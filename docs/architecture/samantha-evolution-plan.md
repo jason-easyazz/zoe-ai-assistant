@@ -235,14 +235,28 @@ false-accept/false-reject rates disappoint, the named upgrade path is **ECAPA-TD
 swap the embedder behind the same enroll/match seam, don't redesign the flow. pyannote
 is already in requirements (unimported) and its source is cached in opensrc for evaluation.
 
-- **Steps:** (1) enrollment session for Jason (+ family who consent) via the existing
-  endpoint/settings page; (2) enable in **shadow mode** — identify + log, don't act — for a
-  week; measure match/false-accept rates against the fallback chain; (3) tune threshold;
-  (4) let identification win over panel-binding for user resolution; PIN challenge stays as
-  the escalation for sensitive scopes (recognition greets, badge-check gates).
-- **Gates:** shadow-mode numbers before acting on identity; replay-gate.
+- **Steps — run PER MODALITY, never once for both.** Voice and face are separate biometrics
+  with separate failure modes, so voice measurements are NOT evidence about faces:
+  (1) enrollment session for Jason (+ family who consent) via the existing endpoint/settings
+  page; (2) enable in **shadow mode** — identify + log, don't act — for a week; measure
+  match/false-accept/false-reject rates against the fallback chain; (3) tune that modality's
+  threshold on its own numbers (`ZOE_SPEAKER_ID_THRESHOLD` for voice; the face threshold and
+  `FACE_MIN_PX` for face); (4) let identification win over panel-binding for user resolution;
+  PIN challenge stays as the escalation for sensitive scopes (recognition greets, badge-check
+  gates). **Face's shadow week must run in REAL panel conditions** — the lighting, angle and
+  distance people are actually at — because that is where its errors live, and the panel's
+  camera shares USB power with the speaker (see the panel-identity notes) so it must be
+  measured in situ, not at a desk.
+- **Gates:** shadow-mode numbers **for the modality being enabled** before acting on identity
+  (voice numbers do not unlock face, or vice versa); replay-gate; **a written
+  biometric retention/deletion policy before ANY enrollment is enabled** — voiceprints and
+  face embeddings are biometrics, so the policy must state a TTL or an explicit "kept until
+  deleted", and give each household member self-service deletion of their own profile.
   **DoD:** Zoe addresses Jason by name from voice alone on the panel; an unenrolled voice
-  cleanly falls back to guest.
+  cleanly falls back to guest; the retention policy is written down and the deletion path
+  works end-to-end for a non-admin member. For FACE, additionally: a face shadow week in real
+  panel conditions with FA/FR recorded, and the face threshold tuned on those numbers —
+  face stays OFF until that exists, however good the voice numbers are.
 - **Effort:** days (mostly product/operator). **Risk:** low in shadow mode.
 
 ### W6 — Attributed ambient capture: from "assistant with a good log" to "was in the room"
@@ -359,8 +373,19 @@ regression, ever (replay harness is the enforcement).
   prod flags ON per #1082)
 - [x] **W1.2** Smart Turn v3 endpointer — **DONE + LIVE** (#1051: `voice_turn.py`, 8.3 MB ONNX,
   complete-utterance 0.90 vs mid-sentence 0.02 on real voice; `ZOE_SMART_TURN_ENABLED` ON in prod)
-- [ ] **W1.3** sentence-streamed TTS in conversation mode — NOT STARTED (LiveKit lane still
-  whole-utterance `synthesize`)
+- [~] **W1.3** sentence-streamed TTS in conversation mode — **MERGED, FLAG OFF** (#1469:
+  `ZOE_LIVEKIT_STREAM_TTS`, default OFF; both `voice_livekit.py` synth sites stream one
+  data message per sentence with `seq`/`final`, clients queue and play in order, barge-in
+  clears the queue, flag-off path byte-identical). NOT yet DONE: the DoD needs the lab
+  flip + first-audio measured at or below the `/ws/voice/` lane on the same utterance,
+  with the replay gate green. **Close-out attempt 2026-07-23 (board #6089) — BLOCKED at
+  the RAM gate, flag stays OFF:** focused unit gate green
+  (`services/zoe-data/tests/test_livekit_stream_tts.py`, 7 passed), but the mandatory
+  replay gate under `flock /tmp/zoe-voice-harness.lock` wrote
+  `voice_regression_last.json` `status=skip` (MemAvailable 133 MB < the 1500 MB OOM
+  guard) — and a skip is NOT a pass, so prod-enabling `ZOE_LIVEKIT_STREAM_TTS` would
+  have violated this task's own gate. Re-run the flip in an idle window with ≥1.5 GB
+  MemAvailable (unblocked by / coordinate with W3.3 RAM reclaim).
 - [~] **W1.4** live measurement session (ADR M1/M3/M4) — PARTIAL: M1 barge-in quality verified
   on real voice (#1081); M3 end-to-end latency + M4 loaded-RAM numbers still unmeasured.
   Bars (from the retired #1056 plan's A3 gate): barge time-to-stop < ~300 ms over 10
@@ -386,14 +411,135 @@ regression, ever (replay harness is the enforcement).
 - [ ] **W3.5** harness fence-out (with tech-debt Wave 4) — NOT STARTED
 - [ ] **W4.1** SER bake-off (Wav2Small / emotion2vec) — NOT STARTED
 - [ ] **W4.2–4** scoring hook + fusion + lab-proof — NOT STARTED (gated on W3)
-- [ ] **W5** speaker-ID enrollment + shadow mode + enable — NOT STARTED
+- [~] **W5** speaker-ID enrollment + shadow mode + enable — **SCAFFOLDING MERGED, DARK**
+  (consent-gated speaker profiles, migration `0023_speaker_consent`; face identity phase 2
+  `0024_face_profiles` + `routers/face_id.py`, embeddings-only and consent-mandatory;
+  guided spoken enrollment flow). Remaining is operator work, and it is the §W5 step
+  list in full — NOT enroll-then-flip: (1) enroll, (2) **shadow mode for a week**
+  (identify + log, never act) with false-accept/false-reject measured against the
+  fallback chain, (3) tune the threshold on those numbers, (4) only then let identity
+  win over panel-binding. **Face identity needs its own shadow week and its own
+  threshold** — it is a separate modality with separate failure modes (panel lighting,
+  angle, distance), so a voice-only shadow week is not evidence about faces; running the
+  voice gate and then flipping face ID would enable a biometric whose FA/FR nobody has
+  measured. Skipping (2)-(3) enables biometric identification with its
+  error rates unmeasured. Blocked until the biometric retention/deletion policy in
+  §W5's Gates exists.
 - [ ] **W6** attributed ambient capture — NOT STARTED (gated on W3+W4+W5 + consent design)
 - [ ] **W7** self-evolution loop closed once — NOT STARTED
 - [ ] **W8** Telegram voice notes — NOT STARTED (after W3)
 
+### 6a. Lane audit (2026-07-26) — W1 ships on a lane the panel never enters
+
+Measured, not inferred. **W1.1/W1.2 are live and correct; they are simply not on the
+path the wall panel uses**, so their felt benefit at the panel is zero and the plan
+must stop reading "W1 DONE" as "conversation-grade voice at the panel".
+
+- **Two independent lanes exist and never meet.** `voice_livekit.py` (LiveKit room
+  `zoe-voice`) holds W1's barge-in + Smart Turn v3. `scripts/setup/zoe_voice_daemon.py`
+  (wake word → whole-WAV POST → `/voice/command`) is what the panel actually runs.
+  The daemon contains **zero** references to LiveKit. `"hey zoe, let's talk"` does NOT
+  open a LiveKit room — the server returns `{"conversation_mode": true}` on the done
+  frame and the DAEMON holds open listen windows itself.
+- **Flags are genuinely ON** (read from the live process env, not defaults):
+  `ZOE_VOICE_BARGE_IN=1`, `ZOE_SMART_TURN_ENABLED=1`. They only ever execute in
+  `voice_livekit.py`.
+- **Smart Turn cannot reach the panel lane by construction**, not by bug: the Jetson
+  never sees live audio there, only a finished WAV. Endpointing happens on the Pi.
+- **LiveKit container state:** last started 2026-07-20, ran 5m42s, stopped on a clean
+  SIGTERM (`oom=false`) — that is `ZOE_LIVEKIT_ONDEMAND=true` idle-reaping by design,
+  NOT a fault. Low recent traffic reflects operator usage (standard commands, not
+  conversation mode) and is **not** an argument to retire the lane —
+  **operator decision 2026-07-26: LiveKit stays.**
+- **Live panel-lane latency budget** (measured this session): endpoint wait **800 ms**
+  (`VAD_ENDPOINT_SILENCE_S=0.8`, live in `/home/pi/.zoe-voice/.env.voice`) → STT
+  **550 ms** → brain **TTFT 66.5 ms** @ 20.1 tok/s. Note the gate's `brain_ms=1583`
+  is generation-to-COMPLETION; sentence-streamed TTS means first audio does not wait
+  for it. **The 800 ms endpoint wait is therefore the largest controllable block
+  before Zoe speaks on the panel lane.**
+- **The replay gate cannot see any of this.** `measure_voice.py` computes
+  `e2e = stt + resolve + brain` by replaying SAVED WAVs, so endpointing, VAD, barge-in
+  and TTS are all outside its boundary. Any endpointing change would leave the gate
+  green regardless of live quality. **A continuous-audio harness is a prerequisite for
+  touching panel-lane endpointing** — building it is most of that work.
+- **Consequence for W1.3:** the flag flip remains correct for the LiveKit lane and
+  stays queued. It is not a panel-lane improvement and must not be scored as one.
+- **Cheap capacity nobody is using:** the Pi 5 runs at roughly one third of ONE core
+  of four with **5.65 GB of 8 GB free**, while the Jetson is the RAM-starved side that
+  gates W3/W4. Panel-lane work implemented on the Pi consumes no Jetson RAM and so does
+  **not** sit behind the W3 gate. Smart Turn v3 is already vendored in-repo
+  (`voice_turn.py`, 8.3 MB ONNX, CPU) — porting it into the daemon's `_Endpointer` is
+  reuse of proven in-house code, not new research. Gated on the harness above.
+- **Panel turn-state feedback is DONE — do not rebuild it.** An earlier draft of this
+  audit claimed the screen was dark during a turn; that was wrong, and the error is
+  worth recording because it is an easy one to repeat. The full chain is live:
+  `/voice/wake` → `voice:listening_started`, `/voice/transcribe` → `voice:thinking`,
+  `/voice/command` → `voice:responding` / `voice:done` / `voice:transcript`, all via
+  `push.broadcaster`; `connect_panel()` subscribes every panel to **both** `all` and
+  `panel_<id>`, so `broadcast("all", …)` does reach it; `js/touch-ui-executor.js`
+  (lines ~1031-1066) owns its own `/ws/push` socket, filters on `panelMatches()`,
+  drives `setOrbMode()` — which applies `orb-listening` / `orb-thinking` /
+  `orb-responding` to `#ztm-orb-dot` — plus a `VoiceOverlay` with transcript display.
+  The live kiosk URL is `/touch/home.html?panel_id=zoe-touch-pi&kiosk=1`, and
+  `home.html` loads `touch-ui-executor.js`, so the machine is loaded where it matters.
+  **The trap:** the orb *classes* are declared in `touch/js/touch-menu.js` while the
+  code that *applies* them lives in `dist/js/touch-ui-executor.js` — a grep scoped to
+  `touch/js/` finds the styles, finds no consumer, and concludes the feature is
+  missing. Search `dist/js/` too before declaring any panel behaviour absent.
+- **Already built, do not rebuild:** async delegation / holding speech is DONE —
+  `ZOE_VOICE_TOOL_FILLER` (default ON, `voice_tts.py`) speaks a per-tool lead-in on the
+  brain's first `__TOOL__: phase=start`, plus the cached `_DEFAULT_PROCESSING_ACK_PHRASES`
+  in `voice_presence.py`. The filler map already carries `web`/`search` entries waiting
+  on a web-search tool that does not exist yet — the gap is the TOOL, not the filler.
+- **W4 shortlist has an option the 2026-07-06 audit could not have had:** Gemma 4 E4B
+  ships its own USM-style conformer audio encoder (log-Mel in, acoustics preserved), so
+  prosody could ride the resident brain instead of a fifth model. NOT free — input-only
+  (no speech out), needs a BF16 mmproj (absent on the box; quantised drifts through the
+  12 conformer layers), and `llama-server`'s `input_audio` routing was closed as
+  not-planned upstream (ggml-org/llama.cpp#21868), leaving `llama-mtmd-cli` subprocess
+  cold-start as the only path. Recorded as **information for the W3 gate decision, not
+  a waiver** — the gate stands per the 2026-07-22 ruling.
+- **Voice gate false alarm (fixed).** `voice_regression_last.json` read `status=fail`
+  on 2026-07-26 with **fail=0 in both runs** — one corpus sample moved OK→EMPTY
+  (18 OK + 2 EMPTY vs a 19 OK + 1 EMPTY baseline) and EMPTY sat in the `ok_rate`
+  denominator, so a silent recording could veto every voice-path deploy. Fixed: score
+  over SCOREABLE samples (EMPTY reported, never gating), plus the CANT_DO/ERROR **count**
+  check the module docstring promised but `compare()` never implemented. Negative
+  controls in `tests/unit/test_voice_regression_probe_scoring.py`.
+
 ## 7. NEXT ACTION (always exactly one)
 
-→ **W1.3 (streamed TTS in conversation mode, packet P-W1.3) + M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3: **W4.1** SER bake-off (RAM allows it — voice stack unswappable per #1409, ~2 GB steady-state).
+→ **W1.3 close-out: flip `ZOE_LIVEKIT_STREAM_TTS` in the lab, measure first-audio, replay-gate it** —
+the code merged 2026-07-21 (#1469, flag OFF), so what remains is the DoD, not the build —
+**plus M3/M4 measurements (packet P-W1.4, bars in §6).** W2 is **DONE and ear-verified** (2026-07-19, see §6 — including the W2.3 lesson: the kiosk browser was never a speaker; spoken delivery rides the Pi daemon's audio path via the `voice_announcements` queue). The 7:30am scheduled brief now speaks to whoever is present; watch-week running. After W1.3, **W4.1 is BLOCKED, not next.** This plan contradicts itself here and the contradiction
+is now resolved in favour of the gate: §W4 states W4.1's gate as "W3 first (RAM)", while §7 used to
+sequence W4.1 straight after W1.3. W3.3-3.5 are open, so the gate is not met. Today's box is the
+argument against waiving it quietly — 124 MB available on 2026-07-22, a brain CUDA-OOM crash, and
+three deploy-gate failures out of that same pressure; W3.1/W3.2 closing did not make this box roomy.
+
+So the step after W1.3 is one of exactly two. **DECIDED 2026-07-22 by Jason: (a).** The W3 gate
+stands; no waiver. An agent may not revisit this.
+
+**Concretely, once W1.3's close-out is done, the NEXT ACTION becomes this ordered list — work it
+top-down, one at a time, and do not skip to the measurement before the reclaim work:**
+  1. **W3.3** reap generalization (HA / music-assistant)
+  2. **W3.4** zram rebalance (measure-first)
+  3. **W3.5** harness fence-out (with tech-debt Wave 4)
+  4. **the W3 DoD profile** — re-run the `memory-pressure-profile.md` methodology into a NEW OKF
+     record and show >=2 GB freed. This is the gate; 1-3 being ticked is not.
+  5. only then **W4.1**.
+If the profile at (4) shows <2 GB freed, W4.1 stays blocked and the shortfall goes back to Jason —
+an agent does not get to call it close enough.
+
+The two options as recorded:
+  (a) [CHOSEN] meet **W3's DoD** — which is the MEASUREMENT, not the three checkboxes: a post-reclaim
+      profile by the same methodology as `docs/knowledge/memory-pressure-profile.md`, in a new
+      OKF record, showing >=2 GB actually freed. Closing W3.3-3.5 as rows without that profile
+      does not open this gate (rows-closed-but-effect-unmeasured is the same silent-success
+      pattern that hid the digest and logging failures); or
+  (b) [NOT CHOSEN] an explicit, recorded operator waiver of the W3 gate for W4.1 on measured headroom.
+An agent must not pick (b) for itself — "confirm headroom at bake-off time" was exactly the kind of
+soft gate that gets talked past, which is how this box lost its brain twice this week.
 
 Closed en route: **W0** fully (2026-07-13 — P-F6 #1160, organic chat/Telegram capture,
 spoken-panel positive control after #1282) and **W3.1** (2026-07-19, measured: the

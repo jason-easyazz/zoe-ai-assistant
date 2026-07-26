@@ -83,6 +83,7 @@ const NOW_PLAYING = {
   image: 'https://i.ytimg.com/vi/x4fR5RhwyoM/maxresdefault.jpg',
   volume: 18, queue_id: PLAYER, queue_item_id: '731cd09f879c4d69a85c984f11763b59',
   queue_index: 3, shuffle: false, repeat: 'off', elapsed: 70.72586054039002, duration: 105.0,
+  dont_stop: false,
 };
 const QUEUE = [
   ['0ef566db08f146b1afb75664d2ee5ec5', 'Yes', 'lahBKZIkLDM', 126],
@@ -117,6 +118,7 @@ const PLAYLISTS = [
 // GONE on music and BACK everywhere else.
 const PANEL_CFG = {
   device_id: 'zoe-touch-pi', location: 'bedroom',
+  room_id: null, room_name: null, room_slug: null,
   default_player: PLAYER, default_player_source: 'global',
   pins_configured: true,
   pinned: [
@@ -178,8 +180,12 @@ function serve() {
   const types = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json' };
   const srv = http.createServer((req, res) => {
     const rel = decodeURIComponent(req.url.split('?')[0]);
-    const file = path.join(DIST, rel);
-    if (!file.startsWith(DIST) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    // Resolve, then anchor the containment check at a separator: a bare
+    // startsWith(DIST) also accepts a SIBLING whose name merely begins with it
+    // (dist2, dist-legacy), because the prefix matches with no path boundary.
+    const file = path.resolve(DIST, '.' + path.sep + rel);
+    if ((file !== DIST && !file.startsWith(DIST + path.sep))
+        || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
       res.writeHead(404); res.end('nope'); return;
     }
     res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'text/plain' });
@@ -391,7 +397,7 @@ async function t(name, fn) {
   console.log('    shot: ' + await shoot(page, 'music-card'));
 
   // ── 3. Browse is a card ──────────────────────────────────────────────────
-  await page.click('#mQBtn');
+  await page.click('#mBrowse');
   await page.waitForSelector('.brf', { timeout: 4000 });
   await page.waitForTimeout(600);
 
@@ -400,15 +406,19 @@ async function t(name, fn) {
     assert.ok(await box(page, '.brf'), 'the Browse card body is not visible');
     assert.strictEqual(await page.$('#mCF'), null, 'the music card is still mounted underneath — Browse is not its own surface');
   });
-  await t('browse: standard card header — title by #home, actions by .fcog', async () => {
+  await t('browse: standard card header — title by #home, actions by .chmeta', async () => {
     const ttl = await box(page, '.chttl'), home = await box(page, '#home');
-    const meta = await box(page, '.chmeta'), cog = await box(page, '.fcog');
-    assert.ok(ttl && home && meta && cog, 'header parts missing');
+    const meta = await box(page, '.chmeta');
+    assert.ok(ttl && home && meta, 'header parts missing');
     assert.ok(ttl.x > home.r, 'title must sit beside the home button');
-    assert.ok(meta.r < cog.x, 'actions must sit beside the cog');
+    // The settings cog was removed from every card — all settings live in the
+    // Settings card, reached from the launcher. The header actions now own the
+    // top-right corner outright.
+    assert.strictEqual(await page.$('.fcog'), null, 'a per-card settings cog came back');
+    assert.ok(meta.x > ttl.x, 'actions must sit to the right of the title');
     assert.ok(await box(page, '#mQSave'), 'Save-as-playlist missing from the header');
     assert.ok(await box(page, '#mQClear'), 'Clear-queue missing from the header');
-    assert.strictEqual(overlap(meta, cog), 0, 'header actions collide with the cog');
+    assert.strictEqual(overlap(meta, ttl), 0, 'header actions collide with the title');
   });
   await t('browse: Recent tab rendered the live-shaped rows', async () => {
     const n = await page.$$eval('.mqlist.recent .rtile', (e) => e.length);
@@ -456,7 +466,7 @@ async function t(name, fn) {
   await t('browse: Save/Clear refuse to post a null queue_id (nothing ever played)', async () => {
     // Greptile #1429: Save and Clear lacked the `||undefined` guard the play
     // paths have. Its stated premise was wrong (Browse is NOT a launcher tile —
-    // #mQBtn on the music card is the only route, so loadMusic always runs
+    // #mBrowse on the music card is the only route, so loadMusic always runs
     // first), but "nothing has ever played" genuinely leaves player_id null and
     // a POST with queue_id:null fails opaquely.
     // Driven with a SECOND page whose now-playing is idle — the real null state,
@@ -468,7 +478,7 @@ async function t(name, fn) {
     await idlePage.waitForSelector('#stage.lopen');
     await idlePage.click('.ltile[data-id="music"]');
     await idlePage.waitForTimeout(900);
-    await idlePage.click('#mQBtn');
+    await idlePage.click('#mBrowse');
     await idlePage.waitForSelector('.brf', { timeout: 4000 });
     await idlePage.waitForTimeout(400);
     assert.strictEqual(await idlePage.evaluate(() => document.querySelector('#dock .pc.dnp')), null,

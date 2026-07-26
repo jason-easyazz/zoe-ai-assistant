@@ -25,6 +25,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from biometric_scope import (
+    authorize_profile_access,
+    require_person_scope,
+    resolve_enroll_target,
+)
 from routers.voice_tts import _require_voice_auth
 
 logger = logging.getLogger(__name__)
@@ -72,7 +77,10 @@ async def face_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)
     if not bool(payload.get("consent")):
         raise HTTPException(status_code=400, detail="explicit consent is required to enroll a face profile")
 
-    user_id = str(payload.get("user_id") or caller.get("user_id") or "").strip()
+    # A session caller may only enrol ITSELF (admins excepted): accepting the
+    # payload's user_id verbatim let any household member enrol their own face
+    # under someone else's id — identity takeover, not just a bad row.
+    user_id = str(resolve_enroll_target(payload.get("user_id"), caller) or "").strip()
     if not user_id or user_id in ("voice-daemon", "guest"):
         raise HTTPException(status_code=400, detail="a real user_id is required")
     display_name = str(payload.get("display_name") or user_id).strip() or user_id
@@ -166,16 +174,31 @@ async def face_profiles_sync(caller: dict = Depends(_require_voice_auth)):
 
 @router.get("/profiles")
 async def face_profiles(caller: dict = Depends(_require_voice_auth)):
-    """List enrolled face profiles (metadata only — never embeddings)."""
+    """List the caller's own enrolled face profiles (metadata only — never embeddings).
+
+    Household-wide only for an admin: who is enrolled is itself biometric
+    metadata, so the scope filter is in the SQL, not a post-filter.
+    """
     _require_enabled()
     from db_compat import get_compat_db as _get_compat_db
 
+    caller_id, is_admin = require_person_scope(caller)
+    if is_admin:
+        sql = (
+            "SELECT id, user_id, display_name, model_name, dim, panel_id, created_at "
+            "FROM face_profiles WHERE active=1 ORDER BY display_name, created_at"
+        )
+        params: tuple = ()
+    else:
+        sql = (
+            "SELECT id, user_id, display_name, model_name, dim, panel_id, created_at "
+            "FROM face_profiles WHERE active=1 AND user_id=? ORDER BY display_name, created_at"
+        )
+        params = (caller_id,)
+
     try:
         async with _get_compat_db() as db:
-            async with db.execute(
-                "SELECT id, user_id, display_name, model_name, dim, panel_id, created_at "
-                "FROM face_profiles WHERE active=1 ORDER BY display_name, created_at"
-            ) as cur:
+            async with db.execute(sql, params) as cur:
                 rows = await cur.fetchall()
         return {
             "ok": True,
@@ -192,15 +215,31 @@ async def face_profiles(caller: dict = Depends(_require_voice_auth)):
 
 @router.delete("/profiles/{profile_id}")
 async def face_profile_delete(profile_id: str, caller: dict = Depends(_require_voice_auth)):
-    """Delete one enrolled face pose."""
+    """Delete one enrolled face pose — the caller's own, or any row for an admin.
+
+    Ownership is checked against the row BEFORE the delete. `_require_voice_auth`
+    only proves the caller may reach the voice surface, so an unscoped
+    `DELETE ... WHERE id=?` let any signed-in household member wipe anyone
+    else's faceprint.
+    """
     _require_enabled()
     from db_compat import get_compat_db as _get_compat_db
 
+    caller_id, is_admin = require_person_scope(caller)
     try:
         async with _get_compat_db() as db:
+            async with db.execute(
+                "SELECT user_id FROM face_profiles WHERE id=?", (profile_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            authorize_profile_access(
+                row[0] if row else None, caller_id, is_admin, kind="face"
+            )
             await db.execute("DELETE FROM face_profiles WHERE id=?", (profile_id,))
             await db.commit()
-        return {"ok": True}
+        return {"ok": True, "deleted": profile_id}
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("face/profiles delete DB error for %s: %s", profile_id, exc)
         raise HTTPException(status_code=500, detail="DB error") from exc

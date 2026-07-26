@@ -25,7 +25,7 @@ These run as **user systemd** units (`systemctl --user`), straight on the host:
 
 | Service | Unit | Port | Serves | Logs |
 |---|---|---|---|---|
-| API | `zoe-data.service` | `0.0.0.0:8000` | FastAPI/uvicorn (`main:app`) — voice + chat path, memory router, Skybridge; Prometheus at `/metrics` | `~/.zoe-logs/zoe-data.{stdout,stderr}.log` (append; **not** journald) |
+| API | `zoe-data.service` | `0.0.0.0:8000` | FastAPI/uvicorn (`main:app`) — voice + chat path, memory router, Skybridge; Prometheus at `/metrics` | **App records:** `~/.zoe-logs/zoe-data.app.log` (rotating, timestamped — `logging_setup`, configured in the lifespan). **Access lines only:** `zoe-data.{stdout,stderr}.log` (append, unrotated; **not** journald). Before the app log existed the root logger had no handler, so every `logger.info()` was discarded and WARNING+ arrived unformatted and undatable — if you are reading logs from before 2026-07-20, that absence is the tooling, not the system. |
 | Brain | `llama-server.service` | `0.0.0.0:11434` | host-native llama.cpp serving the Gemma 4 E4B-QAT + MTP rock (~5.2 GB mlock) | journald |
 | TTS | `kokoro-tts.service` | `127.0.0.1:10201` | Kokoro voice sidecar (localhost-only, `device=cuda`, RTF ~0.08) | journald |
 | Router (stage-2) | `functiongemma-router.service` | `127.0.0.1:11436` | FunctionGemma-270M decoder for the **two-stage router** (SetFit MLP shortlist → GBNF decode); zoe-data selects it via `ZOE_ROUTER_HEAD=active` (#1322, live) | journald |

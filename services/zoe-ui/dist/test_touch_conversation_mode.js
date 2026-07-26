@@ -20,10 +20,13 @@ const assert = require('assert');
 const html = fs.readFileSync(path.join(__dirname, 'touch/home.html'), 'utf8');
 
 // ── The estate script is one big self-invoking IIFE; grab it whole, from the
-// `(function(){` that precedes GEAR through to its closing `</script>`. ──────
+// `(function(){` that precedes askShell through to its closing `</script>`.
+// Anchor on askShell, NOT on a passing icon constant: this used to key off
+// `var GEAR=`, which the harness never used, and deleting that constant with
+// the settings cogs broke CI for a reason no one could see from here. ───────
 function estateScript() {
-  const anchor = html.indexOf("var GEAR='<svg");
-  assert(anchor >= 0, 'estate script anchor (GEAR) not found');
+  const anchor = html.indexOf('function askShell(');
+  assert(anchor >= 0, 'estate script anchor (askShell) not found');
   const start = html.lastIndexOf('(function(){', anchor);
   assert(start >= 0, 'estate IIFE start not found');
   const end = html.indexOf('</script>', anchor);

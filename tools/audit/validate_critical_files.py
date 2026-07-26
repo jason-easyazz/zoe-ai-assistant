@@ -55,6 +55,13 @@ CRITICAL_FILES = {
         'services/zoe-ui/dist/components/zoe-orb.html',
         'services/zoe-ui/dist/components/zoe-orb-complete.html',
     ],
+    'manifests': [
+        # Both were caught by the blanket *.json gitignore and existed ONLY on
+        # the live box. widget-manifest.json blanks the widget grid if missing;
+        # manifest.json breaks PWA install (nginx serves index.html in its place).
+        'services/zoe-ui/dist/manifest.json',
+        'services/zoe-ui/dist/js/widgets/widget-manifest.json',
+    ],
     'html_pages': [
         'services/zoe-ui/dist/index.html',
         'services/zoe-ui/dist/auth.html',
@@ -72,7 +79,10 @@ CRITICAL_FILES = {
         'services/zoe-data/main.py',
         'services/zoe-data/database.py',
         'services/zoe-data/auth.py',
-        'services/zoe-data/openclaw_ws.py',
+        # 'services/zoe-data/openclaw_ws.py' — REMOVED from critical list 2026-07-22:
+        # OpenClaw is being retired (multica-executor-migration.md §5); the file is a
+        # gated deletion target and the validator must not block its deletion PR.
+
         'services/zoe-data/routers/chat.py',
         'services/zoe-data/routers/system.py',
         'services/zoe-auth/main.py',

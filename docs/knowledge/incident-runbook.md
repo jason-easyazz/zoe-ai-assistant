@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active) and root-owned lab-container files silently blocking every deploy at the git pull step. Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions]
-timestamp: 2026-07-03T00:00:00Z
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, and MemoryMax-without-MemorySwapMax being no cap at all. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap]
+timestamp: 2026-07-20T00:00:00Z
 ---
 
 # Production Incident Runbook
@@ -172,3 +172,126 @@ in [`scripts/setup/systemd/README.md`](../../scripts/setup/systemd/README.md)
 **Caution — one failed `/health` poll is not an outage.** Under swap thrash a 6s
 timeout returns `000` while the service is fine. Poll three times before
 declaring anything down; `systemctl is-active` is not evidence either way.
+
+## 5. Brain CUDA-OOM crash-loop under unified-memory pressure (2026-07-19)
+
+**Signature.** The voice replay gate collapses (e.g. **3/20**) with ERROR
+verdicts and `brain_ms` medians around **~100 ms** — that is an *instant
+connection-refused*, not slow inference; a genuinely slow brain shows seconds.
+Meanwhile tier0 paths (weather/time/calendar) keep passing — **fast-tier OK +
+brain fast-fail is the fingerprint**. Confirm:
+
+```bash
+curl -m 3 http://127.0.0.1:11434/health          # fails
+systemctl --user is-active llama-server          # "activating" — restart loop
+```
+
+A manual run of the llama-server command line shows the smoking gun:
+
+```
+NvMapMemAllocInternalTagged: error 12
+cudaMalloc failed: out of memory
+```
+
+**Diagnosis.** Tegra is **unified memory**: CUDA allocations come from the same
+physical RAM as everything else. Burst RAM from other workloads — CI validate +
+playwright runs, the replay harness's own in-process Moonshine (~1.5 GB
+transient), deploy warmups — starves the *running* brain's next CUDA
+allocation. The cgroup guards (`MemoryLow`, `MemorySwapMax=0`) protect **CPU
+pages only** — they do nothing for NvMap/CUDA allocations, so a "protected"
+brain still OOMs on the GPU side. Once it dies, `Restart=` loops it in
+`activating` until enough RAM drains to reload (**~6.3 GB availMB needed**);
+it self-heals when the pressure source finishes.
+
+**Fix.** Usually none needed — stop/finish the competing workload and the
+restart loop succeeds on its own. Verify recovery with
+`curl -m 3 http://127.0.0.1:11434/health` then a replay-gate re-run.
+
+**Prevention (the actual rule).**
+- **Never run the replay gate — or any ~1.5 GB-transient job — with
+  < 2 GB availMB, or concurrently with CI runs or deploys.**
+- The probe's 1500 MB free-RAM guard protects **the probe**, not the brain: the
+  probe can pass its own guard and still be the allocation that kills the
+  brain's next `cudaMalloc`.
+- When triaging a "brain down" replay collapse, check `brain_ms` first: ~100 ms
+  medians mean connection-refused (this incident), not a model problem.
+
+## 6. systemd `MemoryMax` without `MemorySwapMax=0` is not a cap (2026-07-20)
+
+**Signature.** A service with `MemoryHigh=1G` / `MemoryMax=2G` (the shared
+`serena-mcp.service`) sitting at **1.0 G RSS + 2.1 G swap ≈ 3.1 G real
+footprint**. The "cap" held RSS exactly at MemoryHigh — by pushing everything
+else to swap.
+
+**Diagnosis.** `MemoryHigh` pressure causes reclaim, and reclaim's outlet is
+swap, which is **unbounded** unless `MemorySwapMax` is set. So
+`MemoryHigh`/`MemoryMax` alone converts a RAM hog into a swap hog of arbitrary
+size — worse on this box, where swap thrash is the voice-latency killer (§4).
+
+**Fix.** Add a `MemorySwapMax=0` drop-in (drop-in, never template-copy — §4).
+A real breach then OOM-kills the service and `Restart=always` brings it back —
+acceptable for rebuildable-cache services like Serena. The voice-stack units
+already carry `MemorySwapMax=0` (#1409); this extends the same rule to every
+capped unit.
+
+**Amplifier — stale per-worktree stdio Serena configs.** ~91 pre-#1400
+worktrees carried stale stdio `serena` entries in their `.mcp.json`, each
+spawning a **~1 GB per-session Serena at MCP connect time** (bypassing the
+shared server entirely). Swept 2026-07-20 — but **recheck `.mcp.json` when
+resurrecting an old worktree**; a stale config silently re-creates the fleet.
+
+**Prevention (the actual rule).** A memory cap on this box is
+`MemoryHigh` + `MemoryMax` + **`MemorySwapMax=0`** — all three, via drop-in.
+Two out of three is not a cap.
+
+## 7. Scheduled job runs on time and does NOTHING — the zero-effect blind spot (2026-07-22)
+
+**Signature.** Everything is green. The loop logs `nightly run complete` at
+03:00 on the dot, `/health` is 200, `stale: false` on the memory-loops status
+endpoint — and no memory has been written for weeks. This has now happened
+**twice** to the same job: a timezone cast that made the lookback window empty
+(#1217) and ten consecutive nights processing zero users (#1480).
+
+**Diagnosis.** The observability added after the first outage (#1226) records
+*that* the loop ran and raises `stale` when a run is MISSED. A run that happens
+punctually and produces nothing is, to that check, indistinguishable from a
+healthy one — the empty successes were faithfully recorded and never alerted
+on. **A heartbeat that carries only liveness is not a heartbeat.**
+
+**Watch it.**
+- Every recorded run now carries `effect_count` — the summed effects the run
+  actually produced (digest: `extracted + new + superseded + skipped_duplicates`;
+  consolidation: `merged + resolved_contradictions + archived`). Zero means the
+  run did no work at all.
+- Consecutive zero-effect runs accumulate into `zero_effect_streak`; reaching
+  `zero_effect_alert_after` (default 5, `ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS`;
+  `< 1` disables) sets `zero_effect_alert: true` and escalates the run-complete
+  line in `~/.zoe/zoe-data-memory-loops.log` to a `ZERO-EFFECT ALERT` WARNING.
+- Human-queryable: admin `GET /api/system/memory-loops/status` →
+  `{loops, healthy, alerts}`. `alerts` is prose, e.g. `digest: ran 10 times in
+  a row and did nothing each time (threshold 5)`.
+- **PromQL alert rule:**
+  ```promql
+  # A memory-maintenance loop is running on schedule but doing nothing.
+  - alert: MemoryLoopZeroEffect
+    expr: zoe_memory_loop_zero_effect_alert == 1
+    for: 10m
+    labels: { severity: warning }
+    annotations:
+      summary: "{{ $labels.loop }} loop runs but produces no effects"
+      description: "zoe_memory_loop_zero_effect_streak{loop=\"{{ $labels.loop }}\"} consecutive runs with effect_count 0. Staleness will NOT catch this — the runs are on time. Check the loop's query window (timezone/lookback) and its active-user selection."
+  ```
+
+**Fix.** Zero effect is a *symptom*: read the loop's own selection query first
+(both digest outages were in the "which users / which window" step, not in the
+extraction). Confirm with a manual run and inspect `users` alongside
+`effect_count` — `users: 0` means the selection is empty, `users: N` with
+`effect_count: 0` means the window or the extractor is.
+
+**Prevention (the actual rule).** Any scheduled job's heartbeat must record
+**what the run did, not just that it ran**, and N consecutive no-op runs must
+raise a visible unhealthy state. A job that is *legitimately* idle sometimes
+declares it (`memory_metrics._IDLE_TOLERANT_LOOPS`) rather than having its
+alert threshold quietly raised for everyone — the declaration is reviewable,
+a tuned-away threshold is not. Pinned by
+`services/zoe-data/tests/test_memory_loop_observability.py`.

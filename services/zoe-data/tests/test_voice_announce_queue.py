@@ -289,8 +289,12 @@ def test_0025_extends_the_migration_chain_single_head():
     cfg.set_main_option("script_location", str(svc / "alembic"))
     cfg.set_main_option("sqlalchemy.url", "postgresql+psycopg2://u:p@localhost/db")
     script = ScriptDirectory.from_config(cfg)
+    # The invariant is LINEARITY (exactly one head), not that 0025 is forever
+    # the newest revision — pinning the head id here makes every later migration
+    # fail this test for the wrong reason. 0025's own chain link is asserted
+    # below, which is what this module actually depends on.
     heads = list(script.get_heads())
-    assert heads == ["0025"], f"migration graph must stay linear — heads: {heads}"
+    assert len(heads) == 1, f"migration graph must stay linear — heads: {heads}"
     assert script.get_revision("0025").down_revision == "0024"
 
 

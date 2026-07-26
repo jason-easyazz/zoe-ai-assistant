@@ -157,19 +157,52 @@
   .calviews button{font:inherit;font-size:16px;color:var(--ink-soft);background:transparent;border:0;border-radius:999px;padding:8px 18px;cursor:pointer}
   .calviews button.on{background:#fff;color:#0a0d14;font-weight:600}
   .calbody{flex:1;min-height:0;overflow-y:auto}
-  .calmonth{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:minmax(0,1fr);gap:6px;width:100%;height:100%;grid-template-rows:auto}
-  .calmonth .cmh{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:4px 0}
+  /* Week and month are TODAY-ANCHORED and scroll; the calendar no longer spends
+     the panel's 1208x476 on days that have already happened. Both scrollers are
+     NATIVE (momentum, fling, rubber-band come free and match the OS).
+     touch-action is deliberately left at its default here. The Cover Flow's
+     comment above is the same trap seen from the other side: the CONTAINER's
+     touch-action decides who owns the gesture, and these containers WANT the
+     browser to own it. Setting touch-action:none on .calweek/.calmonth would
+     hand the pan to a JS handler that does not exist and the view would simply
+     not scroll. overscroll-behavior contains the fling so reaching the end of a
+     row never chains out into the surface behind it. */
+  .calmonth{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;width:100%;height:100%;
+            /* A FIXED row height, never minmax(0,...): with a definite grid
+               height minmax lets every row shrink to fit instead of
+               overflowing, which silently collapsed the cells to 39px and made
+               the month scroll not exist. Fixed rows are what make it scroll. */
+            grid-template-rows:auto;grid-auto-rows:var(--calrow,144px);
+            /* scroll-padding-top = weekday strip (25px) + row gap (6px). Snap
+               aligns a row's start edge to the container's start edge, which is
+               UNDERNEATH the sticky strip — without this padding, snapping drags
+               today's row back under the header and hides its date numbers,
+               undoing the anchor. Keep in step with CAL_GRID_GAP. */
+            scroll-padding-top:31px;
+            overflow-y:auto;overscroll-behavior-y:contain;scroll-snap-type:y proximity}
+  .calmonth::-webkit-scrollbar{width:0}
+  /* The weekday strip stays put while the weeks scroll under it — without it a
+     scrolled month is seven unlabelled columns. */
+  .calmonth .cmh{position:sticky;top:0;z-index:2;background:#0a0d14;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:4px 0 6px}
   .cmd{min-width:0;min-height:0;overflow:hidden;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);padding:7px 9px;font-size:15px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
   .cmd.dim{opacity:.3}
   .cmd.today{border-color:rgba(123,150,255,.65);background:linear-gradient(180deg,rgba(123,150,255,.18),rgba(123,150,255,.08));box-shadow:0 0 22px rgba(123,150,255,.18),inset 0 1px 0 rgba(255,255,255,.1)}
   .cmd.today .dn{color:#fff;font-weight:600}
+  .cmd{scroll-snap-align:start}
   .cmd .dn{font-size:14px;color:var(--ink-soft)}
   .cmd .cev{font-size:12px;color:var(--ink);border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 20%,transparent);border-radius:5px;padding:2px 7px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .calweek{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;width:100%}
-  .cwc{min-width:0;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:12px 10px;min-height:300px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
-  .cwc h5{font-size:14px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;text-align:center}
+  /* Once today is no longer implied by "leftmost"/"first row", it has to SAY so:
+     scroll two weeks out and the accent alone reads as just another tinted cell. */
+  .cmd.today .dn::after,.cwc.today h5::after{content:'TODAY';margin-left:7px;font-size:10px;letter-spacing:.12em;font-weight:700;color:#0a0d14;background:#7b96ff;border-radius:4px;padding:1px 5px;vertical-align:middle}
+  .calweek{display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - 30px)/4);gap:10px;height:100%;
+           overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity}
+  .calweek::-webkit-scrollbar{height:0}
+  .cwc{min-width:0;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:12px 10px;overflow-y:auto;scroll-snap-align:start;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+  .cwc h5{font-size:16px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;text-align:center}
   .cwc.today{border-color:rgba(123,150,255,.6);background:linear-gradient(180deg,rgba(123,150,255,.15),rgba(123,150,255,.05));box-shadow:0 0 22px rgba(123,150,255,.15)}
-  .cwe{font-size:14px;border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 18%,transparent);border-radius:7px;padding:5px 9px;margin-bottom:6px}
+  .cwc.past{opacity:.55}
+  /* 48px minimum: these are finger targets, and the wider column finally affords it. */
+  .cwe{font-size:15px;border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 18%,transparent);border-radius:7px;padding:7px 10px;margin-bottom:7px;min-height:48px;box-sizing:border-box}
   .cwe small{display:block;color:var(--ink-soft);opacity:.8;margin-top:1px;font-variant-numeric:tabular-nums}
   .caldaylist .dev{display:flex;align-items:center;gap:16px;padding:15px 0;border-top:1px solid rgba(255,255,255,.08)}
   /* Settings — expanding sections */
@@ -222,8 +255,37 @@
   .estmc input,.estmc select{width:100%;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:19px;padding:0 14px;outline:none}
   .estmc .erow{display:flex;gap:12px}
   .estmc .btns{display:flex;gap:12px;margin-top:24px}
-  .estmc .spkgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;max-height:380px;overflow-y:auto}
-  .estmc .spkopt{display:block;width:100%;text-align:left;padding:15px 18px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:20px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Speaker picker: a wider overlay + a 2-column list of ROW tiles (icon · name
+     · status/select), scoped via :has(.spkgrid) so other estmc dialogs keep
+     520px. Rows (not square tiles) give long names room instead of the old
+     4-up grid's heavy truncation, and put the multi-select check on the right.
+     The modal is a flex COLUMN capped to the stage (100% of .estmodal — inset:0
+     of the transform-scaled 1280x720 #stage, NOT 100vh): title + hint + Cancel
+     are pinned and only the grid scrolls, so Cancel never falls off. */
+  .estmc:has(.spkgrid){width:1120px;max-width:calc(100vw - 40px);max-height:calc(100% - 24px);display:flex;flex-direction:column}
+  .estmc:has(.spkgrid) h3{flex:none;margin-bottom:2px}
+  .estmc .spkhint{flex:none;font-size:14px;color:var(--ink-faint);margin-bottom:14px}
+  .estmc:has(.spkgrid) .btns{flex:none;margin-top:16px}
+  .estmc .spkgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;overflow-y:auto;min-height:0;flex:1 1 auto;-webkit-overflow-scrolling:touch;padding-right:4px}
+  .estmc .spkopt{display:flex;align-items:center;gap:14px;width:100%;min-height:74px;text-align:left;padding:12px 16px;border-radius:16px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:#fff;font:inherit;cursor:pointer;position:relative}
+  .estmc .spkopt .si{width:46px;height:46px;flex:none;border-radius:12px;background:rgba(255,255,255,.08);display:grid;place-items:center;color:rgba(255,255,255,.85)}
+  .estmc .spkopt .si svg{width:24px;height:24px;display:block}
+  .estmc .spkopt .stx{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .estmc .spkopt .snm{font-size:19px;font-weight:600;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .estmc .spkopt .ssub{font-size:13.5px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
+  .estmc .spkopt .sright{flex:none;display:flex;align-items:center;gap:10px}
+  .estmc .spkopt .schip{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.14);color:rgba(255,255,255,.82);white-space:nowrap}
+  .estmc .spkopt .schip.play{background:var(--accent);color:#fff}
+  /* Multi-select check: an empty ring that fills accent when the zone is on. */
+  .estmc .spkopt .schk{width:28px;height:28px;flex:none;border-radius:50%;border:2px solid rgba(255,255,255,.3);display:grid;place-items:center;color:transparent}
+  .estmc .spkopt .schk svg{width:16px;height:16px}
+  .estmc .spkopt.on{border-color:var(--accent);background:rgba(123,150,255,.16)}
+  .estmc .spkopt.on .schk{background:var(--accent);border-color:var(--accent);color:#fff}
+  /* A zone MA can't group (e.g. a lone TV) shows no check — tapping it just
+     switches to it, the single-speaker behaviour. */
+  .estmc .spkopt.nogroup .schk{display:none}
+  .estmc .spkopt.off{opacity:.42;cursor:default}
+  .estmc .spkopt.off .ssub{color:#ff9db0}
   .estmc .btns button{flex:1;height:54px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;cursor:pointer}
   .estmc .btns .save{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
   .estmc .btns button:disabled{opacity:.4;cursor:default}
@@ -420,24 +482,56 @@
                  max-width:760px;margin-left:auto;margin-right:auto;
                  display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
   .mfull .martist{font-size:20px;color:rgba(255,255,255,.72);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .mfull .mscrub{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:148px}
+  /* bottom 132 + 16px padding keeps the BAR exactly where it was (132+16=148)
+     while giving the drag a 39px-tall finger target instead of a 7px one.
+     touch-action:none so a vertical finger drag scrubs instead of being stolen
+     as a page gesture — same reason the Cover Flow sets it. */
+  .mfull .mscrub{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:132px;
+                 padding:16px 0;touch-action:none;cursor:pointer}
   .mfull .mtrack{position:relative;height:7px;border-radius:999px;background:rgba(255,255,255,.22)}
   .mfull .mfill{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:999px;background:#fff}
-  .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+  .mfull .mknob{position:absolute;top:50%;left:38%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4);transition:transform .12s}
+  /* Grows under the finger so a drag is visibly grabbed, not just repainted. */
+  .mfull .mscrub.drag .mknob{transform:translate(-50%,-50%) scale(1.5)}
   .mfull .mtimes{display:flex;justify-content:space-between;margin-top:12px;font-size:18px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
-  .mfull .mtransport{position:absolute;left:0;right:0;bottom:44px;display:flex;justify-content:center;align-items:center;gap:44px}
-  .mfull .mtransport .sml{opacity:.55;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
-  .mfull .mtransport .sml svg{width:26px;height:26px}
+  /* Transport is now JUST back / play / next, centred. Keep-playing, shuffle and
+     repeat moved into the tools row (#mTools); volume and the tools button sit
+     absolutely at the two bottom corners, so the centred trio stays centred. */
+  .mfull .mtransport{position:absolute;left:0;right:0;bottom:44px;display:flex;justify-content:center;align-items:center;gap:44px;pointer-events:none}
+  /* The row spans the full width to centre prev/play/next, but its EMPTY areas
+     overlay the bottom-corner tools button + volume tile — a transparent box
+     still eats pointer events, so a real finger tap on those corners was being
+     swallowed. Only the buttons themselves take events. */
+  .mfull .mtransport button{pointer-events:auto}
   .mfull .mtransport button svg{width:28px;height:28px}
   .mfull .mtransport .pp svg{width:32px;height:32px;color:#0a0d18}
-  .mfull .mtransport .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  /* Tools row occupies the progress-bar slot; shown only while .mfull.tools, and
+     the scrub is hidden then (they never coexist — "replace, don't overlay"). */
+  .mfull .mtools{position:absolute;left:50%;width:560px;margin-left:-280px;bottom:120px;display:none;justify-content:center;align-items:center;gap:52px}
+  .mfull.tools .mtools{display:flex}
+  .mfull.tools .mscrub{display:none}
+  .mfull .mtools .sml{opacity:.6;background:none;border:0;color:#fff;cursor:pointer;width:68px;height:68px;border-radius:50%;display:grid;place-items:center}
+  .mfull .mtools .sml svg{width:28px;height:28px}
+  .mfull .mtools .sml.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  /* Tools button: bottom-left, under the scrub's left edge; the volume tile
+     mirrors it under the right edge. Both 68px, so prev/play/next stay centred. */
+  .mfull .mtoolsbtn{position:absolute;bottom:44px;left:calc(50% - 280px);width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.10);color:#fff;display:grid;place-items:center;cursor:pointer;opacity:.7}
+  .mfull .mtoolsbtn svg{width:26px;height:26px}
+  .mfull .mtoolsbtn.on{opacity:1;background:rgba(123,150,255,.25);box-shadow:0 0 16px rgba(123,150,255,.35)}
+  /* Buttons flanking the cover flow, in its glassy card styling: search (left),
+     playlists/radio/sources (right). Vertically centred on the cover band. */
+  .mfull .cfside{position:absolute;top:calc(74px + var(--cfcard,300px) / 2);transform:translateY(-50%);width:60px;height:60px;border-radius:18px;border:1px solid rgba(255,255,255,.16);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(255,255,255,.05));backdrop-filter:blur(8px);color:#fff;display:grid;place-items:center;cursor:pointer;z-index:40;box-shadow:0 14px 32px rgba(0,0,0,.4)}
+  .mfull .cfside svg{width:26px;height:26px}
+  .mfull .cfside:active{transform:translateY(-50%) scale(.93)}
+  .mfull .cfleft{left:40px}
+  .mfull .cfright{right:40px}
   .mqbtn{width:48px;height:48px;flex:none;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
   .mqbtn svg{width:22px;height:22px}
   /* Browse (Recent + Playlists) is a real SURFACE, not an overlay on the music
      card. It used to be `.mqueue` — a z44 sheet that covered #mTransport, which
      is the entire reason the dock's now-playing chip needed a "…except while the
      overlay is open" exception. As a card it gets the standard header (.chttl by
-     #home, .chmeta by .fcog), the normal full dock, and the normal chip, and
+     #home, .chmeta), the normal full dock, and the normal chip, and
      nothing overlays the music card any more. */
   .brf{position:absolute;left:56px;right:56px;top:106px;bottom:126px;display:flex;flex-direction:column}
   /* Music control lives in the dock (now-playing pill) — no in-card strip,
@@ -454,7 +548,8 @@
   .rtile .rti{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
   .rtile .rti .qn{font-size:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rtile .rti .ra{font-size:14px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
-  .rtile .qadd{flex:none;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--accent);font-size:18px;cursor:pointer}
+  .rtile .qadd,.rtile .qnext{flex:none;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--accent);font-size:18px;cursor:pointer;display:grid;place-items:center}
+  .rtile .qnext svg{width:19px;height:19px}
   /* ---- Playlists tab: compact album-art grid (smaller tiles, more per row) ---- */
   .mqlist.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px 14px;align-content:start;padding-top:2px}
   .mqlist.grid .qi.pl{display:flex;flex-direction:column;align-items:stretch;gap:0;padding:0;background:none;cursor:pointer;font-size:15px}
@@ -464,7 +559,7 @@
   .mqlist.grid .qi.pl .pcov .pcount{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.55);border-radius:999px;padding:2px 8px;font-size:12px}
   .mqlist.grid .qi.pl .qn{margin-top:8px;white-space:normal;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   /* Favourite: the meta block is centred now, so pin it to the card's right
-     margin on the title's line (clear of .fcog at top:38 and the flow itself). */
+     margin on the title's line, clear of the flow itself. */
   .mfull .mfav{position:absolute;top:6px;right:56px;width:52px;height:52px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:rgba(255,255,255,.6);display:grid;place-items:center;cursor:pointer}
   .mfull .mfav.on{color:var(--cat-health);background:rgba(255,122,144,.16)}
   .mfull .mfav svg{width:26px;height:26px}
@@ -541,6 +636,25 @@
   .slp .sc .nm{font-size:20px;font-weight:500}
   .slp .sc .bt{font-size:32px;font-weight:600;line-height:1}
   .slp .sc.on{background:radial-gradient(circle at 40% 28%,rgba(255,214,140,.8),rgba(255,180,90,.22));color:#3a2a10;border-color:rgba(255,205,125,.4);box-shadow:0 0 34px rgba(255,190,100,.35)}
+  /* Pinned controls on the night screen. Same pins as the dock, same kinds and
+     server-resolved icons — but the dock's pill styling is deliberately NOT
+     reused: this surface is hit in the dark, so the tiles stay large. The
+     popover geometry below is the dock's, scaled up for the same reason. */
+  .slp .sc.unavail{opacity:.42}
+  /* a scene is an event, not a state: it never carries .on, and flashes the
+     launcher accent rather than the light amber (matches the dock's rule) */
+  .slp .sc.scene.fire{background:rgba(123,150,255,.9);border-color:rgba(123,150,255,.6);color:#fff;box-shadow:0 0 34px rgba(123,150,255,.5)}
+  .slp .sc.scene.fire svg{color:#fff}
+  .slp .sc.temp{position:relative;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:16px 26px}
+  .slp .sc.temp .nm{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.5)}
+  .slp .sc.temp .tpop{position:absolute;bottom:100%;margin-bottom:18px;left:50%;transform:translateX(-50%) translateY(10px);width:140px;height:250px;padding:20px 0 18px;border-radius:22px;background:rgba(18,16,30,.82);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(16px);box-shadow:0 20px 50px rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:.28s;display:flex;flex-direction:column;align-items:center;gap:14px;z-index:50}
+  .slp .sc.temp.open .tpop{opacity:1;transform:translateX(-50%);pointer-events:auto}
+  .slp .sc.temp .tpv{font-size:27px;font-weight:700;color:#ff9d6e;font-variant-numeric:tabular-nums}
+  .slp .sc.temp .tpl{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.6)}
+  /* wider than the dock's 15px: this is dragged half-asleep in the dark */
+  .slp .sc.temp .tsl{position:relative;width:20px;flex:1;border-radius:999px;background:rgba(255,255,255,.18);cursor:pointer;touch-action:none}
+  .slp .sc.temp .tff{position:absolute;left:0;right:0;bottom:0;border-radius:999px;background:linear-gradient(180deg,#ffb07a,#ff8a5a)}
+  .slp .sc.temp .tkn{position:absolute;left:50%;transform:translate(-50%,50%);width:36px;height:36px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.4)}
 
   /* ROOMS — a control panel for everything in a room */
   .rm .rchips{position:absolute;top:46px;right:122px;display:flex;gap:8px}
@@ -608,18 +722,73 @@
   .wloc{position:absolute;left:74px;top:150px;font-size:20px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.82);text-shadow:0 2px 14px rgba(0,0,0,.4)}
 
   /* settings cog — per card, and per full-screen */
-  .card .cog{position:absolute;top:22px;right:22px;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:var(--ink-soft);cursor:pointer;z-index:6}
   .card .cog svg{width:22px;height:22px}
   .chttl{position:absolute;top:38px;left:110px;height:48px;display:flex;align-items:center;font-size:30px;font-weight:600;letter-spacing:-.01em;z-index:30}
   .chmeta{position:absolute;top:38px;right:122px;height:48px;display:flex;align-items:center;gap:10px;font-size:20px;color:var(--ink-soft);z-index:30}
   .chmeta .chbtn{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer}
   .chmeta .chbtn svg{width:24px;height:24px}
-  .fcog{position:absolute;top:38px;right:56px;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer;z-index:30}
-  .fcog svg{width:24px;height:24px}
   .hfull .htemp{right:120px} /* clear the home cog */
 
   /* speaker / cast selection on music */
-  .mtop{position:absolute;top:40px;right:120px;display:flex;align-items:center;gap:12px;z-index:60}
+  .mtop{position:absolute;top:40px;right:44px;display:flex;align-items:center;gap:12px;z-index:60}
+  /* Volume sits top-LEFT, beside #home. Not with the speaker chip on the right,
+     which is where it started: at CF_K=1 the centre cover spans x455-825 and
+     .mtop grows leftward, so the pill landed ON the artwork (caught by looking
+     at the screenshot, not by a test — hence the overlap assertion in
+     test_touch_music_polish.js). x112-386 is the one band that is clear of both
+     the centre cover and the fanned side covers, which start below y88.
+     Same native input as the Rooms hero (#rmVol), not a second component:
+     accent-color, 40px tall for a finger, debounced write, repaint-guarded. */
+  /* "Keep playing" (∞) holds the scrub's left flank — the slot the volume
+     slider used to occupy, and the same measured box. The top strip cannot
+     host this: at CF_K=1 the covers fan from y39 (centre) up to y78 at x310
+     and y91 at x234, so any 48px control up there clips artwork — measured,
+     after two tries. Below the covers (they end y412) the row that carries the
+     progress bar is clear out to x360 where .mscrub starts, and it sits just
+     above the orb. 52px tall, over the kiosk's 48px finger-target floor.
+     Volume moved into the transport behind a speaker icon (see .mvolt): it is
+     a set-and-forget control and did not earn permanent screen space. */
+  
+  
+  
+  #mDS.on{background:rgba(123,150,255,.28);border-color:rgba(123,150,255,.45);color:#fff;
+            box-shadow:0 0 18px rgba(123,150,255,.35)}
+  /* Volume: a speaker icon in the transport (the slot ∞ vacated) opening a
+     popover, built on `.pc.temp`/`.tpop`'s pattern rather than a second one.
+     It is a DIV, not a button, for two reasons that are both load-bearing:
+     #mTransport's delegated handler matches `closest('button')`, so a div is
+     invisible to it and cannot fall through to musicControl(); and a native
+     range input inside a <button> is invalid interactive content. */
+  /* Volume left the transport row: it now sits absolutely at bottom-right,
+     mirroring the tools button at bottom-left, so prev/play/next stay centred. */
+  .mfull .mvolt{position:absolute;bottom:44px;right:calc(50% - 280px);width:68px;height:68px;border-radius:50%;
+        display:grid;place-items:center;color:#fff;opacity:.7;cursor:pointer;transition:.25s}
+  .mfull .mvolt svg{width:26px;height:26px}
+  .mfull .mvolt.open{opacity:1;background:rgba(255,255,255,.16)}
+  /* Cleared over .mscrub, not merely "above the button". At bottom:80px the
+     popover sat across the seek bar and hid the duration — it passed every
+     assertion, and only the screenshot showed it. This lands its bottom edge
+     above the scrub's top, in the band between the covers (they end y412 at
+     CF_K=1) and the progress row. Re-measure if either of those moves. */
+  .mfull .mvolt .vpop{position:fixed;right:24px;top:50%;transform:translateY(-50%) translateX(16px);width:104px;height:260px;padding:18px 0 16px;border-radius:22px;background:rgba(18,16,30,.78);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(18px);box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .26s ease,transform .28s cubic-bezier(.2,.8,.3,1);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:14px;z-index:70}
+  .mfull .mvolt.open .vpop{opacity:1;transform:translateY(-50%) translateX(0);pointer-events:auto}
+  .mfull .mvolt .vpop .vsolo{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:14px;height:100%}
+  .mfull .mvolt .vpop .vsolo input[type=range]{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:vertical-lr;direction:rtl;width:44px;height:176px;accent-color:#fff;flex:none;margin:0;background:transparent;cursor:pointer;touch-action:none}
+  .mfull .mvolt .vpop .vv{min-width:46px;text-align:right;font-size:17px;
+        font-variant-numeric:tabular-nums;color:#fff}
+  /* GROUPED playback: the popover widens into one horizontal slider per zone
+     ("hit volume with multiple zones selected → multiple sliders"). The single
+     vertical slider (.vsolo) hides; .vzones shows. Anchored bottom (it grows
+     downward with zone count) instead of vertically centred. */
+  .mfull .mvolt .vpop .vzones{display:none}
+  .mfull .mvolt.multi .vpop{width:340px;height:auto;max-height:calc(100% - 40px);padding:16px 18px;top:auto;bottom:120px;transform:translateX(16px);justify-content:flex-start;gap:2px;overflow-y:auto}
+  .mfull .mvolt.multi.open .vpop{transform:translateX(0)}
+  .mfull .mvolt.multi .vsolo{display:none}
+  .mfull .mvolt.multi .vpop .vzones{display:flex;flex-direction:column;gap:16px;width:100%}
+  .mfull .vzrow{display:flex;align-items:center;gap:12px;width:100%}
+  .mfull .vzrow .vzn{flex:none;width:104px;font-size:14px;font-weight:500;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mfull .vzrow input[type=range]{flex:1;height:28px;accent-color:#fff;background:transparent;cursor:pointer;touch-action:none;min-width:0}
+  .mfull .vzrow .vzv{flex:none;width:44px;text-align:right;font-size:14px;color:rgba(255,255,255,.85);font-variant-numeric:tabular-nums}
   .spk{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;max-width:340px}
   .spk .spkname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .spk svg{width:22px;height:22px}
@@ -764,6 +933,22 @@
   #pick button.sel{background:#fff;color:#0a0d14;font-weight:600}
   #pick .sep{width:1px;background:rgba(255,255,255,.14);margin:4px 4px}
   .tag{position:fixed;top:12px;left:14px;font-size:12px;color:rgba(255,255,255,.4);z-index:99}
+  /* Zoe's Work — autonomous board review view */
+  .wkf{position:absolute;top:104px;left:64px;right:64px;bottom:96px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .wkbody{display:flex;flex-direction:column;gap:22px;padding-bottom:20px}
+  .wksec h4{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:rgba(255,255,255,.55);margin:0 0 10px}
+  .wkitem{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:14px 18px;margin-bottom:10px}
+  .wkitem .wkt{font-size:19px;font-weight:500;display:flex;align-items:center;gap:10px}
+  .wkitem .wkm{color:rgba(255,255,255,.5);font-size:15px;margin-top:5px}
+  .wkpr{color:#8ab4ff;text-decoration:none}
+  .wkpr:active{opacity:.7}
+  .wkreason{color:#ff9db0;font-size:15px;margin-top:8px}
+  .wksum{color:rgba(255,255,255,.74);font-size:15px;margin-top:8px;line-height:1.45}
+  .wksum .wksd{color:rgba(255,255,255,.5)}
+  .wkdot{width:9px;height:9px;border-radius:50%;flex:none}
+  .wkdot.prog{background:#7b96ff}.wkdot.review{background:#ffbf5e}
+  .wkdot.block{background:#ff7a90}.wkdot.done{background:#66d6a3}
+  .wkempty{color:rgba(255,255,255,.5);font-size:16px;padding:20px 4px}
 </style>
 </head>
 <body>
@@ -807,17 +992,23 @@
   };
   function hrs(list){return list.map(function(h){return '<div class="hh"><div class="lab">'+h[0]+'</div><div class="ic" style="color:'+(h[1]==='sun'?'#ffce7a':(h[1]==='moon'?'#c7d4ff':'#e2ebf4'))+'">'+IC[h[1]]+'</div><div class="d">'+h[2]+'</div></div>';}).join('');}
 
-  var GEAR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-7M6 7H4M20 17h-2M11 17H4"/><circle cx="9" cy="7" r="2.4"/><circle cx="15" cy="17" r="2.4"/></svg>';
   var SPKR='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="19" rx="3"/><circle cx="12" cy="14" r="3.4"/><circle cx="12" cy="6.5" r="1"/></svg>';
-  var COG='<button class="cog" title="Settings">'+GEAR+'</button>';
+  // Device-type glyphs for the speaker picker, one per resolved `kind` from
+  // /api/music/players (see routers/music.py::resolve_player_kind). The panel
+  // only RENDERS these — it never derives a device type from a model string.
+  var SPK_KIND_ICONS={
+    speaker:SPKR,
+    tv:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8.5 21h7M12 17v4"/></svg>',
+    display:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="12" rx="3"/><path d="M7 15h10l1.6 5.5H5.4z"/></svg>',
+    group:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="7.5" width="12" height="13.5" rx="2.5"/><path d="M8 4.5h9.5a2 2 0 0 1 2 2V17"/></svg>',
+    computer:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4.5" width="16" height="11" rx="1.8"/><path d="M2.5 19.5h19"/></svg>'
+  };
+  function spkKindIcon(k){return SPK_KIND_ICONS[k]||SPKR;}
   // The Ask surface is re-rendered from FULL.ask.html on every ask, so build it
   // from ONE shell — otherwise the talk control vanishes the moment Zoe answers.
-  // `cog` is opt-in because the answer re-renders have never carried the settings
-  // cog (only the idle surface does); keeping that as-is holds this PR to the
-  // conversation feature.
-  // (Hoisted: FULL's literal calls this, and GEAR is assigned above it.)
-  function askShell(inner,cog){
-    return (cog?'<div class="fcog">'+GEAR+'</div>':'')+'<div class="askf">'+inner+'</div>'
+  // (Hoisted: FULL's literal calls this.)
+  function askShell(inner){
+    return '<div class="askf">'+inner+'</div>'
       +'<button class="talkbtn" id="talkBtn" type="button" aria-pressed="false">Talk</button>';
   }
   var QICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
@@ -825,57 +1016,69 @@
   var TRASH_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>';
   var HEART_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>';
   var SHUF_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>';
+  // "Don't stop the music" — infinity: the queue keeps going with similar tracks.
+  var DS_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.8 8.2a3.8 3.8 0 1 0 0 7.6c1.7 0 2.9-1.1 4-2.4l2.4-2.8c1.1-1.3 2.3-2.4 4-2.4a3.8 3.8 0 1 1 0 7.6c-1.7 0-2.9-1.1-4-2.4l-2.4-2.8c-1.1-1.3-2.3-2.4-4-2.4z"/></svg>';
+  // Volume pill (top strip) — a speaker cone; the level is the slider beside it.
+  var VOL_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6.5 9H3v6h3.5L11 19z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+  // Play next — queue jumps in after the current track (arrow into a stack).
+  var NEXTQ_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h10M3 12h10M3 18h6"/><path d="m16 9 4 3-4 3z" fill="currentColor"/></svg>';
   var REP_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>';
   var PREV_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14l-10-7z"/></svg>';
   var NEXT_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l10-7z"/></svg>';
   var PLAY_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
   var PAUSE_I='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/></svg>';
   var REP1_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>';
+  var SEARCH_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
+  var TOOLS_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h7M15 18h5"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg>';
+  var CHK_I='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var GROUND='radial-gradient(120% 90% at 50% -10%,#131a2b,#080b12 62%)';
   var DUSK='linear-gradient(180deg,#20264d,#3a3a6b 34%,#8a5a86 60%,#d98a63 82%,#efb27a)';
 
   // full-screen answers
   var BULB='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.2 20h5.6"/><path d="M10 22.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4.2 11.4c.8.7 1.2 1.4 1.2 2.6h6c0-1.2.4-1.9 1.2-2.6A6.5 6.5 0 0 0 12 2.5z"/></svg>';
   var FULL={
+    work:{home:true, bg:GROUND, canvas:false,
+      html:'<div class="chttl">Zoe’s Work</div><div class="chmeta" id="wkMeta"></div>'
+        +'<div class="wkf"><div id="wkBody" class="wkbody"><div class="wkempty">Loading…</div></div></div>'},
     home:{home:false, bg:DUSK, canvas:true,
-      html:'<div class="fcog">'+GEAR+'</div><div class="hfull">'
+      html:'<div class="hfull">'
         +'<div class="htemp" id="hTemp"><div class="n">—°</div><div class="c"></div></div>'
         +'<div class="hclock"><div class="ht" id="hClock">--:--</div><div class="hd" id="hDate"></div></div>'
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
-      html:askShell('<div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div>',true)},
+      html:askShell('<div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div>')},
     weather:{home:true, bg:DUSK, canvas:true,
-      html:'<div class="fcog">'+GEAR+'</div><div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
+      html:'<div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button><button class="mqbtn" id="mQBtn" title="Browse music">'+QICON+'</button></div><div class="mfull"><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtransport" id="mTransport"><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
+      html:'<div class="mtop"><button class="spk" id="mSpk">'+SPKR+' <span class="spkname">Speaker</span> <span class="cx">▾</span></button></div><div class="mfull"><button class="cfside cfleft" id="mSearch" title="Search by voice" aria-label="Search music by voice">'+SEARCH_I+'</button><button class="cfside cfright" id="mBrowse" title="Playlists, radio &amp; sources" aria-label="Playlists, radio and sources">'+QICON+'</button><div class="cf" id="mCF"><div class="cf-track" id="mCFT"></div></div><div class="cfmeta"><div class="mkick" id="mKick">Now Playing</div><div class="mtitle" id="mTitle">—</div><div class="martist" id="mArtist"></div><button class="mfav" id="mFav" title="Favourite">'+HEART_I+'</button></div><div class="mscrub" id="mScrub"><div class="mtrack"><div class="mfill" id="mFill" style="width:0%"></div><div class="mknob" id="mKnob" style="left:0%"></div></div><div class="mtimes"><span id="mElapsed">0:00</span><span id="mDur">0:00</span></div></div><div class="mtools" id="mTools" aria-hidden="true"><button class="sml" id="mDS" type="button" title="Keep the music playing" aria-pressed="false">'+DS_I+'</button><button class="sml" id="mShuf" data-a="shuffle" title="Shuffle">'+SHUF_I+'</button><button class="sml" id="mRep" data-a="repeat" title="Repeat">'+REP_I+'</button></div><button class="mtoolsbtn" id="mToolsBtn" type="button" title="More controls" aria-label="More controls" aria-pressed="false">'+TOOLS_I+'</button><div class="mtransport" id="mTransport"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="mPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="mvolt" id="mVolT" role="button" tabindex="0" aria-label="Volume" title="Volume">'+VOL_I+'<div class="vpop"><div class="vsolo"><input type="range" min="0" max="100" step="2" id="mVol" aria-label="Volume"><span class="vv" id="mVolV"></span></div><div class="vzones" id="mVZones"></div></div></div></div><div class="mqr" id="mQR"><div class="qrbox" id="mQRCode"></div><div class="qrlab">Scan to queue</div></div>'},
     // Browse — Recent + Playlists. Same background as music (it is the music
-    // card's other face), standard card header: title by #home, actions by .fcog.
+    // card's other face), standard card header: title by #home.
     browse:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl" id="mQTitle">Recently played</div>'
+      html:'<div class="chttl" id="mQTitle">Recently played</div>'
         +'<div class="chmeta"><button class="chbtn" id="mQSave" title="Save queue as playlist">'+SAVE_I+'</button>'
         +'<button class="chbtn" id="mQClear" title="Clear queue">'+TRASH_I+'</button></div>'
         +'<div class="brf"><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button></div>'
         +'<div id="mQList" class="mqlist"></div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
+      html:'<div class="chttl">Timers</div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div>'},
     list:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="lhdr"><div class="lcount" id="lstCount"></div><div class="ltabs" id="lstTabs"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
+      html:'<div class="lhdr"><div class="lcount" id="lstCount"></div><div class="ltabs" id="lstTabs"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="calf"><div class="calhead"><h1 id="calTtl"></h1><div class="calviews" id="calViews"><button data-v="day">Day</button><button data-v="week" class="on">Week</button><button data-v="month">Month</button></div></div><div class="calbody" id="calBody"></div></div>'},
+      html:'<div class="calf"><div class="calhead"><h1 id="calTtl"></h1><div class="calviews" id="calViews"><button data-v="day">Day</button><button data-v="week" class="on">Week</button><button data-v="month">Month</button></div></div><div class="calbody" id="calBody"></div></div>'},
     person:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Contacts</div><div class="chmeta"><button class="chbtn" id="ctSearch" title="Search by voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button></div><div class="ctf"><div class="ctwrap"><div class="ctgrid" id="ctGrid"></div><div class="ctaz" id="ctAZ"></div></div></div><div class="ctdetail" id="ctDetail"></div>'},
+      html:'<div class="chttl">Contacts</div><div class="chmeta"><button class="chbtn" id="ctSearch" title="Search by voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button></div><div class="ctf"><div class="ctwrap"><div class="ctgrid" id="ctGrid"></div><div class="ctaz" id="ctAZ"></div></div></div><div class="ctdetail" id="ctDetail"></div>'},
     settings:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="setf"><div class="dk" style="margin-bottom:14px">Settings</div><div id="setSecs"></div></div>'},
+      html:'<div class="setf"><div class="dk" style="margin-bottom:14px">Settings</div><div id="setSecs"></div></div>'},
     day:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Your Day</div><div class="chmeta" id="dayMeta"></div><div class="dayf"><div class="dc1"><div class="dsec"><h4>Calendar</h4><div id="dayEvents"></div></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
+      html:'<div class="chttl">Your Day</div><div class="chmeta" id="dayMeta"></div><div class="dayf"><div class="dc1"><div class="dsec"><h4>Calendar</h4><div id="dayEvents"></div></div></div><div class="dc2"><div class="dsec"><h4>Reminders</h4><div id="dayRems"></div></div><div class="dsec" id="dayComms" style="display:none"><h4>Messages</h4><div id="dayCommsList"></div></div></div></div>'},
     sleep:{home:false, bg:'radial-gradient(120% 90% at 50% 46%,#0a0e18,#02030a 72%)', canvas:false,
       html:'<div class="slp"><div class="sclock" id="slClock"><span>--</span><span class="cln">:</span><span>--</span></div><div class="sdate" id="slDate"></div>'
         +'<div class="sdock" id="slDock"></div></div>'},
     reminder:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
+      html:'<div class="chttl">Reminders</div><div class="chmeta" id="remMeta"></div><div class="remf"><div id="remList" class="remlist"></div></div>'},
     rooms:{home:true, bg:GROUND, canvas:false,
-      html:'<div class="fcog">'+GEAR+'</div><div class="rm"><div class="rchips" id="rmScenes"></div>'
+      html:'<div class="rm"><div class="rchips" id="rmScenes"></div>'
         +'<div class="rhero" id="rmHero" style="display:none"><div class="cover"></div><div class="rhead"><div class="rart" id="rmArt">🎵</div><div><div class="rk">Now Playing</div><div class="rt" id="rmT"></div><div class="ra" id="rmA"></div></div></div><div class="rscrub"><div class="f" id="rmF" style="width:0%"></div></div><div class="rtp"><button data-a="previous">'+PREV_I+'</button><button class="pp" id="rmPP" data-a="playpause" data-playing="0">'+PLAY_I+'</button><button data-a="next">'+NEXT_I+'</button></div><div class="rvol"><span class="vlab">Vol</span><input type="range" min="0" max="100" step="2" id="rmVol"><span class="vv" id="rmVolV"></span></div></div>'
         +'<div class="rlights" id="rmLights"></div></div>'}
   };
@@ -897,7 +1100,6 @@
 
   var full=document.getElementById('full'),cardwrap=document.getElementById('cardwrap'),host=document.getElementById('host'),dock=document.getElementById('dock'),dbody=document.getElementById('dbody'),home=document.getElementById('home'),glow=document.getElementById('glow'),pick=document.getElementById('pick');
 
-  full.addEventListener('click',function(e){if(e.target.closest('.fcog'))show('settings');});
   // Delegated: the Ask surface re-renders on every answer, so the talk control is
   // a fresh element each time and cannot hold its own listener.
   full.addEventListener('click',function(e){
@@ -991,18 +1193,32 @@
       // claimed "a failed request falls through to sleeping"; a HUNG one isn't a
       // failed one, and that gap made the claim untrue.) Race a timer so exactly
       // one decision is taken, whichever arrives first.
-      var _decided=false,_decideT=null;
-      function _decide(playing){
+      var _decided=false,_decideT=null,_votes=0,_stay=false;
+      function _decide(stayAwake){
         if(_decided)return;_decided=true;
         if(_decideT){clearTimeout(_decideT);_decideT=null;}
-        if(playing){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
+        if(stayAwake){armIdleSleep(IDLE_SLEEP_RETRY_MS);return;}
         _sleepNow();
       }
-      _decideT=setTimeout(function(){_decide(false);},4000);
+      // TWO independent reasons to stay awake, asked in parallel — EITHER wins.
+      // The timeout decides with whatever votes have LANDED, not a hard false:
+      // otherwise a "music is playing" vote already received would be thrown
+      // away by the second, slower request hanging, and the panel would sleep
+      // mid-song again. With no votes at all _stay is false, so an unreachable
+      // server still falls through to sleeping exactly as before.
+      function _tally(stay){if(stay)_stay=true;if(++_votes>=2)_decide(_stay);}
+      _decideT=setTimeout(function(){_decide(_stay);},4000);
       apiGet('/api/music/now-playing').then(function(d){
         var np=d&&d.now_playing;
-        _decide(!!(np&&np.state==='playing'));
-      }).catch(function(){_decide(false);});
+        _tally(!!(np&&np.state==='playing'));
+      }).catch(function(){_tally(false);});
+      // A light/fan/TV on in THIS panel's room means a human is up. The idle
+      // timer alone never knew that, so it drifted to the night clock while the
+      // operator sat in a lit room. Resolved server-side from the panel's room
+      // (rooms -> room_devices), so no entity id is hardcoded here.
+      apiGet('/api/panels/'+encodeURIComponent(_panelDevId())+'/sleep-gate').then(function(d){
+        _tally(!!(d&&d.block));
+      }).catch(function(){_tally(false);});
     },ms||IDLE_SLEEP_MS);}
   // Any touch on the panel means the user took over — the screen is theirs.
   document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
@@ -1042,6 +1258,7 @@
       if(id==='calendar')wireCalendar();
       if(id==='person')wireContacts();
       if(id==='settings')wireSettings();
+      if(id==='work')wireWork();
       if(id==='reminder')wireReminder();
       full.querySelectorAll('.sc[data-t], .rlt[data-l], .hdock .hpc.light').forEach(function(el){el.onclick=function(){el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';};});
       full.querySelectorAll('.rchip').forEach(function(c){c.onclick=function(){full.querySelectorAll('.rchip').forEach(function(x){x.classList.remove('on')});c.classList.add('on');};});
@@ -1160,6 +1377,7 @@
     'mdi:palette-outline':'<path d="M12 3.2a8.8 8.8 0 0 0 0 17.6c1.2 0 1.9-.8 1.9-1.7 0-.9-.7-1.4-.7-2.1 0-.8.6-1.4 1.5-1.4h1.6a4.4 4.4 0 0 0 4.5-4.5c0-4.3-4-7.9-8.8-7.9z"/><circle cx="7.4" cy="11.4" r="1.1"/><circle cx="10.2" cy="7.2" r="1.1"/><circle cx="15.2" cy="8" r="1.1"/>',
     'mdi:toggle-switch-outline':'<rect x="2.5" y="7" width="19" height="10" rx="5"/><circle cx="16.4" cy="12" r="2.6"/>',
     'mdi:lightbulb-outline':'<path d="M9.2 20h5.6"/><path d="M10 22.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4.2 11.4c.8.7 1.2 1.4 1.2 2.6h6c0-1.2.4-1.9 1.2-2.6A6.5 6.5 0 0 0 12 2.5z"/>',
+    'mdi:door':'<path d="M3.5 21h17"/><path d="M6 21V4.2a1.2 1.2 0 0 1 1.4-1.2l9 1.3a1.2 1.2 0 0 1 1.1 1.2V21"/><circle cx="14.8" cy="12.4" r="1"/>',
     '_':'<circle cx="12" cy="12" r="8.6"/><path d="M12 8.4v4.2"/><path d="M12 15.8h.01"/>'
   };
   function mdi(name){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(MDI[name]||MDI['_'])+'</svg>';}
@@ -1323,8 +1541,7 @@
     // is never empty. pins_configured:true with an empty list is a real choice
     // ("show nothing") and must NOT fall back.
     if(_pcfg&&_pcfg.pins_configured){
-      dbody.innerHTML=(_pcfg.pinned||[]).map(dockPinHtml).join('');
-      paintDockTimer();paintDockMusic();wireDock();return;
+      _dockPaint((_pcfg.pinned||[]).map(dockPinHtml).join(''));return;
     }
     var cl=_ha.climate,lights=_ha.lights.slice(0,cl?2:3),html='';
     // Dock pills carry a ONE-WORD name: the dock is a glance surface and
@@ -1353,10 +1570,35 @@
       html+='<div class="pc temp" data-eid="'+esc(cl.entity_id)+'" data-act="set_temperature" data-tgt="'+esc(String(ctgt))+'"'
         +' data-mn="'+cb.mn+'" data-mx="'+cb.mx+'" data-st="'+cb.st+'"><div class="tv">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="tl">Temp</div>'
         +'<div class="tpop"><div class="tpv">'+_tfmt(ctgt,cb.st)+'°</div><div class="tsl"><div class="tff"></div><div class="tkn"></div></div><div class="tpl">Thermostat</div></div></div>';}
-    dbody.innerHTML=html;
+    _dockPaint(html);
+  }
+  // Write the dock ONLY when its markup actually changed.
+  //
+  // refreshHA() runs every 30s and used to call renderDock() unconditionally,
+  // which replaced dbody.innerHTML wholesale — tearing down and rebuilding every
+  // tile, icon and SVG even when not one value had moved. That is the reported
+  // "the dock flashes, or changes quickly, just while your on one card, not
+  // touching anything": a full DOM swap twice a minute, forever.
+  //
+  // Comparing against dbody.innerHTML directly does NOT work: the browser
+  // normalises serialised markup, and paintDockMusic()/paintDockTimer() append
+  // their chips afterwards, so the live innerHTML never equals a freshly
+  // generated pin string. Compare against the exact string we last wrote.
+  //
+  // Still rebuild when our tiles are absent (a "heard" chip took the dock, or
+  // this is the first paint) — otherwise an unchanged signature would leave the
+  // dock empty forever.
+  var _dockHtml=null;
+  function _dockPaint(html){
+    if(html!==_dockHtml||!dbody.querySelector('.pc')){
+      _dockHtml=html;
+      dbody.innerHTML=html;
+      wireDock();
+    }
+    // These own their own chips and are cheap + idempotent, so they run every
+    // time: they are what keeps the timer countdown and now-playing fresh.
     paintDockTimer();
     paintDockMusic();
-    wireDock();
   }
 
   // ---- launcher overlay (opened from the dock grid button) ----
@@ -1400,6 +1642,40 @@
   lgrid.addEventListener('click',function(e){var t=e.target.closest('.ltile');if(!t)return;lclose();var u=t.getAttribute('data-u');if(u){location.href=u;return;}
     show(t.dataset.id);});
   addEventListener('keydown',function(e){if(e.key==='Escape')lclose();});
+
+  // Zoe's Work — review surface for the autonomous board runner. Reads the
+  // read-only /api/board/summary and renders needs-feedback first.
+  function wireWork(){
+    var body=document.getElementById('wkBody'), meta=document.getElementById('wkMeta');
+    if(!body)return;
+    function safeUrl(u){return (typeof u==='string'&&/^https:\/\/github\.com\//.test(u))?u:null;}
+    function prLink(u){var s=safeUrl(u);return s?' · <a class="wkpr" href="'+esc(s)+'" target="_blank" rel="noopener">review PR ↗</a>':'';}
+    function itemHtml(it,cls,withReason){
+      var reason=(withReason&&it.reason)?'<div class="wkreason">⚠ '+esc(it.reason)+'</div>':'';
+      // Plain-English "what was fixed", written at merge — the headline is the
+      // fix, the muted tail is the longer detail (both already escaped).
+      var sum=it.summary?'<div class="wksum">'+esc(it.summary)
+        +(it.summary_detail?'<span class="wksd"> — '+esc(it.summary_detail)+'</span>':'')+'</div>':'';
+      return '<div class="wkitem"><div class="wkt"><span class="wkdot '+cls+'"></span> '+esc(it.title)+'</div>'
+        +'<div class="wkm">#'+esc(it.number)+prLink(it.pr_url)+'</div>'+sum+reason+'</div>';
+    }
+    function section(title,arr,cls,withReason){
+      if(!arr||!arr.length)return '';
+      return '<div class="wksec"><h4>'+esc(title)+' ('+arr.length+')</h4>'+arr.map(function(it){return itemHtml(it,cls,withReason);}).join('')+'</div>';
+    }
+    apiGet('/api/board/summary').then(function(d){
+      if(_cur!=='work')return;
+      if(!d||!d.ok){body.innerHTML='<div class="wkempty">Board unavailable — the runner or Multica may be down.</div>';if(meta)meta.textContent='';return;}
+      var c=d.counts||{};
+      if(meta)meta.textContent=(d.needs_attention?d.needs_attention+' need feedback · ':'')+(c.done||0)+' done · '+(c.todo||0)+' queued';
+      var h='';
+      h+=section('Needs your feedback',d.blocked,'block',true);
+      h+=section('In progress',d.in_progress,'prog',false);
+      h+=section('In review',d.in_review,'review',false);
+      h+=section('Recently shipped',d.recently_done,'done',false);
+      body.innerHTML=h||'<div class="wkempty">Nothing on the board yet.</div>';
+    }).catch(function(){if(_cur==='work')body.innerHTML='<div class="wkempty">Board unavailable.</div>';});
+  }
 
   // ---- live home data: real clock + weather + today's agenda (no placeholder data) ----
   var CAT={social:'var(--cat-personal)',health:'var(--cat-health)',work:'var(--cat-work)',family:'var(--cat-family)',personal:'var(--cat-personal)',
@@ -1462,6 +1738,23 @@
   // ---- Music screen (real now-playing + transport) ----
   function fmtDur(s){s=Math.max(0,Math.round(s||0));return Math.floor(s/60)+':'+two(s%60);}
   var _music={player_id:null};
+  // Does a PAUSED player still hold something worth moving? `playing` never asks
+  // this — audio is audibly coming out of a speaker, so there is by definition
+  // something to transfer even when MA reports no metadata at all (a bare
+  // stream). Only `paused` is ambiguous: a genuinely paused track versus a stale
+  // transport left sitting on a player. The stuck case had NOTHING on any axis
+  // (title '', queue_item_id '', queue_index null, elapsed 0, duration null),
+  // which is what separates it from a real pause.
+  function _hasMedia(np){
+    if(!np)return false;
+    if((np.title||'').trim())return true;
+    if((np.queue_item_id||'').toString().trim())return true;
+    if(np.queue_index!=null)return true;
+    if(+np.elapsed>0)return true;
+    if(+np.duration>0)return true;
+    return false;
+  }
+
   // "Is music playing right now", written by BOTH now-playing pollers — the music
   // surface's loadMusic and the dock's paintDockMusic — so it stays fresh on every
   // surface. The idle-sleep guard can't use _music.np: only loadMusic writes that,
@@ -1480,6 +1773,7 @@
       var spk=document.getElementById('mSpk'),ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),td=document.getElementById('mDur'),pp=document.getElementById('mPP');
       var idle=!d||!d.available||!np||!(np.title||np.state==='playing'||np.state==='paused');
       var scrub=document.querySelector('.mfull .mscrub'),tp=document.getElementById('mTransport');
+      var tbtn=document.getElementById('mToolsBtn'),vtile=document.getElementById('mVolT');
       noteNP(np);   // before the idle return, so stopping the music lets sleep arm again
       if(idle){
         // Idle is a real state, not a broken card: say so, keep the speaker
@@ -1491,52 +1785,292 @@
         var pp0=document.getElementById('mPP');if(pp0){pp0.dataset.playing='0';pp0.innerHTML=PLAY_I;}
         if(ar)ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
-        if(np&&spk){var nm0=spk.querySelector('.spkname');if(nm0&&np.player_name)nm0.textContent=np.player_name;}
+        // Nothing to act on: hide the tools + volume tiles too, and force the
+        // tools row shut so it can't linger over an idle card.
+        if(tbtn)tbtn.style.display='none';if(vtile)vtile.style.display='none';musicTools(false);
+        // Don't stomp the speaker the operator just chose. With nothing
+        // playing, now-playing still names whatever MA last had active, so
+        // refreshing from it made the label snap back a few seconds after
+        // every pick — which read as "I can't change speaker".
+        if(np&&spk){var nm0=spk.querySelector('.spkname');
+          var want0=_music.chosenName||np.player_name;
+          if(nm0&&want0)nm0.textContent=want0;}
         cfClear();   // no queue to fan out when nothing is playing
         return;
       }
       if(scrub)scrub.style.display='';if(tp)tp.style.display='';
+      if(tbtn)tbtn.style.display='';if(vtile)vtile.style.display='';
       _music.player_id=np.player_id;
-      if(spk){var nm=spk.querySelector('.spkname');if(nm)nm.textContent=np.player_name||'';}
+      if(spk){var nm=spk.querySelector('.spkname');
+        // A REAL track playing somewhere is the truth — that player wins and any
+        // stale pick is dropped. But `paused with no title` is not a real track:
+        // this branch is reached whenever state is playing OR paused, so without
+        // the title check a pick was overwritten within 5s by the very player the
+        // operator was trying to move away from. That is the whole "I can't
+        // change speaker" report.
+        var real=(np.state==='playing')||(np.state==='paused'&&_hasMedia(np));
+        if(real&&np.player_name)_music.chosenName='';
+        if(nm)nm.textContent=(real?np.player_name:'')||_music.chosenName||np.player_name||'';}
       var el=np.elapsed||0,du=np.duration||0;
-      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||np.state==='paused'),at:Date.now(),uri:np.uri||np.media_uri||'',queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
+      _music.np={elapsed:el,duration:du,playing:np.state==='playing',active:(np.state==='playing'||(np.state==='paused'&&_hasMedia(np)))/* 'active' must mean THERE IS SOMETHING TO MOVE, not merely a paused transport. A stale paused player with an empty queue was counted as active, so every speaker tap took the transfer path, tried to move a queue that did not exist, and silently did nothing — the speaker could never be changed. */,at:Date.now(),queueItemId:np.queue_item_id||null,index:(np.queue_index!=null?np.queue_index:null),title:np.title||'',artist:np.artist||'',image:np.image||''};
       cfSync();   // the flow owns the art + meta now (it may be showing a browsed cover)
-      if(fill)fill.style.width=(du?Math.min(100,el/du*100):0)+'%';
-      if(te)te.textContent=fmtDur(el);if(td)td.textContent=fmtDur(du);
+      // The 5s poll must not repaint the bar out from under a drag.
+      if(!_seek){
+        var fp=(du?Math.min(100,el/du*100):0)+'%';
+        if(fill)fill.style.width=fp;
+        var kn=document.getElementById('mKnob');if(kn)kn.style.left=fp;
+        if(te)te.textContent=fmtDur(el);
+      }
+      if(td)td.textContent=fmtDur(du);
       if(pp){var playing=(np.state==='playing');pp.dataset.playing=playing?'1':'0';pp.innerHTML=playing?PAUSE_I:PLAY_I;}
       var sh=document.getElementById('mShuf');if(sh)sh.classList.toggle('on',!!np.shuffle);
       var rp=document.getElementById('mRep');if(rp){var rm=np.repeat||'off';_music.repeat=rm;
         rp.classList.toggle('on',rm!=='off');rp.innerHTML=rm==='one'?REP1_I:REP_I;}
+      // "Don't stop the music" reads back off the same poll as shuffle/repeat.
+      var ds=document.getElementById('mDS');_music.dontStop=!!np.dont_stop;
+      if(ds){ds.classList.toggle('on',_music.dontStop);
+        ds.setAttribute('aria-pressed',_music.dontStop?'true':'false');}
+      // Volume: skip while the finger is on the slider, or the poll fights the
+      // drag — the same guard the Rooms hero slider uses.
+      var mv=document.getElementById('mVol'),mvv=document.getElementById('mVolV');
+      if(mv&&np.volume!=null&&document.activeElement!==mv&&!mv.dataset.drag){
+        mv.value=Math.round(np.volume);
+        if(mvv)mvv.textContent=Math.round(np.volume)+'%';
+      }
       _music.shuffle=!!np.shuffle;
     }).catch(function(){});
   }
   // Smooth elapsed between the 5s polls — the scrub advances every second
   // while something is playing instead of jumping on each poll.
   function tickMusic(){if(_cur!=='music'||!_music.np||!_music.np.playing)return;
+    if(_seek)return;   // a finger owns the bar — see seekPaint
     var el=_music.np.elapsed+(Date.now()-_music.np.at)/1000,du=_music.np.duration||0;
-    var fill=document.getElementById('mFill'),te=document.getElementById('mElapsed');
-    if(fill&&du)fill.style.width=Math.min(100,el/du*100)+'%';
+    var fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),
+        kn=document.getElementById('mKnob');
+    // The knob moves with the fill, every tick. Advancing only the fill leaves
+    // the two up to 5s apart between polls — they are one control.
+    if(du){var p=Math.min(100,el/du*100)+'%';
+      if(fill)fill.style.width=p;
+      if(kn)kn.style.left=p;}
     if(te)te.textContent=fmtDur(Math.min(el,du||el));}
+
+  // ---- Scrub: drag or tap the bar to seek ----------------------------------
+  // /api/music/seek existed and the bar was drawn, but nothing listened — a bar
+  // that looks draggable and isn't is a correctness bug, so this wires it.
+  // `_seek` is non-null for exactly as long as a finger owns the bar, and BOTH
+  // repainters (tickMusic every 1s, loadMusic every 5s) bail while it is set —
+  // the same shape as refreshHA's `.pc.temp.open` guard: a poll must never
+  // yank the control out from under a drag.
+  var _seek=null;
+  // Fraction 0..1 of the TRACK's box (not the padded hit area), so the value
+  // matches where the fill visually ends.
+  function seekPct(clientX){
+    var tr=document.querySelector('.mfull .mtrack');if(!tr)return null;
+    var r=tr.getBoundingClientRect();if(!r.width)return null;
+    return Math.max(0,Math.min(1,(clientX-r.left)/r.width));
+  }
+  function seekPaint(p){
+    var du=(_music.np&&_music.np.duration)||0;
+    var fill=document.getElementById('mFill'),kn=document.getElementById('mKnob'),
+        te=document.getElementById('mElapsed');
+    var pct=(p*100)+'%';
+    if(fill)fill.style.width=pct;
+    if(kn)kn.style.left=pct;
+    if(te)te.textContent=fmtDur(p*du);
+  }
+  function seekCommit(p){
+    var du=(_music.np&&_music.np.duration)||0;
+    if(!du||!_music.player_id)return;
+    var pos=Math.max(0,Math.min(du,Math.round(p*du)));
+    // Adopt the seeked position locally so tickMusic counts on from HERE while
+    // MA catches up; the next poll corrects it if the seek was refused.
+    _music.np.elapsed=pos;_music.np.at=Date.now();
+    _qpost('seek',{position_seconds:pos,player_id:_music.player_id})
+      .then(function(r){if(!r||!r.ok)toast('Couldn’t seek');})
+      .catch(function(){toast('Couldn’t seek');});
+  }
+  // ---- Volume: the Rooms hero slider, on the music card -------------------
+  // Same native input, same 250ms debounce, same volume_set action as #rmVol
+  // (see the rooms card) — deliberately not a second volume component. The
+  // extra `drag` flag closes a gap the Rooms one has: activeElement alone is
+  // false during a TOUCH drag on some builds, which would let the 5s poll
+  // snap the knob back mid-slide.
+  function wireVol(){
+    var v=document.getElementById('mVol'),vv=document.getElementById('mVolV');
+    if(!v||v.dataset.wired)return;
+    v.dataset.wired='1';
+    var vt=null;
+    v.addEventListener('pointerdown',function(){v.dataset.drag='1';});
+    ['pointerup','pointercancel'].forEach(function(ev){
+      v.addEventListener(ev,function(){delete v.dataset.drag;});});
+    v.oninput=function(){
+      if(vv)vv.textContent=v.value+'%';
+      if(vt)clearTimeout(vt);
+      vt=setTimeout(function(){
+        fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',
+          body:JSON.stringify({action:'volume_set',player_id:_music.player_id||'',value:+v.value})}).catch(function(){});
+      },250);};
+  }
+  // ---- Volume popover: the thermostat pill's pattern, on the transport -----
+  // The slider is no longer permanently on screen — a speaker icon opens it.
+  // Same shape as `.pc.temp`/`.tpop`: a tap on the tile toggles `.open`, and a
+  // click that lands INSIDE the popover is ignored, so dragging the slider
+  // cannot dismiss the thing you are dragging.
+  //
+  // It survives a repaint mid-drag for two reasons, and BOTH already hold:
+  //  1. Neither repainter rebuilds this DOM. tickMusic (1s) and loadMusic (5s)
+  //     patch text and values in place; only show('music') rebuilds the card.
+  //     So there is no `.open` state for a poll to destroy — unlike the dock,
+  //     where renderDock() replaces innerHTML and refreshHA() therefore needs
+  //     its explicit `.pc.temp.open` guard.
+  //  2. loadMusic's volume write is already gated on `document.activeElement`
+  //     PLUS `dataset.drag` (activeElement alone is false during a touch drag),
+  //     so the poll cannot snap the knob back mid-slide either.
+  // Keeping the popover's own state out of the repainters is what makes (1)
+  // true — do not move `.open` onto an element a repainter rewrites.
+  function wireVolPop(){
+    var t=document.getElementById('mVolT');
+    if(!t||t.dataset.wired)return;
+    t.dataset.wired='1';
+    t.addEventListener('click',function(e){
+      if(e.target.closest('.vpop'))return;   // the slider lives in there
+      var opening=!t.classList.contains('open');
+      t.classList.toggle('open');
+      if(opening)populateVolPop(t);   // solo slider, or one per zone if grouped
+    });
+  }
+  // When playback spans multiple zones the popover becomes one horizontal slider
+  // per zone ("hit volume with multiple zones → multiple sliders"); solo keeps
+  // the single vertical slider. Reads live group state each open, so the sliders
+  // reflect and control each real member. The solo #mVol is never destroyed —
+  // .vzones is a separate box — so its wiring survives.
+  function populateVolPop(t){
+    var zones=document.getElementById('mVZones');if(!zones)return;
+    apiGet('/api/music/groups').then(function(gd){
+      var players=((gd&&gd.players))||[];
+      var byId={};players.forEach(function(p){if(p&&p.player_id)byId[p.player_id]=p;});
+      var leaderRow=byId[_music.player_id]||{};
+      var mem=(leaderRow.group_member_ids&&leaderRow.group_member_ids.length>1)?leaderRow.group_member_ids:null;
+      if(!mem){t.classList.remove('multi');zones.innerHTML='';return;}
+      zones.innerHTML=mem.map(function(id){
+        var p=byId[id]||{};var nm=p.display_name||p.name||'Zone';
+        var vol=(p.volume!=null?p.volume:(p.volume_level!=null?p.volume_level:50));
+        return '<div class="vzrow"><span class="vzn">'+esc(String(nm))+'</span>'
+          +'<input type="range" min="0" max="100" step="2" class="vz" data-pid="'+esc(String(id))+'" value="'+Math.round(+vol)+'" aria-label="'+esc(String(nm))+' volume">'
+          +'<span class="vzv">'+Math.round(+vol)+'%</span></div>';
+      }).join('');
+      wireZoneVols(zones);
+      t.classList.add('multi');
+    }).catch(function(){});
+  }
+  function wireZoneVols(zones){
+    zones.querySelectorAll('input.vz').forEach(function(v){
+      if(v.dataset.wired)return;v.dataset.wired='1';
+      var vt=null,vv=v.parentNode.querySelector('.vzv');
+      v.addEventListener('pointerdown',function(){v.dataset.drag='1';});
+      ['pointerup','pointercancel'].forEach(function(ev){v.addEventListener(ev,function(){delete v.dataset.drag;});});
+      v.oninput=function(){
+        if(vv)vv.textContent=v.value+'%';
+        if(vt)clearTimeout(vt);
+        vt=setTimeout(function(){
+          fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',
+            body:JSON.stringify({action:'volume_set',player_id:v.getAttribute('data-pid'),value:+v.value})}).catch(function(){});
+        },250);};
+    });
+  }
+  // ---- "Keep playing" (∞), a round button in the transport row (#1450) -----
+  // It lives inside #mTransport (before shuffle) but carries no data-a, so the
+  // transport's delegated handler — which dispatches on data-a — skips it; it is
+  // wired directly here instead.
+  // MA auto-continues with similar tracks when the queue runs dry. Optimistic
+  // like shuffle/repeat, but reverted on refusal — MA rejects the enable
+  // unless a provider offers similar_tracks.
+  function wireKeep(){
+    var b=document.getElementById('mDS');
+    if(!b||b.dataset.wired)return;
+    b.dataset.wired='1';
+    b.addEventListener('click',function(){
+      var want=!_music.dontStop;
+      _music.dontStop=want;b.classList.toggle('on',want);b.setAttribute('aria-pressed',want?'true':'false');
+      function revert(){_music.dontStop=!want;b.classList.toggle('on',!want);
+        b.setAttribute('aria-pressed',want?'false':'true');toast('Couldn’t change that');}
+      _qpost('dont-stop',{enabled:want,player_id:_music.player_id||''}).then(function(r){
+        if(r&&r.ok){toast(want?'Keeping the music going':'Stopping when the queue ends');setTimeout(loadMusic,400);return;}
+        revert();
+      }).catch(revert);
+    });
+  }
+  function wireSeek(){
+    // The card is rebuilt on every show('music'), so a drag left in flight by a
+    // navigation would strand `_seek` set — and BOTH repainters bail while it
+    // is, freezing the bar for the rest of the session. Same hazard cfClear()
+    // handles for `_cf.drag`.
+    _seek=null;
+    var sc=document.getElementById('mScrub');if(!sc||sc.dataset.wired)return;
+    sc.dataset.wired='1';
+    sc.addEventListener('pointerdown',function(e){
+      if(!_music.np||!(_music.np.duration>0))return;   // radio: nothing to seek
+      // startX is read HERE, off the real event — never inside a timer, which
+      // is how a drag once shipped permanently disarmed (#1332).
+      var p=seekPct(e.clientX);if(p===null)return;
+      _seek={id:e.pointerId,p:p};
+      sc.classList.add('drag');
+      try{sc.setPointerCapture(e.pointerId);}catch(_){}
+      seekPaint(p);e.preventDefault();
+    });
+    sc.addEventListener('pointermove',function(e){
+      if(!_seek||e.pointerId!==_seek.id)return;
+      var p=seekPct(e.clientX);if(p===null)return;
+      _seek.p=p;seekPaint(p);
+    });
+    function release(e,commit){
+      if(!_seek||e.pointerId!==_seek.id)return;
+      var p=_seek.p;_seek=null;sc.classList.remove('drag');
+      try{sc.releasePointerCapture(e.pointerId);}catch(_){}
+      if(commit)seekCommit(p);   // a plain tap lands here too: down+up, no move
+    }
+    sc.addEventListener('pointerup',function(e){release(e,true);});
+    sc.addEventListener('pointercancel',function(e){release(e,false);});
+  }
   function musicSet(action,value){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id,value:value})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
   var _qtab='recent';
   function _qpost(path,body){return apiJson('POST','/api/music/'+path,body);}
   // The overlay is pure BROWSING now — Recent + Playlists. The queue itself is
   // the card (see the Cover Flow below), so there's no Queue tab to render.
+  var _qGen=0;
   function loadQueue(){var host=document.getElementById('mQList');if(!host)return;
+    // Overlapping loads: `_cur==='browse'` cannot tell WHICH visit a response
+    // belongs to, so leaving and re-entering Browse before the first request
+    // resolves lets the stale one land — and, with the fall-through below, flip
+    // a freshly-loading Recent over to Playlists. Only the newest load may act.
+    var gen=++_qGen;
     var ttl=document.getElementById('mQTitle');
     host.classList.remove('grid','recent');
     if(_qtab==='recent'){host.classList.add('recent');if(ttl)ttl.textContent='Recently played';
       host.innerHTML=_qmsg('Loading…');
-      apiGet('/api/music/recently-played').then(function(d){if(_cur!=='browse')return;var its=(d&&d.items)||[];
-        host.innerHTML=its.slice(0,40).map(_rtile).join('')||_qempty('Nothing played yet.');
-        _wireBrowseRow(host);}).catch(function(){host.innerHTML=_qempty('Couldn’t load.');});return;}
+      apiGet('/api/music/recently-played').then(function(d){if(_cur!=='browse'||gen!==_qGen)return;var its=(d&&d.items)||[];
+        if(!its.length){
+          // Recent is empty on a fresh house (MA reports available:false with no
+          // history). Landing here is a dead end: the speaker picker only
+          // REMEMBERS a speaker, it never starts anything, so an empty Recent
+          // leaves no way to play a single thing from the panel. Fall through to
+          // Playlists, which is the tab that actually has content.
+          var tb=document.querySelector('.mqtabs button[data-qt="playlists"]');
+          if(tb&&_qtab==='recent'){_qtab='playlists';
+            document.querySelectorAll('.mqtabs button').forEach(function(x){x.classList.toggle('on',x===tb);});
+            loadQueue();return;}
+          host.innerHTML=_qempty('Nothing played yet — try Playlists.');
+          _wireBrowseRow(host);return;
+        }
+        host.innerHTML=its.slice(0,40).map(_rtile).join('');
+        _wireBrowseRow(host);}).catch(function(){if(_cur!=='browse'||gen!==_qGen)return;host.innerHTML=_qempty('Couldn’t load.');});return;}
     if(_qtab==='playlists'){host.classList.add('grid');if(ttl)ttl.textContent='Your playlists';
       host.innerHTML=_qmsg('Loading…');
-      apiGet('/api/music/playlists').then(function(d){if(_cur!=='browse')return;var pls=(d&&d.playlists)||[];
+      apiGet('/api/music/playlists').then(function(d){if(_cur!=='browse'||gen!==_qGen)return;var pls=(d&&d.playlists)||[];
         host.innerHTML=pls.map(_pltile).join('')||_qempty('No playlists yet — build one with Save.');
         host.onclick=function(e){var r=e.target.closest('.qi.pl');if(!r)return;_qpost('play_media',{uri:r.getAttribute('data-uri'),player_id:_music.player_id||undefined,option:'replace'}).then(function(){toast('Playing playlist');setTimeout(loadMusic,600);}).catch(function(){toast('Couldn’t play');});};
-      }).catch(function(){host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
+      }).catch(function(){if(_cur!=='browse'||gen!==_qGen)return;host.innerHTML=_qempty('Couldn’t load playlists.');});return;}
   }
   function _qmsg(t){return '<div class="mqmsg" style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _qempty(t){return '<div style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
@@ -1544,10 +2078,16 @@
   function _pltile(pl){var cov=(pl.image&&/^https?:/.test(pl.image))?'<img alt="" src="'+esc(pl.image)+'">':'<span class="pph">🎵</span>';
     var cnt=pl.count?'<span class="pcount">'+esc(String(pl.count))+'</span>':'';
     return '<div class="qi pl" data-uri="'+esc(pl.uri)+'"><div class="pcov">'+cov+cnt+'</div><span class="qn">'+esc(pl.name)+'</span></div>';}
-  function _rtile(t){return '<div class="rtile qi br" data-uri="'+esc(t.uri||'')+'">'+_thumb(t.image)+'<span class="rti"><span class="qn">'+esc(t.name||'')+'</span>'+(t.artist?'<span class="ra">'+esc(t.artist)+'</span>':'')+'</span><button class="qadd" title="Add to queue">＋</button></div>';}
+  function _rtile(t){return '<div class="rtile qi br" data-uri="'+esc(t.uri||'')+'">'+_thumb(t.image)+'<span class="rti"><span class="qn">'+esc(t.name||'')+'</span>'+(t.artist?'<span class="ra">'+esc(t.artist)+'</span>':'')+'</span><button class="qnext" title="Play next">'+NEXTQ_I+'</button><button class="qadd" title="Add to queue">＋</button></div>';}
+  // Three intents per row, all through the one `option` play_media already
+  // takes: tap the row = play now (replace), ⏭ = play next, ＋ = end of queue.
+  // "Play next" is offered exactly where "add to queue" is, since it is the
+  // same decision with a different urgency.
   function _wireBrowseRow(host){host.onclick=function(e){var r=e.target.closest('.qi.br');if(!r)return;var uri=r.getAttribute('data-uri');
-    var add=e.target.closest('.qadd');
-    _qpost('play_media',{uri:uri,player_id:_music.player_id||undefined,option:add?'add':'replace'}).then(function(){toast(add?'Added to queue':'Playing now');if(!add)setTimeout(loadMusic,600);else setTimeout(cfLoad,600);}).catch(function(){toast('Couldn’t do that');});};}
+    var add=e.target.closest('.qadd'),nxt=e.target.closest('.qnext');
+    var option=nxt?'next':(add?'add':'replace');
+    var said={next:'Playing next',add:'Added to queue',replace:'Playing now'}[option];
+    _qpost('play_media',{uri:uri,player_id:_music.player_id||undefined,option:option}).then(function(){toast(said);if(option==='replace')setTimeout(loadMusic,600);else setTimeout(cfLoad,600);}).catch(function(){toast('Couldn’t do that');});};}
 
   // ---- Cover Flow queue: the music card IS the queue -----------------------
   // Played covers recede LEFT, now-playing flat in the CENTRE, upcoming fan
@@ -1767,7 +2307,10 @@
     var ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),
         ki=document.getElementById('mKick');
     var f=cfF(),it=_cf.items[f],np=_music.np;
-    if(!it){if(np&&ti){ti.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';}return;}
+    // No focused row (empty/unloaded queue): fall back to the playing labels —
+    // and repaint the heart too, or it keeps whatever the LAST focused track
+    // set, which is the "stays lit across track changes" lie this PR removes.
+    if(!it){if(np&&ti){ti.textContent=np.title||'';if(ar)ar.textContent=np.artist||'';}cfPaintFav();return;}
     // Say where the focused cover sits relative to what's playing. `cur` is -1
     // when the playing row isn't in the queue (it was just removed, or MA hasn't
     // caught up), so that case gets its own honest label instead of a nonsense
@@ -1782,6 +2325,25 @@
     // ("Livingston - Shadow") kept only as a fallback for shapes with no media_item.
     if(ti)ti.textContent=it.title||it.name||'';
     if(ar)ar.textContent=it.artist||'';
+    cfPaintFav();   // painted HERE so the heart can never disagree with the label
+  }
+  // ---- Favourite: the heart follows the FOCUSED cover ----------------------
+  // It sits directly under the title/artist that cfPaintMeta just wrote, and
+  // those are the FOCUSED track's — so the heart must act on the same item or
+  // the card contradicts itself (flick to cover 5, tap, favourite cover 1).
+  // It also has to: `now-playing` carries NO uri/media_uri field at all (see
+  // music_service.now_playing), so the old `_music.np.uri` was permanently ''
+  // and the handler short-circuited to "Nothing playing" on EVERY tap — the
+  // heart never once reached the API. The queue item does carry the real
+  // thing: media_item.uri to write, media_item.favorite to read back.
+  function cfFavItem(){var it=_cf.items[cfF()];return (it&&it.media_item)||null;}
+  function cfPaintFav(){
+    var fav=document.getElementById('mFav');if(!fav)return;
+    var mi=cfFavItem();
+    // No uri = nothing that CAN be favourited (radio, a shape with no media
+    // item). Hide it rather than offer a button that can only fail.
+    fav.style.display=(mi&&mi.uri)?'':'none';
+    fav.classList.toggle('on',!!(mi&&mi.favorite));
   }
   function cfArmHome(){   // browse, then drift back to Now — like ambient return
     if(_cf.homeT)clearTimeout(_cf.homeT);
@@ -1936,7 +2498,18 @@
       var dx=e.clientX-d.x0,dy=e.clientY-d.y0,dt=Date.now()-d.t0;
       if(d.lifted){
         d.el.classList.remove('lift');d.el.style.zIndex='';
-        cfCommitMove(d.i,(d.to==null?d.i:d.to));return;
+        var to=(d.to==null?d.i:d.to);
+        // A lift that never MOVED is not a reorder — it is just a slow tap.
+        // Committing a move-to-itself here made every stationary press longer
+        // than CF_HOLD_MS (320ms) a dead zone that neither played nor
+        // reordered: "I cant seem to click on an upcoming track to get it to
+        // play now". A deliberate tap easily runs past 320ms, especially when
+        // aiming at a smaller off-centre cover, so the bug hid from quick
+        // flicks and bit exactly the careful taps. Compare the SLOT, not the
+        // `moved` flag: finger wobble sets `moved` while still rounding to the
+        // same slot, and that is still a tap.
+        if(to===d.i){cfPlay(d.i);return;}
+        cfCommitMove(d.i,to);return;
       }
       if(d.onX){cfRemove(d.i);return;}                            // the visible affordance
       if(d.browsing){cfRelease(d,e);return;}                      // BROWSE only — never plays
@@ -1985,26 +2558,66 @@
     toast('No speaker playing yet');
     return false;
   }
+  // Tools overlay: keep-playing / shuffle / repeat replace the progress bar, then
+  // auto-hide — "these are all tools you only touch once and leave". Defined at
+  // this scope (not inside wireMusic) so loadMusic's idle path can force it shut.
+  var _toolsT=null;
+  function _toolsClear(){if(_toolsT){clearTimeout(_toolsT);_toolsT=null;}}
+  function _toolsArm(){_toolsClear();_toolsT=setTimeout(function(){musicTools(false);},4500);}
+  function musicTools(open){
+    var mf=document.querySelector('.mfull');if(!mf)return;
+    if(open===undefined)open=!mf.classList.contains('tools');
+    mf.classList.toggle('tools',open);
+    // The row is aria-hidden while collapsed; reveal it to the screen reader when
+    // it opens, or keep/shuffle/repeat are visible but unreachable by assistive nav.
+    var row=document.getElementById('mTools');if(row)row.setAttribute('aria-hidden',open?'false':'true');
+    var btn=document.getElementById('mToolsBtn');if(btn)btn.setAttribute('aria-pressed',open?'true':'false');if(btn)btn.classList.toggle('on',open);
+    if(open)_toolsArm();else _toolsClear();
+  }
   function wireMusic(){
     // Revisits: seed the play/pause button from the cached snapshot so the
     // pre-poll icon (and a fast tap) match the last-known real state.
     if(_music.np){var pp0=document.getElementById('mPP');
       if(pp0){pp0.dataset.playing=_music.np.playing?'1':'0';pp0.innerHTML=_music.np.playing?PAUSE_I:PLAY_I;}}
     // The flow is rebuilt with the card, so its state can't survive a show().
-    cfApplyScale();cfClear();wireCF();
+    cfApplyScale();cfClear();wireCF();wireSeek();wireVol();wireVolPop();wireKeep();
+    _toolsClear();var _mf0=document.querySelector('.mfull');if(_mf0)_mf0.classList.remove('tools');
     loadMusic();_wxTick=setInterval(function(){if(_cur==='music')loadMusic();},5000);
     if(_homeTick){clearInterval(_homeTick);}_homeTick=setInterval(tickMusic,1000);
-    var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');
+    var t=document.getElementById('mTransport');if(t)t.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;var a=btn.getAttribute('data-a');if(!a)return;
+      musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
+    // Tools button opens/closes the row; the row's own clicks (shuffle/repeat —
+    // keep-playing is wired directly by wireKeep) keep the auto-hide alive so it
+    // doesn't vanish while you're still adjusting.
+    var tb=document.getElementById('mToolsBtn');
+    if(tb)tb.onclick=function(e){e.stopPropagation();musicTools();};
+    var tr=document.getElementById('mTools');
+    if(tr)tr.addEventListener('click',function(e){var btn=e.target.closest('button');if(!btn)return;
+      _toolsArm();   // still fiddling — keep it open
+      var a=btn.getAttribute('data-a');
       if(a==='shuffle'){musicSet('shuffle_set',!_music.shuffle);return;}
       if(a==='repeat'){var nxt={off:'all',all:'one',one:'off'}[_music.repeat||'off'];musicSet('repeat_set',nxt);return;}
-      musicControl(a==='playpause'?(document.getElementById('mPP').dataset.playing==='1'?'pause':'play'):a);});
-    // Browse is a surface now, so this is plain navigation — no toggle, no
-    // overlay state, and #home keeps its corner because nothing covers it.
-    var qb=document.getElementById('mQBtn');
+      // #mDS has no data-a; wireKeep owns its action, this just kept the timer alive.
+    });
+    // Search hands the mic to Zoe (voice), the same path the orb + wake word use;
+    // Browse is the playlists/radio/sources surface.
+    var sb=document.getElementById('mSearch');
+    if(sb)sb.onclick=function(e){e.stopPropagation();panelVoice('Listening — what would you like to hear?');};
+    var qb=document.getElementById('mBrowse');
     if(qb)qb.onclick=function(e){e.stopPropagation();show('browse');};
     var fav=document.getElementById('mFav');
-    if(fav)fav.onclick=function(){if(!_music.np||!_music.np.uri){toast('Nothing playing');return;}
-      _qpost('favorite',{uri:_music.np.uri}).then(function(r){if(r&&r.ok){fav.classList.add('on');toast('Added to favourites');}else toast('Couldn’t favourite');}).catch(function(){toast('Couldn’t favourite');});};
+    if(fav)fav.onclick=function(){
+      var mi=cfFavItem();
+      if(!mi||!mi.uri){toast('Nothing to favourite');return;}
+      var wasOn=!!mi.favorite,uri=mi.uri;
+      // Write the new state onto the queue item itself, then repaint from it:
+      // the optimistic UI and the read-back share ONE source of truth, so a
+      // later cfPaintMeta (a glide, a poll) can't silently revert the heart.
+      mi.favorite=!wasOn;cfPaintFav();
+      _qpost(wasOn?'unfavorite':'favorite',{uri:uri}).then(function(r){
+        if(r&&r.ok){toast(wasOn?'Removed from favourites':'Added to favourites');return;}
+        mi.favorite=wasOn;cfPaintFav();toast(wasOn?'Couldn’t unfavourite':'Couldn’t favourite');
+      }).catch(function(){mi.favorite=wasOn;cfPaintFav();toast('Couldn’t favourite');});};
     // Jukebox QR: phones scan it to search + queue music (jukebox.html).
     var qr=document.getElementById('mQRCode');
     if(qr&&!qr.dataset.done){qr.dataset.done='1';
@@ -2015,30 +2628,108 @@
     // Speaker picker: list Music Assistant players, tap to move playback there.
     var spk=document.getElementById('mSpk');
     if(spk)spk.onclick=function(){
-      apiGet('/api/music/players').then(function(d){
-        var ps=(d&&d.players)||[];
+      // Two sources, merged by player_id: /players gives the type icon + label,
+      // /groups gives can_group_with + the current group_member_ids. Grouping is
+      // what makes the picker MULTI-select: tap zones to add/remove them live.
+      Promise.all([
+        apiGet('/api/music/players').catch(function(){return null;}),
+        apiGet('/api/music/groups').catch(function(){return null;})
+      ]).then(function(res){
+        var ps=((res[0]&&res[0].players))||[];
         if(!ps.length){toast('No speakers found');return;}
-        estOpen('<h3>Play on…</h3><div class="spkgrid">'+ps.map(function(pl){var pid=pl.player_id||pl.id||'';var nm=pl.display_name||pl.name||pid;
-          var cur=(_music.player_id&&pid===_music.player_id)?' style="border-color:var(--accent)"':'';
-          return '<button class="spkopt" data-pid="'+esc(String(pid))+'"'+cur+'>'+esc(String(nm))+'</button>';}).join('')
-          +'</div><div class="btns"><button data-x="cancel">Cancel</button></div>');
+        var gById={};(((res[1]&&res[1].players))||[]).forEach(function(g){if(g&&g.player_id)gById[g.player_id]=g;});
+        ps=ps.map(function(p){var g=gById[p.player_id]||{};return Object.assign({},p,{
+          can_group_with:g.can_group_with||[],group_member_ids:g.group_member_ids||[]});});
+
+        // Self-identity (name-matched; MA suffixes "Zoe Panel"→"Zoe Panel (AirPlay)"
+        // and a dead ghost can share the name, so require available + first-match)
+        // and hoist THIS device to the front.
+        var selfName=String((_pcfg&&_pcfg.self_player)||'Zoe Panel').toLowerCase();
+        var selfLoc=(_pcfg&&(_pcfg.room_name||_pcfg.location))||'';
+        var selfMarked=false;
+        for(var _i=0;_i<ps.length;_i++){var _n=String(ps[_i].display_name||ps[_i].name||'').toLowerCase();
+          if(ps[_i].available!==false&&selfName&&_n.indexOf(selfName)>=0){if(_i>0){ps=ps.slice();ps.unshift(ps.splice(_i,1)[0]);}break;}}
+
+        // The anchor zone = whatever is playing now; the selected set = its group
+        // members (or just itself). Multi-select only makes sense while playing —
+        // idle taps set the single default speaker, as before.
+        var playing=!!(_music.np&&_music.np.active)&&!!_music.player_id;
+        var leader=_music.player_id||'';
+        var leaderRow=ps.filter(function(p){return p.player_id===leader;})[0]||{};
+        var leaderName=leaderRow.display_name||leaderRow.name||_music.chosenName||'Speaker';
+        var selected={};
+        if(playing){(leaderRow.group_member_ids&&leaderRow.group_member_ids.length?leaderRow.group_member_ids:[leader]).forEach(function(id){selected[id]=true;});}
+
+        function tile(pl){
+          var pid=pl.player_id||pl.id||'';
+          var nm=pl.display_name||pl.name||pid;
+          var kind=pl.kind||'speaker';
+          var sub=pl.kind_label||'';
+          var off=(pl.available===false);
+          var isSelf=(!selfMarked&&!off&&!!selfName&&String(nm).toLowerCase().indexOf(selfName)>=0);
+          if(isSelf){selfMarked=true;if(selfLoc)sub=selfLoc;}
+          if(off)sub=(sub?sub+' · ':'')+'Unavailable';
+          var isLeader=(pid===leader&&playing);
+          var canGroup=!off&&playing&&(pl.can_group_with&&pl.can_group_with.length>0);
+          var on=!!selected[pid];
+          var cls='spkopt'+(on?' on':'')+(off?' off':'')+((!canGroup&&!isLeader)?' nogroup':'');
+          var chip=isLeader?'<span class="schip play">Playing</span>'
+                  :(isSelf?'<span class="schip">This device</span>':'');
+          var chk=(canGroup||isLeader)?'<span class="schk">'+CHK_I+'</span>':'';
+          return '<button class="'+cls+'" data-pid="'+esc(String(pid))+'" data-name="'+esc(String(nm))+'"'
+            +' data-group="'+(canGroup?'1':'0')+'" data-leader="'+(isLeader?'1':'0')+'"'+(off?' disabled':'')+'>'
+            +'<span class="si">'+spkKindIcon(kind)+'</span>'
+            +'<span class="stx"><span class="snm">'+esc(String(nm))+'</span><span class="ssub">'+esc(String(sub))+'</span></span>'
+            +'<span class="sright">'+chip+chk+'</span></button>';
+        }
+        var hint=playing?'Tap zones to play in more than one room — volume sets each zone.'
+                        :'Tap a speaker to play music there.';
+        estOpen('<h3>Play on…</h3><div class="spkhint">'+esc(hint)+'</div><div class="spkgrid">'
+          +ps.map(tile).join('')+'</div><div class="btns"><button data-x="cancel">Done</button></div>');
         var m=document.getElementById('estModal');
         m.querySelector('[data-x="cancel"]').onclick=estClose;
+
+        function setSpkLabel(){
+          var sn=document.querySelector('#mSpk .spkname');if(!sn)return;
+          var cnt=Object.keys(selected).filter(function(k){return selected[k];}).length;
+          sn.textContent=cnt>1?(leaderName+' +'+(cnt-1)):leaderName;
+        }
+
         m.querySelectorAll('.spkopt').forEach(function(b){b.onclick=function(){
+          if(b.classList.contains('off'))return;
           var pid=b.getAttribute('data-pid');
-          var active=_music.np&&_music.np.active;   // paused still owns a queue — transfer it
-          if(!active){
-            // Nothing to move — remember this speaker as the default for the
-            // NEXT play (server-side, so voice plays land there too).
-            _music.player_id=pid;estClose();
-            var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;
-            apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
-            toast('Music will play on '+b.textContent);
+          var nm=b.getAttribute('data-name')||'';
+          var groupable=b.getAttribute('data-group')==='1';
+          var isLeader=b.getAttribute('data-leader')==='1';
+
+          // IDLE, or a zone MA can't group → single behaviour (set default / switch).
+          if(!playing||(!groupable&&!isLeader)){
+            if(!playing){
+              _music.player_id=pid;_music.chosenName=nm;estClose();
+              var sn0=document.querySelector('#mSpk .spkname');if(sn0)sn0.textContent=nm;
+              apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
+              toast('Music will play on '+nm);
+            }else{
+              apiJson('POST','/api/music/transfer',{target_player_id:pid,source_player_id:leader||undefined})
+                .then(function(){estClose();var sn1=document.querySelector('#mSpk .spkname');if(sn1)sn1.textContent=nm;loadMusic();})
+                .catch(function(){toast('Couldn’t switch speaker');});
+            }
             return;
           }
-          apiJson('POST','/api/music/transfer',{target_player_id:pid,source_player_id:_music.player_id||undefined})
-            .then(function(){estClose();var sn=spk.querySelector('.spkname');if(sn)sn.textContent=b.textContent;loadMusic();})
-            .catch(function(){toast('Couldn’t switch speaker');});};});
+
+          // MULTI-SELECT: toggle this zone in/out of the playing group. The leader
+          // is the anchor — it stays; you add/remove companion zones around it.
+          if(isLeader){toast('That’s where the music is playing');return;}
+          var nowOn=b.classList.contains('on');
+          b.classList.toggle('on',!nowOn);   // optimistic
+          var body=nowOn?{target_player_id:leader,remove:[pid]}:{target_player_id:leader,add:[pid]};
+          apiJson('POST','/api/music/group',body).then(function(r){
+            if(!(r&&r.ok)){b.classList.toggle('on',nowOn);toast('Couldn’t change zones');return;}
+            selected[pid]=!nowOn;setSpkLabel();
+            toast(nowOn?('Removed '+nm):('Added '+nm));
+            setTimeout(loadMusic,400);
+          }).catch(function(){b.classList.toggle('on',nowOn);toast('Couldn’t change zones');});
+        };});
       }).catch(function(){toast('Couldn’t load speakers');});
     };
   }
@@ -2091,10 +2782,69 @@
     // isn't a light control returns to home.
     var slp=full.querySelector('.slp');
     if(slp)slp.addEventListener('click',function(e){if(!e.target.closest('.sc'))show('home');});
+    // The night screen shows the SAME controls as the dock. It renders from
+    // `_pcfg.pinned` — the operator's pins — not from `_ha.lights.slice(0,4)`,
+    // which is the pre-pins fallback and ignores their choice entirely. The
+    // dock's own tile markup is not reused: its CSS is `#dock`-scoped and its
+    // pills are sized for a glance at a lit screen, whereas these are hit in
+    // the dark. So the SOURCE and SEMANTICS are mirrored, the sizing is not.
+    function sleepPinHtml(p){
+      var nm=esc(p.name||''),dead=(p.available===false?' unavail':'');
+      if(p.kind==='temp'){
+        // Same data-* contract as the dock tile, so wireTempTile drives this
+        // unchanged. `min`/`max`/`step` arrive as strings — _tbounds parses.
+        var b=_tbounds(p),cur=_tnum(p.state),sp=_tnum(p.setpoint);
+        if(sp==null)sp=(cur!=null?cur:b.mn);
+        sp=_tsnap(sp,b.mn,b.mx,b.st);
+        return '<div class="sc temp'+dead+'" data-k="temp" data-eid="'+esc(p.write_eid)+'"'
+          +' data-act="'+esc(p.write_action||'set_value')+'" data-tgt="'+esc(String(sp))+'"'
+          +' data-mn="'+b.mn+'" data-mx="'+b.mx+'" data-st="'+b.st+'">'
+          +'<div class="bt">'+(cur!=null?Math.round(cur):'—')+'°</div><div class="nm">'+nm+'</div>'
+          +'<div class="tpop"><div class="tpv">'+_tfmt(sp,b.st)+'°</div>'
+          +'<div class="tsl"><div class="tff"></div><div class="tkn"></div></div>'
+          +'<div class="tpl">'+nm+'</div></div></div>';
+      }
+      if(p.kind==='scene'){
+        return '<div class="sc scene'+dead+'" data-k="scene" data-eid="'+esc(p.write_eid)+'"'
+          +' data-act="'+esc(p.write_action||'turn_on')+'">'+mdi(p.icon)+'<div class="nm">'+nm+'</div></div>';
+      }
+      // Render the server's icon. Deriving one from the domain is what drew a
+      // bulb on the fan and the TV — the same bug this screen had, since it
+      // hardcoded BULB for every tile.
+      return '<div class="sc'+(String(p.state).toLowerCase()==='on'?' on':'')+dead+'"'
+        +' data-k="toggle" data-eid="'+esc(p.write_eid)+'">'+mdi(p.icon)+'<div class="nm">'+nm+'</div></div>';
+    }
+    function wireSleepTiles(host){
+      // Explicit turn_on/turn_off from what the operator just saw, matching the
+      // dock: a blind `toggle` against a stale read flips the wrong way.
+      host.querySelectorAll('.sc[data-k="toggle"][data-eid]').forEach(function(el){el.onclick=function(){
+        var on=el.classList.toggle('on');
+        haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'})
+          .then(function(r){if(!r.ok)throw new Error('http '+r.status);})
+          .catch(function(){el.classList.toggle('on');});};});
+      host.querySelectorAll('.sc.scene[data-eid]').forEach(function(el){el.onclick=function(){
+        el.classList.add('fire');setTimeout(function(){el.classList.remove('fire');},420);
+        haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'})
+          .catch(function(){});};});
+      host.querySelectorAll('.sc.temp').forEach(wireTempTile);
+    }
     function paint(){if(_cur!=='sleep')return;var host=document.getElementById('slDock');if(!host)return;
+      // The 30s refresh must not destroy an open temp popover mid-drag — the
+      // same guard the dock's refresh carries.
+      if(host.querySelector('.sc.temp.open'))return;
+      // pins_configured:false => nobody has chosen => keep the legacy "first
+      // few lights" fallback so a fresh panel is never empty. true with an
+      // empty list is a real choice ("show nothing") and must NOT fall back.
+      if(_pcfg&&_pcfg.pins_configured){
+        host.innerHTML=(_pcfg.pinned||[]).map(sleepPinHtml).join('');
+        wireSleepTiles(host);return;
+      }
       host.innerHTML=_ha.lights.slice(0,4).map(function(e){return '<div class="sc'+(isOn(e)?' on':'')+'" data-eid="'+esc(e.entity_id)+'">'+BULB+'<div class="nm">'+esc(friendly(e))+'</div></div>';}).join('');
       host.querySelectorAll('.sc[data-eid]').forEach(function(el){el.onclick=function(){var on=el.classList.toggle('on');haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw 0;}).catch(function(){el.classList.toggle('on');});};});}
-    if(_ha.loaded)paint();else loadHA(paint);
+    // Pins decide WHAT renders, so the config must be loaded before the first
+    // paint or the night screen flashes the fallback lights and then swaps.
+    function paintWhenReady(){if(_ha.loaded)paint();else loadHA(paint);}
+    if(_pcfgLoaded)paintWhenReady();else loadPanelCfg(paintWhenReady);
     // Overnight automations change lights — keep the wake toggles truthful.
     _wxTick=setInterval(function(){if(_cur==='sleep')loadHA(paint);},30000);
   }
@@ -2420,15 +3170,201 @@
              :_pcfg.default_player_source==='panel'?' <small style="color:var(--ink-faint)">(this panel)</small>':'';
       var n=(_pcfg.pinned||[]).length;
       var pins=_pcfg.pins_configured?(n+' of '+_pcMax()):'Not set — showing whatever HA lists first';
+      // The panel's ROOM is the structured "where am I" — it is what will let
+      // "turn off the light" mean the light in HERE. `location` is the older
+      // free-text label and stays below it, unlinked, rather than being
+      // silently mirrored (nothing reads it for behaviour).
+      var room=_pcfg.room_name||'Not set';
       el.innerHTML=
-         '<div class="srow2" data-p="loc"><span>Location</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(loc)+' ›</span></div>'
+         '<div class="srow2" data-p="room"><span>Room</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(room)+' ›</span></div>'
+        +'<div class="srow2" data-p="rooms"><span>Manage rooms</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">Rooms &amp; devices ›</span></div>'
+        +'<div class="srow2" data-p="loc"><span>Location label</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(loc)+' ›</span></div>'
         +'<div class="srow2" data-p="spk"><span>Default speaker</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(spk)+src+' ›</span></div>'
         +'<div class="srow2" data-p="pins"><span>Dock controls</span><span class="chev2" style="margin-left:auto;color:var(--ink-soft)">'+esc(pins)+' ›</span></div>';
+      el.querySelector('[data-p="room"]').onclick=_pcRoom;
+      el.querySelector('[data-p="rooms"]').onclick=_rmList;
       el.querySelector('[data-p="loc"]').onclick=_pcLocation;
       el.querySelector('[data-p="spk"]').onclick=_pcSpeaker;
       el.querySelector('[data-p="pins"]').onclick=_pcPins;
     }
     if(_pcfgLoaded)paint();else loadPanelCfg(paint);
+  }
+
+  // ── Rooms (Zoe's own; HA areas are an optional link, never the source) ──────
+  // The API is /api/rooms: GET is open (the kiosk reads it as a guest), writes
+  // need a session — the same posture as panel config, so the same `apiJson`
+  // 'auth' error path applies and surfaces the same "sign in" toast.
+  var _rooms=null;
+
+  function _rmLoad(then){
+    apiGet('/api/rooms').then(function(d){
+      _rooms=(d&&d.rooms)||[];then&&then();
+    }).catch(function(){_rooms=null;then&&then();});
+  }
+
+  function _rmSave(method,path,body,then){
+    return apiJson(method,path,body)
+      .then(function(){_rmLoad(then);})
+      .catch(function(e){
+        toast(String(e&&e.message)==='auth'?'Sign in to manage rooms':'Couldn’t save rooms');
+        throw e;});
+  }
+
+  // A touch panel makes a double-tap trivially easy, and every write here is
+  // non-idempotent: two taps on Create make two rooms, two on Delete make the
+  // second one 404. Disable the button for the life of the request rather than
+  // relying on the user being precise on a glass screen.
+  function _rmOnce(btn, run){
+    if(!btn)return;
+    btn.onclick=function(){
+      if(btn.disabled)return;
+      btn.disabled=true;
+      var done=function(){ if(btn&&btn.isConnected)btn.disabled=false; };
+      var p;
+      try{ p=run(); }catch(e){ done(); throw e; }
+      // A handler that returns nothing still gets re-enabled, so this is safe
+      // for the non-async callers too.
+      if(p&&typeof p.then==='function')p.then(done,done);else done();
+    };
+  }
+
+  // Pick which room THIS panel is in. Writes panels.room_id via panel config,
+  // so it round-trips through the same _pcSave that the other panel rows use.
+  function _pcRoom(){
+    estOpen('<h3>Which room is this panel in?</h3>'
+      +'<div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<div class="phint">This is how Zoe knows what “in here” means — “turn off the light” will mean the light in this room.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="cancel">Cancel</button><button data-x="clear">No room</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="clear"]').onclick=function(){
+      _pcSave({room_id:null},estClose).catch(function(){});};
+    _rmLoad(function(){
+      var list=m.querySelector('.elist');if(!list)return;
+      if(_rooms===null){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load rooms.</div>';return;}
+      if(!_rooms.length){
+        list.innerHTML='<div class="phint" style="margin:0">No rooms yet. Create one in “Manage rooms” first.</div>';return;}
+      var cur=_pcfg&&_pcfg.room_id;
+      list.innerHTML=_rooms.map(function(r){
+        return '<button class="eopt" data-rid="'+esc(r.id)+'">'+mdi('mdi:door')
+          +'<span class="et">'+esc(r.name)+'<small>'+(r.devices||[]).length+' device'+((r.devices||[]).length===1?'':'s')
+          +(r.id===cur?' · this panel':'')+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+        _pcSave({room_id:b.getAttribute('data-rid')},estClose).catch(function(){});};});
+    });
+  }
+
+  function _rmList(){
+    estOpen('<h3>Rooms</h3><div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<button class="padd" data-x="add">+ Create a room</button>'
+      +'<div class="phint">A room is Zoe’s own — you don’t need Home Assistant for it. Put devices in a room and Zoe can act on “the light in here”.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="cancel">Done</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="add"]').onclick=_rmCreate;
+    function paint(){
+      var list=m.querySelector('.elist');if(!list)return;
+      if(_rooms===null){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load rooms.</div>';return;}
+      if(!_rooms.length){
+        list.innerHTML='<div class="phint" style="margin:0">No rooms yet.</div>';return;}
+      list.innerHTML=_rooms.map(function(r){
+        var n=(r.devices||[]).length;
+        return '<button class="eopt" data-rid="'+esc(r.id)+'">'+mdi('mdi:door')
+          +'<span class="et">'+esc(r.name)+'<small>'+n+' device'+(n===1?'':'s')
+          +(r.linked_to_ha?' · linked to HA':'')+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
+        _rmRoom(b.getAttribute('data-rid'));};});
+    }
+    if(_rooms!==null)paint();else _rmLoad(paint);
+  }
+
+  function _rmCreate(){
+    estOpen('<h3>Create a room</h3>'
+      +'<label>Name</label><input data-f="rn" maxlength="40" placeholder="Bedroom">'
+      +'<div class="phint">Spaces are fine — “Living Room” is a normal name.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="back">Back</button><button class="save" data-x="save">Create</button></div>');
+    var m=document.getElementById('estModal'),f=m.querySelector('[data-f="rn"]');
+    f.focus();
+    m.querySelector('[data-x="back"]').onclick=_rmList;
+    _rmOnce(m.querySelector('[data-x="save"]'), function(){
+      var name=f.value.trim();
+      if(!name){_pcErr('Give the room a name.');return;}
+      return _rmSave('POST','/api/rooms',{name:name},_rmList).catch(function(){});});
+  }
+
+  function _rmRoom(rid){
+    var r=(_rooms||[]).filter(function(x){return x.id===rid;})[0];
+    if(!r){_rmList();return;}
+    var devs=(r.devices||[]).map(function(d){
+      return '<div class="pinrow"><span class="pnm">'+esc(d.name||d.entity_id)+'</span>'
+        +'<span class="pfn">'+esc(d.entity_id)+(d.available===false?' · unavailable':'')+'</span>'
+        +'<button class="del" data-rm="'+esc(d.entity_id)+'">✕</button></div>';}).join('')
+      ||'<div class="phint" style="margin:14px 0">No devices in this room yet.</div>';
+    estOpen('<h3>'+esc(r.name)+'</h3>'
+      +devs
+      +'<button class="padd" data-x="add">+ Add a device</button>'
+      +'<div class="phint">Devices here are what “in this room” means. A device lives in one room — adding it here moves it.</div>'
+      +'<div class="perr"></div>'
+      +'<div class="btns"><button data-x="back">Back</button><button data-x="del" style="margin-left:auto">Delete room</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="back"]').onclick=_rmList;
+    m.querySelector('[data-x="add"]').onclick=function(){_rmPickDevice(rid);};
+    _rmOnce(m.querySelector('[data-x="del"]'), function(){
+      // Deleting a room does NOT delete its devices — they just become
+      // unassigned — so this needs no scarier confirmation than saying so.
+      return _rmSave('DELETE','/api/rooms/'+encodeURIComponent(rid),null,_rmList).catch(function(){});});
+    m.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){
+      _rmSave('DELETE','/api/rooms/'+encodeURIComponent(rid)+'/devices/'
+        +encodeURIComponent(b.getAttribute('data-rm')),null,function(){_rmRoom(rid);})
+        .catch(function(){});};});
+  }
+
+  function _rmPickDevice(rid){
+    estOpen('<h3>Add a device</h3><div class="elist"><div style="color:var(--ink-faint);font-size:18px">Loading…</div></div>'
+      +'<div class="perr"></div><div class="btns"><button data-x="back">Back</button></div>');
+    var m=document.getElementById('estModal');
+    m.querySelector('[data-x="back"]').onclick=function(){_rmRoom(rid);};
+    apiGet('/api/rooms/unassigned').then(function(d){
+      var list=m.querySelector('.elist');if(!list)return;
+      var cands=(d&&d.devices)||[];
+      if(!(d&&d.ha_available)){
+        list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Home Assistant isn’t reachable, so there’s nothing to pick from yet.</div>';return;}
+      if(!cands.length){
+        list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Every device is already in a room.</div>';return;}
+      list.innerHTML=cands.map(function(e){
+        return '<button class="eopt" data-eid="'+esc(e.entity_id)+'">'+mdi(e.icon)
+          +'<span class="et">'+esc(e.name||e.entity_id)+'<small>'+esc(e.entity_id)+'</small></span></button>';}).join('');
+      list.querySelectorAll('.eopt').forEach(function(b){_rmOnce(b, function(){
+        var eid=b.getAttribute('data-eid');
+        // The devices endpoint REPLACES the room's list, so the payload must be
+        // built from the room as it is NOW — not from the `_rooms` snapshot this
+        // picker was painted from. That snapshot can be minutes old (the picker
+        // is a second screen away), and a stale one silently deletes whatever
+        // was added from another panel in between: a lost update, written by us,
+        // that the operator never sees. Re-read first, then append.
+        return apiGet('/api/rooms').then(function(d){
+          // Adopt the fresh read as the cache BEFORE rendering from it. Every
+          // screen below (_rmRoom, _rmList) paints from `_rooms`, so fetching
+          // fresh data and leaving the stale copy in place would show the very
+          // list this re-read exists to correct.
+          if(d&&Array.isArray(d.rooms))_rooms=d.rooms;
+          var fresh=(_rooms||[]).filter(function(x){return x.id===rid;})[0];
+          if(!fresh){toast('That room no longer exists');return _rmList();}
+          var next=(fresh.devices||[]).map(function(x){return {entity_id:x.entity_id};});
+          // Already there (added elsewhere while this picker sat open) — the
+          // desired end state already holds, so don't write a duplicate. The
+          // cache is fresh now, so the detail screen shows it correctly.
+          if(next.some(function(x){return x.entity_id===eid;})){return _rmRoom(rid);}
+          next.push({entity_id:eid});
+          return _rmSave('PUT','/api/rooms/'+encodeURIComponent(rid)+'/devices',{devices:next},
+            function(){_rmRoom(rid);});
+        }).catch(function(){toast('Couldn’t add the device');});});});
+    }).catch(function(){
+      var list=m.querySelector('.elist');
+      if(list)list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load devices.</div>';});
   }
 
   function _pcLocation(){
@@ -2710,8 +3646,108 @@
   }
 
   // ---- Calendar: day / week / month on real events ----
-  var _cal={view:'week',gen:0};var _calEvents={};
+  // Week and month are TODAY-ANCHORED and SCROLL. The old layout started the
+  // week on Monday and the month on the 1st, so on a Friday four of seven
+  // columns — and on the 19th, eighteen day cells — were spent on days you can
+  // no longer act on. That starved the grid badly enough that a six-week month
+  // could only fit ONE chip per day before clipping. Anchoring on today buys
+  // the space back: week columns go 164px -> 294px, month cells ~70px -> ~144px.
+  // The past is DE-EMPHASISED, NOT AMPUTATED: both views scroll backwards to
+  // CAL_BACK_DAYS, so yesterday is always one nudge away.
+  var CAL_BACK_DAYS=7;      // scrollable (and fetched) history
+  var CAL_FWD_DAYS=56;      // scrollable (and fetched) future — 8 weeks
+  var CAL_WEEK_COLS=4;      // day columns visible at once in week view
+  var CAL_MONTH_WEEKS=3;    // week rows visible at once in month view
+  // Rolling weeks are always uniform, so the old `weeks>5?1:2` six-week squeeze
+  // is gone: every cell is the same ~144px and fits four chips.
+  var CAL_MONTH_CHIPS=4;
+  var _cal={view:'week',gen:0,raf:0};var _calEvents={};
   function isoD(d){return d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());}
+  // Chips for one month cell, with the counter TAKING the last slot when it
+  // overflows (never adding a row, so nothing can clip).
+  function calChips(es,max){
+    function chip(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';
+      return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}
+    if(es.length<=max)return es.map(chip).join('');
+    var showN=max-1;
+    return es.slice(0,showN).map(chip).join('')
+      +'<div class="cev" style="opacity:.6">'+(showN?('+'+(es.length-showN)+' more'):(es.length+' events'))+'</div>';
+  }
+  function calFromIso(s){var p=String(s).split('-');return new Date(+p[0],+p[1]-1,+p[2]);}
+  function calAdd(d,n){var x=new Date(d.getFullYear(),d.getMonth(),d.getDate());x.setDate(x.getDate()+n);return x;}
+  function calMonday(d){return calAdd(d,-((d.getDay()+6)%7));}
+  // ONE window drives both views AND the fetch. The month grid is the widest of
+  // the two (it rounds out to whole Mon..Sun rows), so fetching that range
+  // covers the week strip as well — which is what lets scrolling stay silent
+  // instead of firing a request per scroll event.
+  function calWindow(now){
+    var last=calAdd(now,CAL_FWD_DAYS);
+    return {gridStart:calMonday(calAdd(now,-CAL_BACK_DAYS)),gridEnd:calAdd(calMonday(last),6),
+            weekStart:calAdd(now,-CAL_BACK_DAYS),weekEnd:last};
+  }
+  // Honest about what is ON SCREEN. "This week" and "July 2026" both lie the
+  // moment a rolling window straddles a month or year boundary.
+  function calHeaderText(view,a,b,now){
+    if(view==='day')return now.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
+    var sameY=a.getFullYear()===b.getFullYear(),sameM=sameY&&a.getMonth()===b.getMonth();
+    var oa=!sameY?{day:'numeric',month:'short',year:'numeric'}:(sameM?{day:'numeric'}:{day:'numeric',month:'short'});
+    var ob=!sameY?{day:'numeric',month:'short',year:'numeric'}:(sameM?{day:'numeric',month:'long'}:{day:'numeric',month:'short'});
+    return a.toLocaleDateString(undefined,oa)+' – '+b.toLocaleDateString(undefined,ob);
+  }
+  function calScroller(){return document.querySelector('#calBody .calweek,#calBody .calmonth');}
+  // Read the visible days off REAL geometry rather than recomputing scroll
+  // arithmetic, so the header can never disagree with what is drawn.
+  // A day counts as on-screen only when at least HALF of it is — a 1px sliver of
+  // the next row peeking under the fold is not something the header should
+  // claim you can see (it made a 3-week view announce four weeks).
+  function calVisibleDays(sc){
+    if(!sc)return [];
+    var sr=sc.getBoundingClientRect(),cmh=sc.querySelector('.cmh');
+    var top=sr.top+(cmh?cmh.getBoundingClientRect().height:0),out=[];
+    [].forEach.call(sc.querySelectorAll('[data-d]'),function(el){
+      var r=el.getBoundingClientRect();
+      var w=Math.min(r.right,sr.right)-Math.max(r.left,sr.left);
+      var h=Math.min(r.bottom,sr.bottom)-Math.max(r.top,top);
+      if(w>0&&h>0&&(w*h)/(r.width*r.height)>=.5)out.push(el.getAttribute('data-d'));
+    });
+    return out;
+  }
+  function calSyncHeader(){
+    var ttl=document.getElementById('calTtl');if(!ttl||_cal.view==='day')return;
+    var vis=calVisibleDays(calScroller());if(!vis.length)return;
+    ttl.textContent=calHeaderText(_cal.view,calFromIso(vis[0]),calFromIso(vis[vis.length-1]),new Date());
+  }
+  // Put today at the leading edge (leftmost column / top row). Measured from
+  // live rects: offsetLeft/offsetTop would be read against .calf, not the
+  // scroller, because .calf is the positioned ancestor.
+  var CAL_GRID_GAP=6;   // must track the gap on .calmonth
+  function calAnchorToday(){
+    var sc=calScroller();if(!sc)return;
+    var el=sc.querySelector('.today');if(!el)return;
+    if(_cal.view==='week'){sc.scrollLeft+=(el.getBoundingClientRect().left-sc.getBoundingClientRect().left);}
+    else{
+      // TWO passes. The weekday strip is position:sticky, so where it actually
+      // comes to rest is only knowable AFTER a scroll has happened; a
+      // single-pass anchor computed against its pre-scroll box left today's row
+      // tucked UNDER the strip with its date numbers invisible. Every assertion
+      // still passed — the row was ">=50% visible" — which is exactly why this
+      // is corrected by measurement rather than arithmetic.
+      for(var i=0;i<2;i++){
+        var cmh=sc.querySelector('.cmh');
+        var hb=cmh?cmh.getBoundingClientRect().bottom:sc.getBoundingClientRect().top;
+        var d=el.getBoundingClientRect().top-hb-CAL_GRID_GAP;
+        if(Math.abs(d)<1)break;
+        sc.scrollTop+=d;
+      }
+    }
+    calSyncHeader();
+  }
+  // Test seam. The harness asserts against THESE functions — the ones the panel
+  // actually runs — because a suite that re-implements the date maths inline
+  // passes just as happily against broken production code.
+  window._calTest={window:calWindow,headerText:calHeaderText,visibleDays:calVisibleDays,
+                   chips:calChips,iso:isoD,fromIso:calFromIso,add:calAdd,monday:calMonday,
+                   K:{back:CAL_BACK_DAYS,fwd:CAL_FWD_DAYS,cols:CAL_WEEK_COLS,weeks:CAL_MONTH_WEEKS,chips:CAL_MONTH_CHIPS}};
   function wireCalendar(){
     var vs=document.getElementById('calViews');
     if(vs)vs.onclick=function(e){var b=e.target.closest('button');if(!b)return;_cal.view=b.getAttribute('data-v');
@@ -2723,40 +3759,46 @@
   function paintCal(){
     var body=document.getElementById('calBody'),ttl=document.getElementById('calTtl');if(!body)return;
     var gen=++_cal.gen;   // rapid view switches: only the newest request may paint
-    var now=new Date(),start,end;
-    if(_cal.view==='day'){start=new Date(now);end=new Date(now);}
-    else if(_cal.view==='week'){start=new Date(now);start.setDate(now.getDate()-((now.getDay()+6)%7));end=new Date(start);end.setDate(start.getDate()+6);}
-    else{start=new Date(now.getFullYear(),now.getMonth(),1);end=new Date(now.getFullYear(),now.getMonth()+1,0);}
-    if(ttl)ttl.textContent=_cal.view==='month'?now.toLocaleDateString(undefined,{month:'long',year:'numeric'}):(_cal.view==='week'?'This week':now.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'}));
+    var now=new Date(),win=calWindow(now);
+    // ONE request spanning everything either view can scroll to. Scrolling then
+    // needs no network at all, which is why it cannot feel laggy and cannot
+    // hammer the API — the alternative (fetch-on-scroll) buys nothing here,
+    // since the whole window is ~9 weeks of a personal calendar.
+    var start=_cal.view==='day'?new Date(now):win.gridStart,
+        end  =_cal.view==='day'?new Date(now):win.gridEnd;
+    if(ttl&&_cal.view==='day')ttl.textContent=calHeaderText('day',start,end,now);
     apiGet('/api/calendar/events?start_date='+isoD(start)+'&end_date='+isoD(end)).then(function(d){if(_cur!=='calendar'||gen!==_cal.gen)return;
       var evs=((d&&d.events)||[]).filter(function(e){return !e.deleted;});
       _calEvents={};evs.forEach(function(e){if(e.id!=null)_calEvents[e.id]=e;});
       var byDay={};evs.forEach(function(e){var k=e.start_date;(byDay[k]=byDay[k]||[]).push(e);});
       Object.keys(byDay).forEach(function(k){byDay[k].sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});});
+      var tk=isoD(now);
       if(_cal.view==='month'){
-        var first=new Date(start),lead=(first.getDay()+6)%7,days=end.getDate();
-        // six-week months have shorter cells — show one chip + counter so "+N more" never clips
-        var weeks=Math.ceil((lead+days)/7),maxChips=weeks>5?1:2;
+        // Rolling Mon..Sun rows from a week before today — NOT the calendar
+        // month, so the grid never wastes rows on days already gone and never
+        // degenerates into the six-row month the old squeeze existed for.
         var html='<div class="calmonth">'+['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(function(h){return '<div class="cmh">'+h+'</div>';}).join('');
-        for(var i=0;i<lead;i++)html+='<div class="cmd dim"></div>';
-        for(var dnum=1;dnum<=days;dnum++){var dd=new Date(now.getFullYear(),now.getMonth(),dnum),k=isoD(dd),es=byDay[k]||[];
-          html+='<div class="cmd'+(k===isoD(now)?' today':'')+'"><div class="dn">'+dnum+'</div>'+(function(){
-            // Rows never exceed maxChips: when overflowing, the counter TAKES the
-            // last slot instead of adding a row (so nothing can clip).
-            if(es.length<=maxChips)return es.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('');
-            var showN=maxChips-1;
-            return es.slice(0,showN).map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}).join('')
-              +'<div class="cev" style="opacity:.6">'+(showN?('+'+(es.length-showN)+' more'):(es.length+' events'))+'</div>';
-          })()+'</div>';}
+        for(var c=new Date(win.gridStart);c<=win.gridEnd;c=calAdd(c,1)){var k=isoD(c),es=byDay[k]||[];
+          html+='<div class="cmd'+(k===tk?' today':(k<tk?' dim':''))+'" data-d="'+k+'"><div class="dn">'+c.getDate()+'</div>'+calChips(es,CAL_MONTH_CHIPS)+'</div>';}
         body.innerHTML=html+'</div>';
       } else if(_cal.view==='week'){
         var html2='<div class="calweek">';
-        for(var i2=0;i2<7;i2++){var d2=new Date(start);d2.setDate(start.getDate()+i2);var k2=isoD(d2),es2=byDay[k2]||[];
-          html2+='<div class="cwc'+(k2===isoD(now)?' today':'')+'"><h5>'+d2.toLocaleDateString(undefined,{weekday:'short'})+' '+d2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
+        for(var c2=new Date(win.weekStart);c2<=win.weekEnd;c2=calAdd(c2,1)){var k2=isoD(c2),es2=byDay[k2]||[];
+          html2+='<div class="cwc'+(k2===tk?' today':(k2<tk?' past':''))+'" data-d="'+k2+'"><h5>'+c2.toLocaleDateString(undefined,{weekday:'short'})+' '+c2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
         body.innerHTML=html2+'</div>';
       } else {
         var es3=byDay[isoD(now)]||[];
         body.innerHTML='<div class="caldaylist">'+(es3.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="dev" data-eid="'+esc(String(e.id))+'"><div class="t" style="width:96px;flex:none;font-size:21px;color:var(--ink-soft)">'+esc(e.all_day?'All day':fmt12(e.start_time))+'</div><span class="dot" style="--c:'+cat+';width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c);flex:none"></span><div><div class="en" style="font-size:23px;font-weight:500">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es" style="font-size:16px;color:var(--ink-faint)">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:20px;padding-top:20px">Nothing scheduled today.</div>')+'</div>';
+      }
+      if(_cal.view!=='day'){
+        var sc=calScroller();
+        // passive: this listener only reads geometry to retitle the header, so
+        // it must never be able to delay the scroll it is watching.
+        if(sc)sc.addEventListener('scroll',function(){
+          if(_cal.raf)return;
+          _cal.raf=requestAnimationFrame(function(){_cal.raf=0;calSyncHeader();});
+        },{passive:true});
+        calAnchorToday();
       }
     }).catch(function(){if(_cur!=='calendar'||gen!==_cal.gen)return;body.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Couldn’t load the calendar.</div>';});
   }
@@ -3014,6 +4056,10 @@
   function convEvent(msg){
     var t=msg.type||msg.event,s=msg.state;
     if(t==='state'){
+      // The voice pipeline now OWNS the orb, so drop the orb-tap fallback timer.
+      // Left running it would strip a genuine `listening` class mid-session when
+      // its 12s expiry landed inside an active turn.
+      if(_orbListenT){clearTimeout(_orbListenT);_orbListenT=null;}
       if(s==='listening'||s==='wake'){orb.classList.remove('busy');orb.classList.add('listening');convPaint('Listening…');}
       else if(s==='thinking'||s==='processing'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('Thinking…');}
       else if(s==='responding'||s==='speaking'){orb.classList.remove('listening');orb.classList.add('busy');convPaint('');}
@@ -3147,10 +4193,45 @@
       if(_cur!=='home'&&_cur!=='sleep'){_voiceScreen=true;armAutoHome();}}
   };
 
-  orb.addEventListener('click',function(){
-    var on=cmdbar.classList.toggle('on');
-    if(on){setTimeout(function(){cmdin.focus();},50);}
-  });
+  // Tapping the orb hands the mic to Zoe exactly as "Hey Zoe" does — the panel
+  // daemon plays the wake beep and opens the mic. It used to just toggle a TEXT
+  // box, which is useless on a panel with no keyboard. The typed bar survives
+  // only as the FALLBACK for where that daemon isn't reachable (a desktop
+  // browser, dev), so the same build still works off-panel.
+  // `_orbBusy` is a SEPARATE guard from `_convLive`: a daemon-activated turn
+  // never sets _convLive, so that check alone let two taps inside the 800ms
+  // window send two POSTs and beep twice.
+  var _orbListenT=null,_orbBusy=false;
+  function orbListening(on){
+    if(_orbListenT){clearTimeout(_orbListenT);_orbListenT=null;}
+    orb.classList.toggle('listening',!!on);
+    if(!on)return;
+    // The daemon owns the turn from here, so this is only the visual
+    // affordance — it must expire on its own rather than latch on forever if
+    // nothing comes back.
+    _orbListenT=setTimeout(function(){orb.classList.remove('listening');},12000);
+  }
+  // Hand the mic to Zoe via the panel daemon (beep + open mic). Shared by the
+  // orb and the music card's search button — both want "listen, don't type".
+  // `promptMsg` is the on-screen cue while listening.
+  function panelVoice(promptMsg){
+    if(_convLive||_orbBusy)return;       // a live conversation, or an activate already in flight
+    _orbBusy=true;
+    cmdbar.classList.remove('on');
+    orbListening(true);
+    toast(promptMsg||'Listening — ask Zoe anything');
+    fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
+      .then(function(r){if(!r||!r.ok)throw new Error('activate '+(r&&r.status));})
+      .catch(function(){
+        orbListening(false);toastHide();
+        cmdbar.classList.add('on');
+        setTimeout(function(){cmdin.focus();},50);
+      })
+      // Trailing .then runs after EITHER branch — the guard must clear on the
+      // fallback path too, or one unreachable daemon would wedge the orb.
+      .then(function(){_orbBusy=false;});
+  }
+  orb.addEventListener('click',function(){panelVoice('Listening — ask Zoe anything');});
   cmdin.addEventListener('keydown',function(e){if(e.key==='Enter')sendCmd(cmdin.value);if(e.key==='Escape')cmdbar.classList.remove('on');});
   document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 
-from hermes_http import zoe_repo_root
+from repo_paths import zoe_repo_root
 from pipeline_evidence import EvidenceItem, content_hash
 
 _VALIDATORS = (

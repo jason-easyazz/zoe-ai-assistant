@@ -16,12 +16,13 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 ## Local Contracts
 
 - Exactly ONE production chat router: `zoe-data/routers/chat.py`. Never create `chat_v2.py`, `chat_new.py`, or parallel routers.
-- No hardcoded NLU if/else in the production chat router; natural-language routing belongs in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw.
+- No hardcoded NLU if/else in the production chat router; natural-language routing belongs in `intent_router.py` or Zoe Agent. (Hermes and OpenClaw are being RETIRED — operator decision 2026-07-22, `docs/architecture/multica-executor-migration.md` §5 — do not add new routing to either; their existing paths are deletion targets via the gated retirement PRs.)
 - Code must work on BOTH Jetson Orin NX (GPU) and Raspberry Pi 5 (CPU); gate hardware-specific paths on `HARDWARE_PLATFORM`.
 - Memory writes always carry scope (`personal` / `shared` / `ambient`); credentials are per user and per scope, never in global env vars.
 - No `home` / `family` / `household` concepts in kernel code (router, memory schema, auth, tool signatures) — they belong in skills and scopes.
 - `zoe-data` runs as a systemd USER service: `systemctl --user restart zoe-data.service` (never `sudo systemctl`).
 - Exactly ONE calendar-event writer: `zoe-data/calendar_service.py::create_event_record`. All three callers (the voice/direct executor in `intent_router.py`, the `calendar_create_event` MCP tool in `mcp_server.py`, and the `/api/calendar/events` router) INSERT through it — never open a second `INSERT INTO events`. The helper owns only the row write; date parsing, UI notify, MemPalace, and response shape stay per-caller (they differ, and preserving them is what keeps behaviour identical). Voice-path changes here are replay-gated.
+- Exactly ONE list writer: `zoe-data/list_service.py` — `create_list_record` / `create_item_record` are the only `INSERT INTO lists` / `list_items` sites for the Wave-3 trio (the voice/direct executor in `intent_router.py`, the `list_add_item` MCP tool in `mcp_server.py`, and the `/api/lists` router); `add_item_to_list` is the shared resolve-or-create add, whose fresh-list path lands the list row and first item in ONE transaction (asyncpg auto-commits, so separate INSERTs orphan an empty list on a mid-write failure). Behaviour choices stay per-caller as explicit parameters: the voice 10 s replay-dedup window, auto-created-list visibility, notification channel, and feature gating never move into the service. `skybridge_service.py` + `pending_suggestions.py` still carry their own list INSERTs (follow-up). Pinned by `tests/test_list_service.py` (`ci_safe`).
 
 ## Work Guidance
 

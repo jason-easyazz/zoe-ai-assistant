@@ -45,11 +45,22 @@ no code would auto-load them if one did.
 A skill is a Markdown file whose **description** is parsed and handed to the
 brain so it knows a capability exists. That is all a skill is.
 
-`services/zoe-data/skill_discovery.py` parses `SKILL.md` files from exactly two
-directories — `~/.openclaw/workspace/skills/` and `~/.hermes/skills/` — into A2A
-v1.0 `AgentSkill` dicts (`id` / `name` / `description` / `inputModes` /
-`outputModes`). `zoe_agent.py` surfaces that list via the `list_openclaw_skills`
-tool. `skills_watcher.py` watches both directories and invalidates the cache.
+`openclaw_manager.list_skills()` parses `SKILL.md` files from
+`~/.openclaw/workspace/skills/`, and `zoe_agent.py` surfaces that list via the
+`list_openclaw_skills` tool.
+
+> **Corrected 2026-07-20.** This section previously credited
+> `skill_discovery.py` (plus `skills_watcher.py` for cache invalidation) with
+> feeding the `list_openclaw_skills` tool. It never did — those modules produced
+> an A2A agent card with **zero callers** and a `FEDERATION_SKILLS.md` with
+> **zero readers**, dispatched nothing, and have been deleted. The tool always
+> used `openclaw_manager`'s own independent parser.
+>
+> Caveat worth carrying: the surfaced list is **not** evidence a skill can run.
+> OpenClaw resolves its workspace-skills root from `agents.list[0].workspace`,
+> which points at a directory with no `skills/` — so as of this writing none of
+> the 31 Zoe-authored workspace skills has ever been loaded, while
+> `list_openclaw_skills` still reports the builders as installed.
 
 **Zoe does not load, sandbox, or execute skills.** There is no executor, so there
 is nothing to whitelist. When a skill's capability is actually invoked, it is
@@ -107,7 +118,7 @@ The real security posture:
 - **Scan before installing.** Root `AGENTS.md` → "Skill & extension safety":
   `skillspector scan <dir|file|git-url>`, and record the outcome or a deliberate
   waiver.
-- **Cache reload is admin-gated** — `POST /api/agent/peers/{name}/skills/reload`
-  requires admin.
+- ~~**Cache reload is admin-gated**~~ — **removed 2026-07-20** with
+  `skill_discovery.py`; there is no skill cache to reload.
 
 See [../governance/SECURITY_POLICY_SKILLS.md](../governance/SECURITY_POLICY_SKILLS.md).

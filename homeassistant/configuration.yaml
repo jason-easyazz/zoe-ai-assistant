@@ -95,19 +95,16 @@ script:
 # Add thermostats via: Generic Thermostat, Nest, or similar integration.
 # Add media players via: Spotify, Chromecast, Sonos, or Plex integration.
 
+# The four simulated LIGHTS are gone — real hardware replaced them (the first
+# being switch.bedroom_1_switch_1, "Bedroom Light", a Grid Connect wall switch).
+# They were not harmless placeholders: every one of them was a `light`-domain
+# device competing in the same pool as the real switch, so "the light" stayed
+# ambiguous and "the lights" swept four fakes alongside one real bulb.
+#
+# `fan` and `tv` stay for now — they are still the only devices of their kind
+# here, and the scenes below use them. Retire each the same way when real
+# hardware arrives: delete it, then repoint whatever referenced it.
 input_boolean:
-  living_room_light:
-    name: Living Room Light
-    icon: mdi:ceiling-light
-  kitchen_light:
-    name: Kitchen Light
-    icon: mdi:ceiling-light
-  bedroom_light:
-    name: Bedroom Light
-    icon: mdi:ceiling-light
-  porch_light:
-    name: Porch Light
-    icon: mdi:outdoor-lamp
   fan:
     name: Ceiling Fan
     icon: mdi:fan
@@ -134,30 +131,27 @@ template:
         icon: mdi:thermometer
 
 # Scene definitions (Good Morning / Good Night / Movie Time)
+#
+# Repointed onto REAL hardware. Every light these referenced was simulated, so
+# deleting the fakes would have left Good Morning with no entities at all — an
+# empty scene that still appears in the picker and silently does nothing. Each
+# scene keeps its original intent, driven by the light that actually exists.
 scene:
   - name: Good Morning
     entities:
-      input_boolean.living_room_light:
-        state: "on"
-      input_boolean.kitchen_light:
+      switch.bedroom_1_switch_1:
         state: "on"
 
   - name: Good Night
     entities:
-      input_boolean.living_room_light:
-        state: "off"
-      input_boolean.kitchen_light:
-        state: "off"
-      input_boolean.bedroom_light:
-        state: "off"
-      input_boolean.porch_light:
+      switch.bedroom_1_switch_1:
         state: "off"
       input_boolean.fan:
         state: "off"
 
   - name: Movie Time
     entities:
-      input_boolean.living_room_light:
+      switch.bedroom_1_switch_1:
         state: "off"
       input_boolean.tv:
         state: "on"

@@ -255,3 +255,89 @@ def test_no_docs_archive_graveyard():
         "docs/archive reappeared — retire superseded files by deleting them "
         "(git keeps history); do not re-introduce an archive graveyard. See docs/CANONICAL.md"
     )
+
+
+# ── Two-stage router: a rock that is ALLOWED TO IMPROVE ──────────────────────
+#
+# The brain/STT/TTS rocks are locked because they must not change. The router is
+# different: the self-train loop (ZOE_ROUTER_SELFTRAIN) exists to mine real
+# traffic and promote a better checkpoint, guarded by its ratchet. So pinning a
+# checkpoint hash here would fight the design.
+#
+# What IS locked is the architecture and the contract — the two-stage shape, the
+# sidecar seam, the flag semantics, and the artifact paths. Those are what a
+# refactor could quietly undo, and until 2026-07-20 nothing enforced them:
+# CANONICAL described the router in prose while CI guarded only the other three.
+
+
+def test_router_rock_is_two_stage_setfit_then_functiongemma():
+    """The two-stage SHAPE is the rock. Collapsing it to one stage, or swapping
+    either stage's family, must be a deliberate reviewed edit — not a refactor."""
+    router = _rocks()["router"]
+    assert router["architecture"] == "two-stage", f"router architecture drifted: {router}"
+    assert "setfit" in _compact_token(router["stage1"]), f"stage-1 drifted off SetFit: {router}"
+    assert "functiongemma" in _compact_token(router["stage2"]), (
+        f"stage-2 drifted off FunctionGemma: {router}"
+    )
+
+
+def test_router_checkpoint_is_deliberately_not_pinned():
+    """Guards the DISTINCTION, not a value: if someone pins a checkpoint hash they
+    have broken the self-train loop's ability to promote, which is the whole point
+    of the ratchet. Keep this rock improvable."""
+    assert _rocks()["router"]["checkpoint_pinned"].strip().lower().startswith("no"), (
+        "router checkpoint got pinned — that fights ZOE_ROUTER_SELFTRAIN's ratchet; "
+        "the architecture is the rock, the weights are not"
+    )
+
+
+def test_router_stage1_artifact_is_committed():
+    """Stage 1 is small (~1.5 MB) and IS in git — losing it must not be possible.
+    Stage 2's GGUF (~291 MB) is deliberately NOT in git; it rebuilds from the
+    tracked corpus via labs/functiongemma-finetune/export_gguf.sh."""
+    rel = _rocks()["router"]["stage1_artifact"]
+    assert os.path.exists(os.path.join(REPO, rel)), f"stage-1 router head missing: {rel}"
+
+
+def test_router_sidecar_seam_is_intact():
+    """The sidecar contract: a dedicated unit on its own port, reached by URL.
+    zoe-data must not grow an in-process copy of stage 2.
+
+    Asserts against the ExecStart command line specifically, NOT the whole unit
+    file. The port string also appears in a comment, the Description, and the
+    ExecStartPost health check — so a substring search over the file would stay
+    green while ExecStart bound a different port, which is exactly the drift
+    this test exists to catch.
+    """
+    router = _rocks()["router"]
+    rel = os.path.join("scripts", "setup", "systemd", router["sidecar_service"])
+    unit_path = os.path.join(REPO, rel)
+    assert os.path.exists(unit_path), f"router sidecar unit missing: {unit_path}"
+
+    # ExecStart is a multi-line continuation; join it back into one command.
+    lines, exec_start, collecting = _read_repo(rel).splitlines(), [], False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("ExecStart="):
+            collecting = True
+        elif collecting and not stripped.endswith("\\") and exec_start:
+            exec_start.append(stripped)
+            break
+        if collecting:
+            exec_start.append(stripped.rstrip("\\").strip())
+            if not stripped.endswith("\\"):
+                break
+    cmd = " ".join(exec_start)
+    assert cmd, "could not locate ExecStart in the router sidecar unit"
+    assert f"--port {router['sidecar_port']}" in cmd, (
+        f"router sidecar ExecStart no longer binds --port {router['sidecar_port']}: {cmd!r}"
+    )
+
+
+def test_router_flag_keeps_its_four_stage_rollout():
+    """ZOE_ROUTER_HEAD's off|shadow|shadow2|active ladder is how a router change
+    reaches production safely. Losing a rung removes the ability to observe a new
+    decision without routing on it."""
+    src = _data_src("semantic_router.py") + _data_src("router_two_stage.py")
+    for rung in ("shadow2", "active"):
+        assert rung in src, f"ZOE_ROUTER_HEAD rung '{rung}' vanished from the router modules"
