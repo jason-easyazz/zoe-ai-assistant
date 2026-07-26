@@ -163,3 +163,19 @@ def test_quiet_hours_use_household_timezone_not_host_clock(monkeypatch):
     assert voice_delivery.resolve(LONG_NEUTRAL).profile == "gentle", (
         "18:00 UTC is 02:00 in Perth — must be treated as quiet hours"
     )
+
+
+def test_blank_or_invalid_timezone_does_not_break_the_module(monkeypatch):
+    """A bad ZOE_TIMEZONE must degrade to the default, not take the TTS path down.
+
+    The first cut resolved ZoneInfo() at import; an empty or misspelled value raised
+    while `voice_delivery` was being imported, which would have broken every synth
+    call rather than just the quiet-hours window.
+    """
+    _on(monkeypatch)
+    for bad in ("", "   ", "Not/AZone"):
+        monkeypatch.setenv("ZOE_TIMEZONE", bad)
+        importlib.reload(voice_delivery)
+        # Resolves, and still applies the window using the fallback timezone.
+        assert voice_delivery.resolve(LONG_NEUTRAL, hour=2).profile == "gentle"
+        assert voice_delivery.resolve(LONG_NEUTRAL, hour=12).speed is None
