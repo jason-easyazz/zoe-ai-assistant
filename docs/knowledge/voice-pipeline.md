@@ -95,12 +95,23 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   {"status": "pass|fail|skip|error", "timestamp": "…Z",
    "said_vs_did_regressions": ["FUNCTION: …"], "per_stage_speed_deltas": {"stt_ms": {"cur_ms": …, "baseline_ms": …, "delta_ms": …, "ratio": …}, …},
    "baseline_ref": {"path": "…", "created_at": "…Z", "ok_rate": …},
-   "reason": "…", "summary": {"n_samples": …, "ok_rate": …, "medians_ms": {…}}}
+   "reason": "…", "summary": {"n_samples": …, "ok_rate": …, "medians_ms": {…}},
+   "non_pass_streak": 0, "non_pass_alert_after": 3, "non_pass_alert": false}
   ```
 
   A **skip** (box too tight), **timeout**, or **error** (harness couldn't run) MUST still write an
   artifact with `status != "pass"` — an *absent* file is never "nothing wrong". `summary` +
   `created_at` are retained for the router self-train `replay_gate` reader.
+
+  **Skip-streak alarm** (a gate that green-skips forever is not a gate): `non_pass_streak` counts
+  consecutive runs with `status != "pass"` (a real pass resets it to 0). Once it reaches
+  `--alert-after-non-pass` (default 3, env `ZOE_VOICE_ALERT_NON_PASS_RUNS`), `non_pass_alert`
+  flips true and the low-memory **skip path exits 4** instead of 0, so
+  `zoe-voice-regression.service` (and its timer) goes visibly red instead of recording SUCCESS on
+  every skipped run. The unit also gates startup on a bounded Postgres :5432 TCP wait
+  (`scripts/maintenance/wait_for_port.py`, `ExecStartPre`) — it is a USER unit, so
+  `After=docker.service` cannot order it after the dockerized DB at boot. Pinned by
+  `tests/unit/test_voice_probe_streak.py`.
 
 - **Deploy-path checker — `scripts/maintenance/voice_gate_check.py`:** the cheap counterpart the
   blessed deploy (`deploy_live.sh`) invokes. If the incoming git diff touches the **voice runtime
