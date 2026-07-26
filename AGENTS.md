@@ -168,9 +168,13 @@ files pay twice and then conflict with each other. Combine first.
   others behind, and each branch update triggers a fresh review — the measured 3.6 reviews/PR
   in July was this, not oversized changes.
 
-**Size** (`pr-hygiene.yml`, thresholds from 40 real merged PRs: median 4 files / 246 lines,
-p90 9 / 653, max 10 / 975):
-- warn above **15 files or 1000 lines**, fail above **30 files or 2000 lines**
+**Size** (`pr-hygiene.yml`) — thresholds come from the RESEARCH, not from our habits.
+Defect detection is ~87% at 1-100 changed lines, ~65% at 301-600, ~28% at 1000+
+(SmartBear/Cisco ~2500 PRs; Google): 200 lines is the target, 400 the ceiling. Our own
+distribution (40 merged PRs, 2026-07) is median 246 / p75 401 / p90 653 / max 975 — so the
+median is healthy but the top quartile is already in the degraded band, and the warning is
+meant to fire there:
+- warn above **10 files or 400 lines**, fail above **30 files or 1000 lines**
 - generated files (flag inventory, vendored `dist/lib/`, lockfiles, wheels) are excluded — they
   move in bulk and say nothing about review burden
 - `oversized-ok` label overrides a genuine exception

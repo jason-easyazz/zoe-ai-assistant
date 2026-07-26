@@ -1,11 +1,19 @@
 # PR hygiene — size guard + overlap notice.
 #
 # Both exist to make "combine related work, submit when finished" cheap to follow.
-# Thresholds are calibrated from 40 real merged PRs (2026-07): median 4 files / 246
-# lines, p90 9 files / 653 lines, max 10 files / 975 lines. NOTHING exceeded 40 files
-# or 1500 lines, so a guard set there would never fire. These are set well above normal
-# work but well below Greptile's ~50-file silent-skip — an oversized PR must not sail
-# past review entirely while still costing a credit.
+#
+# THRESHOLDS ARE FROM THE RESEARCH, NOT FROM OUR HABITS. The first cut set them above
+# this repo's observed maximum, which encodes the current habit rather than the point
+# where review actually degrades. The evidence (SmartBear/Cisco ~2500 PRs; Google):
+# defect detection is ~87% at 1-100 changed lines, ~65% at 301-600, and ~28% at 1000+.
+# 200 lines is the target, 400 the ceiling past which detection measurably falls.
+#
+# Our own distribution (40 merged PRs, 2026-07): median 246 lines, p75 401, p90 653,
+# max 975. So the median is healthy but the top quartile is already in the degraded
+# band — the warn threshold is meant to fire there. That is the signal, not noise.
+#
+# The hard fail also sits below Greptile's ~50-file silent skip: past that a PR gets NO
+# review while still costing a credit, which is worse than being blocked.
 name: pr-hygiene
 
 on:
@@ -38,8 +46,8 @@ jobs:
               /^modules\/omnigent\/wheels\//,
             ];
             const OVERRIDE = 'oversized-ok';
-            const WARN  = { files: 15, lines: 1000 };
-            const FAIL  = { files: 30, lines: 2000 };
+            const WARN  = { files: 10, lines: 400 };   // research ceiling — detection falls past here
+            const FAIL  = { files: 30, lines: 1000 };  // ~28% detection; also under Greptile's ~50-file skip
 
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner, repo: context.repo.repo,
@@ -84,10 +92,10 @@ jobs:
             const hasOverride = pr.labels.some(l => l.name === OVERRIDE);
 
             if (over(FAIL) && !hasOverride) {
-              lines.push('', `**Too large:** ${nFiles} files / ${nLines} lines (limit ${FAIL.files} / ${FAIL.lines}).`,
+              lines.push('', `**Too large:** ${nFiles} files / ${nLines} lines (limit ${FAIL.files} / ${FAIL.lines}). At 1000+ changed lines reviewers find roughly 28% of defects.`,
                 '', `Split it, or add the \`${OVERRIDE}\` label if it genuinely cannot be split. Note Greptile silently SKIPS PRs over ~50 files — past that you get no review at all while still paying for it.`);
             } else if (over(WARN)) {
-              lines.push('', `**Getting large:** ${nFiles} files / ${nLines} lines (typical here is 4 files / 246 lines). Not blocking.`);
+              lines.push('', `**Getting large:** ${nFiles} files / ${nLines} lines. Past ~400 changed lines defect detection drops from ~87% to ~65% and keeps falling (SmartBear/Cisco, Google). Not blocking — but this is the point where splitting pays.`);
             }
 
             if (lines.length) {
