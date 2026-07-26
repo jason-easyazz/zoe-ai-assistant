@@ -1153,3 +1153,67 @@ def test_queue_index_falls_back_to_enumeration_order():
 def test_queue_index_ignores_a_non_integer_sort_index():
     items = _norm([{"name": "a", "sort_index": None}, {"name": "b", "sort_index": "1"}])
     assert [i["index"] for i in items] == [0, 1]
+
+
+# ── favorite_now_playing: "Hey Zoe, I like this song" ────────────────────────
+# Resolves the CURRENT track's uri from the now-playing snapshot, then favourites
+# it. Radio / provider-less streams (no uri) must fall out as "nothing playing",
+# never a silent success; a failed MA write must not claim success.
+
+@pytest.mark.asyncio
+async def test_favorite_now_playing_favourites_the_current_uri(monkeypatch):
+    async def np(pid=""):
+        return {"state": "playing", "uri": "ytmusic://track/abc", "title": "Meet Joe Black", "artist": "Thomas Newman"}
+    added = {}
+    async def fav(uri):
+        added["uri"] = uri
+        return True
+    monkeypatch.setattr(music_service, "now_playing", np)
+    monkeypatch.setattr(music_service, "favorite_add", fav)
+    res = await music_service.favorite_now_playing()
+    assert res["ok"] is True
+    assert added["uri"] == "ytmusic://track/abc"
+    assert res["title"] == "Meet Joe Black" and res["artist"] == "Thomas Newman"
+
+
+@pytest.mark.asyncio
+async def test_favorite_now_playing_nothing_playing(monkeypatch):
+    async def np(pid=""):
+        return {"state": "idle", "uri": "", "title": "", "artist": ""}
+    monkeypatch.setattr(music_service, "now_playing", np)
+    monkeypatch.setattr(music_service, "favorite_add", lambda uri: (_ for _ in ()).throw(AssertionError("must not write")))
+    res = await music_service.favorite_now_playing()
+    assert res == {"ok": False, "reason": "nothing playing"}
+
+
+@pytest.mark.asyncio
+async def test_favorite_now_playing_radio_has_no_uri(monkeypatch):
+    # Playing, but a radio stream with no media uri — cannot be favourited.
+    async def np(pid=""):
+        return {"state": "playing", "uri": "", "title": "181.FM", "artist": ""}
+    monkeypatch.setattr(music_service, "now_playing", np)
+    monkeypatch.setattr(music_service, "favorite_add", lambda uri: (_ for _ in ()).throw(AssertionError("must not write")))
+    res = await music_service.favorite_now_playing()
+    assert res["ok"] is False and res["reason"] == "nothing playing"
+
+
+@pytest.mark.asyncio
+async def test_favorite_now_playing_write_failure_is_not_success(monkeypatch):
+    async def np(pid=""):
+        return {"state": "playing", "uri": "ytmusic://track/abc", "title": "T", "artist": "A"}
+    async def fav(uri):
+        return False
+    monkeypatch.setattr(music_service, "now_playing", np)
+    monkeypatch.setattr(music_service, "favorite_add", fav)
+    res = await music_service.favorite_now_playing()
+    assert res["ok"] is False and res["reason"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_favorite_now_playing_ma_down(monkeypatch):
+    async def np(pid=""):
+        return None                       # MA unreachable
+    monkeypatch.setattr(music_service, "now_playing", np)
+    monkeypatch.setattr(music_service, "favorite_add", lambda uri: (_ for _ in ()).throw(AssertionError("must not write")))
+    res = await music_service.favorite_now_playing()
+    assert res["ok"] is False and res["reason"] == "nothing playing"
