@@ -27,12 +27,21 @@ import contextlib
 import subprocess
 from typing import Mapping, Sequence
 
-# Shared, small pool used ONLY for the quick blocking fork+exec (subprocess.Popen)
-# and the run_to_completion() run. Long blocking waits do NOT go here — see
-# AsyncPipeProcess.wait() — so a stuck process can't hold a spawn slot for its
-# whole lifetime and starve new fork+execs.
+# Shared, small pool used ONLY for the quick blocking fork+exec (subprocess.Popen).
+# Long blocking waits do NOT go here — see AsyncPipeProcess.wait() and _RUN_POOL —
+# so a stuck process can't hold a spawn slot for its whole lifetime and starve new
+# fork+execs.
 _SPAWN_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=4, thread_name_prefix="zoe-async-spawn"
+)
+
+# Separate, wider pool for run_to_completion(): that call holds its worker for the
+# child's WHOLE lifetime, which for the background Hermes lane is up to
+# HERMES_BACKGROUND_TIMEOUT_S (900s default). Sharing _SPAWN_POOL would let four
+# concurrent background tasks occupy every spawn slot and stall unrelated chat/voice
+# fork+execs behind them for 15 minutes.
+_RUN_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=16, thread_name_prefix="zoe-async-run"
 )
 
 
@@ -156,4 +165,6 @@ async def run_to_completion(
             timeout=timeout,
         )
 
-    return await loop.run_in_executor(_SPAWN_POOL, _blocking_run)
+    # _RUN_POOL, NOT _SPAWN_POOL: this worker is held for the child's whole
+    # lifetime, so parking it in the small spawn pool would starve new fork+execs.
+    return await loop.run_in_executor(_RUN_POOL, _blocking_run)

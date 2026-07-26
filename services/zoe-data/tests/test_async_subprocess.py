@@ -112,3 +112,60 @@ async def test_run_to_completion_times_out_and_kills_child():
             [sys.executable, "-c", "import time; time.sleep(5)"],
             timeout=0.5,
         )
+
+
+# ── spawn-pool starvation guard ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_long_run_to_completion_does_not_starve_spawn_pool():
+    """A long run_to_completion must not hold a _SPAWN_POOL slot.
+
+    The background Hermes lane runs run_to_completion() with a 900s timeout. If
+    those shared the 4-worker _SPAWN_POOL, four concurrent background tasks would
+    block every unrelated chat/voice fork+exec behind them. Occupy the whole
+    _RUN_POOL-bound path with sleepers and prove a spawn still goes through.
+    """
+    import asyncio
+
+    import async_subprocess
+
+    sleeper = [sys.executable, "-c", "import time; time.sleep(30)"]
+    # More concurrent long runs than _SPAWN_POOL has workers.
+    n = async_subprocess._SPAWN_POOL._max_workers + 2
+    long_runs = [
+        asyncio.create_task(run_to_completion(sleeper, timeout=30)) for _ in range(n)
+    ]
+    try:
+        # Let them all get scheduled into their pool.
+        await asyncio.sleep(0.5)
+        # A fresh fork+exec must still complete promptly, not queue behind them.
+        proc = await asyncio.wait_for(
+            run_to_completion([sys.executable, "-c", "print('ok')"], timeout=10),
+            timeout=10,
+        )
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == b"ok"
+        # And the dedicated pipe-spawn path must be unblocked too.
+        piped = await asyncio.wait_for(
+            spawn_pipe_process([sys.executable, "-c", _ECHO_UPPER]), timeout=10
+        )
+        piped.stdin.write(b"hi\n")
+        await piped.stdin.drain()
+        assert (await asyncio.wait_for(piped.stdout.readline(), timeout=10)) == b"HI\n"
+        piped.kill()
+        await piped.wait()
+    finally:
+        for t in long_runs:
+            t.cancel()
+        await asyncio.gather(*long_runs, return_exceptions=True)
+
+
+def test_run_to_completion_uses_its_own_pool():
+    """Guard the invariant directly: the long-run path is not the spawn pool."""
+    import async_subprocess
+
+    assert async_subprocess._RUN_POOL is not async_subprocess._SPAWN_POOL
+    assert (
+        async_subprocess._RUN_POOL._max_workers
+        > async_subprocess._SPAWN_POOL._max_workers
+    )
