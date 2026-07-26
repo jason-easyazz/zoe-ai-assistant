@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
+from async_subprocess import run_to_completion
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
@@ -795,12 +796,12 @@ async def _write_hermes_codex_token(access_token: str, refresh_token: str = "") 
 async def _restart_hermes() -> None:
     """Restart hermes-agent systemd user service so it picks up the new token."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "systemctl", "--user", "restart", "hermes-agent.service",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+        # AGENTS.md fork rule: never fork on the event-loop thread — run the
+        # restart CLI to completion inside a worker thread (output discarded).
+        await run_to_completion(
+            ["systemctl", "--user", "restart", "hermes-agent.service"],
+            timeout=10,
         )
-        await asyncio.wait_for(proc.wait(), timeout=10)
         logger.info("hermes-agent.service restarted after token write")
     except Exception as exc:
         logger.warning("Hermes restart after token write failed: %s", exc)

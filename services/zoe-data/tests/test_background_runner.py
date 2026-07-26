@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 import types
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -43,21 +43,14 @@ def test_zoe_repo_root_is_portable(monkeypatch):
 async def test_run_hermes_background_task_uses_worker_cli(monkeypatch):
     captured = {}
 
-    async def fake_communicate():
-        return b"done", b""
-
-    proc = MagicMock()
-    proc.communicate = fake_communicate
-    proc.returncode = 0
-    proc.kill = MagicMock()
-    proc.wait = AsyncMock()
-
-    async def fake_exec(*cmd, **kwargs):
-        captured["cmd"] = cmd
+    async def fake_run_to_completion(cmd, **kwargs):
+        captured["cmd"] = tuple(cmd)
         captured["kwargs"] = kwargs
-        return proc
+        return subprocess.CompletedProcess(list(cmd), 0, stdout=b"done", stderr=b"")
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    # The spawn goes through async_subprocess.run_to_completion (off-loop fork
+    # rule), imported into background_runner's namespace.
+    monkeypatch.setattr(br, "run_to_completion", fake_run_to_completion)
     monkeypatch.setenv("HERMES_BACKGROUND_PROFILE", "zoe-coder")
 
     result = await br._run_hermes_background_task("audit validators only", user_id="u1", task_id=99)

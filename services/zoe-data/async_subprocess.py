@@ -131,6 +131,7 @@ async def run_to_completion(
     cwd: "str | None" = None,
     env: "Mapping[str, str] | None" = None,
     timeout: "float | None" = None,
+    merge_stderr: bool = False,
 ) -> "subprocess.CompletedProcess[bytes]":
     """Run a subprocess to completion OFF the event-loop thread.
 
@@ -138,6 +139,10 @@ async def run_to_completion(
     worker thread via `subprocess.run`, so nothing forks on the loop. Raises
     `subprocess.TimeoutExpired` (the child is killed) on timeout; returns a
     `CompletedProcess` with `.returncode`, `.stdout`, `.stderr` (bytes).
+
+    `merge_stderr=True` interleaves stderr into stdout (`stderr=STDOUT`), for
+    callers that previously spawned with `stderr=asyncio.subprocess.STDOUT`;
+    `.stderr` is then `None`.
     """
     loop = asyncio.get_running_loop()
 
@@ -147,7 +152,7 @@ async def run_to_completion(
             cwd=cwd,
             env=dict(env) if env is not None else None,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
             timeout=timeout,
         )
 

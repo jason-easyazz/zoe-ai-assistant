@@ -14,10 +14,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import subprocess
 import time
 import uuid
 from datetime import datetime, timezone
 
+from async_subprocess import run_to_completion
 from hermes_http import hermes_auth_headers, hermes_bin
 from repo_paths import zoe_repo_root
 
@@ -257,21 +259,16 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
     env = dict(os.environ)
     env.setdefault("HERMES_YOLO_MODE", "1")
     env["HERMES_SESSION_ID"] = f"background-task-{task_id}"
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=repo_root,
-        env=env,
-    )
+    # AGENTS.md fork rule: never fork on the event-loop thread — the whole
+    # spawn+communicate+timeout+kill runs in a worker thread (2026-06-29 outage).
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise TimeoutError(f"Background Hermes task timed out after {timeout_s:.0f}s")
-    stdout = (out or b"").decode("utf-8", errors="replace").strip()
-    stderr = (err or b"").decode("utf-8", errors="replace").strip()
+        proc = await run_to_completion(cmd, cwd=repo_root, env=env, timeout=timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"Background Hermes task timed out after {timeout_s:.0f}s"
+        ) from exc
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
     if proc.returncode != 0:
         raise RuntimeError(
             f"hermes -p {profile} -z exited {proc.returncode}: {stderr or stdout or 'no output'}"
