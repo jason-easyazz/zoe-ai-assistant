@@ -76,11 +76,10 @@ jobs:
             const CHECK_DONE = ['success', 'neutral', 'skipped'];
             const COPILOT = 'copilot-pull-request-reviewer';
             const CODEX = 'chatgpt-codex-connector';
-            // Codex is summoned and WAITED FOR, but with a bound. Requiring it outright
-            // would stall the routine tier (AGENTS.md: local review + Copilot); not waiting
-            // at all lets Greptile run concurrently with it, so a Codex finding lands after
-            // the credit is already spent. A bounded wait satisfies both: Greptile really is
-            // last when Codex participates, and an absent Codex cannot deadlock the gate.
+            // Codex auto-runs on every push (no summon needed). It is WAITED FOR with a
+            // bound, anchored to head-commit age: not waiting lets Greptile run
+            // concurrently and a Codex finding lands after the credit is spent, while an
+            // unbounded wait deadlocks on a silent Codex. Bounded satisfies both.
             const CODEX_GRACE_MIN = 20;
             // Copilot gets the SAME bounded-wait treatment. It previously had none, so
             // an unresponsive Copilot held the gate indefinitely — measured 2026-07-27:
@@ -312,32 +311,18 @@ jobs:
                 if (m) copilotSummon = m.data;
               }
 
-              const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
-              // Same trust rule: a forged summon marker would suppress the real one and,
-              // once its timestamp aged past the grace, wave Greptile through early.
-              // NEWEST, not first. `find` returns the OLDEST match, so after a re-summon
-              // (or a retry following a failed label) a stale marker would set the grace
-              // clock and could read as elapsed while the latest @codex review is still
-              // inside its window. The handoff marker already takes the last match; these
-              // two must agree.
-              const codexSummons = comments.filter(c => c.body?.includes(codexMark) && trusted(c))
-                                            .sort(byCreated);
-              const codexSummon = codexSummons.length ? codexSummons[codexSummons.length - 1] : undefined;
-              if (!reviewedHead.has(CODEX) && !codexSummon) {
-                // Wrapped: an advisory summon must never abort the sweep for other PRs.
-                const r = await ok(`PR #${pr.number} summon Codex`, () =>
-                  github.rest.issues.createComment({
-                    ...base, issue_number: pr.number, body: `@codex review\n${codexMark}`,
-                  }));
-                if (r) core.info(`PR #${pr.number}: summoned Codex`);
-              }
-
-              // Bounded wait for Codex: hold until it reviews this head, or until the grace
-              // period since we summoned has elapsed. Expressed as a function of a
-              // reviewedHead SET so the revalidation below can re-derive it from fresh data
-              // instead of reusing a frozen verdict — see the note at the revalidation.
-              const graceElapsed = codexSummon
-                ? (Date.now() - new Date(codexSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
+              // Codex runs AUTOMATICALLY on every push (operator config, 2026-07-27) —
+              // the gate no longer summons it. The old `@codex review` comment would now
+              // trigger a SECOND, redundant billed run per head on top of the automatic
+              // one. The bounded wait remains, anchored to the HEAD COMMIT's own
+              // timestamp: push starts Codex, so commit age is the natural grace clock,
+              // and no marker comment is needed at all. Unreadable commit -> grace never
+              // elapses (fail toward waiting; the cron re-tries).
+              const headCommitAt = await ok(`PR #${pr.number} head commit`, () =>
+                github.rest.repos.getCommit({ ...base, ref: sha })
+                  .then(r => r.data.commit?.committer?.date || r.data.commit?.author?.date));
+              const graceElapsed = headCommitAt
+                ? (Date.now() - new Date(headCommitAt)) / 60000 >= CODEX_GRACE_MIN
                 : false;
               const codexPasses = (rh) => rh.has(CODEX) || graceElapsed;
               const codexOk = codexPasses(reviewedHead);
