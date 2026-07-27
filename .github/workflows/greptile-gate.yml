@@ -117,7 +117,13 @@ jobs:
               // that writes them — so the narrowest possible rule is also the correct one.
               const trusted = (c) =>
                 c.user?.login === 'github-actions[bot]' && c.user?.type === 'Bot';
-              const marks = comments.filter(c => c.body?.includes(MARK) && trusted(c));
+              // Explicit chronology: "newest marker wins" must not lean on the REST
+              // default ordering (ascending id — documented, but implicit here). The
+              // issue-comments endpoint has no sort parameter, so order in code.
+              const byCreated = (a, b) =>
+                new Date(a.created_at || 0) - new Date(b.created_at || 0);
+              const marks = comments.filter(c => c.body?.includes(MARK) && trusted(c))
+                                    .sort(byCreated);
 
               // ONE reader for EVERY gate condition, called twice: once to decide, once to
               // revalidate immediately before acting. It previously hand-copied a SUBSET of
@@ -291,7 +297,8 @@ jobs:
               // clock and could read as elapsed while the latest @codex review is still
               // inside its window. The handoff marker already takes the last match; these
               // two must agree.
-              const codexSummons = comments.filter(c => c.body?.includes(codexMark) && trusted(c));
+              const codexSummons = comments.filter(c => c.body?.includes(codexMark) && trusted(c))
+                                            .sort(byCreated);
               const codexSummon = codexSummons.length ? codexSummons[codexSummons.length - 1] : undefined;
               if (!reviewedHead.has(CODEX) && !codexSummon) {
                 // Wrapped: an advisory summon must never abort the sweep for other PRs.
