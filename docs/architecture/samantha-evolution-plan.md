@@ -464,6 +464,14 @@ must stop reading "W1 DONE" as "conversation-grade voice at the panel".
   and TTS are all outside its boundary. Any endpointing change would leave the gate
   green regardless of live quality. **A continuous-audio harness is a prerequisite for
   touching panel-lane endpointing** — building it is most of that work.
+- **Deep-quiet fast tail shipped dark (2026-07-27):** the daemon's `_Endpointer` can
+  now close after `ZOE_VAD_TAIL_MS` of consecutive DEEP Silero quiet
+  (prob < `ZOE_VAD_TAIL_DEEP_PROB`, default 0.10) instead of the full 800 ms — corpus
+  measurement showed a plain shorter tail cuts ~17% of real commands mid-pause, while
+  depth-gating halves that risk at every tail length (true end-of-turn silence scores
+  ~0.06, mid-utterance pauses ~0.18). Default `0` = off, byte-identical to before;
+  staged rollout value recommended by `scripts/perf/measure_endpointing.py` evidence
+  (see scripts/AGENTS.md).
 - **Consequence for W1.3:** the flag flip remains correct for the LiveKit lane and
   stays queued. It is not a panel-lane improvement and must not be scored as one.
 - **Cheap capacity nobody is using:** the Pi 5 runs at roughly one third of ONE core

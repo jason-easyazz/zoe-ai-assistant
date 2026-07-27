@@ -100,6 +100,25 @@ RECORD_SILENCE_AMPLITUDE = int(os.environ.get("RECORD_SILENCE_AMPLITUDE", "300")
 VAD_ENDPOINT_ENABLED = os.environ.get("VAD_ENDPOINT_ENABLED", "false").lower() in ("1", "true", "yes")
 VAD_ENDPOINT_SILENCE_S = float(os.environ.get("VAD_ENDPOINT_SILENCE_S", "0.8"))
 VAD_ENDPOINT_THRESHOLD = float(os.environ.get("VAD_ENDPOINT_THRESHOLD", "0.35"))
+# ── Deep-quiet fast tail: cut the endpoint wait when silence is unambiguous ──
+# The 800ms VAD tail is the largest controllable block in the panel latency
+# budget, but corpus measurement (2026-07-27, 889 utterances) showed a plain
+# shorter tail is not safe: ~17% of real commands contain a mid-utterance
+# VAD-quiet pause >= 480ms, so lowering the single tail cuts people off
+# mid-sentence. The same measurement found a usable signal: true end-of-turn
+# silence scores DEEP on Silero (p90 prob median 0.062) while mid-utterance
+# pauses hover higher (median 0.179 — breath, mouth noise, trailing voicing).
+# So when ZOE_VAD_TAIL_MS > 0, the endpointer closes after that many ms of
+# consecutive DEEP quiet (prob < ZOE_VAD_TAIL_DEEP_PROB); pauses that are
+# merely below the speech threshold still get the full VAD_ENDPOINT_SILENCE_S.
+# Measured on the corpus: at the same tail length the deep gate halves the
+# false-cut risk vs a fixed reduction (480ms: 8.3% vs 17.4%; 640ms: 3.6% vs
+# 8.3% — upper bounds, the corpus mixes in non-panel lanes whose endpointing
+# tolerates longer pauses). 0 (the default) disables the fast tail entirely:
+# behaviour is byte-identical to before the flag existed, so deploying this
+# code is a no-op until the operator stages the flag on the Pi.
+ZOE_VAD_TAIL_MS = int(os.environ.get("ZOE_VAD_TAIL_MS", "0"))
+ZOE_VAD_TAIL_DEEP_PROB = float(os.environ.get("ZOE_VAD_TAIL_DEEP_PROB", "0.10"))
 # Default 0.28 — 0.35 misses many real mics/rooms; tune via WAKEWORD_THRESHOLD.
 WAKEWORD_THRESHOLD = float(_env("WAKEWORD_THRESHOLD", "0.28", "OWW_THRESHOLD"))
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no")
@@ -302,11 +321,18 @@ class _Endpointer:
                 self._model = model
                 self.mode = "vad"
         self._quiet = 0
+        self._deep_quiet = 0
         # spoke=True when the caller already confirmed speech (the follow-up
         # recorder's VAD trigger) so the fast tail applies from the first pause.
         self._spoke = spoke
         self._amp_max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
         self._vad_max_silent = max(1, int(VAD_ENDPOINT_SILENCE_S * SAMPLE_RATE / CHUNK_SIZE))
+        # Deep-quiet fast tail (see ZOE_VAD_TAIL_MS above): None = disabled,
+        # i.e. exactly the pre-flag behaviour.
+        self._deep_max_silent = (
+            max(1, int(ZOE_VAD_TAIL_MS / 1000 * SAMPLE_RATE / CHUNK_SIZE))
+            if self.mode == "vad" and ZOE_VAD_TAIL_MS > 0 else None
+        )
         self._min_frames = int(0.5 * SAMPLE_RATE / CHUNK_SIZE)
 
     def push(self, data: bytes, n_frames: int) -> bool:
@@ -316,10 +342,20 @@ class _Endpointer:
             if prob >= VAD_ENDPOINT_THRESHOLD:
                 self._spoke = True
                 self._quiet = 0
+                self._deep_quiet = 0
                 return False
             self._quiet += 1
+            # Borderline chunks (deep prob <= prob < speech threshold) count as
+            # quiet but RESET the deep counter: an ambiguous pause must never
+            # take the fast exit, only unambiguous silence may.
+            self._deep_quiet = self._deep_quiet + 1 if prob < ZOE_VAD_TAIL_DEEP_PROB else 0
+            if n_frames <= self._min_frames:
+                return False
+            if (self._spoke and self._deep_max_silent is not None
+                    and self._deep_quiet >= self._deep_max_silent):
+                return True
             limit = self._vad_max_silent if self._spoke else self._amp_max_silent
-            return self._quiet >= limit and n_frames > self._min_frames
+            return self._quiet >= limit
         amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
         if amplitude >= RECORD_SILENCE_AMPLITUDE:
             self._quiet = 0

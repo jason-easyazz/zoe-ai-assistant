@@ -3922,6 +3922,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_VAD_TAIL_DEEP_PROB": {
+        "defaults": [
+          "'0.10'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VAD_TAIL_MS": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_VOICE_ALERT_NON_PASS_RUNS": {
         "defaults": [
           "'3'"
