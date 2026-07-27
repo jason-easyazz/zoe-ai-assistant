@@ -238,7 +238,7 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
     (default ``zoe-coder`` / DeepSeek on OpenRouter) instead.
     """
     profile = _background_profile()
-    timeout_s = float(os.environ.get("HERMES_BACKGROUND_TIMEOUT_S", "900"))
+    timeout_s = _background_runtime_s()
     repo_root = zoe_repo_root()
     prompt = (
         "You are Hermes running a Zoe background task. "
@@ -267,7 +267,7 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
     # tasks rather than fail fast. The helper's 30s default suits interactive
     # callers; taking it here would make a saturated pool abort background tasks
     # that the pre-helper create_subprocess_exec path would simply have started.
-    queue_wait_s = float(os.environ.get("HERMES_BACKGROUND_QUEUE_WAIT_S", "600"))
+    queue_wait_s = _background_queue_wait_s()
     try:
         proc = await run_to_completion(
             cmd, cwd=repo_root, env=env, timeout=timeout_s, queue_timeout=queue_wait_s
@@ -324,6 +324,49 @@ async def get_pending_tasks(user_id: str) -> list[dict]:
     ]
 
 
+def _background_runtime_s() -> float:
+    """How long the background child may RUN."""
+    return float(os.environ.get("HERMES_BACKGROUND_TIMEOUT_S", "900"))
+
+
+def _background_queue_wait_s() -> float:
+    """How long a background task may WAIT for a subprocess worker."""
+    return float(os.environ.get("HERMES_BACKGROUND_QUEUE_WAIT_S", "600"))
+
+
+def _watchdog_timeout_s() -> float:
+    """When the watchdog may declare a 'running' row stuck.
+
+    Measured from created_at, so it must cover the WHOLE wall-clock a task is
+    legitimately allowed: queue wait PLUS child runtime. Sizing it to the
+    runtime alone (the old 900s default, correct when the pre-helper path
+    spawned immediately) would let the watchdog mark a task blocked while it is
+    still inside its own budget — and the runner would then write done/error
+    over that, producing contradictory notifications and a result that polling
+    never sees.
+
+    An explicit ZOE_TASK_TIMEOUT_S still wins, but is floored at the real
+    worst case for the same reason.
+    """
+    floor = _background_queue_wait_s() + _background_runtime_s()
+    configured = os.environ.get("ZOE_TASK_TIMEOUT_S")
+    if configured is None:
+        return floor
+    try:
+        value = float(configured)
+    except ValueError:
+        return floor
+    if value < floor:
+        logger.warning(
+            "ZOE_TASK_TIMEOUT_S=%.0fs is below the background lane's worst case "
+            "(%.0fs queue + %.0fs runtime); using %.0fs so the watchdog cannot "
+            "expire a task that is still running.",
+            value, _background_queue_wait_s(), _background_runtime_s(), floor,
+        )
+        return floor
+    return value
+
+
 async def _watchdog_loop() -> None:
     """Scan for tasks stuck in 'running' state beyond ZOE_TASK_TIMEOUT_S.
 
@@ -337,7 +380,7 @@ async def _watchdog_loop() -> None:
     from db_pool import get_db_ctx
     from datetime import timezone, timedelta
 
-    timeout_s = float(os.environ.get("ZOE_TASK_TIMEOUT_S", "900"))
+    timeout_s = _watchdog_timeout_s()
     _CLEANUP_INTERVAL_S = 7 * 86400  # weekly
     _RETENTION_DAYS = 30
     _last_cleanup = 0.0

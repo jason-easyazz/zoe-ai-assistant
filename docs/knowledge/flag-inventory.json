@@ -3764,7 +3764,7 @@
       },
       "ZOE_TASK_TIMEOUT_S": {
         "defaults": [
-          "'900'"
+          "-"
         ],
         "in_env_example": false,
         "readers": [

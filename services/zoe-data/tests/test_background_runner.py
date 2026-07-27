@@ -351,3 +351,44 @@ def test_queue_and_runtime_budgets_are_told_apart_by_type_not_value():
             raise exc
         except subprocess.TimeoutExpired:
             pass
+
+
+# ── the watchdog must not expire a task that is still inside its budget ─────
+
+def test_watchdog_window_covers_queue_wait_plus_runtime(monkeypatch):
+    """The watchdog measures from created_at, so it must cover BOTH budgets.
+
+    A background task may legitimately wait for a worker and then run. Sizing
+    the watchdog to the runtime alone (correct only when spawning was
+    immediate) lets it mark a still-running task 'blocked' — after which the
+    runner writes done/error over that row, producing contradictory
+    notifications and a result polling never sees.
+    """
+    import background_runner as br
+
+    monkeypatch.delenv("ZOE_TASK_TIMEOUT_S", raising=False)
+    monkeypatch.setenv("HERMES_BACKGROUND_TIMEOUT_S", "900")
+    monkeypatch.setenv("HERMES_BACKGROUND_QUEUE_WAIT_S", "600")
+    assert br._watchdog_timeout_s() == 1500
+
+    # A too-small explicit setting is floored, not silently obeyed.
+    monkeypatch.setenv("ZOE_TASK_TIMEOUT_S", "900")
+    assert br._watchdog_timeout_s() == 1500
+
+    # A generous explicit setting still wins.
+    monkeypatch.setenv("ZOE_TASK_TIMEOUT_S", "3600")
+    assert br._watchdog_timeout_s() == 3600
+
+    # Garbage falls back to the safe floor rather than crashing the loop.
+    monkeypatch.setenv("ZOE_TASK_TIMEOUT_S", "not-a-number")
+    assert br._watchdog_timeout_s() == 1500
+
+
+def test_watchdog_tracks_queue_budget_changes(monkeypatch):
+    """Raising the queue budget must widen the watchdog with it."""
+    import background_runner as br
+
+    monkeypatch.delenv("ZOE_TASK_TIMEOUT_S", raising=False)
+    monkeypatch.setenv("HERMES_BACKGROUND_TIMEOUT_S", "900")
+    monkeypatch.setenv("HERMES_BACKGROUND_QUEUE_WAIT_S", "1800")
+    assert br._watchdog_timeout_s() == 2700
