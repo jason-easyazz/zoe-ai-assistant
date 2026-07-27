@@ -111,8 +111,14 @@ Sequence:
    (operator-approved 2026-07-27): the gate summons Copilot once per head and anchors a
    server-timestamped summon marker on SUCCESS only; if Copilot has not reviewed within
    the grace window (reuses `CODEX_GRACE_MIN`, 20 min) and no request is genuinely
-   pending, the gate proceeds to Greptile without it. Motivation: a repo-wide Copilot
-   outage on 2026-07-27 deadlocked every PR — including the PR that carried the fix.
+   pending, the gate proceeds to Greptile without it. Two sharp edges of that bound,
+   so nobody reads it as a hard 20 minutes: (a) a still-PENDING request holds the gate
+   past the grace (an outage that accepts requests but never reviews holds until the
+   request is cleared — `gh pr edit <n> --remove-reviewer` — or Copilot answers), and
+   a manual `--add-reviewer` re-arms that hold; (b) the grace is evaluated only when
+   the gate RUNS (review/check events or the `*/30` cron), so a quiet PR clears in
+   20–50 min wall-clock, not 20. Motivation: a repo-wide Copilot outage on 2026-07-27
+   deadlocked every PR — including the PR that carried the fix.
 4. **Batch the fixes.** Collect every finding, fix once, push once. Fix-push-fix-push
    multiplies reviews AND multiplies the chance a fix introduces a new bug — which is
    exactly what happened on #1560.
