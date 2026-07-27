@@ -121,7 +121,9 @@ VAD_ENDPOINT_THRESHOLD = float(os.environ.get("VAD_ENDPOINT_THRESHOLD", "0.35"))
 # to disabled, never crash the daemon at import and take the panel's voice down.
 ZOE_VAD_TAIL_MS = _int_env("ZOE_VAD_TAIL_MS", 0)
 try:
-    ZOE_VAD_TAIL_DEEP_PROB = float(os.environ.get("ZOE_VAD_TAIL_DEEP_PROB") or 0.10)
+    # The default lives INSIDE environ.get so the flag-inventory scanner records
+    # it ("or 0.10" outside the call reads as no-default in the committed table).
+    ZOE_VAD_TAIL_DEEP_PROB = float(os.environ.get("ZOE_VAD_TAIL_DEEP_PROB", "0.10") or "0.10")
 except ValueError:
     ZOE_VAD_TAIL_DEEP_PROB = 0.10
 # Clamp: the whole safety design is deep < ambiguous < speech. A value at or
