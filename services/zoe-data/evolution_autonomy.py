@@ -38,6 +38,14 @@ def contract_for_type(proposal_type: str | None) -> dict:
     auto-executable."""
     t = (proposal_type or "").strip().lower()
     if t in _EXECUTE_TYPES:
+        # DELIBERATELY no `pr_evidence` here, although the canonical intake maps
+        # EXECUTE -> pr_evidence. In that framework, "execute" meant promoting an
+        # ALREADY-BUILT PR, so PR evidence had to exist up front. In this lane the
+        # PR is the OUTPUT of execution (approve -> board issue -> Omnigent builds
+        # the PR -> focused tests + review gate + greploop merge), so requiring
+        # pr_evidence pre-execution is unsatisfiable by construction — and the
+        # evidence the class exists to guarantee is enforced downstream by the
+        # PR's own merge gates instead.
         return {
             "autonomy_class": "execute",
             "approval_required": [_PRIVILEGED],

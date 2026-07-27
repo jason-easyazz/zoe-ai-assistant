@@ -57,3 +57,12 @@ def test_policy_and_migration_agree_on_the_executable_types():
     for t in ("intent_pattern", "user_frustration"):
         assert ea.contract_for_type(t)["autonomy_class"] == "execute"
         assert f'"{t}"' in mig or f"'{t}'" in mig
+
+
+def test_execute_types_deliberately_omit_pr_evidence():
+    """The canonical intake maps EXECUTE -> pr_evidence because there 'execute'
+    promoted an already-built PR. In this lane the PR is the OUTPUT of execution,
+    so pre-execution pr_evidence is unsatisfiable; the PR's own merge gates carry
+    that evidence downstream. Pin the omission so it reads as a decision."""
+    for t in ("intent_pattern", "user_frustration"):
+        assert "pr_evidence" not in ea.contract_for_type(t)["approval_required"]
