@@ -81,6 +81,23 @@ jobs:
         env:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
 
+      # actionlint validates workflow files against GitHub's ACTUAL schema. PyYAML
+      # passing is not evidence a workflow parses: greptile-gate.yml carried an
+      # invalid `on:` event (`pull_request_review_thread`) through ten review rounds
+      # and 15 commits — GitHub failed the file at parse time on EVERY push, the
+      # workflow never executed once, and nothing in CI noticed. A zero-job parse
+      # failure does not even fail a required check, so this is the only gate.
+      - name: Workflow lint (actionlint — a workflow that cannot parse cannot gate)
+        run: |
+          curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz \
+            | tar xz actionlint
+          # -shellcheck= (empty) disables the embedded-shell lint: deploy.yml has
+          # pre-existing SC2155 warnings that are style, not parse failures. This
+          # step exists to catch workflows GitHub itself cannot parse — keep it
+          # sharp for that and let shell style stay out of the merge gate.
+          ./actionlint -color -shellcheck=
+          rm -f actionlint
+
       - name: Python syntax check (all zoe-data modules)
         run: |
           find services/zoe-data -name "*.py" \

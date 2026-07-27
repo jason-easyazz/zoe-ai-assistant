@@ -23,10 +23,13 @@ on:
   # gate would never run for that PR at all.
   pull_request:
     types: [ready_for_review, synchronize, opened]
-  # The gate holds while threads are unresolved, so resolving the LAST one must
-  # re-run it — otherwise the PR sits unlabelled forever with nothing left to fix.
-  pull_request_review_thread:
-    types: [resolved]
+  # NOTE: thread-resolution has NO workflow trigger. `pull_request_review_thread`
+  # is a real webhook event but NOT a valid `on:` event — with it present the file
+  # failed GitHub's parser and the workflow never executed at all (every push run
+  # was a zero-job parse failure; actionlint catches it, PyYAML does not). Resolving
+  # the last thread is instead picked up by the schedule below, worst case ~30min
+  # later — slower than an event, but a gate that runs slowly beats one that never
+  # parses.
   # The Codex grace period is only evaluated when this workflow RUNS. Without a timer,
   # a silent Codex plus no other activity means the gate never wakes to notice the grace
   # elapsed — the bounded wait added to fix a deadlock would become one. This is the
