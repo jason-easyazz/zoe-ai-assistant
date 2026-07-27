@@ -136,8 +136,15 @@ def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
         from urllib.parse import urlparse
         base = os.environ.get("ZOE_BASE_URL", "http://127.0.0.1:8000")
         u = urlparse(base)
-        host, port = (u.hostname or "127.0.0.1"), (u.port or (443 if u.scheme == "https" else 80))
-        obs.append(f"zoe-data {host}:{port} {'reachable' if _port_open(host, port) else 'REFUSED'}")
+        if u.scheme not in ("http", "https") or not u.hostname:
+            # A malformed base is ITSELF the observation. Probing a fallback like
+            # 127.0.0.1:80 would report the state of an endpoint the harness
+            # cannot target — a guess with a confident tone.
+            obs.append(f"ZOE_BASE_URL INVALID ({base!r}) — cannot probe the endpoint")
+        else:
+            port = u.port or (443 if u.scheme == "https" else 80)
+            obs.append(f"zoe-data {u.hostname}:{port} "
+                       f"{'reachable' if _port_open(u.hostname, port) else 'REFUSED'}")
     return obs
 
 
