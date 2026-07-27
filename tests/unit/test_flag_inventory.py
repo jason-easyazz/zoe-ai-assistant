@@ -149,14 +149,23 @@ def test_precommit_keeps_the_inventory_fresh_hook_wired():
     hooks = [h for r in cfg["repos"] if r["repo"] == "local" for h in r.get("hooks", [])]
     hook = next((h for h in hooks if h["id"] == "zoe-flag-inventory-fresh"), None)
     assert hook is not None, "zoe-flag-inventory-fresh hook removed from pre-commit"
-    # Full path, not a substring: `echo flag_inventory.py` satisfies a bare
-    # "flag_inventory.py in entry" while never running the generator (polly
-    # cross-review, blocking finding #2).
-    assert "tools/audit/flag_inventory.py" in hook["entry"], \
-        "entry no longer invokes the real generator"
+    # Structural, not substring: the generator must be the FIRST command the
+    # entry executes — `echo tools/audit/flag_inventory.py …` mentions the path
+    # without running it and must fail here (Codex P2 on the earlier substring).
+    import shlex as _shlex
+    outer = _shlex.split(hook["entry"])
+    assert outer[:2] == ["bash", "-c"] and len(outer) >= 3, \
+        f"unexpected entry shape: {hook['entry']!r}"
+    script_tokens = _shlex.split(outer[2])
+    assert script_tokens[:2] == ["python3", "tools/audit/flag_inventory.py"], \
+        "entry's first command no longer executes the real generator"
     import re as _re
     assert _re.search(hook["files"], "services/zoe-data/example.py"), \
         "hook must fire on Python changes"
+    # scan_repo() reads .env.example for every flag's in_env_example bit — an
+    # .env.example-only commit must also trigger regeneration (Codex P2).
+    assert _re.search(hook["files"], ".env.example"), \
+        "hook must fire on .env.example changes"
     # BOTH -I filters: the JSON's `timestamp:` line churns with the date too —
     # dropping either filter false-fails every later-calendar-day commit while
     # a single-filter assertion stays green (polly cross-review, blocking #1).
