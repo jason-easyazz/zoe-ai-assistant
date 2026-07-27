@@ -152,8 +152,11 @@ def terminate_live_children() -> None:
         with contextlib.suppress(Exception):
             popen.wait(timeout=5)
         with contextlib.suppress(Exception):
-            if popen.poll() is None:
-                _kill_tree(popen)
+            # Unconditional: the LEADER may already be reaped while a
+            # descendant that ignored SIGTERM still holds the pipes — killpg
+            # by saved pgid takes whatever remains of the group, and raises
+            # harmlessly if the group is already gone.
+            _kill_tree(popen)
 
 
 _terminate_live_children = terminate_live_children  # backstop alias

@@ -798,10 +798,17 @@ async def _restart_hermes() -> bool:
     try:
         # AGENTS.md fork rule: never fork on the event-loop thread — run the
         # restart CLI to completion inside a worker thread (output discarded).
-        await run_to_completion(
+        proc = await run_to_completion(
             ["systemctl", "--user", "restart", "hermes-agent.service"],
             timeout=10,
         )
+        if proc.returncode != 0:
+            # run_to_completion returns rather than raises on a nonzero exit —
+            # a unit that failed to restart must not read as success upstream.
+            logger.warning("hermes-agent.service restart exited %s: %s",
+                           proc.returncode,
+                           (proc.stderr or proc.stdout or b"").decode(errors="replace")[-300:])
+            return False
         logger.info("hermes-agent.service restarted after token write")
         return True
     except QueueTimeout as exc:
