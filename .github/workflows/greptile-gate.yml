@@ -2,15 +2,15 @@
 #
 # Greptile is filtered (dashboard) to only review PRs carrying the `greptile` label.
 # Without the label it ignores the PR entirely and costs nothing. This job adds the
-# label only once every OTHER reviewer has reported success, so the ordering is a rule
-# rather than a habit, and Greptile's single review lands on the final, up-to-date head.
+# label only once the cheap tier has finished, so Greptile's single review lands on a
+# final, up-to-date head with no outstanding findings.
 #
 # WHY THAT ORDERING IS LOAD-BEARING (learned the hard way, 2026-07-26):
 # Greptile deduplicates by PR diff. If it reviews early and `strict` then forces a
 # branch update, it correctly refuses to re-review the unchanged diff — leaving the
 # required check stranded on the previous commit and the PR permanently unmergeable.
 # Reviewing once, last, on an already-current head avoids that entirely, and drops the
-# cost from ~3.6 reviews per PR to one.
+# cost from the 3.6 reviews/PR measured in July to one.
 name: greptile-gate
 
 on:
@@ -18,6 +18,11 @@ on:
     types: [completed]
   pull_request_review:
     types: [submitted]
+  # ready_for_review is not optional: if every cheap review finishes while the PR is
+  # still a draft, neither event above fires again when it is marked ready, and the
+  # gate would never run for that PR at all.
+  pull_request:
+    types: [ready_for_review, synchronize, opened]
   workflow_dispatch:
 
 permissions:
@@ -26,40 +31,60 @@ permissions:
   checks: read
 
 concurrency:
-  # Never race two labellers on the same PR.
-  group: greptile-gate-${{ github.event.pull_request.number || github.run_id }}
+  # Deliberately GLOBAL, not per-PR. This job sweeps every open PR, and on check_suite
+  # events there is no `pull_request.number` to key on — a run_id fallback is unique per
+  # run and would give no protection whatsoever. Serialising the workflow is correct.
+  group: greptile-gate
   cancel-in-progress: false
 
 jobs:
   label-when-others-pass:
     runs-on: ubuntu-latest
     steps:
-      - name: Add the greptile label once the other reviewers are green
+      - name: Add the greptile label once the cheap tier is done
         uses: actions/github-script@v7
         with:
           script: |
             const LABEL = 'greptile';
-            // The reviewers that must finish FIRST. Greptile is deliberately absent.
-            const REQUIRED = ['Cursor Bugbot'];
-            const REQUIRED_REVIEWERS = ['copilot-pull-request-reviewer', 'chatgpt-codex-connector'];
+            // Blocking prerequisites. Codex is deliberately NOT required: AGENTS.md's
+            // routine tier is local review + Copilot, so gating every PR on Codex would
+            // contradict the documented flow and stall routine work. It is still summoned
+            // below — advisory, not blocking.
+            const REQUIRED_CHECKS = ['Cursor Bugbot'];
+            const REQUIRED_REVIEWERS = ['copilot-pull-request-reviewer'];
+            const CODEX = 'chatgpt-codex-connector';
+            // States that positively mean "not behind". `unknown` means GitHub is still
+            // computing mergeability — treat it as not-ready rather than assuming current.
+            const CURRENT_STATES = ['clean', 'unstable', 'blocked', 'has_hooks'];
 
             const prs = await github.paginate(github.rest.pulls.list, {
               owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
             });
 
             for (const pr of prs) {
-              if (pr.draft) continue;                       // drafts iterate for free
-              if (pr.labels.some(l => l.name === LABEL)) continue;   // already gated through
+              if (pr.draft) continue;                                // drafts iterate for free
+              if (pr.labels.some(l => l.name === LABEL)) continue;   // already handed off
 
-              // Every required CHECK must have concluded successfully on the CURRENT head.
+              const { data: prFull } = await github.rest.pulls.get({
+                owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number,
+              });
+              const upToDate = CURRENT_STATES.includes(prFull.mergeable_state);
+
+              // listForRef returns newest-first, so a Map built over the whole array keeps
+              // the LAST (oldest) run per name — a stale failure would mask a passing
+              // re-run. Keep the newest explicitly.
               const { data: runs } = await github.rest.checks.listForRef({
                 owner: context.repo.owner, repo: context.repo.repo, ref: pr.head.sha, per_page: 100,
               });
-              const byName = new Map(runs.check_runs.map(c => [c.name, c]));
-              const checksOk = REQUIRED.every(n => byName.get(n)?.conclusion === 'success');
+              const newest = new Map();
+              for (const c of runs.check_runs) {
+                const prev = newest.get(c.name);
+                if (!prev || new Date(c.started_at) > new Date(prev.started_at)) newest.set(c.name, c);
+              }
+              const checksOk = REQUIRED_CHECKS.every(n => newest.get(n)?.conclusion === 'success');
 
-              // ...and every required REVIEWER must have actually reviewed that head.
-              // A reviewer that has not run yet is NOT a pass — silence is not success.
+              // A reviewer must have reviewed THIS head. One that has not run yet is not a
+              // pass — silence is never success.
               const { data: reviews } = await github.rest.pulls.listReviews({
                 owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number, per_page: 100,
               });
@@ -69,48 +94,50 @@ jobs:
               );
               const reviewersOk = REQUIRED_REVIEWERS.every(r => reviewedHead.has(r));
 
-              // Unresolved conversations mean the cheap tier is not finished with it.
-              const { data: prFullEarly } = await github.rest.pulls.get({
-                owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number,
-              });
-              const upToDate = prFullEarly.mergeable_state !== 'behind';
-
-              // SUMMON the cheap reviewers if they have not reviewed this head. Both are
-              // manual-trigger only, so without this the gate waits forever for reviews
-              // nobody asked for — verified by simulation against live PRs before merge:
-              // every open PR held on reviewers=false, and would have held indefinitely.
-              // They are summoned differently: Copilot via requestReviewers ("Copilot" —
-              // the [bot] login does NOT resolve), Codex via an @codex comment.
-              if (!reviewersOk) {
-                const requested = new Set((prFullEarly.requested_reviewers || []).map(r => r.login));
-                if (!reviewedHead.has('copilot-pull-request-reviewer') && !requested.has('Copilot')) {
-                  try {
-                    await github.rest.pulls.requestReviewers({
-                      owner: context.repo.owner, repo: context.repo.repo,
-                      pull_number: pr.number, reviewers: ['Copilot'],
-                    });
-                    core.info(`PR #${pr.number}: requested Copilot`);
-                  } catch (e) { core.info(`PR #${pr.number}: could not request Copilot — ${e.message}`); }
-                }
-                if (!reviewedHead.has('chatgpt-codex-connector')) {
-                  // Only ask once per head: look for our own prior summon on this SHA.
-                  const comments = await github.paginate(github.rest.issues.listComments, {
-                    owner: context.repo.owner, repo: context.repo.repo,
-                    issue_number: pr.number, per_page: 100,
-                  });
-                  const marker = `<!-- greptile-gate:codex:${pr.head.sha} -->`;
-                  if (!comments.some(c => c.body?.includes(marker))) {
-                    await github.rest.issues.createComment({
-                      owner: context.repo.owner, repo: context.repo.repo,
-                      issue_number: pr.number, body: `@codex review\n${marker}`,
-                    });
-                    core.info(`PR #${pr.number}: summoned Codex`);
+              // Unresolved threads mean the cheap tier is not finished with it. Handing off
+              // now would spend a Greptile credit on a diff that is about to change.
+              const q = await github.graphql(`
+                query($owner:String!,$repo:String!,$num:Int!){
+                  repository(owner:$owner,name:$repo){
+                    pullRequest(number:$num){ reviewThreads(first:100){ nodes{ isResolved } } }
                   }
+                }`, { owner: context.repo.owner, repo: context.repo.repo, num: pr.number });
+              const unresolved = q.repository.pullRequest.reviewThreads.nodes
+                .filter(t => !t.isResolved).length;
+
+              // Summon what we wait for. Both are manual-trigger only, so without this the
+              // gate waits for reviews nobody requested — verified by simulation against
+              // live PRs, where every one held forever. They are summoned differently:
+              // Copilot by reviewer request (the literal name "Copilot"; the [bot] login
+              // does NOT resolve), Codex by comment.
+              const requested = new Set((prFull.requested_reviewers || []).map(r => r.login));
+              if (!reviewedHead.has('copilot-pull-request-reviewer') && !requested.has('Copilot')) {
+                try {
+                  await github.rest.pulls.requestReviewers({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    pull_number: pr.number, reviewers: ['Copilot'],
+                  });
+                  core.info(`PR #${pr.number}: requested Copilot`);
+                } catch (e) { core.info(`PR #${pr.number}: could not request Copilot — ${e.message}`); }
+              }
+              if (!reviewedHead.has(CODEX)) {
+                const comments = await github.paginate(github.rest.issues.listComments, {
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: pr.number, per_page: 100,
+                });
+                const marker = `<!-- greptile-gate:codex:${pr.head.sha} -->`;
+                if (!comments.some(c => c.body?.includes(marker))) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    issue_number: pr.number, body: `@codex review\n${marker}`,
+                  });
+                  core.info(`PR #${pr.number}: summoned Codex`);
                 }
               }
 
-              if (!(checksOk && reviewersOk && upToDate)) {
-                core.info(`PR #${pr.number}: not ready — checks=${checksOk} reviewers=${reviewersOk} upToDate=${upToDate}`);
+              if (!(checksOk && reviewersOk && upToDate && unresolved === 0)) {
+                core.info(`PR #${pr.number}: holding — checks=${checksOk} copilot=${reviewersOk} ` +
+                          `state=${prFull.mergeable_state} unresolved=${unresolved}`);
                 continue;
               }
 
@@ -118,5 +145,5 @@ jobs:
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: pr.number, labels: [LABEL],
               });
-              core.notice(`PR #${pr.number}: other reviewers green and branch current — handing off to Greptile.`);
+              core.notice(`PR #${pr.number}: cheap tier green, branch current, threads clear — handing off to Greptile.`);
             }
