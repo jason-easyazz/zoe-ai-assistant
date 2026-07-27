@@ -66,6 +66,19 @@ It mirrors `zoe_latency_probe.py`: `--update-baseline` to set the bar, baseline 
 regression. It self-guards: **SKIPs if available memory is low** (never OOMs the box) and runs the
 harness under the shared flock.
 
+**STT mode — `--stt remote` is the nightly default** (unit template sets
+`ZOE_VOICE_REPLAY_STT=remote`). In-process mode lazy-loads a SECOND Moonshine next to the live
+service's warm one, which is why the gate demanded 1500MB and skipped for days on a box whose
+steady state leaves ~350–1200MB. Remote mode POSTs each WAV to the live `/api/voice/transcribe`
+(auth: `ZOE_DEVICE_TOKEN` in the environment, provisioned in `~/.hermes/.env`): measured
+2026-07-27, a full run peaks at **445MB** and the per-mode memory floor is 700MB vs 1500MB.
+Transcripts are engine-identical across modes (same Moonshine, same box), so baselines carry
+over; the replay JSON records `stt_mode`. Router/`fast_tiers` deliberately stay in-process —
+only the harness runs them with `allow_writes=False`; the live endpoints would execute the
+commands for real. Flip back to `inprocess` only when the live service itself is the thing
+under test. Expect ~5% single-turn brain flake on a busy box: one CANT_DO in 20 fails the gate
+by design (said-vs-did is zero-tolerance) — re-run before treating it as a real regression.
+
 **Run it from a git worktree with no flags** — and that now holds for the lower-level
 `scripts/perf/measure_voice.py` and `measure_tts.py` run DIRECTLY, too. The voice path needs the LIVE
 `services/zoe-data/.env`, which is gitignored and therefore absent in a worktree. `--service-dir`
