@@ -22,6 +22,7 @@ out of this change to avoid touching the freshly-landed brain-spawn code.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import concurrent.futures
 import contextlib
 import logging
@@ -114,6 +115,31 @@ class QueueTimeout(subprocess.TimeoutExpired):
     Subclasses `subprocess.TimeoutExpired` so every existing
     `except subprocess.TimeoutExpired` handler keeps working unchanged.
     """
+
+
+# Live children spawned by run_to_completion, so a zoe-data shutdown can
+# terminate them instead of orphaning e.g. a 900s hermes under the OLD process
+# while the NEW one starts its own. Registered/removed inside the worker thread.
+_LIVE_CHILDREN: "set[subprocess.Popen]" = set()
+_LIVE_CHILDREN_LOCK = threading.Lock()
+
+
+def _terminate_live_children() -> None:
+    """atexit: this process is going away — its children go with it."""
+    with _LIVE_CHILDREN_LOCK:
+        children = list(_LIVE_CHILDREN)
+    for popen in children:
+        with contextlib.suppress(Exception):
+            popen.terminate()
+    for popen in children:
+        with contextlib.suppress(Exception):
+            popen.wait(timeout=5)
+        with contextlib.suppress(Exception):
+            if popen.poll() is None:
+                popen.kill()
+
+
+atexit.register(_terminate_live_children)
 
 
 async def _acquire_slot(slots: "threading.BoundedSemaphore", timeout: float) -> bool:
@@ -282,14 +308,29 @@ async def run_to_completion(
 
     def _blocking_run() -> "subprocess.CompletedProcess[bytes]":
         try:
-            return subprocess.run(
+            # Popen+communicate rather than subprocess.run, IDENTICAL timeout
+            # semantics (kill on expiry, then re-raise) — the difference is a
+            # handle we can register, so a zoe-data shutdown terminates the
+            # child instead of orphaning it for the rest of its budget.
+            popen = subprocess.Popen(
                 list(cmd),
                 cwd=cwd,
                 env=dict(env) if env is not None else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
-                timeout=timeout,
             )
+            with _LIVE_CHILDREN_LOCK:
+                _LIVE_CHILDREN.add(popen)
+            try:
+                out, err = popen.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                popen.kill()
+                popen.communicate()
+                raise
+            finally:
+                with _LIVE_CHILDREN_LOCK:
+                    _LIVE_CHILDREN.discard(popen)
+            return subprocess.CompletedProcess(list(cmd), popen.returncode, out, err)
         finally:
             with _handoff_lock:
                 _handoff["done"] = True

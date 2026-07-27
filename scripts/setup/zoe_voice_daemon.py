@@ -991,6 +991,7 @@ def _match_speaker_local(embedding) -> tuple[str, float] | None:
     if not profiles:
         return None
     best_user, best_score = None, -1.0
+    compared = 0
     for p in profiles:
         uid = p.get("user_id")
         if not uid:
@@ -1005,8 +1006,13 @@ def _match_speaker_local(embedding) -> tuple[str, float] | None:
             score = float(_np.dot(embedding, ref) / denom)
         except Exception:
             continue  # one bad row must never cost the whole turn's speaker ID
+        compared += 1
         if score > best_score:
             best_user, best_score = uid, score
+    # Malformed/zero-norm/dimension-mismatched rows were SKIPPED above — the
+    # shadow row must report how many profiles the score was actually chosen
+    # from, not the raw cache length.
+    _claim_ctx.n_compared = compared
     if best_user is None:
         return None
     return best_user, best_score
@@ -1189,8 +1195,12 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
     # score was reached. Record the source and leave the count null instead.
     source = getattr(_claim_ctx, "source", None)
     if source == "local":
-        with _profile_cache_lock:
-            n_profiles = len(_profile_cache["profiles"])
+        # Prefer the count of rows actually COMPARED (skips excluded); fall
+        # back to cache length only if the matcher never ran.
+        n_profiles = getattr(_claim_ctx, "n_compared", None)
+        if n_profiles is None:
+            with _profile_cache_lock:
+                n_profiles = len(_profile_cache["profiles"])
     else:
         n_profiles = None
     try:
@@ -1225,6 +1235,9 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
             def _open_private_append():
                 fd = os.open(SPEAKER_ID_SHADOW_LOG,
                              os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                # os.open's mode only applies at CREATION — a log left 0644 by
+                # the earlier writer stays world-readable without this.
+                os.fchmod(fd, 0o600)
                 return os.fdopen(fd, "a", encoding="utf-8")
             if _needs_leading_newline(SPEAKER_ID_SHADOW_LOG):
                 with _open_private_append() as f:

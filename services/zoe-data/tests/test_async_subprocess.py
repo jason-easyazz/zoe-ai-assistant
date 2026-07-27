@@ -476,3 +476,42 @@ def test_permit_returns_even_after_the_callers_loop_closes(monkeypatch):
         _t.sleep(0.2)
     else:
         raise AssertionError("permit stranded after the caller's loop closed")
+
+
+@pytest.mark.asyncio
+async def test_shutdown_terminates_registered_children():
+    """A dying zoe-data must take its children with it.
+
+    The shield keeps a child running when its CALLER goes away — correct for a
+    cancelled task, wrong for process shutdown, where an orphaned 900s hermes
+    would keep running under the old deploy while the new one starts its own.
+    """
+    import asyncio
+
+    import async_subprocess as mod
+
+    task = asyncio.create_task(
+        run_to_completion([sys.executable, "-c", "import time; time.sleep(30)"], timeout=30)
+    )
+    await asyncio.sleep(0.6)
+    with mod._LIVE_CHILDREN_LOCK:
+        live = list(mod._LIVE_CHILDREN)
+    assert len(live) == 1, "child not registered while running"
+    popen = live[0]
+
+    mod._terminate_live_children()          # what atexit runs at shutdown
+    assert popen.poll() is not None, "child survived shutdown"
+
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    with mod._LIVE_CHILDREN_LOCK:
+        assert popen not in mod._LIVE_CHILDREN
+
+
+@pytest.mark.asyncio
+async def test_children_deregister_on_normal_exit():
+    import async_subprocess as mod
+
+    await run_to_completion([sys.executable, "-c", "print('x')"], timeout=10)
+    with mod._LIVE_CHILDREN_LOCK:
+        assert not mod._LIVE_CHILDREN, "registry leaked a finished child"

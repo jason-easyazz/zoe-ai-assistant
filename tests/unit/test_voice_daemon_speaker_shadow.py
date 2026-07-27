@@ -438,3 +438,40 @@ def test_shadow_metrics_file_is_private(daemon, monkeypatch, shadow_log):
         _os.umask(old)
     mode = _os.stat(shadow_log).st_mode & 0o777
     assert mode == 0o600, f"shadow metrics world-readable: {oct(mode)}"
+
+
+def test_existing_world_readable_log_is_repaired(daemon, monkeypatch, shadow_log):
+    """A log left 0644 by the earlier writer must be fixed on the next append."""
+    import os as _os
+
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    shadow_log.parent.mkdir(parents=True, exist_ok=True)
+    shadow_log.write_text('{"seq": 1, "ts": 1.0}\n', encoding="utf-8")
+    _os.chmod(shadow_log, 0o644)            # the pre-fix state on a real panel
+
+    daemon._record_speaker_shadow(("jason", 0.9))
+    assert (_os.stat(shadow_log).st_mode & 0o777) == 0o600
+
+
+def test_n_profiles_counts_only_compared_rows(daemon, monkeypatch, shadow_log):
+    """Skipped (malformed/mismatched) cache rows must not inflate n_profiles."""
+    import base64 as _b64
+
+    import numpy as _np
+
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    good = _b64.b64encode(_np.ones(4, dtype=_np.float32).tobytes()).decode()
+    with daemon._profile_cache_lock:
+        daemon._profile_cache["profiles"] = [
+            {"user_id": "jason", "embedding_base64": good},
+            {"user_id": "mal", "embedding_base64": "!!!not-base64!!!"},   # skipped
+            {"user_id": "mismatch", "embedding_base64": _b64.b64encode(_np.ones(8, dtype=_np.float32).tobytes()).decode()},  # dim mismatch
+        ]
+    claim = daemon._match_speaker_local(_np.ones(4, dtype=_np.float32))
+    assert claim is not None and claim[0] == "jason"
+    daemon._claim_ctx.source = "local"
+    daemon._record_speaker_shadow(claim)
+    row = _rows(shadow_log)[-1]
+    assert row["n_profiles"] == 1, f"skipped rows counted: {row['n_profiles']}"

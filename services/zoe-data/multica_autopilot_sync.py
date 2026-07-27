@@ -257,7 +257,8 @@ async def _run_platform_health_check() -> None:
             # _env_float, not bare float(): a typo here would crash the health
             # loop itself — the third instance of this class in one PR, so parse
             # every budget env var through the same fail-safe helper.
-            queue_timeout=_env_float("ZOE_AUTOPILOT_QUEUE_WAIT_S", 600.0),
+            # must EXCEED a full background runtime (900s) — see background lane
+            queue_timeout=_env_float("ZOE_AUTOPILOT_QUEUE_WAIT_S", 1200.0),
         )
     except QueueTimeout as exc:
         # The script never ran — a saturated worker pool, not an unhealthy
