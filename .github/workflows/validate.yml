@@ -102,7 +102,28 @@ jobs:
           # step exists to catch workflows GitHub itself cannot parse — keep it
           # sharp for that and let shell style stay out of the merge gate.
           ./actionlint -color -shellcheck=
-          rm -f actionlint
+          # NEGATIVE CONTROL, every run: prove the gate can still go red. Feed it a
+          # workflow with exactly the defect class it exists to catch (an invalid
+          # `on:` event) and require a non-zero exit. If actionlint is ever
+          # misconfigured into a yes-machine, this fails the lane instead of the
+          # lane silently guarding nothing — a lint that cannot fail is not a gate.
+          cat > /tmp/known-bad-workflow.yml <<'BAD'
+          name: negative-control
+          on:
+            pull_request_review_thread:
+              types: [resolved]
+          jobs:
+            noop:
+              runs-on: ubuntu-latest
+              steps:
+                - run: "true"
+          BAD
+          if ./actionlint -shellcheck= /tmp/known-bad-workflow.yml; then
+            echo "::error::actionlint PASSED a known-invalid workflow — the gate is not gating"
+            exit 1
+          fi
+          echo "negative control OK: actionlint rejects the known-bad fixture"
+          rm -f actionlint /tmp/known-bad-workflow.yml
 
       - name: Python syntax check (all zoe-data modules)
         run: |

@@ -90,9 +90,11 @@ jobs:
               // Every list is PAGINATED. A long-lived PR exceeds 100 comments/threads/checks,
               // and a truncated list silently reads as "nothing outstanding" — the exact
               // false-clear this gate exists to prevent.
-              const comments = await github.paginate(github.rest.issues.listComments, {
+              const comments = await ok(`PR #${pr.number} comments`, () =>
+                github.paginate(github.rest.issues.listComments, {
                 ...base, issue_number: pr.number, per_page: 100,
-              });
+              }));
+              if (!comments) { core.info(`PR #${pr.number}: could not read comments — holding`); continue; }
 
               const MARK = '<!-- greptile-gate:labelled:';
               // TRUST, not presence. This repo is PUBLIC, so anyone can post a comment
@@ -122,9 +124,11 @@ jobs:
                     .then(r => r.data));
                 if (!cmp) return null;
 
-                const runs = await github.paginate(github.rest.checks.listForRef, {
-                  ...base, ref: sha, per_page: 100,
-                });
+                const runs = await ok(`PR #${num} check runs`, () =>
+                  github.paginate(github.rest.checks.listForRef, {
+                    ...base, ref: sha, per_page: 100,
+                  }));
+                if (!runs) return null;
                 const byName = new Map();
                 for (const c of runs) {
                   if (!byName.has(c.name)) byName.set(c.name, []);
@@ -145,9 +149,11 @@ jobs:
                   return CHECK_DONE.includes(newest.conclusion);
                 });
 
-                const reviews = await github.paginate(github.rest.pulls.listReviews, {
-                  ...base, pull_number: num, per_page: 100,
-                });
+                const reviews = await ok(`PR #${num} reviews`, () =>
+                  github.paginate(github.rest.pulls.listReviews, {
+                    ...base, pull_number: num, per_page: 100,
+                  }));
+                if (!reviews) return null;
                 // PENDING is not submitted — counting it treats a review that has not
                 // happened as a pass.
                 const reviewedHead = new Set(

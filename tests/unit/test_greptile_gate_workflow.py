@@ -19,6 +19,7 @@ remove the revalidation of `checksOk` and it goes red. It was verified to do so.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import textwrap
@@ -39,7 +40,12 @@ WORKFLOW = REPO / ".github" / "workflows" / "greptile-gate.yml"
 import yaml
 
 node = shutil.which("node")
-pytestmark = [pytestmark, pytest.mark.skipif(not node, reason="node not available")]
+if not node and os.environ.get("CI"):
+    # In CI this suite is a merge-path gate: a runner change that drops node must
+    # FAIL the lane, not skip 15 tests and report green (the PyYAML importorskip
+    # did exactly that until two reviewers caught it). Locally, skipping is fine.
+    raise RuntimeError("node is required in CI for the greptile-gate workflow tests")
+pytestmark = [pytestmark, pytest.mark.skipif(not node, reason="node not available (non-CI)")]
 
 
 def _script() -> str:
