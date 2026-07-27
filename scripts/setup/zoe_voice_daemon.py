@@ -1091,9 +1091,15 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         emb_bytes = embedding.astype(_np.float32).tobytes()
         emb_b64 = _b64.b64encode(emb_bytes).decode()
         resp = _api_post("/api/voice/identify", {"embedding_base64": emb_b64}, timeout=5)
-        # From here on the SERVER scored the turn — every branch below must say
-        # so, or its shadow row reads like an unscored/local-failure null and
-        # skews the FA/FR exclusion rules that key on source.
+        # _api_post swallows transport/HTTP failures into {"ok": False, ...}
+        # instead of raising, so "the call returned" does NOT mean "the server
+        # scored the turn". Only a response carrying the identify shape earns
+        # source='server'; a swallowed failure is an ERROR row, or the FA/FR
+        # review would read a week of dead panel->server calls as no-matches.
+        if "identified" not in resp:
+            _claim_ctx.source = "error"
+            log.warning("Speaker ID identify failed: %s", resp.get("error") or resp)
+            return None
         _claim_ctx.source = "server"
         if resp.get("identified"):
             uid = resp.get("user_id")

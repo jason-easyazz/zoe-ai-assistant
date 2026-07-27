@@ -959,8 +959,15 @@ async def _run_music_discovery_batch() -> None:
     _script = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..", "..", "scripts", "maintenance", "music_discovery_batch.py"))
+    from async_subprocess import QueueTimeout as _QT
     try:
         proc = await _run_off_loop([_sys.executable, _script], timeout=2400)
+    except _QT:
+        # NO child ever started — the subprocess pool was saturated. There is
+        # nothing to clean up, and running the recovery below would report a
+        # phantom "timed out (killed)" incident for a batch that never ran.
+        logger.error("music discovery batch never started: subprocess pool saturated")
+        return
     except _sp.TimeoutExpired:
         # run_to_completion already killed the child. Force-remove the
         # container regardless — a leaked 768MB digarr container on this
@@ -1004,9 +1011,17 @@ async def _run_router_selftrain() -> None:
     # ON the loop thread, which in this large multi-threaded process can
     # deadlock pre-exec and freeze the whole API — that is the 2026-06-29
     # outage. See services/zoe-data/AGENTS.md.
+    from async_subprocess import QueueTimeout as _QT
     try:
         proc = await _run_off_loop(
             [_sys.executable, _script], env=_env, timeout=_timeout)
+    except _QT:
+        # NO child ever started — pool saturated. --recover exists to undo a
+        # KILLED training run (brain stopped / GGUF mid-swap); firing it here
+        # would restart the live brain over a run that never began.
+        logger.error("router self-train never started: subprocess pool saturated "
+                     "— skipping --recover (nothing to recover)")
+        return
     except _sp.TimeoutExpired:
         # The helper KILLs the child on timeout (SIGKILL — no in-process
         # handler survives it). So a timeout can land (a) inside a training

@@ -413,3 +413,24 @@ async def test_permit_returns_if_the_executor_rejects_synchronously(monkeypatch)
     # Capacity must be intact, not permanently reduced.
     assert sem.acquire(blocking=False), "permit stranded by a synchronous submit failure"
     sem.release()
+
+
+def test_queue_timeout_is_distinguishable_for_recovery_callers():
+    """Callers that RECOVER after a timeout must be able to opt out on QueueTimeout.
+
+    main.py's scheduled jobs run `docker rm -f` / `--recover` on TimeoutExpired,
+    on the premise a child ran and was killed. QueueTimeout means NO child ever
+    started — those handlers catch it first and skip recovery. This pins the
+    ordering property that makes that possible: except QueueTimeout before
+    except TimeoutExpired must win.
+    """
+    from async_subprocess import QueueTimeout
+
+    caught = None
+    try:
+        raise QueueTimeout(["x"], 30)
+    except QueueTimeout:
+        caught = "queue"
+    except subprocess.TimeoutExpired:
+        caught = "child"
+    assert caught == "queue"
