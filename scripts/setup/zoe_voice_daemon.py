@@ -130,9 +130,14 @@ except ValueError:
 # prevents), and NaN/inf comparisons are silently False. Misconfiguration
 # degrades to the safe default, never to a sharper knife.
 if not (0.0 < ZOE_VAD_TAIL_DEEP_PROB < VAD_ENDPOINT_THRESHOLD):
-    log.warning("ZOE_VAD_TAIL_DEEP_PROB=%r outside (0, %s); using 0.10",
-                ZOE_VAD_TAIL_DEEP_PROB, VAD_ENDPOINT_THRESHOLD)
-    ZOE_VAD_TAIL_DEEP_PROB = 0.10
+    # The fallback itself must satisfy deep < speech-threshold: with a speech
+    # threshold configured below 0.10, a bare 0.10 fallback would make ALL
+    # post-speech quiet "deep" (Bugbot). Half the threshold keeps the invariant
+    # at any configuration.
+    _fallback = min(0.10, VAD_ENDPOINT_THRESHOLD / 2)
+    log.warning("ZOE_VAD_TAIL_DEEP_PROB=%r outside (0, %s); using %s",
+                ZOE_VAD_TAIL_DEEP_PROB, VAD_ENDPOINT_THRESHOLD, _fallback)
+    ZOE_VAD_TAIL_DEEP_PROB = _fallback
 # Default 0.28 — 0.35 misses many real mics/rooms; tune via WAKEWORD_THRESHOLD.
 WAKEWORD_THRESHOLD = float(_env("WAKEWORD_THRESHOLD", "0.28", "OWW_THRESHOLD"))
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no")

@@ -283,27 +283,35 @@ jobs:
                 // we need it — so it is pinned. If GitHub ever changes it the mutation fails
                 // and the warning below names the cause rather than silently never summoning.
                 const COPILOT_BOT_ID = 'BOT_kgDOCnlnWA';
-                const r = await ok(`PR #${pr.number} request Copilot`, async () => {
-                  const q = await github.graphql(`
-                    query($owner:String!,$repo:String!,$num:Int!){
-                      repository(owner:$owner,name:$repo){ pullRequest(number:$num){ id } } }`,
-                    { owner: base.owner, repo: base.repo, num: pr.number });
-                  return github.graphql(`
-                    mutation($pr:ID!,$bot:ID!){
-                      requestReviews(input:{pullRequestId:$pr, botIds:[$bot], union:true}){
-                        pullRequest{ number } } }`,
-                    { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
-                });
-                if (r) {
-                  core.info(`PR #${pr.number}: requested Copilot`);
-                  // Timestamp anchor for the Copilot grace — posted ONCE per head.
-                  await ok(`PR #${pr.number} copilot marker`, () =>
-                    github.rest.issues.createComment({
-                      ...base, issue_number: pr.number,
-                      body: `Requested Copilot review.\n${copilotMark}`,
-                    }));
+                // MARKER FIRST, summon second (Bugbot): if the summon succeeded but
+                // the marker post failed, the grace had no anchor and the next sweep
+                // would re-summon — bounded only by luck. Anchor-first inverts the
+                // failure mode: a failed marker skips the summon and retries next
+                // sweep ("asked late"); a failed summon after a posted marker still
+                // has a ticking grace ("waved through after the bounded wait") —
+                // both bounded, neither spams.
+                const marker = await ok(`PR #${pr.number} copilot marker`, () =>
+                  github.rest.issues.createComment({
+                    ...base, issue_number: pr.number,
+                    body: `Requested Copilot review.\n${copilotMark}`,
+                  }));
+                if (!marker) {
+                  core.warning(`PR #${pr.number}: copilot marker failed — retrying summon next sweep`);
+                } else {
+                  const r = await ok(`PR #${pr.number} request Copilot`, async () => {
+                    const q = await github.graphql(`
+                      query($owner:String!,$repo:String!,$num:Int!){
+                        repository(owner:$owner,name:$repo){ pullRequest(number:$num){ id } } }`,
+                      { owner: base.owner, repo: base.repo, num: pr.number });
+                    return github.graphql(`
+                      mutation($pr:ID!,$bot:ID!){
+                        requestReviews(input:{pullRequestId:$pr, botIds:[$bot], union:true}){
+                          pullRequest{ number } } }`,
+                      { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
+                  });
+                  if (r) core.info(`PR #${pr.number}: requested Copilot`);
+                  else core.warning(`PR #${pr.number}: could NOT request Copilot — the grace still bounds the wait`);
                 }
-                else core.warning(`PR #${pr.number}: could NOT request Copilot — the gate will hold until it reviews or the grace elapses`);
               }
 
               const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
