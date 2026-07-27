@@ -107,7 +107,11 @@ Sequence:
    `/review` as the Bugbot pass and use `bugbot run` only after marking ready, if wanted.
 3. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
    NOT resolve). ~$10/mo flat for 1500 requests, and its reviews are always `COMMENTED`,
-   so it can never block a merge.
+   so it can never block a merge. **Copilot's wait is BOUNDED, not unconditional**
+   (operator-approved 2026-07-27): if it has not reviewed the head within the gate's
+   grace window (`COPILOT_GRACE_MIN`, 20 min from the server-timestamped observed
+   marker), the gate proceeds to Greptile without it — a repo-wide Copilot outage
+   deadlocked every PR on 2026-07-27, including the PR carrying this fix.
 4. **Batch the fixes.** Collect every finding, fix once, push once. Fix-push-fix-push
    multiplies reviews AND multiplies the chance a fix introduces a new bug — which is
    exactly what happened on #1560.

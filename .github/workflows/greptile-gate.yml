@@ -318,13 +318,20 @@ jobs:
               // (ANY state — dismissal included) are dead: the reviewer stopped being
               // missing after them, so a later dismissal must start a FRESH bounded
               // window, not inherit a clock that elapsed while the review stood.
-              const latestObserved = (key) => {
+              // Parameterised on the review-state it is judged against: the
+              // revalidation reads pass THEIR lastReviewAt, so a review that was
+              // submitted and dismissed between reads floors out the old marker
+              // and restarts the window — a grace flag frozen from the first
+              // read is exactly the enumerate-in-two-places bug this file keeps
+              // relearning.
+              const latestObservedWith = (key, lra) => {
                 const mk = observedMarkFor(key);
-                const floor = lastReviewAt[key === 'copilot' ? COPILOT : CODEX];
+                const floor = lra[key === 'copilot' ? COPILOT : CODEX];
                 const ms = comments.filter(c => c.body?.includes(mk) && trusted(c)
                                                 && (!floor || c.created_at > floor)).sort(byCreated);
                 return ms.length ? ms[ms.length - 1] : undefined;
               };
+              const latestObserved = (key) => latestObservedWith(key, lastReviewAt);
               const needMark = [];
               if (!reviewedHead.has(COPILOT) && !latestObserved('copilot')) needMark.push('copilot');
               if (!reviewedHead.has(CODEX) && !latestObserved('codex')) needMark.push('codex');
@@ -338,27 +345,28 @@ jobs:
                   }));
                 if (m) postedObserved = m.data;
               }
-              const graceMinutesFor = (key) => {
-                const o = latestObserved(key)
+              const graceMinutesWith = (key, lra) => {
+                const o = latestObservedWith(key, lra)
                   ?? (postedObserved?.body?.includes(observedMarkFor(key)) ? postedObserved : undefined);
                 return o ? (Date.now() - new Date(o.created_at)) / 60000 : 0;
               };
+              const graceMinutesFor = (key) => graceMinutesWith(key, lastReviewAt);
 
               // Codex runs AUTOMATICALLY on every push (operator config, 2026-07-27) —
               // the gate no longer summons it (the old `@codex review` comment would now
               // trigger a second billed run per head). Its bounded wait anchors to the
               // shared observed marker above — server-timestamped, not the contributor-
               // controlled commit date.
-              const graceElapsed = graceMinutesFor('codex') >= CODEX_GRACE_MIN;
-              const codexPasses = (rh) => rh.has(CODEX) || graceElapsed;
-              const codexOk = codexPasses(reviewedHead);
+              const codexPasses = (rh, lra) =>
+                rh.has(CODEX) || graceMinutesWith('codex', lra ?? lastReviewAt) >= CODEX_GRACE_MIN;
+              const codexOk = codexPasses(reviewedHead, lastReviewAt);
               if (codexOk && !reviewedHead.has(CODEX)) {
                 core.info(`PR #${pr.number}: Codex grace elapsed — proceeding`);
               }
 
-              const copilotGraceElapsed = graceMinutesFor('copilot') >= COPILOT_GRACE_MIN;
-              const copilotPasses = (rh) => rh.has(COPILOT) || copilotGraceElapsed;
-              const copilotOk = copilotPasses(reviewedHead);
+              const copilotPasses = (rh, lra) =>
+                rh.has(COPILOT) || graceMinutesWith('copilot', lra ?? lastReviewAt) >= COPILOT_GRACE_MIN;
+              const copilotOk = copilotPasses(reviewedHead, lastReviewAt);
               if (copilotOk && !reviewedHead.has(COPILOT)) {
                 core.info(`PR #${pr.number}: Copilot grace elapsed — proceeding`);
               }
@@ -382,13 +390,13 @@ jobs:
                 // null blocks LABELLING the asymmetry runs the other way: a false
                 // label spends the review this gate exists to protect.
                 if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
-                const stillOk = now.checksOk && copilotPasses(now.reviewedHead) &&
-                                codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
+                const stillOk = now.checksOk && copilotPasses(now.reviewedHead, now.lastReviewAt) &&
+                                codexPasses(now.reviewedHead, now.lastReviewAt) && now.upToDate && now.unresolved === 0;
                 if (!stillOk) {
                   const r = await ok(`PR #${pr.number} revoke label`, () =>
                     github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
                   if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${now.checksOk} ` +
-                                   `copilot=${copilotPasses(now.reviewedHead)} codex=${codexPasses(now.reviewedHead)} ` +
+                                   `copilot=${copilotPasses(now.reviewedHead, now.lastReviewAt)} codex=${codexPasses(now.reviewedHead, now.lastReviewAt)} ` +
                                    `upToDate=${now.upToDate} unresolved=${now.unresolved}) — label revoked`);
                 }
                 continue;
@@ -411,8 +419,8 @@ jobs:
               // codexOk on the claim that it only moves false->true for a fixed head. That
               // claim is false: a review can be DISMISSED, which drops it back out of the
               // submitted-review set. No condition here gets to be special.
-              const codexOk2 = codexPasses(st2.reviewedHead);
-              const copilotOk2 = copilotPasses(st2.reviewedHead);
+              const codexOk2 = codexPasses(st2.reviewedHead, st2.lastReviewAt);
+              const copilotOk2 = copilotPasses(st2.reviewedHead, st2.lastReviewAt);
               if (!(st2.checksOk && copilotOk2 && codexOk2 &&
                     st2.upToDate && st2.unresolved === 0)) {
                 core.info(`PR #${pr.number}: conditions changed during the sweep ` +
