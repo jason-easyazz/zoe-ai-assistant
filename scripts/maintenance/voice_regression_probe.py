@@ -94,10 +94,11 @@ def mem_available_mb() -> int:
 def _port_open(host: str, port: int, timeout: float = 2.0) -> bool:
     # Fail closed: this runs inside the error path that BUILDS the diagnosis —
     # a raise here would mask the original failure with a socket traceback.
+    # create_connection() (not a bare AF_INET socket) so IPv6 literals and
+    # v6-only hostnames resolve properly, matching wait_for_port.py.
     try:
-        with socket.socket() as sock:
-            sock.settimeout(timeout)
-            return sock.connect_ex((host, port)) == 0
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
     except OSError:
         return False
 
