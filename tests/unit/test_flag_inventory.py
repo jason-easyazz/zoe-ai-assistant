@@ -187,5 +187,31 @@ def test_wrapper_spellings_are_scanned_and_value_shape_is_skipped(tmp_path):
     )
     data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
     names = set(data["flags"]["prod"]) | set(data["flags"]["lab"])
-    assert {"ZOE_WRAP_A", "ZOE_WRAP_B", "ZOE_WRAP_C", "ZOE_WRAP_D"} <= names
-    assert "raw" not in names and not any(n == "raw" for n in names)
+    # EXACT equality, not subset + a sentinel that FLAG_RE could never admit:
+    # any spurious row from the value-shaped call — whatever the scanner would
+    # name it — makes this fail (polly cross-review: the old "raw" negative
+    # assertion was vacuous by construction).
+    assert names == {"ZOE_WRAP_A", "ZOE_WRAP_B", "ZOE_WRAP_C", "ZOE_WRAP_D"}, \
+        f"unexpected flag set from wrapper sweep: {sorted(names)}"
+
+
+def test_typed_delegator_wrappers_count_as_typed(tmp_path):
+    """A module-local wrapper that bare-delegates to a typed_env helper is a
+    typed read; one with its own logic stays untyped (Greptile P1 on #1575:
+    voice_tts/main.py delegators were inflating the untyped count)."""
+    (tmp_path / "m.py").write_text(
+        "def _env_int(name, default):\n"
+        '    """doc"""\n'
+        "    return env_int(name, default)\n"
+        "def _env_float(name, default):\n"
+        "    try:\n"
+        "        return float(os.getenv(name, default))\n"
+        "    except ValueError:\n"
+        "        return default\n"
+        'A = _env_int("ZOE_TD_A", 1)\n'
+        'B = _env_float("ZOE_TD_B", 2.0)\n'
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    rows = {**data["flags"]["prod"], **data["flags"]["lab"]}
+    assert rows["ZOE_TD_A"]["typed_env"] is True, "bare delegator must count as typed"
+    assert rows["ZOE_TD_B"]["typed_env"] is False, "wrapper with own logic must stay untyped"
