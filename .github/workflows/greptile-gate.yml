@@ -353,7 +353,11 @@ jobs:
               const copilotGraceElapsed = copilotSummon
                 ? (Date.now() - new Date(copilotSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
                 : false;
-              const copilotPasses = (rh) => rh.has(COPILOT) || copilotGraceElapsed;
+              // A GENUINELY pending request (visible in requested_reviewers — rare,
+              // since GitHub usually drops it, which is the whole story here) means
+              // Copilot is actually coming: hold for it rather than waving the grace
+              // through (Codex P2). The grace covers the silent-drop case only.
+              const copilotPasses = (rh) => rh.has(COPILOT) || (copilotGraceElapsed && !copilotPending);
               if (copilotPasses(reviewedHead) && !reviewedHead.has(COPILOT)) {
                 core.info(`PR #${pr.number}: Copilot grace elapsed — proceeding`);
               }

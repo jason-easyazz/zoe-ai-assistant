@@ -317,7 +317,13 @@ def _vad_prob(model, chunk_int16: np.ndarray, sample_rate: int = 16000) -> float
                 max_prob = prob
         return max_prob
     except Exception:
-        return 0.0
+        # -1.0 sentinel, NOT 0.0: with the deep-quiet fast tail, 0.0 reads as the
+        # strongest possible silence — a crashing Silero would fast-exit every
+        # turn early on its own failures (Codex P2). Callers treat the sentinel
+        # as quiet-but-AMBIGUOUS: it still counts toward the long 800ms tail
+        # (so a permanently broken VAD degrades to the old timeout, never hangs)
+        # but never toward the deep counter.
+        return -1.0
 
 
 class _Endpointer:
@@ -369,8 +375,11 @@ class _Endpointer:
             self._quiet += 1
             # Borderline chunks (deep prob <= prob < speech threshold) count as
             # quiet but RESET the deep counter: an ambiguous pause must never
-            # take the fast exit, only unambiguous silence may.
-            self._deep_quiet = self._deep_quiet + 1 if prob < ZOE_VAD_TAIL_DEEP_PROB else 0
+            # take the fast exit, only unambiguous silence may. The same goes for
+            # the inference-failure sentinel (prob < 0): a broken VAD is the
+            # opposite of evidence of silence.
+            self._deep_quiet = (self._deep_quiet + 1
+                                if 0.0 <= prob < ZOE_VAD_TAIL_DEEP_PROB else 0)
             if n_frames <= self._min_frames:
                 return False
             if (self._spoke and self._deep_max_silent is not None

@@ -141,3 +141,15 @@ def test_min_recording_guard_applies_to_fast_tail(daemon, monkeypatch):
     ep = make_endpointer(daemon, monkeypatch, [DEEP] * 20, tail_ms=640, spoke=True)
     for _ in range(10):
         assert not ep.push(b"", n_frames=ep._min_frames)
+
+
+def test_vad_failure_sentinel_never_counts_as_deep(daemon, monkeypatch):
+    """A crashing Silero returns the -1.0 sentinel — with the old 0.0 it read as
+    the strongest possible silence and the fast tail exited on the VAD's own
+    failures (Codex, #1573). The sentinel counts toward the long tail (broken
+    VAD degrades to the 800ms timeout, never a hang) but never toward deep."""
+    probs = [SPEECH] + [-1.0] * 20
+    ep = make_endpointer(daemon, monkeypatch, probs, tail_ms=640)
+    stopped = closes_at(ep, 21)
+    # long tail = 10 chunks (0.8s), NOT the 8-chunk fast exit
+    assert stopped == 1 + 10, f"sentinel must take the long tail, got {stopped}"
