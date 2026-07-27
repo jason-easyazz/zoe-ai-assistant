@@ -1102,11 +1102,18 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
             return uid, float(resp.get("confidence") or 1.0)
         return None
     except ImportError:
-        _claim_ctx.source = None
+        # resemblyzer import failed mid-path — same class as encoder_unavailable.
+        _claim_ctx.source = "encoder_unavailable"
         return None
     except Exception as exc:
-        _claim_ctx.source = None
-        log.debug("Speaker ID failed: %s", exc)
+        # The attempt ERRORED (network to /api/voice/identify, a garbled server
+        # response, ...). Recorded distinctly rather than as null: null means
+        # "never attempted" (speaker ID disabled), and folding errors into it
+        # would let a week of failing lookups read as ordinary unscored turns in
+        # the FA/FR review. If the server had already answered, keep "server".
+        if getattr(_claim_ctx, "source", None) != "server":
+            _claim_ctx.source = "error"
+        log.warning("Speaker ID failed: %s", exc)
         return None
 
 
@@ -1185,7 +1192,7 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
                 "user_id": claim[0] if claim else None,
                 "score": round(claim[1], 4) if claim else None,
                 "n_profiles": n_profiles,   # local cache size; null for server claims
-                "source": source,           # "local" | "server" | "encoder_unavailable" | null (not scored)
+                "source": source,           # "local" | "server" | "encoder_unavailable" | "error" | null (never attempted)
                 "truth": None,  # operator-filled ground truth; null until reviewed
             }
             # Heal a torn tail before appending. If a previous write was cut
