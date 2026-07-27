@@ -53,7 +53,11 @@ HARNESS = textwrap.dedent(
 
     let checkReads = 0;
     const calls = { addLabels: 0, removeLabel: 0, comments: [] };
-    const pr = { number: 1, head: { sha: SHA }, base: { ref: 'main' }, labels: [], draft: false };
+    // OPTS.staleListSha simulates the head moving between the sweep's opening
+    // `pulls.list` and this PR being processed: the list is stale, `pulls.get` is current.
+    const LIST_SHA = OPTS.staleListSha ? 'b'.repeat(40) : SHA;
+    const pr = { number: 1, head: { sha: LIST_SHA }, base: { ref: 'main' },
+                 labels: OPTS.labels || [], draft: false };
 
     const reviewers = (OPTS.reviewers || []).map(
       (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l } }));
@@ -70,7 +74,7 @@ HARNESS = textwrap.dedent(
       rest: {
         pulls: {
           list: async () => [pr],
-          get: async () => ({ data: { ...pr, requested_reviewers: [] } }),
+          get: async () => ({ data: { ...pr, head: { sha: SHA }, requested_reviewers: [] } }),
           listReviews: async () => reviewers,
         },
         repos: { compareCommits: async () => ({ data: { behind_by: OPTS.behindBy || 0 } }) },
@@ -87,7 +91,13 @@ HARNESS = textwrap.dedent(
           },
         },
         issues: {
-          listComments: async () => [],
+          // OPTS.markerSha: a prior handoff marker from THIS workflow's bot, pinning
+          // the label to that SHA. Trust is bot-only, so the author must match exactly.
+          listComments: async () => (OPTS.markerSha ? [{
+            user: { login: 'github-actions[bot]', type: 'Bot' },
+            created_at: '2026-07-27T00:00:00Z',
+            body: `handoff\n<!-- greptile-gate:labelled:${OPTS.markerSha} -->`,
+          }] : []),
           createComment: async (o) => { calls.comments.push(o.body); return {}; },
           addLabels: async () => { calls.addLabels += 1; return {}; },
           removeLabel: async () => { calls.removeLabel += 1; return {}; },
@@ -167,3 +177,33 @@ def test_missing_copilot_review_holds_and_summons(tmp_path):
     """Copilot has not reviewed this head: hold, and actually request it."""
     r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"])
     assert r["addLabels"] == 0, r["log"]
+
+
+def test_head_moving_mid_sweep_uses_the_authoritative_sha(tmp_path):
+    """`pulls.list` is fetched once for the whole sweep and goes stale.
+
+    Everything downstream — the handed-off comparison, the condition reads, the Codex
+    marker, the handoff marker — must key off the SHA from `pulls.get`, not the stale
+    list entry. Otherwise the gate reasons about a commit nobody is merging: it can
+    skip stale-label cleanup and skip regression revocation while the `greptile`
+    label still sits on a NEWER commit.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, staleListSha=True)
+    assert r["addLabels"] == 1, r["log"]
+    handoff = [c for c in r["comments"] if "greptile-gate:labelled:" in c]
+    assert handoff, r["comments"]
+    assert "a" * 40 in handoff[0], "marker must carry the CURRENT head"
+    assert "b" * 40 not in handoff[0], "marker must not carry the stale list head"
+
+
+def test_label_on_a_newer_head_is_revoked_not_ignored(tmp_path):
+    """A label whose marker points at an older SHA is a false claim and must go.
+
+    With the stale list SHA this comparison used to be made against the OLD head, so
+    a PR labelled on a superseded commit looked "already handed off" and was left
+    alone — the label kept asserting "cheap tier green" for a commit it never saw.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, staleListSha=True,
+             labels=[{"name": "greptile"}], markerSha="b" * 40)
+    assert r["removeLabel"] == 1, r["log"]
+    assert any("stale label removed" in m for m in r["log"]), r["log"]

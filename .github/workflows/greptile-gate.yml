@@ -95,8 +95,7 @@ jobs:
               // TRUST, not presence. This repo is PUBLIC, so anyone can post a comment
               // containing the marker string. An unfiltered match lets a stranger forge a
               // handoff — making the gate believe a PR was already cleared, or pinning it to
-              // a SHA of their choosing. Only markers written by this workflow's own bot,
-              // by an account with write access, count.
+              // a SHA of their choosing.
               // ONLY this workflow's own bot. author_association was tried and is wrong:
               // MEMBER and COLLABORATOR do not imply write permission, so an org member
               // with read-only access could forge a handoff marker. There is no legitimate
@@ -174,6 +173,20 @@ jobs:
                 return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, unresolved };
               };
 
+              // Refetch BEFORE anything reads a SHA. `pulls.list` was fetched once at the top
+              // of the sweep, so by the time this PR is processed its head may have moved —
+              // and every downstream decision keyed on the stale value: `alreadyHandedOff`
+              // would compare the marker against an old SHA (skipping both stale-label
+              // cleanup and regression revocation while the label still sits on a NEWER
+              // commit), conditions would be read for a commit nobody is merging, and the
+              // Codex marker would be written for the wrong head. One authoritative `sha`,
+              // established here, is used from this point on — `pr.head.sha` is not read again.
+              const prFull = await ok(`PR #${pr.number} get`, () =>
+                github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
+              if (!prFull) continue;
+              const sha = prFull.head.sha;
+              const baseRef = prFull.base.ref;
+
               const labelledSha = marks.length
                 ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
                 : null;
@@ -184,7 +197,7 @@ jobs:
               // re-run failing, main moving ahead), and the label asserts "cheap tier
               // green". Leaving it in place would keep asserting something untrue, so fall
               // through, re-evaluate, and strip it below if it no longer holds.
-              const alreadyHandedOff = isLabelled && labelledSha === pr.head.sha;
+              const alreadyHandedOff = isLabelled && labelledSha === sha;
 
               if (isLabelled && !alreadyHandedOff) {
                 // Stale or unknown provenance (applied by hand, or the comment was deleted):
@@ -202,13 +215,9 @@ jobs:
                 // BE another event.
               }
 
-              const prFull = await ok(`PR #${pr.number} get`, () =>
-                github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
-              if (!prFull) continue;
-
               // Behind-ness is MEASURED here (inside readConditions), not inferred from
               // mergeable_state, which mixes concerns and can be `unknown` while GitHub computes.
-              const st = await readConditions(pr.number, pr.head.sha, pr.base.ref);
+              const st = await readConditions(pr.number, sha, baseRef);
               if (!st) { core.info(`PR #${pr.number}: could not read conditions — holding`); continue; }
               const { upToDate, checksOk, reviewedHead, unresolved } = st;
 
@@ -242,7 +251,7 @@ jobs:
                 else core.warning(`PR #${pr.number}: could NOT request Copilot — the gate will hold until it reviews`);
               }
 
-              const codexMark = `<!-- greptile-gate:codex:${pr.head.sha} -->`;
+              const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
               // Same trust rule: a forged summon marker would suppress the real one and,
               // once its timestamp aged past the grace, wave Greptile through early.
               const codexSummon = comments.find(c => c.body?.includes(codexMark) && trusted(c));
@@ -293,11 +302,11 @@ jobs:
               // window would otherwise be labelled as green.
               const fresh = await ok(`PR #${pr.number} revalidate`, () =>
                 github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
-              if (!fresh || fresh.head.sha !== pr.head.sha) {
+              if (!fresh || fresh.head.sha !== sha) {
                 core.info(`PR #${pr.number}: head moved during the sweep — skipping this pass`);
                 continue;
               }
-              const st2 = await readConditions(pr.number, pr.head.sha, pr.base.ref);
+              const st2 = await readConditions(pr.number, sha, baseRef);
               if (!st2) { core.info(`PR #${pr.number}: could not re-read conditions — skipping this pass`); continue; }
               // codexOk is deliberately NOT re-derived: for a fixed head it only ever goes
               // false->true (Codex reviews, or the grace elapses), so the value decided above
@@ -315,7 +324,7 @@ jobs:
               const marker = await ok(`PR #${pr.number} marker`, () =>
                 github.rest.issues.createComment({
                   ...base, issue_number: pr.number,
-                  body: `Handing off to Greptile — cheap tier green on \`${pr.head.sha.slice(0, 8)}\`.\n${MARK}${pr.head.sha} -->`,
+                  body: `Handing off to Greptile — cheap tier green on \`${sha.slice(0, 8)}\`.\n${MARK}${sha} -->`,
                 }));
               if (!marker) { core.warning(`PR #${pr.number}: marker failed — not labelling`); continue; }
 
