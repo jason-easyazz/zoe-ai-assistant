@@ -910,6 +910,14 @@ _SKILL_TOOLS: dict[str, list[str]] = {
 # when healthy; OpenClaw is loaded only for explicit fallback/browser cases.
 _ALWAYS_ON_TOOLS: list[str] = ["web_search", "web_browse", "deep_web_research", "report_issue"]
 
+# Max tool-list size that still forces tool_choice="required" on the first turn.
+# Was a bare `<= 6` when _ALWAYS_ON_TOOLS held 3 tools. Adding web_browse made
+# every skill's list one longer, which would have silently dropped skills that
+# used to sit exactly at the limit back to tool_choice="auto" (a behaviour
+# regression for existing skills, not a new-feature cost). Kept in step with the
+# always-on count so the effective per-skill budget is unchanged.
+_FORCE_TOOL_MAX = len(_ALWAYS_ON_TOOLS) + 3
+
 _SKILL_KEYWORDS: dict[str, list[str]] = {
     "memory": [
         "remember", "forgot", "recall", "memory", "know about", "do you know",
@@ -2679,6 +2687,39 @@ def _is_verification_challenge(message: str) -> bool:
     return bool(_VERIFY_CHALLENGE_RE.match(msg))
 
 
+def apply_verification_challenge(
+    message: str, user_message: str, active_tools: list, first_turn_choice: str,
+) -> tuple[str, list, str]:
+    """If `message` challenges Zoe's last claim, force a cited web check.
+
+    Returns (user_message, active_tools, first_turn_choice). Shared by BOTH chat
+    prompt-assembly paths (buffered and streaming) so they cannot drift apart —
+    an earlier version lived only in the buffered path, so "are you sure?" did
+    nothing on the streaming path, which is the one the UI actually uses.
+
+    The directive goes on the USER message, never the system prompt: the chat
+    system prompt is kept byte-identical every turn for llama.cpp KV-cache reuse.
+    """
+    if not _is_verification_challenge(message):
+        return user_message, active_tools, first_turn_choice
+
+    # Narrow to web_search ONLY. With web_browse also present, a "required" tool
+    # call could be satisfied by browsing an invented URL instead of actually
+    # searching — the model must SEARCH first; it can browse on a later turn.
+    verify_tools = [
+        t for t in active_tools
+        if isinstance(t, dict) and t.get("function", {}).get("name") == "web_search"
+    ]
+    if not verify_tools:
+        # web_search is always-on, so this should not happen; degrade to leaving
+        # the turn untouched rather than forcing a call with no usable tool.
+        logger.warning("zoe_agent: verification challenge but web_search absent — not forcing")
+        return user_message, active_tools, first_turn_choice
+
+    logger.info("zoe_agent: verification challenge — forcing a cited web_search")
+    return user_message + _VERIFY_DIRECTIVE, verify_tools, "required"
+
+
 _VERIFY_DIRECTIVE = (
     "\n\n[VERIFICATION REQUESTED] The user is challenging the claim you just made. "
     "Do NOT simply repeat it. Call web_search now to check it against live sources, "
@@ -3633,31 +3674,15 @@ async def run_zoe_agent(
         # than answering in text when tool_choice="auto" lets it skip.
         _first_turn_choice = (
             "required"
-            if (skills - {"discovery"} and len(active_tools) <= 6)
+            if (skills - {"discovery"} and len(active_tools) <= _FORCE_TOOL_MAX)
             else "auto"
         )
         # "are you sure?" — the user is challenging the claim Zoe just made. Append
         # the directive to the USER message (never the system prompt, which is kept
         # byte-identical for llama.cpp KV-cache reuse) and FORCE a tool call, so the
         # model must go and check rather than restating itself more confidently.
-        if _is_verification_challenge(message):
-            user_message += _VERIFY_DIRECTIVE
-            # Narrow the tool list to the verification tools. With
-            # tool_choice="required" and the full list, Gemma could satisfy
-            # "required" by calling something irrelevant; with only these, the
-            # forced call IS the web check.
-            _verify_tools = [
-                t for t in active_tools
-                if isinstance(t, dict)
-                and t.get("function", {}).get("name") in ("web_search", "web_browse")
-            ]
-            if _verify_tools:
-                active_tools = _verify_tools
-                _first_turn_choice = "required"
-            logger.info(
-                "zoe_agent: verification challenge — forcing a cited web check (tools=%d)",
-                len(active_tools),
-            )
+        user_message, active_tools, _first_turn_choice = apply_verification_challenge(
+            message, user_message, active_tools, _first_turn_choice)
 
     # Build initial messages list with token-budget-aware compaction.
     # Gemma 4 E4B-QAT context window: 8192 tokens. Reserve ~2000 for the response.
@@ -4044,9 +4069,11 @@ async def run_zoe_agent_streaming(
         # Force tool call on iteration 0 when a real skill matched and tool list is small.
         _first_turn_choice = (
             "required"
-            if (skills - {"discovery"} and len(active_tools) <= 6 and active_tools)
+            if (skills - {"discovery"} and len(active_tools) <= _FORCE_TOOL_MAX and active_tools)
             else "auto"
         )
+        user_message, active_tools, _first_turn_choice = apply_verification_challenge(
+            message, user_message, active_tools, _first_turn_choice)
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:

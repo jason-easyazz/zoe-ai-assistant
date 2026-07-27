@@ -81,6 +81,65 @@ def test_directive_demands_a_search_and_a_citation():
     assert "not simply repeat" in d.lower() or "do not simply repeat" in d.lower()
 
 
+def _tools(*names):
+    return [{"type": "function", "function": {"name": n, "parameters": {}}} for n in names]
+
+
+def test_helper_forces_web_search_only():
+    """A required tool call must be satisfiable ONLY by web_search — with
+    web_browse also offered the model could 'comply' by browsing an invented URL
+    instead of actually searching."""
+    msg, tools, choice = zoe_agent.apply_verification_challenge(
+        "are you sure?", "user msg", _tools("web_search", "web_browse", "calendar_add"), "auto")
+    assert choice == "required"
+    assert [t["function"]["name"] for t in tools] == ["web_search"]
+    assert zoe_agent._VERIFY_DIRECTIVE in msg
+
+
+def test_helper_is_a_noop_for_ordinary_messages():
+    tools_in = _tools("web_search", "calendar_add")
+    msg, tools, choice = zoe_agent.apply_verification_challenge(
+        "add milk to the shopping list", "user msg", tools_in, "auto")
+    assert msg == "user msg" and tools == tools_in and choice == "auto"
+
+
+def test_helper_degrades_when_web_search_absent():
+    """Never force a tool call with nothing usable to call (e.g. creative-writing
+    turns strip the tool list entirely)."""
+    msg, tools, choice = zoe_agent.apply_verification_challenge(
+        "are you sure?", "user msg", [], "auto")
+    assert msg == "user msg" and tools == [] and choice == "auto"
+
+
+def test_both_chat_paths_apply_the_challenge():
+    """REGRESSION: the logic first shipped only in the buffered path, so
+    'are you sure?' did nothing on the STREAMING path the UI actually uses."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(zoe_agent))
+    calls = sum(
+        1 for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == "apply_verification_challenge"
+    )
+    # Count real CALL nodes, not text matches — a substring count also matches the
+    # `def` line, which made an earlier version of this test pass even with the
+    # streaming call deleted (caught by a negative control).
+    assert calls >= 2, (
+        f"apply_verification_challenge is called {calls}x; it must be called from "
+        "BOTH chat prompt-assembly paths (buffered AND streaming)"
+    )
+
+
+def test_force_tool_threshold_tracks_always_on_count():
+    """REGRESSION: the force-tool limit was a bare `<= 6` chosen when there were
+    3 always-on tools. Adding web_browse lengthened every skill's list, which
+    would silently drop skills sitting at the limit back to tool_choice='auto'."""
+    assert zoe_agent._FORCE_TOOL_MAX == len(zoe_agent._ALWAYS_ON_TOOLS) + 3
+
+
 def test_verification_tools_exist_to_be_forced():
     """The forced-tool narrowing only works if these are in the schema."""
     names = [
