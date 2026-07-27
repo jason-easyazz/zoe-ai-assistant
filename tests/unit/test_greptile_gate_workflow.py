@@ -379,3 +379,13 @@ def test_failed_copilot_summon_leaves_no_grace_anchor(tmp_path):
     assert r["addLabels"] == 0, r["log"]
     posted = [c for c in r["comments"] if "greptile-gate:copilot:" in c]
     assert posted == [], f"failed mutation must post NO marker: {posted}"
+
+
+def test_handed_off_without_greptile_run_resummons(tmp_path):
+    """Label+marker present, no Greptile Review check-run for the head: the
+    post-label summon must be re-posted, or a swallowed comment failure strands
+    the PR labeled-but-never-reviewed forever (Codex P1, #1577)."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             labels=[{"name": "greptile"}], markerSha="a" * 40)
+    summons = [c for c in r["comments"] if c.strip() == "@greptileai review"]
+    assert summons, f"handed-off head with no Greptile run must re-summon: {r['comments']}"

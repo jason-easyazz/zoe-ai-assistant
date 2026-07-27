@@ -372,9 +372,24 @@ jobs:
               const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
 
               if (alreadyHandedOff) {
-                // Already handed off on this head. Only act if it has REGRESSED — then the
-                // label is a false claim and must go; it will be re-applied once the
-                // condition clears.
+                // Handed off, but is Greptile actually COMING? If the post-label summon
+                // failed (ok() swallows transient errors; the job can die between label
+                // and comment), the label+marker persist and no later sweep would ever
+                // re-summon — labeled-but-never-reviewed forever (Codex P1, #1577). A
+                // missing Greptile Review check-run for this head means the review has
+                // not started: re-post the summon. Idempotent once the review exists.
+                const gRuns = await ok(`PR #${pr.number} greptile check`, () =>
+                  github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
+                    .then(rs => rs.filter(c => c.name === 'Greptile Review').length));
+                if (gRuns === 0) {
+                  const re = await ok(`PR #${pr.number} re-summon Greptile`, () =>
+                    github.rest.issues.createComment({
+                      ...base, issue_number: pr.number, body: '@greptileai review',
+                    }));
+                  if (re) core.info(`PR #${pr.number}: handed off but no Greptile run — re-summoned`);
+                }
+                // Only act on the label if the PR has REGRESSED — then the label is a
+                // false claim and must go; it will be re-applied once the condition clears.
                 // Re-read first: `qualifies` above was computed BEFORE the summon calls, and
                 // a check that went red or a thread opened in that window is exactly the
                 // regression this branch exists to catch. Deciding not to revoke from
