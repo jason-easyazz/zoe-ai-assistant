@@ -5,7 +5,7 @@ Shadow-before-acting is the W5 gate (`docs/architecture/samantha-evolution-plan.
 and logs it — journal line + one JSONL metrics row — but ``_speaker_claim_for_turn``
 returns None, so the claim is never attached to the turn payload and the server
 cannot act on identity during the shadow week. Metrics rows carry
-boot/seq/ts/panel_id/user_id/score/n_profiles/truth ONLY — never audio bytes or
+boot/seq/ts/panel_id/user_id/score/n_profiles/source/truth ONLY — never audio bytes or
 embeddings (`docs/knowledge/biometric-retention-policy.md`). `truth` is the
 operator-filled ground-truth slot: rows are predictions, and FA/FR is not
 computable from them until they are labelled. The labelling handle is the

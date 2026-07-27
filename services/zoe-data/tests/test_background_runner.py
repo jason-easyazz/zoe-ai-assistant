@@ -392,3 +392,16 @@ def test_watchdog_tracks_queue_budget_changes(monkeypatch):
     monkeypatch.setenv("HERMES_BACKGROUND_TIMEOUT_S", "900")
     monkeypatch.setenv("HERMES_BACKGROUND_QUEUE_WAIT_S", "1800")
     assert br._watchdog_timeout_s() == 2700
+
+
+def test_background_env_typos_do_not_crash_the_lane(monkeypatch):
+    """A mistyped budget env var must not raise — it would take the WATCHDOG
+    down with it, so stuck rows would never be reaped."""
+    import background_runner as br
+
+    monkeypatch.setenv("HERMES_BACKGROUND_TIMEOUT_S", "900s")
+    monkeypatch.setenv("HERMES_BACKGROUND_QUEUE_WAIT_S", "ten minutes")
+    assert br._background_runtime_s() == 900.0
+    assert br._background_queue_wait_s() == 600.0
+    monkeypatch.setenv("HERMES_BACKGROUND_TIMEOUT_S", "1200")
+    assert br._background_runtime_s() == 1200.0

@@ -115,7 +115,7 @@ SPEAKER_ID_ENABLED = os.environ.get("SPEAKER_ID_ENABLED", "false").lower() in ("
 # until the shadow week's false-accept/false-reject numbers are reviewed with
 # the operator (docs/architecture/samantha-evolution-plan.md §W5,
 # docs/architecture/panel-identity-plan.md ops-enable). Metrics rows hold
-# timestamp + panel + user_id + raw score ONLY — no audio, no embeddings
+# {boot, seq, ts, panel_id, user_id, score, n_profiles, source, truth} — metadata ONLY, no audio, no embeddings
 # (docs/knowledge/biometric-retention-policy.md).
 # Parsed as a default-ON SAFETY gate, not an ordinary feature flag: only an
 # EXPLICIT false-y value lifts it. The usual `in ("1","true","yes")` shape would
@@ -1147,8 +1147,7 @@ def _needs_leading_newline(path: str) -> bool:
 def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
     """Append one W5 shadow-week metrics row (JSONL) for FA/FR analysis.
 
-    Rows carry timestamp, panel, matched user_id (null on no-match) and the raw
-    cosine score ONLY — never audio bytes or embeddings, per
+    Rows carry {boot, seq, ts, panel_id, user_id, score, n_profiles, source, truth} — metadata ONLY, never audio bytes or embeddings, per
     docs/knowledge/biometric-retention-policy.md. A write failure must never
     cost the turn.
 

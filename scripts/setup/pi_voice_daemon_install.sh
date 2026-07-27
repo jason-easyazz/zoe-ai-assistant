@@ -132,7 +132,7 @@ ZOE_WAKE_ACK_PHRASE=
 # Optional phrase bank. Quote pipe-separated values if enabled.
 # ZOE_WAKE_ACK_PHRASES="Yes Jason.|Hi Jason.|Good morning Jason."
 # Speaker ID (W5): ON, in shadow mode — the daemon scores every turn and logs
-# {ts, panel, user_id, score} rows to ~/.zoe-voice/speaker_shadow_metrics.jsonl
+# {boot, seq, ts, panel_id, user_id, score, n_profiles, source, truth} rows to ~/.zoe-voice/speaker_shadow_metrics.jsonl
 # (no audio, no embeddings) but never attaches identity to the turn payload.
 # Flip SPEAKER_ID_SHADOW=false ONLY after the shadow week's false-accept /
 # false-reject numbers are reviewed with the operator (samantha plan §W5).
