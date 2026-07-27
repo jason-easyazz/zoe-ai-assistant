@@ -20,7 +20,10 @@ TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-2400}"
 
 [ $# -ge 2 ] || { echo "usage: $0 <PR-number> \"<contract>\"" >&2; exit 1; }
 
-# ONE polly worker repo-wide (RAM discipline) — serialize concurrent invocations.
+# Serialize concurrent CROSS-REVIEW invocations (RAM discipline). Note: other
+# polly launch paths (omnigent_issue_executor, the Flue heavy lane) do not take
+# this lock — a shared lease across all launchers is future cross-subsystem
+# work (Codex, #1578); this bounds what THIS wrapper can add to the load.
 exec 9>/tmp/zoe-cross-review.lock
 flock 9
 PR="$1"; CONTRACT="$2"
@@ -91,7 +94,8 @@ TMPJ=$(mktemp)
 trap 'rm -f "$TMPJ"' EXIT
 curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" -o "$TMPJ" \
   || { echo "ALARM: could not fetch session $SID for the report" >&2; exit 2; }
-python3 - "$SID" "$TMPJ" <<'PY'
+rc=0
+python3 - "$SID" "$TMPJ" <<'PY' || rc=$?
 import json, sys
 d = json.load(open(sys.argv[2]))
 texts = []
@@ -114,3 +118,11 @@ if not texts:
 # the last message (polly non-blocking on #1578).
 print("\n\n---\n\n".join(texts[-3:]))
 PY
+if [ "$rc" -ne 0 ]; then
+  # rc=2 is the zero-assistant-messages ALARM (already printed its own message).
+  # Anything else is a parse/schema crash — still a report-stage incident, not
+  # a usage error: exit 2 like every other alarm (Codex, #1578), never set -e's
+  # raw 1.
+  [ "$rc" -ne 2 ] && echo "ALARM: report extraction failed (exit $rc) for session $SID — inspect the payload shape" >&2
+  exit 2
+fi
