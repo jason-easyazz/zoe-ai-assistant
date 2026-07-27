@@ -2657,8 +2657,12 @@ async def _cloak_search(query: str, max_results: int = 5, timeout_ms: int = 2000
 _VERIFY_CHALLENGE_RE = re.compile(
     r"^\W*(?:"
     r"(?:are|r)\s+(?:you|u)\s+(?:really\s+)?(?:sure|certain|positive)"
-    r"|(?:you\s+)?sure"                       # "you sure?" / "sure?"
-    r"|really"                                 # "really??"
+    # bare "sure" / "really" are AGREEMENT ("sure", "really appreciated") — as a
+    # challenge they need a question mark ("sure?", "really??") or the fuller
+    # "are you sure" form handled above. "you sure" keeps working bare.
+    r"|you\s+sure"
+    r"|sure\s*\?"
+    r"|really\s*\?"
     r"|is\s+that\s+(?:right|true|correct|actually\s+true)"
     r"|that'?s\s+not\s+right"
     r"|(?:prove|verify|back)\s+(?:it|that)(?:\s+up)?"
@@ -2677,14 +2681,21 @@ _VERIFY_CHALLENGE_RE = re.compile(
 _VERIFY_MAX_CHARS = 60  # a challenge is short; a long message is a new question
 
 
+_INTENT_HINT_PREFIX_RE = re.compile(r"^\[Intent hint:[^\]]*\]\s*")
+
+
 def _is_verification_challenge(message: str) -> bool:
     """True when the user is pushing back on Zoe's PREVIOUS claim and wants proof.
 
     Used to force a live web_search + cited sources instead of letting the model
     simply restate itself more confidently (the failure mode Jason described:
     "when you ask zoe something and she tells you, and you go 'are you sure'").
+
+    The Tier-0.5 classifier prepends "[Intent hint: ...]" to the raw message on
+    the streaming path; strip it first or the anchored regex can never match a
+    hinted challenge.
     """
-    msg = (message or "").strip()
+    msg = _INTENT_HINT_PREFIX_RE.sub("", (message or "").strip()).strip()
     if not msg or len(msg) > _VERIFY_MAX_CHARS:
         return False
     return bool(_VERIFY_CHALLENGE_RE.match(msg))
@@ -2766,8 +2777,10 @@ async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> s
         from agent_safety import assert_public_url
         assert_public_url(raw)
     except Exception as exc:  # noqa: BLE001 - blocked target is a normal answer
-        logger.info("web_browse: refused %s (%s)", raw[:80], type(exc).__name__)
-        return f"Refused to browse that URL — it does not resolve to a public address ({exc})."
+        # Log the detail; do NOT echo the exception to the user — assert_public_url
+        # messages include the RESOLVED internal IP, which would leak addressing.
+        logger.info("web_browse: refused %s (%s)", raw[:80], exc)
+        return "Refused to browse that URL — it does not resolve to a public address."
 
     if _ilu.find_spec("cloakbrowser") is None:
         return "Page browsing is unavailable (CloakBrowser is not installed). Try web_search instead."
@@ -2838,7 +2851,7 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
     try:
         from web_search_provider import tavily_enabled, tavily_search_sync
         if tavily_enabled():
-            loop = _asyncio.get_event_loop()
+            loop = _asyncio.get_running_loop()
             tav = await loop.run_in_executor(
                 None, lambda: tavily_search_sync(query, max_results=6, timeout_s=8.0)
             )

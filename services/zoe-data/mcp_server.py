@@ -396,6 +396,21 @@ TOOLS = [
         },
     },
     {
+        "name": "web_browse",
+        "description": (
+            "Open ONE web page and read its text (~5-10s). Use after web_search when "
+            "a snippet isn't enough — a price, opening hours, an article. Give the "
+            "full https URL from a search result; not for searching."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Full http(s) URL of the page to read"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
         "name": "zoe_sync_knowledge",
         "description": (
             "Regenerate ZOE_SELF.md and distribute to all agents (OpenClaw workspace, "
@@ -1959,6 +1974,22 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             "count": len(skills),
             "skills_dir": used_dir or skills_dirs[0],
         }
+
+    elif name == "web_browse":
+        url = args.get("url", "")
+        if not url:
+            return {"error": "url is required"}
+        try:
+            import sys as _sys, os as _os
+            _zd = _os.path.dirname(_os.path.abspath(__file__))
+            if _zd not in _sys.path:
+                _sys.path.insert(0, _zd)
+            from zoe_agent import _web_browse  # type: ignore[import]
+            result_text = await _web_browse(url, user_id=user_id)
+            return {"content": result_text}
+        except Exception as exc:
+            logger.warning("mcp web_browse failed: %s", exc)
+            return {"error": f"web_browse failed: {type(exc).__name__}"}
 
     elif name == "web_search":
         query = args.get("query", "")

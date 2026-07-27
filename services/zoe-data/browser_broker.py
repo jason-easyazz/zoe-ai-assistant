@@ -230,7 +230,11 @@ def build_cloak_executor() -> BrowserExecutor | None:
             try:
                 assert_public_url(url)
             except Exception as exc:  # noqa: BLE001
-                return {"ok": False, "error": f"refused non-public url: {exc}"}
+                # log detail; the returned error must not echo the resolved
+                # internal IP that assert_public_url includes in its message
+                import logging
+                logging.getLogger(__name__).info("cloak executor refused %s (%s)", url[:80], exc)
+                return {"ok": False, "error": "refused: url does not resolve to a public address"}
             # launch_context_async returns a BrowserContext directly (not an async ctx manager)
             context = await launch_context_async(headless=True)
             try:

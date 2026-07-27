@@ -20,6 +20,7 @@ pytestmark = pytest.mark.ci_safe
     "are you really sure?",
     "are u sure?",
     "you sure?",
+    "you sure",
     "sure?",
     "really?",
     "really??",
@@ -47,6 +48,8 @@ def test_detects_a_challenge(msg):
 
 @pytest.mark.parametrize("msg", [
     # "sure" used as agreement or as an ordinary verb — must NOT trigger
+    "sure",
+    "really",
     "sure, go ahead",
     "sure thing",
     "make sure the front light is off",
@@ -176,3 +179,33 @@ def test_voice_exclusion_is_documented_not_accidental():
     import inspect
     doc = inspect.getdoc(zoe_agent.apply_verification_challenge) or ""
     assert "VOICE IS DELIBERATELY EXCLUDED" in doc
+
+
+def test_intent_hint_prefix_is_stripped():
+    """REGRESSION: the Tier-0.5 classifier prepends '[Intent hint: ...]' on the
+    streaming path; the anchored regex could never match a hinted challenge."""
+    f = zoe_agent._is_verification_challenge
+    assert f("[Intent hint: chat, conf=0.92] are you sure?") is True
+    assert f("[Intent hint: list_add, conf=0.88] add milk to the list") is False
+
+
+def test_bare_agreement_words_do_not_trigger():
+    """'sure' / 'really' alone are agreement; a challenge needs the '?' form."""
+    f = zoe_agent._is_verification_challenge
+    assert f("sure") is False and f("really") is False
+    assert f("sure?") is True and f("really??") is True and f("you sure") is True
+
+
+@pytest.mark.asyncio
+async def test_refusal_does_not_leak_resolved_ips(monkeypatch):
+    """assert_public_url exceptions embed the resolved internal IP — the user-facing
+    refusal must not echo it."""
+    import agent_safety
+
+    def blocked(url):
+        raise ValueError("resolves to non-public address 192.168.1.10")
+    monkeypatch.setattr(agent_safety, "assert_public_url", blocked)
+
+    out = await zoe_agent._web_browse("http://internal.example")
+    assert "192.168" not in out, f"leaked internal IP: {out}"
+    assert "Refused" in out
