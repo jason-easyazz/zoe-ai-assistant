@@ -378,16 +378,9 @@ jobs:
                 // re-summon — labeled-but-never-reviewed forever (Codex P1, #1577). A
                 // missing Greptile Review check-run for this head means the review has
                 // not started: re-post the summon. Idempotent once the review exists.
-                const gRuns = await ok(`PR #${pr.number} greptile check`, () =>
-                  github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
-                    .then(rs => rs.filter(c => c.name === 'Greptile Review').length));
-                if (gRuns === 0) {
-                  const re = await ok(`PR #${pr.number} re-summon Greptile`, () =>
-                    github.rest.issues.createComment({
-                      ...base, issue_number: pr.number, body: '@greptileai review',
-                    }));
-                  if (re) core.info(`PR #${pr.number}: handed off but no Greptile run — re-summoned`);
-                }
+                // (re-summon decision moved BELOW the fresh-conditions read — Codex:
+                // summoning before revalidating could spend a review on a head that
+                // has already regressed and is about to have its label revoked.)
                 // Only act on the label if the PR has REGRESSED — then the label is a
                 // false claim and must go; it will be re-applied once the condition clears.
                 // Re-read first: `qualifies` above was computed BEFORE the summon calls, and
@@ -406,6 +399,22 @@ jobs:
                 if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
                 const stillOk = now.checksOk && copilotPasses(now.reviewedHead) &&
                                 codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
+                if (stillOk) {
+                  // Still green: is Greptile actually COMING? A swallowed post-label
+                  // summon failure leaves label+marker with no review ever starting
+                  // (Codex P1); re-post the summon only now that the fresh read says
+                  // the handoff is still deserved. Idempotent once the review exists.
+                  const gRuns = await ok(`PR #${pr.number} greptile check`, () =>
+                    github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
+                      .then(rs => rs.filter(c => c.name === 'Greptile Review').length));
+                  if (gRuns === 0) {
+                    const re = await ok(`PR #${pr.number} re-summon Greptile`, () =>
+                      github.rest.issues.createComment({
+                        ...base, issue_number: pr.number, body: '@greptileai review',
+                      }));
+                    if (re) core.info(`PR #${pr.number}: handed off but no Greptile run — re-summoned`);
+                  }
+                }
                 if (!stillOk) {
                   const r = await ok(`PR #${pr.number} revoke label`, () =>
                     github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));

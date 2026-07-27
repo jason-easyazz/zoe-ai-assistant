@@ -174,3 +174,19 @@ def test_wrapper_delegating_to_typed_env_records_a_typed_read(tmp_path):
     flat = {**data["flags"]["prod"], **data["flags"]["lab"]}
     assert flat["ZOE_TYPED_WRAP"]["typed_env"] is True
     assert flat["ZOE_RAW_WRAP"]["typed_env"] is False
+
+
+def test_non_forwarding_wrapper_is_not_a_delegator(tmp_path):
+    """A wrapper returning a typed call that IGNORES its name parameter must not
+    classify as a delegator — its callers' first args are not the flags being
+    read (Codex, #1577)."""
+    (tmp_path / "m.py").write_text(
+        "def enabled(label):\n"
+        "    return env_str(\"SOME_FIXED_KEY\")\n"
+        "E = enabled(\"ZOE_NOT_ACTUALLY_READ\")\n"
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    flat = {**data["flags"]["prod"], **data["flags"]["lab"]}
+    # the wrapper reads SOME_FIXED_KEY (non-ZOE, filtered); ZOE_NOT_ACTUALLY_READ
+    # is never an env read at all and must not appear
+    assert "ZOE_NOT_ACTUALLY_READ" not in flat, flat.keys()

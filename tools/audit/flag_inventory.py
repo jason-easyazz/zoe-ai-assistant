@@ -75,11 +75,22 @@ class _FlagVisitor(ast.NodeVisitor):
     def visit_Module(self, node: ast.Module) -> None:
         for fn in ast.walk(node):
             if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # The returned typed_env call must FORWARD the wrapper's first
+                # parameter as its name argument — `def enabled(label): return
+                # env_str("FIXED")` is not a delegator, and classifying it as one
+                # would record its callers' first args as typed flag reads of
+                # names the wrapper ignores (Codex, #1577).
+                params = [a.arg for a in fn.args.args]
+                if not params:
+                    continue
                 for stmt in ast.walk(fn):
-                    if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call):
-                        if self._call_name(stmt.value.func) in TYPED_ENV_FUNCS:
-                            self._typed_delegators.add(fn.name)
-                            break
+                    if (isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call)
+                            and self._call_name(stmt.value.func) in TYPED_ENV_FUNCS
+                            and stmt.value.args
+                            and isinstance(stmt.value.args[0], ast.Name)
+                            and stmt.value.args[0].id == params[0]):
+                        self._typed_delegators.add(fn.name)
+                        break
         self.generic_visit(node)
 
     @staticmethod

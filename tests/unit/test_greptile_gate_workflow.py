@@ -381,6 +381,16 @@ def test_failed_copilot_summon_leaves_no_grace_anchor(tmp_path):
     assert posted == [], f"failed mutation must post NO marker: {posted}"
 
 
+def test_regressed_handed_off_head_is_revoked_not_summoned(tmp_path):
+    """Handed off, no Greptile run, but a required check has gone RED: revoke the
+    label, do NOT spend a summon on a head about to lose its handoff (Codex,
+    #1577 — the re-summon must run behind the fresh-conditions read)."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, checksRed=True,
+             labels=[{"name": "greptile"}], markerSha="a" * 40)
+    assert r["removeLabel"] == 1, r["log"]
+    assert not any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
+
+
 def test_handed_off_without_greptile_run_resummons(tmp_path):
     """Label+marker present, no Greptile Review check-run for the head: the
     post-label summon must be re-posted, or a swallowed comment failure strands
