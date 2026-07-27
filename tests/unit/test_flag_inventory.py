@@ -134,14 +134,20 @@ def test_committed_inventory_matches_generator_output() -> None:
     assert json.dumps(data, indent=2, sort_keys=True) + "\n" == committed_json, regen_hint
 
 
-def test_precommit_regenerates_the_inventory():
-    """The regen hook must stay wired — a stale committed inventory cost six
-    separate incidents (red CI + merge conflicts) in one day before it existed."""
+def test_precommit_keeps_the_inventory_fresh_hook_wired():
+    """The freshness hook must stay wired — a stale committed inventory cost six
+    separate incidents (red CI + merge conflicts) on 2026-07-27 before it
+    existed. Pins presence and the properties that make it correct: it runs the
+    real generator, fires on Python changes, and stays date-insensitive (the
+    -I stamp filters), or every commit on a later calendar day false-fails."""
     import yaml
 
     cfg = yaml.safe_load((_REPO / ".pre-commit-config.yaml").read_text())
     local = next(r for r in cfg["repos"] if r["repo"] == "local")
-    hook = next((h for h in local["hooks"] if h["id"] == "zoe-flag-inventory"), None)
-    assert hook is not None, "zoe-flag-inventory hook removed from pre-commit"
+    hook = next((h for h in local["hooks"] if h["id"] == "zoe-flag-inventory-fresh"), None)
+    assert hook is not None, "zoe-flag-inventory-fresh hook removed from pre-commit"
     assert "flag_inventory.py" in hook["entry"]
-    assert ".py" in hook["files"], "hook must fire on Python changes"
+    import re as _re
+    assert _re.search(hook["files"], "services/zoe-data/example.py"), \
+        "hook must fire on Python changes"
+    assert '-I "Last generated:"' in hook["entry"], "date-insensitivity dropped"
