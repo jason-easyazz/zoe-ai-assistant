@@ -85,7 +85,14 @@ class _FlagVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         name = self._call_name(node.func)
         typed = name in TYPED_ENV_FUNCS
-        is_get = name == "getenv" or self._is_environ_get(node.func)
+        # Local safe-parse wrappers (the Pi daemon's _int_env-style helpers) take
+        # (name, default) like getenv — without this, a flag read through one is
+        # INVISIBLE to the inventory. Found the hard way: ZOE_VAD_TAIL_MS, the
+        # main rollback knob of the fast-tail change, was absent from the
+        # committed inventory because it used _int_env (Bugbot, #1573) — and
+        # ZOE_TTS_KEEP_TAIL_MS / ZOE_TTS_LEAD_GUARD_MS had been missing all along.
+        is_get = (name in ("getenv", "_int_env", "_float_env", "_env")
+                  or self._is_environ_get(node.func))
         if (typed or is_get) and node.args:
             key = node.args[0]
             if isinstance(key, ast.Constant) and isinstance(key.value, str) and FLAG_RE.match(key.value):

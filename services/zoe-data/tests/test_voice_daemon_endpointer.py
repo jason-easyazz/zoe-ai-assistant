@@ -61,7 +61,7 @@ def test_flag_defaults_and_both_recorders_use_endpointer():
     assert "_Endpointer(spoke=True)" in _SRC  # follow-up seeds fast tail
 
 
-def _make_endpointer(vad_enabled, vad_probs=None, spoke=False):
+def _make_endpointer(vad_enabled, vad_probs=None, spoke=False, tail_ms=0):
     """Exec the real _Endpointer source with stubbed daemon globals."""
     m = re.search(r"\nclass _Endpointer:.*?(?=\n\ndef _api_post)", _SRC, re.DOTALL)
     assert m, "_Endpointer class not found in daemon source"
@@ -77,6 +77,10 @@ def _make_endpointer(vad_enabled, vad_probs=None, spoke=False):
         "CHUNK_SIZE": 1280,
         "_get_silero_vad": lambda: (object(), None),
         "_vad_prob": lambda model, chunk: next(probs),
+        # Deep-quiet fast tail (2026-07-27): default 0 = disabled, so every
+        # pre-existing case in this file exercises the flag-off path unchanged.
+        "ZOE_VAD_TAIL_MS": tail_ms,
+        "ZOE_VAD_TAIL_DEEP_PROB": 0.10,
     }
     exec(compile(m.group(0), _DAEMON, "exec"), g)
     return g["_Endpointer"](spoke=spoke)
@@ -164,3 +168,20 @@ def test_daemon_never_reposts_a_processed_turn():
     assert "blocking fallback." not in _SRC, "the unguarded transcript+no-audio re-POST must stay dead"
     assert _SRC.count("NOT re-POSTing") >= 2, "both paths must carry the no-re-POST guard"
     assert "barged before first audio" in _SRC, "barge before audio returns to follow-up, not a re-POST"
+
+
+def test_deep_quiet_fast_tail_closes_early_but_ambiguous_pause_does_not():
+    """ZOE_VAD_TAIL_MS=640: 8 consecutive DEEP-quiet chunks (prob<0.10) close the
+    turn early; an ambiguous pause (0.10<=prob<0.35) resets the deep counter and
+    must wait the full 0.8s tail. Guards the exact contract the corpus numbers
+    were measured against (640ms = 8 chunks at 80ms)."""
+    # deep silence after speech: closes at 8 quiet chunks, not 10
+    probs = [0.9, 0.9, 0.9] + [0.05] * 30
+    ep = _make_endpointer(True, vad_probs=probs, spoke=False, tail_ms=640)
+    stopped = _chunks_until_stop(ep, [b"\x00\x02" * 1280] * 33)
+    assert stopped == 3 + 8, f"deep tail should close at 8 quiet chunks, got {stopped}"
+    # ambiguous quiet (0.2): deep counter never accumulates -> full 10-chunk tail
+    probs2 = [0.9, 0.9, 0.9] + [0.2] * 30
+    ep2 = _make_endpointer(True, vad_probs=probs2, spoke=False, tail_ms=640)
+    stopped2 = _chunks_until_stop(ep2, [b"\x00\x02" * 1280] * 33)
+    assert stopped2 == 3 + 10, f"ambiguous pause must wait the full tail, got {stopped2}"
