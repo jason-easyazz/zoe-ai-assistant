@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-07-26T00:00:00Z
+timestamp: 2026-07-27T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-07-26T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-07-26. The table body is deterministic (sorted, no
+Last generated: 2026-07-27. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-417 flags; 417 not documented in `.env.example`.
+419 flags; 419 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -376,6 +376,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_TWO_STAGE_TIMEOUT_S` | `'1.5'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_WARM_START` | `dynamic` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_SEARCH_HOTNESS_WEIGHT` | `'0.05'` | no | NO | `services/zoe-data/memory_service.py` |
+| `ZOE_SEARCH_PROVIDER` | `'auto'` | no | NO | `services/zoe-data/web_search_provider.py` |
 | `ZOE_SESSION_LOCK_TIMEOUT_S` | `'5'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_SILERO_VAD_MODEL` | `''` | no | NO | `services/zoe-data/voice_vad.py` |
 | `ZOE_SKYBRIDGE_ONLY` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
@@ -388,6 +389,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STT_BACKEND` | `'moonshine'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_TASK_TIMEOUT_S` | `'900'` | no | NO | `services/zoe-data/background_runner.py` |
+| `ZOE_TAVILY_DEPTH` | `'basic'` | no | NO | `services/zoe-data/web_search_provider.py` |
 | `ZOE_TELEGRAM_BOT_USERNAME` | `''` | no | NO | `services/zoe-data/telegram_link.py` |
 | `ZOE_TELEGRAM_LINK_SECRET` | `-` | no | NO | `services/zoe-data/telegram_link.py` |
 | `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED` | `''` | no | NO | `services/zoe-data/person_extractor.py` |

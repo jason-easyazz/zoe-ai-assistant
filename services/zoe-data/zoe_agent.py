@@ -2646,7 +2646,23 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
             lines.append(f"- {title}: {snippet}" + (f" ({url})" if url else ""))
         return "\n".join(lines)
 
-    # Primary: ddgs API — fast, no browser needed
+    # Primary: Tavily — purpose-built for citable answers ("are you sure?"), and
+    # a real API rather than a scrape. INERT until TAVILY_API_KEY is set: with no
+    # key (or on any error/quota) it returns [] and we fall straight through to
+    # the ddgs path below, i.e. exactly the previous behaviour.
+    try:
+        from web_search_provider import tavily_enabled, tavily_search_sync
+        if tavily_enabled():
+            loop = _asyncio.get_event_loop()
+            tav = await loop.run_in_executor(
+                None, lambda: tavily_search_sync(query, max_results=6, timeout_s=8.0)
+            )
+            if tav:
+                return _fmt(tav)
+    except Exception as exc:  # noqa: BLE001 - never let the new tier break search
+        logger.info("web_search: tavily tier skipped (%s) — using ddgs", exc)
+
+    # Fallback 1: ddgs API — fast, no browser needed
     try:
         loop = _asyncio.get_event_loop()
         results = await loop.run_in_executor(

@@ -3632,6 +3632,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_SEARCH_PROVIDER": {
+        "defaults": [
+          "'auto'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/web_search_provider.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_SESSION_LOCK_TIMEOUT_S": {
         "defaults": [
           "'5'"
@@ -3749,6 +3759,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/background_runner.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TAVILY_DEPTH": {
+        "defaults": [
+          "'basic'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/web_search_provider.py"
         ],
         "typed_env": false
       },
