@@ -187,6 +187,10 @@ def test_all_green_hands_off(tmp_path):
     # The marker must carry the SHA, and must be posted BEFORE the label — a label with
     # no marker sits inside Greptile's filter and gets stripped again next run.
     assert any("greptile-gate:labelled:" + "a" * 40 in c for c in r["comments"]), r["comments"]
+    # Measured on the pipeline's first autonomous run (#1575): the label admits
+    # the PR through Greptile's filter but does NOT start the review — the
+    # summon does. The handoff must post both.
+    assert any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
 
 
 def test_red_check_during_summon_window_is_not_labelled(tmp_path):

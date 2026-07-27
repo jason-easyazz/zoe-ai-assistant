@@ -452,6 +452,16 @@ jobs:
 
               const applied = await ok(`PR #${pr.number} addLabel`, () =>
                 github.rest.issues.addLabels({ ...base, issue_number: pr.number, labels: [LABEL] }));
-              if (applied) core.notice(`PR #${pr.number}: cheap tier green, branch current, threads clear — handing off to Greptile.`);
+              if (applied) {
+                core.notice(`PR #${pr.number}: cheap tier green, branch current, threads clear — handing off to Greptile.`);
+                // MEASURED on the pipeline's first autonomous run (#1575, 2026-07-27):
+                // the label alone does NOT wake Greptile — 12 labeled minutes, no
+                // review. The label admits the PR through the dashboard filter; the
+                // summon is what starts the review. Post both, always.
+                await ok(`PR #${pr.number} summon Greptile`, () =>
+                  github.rest.issues.createComment({
+                    ...base, issue_number: pr.number, body: '@greptileai review',
+                  }));
+              }
               else core.warning(`PR #${pr.number}: marker posted but label failed — will retry next run`);
             }
