@@ -111,7 +111,8 @@ def build_proposal_issue_body(proposal: asyncpg.Record | dict) -> str:
 
 
 async def create_board_issue_for_proposal(
-    conn: asyncpg.Connection, proposal: asyncpg.Record | dict, *, claim_next: bool = False,
+    conn: asyncpg.Connection, proposal: asyncpg.Record | dict, *,
+    claim_next: bool = False, allow_retry: bool = False,
 ) -> dict[str, Any]:
     """Create ONE `todo` issue for `proposal` in the executor's workspace.
 
@@ -124,15 +125,15 @@ async def create_board_issue_for_proposal(
     stale under concurrent approvals), matched under the same advisory lock that
     assigns the issue number.
 
-    THE INVARIANT (precisely): at most one NON-FAILED issue per proposal at any
-    time. A live (todo/in_progress/in_review) or done issue blocks a duplicate
-    run — shipped work is never redone, and a running lane is never forked. An
-    issue in a terminal-FAILURE state (blocked/cancelled) does NOT block: an
-    admin re-approving after a failure is explicitly requesting a RETRY, and the
-    new issue is that retry's successor. So a proposal's history may contain
-    several failed issues, but never two non-failed ones — the retry path is a
-    deliberate admin action (approve is admin-only + execution-gated), not an
-    accidental duplicate.
+    THE INVARIANT: by default, ANY prior issue for the proposal — live, done,
+    blocked, or cancelled — blocks a new enqueue; the existing issue is returned
+    with its status. Re-approval alone NEVER re-runs autonomous implementation.
+    Retrying after a failed run (blocked/cancelled) requires the caller to pass
+    ``allow_retry=True`` — an explicit, separate admin decision — and even then
+    only terminal-FAILURE issues are ignored: a live or done issue still blocks,
+    so shipped work is never redone and a running lane is never forked. A
+    proposal's history may therefore contain several failed issues but never two
+    non-failed ones.
 
     Returns {number, issue_id, created[, status]}; the caller updates
     evolution_proposals.multica_issue_id in the zoe DB.
@@ -156,18 +157,17 @@ async def create_board_issue_for_proposal(
 
         # Idempotency by a STABLE proposal reference stored on the issue
         # (context_refs) — NOT the caller-passed multica_issue_id, which may be a
-        # phantom or stale under concurrency. Match ANY status, including terminal
-        # (done/cancelled): a proposal maps to at most ONE board issue for its
-        # lifetime, so re-approving an already-implemented proposal returns that
-        # issue instead of enqueuing a second autonomous run.
-        # Match a NON-FAILED existing issue: todo/in_progress/in_review/done all
-        # block a duplicate run (done = work already shipped, don't redo it). But
-        # a prior run that ended blocked/cancelled is a FAILURE — exclude it so a
-        # re-approve enqueues a fresh retry rather than returning the dead issue.
+        # phantom or stale under concurrency. Default: ANY prior issue blocks —
+        # re-approval alone never enqueues a second autonomous run. Only with
+        # allow_retry (an explicit admin retry) are terminal-FAILURE issues
+        # (blocked/cancelled) ignored; live and done issues ALWAYS block.
+        status_filter = (
+            "AND status <> ALL(ARRAY['blocked','cancelled'])" if allow_retry else ""
+        )
         existing = await conn.fetchrow(
-            """SELECT number, id::text AS id, status FROM issue
+            f"""SELECT number, id::text AS id, status FROM issue
                 WHERE workspace_id = $1::uuid AND context_refs @> $2::jsonb
-                  AND status <> ALL(ARRAY['blocked','cancelled'])
+                  {status_filter}
                 ORDER BY created_at DESC LIMIT 1""",
             ws, proposal_ref,
         )

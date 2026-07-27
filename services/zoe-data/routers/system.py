@@ -2001,6 +2001,9 @@ async def evolution_proposal_action(
       * admin-approved EXECUTABLE proposals (autonomy contract allows it) — skip
         the display sync and Hermes pre-review entirely and bridge the proposal
         to the board runner's lane (todo issue -> Omnigent -> gated PR -> merge).
+        Re-approval NEVER re-enqueues: any prior board issue (even a failed one)
+        is returned as-is unless the body carries an explicit `retry: true`, and
+        even then only failed (blocked/cancelled) runs are retried.
     On reject: archives the proposal.
     On defer: snoozes for 7 days.
     """
@@ -2169,7 +2172,12 @@ async def evolution_proposal_action(
                     }
                     pool = await get_pool()
                     async with pool.acquire() as _mconn:
-                        bridged = await create_board_issue_for_proposal(_mconn, prop_row)
+                        # retry=true in the request body is the ONLY way a prior
+                        # failed (blocked/cancelled) run gets a second enqueue —
+                        # re-approval alone always returns the existing issue.
+                        bridged = await create_board_issue_for_proposal(
+                            _mconn, prop_row, allow_retry=bool(body.get("retry")),
+                        )
                     _prior = multica_issue_id
                     _link_warning = None
                     if bridged.get("issue_id"):

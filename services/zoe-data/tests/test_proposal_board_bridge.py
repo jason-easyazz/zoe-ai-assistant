@@ -52,6 +52,12 @@ class _FakeConn:
     async def execute(self, sql, *a): return "OK"
     async def fetchrow(self, sql, *a):
         if "context_refs @>" in sql and "INSERT" not in sql:  # idempotency probe
+            self.probe_sql = sql
+            # Honour the probe's own status filter, so tests exercise the REAL
+            # SQL semantics instead of a stub that ignores allow_retry.
+            if (self._existing and "<> ALL(ARRAY['blocked','cancelled'])" in sql
+                    and self._existing.get("status") in ("blocked", "cancelled")):
+                return None
             return self._existing
         if sql.strip().startswith("INSERT INTO issue"):
             self.inserted = {"sql": sql, "args": a}
@@ -191,28 +197,49 @@ def test_stored_execute_on_wrong_type_is_refused():
 
 
 @pytest.mark.asyncio
-async def test_blocked_prior_issue_allows_a_retry():
-    """A blocked run is a FAILURE — an admin re-approving is explicitly asking
-    for a retry, so a NEW issue is created (the idempotency probe excludes
-    blocked/cancelled)."""
-    conn = _FakeConn(existing=None, number=7001)  # probe excludes the blocked row
+async def test_reapproval_after_cancelled_does_not_reenqueue():
+    """DEFAULT is fail-closed: a cancelled prior run still blocks a new enqueue.
+
+    Re-approval alone must NEVER re-run autonomous implementation — the dead
+    issue is returned with its status so the caller can surface it. Retrying is
+    a separate, explicit admin decision (allow_retry)."""
+    conn = _FakeConn(existing={"number": 42, "id": "dead", "status": "cancelled"}, number=7001)
     out = await pbb.create_board_issue_for_proposal(conn, {"id": "p1", "title": "T", "description": "d"})
+    assert out["created"] is False and out["status"] == "cancelled"
+    assert conn.inserted is None
+
+
+@pytest.mark.asyncio
+async def test_blocked_prior_issue_allows_an_explicit_retry():
+    """With allow_retry=True (the admin explicitly asked), a prior FAILED run
+    (blocked/cancelled) is ignored and a fresh issue is enqueued."""
+    conn = _FakeConn(existing={"number": 42, "id": "dead", "status": "blocked"}, number=7001)
+    out = await pbb.create_board_issue_for_proposal(
+        conn, {"id": "p1", "title": "T", "description": "d"}, allow_retry=True)
     assert out["created"] is True and out["number"] == 7001
 
 
 @pytest.mark.asyncio
-async def test_the_probe_sql_excludes_only_failure_states():
-    """Pin the invariant in the SQL itself: blocked/cancelled are excluded from
-    the duplicate check (retryable); every other status blocks a duplicate."""
-    captured = {}
-    class _Probe(_FakeConn):
-        async def fetchrow(self, sql, *a):
-            if "context_refs @>" in sql and "INSERT" not in sql:
-                captured["sql"] = sql
-                return None
-            return await super().fetchrow(sql, *a)
-    await pbb.create_board_issue_for_proposal(_Probe(number=1), {"id": "p", "title": "t", "description": "d"})
-    sql = captured["sql"]
+async def test_explicit_retry_still_never_redoes_live_or_done_work():
+    """allow_retry only forgives FAILURES: a done (or live) issue still blocks —
+    shipped work is never redone, a running lane is never forked."""
+    conn = _FakeConn(existing={"number": 42, "id": "shipped", "status": "done"}, number=7001)
+    out = await pbb.create_board_issue_for_proposal(
+        conn, {"id": "p1", "title": "T", "description": "d"}, allow_retry=True)
+    assert out["created"] is False and out["status"] == "done"
+    assert conn.inserted is None
+
+
+@pytest.mark.asyncio
+async def test_the_probe_sql_is_unfiltered_by_default_and_excludes_only_failures_on_retry():
+    """Pin the invariant in the SQL itself: no status filter by default (ANY
+    prior issue blocks); with allow_retry, ONLY blocked/cancelled are excluded."""
+    conn = _FakeConn(number=1)
+    await pbb.create_board_issue_for_proposal(conn, {"id": "p", "title": "t", "description": "d"})
+    assert "<> ALL" not in conn.probe_sql, "default probe must match ANY prior issue"
+    await pbb.create_board_issue_for_proposal(
+        conn, {"id": "p", "title": "t", "description": "d"}, allow_retry=True)
+    sql = conn.probe_sql
     assert "'blocked'" in sql and "'cancelled'" in sql and "<> ALL" in sql
     for live in ("todo", "in_progress", "in_review", "done"):
         assert f"'{live}'" not in sql, f"{live} must BLOCK a duplicate, not be excluded"
