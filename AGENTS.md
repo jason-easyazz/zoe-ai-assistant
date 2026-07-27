@@ -108,10 +108,11 @@ Sequence:
 3. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
    NOT resolve). ~$10/mo flat for 1500 requests, and its reviews are always `COMMENTED`,
    so it can never block a merge. **Copilot's wait is BOUNDED, not unconditional**
-   (operator-approved 2026-07-27): if it has not reviewed the head within the gate's
-   grace window (`COPILOT_GRACE_MIN`, 20 min from the server-timestamped observed
-   marker), the gate proceeds to Greptile without it — a repo-wide Copilot outage
-   deadlocked every PR on 2026-07-27, including the PR carrying this fix.
+   (operator-approved 2026-07-27): the gate summons Copilot once per head and anchors a
+   server-timestamped summon marker on SUCCESS only; if Copilot has not reviewed within
+   the grace window (reuses `CODEX_GRACE_MIN`, 20 min) and no request is genuinely
+   pending, the gate proceeds to Greptile without it. Motivation: a repo-wide Copilot
+   outage on 2026-07-27 deadlocked every PR — including the PR that carried the fix.
 4. **Batch the fixes.** Collect every finding, fix once, push once. Fix-push-fix-push
    multiplies reviews AND multiplies the chance a fix introduces a new bug — which is
    exactly what happened on #1560.
@@ -168,11 +169,12 @@ files pay twice and then conflict with each other. Combine first.
 - **Before opening a PR, check for an open one over the same files.** If it exists, add to that
   branch or wait for it to land. `pr-hygiene.yml` posts an overlap notice automatically, but
   the cheaper move is not creating the second PR at all.
-- **A merge queue would remove this churn entirely** — it tests against the latest `main`
-  without the author updating the branch. Prepared but NOT enabled: `validate.yml` already
-  triggers on `merge_group`, and one decision is open (GitGuardian's App check cannot report
-  on `merge_group`). Plan, blockers and the exact settings:
-  [`docs/knowledge/merge-queue-switch.md`](docs/knowledge/merge-queue-switch.md).
+- **A merge queue is NOT AVAILABLE to this repo** (resolved 2026-07-27): GitHub gates merge
+  queues to organization-owned repositories and this repo is personal — no setting we
+  control changes that. The churn answer remains serialisation (below). The useful piece
+  shipped anyway: the required secret check is now the first-party `secret-scan` job, so a
+  GitGuardian App outage can no longer freeze `main`. Analysis, org-transfer trade-offs and
+  rollback: [`docs/knowledge/merge-queue-switch.md`](docs/knowledge/merge-queue-switch.md).
 - **Serialise.** Keep one or two PRs in flight. With `strict: true` every merge pushes the
   others behind, and each branch update triggers a fresh review — the measured 3.6 reviews/PR
   in July was this, not oversized changes.

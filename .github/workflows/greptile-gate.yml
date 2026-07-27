@@ -76,16 +76,12 @@ jobs:
             const CHECK_DONE = ['success', 'neutral', 'skipped'];
             const COPILOT = 'copilot-pull-request-reviewer';
             const CODEX = 'chatgpt-codex-connector';
-            // Codex auto-runs on every push (no summon needed). It is WAITED FOR with a
-            // bound, anchored to head-commit age: not waiting lets Greptile run
-            // concurrently and a Codex finding lands after the credit is spent, while an
-            // unbounded wait deadlocks on a silent Codex. Bounded satisfies both.
+            // Codex is summoned and WAITED FOR, but with a bound. Requiring it outright
+            // would stall the routine tier (AGENTS.md: local review + Copilot); not waiting
+            // at all lets Greptile run concurrently with it, so a Codex finding lands after
+            // the credit is already spent. A bounded wait satisfies both: Greptile really is
+            // last when Codex participates, and an absent Codex cannot deadlock the gate.
             const CODEX_GRACE_MIN = 20;
-            // Copilot gets the SAME bounded-wait treatment. It previously had none, so
-            // an unresponsive Copilot held the gate indefinitely — measured 2026-07-27:
-            // two ready PRs sat >40min at copilot=false while every other condition was
-            // green. The clock starts at the summon marker below, exactly like Codex.
-            const COPILOT_GRACE_MIN = 20;
 
             const ok = async (label, fn) => {
               try { return await fn(); }
@@ -180,16 +176,6 @@ jobs:
                                       ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED'].includes(r.state))
                          .map(r => (r.user?.login || '').replace(/\[bot\]$/, ''))
                 );
-                // Newest review activity per login on THIS head, ANY state — dismissed
-                // included. The grace clock ignores observed markers older than this,
-                // so a review-then-dismissal restarts the reviewer's window instead of
-                // inheriting a marker that elapsed while the review stood.
-                const lastReviewAt = {};
-                for (const r of reviews) {
-                  if (r.commit_id !== sha || !r.submitted_at) continue;
-                  const who = (r.user?.login || '').replace(/\[bot\]$/, '');
-                  if (!lastReviewAt[who] || r.submitted_at > lastReviewAt[who]) lastReviewAt[who] = r.submitted_at;
-                }
 
                 // Paginate: `first: 100` silently truncates, and a truncated page reads as
                 // "no unresolved threads".
@@ -208,7 +194,7 @@ jobs:
                   cursor = t.pageInfo.hasNextPage ? t.pageInfo.endCursor : null;
                 } while (cursor);
 
-                return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, lastReviewAt, unresolved };
+                return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, unresolved };
               };
 
               // Refetch BEFORE anything reads a SHA. `pulls.list` was fetched once at the top
@@ -271,13 +257,22 @@ jobs:
               // mergeable_state, which mixes concerns and can be `unknown` while GitHub computes.
               const st = await readConditions(pr.number, sha, baseRef);
               if (!st) { core.info(`PR #${pr.number}: could not read conditions — holding`); continue; }
-              const { upToDate, checksOk, reviewedHead, lastReviewAt, unresolved } = st;
+              const { upToDate, checksOk, reviewedHead, unresolved } = st;
 
               // Summon what we wait for; both are manual-trigger only.
+              // Copilot's marker is computed BEFORE the summon so the summon can be
+              // gated on its absence — the same only-once-per-head rule codex has.
+              // Without that gate, every sweep posted a fresh marker and the newest-
+              // marker rule reset the grace clock forever (Bugbot, High): the exact
+              // unbounded wait the grace was added to remove, rebuilt one commit later.
+              const copilotMark = `<!-- greptile-gate:copilot:${sha} -->`;
+              const copilotSummons = comments.filter(c => c.body?.includes(copilotMark) && trusted(c))
+                                             .sort(byCreated);
+              const copilotSummon = copilotSummons.length ? copilotSummons[copilotSummons.length - 1] : undefined;
               const requested = new Set((prFull.requested_reviewers || [])
                 .map(r => (r.login || '').replace(/\[bot\]$/, '').toLowerCase()));
               const copilotPending = requested.has('copilot') || requested.has(COPILOT);
-              if (!reviewedHead.has(COPILOT) && !copilotPending) {
+              if (!reviewedHead.has(COPILOT) && !copilotPending && !copilotSummon) {
                 // REST requestReviewers returns 200 and silently does NOTHING for Copilot
                 // — verified: requested_reviewers stayed empty afterwards. Copilot is a Bot
                 // node, so it must go through GraphQL requestReviews(botIds:). `userIds:`
@@ -287,6 +282,16 @@ jobs:
                 // not discoverable from this PR when Copilot is absent, which is exactly when
                 // we need it — so it is pinned. If GitHub ever changes it the mutation fails
                 // and the warning below names the cause rather than silently never summoning.
+                // SUMMON FIRST, marker only on SUCCESS (Greptile P1, twice): a grace
+                // anchor must attest that the summon actually happened — a marker that
+                // outlives a failed mutation (or a failed cleanup of one) eventually
+                // authorises handoff for a reviewer nobody requested. With the marker
+                // gated on mutation success, that class is closed outright. The chosen
+                // residual runs the SAFE direction: if the marker post chronically
+                // fails, each sweep re-summons (idempotent — GitHub drops or dedups
+                // the request) and the PR HOLDS, loudly, until a marker sticks. The
+                // !copilotSummon gate above still prevents the clock-reset loop: a
+                // marker is only ever posted while none exists for this head.
                 const COPILOT_BOT_ID = 'BOT_kgDOCnlnWA';
                 const r = await ok(`PR #${pr.number} request Copilot`, async () => {
                   const q = await github.graphql(`
@@ -299,77 +304,71 @@ jobs:
                         pullRequest{ number } } }`,
                     { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
                 });
-                if (r) core.info(`PR #${pr.number}: requested Copilot`);
-                else core.warning(`PR #${pr.number}: could NOT request Copilot — holding until it reviews or the grace elapses`);
+                if (r) {
+                  core.info(`PR #${pr.number}: requested Copilot`);
+                  const marker = await ok(`PR #${pr.number} copilot marker`, () =>
+                    github.rest.issues.createComment({
+                      ...base, issue_number: pr.number,
+                      body: `Requested Copilot review.\n${copilotMark}`,
+                    }));
+                  if (!marker) core.warning(`PR #${pr.number}: copilot marker failed — will re-summon next sweep until one sticks (holds, never hands off unasked)`);
+                } else {
+                  core.warning(`PR #${pr.number}: could NOT request Copilot — no marker posted, no grace starts; retrying next sweep`);
+                }
               }
 
-              // Trusted grace anchors: PER-REVIEWER marker comments this workflow
-              // posts the first time it observes THAT reviewer missing on this head.
-              // created_at is GITHUB-SERVER time — unlike the head commit's committer
-              // date, which is contributor-controlled and would let a backdated commit
-              // skip the grace instantly (or a future-dated one wait forever). Same
-              // bot-only trust rule as the handoff marker. Per-reviewer (not shared)
-              // so a reviewer's clock only starts once that reviewer is actually
-              // missing — e.g. a prompt Copilot review later dismissed starts a FRESH
-              // Copilot clock rather than inheriting one elapsed while only Codex
-              // was absent.
-              const observedMarkFor = (key) => `<!-- greptile-gate:observed:${key}:${sha} -->`;
-              // Markers older than the reviewer's newest review activity on this head
-              // (ANY state — dismissal included) are dead: the reviewer stopped being
-              // missing after them, so a later dismissal must start a FRESH bounded
-              // window, not inherit a clock that elapsed while the review stood.
-              // Parameterised on the review-state it is judged against: the
-              // revalidation reads pass THEIR lastReviewAt, so a review that was
-              // submitted and dismissed between reads floors out the old marker
-              // and restarts the window — a grace flag frozen from the first
-              // read is exactly the enumerate-in-two-places bug this file keeps
-              // relearning.
-              const latestObservedWith = (key, lra) => {
-                const mk = observedMarkFor(key);
-                const floor = lra[key === 'copilot' ? COPILOT : CODEX];
-                const ms = comments.filter(c => c.body?.includes(mk) && trusted(c)
-                                                && (!floor || c.created_at > floor)).sort(byCreated);
-                return ms.length ? ms[ms.length - 1] : undefined;
-              };
-              const latestObserved = (key) => latestObservedWith(key, lastReviewAt);
-              const needMark = [];
-              if (!reviewedHead.has(COPILOT) && !latestObserved('copilot')) needMark.push('copilot');
-              if (!reviewedHead.has(CODEX) && !latestObserved('codex')) needMark.push('codex');
-              let postedObserved;
-              if (needMark.length) {
-                const m = await ok(`PR #${pr.number} observed marker`, () =>
+              const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
+              // Same trust rule: a forged summon marker would suppress the real one and,
+              // once its timestamp aged past the grace, wave Greptile through early.
+              // NEWEST, not first. `find` returns the OLDEST match, so after a re-summon
+              // (or a retry following a failed label) a stale marker would set the grace
+              // clock and could read as elapsed while the latest @codex review is still
+              // inside its window. The handoff marker already takes the last match; these
+              // two must agree.
+              const codexSummons = comments.filter(c => c.body?.includes(codexMark) && trusted(c))
+                                            .sort(byCreated);
+              const codexSummon = codexSummons.length ? codexSummons[codexSummons.length - 1] : undefined;
+              if (!reviewedHead.has(CODEX) && !codexSummon) {
+                // Wrapped: an advisory summon must never abort the sweep for other PRs.
+                const r = await ok(`PR #${pr.number} summon Codex`, () =>
                   github.rest.issues.createComment({
-                    ...base, issue_number: pr.number,
-                    body: `Waiting for ${needMark.join(' + ')} review on \`${sha.slice(0, 8)}\` (bounded).\n`
-                      + needMark.map(observedMarkFor).join('\n'),
+                    ...base, issue_number: pr.number, body: `@codex review\n${codexMark}`,
                   }));
-                if (m) postedObserved = m.data;
+                if (r) core.info(`PR #${pr.number}: summoned Codex`);
               }
-              const graceMinutesWith = (key, lra) => {
-                const o = latestObservedWith(key, lra)
-                  ?? (postedObserved?.body?.includes(observedMarkFor(key)) ? postedObserved : undefined);
-                return o ? (Date.now() - new Date(o.created_at)) / 60000 : 0;
-              };
-              const graceMinutesFor = (key) => graceMinutesWith(key, lastReviewAt);
 
-              // Codex runs AUTOMATICALLY on every push (operator config, 2026-07-27) —
-              // the gate no longer summons it (the old `@codex review` comment would now
-              // trigger a second billed run per head). Its bounded wait anchors to the
-              // shared observed marker above — server-timestamped, not the contributor-
-              // controlled commit date.
-              const codexPasses = (rh, lra) =>
-                rh.has(CODEX) || graceMinutesWith('codex', lra ?? lastReviewAt) >= CODEX_GRACE_MIN;
-              const codexOk = codexPasses(reviewedHead, lastReviewAt);
+              // Bounded wait for Codex: hold until it reviews this head, or until the grace
+              // period since we summoned has elapsed. Expressed as a function of a
+              // reviewedHead SET so the revalidation below can re-derive it from fresh data
+              // instead of reusing a frozen verdict — see the note at the revalidation.
+              const graceElapsed = codexSummon
+                ? (Date.now() - new Date(codexSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
+                : false;
+              const codexPasses = (rh) => rh.has(CODEX) || graceElapsed;
+              const codexOk = codexPasses(reviewedHead);
+
+              // Copilot gets the SAME bounded grace, for a failure mode observed live
+              // (#1573, 2026-07-27): after Copilot has reviewed earlier heads of a PR,
+              // GitHub silently drops further re-requests — the mutation succeeds,
+              // requested_reviewers stays empty, no review ever arrives — and a
+              // graceless required reviewer is an unbounded wait. Same trust rule,
+              // same newest-marker rule as codex.
+              const copilotGraceElapsed = copilotSummon
+                ? (Date.now() - new Date(copilotSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
+                : false;
+              // A GENUINELY pending request (visible in requested_reviewers — rare,
+              // since GitHub usually drops it, which is the whole story here) means
+              // Copilot is actually coming: hold for it rather than waving the grace
+              // through (Codex P2). The grace covers the silent-drop case only.
+              const copilotPasses = (rh) => rh.has(COPILOT) || (copilotGraceElapsed && !copilotPending);
+              if (copilotPasses(reviewedHead) && !reviewedHead.has(COPILOT)) {
+                core.info(`PR #${pr.number}: Copilot grace elapsed — proceeding`);
+              }
               if (codexOk && !reviewedHead.has(CODEX)) {
                 core.info(`PR #${pr.number}: Codex grace elapsed — proceeding`);
               }
 
-              const copilotPasses = (rh, lra) =>
-                rh.has(COPILOT) || graceMinutesWith('copilot', lra ?? lastReviewAt) >= COPILOT_GRACE_MIN;
-              const copilotOk = copilotPasses(reviewedHead, lastReviewAt);
-              if (copilotOk && !reviewedHead.has(COPILOT)) {
-                core.info(`PR #${pr.number}: Copilot grace elapsed — proceeding`);
-              }
+              const copilotOk = copilotPasses(reviewedHead);
               const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
 
               if (alreadyHandedOff) {
@@ -390,13 +389,13 @@ jobs:
                 // null blocks LABELLING the asymmetry runs the other way: a false
                 // label spends the review this gate exists to protect.
                 if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
-                const stillOk = now.checksOk && copilotPasses(now.reviewedHead, now.lastReviewAt) &&
-                                codexPasses(now.reviewedHead, now.lastReviewAt) && now.upToDate && now.unresolved === 0;
+                const stillOk = now.checksOk && copilotPasses(now.reviewedHead) &&
+                                codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
                 if (!stillOk) {
                   const r = await ok(`PR #${pr.number} revoke label`, () =>
                     github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
                   if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${now.checksOk} ` +
-                                   `copilot=${copilotPasses(now.reviewedHead, now.lastReviewAt)} codex=${codexPasses(now.reviewedHead, now.lastReviewAt)} ` +
+                                   `copilot=${copilotPasses(now.reviewedHead)} codex=${codexPasses(now.reviewedHead)} ` +
                                    `upToDate=${now.upToDate} unresolved=${now.unresolved}) — label revoked`);
                 }
                 continue;
@@ -419,12 +418,11 @@ jobs:
               // codexOk on the claim that it only moves false->true for a fixed head. That
               // claim is false: a review can be DISMISSED, which drops it back out of the
               // submitted-review set. No condition here gets to be special.
-              const codexOk2 = codexPasses(st2.reviewedHead, st2.lastReviewAt);
-              const copilotOk2 = copilotPasses(st2.reviewedHead, st2.lastReviewAt);
-              if (!(st2.checksOk && copilotOk2 && codexOk2 &&
+              const codexOk2 = codexPasses(st2.reviewedHead);
+              if (!(st2.checksOk && copilotPasses(st2.reviewedHead) && codexOk2 &&
                     st2.upToDate && st2.unresolved === 0)) {
                 core.info(`PR #${pr.number}: conditions changed during the sweep ` +
-                          `(checks=${st2.checksOk} copilot=${copilotOk2} ` +
+                          `(checks=${st2.checksOk} copilot=${copilotPasses(st2.reviewedHead)} ` +
                           `codex=${codexOk2} upToDate=${st2.upToDate} unresolved=${st2.unresolved}) — skipping this pass`);
                 continue;
               }

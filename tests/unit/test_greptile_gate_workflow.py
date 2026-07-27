@@ -67,7 +67,7 @@ HARNESS = textwrap.dedent(
 
     let checkReads = 0;
     let getReads = 0;
-    const calls = { addLabels: 0, removeLabel: 0, comments: [] };
+    const calls = { addLabels: 0, removeLabel: 0, comments: [], deleted: [] };
     // OPTS.staleListSha simulates the head moving between the sweep's opening
     // `pulls.list` and this PR being processed: the list is stale, `pulls.get` is current.
     const LIST_SHA = OPTS.staleListSha ? 'b'.repeat(40) : SHA;
@@ -75,29 +75,20 @@ HARNESS = textwrap.dedent(
                  labels: OPTS.labels || [], draft: false };
 
     let reviewReads = 0;
-    const asReview = (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l },
-                               submitted_at: '2026-07-27T00:30:00Z' });
+    const asReview = (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l } });
     // OPTS.dismissMidSweep: a login present on the first read and gone on the second —
     // what a DISMISSED review looks like, since DISMISSED is not a submitted state.
-    // OPTS.dismissedReviews: [{login, at}] — a review that WAS submitted on this head
-    // and has since been dismissed; it stays in the list with state DISMISSED.
     const listReviews = () => {
       reviewReads += 1;
       const ls = (OPTS.reviewers || []).filter(
         (l) => !(OPTS.dismissMidSweep === l && reviewReads >= 2));
-      return ls.map(asReview).concat((OPTS.dismissedReviews || []).map((d) => ({
-        commit_id: SHA, state: 'DISMISSED', user: { login: d.login }, submitted_at: d.at })))
-      // OPTS.lateDismissed: review activity that happens BETWEEN the initial read
-      // and the revalidation — submitted and dismissed mid-sweep, so it shows up
-      // only on the second read, as a DISMISSED entry with a fresh timestamp.
-      .concat((reviewReads >= 2 && OPTS.lateDismissed) ? [{
-        commit_id: SHA, state: 'DISMISSED', user: { login: OPTS.lateDismissed.login },
-        submitted_at: OPTS.lateDismissed.at }] : []);
+      return ls.map(asReview);
     };
 
     const github = {
       paginate: async (fn, o) => fn(o),
       graphql: async (q) => {
+        if (OPTS.copilotSummonFails && q.includes('requestReviews')) throw new Error('mutation failed');
         if (q.includes('reviewThreads')) return { repository: { pullRequest: { reviewThreads: {
           pageInfo: { hasNextPage: false, endCursor: null },
           nodes: (OPTS.unresolved ? [{ isResolved: false }] : []) } } } };
@@ -139,16 +130,21 @@ HARNESS = textwrap.dedent(
         issues: {
           // OPTS.markerSha: a prior handoff marker from THIS workflow's bot, pinning
           // the label to that SHA. Trust is bot-only, so the author must match exactly.
-          listComments: async () => ((OPTS.observedMarks || []).map((c) => ({
+          listComments: async () => ((OPTS.codexSummons || []).map((c) => ({
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: c.at,
-            body: `waiting\n<!-- greptile-gate:observed:${c.who || 'codex'}:${c.sha || 'a'.repeat(40)} -->`,
-          })).concat(OPTS.markerSha ? [{
+            body: `@codex review\n<!-- greptile-gate:codex:${c.sha || 'a'.repeat(40)} -->`,
+          })).concat((OPTS.copilotSummons || []).map((c) => ({
+            user: { login: 'github-actions[bot]', type: 'Bot' },
+            created_at: c.at,
+            body: `Requested Copilot review.\n<!-- greptile-gate:copilot:${c.sha || 'a'.repeat(40)} -->`,
+          }))).concat(OPTS.markerSha ? [{
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: '2026-07-27T00:00:00Z',
             body: `handoff\n<!-- greptile-gate:labelled:${OPTS.markerSha} -->`,
           }] : [])),
-          createComment: async (o) => { calls.comments.push(o.body); return {}; },
+          createComment: async (o) => { calls.comments.push(o.body); return { data: { id: 777 } }; },
+          deleteComment: async (o) => { calls.deleted.push(o.comment_id); return {}; },
           addLabels: async () => { calls.addLabels += 1; return {}; },
           removeLabel: async () => { calls.removeLabel += 1; return {}; },
         },
@@ -224,9 +220,37 @@ def test_unresolved_thread_holds(tmp_path):
 
 
 def test_missing_copilot_review_holds_and_summons(tmp_path):
-    """Copilot has not reviewed this head: hold, and actually request it."""
+    """Copilot has not reviewed this head and no summon marker is aged: hold."""
     r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"])
     assert r["addLabels"] == 0, r["log"]
+    # the summon posts a timestamp marker so the grace has an anchor
+    assert any("greptile-gate:copilot:" in c for c in r["comments"]), r["comments"]
+
+
+def test_copilot_summon_happens_once_per_head(tmp_path):
+    """A fresh summon marker must SUPPRESS further summons — every sweep posting a
+    new marker resets the newest-marker grace clock forever (Bugbot, High): the
+    exact unbounded wait the grace was added to remove, rebuilt one commit later.
+    With a fresh marker present, the sweep must post NO new copilot marker."""
+    r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"],
+             copilotSummons=[{"at": "2099-01-01T00:00:00Z"}])
+    assert r["addLabels"] == 0, r["log"]
+    new_marks = [c for c in r["comments"] if "greptile-gate:copilot:" in c]
+    assert new_marks == [], f"sweep must not re-post the copilot marker: {new_marks}"
+
+
+def test_copilot_grace_elapses_like_codex(tmp_path):
+    """Observed live (#1573): GitHub silently drops Copilot re-requests once it
+    has reviewed earlier heads — the mutation succeeds, requested_reviewers stays
+    empty, the review never comes. A graceless required reviewer is an unbounded
+    wait, so an aged summon marker passes Copilot exactly like Codex's grace."""
+    r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"],
+             copilotSummons=[{"at": "2020-01-01T00:00:00Z"}])
+    assert r["addLabels"] == 1, r["log"]
+    # and a FRESH summon does not pass it
+    r2 = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"],
+              copilotSummons=[{"at": "2099-01-01T00:00:00Z"}])
+    assert r2["addLabels"] == 0, r2["log"]
 
 
 def test_head_moving_mid_sweep_uses_the_authoritative_sha(tmp_path):
@@ -291,52 +315,18 @@ def test_head_moving_in_the_final_window_is_not_labelled(tmp_path):
     assert any("head moved during the sweep" in m for m in r["log"]), r["log"]
 
 
-def test_grace_clock_uses_the_newest_observed_marker(tmp_path):
-    """The grace must key off the NEWEST observed marker, not the oldest.
+def test_grace_clock_uses_the_newest_codex_summon(tmp_path):
+    """`find` returns the OLDEST match — the grace must key off the NEWEST.
 
-    Two trusted observed markers for codex on the same head: one long past the
-    grace, one just posted. Taking the older one makes the grace read as elapsed
-    and waves the PR through while the latest window is still open. Codex has
-    NOT reviewed here, so the only thing that could pass it is the grace.
+    Two trusted summon markers on the same head: one long past the 20-minute grace,
+    one just posted. Taking the older one makes the grace read as elapsed and waves
+    the PR through while the latest @codex review is still inside its window. Codex
+    has NOT reviewed here, so the only thing that could pass it is the grace.
     """
     r = _run(
         tmp_path, _script(),
         reviewers=["copilot-pull-request-reviewer[bot]"],
-        observedMarks=[{"at": "2020-01-01T00:00:00Z"}, {"at": "2099-01-01T00:00:00Z"}],
-    )
-    assert r["addLabels"] == 0, r["log"]
-
-
-def test_grace_clocks_are_per_reviewer(tmp_path):
-    """One reviewer's elapsed clock must not elapse the OTHER reviewer's.
-
-    Codex's observed marker is ancient (its grace long elapsed) but Copilot —
-    also missing — has only a fresh marker. A shared clock would inherit codex's
-    elapsed grace and hand off before Copilot's own window ever ran.
-    """
-    r = _run(
-        tmp_path, _script(),
-        reviewers=[],
-        observedMarks=[
-            {"at": "2020-01-01T00:00:00Z", "who": "codex"},
-            {"at": "2099-01-01T00:00:00Z", "who": "copilot"},
-        ],
-    )
-    assert r["addLabels"] == 0, r["log"]
-
-
-def test_dismissal_restarts_the_grace_clock(tmp_path):
-    """A marker that elapsed WHILE the review stood must not pass a dismissed reviewer.
-
-    Codex was missing early (ancient marker), then reviewed, then that review was
-    dismissed. The old marker predates the review — inheriting it hands off
-    immediately after dismissal instead of granting a fresh bounded window.
-    """
-    r = _run(
-        tmp_path, _script(),
-        reviewers=["copilot-pull-request-reviewer[bot]"],
-        observedMarks=[{"at": "2020-01-01T00:00:00Z", "who": "codex"}],
-        dismissedReviews=[{"login": "chatgpt-codex-connector[bot]", "at": "2026-07-27T00:30:00Z"}],
+        codexSummons=[{"at": "2020-01-01T00:00:00Z"}, {"at": "2099-01-01T00:00:00Z"}],
     )
     assert r["addLabels"] == 0, r["log"]
 
@@ -375,36 +365,13 @@ def test_pr_turned_draft_during_the_sweep_is_not_labelled(tmp_path):
     assert any("became a draft" in m for m in r["log"]), r["log"]
 
 
-def test_review_dismissed_between_reads_restarts_an_elapsed_grace(tmp_path):
-    """Grace must be recomputed from the FINAL read's review activity.
-
-    Codex's observed marker is ancient (grace long elapsed) and Codex has not
-    reviewed — so the initial pass qualifies via grace. Between the reads, Codex
-    submits and is dismissed: the final read's lastReviewAt is newer than the
-    marker, which floors it out and must restart the bounded window. A grace
-    flag frozen from the initial read labels anyway — the enumerate-in-two-
-    places bug, this time in time rather than in conditions.
-    """
-    r = _run(
-        tmp_path, _script(),
-        reviewers=["copilot-pull-request-reviewer[bot]"],
-        observedMarks=[{"at": "2020-01-01T00:00:00Z", "who": "codex"}],
-        lateDismissed={"login": "chatgpt-codex-connector[bot]",
-                        "at": "2026-07-27T01:00:00Z"},
-    )
+def test_failed_copilot_summon_leaves_no_grace_anchor(tmp_path):
+    """Greptile P1, both rounds: the grace anchor must ATTEST a successful
+    summon. A failed mutation now posts no marker at all — no anchor, no grace,
+    the PR holds and the next sweep retries. Copilot can never pass the gate
+    via the grace without having actually been requested."""
+    r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"],
+             copilotSummonFails=True)
     assert r["addLabels"] == 0, r["log"]
-
-
-def test_copilot_grace_expiry_hands_off(tmp_path):
-    """The feature's SUCCESS path: Codex reviewed, Copilot absent, Copilot's
-    trusted observed marker older than the grace — the gate must hand off.
-    Every other new case proves a hold; without this one, replacing the grace
-    with `false` (feature deleted) would pass the whole suite.
-    """
-    r = _run(
-        tmp_path, _script(),
-        reviewers=["chatgpt-codex-connector[bot]"],
-        observedMarks=[{"at": "2020-01-01T00:00:00Z", "who": "copilot"}],
-    )
-    assert r["addLabels"] == 1, r["log"]
-    assert any("Copilot grace elapsed" in m for m in r["log"]), r["log"]
+    posted = [c for c in r["comments"] if "greptile-gate:copilot:" in c]
+    assert posted == [], f"failed mutation must post NO marker: {posted}"
