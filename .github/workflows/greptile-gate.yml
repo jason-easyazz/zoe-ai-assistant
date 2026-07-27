@@ -97,10 +97,13 @@ jobs:
               // handoff — making the gate believe a PR was already cleared, or pinning it to
               // a SHA of their choosing. Only markers written by this workflow's own bot,
               // by an account with write access, count.
-              const TRUSTED_ASSOC = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+              // ONLY this workflow's own bot. author_association was tried and is wrong:
+              // MEMBER and COLLABORATOR do not imply write permission, so an org member
+              // with read-only access could forge a handoff marker. There is no legitimate
+              // case for a human-authored marker either — the workflow is the only thing
+              // that writes them — so the narrowest possible rule is also the correct one.
               const trusted = (c) =>
-                (c.user?.login === 'github-actions[bot]' && c.user?.type === 'Bot') ||
-                TRUSTED_ASSOC.includes(c.author_association);
+                c.user?.login === 'github-actions[bot]' && c.user?.type === 'Bot';
               const marks = comments.filter(c => c.body?.includes(MARK) && trusted(c));
               const labelledSha = marks.length
                 ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
