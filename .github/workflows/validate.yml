@@ -90,8 +90,13 @@ jobs:
       # failure does not even fail a required check, so this is the only gate.
       - name: Workflow lint (actionlint — a workflow that cannot parse cannot gate)
         run: |
-          curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz \
-            | tar xz actionlint
+          # Pinned sha256 from the release's checksums.txt — verify BEFORE anything
+          # executes or extracts, so neither a compromised nor a truncated artifact
+          # gets run (Copilot flagged the unverified curl|tar).
+          curl -sSfL -o /tmp/actionlint.tgz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  /tmp/actionlint.tgz" | sha256sum -c -
+          tar xzf /tmp/actionlint.tgz actionlint
           # -shellcheck= (empty) disables the embedded-shell lint: deploy.yml has
           # pre-existing SC2155 warnings that are style, not parse failures. This
           # step exists to catch workflows GitHub itself cannot parse — keep it
