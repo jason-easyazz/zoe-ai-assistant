@@ -225,6 +225,18 @@ def test_missing_copilot_review_holds_and_summons(tmp_path):
     assert any("greptile-gate:copilot:" in c for c in r["comments"]), r["comments"]
 
 
+def test_copilot_summon_happens_once_per_head(tmp_path):
+    """A fresh summon marker must SUPPRESS further summons — every sweep posting a
+    new marker resets the newest-marker grace clock forever (Bugbot, High): the
+    exact unbounded wait the grace was added to remove, rebuilt one commit later.
+    With a fresh marker present, the sweep must post NO new copilot marker."""
+    r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"],
+             copilotSummons=[{"at": "2099-01-01T00:00:00Z"}])
+    assert r["addLabels"] == 0, r["log"]
+    new_marks = [c for c in r["comments"] if "greptile-gate:copilot:" in c]
+    assert new_marks == [], f"sweep must not re-post the copilot marker: {new_marks}"
+
+
 def test_copilot_grace_elapses_like_codex(tmp_path):
     """Observed live (#1573): GitHub silently drops Copilot re-requests once it
     has reviewed earlier heads — the mutation succeeds, requested_reviewers stays

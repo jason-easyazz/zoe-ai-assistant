@@ -260,10 +260,19 @@ jobs:
               const { upToDate, checksOk, reviewedHead, unresolved } = st;
 
               // Summon what we wait for; both are manual-trigger only.
+              // Copilot's marker is computed BEFORE the summon so the summon can be
+              // gated on its absence — the same only-once-per-head rule codex has.
+              // Without that gate, every sweep posted a fresh marker and the newest-
+              // marker rule reset the grace clock forever (Bugbot, High): the exact
+              // unbounded wait the grace was added to remove, rebuilt one commit later.
+              const copilotMark = `<!-- greptile-gate:copilot:${sha} -->`;
+              const copilotSummons = comments.filter(c => c.body?.includes(copilotMark) && trusted(c))
+                                             .sort(byCreated);
+              const copilotSummon = copilotSummons.length ? copilotSummons[copilotSummons.length - 1] : undefined;
               const requested = new Set((prFull.requested_reviewers || [])
                 .map(r => (r.login || '').replace(/\[bot\]$/, '').toLowerCase()));
               const copilotPending = requested.has('copilot') || requested.has(COPILOT);
-              if (!reviewedHead.has(COPILOT) && !copilotPending) {
+              if (!reviewedHead.has(COPILOT) && !copilotPending && !copilotSummon) {
                 // REST requestReviewers returns 200 and silently does NOTHING for Copilot
                 // — verified: requested_reviewers stayed empty afterwards. Copilot is a Bot
                 // node, so it must go through GraphQL requestReviews(botIds:). `userIds:`
@@ -287,15 +296,11 @@ jobs:
                 });
                 if (r) {
                   core.info(`PR #${pr.number}: requested Copilot`);
-                  // Timestamp anchor for the Copilot grace below — same pattern as
-                  // codexMark. The mutation alone leaves no visible trace when GitHub
-                  // quietly drops a re-request (observed on #1573: three "successful"
-                  // summons, requested_reviewers stayed empty, Copilot never returned
-                  // to a head it had reviewed predecessors of).
+                  // Timestamp anchor for the Copilot grace — posted ONCE per head.
                   await ok(`PR #${pr.number} copilot marker`, () =>
                     github.rest.issues.createComment({
                       ...base, issue_number: pr.number,
-                      body: `Requested Copilot review.\n<!-- greptile-gate:copilot:${sha} -->`,
+                      body: `Requested Copilot review.\n${copilotMark}`,
                     }));
                 }
                 else core.warning(`PR #${pr.number}: could NOT request Copilot — the gate will hold until it reviews or the grace elapses`);
@@ -337,10 +342,6 @@ jobs:
               // requested_reviewers stays empty, no review ever arrives — and a
               // graceless required reviewer is an unbounded wait. Same trust rule,
               // same newest-marker rule as codex.
-              const copilotMark = `<!-- greptile-gate:copilot:${sha} -->`;
-              const copilotSummons = comments.filter(c => c.body?.includes(copilotMark) && trusted(c))
-                                             .sort(byCreated);
-              const copilotSummon = copilotSummons.length ? copilotSummons[copilotSummons.length - 1] : undefined;
               const copilotGraceElapsed = copilotSummon
                 ? (Date.now() - new Date(copilotSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
                 : false;
