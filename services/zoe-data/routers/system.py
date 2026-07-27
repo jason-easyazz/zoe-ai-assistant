@@ -2063,12 +2063,25 @@ async def evolution_proposal_action(
                 except Exception as exc:
                     logger.warning("Could not sync Multica for proposal %s: %s", proposal_id, exc)
 
-            await db.execute(
-                """UPDATE evolution_proposals
-                   SET status='approved', reviewed_at=$1, multica_issue_id=$2
-                   WHERE id=$3""",
-                _time.time(), multica_issue_id, proposal_id,
-            )
+            if _allowed:
+                # Auto-exec path: do NOT re-write the prior multica_issue_id here —
+                # it is a REST display/phantom id about to be superseded. The
+                # bridge's link update below is the sole writer of the board issue
+                # id, so a link failure leaves the ORIGINAL value (flagged via
+                # dispatch.warning) instead of a freshly-written stale one.
+                await db.execute(
+                    """UPDATE evolution_proposals
+                       SET status='approved', reviewed_at=$1
+                       WHERE id=$2""",
+                    _time.time(), proposal_id,
+                )
+            else:
+                await db.execute(
+                    """UPDATE evolution_proposals
+                       SET status='approved', reviewed_at=$1, multica_issue_id=$2
+                       WHERE id=$3""",
+                    _time.time(), multica_issue_id, proposal_id,
+                )
             # Hermes PROPOSAL pre-review gate — REVIEW-ONLY proposals only.
             # An auto-executing proposal is skipped here: it is already authorized
             # (admin + execution gate) and the CODE it produces is reviewed
