@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-418 flags; 417 not documented in `.env.example`.
+419 flags; 418 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -67,6 +67,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_CAP_MEMORY_LIST` | `'0'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_MEMORY_LIST_ROWS` | `'25'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_SELF_CAPS` | `'2000'` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_CAP_WEB_BROWSE` | `'6000'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_WEB_RESEARCH` | `'6000'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CHAT_CONTEXT_MAX_SESSIONS` | `'2000'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_CHAT_INJECT_DB_MEMORY` | `'0'` | no | NO | `services/zoe-data/routers/chat.py` |

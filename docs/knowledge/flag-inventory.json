@@ -488,6 +488,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CAP_WEB_BROWSE": {
+        "defaults": [
+          "'6000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_CAP_WEB_RESEARCH": {
         "defaults": [
           "'6000'"

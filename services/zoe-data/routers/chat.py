@@ -1454,7 +1454,7 @@ async def _capture_research_screenshot(
             user_id=user_id,
             session_id=f"chat:{session_id}",
             action_class="read_only_research",
-            requested_surface="openclawLocal",
+            requested_surface="zoeCloak",
         )
         result = await _BROWSER_BROKER.execute(plan)
         image_b64 = str(result.get("image_base64") or "").strip()

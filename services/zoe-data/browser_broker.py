@@ -203,7 +203,12 @@ def build_cloak_executor() -> BrowserExecutor | None:
         try:
             from cloakbrowser import launch_context_async  # type: ignore[import]
             action_log: list[dict] = []
-            url = plan.params.get("url", "")
+            # Accept both spellings: chat research passes "navigate_to",
+            # the MCP browser tool passes "url". Before the OpenClaw surface
+            # was retired these were served by different executors.
+            url = str(plan.params.get("url") or plan.params.get("navigate_to") or "").strip()
+            if not url:
+                return {"ok": False, "error": "no url/navigate_to in plan params"}
             # launch_context_async returns a BrowserContext directly (not an async ctx manager)
             context = await launch_context_async(headless=True)
             try:

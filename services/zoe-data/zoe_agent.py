@@ -637,6 +637,25 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "web_browse",
+            "description": (
+                "Open ONE web page and read its text (~5-10s). Use after web_search when a "
+                "snippet isn't enough and you need what's actually on the page — a price, "
+                "opening hours, an article. Give the full https URL from a search result. "
+                "Do NOT use it to search; use web_search first to find the URL."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full http(s) URL of the page to read"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "deep_web_research",
             "description": (
                 "Thorough multi-source research via a stealth browser (CloakBrowser + Google Maps, ~60s). "
@@ -889,7 +908,7 @@ _SKILL_TOOLS: dict[str, list[str]] = {
 
 # Always included regardless of query. Hermes escalation is added dynamically
 # when healthy; OpenClaw is loaded only for explicit fallback/browser cases.
-_ALWAYS_ON_TOOLS: list[str] = ["web_search", "deep_web_research", "report_issue"]
+_ALWAYS_ON_TOOLS: list[str] = ["web_search", "web_browse", "deep_web_research", "report_issue"]
 
 _SKILL_KEYWORDS: dict[str, list[str]] = {
     "memory": [
@@ -2623,6 +2642,68 @@ async def _cloak_search(query: str, max_results: int = 5, timeout_ms: int = 2000
     return results
 
 
+async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> str:
+    """Zoe-NATIVE page read: open a URL in CloakBrowser and return its text.
+
+    This is the browse tier the Flue brain calls DIRECTLY — no Hermes/OpenClaw
+    escalation. Use it after web_search to actually read a page (prices, opening
+    hours, an article) when a snippet isn't enough.
+
+    SECURITY: the URL is chosen by the MODEL, so it is untrusted input.
+    ``assert_public_url`` enforces http(s) + a publicly-routable address, which
+    stops the model being talked into fetching localhost / link-local / RFC1918
+    (SSRF into Zoe's own services or the house network).
+    """
+    import importlib.util as _ilu
+    import re as _re
+    from html import unescape as _unescape
+
+    raw = (url or "").strip()
+    if not raw:
+        return "No URL provided."
+    if not raw.lower().startswith(("http://", "https://")):
+        return f"Refused to browse {raw[:80]!r}: only http(s) URLs are allowed."
+    try:
+        from agent_safety import assert_public_url
+        assert_public_url(raw)
+    except Exception as exc:  # noqa: BLE001 - blocked target is a normal answer
+        logger.info("web_browse: refused %s (%s)", raw[:80], type(exc).__name__)
+        return f"Refused to browse that URL — it does not resolve to a public address ({exc})."
+
+    if _ilu.find_spec("cloakbrowser") is None:
+        return "Page browsing is unavailable (CloakBrowser is not installed). Try web_search instead."
+
+    from cloakbrowser import launch_context_async  # type: ignore[import]
+
+    try:
+        ctx = await launch_context_async(headless=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("web_browse: could not launch browser: %s", exc)
+        return "Couldn't open a browser to read that page. Try web_search instead."
+    try:
+        page = await ctx.new_page()
+        await page.goto(raw, wait_until="domcontentloaded", timeout=timeout_ms)
+        html = await page.content()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("web_browse: load failed for %s: %s", raw[:80], exc)
+        return f"Couldn't load that page ({type(exc).__name__}). It may be blocked or offline."
+    finally:
+        try:
+            await ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # script/style carry no readable content and would dominate the budget
+    text = _re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", html)
+    text = _re.sub(r"(?s)<[^>]+>", " ", text)
+    text = _unescape(text)
+    text = _re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = _re.sub(r"\n\s*\n+", "\n", text).strip()
+    if not text:
+        return f"Opened {raw} but found no readable text (it may be an app or a PDF)."
+    return f"Page content from {raw}:\n{text}"
+
+
 async def _web_search_ddg(query: str, user_id: str = "") -> str:
     """Fast web search backing the web_search tool.
 
@@ -2698,6 +2779,8 @@ _TOOL_CAPS: dict[str, int] = {
     "ambient_search":      int(os.environ.get("ZOE_CAP_AMBIENT_SEARCH",   "0")),   # handled specially
     # deep_web_research: {"query":..., "raw":<big string>}
     "deep_web_research":   int(os.environ.get("ZOE_CAP_WEB_RESEARCH",    "6000")),
+    # a rendered page can be enormous — cap it like the research tool
+    "web_browse":          int(os.environ.get("ZOE_CAP_WEB_BROWSE",      "6000")),
     # memory_list: {"items":[...], "count":N, "status":...}
     "memory_list":         int(os.environ.get("ZOE_CAP_MEMORY_LIST",      "0")),   # handled specially
     # a2a_delegate: arbitrary peer JSON
@@ -2861,6 +2944,9 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "guest") -> 
 
     if tool_name == "web_search":
         return await _web_search_ddg(args.get("query", ""), user_id=user_id)
+
+    if tool_name == "web_browse":
+        return await _web_browse(args.get("url", ""), user_id=user_id)
 
     if tool_name == "deep_web_research":
         return await _web_research(args.get("query", ""), user_id=user_id)
