@@ -92,16 +92,21 @@ jobs:
                 : null;
 
               if (pr.labels.some(l => l.name === LABEL)) {
-                // No marker means unknown provenance (applied by hand, or the comment was
-                // deleted): remove it so the PR re-qualifies rather than sitting inside
-                // Greptile's filter forever, re-reviewing on every push.
-                if (!labelledSha || labelledSha !== pr.head.sha) {
-                  const r = await ok(`PR #${pr.number} removeLabel`, () =>
-                    github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
-                  if (r) core.info(`PR #${pr.number}: head moved — label removed, must re-qualify`);
-                  else core.warning(`PR #${pr.number}: label could NOT be removed — still inside Greptile's filter`);
+                // Marker matches the head: already handed off, nothing to do.
+                if (labelledSha && labelledSha === pr.head.sha) continue;
+                // Stale or unknown provenance (applied by hand, or the comment was deleted):
+                // strip it so the PR re-qualifies rather than sitting inside Greptile's
+                // filter re-reviewing on every push.
+                const r = await ok(`PR #${pr.number} removeLabel`, () =>
+                  github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
+                if (!r) {
+                  core.warning(`PR #${pr.number}: label could NOT be removed — still inside Greptile's filter`);
+                  continue;
                 }
-                continue;
+                core.info(`PR #${pr.number}: stale label removed — re-qualifying in this same pass`);
+                // Deliberately NO `continue`: fall through and re-evaluate now. Waiting for
+                // the next event would stall a PR that is otherwise ready, and there may not
+                // BE another event.
               }
 
               const prFull = await ok(`PR #${pr.number} get`, () =>
@@ -216,10 +221,38 @@ jobs:
 
               // REVALIDATE the head immediately before acting. `pulls.list` was fetched at the
               // top of the sweep; a push since then would label a head nothing has reviewed.
+              // Revalidate the CONDITIONS, not just the SHA. Threads can be opened and a
+              // branch can fall behind without any push, so an unchanged head is not
+              // evidence that what was true at the top of the sweep is still true.
               const fresh = await ok(`PR #${pr.number} revalidate`, () =>
                 github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
               if (!fresh || fresh.head.sha !== pr.head.sha) {
                 core.info(`PR #${pr.number}: head moved during the sweep — skipping this pass`);
+                continue;
+              }
+              const cmp2 = await ok(`PR #${pr.number} recompare`, () =>
+                github.rest.repos.compareCommits({ ...base, base: pr.base.ref, head: pr.head.sha })
+                  .then(r => r.data));
+              if (!cmp2 || cmp2.behind_by !== 0) {
+                core.info(`PR #${pr.number}: fell behind during the sweep — skipping this pass`);
+                continue;
+              }
+              let late = 0, c2 = null, lateOk = true;
+              do {
+                const q2 = await ok(`PR #${pr.number} rethreads`, () => github.graphql(`
+                  query($owner:String!,$repo:String!,$num:Int!,$cursor:String){
+                    repository(owner:$owner,name:$repo){
+                      pullRequest(number:$num){
+                        reviewThreads(first:100, after:$cursor){
+                          pageInfo{ hasNextPage endCursor } nodes{ isResolved } } } } }`,
+                  { owner: base.owner, repo: base.repo, num: pr.number, cursor: c2 }));
+                if (!q2) { lateOk = false; break; }
+                const t2 = q2.repository.pullRequest.reviewThreads;
+                late += t2.nodes.filter(n => !n.isResolved).length;
+                c2 = t2.pageInfo.hasNextPage ? t2.pageInfo.endCursor : null;
+              } while (c2);
+              if (!lateOk || late > 0) {
+                core.info(`PR #${pr.number}: ${lateOk ? late + ' thread(s) opened during the sweep' : 'could not re-read threads'} — skipping this pass`);
                 continue;
               }
 
