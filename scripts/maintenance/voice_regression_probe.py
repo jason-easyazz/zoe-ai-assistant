@@ -92,9 +92,14 @@ def mem_available_mb() -> int:
 
 
 def _port_open(host: str, port: int, timeout: float = 2.0) -> bool:
-    with socket.socket() as sock:
-        sock.settimeout(timeout)
-        return sock.connect_ex((host, port)) == 0
+    # Fail closed: this runs inside the error path that BUILDS the diagnosis —
+    # a raise here would mask the original failure with a socket traceback.
+    try:
+        with socket.socket() as sock:
+            sock.settimeout(timeout)
+            return sock.connect_ex((host, port)) == 0
+    except OSError:
+        return False
 
 
 def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:

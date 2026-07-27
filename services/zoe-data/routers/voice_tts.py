@@ -2303,9 +2303,14 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
             wav_path = tmp.name
         duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
         t_stt_start = time.monotonic()
+        # Instrument treatment (no broadcasts, no corpus capture) requires BOTH the
+        # replay- prefix AND device-token auth. panel_id is caller-chosen payload,
+        # so on its own it would let any session-authenticated client opt out of
+        # corpus capture by picking a name (Greptile, #1572). The harness
+        # authenticates with the device token, so it satisfies both.
+        is_instrument = _suppress_ui_broadcast(panel_id) and caller.get("source") == "device"
         try:
-            text = await _transcribe_audio(
-                wav_path, capture=not _suppress_ui_broadcast(panel_id))
+            text = await _transcribe_audio(wav_path, capture=not is_instrument)
         finally:
             try:
                 os.unlink(wav_path)
@@ -2327,7 +2332,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
             panel_id, duration_s or 0.0, stt_s, len(stripped),
         )
         # Broadcast the transcribed user text so the UI shows what was heard.
-        if stripped and not _suppress_ui_broadcast(panel_id):
+        if stripped and not is_instrument:
             try:
                 from push import broadcaster
                 await broadcaster.broadcast("all", "voice:transcript", {
@@ -2337,7 +2342,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
             except Exception:
                 pass
         # Broadcast thinking state — STT done, LLM processing next.
-        if not _suppress_ui_broadcast(panel_id):
+        if not is_instrument:
             try:
                 from push import broadcaster
                 await broadcaster.broadcast("all", "voice:thinking", {"panel_id": panel_id})
