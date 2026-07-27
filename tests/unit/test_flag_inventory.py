@@ -132,3 +132,16 @@ def test_committed_inventory_matches_generator_output() -> None:
     regen_hint = "stale inventory — rerun: python3 tools/audit/flag_inventory.py"
     assert flag_inventory.render_markdown(data, m.group(1)) == committed_md, regen_hint
     assert json.dumps(data, indent=2, sort_keys=True) + "\n" == committed_json, regen_hint
+
+
+def test_precommit_regenerates_the_inventory():
+    """The regen hook must stay wired — a stale committed inventory cost six
+    separate incidents (red CI + merge conflicts) in one day before it existed."""
+    import yaml
+
+    cfg = yaml.safe_load((_REPO / ".pre-commit-config.yaml").read_text())
+    local = next(r for r in cfg["repos"] if r["repo"] == "local")
+    hook = next((h for h in local["hooks"] if h["id"] == "zoe-flag-inventory"), None)
+    assert hook is not None, "zoe-flag-inventory hook removed from pre-commit"
+    assert "flag_inventory.py" in hook["entry"]
+    assert ".py" in hook["files"], "hook must fire on Python changes"

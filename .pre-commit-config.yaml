@@ -30,3 +30,16 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # Regenerate the ZOE_* flag inventory whenever Python changes. The
+      # committed inventory is pinned by tests/unit/test_flag_inventory.py, and
+      # a stale copy cost SIX separate incidents on 2026-07-27 alone (red CI on
+      # three PRs, merge conflicts on three more). If this hook rewrites the
+      # inventory, pre-commit reports "files were modified" — `git add` the
+      # regenerated files and commit again; the fix is already on disk.
+      # Conflict rule stays: never hand-merge these files, regenerate them.
+      - id: zoe-flag-inventory
+        name: ZOE_* flag inventory regen
+        entry: python3 tools/audit/flag_inventory.py
+        language: system
+        pass_filenames: false
+        files: '(\.py$|docs/knowledge/flag-inventory\.(md|json)$)' 
