@@ -1379,9 +1379,49 @@
         ],
         "typed_env": false
       },
+      "ZOE_IDLE_CONSOLIDATION_CHECK_S": {
+        "defaults": [
+          "60"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_idle_consolidation.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_IDLE_CONSOLIDATION_ENABLED": {
         "defaults": [
           "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_idle_consolidation.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_IDLE_CONSOLIDATION_IDLE_S": {
+        "defaults": [
+          "180"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_idle_consolidation.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_IDLE_CONSOLIDATION_LOOKBACK_S": {
+        "defaults": [
+          "3600"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_idle_consolidation.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_IDLE_CONSOLIDATION_MIN_TURNS": {
+        "defaults": [
+          "2"
         ],
         "in_env_example": false,
         "readers": [
@@ -3826,6 +3866,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_TTS_KEEP_TAIL_MS": {
+        "defaults": [
+          "130"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TTS_LEAD_GUARD_MS": {
+        "defaults": [
+          "20"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_TTS_MODE": {
         "defaults": [
           "'hybrid'"
@@ -3925,6 +3985,16 @@
       "ZOE_VAD_TAIL_DEEP_PROB": {
         "defaults": [
           "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VAD_TAIL_MS": {
+        "defaults": [
+          "0"
         ],
         "in_env_example": false,
         "readers": [
