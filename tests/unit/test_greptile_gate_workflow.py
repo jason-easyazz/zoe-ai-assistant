@@ -129,10 +129,10 @@ HARNESS = textwrap.dedent(
         issues: {
           // OPTS.markerSha: a prior handoff marker from THIS workflow's bot, pinning
           // the label to that SHA. Trust is bot-only, so the author must match exactly.
-          listComments: async () => ((OPTS.codexSummons || []).map((c) => ({
+          listComments: async () => ((OPTS.observedMarks || []).map((c) => ({
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: c.at,
-            body: `@codex review\n<!-- greptile-gate:codex:${c.sha || 'a'.repeat(40)} -->`,
+            body: `waiting\n<!-- greptile-gate:observed:${c.who || 'codex'}:${c.sha || 'a'.repeat(40)} -->`,
           })).concat(OPTS.markerSha ? [{
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: '2026-07-27T00:00:00Z',
@@ -281,18 +281,36 @@ def test_head_moving_in_the_final_window_is_not_labelled(tmp_path):
     assert any("head moved during the sweep" in m for m in r["log"]), r["log"]
 
 
-def test_grace_clock_uses_the_newest_codex_summon(tmp_path):
-    """`find` returns the OLDEST match — the grace must key off the NEWEST.
+def test_grace_clock_uses_the_newest_observed_marker(tmp_path):
+    """The grace must key off the NEWEST observed marker, not the oldest.
 
-    Two trusted summon markers on the same head: one long past the 20-minute grace,
-    one just posted. Taking the older one makes the grace read as elapsed and waves
-    the PR through while the latest @codex review is still inside its window. Codex
-    has NOT reviewed here, so the only thing that could pass it is the grace.
+    Two trusted observed markers for codex on the same head: one long past the
+    grace, one just posted. Taking the older one makes the grace read as elapsed
+    and waves the PR through while the latest window is still open. Codex has
+    NOT reviewed here, so the only thing that could pass it is the grace.
     """
     r = _run(
         tmp_path, _script(),
         reviewers=["copilot-pull-request-reviewer[bot]"],
-        codexSummons=[{"at": "2020-01-01T00:00:00Z"}, {"at": "2099-01-01T00:00:00Z"}],
+        observedMarks=[{"at": "2020-01-01T00:00:00Z"}, {"at": "2099-01-01T00:00:00Z"}],
+    )
+    assert r["addLabels"] == 0, r["log"]
+
+
+def test_grace_clocks_are_per_reviewer(tmp_path):
+    """One reviewer's elapsed clock must not elapse the OTHER reviewer's.
+
+    Codex's observed marker is ancient (its grace long elapsed) but Copilot —
+    also missing — has only a fresh marker. A shared clock would inherit codex's
+    elapsed grace and hand off before Copilot's own window ever ran.
+    """
+    r = _run(
+        tmp_path, _script(),
+        reviewers=[],
+        observedMarks=[
+            {"at": "2020-01-01T00:00:00Z", "who": "codex"},
+            {"at": "2099-01-01T00:00:00Z", "who": "copilot"},
+        ],
     )
     assert r["addLabels"] == 0, r["log"]
 
