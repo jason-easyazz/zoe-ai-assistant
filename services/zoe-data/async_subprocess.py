@@ -51,10 +51,27 @@ _RUN_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=_RUN_POOL_WIDTH, thread_name_prefix="zoe-async-run"
 )
 
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var without letting a typo kill the service.
+
+    This module is imported during zoe-data startup, so a bare float() here
+    turns a mistyped value into an unhandled ValueError at import — the whole
+    API down because someone wrote `30s`. Fall back loudly instead.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        _log.warning("%s=%r is not a number — using the default %.1f", name, raw, default)
+        return default
+
+
 # Default cap on how long a caller waits for a free _RUN_POOL worker. Bounds the
 # queue explicitly instead of letting the executor absorb it invisibly; callers
 # with their own latency budget pass queue_timeout=.
-_QUEUE_WAIT_S = float(os.environ.get("ZOE_SUBPROCESS_QUEUE_WAIT_S", "30"))
+_QUEUE_WAIT_S = _env_float("ZOE_SUBPROCESS_QUEUE_WAIT_S", 30.0)
 
 # Slack past a child's own timeout before we conclude the WORKER (not the child)
 # is wedged. subprocess.run kills the child at `timeout`, so exceeding this means
@@ -254,7 +271,16 @@ async def run_to_completion(
 
     # _RUN_POOL, NOT _SPAWN_POOL: this worker is held for the child's whole
     # lifetime, so parking it in the small spawn pool would starve new fork+execs.
-    fut = loop.run_in_executor(_RUN_POOL, _blocking_run)
+    #
+    # The permit is already held, so a SYNCHRONOUS failure here (pool shut down
+    # during teardown -> RuntimeError) must hand it back: there is no future to
+    # attach a release callback to, and a stranded permit shrinks pool capacity
+    # for the life of the process.
+    try:
+        fut = loop.run_in_executor(_RUN_POOL, _blocking_run)
+    except BaseException:
+        _RUN_SLOTS.release()
+        raise
     released = False
     try:
         # shield on BOTH paths. Cancelling the caller cancels the Future but not

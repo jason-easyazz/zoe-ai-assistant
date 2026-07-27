@@ -363,3 +363,53 @@ async def test_cancelling_a_no_timeout_call_does_not_return_the_permit_early():
             raise AssertionError("permit never returned after the child exited")
     finally:
         mod._RUN_SLOTS = orig
+
+
+def test_bad_env_value_does_not_crash_the_import():
+    """A mistyped queue-wait env var must not take zoe-data down at startup.
+
+    This module is imported during service startup, so a bare float() turns
+    `ZOE_SUBPROCESS_QUEUE_WAIT_S=30s` into an unhandled ValueError and the whole
+    API fails to boot over a typo.
+    """
+    import async_subprocess as mod
+
+    assert mod._env_float("NOPE_UNSET", 12.5) == 12.5
+    import os as _os
+    _os.environ["ZTEST_QW"] = "30s"          # the typo
+    try:
+        assert mod._env_float("ZTEST_QW", 30.0) == 30.0
+        _os.environ["ZTEST_QW"] = ""          # blank
+        assert mod._env_float("ZTEST_QW", 30.0) == 30.0
+        _os.environ["ZTEST_QW"] = "45"        # a good value still wins
+        assert mod._env_float("ZTEST_QW", 30.0) == 45.0
+    finally:
+        _os.environ.pop("ZTEST_QW", None)
+
+
+@pytest.mark.asyncio
+async def test_permit_returns_if_the_executor_rejects_synchronously(monkeypatch):
+    """A synchronous run_in_executor failure must not strand the permit.
+
+    The permit is acquired BEFORE the submit. If the submit raises (pool shut
+    down during teardown), there is no future to hang a release callback on, so
+    an unguarded path silently shrinks pool capacity for the process's life.
+    """
+    import asyncio
+
+    import async_subprocess as mod
+
+    sem = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(mod, "_RUN_SLOTS", sem)
+
+    loop = asyncio.get_running_loop()
+    def _boom(*a, **k):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+    monkeypatch.setattr(loop, "run_in_executor", _boom)
+
+    with pytest.raises(RuntimeError):
+        await run_to_completion([sys.executable, "-c", "pass"], timeout=5)
+
+    # Capacity must be intact, not permanently reduced.
+    assert sem.acquire(blocking=False), "permit stranded by a synchronous submit failure"
+    sem.release()
