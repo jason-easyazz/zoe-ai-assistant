@@ -75,14 +75,18 @@ HARNESS = textwrap.dedent(
                  labels: OPTS.labels || [], draft: false };
 
     let reviewReads = 0;
-    const asReview = (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l } });
+    const asReview = (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l },
+                               submitted_at: '2026-07-27T00:30:00Z' });
     // OPTS.dismissMidSweep: a login present on the first read and gone on the second —
     // what a DISMISSED review looks like, since DISMISSED is not a submitted state.
+    // OPTS.dismissedReviews: [{login, at}] — a review that WAS submitted on this head
+    // and has since been dismissed; it stays in the list with state DISMISSED.
     const listReviews = () => {
       reviewReads += 1;
       const ls = (OPTS.reviewers || []).filter(
         (l) => !(OPTS.dismissMidSweep === l && reviewReads >= 2));
-      return ls.map(asReview);
+      return ls.map(asReview).concat((OPTS.dismissedReviews || []).map((d) => ({
+        commit_id: SHA, state: 'DISMISSED', user: { login: d.login }, submitted_at: d.at })));
     };
 
     const github = {
@@ -311,6 +315,22 @@ def test_grace_clocks_are_per_reviewer(tmp_path):
             {"at": "2020-01-01T00:00:00Z", "who": "codex"},
             {"at": "2099-01-01T00:00:00Z", "who": "copilot"},
         ],
+    )
+    assert r["addLabels"] == 0, r["log"]
+
+
+def test_dismissal_restarts_the_grace_clock(tmp_path):
+    """A marker that elapsed WHILE the review stood must not pass a dismissed reviewer.
+
+    Codex was missing early (ancient marker), then reviewed, then that review was
+    dismissed. The old marker predates the review — inheriting it hands off
+    immediately after dismissal instead of granting a fresh bounded window.
+    """
+    r = _run(
+        tmp_path, _script(),
+        reviewers=["copilot-pull-request-reviewer[bot]"],
+        observedMarks=[{"at": "2020-01-01T00:00:00Z", "who": "codex"}],
+        dismissedReviews=[{"login": "chatgpt-codex-connector[bot]", "at": "2026-07-27T00:30:00Z"}],
     )
     assert r["addLabels"] == 0, r["log"]
 

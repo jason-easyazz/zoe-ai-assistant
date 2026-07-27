@@ -133,18 +133,23 @@ Re-add `Greptile Review` to the required contexts, set `strict=true`, disable th
 ## 8. Gate self-test — simulated against live PRs before merge
 
 `greptile-gate.yml` was dry-run against the six open PRs by replaying its exact API calls.
-Every one held on `reviewers=false`, and **would have held forever**: Copilot and Codex are
-manual-trigger only, so the gate was waiting for reviews nobody would ever request. The label
-would never have been applied and Greptile never summoned — a silent deadlock, in the very
-component built to prevent one.
+Every one held on `reviewers=false`, and **would have held forever**: at the time, Copilot and
+Codex were manual-trigger only, so the gate was waiting for reviews nobody would ever request.
+The label would never have been applied and Greptile never summoned — a silent deadlock, in the
+very component built to prevent one.
 
-Fixed by making the gate SUMMON what it waits for. The two are requested differently and both
-details are easy to get wrong:
+Fixed by making the gate SUMMON Copilot, and bounding both waits (2026-07-27):
 
 - **Copilot** — `pulls.requestReviewers({ reviewers: ['Copilot'] })`. The `[bot]` login does
   NOT resolve; `copilot-pull-request-reviewer[bot]` fails with "Could not resolve user".
-- **Codex** — an `@codex review` comment, tagged with a hidden per-SHA marker so it is asked
-  once per head rather than on every workflow run.
+  Bounded by `COPILOT_GRACE_MIN` in case the request is dropped.
+- **Codex** — **auto-runs on every push** (operator config, 2026-07-27); the gate does NOT
+  summon it. Do not post `@codex review` manually or restore the old summon — Codex runs are
+  billed, and a summon triggers a second run per head. The gate just waits, bounded by
+  `CODEX_GRACE_MIN`.
+- Both grace clocks anchor to per-reviewer, server-timestamped "observed" marker comments
+  posted by the workflow bot (never the contributor-controlled commit date), and restart if a
+  review on the head is later dismissed.
 
 Labels the Actions depend on (`greptile`, `oversized-ok`) did not exist either and have been
 created; `addLabels` would have auto-created a bare one, but the `oversized-ok` override would

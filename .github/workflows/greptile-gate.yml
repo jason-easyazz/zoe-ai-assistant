@@ -180,6 +180,16 @@ jobs:
                                       ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED'].includes(r.state))
                          .map(r => (r.user?.login || '').replace(/\[bot\]$/, ''))
                 );
+                // Newest review activity per login on THIS head, ANY state — dismissed
+                // included. The grace clock ignores observed markers older than this,
+                // so a review-then-dismissal restarts the reviewer's window instead of
+                // inheriting a marker that elapsed while the review stood.
+                const lastReviewAt = {};
+                for (const r of reviews) {
+                  if (r.commit_id !== sha || !r.submitted_at) continue;
+                  const who = (r.user?.login || '').replace(/\[bot\]$/, '');
+                  if (!lastReviewAt[who] || r.submitted_at > lastReviewAt[who]) lastReviewAt[who] = r.submitted_at;
+                }
 
                 // Paginate: `first: 100` silently truncates, and a truncated page reads as
                 // "no unresolved threads".
@@ -198,7 +208,7 @@ jobs:
                   cursor = t.pageInfo.hasNextPage ? t.pageInfo.endCursor : null;
                 } while (cursor);
 
-                return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, unresolved };
+                return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, lastReviewAt, unresolved };
               };
 
               // Refetch BEFORE anything reads a SHA. `pulls.list` was fetched once at the top
@@ -261,7 +271,7 @@ jobs:
               // mergeable_state, which mixes concerns and can be `unknown` while GitHub computes.
               const st = await readConditions(pr.number, sha, baseRef);
               if (!st) { core.info(`PR #${pr.number}: could not read conditions — holding`); continue; }
-              const { upToDate, checksOk, reviewedHead, unresolved } = st;
+              const { upToDate, checksOk, reviewedHead, lastReviewAt, unresolved } = st;
 
               // Summon what we wait for; both are manual-trigger only.
               const requested = new Set((prFull.requested_reviewers || [])
@@ -304,9 +314,15 @@ jobs:
               // Copilot clock rather than inheriting one elapsed while only Codex
               // was absent.
               const observedMarkFor = (key) => `<!-- greptile-gate:observed:${key}:${sha} -->`;
+              // Markers older than the reviewer's newest review activity on this head
+              // (ANY state — dismissal included) are dead: the reviewer stopped being
+              // missing after them, so a later dismissal must start a FRESH bounded
+              // window, not inherit a clock that elapsed while the review stood.
               const latestObserved = (key) => {
                 const mk = observedMarkFor(key);
-                const ms = comments.filter(c => c.body?.includes(mk) && trusted(c)).sort(byCreated);
+                const floor = lastReviewAt[key === 'copilot' ? COPILOT : CODEX];
+                const ms = comments.filter(c => c.body?.includes(mk) && trusted(c)
+                                                && (!floor || c.created_at > floor)).sort(byCreated);
                 return ms.length ? ms[ms.length - 1] : undefined;
               };
               const needMark = [];
