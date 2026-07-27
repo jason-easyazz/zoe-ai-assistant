@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-07-26T00:00:00Z
+timestamp: 2026-07-27T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-07-26T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-07-26. The table body is deterministic (sorted, no
+Last generated: 2026-07-27. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-417 flags; 417 not documented in `.env.example`.
+418 flags; 418 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -417,11 +417,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_GREETING_STATE_PATH` | `dynamic` | no | NO | `services/zoe-data/voice_greeting.py` |
 | `ZOE_VOICE_IDENT` | `''` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_LOG` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
-| `ZOE_VOICE_PROBE_MIN_MEM_MB` | `'1500'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
+| `ZOE_VOICE_PROBE_MIN_MEM_MB` | `-` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_SAMPLES` | `'20'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_TIMEOUT_S` | `'900'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_USER` | `'jason'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROFILE` | `'zoe_au_natural_v1'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_VOICE_REPLAY_STT` | `'inprocess'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_RESULTS` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |

@@ -150,6 +150,43 @@ and reverted, because it breaks the gate. **Copilot's inline comments
 create review threads that count toward `required_conversation_resolution`**, so they must
 be resolved like any other.
 
+## One workstream, one PR — combine before review, not after
+
+Reviews are billed **per PR and per push**, and every reviewer re-runs on every update. So
+splitting one piece of work across several PRs multiplies the cost, and two PRs over the same
+files pay twice and then conflict with each other. Combine first.
+
+- **One branch per WORKSTREAM, not per change.** Several commits on `feature/<slug>`, one PR,
+  one review — rather than three PRs that each touch the same module.
+- **A draft PR is a parked PR, and parking is free.** Greptile is `triggerOnDrafts: false`, so
+  a draft can stay open for days at zero cost. Open early as a draft, iterate, and mark ready
+  only when the work is genuinely finished — marking ready is the act of spending the review.
+- **Before opening a PR, check for an open one over the same files.** If it exists, add to that
+  branch or wait for it to land. `pr-hygiene.yml` posts an overlap notice automatically, but
+  the cheaper move is not creating the second PR at all.
+- **A merge queue would remove this churn entirely** — it tests against the latest `main`
+  without the author updating the branch. Prepared but NOT enabled: `validate.yml` already
+  triggers on `merge_group`, and one decision is open (GitGuardian's App check cannot report
+  on `merge_group`). Plan, blockers and the exact settings:
+  [`docs/knowledge/merge-queue-switch.md`](docs/knowledge/merge-queue-switch.md).
+- **Serialise.** Keep one or two PRs in flight. With `strict: true` every merge pushes the
+  others behind, and each branch update triggers a fresh review — the measured 3.6 reviews/PR
+  in July was this, not oversized changes.
+
+**Size** (`pr-hygiene.yml`) — thresholds come from the RESEARCH, not from our habits.
+Defect detection is ~87% at 1-100 changed lines, ~65% at 301-600, ~28% at 1000+
+(SmartBear/Cisco ~2500 PRs; Google): 200 lines is the target, 400 the ceiling. Our own
+distribution (40 merged PRs, 2026-07) is median 246 / p75 401 / p90 653 / max 975 — so the
+median is healthy but the top quartile is already in the degraded band, and the warning is
+meant to fire there:
+- warn **at or above 10 files / 400 lines**, fail **at or above 30 files / 1000 lines**
+  (inclusive: 1000 lines IS the limit, not one line under it)
+- generated files (flag inventory, vendored `dist/lib/`, lockfiles, wheels) are excluded — they
+  move in bulk and say nothing about review burden
+- `oversized-ok` label overrides a genuine exception
+- the hard limit exists because **Greptile silently skips PRs over ~50 files** — past that you
+  get no review at all while still paying for it, which is worse than a blocked PR
+
 ## Greptile PR loop
 
 For reviewable development work:
