@@ -404,11 +404,18 @@ jobs:
                   // summon failure leaves label+marker with no review ever starting
                   // (Codex P1); re-post the summon only now that the fresh read says
                   // the handoff is still deserved. Idempotent once the review exists.
-                  // A LIVE run = pending, or completed without an infra-death. A run
-                  // that concluded cancelled/timed_out/stale is DEAD for this immutable
-                  // head and must not block a re-summon forever (Codex); a completed
-                  // failure/success is a real review verdict and does.
-                  const DEAD = ['cancelled', 'timed_out', 'stale'];
+                  // A LIVE run = pending, or completed without a dead-end conclusion.
+                  // A run that concluded cancelled/timed_out/stale is an infra death on
+                  // this immutable head and must not block a re-summon forever (Codex);
+                  // a completed failure/success is a real review verdict and does.
+                  // `skipped` is DEAD too: Greptile deliberately skips PRs over ~50
+                  // files, and counting that skip as LIVE blocks re-summons forever —
+                  // the PR sits labeled-but-never-reviewed with the credit already
+                  // spent. Treating it as DEAD re-summons instead. Caveat, accepted:
+                  // a genuinely >50-file PR gains nothing (Greptile just skips again),
+                  // but each retry is harmless and bounded by the per-sha 10-minute
+                  // debounce below, while NOT re-summoning strands EVERY skipped PR.
+                  const DEAD = ['cancelled', 'timed_out', 'stale', 'skipped'];
                   const gLive = await ok(`PR #${pr.number} greptile check`, () =>
                     github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
                       .then(rs => rs.filter(c => c.name === 'Greptile Review'
@@ -510,7 +517,9 @@ jobs:
                 // the SAME sha, a Greptile run already exists for this head, and a
                 // fresh summon would bill a re-review of a reviewed diff. Same
                 // live-run rule as the handed-off branch.
-                const DEAD2 = ['cancelled', 'timed_out', 'stale'];
+                // Same list as DEAD in the handed-off branch — `skipped` included,
+                // rationale (the >50-file skip) lives there.
+                const DEAD2 = ['cancelled', 'timed_out', 'stale', 'skipped'];
                 const gLive2 = await ok(`PR #${pr.number} greptile run check`, () =>
                   github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
                     .then(rs => rs.filter(c => c.name === 'Greptile Review'

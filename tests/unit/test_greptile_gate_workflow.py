@@ -432,6 +432,38 @@ def test_dead_greptile_run_does_not_block_resummon(tmp_path):
     assert not any(c.strip().startswith("@greptileai review") for c in r2["comments"]), r2["comments"]
 
 
+def test_in_progress_greptile_run_suppresses_resummon(tmp_path):
+    """An in-flight run (status != completed) IS Greptile coming — no re-summon.
+
+    Pins the `status !== 'completed'` arm of the LIVE filter, which nothing else
+    exercised: a rewrite to "completed non-DEAD only" passed the entire suite while
+    re-summoning (and re-billing) on every sweep of the review window. Verified: with
+    the filter rewritten that way, this test goes red."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             labels=[{"name": "greptile"}], markerSha="a" * 40,
+             greptileRun={"status": "in_progress"})
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+
+
+def test_skipped_greptile_run_does_not_block_resummon(tmp_path):
+    """completed/skipped is DEAD, in BOTH live-run checks.
+
+    Greptile deliberately skips PRs over ~50 files — the credit is spent and no
+    review exists. Counted as LIVE, that skip suppressed re-summons forever:
+    labeled-but-never-reviewed with no repair path. Re-summoning is harmless
+    (bounded by the per-sha debounce) even when the PR is still oversized."""
+    # handed-off branch (DEAD)
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             labels=[{"name": "greptile"}], markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "skipped"})
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+    # fresh-handoff branch (DEAD2): the skipped run must not suppress the post-label summon
+    r2 = _run(tmp_path, _script(), reviewers=BOTH,
+              greptileRun={"status": "completed", "conclusion": "skipped"})
+    assert r2["addLabels"] == 1, r2["log"]
+    assert any(c.strip().startswith("@greptileai review") for c in r2["comments"]), r2["comments"]
+
+
 def test_rehandoff_of_reviewed_sha_does_not_resummon(tmp_path):
     """Regress-then-clear on the same SHA: the label is re-applied, but a live
     Greptile run already exists for the head — a fresh summon would bill a
