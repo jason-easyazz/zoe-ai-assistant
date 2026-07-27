@@ -187,3 +187,49 @@ class TestUnitTemplateGatesOnPostgres:
         assert wait_at < unit.index("voice_regression_probe.py --samples")
         pre_line = next(l for l in unit.splitlines() if "wait_for_port.py" in l)
         assert pre_line.startswith("ExecStartPre=")
+
+
+class TestSkipDiagnosisReportsWhatItObserved:
+    """A probe must never NAME a cause it did not check.
+
+    The skip branch used to hardcode "no .env in resolved --service-dir" as the
+    reason measure_voice produced no JSON. On 2026-07-27 the real cause was
+    Postgres not yet listening after a reboot, while the .env was present and
+    correct the whole time — so every run in the log pointed at a healthy file
+    and the actual dependency went unmentioned. A wrong cause is worse than no
+    cause: it sends you to the wrong place.
+    """
+
+    def test_reports_env_present_when_it_is_present(self, tmp_path):
+        (tmp_path / ".env").write_text("X=1")
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        assert ".env present" in obs
+        assert "NO .env" not in obs, "must not claim a missing .env that exists"
+
+    def test_reports_env_missing_when_it_is_missing(self, tmp_path):
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        assert "NO .env" in obs
+
+    def test_replay_path_mirrors_measure_voice_resolution(self, tmp_path):
+        """service_dir/tests/replay_samples.py — the path measure_voice.py itself uses."""
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        assert "MISSING at" in obs and "tests/replay_samples.py" in obs
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "replay_samples.py").write_text("")
+        assert "replay harness present" in "; ".join(vrp._diagnose_skip(str(tmp_path)))
+
+    def test_postgres_state_is_probed_not_assumed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(vrp, "_port_open", lambda *a, **k: False)
+        assert "postgres 127.0.0.1:5432 REFUSED" in "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        monkeypatch.setattr(vrp, "_port_open", lambda *a, **k: True)
+        assert "postgres 127.0.0.1:5432 reachable" in "; ".join(vrp._diagnose_skip(str(tmp_path)))
+
+    def test_the_field_failure_names_postgres_not_the_env(self, tmp_path, monkeypatch):
+        """The exact 2026-07-27 state: .env fine, harness fine, database down."""
+        (tmp_path / ".env").write_text("X=1")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "replay_samples.py").write_text("")
+        monkeypatch.setattr(vrp, "_port_open", lambda *a, **k: False)
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        assert "REFUSED" in obs
+        assert ".env present" in obs and "NO .env" not in obs

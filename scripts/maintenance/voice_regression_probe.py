@@ -57,6 +57,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -90,6 +91,35 @@ def mem_available_mb() -> int:
     return 0
 
 
+def _port_open(host: str, port: int, timeout: float = 2.0) -> bool:
+    with socket.socket() as sock:
+        sock.settimeout(timeout)
+        return sock.connect_ex((host, port)) == 0
+
+
+def _diagnose_skip(service_dir: str) -> list[str]:
+    """Report the OBSERVED state behind a measure_voice skip — never a guessed cause.
+
+    Returns human-readable observations in the order they are worth reading. Each
+    entry is something this function actually checked just now.
+    """
+    env_path = os.path.join(service_dir, ".env")
+    obs = []
+    try:
+        obs.append(f".env present ({os.path.getsize(env_path)}B)" if os.path.isfile(env_path)
+                   else f"NO .env at {env_path}")
+    except OSError as exc:
+        obs.append(f".env unreadable at {env_path}: {exc}")
+    # Mirror measure_voice.py's OWN resolution (service_dir/tests/replay_samples.py)
+    # rather than a repo-relative guess, so the two cannot drift apart.
+    replay = os.path.join(service_dir, "tests", "replay_samples.py")
+    obs.append(f"replay harness {'present' if os.path.isfile(replay) else f'MISSING at {replay}'}")
+    # Postgres is the dependency that actually bit us: the timer is Persistent=true,
+    # so a missed nightly run fires during boot, ahead of the database.
+    obs.append(f"postgres 127.0.0.1:5432 {'reachable' if _port_open('127.0.0.1', 5432) else 'REFUSED'}")
+    return obs
+
+
 def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict[str, Any]:
     """Run measure_voice.py under the shared flock and return its aggregated JSON."""
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
@@ -115,14 +145,18 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
         if proc.returncode not in (0, 1):  # 1 = measure_voice's own "a turn broke function"
             raise RuntimeError(f"measure_voice failed (rc={proc.returncode}): {proc.stderr[-400:]}")
         if not os.path.getsize(out_json):
-            # measure_voice exits 0 on its skip paths (no .env in --service-dir,
-            # missing replay harness) without writing JSON — surface that
-            # instead of a cryptic JSONDecodeError. --service-dir auto-resolves
-            # to the live env (see _resolve_service_dir); reaching here means it
-            # found none anywhere, which is a loud error, never a pass.
+            # measure_voice exits 0 on SEVERAL skip paths without writing JSON.
+            # This branch used to NAME one of them ("no .env in --service-dir") as
+            # the cause without ever checking it. In the field that guess was wrong:
+            # after the 2026-07-27 reboot the real cause was Postgres not yet
+            # listening, while the .env was present and correct the whole time — so
+            # the gate spent every run pointing at a healthy file. A probe that
+            # asserts a cause it did not observe is worse than one that says
+            # nothing. Observe first, then report what was actually seen.
             raise RuntimeError(
-                "measure_voice skipped without results — no .env in resolved "
-                f"--service-dir {service_dir!r}; stderr: {proc.stderr[-300:]}"
+                "measure_voice skipped without results — observed: "
+                f"{'; '.join(_diagnose_skip(service_dir))}; "
+                f"stderr: {proc.stderr[-300:]}"
             )
         with open(out_json) as fh:
             return json.load(fh)
