@@ -232,7 +232,7 @@ async def _run_platform_health_check() -> None:
     import subprocess
     from pathlib import Path
 
-    from async_subprocess import QueueTimeout, run_to_completion
+    from async_subprocess import QueueTimeout, _env_float, run_to_completion
 
     script = Path(
         os.environ.get(
@@ -254,7 +254,10 @@ async def _run_platform_health_check() -> None:
             ["bash", str(script)],
             timeout=_HEALTH_CHECK_TIMEOUT_S,
             merge_stderr=True,
-            queue_timeout=float(os.environ.get("ZOE_AUTOPILOT_QUEUE_WAIT_S", "600")),
+            # _env_float, not bare float(): a typo here would crash the health
+            # loop itself — the third instance of this class in one PR, so parse
+            # every budget env var through the same fail-safe helper.
+            queue_timeout=_env_float("ZOE_AUTOPILOT_QUEUE_WAIT_S", 600.0),
         )
     except QueueTimeout as exc:
         # The script never ran — a saturated worker pool, not an unhealthy

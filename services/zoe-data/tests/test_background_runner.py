@@ -272,7 +272,7 @@ async def test_queue_saturation_is_not_reported_as_a_child_timeout(monkeypatch):
     """
     import background_runner as br
 
-    queue_wait = float(os.environ.get("HERMES_BACKGROUND_QUEUE_WAIT_S", "600"))
+    queue_wait = br._background_queue_wait_s()  # the fail-safe helper, not a bare float
 
     from async_subprocess import QueueTimeout
 

@@ -241,16 +241,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_AUTOPILOT_QUEUE_WAIT_S": {
-        "defaults": [
-          "'600'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/multica_autopilot_sync.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_AUTORESEARCH_RUN_ROOT": {
         "defaults": [
           "'data/autoresearch'"

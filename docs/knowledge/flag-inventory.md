@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-419 flags; 419 not documented in `.env.example`.
+418 flags; 418 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -43,7 +43,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_AUTH_FAIL_CLOSED` | `'true'` | no | NO | `services/zoe-data/auth.py` |
 | `ZOE_AUTH_SETUP_TOKEN` | `''` | no | NO | `services/zoe-auth/core/account_setup.py` |
 | `ZOE_AUTH_URL` | `'http://localhost:8002'` | no | NO | `services/zoe-auth/touch_panel/quick_auth.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/main.py`<br>`services/zoe-data/routers/auth.py`<br>`services/zoe-data/routers/panel_auth.py` |
-| `ZOE_AUTOPILOT_QUEUE_WAIT_S` | `'600'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_AUTORESEARCH_RUN_ROOT` | `'data/autoresearch'` | no | NO | `services/zoe-data/routers/autoresearch.py` |
 | `ZOE_AUTO_APPROVE_THRESHOLD` | `'0'` | no | NO | `services/zoe-data/evolution_notice.py` |
 | `ZOE_BACKUP_DIR` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
