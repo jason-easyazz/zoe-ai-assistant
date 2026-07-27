@@ -107,6 +107,24 @@ jobs:
             // push. Observed on this PR — two near-identical "Getting large" comments
             // after two syncs. Noise trains people to ignore the check.
             const MARK = '<!-- pr-hygiene -->';
+            // A cleared condition must CLEAR the notice. Once a PR shrinks, the overlap
+            // lands, or `oversized-ok` is applied, `lines` is empty — and simply skipping
+            // would leave an old warning on screen describing a problem that no longer
+            // exists. A stale warning is worse than none: it is wrong, and it is trusted.
+            if (!lines.length) {
+              const stale = (await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: pr.number, per_page: 100,
+              })).find(c => c.body?.includes(MARK));
+              if (stale) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  comment_id: stale.id,
+                  body: `PR hygiene: clear — ${nFiles} files / ${nLines} lines, no overlapping open PRs.\n${MARK}`,
+                });
+                core.info(`PR #${pr.number}: hygiene notice cleared`);
+              }
+            }
             if (lines.length) {
               const body = `${lines.join('\n')}\n${MARK}`;
               const existing = (await github.paginate(github.rest.issues.listComments, {
