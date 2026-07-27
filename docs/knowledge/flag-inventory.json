@@ -4086,7 +4086,7 @@
       },
       "ZOE_VOICE_PROBE_MIN_MEM_MB": {
         "defaults": [
-          "'1500'"
+          "-"
         ],
         "in_env_example": false,
         "readers": [
@@ -4131,6 +4131,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_REPLAY_STT": {
+        "defaults": [
+          "'inprocess'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
         ],
         "typed_env": false
       },
