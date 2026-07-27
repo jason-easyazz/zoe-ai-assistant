@@ -30,6 +30,7 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+<<<<<<< HEAD
       # Regenerate the ZOE_* flag inventory whenever Python changes. The
       # committed inventory is pinned by tests/unit/test_flag_inventory.py, and
       # a stale copy cost SIX separate incidents on 2026-07-27 alone (red CI on
@@ -43,3 +44,22 @@ repos:
         language: system
         pass_filenames: false
         files: '(\.py$|docs/knowledge/flag-inventory\.(md|json)$)' 
+=======
+      # The committed flag inventory must match the generator's output — CI
+      # enforces this (test_flag_inventory.py) and it went stale->red THREE
+      # times on 2026-07-27 alone, each time because an env-flag edit shipped
+      # without a regen. Scoped to the files whose edits can stale it, so
+      # ordinary commits pay nothing.
+      - id: zoe-flag-inventory-fresh
+        name: Flag inventory matches generator output
+        # -I ignores the 'Last generated:' stamp line — the generator rewrites it
+        # to today, so without -I every commit on a later calendar day would
+        # false-fail (Bugbot). CI's test is date-insensitive the same way.
+        # On pass, restore the committed copy: the generator rewrites the two
+        # date lines even when nothing real changed, and leaving that churn in
+        # the worktree would ride into someone's next commit (Codex).
+        entry: bash -c 'python3 tools/audit/flag_inventory.py >/dev/null && if git diff --quiet -I "Last generated:" -I "^timestamp:" -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json; then git checkout -q -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json; else echo "flag inventory was STALE — regenerated; git add docs/knowledge/flag-inventory.* and re-commit"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        files: '(\.(py|env|ya?ml)$|\.env\.example$)'
+>>>>>>> origin/main
