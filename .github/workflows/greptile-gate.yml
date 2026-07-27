@@ -51,6 +51,11 @@ jobs:
           script: |
             const LABEL = 'greptile';
             const REQUIRED_CHECKS = ['Cursor Bugbot'];
+            // Bugbot reports `neutral` when it has no findings and `skipped` when it dedups
+            // a diff — both mean it RAN. Requiring `success` held forever on PR #1571, which
+            // sat at completed/neutral. Any real findings surface as review threads, and the
+            // unresolved===0 check below covers those; this only confirms it executed.
+            const CHECK_DONE = ['success', 'neutral', 'skipped'];
             const COPILOT = 'copilot-pull-request-reviewer';
             const CODEX = 'chatgpt-codex-connector';
             // Codex is summoned and WAITED FOR, but with a bound. Requiring it outright
@@ -120,7 +125,7 @@ jobs:
                 const prev = newest.get(c.name);
                 if (!prev || new Date(c.started_at) > new Date(prev.started_at)) newest.set(c.name, c);
               }
-              const checksOk = REQUIRED_CHECKS.every(n => newest.get(n)?.conclusion === 'success');
+              const checksOk = REQUIRED_CHECKS.every(n => CHECK_DONE.includes(newest.get(n)?.conclusion));
 
               const reviews = await github.paginate(github.rest.pulls.listReviews, {
                 ...base, pull_number: pr.number, per_page: 100,
@@ -157,9 +162,29 @@ jobs:
                 .map(r => (r.login || '').replace(/\[bot\]$/, '').toLowerCase()));
               const copilotPending = requested.has('copilot') || requested.has(COPILOT);
               if (!reviewedHead.has(COPILOT) && !copilotPending) {
-                const r = await ok(`PR #${pr.number} requestReviewers`, () =>
-                  github.rest.pulls.requestReviewers({ ...base, pull_number: pr.number, reviewers: ['Copilot'] }));
+                // REST requestReviewers returns 200 and silently does NOTHING for Copilot
+                // — verified: requested_reviewers stayed empty afterwards. Copilot is a Bot
+                // node, so it must go through GraphQL requestReviews(botIds:). `userIds:`
+                // errors with "Could not resolve to User node".
+                //
+                // COPILOT_BOT_ID is Copilot's global Bot node id (verified 2026-07-27). It is
+                // not discoverable from this PR when Copilot is absent, which is exactly when
+                // we need it — so it is pinned. If GitHub ever changes it the mutation fails
+                // and the warning below names the cause rather than silently never summoning.
+                const COPILOT_BOT_ID = 'BOT_kgDOCnlnWA';
+                const r = await ok(`PR #${pr.number} request Copilot`, async () => {
+                  const q = await github.graphql(`
+                    query($owner:String!,$repo:String!,$num:Int!){
+                      repository(owner:$owner,name:$repo){ pullRequest(number:$num){ id } } }`,
+                    { owner: base.owner, repo: base.repo, num: pr.number });
+                  return github.graphql(`
+                    mutation($pr:ID!,$bot:ID!){
+                      requestReviews(input:{pullRequestId:$pr, botIds:[$bot], union:true}){
+                        pullRequest{ number } } }`,
+                    { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
+                });
                 if (r) core.info(`PR #${pr.number}: requested Copilot`);
+                else core.warning(`PR #${pr.number}: could NOT request Copilot — the gate will hold until it reviews`);
               }
 
               const codexMark = `<!-- greptile-gate:codex:${pr.head.sha} -->`;
