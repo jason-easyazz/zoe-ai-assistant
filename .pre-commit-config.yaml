@@ -30,3 +30,14 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # The committed flag inventory must match the generator's output — CI
+      # enforces this (test_flag_inventory.py) and it went stale->red THREE
+      # times on 2026-07-27 alone, each time because an env-flag edit shipped
+      # without a regen. Scoped to the files whose edits can stale it, so
+      # ordinary commits pay nothing.
+      - id: zoe-flag-inventory-fresh
+        name: Flag inventory matches generator output
+        entry: bash -c 'python3 tools/audit/flag_inventory.py >/dev/null && git diff --quiet -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json || { echo "flag inventory was STALE — regenerated; git add docs/knowledge/flag-inventory.* and re-commit"; exit 1; }'
+        language: system
+        pass_filenames: false
+        files: '\.(py|env|ya?ml)$'
