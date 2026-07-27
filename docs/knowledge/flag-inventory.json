@@ -377,6 +377,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_BRAIN_STARTUP_WAIT_S": {
+        "defaults": [
+          "30.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BRAIN_TOKEN": {
         "defaults": [
           "-"
@@ -1725,6 +1735,46 @@
         ],
         "typed_env": false
       },
+      "ZOE_KOKORO_CACHE_FLUSH_INTERVAL_S": {
+        "defaults": [
+          "60"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_CACHE_MAX_DISK": {
+        "defaults": [
+          "1000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_CACHE_MAX_DISK_BYTES": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_KOKORO_CACHE_PERSIST": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_KOKORO_CUDA_ATTEMPTS": {
         "defaults": [
           "'3'"
@@ -2101,6 +2151,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LOG_BACKUP_COUNT": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LOG_DIR": {
         "defaults": [
           "-"
@@ -2114,6 +2174,16 @@
       "ZOE_LOG_LEVEL": {
         "defaults": [
           "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_MAX_BYTES": {
+        "defaults": [
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
@@ -3031,6 +3101,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PI_INTENT_ENABLED": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PI_INTENT_MODEL": {
         "defaults": [
           "-"
@@ -3061,6 +3141,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PI_INTENT_SHADOW_ENABLED": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PI_INTENT_TIMEOUT_SECONDS": {
         "defaults": [
           "-"
@@ -3068,6 +3158,36 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/pi_promotion_eval.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_LAB_MIN_AVAILABLE_MB": {
+        "defaults": [
+          "2048.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/pi_intent_lab.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_LAB_MIN_SWAP_FREE_MB": {
+        "defaults": [
+          "256.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/pi_intent_lab.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PI_LAB_RESOURCE_GUARD_ENABLED": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/pi_intent_lab.py"
         ],
         "typed_env": false
       },
@@ -3144,6 +3264,16 @@
       "ZOE_PR_GUARD_AUTO_UPDATE_BRANCH": {
         "defaults": [
           "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/greploop_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PR_GUARD_CLEAN_MERGE_IGNORES_CONFIDENCE": {
+        "defaults": [
+          "True"
         ],
         "in_env_example": false,
         "readers": [
@@ -3309,6 +3439,26 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/proactive/engine.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_READINESS_CACHE_TTL_S": {
+        "defaults": [
+          "3.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_READINESS_TIMEOUT_S": {
+        "defaults": [
+          "4.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
         ],
         "typed_env": false
       },
@@ -4316,6 +4466,16 @@
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": true
+      },
+      "ZOE_VOICE_STT_LOG_MAX_BYTES": {
+        "defaults": [
+          "5000000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
       },
       "ZOE_VOICE_TOOL_FILLER": {
         "defaults": [
