@@ -122,9 +122,17 @@ async def create_board_issue_for_proposal(
     Idempotency keys on a STABLE proposal back-ref stored in ``issue.context_refs``
     (NOT the caller-supplied ``multica_issue_id``, which may be a phantom id or
     stale under concurrent approvals), matched under the same advisory lock that
-    assigns the issue number. Issues in a terminal-FAILURE state
-    (blocked/cancelled) are excluded so a failed run can be retried, while a
-    live-or-done issue blocks a duplicate run.
+    assigns the issue number.
+
+    THE INVARIANT (precisely): at most one NON-FAILED issue per proposal at any
+    time. A live (todo/in_progress/in_review) or done issue blocks a duplicate
+    run — shipped work is never redone, and a running lane is never forked. An
+    issue in a terminal-FAILURE state (blocked/cancelled) does NOT block: an
+    admin re-approving after a failure is explicitly requesting a RETRY, and the
+    new issue is that retry's successor. So a proposal's history may contain
+    several failed issues, but never two non-failed ones — the retry path is a
+    deliberate admin action (approve is admin-only + execution-gated), not an
+    accidental duplicate.
 
     Returns {number, issue_id, created[, status]}; the caller updates
     evolution_proposals.multica_issue_id in the zoe DB.

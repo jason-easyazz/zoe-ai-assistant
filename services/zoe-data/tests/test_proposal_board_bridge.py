@@ -188,3 +188,31 @@ def test_stored_execute_on_wrong_type_is_refused():
             "approval_required": ["user_or_admin_for_privileged_execution"]}
     allowed, reason = pbb.may_auto_execute(admin, prop)
     assert allowed is False and "does not match the policy" in reason
+
+
+@pytest.mark.asyncio
+async def test_blocked_prior_issue_allows_a_retry():
+    """A blocked run is a FAILURE — an admin re-approving is explicitly asking
+    for a retry, so a NEW issue is created (the idempotency probe excludes
+    blocked/cancelled)."""
+    conn = _FakeConn(existing=None, number=7001)  # probe excludes the blocked row
+    out = await pbb.create_board_issue_for_proposal(conn, {"id": "p1", "title": "T", "description": "d"})
+    assert out["created"] is True and out["number"] == 7001
+
+
+@pytest.mark.asyncio
+async def test_the_probe_sql_excludes_only_failure_states():
+    """Pin the invariant in the SQL itself: blocked/cancelled are excluded from
+    the duplicate check (retryable); every other status blocks a duplicate."""
+    captured = {}
+    class _Probe(_FakeConn):
+        async def fetchrow(self, sql, *a):
+            if "context_refs @>" in sql and "INSERT" not in sql:
+                captured["sql"] = sql
+                return None
+            return await super().fetchrow(sql, *a)
+    await pbb.create_board_issue_for_proposal(_Probe(number=1), {"id": "p", "title": "t", "description": "d"})
+    sql = captured["sql"]
+    assert "'blocked'" in sql and "'cancelled'" in sql and "<> ALL" in sql
+    for live in ("todo", "in_progress", "in_review", "done"):
+        assert f"'{live}'" not in sql, f"{live} must BLOCK a duplicate, not be excluded"
