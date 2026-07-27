@@ -91,7 +91,20 @@ class _FlagVisitor(ast.NodeVisitor):
         # main rollback knob of the fast-tail change, was absent from the
         # committed inventory because it used _int_env (Bugbot, #1573) — and
         # ZOE_TTS_KEEP_TAIL_MS / ZOE_TTS_LEAD_GUARD_MS had been missing all along.
-        is_get = (name in ("getenv", "_int_env", "_float_env", "_env")
+        # Full sweep of the repo's (name, default)-shaped wrapper spellings
+        # (2026-07-27, follow-up to the daemon trio): kokoro_sidecar and
+        # greploop_guard's _env_int/_env_flag, main.py/voice_tts/pi_intent_lab's
+        # _env_float/_env_int/_env_bool, agent_sync's _env_enabled,
+        # logging_setup's _int_from_env, memory_idle_consolidation's _int_env.
+        # SAFE against the (value, default)-shaped coercers that share these
+        # names in the pi_* modules: those call sites pass variables, and the
+        # ZOE_* string-constant filter below skips any non-constant first arg —
+        # so a name can be on this list even when another module reuses it for
+        # a different shape.
+        is_get = (name in ("getenv",
+                           "_int_env", "_float_env", "_env",
+                           "_env_int", "_env_float", "_env_bool", "_env_flag",
+                           "_env_enabled", "_int_from_env")
                   or self._is_environ_get(node.func))
         if (typed or is_get) and node.args:
             key = node.args[0]
