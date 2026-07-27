@@ -19,10 +19,14 @@ CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
 TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-2400}"
 
 [ $# -ge 2 ] || { echo "usage: $0 <PR-number> \"<contract>\"" >&2; exit 1; }
+
+# ONE polly worker repo-wide (RAM discipline) — serialize concurrent invocations.
+exec 9>/tmp/zoe-cross-review.lock
+flock 9
 PR="$1"; CONTRACT="$2"
 case "$PR" in (*[!0-9]*|'') echo "ALARM: PR must be numeric, got: $PR" >&2; exit 1;; esac
 
-SID=$(curl -sf -X POST "$SERVER/v1/sessions" -H 'Content-Type: application/json' \
+SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -H 'Content-Type: application/json' \
   -d "{\"agent_id\":\"$POLLY_ID\",\"title\":\"cross-review PR #$PR\"}" \
   | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])") \
   || { echo "ALARM: session create failed against $SERVER" >&2; exit 2; }
@@ -48,13 +52,21 @@ saw_running=0
 status=""
 while :; do
   sleep 30
-  status=$(curl -sf "$SERVER/v1/sessions/$SID" \
+  status=$(curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" \
     | python3 -c "import json,sys;print(json.load(sys.stdin).get('status','?'))" || echo poll-fail)
   [ "$status" = "running" ] && saw_running=1
   if [ "$status" != "running" ] && [ "$status" != "poll-fail" ] && [ "$saw_running" = 1 ]; then
     break
   fi
   now=$(date +%s)
+  if [ "$saw_running" = 0 ] && [ "$status" != "running" ] && [ "$status" != "poll-fail" ]; then
+    # The run may have started AND finished between two polls — evidence of an
+    # assistant reply means completion, not a dead kick (Codex P2, #1578).
+    if curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" \
+        | python3 -c "import json,sys;d=json.load(sys.stdin);sys.exit(0 if any(i.get('type')=='message' and (i.get('data',{}).get('role') or i.get('role'))=='assistant' for i in d.get('items',[])) else 1)" 2>/dev/null; then
+      saw_running=1; continue
+    fi
+  fi
   if [ "$saw_running" = 0 ] && [ $((now - start)) -gt 300 ]; then
     echo "ALARM: session never reached 'running' within 300s (status: $status) — kick died silently" >&2
     exit 2
@@ -77,20 +89,24 @@ esac
 # alarm, never report it as a clean review.
 TMPJ=$(mktemp)
 trap 'rm -f "$TMPJ"' EXIT
-curl -sf "$SERVER/v1/sessions/$SID" -o "$TMPJ" \
+curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" -o "$TMPJ" \
   || { echo "ALARM: could not fetch session $SID for the report" >&2; exit 2; }
 python3 - "$SID" "$TMPJ" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[2]))
 texts = []
 for it in d.get("items", []):
-    if it.get("type") == "message":
-        c = it.get("data", {}).get("content") or it.get("content") or ""
-        if isinstance(c, list):
-            c = " ".join(str(x.get("text", "")) for x in c if isinstance(x, dict))
-        texts.append(str(c))
+    if it.get("type") != "message":
+        continue
+    role = it.get("data", {}).get("role") or it.get("role") or ""
+    if role != "assistant":
+        continue  # the inline kick prompt is a message item too (Codex P2)
+    c = it.get("data", {}).get("content") or it.get("content") or ""
+    if isinstance(c, list):
+        c = " ".join(str(x.get("text", "")) for x in c if isinstance(x, dict))
+    texts.append(str(c))
 if not texts:
-    print(f"ALARM: session {sys.argv[1]} ended idle with zero messages — "
+    print(f"ALARM: session {sys.argv[1]} ended idle with zero ASSISTANT messages — "
           "the kick died silently (check container auth: claude OAuth expires 2026-08-22).",
           file=sys.stderr)
     sys.exit(2)

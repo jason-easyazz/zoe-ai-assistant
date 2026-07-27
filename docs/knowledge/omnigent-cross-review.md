@@ -55,6 +55,17 @@ exits 2 and prints an ALARM for that case — treat exit 2 as an incident, not a
 pass. Standing risk: the container's Claude OAuth expires **2026-08-22**; when
 it does, every kick will die this way.
 
+## Known limitation — reviewer-only is enforced by PROMPT, not permissions
+
+The brief forbids pushes/comments/merges, but the claude-sdk harness runs with
+skipped permission prompts in a container whose `/workspace` is the writable
+live checkout with authenticated GitHub credentials (Codex P1, #1578). A
+prompt-injected or misbehaving reviewer COULD mutate state. Accepted for now as
+an operator-trust tradeoff; hardening path when it matters: a read-only
+workspace mount + an unauthenticated `gh` for review sessions. Until then,
+treat cross-review output on UNTRUSTED diffs with the same suspicion as any
+agent given write access.
+
 ## Constraints
 
 - ONE polly worker at a time repo-wide (RAM discipline on the box).

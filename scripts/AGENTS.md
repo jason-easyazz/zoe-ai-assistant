@@ -73,3 +73,14 @@ For `deploy_zoe_data_when_ready.sh`, run `pytest services/zoe-data/tests/test_de
 ## Child DOX Index
 
 No child AGENTS.md files yet.
+
+### cross_review.sh (maintenance)
+
+`scripts/maintenance/cross_review.sh <PR#> "<contract>"` kicks an Omnigent polly
+cross-review of a PR and prints the structured report. Constraints: ONE polly
+worker repo-wide (enforced via `flock /tmp/zoe-cross-review.lock`); advisory
+only (never wired into greptile-gate); exit 2 = alarm (silent kick death,
+error-status session, or unreachable server) and must never be read as a clean
+review. Protocol + validation record: `docs/knowledge/omnigent-cross-review.md`.
+Verification: `bash -n`, plus the dogfood pattern — review changes to this
+script with the script itself.

@@ -149,10 +149,12 @@ settles at ~2 reviews per PR (one at ready, one after the final branch update). 
 keeps all iteration before that free, so you only ever pay once the work is finished.
 
 Tier by risk; four reviewers on a one-file docs change is friction, not safety:
-- **Routine** (docs, config, generated files, tests, UI) → local `/review` + Copilot, then
+- **Routine** (docs, config, generated files, tests, UI) → cross-review (step 2) + local `/review` + Copilot, then
   mark ready for the single Greptile pass. Greptile is a REQUIRED check, so every PR gets
   it; the tiering decides how much cheap review happens BEFORE that, not whether it runs.
 - **Load-bearing** (voice path, auth, migrations, anything flag-gated) → the full chain.
+  Cross-review applies to BOTH tiers — it is the free default pre-ready step, not an
+  extra load-bearing-only reviewer.
 
 Cost note, measured 2026-07: this repo ran **400+ reviews across 112 PRs (3.6× per PR)**
 in one month. At that volume Greptile is ~$380/mo and Bugbot ~$400–600/mo, against
