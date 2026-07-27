@@ -63,6 +63,24 @@ class _FlagVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         # name -> list of (default_str, via_typed_env)
         self.reads: list[tuple[str, str, bool]] = []
+        # Local wrapper names whose body returns a typed_env call: reads through
+        # them ARE typed reads — voice_tts/_env_int and main/_env_float delegate
+        # to env_int/env_float (Wave-4), and recording those as untyped
+        # misreports typed-env adoption (Greptile P1, #1575). Per-FILE, because
+        # the same name delegates in one module and reads os.environ raw in
+        # another. Filled by a prescan in visit_Module so definition order
+        # relative to call sites cannot matter.
+        self._typed_delegators: set[str] = set()
+
+    def visit_Module(self, node: ast.Module) -> None:
+        for fn in ast.walk(node):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for stmt in ast.walk(fn):
+                    if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call):
+                        if self._call_name(stmt.value.func) in TYPED_ENV_FUNCS:
+                            self._typed_delegators.add(fn.name)
+                            break
+        self.generic_visit(node)
 
     @staticmethod
     def _call_name(func: ast.expr) -> str:
@@ -84,7 +102,7 @@ class _FlagVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         name = self._call_name(node.func)
-        typed = name in TYPED_ENV_FUNCS
+        typed = name in TYPED_ENV_FUNCS or name in self._typed_delegators
         # Local safe-parse wrappers (the Pi daemon's _int_env-style helpers) take
         # (name, default) like getenv — without this, a flag read through one is
         # INVISIBLE to the inventory. Found the hard way: ZOE_VAD_TAIL_MS, the

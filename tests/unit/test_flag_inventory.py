@@ -150,3 +150,22 @@ def test_wrapper_spellings_are_scanned_and_value_shape_is_skipped(tmp_path):
     names = set(data["flags"]["prod"]) | set(data["flags"]["lab"])
     assert {"ZOE_WRAP_A", "ZOE_WRAP_B", "ZOE_WRAP_C", "ZOE_WRAP_D"} <= names
     assert "raw" not in names and not any(n == "raw" for n in names)
+
+
+def test_wrapper_delegating_to_typed_env_records_a_typed_read(tmp_path):
+    """A local wrapper whose body returns a typed_env call is a TYPED read;
+    a wrapper reading os.environ raw is not (Greptile P1, #1575 — recording
+    delegating wrappers as untyped misreported typed-env adoption)."""
+    (tmp_path / "m.py").write_text(
+        "def _env_float(name, default):\n"
+        "    return env_float(name, default)\n"
+        "def _env_flag(name, default):\n"
+        "    raw = os.environ.get(name)\n"
+        "    return default if raw is None else raw == '1'\n"
+        "A = _env_float(\"ZOE_TYPED_WRAP\", 4.0)\n"
+        "B = _env_flag(\"ZOE_RAW_WRAP\", True)\n"
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    flat = {**data["flags"]["prod"], **data["flags"]["lab"]}
+    assert flat["ZOE_TYPED_WRAP"]["typed_env"] is True
+    assert flat["ZOE_RAW_WRAP"]["typed_env"] is False
