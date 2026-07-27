@@ -31,8 +31,12 @@ pytestmark = pytest.mark.ci_safe
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "greptile-gate.yml"
 
-pytest.importorskip("yaml")
-import yaml  # noqa: E402
+# HARD import, deliberately not importorskip: these tests exist because this
+# workflow shipped ten review rounds of logic GitHub never parsed. A skip that
+# silently zeroes out the suite in CI (slim venv without PyYAML — Bugbot and
+# Codex both caught exactly that) recreates the disease the tests treat. PyYAML
+# is in validate.yml's slim install; if it goes missing, FAIL, don't skip.
+import yaml
 
 node = shutil.which("node")
 pytestmark = [pytestmark, pytest.mark.skipif(not node, reason="node not available")]
@@ -41,8 +45,12 @@ pytestmark = [pytestmark, pytest.mark.skipif(not node, reason="node not availabl
 def _script() -> str:
     """The inline `actions/github-script` body, exactly as CI runs it."""
     spec = yaml.safe_load(WORKFLOW.read_text())
-    step = spec["jobs"]["label-when-others-pass"]["steps"][0]
-    return step["with"]["script"]
+    steps = spec["jobs"]["label-when-others-pass"]["steps"]
+    # Select by action, not position — a future checkout/setup step prepended to
+    # the job must not silently point these tests at the wrong step.
+    script_steps = [st for st in steps if "github-script" in str(st.get("uses", ""))]
+    assert len(script_steps) == 1, f"expected exactly one github-script step, got {len(script_steps)}"
+    return script_steps[0]["with"]["script"]
 
 
 HARNESS = textwrap.dedent(
