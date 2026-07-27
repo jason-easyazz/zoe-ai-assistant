@@ -417,13 +417,24 @@ jobs:
                   // summon; every event in that gap would re-enter this branch and post
                   // another summon (Codex). A trusted summon comment younger than
                   // 10 minutes means one is already in flight.
+                  // Debounce PER HEAD (Greptile P1): a PR-wide match let the OLD
+                  // head's summon suppress the NEW head's, leaving a fresh push
+                  // unreviewed for up to the debounce window. Gate-posted summons
+                  // carry a sha marker; only a fresh summon FOR THIS SHA debounces.
+                  const summonMark = `<!-- greptile-gate:summon:${sha} -->`;
                   const recentSummon = comments.some(c =>
-                    trusted(c) && (c.body || '').trim() === '@greptileai review' &&
+                    trusted(c) && (c.body || '').includes(summonMark) &&
                     (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
-                  if (gLive === 0 && !recentSummon) {
+                  if (gLive === null) {
+                    // Fail-closed with an HONEST log (Greptile P1: the old message
+                    // claimed a live run existed): unreadable is not knowledge, no
+                    // summon this sweep; every later event and the 30-min schedule
+                    // re-enter this branch and retry the read.
+                    core.warning(`PR #${pr.number}: could not read Greptile runs — retrying next sweep`);
+                  } else if (gLive === 0 && !recentSummon) {
                     const re = await ok(`PR #${pr.number} re-summon Greptile`, () =>
                       github.rest.issues.createComment({
-                        ...base, issue_number: pr.number, body: '@greptileai review',
+                        ...base, issue_number: pr.number, body: `@greptileai review\n${summonMark}`,
                       }));
                     if (re) core.info(`PR #${pr.number}: handed off but no live Greptile run — re-summoned`);
                   }
@@ -508,13 +519,16 @@ jobs:
                 // recover inside Greptile's check-creation gap would otherwise
                 // double-summon — gLive2 is 0 precisely while the first summon is
                 // still being processed.
+                const summonMark2 = `<!-- greptile-gate:summon:${sha} -->`;
                 const recentSummon2 = comments.some(c =>
-                  trusted(c) && (c.body || '').trim() === '@greptileai review' &&
+                  trusted(c) && (c.body || '').includes(summonMark2) &&
                   (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
-                if (gLive2 === 0 && !recentSummon2) {
+                if (gLive2 === null) {
+                  core.warning(`PR #${pr.number}: could not read Greptile runs — label applied, summon retries next sweep`);
+                } else if (gLive2 === 0 && !recentSummon2) {
                   await ok(`PR #${pr.number} summon Greptile`, () =>
                     github.rest.issues.createComment({
-                      ...base, issue_number: pr.number, body: '@greptileai review',
+                      ...base, issue_number: pr.number, body: `@greptileai review\n${summonMark2}`,
                     }));
                 } else if (gLive2 !== 0) {
                   core.info(`PR #${pr.number}: live Greptile run already exists for this head — label re-applied without a fresh summon`);

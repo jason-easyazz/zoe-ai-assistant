@@ -136,7 +136,8 @@ HARNESS = textwrap.dedent(
           // the label to that SHA. Trust is bot-only, so the author must match exactly.
           listComments: async () => ((OPTS.greptileSummons || []).map((c) => ({
             user: { login: 'github-actions[bot]', type: 'Bot' },
-            created_at: c.at, body: '@greptileai review',
+            created_at: c.at,
+            body: `@greptileai review\n<!-- greptile-gate:summon:${c.sha || 'a'.repeat(40)} -->`,
           })).concat((OPTS.codexSummons || []).map((c) => ({
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: c.at,
@@ -197,7 +198,7 @@ def test_all_green_hands_off(tmp_path):
     # Measured on the pipeline's first autonomous run (#1575): the label admits
     # the PR through Greptile's filter but does NOT start the review — the
     # summon does. The handoff must post both.
-    assert any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
 
 
 def test_red_check_during_summon_window_is_not_labelled(tmp_path):
@@ -395,7 +396,7 @@ def test_regressed_handed_off_head_is_revoked_not_summoned(tmp_path):
     r = _run(tmp_path, _script(), reviewers=BOTH, checksRed=True,
              labels=[{"name": "greptile"}], markerSha="a" * 40)
     assert r["removeLabel"] == 1, r["log"]
-    assert not any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
 
 
 def test_handed_off_without_greptile_run_resummons(tmp_path):
@@ -404,7 +405,7 @@ def test_handed_off_without_greptile_run_resummons(tmp_path):
     the PR labeled-but-never-reviewed forever (Codex P1, #1577)."""
     r = _run(tmp_path, _script(), reviewers=BOTH,
              labels=[{"name": "greptile"}], markerSha="a" * 40)
-    summons = [c for c in r["comments"] if c.strip() == "@greptileai review"]
+    summons = [c for c in r["comments"] if c.strip().startswith("@greptileai review")]
     assert summons, f"handed-off head with no Greptile run must re-summon: {r['comments']}"
 
 
@@ -414,7 +415,7 @@ def test_fresh_summon_debounces_resummon(tmp_path):
     r = _run(tmp_path, _script(), reviewers=BOTH,
              labels=[{"name": "greptile"}], markerSha="a" * 40,
              greptileSummons=[{"at": "2099-01-01T00:00:00Z"}])
-    assert not any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
 
 
 def test_dead_greptile_run_does_not_block_resummon(tmp_path):
@@ -424,11 +425,11 @@ def test_dead_greptile_run_does_not_block_resummon(tmp_path):
     r = _run(tmp_path, _script(), reviewers=BOTH,
              labels=[{"name": "greptile"}], markerSha="a" * 40,
              greptileRun={"status": "completed", "conclusion": "cancelled"})
-    assert any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
     r2 = _run(tmp_path, _script(), reviewers=BOTH,
               labels=[{"name": "greptile"}], markerSha="a" * 40,
               greptileRun={"status": "completed", "conclusion": "failure"})
-    assert not any(c.strip() == "@greptileai review" for c in r2["comments"]), r2["comments"]
+    assert not any(c.strip().startswith("@greptileai review") for c in r2["comments"]), r2["comments"]
 
 
 def test_rehandoff_of_reviewed_sha_does_not_resummon(tmp_path):
@@ -438,7 +439,7 @@ def test_rehandoff_of_reviewed_sha_does_not_resummon(tmp_path):
     r = _run(tmp_path, _script(), reviewers=BOTH,
              greptileRun={"status": "completed", "conclusion": "success"})
     assert r["addLabels"] == 1, r["log"]
-    assert not any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
 
 
 def test_handoff_debounces_when_summon_already_in_flight(tmp_path):
@@ -447,4 +448,14 @@ def test_handoff_debounces_when_summon_already_in_flight(tmp_path):
     r = _run(tmp_path, _script(), reviewers=BOTH,
              greptileSummons=[{"at": "2099-01-01T00:00:00Z"}])
     assert r["addLabels"] == 1, r["log"]
-    assert not any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+
+
+def test_stale_head_summon_does_not_debounce_the_new_head(tmp_path):
+    """Per-sha debounce (Greptile P1): a fresh summon for the PREVIOUS head must
+    not suppress the summon for the current one — otherwise every push inside
+    the window leaves the new head unreviewed."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             labels=[{"name": "greptile"}], markerSha="a" * 40,
+             greptileSummons=[{"at": "2099-01-01T00:00:00Z", "sha": "b" * 40}])
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
