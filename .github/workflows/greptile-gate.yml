@@ -105,6 +105,75 @@ jobs:
               const trusted = (c) =>
                 c.user?.login === 'github-actions[bot]' && c.user?.type === 'Bot';
               const marks = comments.filter(c => c.body?.includes(MARK) && trusted(c));
+
+              // ONE reader for EVERY gate condition, called twice: once to decide, once to
+              // revalidate immediately before acting. It previously hand-copied a SUBSET of
+              // the conditions into the revalidation block, and the subset drifted — twice.
+              // Round 4 added condition revalidation but copied only SHA/behindness/threads,
+              // so a check that re-ran red or a review submitted during the sweep still got
+              // the label. Enumerating conditions in two places is the bug; there is now one
+              // place, so the two cannot disagree.
+              // Returns null if ANY read failed — an unreadable condition is never a pass.
+              const readConditions = async (num, sha, baseRef) => {
+                const cmp = await ok(`PR #${num} compare`, () =>
+                  github.rest.repos.compareCommits({ ...base, base: baseRef, head: sha })
+                    .then(r => r.data));
+                if (!cmp) return null;
+
+                const runs = await github.paginate(github.rest.checks.listForRef, {
+                  ...base, ref: sha, per_page: 100,
+                });
+                const byName = new Map();
+                for (const c of runs) {
+                  if (!byName.has(c.name)) byName.set(c.name, []);
+                  byName.get(c.name).push(c);
+                }
+                // A run only has a meaningful `conclusion` once `status === 'completed'`, and
+                // sorting on started_at alone lets a queued run with a null timestamp lose to
+                // an older completed one — either way an OLD success stands in for a NEW run.
+                const ts = (c) => {
+                  const t = Date.parse(c.completed_at || c.started_at || '');
+                  return Number.isNaN(t) ? -1 : t;
+                };
+                const checksOk = REQUIRED_CHECKS.every((n) => {
+                  const all = byName.get(n) || [];
+                  if (!all.length) return false;                              // never ran
+                  if (all.some(c => c.status !== 'completed')) return false;  // still in flight
+                  const newest = all.reduce((a, b) => (ts(b) >= ts(a) ? b : a));
+                  return CHECK_DONE.includes(newest.conclusion);
+                });
+
+                const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                  ...base, pull_number: num, per_page: 100,
+                });
+                // PENDING is not submitted — counting it treats a review that has not
+                // happened as a pass.
+                const reviewedHead = new Set(
+                  reviews.filter(r => r.commit_id === sha &&
+                                      ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED'].includes(r.state))
+                         .map(r => (r.user?.login || '').replace(/\[bot\]$/, ''))
+                );
+
+                // Paginate: `first: 100` silently truncates, and a truncated page reads as
+                // "no unresolved threads".
+                let unresolved = 0, cursor = null;
+                do {
+                  const q = await ok(`PR #${num} threads`, () => github.graphql(`
+                    query($owner:String!,$repo:String!,$num:Int!,$cursor:String){
+                      repository(owner:$owner,name:$repo){
+                        pullRequest(number:$num){
+                          reviewThreads(first:100, after:$cursor){
+                            pageInfo{ hasNextPage endCursor } nodes{ isResolved } } } } }`,
+                    { owner: base.owner, repo: base.repo, num, cursor }));
+                  if (!q) return null;
+                  const t = q.repository.pullRequest.reviewThreads;
+                  unresolved += t.nodes.filter(n => !n.isResolved).length;
+                  cursor = t.pageInfo.hasNextPage ? t.pageInfo.endCursor : null;
+                } while (cursor);
+
+                return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, unresolved };
+              };
+
               const labelledSha = marks.length
                 ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
                 : null;
@@ -137,71 +206,11 @@ jobs:
                 github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
               if (!prFull) continue;
 
-              // Behind-ness is MEASURED, not inferred from mergeable_state (which mixes
-              // concerns and can be `unknown` while GitHub computes).
-              const cmp = await ok(`PR #${pr.number} compare`, () =>
-                github.rest.repos.compareCommits({ ...base, base: pr.base.ref, head: pr.head.sha })
-                  .then(r => r.data));
-              const upToDate = cmp ? cmp.behind_by === 0 : false;
-
-              const runs = await github.paginate(github.rest.checks.listForRef, {
-                ...base, ref: pr.head.sha, per_page: 100,
-              });
-              // listForRef is newest-first, so keeping the last entry per name would keep the
-              // OLDEST run and let a stale failure mask a passing re-run.
-              // Two traps here, both of which let an OLD success stand in for a NEW run:
-              //   * sorting by started_at alone — a queued/in-progress run can have a null or
-              //     unparsable started_at, so it loses to an older completed one;
-              //   * reading `conclusion` without checking `status` — a run only has a
-              //     meaningful conclusion once it is `completed`.
-              // So: if ANY run for a required check is not completed, the check is still in
-              // flight and we hold. Only when every run has completed do we judge the newest.
-              const byName = new Map();
-              for (const c of runs) {
-                if (!byName.has(c.name)) byName.set(c.name, []);
-                byName.get(c.name).push(c);
-              }
-              const ts = (c) => {
-                const t = Date.parse(c.completed_at || c.started_at || '');
-                return Number.isNaN(t) ? -1 : t;
-              };
-              const checksOk = REQUIRED_CHECKS.every((n) => {
-                const all = byName.get(n) || [];
-                if (!all.length) return false;                              // never ran
-                if (all.some(c => c.status !== 'completed')) return false;  // still in flight
-                const newest = all.reduce((a, b) => (ts(b) >= ts(a) ? b : a));
-                return CHECK_DONE.includes(newest.conclusion);
-              });
-
-              const reviews = await github.paginate(github.rest.pulls.listReviews, {
-                ...base, pull_number: pr.number, per_page: 100,
-              });
-              // PENDING reviews are not submitted — counting one treats a review that has not
-              // happened as a pass.
-              const reviewedHead = new Set(
-                reviews.filter(r => r.commit_id === pr.head.sha &&
-                                    ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED'].includes(r.state))
-                       .map(r => (r.user?.login || '').replace(/\[bot\]$/, ''))
-              );
-
-              // Paginate review threads too — `first: 100` silently truncates.
-              let unresolved = 0, cursor = null, threadsOk = true;
-              do {
-                const q = await ok(`PR #${pr.number} threads`, () => github.graphql(`
-                  query($owner:String!,$repo:String!,$num:Int!,$cursor:String){
-                    repository(owner:$owner,name:$repo){
-                      pullRequest(number:$num){
-                        reviewThreads(first:100, after:$cursor){
-                          pageInfo{ hasNextPage endCursor }
-                          nodes{ isResolved }
-                        } } } }`,
-                  { owner: base.owner, repo: base.repo, num: pr.number, cursor }));
-                if (!q) { threadsOk = false; break; }
-                const t = q.repository.pullRequest.reviewThreads;
-                unresolved += t.nodes.filter(n => !n.isResolved).length;
-                cursor = t.pageInfo.hasNextPage ? t.pageInfo.endCursor : null;
-              } while (cursor);
-              if (!threadsOk) { core.info(`PR #${pr.number}: could not read threads — holding`); continue; }
+              // Behind-ness is MEASURED here (inside readConditions), not inferred from
+              // mergeable_state, which mixes concerns and can be `unknown` while GitHub computes.
+              const st = await readConditions(pr.number, pr.head.sha, pr.base.ref);
+              if (!st) { core.info(`PR #${pr.number}: could not read conditions — holding`); continue; }
+              const { upToDate, checksOk, reviewedHead, unresolved } = st;
 
               // Summon what we wait for; both are manual-trigger only.
               const requested = new Set((prFull.requested_reviewers || [])
@@ -277,40 +286,26 @@ jobs:
                 continue;
               }
 
-              // REVALIDATE the head immediately before acting. `pulls.list` was fetched at the
-              // top of the sweep; a push since then would label a head nothing has reviewed.
-              // Revalidate the CONDITIONS, not just the SHA. Threads can be opened and a
-              // branch can fall behind without any push, so an unchanged head is not
-              // evidence that what was true at the top of the sweep is still true.
+              // REVALIDATE immediately before acting, through the SAME reader — so every
+              // condition is re-checked, not the three that happened to get copied here.
+              // `pulls.list` was fetched at the top of the sweep, and the summon calls above
+              // take real time; a push, a red re-run, a new review or a new thread in that
+              // window would otherwise be labelled as green.
               const fresh = await ok(`PR #${pr.number} revalidate`, () =>
                 github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
               if (!fresh || fresh.head.sha !== pr.head.sha) {
                 core.info(`PR #${pr.number}: head moved during the sweep — skipping this pass`);
                 continue;
               }
-              const cmp2 = await ok(`PR #${pr.number} recompare`, () =>
-                github.rest.repos.compareCommits({ ...base, base: pr.base.ref, head: pr.head.sha })
-                  .then(r => r.data));
-              if (!cmp2 || cmp2.behind_by !== 0) {
-                core.info(`PR #${pr.number}: fell behind during the sweep — skipping this pass`);
-                continue;
-              }
-              let late = 0, c2 = null, lateOk = true;
-              do {
-                const q2 = await ok(`PR #${pr.number} rethreads`, () => github.graphql(`
-                  query($owner:String!,$repo:String!,$num:Int!,$cursor:String){
-                    repository(owner:$owner,name:$repo){
-                      pullRequest(number:$num){
-                        reviewThreads(first:100, after:$cursor){
-                          pageInfo{ hasNextPage endCursor } nodes{ isResolved } } } } }`,
-                  { owner: base.owner, repo: base.repo, num: pr.number, cursor: c2 }));
-                if (!q2) { lateOk = false; break; }
-                const t2 = q2.repository.pullRequest.reviewThreads;
-                late += t2.nodes.filter(n => !n.isResolved).length;
-                c2 = t2.pageInfo.hasNextPage ? t2.pageInfo.endCursor : null;
-              } while (c2);
-              if (!lateOk || late > 0) {
-                core.info(`PR #${pr.number}: ${lateOk ? late + ' thread(s) opened during the sweep' : 'could not re-read threads'} — skipping this pass`);
+              const st2 = await readConditions(pr.number, pr.head.sha, pr.base.ref);
+              if (!st2) { core.info(`PR #${pr.number}: could not re-read conditions — skipping this pass`); continue; }
+              // codexOk is deliberately NOT re-derived: for a fixed head it only ever goes
+              // false->true (Codex reviews, or the grace elapses), so the value decided above
+              // cannot be stale-true. Every non-monotonic condition comes from st2.
+              if (!(st2.checksOk && st2.reviewedHead.has(COPILOT) && st2.upToDate && st2.unresolved === 0)) {
+                core.info(`PR #${pr.number}: conditions changed during the sweep ` +
+                          `(checks=${st2.checksOk} copilot=${st2.reviewedHead.has(COPILOT)} ` +
+                          `upToDate=${st2.upToDate} unresolved=${st2.unresolved}) — skipping this pass`);
                 continue;
               }
 
