@@ -108,6 +108,8 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 
 ---
 
+- **Brain tool-selection reliability (2026-07-27):** the brain samples its tool choice at `--temp 0.7` with no per-request override, so `test_tool_action_dispatches` fails ~14%. **Not user-visible** — `ZOE_ROUTER_HEAD=active` decides that utterance at tier 1.5 and it never reaches the brain (verified live); the cost is wasted bisecting, and that is already neutralised (durable failure capture + `-m "ci_safe and not integration"`). Investigation, disproved hypotheses (prompt rewording measured WORSE) and a phased plan: [`docs/architecture/brain-tool-selection-reliability.md`](architecture/brain-tool-selection-reliability.md). **BLOCKED on a reproducer** — nothing reproduces the failure on demand (20/20 isolated, 120/120 synthetic), so no fix is currently falsifiable. Needs a quiet ≥2GB window and authorization to stop the brain; the box hit **13MB available** during investigation. Dropping it is a legitimate outcome.
+
 ## 🗂️ Backlog — pinned & sequenced (from Jason, 2026-06-23)
 *Agent/tooling readiness for remote work. Each is a tracked item; do them in order, don't bounce.*
 
