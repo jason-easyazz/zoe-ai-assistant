@@ -82,6 +82,11 @@ jobs:
             // the credit is already spent. A bounded wait satisfies both: Greptile really is
             // last when Codex participates, and an absent Codex cannot deadlock the gate.
             const CODEX_GRACE_MIN = 20;
+            // Copilot gets the SAME bounded-wait treatment. It previously had none, so
+            // an unresponsive Copilot held the gate indefinitely — measured 2026-07-27:
+            // two ready PRs sat >40min at copilot=false while every other condition was
+            // green. The clock starts at the summon marker below, exactly like Codex.
+            const COPILOT_GRACE_MIN = 20;
 
             const ok = async (label, fn) => {
               try { return await fn(); }
@@ -286,7 +291,25 @@ jobs:
                     { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
                 });
                 if (r) core.info(`PR #${pr.number}: requested Copilot`);
-                else core.warning(`PR #${pr.number}: could NOT request Copilot — the gate will hold until it reviews`);
+                else core.warning(`PR #${pr.number}: could NOT request Copilot — holding until it reviews or the grace elapses`);
+              }
+
+              // Grace anchor for Copilot: the GraphQL review-request leaves no timestamped
+              // artifact, so post the same trusted-marker pattern Codex uses. Posted when
+              // this head has neither a Copilot review nor a marker — INDEPENDENT of the
+              // requested_reviewers state, because a pending request with no marker would
+              // otherwise never start the clock.
+              const copilotMark = `<!-- greptile-gate:copilot:${sha} -->`;
+              const copilotSummons = comments.filter(c => c.body?.includes(copilotMark) && trusted(c))
+                                             .sort(byCreated);
+              let copilotSummon = copilotSummons.length ? copilotSummons[copilotSummons.length - 1] : undefined;
+              if (!reviewedHead.has(COPILOT) && !copilotSummon) {
+                const m = await ok(`PR #${pr.number} copilot marker`, () =>
+                  github.rest.issues.createComment({
+                    ...base, issue_number: pr.number,
+                    body: `Waiting for Copilot on \`${sha.slice(0, 8)}\` (bounded ${COPILOT_GRACE_MIN}min).\n${copilotMark}`,
+                  }));
+                if (m) copilotSummon = m.data;
               }
 
               const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
@@ -322,7 +345,14 @@ jobs:
                 core.info(`PR #${pr.number}: Codex grace elapsed — proceeding`);
               }
 
-              const copilotOk = reviewedHead.has(COPILOT);
+              const copilotGraceElapsed = copilotSummon
+                ? (Date.now() - new Date(copilotSummon.created_at)) / 60000 >= COPILOT_GRACE_MIN
+                : false;
+              const copilotPasses = (rh) => rh.has(COPILOT) || copilotGraceElapsed;
+              const copilotOk = copilotPasses(reviewedHead);
+              if (copilotOk && !reviewedHead.has(COPILOT)) {
+                core.info(`PR #${pr.number}: Copilot grace elapsed — proceeding`);
+              }
               const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
 
               if (alreadyHandedOff) {
@@ -343,13 +373,13 @@ jobs:
                 // null blocks LABELLING the asymmetry runs the other way: a false
                 // label spends the review this gate exists to protect.
                 if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
-                const stillOk = now.checksOk && now.reviewedHead.has(COPILOT) &&
+                const stillOk = now.checksOk && copilotPasses(now.reviewedHead) &&
                                 codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
                 if (!stillOk) {
                   const r = await ok(`PR #${pr.number} revoke label`, () =>
                     github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
                   if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${now.checksOk} ` +
-                                   `copilot=${now.reviewedHead.has(COPILOT)} codex=${codexPasses(now.reviewedHead)} ` +
+                                   `copilot=${copilotPasses(now.reviewedHead)} codex=${codexPasses(now.reviewedHead)} ` +
                                    `upToDate=${now.upToDate} unresolved=${now.unresolved}) — label revoked`);
                 }
                 continue;
@@ -373,10 +403,11 @@ jobs:
               // claim is false: a review can be DISMISSED, which drops it back out of the
               // submitted-review set. No condition here gets to be special.
               const codexOk2 = codexPasses(st2.reviewedHead);
-              if (!(st2.checksOk && st2.reviewedHead.has(COPILOT) && codexOk2 &&
+              const copilotOk2 = copilotPasses(st2.reviewedHead);
+              if (!(st2.checksOk && copilotOk2 && codexOk2 &&
                     st2.upToDate && st2.unresolved === 0)) {
                 core.info(`PR #${pr.number}: conditions changed during the sweep ` +
-                          `(checks=${st2.checksOk} copilot=${st2.reviewedHead.has(COPILOT)} ` +
+                          `(checks=${st2.checksOk} copilot=${copilotOk2} ` +
                           `codex=${codexOk2} upToDate=${st2.upToDate} unresolved=${st2.unresolved}) — skipping this pass`);
                 continue;
               }
