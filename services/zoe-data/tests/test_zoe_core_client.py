@@ -29,6 +29,18 @@ first hypothesis should be model nondeterminism, not your diff. Re-run before
 investigating. Genuinely deterministic behaviour belongs in a stubbed unit test,
 not here.
 
+TO SKIP THEM while verifying an unrelated change (they are the only six
+`integration`-marked tests here, 6 of 5538 in the zoe-data suite):
+
+    pytest services/zoe-data/tests -m "ci_safe and not integration"
+
+WHEN ONE DOES FAIL, the losing tool choice is now written to
+``~/.zoe-logs/nondeterministic-test-failures.jsonl`` (override with
+``ZOE_NONDET_FAILURE_LOG``) with the full dispatch bodies and request trace.
+Console output kept getting truncated before the evidence could be read, which
+is why the competing tool is still unknown and the prompt has not been
+disambiguated yet. Check that file first.
+
 PRECEDENT + THE PREFERRED FIX. This is not new: see
 ``test_web_query_delegates_and_synthesizes`` below, whose docstring records the
 same class — "the old weather-phrased prompt became ambiguous once the brain grew
@@ -55,6 +67,7 @@ import json
 import os
 import shutil
 import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -87,6 +100,30 @@ def _skip_reason() -> str | None:
 
 _SKIP = _skip_reason()
 requires_env = pytest.mark.skipif(_SKIP is not None, reason=_SKIP or "")
+
+
+
+_FAILURE_LOG = Path(
+    os.environ.get("ZOE_NONDET_FAILURE_LOG")
+    or Path.home() / ".zoe-logs" / "nondeterministic-test-failures.jsonl"
+)
+
+
+def _record_nondeterministic_failure(test: str, **detail: Any) -> None:
+    """Append one live-model failure to a durable log. Never fails the test.
+
+    These tests assert what the live brain CHOSE, so a failure's only real value
+    is the losing choice — and that is exactly what console truncation keeps
+    eating. Written as JSONL next to the other Zoe logs so the evidence is still
+    there when someone comes to deflake the prompt.
+    """
+    try:
+        _FAILURE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_FAILURE_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"test": test, "ts": time.time(), **detail},
+                               default=str) + "\n")
+    except Exception:
+        pass  # diagnostics must never turn a flake into an error
 
 
 class _Stub:
@@ -258,6 +295,21 @@ async def test_tool_action_dispatches(stub):
     s, zc = stub
     await zc.run_zoe_core("Add bread to my shopping list.", "s2", "family-admin")
     intents = [d.get("intent") for d in s.dispatches()]
+    if "list_add" not in intents:
+        # PERSIST the losing choice before asserting. This test fails ~14% of
+        # runs and the deflake (disambiguating the prompt, as #1079 did for
+        # test_web_query_delegates_and_synthesizes) needs to know WHICH tool the
+        # model picked instead — but every capture attempt so far has lost it to
+        # truncated CI/console output, so the competing tool is still unknown.
+        # A file survives truncation and outlives the run.
+        _record_nondeterministic_failure(
+            "test_tool_action_dispatches",
+            prompt="Add bread to my shopping list.",
+            expected="list_add",
+            intents=intents,
+            dispatches=s.dispatches(),
+            requests=s.requests,
+        )
     assert "list_add" in intents, f"no list_add; got {intents}"
 
 
