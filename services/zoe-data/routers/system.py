@@ -1985,11 +1985,25 @@ async def _hermes_review_proposal(proposal: dict) -> tuple[bool, str]:
 async def evolution_proposal_action(
     proposal_id: str,
     body: dict,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_admin),
 ):
     """Act on an evolution proposal: approve|reject|defer.
 
-    On approve: creates a Multica board issue and queues Hermes implementation.
+    ADMIN ONLY. Approving is a privileged state change even when auto-execution
+    is gated separately: it marks a self-modification proposal as sanctioned, and
+    an approved+executable proposal is what the board lane implements and merges.
+    Previously this took `get_current_user`, so any authenticated caller (and the
+    unauthenticated default identity) could persist status='approved'.
+
+    On approve (conditional, decided by may_auto_execute):
+      * review-only proposals — sync/update a Multica DISPLAY issue and run the
+        Hermes proposal pre-review; nothing is executed.
+      * admin-approved EXECUTABLE proposals (autonomy contract allows it) — skip
+        the display sync and Hermes pre-review entirely and bridge the proposal
+        to the board runner's lane (todo issue -> Omnigent -> gated PR -> merge).
+        Re-approval NEVER re-enqueues: any prior board issue (even a failed one)
+        is returned as-is unless the body carries an explicit `retry: true`, and
+        even then only failed (blocked/cancelled) runs are retried.
     On reject: archives the proposal.
     On defer: snoozes for 7 days.
     """
@@ -2011,112 +2025,252 @@ async def evolution_proposal_action(
         proposal = dict(rows[0])
 
         if action == "approve":
+            # Decide auto-execution ONCE, up front (admin + execution gate,
+            # fail-closed), so the REST display-sync below can be skipped for
+            # auto-executing proposals.
+            from proposal_board_bridge import may_auto_execute  # type: ignore[import]
+            _allowed, _exec_reason = may_auto_execute(user, proposal)
+
             existing_multica_id = proposal.get("multica_issue_id")
             multica_issue_id = existing_multica_id
-            try:
-                from multica_client import (  # type: ignore[import]
-                    sync_evolution_proposal_to_multica,
-                    update_multica_issue_on_proposal_status_change,
-                )
-                if existing_multica_id:
-                    # Issue already created by run_evolution_notice — update status
-                    await update_multica_issue_on_proposal_status_change(
-                        existing_multica_id, "approved"
+            # Sync a Multica DISPLAY issue ONLY for review-only proposals. An
+            # auto-executing proposal's issue is owned by the board runner (its
+            # status flows todo→in_progress→done); calling
+            # update_multica_issue_on_proposal_status_change('approved'→in_progress)
+            # here — especially on a RE-approve, when multica_issue_id is already
+            # the board issue — would clobber that real board status.
+            if not _allowed:
+                try:
+                    from multica_client import (  # type: ignore[import]
+                        sync_evolution_proposal_to_multica,
+                        update_multica_issue_on_proposal_status_change,
                     )
-                else:
-                    # Create issue now (proposal pre-dates the sync or created outside NOTICE)
-                    new_id = await sync_evolution_proposal_to_multica(
-                        proposal_id=proposal_id,
-                        title=proposal["title"],
-                        description=proposal["description"],
-                        evidence=proposal.get("evidence", ""),
-                        proposal_type=proposal.get("type", "intent_pattern"),
-                        contract_snapshot=proposal.get("target_patterns"),
-                    )
-                    if new_id:
-                        multica_issue_id = new_id
-                        await update_multica_issue_on_proposal_status_change(new_id, "approved")
-            except Exception as exc:
-                logger.warning("Could not sync Multica for proposal %s: %s", proposal_id, exc)
-
-            await db.execute(
-                """UPDATE evolution_proposals
-                   SET status='approved', reviewed_at=$1, multica_issue_id=$2
-                   WHERE id=$3""",
-                _time.time(), multica_issue_id, proposal_id,
-            )
-            # Hermes code-review gate before queuing implementation.
-            # Fails open — if Hermes is unavailable we proceed normally.
-            try:
-                _h_approved, _h_feedback = await _hermes_review_proposal(proposal)
-                if not _h_approved and re.search(r"CONCERNS:|REJECT", _h_feedback, re.IGNORECASE):
-                    logger.info(
-                        "evolution_approve: Hermes flagged concerns for proposal %s", proposal_id
-                    )
-                    if multica_issue_id:
+                    if existing_multica_id:
+                        # Issue already created by run_evolution_notice — update status.
+                        # NEVER for a board-lane issue: 'approved'→in_progress would
+                        # silently RESUME a cancelled/blocked autonomous run from this
+                        # review-only path, bypassing the bridge's explicit-retry gate
+                        # (a previously-executable proposal whose gate now blocks lands
+                        # here with multica_issue_id = the real board issue). Unknown
+                        # provenance (probe failure) also skips — fail toward NOT
+                        # touching an issue we can't classify.
+                        _display_issue = False
                         try:
-                            from multica_client import get_multica_client  # type: ignore[import]
-                            _mc = get_multica_client()
-                            if _mc.is_configured():
-                                async with httpx.AsyncClient(timeout=30) as _hc:
-                                    _cur_desc = proposal.get("description", "")
-                                    await _hc.put(
-                                        f"{_mc._base}/api/issues/{multica_issue_id}",
-                                        json={"description": f"{_cur_desc}\n\nHermes review:\n{_h_feedback}"},
-                                        headers=_mc._headers(),
-                                    )
-                        except Exception as _exc:
-                            logger.warning(
-                                "evolution_approve: could not append Hermes feedback to Multica issue: %s", _exc
+                            from proposal_board_bridge import is_board_lane_issue  # type: ignore[import]
+                            _display_issue = not await is_board_lane_issue(
+                                existing_multica_id, proposal_id
                             )
-                    await db.execute(
-                        "UPDATE evolution_proposals SET status='pending' WHERE id=$1", proposal_id
-                    )
-                    return {"ok": True, "action": "hermes_review_required", "feedback": _h_feedback}
-                logger.info("evolution_approve: Hermes cleared proposal %s", proposal_id)
-            except Exception as exc:
-                logger.warning(
-                    "evolution_approve: Hermes review failed — proceeding without review for proposal %s: %s",
-                    proposal_id, exc,
+                        except Exception as _pe:  # noqa: BLE001
+                            logger.warning(
+                                "evolution_approve: cannot classify issue %s (%s) — "
+                                "skipping display-status update", existing_multica_id, _pe,
+                            )
+                        if _display_issue:
+                            await update_multica_issue_on_proposal_status_change(
+                                existing_multica_id, "approved"
+                            )
+                    else:
+                        # Create issue now (proposal pre-dates the sync or created outside NOTICE)
+                        new_id = await sync_evolution_proposal_to_multica(
+                            proposal_id=proposal_id,
+                            title=proposal["title"],
+                            description=proposal["description"],
+                            evidence=proposal.get("evidence", ""),
+                            proposal_type=proposal.get("type", "intent_pattern"),
+                            contract_snapshot=proposal.get("target_patterns"),
+                        )
+                        if new_id:
+                            multica_issue_id = new_id
+                            await update_multica_issue_on_proposal_status_change(new_id, "approved")
+                except Exception as exc:
+                    logger.warning("Could not sync Multica for proposal %s: %s", proposal_id, exc)
+
+            if _allowed:
+                # Auto-exec path: do NOT re-write the prior multica_issue_id here —
+                # it is a REST display/phantom id about to be superseded. The
+                # bridge's link update below is the sole writer of the board issue
+                # id, so a link failure leaves the ORIGINAL value (flagged via
+                # dispatch.warning) instead of a freshly-written stale one.
+                # Conditional on the autonomy contract the gate ACTUALLY checked:
+                # a concurrent write to autonomy_class/approval_required between the
+                # SELECT and here would decouple "what the gate authorized" from
+                # "what was persisted" (TOCTOU). 0 rows → the contract moved under
+                # us → refuse rather than execute on a stale authorization.
+                _upd = await db.execute(
+                    """UPDATE evolution_proposals
+                       SET status='approved', reviewed_at=$1
+                       WHERE id=$2
+                         AND autonomy_class IS NOT DISTINCT FROM $3
+                         AND approval_required IS NOT DISTINCT FROM $4""",
+                    _time.time(), proposal_id,
+                    proposal.get("autonomy_class"), proposal.get("approval_required"),
                 )
-
-            # Dispatch the approved proposal to the Kanban executor (via Multica issue).
-            _dispatch = None
-            try:
-                from executor_registry import dispatch_issue  # type: ignore[import]
-                from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
-
-                if multica_issue_id:
-                    _issue = {
-                        "id": multica_issue_id,
-                        "identifier": proposal_id,
-                        "title": proposal["title"],
-                        "description": (
-                            f"Implement evolution proposal {proposal_id}: "
-                            f"{proposal['title']}.\n\n{proposal['description']}"
-                        ),
-                        "assignee_id": get_engineering_multica_agent_id(),
-                    }
-                    _dispatch = await dispatch_issue(_issue)
-                    logger.info(
-                        "evolution_approve: dispatched proposal %s -> %s",
-                        proposal_id, _dispatch.get("chain") if _dispatch.get("ok") else _dispatch,
+                # db is AsyncpgCompat: execute() returns a _Cursor whose rowcount
+                # is parsed from asyncpg's status tag — NOT the status string
+                # itself (a string check here compared against a _Cursor repr and
+                # never fired; caught by review).
+                if getattr(_upd, "rowcount", None) == 0:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Proposal's autonomy contract changed during approval — re-read and retry",
                     )
-                else:
-                    # No Multica issue to anchor the journaled engineering run (Multica
-                    # unconfigured or the issue sync failed). Surface it so the
-                    # approved proposal does not sit undispatched silently.
-                    _dispatch = {"ok": False, "reason": "no multica_issue_id; proposal approved but not dispatched"}
+            else:
+                await db.execute(
+                    """UPDATE evolution_proposals
+                       SET status='approved', reviewed_at=$1, multica_issue_id=$2
+                       WHERE id=$3""",
+                    _time.time(), multica_issue_id, proposal_id,
+                )
+            # Hermes PROPOSAL pre-review gate — REVIEW-ONLY proposals only.
+            # An auto-executing proposal is skipped here: it is already authorized
+            # (admin + execution gate) and the CODE it produces is reviewed
+            # downstream by the board lane (focused tests + review gate + greploop
+            # before merge). Running this gate for auto-exec proposals is both
+            # redundant AND unsafe — on a re-approve it could revert the proposal
+            # to 'pending' and return early while an already-live board issue keeps
+            # running (proposal says human-review-needed, board says implementing).
+            # Fails open — if Hermes is unavailable we proceed normally.
+            if not _allowed:
+                try:
+                    _h_approved, _h_feedback = await _hermes_review_proposal(proposal)
+                    if not _h_approved and re.search(r"CONCERNS:|REJECT", _h_feedback, re.IGNORECASE):
+                        logger.info(
+                            "evolution_approve: Hermes flagged concerns for proposal %s", proposal_id
+                        )
+                        if multica_issue_id:
+                            try:
+                                from multica_client import get_multica_client  # type: ignore[import]
+                                _mc = get_multica_client()
+                                if _mc.is_configured():
+                                    async with httpx.AsyncClient(timeout=30) as _hc:
+                                        _cur_desc = proposal.get("description", "")
+                                        await _hc.put(
+                                            f"{_mc._base}/api/issues/{multica_issue_id}",
+                                            json={"description": f"{_cur_desc}\n\nHermes review:\n{_h_feedback}"},
+                                            headers=_mc._headers(),
+                                        )
+                            except Exception as _exc:
+                                logger.warning(
+                                    "evolution_approve: could not append Hermes feedback to Multica issue: %s", _exc
+                                )
+                        await db.execute(
+                            "UPDATE evolution_proposals SET status='pending' WHERE id=$1", proposal_id
+                        )
+                        return {"ok": True, "action": "hermes_review_required", "feedback": _h_feedback}
+                    logger.info("evolution_approve: Hermes cleared proposal %s", proposal_id)
+                except Exception as exc:
                     logger.warning(
-                        "evolution_approve: proposal %s approved but NOT dispatched — %s",
-                        proposal_id, _dispatch["reason"],
+                        "evolution_approve: Hermes review failed — proceeding without review for proposal %s: %s",
+                        proposal_id, exc,
                     )
-            except Exception as exc:
-                _dispatch = {"ok": False, "reason": str(exc)}
-                logger.warning("evolution_approve: could not dispatch proposal to Kanban: %s", exc)
+
+            # Land the approved proposal on the board runner's PROVEN lane.
+            # The old executor_registry.dispatch_issue path went to the Kanban
+            # PHASE pipeline whose consumer (Hermes / the Flue live-runner) is
+            # retired — so proposals stranded, reaching no live executor
+            # (docs/architecture/multica-executor-migration.md §6). The board
+            # runner instead claims 'todo' issues from its workspace and drives
+            # them through Omnigent end-to-end; proven on proposal 631f4b5e
+            # (bridge -> issue #6112 -> PR #1555 merged). The issue body is built
+            # from the proposal's OWN fields only (never caller text).
+            # Auto-executing a proposal means Zoe autonomously writes and (via the
+            # greploop gate) MERGES her own code. That is gated on TWO fail-closed
+            # controls, both required, before the bridge is allowed to run:
+            #   1. AUTHORIZATION — the approver must hold the admin role. A plain
+            #      authenticated (or the unauthenticated-default) user must not be
+            #      able to trigger autonomous code execution.
+            #   2. EXECUTION GATE — evaluate_execution_gate must allow it (executable
+            #      autonomy_class + satisfied approval_required). Proposals without a
+            #      populated autonomy contract fail closed and are NOT auto-executed.
+            # Reuse the decision computed up front (_allowed/_exec_reason) — the
+            # REST display-sync above already depended on it.
+            _dispatch = None
+            if not _allowed:
+                # A review-only approval is a SUCCESS, not an execution failure —
+                # ok reflects the dispatch outcome; auto_executed=False + reason
+                # convey that nothing was (intentionally) executed.
+                _dispatch = {"ok": True, "auto_executed": False, "reason": _exec_reason}
+                logger.info(
+                    "evolution_approve: proposal %s approved but NOT auto-executed (%s)",
+                    proposal_id, _exec_reason,
+                )
+            else:
+                try:
+                    from proposal_board_bridge import create_board_issue_for_proposal  # type: ignore[import]
+                    from executors.executor_queue_backend import get_pool  # type: ignore[import]
+
+                    prop_row = {
+                        "id": proposal_id,
+                        "title": proposal["title"],
+                        "description": proposal["description"],
+                        "evidence": proposal.get("evidence"),
+                        "multica_issue_id": multica_issue_id,
+                    }
+                    pool = await get_pool()
+                    async with pool.acquire() as _mconn:
+                        # retry=true in the request body is the ONLY way a prior
+                        # failed (blocked/cancelled) run gets a second enqueue —
+                        # re-approval alone always returns the existing issue.
+                        # STRICT JSON true: bool() would authorize "false", 1, [].
+                        bridged = await create_board_issue_for_proposal(
+                            _mconn, prop_row, allow_retry=body.get("retry") is True,
+                        )
+                    _prior = multica_issue_id
+                    _link_warning = None
+                    if bridged.get("issue_id"):
+                        # Point the proposal at the REAL board issue (replacing any
+                        # phantom id from the earlier Multica REST create). The board
+                        # issue is already COMMITTED at this point — a failure here
+                        # must not be reported as an execution failure (the run IS
+                        # enqueued); it only degrades the back-link.
+                        multica_issue_id = bridged["issue_id"]
+                        try:
+                            await db.execute(
+                                "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                                multica_issue_id, proposal_id,
+                            )
+                        except Exception as _le:  # noqa: BLE001
+                            _link_warning = f"board issue created but proposal link update failed: {_le}"
+                            logger.warning("evolution_approve: %s", _link_warning)
+                        # If a NEW board issue superseded a prior REST-synced issue,
+                        # cancel that orphan so it doesn't linger on multica-web.
+                        if bridged.get("created") and _prior and _prior != multica_issue_id:
+                            try:
+                                from multica_client import update_multica_issue_on_proposal_status_change  # type: ignore[import]
+                                await update_multica_issue_on_proposal_status_change(_prior, "failed")
+                            except Exception as _oe:  # noqa: BLE001 - cleanup is best-effort
+                                logger.debug("evolution_approve: orphan REST issue cleanup skipped: %s", _oe)
+                    # auto_executed is true only when a NEW run was enqueued — a
+                    # re-approve that returns an existing (e.g. done) issue did not.
+                    _dispatch = {"ok": True, "auto_executed": bool(bridged.get("created")),
+                                 "board_issue": bridged["number"], "created": bridged["created"],
+                                 "issue_status": bridged.get("status")}
+                    if _link_warning:
+                        _dispatch["warning"] = _link_warning
+                    logger.info(
+                        "evolution_approve: proposal %s -> board issue #%s (created=%s)",
+                        proposal_id, bridged["number"], bridged["created"],
+                    )
+                except Exception as exc:
+                    # The proposal is approved (persisted), but execution did NOT
+                    # start. Say so explicitly — always include auto_executed=false
+                    # so a client can't read this as a running implementation. It
+                    # is retryable: the bridge's idempotency creates a fresh run on
+                    # a later re-approve when no live issue exists.
+                    _dispatch = {"ok": False, "auto_executed": False,
+                                 "reason": f"approved, but auto-execution failed: {exc}"}
+                    logger.warning("evolution_approve: board bridge failed for %s: %s", proposal_id, exc)
+            # top-level auto_executed = a NEW run was enqueued this call (false for
+            # an idempotent re-approve that returned an already-live/done issue).
+            # 'execution_failed' is keyed on the dispatch's OK, not on auto_executed:
+            # an idempotent re-approve is a SUCCESS (issue already running), only a
+            # bridge error (dispatch ok=false) is a failure.
+            _auto_executed = bool(_dispatch and _dispatch.get("auto_executed"))
+            _exec_failed = bool(_allowed and _dispatch and not _dispatch.get("ok", True))
             return {
                 "ok": True,
-                "action": "approved",
+                "action": "approved_execution_failed" if _exec_failed else "approved",
+                "auto_executed": _auto_executed,
                 "multica_issue_id": multica_issue_id,
                 "dispatch": _dispatch,
             }
