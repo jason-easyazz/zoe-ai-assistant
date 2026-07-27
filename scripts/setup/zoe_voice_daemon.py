@@ -124,6 +124,15 @@ try:
     ZOE_VAD_TAIL_DEEP_PROB = float(os.environ.get("ZOE_VAD_TAIL_DEEP_PROB") or 0.10)
 except ValueError:
     ZOE_VAD_TAIL_DEEP_PROB = 0.10
+# Clamp: the whole safety design is deep < ambiguous < speech. A value at or
+# above VAD_ENDPOINT_THRESHOLD makes EVERY quiet chunk "deep" (borderline
+# pauses take the fast exit — the exact cut-people-off failure the gate
+# prevents), and NaN/inf comparisons are silently False. Misconfiguration
+# degrades to the safe default, never to a sharper knife.
+if not (0.0 < ZOE_VAD_TAIL_DEEP_PROB < VAD_ENDPOINT_THRESHOLD):
+    log.warning("ZOE_VAD_TAIL_DEEP_PROB=%r outside (0, %s); using 0.10",
+                ZOE_VAD_TAIL_DEEP_PROB, VAD_ENDPOINT_THRESHOLD)
+    ZOE_VAD_TAIL_DEEP_PROB = 0.10
 # Default 0.28 — 0.35 misses many real mics/rooms; tune via WAKEWORD_THRESHOLD.
 WAKEWORD_THRESHOLD = float(_env("WAKEWORD_THRESHOLD", "0.28", "OWW_THRESHOLD"))
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no")

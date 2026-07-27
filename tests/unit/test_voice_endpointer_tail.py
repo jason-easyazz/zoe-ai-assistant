@@ -62,6 +62,15 @@ def make_endpointer(daemon, monkeypatch, probs, tail_ms, spoke=False):
     monkeypatch.setattr(daemon, "VAD_ENDPOINT_ENABLED", True)
     monkeypatch.setattr(daemon, "_get_silero_vad", lambda: (object(), None))
     monkeypatch.setattr(daemon, "ZOE_VAD_TAIL_MS", tail_ms)
+    # Pin EVERY threshold the decision table depends on — the module read them
+    # from the process env at import, so a developer (or CI lane) running with
+    # VAD_ENDPOINT_SILENCE_S etc. set would silently shift every expected chunk
+    # count in this file (Copilot, #1573).
+    monkeypatch.setattr(daemon, "ZOE_VAD_TAIL_DEEP_PROB", 0.10)
+    monkeypatch.setattr(daemon, "VAD_ENDPOINT_THRESHOLD", 0.35)
+    monkeypatch.setattr(daemon, "VAD_ENDPOINT_SILENCE_S", 0.8)
+    monkeypatch.setattr(daemon, "SAMPLE_RATE", 16000)
+    monkeypatch.setattr(daemon, "CHUNK_SIZE", 1280)
     seq = iter(probs)
     monkeypatch.setattr(daemon, "_vad_prob", lambda _model, _chunk: next(seq))
     ep = daemon._Endpointer(spoke=spoke)
