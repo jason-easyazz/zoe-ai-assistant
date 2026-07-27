@@ -325,3 +325,17 @@ systemctl --user restart kokoro-tts.service     # sidecar loads the new tensors
 systemctl --user restart zoe-data.service       # picks up the env change
 ```
 The catalogue endpoint re-reads the bin by mtime, so zoe-data shows the new names without a code change.
+
+
+## Endpointing fast-tail rollout (staged 2026-07-28)
+
+`ZOE_VAD_TAIL_MS=640` is live on zoe-pi (`/home/pi/.zoe-voice/.env.voice`): the daemon
+closes a turn after 640 ms of consecutive DEEP silence (Silero prob < `ZOE_VAD_TAIL_DEEP_PROB`,
+default 0.10) instead of the full 800 ms — ambiguous pauses still wait the full tail, and a
+Silero inference failure counts toward the long tail but never the deep counter (a broken VAD
+degrades to the old timeout, never a hang and never an early cut). Deployed two-step from a
+clean main worktree (code flag-off first — proven byte-identical no-op — then the flag), backup
+at `zoe_voice_daemon.py.bak-20260728`. Rollback: set `ZOE_VAD_TAIL_MS=0` and
+`systemctl --user restart zoe-voice` — behaviour is byte-identical to pre-flag. Corpus evidence
+(#1573): −160 ms median tail on ~80 % of turns, +2.7 pt false-cut upper bound; the probe
+(`scripts/perf/measure_endpointing.py`) can exercise old and new behaviour for before/after.

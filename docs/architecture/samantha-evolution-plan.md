@@ -371,6 +371,11 @@ regression, ever (replay harness is the enforcement).
   frames flow during PROCESSING/COOLDOWN, ≥250 ms sustained speech cancels the pipeline +
   `stop_playback`; #1081 fixed the barge gate against real voice — triggers 6/6, was 0/6;
   prod flags ON per #1082)
+- [x] **W1.2b** deep-quiet fast tail — **STAGED LIVE 2026-07-28** (`ZOE_VAD_TAIL_MS=640`
+  on zoe-pi, two-step deploy: new daemon flag-off verified booting clean, then the
+  flag; −160 ms median tail on ~80 % of turns at +2.7 pt measured false-cut upper
+  bound; rollback = `ZOE_VAD_TAIL_MS=0`). Operator ear-check + next nightly gate
+  run are the acceptance; corpus evidence in #1573.
 - [x] **W1.2** Smart Turn v3 endpointer — **DONE + LIVE** (#1051: `voice_turn.py`, 8.3 MB ONNX,
   complete-utterance 0.90 vs mid-sentence 0.02 on real voice; `ZOE_SMART_TURN_ENABLED` ON in prod)
 - [~] **W1.3** sentence-streamed TTS in conversation mode — **MERGED, FLAG OFF** (#1469:
@@ -388,6 +393,17 @@ regression, ever (replay harness is the enforcement).
   700 MB in its default remote-STT mode** (PR #1572 — the harness stopped loading a
   second Moonshine; measured 445 MB peak for a full 20-sample run), so this re-run no
   longer waits on W3.3 — any ~800 MB-idle window clears it.
+  **LAB MEASUREMENT DONE 2026-07-28** (live sidecar, novel text, X-Cache all-miss, brain
+  and sidecar verified undisturbed): streamed first-audio median **996.5 ms** vs
+  whole-utterance **1607 ms** on a 2-sentence reply, extrapolating ~2.2–2.4 s on
+  3 sentences — **~2.2× first-audio improvement**, growing with reply length. The
+  sharper finding: on a tight box (MemAvailable ~50–120 MB) the whole-utterance path
+  **CUDA-OOMs deterministically on 3-sentence replies (4/4)** while all per-sentence
+  calls succeed — flag-off LiveKit may already be silently degrading to fallback
+  voices on long replies. Verdict: **prod flip justified pending the replay gate**
+  (remote mode, 700 MB floor) in an ~800 MB-idle window; M3 end-to-end and the
+  data-channel leg remain unmeasured (container needs ≥1 GB free). Unit contract
+  7/7 green on main.
 - [~] **W1.4** live measurement session (ADR M1/M3/M4) — PARTIAL: M1 barge-in quality verified
   on real voice (#1081); M3 end-to-end latency + M4 loaded-RAM numbers still unmeasured.
   Bars (from the retired #1056 plan's A3 gate): barge time-to-stop < ~300 ms over 10
