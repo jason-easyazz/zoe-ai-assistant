@@ -91,6 +91,10 @@ HARNESS = textwrap.dedent(
             getReads += 1;
             const moved = OPTS.headMovesLate && getReads >= 2 && checkReads >= 2;
             return { data: { ...pr, head: { sha: moved ? 'c'.repeat(40) : SHA },
+                             // freshLabels / freshDraft: what GitHub has NOW, which the
+                             // one-time pulls.list snapshot may not reflect.
+                             labels: OPTS.freshLabels !== undefined ? OPTS.freshLabels : (OPTS.labels || []),
+                             draft: OPTS.freshDraft || false,
                              requested_reviewers: [] } };
           },
           listReviews: async () => listReviews(),
@@ -290,3 +294,24 @@ def test_regression_after_handoff_is_decided_on_fresh_conditions(tmp_path):
              labels=[{"name": "greptile"}], markerSha="a" * 40)
     assert r["removeLabel"] == 1, r["log"]
     assert any("regressed after handoff" in m for m in r["log"]), r["log"]
+
+
+def test_label_present_only_in_the_fresh_read_is_still_stripped(tmp_path):
+    """A stale label snapshot disables BOTH repair paths, which is why this is severe.
+
+    The list says unlabelled; GitHub actually has the label, applied on an older head.
+    Revocation only runs when `alreadyHandedOff`, and stale-label stripping only when
+    `isLabelled` — reading labels from the stale snapshot turns both off and the label
+    survives, still asserting a clearance for a commit it was never granted for.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[],
+             freshLabels=[{"name": "greptile"}], markerSha="b" * 40)
+    assert r["removeLabel"] == 1, r["log"]
+    assert any("stale label removed" in m for m in r["log"]), r["log"]
+
+
+def test_pr_turned_draft_during_the_sweep_is_not_labelled(tmp_path):
+    """Draft is read from the one-time list; a PR marked draft since then must not ship."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, freshDraft=True)
+    assert r["addLabels"] == 0, r["log"]
+    assert any("became a draft" in m for m in r["log"]), r["log"]

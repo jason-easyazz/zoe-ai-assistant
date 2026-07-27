@@ -186,12 +186,26 @@ jobs:
               if (!prFull) continue;
               const sha = prFull.head.sha;
               const baseRef = prFull.base.ref;
+              // Past this point `pr` (the one-time list snapshot) is valid ONLY for
+              // `.number`, which cannot change. Every mutable field comes from prFull.
+              // Fixing head.sha alone was not enough: `labels` was stale from the same
+              // object, which is worse, because a stale label snapshot silently disables
+              // BOTH repair paths — revocation only runs when alreadyHandedOff is true,
+              // and stale-label stripping only when isLabelled is true.
+              if (prFull.draft) {
+                // The cheap `pr.draft` filter above avoids fetching for the common case,
+                // but the snapshot ages: a PR marked draft since the sweep started must not
+                // be labelled. (The opposite drift — draft in the list, ready now — is
+                // self-correcting; the schedule picks it up next pass.)
+                core.info(`PR #${pr.number}: became a draft during the sweep — skipping`);
+                continue;
+              }
 
               const labelledSha = marks.length
                 ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
                 : null;
 
-              const isLabelled = pr.labels.some(l => l.name === LABEL);
+              const isLabelled = (prFull.labels || []).some(l => l.name === LABEL);
               // A matching marker means the handoff happened on THIS head. Do not return
               // early: conditions can regress on the same SHA (a thread opened, a check
               // re-run failing, main moving ahead), and the label asserts "cheap tier
