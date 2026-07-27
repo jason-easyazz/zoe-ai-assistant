@@ -239,6 +239,9 @@ async def run_evolution_notice() -> dict:
                 title=title,
                 signal=signal,
             )
+            # autonomy_class/approval_required/risk are stamped by the DB trigger
+            # (migration 0027) from the proposal type — no per-INSERT columns, so
+            # this stays safe across the deploy window before the migration runs.
             await db.execute(
                 """INSERT INTO evolution_proposals
                    (id, type, title, description, evidence, target_patterns, status, proposed_at)
@@ -476,6 +479,7 @@ async def record_frustration_signal(
             title=title,
             signal=signal,
         )
+        # autonomy_class is stamped by the DB trigger (migration 0027) from the type.
         await db.execute(
             """INSERT INTO evolution_proposals
                (id, type, title, description, evidence, target_patterns, status, proposed_at)
