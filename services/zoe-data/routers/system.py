@@ -2105,7 +2105,11 @@ async def evolution_proposal_action(
                     _time.time(), proposal_id,
                     proposal.get("autonomy_class"), proposal.get("approval_required"),
                 )
-                if str(_upd).strip().endswith(" 0"):
+                # db is AsyncpgCompat: execute() returns a _Cursor whose rowcount
+                # is parsed from asyncpg's status tag — NOT the status string
+                # itself (a string check here compared against a _Cursor repr and
+                # never fired; caught by review).
+                if getattr(_upd, "rowcount", None) == 0:
                     raise HTTPException(
                         status_code=409,
                         detail="Proposal's autonomy contract changed during approval — re-read and retry",
