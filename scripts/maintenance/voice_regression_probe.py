@@ -103,6 +103,32 @@ def _port_open(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
+def _service_env_get(service_dir: str, *names: str) -> tuple[str | None, str | None]:
+    """(name, value) for the first of *names* found — process env first, then
+    service_dir/.env, mirroring the harness's _load_env (setdefault semantics).
+    The diagnosis must read the SAME sources the harness reads, or it reports a
+    'missing' token the replay actually had."""
+    for n in names:
+        v = (os.environ.get(n) or "").strip()
+        if v:
+            return n, v
+    env_path = os.path.join(service_dir, ".env")
+    try:
+        file_vals: dict[str, str] = {}
+        with open(env_path) as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    file_vals[k] = v.strip().strip('"').strip("'")
+        for n in names:
+            if file_vals.get(n):
+                return f"{n} (from .env)", file_vals[n]
+    except OSError:
+        pass
+    return None, None
+
+
 def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
     """Report the OBSERVED state behind a measure_voice skip — never a guessed cause.
 
@@ -129,15 +155,15 @@ def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
         # live endpoint the WAVs go to.
         # Name the variable actually observed — claiming ZOE_DEVICE_TOKEN when
         # only the DEVICE_TOKEN fallback is set would be its own small lie.
-        tok_name = next((n for n in ("ZOE_DEVICE_TOKEN", "DEVICE_TOKEN")
-                         if (os.environ.get(n) or "").strip()), None)
+        tok_name, _ = _service_env_get(service_dir, "ZOE_DEVICE_TOKEN", "DEVICE_TOKEN")
         obs.append(f"{tok_name} present" if tok_name
                    else "ZOE_DEVICE_TOKEN/DEVICE_TOKEN MISSING")
         # Probe the endpoint the harness ACTUALLY targets (ZOE_BASE_URL), not a
         # hardcoded 127.0.0.1:8000 — a hardcoded probe against a redirected base
         # is exactly the reports-a-guess failure this file exists to remove.
         from urllib.parse import urlparse
-        base = os.environ.get("ZOE_BASE_URL", "http://127.0.0.1:8000")
+        _, base = _service_env_get(service_dir, "ZOE_BASE_URL")
+        base = base or "http://127.0.0.1:8000"
         u = urlparse(base)
         if u.scheme not in ("http", "https") or not u.hostname:
             # A malformed base is ITSELF the observation. Probing a fallback like
