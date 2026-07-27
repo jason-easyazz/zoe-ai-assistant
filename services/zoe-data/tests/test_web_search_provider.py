@@ -46,6 +46,12 @@ def test_maps_tavily_shape_onto_ddg_shape():
     assert out == [{"title": "T", "href": "https://example.com/a", "body": "snippet"}]
 
 
+def test_uppercase_scheme_is_accepted():
+    """URL schemes are case-insensitive — an HTTPS:// result must not be dropped."""
+    out = wsp._to_common([{"title": "T", "url": "HTTPS://Example.com/a", "content": "c"}])
+    assert out == [{"title": "T", "href": "HTTPS://Example.com/a", "body": "c"}]
+
+
 def test_drops_non_http_sources():
     """A citation must never point at a javascript:/data: URL."""
     out = wsp._to_common([

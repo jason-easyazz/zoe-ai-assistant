@@ -66,8 +66,8 @@ def _to_common(results: list[dict[str, Any]]) -> list[dict[str, str]]:
         if not isinstance(r, dict):
             continue
         url = str(r.get("url") or "").strip()
-        if not url.startswith(("http://", "https://")):
-            continue  # never surface a non-http source into a citation
+        if not url.lower().startswith(("http://", "https://")):
+            continue  # never surface a non-http source into a citation (schemes are case-insensitive)
         out.append({
             "title": str(r.get("title") or "").strip(),
             "href": url,
