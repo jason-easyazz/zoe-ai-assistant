@@ -224,6 +224,24 @@ class TestSkipDiagnosisReportsWhatItObserved:
         monkeypatch.setattr(vrp, "_port_open", lambda *a, **k: True)
         assert "postgres 127.0.0.1:5432 reachable" in "; ".join(vrp._diagnose_skip(str(tmp_path)))
 
+    def test_remote_mode_observes_token_and_endpoint(self, tmp_path, monkeypatch):
+        """Remote mode's own failure modes must be in the observation list.
+
+        A missing ZOE_DEVICE_TOKEN makes the replay exit 1 before any sample runs;
+        the diagnosis previously listed only .env/harness/postgres, so the one
+        thing actually wrong was the one thing not named (Bugbot, #1572).
+        """
+        monkeypatch.delenv("ZOE_DEVICE_TOKEN", raising=False)
+        monkeypatch.delenv("DEVICE_TOKEN", raising=False)
+        monkeypatch.setattr(vrp, "_port_open", lambda h, p_, timeout=2.0: True)
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
+        assert "ZOE_DEVICE_TOKEN MISSING" in obs
+        assert "zoe-data 127.0.0.1:8000 reachable" in obs
+        monkeypatch.setenv("ZOE_DEVICE_TOKEN", "x")
+        assert "ZOE_DEVICE_TOKEN present" in "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
+        # inprocess mode must NOT name remote-only observations
+        assert "ZOE_DEVICE_TOKEN" not in "; ".join(vrp._diagnose_skip(str(tmp_path), "inprocess"))
+
     def test_the_field_failure_names_postgres_not_the_env(self, tmp_path, monkeypatch):
         """The exact 2026-07-27 state: .env fine, harness fine, database down."""
         (tmp_path / ".env").write_text("X=1")

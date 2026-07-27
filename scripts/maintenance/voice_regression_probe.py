@@ -97,7 +97,7 @@ def _port_open(host: str, port: int, timeout: float = 2.0) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
-def _diagnose_skip(service_dir: str) -> list[str]:
+def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
     """Report the OBSERVED state behind a measure_voice skip — never a guessed cause.
 
     Returns human-readable observations in the order they are worth reading. Each
@@ -117,6 +117,14 @@ def _diagnose_skip(service_dir: str) -> list[str]:
     # Postgres is the dependency that actually bit us: the timer is Persistent=true,
     # so a missed nightly run fires during boot, ahead of the database.
     obs.append(f"postgres 127.0.0.1:5432 {'reachable' if _port_open('127.0.0.1', 5432) else 'REFUSED'}")
+    if stt == "remote":
+        # Remote mode's own failure modes, observed not guessed: the device token
+        # (its absence makes the replay exit 1 before any sample runs) and the
+        # live endpoint the WAVs go to.
+        has_tok = bool((os.environ.get("ZOE_DEVICE_TOKEN")
+                        or os.environ.get("DEVICE_TOKEN") or "").strip())
+        obs.append(f"ZOE_DEVICE_TOKEN {'present' if has_tok else 'MISSING'}")
+        obs.append(f"zoe-data 127.0.0.1:8000 {'reachable' if _port_open('127.0.0.1', 8000) else 'REFUSED'}")
     return obs
 
 
@@ -154,9 +162,11 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: st
             # the gate spent every run pointing at a healthy file. A probe that
             # asserts a cause it did not observe is worse than one that says
             # nothing. Observe first, then report what was actually seen.
+            what = ("failed before aggregation (rc=1)" if proc.returncode == 1
+                    else "skipped without results (rc=0)")
             raise RuntimeError(
-                "measure_voice skipped without results — observed: "
-                f"{'; '.join(_diagnose_skip(service_dir))}; "
+                f"measure_voice {what} — observed: "
+                f"{'; '.join(_diagnose_skip(service_dir, stt))}; "
                 f"stderr: {proc.stderr[-300:]}"
             )
         with open(out_json) as fh:
