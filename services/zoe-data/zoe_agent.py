@@ -41,7 +41,7 @@ os.environ.setdefault("ORT_DISABLE_GPU", "1")
 import httpx
 
 from agent_safety import CommandRejected, check_bash_command, guard_browser_page, is_public_url
-from typed_env import env_str
+from typed_env import env_int, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ _HA_BRIDGE      = os.environ.get("ZOE_HA_BRIDGE_URL",  "http://127.0.0.1:8007")
 _MEMPALACE_DATA = os.environ.get("MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace"))
 _JETSON_MODE    = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 
-_MAX_TOOL_ITERS   = int(os.environ.get("ZOE_AGENT_MAX_TOOL_ITERS", "5"))
+_MAX_TOOL_ITERS   = env_int("ZOE_AGENT_MAX_TOOL_ITERS", 5)
 _LLM_TIMEOUT      = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("ZOE_AGENT_TOOL_TIMEOUT", "10.0"))
 _DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
@@ -637,6 +637,25 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "web_browse",
+            "description": (
+                "Open ONE web page and read its text (~5-10s). Use after web_search when a "
+                "snippet isn't enough and you need what's actually on the page — a price, "
+                "opening hours, an article. Give the full https URL from a search result. "
+                "Do NOT use it to search; use web_search first to find the URL."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full http(s) URL of the page to read"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "deep_web_research",
             "description": (
                 "Thorough multi-source research via a stealth browser (CloakBrowser + Google Maps, ~60s). "
@@ -889,7 +908,15 @@ _SKILL_TOOLS: dict[str, list[str]] = {
 
 # Always included regardless of query. Hermes escalation is added dynamically
 # when healthy; OpenClaw is loaded only for explicit fallback/browser cases.
-_ALWAYS_ON_TOOLS: list[str] = ["web_search", "deep_web_research", "report_issue"]
+_ALWAYS_ON_TOOLS: list[str] = ["web_search", "web_browse", "deep_web_research", "report_issue"]
+
+# Max tool-list size that still forces tool_choice="required" on the first turn.
+# Was a bare `<= 6` when _ALWAYS_ON_TOOLS held 3 tools. Adding web_browse made
+# every skill's list one longer, which would have silently dropped skills that
+# used to sit exactly at the limit back to tool_choice="auto" (a behaviour
+# regression for existing skills, not a new-feature cost). Kept in step with the
+# always-on count so the effective per-skill budget is unchanged.
+_FORCE_TOOL_MAX = len(_ALWAYS_ON_TOOLS) + 3
 
 _SKILL_KEYWORDS: dict[str, list[str]] = {
     "memory": [
@@ -2540,7 +2567,7 @@ async def _web_research(query: str, user_id: str = "") -> str:
         # Limit concurrent browser tabs — Jetson Orin NX has ~8GB free after the LLM.
         # Default 5: Maps results are lightweight store websites, not SPAs.
         # Reduce via ZOE_MAX_BROWSER_TABS env var if memory pressure is observed.
-        _max_tabs = int(os.environ.get("ZOE_MAX_BROWSER_TABS", "5"))
+        _max_tabs = env_int("ZOE_MAX_BROWSER_TABS", 5)
         target_urls = target_urls[:_max_tabs]
         page_tasks = [_visit_with_search(url) for url in target_urls]
         raw_contents = await asyncio.gather(*page_tasks, return_exceptions=True)
@@ -2623,6 +2650,204 @@ async def _cloak_search(query: str, max_results: int = 5, timeout_ms: int = 2000
     return results
 
 
+# A challenge to a claim Zoe just made ("are you sure?"). Deliberately NARROW:
+# it must be a short, standalone push-back, not any sentence containing "sure"
+# ("sure, do that" / "make sure the light is off" must NOT match). Anchored and
+# length-capped so a long message that merely mentions doubt isn't hijacked.
+_VERIFY_CHALLENGE_RE = re.compile(
+    r"^\W*(?:"
+    r"(?:are|r)\s+(?:you|u)\s+(?:really\s+)?(?:sure|certain|positive)"
+    # bare "sure" / "really" are AGREEMENT ("sure", "really appreciated") — as a
+    # challenge they need a question mark ("sure?", "really??") or the fuller
+    # "are you sure" form handled above. "you sure" keeps working bare.
+    r"|you\s+sure"
+    r"|sure\s*\?"
+    r"|really\s*\?"
+    r"|is\s+that\s+(?:right|true|correct|actually\s+true)"
+    r"|that'?s\s+not\s+right"
+    r"|(?:prove|verify|back)\s+(?:it|that)(?:\s+up)?"
+    # a bare "source?" / "citation?" / "any sources?" / "the link?"
+    # A BARE noun ("link", "source") is an ordinary request, not a challenge —
+    # require either a qualifier ("got a source", "any links") or a question mark.
+    r"|(?:got|any|the|your|whats?\s+the)\s+(?:a\s+)?(?:sources?|links?|citations?)"
+    r"|(?:sources?|links?|citations?)\s*\?"
+    r"|where\s+(?:did\s+)?(?:you|u)\s+(?:get|read|hear)\s+that"
+    r"|says?\s+who"
+    r"|according\s+to\s+(?:what|whom|who)"
+    r")\W*$",                                  # trailing "?"/"!" only — no \b (fails after ?)
+    re.IGNORECASE,
+)
+
+_VERIFY_MAX_CHARS = 60  # a challenge is short; a long message is a new question
+
+
+def _strip_intent_hint(message: str) -> str:
+    """Strip a leading Tier-0.5 "[Intent hint: ...]" prefix (chat.py:~2307).
+
+    The hint embeds ``slots {...}`` whose repr can contain lists — i.e. nested
+    ``]`` — so "match to the first ]" truncates mid-hint and "match to the last ]"
+    could eat brackets from the user's own message. The hint's brackets are
+    balanced (it is a fixed f-string around a dict repr), so scan by depth to the
+    hint's own closing bracket.
+    """
+    if not message.startswith("[Intent hint:"):
+        return message
+    depth = 0
+    for i, ch in enumerate(message):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return message[i + 1:].lstrip()
+    return message  # unbalanced — leave untouched rather than guess
+
+
+def _is_verification_challenge(message: str) -> bool:
+    """True when the user is pushing back on Zoe's PREVIOUS claim and wants proof.
+
+    Used to force a live web_search + cited sources instead of letting the model
+    simply restate itself more confidently (the failure mode Jason described:
+    "when you ask zoe something and she tells you, and you go 'are you sure'").
+
+    The Tier-0.5 classifier prepends "[Intent hint: ...]" to the raw message on
+    the streaming path; strip it first or the anchored regex can never match a
+    hinted challenge.
+    """
+    msg = _strip_intent_hint((message or "").strip()).strip()
+    if not msg or len(msg) > _VERIFY_MAX_CHARS:
+        return False
+    return bool(_VERIFY_CHALLENGE_RE.match(msg))
+
+
+def apply_verification_challenge(
+    message: str, user_message: str, active_tools: list, first_turn_choice: str,
+) -> tuple[str, list, str]:
+    """If `message` challenges Zoe's last claim, force a cited web check.
+
+    Returns (user_message, active_tools, first_turn_choice). Shared by BOTH chat
+    prompt-assembly paths (buffered and streaming) so they cannot drift apart —
+    an earlier version lived only in the buffered path, so "are you sure?" did
+    nothing on the streaming path, which is the one the UI actually uses.
+
+    VOICE IS DELIBERATELY EXCLUDED (not an oversight). Voice turns are latency-
+    budgeted — a forced search adds ~3-5s to a path that must answer in seconds —
+    and a spoken answer cannot read a citation list aloud usefully. Wiring it into
+    voice is also a voice-path change, which must clear the replay gate against
+    ~/.zoe-voice-samples before merge. Tracked as follow-up; the spoken
+    equivalent needs its own UX ("let me check that — I'll come back to you"),
+    not this text-shaped directive.
+
+    The directive goes on the USER message, never the system prompt: the chat
+    system prompt is kept byte-identical every turn for llama.cpp KV-cache reuse.
+    """
+    if not _is_verification_challenge(message):
+        return user_message, active_tools, first_turn_choice
+
+    # Narrow to web_search ONLY. With web_browse also present, a "required" tool
+    # call could be satisfied by browsing an invented URL instead of actually
+    # searching — the model must SEARCH first; it can browse on a later turn.
+    verify_tools = [
+        t for t in active_tools
+        if isinstance(t, dict) and t.get("function", {}).get("name") == "web_search"
+    ]
+    if not verify_tools:
+        # web_search is always-on, so this should not happen; degrade to leaving
+        # the turn untouched rather than forcing a call with no usable tool.
+        logger.warning("zoe_agent: verification challenge but web_search absent — not forcing")
+        return user_message, active_tools, first_turn_choice
+
+    logger.info("zoe_agent: verification challenge — forcing a cited web_search")
+    return user_message + _VERIFY_DIRECTIVE, verify_tools, "required"
+
+
+_VERIFY_DIRECTIVE = (
+    "\n\n[VERIFICATION REQUESTED] The user is challenging the claim you just made. "
+    "Do NOT simply repeat it. Call web_search now to check it against live sources, "
+    "then answer in this shape: say plainly whether your previous answer was right, "
+    "corrected, or uncertain, and cite the source URL(s) you relied on. "
+    "If the search finds nothing usable, say you could not verify it rather than "
+    "asserting it again."
+)
+
+
+async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> str:
+    """Zoe-NATIVE page read: open a URL in CloakBrowser and return its text.
+
+    This is the browse tier the Flue brain calls DIRECTLY — no Hermes/OpenClaw
+    escalation. Use it after web_search to actually read a page (prices, opening
+    hours, an article) when a snippet isn't enough.
+
+    SECURITY: the URL is chosen by the MODEL, so it is untrusted input.
+    ``assert_public_url`` enforces http(s) + a publicly-routable address, which
+    stops the model being talked into fetching localhost / link-local / RFC1918
+    (SSRF into Zoe's own services or the house network).
+    """
+    import importlib.util as _ilu
+    import re as _re
+    from html import unescape as _unescape
+
+    raw = (url or "").strip()
+    if not raw:
+        return "No URL provided."
+    if not raw.lower().startswith(("http://", "https://")):
+        return f"Refused to browse {raw[:80]!r}: only http(s) URLs are allowed."
+    try:
+        from agent_safety import assert_public_url
+        assert_public_url(raw)
+    except Exception as exc:  # noqa: BLE001 - blocked target is a normal answer
+        # Log the detail; do NOT echo the exception to the user — assert_public_url
+        # messages include the RESOLVED internal IP, which would leak addressing.
+        logger.info("web_browse: refused %s (%s)", raw[:80], exc)
+        return "Refused to browse that URL — it does not resolve to a public address."
+
+    if _ilu.find_spec("cloakbrowser") is None:
+        return "Page browsing is unavailable (CloakBrowser is not installed). Try web_search instead."
+
+    try:
+        # find_spec passing does not guarantee the import works — a partially
+        # installed package (missing browser binaries, broken wheel) raises at
+        # import time, and a tool must degrade, not crash the turn.
+        from cloakbrowser import launch_context_async  # type: ignore[import]
+        ctx = await launch_context_async(headless=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("web_browse: could not launch browser: %s", exc)
+        return "Couldn't open a browser to read that page. Try web_search instead."
+    try:
+        page = await ctx.new_page()
+        # assert_public_url above only validates the FIRST url. guard_browser_page
+        # re-runs it on every request INCLUDING redirect hops and aborts
+        # pre-connect, so a public page that 302s to loopback/RFC1918/cloud
+        # metadata cannot be fetched. Same guard the MCP browser tools install.
+        await guard_browser_page(page)
+        await page.goto(raw, wait_until="domcontentloaded", timeout=timeout_ms)
+        html = await page.content()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("web_browse: load failed for %s: %s", raw[:80], exc)
+        return f"Couldn't load that page ({type(exc).__name__}). It may be blocked or offline."
+    finally:
+        try:
+            await ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Bound the raw HTML BEFORE any regex pass: the URL is model-chosen, so page
+    # size is untrusted — a huge page would burn CPU/memory here long before the
+    # output cap applies. 1.5MB of HTML vastly exceeds any useful 6000-char answer.
+    _MAX_HTML = env_int("ZOE_WEB_BROWSE_MAX_HTML", 1500000)
+    if len(html) > _MAX_HTML:
+        html = html[:_MAX_HTML]
+    # script/style carry no readable content and would dominate the budget
+    text = _re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", html)
+    text = _re.sub(r"(?s)<[^>]+>", " ", text)
+    text = _unescape(text)
+    text = _re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = _re.sub(r"\n\s*\n+", "\n", text).strip()
+    if not text:
+        return f"Opened {raw} but found no readable text (it may be an app or a PDF)."
+    return f"Page content from {raw}:\n{text}"
+
+
 async def _web_search_ddg(query: str, user_id: str = "") -> str:
     """Fast web search backing the web_search tool.
 
@@ -2646,9 +2871,25 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
             lines.append(f"- {title}: {snippet}" + (f" ({url})" if url else ""))
         return "\n".join(lines)
 
-    # Primary: ddgs API — fast, no browser needed
+    # Primary: Tavily — purpose-built for citable answers ("are you sure?"), and
+    # a real API rather than a scrape. INERT until TAVILY_API_KEY is set: with no
+    # key (or on any error/quota) it returns [] and we fall straight through to
+    # the ddgs path below, i.e. exactly the previous behaviour.
     try:
-        loop = _asyncio.get_event_loop()
+        from web_search_provider import tavily_enabled, tavily_search_sync
+        if tavily_enabled():
+            loop = _asyncio.get_running_loop()
+            tav = await loop.run_in_executor(
+                None, lambda: tavily_search_sync(query, max_results=6, timeout_s=8.0)
+            )
+            if tav:
+                return _fmt(tav)
+    except Exception as exc:  # noqa: BLE001 - never let the new tier break search
+        logger.info("web_search: tavily tier skipped (%s) — using ddgs", exc)
+
+    # Fallback 1: ddgs API — fast, no browser needed
+    try:
+        loop = _asyncio.get_running_loop()
         results = await loop.run_in_executor(
             None, lambda: _ddg_search_sync(query, max_results=6, timeout_s=10.0)
         )
@@ -2679,20 +2920,22 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
 _TOOL_CAPS: dict[str, int] = {
     # ambient_search: JSON {"results":[...], "count":N} — trim rows + truncate
     # transcripts before re-serializing so the model still gets valid JSON
-    "ambient_search":      int(os.environ.get("ZOE_CAP_AMBIENT_SEARCH",   "0")),   # handled specially
+    "ambient_search":      env_int("ZOE_CAP_AMBIENT_SEARCH", 0),   # handled specially
     # deep_web_research: {"query":..., "raw":<big string>}
-    "deep_web_research":   int(os.environ.get("ZOE_CAP_WEB_RESEARCH",    "6000")),
+    "deep_web_research":   env_int("ZOE_CAP_WEB_RESEARCH", 6000),
+    # a rendered page can be enormous — cap it like the research tool
+    "web_browse":          env_int("ZOE_CAP_WEB_BROWSE", 6000),
     # memory_list: {"items":[...], "count":N, "status":...}
-    "memory_list":         int(os.environ.get("ZOE_CAP_MEMORY_LIST",      "0")),   # handled specially
+    "memory_list":         env_int("ZOE_CAP_MEMORY_LIST", 0),   # handled specially
     # a2a_delegate: arbitrary peer JSON
-    "a2a_delegate":        int(os.environ.get("ZOE_CAP_A2A_DELEGATE",    "3000")),
+    "a2a_delegate":        env_int("ZOE_CAP_A2A_DELEGATE", 3000),
     # zoe_self_capabilities: service/widget/page/skill lists
-    "zoe_self_capabilities": int(os.environ.get("ZOE_CAP_SELF_CAPS",     "2000")),
+    "zoe_self_capabilities": env_int("ZOE_CAP_SELF_CAPS", 2000),
 }
 
-_AMBIENT_MAX_ROWS     = int(os.environ.get("ZOE_CAP_AMBIENT_ROWS",        "10"))
-_AMBIENT_TRANSCRIPT   = int(os.environ.get("ZOE_CAP_AMBIENT_TRANSCRIPT", "150"))
-_MEMORY_LIST_MAX_ROWS = int(os.environ.get("ZOE_CAP_MEMORY_LIST_ROWS",    "25"))
+_AMBIENT_MAX_ROWS     = env_int("ZOE_CAP_AMBIENT_ROWS", 10)
+_AMBIENT_TRANSCRIPT   = env_int("ZOE_CAP_AMBIENT_TRANSCRIPT", 150)
+_MEMORY_LIST_MAX_ROWS = env_int("ZOE_CAP_MEMORY_LIST_ROWS", 25)
 
 
 def _cap_tool_result(tool_name: str, result: str) -> str:
@@ -2845,6 +3088,9 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "guest") -> 
 
     if tool_name == "web_search":
         return await _web_search_ddg(args.get("query", ""), user_id=user_id)
+
+    if tool_name == "web_browse":
+        return await _web_browse(args.get("url", ""), user_id=user_id)
 
     if tool_name == "deep_web_research":
         return await _web_research(args.get("query", ""), user_id=user_id)
@@ -3479,14 +3725,20 @@ async def run_zoe_agent(
         # than answering in text when tool_choice="auto" lets it skip.
         _first_turn_choice = (
             "required"
-            if (skills - {"discovery"} and len(active_tools) <= 6)
+            if (skills - {"discovery"} and len(active_tools) <= _FORCE_TOOL_MAX)
             else "auto"
         )
+        # "are you sure?" — the user is challenging the claim Zoe just made. Append
+        # the directive to the USER message (never the system prompt, which is kept
+        # byte-identical for llama.cpp KV-cache reuse) and FORCE a tool call, so the
+        # model must go and check rather than restating itself more confidently.
+        user_message, active_tools, _first_turn_choice = apply_verification_challenge(
+            message, user_message, active_tools, _first_turn_choice)
 
     # Build initial messages list with token-budget-aware compaction.
     # Gemma 4 E4B-QAT context window: 8192 tokens. Reserve ~2000 for the response.
     # Rough token estimate: len(text) / 4 (conservative for mixed content).
-    _CTX_BUDGET = int(os.environ.get("ZOE_CONTEXT_TOKEN_BUDGET", "5500"))
+    _CTX_BUDGET = env_int("ZOE_CONTEXT_TOKEN_BUDGET", 5500)
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
         # Start from the most recent end, add messages until budget is reached.
@@ -3868,14 +4120,16 @@ async def run_zoe_agent_streaming(
         # Force tool call on iteration 0 when a real skill matched and tool list is small.
         _first_turn_choice = (
             "required"
-            if (skills - {"discovery"} and len(active_tools) <= 6 and active_tools)
+            if (skills - {"discovery"} and len(active_tools) <= _FORCE_TOOL_MAX and active_tools)
             else "auto"
         )
+        user_message, active_tools, _first_turn_choice = apply_verification_challenge(
+            message, user_message, active_tools, _first_turn_choice)
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
         _sys_tokens = len(system_prompt) // 4 + len(user_message) // 4 + 50
-        _remaining = int(os.environ.get("ZOE_CONTEXT_TOKEN_BUDGET", "5500")) - _sys_tokens
+        _remaining = env_int("ZOE_CONTEXT_TOKEN_BUDGET", 5500) - _sys_tokens
         trimmed_hist: list[dict] = []
         for msg in reversed(history[-12:]):
             _msg_tokens = len(str(msg.get("content") or "")) // 4 + 10
