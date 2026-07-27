@@ -52,6 +52,15 @@ concurrency:
 
 jobs:
   label-when-others-pass:
+    # check_suite fires for EVERY suite in the repo, including pushes to main —
+    # and this job sweeps all open PRs, so suites with no associated PR would
+    # burn API budget for nothing (Copilot). Skip those. Trade-off, stated: a
+    # main-push suite correlates with a merge that puts other PRs BEHIND, so
+    # skipping it delays behind-ness revocation by up to one schedule tick
+    # (30min) — acceptable, the label self-corrects and Greptile ignores drafts.
+    # Note check_suite.pull_requests omits fork PRs; this repo works from
+    # same-repo branches, where it is populated.
+    if: github.event_name != 'check_suite' || github.event.check_suite.pull_requests[0] != null
     runs-on: ubuntu-latest
     steps:
       - name: Add the greptile label once the cheap tier is done
