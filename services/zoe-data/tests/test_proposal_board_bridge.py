@@ -91,7 +91,8 @@ async def test_idempotent_even_when_prior_issue_is_terminal():
 
 def test_may_auto_execute_is_fail_closed():
     # a DB proposal has no autonomy contract → gate blocks even for an admin
-    admin = {"role": "family-admin"}
+    # (identified admin: the user_id fail-closed check has its own test)
+    admin = {"role": "family-admin", "user_id": "jason"}
     prop = {"id": "p1", "title": "T"}  # no autonomy_class / approval_required
     allowed, reason = pbb.may_auto_execute(admin, prop)
     assert allowed is False and "execution gate blocked" in reason
@@ -143,3 +144,14 @@ async def test_no_live_ref_still_creates():
         conn, {"id": "p1", "title": "T", "description": "d",
                "multica_issue_id": "20b22c47-d132-4647-9a03-96ad2c9d8221"})
     assert out["created"] is True and out["number"] == 6112
+
+
+def test_admin_without_user_id_fails_closed():
+    """An admin-shaped dict with no user_id must NOT mint approval:admin:unknown —
+    an approval ref has to name an identifiable principal."""
+    prop = {"id": "p9", "autonomy_class": "execute",
+            "approval_required": ["user_or_admin_for_privileged_execution"]}
+    for user in ({"role": "family-admin"}, {"role": "admin", "user_id": ""},
+                 {"role": "admin", "user_id": "   "}):
+        allowed, reason = pbb.may_auto_execute(user, prop)
+        assert allowed is False and "user_id" in reason, (user, reason)

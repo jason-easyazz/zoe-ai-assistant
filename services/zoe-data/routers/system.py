@@ -1995,7 +1995,12 @@ async def evolution_proposal_action(
     Previously this took `get_current_user`, so any authenticated caller (and the
     unauthenticated default identity) could persist status='approved'.
 
-    On approve: creates a Multica board issue and queues Hermes implementation.
+    On approve (conditional, decided by may_auto_execute):
+      * review-only proposals — sync/update a Multica DISPLAY issue and run the
+        Hermes proposal pre-review; nothing is executed.
+      * admin-approved EXECUTABLE proposals (autonomy contract allows it) — skip
+        the display sync and Hermes pre-review entirely and bridge the proposal
+        to the board runner's lane (todo issue -> Omnigent -> gated PR -> merge).
     On reject: archives the proposal.
     On defer: snoozes for 7 days.
     """

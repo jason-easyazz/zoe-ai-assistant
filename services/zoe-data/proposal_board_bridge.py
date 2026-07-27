@@ -59,7 +59,11 @@ def may_auto_execute(user: dict | None, proposal: asyncpg.Record | dict) -> tupl
     # class (`approval:admin:<id>` satisfies `user_or_admin_for_privileged_
     # execution`). Any OTHER required approval classes must be evidenced by refs
     # the proposal's own contract carries — passed through here, not fabricated.
-    user_id = str((user or {}).get("user_id") or "").strip() or "unknown"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        # The role check passed, so the caller IS an admin — but an approval ref
+        # must name an identifiable principal. Never mint approval:admin:unknown.
+        return False, "admin identity missing user_id"
     # The ONLY approval evidence available today is the admin's own approval
     # (`approval:admin:<id>` → satisfies `user_or_admin_for_privileged_execution`).
     # There is no store yet for OTHER approval-class evidence (e.g. a completed

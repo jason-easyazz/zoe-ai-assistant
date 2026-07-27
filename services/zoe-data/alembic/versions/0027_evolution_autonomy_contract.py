@@ -14,8 +14,13 @@ a DELIBERATE OPERATOR OVERRIDE of the framework's review-only default grants
 user_frustration — the class proven by PR #1555), keeps security types
 review-only + security_review-gated, and leaves everything else review-only.
 
-Dialect-agnostic (Postgres prod + SQLite tests): plain TEXT columns, guarded
-ADD COLUMN, plain UPDATE backfills — no jsonb type, no trigger.
+Columns are plain TEXT with guarded ADD COLUMN + literal UPDATE backfills.
+On Postgres (prod) the upgrade ALSO installs a BEFORE INSERT trigger
+(evolution_stamp_autonomy) that stamps the three columns from the proposal TYPE,
+unconditionally — that trigger is the enforcement point: it covers EVERY creator
+(evolution_notice, mcp_server, future paths), closes the deploy window where app
+code predates the columns, and stops an INSERT from self-assigning an executable
+class. It mirrors evolution_autonomy.contract_for_type; keep the two in sync.
 """
 from alembic import op
 import sqlalchemy as sa
