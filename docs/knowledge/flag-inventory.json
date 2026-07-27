@@ -1004,16 +1004,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_ENABLE_OPENCLAW_BROWSER_FALLBACK": {
-        "defaults": [
-          "'false'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/browser_broker.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_ENABLE_OPENCLAW_EXECUTION": {
         "defaults": [
           "'false'"
@@ -3640,7 +3630,7 @@
         "readers": [
           "services/zoe-data/web_search_provider.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_SESSION_LOCK_TIMEOUT_S": {
         "defaults": [
@@ -3770,7 +3760,7 @@
         "readers": [
           "services/zoe-data/web_search_provider.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_TELEGRAM_BOT_USERNAME": {
         "defaults": [

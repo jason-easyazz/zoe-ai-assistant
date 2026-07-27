@@ -25,8 +25,9 @@ No new dependency: uses ``httpx``, already a service dependency.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
+
+from typed_env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +35,19 @@ _TAVILY_URL = "https://api.tavily.com/search"
 
 
 def tavily_api_key() -> str:
-    """The Tavily key, or "" when unset. Never logged."""
-    return (os.environ.get("TAVILY_API_KEY") or "").strip()
+    """The household's Tavily key, or "" when unset. Never logged.
+
+    Household-scoped by design, like every other integration credential in
+    ``.env`` (Home Assistant token, model API keys): Zoe is one household's
+    assistant, and search is a shared utility with a shared free-tier quota —
+    not a per-member identity. There is no per-user key store to read from.
+    """
+    return env_str("TAVILY_API_KEY", "")
 
 
 def search_provider() -> str:
     """Selected provider: auto|tavily|ddg. Read per call so a flip needs no restart."""
-    return (os.environ.get("ZOE_SEARCH_PROVIDER", "auto") or "auto").strip().lower()
+    return env_str("ZOE_SEARCH_PROVIDER", "auto").lower()
 
 
 def tavily_enabled() -> bool:
@@ -80,19 +87,31 @@ def tavily_search_sync(query: str, max_results: int = 6, timeout_s: float = 8.0)
     try:
         import httpx
 
-        resp = httpx.post(
-            _TAVILY_URL,
-            headers={"Authorization": f"Bearer {tavily_api_key()}",
-                     "Content-Type": "application/json"},
-            json={
-                "query": q,
-                # 'basic' = 1 credit; the free tier is 1k/month, so keep the
-                # cheap depth for routine lookups.
-                "search_depth": os.environ.get("ZOE_TAVILY_DEPTH", "basic"),
-                "max_results": max(1, min(int(max_results), 20)),
-            },
-            timeout=timeout_s,
-        )
+        from agent_safety import assert_public_url
+
+        # SSRF guard: the endpoint is a constant, but assert it still resolves to
+        # a PUBLIC ip — an operator override or hostile DNS must not point Zoe's
+        # keyed, authenticated request at a private/link-local address.
+        assert_public_url(_TAVILY_URL)
+
+        # trust_env=False: httpx otherwise honours HTTP(S)_PROXY from the
+        # environment, which would route this bearer-token request through an
+        # arbitrary proxy. Pin the transport explicitly.
+        with httpx.Client(trust_env=False, timeout=timeout_s) as client:
+            resp = client.post(
+                _TAVILY_URL,
+                headers={"Authorization": f"Bearer {tavily_api_key()}",
+                         "Content-Type": "application/json"},
+                json={
+                    "query": q,
+                    # 'basic' = 1 credit; the free tier is 1k/month, so keep the
+                    # cheap depth for routine lookups. env_str maps a blank
+                    # `ZOE_TAVILY_DEPTH=` in .env to the default rather than
+                    # sending an empty search_depth the API would reject.
+                    "search_depth": env_str("ZOE_TAVILY_DEPTH", "basic"),
+                    "max_results": max(1, min(int(max_results), 20)),
+                },
+            )
         if resp.status_code != 200:
             # 401 = bad/absent key, 429 = quota exhausted. Both are expected
             # operational states, not crashes — fall back quietly.

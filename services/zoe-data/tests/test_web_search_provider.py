@@ -66,67 +66,84 @@ class _Resp:
         return self._payload
 
 
+class _FakeClient:
+    """Stands in for httpx.Client(...) used as a context manager."""
+    def __init__(self, responder, captured):
+        self._responder, self._captured = responder, captured
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+    def post(self, url, **kw):
+        self._captured.update({"url": url, **kw})
+        return self._responder(url, **kw)
+
+
+@pytest.fixture(autouse=True)
+def _no_network_guard(monkeypatch):
+    """The SSRF guard resolves DNS for real — stub it so these stay ci_safe
+    (CI has no network). Its behaviour is exercised by agent_safety's own tests."""
+    import agent_safety
+    monkeypatch.setattr(agent_safety, "assert_public_url", lambda u: u)
+
+
+def _fake_transport(monkeypatch, responder):
+    """Patch httpx.Client so the provider's `with httpx.Client(...)` is faked.
+    Returns the dict capturing the outbound request."""
+    import httpx
+    captured: dict = {}
+    monkeypatch.setattr(httpx, "Client", lambda **kw: _FakeClient(responder, captured))
+    return captured
+
+
 def test_quota_exhausted_falls_back(monkeypatch):
     """429 is an expected operational state — return [] so DDG takes over."""
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    import httpx
-    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp(429))
+    _fake_transport(monkeypatch, lambda url, **kw: _Resp(429))
     assert wsp.tavily_search_sync("q") == []
 
 
 def test_bad_key_falls_back(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-bad")
-    import httpx
-    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp(401))
+    _fake_transport(monkeypatch, lambda url, **kw: _Resp(401))
     assert wsp.tavily_search_sync("q") == []
 
 
 def test_network_error_falls_back(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     import httpx
-    def boom(*a, **k):
+    def boom(url, **kw):
         raise httpx.ConnectError("no route")
-    monkeypatch.setattr(httpx, "post", boom)
+    _fake_transport(monkeypatch, boom)
     assert wsp.tavily_search_sync("q") == []
 
 
 def test_happy_path_returns_mapped_results(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    import httpx
-    captured = {}
-    def fake_post(url, **kw):
-        captured["url"] = url
-        captured["auth"] = kw["headers"]["Authorization"]
-        captured["json"] = kw["json"]
-        return _Resp(200, {"results": [{"title": "A", "url": "https://a.test", "content": "c"}]})
-    monkeypatch.setattr(httpx, "post", fake_post)
+    captured = _fake_transport(
+        monkeypatch,
+        lambda url, **kw: _Resp(200, {"results": [{"title": "A", "url": "https://a.test", "content": "c"}]}))
 
     out = wsp.tavily_search_sync("bali flights", max_results=6)
     assert out == [{"title": "A", "href": "https://a.test", "body": "c"}]
     assert captured["url"] == "https://api.tavily.com/search"
-    assert captured["auth"].startswith("Bearer ")          # verified API contract
+    assert captured["headers"]["Authorization"].startswith("Bearer ")   # verified API contract
     assert captured["json"]["query"] == "bali flights"
-    assert captured["json"]["search_depth"] == "basic"     # 1 credit, not 2
+    assert captured["json"]["search_depth"] == "basic"                  # 1 credit, not 2
 
 
 def test_max_results_is_clamped_to_api_range(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    import httpx
-    seen = {}
-    def fake_post(url, **kw):
-        seen["n"] = kw["json"]["max_results"]
-        return _Resp(200, {"results": []})
-    monkeypatch.setattr(httpx, "post", fake_post)
+    seen = _fake_transport(monkeypatch, lambda url, **kw: _Resp(200, {"results": []}))
     wsp.tavily_search_sync("q", max_results=999)
-    assert seen["n"] == 20        # API max
+    assert seen["json"]["max_results"] == 20        # API max
     wsp.tavily_search_sync("q", max_results=0)
-    assert seen["n"] == 1         # API min
+    assert seen["json"]["max_results"] == 1         # API min
 
 
 def test_empty_query_never_spends_a_credit(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    import httpx
-    def must_not_call(*a, **k):
+    def must_not_call(url, **kw):
         raise AssertionError("should not spend a credit on an empty query")
-    monkeypatch.setattr(httpx, "post", must_not_call)
+    _fake_transport(monkeypatch, must_not_call)
     assert wsp.tavily_search_sync("   ") == []
