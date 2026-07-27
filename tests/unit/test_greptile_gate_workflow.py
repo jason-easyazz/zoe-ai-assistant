@@ -52,6 +52,7 @@ HARNESS = textwrap.dedent(
     const SHA = 'a'.repeat(40);
 
     let checkReads = 0;
+    let getReads = 0;
     const calls = { addLabels: 0, removeLabel: 0, comments: [] };
     // OPTS.staleListSha simulates the head moving between the sweep's opening
     // `pulls.list` and this PR being processed: the list is stale, `pulls.get` is current.
@@ -59,8 +60,16 @@ HARNESS = textwrap.dedent(
     const pr = { number: 1, head: { sha: LIST_SHA }, base: { ref: 'main' },
                  labels: OPTS.labels || [], draft: false };
 
-    const reviewers = (OPTS.reviewers || []).map(
-      (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l } }));
+    let reviewReads = 0;
+    const asReview = (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l } });
+    // OPTS.dismissMidSweep: a login present on the first read and gone on the second —
+    // what a DISMISSED review looks like, since DISMISSED is not a submitted state.
+    const listReviews = () => {
+      reviewReads += 1;
+      const ls = (OPTS.reviewers || []).filter(
+        (l) => !(OPTS.dismissMidSweep === l && reviewReads >= 2));
+      return ls.map(asReview);
+    };
 
     const github = {
       paginate: async (fn, o) => fn(o),
@@ -74,8 +83,17 @@ HARNESS = textwrap.dedent(
       rest: {
         pulls: {
           list: async () => [pr],
-          get: async () => ({ data: { ...pr, head: { sha: SHA }, requested_reviewers: [] } }),
-          listReviews: async () => reviewers,
+          // OPTS.headMovesLate: the head moves once the conditions have been re-read.
+          // Keyed on checkReads (readConditions calls listForRef), NOT on the number of
+          // pulls.get calls — a get-count trigger fires in BOTH orderings and so cannot
+          // tell whether the head check runs before or after readConditions.
+          get: async () => {
+            getReads += 1;
+            const moved = OPTS.headMovesLate && getReads >= 2 && checkReads >= 2;
+            return { data: { ...pr, head: { sha: moved ? 'c'.repeat(40) : SHA },
+                             requested_reviewers: [] } };
+          },
+          listReviews: async () => listReviews(),
         },
         repos: { compareCommits: async () => ({ data: { behind_by: OPTS.behindBy || 0 } }) },
         checks: {
@@ -207,3 +225,35 @@ def test_label_on_a_newer_head_is_revoked_not_ignored(tmp_path):
              labels=[{"name": "greptile"}], markerSha="b" * 40)
     assert r["removeLabel"] == 1, r["log"]
     assert any("stale label removed" in m for m in r["log"]), r["log"]
+
+
+def test_codex_review_dismissed_mid_sweep_is_not_labelled(tmp_path):
+    """A DISMISSED review drops out of the submitted set — codex is NOT monotone.
+
+    An earlier version froze `codexOk` on the claim that for a fixed head it only ever
+    moves false->true. That claim is wrong, and this is the case that breaks it: Codex
+    has reviewed when the decision is made and its review is dismissed before the gate
+    acts. Freeze `codexOk` again and this goes red.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             dismissMidSweep="chatgpt-codex-connector[bot]")
+    assert r["addLabels"] == 0, r["log"]
+    assert any("codex=false" in m for m in r["log"]), r["log"]
+
+
+def test_copilot_review_dismissed_mid_sweep_is_not_labelled(tmp_path):
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             dismissMidSweep="copilot-pull-request-reviewer[bot]")
+    assert r["addLabels"] == 0, r["log"]
+
+
+def test_head_moving_in_the_final_window_is_not_labelled(tmp_path):
+    """The head check is the LAST read before the write.
+
+    GitHub has no compare-and-swap, so the window cannot be closed — only narrowed.
+    This pins that a head moving after the conditions are read still blocks the label,
+    rather than stamping a marker with a superseded SHA.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, headMovesLate=True)
+    assert r["addLabels"] == 0, r["log"]
+    assert any("head moved during the sweep" in m for m in r["log"]), r["log"]
