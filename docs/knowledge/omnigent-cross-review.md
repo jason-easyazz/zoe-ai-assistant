@@ -14,8 +14,9 @@ becoming billed Greptile rounds.
 
 ## When to run it
 
-- **Pre-push (default):** before pushing any substantive diff, run the review,
-  fix findings, push ONCE. Findings caught here never become billed review
+- **Pre-ready (default):** run it on the DRAFT PR once the work is complete,
+  fix findings, push ONCE, then mark ready. (It reads `gh pr diff`, so the diff
+  must be pushed — drafts are free, so push-to-draft costs nothing.) Findings caught here never become billed review
   rounds or blocking threads.
 - **Post-open (advisory):** on an open PR while the gate runs. The report stays
   in the Omnigent session — never copied into PR threads.

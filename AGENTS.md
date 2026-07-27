@@ -99,7 +99,7 @@ GUARANTEE below), and it is why batching fixes into one push matters.
 Sequence:
 
 1. **Draft PR.** Invisible to Greptile.
-2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs a different-vendor advisory review pre-push (fills Bugbot's seat — its credits are exhausted). Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate. Full protocol: [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
+2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs a different-vendor advisory review on the draft PR before marking ready (fills Bugbot's seat — its credits are exhausted). Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate. Full protocol: [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
 3. **Local `/review` (Cursor) — free.** Bugbot recognises the same diff later and skips
    the cloud review, so this tier costs nothing. `.cursor/BUGBOT.md` carries the repo's
    review guide. This is an IDE-side command — agents cannot run it; it is the operator's
