@@ -23,6 +23,10 @@ on:
   # gate would never run for that PR at all.
   pull_request:
     types: [ready_for_review, synchronize, opened]
+  # The gate holds while threads are unresolved, so resolving the LAST one must
+  # re-run it — otherwise the PR sits unlabelled forever with nothing left to fix.
+  pull_request_review_thread:
+    types: [resolved]
   workflow_dispatch:
 
 permissions:
@@ -80,11 +84,19 @@ jobs:
                 });
                 const headAt = new Date(headCommit.commit.committer.date);
                 if (lastLabelled && headAt > new Date(lastLabelled.created_at)) {
-                  await github.rest.issues.removeLabel({
-                    owner: context.repo.owner, repo: context.repo.repo,
-                    issue_number: pr.number, name: LABEL,
-                  }).catch(() => {});
-                  core.info(`PR #${pr.number}: head moved after labelling — label removed, must re-qualify`);
+                  // Do NOT swallow this. If removal fails the label stays, the PR remains
+                  // inside Greptile's filter, and a log line claiming otherwise would send
+                  // anyone debugging it in the wrong direction.
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner: context.repo.owner, repo: context.repo.repo,
+                      issue_number: pr.number, name: LABEL,
+                    });
+                    core.info(`PR #${pr.number}: head moved after labelling — label removed, must re-qualify`);
+                  } catch (e) {
+                    core.warning(`PR #${pr.number}: head moved but the ${LABEL} label could NOT be removed ` +
+                                 `(${e.message}) — it is still inside Greptile's filter and will re-review on every push.`);
+                  }
                 }
                 continue;   // never re-label in the same pass
               }

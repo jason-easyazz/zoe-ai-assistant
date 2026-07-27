@@ -185,6 +185,10 @@ jobs:
         env:
           GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
           GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
-          GITHUB_PULL_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # pull_request.base.sha is EMPTY on merge-queue runs. Without a base, ggshield
+          # has nothing to diff against and would scan far less than it appears to — the
+          # same silent-underscan failure as a shallow checkout. Fall back to the merge
+          # group's base so the job stays meaningful under a queue.
+          GITHUB_PULL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
