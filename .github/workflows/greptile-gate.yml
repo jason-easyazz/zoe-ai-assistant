@@ -27,6 +27,12 @@ on:
   # re-run it — otherwise the PR sits unlabelled forever with nothing left to fix.
   pull_request_review_thread:
     types: [resolved]
+  # The Codex grace period is only evaluated when this workflow RUNS. Without a timer,
+  # a silent Codex plus no other activity means the gate never wakes to notice the grace
+  # elapsed — the bounded wait added to fix a deadlock would become one. This is the
+  # wake-up for every wait in this file that is not event-driven.
+  schedule:
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -86,7 +92,16 @@ jobs:
               });
 
               const MARK = '<!-- greptile-gate:labelled:';
-              const marks = comments.filter(c => c.body?.includes(MARK));
+              // TRUST, not presence. This repo is PUBLIC, so anyone can post a comment
+              // containing the marker string. An unfiltered match lets a stranger forge a
+              // handoff — making the gate believe a PR was already cleared, or pinning it to
+              // a SHA of their choosing. Only markers written by this workflow's own bot,
+              // by an account with write access, count.
+              const TRUSTED_ASSOC = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+              const trusted = (c) =>
+                (c.user?.login === 'github-actions[bot]' && c.user?.type === 'Bot') ||
+                TRUSTED_ASSOC.includes(c.author_association);
+              const marks = comments.filter(c => c.body?.includes(MARK) && trusted(c));
               const labelledSha = marks.length
                 ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
                 : null;
@@ -193,7 +208,9 @@ jobs:
               }
 
               const codexMark = `<!-- greptile-gate:codex:${pr.head.sha} -->`;
-              const codexSummon = comments.find(c => c.body?.includes(codexMark));
+              // Same trust rule: a forged summon marker would suppress the real one and,
+              // once its timestamp aged past the grace, wave Greptile through early.
+              const codexSummon = comments.find(c => c.body?.includes(codexMark) && trusted(c));
               if (!reviewedHead.has(CODEX) && !codexSummon) {
                 // Wrapped: an advisory summon must never abort the sweep for other PRs.
                 const r = await ok(`PR #${pr.number} summon Codex`, () =>
