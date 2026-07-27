@@ -188,6 +188,12 @@ async def _run(args) -> int:
 
     _remote_token = ""
     if args.stt == "remote":
+        # Resolve the base HERE, after _load_env() has merged the service .env —
+        # an argparse-time default reads the environment before that merge, so a
+        # ZOE_BASE_URL that lives only in the .env (the normal case for the live
+        # service) would be silently ignored in favour of loopback (Bugbot, #1572).
+        if not args.base_url:
+            args.base_url = os.environ.get("ZOE_BASE_URL") or "http://127.0.0.1:8000"
         _remote_token = (os.environ.get("ZOE_DEVICE_TOKEN")
                          or os.environ.get("DEVICE_TOKEN") or "").strip()
         if not _remote_token:
@@ -326,8 +332,9 @@ def main() -> None:
     ap.add_argument("--stt", choices=["inprocess", "remote"], default="inprocess",
                     help="'remote' = transcribe via the LIVE /api/voice/transcribe "
                          "(no second Moonshine load; needs ZOE_DEVICE_TOKEN in env)")
-    ap.add_argument("--base-url", default=os.environ.get("ZOE_BASE_URL", "http://127.0.0.1:8000"),
-                    help="live service base URL for --stt remote")
+    ap.add_argument("--base-url", default=None,
+                    help="live service base URL for --stt remote (default: ZOE_BASE_URL "
+                         "resolved AFTER the service .env is loaded, else localhost:8000)")
     args = ap.parse_args()
     sys.exit(asyncio.run(_run(args)))
 
