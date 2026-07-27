@@ -155,3 +155,22 @@ def test_admin_without_user_id_fails_closed():
                  {"role": "admin", "user_id": "   "}):
         allowed, reason = pbb.may_auto_execute(user, prop)
         assert allowed is False and "user_id" in reason, (user, reason)
+
+
+def test_evolution_proposal_action_requires_admin():
+    """The approve/reject/defer endpoint is security-critical (it sanctions
+    self-modification and, for executable proposals, triggers autonomous
+    implementation). It must carry require_admin — not get_current_user, which
+    resolves unauthenticated callers to a guest identity instead of rejecting."""
+    from routers import system as system_router
+    from auth import require_admin
+
+    route = next(
+        r for r in system_router._agent_card_router.routes
+        if getattr(r, "path", "").endswith("/evolution/proposals/{proposal_id}/action")
+    )
+    dep_calls = [d.call for d in route.dependant.dependencies]
+    assert require_admin in dep_calls, (
+        "evolution_proposal_action must Depends(require_admin); "
+        f"got dependencies: {[getattr(c, '__name__', c) for c in dep_calls]}"
+    )

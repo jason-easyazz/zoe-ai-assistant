@@ -27,10 +27,6 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-_EXECUTOR_RUNTIME_NAME = "Flue Executor (Zoe)"
-_EXECUTOR_AGENT_NAME = "Flue Executor"
-
-
 def _as_list(v) -> tuple:
     """Coerce an approval field to a tuple. It may be a JSON-array TEXT column
     (Postgres/SQLite), an already-parsed list, or None."""
