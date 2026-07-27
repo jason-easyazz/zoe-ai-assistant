@@ -310,7 +310,19 @@ jobs:
                       { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
                   });
                   if (r) core.info(`PR #${pr.number}: requested Copilot`);
-                  else core.warning(`PR #${pr.number}: could NOT request Copilot — the grace still bounds the wait`);
+                  else {
+                    // Greptile P1: a surviving marker after a FAILED mutation would
+                    // suppress every later summon while its grace still authorises
+                    // handoff — Copilot would pass without ever being asked. Delete
+                    // the anchor so the next sweep retries both. Only if the delete
+                    // ALSO fails does the grace wave through, and that double-failure
+                    // is logged loudly here.
+                    const del = await ok(`PR #${pr.number} delete copilot marker`, () =>
+                      github.rest.issues.deleteComment({ ...base, comment_id: marker.data.id }));
+                    core.warning(`PR #${pr.number}: Copilot request FAILED — ` +
+                      (del ? 'marker deleted, retrying next sweep'
+                           : 'marker delete ALSO failed; grace will bound the wait'));
+                  }
                 }
               }
 

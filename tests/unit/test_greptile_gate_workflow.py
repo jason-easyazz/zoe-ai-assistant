@@ -67,7 +67,7 @@ HARNESS = textwrap.dedent(
 
     let checkReads = 0;
     let getReads = 0;
-    const calls = { addLabels: 0, removeLabel: 0, comments: [] };
+    const calls = { addLabels: 0, removeLabel: 0, comments: [], deleted: [] };
     // OPTS.staleListSha simulates the head moving between the sweep's opening
     // `pulls.list` and this PR being processed: the list is stale, `pulls.get` is current.
     const LIST_SHA = OPTS.staleListSha ? 'b'.repeat(40) : SHA;
@@ -88,6 +88,7 @@ HARNESS = textwrap.dedent(
     const github = {
       paginate: async (fn, o) => fn(o),
       graphql: async (q) => {
+        if (OPTS.copilotSummonFails && q.includes('requestReviews')) throw new Error('mutation failed');
         if (q.includes('reviewThreads')) return { repository: { pullRequest: { reviewThreads: {
           pageInfo: { hasNextPage: false, endCursor: null },
           nodes: (OPTS.unresolved ? [{ isResolved: false }] : []) } } } };
@@ -142,7 +143,8 @@ HARNESS = textwrap.dedent(
             created_at: '2026-07-27T00:00:00Z',
             body: `handoff\n<!-- greptile-gate:labelled:${OPTS.markerSha} -->`,
           }] : [])),
-          createComment: async (o) => { calls.comments.push(o.body); return {}; },
+          createComment: async (o) => { calls.comments.push(o.body); return { data: { id: 777 } }; },
+          deleteComment: async (o) => { calls.deleted.push(o.comment_id); return {}; },
           addLabels: async () => { calls.addLabels += 1; return {}; },
           removeLabel: async () => { calls.removeLabel += 1; return {}; },
         },
@@ -361,3 +363,16 @@ def test_pr_turned_draft_during_the_sweep_is_not_labelled(tmp_path):
     r = _run(tmp_path, _script(), reviewers=BOTH, freshDraft=True)
     assert r["addLabels"] == 0, r["log"]
     assert any("became a draft" in m for m in r["log"]), r["log"]
+
+
+def test_failed_copilot_summon_deletes_its_marker(tmp_path):
+    """Greptile P1 (its one finding on this PR): a marker surviving a FAILED
+    mutation suppresses every later summon while its grace still authorises
+    handoff — Copilot would pass without ever being asked. The failed mutation
+    must delete its anchor so the next sweep retries both."""
+    r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"],
+             copilotSummonFails=True)
+    assert r["addLabels"] == 0, r["log"]
+    posted = [c for c in r["comments"] if "greptile-gate:copilot:" in c]
+    assert posted, "marker is still posted first (anchor-first)"
+    assert r["deleted"] == [777], f"failed mutation must delete the marker: {r['deleted']}"
