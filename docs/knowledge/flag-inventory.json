@@ -241,6 +241,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_AUTOPILOT_QUEUE_WAIT_S": {
+        "defaults": [
+          "1200.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_autopilot_sync.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_AUTORESEARCH_RUN_ROOT": {
         "defaults": [
           "'data/autoresearch'"
@@ -3622,6 +3632,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_SCHEDULED_QUEUE_WAIT_S": {
+        "defaults": [
+          "1200.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_SEARCH_HOTNESS_WEIGHT": {
         "defaults": [
           "'0.05'"
@@ -3752,15 +3772,26 @@
         ],
         "typed_env": true
       },
+      "ZOE_SUBPROCESS_QUEUE_WAIT_S": {
+        "defaults": [
+          "30.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/async_subprocess.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_TASK_TIMEOUT_S": {
         "defaults": [
-          "'900'"
+          "-",
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/background_runner.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_TAVILY_DEPTH": {
         "defaults": [

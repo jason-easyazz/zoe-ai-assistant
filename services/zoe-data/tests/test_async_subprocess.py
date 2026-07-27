@@ -9,8 +9,10 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
 
+import contextlib
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -27,6 +29,31 @@ _ECHO_UPPER = (
     "    sys.stdout.write(line.upper())\n"
     "    sys.stdout.flush()\n"
 )
+
+
+@pytest.fixture
+def narrow_pool(monkeypatch):
+    """Shrink _RUN_POOL to 2 workers for saturation tests.
+
+    The invariants under test are about the pool being FULL, not about it being
+    16 wide — and this suite runs on the box hosting the live brain, where a
+    burst of concurrent children is a genuine hazard rather than a cost. Two
+    workers reproduce saturation with a fraction of the processes.
+    """
+    import concurrent.futures
+
+    import async_subprocess as mod
+
+    narrow = concurrent.futures.ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="zoe-test-run"
+    )
+    monkeypatch.setattr(mod, "_RUN_POOL", narrow)
+    monkeypatch.setattr(mod, "_RUN_POOL_WIDTH", 2)
+    monkeypatch.setattr(mod, "_RUN_SLOTS", threading.BoundedSemaphore(2))
+    try:
+        yield 2
+    finally:
+        narrow.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -112,3 +139,411 @@ async def test_run_to_completion_times_out_and_kills_child():
             [sys.executable, "-c", "import time; time.sleep(5)"],
             timeout=0.5,
         )
+
+
+# ── spawn-pool starvation guard ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_long_run_to_completion_does_not_starve_spawn_pool():
+    """A long run_to_completion must not hold a _SPAWN_POOL slot.
+
+    The background Hermes lane runs run_to_completion() with a 900s timeout. If
+    those shared the 4-worker _SPAWN_POOL, four concurrent background tasks would
+    block every unrelated chat/voice fork+exec behind them. Occupy the whole
+    _RUN_POOL-bound path with sleepers and prove a spawn still goes through.
+    """
+    import asyncio
+
+    import async_subprocess
+
+    # The sleepers must outlive the probe's deadline, or "didn't block" and
+    # "blocked, but the blockers finished first" look identical and the test
+    # passes even when run_to_completion IS parked in the spawn pool.
+    _HOLD_S, _PROBE_DEADLINE_S = 6, 2.5
+    sleeper = [sys.executable, "-c", f"import time; time.sleep({_HOLD_S})"]
+    # More concurrent long runs than _SPAWN_POOL has workers.
+    n = async_subprocess._SPAWN_POOL._max_workers + 1
+    long_runs = [
+        asyncio.create_task(run_to_completion(sleeper, timeout=_HOLD_S + 10))
+        for _ in range(n)
+    ]
+    try:
+        # Let them all get scheduled into their pool.
+        await asyncio.sleep(0.5)
+        # A fresh fork+exec must still complete promptly, not queue behind them.
+        proc = await asyncio.wait_for(
+            run_to_completion([sys.executable, "-c", "print('ok')"], timeout=10),
+            timeout=_PROBE_DEADLINE_S,
+        )
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == b"ok"
+        # And the dedicated pipe-spawn path must be unblocked too.
+        piped = await asyncio.wait_for(
+            spawn_pipe_process([sys.executable, "-c", _ECHO_UPPER]),
+            timeout=_PROBE_DEADLINE_S,
+        )
+        piped.stdin.write(b"hi\n")
+        await piped.stdin.drain()
+        assert (await asyncio.wait_for(piped.stdout.readline(), timeout=_PROBE_DEADLINE_S)) == b"HI\n"
+        piped.kill()
+        await piped.wait()
+    finally:
+        for t in long_runs:
+            t.cancel()
+        await asyncio.gather(*long_runs, return_exceptions=True)
+
+
+def test_run_to_completion_uses_its_own_pool():
+    """Guard the invariant directly: the long-run path is not the spawn pool."""
+    import async_subprocess
+
+    assert async_subprocess._RUN_POOL is not async_subprocess._SPAWN_POOL
+    assert (
+        async_subprocess._RUN_POOL._max_workers
+        > async_subprocess._SPAWN_POOL._max_workers
+    )
+
+
+
+
+# ── waiting and running are separate budgets ───────────────────────────────
+
+@pytest.mark.asyncio
+async def test_queue_wait_is_bounded_separately_from_runtime(narrow_pool):
+    """A saturated pool must fail fast on the WAIT, without a child forking."""
+    import asyncio
+
+    import async_subprocess
+
+    # Short-lived: cancelling a caller does NOT free its worker, so a long
+    # sleeper would leak occupied permits into the next test.
+    sleeper = [sys.executable, "-c", "import time; time.sleep(3)"]
+    hogs = [
+        asyncio.create_task(run_to_completion(sleeper, timeout=10))
+        for _ in range(narrow_pool)
+    ]
+    try:
+        await asyncio.sleep(0.5)  # every worker occupied
+        spawned = []
+        real_popen = async_subprocess.subprocess.Popen
+
+        def _spy(*a, **k):
+            spawned.append(a[0])
+            return real_popen(*a, **k)
+
+        async_subprocess.subprocess.Popen = _spy
+        try:
+            started = asyncio.get_running_loop().time()
+            with pytest.raises(subprocess.TimeoutExpired):
+                await run_to_completion(
+                    [sys.executable, "-c", "print('x')"], timeout=900, queue_timeout=1
+                )
+            waited = asyncio.get_running_loop().time() - started
+        finally:
+            async_subprocess.subprocess.Popen = real_popen
+        # Gave up on the WAIT (~1s), not after the 900s runtime budget...
+        assert waited < 5, f"queue wait not bounded: {waited:.1f}s"
+        # ...and nothing forked, so no child was orphaned by giving up.
+        assert spawned == []
+    finally:
+        # Let the children exit so their permits come back before the next test.
+        await asyncio.gather(*hogs, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_queue_time_does_not_shrink_the_child_budget(narrow_pool):
+    """Queue time must NOT be charged against the child's runtime.
+
+    The background Hermes lane asks for 900s of `hermes`, not '900s from
+    whenever I asked'. Charging the wait against it would kill real work early
+    under contention. Prove the child still gets its full budget after waiting.
+    """
+    import asyncio
+
+    import async_subprocess
+
+    # Occupy every worker briefly, so the job under test genuinely queues.
+    blocker = [sys.executable, "-c", "import time; time.sleep(2)"]
+    hogs = [
+        asyncio.create_task(run_to_completion(blocker, timeout=10))
+        for _ in range(narrow_pool)
+    ]
+    try:
+        await asyncio.sleep(0.3)
+        # 1.5s of runtime, queued behind ~2s of blockers. If the wait were
+        # charged against it the child would be killed; it must succeed.
+        proc = await run_to_completion(
+            [sys.executable, "-c", "import time; time.sleep(1); print('survived')"],
+            timeout=1.5,
+            queue_timeout=20,
+        )
+        assert proc.stdout.strip() == b"survived"
+    finally:
+        await asyncio.gather(*hogs, return_exceptions=True)
+
+
+def test_run_slots_are_global_not_per_loop(monkeypatch):
+    """Permits must count across loops, because the pool they guard is global.
+
+    A per-loop semaphore hands every loop a full set of permits over the SAME
+    workers, so two loops can admit 2x the pool width. The second loop's
+    timeout+grace backstop then starts ticking while its child is still stuck
+    behind the first loop's work — it reports a wedged worker for a job that
+    never got one.
+    """
+    import asyncio
+
+    import async_subprocess as mod
+
+    # Own semaphore, so the assertion doesn't depend on what the rest of the
+    # suite happens to be holding.
+    monkeypatch.setattr(mod, "_RUN_SLOTS", threading.BoundedSemaphore(2))
+    monkeypatch.setattr(mod, "_RUN_POOL_WIDTH", 2)
+
+    # Loop-agnostic: acquired from OUTSIDE any running loop.
+    assert mod._RUN_SLOTS.acquire(blocking=False)
+    assert mod._RUN_SLOTS.acquire(blocking=False)
+    try:
+        async def _probe():
+            return await mod._acquire_slot(mod._RUN_SLOTS, 0.2)
+
+        # A brand-new loop must still see the pool as full.
+        assert asyncio.run(_probe()) is False, "a fresh loop got permits over a full pool"
+
+        # And once a permit comes back, that same fresh-loop path succeeds —
+        # proving the False above was exhaustion, not a broken acquire.
+        mod._RUN_SLOTS.release()
+        assert asyncio.run(_probe()) is True
+    finally:
+        with contextlib.suppress(ValueError):
+            mod._RUN_SLOTS.release()
+        with contextlib.suppress(ValueError):
+            mod._RUN_SLOTS.release()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_no_timeout_call_does_not_return_the_permit_early():
+    """Cancelling the caller must not hand a permit back while the worker runs.
+
+    Cancelling an unshielded `run_in_executor` future does NOT stop the thread —
+    it still owns a live child — but it does fire the permit-release callback
+    immediately, over-admitting into a pool with no free worker. The
+    `timeout is None` path had this hole after the timeout path was shielded.
+    """
+    import asyncio
+
+    import async_subprocess as mod
+
+    monkey_sem = threading.BoundedSemaphore(1)
+    orig = mod._RUN_SLOTS
+    mod._RUN_SLOTS = monkey_sem
+    try:
+        task = asyncio.create_task(
+            run_to_completion([sys.executable, "-c", "import time; time.sleep(3)"])
+        )
+        await asyncio.sleep(0.6)                      # let it acquire + start
+        assert not monkey_sem.acquire(blocking=False), "permit not held while running"
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.3)                      # child still running
+
+        # The permit must STILL be held — the thread has not finished.
+        assert not monkey_sem.acquire(blocking=False), (
+            "permit released on cancel while the worker was still running"
+        )
+        # ...and it comes back once the child actually exits.
+        for _ in range(60):
+            if monkey_sem.acquire(blocking=False):
+                monkey_sem.release()
+                break
+            await asyncio.sleep(0.2)
+        else:
+            raise AssertionError("permit never returned after the child exited")
+    finally:
+        mod._RUN_SLOTS = orig
+
+
+def test_bad_env_value_does_not_crash_the_import():
+    """A mistyped queue-wait env var must not take zoe-data down at startup.
+
+    This module is imported during service startup, so a bare float() turns
+    `ZOE_SUBPROCESS_QUEUE_WAIT_S=30s` into an unhandled ValueError and the whole
+    API fails to boot over a typo.
+    """
+    import async_subprocess as mod
+
+    assert mod.env_float_failsafe("NOPE_UNSET", 12.5) == 12.5
+    import os as _os
+    _os.environ["ZTEST_QW"] = "30s"          # the typo
+    try:
+        assert mod.env_float_failsafe("ZTEST_QW", 30.0) == 30.0
+        _os.environ["ZTEST_QW"] = ""          # blank
+        assert mod.env_float_failsafe("ZTEST_QW", 30.0) == 30.0
+        _os.environ["ZTEST_QW"] = "45"        # a good value still wins
+        assert mod.env_float_failsafe("ZTEST_QW", 30.0) == 45.0
+        for bad in ("nan", "inf", "-inf", "-5"):
+            _os.environ["ZTEST_QW"] = bad     # parses as float, defeats the bound
+            assert mod.env_float_failsafe("ZTEST_QW", 30.0) == 30.0, bad
+    finally:
+        _os.environ.pop("ZTEST_QW", None)
+
+
+@pytest.mark.asyncio
+async def test_permit_returns_if_the_executor_rejects_synchronously(monkeypatch):
+    """A synchronous run_in_executor failure must not strand the permit.
+
+    The permit is acquired BEFORE the submit. If the submit raises (pool shut
+    down during teardown), there is no future to hang a release callback on, so
+    an unguarded path silently shrinks pool capacity for the process's life.
+    """
+    import asyncio
+
+    import async_subprocess as mod
+
+    sem = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(mod, "_RUN_SLOTS", sem)
+
+    loop = asyncio.get_running_loop()
+    def _boom(*a, **k):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+    monkeypatch.setattr(loop, "run_in_executor", _boom)
+
+    with pytest.raises(RuntimeError):
+        await run_to_completion([sys.executable, "-c", "pass"], timeout=5)
+
+    # Capacity must be intact, not permanently reduced.
+    assert sem.acquire(blocking=False), "permit stranded by a synchronous submit failure"
+    sem.release()
+
+
+def test_queue_timeout_is_distinguishable_for_recovery_callers():
+    """Callers that RECOVER after a timeout must be able to opt out on QueueTimeout.
+
+    main.py's scheduled jobs run `docker rm -f` / `--recover` on TimeoutExpired,
+    on the premise a child ran and was killed. QueueTimeout means NO child ever
+    started — those handlers catch it first and skip recovery. This pins the
+    ordering property that makes that possible: except QueueTimeout before
+    except TimeoutExpired must win.
+    """
+    from async_subprocess import QueueTimeout
+
+    caught = None
+    try:
+        raise QueueTimeout(["x"], 30)
+    except QueueTimeout:
+        caught = "queue"
+    except subprocess.TimeoutExpired:
+        caught = "child"
+    assert caught == "queue"
+
+
+def test_permit_returns_even_after_the_callers_loop_closes(monkeypatch):
+    """The release must not depend on the event loop surviving.
+
+    An asyncio done-callback can never fire once the caller's loop is closed
+    (consecutive asyncio.run()s, pytest loops) — the old shape stranded the
+    permit exactly then. The worker thread itself now hands the permit back.
+    """
+    import asyncio
+    import time as _t
+
+    import async_subprocess as mod
+
+    sem = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(mod, "_RUN_SLOTS", sem)
+
+    async def _start_and_abandon():
+        task = asyncio.create_task(
+            run_to_completion([sys.executable, "-c", "import time; time.sleep(2)"])
+        )
+        await asyncio.sleep(0.6)          # acquired + child running
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(_start_and_abandon())     # loop CLOSES here, child still alive
+    assert not sem.acquire(blocking=False), "permit free while the child still runs"
+
+    deadline = _t.monotonic() + 15
+    while _t.monotonic() < deadline:
+        if sem.acquire(blocking=False):
+            sem.release()
+            break
+        _t.sleep(0.2)
+    else:
+        raise AssertionError("permit stranded after the caller's loop closed")
+
+
+@pytest.mark.asyncio
+async def test_shutdown_terminates_registered_children():
+    """A dying zoe-data must take its children with it.
+
+    The shield keeps a child running when its CALLER goes away — correct for a
+    cancelled task, wrong for process shutdown, where an orphaned 900s hermes
+    would keep running under the old deploy while the new one starts its own.
+    """
+    import asyncio
+
+    import async_subprocess as mod
+
+    task = asyncio.create_task(
+        run_to_completion([sys.executable, "-c", "import time; time.sleep(30)"], timeout=30)
+    )
+    await asyncio.sleep(0.6)
+    with mod._LIVE_CHILDREN_LOCK:
+        live = list(mod._LIVE_CHILDREN)
+    assert len(live) == 1, "child not registered while running"
+    popen = live[0]
+
+    try:
+        mod._terminate_live_children()      # what atexit runs at shutdown
+        assert popen.poll() is not None, "child survived shutdown"
+
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        with mod._LIVE_CHILDREN_LOCK:
+            assert popen not in mod._LIVE_CHILDREN
+    finally:
+        # In prod the process is dying; in a SUITE the flag would poison every
+        # later run_to_completion with "refusing to spawn".
+        mod._SHUTTING_DOWN.clear()
+
+
+@pytest.mark.asyncio
+async def test_children_deregister_on_normal_exit():
+    import async_subprocess as mod
+
+    await run_to_completion([sys.executable, "-c", "print('x')"], timeout=10)
+    with mod._LIVE_CHILDREN_LOCK:
+        assert not mod._LIVE_CHILDREN, "registry leaked a finished child"
+
+
+@pytest.mark.asyncio
+async def test_timeout_kills_the_whole_process_tree():
+    """A timed-out CLI's descendants must not hold the pipes open past the kill.
+
+    A child that spawns a grandchild inheriting stdout leaves communicate()
+    blocked on the pipe after killing only the direct child — the timeout is
+    then unbounded in the worst case. killpg on the child's own session takes
+    the tree.
+    """
+    import time as _t
+
+    spawner = (
+        "import subprocess,sys,time;"
+        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']);"
+        "time.sleep(30)"
+    )
+    started = _t.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        await run_to_completion([sys.executable, "-c", spawner], timeout=1.5)
+    elapsed = _t.monotonic() - started
+    # Must beat the OUTER backstop (timeout + _QUEUE_GRACE_S = 6.5s): without
+    # killpg the caller is rescued by that backstop at ~6.5s while the WORKER
+    # stays blocked on the pipe — which is exactly the failure. The inner
+    # timeout must be what released us.
+    assert elapsed < 4, f"released by the backstop, not the tree kill: {elapsed:.1f}s"
