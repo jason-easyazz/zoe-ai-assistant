@@ -15,10 +15,26 @@ def _fake_executor_identity(monkeypatch):
     SAME resolver the board runner uses. Stub it so tests don't need a DB."""
     async def _identity(conn):
         return {"workspace_id": "ws1", "agent_id": "ag1"}
+    async def _get_pool():
+        raise AssertionError("get_pool not stubbed for this test")
     monkeypatch.setitem(
         sys.modules, "executors.executor_queue_backend",
-        types.SimpleNamespace(ensure_executor_identity=_identity),
+        types.SimpleNamespace(ensure_executor_identity=_identity, get_pool=_get_pool),
     )
+
+
+def _pool_returning(row):
+    """A fake asyncpg pool whose acquired conn's fetchrow returns `row`."""
+    class _Conn:
+        async def fetchrow(self, sql, *a):
+            _pool_returning.last = (sql, a)
+            return row
+    class _Acq:
+        async def __aenter__(self): return _Conn()
+        async def __aexit__(self, *a): return False
+    class _Pool:
+        def acquire(self): return _Acq()
+    return _Pool()
 
 
 def test_body_is_built_only_from_proposal_fields():
@@ -228,6 +244,24 @@ async def test_explicit_retry_still_never_redoes_live_or_done_work():
         conn, {"id": "p1", "title": "T", "description": "d"}, allow_retry=True)
     assert out["created"] is False and out["status"] == "done"
     assert conn.inserted is None
+
+
+@pytest.mark.asyncio
+async def test_is_board_lane_issue_matches_only_the_proposals_backref(monkeypatch):
+    """The review-only display-sync uses this to avoid resuming a board-lane run
+    (approved→in_progress on a cancelled board issue). True only when the issue
+    carries THIS proposal's context_refs back-ref."""
+    import sys as _sys, types as _types
+    async def _identity(conn): return {"workspace_id": "ws1", "agent_id": "ag1"}
+    for row, expect in (({"?column?": 1}, True), (None, False)):
+        pool = _pool_returning(row)
+        async def _get_pool(_p=pool): return _p
+        monkeypatch.setitem(_sys.modules, "executors.executor_queue_backend",
+                            _types.SimpleNamespace(ensure_executor_identity=_identity,
+                                                   get_pool=_get_pool))
+        assert await pbb.is_board_lane_issue("iid-1", "p1") is expect
+    sql, args = _pool_returning.last
+    assert "context_refs @>" in sql and '"proposal_id": "p1"' in args[1]
 
 
 @pytest.mark.asyncio

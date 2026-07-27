@@ -2046,10 +2046,29 @@ async def evolution_proposal_action(
                         update_multica_issue_on_proposal_status_change,
                     )
                     if existing_multica_id:
-                        # Issue already created by run_evolution_notice — update status
-                        await update_multica_issue_on_proposal_status_change(
-                            existing_multica_id, "approved"
-                        )
+                        # Issue already created by run_evolution_notice — update status.
+                        # NEVER for a board-lane issue: 'approved'→in_progress would
+                        # silently RESUME a cancelled/blocked autonomous run from this
+                        # review-only path, bypassing the bridge's explicit-retry gate
+                        # (a previously-executable proposal whose gate now blocks lands
+                        # here with multica_issue_id = the real board issue). Unknown
+                        # provenance (probe failure) also skips — fail toward NOT
+                        # touching an issue we can't classify.
+                        _display_issue = False
+                        try:
+                            from proposal_board_bridge import is_board_lane_issue  # type: ignore[import]
+                            _display_issue = not await is_board_lane_issue(
+                                existing_multica_id, proposal_id
+                            )
+                        except Exception as _pe:  # noqa: BLE001
+                            logger.warning(
+                                "evolution_approve: cannot classify issue %s (%s) — "
+                                "skipping display-status update", existing_multica_id, _pe,
+                            )
+                        if _display_issue:
+                            await update_multica_issue_on_proposal_status_change(
+                                existing_multica_id, "approved"
+                            )
                     else:
                         # Create issue now (proposal pre-dates the sync or created outside NOTICE)
                         new_id = await sync_evolution_proposal_to_multica(
@@ -2072,12 +2091,25 @@ async def evolution_proposal_action(
                 # bridge's link update below is the sole writer of the board issue
                 # id, so a link failure leaves the ORIGINAL value (flagged via
                 # dispatch.warning) instead of a freshly-written stale one.
-                await db.execute(
+                # Conditional on the autonomy contract the gate ACTUALLY checked:
+                # a concurrent write to autonomy_class/approval_required between the
+                # SELECT and here would decouple "what the gate authorized" from
+                # "what was persisted" (TOCTOU). 0 rows → the contract moved under
+                # us → refuse rather than execute on a stale authorization.
+                _upd = await db.execute(
                     """UPDATE evolution_proposals
                        SET status='approved', reviewed_at=$1
-                       WHERE id=$2""",
+                       WHERE id=$2
+                         AND autonomy_class IS NOT DISTINCT FROM $3
+                         AND approval_required IS NOT DISTINCT FROM $4""",
                     _time.time(), proposal_id,
+                    proposal.get("autonomy_class"), proposal.get("approval_required"),
                 )
+                if str(_upd).strip().endswith(" 0"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Proposal's autonomy contract changed during approval — re-read and retry",
+                    )
             else:
                 await db.execute(
                     """UPDATE evolution_proposals
@@ -2175,8 +2207,9 @@ async def evolution_proposal_action(
                         # retry=true in the request body is the ONLY way a prior
                         # failed (blocked/cancelled) run gets a second enqueue —
                         # re-approval alone always returns the existing issue.
+                        # STRICT JSON true: bool() would authorize "false", 1, [].
                         bridged = await create_board_issue_for_proposal(
-                            _mconn, prop_row, allow_retry=bool(body.get("retry")),
+                            _mconn, prop_row, allow_retry=body.get("retry") is True,
                         )
                     _prior = multica_issue_id
                     _link_warning = None

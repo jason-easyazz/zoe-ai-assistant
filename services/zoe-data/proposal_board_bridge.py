@@ -110,6 +110,23 @@ def build_proposal_issue_body(proposal: asyncpg.Record | dict) -> str:
     return "\n".join(parts).strip()
 
 
+async def is_board_lane_issue(issue_id: str, proposal_id: str) -> bool:
+    """True if `issue_id` is a BOARD-LANE issue for this proposal (carries the
+    bridge's context_refs back-ref). The board lane owns such an issue's status
+    (todo→in_progress→done); the REST display-sync must never touch it — in
+    particular `approved→in_progress`, which would silently RESUME a cancelled/
+    blocked autonomous run from the review-only path, bypassing the retry gate.
+    """
+    from executors.executor_queue_backend import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM issue WHERE id = $1::uuid AND context_refs @> $2::jsonb",
+            str(issue_id), json.dumps([{"proposal_id": str(proposal_id)}]),
+        )
+    return row is not None
+
+
 async def create_board_issue_for_proposal(
     conn: asyncpg.Connection, proposal: asyncpg.Record | dict, *,
     claim_next: bool = False, allow_retry: bool = False,
