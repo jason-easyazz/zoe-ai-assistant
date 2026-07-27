@@ -244,6 +244,18 @@ class TestSkipDiagnosisReportsWhatItObserved:
         monkeypatch.setenv("DEVICE_TOKEN", "y")
         obs2 = "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
         assert "DEVICE_TOKEN present" in obs2 and "ZOE_DEVICE_TOKEN present" not in obs2
+
+    def test_empty_env_var_masks_dotenv_like_setdefault(self, tmp_path, monkeypatch):
+        """ZOE_DEVICE_TOKEN='' in the env + a value in .env: setdefault keeps the
+        empty, so the harness gets NOTHING — the diagnosis must not claim the
+        .env token was in play (Bugbot, the mirrors-exactly claim was not exact).
+        """
+        monkeypatch.setattr(vrp, "_port_open", lambda h, p_, timeout=2.0: True)
+        (tmp_path / ".env").write_text("ZOE_DEVICE_TOKEN=realtoken\n")
+        monkeypatch.setenv("ZOE_DEVICE_TOKEN", "")
+        monkeypatch.delenv("DEVICE_TOKEN", raising=False)
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
+        assert "MISSING" in obs and "(from .env)" not in obs
         # inprocess mode must NOT name remote-only observations
         assert "ZOE_DEVICE_TOKEN" not in "; ".join(vrp._diagnose_skip(str(tmp_path), "inprocess"))
 

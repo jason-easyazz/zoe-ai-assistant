@@ -293,14 +293,12 @@
       },
       "ZOE_BASE_URL": {
         "defaults": [
-          "'http://127.0.0.1:8000'",
           "'http://localhost:8000'",
           "'http://zoe.local'",
           "'https://192.168.1.218'"
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-auth/oidc/startup.py",
           "services/zoe-data/routers/panel_provision.py",
           "services/zoe-data/routers/system.py"
@@ -842,7 +840,6 @@
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/maintenance/voice_regression_probe.py",
           "scripts/maintenance/zoe_latency_probe.py"
         ],
         "typed_env": false

@@ -108,24 +108,28 @@ def _service_env_get(service_dir: str, *names: str) -> tuple[str | None, str | N
     service_dir/.env, mirroring the harness's _load_env (setdefault semantics).
     The diagnosis must read the SAME sources the harness reads, or it reports a
     'missing' token the replay actually had."""
-    for n in names:
-        v = (os.environ.get(n) or "").strip()
-        if v:
-            return n, v
-    env_path = os.path.join(service_dir, ".env")
+    file_vals: dict[str, str] = {}
     try:
-        file_vals: dict[str, str] = {}
-        with open(env_path) as fh:
+        with open(os.path.join(service_dir, ".env")) as fh:
             for line in fh:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
                     file_vals[k] = v.strip().strip('"').strip("'")
-        for n in names:
-            if file_vals.get(n):
-                return f"{n} (from .env)", file_vals[n]
     except OSError:
         pass
+    for n in names:
+        # setdefault semantics EXACTLY: a name PRESENT in the process env — even
+        # as an empty string — masks the .env value (the harness would see the
+        # empty too and fall through its `or` chain). Skipping empties here made
+        # the diagnosis claim a .env token the replay never received.
+        if n in os.environ:
+            v = os.environ[n].strip()
+            if v:
+                return n, v
+            continue  # set-but-empty: masks .env for this name, harness sees nothing
+        if file_vals.get(n):
+            return f"{n} (from .env)", file_vals[n]
     return None, None
 
 
