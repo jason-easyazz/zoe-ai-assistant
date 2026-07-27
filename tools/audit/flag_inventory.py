@@ -67,14 +67,27 @@ def _typed_delegators(tree: ast.AST) -> frozenset[str]:
     under-counting typed adoption rather than over-counting it.
     """
     out = set()
-    for node in ast.walk(tree):
+    # MODULE-LEVEL functions only, not ast.walk: a nested bare delegator (e.g. a
+    # local `_env_int` helper inside some function) registers its NAME, and a
+    # raw module-level wrapper sharing that name would then wrongly type every
+    # read through it (Codex, #1577 — the name-collision class).
+    for node in ast.iter_child_nodes(tree):
         if not isinstance(node, ast.FunctionDef):
             continue
         body = [st for st in node.body
                 if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant))]
-        if (len(body) == 1 and isinstance(body[0], ast.Return)
+        # The delegation must FORWARD the wrapper's first parameter as the typed
+        # call's name argument: `def enabled(label): return env_str("FIXED")` is a
+        # bare delegation by shape but reads a name its callers never passed —
+        # classifying it would record their first args as typed flag reads of
+        # names the wrapper ignores (Codex, #1577).
+        params = [a.arg for a in node.args.args]
+        if (params and len(body) == 1 and isinstance(body[0], ast.Return)
                 and isinstance(body[0].value, ast.Call)
-                and _FlagVisitor._call_name(body[0].value.func) in TYPED_ENV_FUNCS):
+                and _FlagVisitor._call_name(body[0].value.func) in TYPED_ENV_FUNCS
+                and body[0].value.args
+                and isinstance(body[0].value.args[0], ast.Name)
+                and body[0].value.args[0].id == params[0]):
             out.add(node.name)
     return frozenset(out)
 
