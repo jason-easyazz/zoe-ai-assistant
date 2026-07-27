@@ -263,7 +263,7 @@ async def _noop_async(*_a, **_kw):
 
 @pytest.mark.asyncio
 async def test_queue_saturation_is_not_reported_as_a_child_timeout(monkeypatch):
-    """"Never started" and "ran too long" must not read the same in the log.
+    """A "never started" and a "ran too long" must not read the same in the log.
 
     run_to_completion raises TimeoutExpired for BOTH giving up on the queue and
     the child overrunning. Reporting the child's 900s budget when we actually
@@ -369,11 +369,11 @@ def test_watchdog_window_covers_queue_wait_plus_runtime(monkeypatch):
     monkeypatch.delenv("ZOE_TASK_TIMEOUT_S", raising=False)
     monkeypatch.setenv("HERMES_BACKGROUND_TIMEOUT_S", "900")
     monkeypatch.setenv("HERMES_BACKGROUND_QUEUE_WAIT_S", "600")
-    assert br._watchdog_timeout_s() == 1500
+    assert br._watchdog_timeout_s() == 1560
 
     # A too-small explicit setting is floored, not silently obeyed.
     monkeypatch.setenv("ZOE_TASK_TIMEOUT_S", "900")
-    assert br._watchdog_timeout_s() == 1500
+    assert br._watchdog_timeout_s() == 1560
 
     # A generous explicit setting still wins.
     monkeypatch.setenv("ZOE_TASK_TIMEOUT_S", "3600")
@@ -381,7 +381,7 @@ def test_watchdog_window_covers_queue_wait_plus_runtime(monkeypatch):
 
     # Garbage falls back to the safe floor rather than crashing the loop.
     monkeypatch.setenv("ZOE_TASK_TIMEOUT_S", "not-a-number")
-    assert br._watchdog_timeout_s() == 1500
+    assert br._watchdog_timeout_s() == 1560
 
 
 def test_watchdog_tracks_queue_budget_changes(monkeypatch):
@@ -391,7 +391,7 @@ def test_watchdog_tracks_queue_budget_changes(monkeypatch):
     monkeypatch.delenv("ZOE_TASK_TIMEOUT_S", raising=False)
     monkeypatch.setenv("HERMES_BACKGROUND_TIMEOUT_S", "900")
     monkeypatch.setenv("HERMES_BACKGROUND_QUEUE_WAIT_S", "1800")
-    assert br._watchdog_timeout_s() == 2700
+    assert br._watchdog_timeout_s() == 2760
 
 
 def test_background_env_typos_do_not_crash_the_lane(monkeypatch):

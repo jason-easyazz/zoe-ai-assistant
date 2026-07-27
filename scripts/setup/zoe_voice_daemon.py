@@ -1091,13 +1091,15 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         emb_bytes = embedding.astype(_np.float32).tobytes()
         emb_b64 = _b64.b64encode(emb_bytes).decode()
         resp = _api_post("/api/voice/identify", {"embedding_base64": emb_b64}, timeout=5)
+        # From here on the SERVER scored the turn — every branch below must say
+        # so, or its shadow row reads like an unscored/local-failure null and
+        # skews the FA/FR exclusion rules that key on source.
+        _claim_ctx.source = "server"
         if resp.get("identified"):
             uid = resp.get("user_id")
             if not uid:
                 return None  # legacy server echoed identified without a user
-            _claim_ctx.source = "server"
             return uid, float(resp.get("confidence") or 1.0)
-        _claim_ctx.source = None
         return None
     except ImportError:
         _claim_ctx.source = None
@@ -1183,7 +1185,7 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
                 "user_id": claim[0] if claim else None,
                 "score": round(claim[1], 4) if claim else None,
                 "n_profiles": n_profiles,   # local cache size; null for server claims
-                "source": source,           # "local" | "server" | null (no match)
+                "source": source,           # "local" | "server" | "encoder_unavailable" | null (not scored)
                 "truth": None,  # operator-filled ground truth; null until reviewed
             }
             # Heal a torn tail before appending. If a previous write was cut

@@ -366,7 +366,13 @@ def _watchdog_timeout_s() -> float:
     An explicit ZOE_TASK_TIMEOUT_S still wins, but is floored at the real
     worst case for the same reason.
     """
-    floor = _background_queue_wait_s() + _background_runtime_s()
+    # Slack on top of the two budgets: the watchdog measures from created_at,
+    # which also spans the pending->running tick, pre-spawn overhead (profile
+    # fetch, env build) and the scan's own 60s granularity. A floor of EXACTLY
+    # queue+runtime lets a task that legitimately uses both budgets be caught
+    # in that epsilon.
+    _WATCHDOG_SLACK_S = 60.0
+    floor = _background_queue_wait_s() + _background_runtime_s() + _WATCHDOG_SLACK_S
     configured = os.environ.get("ZOE_TASK_TIMEOUT_S")
     if configured is None:
         return floor
