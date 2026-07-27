@@ -1135,10 +1135,14 @@ def detect_intent(
     ]:
         m = re.match(pattern, t)
         if m:
-            groups = [g for g in (m.groups() if m.lastindex else []) if g]
-            mins_raw = next((g for g in groups if _timer_minutes_value(g) is not None), None)
-            label = next((g for g in groups if g != mins_raw), "Timer")
+            # POSITIONAL, not value-based: the label is always the final
+            # capture group, minutes always an earlier one — comparing VALUES
+            # dropped a label spelled like the duration ("... called five").
+            gs = list(m.groups()) if m.lastindex else []
+            label_raw = gs[-1] if gs else None
+            mins_raw = next((g for g in gs[:-1] if g and _timer_minutes_value(g) is not None), None)
             mins = _timer_minutes_value(mins_raw) if mins_raw is not None else 5
+            label = label_raw if label_raw else "Timer"
             return Intent("timer_create", {"minutes": mins, "label": label.title()})
 
     # --- RECIPE SEARCH ---

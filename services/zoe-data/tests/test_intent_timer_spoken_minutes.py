@@ -60,3 +60,14 @@ def test_digit_minutes_unchanged(text, minutes):
 
 def test_non_number_words_still_fall_through():
     assert _detect("set a timer for eleventy minutes") is None
+
+
+@pytest.mark.parametrize("text,minutes,label", [
+    # label spelled like the duration must survive (positional, not value-based)
+    ("set a five minute timer called five", 5, "Five"),
+    ("set a timer for 5 minutes called 5", 5, "5"),
+])
+def test_label_equal_to_duration_is_kept(text, minutes, label):
+    intent = _detect(text)
+    assert intent is not None and intent.name == "timer_create"
+    assert intent.slots == {"minutes": minutes, "label": label}
