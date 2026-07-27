@@ -84,7 +84,7 @@ _HA_BRIDGE      = os.environ.get("ZOE_HA_BRIDGE_URL",  "http://127.0.0.1:8007")
 _MEMPALACE_DATA = os.environ.get("MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace"))
 _JETSON_MODE    = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 
-_MAX_TOOL_ITERS   = int(os.environ.get("ZOE_AGENT_MAX_TOOL_ITERS", "5"))
+_MAX_TOOL_ITERS   = env_int("ZOE_AGENT_MAX_TOOL_ITERS", 5)
 _LLM_TIMEOUT      = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("ZOE_AGENT_TOOL_TIMEOUT", "10.0"))
 _DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
@@ -2567,7 +2567,7 @@ async def _web_research(query: str, user_id: str = "") -> str:
         # Limit concurrent browser tabs — Jetson Orin NX has ~8GB free after the LLM.
         # Default 5: Maps results are lightweight store websites, not SPAs.
         # Reduce via ZOE_MAX_BROWSER_TABS env var if memory pressure is observed.
-        _max_tabs = int(os.environ.get("ZOE_MAX_BROWSER_TABS", "5"))
+        _max_tabs = env_int("ZOE_MAX_BROWSER_TABS", 5)
         target_urls = target_urls[:_max_tabs]
         page_tasks = [_visit_with_search(url) for url in target_urls]
         raw_contents = await asyncio.gather(*page_tasks, return_exceptions=True)
@@ -2815,7 +2815,7 @@ async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> s
     # Bound the raw HTML BEFORE any regex pass: the URL is model-chosen, so page
     # size is untrusted — a huge page would burn CPU/memory here long before the
     # output cap applies. 1.5MB of HTML vastly exceeds any useful 6000-char answer.
-    _MAX_HTML = int(os.environ.get("ZOE_WEB_BROWSE_MAX_HTML", "1500000"))
+    _MAX_HTML = env_int("ZOE_WEB_BROWSE_MAX_HTML", 1500000)
     if len(html) > _MAX_HTML:
         html = html[:_MAX_HTML]
     # script/style carry no readable content and would dominate the budget
@@ -2914,9 +2914,9 @@ _TOOL_CAPS: dict[str, int] = {
     "zoe_self_capabilities": env_int("ZOE_CAP_SELF_CAPS", 2000),
 }
 
-_AMBIENT_MAX_ROWS     = int(os.environ.get("ZOE_CAP_AMBIENT_ROWS",        "10"))
-_AMBIENT_TRANSCRIPT   = int(os.environ.get("ZOE_CAP_AMBIENT_TRANSCRIPT", "150"))
-_MEMORY_LIST_MAX_ROWS = int(os.environ.get("ZOE_CAP_MEMORY_LIST_ROWS",    "25"))
+_AMBIENT_MAX_ROWS     = env_int("ZOE_CAP_AMBIENT_ROWS", 10)
+_AMBIENT_TRANSCRIPT   = env_int("ZOE_CAP_AMBIENT_TRANSCRIPT", 150)
+_MEMORY_LIST_MAX_ROWS = env_int("ZOE_CAP_MEMORY_LIST_ROWS", 25)
 
 
 def _cap_tool_result(tool_name: str, result: str) -> str:
@@ -3719,7 +3719,7 @@ async def run_zoe_agent(
     # Build initial messages list with token-budget-aware compaction.
     # Gemma 4 E4B-QAT context window: 8192 tokens. Reserve ~2000 for the response.
     # Rough token estimate: len(text) / 4 (conservative for mixed content).
-    _CTX_BUDGET = int(os.environ.get("ZOE_CONTEXT_TOKEN_BUDGET", "5500"))
+    _CTX_BUDGET = env_int("ZOE_CONTEXT_TOKEN_BUDGET", 5500)
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
         # Start from the most recent end, add messages until budget is reached.
@@ -4110,7 +4110,7 @@ async def run_zoe_agent_streaming(
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
         _sys_tokens = len(system_prompt) // 4 + len(user_message) // 4 + 50
-        _remaining = int(os.environ.get("ZOE_CONTEXT_TOKEN_BUDGET", "5500")) - _sys_tokens
+        _remaining = env_int("ZOE_CONTEXT_TOKEN_BUDGET", 5500) - _sys_tokens
         trimmed_hist: list[dict] = []
         for msg in reversed(history[-12:]):
             _msg_tokens = len(str(msg.get("content") or "")) // 4 + 10

@@ -80,6 +80,9 @@ class BrowserBroker:
 
     def capabilities(self) -> list[dict[str, Any]]:
         """Return a normalized capability matrix for known browser backends."""
+        # "hermesCloak" is deliberately NOT advertised here: it is a deprecated
+        # execution-only alias (registered so persisted plans still run) and new
+        # clients picking surfaces from capabilities() must not adopt it.
         known: list[BrowserSurface] = ["zoeCloak", "harness", "touchPanel", "userDesktop"]
         matrix: list[dict[str, Any]] = []
         for backend in known:
