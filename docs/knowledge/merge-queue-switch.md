@@ -124,3 +124,27 @@ own, and the queue is unnecessary complexity.
 
 Re-add `Greptile Review` to the required contexts, set `strict=true`, disable the queue. The
 `merge_group` triggers are inert without a queue, so nothing needs reverting in code.
+
+## 8. Gate self-test — simulated against live PRs before merge
+
+`greptile-gate.yml` was dry-run against the six open PRs by replaying its exact API calls.
+Every one held on `reviewers=false`, and **would have held forever**: Copilot and Codex are
+manual-trigger only, so the gate was waiting for reviews nobody would ever request. The label
+would never have been applied and Greptile never summoned — a silent deadlock, in the very
+component built to prevent one.
+
+Fixed by making the gate SUMMON what it waits for. The two are requested differently and both
+details are easy to get wrong:
+
+- **Copilot** — `pulls.requestReviewers({ reviewers: ['Copilot'] })`. The `[bot]` login does
+  NOT resolve; `copilot-pull-request-reviewer[bot]` fails with "Could not resolve user".
+- **Codex** — an `@codex review` comment, tagged with a hidden per-SHA marker so it is asked
+  once per head rather than on every workflow run.
+
+Labels the Actions depend on (`greptile`, `oversized-ok`) did not exist either and have been
+created; `addLabels` would have auto-created a bare one, but the `oversized-ok` override would
+have been undiscoverable.
+
+**Still unverified:** the label NAME must match the filter configured in the Greptile dashboard.
+If the dashboard filters on a different string, the gate labels correctly and Greptile still
+never runs. Confirm before relying on it.

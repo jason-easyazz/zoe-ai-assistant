@@ -70,10 +70,44 @@ jobs:
               const reviewersOk = REQUIRED_REVIEWERS.every(r => reviewedHead.has(r));
 
               // Unresolved conversations mean the cheap tier is not finished with it.
-              const { data: prFull } = await github.rest.pulls.get({
+              const { data: prFullEarly } = await github.rest.pulls.get({
                 owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number,
               });
-              const upToDate = prFull.mergeable_state !== 'behind';
+              const upToDate = prFullEarly.mergeable_state !== 'behind';
+
+              // SUMMON the cheap reviewers if they have not reviewed this head. Both are
+              // manual-trigger only, so without this the gate waits forever for reviews
+              // nobody asked for — verified by simulation against live PRs before merge:
+              // every open PR held on reviewers=false, and would have held indefinitely.
+              // They are summoned differently: Copilot via requestReviewers ("Copilot" —
+              // the [bot] login does NOT resolve), Codex via an @codex comment.
+              if (!reviewersOk) {
+                const requested = new Set((prFullEarly.requested_reviewers || []).map(r => r.login));
+                if (!reviewedHead.has('copilot-pull-request-reviewer') && !requested.has('Copilot')) {
+                  try {
+                    await github.rest.pulls.requestReviewers({
+                      owner: context.repo.owner, repo: context.repo.repo,
+                      pull_number: pr.number, reviewers: ['Copilot'],
+                    });
+                    core.info(`PR #${pr.number}: requested Copilot`);
+                  } catch (e) { core.info(`PR #${pr.number}: could not request Copilot — ${e.message}`); }
+                }
+                if (!reviewedHead.has('chatgpt-codex-connector')) {
+                  // Only ask once per head: look for our own prior summon on this SHA.
+                  const comments = await github.paginate(github.rest.issues.listComments, {
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    issue_number: pr.number, per_page: 100,
+                  });
+                  const marker = `<!-- greptile-gate:codex:${pr.head.sha} -->`;
+                  if (!comments.some(c => c.body?.includes(marker))) {
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner, repo: context.repo.repo,
+                      issue_number: pr.number, body: `@codex review\n${marker}`,
+                    });
+                    core.info(`PR #${pr.number}: summoned Codex`);
+                  }
+                }
+              }
 
               if (!(checksOk && reviewersOk && upToDate)) {
                 core.info(`PR #${pr.number}: not ready — checks=${checksOk} reviewers=${reviewersOk} upToDate=${upToDate}`);
