@@ -106,9 +106,15 @@ jobs:
                 ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
                 : null;
 
-              if (pr.labels.some(l => l.name === LABEL)) {
-                // Marker matches the head: already handed off, nothing to do.
-                if (labelledSha && labelledSha === pr.head.sha) continue;
+              const isLabelled = pr.labels.some(l => l.name === LABEL);
+              // A matching marker means the handoff happened on THIS head. Do not return
+              // early: conditions can regress on the same SHA (a thread opened, a check
+              // re-run failing, main moving ahead), and the label asserts "cheap tier
+              // green". Leaving it in place would keep asserting something untrue, so fall
+              // through, re-evaluate, and strip it below if it no longer holds.
+              const alreadyHandedOff = isLabelled && labelledSha === pr.head.sha;
+
+              if (isLabelled && !alreadyHandedOff) {
                 // Stale or unknown provenance (applied by hand, or the comment was deleted):
                 // strip it so the PR re-qualifies rather than sitting inside Greptile's
                 // filter re-reviewing on every push.
@@ -230,7 +236,22 @@ jobs:
               }
 
               const copilotOk = reviewedHead.has(COPILOT);
-              if (!(checksOk && copilotOk && codexOk && upToDate && unresolved === 0)) {
+              const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
+
+              if (alreadyHandedOff) {
+                // Already handed off on this head. Only act if it has REGRESSED — then the
+                // label is a false claim and must go; it will be re-applied once the
+                // condition clears.
+                if (!qualifies) {
+                  const r = await ok(`PR #${pr.number} revoke label`, () =>
+                    github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
+                  if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${checksOk} ` +
+                                   `copilot=${copilotOk} upToDate=${upToDate} unresolved=${unresolved}) — label revoked`);
+                }
+                continue;
+              }
+
+              if (!qualifies) {
                 core.info(`PR #${pr.number}: holding — checks=${checksOk} copilot=${copilotOk} ` +
                           `codex=${codexOk} upToDate=${upToDate} unresolved=${unresolved}`);
                 continue;
