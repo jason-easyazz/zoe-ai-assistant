@@ -257,11 +257,14 @@ async def run_to_completion(
     fut = loop.run_in_executor(_RUN_POOL, _blocking_run)
     released = False
     try:
+        # shield on BOTH paths. Cancelling the caller cancels the Future but not
+        # the thread, which still owns a live child — and an unshielded cancel
+        # fires the done-callback immediately, handing a permit back while the
+        # worker is still busy and over-admitting into a saturated pool. Shielded,
+        # the permit returns only when the thread genuinely finishes.
         if timeout is None:
-            result = await fut
+            result = await asyncio.shield(fut)
         else:
-            # shield: on the backstop below we must NOT cancel the thread — it
-            # owns a real child. Let it run on and release its own permit.
             result = await asyncio.wait_for(
                 asyncio.shield(fut), timeout=timeout + _QUEUE_GRACE_S
             )

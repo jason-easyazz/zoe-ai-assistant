@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Required checks must report on the merge_group event or a merge queue stalls
+  # forever waiting for them (GitHub: "checks that only run on pull_request will not
+  # execute during merge queue operations"). Harmless until a queue is enabled — no
+  # merge_group events are produced without one. See docs/knowledge/merge-queue-switch.md.
+  merge_group:
 
 concurrency:
   group: validate-${{ github.event.pull_request.number || github.ref }}
@@ -47,7 +52,8 @@ jobs:
             fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
             "ag-ui-protocol==0.1.14" websockets python-jose passlib \
-            python-multipart uvicorn prometheus-client "python-json-logger>=4.1.0"
+            python-multipart uvicorn prometheus-client "python-json-logger>=4.1.0" \
+            pyyaml
 
       - name: Validate project structure
         run: python3 tools/audit/validate_structure.py
@@ -75,6 +81,49 @@ jobs:
           "
         env:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
+
+      # actionlint validates workflow files against GitHub's ACTUAL schema. PyYAML
+      # passing is not evidence a workflow parses: greptile-gate.yml carried an
+      # invalid `on:` event (`pull_request_review_thread`) through ten review rounds
+      # and 15 commits — GitHub failed the file at parse time on EVERY push, the
+      # workflow never executed once, and nothing in CI noticed. A zero-job parse
+      # failure does not even fail a required check, so this is the only gate.
+      - name: Workflow lint (actionlint — a workflow that cannot parse cannot gate)
+        run: |
+          # Pinned sha256 from the release's checksums.txt — verify BEFORE anything
+          # executes or extracts, so neither a compromised nor a truncated artifact
+          # gets run (Copilot flagged the unverified curl|tar).
+          curl -sSfL -o /tmp/actionlint.tgz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  /tmp/actionlint.tgz" | sha256sum -c -
+          tar xzf /tmp/actionlint.tgz actionlint
+          # -shellcheck= (empty) disables the embedded-shell lint: deploy.yml has
+          # pre-existing SC2155 warnings that are style, not parse failures. This
+          # step exists to catch workflows GitHub itself cannot parse — keep it
+          # sharp for that and let shell style stay out of the merge gate.
+          ./actionlint -color -shellcheck=
+          # NEGATIVE CONTROL, every run: prove the gate can still go red. Feed it a
+          # workflow with exactly the defect class it exists to catch (an invalid
+          # `on:` event) and require a non-zero exit. If actionlint is ever
+          # misconfigured into a yes-machine, this fails the lane instead of the
+          # lane silently guarding nothing — a lint that cannot fail is not a gate.
+          cat > /tmp/known-bad-workflow.yml <<'BAD'
+          name: negative-control
+          on:
+            pull_request_review_thread:
+              types: [resolved]
+          jobs:
+            noop:
+              runs-on: ubuntu-latest
+              steps:
+                - run: "true"
+          BAD
+          if ./actionlint -shellcheck= /tmp/known-bad-workflow.yml; then
+            echo "::error::actionlint PASSED a known-invalid workflow — the gate is not gating"
+            exit 1
+          fi
+          echo "negative control OK: actionlint rejects the known-bad fixture"
+          rm -f actionlint /tmp/known-bad-workflow.yml
 
       - name: Python syntax check (all zoe-data modules)
         run: |
@@ -146,3 +195,62 @@ jobs:
             --override-ini="asyncio_mode=auto"
         env:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
+
+  # Secret scanning as a MERGE-QUEUE-COMPATIBLE gate.
+  #
+  # The GitGuardian GitHub App cannot report on `merge_group`, so it can never be a
+  # required check once a merge queue is enabled (GitHub: checks that only run on
+  # pull_request will not execute during merge queue operations). This job is the
+  # Action equivalent and inherits this workflow's merge_group trigger, so it CAN.
+  # The App stays installed for its dashboard alerts and PR comments — only the
+  # blocking gate moves here. See docs/knowledge/merge-queue-switch.md.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # ggshield scans BRANCH HISTORY, not just the head tree: a credential in an
+          # intermediate commit fails even when the final diff is clean. Full history
+          # is required or the scan silently checks far less than it appears to.
+          fetch-depth: 0
+
+      - name: Skip on fork PRs (the secret is not available there)
+        id: forkcheck
+        # A fork PR cannot read repository secrets, so the explicit missing-key check
+        # below would fail EVERY external contribution. The GitGuardian App still scans
+        # fork PRs, so coverage is not lost — this only moves which gate reports.
+        run: |
+          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            echo "::notice::Fork PR — ggshield skipped (no secret access). The GitGuardian App still scans this PR."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fail loudly if the scan gate is not actually configured
+        if: steps.forkcheck.outputs.skip != 'true'
+        # A missing or expired token must NOT look like a pass. This is the same rule
+        # as the voice gate: an absent result is never a green one.
+        run: |
+          if [ -z "${{ secrets.GITGUARDIAN_API_KEY }}" ]; then
+            echo "::error::GITGUARDIAN_API_KEY is not set — the secret-scan gate is NOT running."
+            echo "Set it at Settings → Secrets and variables → Actions. Until then this check is meaningless."
+            exit 1
+          fi
+
+      - name: GitGuardian scan
+        if: steps.forkcheck.outputs.skip != 'true'
+        uses: GitGuardian/ggshield-action@v1
+        env:
+          # `github.event.before` is all-zeros on a branch's first push and absent on
+          # pull_request events — an invalid base makes ggshield scan the wrong range.
+          # Blank it in that case so the action falls back to its own default.
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '' }}
+          GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+          # pull_request.base.sha is EMPTY on merge-queue runs. Without a base, ggshield
+          # has nothing to diff against and would scan far less than it appears to — the
+          # same silent-underscan failure as a shallow checkout. Fall back to the merge
+          # group's base so the job stays meaningful under a queue.
+          GITHUB_PULL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}

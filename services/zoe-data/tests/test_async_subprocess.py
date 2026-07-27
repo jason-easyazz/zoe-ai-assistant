@@ -319,3 +319,47 @@ def test_run_slots_are_global_not_per_loop(monkeypatch):
             mod._RUN_SLOTS.release()
         with contextlib.suppress(ValueError):
             mod._RUN_SLOTS.release()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_no_timeout_call_does_not_return_the_permit_early():
+    """Cancelling the caller must not hand a permit back while the worker runs.
+
+    Cancelling an unshielded `run_in_executor` future does NOT stop the thread —
+    it still owns a live child — but it does fire the permit-release callback
+    immediately, over-admitting into a pool with no free worker. The
+    `timeout is None` path had this hole after the timeout path was shielded.
+    """
+    import asyncio
+
+    import async_subprocess as mod
+
+    monkey_sem = threading.BoundedSemaphore(1)
+    orig = mod._RUN_SLOTS
+    mod._RUN_SLOTS = monkey_sem
+    try:
+        task = asyncio.create_task(
+            run_to_completion([sys.executable, "-c", "import time; time.sleep(3)"])
+        )
+        await asyncio.sleep(0.6)                      # let it acquire + start
+        assert not monkey_sem.acquire(blocking=False), "permit not held while running"
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.3)                      # child still running
+
+        # The permit must STILL be held — the thread has not finished.
+        assert not monkey_sem.acquire(blocking=False), (
+            "permit released on cancel while the worker was still running"
+        )
+        # ...and it comes back once the child actually exits.
+        for _ in range(60):
+            if monkey_sem.acquire(blocking=False):
+                monkey_sem.release()
+                break
+            await asyncio.sleep(0.2)
+        else:
+            raise AssertionError("permit never returned after the child exited")
+    finally:
+        mod._RUN_SLOTS = orig
