@@ -33,6 +33,12 @@ SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -
   -d "{\"agent_id\":\"$POLLY_ID\",\"title\":\"cross-review PR #$PR\"}" \
   | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])") \
   || { echo "ALARM: session create failed against $SERVER" >&2; exit 2; }
+# The ID is interpolated into an sh -c below — reject anything that isn't a
+# plain conv_ token (same rule as omnigent_issue_executor; Codex, #1578).
+case "$SID" in
+  (conv_*) [[ "$SID" =~ ^conv_[A-Za-z0-9]+$ ]] || { echo "ALARM: malformed session id: $SID" >&2; exit 2; } ;;
+  (*) echo "ALARM: malformed session id: $SID" >&2; exit 2 ;;
+esac
 echo "session: $SID" >&2
 
 # Brief goes INLINE via -p. Do not stage it as a session comment: comment
@@ -108,7 +114,9 @@ for it in d.get("items", []):
     c = it.get("data", {}).get("content") or it.get("content") or ""
     if isinstance(c, list):
         c = " ".join(str(x.get("text", "")) for x in c if isinstance(x, dict))
-    texts.append(str(c))
+    c = str(c).strip()
+    if c:  # tool_use-only assistant items reduce to "" — a blank is not a report (Codex, #1578)
+        texts.append(c)
 if not texts:
     print(f"ALARM: session {sys.argv[1]} ended idle with zero ASSISTANT messages — "
           "the kick died silently (check container auth: claude OAuth expires 2026-08-22).",
