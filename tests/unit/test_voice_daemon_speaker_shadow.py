@@ -423,3 +423,18 @@ def test_journal_reports_an_identify_error_distinctly(daemon, monkeypatch, shado
     msgs = " ".join(r.getMessage() for r in caplog.records)
     assert "identify ERROR" in msgs
     assert "no match" not in msgs
+
+
+def test_shadow_metrics_file_is_private(daemon, monkeypatch, shadow_log):
+    """Rows are biometric predictions — the file must be 0600 regardless of umask."""
+    import os as _os
+
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    old = _os.umask(0o022)          # the normal panel umask the finding cites
+    try:
+        daemon._record_speaker_shadow(("jason", 0.9))
+    finally:
+        _os.umask(old)
+    mode = _os.stat(shadow_log).st_mode & 0o777
+    assert mode == 0o600, f"shadow metrics world-readable: {oct(mode)}"

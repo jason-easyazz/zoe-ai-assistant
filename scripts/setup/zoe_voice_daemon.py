@@ -1105,7 +1105,17 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
             uid = resp.get("user_id")
             if not uid:
                 return None  # legacy server echoed identified without a user
-            return uid, float(resp.get("confidence") or 1.0)
+            try:
+                conf = float(resp.get("confidence") or 1.0)
+            except (TypeError, ValueError):
+                # A malformed confidence is a MALFORMED RESPONSE, not a server
+                # score — letting the generic handler keep source='server' here
+                # would count it as a scored turn in the FA/FR review.
+                _claim_ctx.source = "error"
+                log.warning("Speaker ID identify returned malformed confidence: %r",
+                            resp.get("confidence"))
+                return None
+            return uid, conf
         return None
     except ImportError:
         # resemblyzer import failed mid-path — same class as encoder_unavailable.
@@ -1209,10 +1219,17 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
             # the torn one stays skippable on its own line, the new one lands
             # clean. (Handle uniqueness no longer depends on this: see
             # _SHADOW_BOOT_ID.)
+            # 0600, regardless of umask: rows are biometric PREDICTIONS
+            # (who spoke, when, at what confidence) — no other local account
+            # has any business reading them.
+            def _open_private_append():
+                fd = os.open(SPEAKER_ID_SHADOW_LOG,
+                             os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                return os.fdopen(fd, "a", encoding="utf-8")
             if _needs_leading_newline(SPEAKER_ID_SHADOW_LOG):
-                with open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
+                with _open_private_append() as f:
                     f.write("\n")
-            with open(SPEAKER_ID_SHADOW_LOG, "a", encoding="utf-8") as f:
+            with _open_private_append() as f:
                 f.write(json.dumps(row) + "\n")
         return True
     except Exception as exc:

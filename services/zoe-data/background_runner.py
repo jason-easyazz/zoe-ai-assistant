@@ -19,7 +19,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from async_subprocess import QueueTimeout, run_to_completion
+from async_subprocess import QueueTimeout, _env_float, run_to_completion
 from hermes_http import hermes_auth_headers, hermes_bin
 from repo_paths import zoe_repo_root
 
@@ -324,23 +324,10 @@ async def get_pending_tasks(user_id: str) -> list[dict]:
     ]
 
 
-def _env_float(name: str, default: float) -> float:
-    """Read a float env var without letting a typo break the lane.
-
-    Same fail-safe shape as async_subprocess._env_float. A bare float() here
-    raises on `HERMES_BACKGROUND_TIMEOUT_S=900s` — which would not just fail one
-    task but take the watchdog loop down with it, so stuck rows would never be
-    reaped and the weekly cleanup would stop running.
-    """
-    raw = os.environ.get(name)
-    if raw is None or not raw.strip():
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        logger.warning("%s=%r is not a number — using the default %.0f", name, raw, default)
-        return default
-
+# _env_float is IMPORTED from async_subprocess — this file briefly carried its
+# own copy, which silently missed that helper's later non-finite hardening (a
+# NaN wait makes _acquire_slot's deadline comparison permanently false). One
+# parser, one set of guarantees.
 
 def _background_runtime_s() -> float:
     """How long the background child may RUN."""
@@ -349,7 +336,10 @@ def _background_runtime_s() -> float:
 
 def _background_queue_wait_s() -> float:
     """How long a background task may WAIT for a subprocess worker."""
-    return _env_float("HERMES_BACKGROUND_QUEUE_WAIT_S", 600.0)
+    # Must EXCEED a full worker runtime (900s): with the pool held by
+    # freshly-started background tasks, a 600s wait expires before any worker
+    # can possibly free — the same off-by-a-runtime the scheduled lane had.
+    return _env_float("HERMES_BACKGROUND_QUEUE_WAIT_S", 1200.0)
 
 
 def _watchdog_timeout_s() -> float:
