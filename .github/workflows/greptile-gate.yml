@@ -57,9 +57,10 @@ jobs:
             const REQUIRED_CHECKS = ['Cursor Bugbot'];
             const REQUIRED_REVIEWERS = ['copilot-pull-request-reviewer'];
             const CODEX = 'chatgpt-codex-connector';
-            // States that positively mean "not behind". `unknown` means GitHub is still
-            // computing mergeability — treat it as not-ready rather than assuming current.
-            const CURRENT_STATES = ['clean', 'unstable', 'blocked', 'has_hooks'];
+            // Behind-ness is MEASURED, not inferred from mergeable_state. That field mixes
+            // several concerns (`blocked` means a required check is unsatisfied, which says
+            // nothing about whether the branch is current) and can be `unknown` while
+            // GitHub computes. compareCommits gives an unambiguous behind_by.
 
             const prs = await github.paginate(github.rest.pulls.list, {
               owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
@@ -88,7 +89,11 @@ jobs:
                 : null;
 
               if (pr.labels.some(l => l.name === LABEL)) {
-                if (labelledSha && labelledSha !== pr.head.sha) {
+                // No marker means unknown provenance — a human applied it by hand, or the
+                // marker comment was deleted. Removing it is the safe default: keeping it
+                // would skip this PR here FOREVER while leaving it inside Greptile's
+                // filter, so it would re-review on every push with nothing able to stop it.
+                if (!labelledSha || labelledSha !== pr.head.sha) {
                   try {
                     await github.rest.issues.removeLabel({
                       owner: context.repo.owner, repo: context.repo.repo,
@@ -106,7 +111,16 @@ jobs:
               const { data: prFull } = await github.rest.pulls.get({
                 owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number,
               });
-              const upToDate = CURRENT_STATES.includes(prFull.mergeable_state);
+              let upToDate = false;
+              try {
+                const { data: cmp } = await github.rest.repos.compareCommits({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  base: pr.base.ref, head: pr.head.sha,
+                });
+                upToDate = cmp.behind_by === 0;
+              } catch (e) {
+                core.info(`PR #${pr.number}: could not compare against ${pr.base.ref} (${e.message}) — holding`);
+              }
 
               // listForRef returns newest-first, so a Map built over the whole array keeps
               // the LAST (oldest) run per name — a stale failure would mask a passing
