@@ -1984,9 +1984,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             _zd = _os.path.dirname(_os.path.abspath(__file__))
             if _zd not in _sys.path:
                 _sys.path.insert(0, _zd)
-            from zoe_agent import _web_browse  # type: ignore[import]
+            from zoe_agent import _cap_tool_result, _web_browse  # type: ignore[import]
             result_text = await _web_browse(url, user_id=user_id)
-            return {"content": result_text}
+            # same output cap the brain path applies — a rendered page must not
+            # blow out an MCP client's context either
+            return {"content": _cap_tool_result("web_browse", result_text)}
         except Exception as exc:
             logger.warning("mcp web_browse failed: %s", exc)
             return {"error": f"web_browse failed: {type(exc).__name__}"}

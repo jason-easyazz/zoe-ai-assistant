@@ -2681,7 +2681,26 @@ _VERIFY_CHALLENGE_RE = re.compile(
 _VERIFY_MAX_CHARS = 60  # a challenge is short; a long message is a new question
 
 
-_INTENT_HINT_PREFIX_RE = re.compile(r"^\[Intent hint:[^\]]*\]\s*")
+def _strip_intent_hint(message: str) -> str:
+    """Strip a leading Tier-0.5 "[Intent hint: ...]" prefix (chat.py:~2307).
+
+    The hint embeds ``slots {...}`` whose repr can contain lists — i.e. nested
+    ``]`` — so "match to the first ]" truncates mid-hint and "match to the last ]"
+    could eat brackets from the user's own message. The hint's brackets are
+    balanced (it is a fixed f-string around a dict repr), so scan by depth to the
+    hint's own closing bracket.
+    """
+    if not message.startswith("[Intent hint:"):
+        return message
+    depth = 0
+    for i, ch in enumerate(message):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return message[i + 1:].lstrip()
+    return message  # unbalanced — leave untouched rather than guess
 
 
 def _is_verification_challenge(message: str) -> bool:
@@ -2695,7 +2714,7 @@ def _is_verification_challenge(message: str) -> bool:
     the streaming path; strip it first or the anchored regex can never match a
     hinted challenge.
     """
-    msg = _INTENT_HINT_PREFIX_RE.sub("", (message or "").strip()).strip()
+    msg = _strip_intent_hint((message or "").strip()).strip()
     if not msg or len(msg) > _VERIFY_MAX_CHARS:
         return False
     return bool(_VERIFY_CHALLENGE_RE.match(msg))

@@ -209,3 +209,15 @@ async def test_refusal_does_not_leak_resolved_ips(monkeypatch):
     out = await zoe_agent._web_browse("http://internal.example")
     assert "192.168" not in out, f"leaked internal IP: {out}"
     assert "Refused" in out
+
+
+def test_intent_hint_with_nested_brackets_is_stripped():
+    """REGRESSION: the hint embeds `slots {...}` whose repr can contain lists —
+    a first-']' regex truncated mid-hint and the challenge went undetected."""
+    f = zoe_agent._is_verification_challenge
+    hinted = "[Intent hint: chat, confidence 0.91, slots {'items': ['a', 'b']}] are you sure?"
+    assert f(hinted) is True
+    # the user's own brackets must not be eaten
+    assert f("[Intent hint: list_add, confidence 0.9, slots {}] add [urgent] milk") is False
+    # unbalanced garbage: left untouched (and long, so not a challenge)
+    assert f("[Intent hint: broken slots {'x': ['a'" + "x" * 60) is False
