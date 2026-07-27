@@ -365,14 +365,13 @@ def test_pr_turned_draft_during_the_sweep_is_not_labelled(tmp_path):
     assert any("became a draft" in m for m in r["log"]), r["log"]
 
 
-def test_failed_copilot_summon_deletes_its_marker(tmp_path):
-    """Greptile P1 (its one finding on this PR): a marker surviving a FAILED
-    mutation suppresses every later summon while its grace still authorises
-    handoff — Copilot would pass without ever being asked. The failed mutation
-    must delete its anchor so the next sweep retries both."""
+def test_failed_copilot_summon_leaves_no_grace_anchor(tmp_path):
+    """Greptile P1, both rounds: the grace anchor must ATTEST a successful
+    summon. A failed mutation now posts no marker at all — no anchor, no grace,
+    the PR holds and the next sweep retries. Copilot can never pass the gate
+    via the grace without having actually been requested."""
     r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"],
              copilotSummonFails=True)
     assert r["addLabels"] == 0, r["log"]
     posted = [c for c in r["comments"] if "greptile-gate:copilot:" in c]
-    assert posted, "marker is still posted first (anchor-first)"
-    assert r["deleted"] == [777], f"failed mutation must delete the marker: {r['deleted']}"
+    assert posted == [], f"failed mutation must post NO marker: {posted}"

@@ -282,47 +282,38 @@ jobs:
                 // not discoverable from this PR when Copilot is absent, which is exactly when
                 // we need it — so it is pinned. If GitHub ever changes it the mutation fails
                 // and the warning below names the cause rather than silently never summoning.
+                // SUMMON FIRST, marker only on SUCCESS (Greptile P1, twice): a grace
+                // anchor must attest that the summon actually happened — a marker that
+                // outlives a failed mutation (or a failed cleanup of one) eventually
+                // authorises handoff for a reviewer nobody requested. With the marker
+                // gated on mutation success, that class is closed outright. The chosen
+                // residual runs the SAFE direction: if the marker post chronically
+                // fails, each sweep re-summons (idempotent — GitHub drops or dedups
+                // the request) and the PR HOLDS, loudly, until a marker sticks. The
+                // !copilotSummon gate above still prevents the clock-reset loop: a
+                // marker is only ever posted while none exists for this head.
                 const COPILOT_BOT_ID = 'BOT_kgDOCnlnWA';
-                // MARKER FIRST, summon second (Bugbot): if the summon succeeded but
-                // the marker post failed, the grace had no anchor and the next sweep
-                // would re-summon — bounded only by luck. Anchor-first inverts the
-                // failure mode: a failed marker skips the summon and retries next
-                // sweep ("asked late"); a failed summon after a posted marker still
-                // has a ticking grace ("waved through after the bounded wait") —
-                // both bounded, neither spams.
-                const marker = await ok(`PR #${pr.number} copilot marker`, () =>
-                  github.rest.issues.createComment({
-                    ...base, issue_number: pr.number,
-                    body: `Requested Copilot review.\n${copilotMark}`,
-                  }));
-                if (!marker) {
-                  core.warning(`PR #${pr.number}: copilot marker failed — retrying summon next sweep`);
+                const r = await ok(`PR #${pr.number} request Copilot`, async () => {
+                  const q = await github.graphql(`
+                    query($owner:String!,$repo:String!,$num:Int!){
+                      repository(owner:$owner,name:$repo){ pullRequest(number:$num){ id } } }`,
+                    { owner: base.owner, repo: base.repo, num: pr.number });
+                  return github.graphql(`
+                    mutation($pr:ID!,$bot:ID!){
+                      requestReviews(input:{pullRequestId:$pr, botIds:[$bot], union:true}){
+                        pullRequest{ number } } }`,
+                    { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
+                });
+                if (r) {
+                  core.info(`PR #${pr.number}: requested Copilot`);
+                  const marker = await ok(`PR #${pr.number} copilot marker`, () =>
+                    github.rest.issues.createComment({
+                      ...base, issue_number: pr.number,
+                      body: `Requested Copilot review.\n${copilotMark}`,
+                    }));
+                  if (!marker) core.warning(`PR #${pr.number}: copilot marker failed — will re-summon next sweep until one sticks (holds, never hands off unasked)`);
                 } else {
-                  const r = await ok(`PR #${pr.number} request Copilot`, async () => {
-                    const q = await github.graphql(`
-                      query($owner:String!,$repo:String!,$num:Int!){
-                        repository(owner:$owner,name:$repo){ pullRequest(number:$num){ id } } }`,
-                      { owner: base.owner, repo: base.repo, num: pr.number });
-                    return github.graphql(`
-                      mutation($pr:ID!,$bot:ID!){
-                        requestReviews(input:{pullRequestId:$pr, botIds:[$bot], union:true}){
-                          pullRequest{ number } } }`,
-                      { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
-                  });
-                  if (r) core.info(`PR #${pr.number}: requested Copilot`);
-                  else {
-                    // Greptile P1: a surviving marker after a FAILED mutation would
-                    // suppress every later summon while its grace still authorises
-                    // handoff — Copilot would pass without ever being asked. Delete
-                    // the anchor so the next sweep retries both. Only if the delete
-                    // ALSO fails does the grace wave through, and that double-failure
-                    // is logged loudly here.
-                    const del = await ok(`PR #${pr.number} delete copilot marker`, () =>
-                      github.rest.issues.deleteComment({ ...base, comment_id: marker.data.id }));
-                    core.warning(`PR #${pr.number}: Copilot request FAILED — ` +
-                      (del ? 'marker deleted, retrying next sweep'
-                           : 'marker delete ALSO failed; grace will bound the wait'));
-                  }
+                  core.warning(`PR #${pr.number}: could NOT request Copilot — no marker posted, no grace starts; retrying next sweep`);
                 }
               }
 
