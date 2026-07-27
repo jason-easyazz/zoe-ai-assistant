@@ -50,8 +50,9 @@ The resolution is not to drop Greptile but to change *how* it gates:
 - **Remove `Greptile Review` from required status checks.**
 - **Keep `required_conversation_resolution: true`** (already on). Greptile's findings become
   review threads, and unresolved threads still block the merge.
-- Summon it deliberately via the `greptile` label (see `greptile-gate.yml`), which applies
-  only once the other reviewers are green.
+- Summon it deliberately via the `greptile` label, applied only once the other reviewers are
+  green. The `greptile-gate.yml` Action that automates this lands in a separate PR — until
+  then the label is applied by hand.
 
 Net effect: Greptile's *findings* still block; Greptile's *availability* no longer can. That
 matters because in one day it froze `main` via quota exhaustion, a 5/5 confidence threshold,
