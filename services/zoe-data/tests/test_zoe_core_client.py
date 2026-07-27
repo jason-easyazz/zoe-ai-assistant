@@ -328,7 +328,11 @@ async def test_tool_action_dispatches(stub):
         a user experiences.
 
     Check ~/.zoe-logs/nondeterministic-test-failures.jsonl for the losing choice
-    before assuming a regression.
+    before assuming a regression. The full investigation — including the root
+    cause (tool choice is SAMPLED at --temp 0.7 with no per-request override),
+    what is disproved, and the preconditions for attempting a real fix — is in
+    docs/architecture/brain-tool-selection-reliability.md. Read it before
+    spending time here.
     """
     s, zc = stub
     await zc.run_zoe_core("Add bread to my shopping list.", "s2", "family-admin")
