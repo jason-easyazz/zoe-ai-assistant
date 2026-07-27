@@ -29,20 +29,31 @@ first hypothesis should be model nondeterminism, not your diff. Re-run before
 investigating. Genuinely deterministic behaviour belongs in a stubbed unit test,
 not here.
 
-PRECEDENT + THE PREFERRED FIX. This is not new: see
-``test_web_query_delegates_and_synthesizes`` below, whose docstring records the
-same class — "the old weather-phrased prompt became ambiguous once the brain grew
-a weather tool — the live model validly picked either tool, flaking ~1-in-3".
-That was fixed properly, by **disambiguating the prompt** so only one tool can
-satisfy it, not by loosening the assertion. Do the same here once a failure is
-actually captured and the competing tool is known (it declined to fail while
-output was being recorded, so that is still unknown).
+TO SKIP THEM while verifying an unrelated change (they are the only six
+`integration`-marked tests here, 6 of 5538 in the zoe-data suite):
+
+    pytest services/zoe-data/tests -m "ci_safe and not integration"
+
+WHEN ONE DOES FAIL, the losing tool choice is written to
+``~/.zoe-logs/nondeterministic-test-failures.jsonl`` (override with
+``ZOE_NONDET_FAILURE_LOG``) with the full dispatch bodies and request trace,
+because console output kept getting truncated before it could be read. Check
+that file first.
+
+ROOT CAUSE (2026-07-27): tool choice is SAMPLED, not decided — llama-server runs
+``--temp 0.7 --top-k 64 --top-p 0.95`` and nothing sets a per-request
+temperature. No prompt wording fixes a sampled classifier, and rewording was
+tried and measured WORSE (see ``test_tool_action_dispatches``). The precedent
+fix for ``test_web_query_delegates_and_synthesizes`` (#1079, disambiguate the
+prompt) does NOT generalise here. Full investigation, disproved hypotheses and
+the plan for a real fix: ``docs/architecture/brain-tool-selection-reliability.md``.
 
 WORTH KNOWING ANYWAY: in production this phrase never reaches the brain. With
 ``ZOE_ROUTER_HEAD=active`` the two-stage router decides it at tier 1.5 —
 FunctionGemma-270M returns ``shopping_list_add`` at **0.9996** confidence in
-~300 ms warm (measured 2026-07-20). So a failure here is a real signal about the
-brain's tool-calling lane, but a poor proxy for user-visible behaviour.
+~300 ms warm (measured 2026-07-20; router verified live on :11436 2026-07-27).
+So a failure here is a real signal about the brain's tool-calling lane, but a
+poor proxy for user-visible behaviour.
 """
 from __future__ import annotations
 
@@ -55,6 +66,7 @@ import json
 import os
 import shutil
 import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -87,6 +99,41 @@ def _skip_reason() -> str | None:
 
 _SKIP = _skip_reason()
 requires_env = pytest.mark.skipif(_SKIP is not None, reason=_SKIP or "")
+
+
+
+_FAILURE_LOG = Path(
+    os.environ.get("ZOE_NONDET_FAILURE_LOG")
+    or Path.home() / ".zoe-logs" / "nondeterministic-test-failures.jsonl"
+)
+
+
+def _record_nondeterministic_failure(
+    test: str, *, dispatches: list[dict[str, Any]], **detail: Any
+) -> None:
+    """Append one live-model failure to a durable log. Never fails the test.
+
+    These tests assert what the live brain CHOSE, so a failure's only real value
+    is the losing choice — and that is exactly what console truncation keeps
+    eating. Written as JSONL next to the other Zoe logs so the evidence is still
+    there when someone comes to deflake the prompt.
+
+    `intents` is derived HERE from the recorded dispatches rather than accepted
+    from the caller: a forced-failure control that overrides the caller's local
+    variable wrote a self-contradictory record into this log on 2026-07-27
+    (intents=['memory_store'] alongside dispatches=[list_add, list_add]) and
+    briefly passed as real evidence. Point ZOE_NONDET_FAILURE_LOG elsewhere when
+    deliberately forcing a failure.
+    """
+    detail["dispatches"] = dispatches
+    detail["intents"] = [d.get("intent") for d in dispatches]
+    try:
+        _FAILURE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_FAILURE_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"test": test, "ts": time.time(), **detail},
+                               default=str) + "\n")
+    except Exception:
+        pass  # diagnostics must never turn a flake into an error
 
 
 class _Stub:
@@ -255,9 +302,58 @@ async def test_web_query_delegates_and_synthesizes(stub):
 @requires_env
 @pytest.mark.asyncio
 async def test_tool_action_dispatches(stub):
+    """The brain must pick the lists tool for an unambiguous list mutation.
+
+    DEFLAKE ATTEMPTED AND REJECTED (2026-07-27) — do not retry it blind.
+
+    The failure was finally captured: this prompt dispatches `memory_store`
+    instead of `list_add`, i.e. the brain reads it as a fact about the user
+    worth remembering rather than a list operation.
+
+    The obvious fix — rewording to the `lists` ability's own advertised example,
+    "Add milk to the shopping list." (dropping the possessive "my" that invites
+    the remember-a-fact reading) — was tried and MEASURED WORSE: 2 failures in 7
+    file-level runs (~29%) against this prompt's documented ~14%, and it failed a
+    DIFFERENT way, dispatching nothing at all. So the instability is not simply
+    lists-vs-memory ambiguity that wording can resolve; the 4B brain is just
+    unreliable at tool-calling on this path.
+
+    Two things that will mislead you if you try again:
+      * It does NOT reproduce in isolation — the old prompt scored 20/20 on its
+        own. Only repeated full-file / full-suite runs surface it, so any harness
+        built on single calls cannot show one prompt beating another.
+      * In production this phrase never reaches the brain at all: with
+        ZOE_ROUTER_HEAD=active (verified live 2026-07-27, FunctionGemma-270M on
+        :11436) the two-stage router decides it at tier 1.5. So this is a real
+        signal about the brain's tool-calling lane and a poor proxy for anything
+        a user experiences.
+
+    Check ~/.zoe-logs/nondeterministic-test-failures.jsonl for the losing choice
+    before assuming a regression. The full investigation — including the root
+    cause (tool choice is SAMPLED at --temp 0.7 with no per-request override),
+    what is disproved, and the preconditions for attempting a real fix — is in
+    docs/architecture/brain-tool-selection-reliability.md. Read it before
+    spending time here.
+    """
     s, zc = stub
     await zc.run_zoe_core("Add bread to my shopping list.", "s2", "family-admin")
-    intents = [d.get("intent") for d in s.dispatches()]
+    # Snapshot once: reading the stub twice could log a different payload than
+    # the one asserted on, which is exactly the evidence this records.
+    dispatches = s.dispatches()
+    intents = [d.get("intent") for d in dispatches]
+    if "list_add" not in intents:
+        # PERSIST the losing choice before asserting: console output kept
+        # truncating it away. The first capture (2026-07-27) showed
+        # `memory_store`; keep collecting, because the cause is sampling at
+        # temp 0.7 rather than one specific competing tool, so the losing
+        # choice is expected to vary.
+        _record_nondeterministic_failure(
+            "test_tool_action_dispatches",
+            prompt="Add bread to my shopping list.",
+            expected="list_add",
+            dispatches=dispatches,
+            requests=s.requests,
+        )
     assert "list_add" in intents, f"no list_add; got {intents}"
 
 

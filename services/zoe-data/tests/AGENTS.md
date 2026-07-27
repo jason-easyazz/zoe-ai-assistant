@@ -25,6 +25,32 @@ Pytest suite for the production API: router contracts, agent harness behavior, c
 
 Run focused: `pytest services/zoe-data/tests/test_<area>.py` from the repo root (pytest.ini applies).
 
+**Verifying an unrelated change — exclude `integration`:**
+
+```
+pytest services/zoe-data/tests -m "ci_safe and not integration"
+```
+
+Plain `-m ci_safe` also runs six tests in `test_zoe_core_client.py` that assert
+what the **live Gemma brain chose to do** for a given prompt. Tool choice is
+SAMPLED (llama-server runs `--temp 0.7`, no per-request override), so it is not
+deterministic: measured ~14% failure (#1478). They skip on GitHub —
+`requires_env` needs `pi` on PATH and a reachable model server — so they never
+redden CI, but they DO redden local runs, and their signature (green alone, red
+in the full suite, green next run) is indistinguishable from a test-isolation
+leak. That has cost real bisecting time more than once.
+
+`not integration` costs 6 tests of 5538 and excludes exactly those. Run them
+deliberately when the brain's tool-calling lane is what you are checking:
+
+```
+pytest services/zoe-data/tests/test_zoe_core_client.py -m integration
+```
+
+Before treating a failure there as a regression, **re-run it**, then check
+`~/.zoe-logs/nondeterministic-test-failures.jsonl` for the losing tool choice.
+Background + plan: `docs/architecture/brain-tool-selection-reliability.md`.
+
 ## Child DOX Index
 
 - [samantha_live/AGENTS.md](samantha_live/AGENTS.md) — LIVE-integration proofs for the Samantha memory engine (real Gemma + real store), gated off CI, demo-users only: core loop (`test_live_core.py`), dedup/durability (`test_live_dedup.py`), and cross-user isolation / owner resolution / idle timing (`test_live_isolation.py`).
