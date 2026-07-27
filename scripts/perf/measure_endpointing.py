@@ -338,6 +338,15 @@ def main() -> int:
     if args.tail_deep_prob is not None:
         mod.ZOE_VAD_TAIL_DEEP_PROB = args.tail_deep_prob
         print(f"ZOE_VAD_TAIL_DEEP_PROB -> {args.tail_deep_prob}")
+        # The instrument DELIBERATELY bypasses the daemon's clamp — negative
+        # controls need to measure configurations production refuses. But a
+        # measurement of a config prod would clamp must SAY so, or the number
+        # gets shipped as if it were reachable (Codex, #1573).
+        if not (0.0 < args.tail_deep_prob < mod.VAD_ENDPOINT_THRESHOLD):
+            print(f"WARNING: {args.tail_deep_prob} is outside (0, "
+                  f"{mod.VAD_ENDPOINT_THRESHOLD}) — the DAEMON WOULD CLAMP this "
+                  f"to its default; this measurement is a negative control, not "
+                  f"a deployable configuration.")
 
     _is_speech = speech_predicate(mod, chunk)
     files = sorted(args.corpus.glob("*.wav"))[-args.samples * 4:]

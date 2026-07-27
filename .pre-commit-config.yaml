@@ -40,7 +40,10 @@ repos:
         # -I ignores the 'Last generated:' stamp line — the generator rewrites it
         # to today, so without -I every commit on a later calendar day would
         # false-fail (Bugbot). CI's test is date-insensitive the same way.
-        entry: bash -c 'python3 tools/audit/flag_inventory.py >/dev/null && git diff --quiet -I "Last generated:" -I "^timestamp:" -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json || { echo "flag inventory was STALE — regenerated; git add docs/knowledge/flag-inventory.* and re-commit"; exit 1; }'
+        # On pass, restore the committed copy: the generator rewrites the two
+        # date lines even when nothing real changed, and leaving that churn in
+        # the worktree would ride into someone's next commit (Codex).
+        entry: bash -c 'python3 tools/audit/flag_inventory.py >/dev/null && if git diff --quiet -I "Last generated:" -I "^timestamp:" -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json; then git checkout -q -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json; else echo "flag inventory was STALE — regenerated; git add docs/knowledge/flag-inventory.* and re-commit"; exit 1; fi'
         language: system
         pass_filenames: false
         files: '(\.(py|env|ya?ml)$|\.env\.example$)'
