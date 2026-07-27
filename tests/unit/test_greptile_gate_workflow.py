@@ -393,3 +393,18 @@ def test_review_dismissed_between_reads_restarts_an_elapsed_grace(tmp_path):
                         "at": "2026-07-27T01:00:00Z"},
     )
     assert r["addLabels"] == 0, r["log"]
+
+
+def test_copilot_grace_expiry_hands_off(tmp_path):
+    """The feature's SUCCESS path: Codex reviewed, Copilot absent, Copilot's
+    trusted observed marker older than the grace — the gate must hand off.
+    Every other new case proves a hold; without this one, replacing the grace
+    with `false` (feature deleted) would pass the whole suite.
+    """
+    r = _run(
+        tmp_path, _script(),
+        reviewers=["chatgpt-codex-connector[bot]"],
+        observedMarks=[{"at": "2020-01-01T00:00:00Z", "who": "copilot"}],
+    )
+    assert r["addLabels"] == 1, r["log"]
+    assert any("Copilot grace elapsed" in m for m in r["log"]), r["log"]
