@@ -494,11 +494,24 @@ jobs:
                 // MEASURED on the pipeline's first autonomous run (#1575, 2026-07-27):
                 // the label alone does NOT wake Greptile — 12 labeled minutes, no
                 // review. The label admits the PR through the dashboard filter; the
-                // summon is what starts the review. Post both, always.
-                await ok(`PR #${pr.number} summon Greptile`, () =>
-                  github.rest.issues.createComment({
-                    ...base, issue_number: pr.number, body: '@greptileai review',
-                  }));
+                // summon is what starts the review.
+                // But NOT unconditionally (Codex): after a regress-then-clear cycle on
+                // the SAME sha, a Greptile run already exists for this head, and a
+                // fresh summon would bill a re-review of a reviewed diff. Same
+                // live-run rule as the handed-off branch.
+                const DEAD2 = ['cancelled', 'timed_out', 'stale'];
+                const gLive2 = await ok(`PR #${pr.number} greptile run check`, () =>
+                  github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
+                    .then(rs => rs.filter(c => c.name === 'Greptile Review'
+                                            && !(c.status === 'completed' && DEAD2.includes(c.conclusion))).length));
+                if (gLive2 === 0) {
+                  await ok(`PR #${pr.number} summon Greptile`, () =>
+                    github.rest.issues.createComment({
+                      ...base, issue_number: pr.number, body: '@greptileai review',
+                    }));
+                } else {
+                  core.info(`PR #${pr.number}: live Greptile run already exists for this head — label re-applied without a fresh summon`);
+                }
               }
               else core.warning(`PR #${pr.number}: marker posted but label failed — will retry next run`);
             }

@@ -429,3 +429,13 @@ def test_dead_greptile_run_does_not_block_resummon(tmp_path):
               labels=[{"name": "greptile"}], markerSha="a" * 40,
               greptileRun={"status": "completed", "conclusion": "failure"})
     assert not any(c.strip() == "@greptileai review" for c in r2["comments"]), r2["comments"]
+
+
+def test_rehandoff_of_reviewed_sha_does_not_resummon(tmp_path):
+    """Regress-then-clear on the same SHA: the label is re-applied, but a live
+    Greptile run already exists for the head — a fresh summon would bill a
+    re-review of a reviewed diff (Codex, #1577)."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             greptileRun={"status": "completed", "conclusion": "success"})
+    assert r["addLabels"] == 1, r["log"]
+    assert not any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
