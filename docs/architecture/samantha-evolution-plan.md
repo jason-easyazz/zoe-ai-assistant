@@ -382,10 +382,12 @@ regression, ever (replay harness is the enforcement).
   the RAM gate, flag stays OFF:** focused unit gate green
   (`services/zoe-data/tests/test_livekit_stream_tts.py`, 7 passed), but the mandatory
   replay gate under `flock /tmp/zoe-voice-harness.lock` wrote
-  `voice_regression_last.json` `status=skip` (MemAvailable 133 MB < the 1500 MB OOM
+  `voice_regression_last.json` `status=skip` (MemAvailable 133 MB < the then-1500 MB OOM
   guard) — and a skip is NOT a pass, so prod-enabling `ZOE_LIVEKIT_STREAM_TTS` would
-  have violated this task's own gate. Re-run the flip in an idle window with ≥1.5 GB
-  MemAvailable (unblocked by / coordinate with W3.3 RAM reclaim).
+  have violated this task's own gate. **2026-07-27 update: the gate's floor is now
+  700 MB in its default remote-STT mode** (PR #1572 — the harness stopped loading a
+  second Moonshine; measured 445 MB peak for a full 20-sample run), so this re-run no
+  longer waits on W3.3 — any ~800 MB-idle window clears it.
 - [~] **W1.4** live measurement session (ADR M1/M3/M4) — PARTIAL: M1 barge-in quality verified
   on real voice (#1081); M3 end-to-end latency + M4 loaded-RAM numbers still unmeasured.
   Bars (from the retired #1056 plan's A3 gate): barge time-to-stop < ~300 ms over 10
