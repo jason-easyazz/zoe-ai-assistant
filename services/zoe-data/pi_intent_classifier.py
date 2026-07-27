@@ -323,6 +323,11 @@ async def _classify_with_pi_print(
             cmd,
             cwd=active_config.cwd,
             env=run_env,
+            # queue wait bounded by the SAME latency budget as the run itself:
+            # this is a live voice-turn path with a ~4s budget — waiting the
+            # 30s interactive default for a worker blows the turn either way,
+            # so fail fast and let the caller fall back.
+            queue_timeout=active_config.timeout_seconds,
             timeout=active_config.timeout_seconds,
         )
     except subprocess.TimeoutExpired:

@@ -81,8 +81,12 @@ pip install --quiet \
     pyaudio \
     numpy \
     requests \
-    websocket-client \
-    "resemblyzer>=0.1.3"
+    websocket-client
+
+# Separate, FAILURE-TOLERATED install: this script runs under `set -e`, so a
+# resemblyzer build failure inside the shared install above would abort the
+# whole provisioning before the warning below could ever run.
+pip install --quiet "resemblyzer>=0.1.3" || true
 
 # Warn loudly (not fatal: speaker ID ships disabled, and a panel that never
 # enables it should still provision). The daemon additionally records

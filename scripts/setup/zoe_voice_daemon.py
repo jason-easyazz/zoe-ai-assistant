@@ -1250,6 +1250,14 @@ def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
             if claim:
                 log.info("Speaker ID (shadow): %s (%.3f) — %s, not acted on",
                          claim[0], claim[1], state)
+            elif source == "error":
+                # The identify ATTEMPT failed (network/auth/malformed response)
+                # — logging "no match" here would hide a broken panel<->server
+                # path behind what reads as a scored result.
+                log.warning(
+                    "Speaker ID (shadow): identify ERROR — recorded as error, "
+                    "not scored; %s, not acted on", state,
+                )
             elif source == "encoder_unavailable":
                 # NOT a scored non-match: nothing was embedded. Saying "no match"
                 # here would read as a real result and undermine the whole point

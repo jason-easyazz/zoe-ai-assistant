@@ -2123,7 +2123,7 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
     try:
         from async_subprocess import QueueTimeout, run_to_completion
 
-        proc = await run_to_completion(shlex.split(cmd), env=env, timeout=10)
+        proc = await run_to_completion(shlex.split(cmd), env=env, timeout=10, queue_timeout=10)
         if proc.returncode != 0:
             logger.warning(f"mcporter-safe failed: {proc.stderr.decode()}")
             return None

@@ -406,3 +406,20 @@ def test_journal_failure_cannot_cause_a_second_row(daemon, monkeypatch, shadow_l
     # Must return normally (not raise), having written exactly one row.
     assert daemon._speaker_claim_for_turn(b"wav") is None
     assert len(_rows(shadow_log)) == 1
+
+
+def test_journal_reports_an_identify_error_distinctly(daemon, monkeypatch, shadow_log, caplog):
+    """An errored identify attempt must not journal as an ordinary "no match"."""
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+
+    def _errored(wav):
+        daemon._claim_ctx.source = "error"
+        return None
+
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", _errored)
+    with caplog.at_level("DEBUG"):
+        assert daemon._speaker_claim_for_turn(b"wav") is None
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "identify ERROR" in msgs
+    assert "no match" not in msgs

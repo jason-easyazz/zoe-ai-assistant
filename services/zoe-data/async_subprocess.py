@@ -25,6 +25,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import logging
+import math
 import os
 import subprocess
 import threading
@@ -62,10 +63,18 @@ def _env_float(name: str, default: float) -> float:
     if raw is None or not raw.strip():
         return default
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         _log.warning("%s=%r is not a number — using the default %.1f", name, raw, default)
         return default
+    # float() happily parses "nan" and "inf". A NaN wait makes every deadline
+    # comparison false and an infinite one never expires — both defeat the
+    # bound this variable exists to provide.
+    if not math.isfinite(value) or value < 0:
+        _log.warning("%s=%r is not a finite non-negative number — using the default %.1f",
+                     name, raw, default)
+        return default
+    return value
 
 
 # Default cap on how long a caller waits for a free _RUN_POOL worker. Bounds the
