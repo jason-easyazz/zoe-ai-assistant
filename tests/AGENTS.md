@@ -37,30 +37,6 @@ Repository-level test suites: unit, integration, performance, e2e, intent-system
 
 `pytest` with `pytest.ini` at the repo root; run focused suites rather than the full tree on constrained hosts.
 
-**Verifying a change locally on the Jetson — exclude `integration`:**
-
-```
-pytest services/zoe-data/tests -m "ci_safe and not integration"
-```
-
-Plain `-m ci_safe` also runs six tests that assert what the **live Gemma brain
-chose to do** for a given prompt (`test_zoe_core_client.py`). A 4B model does not
-choose deterministically: measured ~14% failure (#1478). They skip on GitHub —
-`requires_env` needs `pi` on PATH and a reachable model server — so they never
-redden CI, but they DO redden local runs, and their signature (green alone, red
-in the full suite, green on the next run) is indistinguishable from a
-test-isolation leak. That has cost real bisecting time more than once.
-
-`not integration` costs 6 tests out of 5538 and excludes exactly those. Run them
-deliberately when the brain's tool-calling lane is what you're checking:
-
-```
-pytest services/zoe-data/tests/test_zoe_core_client.py -m integration
-```
-
-Before treating one of their failures as a regression, **re-run it** — see that
-file's docstring.
-
 ## Child DOX Index
 
 No child AGENTS.md files yet.

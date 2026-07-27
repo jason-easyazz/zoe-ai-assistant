@@ -34,27 +34,26 @@ TO SKIP THEM while verifying an unrelated change (they are the only six
 
     pytest services/zoe-data/tests -m "ci_safe and not integration"
 
-WHEN ONE DOES FAIL, the losing tool choice is now written to
+WHEN ONE DOES FAIL, the losing tool choice is written to
 ``~/.zoe-logs/nondeterministic-test-failures.jsonl`` (override with
-``ZOE_NONDET_FAILURE_LOG``) with the full dispatch bodies and request trace.
-Console output kept getting truncated before the evidence could be read, which
-is why the competing tool is still unknown and the prompt has not been
-disambiguated yet. Check that file first.
+``ZOE_NONDET_FAILURE_LOG``) with the full dispatch bodies and request trace,
+because console output kept getting truncated before it could be read. Check
+that file first.
 
-PRECEDENT + THE PREFERRED FIX. This is not new: see
-``test_web_query_delegates_and_synthesizes`` below, whose docstring records the
-same class — "the old weather-phrased prompt became ambiguous once the brain grew
-a weather tool — the live model validly picked either tool, flaking ~1-in-3".
-That was fixed properly, by **disambiguating the prompt** so only one tool can
-satisfy it, not by loosening the assertion. Do the same here once a failure is
-actually captured and the competing tool is known (it declined to fail while
-output was being recorded, so that is still unknown).
+ROOT CAUSE (2026-07-27): tool choice is SAMPLED, not decided — llama-server runs
+``--temp 0.7 --top-k 64 --top-p 0.95`` and nothing sets a per-request
+temperature. No prompt wording fixes a sampled classifier, and rewording was
+tried and measured WORSE (see ``test_tool_action_dispatches``). The precedent
+fix for ``test_web_query_delegates_and_synthesizes`` (#1079, disambiguate the
+prompt) does NOT generalise here. Full investigation, disproved hypotheses and
+the plan for a real fix: ``docs/architecture/brain-tool-selection-reliability.md``.
 
 WORTH KNOWING ANYWAY: in production this phrase never reaches the brain. With
 ``ZOE_ROUTER_HEAD=active`` the two-stage router decides it at tier 1.5 —
 FunctionGemma-270M returns ``shopping_list_add`` at **0.9996** confidence in
-~300 ms warm (measured 2026-07-20). So a failure here is a real signal about the
-brain's tool-calling lane, but a poor proxy for user-visible behaviour.
+~300 ms warm (measured 2026-07-20; router verified live on :11436 2026-07-27).
+So a failure here is a real signal about the brain's tool-calling lane, but a
+poor proxy for user-visible behaviour.
 """
 from __future__ import annotations
 
@@ -338,12 +337,11 @@ async def test_tool_action_dispatches(stub):
     await zc.run_zoe_core("Add bread to my shopping list.", "s2", "family-admin")
     intents = [d.get("intent") for d in s.dispatches()]
     if "list_add" not in intents:
-        # PERSIST the losing choice before asserting. This test fails ~14% of
-        # runs and the deflake (disambiguating the prompt, as #1079 did for
-        # test_web_query_delegates_and_synthesizes) needs to know WHICH tool the
-        # model picked instead — but every capture attempt so far has lost it to
-        # truncated CI/console output, so the competing tool is still unknown.
-        # A file survives truncation and outlives the run.
+        # PERSIST the losing choice before asserting: console output kept
+        # truncating it away. The first capture (2026-07-27) showed
+        # `memory_store`; keep collecting, because the cause is sampling at
+        # temp 0.7 rather than one specific competing tool, so the losing
+        # choice is expected to vary.
         _record_nondeterministic_failure(
             "test_tool_action_dispatches",
             prompt="Add bread to my shopping list.",
