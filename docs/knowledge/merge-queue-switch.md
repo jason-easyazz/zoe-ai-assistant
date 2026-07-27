@@ -69,6 +69,29 @@ cannot stay in the required list once a queue is enabled. Three options, in pref
    A real reduction in a *security* gate; do not choose this by accident.
 3. Do not enable the queue.
 
+**RESOLVED 2026-07-27 — option 1 taken.** `GITGUARDIAN_API_KEY` is set as a repo secret
+(personal access token) and a `secret-scan` job using `GitGuardian/ggshield-action` now runs
+in `validate.yml`, inheriting its `merge_group` trigger.
+
+Proven in both directions rather than assumed — a gate never seen to fail is not a gate:
+
+| | result |
+|---|---|
+| clean branch | `secret-scan: completed/success` |
+| planted credential (throwaway PR, since deleted) | **`secret-scan: completed/failure`** |
+
+The planted value was randomly generated and never valid; the branch and PR were removed as
+soon as the job reported red. The GitGuardian App failed on the same commit, so both agree.
+
+Two details in that job are load-bearing: `fetch-depth: 0`, because ggshield scans branch
+HISTORY and a shallow checkout silently scans far less than it appears to; and an explicit
+pre-check that fails when `GITGUARDIAN_API_KEY` is empty, so an expired token cannot turn the
+gate into a silent no-op. The token is a PAT, so it *will* expire.
+
+**Still do not enable the merge queue before swapping the required check** — `secret-scan`
+only exists on `main` once this PR merges, and until then the App is still the blocking gate.
+
+**Original warning, kept for context:**
 **Do not enable the merge queue before resolving this.** Dropping a secret-scanning gate to
 fix a review-churn problem is a bad trade, and the whole point of the switch is to stop
 solving process problems by weakening gates.
