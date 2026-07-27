@@ -106,10 +106,16 @@ async def create_board_issue_for_proposal(
 
     ``conn`` is a connection to the MULTICA database (where the ``issue`` table
     lives). The proposal row comes from the ZOE database — they are SEPARATE
-    databases, so idempotency cannot use a cross-database join. Instead we check
-    the proposal's own ``multica_issue_id`` (if any) against the issue table: if
-    it still points at a live issue in this workspace, that is returned unchanged.
-    Returns {number, issue_id, created}; the caller updates
+    databases, so idempotency cannot use a cross-database join.
+
+    Idempotency keys on a STABLE proposal back-ref stored in ``issue.context_refs``
+    (NOT the caller-supplied ``multica_issue_id``, which may be a phantom id or
+    stale under concurrent approvals), matched under the same advisory lock that
+    assigns the issue number. Issues in a terminal-FAILURE state
+    (blocked/cancelled) are excluded so a failed run can be retried, while a
+    live-or-done issue blocks a duplicate run.
+
+    Returns {number, issue_id, created[, status]}; the caller updates
     evolution_proposals.multica_issue_id in the zoe DB.
     """
     # Resolve the workspace/agent the SAME way the board runner does

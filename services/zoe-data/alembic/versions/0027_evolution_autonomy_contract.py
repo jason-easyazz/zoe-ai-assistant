@@ -84,9 +84,14 @@ def upgrade() -> None:
             "    NEW.autonomy_class := 'prepare'; NEW.risk := 'high';\n"
             f"    NEW.approval_required := '{_SECURITY_APPROVAL}';\n"
             "  ELSE\n"
-            "    IF NEW.autonomy_class IS NULL THEN NEW.autonomy_class := 'prepare'; END IF;\n"
-            f"    IF NEW.approval_required IS NULL THEN NEW.approval_required := '{_DEFAULT_APPROVAL}'; END IF;\n"
-            "    IF NEW.risk IS NULL THEN NEW.risk := 'medium'; END IF;\n"
+            # FAIL-CLOSED and AUTHORITATIVE: overwrite unconditionally rather than
+            # only filling NULLs. Filling-if-NULL let any INSERT hand itself
+            # autonomy_class='execute' for a non-executable type, which would make
+            # a proposal auto-implementable purely by asking — the exact bypass the
+            # policy exists to prevent. Only the type decides.
+            "    NEW.autonomy_class := 'prepare';\n"
+            f"    NEW.approval_required := '{_DEFAULT_APPROVAL}';\n"
+            "    NEW.risk := 'medium';\n"
             "  END IF;\n"
             "  RETURN NEW;\n"
             "END;\n"

@@ -1985,9 +1985,15 @@ async def _hermes_review_proposal(proposal: dict) -> tuple[bool, str]:
 async def evolution_proposal_action(
     proposal_id: str,
     body: dict,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_admin),
 ):
     """Act on an evolution proposal: approve|reject|defer.
+
+    ADMIN ONLY. Approving is a privileged state change even when auto-execution
+    is gated separately: it marks a self-modification proposal as sanctioned, and
+    an approved+executable proposal is what the board lane implements and merges.
+    Previously this took `get_current_user`, so any authenticated caller (and the
+    unauthenticated default identity) could persist status='approved'.
 
     On approve: creates a Multica board issue and queues Hermes implementation.
     On reject: archives the proposal.
