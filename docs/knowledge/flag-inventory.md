@@ -56,7 +56,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED` | `'false'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_BRAIN_BACKEND` | `'core'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
-| `ZOE_BRAIN_STARTUP_WAIT_S` | `30.0` | no | NO | `services/zoe-data/main.py` |
+| `ZOE_BRAIN_STARTUP_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_BRAIN_TOKEN` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_BRAIN_UNIT` | `'llama-server.service'` | no | NO | `scripts/maintenance/router_selftrain.py`<br>`services/zoe-data/main.py` |
 | `ZOE_BRAIN_URL` | `-` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
@@ -357,8 +357,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PUBLIC_URL` | `''` | no | NO | `services/zoe-data/routers/music_setup.py`<br>`services/zoe-data/routers/smart_home_setup.py` |
 | `ZOE_QUIET_END_HOUR` | `'7'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_QUIET_START_HOUR` | `'22'` | no | NO | `services/zoe-data/proactive/engine.py` |
-| `ZOE_READINESS_CACHE_TTL_S` | `3.0` | no | NO | `services/zoe-data/main.py` |
-| `ZOE_READINESS_TIMEOUT_S` | `4.0` | no | NO | `services/zoe-data/main.py` |
+| `ZOE_READINESS_CACHE_TTL_S` | `3.0` | yes | NO | `services/zoe-data/main.py` |
+| `ZOE_READINESS_TIMEOUT_S` | `4.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_RELATIONSHIP_GRAPH_ENABLED` | `''` | no | NO | `services/zoe-data/relationship_graph.py` |
 | `ZOE_REMINDER_MAX_ATTEMPTS` | `'5'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_REMINDER_STUCK_CLAIM_S` | `'600'` | no | NO | `services/zoe-data/proactive/triggers/reminders.py` |
@@ -457,7 +457,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_STITCH_ENABLED` | `'0'` | no | NO | `services/zoe-data/main.py`<br>`services/zoe-data/voice_stitch.py` |
 | `ZOE_VOICE_STREAM` | `'1'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_VOICE_STT_LOG` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_VOICE_STT_LOG_MAX_BYTES` | `5000000` | no | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_VOICE_STT_LOG_MAX_BYTES` | `5000000` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_TOOL_FILLER` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_TREND` | `dynamic` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_WARN_MS` | `'1500'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
