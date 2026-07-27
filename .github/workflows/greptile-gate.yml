@@ -63,7 +63,31 @@ jobs:
 
             for (const pr of prs) {
               if (pr.draft) continue;                                // drafts iterate for free
-              if (pr.labels.some(l => l.name === LABEL)) continue;   // already handed off
+
+              // The label must NOT survive a head change. Left in place, a later fix push
+              // or strict branch update keeps the PR inside Greptile's filter and it
+              // reviews again on every push — the exact per-push churn this gate exists to
+              // stop. Compare when the label was applied against when the head landed, and
+              // strip it if the head is newer so the PR has to re-qualify.
+              if (pr.labels.some(l => l.name === LABEL)) {
+                const events = await github.paginate(github.rest.issues.listEvents, {
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: pr.number, per_page: 100,
+                });
+                const lastLabelled = events.filter(e => e.event === 'labeled' && e.label?.name === LABEL).pop();
+                const { data: headCommit } = await github.rest.repos.getCommit({
+                  owner: context.repo.owner, repo: context.repo.repo, ref: pr.head.sha,
+                });
+                const headAt = new Date(headCommit.commit.committer.date);
+                if (lastLabelled && headAt > new Date(lastLabelled.created_at)) {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    issue_number: pr.number, name: LABEL,
+                  }).catch(() => {});
+                  core.info(`PR #${pr.number}: head moved after labelling — label removed, must re-qualify`);
+                }
+                continue;   // never re-label in the same pass
+              }
 
               const { data: prFull } = await github.rest.pulls.get({
                 owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number,

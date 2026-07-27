@@ -201,7 +201,16 @@ systemctl --user stop llama-server.service
 systemctl --user stop kokoro-tts.service     # ← the step that is easy to forget
 # ... do the RAM-hungry work ...
 systemctl --user start llama-server.service  # ← brain first: it needs the CONTIGUOUS buffer
-curl -sf http://127.0.0.1:11434/health       # wait for {"status":"ok"} before continuing
+
+# WAIT — do not just probe once. The model takes ~60-120s to load, so a single `curl`
+# fails immediately and the next line would start Kokoro into the memory the brain is
+# still claiming — reproducing the exact OOM this ordering exists to prevent.
+for i in $(seq 1 120); do
+  curl -sf http://127.0.0.1:11434/health 2>/dev/null | grep -q ok && break
+  sleep 2
+done
+curl -sf http://127.0.0.1:11434/health | grep -q ok || { echo "brain did not come up — do NOT start Kokoro"; exit 1; }
+
 systemctl --user start kokoro-tts.service    # Kokoro fits in what remains
 ```
 

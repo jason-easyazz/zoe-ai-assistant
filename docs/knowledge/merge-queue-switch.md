@@ -100,8 +100,12 @@ solving process problems by weakening gates.
 
 ```bash
 # 1. required checks: validate (+ ggshield job if migrated). NOT Greptile, NOT the GG App.
+# BOTH jobs must be listed. `secret-scan` is a separate job in validate.yml and reports
+# as its own check — listing only `validate` would silently DROP secret scanning from the
+# required set, which is precisely the "fix process by weakening a gate" trap this whole
+# document warns about.
 gh api -X PATCH repos/jason-easyazz/zoe-ai-assistant/branches/main/protection/required_status_checks \
-  -F strict=false -f 'contexts[]=validate'
+  -F strict=false -f 'contexts[]=validate' -f 'contexts[]=secret-scan'
 
 # 2. enable the merge queue for main (Settings → Branches, or via a ruleset)
 ```
