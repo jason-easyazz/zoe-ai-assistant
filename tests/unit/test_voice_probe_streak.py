@@ -233,3 +233,30 @@ class TestSkipDiagnosisReportsWhatItObserved:
         obs = "; ".join(vrp._diagnose_skip(str(tmp_path)))
         assert "REFUSED" in obs
         assert ".env present" in obs and "NO .env" not in obs
+
+
+class TestPerModeMemoryThreshold:
+    """The min-mem default follows the STT mode, both values measured not guessed.
+
+    inprocess carries its own Moonshine: 1500MB (historical empirical bar).
+    remote rides the live service's warm model: 700MB, against a measured 445MB
+    peak for a real 2-sample remote run on the live box (2026-07-27).
+    An explicit flag or ZOE_VOICE_PROBE_MIN_MEM_MB always wins.
+    """
+
+    def _default_for(self, monkeypatch, stt, env=None):
+        monkeypatch.delenv("ZOE_VOICE_PROBE_MIN_MEM_MB", raising=False)
+        if env is not None:
+            monkeypatch.setenv("ZOE_VOICE_PROBE_MIN_MEM_MB", env)
+        # the REAL function main() calls — not a mirror of its expression
+        return vrp.resolve_min_mem(stt)
+
+    def test_inprocess_default_is_1500(self, monkeypatch):
+        assert self._default_for(monkeypatch, "inprocess") == 1500
+
+    def test_remote_default_is_700(self, monkeypatch):
+        assert self._default_for(monkeypatch, "remote") == 700
+
+    def test_env_override_wins_either_mode(self, monkeypatch):
+        assert self._default_for(monkeypatch, "remote", env="1200") == 1200
+        assert self._default_for(monkeypatch, "inprocess", env="800") == 800

@@ -120,7 +120,7 @@ def _diagnose_skip(service_dir: str) -> list[str]:
     return obs
 
 
-def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict[str, Any]:
+def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: str) -> dict[str, Any]:
     """Run measure_voice.py under the shared flock and return its aggregated JSON."""
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         out_json = tf.name
@@ -137,6 +137,7 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
             "python3", str(MEASURE),
             "--last", str(samples), "--user", user,
             "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
+            "--stt", stt,
         ]
         proc = subprocess.run(
             cmd, cwd=str(REPO), capture_output=True, text=True,
@@ -507,12 +508,24 @@ def _acquire_harness_lock():
         raise SystemExit(3)
 
 
+def resolve_min_mem(stt: str) -> int:
+    """Memory floor for a run, by STT mode. ZOE_VOICE_PROBE_MIN_MEM_MB always wins."""
+    env_min = os.environ.get("ZOE_VOICE_PROBE_MIN_MEM_MB")
+    if env_min:
+        return int(env_min)
+    return 700 if stt == "remote" else 1500
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Zoe voice regression + speed probe.")
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
                     help="newest N corpus samples to replay")
     ap.add_argument("--user", default=os.environ.get("ZOE_VOICE_PROBE_USER", "jason"))
     ap.add_argument("--service-dir", default=None, help=SERVICE_DIR_HELP)
+    ap.add_argument("--stt", choices=["inprocess", "remote"],
+                    default=os.environ.get("ZOE_VOICE_REPLAY_STT", "inprocess"),
+                    help="'remote' = STT via the LIVE service (no second Moonshine "
+                         "load, needs ZOE_DEVICE_TOKEN). Default via ZOE_VOICE_REPLAY_STT.")
     ap.add_argument("--timeout", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_TIMEOUT_S", "900")))
     ap.add_argument("--baseline", type=Path, default=Path(os.environ.get("ZOE_VOICE_BASELINE", DEFAULT_BASELINE)))
     ap.add_argument("--results", type=Path, default=Path(os.environ.get("ZOE_VOICE_RESULTS", DEFAULT_RESULTS)))
@@ -520,7 +533,14 @@ def main() -> int:
     ap.add_argument("--update-baseline", action="store_true", help="Save this run as the new comparison baseline.")
     ap.add_argument("--warn-ratio", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_RATIO", "1.5")))
     ap.add_argument("--warn-ms", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_MS", "1500")))
-    ap.add_argument("--min-mem-mb", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_MIN_MEM_MB", "1500")),
+    # Per-mode default, both MEASURED not guessed. inprocess: 1500MB (set
+    # empirically when the harness carried its own Moonshine; that load is the
+    # bulk of it). remote: 700MB against a measured 445MB peak RSS for a REAL
+    # 2-sample remote run (STT via the live endpoint, +brain, dry) inside a
+    # MemoryMax=500M cgroup on the live box, 2026-07-27 — the embedder is 293MB
+    # of it; the ~255MB margin covers WAV buffers, more samples, and drift.
+    # An explicit flag or env always wins.
+    ap.add_argument("--min-mem-mb", type=int, default=None,
                     help="skip if available memory is below this — never OOM the live box "
                          "(exit 0 until the non-pass streak trips the alert, then exit 4)")
     ap.add_argument("--alert-after-non-pass", type=int,
@@ -544,6 +564,9 @@ def main() -> int:
     except Exception:
         pass
 
+    if args.min_mem_mb is None:
+        args.min_mem_mb = resolve_min_mem(args.stt)
+
     avail = mem_available_mb()
     if avail < args.min_mem_mb:
         reason = (f"available memory {avail}MB < {args.min_mem_mb}MB threshold — "
@@ -565,7 +588,7 @@ def main() -> int:
 
     run_started_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     try:
-        report = run_measure(args.samples, args.service_dir, args.user, args.timeout)
+        report = run_measure(args.samples, args.service_dir, args.user, args.timeout, args.stt)
     except Exception as exc:
         reason = f"voice probe could not run: {exc}"
         print(f"ERROR: {reason}", file=sys.stderr)

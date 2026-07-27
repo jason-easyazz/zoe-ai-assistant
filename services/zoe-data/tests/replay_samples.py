@@ -127,6 +127,44 @@ def _classify(transcript: str, reply: str, outcome: str) -> str:
     return "OK"
 
 
+def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
+    """STT via the LIVE zoe-data /api/voice/transcribe (its Moonshine is already warm).
+
+    Why this exists: in-process STT lazy-loads a SECOND Moonshine copy
+    (`_ensure_moonshine`) next to the one the live service already holds — the
+    single biggest slice of the harness's 1500MB memory requirement, on a box
+    where the gate skipped for days because that much was never free. STT is a
+    pure function of the audio, so it is the one stage that can safely go remote:
+    router/fast_tiers stay in-process because ONLY the harness runs them with
+    allow_writes=False — the live endpoints would actually execute the commands.
+
+    Trade-offs, stated: stt_ms gains localhost-HTTP overhead (~ms, dwarfed by the
+    1-2s of STT itself), and the live service broadcasts a transcript event per
+    call — panel_id "replay-harness" so kiosks, which filter on their own id,
+    ignore it. Auth follows the zoe_latency_probe convention: ZOE_DEVICE_TOKEN
+    from the environment only, never a CLI flag.
+    """
+    import base64 as _b64
+    import urllib.request as _rq
+
+    with open(wav_path, "rb") as fh:
+        payload = json.dumps({
+            "audio_base64": _b64.b64encode(fh.read()).decode("ascii"),
+            "panel_id": "replay-harness",
+        }).encode("utf-8")
+    req = _rq.Request(
+        base_url.rstrip("/") + "/api/voice/transcribe",
+        data=payload,
+        headers={"Content-Type": "application/json", "X-Device-Token": token},
+        method="POST",
+    )
+    with _rq.urlopen(req, timeout=60) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    # A backend failure raises above (non-2xx -> HTTPError), matching the
+    # in-process contract: silence returns "", real failure raises.
+    return str(body.get("text") or "")
+
+
 async def _run(args) -> int:
     _load_env()
     os.environ.setdefault("ZOE_ROUTER_ENABLED", "1")
@@ -143,6 +181,15 @@ async def _run(args) -> int:
     )
 
     sr.warm()
+
+    _remote_token = ""
+    if args.stt == "remote":
+        _remote_token = (os.environ.get("ZOE_DEVICE_TOKEN")
+                         or os.environ.get("DEVICE_TOKEN") or "").strip()
+        if not _remote_token:
+            print("--stt remote needs ZOE_DEVICE_TOKEN in the environment "
+                  "(same convention as zoe_latency_probe; never a CLI flag)", file=sys.stderr)
+            return 1
 
     user = args.user
     session_id = _run_session_id()
@@ -165,7 +212,11 @@ async def _run(args) -> int:
 
         t = time.monotonic()
         try:
-            transcript = (await _transcribe_audio_impl(f) or "").strip()
+            if args.stt == "remote":
+                transcript = (await asyncio.to_thread(
+                    _transcribe_remote, f, args.base_url, _remote_token) or "").strip()
+            else:
+                transcript = (await _transcribe_audio_impl(f) or "").strip()
         except Exception as exc:
             transcript = ""
             rec["stt_error"] = str(exc)
@@ -246,7 +297,8 @@ async def _run(args) -> int:
             print(f"    {r['file']}: {r['transcript']!r} → {r['outcome']}")
 
     if args.json:
-        json.dump({"counts": counts, "rows": rows}, open(args.json, "w"), indent=2)
+        json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt},
+                  open(args.json, "w"), indent=2)
         print(f"\nwrote {args.json}")
     return 0
 
@@ -259,6 +311,11 @@ def main() -> None:
     ap.add_argument("--brain", action="store_true", help="run the Gemma brain on fall-through")
     ap.add_argument("--execute", action="store_true", help="actually fulfil writes (mutates DB)")
     ap.add_argument("--json", help="also dump machine-readable results here")
+    ap.add_argument("--stt", choices=["inprocess", "remote"], default="inprocess",
+                    help="'remote' = transcribe via the LIVE /api/voice/transcribe "
+                         "(no second Moonshine load; needs ZOE_DEVICE_TOKEN in env)")
+    ap.add_argument("--base-url", default=os.environ.get("ZOE_BASE_URL", "http://127.0.0.1:8000"),
+                    help="live service base URL for --stt remote")
     args = ap.parse_args()
     sys.exit(asyncio.run(_run(args)))
 
