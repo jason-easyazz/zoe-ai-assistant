@@ -121,20 +121,28 @@ HARNESS = textwrap.dedent(
             // checksFlip: green on the first read, red on the second — a required check
             // that re-runs and fails while the summon calls are in flight.
             const red = OPTS.checksRed || (OPTS.checksFlip && checkReads >= 2);
-            return ['Cursor Bugbot'].map((name) => ({
+            const extra = OPTS.greptileRun
+              ? [{ name: 'Greptile Review', status: OPTS.greptileRun.status || 'completed',
+                   conclusion: OPTS.greptileRun.conclusion || null,
+                   completed_at: '2026-07-27T00:00:00Z' }] : [];
+            return extra.concat(['Cursor Bugbot'].map((name) => ({
               name, status: OPTS.checksPending ? 'in_progress' : 'completed',
               conclusion: red ? 'failure' : 'neutral',
-              completed_at: '2026-07-27T00:00:00Z' }));
+              completed_at: '2026-07-27T00:00:00Z' })));
           },
         },
         issues: {
           // OPTS.markerSha: a prior handoff marker from THIS workflow's bot, pinning
           // the label to that SHA. Trust is bot-only, so the author must match exactly.
-          listComments: async () => ((OPTS.codexSummons || []).map((c) => ({
+          listComments: async () => ((OPTS.greptileSummons || []).map((c) => ({
+            user: { login: 'github-actions[bot]', type: 'Bot' },
+            created_at: c.at,
+            body: `@greptileai review\n<!-- greptile-gate:summon:${c.sha || 'a'.repeat(40)} -->`,
+          })).concat((OPTS.codexSummons || []).map((c) => ({
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: c.at,
             body: `@codex review\n<!-- greptile-gate:codex:${c.sha || 'a'.repeat(40)} -->`,
-          })).concat((OPTS.copilotSummons || []).map((c) => ({
+          }))).concat((OPTS.copilotSummons || []).map((c) => ({
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: c.at,
             body: `Requested Copilot review.\n<!-- greptile-gate:copilot:${c.sha || 'a'.repeat(40)} -->`,
@@ -187,6 +195,10 @@ def test_all_green_hands_off(tmp_path):
     # The marker must carry the SHA, and must be posted BEFORE the label — a label with
     # no marker sits inside Greptile's filter and gets stripped again next run.
     assert any("greptile-gate:labelled:" + "a" * 40 in c for c in r["comments"]), r["comments"]
+    # Measured on the pipeline's first autonomous run (#1575): the label admits
+    # the PR through Greptile's filter but does NOT start the review — the
+    # summon does. The handoff must post both.
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
 
 
 def test_red_check_during_summon_window_is_not_labelled(tmp_path):
@@ -375,3 +387,75 @@ def test_failed_copilot_summon_leaves_no_grace_anchor(tmp_path):
     assert r["addLabels"] == 0, r["log"]
     posted = [c for c in r["comments"] if "greptile-gate:copilot:" in c]
     assert posted == [], f"failed mutation must post NO marker: {posted}"
+
+
+def test_regressed_handed_off_head_is_revoked_not_summoned(tmp_path):
+    """Handed off, no Greptile run, but a required check has gone RED: revoke the
+    label, do NOT spend a summon on a head about to lose its handoff (Codex,
+    #1577 — the re-summon must run behind the fresh-conditions read)."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, checksRed=True,
+             labels=[{"name": "greptile"}], markerSha="a" * 40)
+    assert r["removeLabel"] == 1, r["log"]
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+
+
+def test_handed_off_without_greptile_run_resummons(tmp_path):
+    """Label+marker present, no Greptile Review check-run for the head: the
+    post-label summon must be re-posted, or a swallowed comment failure strands
+    the PR labeled-but-never-reviewed forever (Codex P1, #1577)."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             labels=[{"name": "greptile"}], markerSha="a" * 40)
+    summons = [c for c in r["comments"] if c.strip().startswith("@greptileai review")]
+    assert summons, f"handed-off head with no Greptile run must re-summon: {r['comments']}"
+
+
+def test_fresh_summon_debounces_resummon(tmp_path):
+    """A trusted summon younger than 10min means one is in flight — events in
+    Greptile's check-creation gap must not spam more (Codex, #1577)."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             labels=[{"name": "greptile"}], markerSha="a" * 40,
+             greptileSummons=[{"at": "2099-01-01T00:00:00Z"}])
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+
+
+def test_dead_greptile_run_does_not_block_resummon(tmp_path):
+    """cancelled/timed_out runs are infra deaths on an immutable head: they must
+    not satisfy the is-Greptile-coming check forever (Codex, #1577). A completed
+    FAILURE is a real verdict and must still block."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             labels=[{"name": "greptile"}], markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "cancelled"})
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+    r2 = _run(tmp_path, _script(), reviewers=BOTH,
+              labels=[{"name": "greptile"}], markerSha="a" * 40,
+              greptileRun={"status": "completed", "conclusion": "failure"})
+    assert not any(c.strip().startswith("@greptileai review") for c in r2["comments"]), r2["comments"]
+
+
+def test_rehandoff_of_reviewed_sha_does_not_resummon(tmp_path):
+    """Regress-then-clear on the same SHA: the label is re-applied, but a live
+    Greptile run already exists for the head — a fresh summon would bill a
+    re-review of a reviewed diff (Codex, #1577)."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             greptileRun={"status": "completed", "conclusion": "success"})
+    assert r["addLabels"] == 1, r["log"]
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+
+
+def test_handoff_debounces_when_summon_already_in_flight(tmp_path):
+    """Revoke-then-recover inside Greptile's check-creation gap: a fresh trusted
+    summon exists, no run yet — the re-handoff must not double-summon."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             greptileSummons=[{"at": "2099-01-01T00:00:00Z"}])
+    assert r["addLabels"] == 1, r["log"]
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+
+
+def test_stale_head_summon_does_not_debounce_the_new_head(tmp_path):
+    """Per-sha debounce (Greptile P1): a fresh summon for the PREVIOUS head must
+    not suppress the summon for the current one — otherwise every push inside
+    the window leaves the new head unreviewed."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             labels=[{"name": "greptile"}], markerSha="a" * 40,
+             greptileSummons=[{"at": "2099-01-01T00:00:00Z", "sha": "b" * 40}])
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
