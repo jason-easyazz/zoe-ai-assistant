@@ -1358,9 +1358,28 @@ _HIDDEN_ENTRY_TYPES = {"label", "divider"}
 
 
 async def provider_catalogue() -> list[dict[str, Any]]:
-    """The 'Add music' catalogue merged with configured status."""
-    configured = {c.get("domain") for c in (await _ma("config/providers") or []) if isinstance(c, dict)}
-    return [{**p, "connected": p["domain"] in configured} for p in _SETUP_CATALOGUE]
+    """The 'Add music' catalogue merged with configured + health status.
+
+    `connected` = an instance exists in MA. `needs_attention` = that instance is
+    enabled but NOT loaded (e.g. YouTube Music failing its Premium check), with
+    MA's own `reason` — so the UI can offer "Reconnect" instead of "Connect".
+    """
+    cfgs = [c for c in (await _ma("config/providers") or []) if isinstance(c, dict)]
+    provs = _as_list(await _ma("providers"))
+    configured = {c.get("domain") for c in cfgs}
+    available = {p.get("domain") for p in provs if isinstance(p, dict) and p.get("available")}
+    err_by_domain = {
+        c.get("domain"): str(c.get("last_error") or "")
+        for c in cfgs if c.get("enabled") and c.get("last_error")
+    }
+    out: list[dict[str, Any]] = []
+    for p in _SETUP_CATALOGUE:
+        dom = p["domain"]
+        connected = dom in configured
+        needs = connected and dom not in available and dom in err_by_domain
+        out.append({**p, "connected": connected, "needs_attention": needs,
+                    "reason": err_by_domain.get(dom, "") if needs else ""})
+    return out
 
 
 def _clean_entries(entries: Any) -> list[dict[str, Any]]:
@@ -1421,10 +1440,21 @@ async def save_provider(provider: str, values: dict[str, Any],
     Pass ``instance_id`` to UPDATE that existing instance in place (MA otherwise
     mints a new instance on every save — which duplicates the provider on a
     re-connect or a cookie refresh)."""
-    # Merge the caller's values over MA's defaults so unspecified fields are valid.
+    # Base to merge the caller's values over. On a FIRST connect that's MA's
+    # defaults. On a RECONNECT (instance_id) it's the EXISTING instance's current
+    # values — so a cookie/OAuth refresh preserves the user's other settings
+    # (library-sync toggles etc.) instead of resetting them to defaults, which it
+    # would if we always started from defaults.
     entries = await _ma("config/providers/get_entries", provider_domain=provider) or []
     merged = {e["key"]: e.get("default_value") for e in entries
               if isinstance(e, dict) and e.get("key") and e.get("type") not in _HIDDEN_ENTRY_TYPES}
+    if instance_id:
+        for c in (await _ma("config/providers") or []):
+            if isinstance(c, dict) and (c.get("instance_id") == instance_id or c.get("id") == instance_id):
+                cur = c.get("values")
+                if isinstance(cur, dict):
+                    merged.update({k: v for k, v in cur.items() if v is not None})
+                break
     merged.update({k: v for k, v in (values or {}).items() if v is not None})
     if provider == _YTMUSIC_DOMAIN:
         # Always point YouTube Music at Zoe's local PO-token generator, whatever

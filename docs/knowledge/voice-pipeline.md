@@ -66,6 +66,20 @@ It mirrors `zoe_latency_probe.py`: `--update-baseline` to set the bar, baseline 
 regression. It self-guards: **SKIPs if available memory is low** (never OOMs the box) and runs the
 harness under the shared flock.
 
+**STT mode — `--stt remote` is the nightly default** (unit template sets
+`ZOE_VOICE_REPLAY_STT=remote`). In-process mode lazy-loads a SECOND Moonshine next to the live
+service's warm one, which is why the gate demanded 1500MB and skipped for days on a box whose
+steady state leaves ~350–1200MB. Remote mode POSTs each WAV to the live `/api/voice/transcribe`
+(auth: `ZOE_DEVICE_TOKEN` — `DEVICE_TOKEN` also honoured as the fallback name, matching
+`zoe_latency_probe` — in the environment, provisioned in `~/.hermes/.env`): measured
+2026-07-27, a full run peaks at **445MB** and the per-mode memory floor is 700MB vs 1500MB.
+Transcripts are engine-identical across modes (same Moonshine, same box), so baselines carry
+over; the replay JSON records `stt_mode`. Router/`fast_tiers` deliberately stay in-process —
+only the harness runs them with `allow_writes=False`; the live endpoints would execute the
+commands for real. Flip back to `inprocess` only when the live service itself is the thing
+under test. Expect ~5% single-turn brain flake on a busy box: one CANT_DO in 20 fails the gate
+by design (said-vs-did is zero-tolerance) — re-run before treating it as a real regression.
+
 **Run it from a git worktree with no flags** — and that now holds for the lower-level
 `scripts/perf/measure_voice.py` and `measure_tts.py` run DIRECTLY, too. The voice path needs the LIVE
 `services/zoe-data/.env`, which is gitignored and therefore absent in a worktree. `--service-dir`
@@ -171,6 +185,57 @@ can't attribute per-commit, but the landed work that drove it:
 579.5 ms**, OK 19/20) via `voice_regression_probe.py --samples 20 --update-baseline`. Why: left on the
 July-2 bar the gate compared against an easy, ~1.75× slower target, so a silent brain slowdown could
 regress most of the July wins and still "pass". The new bar holds the gains.
+
+## Stopping the brain does NOT guarantee it restarts (2026-07-26)
+
+Freeing RAM by stopping `llama-server` — the documented move for a build or training window —
+has a trap that cost ~20 minutes of total voice outage on 2026-07-26.
+
+**What happened.** Brain stopped for a Docker build. Build succeeded. Brain then refused to
+start, crash-looping with:
+
+```
+ggml_backend_cuda_buffer_type_alloc_buffer: allocating 2493.32 MiB on device 0:
+cudaMalloc failed: out of memory
+```
+
+...while `MemAvailable` showed **6.5 GB free**. Dropping page cache changed nothing.
+
+**Why.** This is Tegra unified memory: the brain needs a ~2.5 GB *contiguous CUDA* buffer, and
+that is a different resource from free system RAM. While the brain was down, the **Kokoro
+sidecar expanded into the freed GPU memory and did not give it back** (`kokoro-tts.service`,
+PyTorch/CUDA backend, ~2.45 GB RSS holding `/dev/nvmap`). System RAM was plentiful; GPU memory
+was not.
+
+**The ordering that works** — stop Kokoro too, and start the brain FIRST so it claims its
+buffer before anything else can:
+
+```bash
+systemctl --user stop llama-server.service
+systemctl --user stop kokoro-tts.service     # ← the step that is easy to forget
+# ... do the RAM-hungry work ...
+systemctl --user start llama-server.service  # ← brain first: it needs the CONTIGUOUS buffer
+
+# WAIT — do not just probe once. The model takes ~60-120s to load, so a single `curl`
+# fails immediately and the next line would start Kokoro into the memory the brain is
+# still claiming — reproducing the exact OOM this ordering exists to prevent.
+for i in $(seq 1 120); do
+  curl -sf http://127.0.0.1:11434/health 2>/dev/null | grep -q ok && break
+  sleep 2
+done
+curl -sf http://127.0.0.1:11434/health | grep -q ok || { echo "brain did not come up — do NOT start Kokoro"; exit 1; }
+
+systemctl --user start kokoro-tts.service    # Kokoro fits in what remains
+```
+
+**Diagnosing it:** `sudo fuser -v /dev/nvmap` lists the GPU holders — that is the question to
+ask, not `free -m`. A CUDA OOM with gigabytes of free system RAM always means a *GPU* holder,
+so find it rather than dropping caches.
+
+**Two process notes from the same incident:** run the long build in the BACKGROUND (a
+foreground timeout killed it with the brain already stopped — silent Zoe, no build running),
+and if a `trap` restarts the brain on exit, do not also call `start` explicitly — the race
+produces a "Job failed" that looks like a hard failure while the service is actually mid-load.
 
 ## Failure modes that are easy to misdiagnose (2026-07-14 / -15)
 

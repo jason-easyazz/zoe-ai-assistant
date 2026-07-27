@@ -18,9 +18,20 @@ rm -f "${HOME}/.omnigent/host.pid" "${HOME}/.omnigent"/daemons/*.json 2>/dev/nul
 
 # Make the mounted host cursor-agent resolvable on PATH. Symlink the REAL versioned binary
 # (resolved via realpath by the launcher) so its bundled node sits beside it.
+# Target /root/.local/bin, NOT /usr/local/bin: the container runs as uid 1000 (see
+# `user:` in docker-compose.module.yml) and /usr/local/bin is root-owned 755, so the
+# symlink silently failed there — `ln -sf` has no error check, so cursor-agent simply
+# never appeared on PATH and the Cursor harness broke with no message. /root/.local/bin
+# is owned by 1000 (chowned in the Dockerfile) and already ahead of /usr/local/bin on
+# PATH. Failure is now reported rather than swallowed.
 cursor_bin="$(ls /root/.local/share/cursor-agent/versions/*/cursor-agent 2>/dev/null | sort -V | tail -1)"
 if [ -n "${cursor_bin}" ]; then
-  ln -sf "${cursor_bin}" /usr/local/bin/cursor-agent
+  mkdir -p /root/.local/bin
+  if ln -sf "${cursor_bin}" /root/.local/bin/cursor-agent; then
+    echo "[entrypoint] cursor-agent linked -> ${cursor_bin}"
+  else
+    echo "[entrypoint] WARNING: could not link cursor-agent into /root/.local/bin — the Cursor harness will not resolve" >&2
+  fi
 fi
 
 # GitHub auth for the workers: with the host's gh login mounted read-only at

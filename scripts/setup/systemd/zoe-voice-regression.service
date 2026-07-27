@@ -26,6 +26,12 @@ EnvironmentFile=-%h/assistant/services/zoe-data/.env
 EnvironmentFile=-%h/.hermes/.env
 Environment=HOME=%h
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# STT via the LIVE service's warm Moonshine instead of loading a second copy
+# in-process: measured peak drops 1500MB -> 445MB (2026-07-27), which is the
+# difference between a gate that skipped for days and one that fits the box.
+# Needs ZOE_DEVICE_TOKEN (provisioned in ~/.hermes/.env, loaded above). Flip
+# back to inprocess only if the live service itself is what you are testing.
+Environment=ZOE_VOICE_REPLAY_STT=remote
 # systemd does not create parent dirs for append: log targets — ensure it exists.
 ExecStartPre=/usr/bin/mkdir -p %h/.zoe-logs
 # Boot race (perf plan 3a): this is a USER unit, so `After=docker.service` (a

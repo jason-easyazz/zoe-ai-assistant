@@ -229,8 +229,10 @@ async def _run_reminder_scan() -> None:
 
 async def _run_platform_health_check() -> None:
     """Run the host health script and open a Hermes-assigned issue on failure."""
-    import asyncio
+    import subprocess
     from pathlib import Path
+
+    from async_subprocess import QueueTimeout, env_float_failsafe, run_to_completion
 
     script = Path(
         os.environ.get(
@@ -241,24 +243,36 @@ async def _run_platform_health_check() -> None:
     if not script.exists():
         raise FileNotFoundError(f"Health check script missing: {script}")
 
-    proc = await asyncio.create_subprocess_exec(
-        "bash",
-        str(script),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+    # AGENTS.md fork rule: never fork on the event-loop thread — the whole
+    # spawn+communicate+timeout+kill runs in a worker thread (2026-06-29 outage).
     try:
-        stdout, _ = await asyncio.wait_for(
-            proc.communicate(),
+        # queue_timeout, not the interactive 30s default: this pool is shared
+        # with background Hermes tasks that hold a worker for up to 900s, so the
+        # default would make the health check routinely never start — where the
+        # prior on-loop spawn always ran. The autopilot has no latency budget.
+        proc = await run_to_completion(
+            ["bash", str(script)],
             timeout=_HEALTH_CHECK_TIMEOUT_S,
+            merge_stderr=True,
+            # env_float_failsafe, not bare float(): a typo here would crash the health
+            # loop itself — the third instance of this class in one PR, so parse
+            # every budget env var through the same fail-safe helper.
+            # must EXCEED a full background runtime (900s) — see background lane
+            queue_timeout=env_float_failsafe("ZOE_AUTOPILOT_QUEUE_WAIT_S", 1200.0),
         )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
+    except QueueTimeout as exc:
+        # The script never ran — a saturated worker pool, not an unhealthy
+        # platform. Reporting this as a health-check timeout would send the
+        # operator investigating the platform instead of the queue.
+        raise RuntimeError(
+            "Platform health check never started: no free subprocess worker "
+            f"(waited {exc.timeout:.0f}s, pool saturated)"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"Platform health check timed out after {_HEALTH_CHECK_TIMEOUT_S:.0f}s"
-        )
-    output = (stdout or b"").decode("utf-8", errors="replace").strip()
+        ) from exc
+    output = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
     tail = "\n".join(output.splitlines()[-25:])
 
     if proc.returncode == 0:

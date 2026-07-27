@@ -90,7 +90,9 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
 
 - `strict = true` — a PR must be **up to date with `main`** to merge (it can sit **BEHIND** if `main`
   races ahead; clear with update-branch / re-run).
-- Required status checks: **`validate`**, **`GitGuardian Security Checks`**, **`Greptile Review`**.
+- Required status checks: **`validate`**, **`secret-scan`**, **`Greptile Review`** (since
+  2026-07-27; the GitGuardian App check is informational — the first-party `secret-scan`
+  job replaced it as required so an App outage cannot freeze `main`).
 - `required_conversation_resolution = true` — **every review thread must be resolved**, not just replied to.
 - `0` required human approvals → green checks + resolved threads = mergeable; repo `allow_auto_merge = true`.
 - **Never** `--admin` / `--force` (no bypassing protection) unless the operator explicitly asks for that
@@ -125,8 +127,9 @@ With `strict = true` only **one** PR can be up-to-date at a time, so a batch of 
 - **Arm auto-merge** so a PR self-merges the moment it's green + resolved + current:
   `gh pr merge <n> --squash --auto --delete-branch`. This is **not** a bypass — GitHub still holds it
   until every gate passes; it just removes the manual click.
-- The purpose-built fix for this serial churn is a **GitHub merge queue** (see below) — evaluated but
-  not yet enabled.
+- The purpose-built fix for this serial churn WOULD BE a **GitHub merge queue**, but it is
+  **not available to this repo** (org-owned repos only; verdict 2026-07-27, see
+  merge-queue-switch.md) — serialisation stays the answer.
 
 ## GitGuardian: secrets live in branch *history*
 
@@ -154,7 +157,13 @@ With `strict = true` only **one** PR can be up-to-date at a time, so a batch of 
   **whenever you add a test file, add it to `validate.yml`'s test list** and confirm it actually runs
   in the CI job. Greptile flags this repeatedly; don't rely on that as the backstop.
 
-## Merge queue (evaluated, NOT enabled as of 2026-06-29)
+## Merge queue (VERDICT 2026-07-27: unavailable — org-owned repos only)
+
+**Resolved:** GitHub gates merge queues to organization-owned repositories; this repo is
+personal, so the queue cannot be enabled by any setting we control. Full analysis,
+org-transfer trade-offs and the executed secret-scan contexts swap:
+[`merge-queue-switch.md`](merge-queue-switch.md). The prerequisites below are kept as the
+historical record of what enabling WOULD take after an org transfer.
 
 A merge queue would drain a clean batch without the serial branch-update treadmill (it rebases, tests,
 and merges each PR in order automatically). **Hard prerequisites — without them it stalls every queued

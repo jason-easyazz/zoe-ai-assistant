@@ -72,12 +72,30 @@ python3 -m venv "$INSTALL_DIR/venv"
 source "$INSTALL_DIR/venv/bin/activate"
 
 pip install --quiet --upgrade pip
+# resemblyzer is REQUIRED here, not optional: the env written below ships
+# SPEAKER_ID_ENABLED=true, and without the encoder _get_voice_encoder() returns
+# None, so the W5 shadow week records every turn as a null no-match — a metrics
+# file that reads like real data and is not.
 pip install --quiet \
     openwakeword \
     pyaudio \
     numpy \
     requests \
     websocket-client
+
+# Separate, FAILURE-TOLERATED install: this script runs under `set -e`, so a
+# resemblyzer build failure inside the shared install above would abort the
+# whole provisioning before the warning below could ever run.
+pip install --quiet "resemblyzer>=0.1.3" || true
+
+# Warn loudly (not fatal: speaker ID ships disabled, and a panel that never
+# enables it should still provision). The daemon additionally records
+# source='encoder_unavailable' if it is ever enabled without the encoder.
+if ! python3 -c "import resemblyzer" 2>/dev/null; then
+    echo "!!  resemblyzer failed to install — speaker ID cannot be enabled on"
+    echo "!!  this panel until that is fixed. Provisioning continues (the"
+    echo "!!  feature ships disabled)."
+fi
 
 ### ---- openwakeword model download -------------------------------------
 echo "==> Downloading wake word model..."
@@ -117,6 +135,16 @@ VERIFY_SSL=true
 ZOE_WAKE_ACK_PHRASE=
 # Optional phrase bank. Quote pipe-separated values if enabled.
 # ZOE_WAKE_ACK_PHRASES="Yes Jason.|Hi Jason.|Good morning Jason."
+# Speaker ID (W5): OFF by default — enabling biometric scoring is an OPERATOR
+# decision (consent + enrollment first; docs/PLANS.md tracks this phase as
+# flag-dark). To start the W5 shadow week: enroll, then set
+# SPEAKER_ID_ENABLED=true here and restart. Shadow mode — the daemon scores every turn and logs
+# {boot, seq, ts, panel_id, user_id, score, n_profiles, source, truth} rows to ~/.zoe-voice/speaker_shadow_metrics.jsonl
+# (no audio, no embeddings) but never attaches identity to the turn payload.
+# Flip SPEAKER_ID_SHADOW=false ONLY after the shadow week's false-accept /
+# false-reject numbers are reviewed with the operator (samantha plan §W5).
+SPEAKER_ID_ENABLED=false
+SPEAKER_ID_SHADOW=true
 EOF
     echo "    IMPORTANT: Edit $ENV_FILE and set DEVICE_TOKEN before starting."
 else
