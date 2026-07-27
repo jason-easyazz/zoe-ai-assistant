@@ -218,10 +218,20 @@ def build_cloak_executor() -> BrowserExecutor | None:
             url = target_url(plan.params)
             if not url:
                 return {"ok": False, "error": "no url/navigate_to in plan params"}
+            # SSRF: chat research derives this URL from model/search output, so it is
+            # untrusted. Validate the initial target, then install the route guard
+            # (which re-checks every redirect hop pre-connect) — the same protection
+            # zoe_agent._web_browse and the MCP cloakbrowser_* tools use.
+            from agent_safety import assert_public_url, guard_browser_page
+            try:
+                assert_public_url(url)
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"refused non-public url: {exc}"}
             # launch_context_async returns a BrowserContext directly (not an async ctx manager)
             context = await launch_context_async(headless=True)
             try:
                 page = await context.new_page()
+                await guard_browser_page(page)
                 action_log.append({"action": "navigate", "url": url})
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 final_url = page.url

@@ -2642,6 +2642,53 @@ async def _cloak_search(query: str, max_results: int = 5, timeout_ms: int = 2000
     return results
 
 
+# A challenge to a claim Zoe just made ("are you sure?"). Deliberately NARROW:
+# it must be a short, standalone push-back, not any sentence containing "sure"
+# ("sure, do that" / "make sure the light is off" must NOT match). Anchored and
+# length-capped so a long message that merely mentions doubt isn't hijacked.
+_VERIFY_CHALLENGE_RE = re.compile(
+    r"^\W*(?:"
+    r"(?:are|r)\s+(?:you|u)\s+(?:really\s+)?(?:sure|certain|positive)"
+    r"|(?:you\s+)?sure"                       # "you sure?" / "sure?"
+    r"|really"                                 # "really??"
+    r"|is\s+that\s+(?:right|true|correct|actually\s+true)"
+    r"|that'?s\s+not\s+right"
+    r"|(?:prove|verify|back)\s+(?:it|that)(?:\s+up)?"
+    # a bare "source?" / "citation?" / "any sources?" / "the link?"
+    r"|(?:(?:got|any|the|your)\s+)?(?:a\s+)?(?:sources?|links?|citations?)"
+    r"|where\s+(?:did\s+)?(?:you|u)\s+(?:get|read|hear)\s+that"
+    r"|says?\s+who"
+    r"|according\s+to\s+(?:what|whom|who)"
+    r")\W*$",                                  # trailing "?"/"!" only — no \b (fails after ?)
+    re.IGNORECASE,
+)
+
+_VERIFY_MAX_CHARS = 60  # a challenge is short; a long message is a new question
+
+
+def _is_verification_challenge(message: str) -> bool:
+    """True when the user is pushing back on Zoe's PREVIOUS claim and wants proof.
+
+    Used to force a live web_search + cited sources instead of letting the model
+    simply restate itself more confidently (the failure mode Jason described:
+    "when you ask zoe something and she tells you, and you go 'are you sure'").
+    """
+    msg = (message or "").strip()
+    if not msg or len(msg) > _VERIFY_MAX_CHARS:
+        return False
+    return bool(_VERIFY_CHALLENGE_RE.match(msg))
+
+
+_VERIFY_DIRECTIVE = (
+    "\n\n[VERIFICATION REQUESTED] The user is challenging the claim you just made. "
+    "Do NOT simply repeat it. Call web_search now to check it against live sources, "
+    "then answer in this shape: say plainly whether your previous answer was right, "
+    "corrected, or uncertain, and cite the source URL(s) you relied on. "
+    "If the search finds nothing usable, say you could not verify it rather than "
+    "asserting it again."
+)
+
+
 async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> str:
     """Zoe-NATIVE page read: open a URL in CloakBrowser and return its text.
 
@@ -3589,6 +3636,28 @@ async def run_zoe_agent(
             if (skills - {"discovery"} and len(active_tools) <= 6)
             else "auto"
         )
+        # "are you sure?" — the user is challenging the claim Zoe just made. Append
+        # the directive to the USER message (never the system prompt, which is kept
+        # byte-identical for llama.cpp KV-cache reuse) and FORCE a tool call, so the
+        # model must go and check rather than restating itself more confidently.
+        if _is_verification_challenge(message):
+            user_message += _VERIFY_DIRECTIVE
+            # Narrow the tool list to the verification tools. With
+            # tool_choice="required" and the full list, Gemma could satisfy
+            # "required" by calling something irrelevant; with only these, the
+            # forced call IS the web check.
+            _verify_tools = [
+                t for t in active_tools
+                if isinstance(t, dict)
+                and t.get("function", {}).get("name") in ("web_search", "web_browse")
+            ]
+            if _verify_tools:
+                active_tools = _verify_tools
+                _first_turn_choice = "required"
+            logger.info(
+                "zoe_agent: verification challenge — forcing a cited web check (tools=%d)",
+                len(active_tools),
+            )
 
     # Build initial messages list with token-budget-aware compaction.
     # Gemma 4 E4B-QAT context window: 8192 tokens. Reserve ~2000 for the response.

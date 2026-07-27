@@ -420,13 +420,13 @@
       },
       "ZOE_CAP_A2A_DELEGATE": {
         "defaults": [
-          "'3000'"
+          "3000"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CAP_AMBIENT_ROWS": {
         "defaults": [
@@ -440,13 +440,13 @@
       },
       "ZOE_CAP_AMBIENT_SEARCH": {
         "defaults": [
-          "'0'"
+          "0"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CAP_AMBIENT_TRANSCRIPT": {
         "defaults": [
@@ -460,13 +460,13 @@
       },
       "ZOE_CAP_MEMORY_LIST": {
         "defaults": [
-          "'0'"
+          "0"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CAP_MEMORY_LIST_ROWS": {
         "defaults": [
@@ -480,33 +480,33 @@
       },
       "ZOE_CAP_SELF_CAPS": {
         "defaults": [
-          "'2000'"
+          "2000"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CAP_WEB_BROWSE": {
         "defaults": [
-          "'6000'"
+          "6000"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CAP_WEB_RESEARCH": {
         "defaults": [
-          "'6000'"
+          "6000"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CHAT_CONTEXT_MAX_SESSIONS": {
         "defaults": [
