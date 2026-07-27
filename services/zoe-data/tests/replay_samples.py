@@ -309,8 +309,8 @@ async def _run(args) -> int:
             print(f"    {r['file']}: {r['transcript']!r} → {r['outcome']}")
 
     if args.json:
-        json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt},
-                  open(args.json, "w"), indent=2)
+        with open(args.json, "w") as fh:
+            json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt}, fh, indent=2)
         print(f"\nwrote {args.json}")
     return 0
 

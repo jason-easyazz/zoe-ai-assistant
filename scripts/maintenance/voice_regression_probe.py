@@ -129,7 +129,14 @@ def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
         has_tok = bool((os.environ.get("ZOE_DEVICE_TOKEN")
                         or os.environ.get("DEVICE_TOKEN") or "").strip())
         obs.append(f"ZOE_DEVICE_TOKEN {'present' if has_tok else 'MISSING'}")
-        obs.append(f"zoe-data 127.0.0.1:8000 {'reachable' if _port_open('127.0.0.1', 8000) else 'REFUSED'}")
+        # Probe the endpoint the harness ACTUALLY targets (ZOE_BASE_URL), not a
+        # hardcoded 127.0.0.1:8000 — a hardcoded probe against a redirected base
+        # is exactly the reports-a-guess failure this file exists to remove.
+        from urllib.parse import urlparse
+        base = os.environ.get("ZOE_BASE_URL", "http://127.0.0.1:8000")
+        u = urlparse(base)
+        host, port = (u.hostname or "127.0.0.1"), (u.port or (443 if u.scheme == "https" else 80))
+        obs.append(f"zoe-data {host}:{port} {'reachable' if _port_open(host, port) else 'REFUSED'}")
     return obs
 
 
