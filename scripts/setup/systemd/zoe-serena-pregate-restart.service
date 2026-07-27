@@ -5,7 +5,7 @@
 # overnight at ~558MB available — below the gate's 700MB remote-mode floor — so
 # the nightly run skips and the non-pass streak marches toward the red alarm.
 # Serena is a KNOWN leaker (~1GB regrowth over a day; already MemoryMax-capped,
-# see docs/knowledge + memory project_serena_ram_fix): restarting it at 04:25
+# see docs/knowledge + memory project_serena_ram_fix): restarting it at 04:15
 # frees roughly double the shortfall, and nobody uses code-intel at 4am. The
 # alternative — lowering the gate's floor toward the replay's 445MB measured
 # peak — would leave ~110MB of margin on a box where CUDA/NvMap bursts are not

@@ -960,7 +960,9 @@ because Theodore reacts; Zoe currently discards the reactions.
   1.4–1.8 ms with the flag on, and the measured counterfactual (same phrase at 0.94) costs
   ~253 ms/utterance, ~150–180× the hit. Slowed synthesis on long replies costs +13–53 ms
   (immaterial). A/B WAV pairs for the operator listen (the DoD) are at
-  `/home/zoe/zoe-w11-ab/`. Replay gate: GREEN same day (19/19, remote mode). Tuning note:
+  `/home/zoe/zoe-w11-ab/`. **Operator listen DONE 2026-07-28** (panel Jabra): 0.92/0.94
+  inaudible; ladder 1.00→0.80 set WARM=0.88 / GENTLE=0.84 (0.80 "too slow") — shipped
+  with the flag in #1579's deploy. Replay gate: GREEN same day (19/19, remote mode). Tuning note:
   Kokoro's `speed` scales duration SUB-linearly (0.92 → +5–6% observed vs +8.7% naive), so
   profiles sound milder than their numbers — tune by ear, not arithmetic. Remaining for
   enable: the operator listen + `ZOE_EXPRESSIVE_TTS=1` on zoe-data.
