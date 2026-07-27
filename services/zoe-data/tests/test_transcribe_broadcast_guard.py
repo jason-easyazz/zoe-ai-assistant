@@ -2,8 +2,9 @@
 
 websocket-sync.js applies NO panel_id filter to voice events — every kiosk flips
 its orb and resets its auto-home timer on each voice:thinking. The guard is
-server-side: callers that are instruments, not users, carry the replay- prefix
-and the endpoint stays silent. This was originally claimed to be handled by
+server-side: instrument treatment requires BOTH the replay- prefix AND
+device-token auth (panel_id alone is caller-chosen payload), and the endpoint
+then stays silent. This was originally claimed to be handled by
 client-side filtering that does not exist (caught by Copilot on #1572).
 """
 from __future__ import annotations

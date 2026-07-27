@@ -235,10 +235,15 @@ class TestSkipDiagnosisReportsWhatItObserved:
         monkeypatch.delenv("DEVICE_TOKEN", raising=False)
         monkeypatch.setattr(vrp, "_port_open", lambda h, p_, timeout=2.0: True)
         obs = "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
-        assert "ZOE_DEVICE_TOKEN MISSING" in obs
+        assert "ZOE_DEVICE_TOKEN/DEVICE_TOKEN MISSING" in obs
         assert "zoe-data 127.0.0.1:8000 reachable" in obs
         monkeypatch.setenv("ZOE_DEVICE_TOKEN", "x")
         assert "ZOE_DEVICE_TOKEN present" in "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
+        # the fallback name is reported AS the fallback name, not as ZOE_DEVICE_TOKEN
+        monkeypatch.delenv("ZOE_DEVICE_TOKEN")
+        monkeypatch.setenv("DEVICE_TOKEN", "y")
+        obs2 = "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
+        assert "DEVICE_TOKEN present" in obs2 and "ZOE_DEVICE_TOKEN present" not in obs2
         # inprocess mode must NOT name remote-only observations
         assert "ZOE_DEVICE_TOKEN" not in "; ".join(vrp._diagnose_skip(str(tmp_path), "inprocess"))
 

@@ -127,9 +127,12 @@ def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
         # Remote mode's own failure modes, observed not guessed: the device token
         # (its absence makes the replay exit 1 before any sample runs) and the
         # live endpoint the WAVs go to.
-        has_tok = bool((os.environ.get("ZOE_DEVICE_TOKEN")
-                        or os.environ.get("DEVICE_TOKEN") or "").strip())
-        obs.append(f"ZOE_DEVICE_TOKEN {'present' if has_tok else 'MISSING'}")
+        # Name the variable actually observed — claiming ZOE_DEVICE_TOKEN when
+        # only the DEVICE_TOKEN fallback is set would be its own small lie.
+        tok_name = next((n for n in ("ZOE_DEVICE_TOKEN", "DEVICE_TOKEN")
+                         if (os.environ.get(n) or "").strip()), None)
+        obs.append(f"{tok_name} present" if tok_name
+                   else "ZOE_DEVICE_TOKEN/DEVICE_TOKEN MISSING")
         # Probe the endpoint the harness ACTUALLY targets (ZOE_BASE_URL), not a
         # hardcoded 127.0.0.1:8000 — a hardcoded probe against a redirected base
         # is exactly the reports-a-guess failure this file exists to remove.
