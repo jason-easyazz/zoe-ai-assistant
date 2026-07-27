@@ -404,15 +404,28 @@ jobs:
                   // summon failure leaves label+marker with no review ever starting
                   // (Codex P1); re-post the summon only now that the fresh read says
                   // the handoff is still deserved. Idempotent once the review exists.
-                  const gRuns = await ok(`PR #${pr.number} greptile check`, () =>
+                  // A LIVE run = pending, or completed without an infra-death. A run
+                  // that concluded cancelled/timed_out/stale is DEAD for this immutable
+                  // head and must not block a re-summon forever (Codex); a completed
+                  // failure/success is a real review verdict and does.
+                  const DEAD = ['cancelled', 'timed_out', 'stale'];
+                  const gLive = await ok(`PR #${pr.number} greptile check`, () =>
                     github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
-                      .then(rs => rs.filter(c => c.name === 'Greptile Review').length));
-                  if (gRuns === 0) {
+                      .then(rs => rs.filter(c => c.name === 'Greptile Review'
+                                              && !(c.status === 'completed' && DEAD.includes(c.conclusion))).length));
+                  // Debounce: Greptile takes real time to CREATE its check run after a
+                  // summon; every event in that gap would re-enter this branch and post
+                  // another summon (Codex). A trusted summon comment younger than
+                  // 10 minutes means one is already in flight.
+                  const recentSummon = comments.some(c =>
+                    trusted(c) && (c.body || '').trim() === '@greptileai review' &&
+                    (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
+                  if (gLive === 0 && !recentSummon) {
                     const re = await ok(`PR #${pr.number} re-summon Greptile`, () =>
                       github.rest.issues.createComment({
                         ...base, issue_number: pr.number, body: '@greptileai review',
                       }));
-                    if (re) core.info(`PR #${pr.number}: handed off but no Greptile run — re-summoned`);
+                    if (re) core.info(`PR #${pr.number}: handed off but no live Greptile run — re-summoned`);
                   }
                 }
                 if (!stillOk) {

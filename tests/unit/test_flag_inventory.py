@@ -190,3 +190,18 @@ def test_non_forwarding_wrapper_is_not_a_delegator(tmp_path):
     # the wrapper reads SOME_FIXED_KEY (non-ZOE, filtered); ZOE_NOT_ACTUALLY_READ
     # is never an env read at all and must not appear
     assert "ZOE_NOT_ACTUALLY_READ" not in flat, flat.keys()
+
+
+def test_nested_def_return_does_not_classify_outer_wrapper(tmp_path):
+    """A nested helper returning a typed call must not make the OUTER function a
+    delegator (Codex, #1577 — ast.walk descends into nested defs)."""
+    (tmp_path / "m.py").write_text(
+        "def enabled(name):\n"
+        "    def inner(name):\n"
+        "        return env_str(name)\n"
+        "    return bool(inner(\"OTHER\"))\n"
+        "E = enabled(\"ZOE_OUTER_NOT_TYPED\")\n"
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    flat = {**data["flags"]["prod"], **data["flags"]["lab"]}
+    assert "ZOE_OUTER_NOT_TYPED" not in flat, flat.keys()

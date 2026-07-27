@@ -83,7 +83,14 @@ class _FlagVisitor(ast.NodeVisitor):
                 params = [a.arg for a in fn.args.args]
                 if not params:
                     continue
-                for stmt in ast.walk(fn):
+                # Walk WITHOUT descending into nested defs — a nested helper's
+                # return must not classify the OUTER function as a delegator
+                # (Codex, #1577). Manual stack instead of ast.walk.
+                stack = list(fn.body)
+                while stack:
+                    stmt = stack.pop()
+                    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                        continue
                     if (isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call)
                             and self._call_name(stmt.value.func) in TYPED_ENV_FUNCS
                             and stmt.value.args
@@ -91,6 +98,7 @@ class _FlagVisitor(ast.NodeVisitor):
                             and stmt.value.args[0].id == params[0]):
                         self._typed_delegators.add(fn.name)
                         break
+                    stack.extend(ast.iter_child_nodes(stmt))
         self.generic_visit(node)
 
     @staticmethod
