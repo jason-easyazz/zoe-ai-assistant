@@ -195,7 +195,11 @@ def target_url(params: dict[str, Any]) -> str:
     screenshots silently navigate nowhere. Module-level (not buried in the
     executor closure) so it is testable without the browser package installed.
     """
-    return str(params.get("url") or params.get("navigate_to") or "").strip()
+    for key in ("url", "navigate_to"):
+        value = str(params.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def build_cloak_executor() -> BrowserExecutor | None:

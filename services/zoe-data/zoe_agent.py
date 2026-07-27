@@ -2663,7 +2663,10 @@ _VERIFY_CHALLENGE_RE = re.compile(
     r"|that'?s\s+not\s+right"
     r"|(?:prove|verify|back)\s+(?:it|that)(?:\s+up)?"
     # a bare "source?" / "citation?" / "any sources?" / "the link?"
-    r"|(?:(?:got|any|the|your)\s+)?(?:a\s+)?(?:sources?|links?|citations?)"
+    # A BARE noun ("link", "source") is an ordinary request, not a challenge —
+    # require either a qualifier ("got a source", "any links") or a question mark.
+    r"|(?:got|any|the|your|whats?\s+the)\s+(?:a\s+)?(?:sources?|links?|citations?)"
+    r"|(?:sources?|links?|citations?)\s*\?"
     r"|where\s+(?:did\s+)?(?:you|u)\s+(?:get|read|hear)\s+that"
     r"|says?\s+who"
     r"|according\s+to\s+(?:what|whom|who)"
@@ -2696,6 +2699,14 @@ def apply_verification_challenge(
     prompt-assembly paths (buffered and streaming) so they cannot drift apart —
     an earlier version lived only in the buffered path, so "are you sure?" did
     nothing on the streaming path, which is the one the UI actually uses.
+
+    VOICE IS DELIBERATELY EXCLUDED (not an oversight). Voice turns are latency-
+    budgeted — a forced search adds ~3-5s to a path that must answer in seconds —
+    and a spoken answer cannot read a citation list aloud usefully. Wiring it into
+    voice is also a voice-path change, which must clear the replay gate against
+    ~/.zoe-voice-samples before merge. Tracked as follow-up; the spoken
+    equivalent needs its own UX ("let me check that — I'll come back to you"),
+    not this text-shaped directive.
 
     The directive goes on the USER message, never the system prompt: the chat
     system prompt is kept byte-identical every turn for llama.cpp KV-cache reuse.

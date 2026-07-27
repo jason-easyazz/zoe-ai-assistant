@@ -34,6 +34,8 @@ pytestmark = pytest.mark.ci_safe
     "any sources?",
     "the link?",
     "citation?",
+    "source?",
+    "any links?",
     "where did you get that?",
     "where did u hear that",
     "says who?",
@@ -55,6 +57,12 @@ def test_detects_a_challenge(msg):
     "really good idea, thanks",
     "what time is it?",
     "prove it was a great match wasn't it",
+    # BARE nouns are ordinary requests, not push-back (regression: these matched)
+    "link",
+    "links",
+    "source",
+    "citation",
+    "send me the link",
     # a long message that happens to contain doubt is a NEW question, not a challenge
     "are you sure that the flight to Bali is cheaper on Tuesday, because I was "
     "reading that prices change a lot in the school holidays and I want to book soon",
@@ -150,3 +158,21 @@ def test_verification_tools_exist_to_be_forced():
     assert "web_search" in names and "web_browse" in names
     # both are always-on, so they are present on every chat turn to be narrowed to
     assert "web_search" in zoe_agent._ALWAYS_ON_TOOLS
+
+
+def test_bare_nouns_need_a_qualifier_or_question_mark():
+    """REGRESSION: 'link' / 'source' / 'citation' alone are ordinary requests.
+    They only read as a challenge with a qualifier ('got a source') or a '?'."""
+    f = zoe_agent._is_verification_challenge
+    for bare in ("link", "links", "source", "sources", "citation"):
+        assert f(bare) is False, bare
+    for challenge in ("link?", "source?", "got a source?", "any links?", "the citation?"):
+        assert f(challenge) is True, challenge
+
+
+def test_voice_exclusion_is_documented_not_accidental():
+    """Voice deliberately does not force verification (latency + spoken citations
+    + the replay gate). Keep that rationale in the code so it isn't 'fixed' blindly."""
+    import inspect
+    doc = inspect.getdoc(zoe_agent.apply_verification_challenge) or ""
+    assert "VOICE IS DELIBERATELY EXCLUDED" in doc

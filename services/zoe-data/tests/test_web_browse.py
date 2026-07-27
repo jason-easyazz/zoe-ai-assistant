@@ -200,3 +200,13 @@ def test_target_url_empty_when_absent():
     assert bb.target_url({}) == ""
     assert bb.target_url({"url": "   "}) == ""
     assert bb.target_url({"url": None, "navigate_to": None}) == ""
+
+
+def test_target_url_ignores_a_whitespace_only_url():
+    """REGRESSION: `params.get("url") or params.get("navigate_to")` treated a
+    whitespace-only url as truthy, so it won and stripped to "" — silently
+    dropping a perfectly good navigate_to and failing the screenshot."""
+    import browser_broker as bb
+    assert bb.target_url({"url": "   ", "navigate_to": "https://b.test"}) == "https://b.test"
+    assert bb.target_url({"url": "", "navigate_to": "https://b.test"}) == "https://b.test"
+    assert bb.target_url({"url": None, "navigate_to": "https://b.test"}) == "https://b.test"
