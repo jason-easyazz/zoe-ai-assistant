@@ -439,3 +439,12 @@ def test_rehandoff_of_reviewed_sha_does_not_resummon(tmp_path):
              greptileRun={"status": "completed", "conclusion": "success"})
     assert r["addLabels"] == 1, r["log"]
     assert not any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]
+
+
+def test_handoff_debounces_when_summon_already_in_flight(tmp_path):
+    """Revoke-then-recover inside Greptile's check-creation gap: a fresh trusted
+    summon exists, no run yet — the re-handoff must not double-summon."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             greptileSummons=[{"at": "2099-01-01T00:00:00Z"}])
+    assert r["addLabels"] == 1, r["log"]
+    assert not any(c.strip() == "@greptileai review" for c in r["comments"]), r["comments"]

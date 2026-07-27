@@ -67,7 +67,11 @@ def _typed_delegators(tree: ast.AST) -> frozenset[str]:
     under-counting typed adoption rather than over-counting it.
     """
     out = set()
-    for node in ast.walk(tree):
+    # MODULE-LEVEL functions only, not ast.walk: a nested bare delegator (e.g. a
+    # local `_env_int` helper inside some function) registers its NAME, and a
+    # raw module-level wrapper sharing that name would then wrongly type every
+    # read through it (Codex, #1577 — the name-collision class).
+    for node in ast.iter_child_nodes(tree):
         if not isinstance(node, ast.FunctionDef):
             continue
         body = [st for st in node.body

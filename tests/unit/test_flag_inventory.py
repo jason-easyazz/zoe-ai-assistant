@@ -252,16 +252,21 @@ def test_non_forwarding_wrapper_is_not_a_delegator(tmp_path):
     assert "ZOE_NOT_ACTUALLY_READ" not in flat, flat.keys()
 
 
-def test_nested_def_return_does_not_classify_outer_wrapper(tmp_path):
-    """A nested helper returning a typed call must not make the OUTER function a
-    delegator (Codex, #1577 — ast.walk descends into nested defs)."""
+def test_nested_delegator_name_collision_does_not_type_the_raw_wrapper(tmp_path):
+    """The discriminating nested-def case is a NAME COLLISION (Codex, #1577 —
+    the earlier test passed even without the fix): a nested bare delegator
+    named like a raw module-level wrapper must not type reads through the raw
+    one. Module-level functions only may register as delegators."""
     (tmp_path / "m.py").write_text(
-        "def enabled(name):\n"
-        "    def inner(name):\n"
-        "        return env_str(name)\n"
-        "    return bool(inner(\"OTHER\"))\n"
-        "E = enabled(\"ZOE_OUTER_NOT_TYPED\")\n"
+        "def outer(name):\n"
+        "    def _env_int(name):\n"        # nested BARE delegator, colliding name
+        "        return env_int(name, 0)\n"
+        "    return _env_int(name)\n"
+        "def _env_int(name, default):\n"   # module-level RAW wrapper, same name
+        "    raw = os.environ.get(name)\n"
+        "    return default if raw is None else int(raw)\n"
+        "A = _env_int(\"ZOE_RAW_COLLIDE\", 3)\n"
     )
     data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
     flat = {**data["flags"]["prod"], **data["flags"]["lab"]}
-    assert "ZOE_OUTER_NOT_TYPED" not in flat, flat.keys()
+    assert flat["ZOE_RAW_COLLIDE"]["typed_env"] is False, flat["ZOE_RAW_COLLIDE"]

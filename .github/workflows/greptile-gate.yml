@@ -504,12 +504,19 @@ jobs:
                   github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
                     .then(rs => rs.filter(c => c.name === 'Greptile Review'
                                             && !(c.status === 'completed' && DEAD2.includes(c.conclusion))).length));
-                if (gLive2 === 0) {
+                // Same debounce as the handed-off branch (Codex): a revoke-then-
+                // recover inside Greptile's check-creation gap would otherwise
+                // double-summon — gLive2 is 0 precisely while the first summon is
+                // still being processed.
+                const recentSummon2 = comments.some(c =>
+                  trusted(c) && (c.body || '').trim() === '@greptileai review' &&
+                  (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
+                if (gLive2 === 0 && !recentSummon2) {
                   await ok(`PR #${pr.number} summon Greptile`, () =>
                     github.rest.issues.createComment({
                       ...base, issue_number: pr.number, body: '@greptileai review',
                     }));
-                } else {
+                } else if (gLive2 !== 0) {
                   core.info(`PR #${pr.number}: live Greptile run already exists for this head — label re-applied without a fresh summon`);
                 }
               }
