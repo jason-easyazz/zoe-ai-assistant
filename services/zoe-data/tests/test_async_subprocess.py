@@ -515,3 +515,30 @@ async def test_children_deregister_on_normal_exit():
     await run_to_completion([sys.executable, "-c", "print('x')"], timeout=10)
     with mod._LIVE_CHILDREN_LOCK:
         assert not mod._LIVE_CHILDREN, "registry leaked a finished child"
+
+
+@pytest.mark.asyncio
+async def test_timeout_kills_the_whole_process_tree():
+    """A timed-out CLI's descendants must not hold the pipes open past the kill.
+
+    A child that spawns a grandchild inheriting stdout leaves communicate()
+    blocked on the pipe after killing only the direct child — the timeout is
+    then unbounded in the worst case. killpg on the child's own session takes
+    the tree.
+    """
+    import time as _t
+
+    spawner = (
+        "import subprocess,sys,time;"
+        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']);"
+        "time.sleep(30)"
+    )
+    started = _t.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        await run_to_completion([sys.executable, "-c", spawner], timeout=1.5)
+    elapsed = _t.monotonic() - started
+    # Must beat the OUTER backstop (timeout + _QUEUE_GRACE_S = 6.5s): without
+    # killpg the caller is rescued by that backstop at ~6.5s while the WORKER
+    # stays blocked on the pipe — which is exactly the failure. The inner
+    # timeout must be what released us.
+    assert elapsed < 4, f"released by the backstop, not the tree kill: {elapsed:.1f}s"

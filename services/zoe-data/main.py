@@ -1949,6 +1949,15 @@ async def lifespan(app: FastAPI):
         logger.warning("LiveKit setup (non-fatal): %s", _lk_exc)
 
     yield
+    # Reap run_to_completion children BEFORE interpreter teardown:
+    # ThreadPoolExecutor's exit hook joins workers ahead of ordinary atexit
+    # callbacks, so atexit alone cannot terminate a live child — by then
+    # communicate() has already returned. Lifespan shutdown runs first.
+    try:
+        from async_subprocess import terminate_live_children
+        terminate_live_children()
+    except Exception as _exc:
+        logger.warning("child reap on shutdown failed: %s", _exc)
 
     # Stop skills watcher thread
     try:

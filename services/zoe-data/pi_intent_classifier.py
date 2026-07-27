@@ -177,8 +177,9 @@ class PiIntentClassifierConfig:
         )
 
     def validate(self) -> None:
-        if self.timeout_seconds <= 0:
-            raise ValueError("ZOE_PI_INTENT_TIMEOUT_SECONDS must be positive")
+        import math
+        if self.timeout_seconds <= 0 or not math.isfinite(self.timeout_seconds):
+            raise ValueError("ZOE_PI_INTENT_TIMEOUT_SECONDS must be positive and finite")
         if self.max_words <= 0:
             raise ValueError("ZOE_PI_INTENT_MAX_WORDS must be positive")
         if self.offline_only and self.provider.lower() not in {"ollama", "local", "llama", "llamacpp"}:

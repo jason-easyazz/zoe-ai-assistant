@@ -28,6 +28,7 @@ import contextlib
 import logging
 import math
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -124,11 +125,27 @@ _LIVE_CHILDREN: "set[subprocess.Popen]" = set()
 _LIVE_CHILDREN_LOCK = threading.Lock()
 
 
-def _terminate_live_children() -> None:
-    """atexit: this process is going away — its children go with it."""
+def _kill_tree(popen: "subprocess.Popen") -> None:
+    """SIGKILL the child's whole process group (it leads one); fall back to
+    killing just the child if the group is already gone."""
+    try:
+        os.killpg(os.getpgid(popen.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        with contextlib.suppress(Exception):
+            popen.kill()
+
+
+def terminate_live_children() -> None:
+    """Terminate every registered child. Called from zoe-data's lifespan
+    shutdown (BEFORE ThreadPoolExecutor's own exit hook joins workers — plain
+    atexit runs AFTER that join, by which point communicate() has already
+    returned and there is nothing left to kill). The atexit registration below
+    stays as a backstop for non-uvicorn exits."""
     with _LIVE_CHILDREN_LOCK:
         children = list(_LIVE_CHILDREN)
     for popen in children:
+        with contextlib.suppress(Exception):
+            os.killpg(os.getpgid(popen.pid), signal.SIGTERM)
         with contextlib.suppress(Exception):
             popen.terminate()
     for popen in children:
@@ -136,10 +153,11 @@ def _terminate_live_children() -> None:
             popen.wait(timeout=5)
         with contextlib.suppress(Exception):
             if popen.poll() is None:
-                popen.kill()
+                _kill_tree(popen)
 
 
-atexit.register(_terminate_live_children)
+_terminate_live_children = terminate_live_children  # backstop alias
+atexit.register(terminate_live_children)
 
 
 async def _acquire_slot(slots: "threading.BoundedSemaphore", timeout: float) -> bool:
@@ -318,13 +336,18 @@ async def run_to_completion(
                 env=dict(env) if env is not None else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+                # Own process group: a timed-out CLI can have descendants that
+                # inherit our pipes — killing only the direct child leaves them
+                # holding the pipe open and communicate() blocks past the
+                # timeout. killpg takes the whole tree.
+                start_new_session=True,
             )
             with _LIVE_CHILDREN_LOCK:
                 _LIVE_CHILDREN.add(popen)
             try:
                 out, err = popen.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
-                popen.kill()
+                _kill_tree(popen)
                 popen.communicate()
                 raise
             finally:

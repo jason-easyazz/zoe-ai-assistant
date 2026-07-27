@@ -793,7 +793,7 @@ async def _write_hermes_codex_token(access_token: str, refresh_token: str = "") 
         return False
 
 
-async def _restart_hermes() -> None:
+async def _restart_hermes() -> bool:
     """Restart hermes-agent systemd user service so it picks up the new token."""
     try:
         # AGENTS.md fork rule: never fork on the event-loop thread — run the
@@ -803,6 +803,7 @@ async def _restart_hermes() -> None:
             timeout=10,
         )
         logger.info("hermes-agent.service restarted after token write")
+        return True
     except QueueTimeout as exc:
         # Never started. Logged distinctly so a saturated subprocess pool isn't
         # investigated as a slow/hanging systemd restart.
@@ -810,8 +811,10 @@ async def _restart_hermes() -> None:
             "Hermes restart after token write never started: no free subprocess "
             "worker after %ss (pool saturated)", exc.timeout,
         )
+        return False
     except Exception as exc:
         logger.warning("Hermes restart after token write failed: %s", exc)
+        return False
 
 
 # Off-loop runner for the panel_status ssh reachability probe (AGENTS.md fork
@@ -1075,7 +1078,10 @@ async def _chatgpt_connect_flow(emit, enc, recorder, assistant_message_id, tool_
     # ── Step 6b: persist to ~/.hermes/auth.json (openai-codex provider) ─────
     hermes_ok = await _write_hermes_codex_token(access_token, refresh_token)
     if hermes_ok:
-        await _restart_hermes()
+        # Writing the token is NOT the whole job: a restart that never ran
+        # (saturated pool) leaves Hermes on the OLD token, and claiming success
+        # here would tell the user Hermes is connected when it is not.
+        hermes_ok = await _restart_hermes()
 
     # ── Step 7: success ───────────────────────────────────────────────────────
     services_note = "OpenClaw and Hermes are now using your ChatGPT account." if hermes_ok else "OpenClaw is now using your ChatGPT account."
