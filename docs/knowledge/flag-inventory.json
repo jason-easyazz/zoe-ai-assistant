@@ -106,13 +106,13 @@
       },
       "ZOE_AGENT_MAX_TOOL_ITERS": {
         "defaults": [
-          "'5'"
+          "5"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_AGENT_TOOL_TIMEOUT": {
         "defaults": [
@@ -430,13 +430,13 @@
       },
       "ZOE_CAP_AMBIENT_ROWS": {
         "defaults": [
-          "'10'"
+          "10"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CAP_AMBIENT_SEARCH": {
         "defaults": [
@@ -450,13 +450,13 @@
       },
       "ZOE_CAP_AMBIENT_TRANSCRIPT": {
         "defaults": [
-          "'150'"
+          "150"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CAP_MEMORY_LIST": {
         "defaults": [
@@ -470,13 +470,13 @@
       },
       "ZOE_CAP_MEMORY_LIST_ROWS": {
         "defaults": [
-          "'25'"
+          "25"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CAP_SELF_CAPS": {
         "defaults": [
@@ -652,13 +652,13 @@
       },
       "ZOE_CONTEXT_TOKEN_BUDGET": {
         "defaults": [
-          "'5500'"
+          "5500"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_CONVERSATION_ENDER_ACKS": {
         "defaults": [
@@ -2073,13 +2073,13 @@
       },
       "ZOE_MAX_BROWSER_TABS": {
         "defaults": [
-          "'5'"
+          "5"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_agent.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_MCP_ACTOR_ROLE": {
         "defaults": [
@@ -4265,6 +4265,16 @@
           "services/zoe-data/routers/weather.py"
         ],
         "typed_env": false
+      },
+      "ZOE_WEB_BROWSE_MAX_HTML": {
+        "defaults": [
+          "1500000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": true
       },
       "ZOE_WORKTREE_PRUNE_INTERVAL_S": {
         "defaults": [

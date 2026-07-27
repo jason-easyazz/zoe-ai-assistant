@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-420 flags; 419 not documented in `.env.example`.
+421 flags; 420 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -30,7 +30,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_A2A_TOKEN` | `''` | no | NO | `services/zoe-data/auth.py` |
 | `ZOE_ACP_DELIVERY_MODE` | `'live'` | no | NO | `services/zoe-data/zoe_acp_client.py` |
 | `ZOE_AGENT_LLM_TIMEOUT` | `'120.0'`, `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
-| `ZOE_AGENT_MAX_TOOL_ITERS` | `'5'` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_AGENT_MAX_TOOL_ITERS` | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_TOOL_TIMEOUT` | `'10.0'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_VOICE_LLM_TIMEOUT` | `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ALLOWED_WS_ORIGINS` | `-` | yes | NO | `services/zoe-data/main.py` |
@@ -61,11 +61,11 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BUFFER_DELAY_S` | `'0.8'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_BUFFER_PHRASES` | `'1'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_CAP_A2A_DELEGATE` | `3000` | yes | NO | `services/zoe-data/zoe_agent.py` |
-| `ZOE_CAP_AMBIENT_ROWS` | `'10'` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_CAP_AMBIENT_ROWS` | `10` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_AMBIENT_SEARCH` | `0` | yes | NO | `services/zoe-data/zoe_agent.py` |
-| `ZOE_CAP_AMBIENT_TRANSCRIPT` | `'150'` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_CAP_AMBIENT_TRANSCRIPT` | `150` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_MEMORY_LIST` | `0` | yes | NO | `services/zoe-data/zoe_agent.py` |
-| `ZOE_CAP_MEMORY_LIST_ROWS` | `'25'` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_CAP_MEMORY_LIST_ROWS` | `25` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_SELF_CAPS` | `2000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_WEB_BROWSE` | `6000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_WEB_RESEARCH` | `6000` | yes | NO | `services/zoe-data/zoe_agent.py` |
@@ -83,7 +83,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_COMPOSE_UI` | `''` | no | NO | `services/zoe-data/ui_compose.py` |
 | `ZOE_COMPOSE_VOICE_BUDGET_S` | `'8'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_CONTACT_BACKFILL_ENABLED` | `''` | no | NO | `services/zoe-data/contact_backfill.py` |
-| `ZOE_CONTEXT_TOKEN_BUDGET` | `'5500'` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_CONTEXT_TOKEN_BUDGET` | `5500` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CONVERSATION_ENDER_ACKS` | `dynamic` | no | NO | `services/zoe-data/conversation_opener.py` |
 | `ZOE_CORE_DATA_URL` | `-` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_IDLE_TIMEOUT_S` | `'20'` | no | NO | `services/zoe-data/zoe_core_client.py` |
@@ -221,7 +221,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LOCATION_LON` | `'114.6158'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ZOE_LOG_DIR` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_LOG_LEVEL` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
-| `ZOE_MAX_BROWSER_TABS` | `'5'` | no | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_MAX_BROWSER_TABS` | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_MCP_ACTOR_ROLE` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_ACTOR_USER_ID` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_STRICT_USER_ID` | `'false'` | no | NO | `services/zoe-data/mcp_server.py` |
@@ -437,6 +437,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_WARN_RATIO` | `'1.5'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_WAKE_ACK_PHRASE` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_WEATHER_CACHE_TTL_S` | `'600'` | no | NO | `services/zoe-data/routers/weather.py` |
+| `ZOE_WEB_BROWSE_MAX_HTML` | `1500000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_WORKTREE_PRUNE_INTERVAL_S` | `86400.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_WORKTREE_ROOT` | `''` | no | NO | `services/zoe-data/worktree_bootstrap.py` |
 | `ZOE_WS_IDLE_TIMEOUT_SECONDS` | `120.0` | yes | NO | `services/zoe-data/main.py` |
