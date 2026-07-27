@@ -91,18 +91,39 @@ jobs:
             const over = (t) => nFiles > t.files || nLines > t.lines;
             const hasOverride = pr.labels.some(l => l.name === OVERRIDE);
 
-            if (over(FAIL) && !hasOverride) {
+            // The override must silence the WARN branch too. Otherwise a PR that exceeds
+            // both thresholds keeps posting "Getting large" on every push despite carrying
+            // an explicit, deliberate exemption — nagging about a decision already made.
+            if (hasOverride) {
+              core.info(`PR #${pr.number}: ${OVERRIDE} present — size messaging suppressed`);
+            } else if (over(FAIL)) {
               lines.push('', `**Too large:** ${nFiles} files / ${nLines} lines (limit ${FAIL.files} / ${FAIL.lines}). At 1000+ changed lines reviewers find roughly 28% of defects.`,
                 '', `Split it, or add the \`${OVERRIDE}\` label if it genuinely cannot be split. Note Greptile silently SKIPS PRs over ~50 files — past that you get no review at all while still paying for it.`);
             } else if (over(WARN)) {
               lines.push('', `**Getting large:** ${nFiles} files / ${nLines} lines. Past ~400 changed lines defect detection drops from ~87% to ~65% and keeps falling (SmartBear/Cisco, Google). Not blocking — but this is the point where splitting pays.`);
             }
 
+            // Sticky: edit our previous notice rather than posting a new one on every
+            // push. Observed on this PR — two near-identical "Getting large" comments
+            // after two syncs. Noise trains people to ignore the check.
+            const MARK = '<!-- pr-hygiene -->';
             if (lines.length) {
-              await github.rest.issues.createComment({
+              const body = `${lines.join('\n')}\n${MARK}`;
+              const existing = (await github.paginate(github.rest.issues.listComments, {
                 owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: pr.number, body: lines.join('\n'),
-              });
+                issue_number: pr.number, per_page: 100,
+              })).find(c => c.body?.includes(MARK));
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  comment_id: existing.id, body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: pr.number, body,
+                });
+              }
             }
             if (over(FAIL) && !hasOverride) {
               core.setFailed(`PR too large: ${nFiles} files / ${nLines} lines`);
