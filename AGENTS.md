@@ -99,19 +99,20 @@ GUARANTEE below), and it is why batching fixes into one push matters.
 Sequence:
 
 1. **Draft PR.** Invisible to Greptile.
-2. **Local `/review` (Cursor) — free.** Bugbot recognises the same diff later and skips
+2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs a different-vendor advisory review pre-push (fills Bugbot's seat — its credits are exhausted). Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate. Full protocol: [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
+3. **Local `/review` (Cursor) — free.** Bugbot recognises the same diff later and skips
    the cloud review, so this tier costs nothing. `.cursor/BUGBOT.md` carries the repo's
    review guide. This is an IDE-side command — agents cannot run it; it is the operator's
    step. **Bugbot does not reliably auto-review DRAFT PRs** (verified on #1563: a
    `bugbot run` comment on a draft produced nothing), so on the draft tier treat local
    `/review` as the Bugbot pass and use `bugbot run` only after marking ready, if wanted.
-3. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
+4. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
    NOT resolve). ~$10/mo flat for 1500 requests, and its reviews are always `COMMENTED`,
    so it can never block a merge.
-4. **Batch the fixes.** Collect every finding, fix once, push once. Fix-push-fix-push
+5. **Batch the fixes.** Collect every finding, fix once, push once. Fix-push-fix-push
    multiplies reviews AND multiplies the chance a fix introduces a new bug — which is
    exactly what happened on #1560.
-5. **Mark ready** → Greptile reviews once, as the final gate → resolve threads → merge.
+6. **Mark ready** → Greptile reviews once, as the final gate → resolve threads → merge.
 
 **THE GUARANTEE — every merge is up-to-date AND reviewed at that exact commit.** This is
 the load-bearing property and it is worth credits:

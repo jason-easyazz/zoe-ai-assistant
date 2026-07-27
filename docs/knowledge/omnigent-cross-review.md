@@ -1,0 +1,75 @@
+---
+type: knowledge
+title: Omnigent cross-review — the in-house advisory review tier
+description: How and when to run polly (Omnigent) cross-reviews of PRs; validated 2026-07-27 on live PRs with a scored A/B; replaces Bugbot's seat and front-runs billed Greptile rounds.
+---
+
+# Omnigent cross-review (polly) — advisory review tier
+
+Adopted 2026-07-27 after a live trial (operator decision). polly — Omnigent's
+claude-sdk agent with the built-in `cross-review` skill — reviews a PR diff with
+an independent, different-vendor sub-agent. It is the in-house replacement for
+Bugbot's seat (credits exhausted) and the pre-push tier that keeps findings from
+becoming billed Greptile rounds.
+
+## When to run it
+
+- **Pre-push (default):** before pushing any substantive diff, run the review,
+  fix findings, push ONCE. Findings caught here never become billed review
+  rounds or blocking threads.
+- **Post-open (advisory):** on an open PR while the gate runs. The report stays
+  in the Omnigent session — never copied into PR threads.
+- **Not** wired into `greptile-gate.yml`, and it must stay that way: Greptile
+  remains the sole required reviewer; polly is advisory. Greptile is on
+  probation vs polly (log unique catches each way) before any change to that.
+
+## How
+
+```bash
+scripts/maintenance/cross_review.sh <PR#> "<2-4 sentence contract>"
+```
+
+The script creates a session, kicks it (docker-exec — REST cannot start
+claude-sdk sessions), polls to completion, and prints the report. The brief
+goes INLINE via `-p`; staging it as a session comment fails silently.
+
+Rules baked into the brief (keep them if you hand-roll):
+- **Reviewer, never driver:** no pushes, no thread resolution, no GitHub
+  comments, no merges.
+- Contract states what the PR must do, what is out of scope, and that new
+  tests must be able to FAIL.
+- Structured report or explicit CLEAN verdict.
+
+Handling the report:
+- Findings are **hypotheses** — verify each with a negative control
+  (break → red → restore → green) before adopting.
+- Batch all adopted fixes into ONE push (each push triggers a Codex re-review).
+
+## Fail-loudly (the Copilot lesson)
+
+A dead reviewer looks like silence, and silence reads as "clean". The known
+failure signature is a session that ends `idle` almost immediately with zero
+messages (observed 2026-07-27: a silently-failed comment POST). The script
+exits 2 and prints an ALARM for that case — treat exit 2 as an incident, not a
+pass. Standing risk: the container's Claude OAuth expires **2026-08-22**; when
+it does, every kick will die this way.
+
+## Constraints
+
+- ONE polly worker at a time repo-wide (RAM discipline on the box).
+- debby (`debate` skill) is for design-level disputes, not diff review.
+
+## Validation record (2026-07-27)
+
+Live trial: 4 real findings across 2 PRs (#1575, #1576), zero noise, zero
+boundary violations — including a vacuous-by-construction test assertion that
+had survived the author's own negative control, later independently confirmed
+by Codex. Model A/B on ground-truth diffs (same brief, three OpenRouter
+models): GLM-5.2 best (4 real + 1 novel catch, correct severities);
+MiniMax M3 sharpest single catch but failed report discipline (unusable for
+automation); DeepSeek V4-Pro disciplined but caught least. Pi's default is
+`z-ai/glm-5.2` (rollback: `config.yaml.bak-minimax` in the zoe-omnigent
+container). Raw scorecard: session records, 2026-07-27.
+
+No single model caught everything — the union of two vendors covered all known
+defects. That is the argument for cross-vendor review in one sentence.
