@@ -512,7 +512,12 @@ def resolve_min_mem(stt: str) -> int:
     """Memory floor for a run, by STT mode. ZOE_VOICE_PROBE_MIN_MEM_MB always wins."""
     env_min = os.environ.get("ZOE_VOICE_PROBE_MIN_MEM_MB")
     if env_min:
-        return int(env_min)
+        try:
+            return int(env_min)
+        except ValueError:
+            # Operator-facing config: name the bad value instead of a bare traceback.
+            raise SystemExit(
+                f"ZOE_VOICE_PROBE_MIN_MEM_MB={env_min!r} is not an integer (MB)")
     return 700 if stt == "remote" else 1500
 
 

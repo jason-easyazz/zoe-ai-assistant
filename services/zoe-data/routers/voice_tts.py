@@ -2218,9 +2218,16 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
     logger.info("STT_CAPTURE file=%s moonshine=%r", dst, (primary or "")[:90])
 
 
-async def _transcribe_audio(wav_path: str) -> str:
+async def _transcribe_audio(wav_path: str, capture: bool = True) -> str:
     text = await _transcribe_audio_impl(wav_path)
-    await _maybe_capture_stt(wav_path, text)
+    # capture=False for instrument callers (replay- panel ids): the replay gate
+    # POSTs EXISTING corpus WAVs through here, and recapturing them fed the
+    # corpus duplicates of its own newest samples — 62 byte-identical copies in
+    # one day of gate runs (quarantine-replay-dups-20260727), a feedback loop
+    # where the nightly "newest 20" becomes replays of replays. Caught by Codex
+    # on #1572. Real user turns keep capturing unconditionally.
+    if capture:
+        await _maybe_capture_stt(wav_path, text)
     return text
 
 
@@ -2252,7 +2259,7 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
     return ""
 
 
-def _suppress_ui_broadcast(panel_id: str) -> bool:
+def _suppress_ui_broadcast(panel_id: Optional[str]) -> bool:
     """True for callers whose STT must NOT touch the panels.
 
     The replay harness (tests/replay_samples.py --stt remote) transcribes real
@@ -2297,7 +2304,8 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
         t_stt_start = time.monotonic()
         try:
-            text = await _transcribe_audio(wav_path)
+            text = await _transcribe_audio(
+                wav_path, capture=not _suppress_ui_broadcast(panel_id))
         finally:
             try:
                 os.unlink(wav_path)

@@ -144,8 +144,9 @@ def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
     kiosks filter on panel_id and they do not (websocket-sync.js reacts to every
     voice event unconditionally; Copilot caught the unverified claim), so without
     the server-side guard a nightly gate run would poke the house panels 20 times.
-    Auth follows the zoe_latency_probe convention: ZOE_DEVICE_TOKEN from the
-    environment only, never a CLI flag.
+    Auth follows the zoe_latency_probe convention: ZOE_DEVICE_TOKEN (with
+    DEVICE_TOKEN as the fallback name, matching that probe) from the environment
+    only, never a CLI flag.
     """
     import base64 as _b64
     import urllib.request as _rq
@@ -276,7 +277,15 @@ async def _run(args) -> int:
         if reply:
             rec["reply"] = reply
             rec["spoken"] = _clean_for_speech(reply)
-        verdict = _classify(transcript, reply or "", outcome)
+        # An STT failure is an ERROR, never an EMPTY: EMPTY means "the recording is
+        # silence" and is excluded from the gate's denominator, so collapsing HTTP/
+        # auth/timeout failures into it would let a half-dead endpoint quietly
+        # shrink the corpus instead of failing the gate (Codex P1 on #1572). ERROR
+        # counts toward `fail`, so a dead remote = a loud red run.
+        if rec.get("stt_error"):
+            verdict = "ERROR"
+        else:
+            verdict = _classify(transcript, reply or "", outcome)
         rec["verdict"] = verdict
         counts[verdict] = counts.get(verdict, 0) + 1
         rows.append(rec)
