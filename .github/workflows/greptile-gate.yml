@@ -372,9 +372,17 @@ jobs:
               const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
 
               if (alreadyHandedOff) {
-                // Already handed off on this head. Only act if it has REGRESSED — then the
-                // label is a false claim and must go; it will be re-applied once the
-                // condition clears.
+                // Handed off, but is Greptile actually COMING? If the post-label summon
+                // failed (ok() swallows transient errors; the job can die between label
+                // and comment), the label+marker persist and no later sweep would ever
+                // re-summon — labeled-but-never-reviewed forever (Codex P1, #1577). A
+                // missing Greptile Review check-run for this head means the review has
+                // not started: re-post the summon. Idempotent once the review exists.
+                // (re-summon decision moved BELOW the fresh-conditions read — Codex:
+                // summoning before revalidating could spend a review on a head that
+                // has already regressed and is about to have its label revoked.)
+                // Only act on the label if the PR has REGRESSED — then the label is a
+                // false claim and must go; it will be re-applied once the condition clears.
                 // Re-read first: `qualifies` above was computed BEFORE the summon calls, and
                 // a check that went red or a thread opened in that window is exactly the
                 // regression this branch exists to catch. Deciding not to revoke from
@@ -391,6 +399,46 @@ jobs:
                 if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
                 const stillOk = now.checksOk && copilotPasses(now.reviewedHead) &&
                                 codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
+                if (stillOk) {
+                  // Still green: is Greptile actually COMING? A swallowed post-label
+                  // summon failure leaves label+marker with no review ever starting
+                  // (Codex P1); re-post the summon only now that the fresh read says
+                  // the handoff is still deserved. Idempotent once the review exists.
+                  // A LIVE run = pending, or completed without an infra-death. A run
+                  // that concluded cancelled/timed_out/stale is DEAD for this immutable
+                  // head and must not block a re-summon forever (Codex); a completed
+                  // failure/success is a real review verdict and does.
+                  const DEAD = ['cancelled', 'timed_out', 'stale'];
+                  const gLive = await ok(`PR #${pr.number} greptile check`, () =>
+                    github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
+                      .then(rs => rs.filter(c => c.name === 'Greptile Review'
+                                              && !(c.status === 'completed' && DEAD.includes(c.conclusion))).length));
+                  // Debounce: Greptile takes real time to CREATE its check run after a
+                  // summon; every event in that gap would re-enter this branch and post
+                  // another summon (Codex). A trusted summon comment younger than
+                  // 10 minutes means one is already in flight.
+                  // Debounce PER HEAD (Greptile P1): a PR-wide match let the OLD
+                  // head's summon suppress the NEW head's, leaving a fresh push
+                  // unreviewed for up to the debounce window. Gate-posted summons
+                  // carry a sha marker; only a fresh summon FOR THIS SHA debounces.
+                  const summonMark = `<!-- greptile-gate:summon:${sha} -->`;
+                  const recentSummon = comments.some(c =>
+                    trusted(c) && (c.body || '').includes(summonMark) &&
+                    (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
+                  if (gLive === null) {
+                    // Fail-closed with an HONEST log (Greptile P1: the old message
+                    // claimed a live run existed): unreadable is not knowledge, no
+                    // summon this sweep; every later event and the 30-min schedule
+                    // re-enter this branch and retry the read.
+                    core.warning(`PR #${pr.number}: could not read Greptile runs — retrying next sweep`);
+                  } else if (gLive === 0 && !recentSummon) {
+                    const re = await ok(`PR #${pr.number} re-summon Greptile`, () =>
+                      github.rest.issues.createComment({
+                        ...base, issue_number: pr.number, body: `@greptileai review\n${summonMark}`,
+                      }));
+                    if (re) core.info(`PR #${pr.number}: handed off but no live Greptile run — re-summoned`);
+                  }
+                }
                 if (!stillOk) {
                   const r = await ok(`PR #${pr.number} revoke label`, () =>
                     github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
@@ -452,6 +500,39 @@ jobs:
 
               const applied = await ok(`PR #${pr.number} addLabel`, () =>
                 github.rest.issues.addLabels({ ...base, issue_number: pr.number, labels: [LABEL] }));
-              if (applied) core.notice(`PR #${pr.number}: cheap tier green, branch current, threads clear — handing off to Greptile.`);
+              if (applied) {
+                core.notice(`PR #${pr.number}: cheap tier green, branch current, threads clear — handing off to Greptile.`);
+                // MEASURED on the pipeline's first autonomous run (#1575, 2026-07-27):
+                // the label alone does NOT wake Greptile — 12 labeled minutes, no
+                // review. The label admits the PR through the dashboard filter; the
+                // summon is what starts the review.
+                // But NOT unconditionally (Codex): after a regress-then-clear cycle on
+                // the SAME sha, a Greptile run already exists for this head, and a
+                // fresh summon would bill a re-review of a reviewed diff. Same
+                // live-run rule as the handed-off branch.
+                const DEAD2 = ['cancelled', 'timed_out', 'stale'];
+                const gLive2 = await ok(`PR #${pr.number} greptile run check`, () =>
+                  github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
+                    .then(rs => rs.filter(c => c.name === 'Greptile Review'
+                                            && !(c.status === 'completed' && DEAD2.includes(c.conclusion))).length));
+                // Same debounce as the handed-off branch (Codex): a revoke-then-
+                // recover inside Greptile's check-creation gap would otherwise
+                // double-summon — gLive2 is 0 precisely while the first summon is
+                // still being processed.
+                const summonMark2 = `<!-- greptile-gate:summon:${sha} -->`;
+                const recentSummon2 = comments.some(c =>
+                  trusted(c) && (c.body || '').includes(summonMark2) &&
+                  (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
+                if (gLive2 === null) {
+                  core.warning(`PR #${pr.number}: could not read Greptile runs — label applied, summon retries next sweep`);
+                } else if (gLive2 === 0 && !recentSummon2) {
+                  await ok(`PR #${pr.number} summon Greptile`, () =>
+                    github.rest.issues.createComment({
+                      ...base, issue_number: pr.number, body: `@greptileai review\n${summonMark2}`,
+                    }));
+                } else if (gLive2 !== 0) {
+                  core.info(`PR #${pr.number}: live Greptile run already exists for this head — label re-applied without a fresh summon`);
+                }
+              }
               else core.warning(`PR #${pr.number}: marker posted but label failed — will retry next run`);
             }

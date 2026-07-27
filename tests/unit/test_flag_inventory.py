@@ -215,3 +215,58 @@ def test_typed_delegator_wrappers_count_as_typed(tmp_path):
     rows = {**data["flags"]["prod"], **data["flags"]["lab"]}
     assert rows["ZOE_TD_A"]["typed_env"] is True, "bare delegator must count as typed"
     assert rows["ZOE_TD_B"]["typed_env"] is False, "wrapper with own logic must stay untyped"
+
+
+def test_wrapper_delegating_to_typed_env_records_a_typed_read(tmp_path):
+    """A local wrapper whose body returns a typed_env call is a TYPED read;
+    a wrapper reading os.environ raw is not (Greptile P1, #1575 — recording
+    delegating wrappers as untyped misreported typed-env adoption)."""
+    (tmp_path / "m.py").write_text(
+        "def _env_float(name, default):\n"
+        "    return env_float(name, default)\n"
+        "def _env_flag(name, default):\n"
+        "    raw = os.environ.get(name)\n"
+        "    return default if raw is None else raw == '1'\n"
+        "A = _env_float(\"ZOE_TYPED_WRAP\", 4.0)\n"
+        "B = _env_flag(\"ZOE_RAW_WRAP\", True)\n"
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    flat = {**data["flags"]["prod"], **data["flags"]["lab"]}
+    assert flat["ZOE_TYPED_WRAP"]["typed_env"] is True
+    assert flat["ZOE_RAW_WRAP"]["typed_env"] is False
+
+
+def test_non_forwarding_wrapper_is_not_a_delegator(tmp_path):
+    """A wrapper returning a typed call that IGNORES its name parameter must not
+    classify as a delegator — its callers' first args are not the flags being
+    read (Codex, #1577)."""
+    (tmp_path / "m.py").write_text(
+        "def enabled(label):\n"
+        "    return env_str(\"SOME_FIXED_KEY\")\n"
+        "E = enabled(\"ZOE_NOT_ACTUALLY_READ\")\n"
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    flat = {**data["flags"]["prod"], **data["flags"]["lab"]}
+    # the wrapper reads SOME_FIXED_KEY (non-ZOE, filtered); ZOE_NOT_ACTUALLY_READ
+    # is never an env read at all and must not appear
+    assert "ZOE_NOT_ACTUALLY_READ" not in flat, flat.keys()
+
+
+def test_nested_delegator_name_collision_does_not_type_the_raw_wrapper(tmp_path):
+    """The discriminating nested-def case is a NAME COLLISION (Codex, #1577 —
+    the earlier test passed even without the fix): a nested bare delegator
+    named like a raw module-level wrapper must not type reads through the raw
+    one. Module-level functions only may register as delegators."""
+    (tmp_path / "m.py").write_text(
+        "def outer(name):\n"
+        "    def _env_int(name):\n"        # nested BARE delegator, colliding name
+        "        return env_int(name, 0)\n"
+        "    return _env_int(name)\n"
+        "def _env_int(name, default):\n"   # module-level RAW wrapper, same name
+        "    raw = os.environ.get(name)\n"
+        "    return default if raw is None else int(raw)\n"
+        "A = _env_int(\"ZOE_RAW_COLLIDE\", 3)\n"
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    flat = {**data["flags"]["prod"], **data["flags"]["lab"]}
+    assert flat["ZOE_RAW_COLLIDE"]["typed_env"] is False, flat["ZOE_RAW_COLLIDE"]
