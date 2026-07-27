@@ -293,46 +293,41 @@ jobs:
                 else core.warning(`PR #${pr.number}: could NOT request Copilot — holding until it reviews or the grace elapses`);
               }
 
-              // Grace anchor for Copilot: the GraphQL review-request leaves no timestamped
-              // artifact, so post the same trusted-marker pattern Codex uses. Posted when
-              // this head has neither a Copilot review nor a marker — INDEPENDENT of the
-              // requested_reviewers state, because a pending request with no marker would
-              // otherwise never start the clock.
-              const copilotMark = `<!-- greptile-gate:copilot:${sha} -->`;
-              const copilotSummons = comments.filter(c => c.body?.includes(copilotMark) && trusted(c))
-                                             .sort(byCreated);
-              let copilotSummon = copilotSummons.length ? copilotSummons[copilotSummons.length - 1] : undefined;
-              if (!reviewedHead.has(COPILOT) && !copilotSummon) {
-                const m = await ok(`PR #${pr.number} copilot marker`, () =>
+              // ONE trusted grace anchor for BOTH bounded waits: a marker comment this
+              // workflow posts the first time it observes a head still missing a
+              // reviewer. Its created_at is GITHUB-SERVER time — unlike the head
+              // commit's committer date, which is contributor-controlled and would let
+              // a backdated commit skip the grace instantly (or a future-dated one
+              // wait forever). Same bot-only trust rule as the handoff marker.
+              const observedMark = `<!-- greptile-gate:observed:${sha} -->`;
+              const observedMarks = comments.filter(c => c.body?.includes(observedMark) && trusted(c))
+                                            .sort(byCreated);
+              let observed = observedMarks.length ? observedMarks[observedMarks.length - 1] : undefined;
+              if (!observed && (!reviewedHead.has(COPILOT) || !reviewedHead.has(CODEX))) {
+                const m = await ok(`PR #${pr.number} observed marker`, () =>
                   github.rest.issues.createComment({
                     ...base, issue_number: pr.number,
-                    body: `Waiting for Copilot on \`${sha.slice(0, 8)}\` (bounded ${COPILOT_GRACE_MIN}min).\n${copilotMark}`,
+                    body: `Waiting for automated reviews on \`${sha.slice(0, 8)}\` (bounded).\n${observedMark}`,
                   }));
-                if (m) copilotSummon = m.data;
+                if (m) observed = m.data;
               }
+              const graceMinutes = observed
+                ? (Date.now() - new Date(observed.created_at)) / 60000
+                : 0;
 
               // Codex runs AUTOMATICALLY on every push (operator config, 2026-07-27) —
-              // the gate no longer summons it. The old `@codex review` comment would now
-              // trigger a SECOND, redundant billed run per head on top of the automatic
-              // one. The bounded wait remains, anchored to the HEAD COMMIT's own
-              // timestamp: push starts Codex, so commit age is the natural grace clock,
-              // and no marker comment is needed at all. Unreadable commit -> grace never
-              // elapses (fail toward waiting; the cron re-tries).
-              const headCommitAt = await ok(`PR #${pr.number} head commit`, () =>
-                github.rest.repos.getCommit({ ...base, ref: sha })
-                  .then(r => r.data.commit?.committer?.date || r.data.commit?.author?.date));
-              const graceElapsed = headCommitAt
-                ? (Date.now() - new Date(headCommitAt)) / 60000 >= CODEX_GRACE_MIN
-                : false;
+              // the gate no longer summons it (the old `@codex review` comment would now
+              // trigger a second billed run per head). Its bounded wait anchors to the
+              // shared observed marker above — server-timestamped, not the contributor-
+              // controlled commit date.
+              const graceElapsed = graceMinutes >= CODEX_GRACE_MIN;
               const codexPasses = (rh) => rh.has(CODEX) || graceElapsed;
               const codexOk = codexPasses(reviewedHead);
               if (codexOk && !reviewedHead.has(CODEX)) {
                 core.info(`PR #${pr.number}: Codex grace elapsed — proceeding`);
               }
 
-              const copilotGraceElapsed = copilotSummon
-                ? (Date.now() - new Date(copilotSummon.created_at)) / 60000 >= COPILOT_GRACE_MIN
-                : false;
+              const copilotGraceElapsed = graceMinutes >= COPILOT_GRACE_MIN;
               const copilotPasses = (rh) => rh.has(COPILOT) || copilotGraceElapsed;
               const copilotOk = copilotPasses(reviewedHead);
               if (copilotOk && !reviewedHead.has(COPILOT)) {
