@@ -59,47 +59,44 @@ def _literal_repr(node: ast.expr | None) -> str:
         return DYNAMIC
 
 
+def _typed_delegators(tree: ast.AST) -> frozenset[str]:
+    """Names of module-local wrappers that are bare delegations to typed_env.
+
+    Matches only the trivial shape ``def w(...): return env_x(...)`` (docstring
+    allowed) — anything with extra logic stays untyped, which errs toward
+    under-counting typed adoption rather than over-counting it.
+    """
+    out = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        body = [st for st in node.body
+                if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant))]
+        # The delegation must FORWARD the wrapper's first parameter as the typed
+        # call's name argument: `def enabled(label): return env_str("FIXED")` is a
+        # bare delegation by shape but reads a name its callers never passed —
+        # classifying it would record their first args as typed flag reads of
+        # names the wrapper ignores (Codex, #1577).
+        params = [a.arg for a in node.args.args]
+        if (params and len(body) == 1 and isinstance(body[0], ast.Return)
+                and isinstance(body[0].value, ast.Call)
+                and _FlagVisitor._call_name(body[0].value.func) in TYPED_ENV_FUNCS
+                and body[0].value.args
+                and isinstance(body[0].value.args[0], ast.Name)
+                and body[0].value.args[0].id == params[0]):
+            out.add(node.name)
+    return frozenset(out)
+
+
 class _FlagVisitor(ast.NodeVisitor):
-    def __init__(self) -> None:
+    def __init__(self, typed_delegators: frozenset[str] = frozenset()) -> None:
         # name -> list of (default_str, via_typed_env)
         self.reads: list[tuple[str, str, bool]] = []
-        # Local wrapper names whose body returns a typed_env call: reads through
-        # them ARE typed reads — voice_tts/_env_int and main/_env_float delegate
-        # to env_int/env_float (Wave-4), and recording those as untyped
-        # misreports typed-env adoption (Greptile P1, #1575). Per-FILE, because
-        # the same name delegates in one module and reads os.environ raw in
-        # another. Filled by a prescan in visit_Module so definition order
-        # relative to call sites cannot matter.
-        self._typed_delegators: set[str] = set()
-
-    def visit_Module(self, node: ast.Module) -> None:
-        for fn in ast.walk(node):
-            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                # The returned typed_env call must FORWARD the wrapper's first
-                # parameter as its name argument — `def enabled(label): return
-                # env_str("FIXED")` is not a delegator, and classifying it as one
-                # would record its callers' first args as typed flag reads of
-                # names the wrapper ignores (Codex, #1577).
-                params = [a.arg for a in fn.args.args]
-                if not params:
-                    continue
-                # Walk WITHOUT descending into nested defs — a nested helper's
-                # return must not classify the OUTER function as a delegator
-                # (Codex, #1577). Manual stack instead of ast.walk.
-                stack = list(fn.body)
-                while stack:
-                    stmt = stack.pop()
-                    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-                        continue
-                    if (isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call)
-                            and self._call_name(stmt.value.func) in TYPED_ENV_FUNCS
-                            and stmt.value.args
-                            and isinstance(stmt.value.args[0], ast.Name)
-                            and stmt.value.args[0].id == params[0]):
-                        self._typed_delegators.add(fn.name)
-                        break
-                    stack.extend(ast.iter_child_nodes(stmt))
-        self.generic_visit(node)
+        # Local wrappers in THIS module whose body is a bare delegation to a
+        # typed_env helper (``def _env_int(n, d): return env_int(n, d)``) —
+        # reads through them ARE typed (Greptile P1 on #1575: voice_tts/main.py
+        # delegators were inflating the untyped count).
+        self._typed_delegators = typed_delegators
 
     @staticmethod
     def _call_name(func: ast.expr) -> str:
@@ -215,7 +212,7 @@ def scan_repo(repo: Path, files: list[str] | None = None) -> dict:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError, OSError):
             continue
-        visitor = _FlagVisitor()
+        visitor = _FlagVisitor(_typed_delegators(tree))
         visitor.visit(tree)
         for flag, default, typed in visitor.reads:
             info = inventory[section].setdefault(
