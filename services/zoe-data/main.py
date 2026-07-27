@@ -959,9 +959,14 @@ async def _run_music_discovery_batch() -> None:
     _script = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..", "..", "scripts", "maintenance", "music_discovery_batch.py"))
-    from async_subprocess import QueueTimeout as _QT
+    from async_subprocess import QueueTimeout as _QT, _env_float as _envf
+    # Scheduled job: no latency budget — wait for a worker rather than skipping
+    # the nightly run because background Hermes happened to hold the pool. The
+    # interactive 30s default exists for user-facing calls, not these.
+    _qwait = _envf("ZOE_SCHEDULED_QUEUE_WAIT_S", 600.0)
     try:
-        proc = await _run_off_loop([_sys.executable, _script], timeout=2400)
+        proc = await _run_off_loop([_sys.executable, _script], timeout=2400,
+                                   queue_timeout=_qwait)
     except _QT:
         # NO child ever started — the subprocess pool was saturated. There is
         # nothing to clean up, and running the recovery below would report a
@@ -975,7 +980,8 @@ async def _run_music_discovery_batch() -> None:
         # have run.
         logger.error("music discovery batch timed out (killed); removing digarr container")
         try:
-            await _run_off_loop(["docker", "rm", "-f", "zoe-digarr-batch"], timeout=120)
+            await _run_off_loop(["docker", "rm", "-f", "zoe-digarr-batch"], timeout=120,
+                                queue_timeout=_qwait)
         except Exception as _rm_exc:
             logger.error("could not remove zoe-digarr-batch after timeout: %s", _rm_exc)
         return
@@ -1011,10 +1017,12 @@ async def _run_router_selftrain() -> None:
     # ON the loop thread, which in this large multi-threaded process can
     # deadlock pre-exec and freeze the whole API — that is the 2026-06-29
     # outage. See services/zoe-data/AGENTS.md.
-    from async_subprocess import QueueTimeout as _QT
+    from async_subprocess import QueueTimeout as _QT, _env_float as _envf
+    _qwait = _envf("ZOE_SCHEDULED_QUEUE_WAIT_S", 600.0)
     try:
         proc = await _run_off_loop(
-            [_sys.executable, _script], env=_env, timeout=_timeout)
+            [_sys.executable, _script], env=_env, timeout=_timeout,
+            queue_timeout=_qwait)
     except _QT:
         # NO child ever started — pool saturated. --recover exists to undo a
         # KILLED training run (brain stopped / GGUF mid-swap); firing it here
@@ -1037,7 +1045,7 @@ async def _run_router_selftrain() -> None:
         try:
             _rec = await _run_off_loop(
                 [_sys.executable, _script, "--recover"],
-                env=_env, timeout=900)
+                env=_env, timeout=900, queue_timeout=_qwait)
             _rtail = (_rec.stdout or b"").decode(errors="replace")[-1500:]
             if _rec.returncode == 0:
                 logger.info("router self-train recovery ok:\n%s", _rtail)
