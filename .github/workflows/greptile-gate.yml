@@ -146,12 +146,29 @@ jobs:
               });
               // listForRef is newest-first, so keeping the last entry per name would keep the
               // OLDEST run and let a stale failure mask a passing re-run.
-              const newest = new Map();
+              // Two traps here, both of which let an OLD success stand in for a NEW run:
+              //   * sorting by started_at alone — a queued/in-progress run can have a null or
+              //     unparsable started_at, so it loses to an older completed one;
+              //   * reading `conclusion` without checking `status` — a run only has a
+              //     meaningful conclusion once it is `completed`.
+              // So: if ANY run for a required check is not completed, the check is still in
+              // flight and we hold. Only when every run has completed do we judge the newest.
+              const byName = new Map();
               for (const c of runs) {
-                const prev = newest.get(c.name);
-                if (!prev || new Date(c.started_at) > new Date(prev.started_at)) newest.set(c.name, c);
+                if (!byName.has(c.name)) byName.set(c.name, []);
+                byName.get(c.name).push(c);
               }
-              const checksOk = REQUIRED_CHECKS.every(n => CHECK_DONE.includes(newest.get(n)?.conclusion));
+              const ts = (c) => {
+                const t = Date.parse(c.completed_at || c.started_at || '');
+                return Number.isNaN(t) ? -1 : t;
+              };
+              const checksOk = REQUIRED_CHECKS.every((n) => {
+                const all = byName.get(n) || [];
+                if (!all.length) return false;                              // never ran
+                if (all.some(c => c.status !== 'completed')) return false;  // still in flight
+                const newest = all.reduce((a, b) => (ts(b) >= ts(a) ? b : a));
+                return CHECK_DONE.includes(newest.conclusion);
+              });
 
               const reviews = await github.paginate(github.rest.pulls.listReviews, {
                 ...base, pull_number: pr.number, per_page: 100,
