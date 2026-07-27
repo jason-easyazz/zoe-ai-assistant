@@ -959,12 +959,13 @@ async def _run_music_discovery_batch() -> None:
     _script = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "..", "..", "scripts", "maintenance", "music_discovery_batch.py"))
-    from async_subprocess import QueueTimeout as _QT, _env_float as _envf
+    from async_subprocess import QueueTimeout as _QT
+    from async_subprocess import _env_float
     # Scheduled job: no latency budget — wait for a worker rather than skipping
     # the nightly run because background Hermes happened to hold the pool. The
     # default must EXCEED a full background runtime (900s): a 600s wait expires
     # before a pool of freshly-started 900s workers can free a single slot.
-    _qwait = _envf("ZOE_SCHEDULED_QUEUE_WAIT_S", 1200.0)
+    _qwait = _env_float("ZOE_SCHEDULED_QUEUE_WAIT_S", 1200.0)
     try:
         proc = await _run_off_loop([_sys.executable, _script], timeout=2400,
                                    queue_timeout=_qwait)
@@ -1018,8 +1019,9 @@ async def _run_router_selftrain() -> None:
     # ON the loop thread, which in this large multi-threaded process can
     # deadlock pre-exec and freeze the whole API — that is the 2026-06-29
     # outage. See services/zoe-data/AGENTS.md.
-    from async_subprocess import QueueTimeout as _QT, _env_float as _envf
-    _qwait = _envf("ZOE_SCHEDULED_QUEUE_WAIT_S", 1200.0)
+    from async_subprocess import QueueTimeout as _QT
+    from async_subprocess import _env_float
+    _qwait = _env_float("ZOE_SCHEDULED_QUEUE_WAIT_S", 1200.0)
     try:
         proc = await _run_off_loop(
             [_sys.executable, _script], env=_env, timeout=_timeout,

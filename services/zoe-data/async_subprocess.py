@@ -123,13 +123,21 @@ class QueueTimeout(subprocess.TimeoutExpired):
 # while the NEW one starts its own. Registered/removed inside the worker thread.
 _LIVE_CHILDREN: "set[subprocess.Popen]" = set()
 _LIVE_CHILDREN_LOCK = threading.Lock()
+# Set when the process begins shutting down: permit waiters and pre-fork checks
+# refuse, so a caller that was queued during the reap cannot spawn a child the
+# snapshot never saw.
+_SHUTTING_DOWN = threading.Event()
 
 
 def _kill_tree(popen: "subprocess.Popen") -> None:
-    """SIGKILL the child's whole process group (it leads one); fall back to
-    killing just the child if the group is already gone."""
+    """SIGKILL the child's whole process group.
+
+    start_new_session=True makes the child a session/group LEADER, so its pid
+    IS the pgid — used directly, because os.getpgid(pid) raises once the leader
+    has been reaped, which silently turned this into a no-op exactly when a
+    surviving descendant was the problem."""
     try:
-        os.killpg(os.getpgid(popen.pid), signal.SIGKILL)
+        os.killpg(popen.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
         with contextlib.suppress(Exception):
             popen.kill()
@@ -141,11 +149,12 @@ def terminate_live_children() -> None:
     atexit runs AFTER that join, by which point communicate() has already
     returned and there is nothing left to kill). The atexit registration below
     stays as a backstop for non-uvicorn exits."""
+    _SHUTTING_DOWN.set()
     with _LIVE_CHILDREN_LOCK:
         children = list(_LIVE_CHILDREN)
     for popen in children:
         with contextlib.suppress(Exception):
-            os.killpg(os.getpgid(popen.pid), signal.SIGTERM)
+            os.killpg(popen.pid, signal.SIGTERM)   # pid == pgid (own session)
         with contextlib.suppress(Exception):
             popen.terminate()
     for popen in children:
@@ -156,6 +165,13 @@ def terminate_live_children() -> None:
             # descendant that ignored SIGTERM still holds the pipes — killpg
             # by saved pgid takes whatever remains of the group, and raises
             # harmlessly if the group is already gone.
+            _kill_tree(popen)
+    # Second sweep: a caller already past the permit gate when the flag was set
+    # may have spawned between snapshot and now. The flag stops any more.
+    with _LIVE_CHILDREN_LOCK:
+        stragglers = [p for p in _LIVE_CHILDREN if p not in children]
+    for popen in stragglers:
+        with contextlib.suppress(Exception):
             _kill_tree(popen)
 
 
@@ -173,6 +189,8 @@ async def _acquire_slot(slots: "threading.BoundedSemaphore", timeout: float) -> 
     """
     deadline = time.monotonic() + timeout
     while True:
+        if _SHUTTING_DOWN.is_set():
+            return False
         if slots.acquire(blocking=False):
             return True
         if time.monotonic() >= deadline:
@@ -333,6 +351,8 @@ async def run_to_completion(
             # semantics (kill on expiry, then re-raise) — the difference is a
             # handle we can register, so a zoe-data shutdown terminates the
             # child instead of orphaning it for the rest of its budget.
+            if _SHUTTING_DOWN.is_set():
+                raise RuntimeError("zoe-data is shutting down — refusing to spawn")
             popen = subprocess.Popen(
                 list(cmd),
                 cwd=cwd,

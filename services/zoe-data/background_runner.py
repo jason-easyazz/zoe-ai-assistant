@@ -366,10 +366,9 @@ def _watchdog_timeout_s() -> float:
     configured = os.environ.get("ZOE_TASK_TIMEOUT_S")
     if configured is None:
         return floor
-    try:
-        value = float(configured)
-    except ValueError:
-        return floor
+    # The hardened parser, not bare float(): NaN defeats the watchdog's cutoff
+    # comparison entirely and inf disables it. Garbage/non-finite -> the floor.
+    value = _env_float("ZOE_TASK_TIMEOUT_S", floor)
     if value < floor:
         logger.warning(
             "ZOE_TASK_TIMEOUT_S=%.0fs is below the background lane's worst case "

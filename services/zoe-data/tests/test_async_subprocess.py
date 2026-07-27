@@ -225,13 +225,13 @@ async def test_queue_wait_is_bounded_separately_from_runtime(narrow_pool):
     try:
         await asyncio.sleep(0.5)  # every worker occupied
         spawned = []
-        real_run = async_subprocess.subprocess.run
+        real_popen = async_subprocess.subprocess.Popen
 
         def _spy(*a, **k):
             spawned.append(a[0])
-            return real_run(*a, **k)
+            return real_popen(*a, **k)
 
-        async_subprocess.subprocess.run = _spy
+        async_subprocess.subprocess.Popen = _spy
         try:
             started = asyncio.get_running_loop().time()
             with pytest.raises(subprocess.TimeoutExpired):
@@ -240,7 +240,7 @@ async def test_queue_wait_is_bounded_separately_from_runtime(narrow_pool):
                 )
             waited = asyncio.get_running_loop().time() - started
         finally:
-            async_subprocess.subprocess.run = real_run
+            async_subprocess.subprocess.Popen = real_popen
         # Gave up on the WAIT (~1s), not after the 900s runtime budget...
         assert waited < 5, f"queue wait not bounded: {waited:.1f}s"
         # ...and nothing forked, so no child was orphaned by giving up.
@@ -499,13 +499,18 @@ async def test_shutdown_terminates_registered_children():
     assert len(live) == 1, "child not registered while running"
     popen = live[0]
 
-    mod._terminate_live_children()          # what atexit runs at shutdown
-    assert popen.poll() is not None, "child survived shutdown"
+    try:
+        mod._terminate_live_children()      # what atexit runs at shutdown
+        assert popen.poll() is not None, "child survived shutdown"
 
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
-    with mod._LIVE_CHILDREN_LOCK:
-        assert popen not in mod._LIVE_CHILDREN
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        with mod._LIVE_CHILDREN_LOCK:
+            assert popen not in mod._LIVE_CHILDREN
+    finally:
+        # In prod the process is dying; in a SUITE the flag would poison every
+        # later run_to_completion with "refusing to spawn".
+        mod._SHUTTING_DOWN.clear()
 
 
 @pytest.mark.asyncio

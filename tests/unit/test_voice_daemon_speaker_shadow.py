@@ -178,13 +178,9 @@ def test_handle_is_unique_across_restarts_without_reading_the_log(daemon, monkey
 # ── one spoken turn must produce exactly one row ────────────────────────────
 
 def test_stream_fallback_does_not_double_log_the_turn(daemon, monkeypatch, shadow_log):
-    """The stream path scores, then falls back — it must not score twice.
-
-    `_do_single_turn_stream` computes a claim, and on error hands the turn to
-    `_do_single_turn`. If that re-scored, one utterance would append two JSONL
-    rows and two journal lines, inflating the shadow-week counts and giving a
-    single turn two seqs — which is exactly what the per-seq labelling can't
-    survive.
+    """The REAL fallback path: _do_single_turn with a handed-over claim must not
+    re-score, and with the sentinel it must. Exercises the actual function, not
+    its signature — a signature assertion passed even if the forwarding broke.
     """
     monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
     monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
@@ -197,27 +193,30 @@ def test_stream_fallback_does_not_double_log_the_turn(daemon, monkeypatch, shado
 
     monkeypatch.setattr(daemon, "_identify_speaker_from_wav", _score)
 
-    # 1. The stream path scores this turn — one row, one scoring call.
-    claim = daemon._speaker_claim_for_turn(b"same-wav")
-    assert len(_rows(shadow_log)) == 1
-    assert len(scored) == 1
+    # The turn's HTTP post runs in an internal thread that swallows errors into
+    # the espeak fallback, so a failing _api_post cleanly ends the turn after
+    # the scoring branch — which is all this test needs. Silence the audio
+    # fallback so nothing tries the sound device.
+    monkeypatch.setattr(daemon, "_api_post",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("stop")))
+    monkeypatch.setattr(daemon.subprocess, "run",
+                        lambda *a, **k: type("P", (), {"returncode": 0})())
+    monkeypatch.setattr(daemon.subprocess, "Popen",
+                        lambda *a, **k: type("P", (), {"returncode": 0, "wait": lambda self, *aa, **kk: 0, "poll": lambda self: 0, "kill": lambda self: None, "communicate": lambda self, *aa, **kk: (b"", b"")})())
 
-    # 2. The fallback re-enters _do_single_turn with that claim. Reproduce the
-    #    scoring branch exactly as the fallback reaches it: an explicit claim
-    #    must short-circuit re-scoring, so no second row and no second call.
-    sig = inspect.signature(daemon._do_single_turn)
-    assert sig.parameters["voice_claim"].default is daemon._CLAIM_UNSET
+    # 1. Stream path scores the turn (shadow row written), then "fails".
+    claim = daemon._speaker_claim_for_turn(b"wav")
+    assert claim is None and len(scored) == 1 and len(_rows(shadow_log)) == 1
 
-    handed_over = claim  # None in shadow mode — must still count as "scored"
-    if handed_over is daemon._CLAIM_UNSET:  # pragma: no cover - guard the guard
-        raise AssertionError("fallback would re-score")
-    assert len(_rows(shadow_log)) == 1, "one spoken turn wrote two shadow rows"
-    assert len(scored) == 1, "one spoken turn was scored twice"
+    # 2. Fallback hands the claim over — the scoring branch must NOT run again.
+    daemon._do_single_turn(None, b"wav", voice_claim=claim)
+    assert len(scored) == 1, "fallback re-scored a handed-over claim"
+    assert len(_rows(shadow_log)) == 1, "fallback wrote a second shadow row"
 
-    # 3. And the sentinel path still scores when nobody hands a claim over.
-    daemon._speaker_claim_for_turn(b"another-wav")
+    # 3. Sentinel (no claim handed over) — scoring MUST run.
+    daemon._do_single_turn(None, b"wav")
+    assert len(scored) == 2, "sentinel path failed to score"
     assert len(_rows(shadow_log)) == 2
-    assert len(scored) == 2
 
 
 def test_torn_tail_does_not_fuse_rows(daemon, monkeypatch, shadow_log):
