@@ -152,10 +152,24 @@ The practical cost is already neutralised without touching the brain:
 Dropping this plan is a legitimate outcome. The router already covers the
 user-visible path.
 
-## 9. Open question
+## 9. Resolved: where `memory_store` comes from
 
-`memory_store` has **no producer in the checkout.** `abilities/_dispatch.ts` is
-the only caller of `/api/system/intent-dispatch`, and none of the abilities emit
-`memory_store`; `pi list` reports no installed packages. Yet a captured failure
-shows it dispatched. Resolve this before trusting any model of what the brain
-was choosing between — the tool set may not be what it appears.
+Originally filed here as an open question — `abilities/_dispatch.ts` emits no
+`memory_store` and `pi list` reports no installed packages, yet a captured
+failure dispatched it. **Answered by review (2026-07-27):** `_dispatch.ts` is
+the main *zoe-core* caller of `/api/system/intent-dispatch`, not the only caller
+in the repo. The Flue brain has its own tool registry:
+
+    labs/flue-zoe-brain/src/tools/zoe-tools.ts:53
+      remember_fact → memory_store {text}   (Wave 3, fulfilled via MemoryService.ingest)
+
+So the competing tool is **`remember_fact`** — "store a durable fact about the
+user in long-term memory" — which is a genuinely reasonable reading of *"Add
+bread to my shopping list."* It is not a spurious dispatch.
+
+**Consequence for Phase 1:** the brain's tool set is NOT the zoe-core abilities
+list. Enumerate what the running brain actually offers before building a
+reproducer, or the reproducer will pose an easier choice than production does —
+which is exactly how the synthetic harnesses in §3 scored 100% while the real
+path flaked. (`ZOE_BRAIN_BACKEND=flue` is the live backend, so Flue's registry
+is the one that matters.)

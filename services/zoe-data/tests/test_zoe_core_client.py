@@ -108,7 +108,9 @@ _FAILURE_LOG = Path(
 )
 
 
-def _record_nondeterministic_failure(test: str, *, dispatches: list, **detail: Any) -> None:
+def _record_nondeterministic_failure(
+    test: str, *, dispatches: list[dict[str, Any]], **detail: Any
+) -> None:
     """Append one live-model failure to a durable log. Never fails the test.
 
     These tests assert what the live brain CHOSE, so a failure's only real value
@@ -335,7 +337,10 @@ async def test_tool_action_dispatches(stub):
     """
     s, zc = stub
     await zc.run_zoe_core("Add bread to my shopping list.", "s2", "family-admin")
-    intents = [d.get("intent") for d in s.dispatches()]
+    # Snapshot once: reading the stub twice could log a different payload than
+    # the one asserted on, which is exactly the evidence this records.
+    dispatches = s.dispatches()
+    intents = [d.get("intent") for d in dispatches]
     if "list_add" not in intents:
         # PERSIST the losing choice before asserting: console output kept
         # truncating it away. The first capture (2026-07-27) showed
@@ -346,7 +351,7 @@ async def test_tool_action_dispatches(stub):
             "test_tool_action_dispatches",
             prompt="Add bread to my shopping list.",
             expected="list_add",
-            dispatches=s.dispatches(),
+            dispatches=dispatches,
             requests=s.requests,
         )
     assert "list_add" in intents, f"no list_add; got {intents}"
