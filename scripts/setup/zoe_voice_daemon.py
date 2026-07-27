@@ -117,8 +117,13 @@ VAD_ENDPOINT_THRESHOLD = float(os.environ.get("VAD_ENDPOINT_THRESHOLD", "0.35"))
 # tolerates longer pauses). 0 (the default) disables the fast tail entirely:
 # behaviour is byte-identical to before the flag existed, so deploying this
 # code is a no-op until the operator stages the flag on the Pi.
-ZOE_VAD_TAIL_MS = int(os.environ.get("ZOE_VAD_TAIL_MS", "0"))
-ZOE_VAD_TAIL_DEEP_PROB = float(os.environ.get("ZOE_VAD_TAIL_DEEP_PROB", "0.10"))
+# _int_env, not int(): a malformed value (ZOE_VAD_TAIL_MS=off) must fall back
+# to disabled, never crash the daemon at import and take the panel's voice down.
+ZOE_VAD_TAIL_MS = _int_env("ZOE_VAD_TAIL_MS", 0)
+try:
+    ZOE_VAD_TAIL_DEEP_PROB = float(os.environ.get("ZOE_VAD_TAIL_DEEP_PROB") or 0.10)
+except ValueError:
+    ZOE_VAD_TAIL_DEEP_PROB = 0.10
 # Default 0.28 — 0.35 misses many real mics/rooms; tune via WAKEWORD_THRESHOLD.
 WAKEWORD_THRESHOLD = float(_env("WAKEWORD_THRESHOLD", "0.28", "OWW_THRESHOLD"))
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no")
