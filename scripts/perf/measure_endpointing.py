@@ -29,6 +29,15 @@ Two axes, both with ground truth by construction:
 Streams are built by concatenating real corpus utterances (~/.zoe-voice-samples) with
 known silence gaps, so the correct answer is known exactly rather than annotated.
 
+One caveat when measuring the deep-quiet fast tail (--tail-flag-ms): the inserted
+gaps are digital zeros, which Silero scores ~0.02 — maximally "deep". Real
+mid-utterance pauses score higher (corpus 2026-07-27: internal-pause prob p90
+median 0.179 vs 0.062 for true end-of-turn silence), so the false-cut table is a
+WORST CASE for the deep-gated mode: it shows the fast tail as if every real pause
+were as silent as a wire with no mic on it. The `natural_cuts` counter (closures
+during a real utterance's own internal pauses, no synthetic gap involved) is the
+realistic complement.
+
 IT TESTS THE SHIPPED FILE. `scripts/setup/zoe_voice_daemon.py` imports pyaudio at
 module scope and cannot be imported off the Pi, so this loads the real source with the
 Pi-only modules stubbed. That is deliberate: a harness that tests a COPY of the
@@ -39,6 +48,8 @@ Examples:
     python3 scripts/perf/measure_endpointing.py --samples 40 --json out.json
     # negative control — prove the probe can go red:
     python3 scripts/perf/measure_endpointing.py --vad-silence-s 0.1
+    # before/after for the deep-quiet fast tail (ZOE_VAD_TAIL_MS):
+    python3 scripts/perf/measure_endpointing.py --tail-flag-ms 640
 """
 from __future__ import annotations
 
@@ -66,8 +77,36 @@ CORPUS = Path.home() / ".zoe-voice-samples"
 _STUB_MODULES = ("pyaudio", "openwakeword", "openwakeword.model")
 
 
+def _stub_torchaudio_if_missing() -> None:
+    """Let the REAL Silero model load on boxes without torchaudio (the Jetson).
+
+    torch.hub refuses to load silero-vad unless `torchaudio` is importable, but
+    the endpointer only ever calls `model(tensor, sr)` — torchaudio is used solely
+    by silero's read_audio/save_audio helpers, which this probe never touches
+    (WAVs are read with the stdlib `wave` module). Without this, the probe on the
+    Jetson silently measured the LEGACY amplitude path while claiming to probe the
+    live VAD lane. The stub is installed ONLY when torchaudio is genuinely absent,
+    so on the Pi (where it exists) the real module is untouched, and it persists
+    for the whole process because Silero loads lazily, after load_daemon returns.
+    """
+    import importlib.machinery
+    import importlib.util
+    try:
+        if importlib.util.find_spec("torchaudio") is not None:
+            return
+    except (ImportError, ValueError):
+        pass
+    stub = types.ModuleType("torchaudio")
+    # A real ModuleSpec is required: torch.hub's dependency check calls
+    # find_spec(), which raises on a module whose __spec__ is None.
+    stub.__spec__ = importlib.machinery.ModuleSpec("torchaudio", loader=None)
+    stub.__version__ = "0.0.0-probe-stub"
+    sys.modules["torchaudio"] = stub
+
+
 def load_daemon(source: Path = DAEMON) -> types.ModuleType:
     """Execute the real daemon source with Pi-only imports stubbed."""
+    _stub_torchaudio_if_missing()
     saved = {name: sys.modules.get(name) for name in _STUB_MODULES}
     for name in _STUB_MODULES:
         stub = types.ModuleType(name)
@@ -188,6 +227,7 @@ def measure(mod: types.ModuleType, samples: list[np.ndarray], gaps_ms: list[int]
             tail_ms: int, rate: int, chunk: int) -> dict[str, Any]:
     tails: list[float] = []
     never_closed = 0
+    natural_cuts = 0
     for utt in samples:
         stream = np.concatenate([utt, silence(tail_ms, rate)])
         closed = run_stream(mod, stream, chunk)
@@ -199,8 +239,16 @@ def measure(mod: types.ModuleType, samples: list[np.ndarray], gaps_ms: list[int]
             # even look like a long wait). Count it and keep it out of the stat.
             never_closed += 1
             continue
+        if closed < len(utt):
+            # Closed DURING the utterance: a real command's own internal pause
+            # tripped the endpointer, with no synthetic gap involved. This is a
+            # said-vs-did failure, not a tail value — the old max(...,0) folded
+            # it into `tails` as a flattering 0ms, hiding exactly the regression
+            # a shorter tail would introduce. Count it separately.
+            natural_cuts += 1
+            continue
         # Wait measured from the END OF SPEECH, which is known by construction.
-        tails.append(1000.0 * max(closed - len(utt), 0) / rate)
+        tails.append(1000.0 * (closed - len(utt)) / rate)
 
     false_cuts: dict[str, dict[str, Any]] = {}
     for gap in gaps_ms:
@@ -229,6 +277,7 @@ def measure(mod: types.ModuleType, samples: list[np.ndarray], gaps_ms: list[int]
         # Surfaced, never hidden: a high never_closed count means the tail median
         # is computed over a SUBSET, and the reader has to know that.
         "never_closed": never_closed,
+        "natural_cuts": natural_cuts,
         "tail_scored": len(tails),
         "tail_ms": {
             "median": round(statistics.median(tails), 1) if tails else None,
@@ -248,6 +297,11 @@ def main() -> int:
     ap.add_argument("--gaps", default="200,400,600,800", help="mid-utterance pause lengths (ms)")
     ap.add_argument("--tail-ms", type=int, default=3000, help="trailing silence appended to each stream")
     ap.add_argument("--vad-silence-s", type=float, help="override VAD_ENDPOINT_SILENCE_S (negative control)")
+    ap.add_argument("--tail-flag-ms", type=int,
+                    help="set ZOE_VAD_TAIL_MS — measure the deep-quiet fast tail (0 = flag off, "
+                         "which must reproduce the flagless baseline exactly)")
+    ap.add_argument("--tail-deep-prob", type=float,
+                    help="set ZOE_VAD_TAIL_DEEP_PROB (deep-silence threshold for the fast tail)")
     ap.add_argument("--silence-timeout-s", type=float,
                     help="override SILENCE_TIMEOUT_S — the amplitude-mode knob (negative control)")
     ap.add_argument("--amplitude-mode", action="store_true",
@@ -276,6 +330,23 @@ def main() -> int:
         # it moved rather than editing the shipped file.
         mod.VAD_ENDPOINT_SILENCE_S = args.vad_silence_s
         print(f"[negative control] VAD_ENDPOINT_SILENCE_S -> {args.vad_silence_s}s")
+    if args.tail_flag_ms is not None:
+        # Same patch-the-global route the env flag takes at daemon import, so the
+        # probe exercises the identical code path the Pi will run with the flag set.
+        mod.ZOE_VAD_TAIL_MS = args.tail_flag_ms
+        print(f"ZOE_VAD_TAIL_MS -> {args.tail_flag_ms}ms")
+    if args.tail_deep_prob is not None:
+        mod.ZOE_VAD_TAIL_DEEP_PROB = args.tail_deep_prob
+        print(f"ZOE_VAD_TAIL_DEEP_PROB -> {args.tail_deep_prob}")
+        # The instrument DELIBERATELY bypasses the daemon's clamp — negative
+        # controls need to measure configurations production refuses. But a
+        # measurement of a config prod would clamp must SAY so, or the number
+        # gets shipped as if it were reachable (Codex, #1573).
+        if not (0.0 < args.tail_deep_prob < mod.VAD_ENDPOINT_THRESHOLD):
+            print(f"WARNING: {args.tail_deep_prob} is outside (0, "
+                  f"{mod.VAD_ENDPOINT_THRESHOLD}) — the DAEMON WOULD CLAMP this "
+                  f"to its default; this measurement is a negative control, not "
+                  f"a deployable configuration.")
 
     _is_speech = speech_predicate(mod, chunk)
     files = sorted(args.corpus.glob("*.wav"))[-args.samples * 4:]
@@ -314,7 +385,8 @@ def main() -> int:
     t = result["tail_ms"]
     print(f"  tail after speech ends : median={t['median']}ms  p90={t['p90']}ms  max={t['max']}ms"
           f"   (scored {result['tail_scored']}/{result['n_samples']}"
-          + (f", NEVER CLOSED {result['never_closed']}" if result["never_closed"] else "") + ")")
+          + (f", NEVER CLOSED {result['never_closed']}" if result["never_closed"] else "")
+          + (f", NATURAL CUTS {result['natural_cuts']}" if result["natural_cuts"] else "") + ")")
     print("  false cuts on a mid-utterance pause (lower is better):")
     for gap, row in result["false_cut"].items():
         pct = "n/a" if row["rate"] is None else f"{row['rate']:.0%}"
