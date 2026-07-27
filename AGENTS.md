@@ -82,6 +82,123 @@ Service helpers should be small capability blocks with explicit parameters, stru
 
 Do not refactor the whole app as cleanup. Do not create `_new`, `_fixed`, `_v2`, `_old`, backup, or duplicate router files.
 
+## Review pipeline — cheap reviewers first, Greptile last
+
+Three reviewers are live and they catch **different** things. On #1560 the chain ran:
+a brittle host-path chown → **Copilot** fixed it *and introduced* a Compose project-name
+flaw → **Greptile** caught that → **Bugbot** caught a silently-failing symlink neither
+saw. Three reviewers, three distinct real defects, no overlap. So the order is not
+ceremony — it is what makes the last review cheap and clean.
+
+**Open every PR as a DRAFT.** Greptile is configured `triggerOnDrafts: false`, so a draft
+is invisible to it and all iteration is free. Marking ready is the act of spending the
+first review — don't do it until the PR is genuinely finished. `triggerOnUpdates` is
+**true**, so any later push or branch update is reviewed too: that is deliberate (see THE
+GUARANTEE below), and it is why batching fixes into one push matters.
+
+Sequence:
+
+1. **Draft PR.** Invisible to Greptile.
+2. **Local `/review` (Cursor) — free.** Bugbot recognises the same diff later and skips
+   the cloud review, so this tier costs nothing. `.cursor/BUGBOT.md` carries the repo's
+   review guide. This is an IDE-side command — agents cannot run it; it is the operator's
+   step. **Bugbot does not reliably auto-review DRAFT PRs** (verified on #1563: a
+   `bugbot run` comment on a draft produced nothing), so on the draft tier treat local
+   `/review` as the Bugbot pass and use `bugbot run` only after marking ready, if wanted.
+3. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
+   NOT resolve). ~$10/mo flat for 1500 requests, and its reviews are always `COMMENTED`,
+   so it can never block a merge. **Copilot's wait is BOUNDED, not unconditional**
+   (operator-approved 2026-07-27): the gate summons Copilot once per head and anchors a
+   server-timestamped summon marker on SUCCESS only; if Copilot has not reviewed within
+   the grace window (reuses `CODEX_GRACE_MIN`, 20 min) and no request is genuinely
+   pending, the gate proceeds to Greptile without it. Two sharp edges of that bound,
+   so nobody reads it as a hard 20 minutes: (a) a still-PENDING request holds the gate
+   past the grace (an outage that accepts requests but never reviews holds until the
+   request is cleared — `gh pr edit <n> --remove-reviewer` — or Copilot answers), and
+   a manual `--add-reviewer` re-arms that hold; (b) the grace is evaluated only when
+   the gate RUNS (review/check events or the `*/30` cron), so a quiet PR clears in
+   20–50 min wall-clock, not 20. Motivation: a repo-wide Copilot outage on 2026-07-27
+   deadlocked every PR — including the PR that carried the fix.
+4. **Batch the fixes.** Collect every finding, fix once, push once. Fix-push-fix-push
+   multiplies reviews AND multiplies the chance a fix introduces a new bug — which is
+   exactly what happened on #1560.
+5. **Mark ready** → Greptile reviews once, as the final gate → resolve threads → merge.
+
+**THE GUARANTEE — every merge is up-to-date AND reviewed at that exact commit.** This is
+the load-bearing property and it is worth credits:
+
+| setting | value | guarantees |
+|---|---|---|
+| branch protection `strict` | **true** | the PR is up to date with `main` |
+| `triggerOnUpdates` | **true** | that up-to-date head actually gets reviewed |
+| `triggerOnDrafts` | **false** | iteration in draft stays free |
+| `Greptile Review` required | **yes** | the gate is real |
+
+`triggerOnUpdates: false` was tried on 2026-07-26 and **reverted the same day**. It looks
+like a saving and it silently breaks the guarantee: `strict` forces a branch update, and
+Greptile then skips the new head because the PR diff is unchanged — correct dedup on its
+part, but it leaves the merged commit with no review and the required check permanently
+absent. Measured, same PR: `update-branch -> COMPLETED` with it true; three consecutive
+`SKIPPED` with it false. Do not turn it off again.
+
+**Cost comes from CONCURRENCY, not from update reviews.** July's 3.6 reviews/PR was
+`strict` cascading across ~8 simultaneously open PRs — every merge updated the other
+seven, each billing a review. Serialise instead: keep one or two PRs in flight and it
+settles at ~2 reviews per PR (one at ready, one after the final branch update). Draft-first
+keeps all iteration before that free, so you only ever pay once the work is finished.
+
+Tier by risk; four reviewers on a one-file docs change is friction, not safety:
+- **Routine** (docs, config, generated files, tests, UI) → local `/review` + Copilot, then
+  mark ready for the single Greptile pass. Greptile is a REQUIRED check, so every PR gets
+  it; the tiering decides how much cheap review happens BEFORE that, not whether it runs.
+- **Load-bearing** (voice path, auth, migrations, anything flag-gated) → the full chain.
+
+Cost note, measured 2026-07: this repo ran **400+ reviews across 112 PRs (3.6× per PR)**
+in one month. At that volume Greptile is ~$380/mo and Bugbot ~$400–600/mo, against
+Copilot's $10 flat. The multiplier — not the PR count — was the cost, and the fix is
+draft-first plus SERIALISING PRs (see THE GUARANTEE); disabling update reviews was tried
+and reverted, because it breaks the gate. **Copilot's inline comments
+create review threads that count toward `required_conversation_resolution`**, so they must
+be resolved like any other.
+
+## One workstream, one PR — combine before review, not after
+
+Reviews are billed **per PR and per push**, and every reviewer re-runs on every update. So
+splitting one piece of work across several PRs multiplies the cost, and two PRs over the same
+files pay twice and then conflict with each other. Combine first.
+
+- **One branch per WORKSTREAM, not per change.** Several commits on `feature/<slug>`, one PR,
+  one review — rather than three PRs that each touch the same module.
+- **A draft PR is a parked PR, and parking is free.** Greptile is `triggerOnDrafts: false`, so
+  a draft can stay open for days at zero cost. Open early as a draft, iterate, and mark ready
+  only when the work is genuinely finished — marking ready is the act of spending the review.
+- **Before opening a PR, check for an open one over the same files.** If it exists, add to that
+  branch or wait for it to land. `pr-hygiene.yml` posts an overlap notice automatically, but
+  the cheaper move is not creating the second PR at all.
+- **A merge queue is NOT AVAILABLE to this repo** (resolved 2026-07-27): GitHub gates merge
+  queues to organization-owned repositories and this repo is personal — no setting we
+  control changes that. The churn answer remains serialisation (below). The useful piece
+  shipped anyway: the required secret check is now the first-party `secret-scan` job, so a
+  GitGuardian App outage can no longer freeze `main`. Analysis, org-transfer trade-offs and
+  rollback: [`docs/knowledge/merge-queue-switch.md`](docs/knowledge/merge-queue-switch.md).
+- **Serialise.** Keep one or two PRs in flight. With `strict: true` every merge pushes the
+  others behind, and each branch update triggers a fresh review — the measured 3.6 reviews/PR
+  in July was this, not oversized changes.
+
+**Size** (`pr-hygiene.yml`) — thresholds come from the RESEARCH, not from our habits.
+Defect detection is ~87% at 1-100 changed lines, ~65% at 301-600, ~28% at 1000+
+(SmartBear/Cisco ~2500 PRs; Google): 200 lines is the target, 400 the ceiling. Our own
+distribution (40 merged PRs, 2026-07) is median 246 / p75 401 / p90 653 / max 975 — so the
+median is healthy but the top quartile is already in the degraded band, and the warning is
+meant to fire there:
+- warn **at or above 10 files / 400 lines**, fail **at or above 30 files / 1000 lines**
+  (inclusive: 1000 lines IS the limit, not one line under it)
+- generated files (flag inventory, vendored `dist/lib/`, lockfiles, wheels) are excluded — they
+  move in bulk and say nothing about review burden
+- `oversized-ok` label overrides a genuine exception
+- the hard limit exists because **Greptile silently skips PRs over ~50 files** — past that you
+  get no review at all while still paying for it, which is worse than a blocked PR
+
 ## Greptile PR loop
 
 For reviewable development work:

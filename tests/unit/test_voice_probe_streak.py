@@ -187,3 +187,111 @@ class TestUnitTemplateGatesOnPostgres:
         assert wait_at < unit.index("voice_regression_probe.py --samples")
         pre_line = next(l for l in unit.splitlines() if "wait_for_port.py" in l)
         assert pre_line.startswith("ExecStartPre=")
+
+
+class TestSkipDiagnosisReportsWhatItObserved:
+    """A probe must never NAME a cause it did not check.
+
+    The skip branch used to hardcode "no .env in resolved --service-dir" as the
+    reason measure_voice produced no JSON. On 2026-07-27 the real cause was
+    Postgres not yet listening after a reboot, while the .env was present and
+    correct the whole time — so every run in the log pointed at a healthy file
+    and the actual dependency went unmentioned. A wrong cause is worse than no
+    cause: it sends you to the wrong place.
+    """
+
+    def test_reports_env_present_when_it_is_present(self, tmp_path):
+        (tmp_path / ".env").write_text("X=1")
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        assert ".env present" in obs
+        assert "NO .env" not in obs, "must not claim a missing .env that exists"
+
+    def test_reports_env_missing_when_it_is_missing(self, tmp_path):
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        assert "NO .env" in obs
+
+    def test_replay_path_mirrors_measure_voice_resolution(self, tmp_path):
+        """service_dir/tests/replay_samples.py — the path measure_voice.py itself uses."""
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        assert "MISSING at" in obs and "tests/replay_samples.py" in obs
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "replay_samples.py").write_text("")
+        assert "replay harness present" in "; ".join(vrp._diagnose_skip(str(tmp_path)))
+
+    def test_postgres_state_is_probed_not_assumed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(vrp, "_port_open", lambda *a, **k: False)
+        assert "postgres 127.0.0.1:5432 REFUSED" in "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        monkeypatch.setattr(vrp, "_port_open", lambda *a, **k: True)
+        assert "postgres 127.0.0.1:5432 reachable" in "; ".join(vrp._diagnose_skip(str(tmp_path)))
+
+    def test_remote_mode_observes_token_and_endpoint(self, tmp_path, monkeypatch):
+        """Remote mode's own failure modes must be in the observation list.
+
+        A missing ZOE_DEVICE_TOKEN makes the replay exit 1 before any sample runs;
+        the diagnosis previously listed only .env/harness/postgres, so the one
+        thing actually wrong was the one thing not named (Bugbot, #1572).
+        """
+        monkeypatch.delenv("ZOE_DEVICE_TOKEN", raising=False)
+        monkeypatch.delenv("DEVICE_TOKEN", raising=False)
+        monkeypatch.setattr(vrp, "_port_open", lambda h, p_, timeout=2.0: True)
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
+        assert "ZOE_DEVICE_TOKEN/DEVICE_TOKEN MISSING" in obs
+        assert "zoe-data 127.0.0.1:8000 reachable" in obs
+        monkeypatch.setenv("ZOE_DEVICE_TOKEN", "x")
+        assert "ZOE_DEVICE_TOKEN present" in "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
+        # the fallback name is reported AS the fallback name, not as ZOE_DEVICE_TOKEN
+        monkeypatch.delenv("ZOE_DEVICE_TOKEN")
+        monkeypatch.setenv("DEVICE_TOKEN", "y")
+        obs2 = "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
+        assert "DEVICE_TOKEN present" in obs2 and "ZOE_DEVICE_TOKEN present" not in obs2
+
+    def test_empty_env_var_masks_dotenv_like_setdefault(self, tmp_path, monkeypatch):
+        """ZOE_DEVICE_TOKEN='' in the env + a value in .env: setdefault keeps the
+        empty, so the harness gets NOTHING — the diagnosis must not claim the
+        .env token was in play (Bugbot, the mirrors-exactly claim was not exact).
+        """
+        monkeypatch.setattr(vrp, "_port_open", lambda h, p_, timeout=2.0: True)
+        (tmp_path / ".env").write_text("ZOE_DEVICE_TOKEN=realtoken\n")
+        monkeypatch.setenv("ZOE_DEVICE_TOKEN", "")
+        monkeypatch.delenv("DEVICE_TOKEN", raising=False)
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path), "remote"))
+        assert "MISSING" in obs and "(from .env)" not in obs
+        # inprocess mode must NOT name remote-only observations
+        assert "ZOE_DEVICE_TOKEN" not in "; ".join(vrp._diagnose_skip(str(tmp_path), "inprocess"))
+
+    def test_the_field_failure_names_postgres_not_the_env(self, tmp_path, monkeypatch):
+        """The exact 2026-07-27 state: .env fine, harness fine, database down."""
+        (tmp_path / ".env").write_text("X=1")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "replay_samples.py").write_text("")
+        monkeypatch.setattr(vrp, "_port_open", lambda *a, **k: False)
+        obs = "; ".join(vrp._diagnose_skip(str(tmp_path)))
+        assert "REFUSED" in obs
+        assert ".env present" in obs and "NO .env" not in obs
+
+
+class TestPerModeMemoryThreshold:
+    """The min-mem default follows the STT mode, both values measured not guessed.
+
+    inprocess carries its own Moonshine: 1500MB (historical empirical bar).
+    remote rides the live service's warm model: 700MB, against a measured 445MB
+    peak for a real 2-sample remote run on the live box (2026-07-27).
+    An explicit flag or ZOE_VOICE_PROBE_MIN_MEM_MB always wins.
+    """
+
+    def _default_for(self, monkeypatch, stt, env=None):
+        monkeypatch.delenv("ZOE_VOICE_PROBE_MIN_MEM_MB", raising=False)
+        if env is not None:
+            monkeypatch.setenv("ZOE_VOICE_PROBE_MIN_MEM_MB", env)
+        # the REAL function main() calls — not a mirror of its expression
+        return vrp.resolve_min_mem(stt)
+
+    def test_inprocess_default_is_1500(self, monkeypatch):
+        assert self._default_for(monkeypatch, "inprocess") == 1500
+
+    def test_remote_default_is_700(self, monkeypatch):
+        assert self._default_for(monkeypatch, "remote") == 700
+
+    def test_env_override_wins_either_mode(self, monkeypatch):
+        assert self._default_for(monkeypatch, "remote", env="1200") == 1200
+        assert self._default_for(monkeypatch, "inprocess", env="800") == 800

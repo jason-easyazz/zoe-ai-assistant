@@ -1,0 +1,457 @@
+# Greptile is the LAST reviewer, and this workflow is what enforces that.
+#
+# Greptile is filtered (dashboard) to only review PRs carrying the `greptile` label.
+# Without the label it ignores the PR entirely and costs nothing. This job adds the
+# label only once the cheap tier has finished, so Greptile's single review lands on a
+# final, up-to-date head with no outstanding findings.
+#
+# WHY THAT ORDERING IS LOAD-BEARING (learned the hard way, 2026-07-26):
+# Greptile deduplicates by PR diff. If it reviews early and `strict` then forces a
+# branch update, it correctly refuses to re-review the unchanged diff — leaving the
+# required check stranded on the previous commit and the PR permanently unmergeable.
+# Reviewing once, last, on an already-current head avoids that entirely, and drops the
+# cost from the 3.6 reviews/PR measured in July to one.
+name: greptile-gate
+
+on:
+  check_suite:
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+  # ready_for_review is not optional: if every cheap review finishes while the PR is
+  # still a draft, neither event above fires again when it is marked ready, and the
+  # gate would never run for that PR at all.
+  pull_request:
+    types: [ready_for_review, synchronize, opened]
+  # NOTE: thread-resolution has NO workflow trigger. `pull_request_review_thread`
+  # is a real webhook event but NOT a valid `on:` event — with it present the file
+  # failed GitHub's parser and the workflow never executed at all (every push run
+  # was a zero-job parse failure; actionlint catches it, PyYAML does not). Resolving
+  # the last thread is instead picked up by the schedule below, worst case ~30min
+  # later — slower than an event, but a gate that runs slowly beats one that never
+  # parses.
+  # The Codex grace period is only evaluated when this workflow RUNS. Without a timer,
+  # a silent Codex plus no other activity means the gate never wakes to notice the grace
+  # elapsed — the bounded wait added to fix a deadlock would become one. This is the
+  # wake-up for every wait in this file that is not event-driven.
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: read
+
+concurrency:
+  # Deliberately GLOBAL, not per-PR. This job sweeps every open PR, and on check_suite
+  # events there is no `pull_request.number` to key on — a run_id fallback is unique per
+  # run and would give no protection whatsoever. Serialising the workflow is correct.
+  group: greptile-gate
+  cancel-in-progress: false
+
+jobs:
+  label-when-others-pass:
+    # check_suite fires for EVERY suite in the repo, including pushes to main —
+    # and this job sweeps all open PRs, so suites with no associated PR would
+    # burn API budget for nothing (Copilot). Skip those. Trade-off, stated: a
+    # main-push suite correlates with a merge that puts other PRs BEHIND, so
+    # skipping it delays behind-ness revocation by up to one schedule tick
+    # (30min) — acceptable, the label self-corrects and Greptile ignores drafts.
+    # Note check_suite.pull_requests omits fork PRs; this repo works from
+    # same-repo branches, where it is populated.
+    if: github.event_name != 'check_suite' || github.event.check_suite.pull_requests[0] != null
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add the greptile label once the cheap tier is done
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const LABEL = 'greptile';
+            const REQUIRED_CHECKS = ['Cursor Bugbot'];
+            // Bugbot reports `neutral` when it has no findings and `skipped` when it dedups
+            // a diff — both mean it RAN. Requiring `success` held forever on PR #1571, which
+            // sat at completed/neutral. Any real findings surface as review threads, and the
+            // unresolved===0 check below covers those; this only confirms it executed.
+            const CHECK_DONE = ['success', 'neutral', 'skipped'];
+            const COPILOT = 'copilot-pull-request-reviewer';
+            const CODEX = 'chatgpt-codex-connector';
+            // Codex is summoned and WAITED FOR, but with a bound. Requiring it outright
+            // would stall the routine tier (AGENTS.md: local review + Copilot); not waiting
+            // at all lets Greptile run concurrently with it, so a Codex finding lands after
+            // the credit is already spent. A bounded wait satisfies both: Greptile really is
+            // last when Codex participates, and an absent Codex cannot deadlock the gate.
+            const CODEX_GRACE_MIN = 20;
+
+            const ok = async (label, fn) => {
+              try { return await fn(); }
+              catch (e) { core.warning(`${label}: ${e.message}`); return null; }
+            };
+
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
+            });
+
+            for (const pr of prs) {
+              if (pr.draft) continue;
+              const base = { owner: context.repo.owner, repo: context.repo.repo };
+
+              // Every list is PAGINATED. A long-lived PR exceeds 100 comments/threads/checks,
+              // and a truncated list silently reads as "nothing outstanding" — the exact
+              // false-clear this gate exists to prevent.
+              const comments = await ok(`PR #${pr.number} comments`, () =>
+                github.paginate(github.rest.issues.listComments, {
+                ...base, issue_number: pr.number, per_page: 100,
+              }));
+              if (!comments) { core.info(`PR #${pr.number}: could not read comments — holding`); continue; }
+
+              const MARK = '<!-- greptile-gate:labelled:';
+              // TRUST, not presence. This repo is PUBLIC, so anyone can post a comment
+              // containing the marker string. An unfiltered match lets a stranger forge a
+              // handoff — making the gate believe a PR was already cleared, or pinning it to
+              // a SHA of their choosing.
+              // ONLY this workflow's own bot. author_association was tried and is wrong:
+              // MEMBER and COLLABORATOR do not imply write permission, so an org member
+              // with read-only access could forge a handoff marker. There is no legitimate
+              // case for a human-authored marker either — the workflow is the only thing
+              // that writes them — so the narrowest possible rule is also the correct one.
+              const trusted = (c) =>
+                c.user?.login === 'github-actions[bot]' && c.user?.type === 'Bot';
+              // Explicit chronology: "newest marker wins" must not lean on the REST
+              // default ordering (ascending id — documented, but implicit here). The
+              // issue-comments endpoint has no sort parameter, so order in code.
+              const byCreated = (a, b) =>
+                new Date(a.created_at || 0) - new Date(b.created_at || 0);
+              const marks = comments.filter(c => c.body?.includes(MARK) && trusted(c))
+                                    .sort(byCreated);
+
+              // ONE reader for EVERY gate condition, called twice: once to decide, once to
+              // revalidate immediately before acting. It previously hand-copied a SUBSET of
+              // the conditions into the revalidation block, and the subset drifted — twice.
+              // Round 4 added condition revalidation but copied only SHA/behindness/threads,
+              // so a check that re-ran red or a review submitted during the sweep still got
+              // the label. Enumerating conditions in two places is the bug; there is now one
+              // place, so the two cannot disagree.
+              // Returns null if ANY read failed — an unreadable condition is never a pass.
+              const readConditions = async (num, sha, baseRef) => {
+                const cmp = await ok(`PR #${num} compare`, () =>
+                  github.rest.repos.compareCommits({ ...base, base: baseRef, head: sha })
+                    .then(r => r.data));
+                if (!cmp) return null;
+
+                const runs = await ok(`PR #${num} check runs`, () =>
+                  github.paginate(github.rest.checks.listForRef, {
+                    ...base, ref: sha, per_page: 100,
+                  }));
+                if (!runs) return null;
+                const byName = new Map();
+                for (const c of runs) {
+                  if (!byName.has(c.name)) byName.set(c.name, []);
+                  byName.get(c.name).push(c);
+                }
+                // A run only has a meaningful `conclusion` once `status === 'completed'`, and
+                // sorting on started_at alone lets a queued run with a null timestamp lose to
+                // an older completed one — either way an OLD success stands in for a NEW run.
+                const ts = (c) => {
+                  const t = Date.parse(c.completed_at || c.started_at || '');
+                  return Number.isNaN(t) ? -1 : t;
+                };
+                const checksOk = REQUIRED_CHECKS.every((n) => {
+                  const all = byName.get(n) || [];
+                  if (!all.length) return false;                              // never ran
+                  if (all.some(c => c.status !== 'completed')) return false;  // still in flight
+                  const newest = all.reduce((a, b) => (ts(b) >= ts(a) ? b : a));
+                  return CHECK_DONE.includes(newest.conclusion);
+                });
+
+                const reviews = await ok(`PR #${num} reviews`, () =>
+                  github.paginate(github.rest.pulls.listReviews, {
+                    ...base, pull_number: num, per_page: 100,
+                  }));
+                if (!reviews) return null;
+                // PENDING is not submitted — counting it treats a review that has not
+                // happened as a pass.
+                const reviewedHead = new Set(
+                  reviews.filter(r => r.commit_id === sha &&
+                                      ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED'].includes(r.state))
+                         .map(r => (r.user?.login || '').replace(/\[bot\]$/, ''))
+                );
+
+                // Paginate: `first: 100` silently truncates, and a truncated page reads as
+                // "no unresolved threads".
+                let unresolved = 0, cursor = null;
+                do {
+                  const q = await ok(`PR #${num} threads`, () => github.graphql(`
+                    query($owner:String!,$repo:String!,$num:Int!,$cursor:String){
+                      repository(owner:$owner,name:$repo){
+                        pullRequest(number:$num){
+                          reviewThreads(first:100, after:$cursor){
+                            pageInfo{ hasNextPage endCursor } nodes{ isResolved } } } } }`,
+                    { owner: base.owner, repo: base.repo, num, cursor }));
+                  if (!q) return null;
+                  const t = q.repository.pullRequest.reviewThreads;
+                  unresolved += t.nodes.filter(n => !n.isResolved).length;
+                  cursor = t.pageInfo.hasNextPage ? t.pageInfo.endCursor : null;
+                } while (cursor);
+
+                return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, unresolved };
+              };
+
+              // Refetch BEFORE anything reads a SHA. `pulls.list` was fetched once at the top
+              // of the sweep, so by the time this PR is processed its head may have moved —
+              // and every downstream decision keyed on the stale value: `alreadyHandedOff`
+              // would compare the marker against an old SHA (skipping both stale-label
+              // cleanup and regression revocation while the label still sits on a NEWER
+              // commit), conditions would be read for a commit nobody is merging, and the
+              // Codex marker would be written for the wrong head. One authoritative `sha`,
+              // established here, is used from this point on — `pr.head.sha` is not read again.
+              const prFull = await ok(`PR #${pr.number} get`, () =>
+                github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
+              if (!prFull) continue;
+              const sha = prFull.head.sha;
+              const baseRef = prFull.base.ref;
+              // Past this point `pr` (the one-time list snapshot) is valid ONLY for
+              // `.number`, which cannot change. Every mutable field comes from prFull.
+              // Fixing head.sha alone was not enough: `labels` was stale from the same
+              // object, which is worse, because a stale label snapshot silently disables
+              // BOTH repair paths — revocation only runs when alreadyHandedOff is true,
+              // and stale-label stripping only when isLabelled is true.
+              if (prFull.draft) {
+                // The cheap `pr.draft` filter above avoids fetching for the common case,
+                // but the snapshot ages: a PR marked draft since the sweep started must not
+                // be labelled. (The opposite drift — draft in the list, ready now — is
+                // self-correcting; the schedule picks it up next pass.)
+                core.info(`PR #${pr.number}: became a draft during the sweep — skipping`);
+                continue;
+              }
+
+              const labelledSha = marks.length
+                ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
+                : null;
+
+              const isLabelled = (prFull.labels || []).some(l => l.name === LABEL);
+              // A matching marker means the handoff happened on THIS head. Do not return
+              // early: conditions can regress on the same SHA (a thread opened, a check
+              // re-run failing, main moving ahead), and the label asserts "cheap tier
+              // green". Leaving it in place would keep asserting something untrue, so fall
+              // through, re-evaluate, and strip it below if it no longer holds.
+              const alreadyHandedOff = isLabelled && labelledSha === sha;
+
+              if (isLabelled && !alreadyHandedOff) {
+                // Stale or unknown provenance (applied by hand, or the comment was deleted):
+                // strip it so the PR re-qualifies rather than sitting inside Greptile's
+                // filter re-reviewing on every push.
+                const r = await ok(`PR #${pr.number} removeLabel`, () =>
+                  github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
+                if (!r) {
+                  core.warning(`PR #${pr.number}: label could NOT be removed — still inside Greptile's filter`);
+                  continue;
+                }
+                core.info(`PR #${pr.number}: stale label removed — re-qualifying in this same pass`);
+                // Deliberately NO `continue`: fall through and re-evaluate now. Waiting for
+                // the next event would stall a PR that is otherwise ready, and there may not
+                // BE another event.
+              }
+
+              // Behind-ness is MEASURED here (inside readConditions), not inferred from
+              // mergeable_state, which mixes concerns and can be `unknown` while GitHub computes.
+              const st = await readConditions(pr.number, sha, baseRef);
+              if (!st) { core.info(`PR #${pr.number}: could not read conditions — holding`); continue; }
+              const { upToDate, checksOk, reviewedHead, unresolved } = st;
+
+              // Summon what we wait for; both are manual-trigger only.
+              // Copilot's marker is computed BEFORE the summon so the summon can be
+              // gated on its absence — the same only-once-per-head rule codex has.
+              // Without that gate, every sweep posted a fresh marker and the newest-
+              // marker rule reset the grace clock forever (Bugbot, High): the exact
+              // unbounded wait the grace was added to remove, rebuilt one commit later.
+              const copilotMark = `<!-- greptile-gate:copilot:${sha} -->`;
+              const copilotSummons = comments.filter(c => c.body?.includes(copilotMark) && trusted(c))
+                                             .sort(byCreated);
+              const copilotSummon = copilotSummons.length ? copilotSummons[copilotSummons.length - 1] : undefined;
+              const requested = new Set((prFull.requested_reviewers || [])
+                .map(r => (r.login || '').replace(/\[bot\]$/, '').toLowerCase()));
+              const copilotPending = requested.has('copilot') || requested.has(COPILOT);
+              if (!reviewedHead.has(COPILOT) && !copilotPending && !copilotSummon) {
+                // REST requestReviewers returns 200 and silently does NOTHING for Copilot
+                // — verified: requested_reviewers stayed empty afterwards. Copilot is a Bot
+                // node, so it must go through GraphQL requestReviews(botIds:). `userIds:`
+                // errors with "Could not resolve to User node".
+                //
+                // COPILOT_BOT_ID is Copilot's global Bot node id (verified 2026-07-27). It is
+                // not discoverable from this PR when Copilot is absent, which is exactly when
+                // we need it — so it is pinned. If GitHub ever changes it the mutation fails
+                // and the warning below names the cause rather than silently never summoning.
+                // SUMMON FIRST, marker only on SUCCESS (Greptile P1, twice): a grace
+                // anchor must attest that the summon actually happened — a marker that
+                // outlives a failed mutation (or a failed cleanup of one) eventually
+                // authorises handoff for a reviewer nobody requested. With the marker
+                // gated on mutation success, that class is closed outright. The chosen
+                // residual runs the SAFE direction: if the marker post chronically
+                // fails, each sweep re-summons (idempotent — GitHub drops or dedups
+                // the request) and the PR HOLDS, loudly, until a marker sticks. The
+                // !copilotSummon gate above still prevents the clock-reset loop: a
+                // marker is only ever posted while none exists for this head.
+                const COPILOT_BOT_ID = 'BOT_kgDOCnlnWA';
+                const r = await ok(`PR #${pr.number} request Copilot`, async () => {
+                  const q = await github.graphql(`
+                    query($owner:String!,$repo:String!,$num:Int!){
+                      repository(owner:$owner,name:$repo){ pullRequest(number:$num){ id } } }`,
+                    { owner: base.owner, repo: base.repo, num: pr.number });
+                  return github.graphql(`
+                    mutation($pr:ID!,$bot:ID!){
+                      requestReviews(input:{pullRequestId:$pr, botIds:[$bot], union:true}){
+                        pullRequest{ number } } }`,
+                    { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
+                });
+                if (r) {
+                  core.info(`PR #${pr.number}: requested Copilot`);
+                  const marker = await ok(`PR #${pr.number} copilot marker`, () =>
+                    github.rest.issues.createComment({
+                      ...base, issue_number: pr.number,
+                      body: `Requested Copilot review.\n${copilotMark}`,
+                    }));
+                  if (!marker) core.warning(`PR #${pr.number}: copilot marker failed — will re-summon next sweep until one sticks (holds, never hands off unasked)`);
+                } else {
+                  core.warning(`PR #${pr.number}: could NOT request Copilot — no marker posted, no grace starts; retrying next sweep`);
+                }
+              }
+
+              const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
+              // Same trust rule: a forged summon marker would suppress the real one and,
+              // once its timestamp aged past the grace, wave Greptile through early.
+              // NEWEST, not first. `find` returns the OLDEST match, so after a re-summon
+              // (or a retry following a failed label) a stale marker would set the grace
+              // clock and could read as elapsed while the latest @codex review is still
+              // inside its window. The handoff marker already takes the last match; these
+              // two must agree.
+              const codexSummons = comments.filter(c => c.body?.includes(codexMark) && trusted(c))
+                                            .sort(byCreated);
+              const codexSummon = codexSummons.length ? codexSummons[codexSummons.length - 1] : undefined;
+              if (!reviewedHead.has(CODEX) && !codexSummon) {
+                // Wrapped: an advisory summon must never abort the sweep for other PRs.
+                const r = await ok(`PR #${pr.number} summon Codex`, () =>
+                  github.rest.issues.createComment({
+                    ...base, issue_number: pr.number, body: `@codex review\n${codexMark}`,
+                  }));
+                if (r) core.info(`PR #${pr.number}: summoned Codex`);
+              }
+
+              // Bounded wait for Codex: hold until it reviews this head, or until the grace
+              // period since we summoned has elapsed. Expressed as a function of a
+              // reviewedHead SET so the revalidation below can re-derive it from fresh data
+              // instead of reusing a frozen verdict — see the note at the revalidation.
+              const graceElapsed = codexSummon
+                ? (Date.now() - new Date(codexSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
+                : false;
+              const codexPasses = (rh) => rh.has(CODEX) || graceElapsed;
+              const codexOk = codexPasses(reviewedHead);
+
+              // Copilot gets the SAME bounded grace, for a failure mode observed live
+              // (#1573, 2026-07-27): after Copilot has reviewed earlier heads of a PR,
+              // GitHub silently drops further re-requests — the mutation succeeds,
+              // requested_reviewers stays empty, no review ever arrives — and a
+              // graceless required reviewer is an unbounded wait. Same trust rule,
+              // same newest-marker rule as codex.
+              const copilotGraceElapsed = copilotSummon
+                ? (Date.now() - new Date(copilotSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
+                : false;
+              // A GENUINELY pending request (visible in requested_reviewers — rare,
+              // since GitHub usually drops it, which is the whole story here) means
+              // Copilot is actually coming: hold for it rather than waving the grace
+              // through (Codex P2). The grace covers the silent-drop case only.
+              const copilotPasses = (rh) => rh.has(COPILOT) || (copilotGraceElapsed && !copilotPending);
+              if (copilotPasses(reviewedHead) && !reviewedHead.has(COPILOT)) {
+                core.info(`PR #${pr.number}: Copilot grace elapsed — proceeding`);
+              }
+              if (codexOk && !reviewedHead.has(CODEX)) {
+                core.info(`PR #${pr.number}: Codex grace elapsed — proceeding`);
+              }
+
+              const copilotOk = copilotPasses(reviewedHead);
+              const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
+
+              if (alreadyHandedOff) {
+                // Already handed off on this head. Only act if it has REGRESSED — then the
+                // label is a false claim and must go; it will be re-applied once the
+                // condition clears.
+                // Re-read first: `qualifies` above was computed BEFORE the summon calls, and
+                // a check that went red or a thread opened in that window is exactly the
+                // regression this branch exists to catch. Deciding not to revoke from
+                // pre-summon data would leave the label asserting something already untrue.
+                const now = await readConditions(pr.number, sha, baseRef);
+                // DELIBERATELY fail-open here, and only here (both Bugbot and Copilot
+                // flagged it — the asymmetry is the design, not an oversight): on a
+                // transient read failure, a false REVOKE costs a full re-handoff cycle
+                // and puts the PR back through Greptile's filter (billed), while a
+                // false KEEP costs nothing — the label just holds the PR in the filter
+                // until the next sweep (≤30min) re-reads and revokes if real. Where
+                // null blocks LABELLING the asymmetry runs the other way: a false
+                // label spends the review this gate exists to protect.
+                if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
+                const stillOk = now.checksOk && copilotPasses(now.reviewedHead) &&
+                                codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
+                if (!stillOk) {
+                  const r = await ok(`PR #${pr.number} revoke label`, () =>
+                    github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
+                  if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${now.checksOk} ` +
+                                   `copilot=${copilotPasses(now.reviewedHead)} codex=${codexPasses(now.reviewedHead)} ` +
+                                   `upToDate=${now.upToDate} unresolved=${now.unresolved}) — label revoked`);
+                }
+                continue;
+              }
+
+              if (!qualifies) {
+                core.info(`PR #${pr.number}: holding — checks=${checksOk} copilot=${copilotOk} ` +
+                          `codex=${codexOk} upToDate=${upToDate} unresolved=${unresolved}`);
+                continue;
+              }
+
+              // REVALIDATE immediately before acting, through the SAME reader — so every
+              // condition is re-checked, not the three that happened to get copied here.
+              // `pulls.list` was fetched at the top of the sweep, and the summon calls above
+              // take real time; a push, a red re-run, a new review or a new thread in that
+              // window would otherwise be labelled as green.
+              const st2 = await readConditions(pr.number, sha, baseRef);
+              if (!st2) { core.info(`PR #${pr.number}: could not re-read conditions — skipping this pass`); continue; }
+              // EVERY condition is re-derived, codex included. An earlier version froze
+              // codexOk on the claim that it only moves false->true for a fixed head. That
+              // claim is false: a review can be DISMISSED, which drops it back out of the
+              // submitted-review set. No condition here gets to be special.
+              const codexOk2 = codexPasses(st2.reviewedHead);
+              if (!(st2.checksOk && copilotPasses(st2.reviewedHead) && codexOk2 &&
+                    st2.upToDate && st2.unresolved === 0)) {
+                core.info(`PR #${pr.number}: conditions changed during the sweep ` +
+                          `(checks=${st2.checksOk} copilot=${copilotPasses(st2.reviewedHead)} ` +
+                          `codex=${codexOk2} upToDate=${st2.upToDate} unresolved=${st2.unresolved}) — skipping this pass`);
+                continue;
+              }
+
+              // Head check LAST, immediately before acting. GitHub offers no compare-and-swap,
+              // so a window between the final check and the write cannot be eliminated — only
+              // narrowed. Doing it here rather than before readConditions() shrinks it from
+              // "four API calls" to "one", and the residual is self-correcting: the marker
+              // embeds this SHA, so if the head moved the next sweep sees labelledSha !== sha
+              // and strips the label rather than leaving a false claim standing.
+              const fresh = await ok(`PR #${pr.number} revalidate head`, () =>
+                github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
+              if (!fresh || fresh.head.sha !== sha) {
+                core.info(`PR #${pr.number}: head moved during the sweep — skipping this pass`);
+                continue;
+              }
+
+              // Marker FIRST, then the label. If the label went on first and the comment
+              // failed, the PR would sit inside Greptile's filter with no marker — and the
+              // marker-less branch above would strip it again next run, flapping.
+              const marker = await ok(`PR #${pr.number} marker`, () =>
+                github.rest.issues.createComment({
+                  ...base, issue_number: pr.number,
+                  body: `Handing off to Greptile — cheap tier green on \`${sha.slice(0, 8)}\`.\n${MARK}${sha} -->`,
+                }));
+              if (!marker) { core.warning(`PR #${pr.number}: marker failed — not labelling`); continue; }
+
+              const applied = await ok(`PR #${pr.number} addLabel`, () =>
+                github.rest.issues.addLabels({ ...base, issue_number: pr.number, labels: [LABEL] }));
+              if (applied) core.notice(`PR #${pr.number}: cheap tier green, branch current, threads clear — handing off to Greptile.`);
+              else core.warning(`PR #${pr.number}: marker posted but label failed — will retry next run`);
+            }

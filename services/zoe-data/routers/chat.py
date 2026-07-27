@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
+from async_subprocess import QueueTimeout, run_to_completion
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
@@ -792,18 +793,35 @@ async def _write_hermes_codex_token(access_token: str, refresh_token: str = "") 
         return False
 
 
-async def _restart_hermes() -> None:
+async def _restart_hermes() -> bool:
     """Restart hermes-agent systemd user service so it picks up the new token."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "systemctl", "--user", "restart", "hermes-agent.service",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+        # AGENTS.md fork rule: never fork on the event-loop thread — run the
+        # restart CLI to completion inside a worker thread (output discarded).
+        proc = await run_to_completion(
+            ["systemctl", "--user", "restart", "hermes-agent.service"],
+            timeout=10,
         )
-        await asyncio.wait_for(proc.wait(), timeout=10)
+        if proc.returncode != 0:
+            # run_to_completion returns rather than raises on a nonzero exit —
+            # a unit that failed to restart must not read as success upstream.
+            logger.warning("hermes-agent.service restart exited %s: %s",
+                           proc.returncode,
+                           (proc.stderr or proc.stdout or b"").decode(errors="replace")[-300:])
+            return False
         logger.info("hermes-agent.service restarted after token write")
+        return True
+    except QueueTimeout as exc:
+        # Never started. Logged distinctly so a saturated subprocess pool isn't
+        # investigated as a slow/hanging systemd restart.
+        logger.warning(
+            "Hermes restart after token write never started: no free subprocess "
+            "worker after %ss (pool saturated)", exc.timeout,
+        )
+        return False
     except Exception as exc:
         logger.warning("Hermes restart after token write failed: %s", exc)
+        return False
 
 
 # Off-loop runner for the panel_status ssh reachability probe (AGENTS.md fork
@@ -1067,7 +1085,10 @@ async def _chatgpt_connect_flow(emit, enc, recorder, assistant_message_id, tool_
     # ── Step 6b: persist to ~/.hermes/auth.json (openai-codex provider) ─────
     hermes_ok = await _write_hermes_codex_token(access_token, refresh_token)
     if hermes_ok:
-        await _restart_hermes()
+        # Writing the token is NOT the whole job: a restart that never ran
+        # (saturated pool) leaves Hermes on the OLD token, and claiming success
+        # here would tell the user Hermes is connected when it is not.
+        hermes_ok = await _restart_hermes()
 
     # ── Step 7: success ───────────────────────────────────────────────────────
     services_note = "OpenClaw and Hermes are now using your ChatGPT account." if hermes_ok else "OpenClaw is now using your ChatGPT account."
@@ -1454,7 +1475,7 @@ async def _capture_research_screenshot(
             user_id=user_id,
             session_id=f"chat:{session_id}",
             action_class="read_only_research",
-            requested_surface="openclawLocal",
+            requested_surface="zoeCloak",
         )
         result = await _BROWSER_BROKER.execute(plan)
         image_b64 = str(result.get("image_base64") or "").strip()

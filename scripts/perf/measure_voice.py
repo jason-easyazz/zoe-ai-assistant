@@ -88,6 +88,9 @@ def main() -> int:
     ap.add_argument("--service-dir", default=None, help=SERVICE_DIR_HELP)
     ap.add_argument("--json", help="write aggregated machine-readable results here")
     ap.add_argument("--timeout", type=int, default=600, help="replay subprocess timeout (s)")
+    ap.add_argument("--stt", choices=["inprocess", "remote"], default="inprocess",
+                    help="passed through to replay_samples.py; 'remote' avoids the "
+                         "harness's second Moonshine load (needs ZOE_DEVICE_TOKEN)")
     args = ap.parse_args()
 
     if os.environ.get("ZOE_PERF") != "1":
@@ -119,6 +122,7 @@ def main() -> int:
     cmd = [
         sys.executable, "tests/replay_samples.py",
         "--brain", "--user", args.user, "--json", replay_json,
+        "--stt", args.stt,
     ]
     if args.since:
         cmd += ["--since", args.since]

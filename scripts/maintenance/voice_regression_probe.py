@@ -57,6 +57,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -90,7 +91,97 @@ def mem_available_mb() -> int:
     return 0
 
 
-def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict[str, Any]:
+def _port_open(host: str, port: int, timeout: float = 2.0) -> bool:
+    # Fail closed: this runs inside the error path that BUILDS the diagnosis —
+    # a raise here would mask the original failure with a socket traceback.
+    # create_connection() (not a bare AF_INET socket) so IPv6 literals and
+    # v6-only hostnames resolve properly, matching wait_for_port.py.
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _service_env_get(service_dir: str, *names: str) -> tuple[str | None, str | None]:
+    """(name, value) for the first of *names* found — process env first, then
+    service_dir/.env, mirroring the harness's _load_env (setdefault semantics).
+    The diagnosis must read the SAME sources the harness reads, or it reports a
+    'missing' token the replay actually had."""
+    file_vals: dict[str, str] = {}
+    try:
+        with open(os.path.join(service_dir, ".env")) as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    file_vals[k] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    for n in names:
+        # setdefault semantics EXACTLY: a name PRESENT in the process env — even
+        # as an empty string — masks the .env value (the harness would see the
+        # empty too and fall through its `or` chain). Skipping empties here made
+        # the diagnosis claim a .env token the replay never received.
+        if n in os.environ:
+            v = os.environ[n].strip()
+            if v:
+                return n, v
+            continue  # set-but-empty: masks .env for this name, harness sees nothing
+        if file_vals.get(n):
+            return f"{n} (from .env)", file_vals[n]
+    return None, None
+
+
+def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
+    """Report the OBSERVED state behind a measure_voice skip — never a guessed cause.
+
+    Returns human-readable observations in the order they are worth reading. Each
+    entry is something this function actually checked just now.
+    """
+    env_path = os.path.join(service_dir, ".env")
+    obs = []
+    try:
+        obs.append(f".env present ({os.path.getsize(env_path)}B)" if os.path.isfile(env_path)
+                   else f"NO .env at {env_path}")
+    except OSError as exc:
+        obs.append(f".env unreadable at {env_path}: {exc}")
+    # Mirror measure_voice.py's OWN resolution (service_dir/tests/replay_samples.py)
+    # rather than a repo-relative guess, so the two cannot drift apart.
+    replay = os.path.join(service_dir, "tests", "replay_samples.py")
+    obs.append(f"replay harness {'present' if os.path.isfile(replay) else f'MISSING at {replay}'}")
+    # Postgres is the dependency that actually bit us: the timer is Persistent=true,
+    # so a missed nightly run fires during boot, ahead of the database.
+    obs.append(f"postgres 127.0.0.1:5432 {'reachable' if _port_open('127.0.0.1', 5432) else 'REFUSED'}")
+    if stt == "remote":
+        # Remote mode's own failure modes, observed not guessed: the device token
+        # (its absence makes the replay exit 1 before any sample runs) and the
+        # live endpoint the WAVs go to.
+        # Name the variable actually observed — claiming ZOE_DEVICE_TOKEN when
+        # only the DEVICE_TOKEN fallback is set would be its own small lie.
+        tok_name, _ = _service_env_get(service_dir, "ZOE_DEVICE_TOKEN", "DEVICE_TOKEN")
+        obs.append(f"{tok_name} present" if tok_name
+                   else "ZOE_DEVICE_TOKEN/DEVICE_TOKEN MISSING")
+        # Probe the endpoint the harness ACTUALLY targets (ZOE_BASE_URL), not a
+        # hardcoded 127.0.0.1:8000 — a hardcoded probe against a redirected base
+        # is exactly the reports-a-guess failure this file exists to remove.
+        from urllib.parse import urlparse
+        _, base = _service_env_get(service_dir, "ZOE_BASE_URL")
+        base = base or "http://127.0.0.1:8000"
+        u = urlparse(base)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            # A malformed base is ITSELF the observation. Probing a fallback like
+            # 127.0.0.1:80 would report the state of an endpoint the harness
+            # cannot target — a guess with a confident tone.
+            obs.append(f"ZOE_BASE_URL INVALID ({base!r}) — cannot probe the endpoint")
+        else:
+            port = u.port or (443 if u.scheme == "https" else 80)
+            obs.append(f"zoe-data {u.hostname}:{port} "
+                       f"{'reachable' if _port_open(u.hostname, port) else 'REFUSED'}")
+    return obs
+
+
+def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: str) -> dict[str, Any]:
     """Run measure_voice.py under the shared flock and return its aggregated JSON."""
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         out_json = tf.name
@@ -107,6 +198,7 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
             "python3", str(MEASURE),
             "--last", str(samples), "--user", user,
             "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
+            "--stt", stt,
         ]
         proc = subprocess.run(
             cmd, cwd=str(REPO), capture_output=True, text=True,
@@ -115,14 +207,20 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
         if proc.returncode not in (0, 1):  # 1 = measure_voice's own "a turn broke function"
             raise RuntimeError(f"measure_voice failed (rc={proc.returncode}): {proc.stderr[-400:]}")
         if not os.path.getsize(out_json):
-            # measure_voice exits 0 on its skip paths (no .env in --service-dir,
-            # missing replay harness) without writing JSON — surface that
-            # instead of a cryptic JSONDecodeError. --service-dir auto-resolves
-            # to the live env (see _resolve_service_dir); reaching here means it
-            # found none anywhere, which is a loud error, never a pass.
+            # measure_voice exits 0 on SEVERAL skip paths without writing JSON.
+            # This branch used to NAME one of them ("no .env in --service-dir") as
+            # the cause without ever checking it. In the field that guess was wrong:
+            # after the 2026-07-27 reboot the real cause was Postgres not yet
+            # listening, while the .env was present and correct the whole time — so
+            # the gate spent every run pointing at a healthy file. A probe that
+            # asserts a cause it did not observe is worse than one that says
+            # nothing. Observe first, then report what was actually seen.
+            what = ("failed before aggregation (rc=1)" if proc.returncode == 1
+                    else "skipped without results (rc=0)")
             raise RuntimeError(
-                "measure_voice skipped without results — no .env in resolved "
-                f"--service-dir {service_dir!r}; stderr: {proc.stderr[-300:]}"
+                f"measure_voice {what} — observed: "
+                f"{'; '.join(_diagnose_skip(service_dir, stt))}; "
+                f"stderr: {proc.stderr[-300:]}"
             )
         with open(out_json) as fh:
             return json.load(fh)
@@ -473,12 +571,29 @@ def _acquire_harness_lock():
         raise SystemExit(3)
 
 
+def resolve_min_mem(stt: str) -> int:
+    """Memory floor for a run, by STT mode. ZOE_VOICE_PROBE_MIN_MEM_MB always wins."""
+    env_min = os.environ.get("ZOE_VOICE_PROBE_MIN_MEM_MB")
+    if env_min:
+        try:
+            return int(env_min)
+        except ValueError:
+            # Operator-facing config: name the bad value instead of a bare traceback.
+            raise SystemExit(
+                f"ZOE_VOICE_PROBE_MIN_MEM_MB={env_min!r} is not an integer (MB)")
+    return 700 if stt == "remote" else 1500
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Zoe voice regression + speed probe.")
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
                     help="newest N corpus samples to replay")
     ap.add_argument("--user", default=os.environ.get("ZOE_VOICE_PROBE_USER", "jason"))
     ap.add_argument("--service-dir", default=None, help=SERVICE_DIR_HELP)
+    ap.add_argument("--stt", choices=["inprocess", "remote"],
+                    default=os.environ.get("ZOE_VOICE_REPLAY_STT", "inprocess"),
+                    help="'remote' = STT via the LIVE service (no second Moonshine "
+                         "load, needs ZOE_DEVICE_TOKEN). Default via ZOE_VOICE_REPLAY_STT.")
     ap.add_argument("--timeout", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_TIMEOUT_S", "900")))
     ap.add_argument("--baseline", type=Path, default=Path(os.environ.get("ZOE_VOICE_BASELINE", DEFAULT_BASELINE)))
     ap.add_argument("--results", type=Path, default=Path(os.environ.get("ZOE_VOICE_RESULTS", DEFAULT_RESULTS)))
@@ -486,7 +601,14 @@ def main() -> int:
     ap.add_argument("--update-baseline", action="store_true", help="Save this run as the new comparison baseline.")
     ap.add_argument("--warn-ratio", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_RATIO", "1.5")))
     ap.add_argument("--warn-ms", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_MS", "1500")))
-    ap.add_argument("--min-mem-mb", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_MIN_MEM_MB", "1500")),
+    # Per-mode default, both MEASURED not guessed. inprocess: 1500MB (set
+    # empirically when the harness carried its own Moonshine; that load is the
+    # bulk of it). remote: 700MB against a measured 445MB peak RSS for a REAL
+    # 2-sample remote run (STT via the live endpoint, +brain, dry) inside a
+    # MemoryMax=500M cgroup on the live box, 2026-07-27 — the embedder is 293MB
+    # of it; the ~255MB margin covers WAV buffers, more samples, and drift.
+    # An explicit flag or env always wins.
+    ap.add_argument("--min-mem-mb", type=int, default=None,
                     help="skip if available memory is below this — never OOM the live box "
                          "(exit 0 until the non-pass streak trips the alert, then exit 4)")
     ap.add_argument("--alert-after-non-pass", type=int,
@@ -510,6 +632,9 @@ def main() -> int:
     except Exception:
         pass
 
+    if args.min_mem_mb is None:
+        args.min_mem_mb = resolve_min_mem(args.stt)
+
     avail = mem_available_mb()
     if avail < args.min_mem_mb:
         reason = (f"available memory {avail}MB < {args.min_mem_mb}MB threshold — "
@@ -531,7 +656,7 @@ def main() -> int:
 
     run_started_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     try:
-        report = run_measure(args.samples, args.service_dir, args.user, args.timeout)
+        report = run_measure(args.samples, args.service_dir, args.user, args.timeout, args.stt)
     except Exception as exc:
         reason = f"voice probe could not run: {exc}"
         print(f"ERROR: {reason}", file=sys.stderr)

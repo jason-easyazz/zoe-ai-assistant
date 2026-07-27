@@ -2218,9 +2218,16 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
     logger.info("STT_CAPTURE file=%s moonshine=%r", dst, (primary or "")[:90])
 
 
-async def _transcribe_audio(wav_path: str) -> str:
+async def _transcribe_audio(wav_path: str, capture: bool = True) -> str:
     text = await _transcribe_audio_impl(wav_path)
-    await _maybe_capture_stt(wav_path, text)
+    # capture=False for instrument callers (replay- panel ids): the replay gate
+    # POSTs EXISTING corpus WAVs through here, and recapturing them fed the
+    # corpus duplicates of its own newest samples — 62 byte-identical copies in
+    # one day of gate runs (quarantine-replay-dups-20260727), a feedback loop
+    # where the nightly "newest 20" becomes replays of replays. Caught by Codex
+    # on #1572. Real user turns keep capturing unconditionally.
+    if capture:
+        await _maybe_capture_stt(wav_path, text)
     return text
 
 
@@ -2250,6 +2257,19 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
         return text
     logger.info("Moonshine STT returned empty transcript")
     return ""
+
+
+def _suppress_ui_broadcast(panel_id: Optional[str]) -> bool:
+    """True for callers whose STT must NOT touch the panels.
+
+    The replay harness (tests/replay_samples.py --stt remote) transcribes real
+    corpus audio through this endpoint at 04:30 nightly. The UI push consumer
+    (websocket-sync.js) applies NO panel_id filter to voice events — every kiosk
+    flips its orb to "thinking" and resets its auto-home timer on each one — so a
+    20-sample gate run would poke the house panels 20 times in the night. Callers
+    that are instruments, not users, identify themselves with the replay- prefix.
+    """
+    return (panel_id or "").startswith("replay-")
 
 
 @router.post("/transcribe")
@@ -2283,8 +2303,14 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
             wav_path = tmp.name
         duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
         t_stt_start = time.monotonic()
+        # Instrument treatment (no broadcasts, no corpus capture) requires BOTH the
+        # replay- prefix AND device-token auth. panel_id is caller-chosen payload,
+        # so on its own it would let any session-authenticated client opt out of
+        # corpus capture by picking a name (Greptile, #1572). The harness
+        # authenticates with the device token, so it satisfies both.
+        is_instrument = _suppress_ui_broadcast(panel_id) and caller.get("source") == "device"
         try:
-            text = await _transcribe_audio(wav_path)
+            text = await _transcribe_audio(wav_path, capture=not is_instrument)
         finally:
             try:
                 os.unlink(wav_path)
@@ -2306,7 +2332,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
             panel_id, duration_s or 0.0, stt_s, len(stripped),
         )
         # Broadcast the transcribed user text so the UI shows what was heard.
-        if stripped:
+        if stripped and not is_instrument:
             try:
                 from push import broadcaster
                 await broadcaster.broadcast("all", "voice:transcript", {
@@ -2316,11 +2342,12 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
             except Exception:
                 pass
         # Broadcast thinking state — STT done, LLM processing next.
-        try:
-            from push import broadcaster
-            await broadcaster.broadcast("all", "voice:thinking", {"panel_id": panel_id})
-        except Exception:
-            pass
+        if not is_instrument:
+            try:
+                from push import broadcaster
+                await broadcaster.broadcast("all", "voice:thinking", {"panel_id": panel_id})
+            except Exception:
+                pass
         return {"ok": True, "panel_id": panel_id, "text": stripped}
     except asyncio.TimeoutError as exc:
         if t_stt_start is not None:

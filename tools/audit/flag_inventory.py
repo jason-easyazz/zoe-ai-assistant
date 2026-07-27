@@ -42,7 +42,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-TYPED_ENV_FUNCS = {"env_str", "env_bool", "env_int", "env_float", "env_list"}
+TYPED_ENV_FUNCS = {"env_str", "env_bool", "env_int", "env_float", "env_list", "env_float_failsafe"}
 FLAG_RE = re.compile(r"^ZOE_[A-Z0-9_]+$")
 DYNAMIC = "dynamic"
 REQUIRED = "(required)"
@@ -59,10 +59,35 @@ def _literal_repr(node: ast.expr | None) -> str:
         return DYNAMIC
 
 
+def _typed_delegators(tree: ast.AST) -> frozenset[str]:
+    """Names of module-local wrappers that are bare delegations to typed_env.
+
+    Matches only the trivial shape ``def w(...): return env_x(...)`` (docstring
+    allowed) — anything with extra logic stays untyped, which errs toward
+    under-counting typed adoption rather than over-counting it.
+    """
+    out = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        body = [st for st in node.body
+                if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant))]
+        if (len(body) == 1 and isinstance(body[0], ast.Return)
+                and isinstance(body[0].value, ast.Call)
+                and _FlagVisitor._call_name(body[0].value.func) in TYPED_ENV_FUNCS):
+            out.add(node.name)
+    return frozenset(out)
+
+
 class _FlagVisitor(ast.NodeVisitor):
-    def __init__(self) -> None:
+    def __init__(self, typed_delegators: frozenset[str] = frozenset()) -> None:
         # name -> list of (default_str, via_typed_env)
         self.reads: list[tuple[str, str, bool]] = []
+        # Local wrappers in THIS module whose body is a bare delegation to a
+        # typed_env helper (``def _env_int(n, d): return env_int(n, d)``) —
+        # reads through them ARE typed (Greptile P1 on #1575: voice_tts/main.py
+        # delegators were inflating the untyped count).
+        self._typed_delegators = typed_delegators
 
     @staticmethod
     def _call_name(func: ast.expr) -> str:
@@ -84,8 +109,28 @@ class _FlagVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         name = self._call_name(node.func)
-        typed = name in TYPED_ENV_FUNCS
-        is_get = name == "getenv" or self._is_environ_get(node.func)
+        typed = name in TYPED_ENV_FUNCS or name in self._typed_delegators
+        # Local safe-parse wrappers (the Pi daemon's _int_env-style helpers) take
+        # (name, default) like getenv — without this, a flag read through one is
+        # INVISIBLE to the inventory. Found the hard way: ZOE_VAD_TAIL_MS, the
+        # main rollback knob of the fast-tail change, was absent from the
+        # committed inventory because it used _int_env (Bugbot, #1573) — and
+        # ZOE_TTS_KEEP_TAIL_MS / ZOE_TTS_LEAD_GUARD_MS had been missing all along.
+        # Full sweep of the repo's (name, default)-shaped wrapper spellings
+        # (2026-07-27, follow-up to the daemon trio): kokoro_sidecar and
+        # greploop_guard's _env_int/_env_flag, main.py/voice_tts/pi_intent_lab's
+        # _env_float/_env_int/_env_bool, agent_sync's _env_enabled,
+        # logging_setup's _int_from_env, memory_idle_consolidation's _int_env.
+        # SAFE against the (value, default)-shaped coercers that share these
+        # names in the pi_* modules: those call sites pass variables, and the
+        # ZOE_* string-constant filter below skips any non-constant first arg —
+        # so a name can be on this list even when another module reuses it for
+        # a different shape.
+        is_get = (name in ("getenv",
+                           "_int_env", "_float_env", "_env",
+                           "_env_int", "_env_float", "_env_bool", "_env_flag",
+                           "_env_enabled", "_int_from_env")
+                  or self._is_environ_get(node.func))
         if (typed or is_get) and node.args:
             key = node.args[0]
             if isinstance(key, ast.Constant) and isinstance(key.value, str) and FLAG_RE.match(key.value):
@@ -158,7 +203,7 @@ def scan_repo(repo: Path, files: list[str] | None = None) -> dict:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError, OSError):
             continue
-        visitor = _FlagVisitor()
+        visitor = _FlagVisitor(_typed_delegators(tree))
         visitor.visit(tree)
         for flag, default, typed in visitor.reads:
             info = inventory[section].setdefault(

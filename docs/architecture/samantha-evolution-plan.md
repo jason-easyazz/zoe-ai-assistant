@@ -382,10 +382,12 @@ regression, ever (replay harness is the enforcement).
   the RAM gate, flag stays OFF:** focused unit gate green
   (`services/zoe-data/tests/test_livekit_stream_tts.py`, 7 passed), but the mandatory
   replay gate under `flock /tmp/zoe-voice-harness.lock` wrote
-  `voice_regression_last.json` `status=skip` (MemAvailable 133 MB < the 1500 MB OOM
+  `voice_regression_last.json` `status=skip` (MemAvailable 133 MB < the then-1500 MB OOM
   guard) — and a skip is NOT a pass, so prod-enabling `ZOE_LIVEKIT_STREAM_TTS` would
-  have violated this task's own gate. Re-run the flip in an idle window with ≥1.5 GB
-  MemAvailable (unblocked by / coordinate with W3.3 RAM reclaim).
+  have violated this task's own gate. **2026-07-27 update: the gate's floor is now
+  700 MB in its default remote-STT mode** (PR #1572 — the harness stopped loading a
+  second Moonshine; measured 445 MB peak for a full 20-sample run), so this re-run no
+  longer waits on W3.3 — any ~800 MB-idle window clears it.
 - [~] **W1.4** live measurement session (ADR M1/M3/M4) — PARTIAL: M1 barge-in quality verified
   on real voice (#1081); M3 end-to-end latency + M4 loaded-RAM numbers still unmeasured.
   Bars (from the retired #1056 plan's A3 gate): barge time-to-stop < ~300 ms over 10
@@ -462,6 +464,14 @@ must stop reading "W1 DONE" as "conversation-grade voice at the panel".
   and TTS are all outside its boundary. Any endpointing change would leave the gate
   green regardless of live quality. **A continuous-audio harness is a prerequisite for
   touching panel-lane endpointing** — building it is most of that work.
+- **Deep-quiet fast tail shipped dark (2026-07-27):** the daemon's `_Endpointer` can
+  now close after `ZOE_VAD_TAIL_MS` of consecutive DEEP Silero quiet
+  (prob < `ZOE_VAD_TAIL_DEEP_PROB`, default 0.10) instead of the full 800 ms — corpus
+  measurement showed a plain shorter tail cuts ~17% of real commands mid-pause, while
+  depth-gating halves that risk at every tail length (true end-of-turn silence scores
+  ~0.06, mid-utterance pauses ~0.18). Default `0` = off, byte-identical to before;
+  staged rollout value recommended by `scripts/perf/measure_endpointing.py` evidence
+  (see scripts/AGENTS.md).
 - **Consequence for W1.3:** the flag flip remains correct for the LiveKit lane and
   stays queued. It is not a panel-lane improvement and must not be scored as one.
 - **Cheap capacity nobody is using:** the Pi 5 runs at roughly one third of ONE core
@@ -932,7 +942,28 @@ because Theodore reacts; Zoe currently discards the reactions.
 - [ ] **W9.3** draft-with-human-send — NOT STARTED (auto-send forbidden)
 - [ ] **W10.1** `zoe_self` first-person memory lane + `[self]` recall block — NOT STARTED
 - [ ] **W10.2** weekly Zoe-reflection → persona-diff PRs via the proposal contract — NOT STARTED (after W7)
-- [ ] **W11.1** delivery-profile mapper (speed/pauses/voice per sentence) — NOT STARTED (best after W4)
+- [x] **W11.1** delivery-profile mapper — **CODE MERGED, FLAG OFF, NOT YET ENABLED**
+  (`services/zoe-data/voice_delivery.py`, flag `ZOE_EXPRESSIVE_TTS` default OFF; wired in
+  `tts_waterfall._synthesize_kokoro_sidecar`, which adds `speed` to the payload ONLY for a
+  non-neutral profile so the flag-off request is byte-identical). Deliberately built
+  WITHOUT W4: it uses reply text + household-timezone hour, and W4's valence/arousal joins
+  as one more input when it lands rather than requiring a rewrite. Utterances at or under
+  `ZOE_EXPRESSIVE_MIN_CHARS` (60) are never touched, because the Kokoro phrase cache only
+  serves at speed 1.0. Pinned by `tests/test_voice_delivery.py` (`ci_safe`), whose
+  load-bearing cases are the negatives. **ENABLING IS GATED**: `ZOE_EXPRESSIVE_TTS=1` is a
+  voice-path behaviour change and MUST have a green replay gate first — merging dark did
+  not satisfy that requirement, it deferred it to the enable step.
+  **LAB EVIDENCE COMPLETE (2026-07-27, live-sidecar HTTP, no restarts):** mapper matrix
+  correct on all 11 cases incl. boundaries and the both-rules-take-slower case; negative
+  control green (flag unset → speed=None everywhere). The load-bearing check passed live:
+  the ≤60-char guard keeps cached phrases at speed=None — prewarmed-phrase hits stayed
+  1.4–1.8 ms with the flag on, and the measured counterfactual (same phrase at 0.94) costs
+  ~253 ms/utterance, ~150–180× the hit. Slowed synthesis on long replies costs +13–53 ms
+  (immaterial). A/B WAV pairs for the operator listen (the DoD) are at
+  `/home/zoe/zoe-w11-ab/`. Replay gate: GREEN same day (19/19, remote mode). Tuning note:
+  Kokoro's `speed` scales duration SUB-linearly (0.92 → +5–6% observed vs +8.7% naive), so
+  profiles sound milder than their numbers — tune by ear, not arithmetic. Remaining for
+  enable: the operator listen + `ZOE_EXPRESSIVE_TTS=1` on zoe-data.
 - [ ] **W11.2** backchannels — NOT STARTED (needs W1.3 + proven echo handling)
 - [ ] **W12.1** remote live voice over the tunnel (measure WAN latency) — NOT STARTED
 - [ ] **W12.2** proactive outbound voice note when nobody's home — NOT STARTED (W2×W8)

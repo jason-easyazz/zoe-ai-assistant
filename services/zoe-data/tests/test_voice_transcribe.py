@@ -55,15 +55,21 @@ def client():
 def test_transcribe_ok_with_mock_whisper(client, monkeypatch):
     from routers import voice_tts
 
-    async def _fake_run(path: str) -> str:
+    seen_capture = []
+
+    async def _fake_run(path: str, capture: bool = True) -> str:
+        seen_capture.append(capture)
         return "hello world"
 
     # Patch the Moonshine entry point so the test is deterministic and model-free.
+    # Signature mirrors the real _transcribe_audio(wav_path, capture=...) — the
+    # endpoint passes capture explicitly, and a (path)-only stub TypeErrors.
     monkeypatch.setattr(voice_tts, "_transcribe_audio", _fake_run)
     wav = b"RIFF" + b"\x00" * 12  # minimal header-ish payload for temp file
     body = {"audio_base64": base64.b64encode(wav).decode(), "panel_id": "p1"}
     r = client.post("/api/voice/transcribe", json=body)
     assert r.status_code == 200
+    assert seen_capture == [True], "an ordinary panel must still feed the corpus"
     data = r.json()
     assert data.get("ok") is True
     assert data.get("text") == "hello world"
@@ -72,7 +78,7 @@ def test_transcribe_ok_with_mock_whisper(client, monkeypatch):
 def test_transcribe_writes_stt_audit_log(client, monkeypatch, tmp_path):
     from routers import voice_tts
 
-    async def _fake_run(path: str) -> str:
+    async def _fake_run(path: str, capture: bool = True) -> str:
         return "hello audit"
 
     log_path = tmp_path / "voice_stt.jsonl"
@@ -104,7 +110,7 @@ def test_transcribe_missing_body_400(client):
 def test_transcribe_503_when_moonshine_fails(client, monkeypatch, tmp_path):
     from routers import voice_tts
 
-    async def _boom(path: str) -> str:
+    async def _boom(path: str, capture: bool = True) -> str:
         raise RuntimeError("moonshine unavailable")
 
     log_path = tmp_path / "voice_stt.jsonl"

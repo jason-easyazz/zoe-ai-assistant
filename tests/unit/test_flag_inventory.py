@@ -132,3 +132,86 @@ def test_committed_inventory_matches_generator_output() -> None:
     regen_hint = "stale inventory — rerun: python3 tools/audit/flag_inventory.py"
     assert flag_inventory.render_markdown(data, m.group(1)) == committed_md, regen_hint
     assert json.dumps(data, indent=2, sort_keys=True) + "\n" == committed_json, regen_hint
+
+
+def test_precommit_keeps_the_inventory_fresh_hook_wired():
+    """The freshness hook must stay wired — a stale committed inventory cost six
+    separate incidents (red CI + merge conflicts) on 2026-07-27 before it
+    existed. Pins presence and the properties that make it correct: it runs the
+    real generator, fires on Python changes, and stays date-insensitive (the
+    -I stamp filters), or every commit on a later calendar day false-fails."""
+    import yaml
+
+    cfg = yaml.safe_load((_REPO / ".pre-commit-config.yaml").read_text())
+    # ALL local blocks, not just the first — moving the hook intact to a second
+    # `repo: local` block is correctly wired and must not false-fail (polly
+    # cross-review, non-blocking finding).
+    hooks = [h for r in cfg["repos"] if r["repo"] == "local" for h in r.get("hooks", [])]
+    hook = next((h for h in hooks if h["id"] == "zoe-flag-inventory-fresh"), None)
+    assert hook is not None, "zoe-flag-inventory-fresh hook removed from pre-commit"
+    # Structural, not substring: the generator must be the FIRST command the
+    # entry executes — `echo tools/audit/flag_inventory.py …` mentions the path
+    # without running it and must fail here (Codex P2 on the earlier substring).
+    import shlex as _shlex
+    outer = _shlex.split(hook["entry"])
+    assert outer[:2] == ["bash", "-c"] and len(outer) >= 3, \
+        f"unexpected entry shape: {hook['entry']!r}"
+    script_tokens = _shlex.split(outer[2])
+    assert script_tokens[:2] == ["python3", "tools/audit/flag_inventory.py"], \
+        "entry's first command no longer executes the real generator"
+    import re as _re
+    assert _re.search(hook["files"], "services/zoe-data/example.py"), \
+        "hook must fire on Python changes"
+    # scan_repo() reads .env.example for every flag's in_env_example bit — an
+    # .env.example-only commit must also trigger regeneration (Codex P2).
+    assert _re.search(hook["files"], ".env.example"), \
+        "hook must fire on .env.example changes"
+    # BOTH -I filters: the JSON's `timestamp:` line churns with the date too —
+    # dropping either filter false-fails every later-calendar-day commit while
+    # a single-filter assertion stays green (polly cross-review, blocking #1).
+    assert '-I "Last generated:"' in hook["entry"], "date-insensitivity dropped (md stamp)"
+    assert '-I "^timestamp:"' in hook["entry"], "date-insensitivity dropped (json timestamp)"
+
+
+def test_wrapper_spellings_are_scanned_and_value_shape_is_skipped(tmp_path):
+    """(name, default)-shaped wrappers must be recorded; the (value, default)-
+    shaped coercers sharing the same names in pi_* modules must NOT produce
+    rows, because their call sites pass variables, not ZOE_* constants —
+    the exact confusion that kept 15+ real flags out of the inventory."""
+    (tmp_path / "m.py").write_text(
+        'X = _env_flag("ZOE_WRAP_A", True)\n'
+        'Y = _env_float("ZOE_WRAP_B", 4.0)\n'
+        'Z = _int_from_env("ZOE_WRAP_C", 7)\n'
+        'raw = os.environ.get("ZOE_WRAP_D")\n'
+        'W = _env_bool(raw, default=True)\n'  # value-shaped: must add no row
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    names = set(data["flags"]["prod"]) | set(data["flags"]["lab"])
+    # EXACT equality, not subset + a sentinel that FLAG_RE could never admit:
+    # any spurious row from the value-shaped call — whatever the scanner would
+    # name it — makes this fail (polly cross-review: the old "raw" negative
+    # assertion was vacuous by construction).
+    assert names == {"ZOE_WRAP_A", "ZOE_WRAP_B", "ZOE_WRAP_C", "ZOE_WRAP_D"}, \
+        f"unexpected flag set from wrapper sweep: {sorted(names)}"
+
+
+def test_typed_delegator_wrappers_count_as_typed(tmp_path):
+    """A module-local wrapper that bare-delegates to a typed_env helper is a
+    typed read; one with its own logic stays untyped (Greptile P1 on #1575:
+    voice_tts/main.py delegators were inflating the untyped count)."""
+    (tmp_path / "m.py").write_text(
+        "def _env_int(name, default):\n"
+        '    """doc"""\n'
+        "    return env_int(name, default)\n"
+        "def _env_float(name, default):\n"
+        "    try:\n"
+        "        return float(os.getenv(name, default))\n"
+        "    except ValueError:\n"
+        "        return default\n"
+        'A = _env_int("ZOE_TD_A", 1)\n'
+        'B = _env_float("ZOE_TD_B", 2.0)\n'
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    rows = {**data["flags"]["prod"], **data["flags"]["lab"]}
+    assert rows["ZOE_TD_A"]["typed_env"] is True, "bare delegator must count as typed"
+    assert rows["ZOE_TD_B"]["typed_env"] is False, "wrapper with own logic must stay untyped"

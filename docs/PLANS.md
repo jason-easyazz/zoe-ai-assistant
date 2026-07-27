@@ -21,7 +21,7 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 - **Goal:** the touch panel learns household voices AND faces, plus device/room presence, fusing them into a live per-user confidence rating (personalization always; PIN-equivalent step-up only on agreeing signals; PIN stays the root credential). **Pi-heavy by design:** every panel does its own embedding + matching (multi-panel scales at zero Jetson cost); the Jetson stores profiles + applies policy only — no vision models on the Orin.
 - **Detail / executable plan:** [`docs/architecture/panel-identity-plan.md`](architecture/panel-identity-plan.md) (phases, fusion math, presence continuity, research grounding, consent gates).
 - **Now (2026-07-19):** Phase 1 voice (server sync+consent+claim gate #1415, daemon local matching #1416) and Phase 2 face (server storage — this PR; on-Pi SCRFD+MobileFaceNet module #1417) in the merge queue, all flag-dark (`SPEAKER_ID_ENABLED` / `ZOE_FACE_ID_ENABLED` off).
-- **Next:** daemon face hook (parallel with STT) + enrollment UX; then ops-enable voice speaker-ID (enroll Jason → replay gate → flip flag on the panel); Phase 2.5 HA device presence; Phase 3 confidence model + step-up.
+- **Next:** daemon face hook (parallel with STT) + enrollment UX; then ops-enable voice speaker-ID **via the W5 shadow week (mandatory, landed in #1566)**: enroll Jason → replay gate → set `SPEAKER_ID_ENABLED=true` (ships OFF; `SPEAKER_ID_SHADOW=true` stays on) → collect ≥1 week of `(boot, seq)` rows → label + review FA/FR with the operator → only then `SPEAKER_ID_SHADOW=false`; Phase 2.5 HA device presence; Phase 3 confidence model + step-up.
 
 ### 📝 Ask-card live conversation + generative answer tiles
 - **Goal:** a pathway to **stay talking to Zoe**, and an Ask Zoe card that is where **Zoe creates tiles to show answers and results** — both built INTO the estate's Ask card (`touch/home.html`), not a separate page.
@@ -107,6 +107,8 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 - **Wave 4 prep:** the `voice_tts.py` split execution packet exists — [`docs/architecture/voice-tts-split-plan.md`](architecture/voice-tts-split-plan.md) (6 sequenced verbatim-move seam PRs, symbols verified, every step replay-gated; executable cold by a mid-tier agent).
 
 ---
+
+- **Brain tool-selection reliability (2026-07-27):** the brain samples its tool choice at `--temp 0.7` with no per-request override, so `test_tool_action_dispatches` fails ~14%. **Not user-visible** — `ZOE_ROUTER_HEAD=active` decides that utterance at tier 1.5 and it never reaches the brain (verified live); the cost is wasted bisecting, and that is already neutralised (durable failure capture + `-m "ci_safe and not integration"`). Investigation, disproved hypotheses (prompt rewording measured WORSE) and a phased plan: [`docs/architecture/brain-tool-selection-reliability.md`](architecture/brain-tool-selection-reliability.md). **BLOCKED on a reproducer** — nothing reproduces the failure on demand (20/20 isolated, 120/120 synthetic), so no fix is currently falsifiable. Needs a quiet ≥2GB window and authorization to stop the brain; the box hit **13MB available** during investigation. Dropping it is a legitimate outcome.
 
 ## 🗂️ Backlog — pinned & sequenced (from Jason, 2026-06-23)
 *Agent/tooling readiness for remote work. Each is a tracked item; do them in order, don't bounce.*

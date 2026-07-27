@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -288,11 +288,26 @@ async def _synthesize_kokoro_sidecar(text: str, voice: Optional[str] = None) -> 
     text = _clean_for_speech(text)
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     voice = await voice_settings.resolve_tts_voice(voice)
+    # W11 expressive delivery (ZOE_EXPRESSIVE_TTS, default OFF). `speed` is added
+    # to the payload ONLY when the mapper returns a non-neutral profile, so the
+    # flag-off request is byte-identical to before — and a slowed utterance is
+    # deliberately never a short one, because the sidecar's phrase cache only
+    # serves at speed 1.0 (see voice_delivery for the full reasoning).
+    payload: dict[str, Any] = {"text": text, "voice": voice}
+    try:
+        import voice_delivery
+
+        _delivery = voice_delivery.resolve(text)
+        if _delivery.speed is not None:
+            payload["speed"] = _delivery.speed
+            logger.debug("expressive delivery: profile=%s speed=%s", _delivery.profile, _delivery.speed)
+    except Exception as exc:  # noqa: BLE001 — delivery is cosmetic, speech is not
+        logger.debug("expressive delivery resolve failed (neutral): %s", exc)
     try:
         client = _kokoro_http_client()
         r = await client.post(
             f"{sidecar_url}/synthesize",
-            json={"text": text, "voice": voice},
+            json=payload,
         )
         if r.status_code >= 400 or not r.content:
             logger.debug("kokoro-sidecar HTTP %s", r.status_code)
