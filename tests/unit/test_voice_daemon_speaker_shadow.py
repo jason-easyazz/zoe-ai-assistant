@@ -371,7 +371,7 @@ def test_missing_encoder_is_not_recorded_as_a_no_match(daemon, monkeypatch, shad
 
 
 def test_journal_says_not_scored_when_the_encoder_is_missing(daemon, monkeypatch, shadow_log, caplog):
-    """"No match" must not be printed when nothing was embedded.
+    """A "no match" line must not be printed when nothing was embedded.
 
     The row already carries source='encoder_unavailable'; a journal line saying
     "no match" alongside it reads as a real scored result and undoes the whole
