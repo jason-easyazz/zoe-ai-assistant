@@ -351,21 +351,26 @@ async def run_to_completion(
             # semantics (kill on expiry, then re-raise) — the difference is a
             # handle we can register, so a zoe-data shutdown terminates the
             # child instead of orphaning it for the rest of its budget.
-            if _SHUTTING_DOWN.is_set():
-                raise RuntimeError("zoe-data is shutting down — refusing to spawn")
-            popen = subprocess.Popen(
-                list(cmd),
-                cwd=cwd,
-                env=dict(env) if env is not None else None,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
-                # Own process group: a timed-out CLI can have descendants that
-                # inherit our pipes — killing only the direct child leaves them
-                # holding the pipe open and communicate() blocks past the
-                # timeout. killpg takes the whole tree.
-                start_new_session=True,
-            )
+            # Admission is ATOMIC with the shutdown sweep: flag-check, fork and
+            # registration all happen under the registry lock, and the sweep
+            # snapshots under the same lock — so a worker can no longer be
+            # mid-fork while both sweeps complete, leaving its child unseen.
+            # The lock is only ever contended at shutdown; a fork takes ~ms.
             with _LIVE_CHILDREN_LOCK:
+                if _SHUTTING_DOWN.is_set():
+                    raise RuntimeError("zoe-data is shutting down — refusing to spawn")
+                popen = subprocess.Popen(
+                    list(cmd),
+                    cwd=cwd,
+                    env=dict(env) if env is not None else None,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+                    # Own process group: a timed-out CLI can have descendants
+                    # that inherit our pipes — killing only the direct child
+                    # leaves them holding the pipe open and communicate()
+                    # blocks past the timeout. killpg takes the whole tree.
+                    start_new_session=True,
+                )
                 _LIVE_CHILDREN.add(popen)
             try:
                 out, err = popen.communicate(timeout=timeout)

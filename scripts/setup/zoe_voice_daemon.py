@@ -1113,6 +1113,8 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
                 return None  # legacy server echoed identified without a user
             try:
                 conf = float(resp.get("confidence") or 1.0)
+                if not math.isfinite(conf):
+                    raise ValueError("non-finite confidence")
             except (TypeError, ValueError):
                 # A malformed confidence is a MALFORMED RESPONSE, not a server
                 # score — letting the generic handler keep source='server' here
