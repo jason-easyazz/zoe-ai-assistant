@@ -285,8 +285,20 @@ jobs:
                         pullRequest{ number } } }`,
                     { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
                 });
-                if (r) core.info(`PR #${pr.number}: requested Copilot`);
-                else core.warning(`PR #${pr.number}: could NOT request Copilot — the gate will hold until it reviews`);
+                if (r) {
+                  core.info(`PR #${pr.number}: requested Copilot`);
+                  // Timestamp anchor for the Copilot grace below — same pattern as
+                  // codexMark. The mutation alone leaves no visible trace when GitHub
+                  // quietly drops a re-request (observed on #1573: three "successful"
+                  // summons, requested_reviewers stayed empty, Copilot never returned
+                  // to a head it had reviewed predecessors of).
+                  await ok(`PR #${pr.number} copilot marker`, () =>
+                    github.rest.issues.createComment({
+                      ...base, issue_number: pr.number,
+                      body: `Requested Copilot review.\n<!-- greptile-gate:copilot:${sha} -->`,
+                    }));
+                }
+                else core.warning(`PR #${pr.number}: could NOT request Copilot — the gate will hold until it reviews or the grace elapses`);
               }
 
               const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
@@ -318,11 +330,29 @@ jobs:
                 : false;
               const codexPasses = (rh) => rh.has(CODEX) || graceElapsed;
               const codexOk = codexPasses(reviewedHead);
+
+              // Copilot gets the SAME bounded grace, for a failure mode observed live
+              // (#1573, 2026-07-27): after Copilot has reviewed earlier heads of a PR,
+              // GitHub silently drops further re-requests — the mutation succeeds,
+              // requested_reviewers stays empty, no review ever arrives — and a
+              // graceless required reviewer is an unbounded wait. Same trust rule,
+              // same newest-marker rule as codex.
+              const copilotMark = `<!-- greptile-gate:copilot:${sha} -->`;
+              const copilotSummons = comments.filter(c => c.body?.includes(copilotMark) && trusted(c))
+                                             .sort(byCreated);
+              const copilotSummon = copilotSummons.length ? copilotSummons[copilotSummons.length - 1] : undefined;
+              const copilotGraceElapsed = copilotSummon
+                ? (Date.now() - new Date(copilotSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
+                : false;
+              const copilotPasses = (rh) => rh.has(COPILOT) || copilotGraceElapsed;
+              if (copilotPasses(reviewedHead) && !reviewedHead.has(COPILOT)) {
+                core.info(`PR #${pr.number}: Copilot grace elapsed — proceeding`);
+              }
               if (codexOk && !reviewedHead.has(CODEX)) {
                 core.info(`PR #${pr.number}: Codex grace elapsed — proceeding`);
               }
 
-              const copilotOk = reviewedHead.has(COPILOT);
+              const copilotOk = copilotPasses(reviewedHead);
               const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
 
               if (alreadyHandedOff) {
@@ -343,13 +373,13 @@ jobs:
                 // null blocks LABELLING the asymmetry runs the other way: a false
                 // label spends the review this gate exists to protect.
                 if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
-                const stillOk = now.checksOk && now.reviewedHead.has(COPILOT) &&
+                const stillOk = now.checksOk && copilotPasses(now.reviewedHead) &&
                                 codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
                 if (!stillOk) {
                   const r = await ok(`PR #${pr.number} revoke label`, () =>
                     github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
                   if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${now.checksOk} ` +
-                                   `copilot=${now.reviewedHead.has(COPILOT)} codex=${codexPasses(now.reviewedHead)} ` +
+                                   `copilot=${copilotPasses(now.reviewedHead)} codex=${codexPasses(now.reviewedHead)} ` +
                                    `upToDate=${now.upToDate} unresolved=${now.unresolved}) — label revoked`);
                 }
                 continue;
@@ -373,10 +403,10 @@ jobs:
               // claim is false: a review can be DISMISSED, which drops it back out of the
               // submitted-review set. No condition here gets to be special.
               const codexOk2 = codexPasses(st2.reviewedHead);
-              if (!(st2.checksOk && st2.reviewedHead.has(COPILOT) && codexOk2 &&
+              if (!(st2.checksOk && copilotPasses(st2.reviewedHead) && codexOk2 &&
                     st2.upToDate && st2.unresolved === 0)) {
                 core.info(`PR #${pr.number}: conditions changed during the sweep ` +
-                          `(checks=${st2.checksOk} copilot=${st2.reviewedHead.has(COPILOT)} ` +
+                          `(checks=${st2.checksOk} copilot=${copilotPasses(st2.reviewedHead)} ` +
                           `codex=${codexOk2} upToDate=${st2.upToDate} unresolved=${st2.unresolved}) — skipping this pass`);
                 continue;
               }

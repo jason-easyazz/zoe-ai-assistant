@@ -133,7 +133,11 @@ HARNESS = textwrap.dedent(
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: c.at,
             body: `@codex review\n<!-- greptile-gate:codex:${c.sha || 'a'.repeat(40)} -->`,
-          })).concat(OPTS.markerSha ? [{
+          })).concat((OPTS.copilotSummons || []).map((c) => ({
+            user: { login: 'github-actions[bot]', type: 'Bot' },
+            created_at: c.at,
+            body: `Requested Copilot review.\n<!-- greptile-gate:copilot:${c.sha || 'a'.repeat(40)} -->`,
+          }))).concat(OPTS.markerSha ? [{
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: '2026-07-27T00:00:00Z',
             body: `handoff\n<!-- greptile-gate:labelled:${OPTS.markerSha} -->`,
@@ -214,9 +218,25 @@ def test_unresolved_thread_holds(tmp_path):
 
 
 def test_missing_copilot_review_holds_and_summons(tmp_path):
-    """Copilot has not reviewed this head: hold, and actually request it."""
+    """Copilot has not reviewed this head and no summon marker is aged: hold."""
     r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"])
     assert r["addLabels"] == 0, r["log"]
+    # the summon posts a timestamp marker so the grace has an anchor
+    assert any("greptile-gate:copilot:" in c for c in r["comments"]), r["comments"]
+
+
+def test_copilot_grace_elapses_like_codex(tmp_path):
+    """Observed live (#1573): GitHub silently drops Copilot re-requests once it
+    has reviewed earlier heads — the mutation succeeds, requested_reviewers stays
+    empty, the review never comes. A graceless required reviewer is an unbounded
+    wait, so an aged summon marker passes Copilot exactly like Codex's grace."""
+    r = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"],
+             copilotSummons=[{"at": "2020-01-01T00:00:00Z"}])
+    assert r["addLabels"] == 1, r["log"]
+    # and a FRESH summon does not pass it
+    r2 = _run(tmp_path, _script(), reviewers=["chatgpt-codex-connector[bot]"],
+              copilotSummons=[{"at": "2099-01-01T00:00:00Z"}])
+    assert r2["addLabels"] == 0, r2["log"]
 
 
 def test_head_moving_mid_sweep_uses_the_authoritative_sha(tmp_path):
