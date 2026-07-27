@@ -368,3 +368,41 @@ def test_missing_encoder_is_not_recorded_as_a_no_match(daemon, monkeypatch, shad
     daemon._claim_ctx.source = "local"
     daemon._record_speaker_shadow(None)
     assert _rows(shadow_log)[-1]["source"] == "local"
+
+
+def test_journal_says_not_scored_when_the_encoder_is_missing(daemon, monkeypatch, shadow_log, caplog):
+    """"No match" must not be printed when nothing was embedded.
+
+    The row already carries source='encoder_unavailable'; a journal line saying
+    "no match" alongside it reads as a real scored result and undoes the whole
+    never-scored / scored-no-match distinction the W5 review depends on.
+    """
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "_get_voice_encoder", lambda: None)
+
+    with caplog.at_level("DEBUG"):
+        assert daemon._speaker_claim_for_turn(b"wav") is None
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "NOT SCORED" in msgs
+    assert "no match" not in msgs
+
+
+def test_journal_failure_cannot_cause_a_second_row(daemon, monkeypatch, shadow_log):
+    """A raise AFTER the row is written must not make the caller re-score.
+
+    The stream path swallows exceptions from _speaker_claim_for_turn and leaves
+    voice_claim at the sentinel, so its fallback would score again — a second
+    metrics row and journal line for ONE spoken turn. Everything after the write
+    is therefore contained.
+    """
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", lambda wav: ("jason", 0.9))
+
+    boom = MagicMock(side_effect=RuntimeError("journal exploded"))
+    monkeypatch.setattr(daemon.log, "info", boom)
+
+    # Must return normally (not raise), having written exactly one row.
+    assert daemon._speaker_claim_for_turn(b"wav") is None
+    assert len(_rows(shadow_log)) == 1

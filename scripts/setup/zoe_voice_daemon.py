@@ -1221,16 +1221,33 @@ def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
         return None
     claim = _identify_speaker_from_wav(wav_bytes)
     if SPEAKER_ID_SHADOW:
+        source = getattr(_claim_ctx, "source", None)
         logged = _record_speaker_shadow(claim)
-        # "logged" is a claim about the artifact, so only say it when the row
-        # actually landed — otherwise the journal and the metrics file disagree
-        # and the FA/FR review silently over-counts.
-        state = "logged" if logged else "NOT logged (metrics write failed)"
-        if claim:
-            log.info("Speaker ID (shadow): %s (%.3f) — %s, not acted on",
-                     claim[0], claim[1], state)
-        else:
-            log.info("Speaker ID (shadow): no match — %s, not acted on", state)
+        # NOTHING below may raise. The row is already on disk, and the stream
+        # path's `except: pass` would leave voice_claim at the sentinel — so its
+        # fallback would re-score and write a SECOND row for one spoken turn,
+        # breaking the one-turn-one-row contract. Journal formatting is not
+        # worth that, so it is contained.
+        try:
+            # "logged" is a claim about the artifact, so only say it when the row
+            # actually landed — otherwise the journal and the metrics file
+            # disagree and the FA/FR review silently over-counts.
+            state = "logged" if logged else "NOT logged (metrics write failed)"
+            if claim:
+                log.info("Speaker ID (shadow): %s (%.3f) — %s, not acted on",
+                         claim[0], claim[1], state)
+            elif source == "encoder_unavailable":
+                # NOT a scored non-match: nothing was embedded. Saying "no match"
+                # here would read as a real result and undermine the whole point
+                # of distinguishing the two during the shadow-week review.
+                log.warning(
+                    "Speaker ID (shadow): NOT SCORED — resemblyzer unavailable "
+                    "(no encoder); %s, not acted on", state,
+                )
+            else:
+                log.info("Speaker ID (shadow): no match — %s, not acted on", state)
+        except Exception as exc:  # journal formatting must never cost a row
+            log.debug("shadow journal line failed (row already written): %s", exc)
         return None
     return claim
 
