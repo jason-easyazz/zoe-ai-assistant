@@ -2785,9 +2785,11 @@ async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> s
     if _ilu.find_spec("cloakbrowser") is None:
         return "Page browsing is unavailable (CloakBrowser is not installed). Try web_search instead."
 
-    from cloakbrowser import launch_context_async  # type: ignore[import]
-
     try:
+        # find_spec passing does not guarantee the import works — a partially
+        # installed package (missing browser binaries, broken wheel) raises at
+        # import time, and a tool must degrade, not crash the turn.
+        from cloakbrowser import launch_context_async  # type: ignore[import]
         ctx = await launch_context_async(headless=True)
     except Exception as exc:  # noqa: BLE001
         logger.info("web_browse: could not launch browser: %s", exc)
@@ -2810,6 +2812,12 @@ async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> s
         except Exception:  # noqa: BLE001
             pass
 
+    # Bound the raw HTML BEFORE any regex pass: the URL is model-chosen, so page
+    # size is untrusted — a huge page would burn CPU/memory here long before the
+    # output cap applies. 1.5MB of HTML vastly exceeds any useful 6000-char answer.
+    _MAX_HTML = int(os.environ.get("ZOE_WEB_BROWSE_MAX_HTML", "1500000"))
+    if len(html) > _MAX_HTML:
+        html = html[:_MAX_HTML]
     # script/style carry no readable content and would dominate the budget
     text = _re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", html)
     text = _re.sub(r"(?s)<[^>]+>", " ", text)
@@ -2862,7 +2870,7 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
 
     # Fallback 1: ddgs API — fast, no browser needed
     try:
-        loop = _asyncio.get_event_loop()
+        loop = _asyncio.get_running_loop()
         results = await loop.run_in_executor(
             None, lambda: _ddg_search_sync(query, max_results=6, timeout_s=10.0)
         )
