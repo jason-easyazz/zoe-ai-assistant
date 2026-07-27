@@ -334,6 +334,14 @@ jobs:
                 // regression this branch exists to catch. Deciding not to revoke from
                 // pre-summon data would leave the label asserting something already untrue.
                 const now = await readConditions(pr.number, sha, baseRef);
+                // DELIBERATELY fail-open here, and only here (both Bugbot and Copilot
+                // flagged it — the asymmetry is the design, not an oversight): on a
+                // transient read failure, a false REVOKE costs a full re-handoff cycle
+                // and puts the PR back through Greptile's filter (billed), while a
+                // false KEEP costs nothing — the label just holds the PR in the filter
+                // until the next sweep (≤30min) re-reads and revokes if real. Where
+                // null blocks LABELLING the asymmetry runs the other way: a false
+                // label spends the review this gate exists to protect.
                 if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
                 const stillOk = now.checksOk && now.reviewedHead.has(COPILOT) &&
                                 codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
