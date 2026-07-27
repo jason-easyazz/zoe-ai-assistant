@@ -186,6 +186,18 @@ class BrowserBroker:
 
 
 
+def target_url(params: dict[str, Any]) -> str:
+    """The URL a plan wants to open, accepting BOTH spellings.
+
+    chat.py's research screenshots pass ``navigate_to``; the MCP browser tool
+    passes ``url``. Before the OpenClaw surface was retired these were served by
+    different executors, so the surviving Zoe-native executor must honour both or
+    screenshots silently navigate nowhere. Module-level (not buried in the
+    executor closure) so it is testable without the browser package installed.
+    """
+    return str(params.get("url") or params.get("navigate_to") or "").strip()
+
+
 def build_cloak_executor() -> BrowserExecutor | None:
     """Build a CloakBrowser executor for bot-protected targets, if installed.
 
@@ -203,10 +215,7 @@ def build_cloak_executor() -> BrowserExecutor | None:
         try:
             from cloakbrowser import launch_context_async  # type: ignore[import]
             action_log: list[dict] = []
-            # Accept both spellings: chat research passes "navigate_to",
-            # the MCP browser tool passes "url". Before the OpenClaw surface
-            # was retired these were served by different executors.
-            url = str(plan.params.get("url") or plan.params.get("navigate_to") or "").strip()
+            url = target_url(plan.params)
             if not url:
                 return {"ok": False, "error": "no url/navigate_to in plan params"}
             # launch_context_async returns a BrowserContext directly (not an async ctx manager)

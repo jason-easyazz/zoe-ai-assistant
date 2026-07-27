@@ -41,7 +41,7 @@ os.environ.setdefault("ORT_DISABLE_GPU", "1")
 import httpx
 
 from agent_safety import CommandRejected, check_bash_command, guard_browser_page, is_public_url
-from typed_env import env_str
+from typed_env import env_int, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -2682,6 +2682,11 @@ async def _web_browse(url: str, user_id: str = "", timeout_ms: int = 25000) -> s
         return "Couldn't open a browser to read that page. Try web_search instead."
     try:
         page = await ctx.new_page()
+        # assert_public_url above only validates the FIRST url. guard_browser_page
+        # re-runs it on every request INCLUDING redirect hops and aborts
+        # pre-connect, so a public page that 302s to loopback/RFC1918/cloud
+        # metadata cannot be fetched. Same guard the MCP browser tools install.
+        await guard_browser_page(page)
         await page.goto(raw, wait_until="domcontentloaded", timeout=timeout_ms)
         html = await page.content()
     except Exception as exc:  # noqa: BLE001
@@ -2776,17 +2781,17 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
 _TOOL_CAPS: dict[str, int] = {
     # ambient_search: JSON {"results":[...], "count":N} — trim rows + truncate
     # transcripts before re-serializing so the model still gets valid JSON
-    "ambient_search":      int(os.environ.get("ZOE_CAP_AMBIENT_SEARCH",   "0")),   # handled specially
+    "ambient_search":      env_int("ZOE_CAP_AMBIENT_SEARCH", 0),   # handled specially
     # deep_web_research: {"query":..., "raw":<big string>}
-    "deep_web_research":   int(os.environ.get("ZOE_CAP_WEB_RESEARCH",    "6000")),
+    "deep_web_research":   env_int("ZOE_CAP_WEB_RESEARCH", 6000),
     # a rendered page can be enormous — cap it like the research tool
-    "web_browse":          int(os.environ.get("ZOE_CAP_WEB_BROWSE",      "6000")),
+    "web_browse":          env_int("ZOE_CAP_WEB_BROWSE", 6000),
     # memory_list: {"items":[...], "count":N, "status":...}
-    "memory_list":         int(os.environ.get("ZOE_CAP_MEMORY_LIST",      "0")),   # handled specially
+    "memory_list":         env_int("ZOE_CAP_MEMORY_LIST", 0),   # handled specially
     # a2a_delegate: arbitrary peer JSON
-    "a2a_delegate":        int(os.environ.get("ZOE_CAP_A2A_DELEGATE",    "3000")),
+    "a2a_delegate":        env_int("ZOE_CAP_A2A_DELEGATE", 3000),
     # zoe_self_capabilities: service/widget/page/skill lists
-    "zoe_self_capabilities": int(os.environ.get("ZOE_CAP_SELF_CAPS",     "2000")),
+    "zoe_self_capabilities": env_int("ZOE_CAP_SELF_CAPS", 2000),
 }
 
 _AMBIENT_MAX_ROWS     = int(os.environ.get("ZOE_CAP_AMBIENT_ROWS",        "10"))

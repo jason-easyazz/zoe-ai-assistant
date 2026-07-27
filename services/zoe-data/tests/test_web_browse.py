@@ -82,6 +82,65 @@ def test_output_is_capped():
     assert len(zoe_agent._cap_tool_result("web_browse", huge)) < len(huge)
 
 
+def test_caps_survive_a_blank_env_value():
+    """REGRESSION: the caps were int(os.environ.get(..)) — a blank `KEY=` in .env
+    made int('') raise at IMPORT, taking zoe_agent (and the whole brain) down.
+    env_int maps blank -> default."""
+    from typed_env import env_int
+    import os
+    os.environ["ZOE_TEST_CAP_BLANK"] = ""
+    try:
+        assert env_int("ZOE_TEST_CAP_BLANK", 6000) == 6000
+    finally:
+        os.environ.pop("ZOE_TEST_CAP_BLANK", None)
+
+
+@pytest.mark.asyncio
+async def test_browse_installs_the_redirect_guard(monkeypatch):
+    """SSRF: assert_public_url only checks the FIRST url. guard_browser_page must
+    be installed before goto so a public page that redirects to loopback /
+    RFC1918 / cloud-metadata is aborted pre-connect."""
+    import agent_safety
+    import importlib.util as ilu
+
+    monkeypatch.setattr(agent_safety, "assert_public_url", lambda u: u)
+    monkeypatch.setattr(ilu, "find_spec", lambda name: object())  # pretend installed
+
+    guarded: list = []
+
+    async def fake_guard(page):
+        guarded.append(page)
+    monkeypatch.setattr(zoe_agent, "guard_browser_page", fake_guard)
+
+    order: list = []
+
+    class _Page:
+        url = "https://example.com"
+        async def goto(self, url, **kw):
+            order.append("goto")
+        async def content(self):
+            return "<html><body>hi</body></html>"
+
+    class _Ctx:
+        async def new_page(self):
+            return _Page()
+        async def close(self):
+            pass
+
+    import sys, types
+    fake_mod = types.ModuleType("cloakbrowser")
+    async def _launch(**kw):
+        order.append("launch")
+        return _Ctx()
+    fake_mod.launch_context_async = _launch
+    monkeypatch.setitem(sys.modules, "cloakbrowser", fake_mod)
+
+    out = await zoe_agent._web_browse("https://example.com")
+    assert guarded, "guard_browser_page was NOT installed — redirect SSRF is open"
+    assert order == ["launch", "goto"]
+    assert "hi" in out
+
+
 # ── broker surface after the OpenClaw retirement ─────────────────────────────
 
 def test_broker_default_surface_is_zoe_native():
@@ -92,62 +151,52 @@ def test_broker_default_surface_is_zoe_native():
     assert not any("openclaw" in x.lower() for x in backends), backends
 
 
-def test_legacy_hermes_surface_still_executes():
-    """A persisted plan naming the old surface must still validate AND run."""
+def test_legacy_hermes_surface_is_honoured_when_registered():
+    """A persisted plan naming the old surface must still resolve to it.
+
+    Registers a stub executor rather than relying on cloakbrowser being
+    installed — CI has no browser package, and plan_action falls back to the
+    default when a requested surface has NO executor (that fallback is what made
+    an earlier, environment-dependent version of this test fail in CI only).
+    """
     import browser_broker as bb
-    b = bb.create_default_browser_broker()
+    b = bb.BrowserBroker(default_surface="zoeCloak")
+
+    async def _stub(plan):
+        return {"ok": True}
+    b.register_executor("hermesCloak", _stub)
+
     plan = b.plan_action(action="navigate", params={"url": "https://example.com"},
                          user_id="u", session_id="s", requested_surface="hermesCloak")
     assert plan.selected_surface == "hermesCloak"
 
 
-@pytest.mark.asyncio
-async def test_cloak_executor_accepts_navigate_to(monkeypatch):
-    """REGRESSION: chat research passes 'navigate_to' (the MCP tool passes 'url').
-    Before the OpenClaw surface was retired these hit different executors — the
-    surviving cloak executor must honour BOTH, or screenshots load nothing."""
+def test_unavailable_surface_falls_back_to_default():
+    """The flip side: a surface with no executor degrades to the default."""
     import browser_broker as bb
-    execu = bb.build_cloak_executor()
-    if execu is None:
-        pytest.skip("cloakbrowser not installed")
-
-    seen = {}
-
-    class _Page:
-        url = "https://example.com"
-        async def goto(self, url, **kw):
-            seen["url"] = url
-        async def screenshot(self, **kw):
-            return b"png"
-        async def content(self):
-            return "<html></html>"
-
-    class _Ctx:
-        async def new_page(self):
-            return _Page()
-        async def close(self):
-            pass
-
-    async def fake_launch(**kw):
-        return _Ctx()
-
-    import cloakbrowser
-    monkeypatch.setattr(cloakbrowser, "launch_context_async", fake_launch)
-
-    plan = bb.BrowserActionPlan(
-        action="navigate", params={"navigate_to": "https://example.com"},
-        user_id="u", session_id="s",
-    )
-    await execu(plan)
-    assert seen.get("url") == "https://example.com", "navigate_to was ignored"
+    b = bb.BrowserBroker(default_surface="zoeCloak")
+    plan = b.plan_action(action="navigate", params={}, user_id="u", session_id="s",
+                         requested_surface="touchPanel")
+    assert plan.selected_surface == "zoeCloak"
 
 
-@pytest.mark.asyncio
-async def test_cloak_executor_refuses_empty_target():
-    """No url/navigate_to must be an explicit error, never a goto('')."""
+# ── navigate_to REGRESSION — tested via the module-level helper so it runs in
+# CI too (the executor itself needs cloakbrowser, which CI does not install, so
+# an executor-level test would silently SKIP and protect nothing).
+
+def test_target_url_accepts_both_spellings():
+    """chat.py research passes 'navigate_to'; the MCP tool passes 'url'. The
+    surviving Zoe-native executor must honour BOTH or screenshots navigate to ''."""
     import browser_broker as bb
-    execu = bb.build_cloak_executor()
-    if execu is None:
-        pytest.skip("cloakbrowser not installed")
-    out = await execu(bb.BrowserActionPlan(action="navigate", params={}, user_id="u", session_id="s"))
-    assert out["ok"] is False and "url" in out["error"]
+    assert bb.target_url({"url": "https://a.test"}) == "https://a.test"
+    assert bb.target_url({"navigate_to": "https://b.test"}) == "https://b.test"
+    # explicit url wins when both are present
+    assert bb.target_url({"url": "https://a.test", "navigate_to": "https://b.test"}) == "https://a.test"
+
+
+def test_target_url_empty_when_absent():
+    """No target must be an explicit empty -> the executor errors instead of goto('')."""
+    import browser_broker as bb
+    assert bb.target_url({}) == ""
+    assert bb.target_url({"url": "   "}) == ""
+    assert bb.target_url({"url": None, "navigate_to": None}) == ""
