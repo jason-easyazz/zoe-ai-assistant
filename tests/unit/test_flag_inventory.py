@@ -132,3 +132,21 @@ def test_committed_inventory_matches_generator_output() -> None:
     regen_hint = "stale inventory — rerun: python3 tools/audit/flag_inventory.py"
     assert flag_inventory.render_markdown(data, m.group(1)) == committed_md, regen_hint
     assert json.dumps(data, indent=2, sort_keys=True) + "\n" == committed_json, regen_hint
+
+
+def test_wrapper_spellings_are_scanned_and_value_shape_is_skipped(tmp_path):
+    """(name, default)-shaped wrappers must be recorded; the (value, default)-
+    shaped coercers sharing the same names in pi_* modules must NOT produce
+    rows, because their call sites pass variables, not ZOE_* constants —
+    the exact confusion that kept 15+ real flags out of the inventory."""
+    (tmp_path / "m.py").write_text(
+        'X = _env_flag("ZOE_WRAP_A", True)\n'
+        'Y = _env_float("ZOE_WRAP_B", 4.0)\n'
+        'Z = _int_from_env("ZOE_WRAP_C", 7)\n'
+        'raw = os.environ.get("ZOE_WRAP_D")\n'
+        'W = _env_bool(raw, default=True)\n'  # value-shaped: must add no row
+    )
+    data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
+    names = set(data["flags"]["prod"]) | set(data["flags"]["lab"])
+    assert {"ZOE_WRAP_A", "ZOE_WRAP_B", "ZOE_WRAP_C", "ZOE_WRAP_D"} <= names
+    assert "raw" not in names and not any(n == "raw" for n in names)
