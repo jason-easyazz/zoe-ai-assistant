@@ -254,7 +254,13 @@ jobs:
               const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
               // Same trust rule: a forged summon marker would suppress the real one and,
               // once its timestamp aged past the grace, wave Greptile through early.
-              const codexSummon = comments.find(c => c.body?.includes(codexMark) && trusted(c));
+              // NEWEST, not first. `find` returns the OLDEST match, so after a re-summon
+              // (or a retry following a failed label) a stale marker would set the grace
+              // clock and could read as elapsed while the latest @codex review is still
+              // inside its window. The handoff marker already takes the last match; these
+              // two must agree.
+              const codexSummons = comments.filter(c => c.body?.includes(codexMark) && trusted(c));
+              const codexSummon = codexSummons.length ? codexSummons[codexSummons.length - 1] : undefined;
               if (!reviewedHead.has(CODEX) && !codexSummon) {
                 // Wrapped: an advisory summon must never abort the sweep for other PRs.
                 const r = await ok(`PR #${pr.number} summon Codex`, () =>
@@ -284,11 +290,20 @@ jobs:
                 // Already handed off on this head. Only act if it has REGRESSED — then the
                 // label is a false claim and must go; it will be re-applied once the
                 // condition clears.
-                if (!qualifies) {
+                // Re-read first: `qualifies` above was computed BEFORE the summon calls, and
+                // a check that went red or a thread opened in that window is exactly the
+                // regression this branch exists to catch. Deciding not to revoke from
+                // pre-summon data would leave the label asserting something already untrue.
+                const now = await readConditions(pr.number, sha, baseRef);
+                if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
+                const stillOk = now.checksOk && now.reviewedHead.has(COPILOT) &&
+                                codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
+                if (!stillOk) {
                   const r = await ok(`PR #${pr.number} revoke label`, () =>
                     github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
-                  if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${checksOk} ` +
-                                   `copilot=${copilotOk} upToDate=${upToDate} unresolved=${unresolved}) — label revoked`);
+                  if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${now.checksOk} ` +
+                                   `copilot=${now.reviewedHead.has(COPILOT)} codex=${codexPasses(now.reviewedHead)} ` +
+                                   `upToDate=${now.upToDate} unresolved=${now.unresolved}) — label revoked`);
                 }
                 continue;
               }

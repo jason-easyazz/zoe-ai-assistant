@@ -111,11 +111,15 @@ HARNESS = textwrap.dedent(
         issues: {
           // OPTS.markerSha: a prior handoff marker from THIS workflow's bot, pinning
           // the label to that SHA. Trust is bot-only, so the author must match exactly.
-          listComments: async () => (OPTS.markerSha ? [{
+          listComments: async () => ((OPTS.codexSummons || []).map((c) => ({
+            user: { login: 'github-actions[bot]', type: 'Bot' },
+            created_at: c.at,
+            body: `@codex review\n<!-- greptile-gate:codex:${c.sha || 'a'.repeat(40)} -->`,
+          })).concat(OPTS.markerSha ? [{
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: '2026-07-27T00:00:00Z',
             body: `handoff\n<!-- greptile-gate:labelled:${OPTS.markerSha} -->`,
-          }] : []),
+          }] : [])),
           createComment: async (o) => { calls.comments.push(o.body); return {}; },
           addLabels: async () => { calls.addLabels += 1; return {}; },
           removeLabel: async () => { calls.removeLabel += 1; return {}; },
@@ -257,3 +261,32 @@ def test_head_moving_in_the_final_window_is_not_labelled(tmp_path):
     r = _run(tmp_path, _script(), reviewers=BOTH, headMovesLate=True)
     assert r["addLabels"] == 0, r["log"]
     assert any("head moved during the sweep" in m for m in r["log"]), r["log"]
+
+
+def test_grace_clock_uses_the_newest_codex_summon(tmp_path):
+    """`find` returns the OLDEST match — the grace must key off the NEWEST.
+
+    Two trusted summon markers on the same head: one long past the 20-minute grace,
+    one just posted. Taking the older one makes the grace read as elapsed and waves
+    the PR through while the latest @codex review is still inside its window. Codex
+    has NOT reviewed here, so the only thing that could pass it is the grace.
+    """
+    r = _run(
+        tmp_path, _script(),
+        reviewers=["copilot-pull-request-reviewer[bot]"],
+        codexSummons=[{"at": "2020-01-01T00:00:00Z"}, {"at": "2099-01-01T00:00:00Z"}],
+    )
+    assert r["addLabels"] == 0, r["log"]
+
+
+def test_regression_after_handoff_is_decided_on_fresh_conditions(tmp_path):
+    """A PR already handed off, whose checks go red during the summon window.
+
+    The revocation used to be decided from the PRE-summon read, so a regression that
+    appeared in that window left the label in place — still asserting "cheap tier
+    green" for a commit that had since failed.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, checksFlip=True,
+             labels=[{"name": "greptile"}], markerSha="a" * 40)
+    assert r["removeLabel"] == 1, r["log"]
+    assert any("regressed after handoff" in m for m in r["log"]), r["log"]
