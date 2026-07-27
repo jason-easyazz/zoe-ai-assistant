@@ -945,6 +945,17 @@ because Theodore reacts; Zoe currently discards the reactions.
   load-bearing cases are the negatives. **ENABLING IS GATED**: `ZOE_EXPRESSIVE_TTS=1` is a
   voice-path behaviour change and MUST have a green replay gate first — merging dark did
   not satisfy that requirement, it deferred it to the enable step.
+  **LAB EVIDENCE COMPLETE (2026-07-27, live-sidecar HTTP, no restarts):** mapper matrix
+  correct on all 11 cases incl. boundaries and the both-rules-take-slower case; negative
+  control green (flag unset → speed=None everywhere). The load-bearing check passed live:
+  the ≤60-char guard keeps cached phrases at speed=None — prewarmed-phrase hits stayed
+  1.4–1.8 ms with the flag on, and the measured counterfactual (same phrase at 0.94) costs
+  ~253 ms/utterance, ~150–180× the hit. Slowed synthesis on long replies costs +13–53 ms
+  (immaterial). A/B WAV pairs for the operator listen (the DoD) are at
+  `/home/zoe/zoe-w11-ab/`. Replay gate: GREEN same day (19/19, remote mode). Tuning note:
+  Kokoro's `speed` scales duration SUB-linearly (0.92 → +5–6% observed vs +8.7% naive), so
+  profiles sound milder than their numbers — tune by ear, not arithmetic. Remaining for
+  enable: the operator listen + `ZOE_EXPRESSIVE_TTS=1` on zoe-data.
 - [ ] **W11.2** backchannels — NOT STARTED (needs W1.3 + proven echo handling)
 - [ ] **W12.1** remote live voice over the tunnel (measure WAN latency) — NOT STARTED
 - [ ] **W12.2** proactive outbound voice note when nobody's home — NOT STARTED (W2×W8)
