@@ -143,11 +143,22 @@ def test_precommit_keeps_the_inventory_fresh_hook_wired():
     import yaml
 
     cfg = yaml.safe_load((_REPO / ".pre-commit-config.yaml").read_text())
-    local = next(r for r in cfg["repos"] if r["repo"] == "local")
-    hook = next((h for h in local["hooks"] if h["id"] == "zoe-flag-inventory-fresh"), None)
+    # ALL local blocks, not just the first — moving the hook intact to a second
+    # `repo: local` block is correctly wired and must not false-fail (polly
+    # cross-review, non-blocking finding).
+    hooks = [h for r in cfg["repos"] if r["repo"] == "local" for h in r.get("hooks", [])]
+    hook = next((h for h in hooks if h["id"] == "zoe-flag-inventory-fresh"), None)
     assert hook is not None, "zoe-flag-inventory-fresh hook removed from pre-commit"
-    assert "flag_inventory.py" in hook["entry"]
+    # Full path, not a substring: `echo flag_inventory.py` satisfies a bare
+    # "flag_inventory.py in entry" while never running the generator (polly
+    # cross-review, blocking finding #2).
+    assert "tools/audit/flag_inventory.py" in hook["entry"], \
+        "entry no longer invokes the real generator"
     import re as _re
     assert _re.search(hook["files"], "services/zoe-data/example.py"), \
         "hook must fire on Python changes"
-    assert '-I "Last generated:"' in hook["entry"], "date-insensitivity dropped"
+    # BOTH -I filters: the JSON's `timestamp:` line churns with the date too —
+    # dropping either filter false-fails every later-calendar-day commit while
+    # a single-filter assertion stays green (polly cross-review, blocking #1).
+    assert '-I "Last generated:"' in hook["entry"], "date-insensitivity dropped (md stamp)"
+    assert '-I "^timestamp:"' in hook["entry"], "date-insensitivity dropped (json timestamp)"
