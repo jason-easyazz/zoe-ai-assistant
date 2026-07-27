@@ -1,0 +1,15 @@
+# 04:25 — five minutes before zoe-voice-regression.timer's 04:30, enough for
+# serena's exit + respawn to settle and its freed pages to be reclaimable.
+# Persistent=false ON PURPOSE: a catch-up restart at boot or mid-morning would
+# yank code-intel out from under working agents for no gate benefit — if the
+# 04:25 tick was missed, the gate simply takes its chances that night.
+[Unit]
+Description=Nightly pre-gate Serena restart timer (04:25, before the 04:30 voice gate)
+
+[Timer]
+OnCalendar=*-*-* 04:25:00
+AccuracySec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

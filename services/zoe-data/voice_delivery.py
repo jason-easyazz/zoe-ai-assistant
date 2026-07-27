@@ -66,8 +66,14 @@ from typed_env import env_bool, env_int
 # being imported, which would take the whole TTS path down with it.
 # Profiles are speed multipliers for the Kokoro sidecar. Kept few and boring on
 # purpose: every one of them costs a phrase-cache miss, so each has to earn it.
-SPEED_GENTLE = 0.92   # late night — quieter house, slower delivery
-SPEED_WARM = 0.94     # consolation / empathy content, any hour
+# Ear-tuned 2026-07-28 on the panel's Jabra (the real output device): the lab
+# defaults (0.92/0.94) were inaudible to the operator — Kokoro's speed scales
+# duration SUB-linearly, so profiles sound milder than their numbers suggest.
+# The operator's fine-zone was 0.84–0.88 with 0.80 explicitly "too slow"; warm
+# takes the conservative end (fires at any hour), gentle the warmer end
+# (22:00–07:00 only, nobody is in a hurry at 2am).
+SPEED_GENTLE = 0.84   # late night — quieter house, slower delivery
+SPEED_WARM = 0.88     # consolation / empathy content, any hour
 
 # Consolation lexicon. Deliberately explicit and narrow rather than a sentiment
 # model: this must NOT fire on ordinary replies, and a false positive costs a
