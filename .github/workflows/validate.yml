@@ -170,7 +170,21 @@ jobs:
           # is required or the scan silently checks far less than it appears to.
           fetch-depth: 0
 
+      - name: Skip on fork PRs (the secret is not available there)
+        id: forkcheck
+        # A fork PR cannot read repository secrets, so the explicit missing-key check
+        # below would fail EVERY external contribution. The GitGuardian App still scans
+        # fork PRs, so coverage is not lost — this only moves which gate reports.
+        run: |
+          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            echo "::notice::Fork PR — ggshield skipped (no secret access). The GitGuardian App still scans this PR."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Fail loudly if the scan gate is not actually configured
+        if: steps.forkcheck.outputs.skip != 'true'
         # A missing or expired token must NOT look like a pass. This is the same rule
         # as the voice gate: an absent result is never a green one.
         run: |
@@ -181,9 +195,13 @@ jobs:
           fi
 
       - name: GitGuardian scan
+        if: steps.forkcheck.outputs.skip != 'true'
         uses: GitGuardian/ggshield-action@v1
         env:
-          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+          # `github.event.before` is all-zeros on a branch's first push and absent on
+          # pull_request events — an invalid base makes ggshield scan the wrong range.
+          # Blank it in that case so the action falls back to its own default.
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '' }}
           GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
           # pull_request.base.sha is EMPTY on merge-queue runs. Without a base, ggshield
           # has nothing to diff against and would scan far less than it appears to — the

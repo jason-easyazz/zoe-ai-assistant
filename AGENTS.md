@@ -179,7 +179,8 @@ Defect detection is ~87% at 1-100 changed lines, ~65% at 301-600, ~28% at 1000+
 distribution (40 merged PRs, 2026-07) is median 246 / p75 401 / p90 653 / max 975 — so the
 median is healthy but the top quartile is already in the degraded band, and the warning is
 meant to fire there:
-- warn above **10 files or 400 lines**, fail above **30 files or 1000 lines**
+- warn **at or above 10 files / 400 lines**, fail **at or above 30 files / 1000 lines**
+  (inclusive: 1000 lines IS the limit, not one line under it)
 - generated files (flag inventory, vendored `dist/lib/`, lockfiles, wheels) are excluded — they
   move in bulk and say nothing about review burden
 - `oversized-ok` label overrides a genuine exception

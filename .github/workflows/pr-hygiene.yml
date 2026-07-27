@@ -88,7 +88,9 @@ jobs:
               lines.push('Two PRs over the same files are billed twice by every reviewer, and the second inherits the first\'s conflicts. Landing them as one branch is cheaper and reviews better.');
             }
 
-            const over = (t) => nFiles > t.files || nLines > t.lines;
+            // >= not >: the documented limit is 1000 lines, so exactly 1000 must be AT the
+            // limit, not one line under it. `> 1000` silently allowed the boundary case.
+            const over = (t) => nFiles >= t.files || nLines >= t.lines;
             const hasOverride = pr.labels.some(l => l.name === OVERRIDE);
 
             // The override must silence the WARN branch too. Otherwise a PR that exceeds
