@@ -305,7 +305,7 @@ def test_run_slots_are_global_not_per_loop(monkeypatch):
     assert mod._RUN_SLOTS.acquire(blocking=False)
     try:
         async def _probe():
-            return await mod._acquire_slot(0.2)
+            return await mod._acquire_slot(mod._RUN_SLOTS, 0.2)
 
         # A brand-new loop must still see the pool as full.
         assert asyncio.run(_probe()) is False, "a fresh loop got permits over a full pool"
@@ -434,3 +434,42 @@ def test_queue_timeout_is_distinguishable_for_recovery_callers():
     except subprocess.TimeoutExpired:
         caught = "child"
     assert caught == "queue"
+
+
+def test_permit_returns_even_after_the_callers_loop_closes(monkeypatch):
+    """The release must not depend on the event loop surviving.
+
+    An asyncio done-callback can never fire once the caller's loop is closed
+    (consecutive asyncio.run()s, pytest loops) — the old shape stranded the
+    permit exactly then. The worker thread itself now hands the permit back.
+    """
+    import asyncio
+    import time as _t
+
+    import async_subprocess as mod
+
+    sem = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(mod, "_RUN_SLOTS", sem)
+
+    async def _start_and_abandon():
+        task = asyncio.create_task(
+            run_to_completion([sys.executable, "-c", "import time; time.sleep(2)"])
+        )
+        await asyncio.sleep(0.6)          # acquired + child running
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(_start_and_abandon())     # loop CLOSES here, child still alive
+    assert not sem.acquire(blocking=False), "permit free while the child still runs"
+
+    deadline = _t.monotonic() + 15
+    while _t.monotonic() < deadline:
+        if sem.acquire(blocking=False):
+            sem.release()
+            break
+        _t.sleep(0.2)
+    else:
+        raise AssertionError("permit stranded after the caller's loop closed")

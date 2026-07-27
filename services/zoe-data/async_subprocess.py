@@ -107,11 +107,17 @@ class QueueTimeout(subprocess.TimeoutExpired):
     """
 
 
-async def _acquire_slot(timeout: float) -> bool:
-    """Wait up to `timeout` for a global run-pool permit. Never blocks the loop."""
+async def _acquire_slot(slots: "threading.BoundedSemaphore", timeout: float) -> bool:
+    """Wait up to `timeout` for a run-pool permit. Never blocks the loop.
+
+    Takes the semaphore EXPLICITLY so the caller can pin acquire and release to
+    the same instance — releasing whatever the global happens to be at finish
+    time over-releases a swapped semaphore (BoundedSemaphore raises) when a
+    worker outlives the swap.
+    """
     deadline = time.monotonic() + timeout
     while True:
-        if _RUN_SLOTS.acquire(blocking=False):
+        if slots.acquire(blocking=False):
             return True
         if time.monotonic() >= deadline:
             return False
@@ -248,21 +254,44 @@ async def run_to_completion(
     if queue_timeout is None:
         queue_timeout = _QUEUE_WAIT_S
 
+    # Permit handoff that does NOT depend on the event loop surviving: an
+    # asyncio done-callback can never fire if the caller's loop closes before
+    # the worker finishes (consecutive asyncio.run()s, pytest loops), which
+    # stranded a permit. The worker thread itself participates instead —
+    # whichever side is second to act (worker finishing / caller abandoning)
+    # releases, under a plain threading.Lock, so exactly one release happens
+    # and none of it touches a loop.
+    _slots = _RUN_SLOTS  # pinned: acquire and release the SAME instance
+    _handoff = {"abandoned": False, "done": False}
+    _handoff_lock = threading.Lock()
+
+    def _abandon_permit() -> None:
+        with _handoff_lock:
+            _handoff["abandoned"] = True
+            if _handoff["done"]:
+                _slots.release()
+
     def _blocking_run() -> "subprocess.CompletedProcess[bytes]":
-        return subprocess.run(
-            list(cmd),
-            cwd=cwd,
-            env=dict(env) if env is not None else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
-            timeout=timeout,
-        )
+        try:
+            return subprocess.run(
+                list(cmd),
+                cwd=cwd,
+                env=dict(env) if env is not None else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+                timeout=timeout,
+            )
+        finally:
+            with _handoff_lock:
+                _handoff["done"] = True
+                if _handoff["abandoned"]:
+                    _slots.release()
 
     # Bound the WAIT explicitly rather than letting the executor queue absorb it
     # invisibly. The semaphore mirrors the pool width, so holding a permit means
     # a worker is available — the job starts immediately once acquired and gets
     # its full `timeout`.
-    if not await _acquire_slot(queue_timeout):
+    if not await _acquire_slot(_slots, queue_timeout):
         _log.warning(
             "run_to_completion gave up queueing after %.1fs (pool saturated, %d workers): %s",
             queue_timeout, _RUN_POOL_WIDTH, cmd[0] if cmd else "?",
@@ -279,7 +308,7 @@ async def run_to_completion(
     try:
         fut = loop.run_in_executor(_RUN_POOL, _blocking_run)
     except BaseException:
-        _RUN_SLOTS.release()
+        _slots.release()
         raise
     released = False
     try:
@@ -295,7 +324,7 @@ async def run_to_completion(
                 asyncio.shield(fut), timeout=timeout + _QUEUE_GRACE_S
             )
         released = True
-        _RUN_SLOTS.release()
+        _slots.release()
         return result
     except asyncio.TimeoutError:
         # subprocess.run's own timeout should already have killed the child, so
@@ -304,7 +333,7 @@ async def run_to_completion(
         # the caller its TimeoutExpired but keep the permit held until the thread
         # actually finishes, so the semaphore keeps reflecting real capacity
         # rather than over-admitting into a pool that has no free worker.
-        fut.add_done_callback(lambda _f: _RUN_SLOTS.release())
+        _abandon_permit()
         released = True
         _log.error(
             "run_to_completion worker wedged past %.1fs+%.1fs grace; permit held "
@@ -319,5 +348,5 @@ async def run_to_completion(
         # accounting error as the wedged case. Hand the permit back only when
         # the thread actually finishes.
         if not released:
-            fut.add_done_callback(lambda _f: _RUN_SLOTS.release())
+            _abandon_permit()
         raise

@@ -84,13 +84,13 @@ pip install --quiet \
     websocket-client \
     "resemblyzer>=0.1.3"
 
-# Fail loudly NOW rather than silently collecting a week of empty shadow rows.
+# Warn loudly (not fatal: speaker ID ships disabled, and a panel that never
+# enables it should still provision). The daemon additionally records
+# source='encoder_unavailable' if it is ever enabled without the encoder.
 if ! python3 -c "import resemblyzer" 2>/dev/null; then
-    echo "!!  resemblyzer failed to install — speaker ID cannot score anything."
-    echo "!!  Either fix the install or set SPEAKER_ID_ENABLED=false in the env"
-    echo "!!  file below; leaving it enabled produces a shadow log full of"
-    echo "!!  no-match rows that look like results."
-    exit 1
+    echo "!!  resemblyzer failed to install — speaker ID cannot be enabled on"
+    echo "!!  this panel until that is fixed. Provisioning continues (the"
+    echo "!!  feature ships disabled)."
 fi
 
 ### ---- openwakeword model download -------------------------------------
@@ -131,12 +131,15 @@ VERIFY_SSL=true
 ZOE_WAKE_ACK_PHRASE=
 # Optional phrase bank. Quote pipe-separated values if enabled.
 # ZOE_WAKE_ACK_PHRASES="Yes Jason.|Hi Jason.|Good morning Jason."
-# Speaker ID (W5): ON, in shadow mode — the daemon scores every turn and logs
+# Speaker ID (W5): OFF by default — enabling biometric scoring is an OPERATOR
+# decision (consent + enrollment first; docs/PLANS.md tracks this phase as
+# flag-dark). To start the W5 shadow week: enroll, then set
+# SPEAKER_ID_ENABLED=true here and restart. Shadow mode — the daemon scores every turn and logs
 # {boot, seq, ts, panel_id, user_id, score, n_profiles, source, truth} rows to ~/.zoe-voice/speaker_shadow_metrics.jsonl
 # (no audio, no embeddings) but never attaches identity to the turn payload.
 # Flip SPEAKER_ID_SHADOW=false ONLY after the shadow week's false-accept /
 # false-reject numbers are reviewed with the operator (samantha plan §W5).
-SPEAKER_ID_ENABLED=true
+SPEAKER_ID_ENABLED=false
 SPEAKER_ID_SHADOW=true
 EOF
     echo "    IMPORTANT: Edit $ENV_FILE and set DEVICE_TOKEN before starting."
