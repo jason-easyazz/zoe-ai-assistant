@@ -109,14 +109,23 @@ _FAILURE_LOG = Path(
 )
 
 
-def _record_nondeterministic_failure(test: str, **detail: Any) -> None:
+def _record_nondeterministic_failure(test: str, *, dispatches: list, **detail: Any) -> None:
     """Append one live-model failure to a durable log. Never fails the test.
 
     These tests assert what the live brain CHOSE, so a failure's only real value
     is the losing choice — and that is exactly what console truncation keeps
     eating. Written as JSONL next to the other Zoe logs so the evidence is still
     there when someone comes to deflake the prompt.
+
+    `intents` is derived HERE from the recorded dispatches rather than accepted
+    from the caller: a forced-failure control that overrides the caller's local
+    variable wrote a self-contradictory record into this log on 2026-07-27
+    (intents=['memory_store'] alongside dispatches=[list_add, list_add]) and
+    briefly passed as real evidence. Point ZOE_NONDET_FAILURE_LOG elsewhere when
+    deliberately forcing a failure.
     """
+    detail["dispatches"] = dispatches
+    detail["intents"] = [d.get("intent") for d in dispatches]
     try:
         _FAILURE_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(_FAILURE_LOG, "a", encoding="utf-8") as f:
@@ -292,6 +301,35 @@ async def test_web_query_delegates_and_synthesizes(stub):
 @requires_env
 @pytest.mark.asyncio
 async def test_tool_action_dispatches(stub):
+    """The brain must pick the lists tool for an unambiguous list mutation.
+
+    DEFLAKE ATTEMPTED AND REJECTED (2026-07-27) — do not retry it blind.
+
+    The failure was finally captured: this prompt dispatches `memory_store`
+    instead of `list_add`, i.e. the brain reads it as a fact about the user
+    worth remembering rather than a list operation.
+
+    The obvious fix — rewording to the `lists` ability's own advertised example,
+    "Add milk to the shopping list." (dropping the possessive "my" that invites
+    the remember-a-fact reading) — was tried and MEASURED WORSE: 2 failures in 7
+    file-level runs (~29%) against this prompt's documented ~14%, and it failed a
+    DIFFERENT way, dispatching nothing at all. So the instability is not simply
+    lists-vs-memory ambiguity that wording can resolve; the 4B brain is just
+    unreliable at tool-calling on this path.
+
+    Two things that will mislead you if you try again:
+      * It does NOT reproduce in isolation — the old prompt scored 20/20 on its
+        own. Only repeated full-file / full-suite runs surface it, so any harness
+        built on single calls cannot show one prompt beating another.
+      * In production this phrase never reaches the brain at all: with
+        ZOE_ROUTER_HEAD=active (verified live 2026-07-27, FunctionGemma-270M on
+        :11436) the two-stage router decides it at tier 1.5. So this is a real
+        signal about the brain's tool-calling lane and a poor proxy for anything
+        a user experiences.
+
+    Check ~/.zoe-logs/nondeterministic-test-failures.jsonl for the losing choice
+    before assuming a regression.
+    """
     s, zc = stub
     await zc.run_zoe_core("Add bread to my shopping list.", "s2", "family-admin")
     intents = [d.get("intent") for d in s.dispatches()]
@@ -306,7 +344,6 @@ async def test_tool_action_dispatches(stub):
             "test_tool_action_dispatches",
             prompt="Add bread to my shopping list.",
             expected="list_add",
-            intents=intents,
             dispatches=s.dispatches(),
             requests=s.requests,
         )
