@@ -145,11 +145,16 @@ def test_wrapper_spellings_are_scanned_and_value_shape_is_skipped(tmp_path):
         'Z = _int_from_env("ZOE_WRAP_C", 7)\n'
         'raw = os.environ.get("ZOE_WRAP_D")\n'
         'W = _env_bool(raw, default=True)\n'  # value-shaped: must add no row
+        'V = _env_flag("NOT_ZOE_FLAG", False)\n'  # non-ZOE constant: FLAG_RE must reject
     )
     data = flag_inventory.scan_repo(tmp_path, files=["m.py"])
     names = set(data["flags"]["prod"]) | set(data["flags"]["lab"])
-    assert {"ZOE_WRAP_A", "ZOE_WRAP_B", "ZOE_WRAP_C", "ZOE_WRAP_D"} <= names
-    assert "raw" not in names and not any(n == "raw" for n in names)
+    # EXACT set, not subset (polly cross-review, #1575): the old negative
+    # assertion ("raw" not in names) was near-vacuous — a variable argument is
+    # an ast.Name and could never be recorded even by a broken filter. Exact
+    # equality is what actually catches an over-recording regression, including
+    # the value-shaped coercer call which must add no row.
+    assert names == {"ZOE_WRAP_A", "ZOE_WRAP_B", "ZOE_WRAP_C", "ZOE_WRAP_D"}, names
 
 
 def test_wrapper_delegating_to_typed_env_records_a_typed_read(tmp_path):
