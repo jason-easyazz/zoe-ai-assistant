@@ -104,7 +104,11 @@ def upgrade() -> None:
         )
         op.execute("DROP TRIGGER IF EXISTS trg_evolution_stamp_autonomy ON evolution_proposals")
         op.execute(
-            "CREATE TRIGGER trg_evolution_stamp_autonomy BEFORE INSERT ON evolution_proposals "
+            # INSERT OR UPDATE: an UPDATE could otherwise flip a non-executable
+            # proposal to autonomy_class='execute' after insert-time stamping.
+            # The stamp is type-derived and deterministic, so re-stamping on any
+            # UPDATE is safe (status changes just re-assert the same contract).
+            "CREATE TRIGGER trg_evolution_stamp_autonomy BEFORE INSERT OR UPDATE ON evolution_proposals "
             "FOR EACH ROW EXECUTE FUNCTION evolution_stamp_autonomy()"
         )
 

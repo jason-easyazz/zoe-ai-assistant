@@ -2158,14 +2158,22 @@ async def evolution_proposal_action(
                     async with pool.acquire() as _mconn:
                         bridged = await create_board_issue_for_proposal(_mconn, prop_row)
                     _prior = multica_issue_id
+                    _link_warning = None
                     if bridged.get("issue_id"):
                         # Point the proposal at the REAL board issue (replacing any
-                        # phantom id from the earlier Multica REST create).
+                        # phantom id from the earlier Multica REST create). The board
+                        # issue is already COMMITTED at this point — a failure here
+                        # must not be reported as an execution failure (the run IS
+                        # enqueued); it only degrades the back-link.
                         multica_issue_id = bridged["issue_id"]
-                        await db.execute(
-                            "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                            multica_issue_id, proposal_id,
-                        )
+                        try:
+                            await db.execute(
+                                "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                                multica_issue_id, proposal_id,
+                            )
+                        except Exception as _le:  # noqa: BLE001
+                            _link_warning = f"board issue created but proposal link update failed: {_le}"
+                            logger.warning("evolution_approve: %s", _link_warning)
                         # If a NEW board issue superseded a prior REST-synced issue,
                         # cancel that orphan so it doesn't linger on multica-web.
                         if bridged.get("created") and _prior and _prior != multica_issue_id:
@@ -2179,6 +2187,8 @@ async def evolution_proposal_action(
                     _dispatch = {"ok": True, "auto_executed": bool(bridged.get("created")),
                                  "board_issue": bridged["number"], "created": bridged["created"],
                                  "issue_status": bridged.get("status")}
+                    if _link_warning:
+                        _dispatch["warning"] = _link_warning
                     logger.info(
                         "evolution_approve: proposal %s -> board issue #%s (created=%s)",
                         proposal_id, bridged["number"], bridged["created"],

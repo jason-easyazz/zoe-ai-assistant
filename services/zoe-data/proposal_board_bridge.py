@@ -67,6 +67,17 @@ def may_auto_execute(user: dict | None, proposal: asyncpg.Record | dict) -> tupl
     # satisfied and fail closed. Persisting per-proposal approval refs is future
     # work — deliberately NOT read from a non-existent column here.
     approval_refs = (f"approval:admin:{user_id}",)
+    # Defense in depth against stored-column tampering (and for stores without
+    # the Postgres trigger): the STORED autonomy_class must match the TYPE
+    # policy. Only the proposal type grants executability — a row whose column
+    # says 'execute' while its type's policy says otherwise is refused.
+    from evolution_autonomy import contract_for_type
+    policy = contract_for_type(get("type"))
+    if str(get("autonomy_class") or "") != policy["autonomy_class"]:
+        return False, (
+            f"stored autonomy_class {get('autonomy_class')!r} does not match the "
+            f"policy for type {get('type')!r} ({policy['autonomy_class']!r})"
+        )
     try:
         from zoe_evolution_execution_gate import evaluate_execution_gate
         gate = evaluate_execution_gate({

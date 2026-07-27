@@ -93,9 +93,11 @@ def test_may_auto_execute_is_fail_closed():
     # a DB proposal has no autonomy contract → gate blocks even for an admin
     # (identified admin: the user_id fail-closed check has its own test)
     admin = {"role": "family-admin", "user_id": "jason"}
-    prop = {"id": "p1", "title": "T"}  # no autonomy_class / approval_required
+    prop = {"id": "p1", "title": "T"}  # no type / autonomy_class / approval_required
     allowed, reason = pbb.may_auto_execute(admin, prop)
-    assert allowed is False and "execution gate blocked" in reason
+    # denied at the earliest applicable check (now the type-policy cross-check;
+    # specific paths each have their own test) — the property is: DENIED, with a reason
+    assert allowed is False and reason
 
     # non-admin is denied BEFORE the gate is even consulted
     allowed, reason = pbb.may_auto_execute({"role": "guest"}, prop)
@@ -110,7 +112,7 @@ def test_may_auto_execute_allows_admin_with_executable_contract():
     admin = {"role": "family-admin", "user_id": "jason"}
     # executable autonomy + the privileged-execution approval, which the admin's
     # own approval satisfies (approval:admin:<id>) — the real happy path.
-    prop = {"id": "p9", "autonomy_class": "execute",
+    prop = {"id": "p9", "type": "intent_pattern", "autonomy_class": "execute",
             "approval_required": ["user_or_admin_for_privileged_execution"]}
     allowed, reason = pbb.may_auto_execute(admin, prop)
     assert allowed is True, reason
@@ -120,7 +122,7 @@ def test_may_auto_execute_parses_json_string_approval_required():
     """approval_required arrives as a JSON-array TEXT column from the DB — the
     real end-to-end shape after the autonomy contract is persisted."""
     admin = {"role": "family-admin", "user_id": "jason"}
-    prop = {"id": "p", "autonomy_class": "execute",
+    prop = {"id": "p", "type": "intent_pattern", "autonomy_class": "execute",
             "approval_required": '["user_or_admin_for_privileged_execution"]'}  # JSON string
     allowed, reason = pbb.may_auto_execute(admin, prop)
     assert allowed is True, reason
@@ -130,7 +132,7 @@ def test_admin_approval_does_not_satisfy_other_approval_classes():
     """The admin ref satisfies only privileged-execution — a proposal that also
     requires e.g. security_review still blocks until THAT evidence exists."""
     admin = {"role": "family-admin", "user_id": "jason"}
-    prop = {"id": "p9", "autonomy_class": "execute",
+    prop = {"id": "p9", "type": "user_frustration", "autonomy_class": "execute",
             "approval_required": ["user_or_admin_for_privileged_execution", "security_review"]}
     allowed, reason = pbb.may_auto_execute(admin, prop)
     assert allowed is False and "security_review" in reason
@@ -149,7 +151,7 @@ async def test_no_live_ref_still_creates():
 def test_admin_without_user_id_fails_closed():
     """An admin-shaped dict with no user_id must NOT mint approval:admin:unknown —
     an approval ref has to name an identifiable principal."""
-    prop = {"id": "p9", "autonomy_class": "execute",
+    prop = {"id": "p9", "type": "intent_pattern", "autonomy_class": "execute",
             "approval_required": ["user_or_admin_for_privileged_execution"]}
     for user in ({"role": "family-admin"}, {"role": "admin", "user_id": ""},
                  {"role": "admin", "user_id": "   "}):
@@ -174,3 +176,15 @@ def test_evolution_proposal_action_requires_admin():
         "evolution_proposal_action must Depends(require_admin); "
         f"got dependencies: {[getattr(c, '__name__', c) for c in dep_calls]}"
     )
+
+
+def test_stored_execute_on_wrong_type_is_refused():
+    """Defense in depth vs the UPDATE-bypass: a row whose stored autonomy_class
+    says 'execute' while its TYPE's policy is review-only must be refused —
+    only the type grants executability (mirrors the DB trigger, and covers
+    stores where the trigger doesn't exist)."""
+    admin = {"role": "family-admin", "user_id": "jason"}
+    prop = {"id": "p9", "type": "code_improvement", "autonomy_class": "execute",
+            "approval_required": ["user_or_admin_for_privileged_execution"]}
+    allowed, reason = pbb.may_auto_execute(admin, prop)
+    assert allowed is False and "does not match the policy" in reason
