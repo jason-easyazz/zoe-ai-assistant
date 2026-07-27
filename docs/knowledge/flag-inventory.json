@@ -3636,7 +3636,7 @@
         "defaults": [
           "'auto'"
         ],
-        "in_env_example": false,
+        "in_env_example": true,
         "readers": [
           "services/zoe-data/web_search_provider.py"
         ],
