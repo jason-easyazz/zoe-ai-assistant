@@ -164,11 +164,12 @@ files pay twice and then conflict with each other. Combine first.
 - **Before opening a PR, check for an open one over the same files.** If it exists, add to that
   branch or wait for it to land. `pr-hygiene.yml` posts an overlap notice automatically, but
   the cheaper move is not creating the second PR at all.
-- **A merge queue would remove this churn entirely** — it tests against the latest `main`
-  without the author updating the branch. Prepared but NOT enabled: `validate.yml` already
-  triggers on `merge_group`, and one decision is open (GitGuardian's App check cannot report
-  on `merge_group`). Plan, blockers and the exact settings:
-  [`docs/knowledge/merge-queue-switch.md`](docs/knowledge/merge-queue-switch.md).
+- **A merge queue is NOT AVAILABLE to this repo** (resolved 2026-07-27): GitHub gates merge
+  queues to organization-owned repositories and this repo is personal — no setting we
+  control changes that. The churn answer remains serialisation (below). The useful piece
+  shipped anyway: the required secret check is now the first-party `secret-scan` job, so a
+  GitGuardian App outage can no longer freeze `main`. Analysis, org-transfer trade-offs and
+  rollback: [`docs/knowledge/merge-queue-switch.md`](docs/knowledge/merge-queue-switch.md).
 - **Serialise.** Keep one or two PRs in flight. With `strict: true` every merge pushes the
   others behind, and each branch update triggers a fresh review — the measured 3.6 reviews/PR
   in July was this, not oversized changes.

@@ -334,8 +334,11 @@ class _Endpointer:
         self._vad_max_silent = max(1, int(VAD_ENDPOINT_SILENCE_S * SAMPLE_RATE / CHUNK_SIZE))
         # Deep-quiet fast tail (see ZOE_VAD_TAIL_MS above): None = disabled,
         # i.e. exactly the pre-flag behaviour.
+        # ceil, not floor: 639ms must mean 8 chunks (640ms), not 7 (560ms) —
+        # flooring silently exits up to a full chunk EARLIER than configured,
+        # which is the aggressive direction and invalidates ear-tuned values.
         self._deep_max_silent = (
-            max(1, int(ZOE_VAD_TAIL_MS / 1000 * SAMPLE_RATE / CHUNK_SIZE))
+            max(1, -(-ZOE_VAD_TAIL_MS * SAMPLE_RATE // (1000 * CHUNK_SIZE)))
             if self.mode == "vad" and ZOE_VAD_TAIL_MS > 0 else None
         )
         self._min_frames = int(0.5 * SAMPLE_RATE / CHUNK_SIZE)
