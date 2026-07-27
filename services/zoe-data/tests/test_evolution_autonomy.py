@@ -38,7 +38,11 @@ def test_migration_trigger_mirrors_the_policy_and_is_authoritative():
     from pathlib import Path
     mig = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0027_evolution_autonomy_contract.py"
     src = mig.read_text()
-    else_branch = src[src.index('"  ELSE'):src.index('"  END IF;')]
+    start, end = src.find("ELSE"), src.find("END IF")
+    assert start != -1 and end != -1 and start < end, (
+        "could not locate the trigger's ELSE branch — migration formatting changed; "
+        "update this test alongside it")
+    else_branch = src[start:end]
     # unconditional assignment, no IS NULL guard
     assert "IS NULL" not in else_branch, "ELSE branch still only fills NULLs (fail-open)"
     assert "NEW.autonomy_class := 'prepare'" in else_branch

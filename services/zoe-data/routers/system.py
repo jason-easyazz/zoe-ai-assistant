@@ -2134,7 +2134,10 @@ async def evolution_proposal_action(
             # REST display-sync above already depended on it.
             _dispatch = None
             if not _allowed:
-                _dispatch = {"ok": False, "auto_executed": False, "reason": _exec_reason}
+                # A review-only approval is a SUCCESS, not an execution failure —
+                # ok reflects the dispatch outcome; auto_executed=False + reason
+                # convey that nothing was (intentionally) executed.
+                _dispatch = {"ok": True, "auto_executed": False, "reason": _exec_reason}
                 logger.info(
                     "evolution_approve: proposal %s approved but NOT auto-executed (%s)",
                     proposal_id, _exec_reason,
