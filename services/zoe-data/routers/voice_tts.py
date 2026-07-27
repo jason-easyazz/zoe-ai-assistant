@@ -2252,6 +2252,19 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
     return ""
 
 
+def _suppress_ui_broadcast(panel_id: str) -> bool:
+    """True for callers whose STT must NOT touch the panels.
+
+    The replay harness (tests/replay_samples.py --stt remote) transcribes real
+    corpus audio through this endpoint at 04:30 nightly. The UI push consumer
+    (websocket-sync.js) applies NO panel_id filter to voice events — every kiosk
+    flips its orb to "thinking" and resets its auto-home timer on each one — so a
+    20-sample gate run would poke the house panels 20 times in the night. Callers
+    that are instruments, not users, identify themselves with the replay- prefix.
+    """
+    return (panel_id or "").startswith("replay-")
+
+
 @router.post("/transcribe")
 async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
@@ -2306,7 +2319,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
             panel_id, duration_s or 0.0, stt_s, len(stripped),
         )
         # Broadcast the transcribed user text so the UI shows what was heard.
-        if stripped:
+        if stripped and not _suppress_ui_broadcast(panel_id):
             try:
                 from push import broadcaster
                 await broadcaster.broadcast("all", "voice:transcript", {
@@ -2316,11 +2329,12 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
             except Exception:
                 pass
         # Broadcast thinking state — STT done, LLM processing next.
-        try:
-            from push import broadcaster
-            await broadcaster.broadcast("all", "voice:thinking", {"panel_id": panel_id})
-        except Exception:
-            pass
+        if not _suppress_ui_broadcast(panel_id):
+            try:
+                from push import broadcaster
+                await broadcaster.broadcast("all", "voice:thinking", {"panel_id": panel_id})
+            except Exception:
+                pass
         return {"ok": True, "panel_id": panel_id, "text": stripped}
     except asyncio.TimeoutError as exc:
         if t_stt_start is not None:

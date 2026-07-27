@@ -139,10 +139,13 @@ def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
     allow_writes=False — the live endpoints would actually execute the commands.
 
     Trade-offs, stated: stt_ms gains localhost-HTTP overhead (~ms, dwarfed by the
-    1-2s of STT itself), and the live service broadcasts a transcript event per
-    call — panel_id "replay-harness" so kiosks, which filter on their own id,
-    ignore it. Auth follows the zoe_latency_probe convention: ZOE_DEVICE_TOKEN
-    from the environment only, never a CLI flag.
+    1-2s of STT itself). panel_id "replay-harness" makes the endpoint SUPPRESS its
+    UI broadcasts (_suppress_ui_broadcast in voice_tts.py) — the first cut claimed
+    kiosks filter on panel_id and they do not (websocket-sync.js reacts to every
+    voice event unconditionally; Copilot caught the unverified claim), so without
+    the server-side guard a nightly gate run would poke the house panels 20 times.
+    Auth follows the zoe_latency_probe convention: ZOE_DEVICE_TOKEN from the
+    environment only, never a CLI flag.
     """
     import base64 as _b64
     import urllib.request as _rq
