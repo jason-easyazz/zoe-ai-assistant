@@ -385,7 +385,7 @@
         "readers": [
           "services/zoe-data/main.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_BRAIN_TOKEN": {
         "defaults": [
@@ -3450,7 +3450,7 @@
         "readers": [
           "services/zoe-data/main.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_READINESS_TIMEOUT_S": {
         "defaults": [
@@ -3460,7 +3460,7 @@
         "readers": [
           "services/zoe-data/main.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_RELATIONSHIP_GRAPH_ENABLED": {
         "defaults": [
@@ -4475,7 +4475,7 @@
         "readers": [
           "services/zoe-data/routers/voice_tts.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_VOICE_TOOL_FILLER": {
         "defaults": [
