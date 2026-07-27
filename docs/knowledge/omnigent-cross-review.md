@@ -9,7 +9,7 @@ description: How and when to run polly (Omnigent) cross-reviews of PRs; validate
 Adopted 2026-07-27 after a live trial (operator decision). polly — Omnigent's
 claude-sdk agent with the built-in `cross-review` skill — reviews a PR diff with
 an independent, different-vendor sub-agent. It is the in-house replacement for
-Bugbot's seat (credits exhausted) and the pre-push tier that keeps findings from
+Bugbot's seat (credits exhausted) and the pre-ready advisory tier that keeps findings from
 becoming billed Greptile rounds.
 
 ## When to run it
