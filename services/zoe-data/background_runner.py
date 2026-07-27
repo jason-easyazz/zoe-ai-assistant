@@ -19,7 +19,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from async_subprocess import QueueTimeout, _env_float, run_to_completion
+from async_subprocess import QueueTimeout, env_float_failsafe, run_to_completion
 from hermes_http import hermes_auth_headers, hermes_bin
 from repo_paths import zoe_repo_root
 
@@ -324,14 +324,14 @@ async def get_pending_tasks(user_id: str) -> list[dict]:
     ]
 
 
-# _env_float is IMPORTED from async_subprocess — this file briefly carried its
+# env_float_failsafe is IMPORTED from async_subprocess — this file briefly carried its
 # own copy, which silently missed that helper's later non-finite hardening (a
 # NaN wait makes _acquire_slot's deadline comparison permanently false). One
 # parser, one set of guarantees.
 
 def _background_runtime_s() -> float:
     """How long the background child may RUN."""
-    return _env_float("HERMES_BACKGROUND_TIMEOUT_S", 900.0)
+    return env_float_failsafe("HERMES_BACKGROUND_TIMEOUT_S", 900.0)
 
 
 def _background_queue_wait_s() -> float:
@@ -339,7 +339,7 @@ def _background_queue_wait_s() -> float:
     # Must EXCEED a full worker runtime (900s): with the pool held by
     # freshly-started background tasks, a 600s wait expires before any worker
     # can possibly free — the same off-by-a-runtime the scheduled lane had.
-    return _env_float("HERMES_BACKGROUND_QUEUE_WAIT_S", 1200.0)
+    return env_float_failsafe("HERMES_BACKGROUND_QUEUE_WAIT_S", 1200.0)
 
 
 def _watchdog_timeout_s() -> float:
@@ -368,7 +368,7 @@ def _watchdog_timeout_s() -> float:
         return floor
     # The hardened parser, not bare float(): NaN defeats the watchdog's cutoff
     # comparison entirely and inf disables it. Garbage/non-finite -> the floor.
-    value = _env_float("ZOE_TASK_TIMEOUT_S", floor)
+    value = env_float_failsafe("ZOE_TASK_TIMEOUT_S", floor)
     if value < floor:
         logger.warning(
             "ZOE_TASK_TIMEOUT_S=%.0fs is below the background lane's worst case "

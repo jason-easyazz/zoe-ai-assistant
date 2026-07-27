@@ -1218,7 +1218,7 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
                 "ts": time.time(),
                 "panel_id": PANEL_ID,
                 "user_id": claim[0] if claim else None,
-                "score": round(claim[1], 4) if claim else None,
+                "score": claim[1] if claim else None,   # RAW: rounding near the threshold can flip the reconstructed accept/reject
                 "n_profiles": n_profiles,   # local cache size; null for server claims
                 "source": source,           # "local" | "server" | "encoder_unavailable" | "error" | null (never attempted)
                 "truth": None,  # operator-filled ground truth; null until reviewed

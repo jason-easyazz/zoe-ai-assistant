@@ -42,7 +42,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-TYPED_ENV_FUNCS = {"env_str", "env_bool", "env_int", "env_float", "env_list", "_env_float"}
+TYPED_ENV_FUNCS = {"env_str", "env_bool", "env_int", "env_float", "env_list", "env_float_failsafe"}
 FLAG_RE = re.compile(r"^ZOE_[A-Z0-9_]+$")
 DYNAMIC = "dynamic"
 REQUIRED = "(required)"

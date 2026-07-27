@@ -7,7 +7,9 @@ event loop thread"; PR #947's multi-day outage; PR #975). This module centralise
 the two safe patterns so callers never fork on the loop:
 
 * `run_to_completion(...)` — for run-to-completion CLIs: does the whole
-  spawn+communicate+timeout+kill inside a worker thread via `subprocess.run`.
+  spawn+communicate+timeout+kill inside a worker thread via `subprocess.Popen`
+  + `communicate()` (run()-equivalent semantics; Popen is used so live children
+  can be registered and reaped at shutdown, and killed as a process group).
 * `spawn_pipe_process(...)` — for long-lived RPC processes we stream to/from:
   does the blocking fork+exec in a worker thread, then wraps the already-open
   pipe fds in asyncio's low-level pipe transports (`connect_read_pipe` /
@@ -54,7 +56,7 @@ _RUN_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=_RUN_POOL_WIDTH, thread_name_prefix="zoe-async-run"
 )
 
-def _env_float(name: str, default: float) -> float:
+def env_float_failsafe(name: str, default: float) -> float:
     """Read a float env var without letting a typo kill the service.
 
     This module is imported during zoe-data startup, so a bare float() here
@@ -82,7 +84,7 @@ def _env_float(name: str, default: float) -> float:
 # Default cap on how long a caller waits for a free _RUN_POOL worker. Bounds the
 # queue explicitly instead of letting the executor absorb it invisibly; callers
 # with their own latency budget pass queue_timeout=.
-_QUEUE_WAIT_S = _env_float("ZOE_SUBPROCESS_QUEUE_WAIT_S", 30.0)
+_QUEUE_WAIT_S = env_float_failsafe("ZOE_SUBPROCESS_QUEUE_WAIT_S", 30.0)
 
 # Slack past a child's own timeout before we conclude the WORKER (not the child)
 # is wedged. subprocess.run kills the child at `timeout`, so exceeding this means
@@ -157,9 +159,14 @@ def terminate_live_children() -> None:
             os.killpg(popen.pid, signal.SIGTERM)   # pid == pgid (own session)
         with contextlib.suppress(Exception):
             popen.terminate()
+    _grace_deadline = time.monotonic() + 5.0
     for popen in children:
         with contextlib.suppress(Exception):
-            popen.wait(timeout=5)
+            # SHARED deadline: per-child waits serialize — 16 SIGTERM-ignoring
+            # children would hold shutdown ~80s. All children got SIGTERM
+            # above; whatever hasn't exited when the shared grace ends is
+            # SIGKILLed below.
+            popen.wait(timeout=max(0.1, _grace_deadline - time.monotonic()))
         with contextlib.suppress(Exception):
             # Unconditional: the LEADER may already be reaped while a
             # descendant that ignored SIGTERM still holds the pipes — killpg

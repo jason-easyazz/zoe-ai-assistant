@@ -374,18 +374,18 @@ def test_bad_env_value_does_not_crash_the_import():
     """
     import async_subprocess as mod
 
-    assert mod._env_float("NOPE_UNSET", 12.5) == 12.5
+    assert mod.env_float_failsafe("NOPE_UNSET", 12.5) == 12.5
     import os as _os
     _os.environ["ZTEST_QW"] = "30s"          # the typo
     try:
-        assert mod._env_float("ZTEST_QW", 30.0) == 30.0
+        assert mod.env_float_failsafe("ZTEST_QW", 30.0) == 30.0
         _os.environ["ZTEST_QW"] = ""          # blank
-        assert mod._env_float("ZTEST_QW", 30.0) == 30.0
+        assert mod.env_float_failsafe("ZTEST_QW", 30.0) == 30.0
         _os.environ["ZTEST_QW"] = "45"        # a good value still wins
-        assert mod._env_float("ZTEST_QW", 30.0) == 45.0
+        assert mod.env_float_failsafe("ZTEST_QW", 30.0) == 45.0
         for bad in ("nan", "inf", "-inf", "-5"):
             _os.environ["ZTEST_QW"] = bad     # parses as float, defeats the bound
-            assert mod._env_float("ZTEST_QW", 30.0) == 30.0, bad
+            assert mod.env_float_failsafe("ZTEST_QW", 30.0) == 30.0, bad
     finally:
         _os.environ.pop("ZTEST_QW", None)
 
