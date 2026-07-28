@@ -968,8 +968,9 @@ because Theodore reacts; Zoe currently discards the reactions.
   run honours the voice-change rule, it does not (cannot) validate the values;
   the operator's ear is the acceptance for these. Replay gate: GREEN same day (19/19, remote mode). Tuning note:
   Kokoro's `speed` scales duration SUB-linearly (0.92 → +5–6% observed vs +8.7% naive), so
-  profiles sound milder than their numbers — tune by ear, not arithmetic. Remaining for
-  enable: the operator listen + `ZOE_EXPRESSIVE_TTS=1` on zoe-data.
+  profiles sound milder than their numbers — tune by ear, not arithmetic (the listen
+  above is exactly how 0.88/0.84 were chosen). Remaining for enable:
+  `ZOE_EXPRESSIVE_TTS=1` on zoe-data — #1579's deploy step.
 - [ ] **W11.2** backchannels — NOT STARTED (needs W1.3 + proven echo handling)
 - [ ] **W12.1** remote live voice over the tunnel (measure WAN latency) — NOT STARTED
 - [ ] **W12.2** proactive outbound voice note when nobody's home — NOT STARTED (W2×W8)

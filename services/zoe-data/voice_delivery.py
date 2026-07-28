@@ -59,9 +59,10 @@ from time_utils import zoe_timezone
 from typed_env import env_bool, env_int
 
 # Household timezone via the SHARED helper, not a local ZoneInfo() call. `datetime.now()`
-# alone reads the HOST clock, and this box runs UTC while the household is
-# Australia/Perth — a naive now() would soften delivery mid-afternoon and leave real 2am
-# replies neutral. Resolving it per call (not at import) also means a blank or invalid
+# alone reads the HOST clock — which happens to be Australia/Perth on today's box, but
+# containers, CI and reinstalls commonly run UTC, and under a UTC host a naive now()
+# would soften delivery mid-afternoon and leave real 2am replies neutral. The household
+# setting must win regardless of what the host clock says. Resolving it per call (not at import) also means a blank or invalid
 # ZOE_TIMEZONE degrades to the canonical default instead of raising while this module is
 # being imported, which would take the whole TTS path down with it.
 # Profiles are speed multipliers for the Kokoro sidecar. Kept few and boring on

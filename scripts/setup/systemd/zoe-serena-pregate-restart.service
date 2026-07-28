@@ -1,4 +1,4 @@
-# Restart the shared Serena MCP server nightly, five minutes BEFORE the voice
+# Restart the shared Serena MCP server nightly, fifteen minutes BEFORE the voice
 # replay gate's 04:30 run.
 #
 # WHY (measured 2026-07-28, the gate's first autonomous night): the box idles
