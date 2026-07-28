@@ -46,6 +46,25 @@ Handling the report:
   (break → red → restore → green) before adopting.
 - Batch all adopted fixes into ONE push (each push triggers a Codex re-review).
 
+## Worker routing (cost policy, 2026-07-28)
+
+- **`claude_code` (Claude Max, flat-rate):** primary implementer. Use Sonnet-tier
+  models for routine work and Opus-tier models for hard or multi-file work. Claude
+  Fable is included in the plan but reserved for checking: deep review passes and
+  final verification, never bulk implementation.
+- **`codex` (ChatGPT subscription, flat-rate):** second implementer for narrowly
+  scoped changes and primary independent reviewer of Claude-implemented work.
+- **Cross-vendor in both directions:** reviewer platform must differ from implementer
+  platform. Claude work → `codex` review; Codex work → `claude_code` review, with
+  Fable preferred as the reviewer model. Fable may additionally deep-check Claude's
+  own work on load-bearing PRs as a free extra pass, but never replaces the independent
+  cross-vendor review.
+- **`pi` (OpenRouter, pay-per-token):** tie-breaker or third-platform opinion only,
+  primarily GLM 5.2 for hard cases. Every dispatch must carry a hard cost-budget cap;
+  Pi is not part of the routine pipeline.
+- **Cursor Bugbot:** disabled 2026-07-28 due to cost. This free cross-review pipeline
+  covers its seat.
+
 ## Fail-loudly (the Copilot lesson)
 
 A dead reviewer looks like silence, and silence reads as "clean". The known

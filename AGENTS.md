@@ -99,7 +99,7 @@ GUARANTEE below), and it is why batching fixes into one push matters.
 Sequence:
 
 1. **Draft PR.** Invisible to Greptile.
-2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs a different-vendor advisory review on the draft PR before marking ready. Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate. Full protocol: [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
+2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs the default pre-ready, cross-vendor advisory review on the draft PR. Worker/model routing follows the flat-rate-first cost policy in [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md). Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate.
 3. **Local `/review` (Cursor) — free.** `.cursor/BUGBOT.md` carries the repo's review
    guide for this IDE-side command. Agents cannot run it; it is the operator's step.
 4. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
