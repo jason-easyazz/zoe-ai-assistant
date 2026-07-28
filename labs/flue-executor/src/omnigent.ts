@@ -18,6 +18,7 @@
  */
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import type pg from 'pg';
 import type { ExecutorConfig } from './config.ts';
@@ -94,6 +95,27 @@ export async function spawnOmnigentWorker(
   const phase = ctx.phase ?? 'implement';
   const nonce = randomBytes(6).toString('hex');
   const token = doneToken(nonce);
+
+  // Mirror the local lane's work_dir race guard (spawn.ts): the dispatcher
+  // commits the queue row BEFORE preparing the worktree, so a fast poll can
+  // claim a task whose directory does not exist yet. Defer without burning an
+  // attempt rather than briefing a remote agent against a missing checkout;
+  // fail loudly if it never appears within the worker timeout.
+  const briefedWorkDir = task.work_dir;
+  if (briefedWorkDir && !existsSync(briefedWorkDir)) {
+    const ageMs = task.created_at ? Date.now() - new Date(task.created_at).getTime() : 0;
+    if (ageMs > cfg.workerTimeoutMs) {
+      await reportTransition(pool, cfg.runtimeId, task, 'failed',
+        `work_dir ${briefedWorkDir} never appeared (still missing ${Math.round(ageMs / 1000)}s after the ` +
+        'row was queued) — the dispatcher did not create the worktree');
+      return;
+    }
+    await reportTransition(pool, cfg.runtimeId, task, 'queued',
+      `work_dir ${briefedWorkDir} does not exist yet (dispatcher still preparing the worktree) — ` +
+      'returned to the queue without burning an attempt',
+      { requeue: true, keepAttempt: true, action: 'task_deferred' });
+    return;
+  }
 
   if (!(await omnigentHealthy(cfg))) {
     await failOrRequeue(pool, cfg, task,

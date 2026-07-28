@@ -134,6 +134,12 @@ services:
       # ~/.worktrees/<task_id>) resolves in-container and the agent works on
       # the prepared branch instead of self-provisioning a divergent checkout.
       - /home/zoe/.worktrees:/home/zoe/.worktrees
+      # A worktree's .git FILE is an absolute pointer
+      # (gitdir: /home/zoe/assistant/.git/worktrees/<id>), so the main repo
+      # must also resolve at its HOST path or the mounted worktrees are not
+      # usable as git checkouts. Same bind source as /workspace; rw because
+      # worktree git operations write .git/worktrees/<id> and .git/objects.
+      - ../../:/home/zoe/assistant
       # Activate the container-relative MCP config: Claude Code (--project /workspace)
       # auto-loads /workspace/.mcp.json. The committed repo-root .mcp.json uses the HOST
       # path (--project /home/zoe/assistant), which is NOT where the repo is mounted here,
