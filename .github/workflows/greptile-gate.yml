@@ -68,11 +68,7 @@ jobs:
         with:
           script: |
             const LABEL = 'greptile';
-            const REQUIRED_CHECKS = ['Cursor Bugbot'];
-            // Bugbot reports `neutral` when it has no findings and `skipped` when it dedups
-            // a diff — both mean it RAN. Requiring `success` held forever on PR #1571, which
-            // sat at completed/neutral. Any real findings surface as review threads, and the
-            // unresolved===0 check below covers those; this only confirms it executed.
+            const REQUIRED_CHECKS = [];
             // Max Greptile summons per head before the gate stops asking (both the
             // handed-off and fresh-handoff branches enforce it).
             const MAX_SUMMONS = 3;
