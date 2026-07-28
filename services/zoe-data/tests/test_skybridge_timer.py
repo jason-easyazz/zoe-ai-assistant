@@ -49,6 +49,10 @@ def _t(text: str) -> str:
     ("set a 3 minute timer called pasta", 180),
     ("timer for the eggs", 0),          # no duration → caller defaults
     ("set a timer", 0),
+    # compound spoken numbers — "twenty five" must NOT parse as bare "five"
+    ("set a timer for twenty five minutes", 1500),
+    ("set a timer for forty-five minutes", 2700),
+    ("set a timer for thirty two minutes", 1920),
 ])
 def test_parse_duration(text, expected):
     assert _parse_timer_duration(_t(text)) == expected
@@ -59,6 +63,19 @@ def test_parse_duration(text, expected):
     ("timer for the eggs", "Eggs"),
     ("set a 5 minute timer", ""),           # plain duration, no label
     ("set a timer for 10 minutes", ""),     # 'for <duration>' is not a label
+    # an EXPLICIT called/named number-word is a real label; after 'for' it stays
+    # a duration fragment
+    ("set a five minute timer called five", "Five"),
+    # label-FIRST phrasing: the trailing duration is not part of the name
+    ("set a timer called pasta for five minutes", "Pasta"),
+    ("set a timer called pasta for 5 minutes", "Pasta"),
+    ("set a timer named eggs for twenty five minutes", "Eggs"),
+    # an explicitly-named timer whose NAME is duration-shaped keeps that name
+    # (stripping must never erase the label entirely)
+    ("set a timer called five minutes", "Five Minutes"),
+    # an INTERIOR duration is part of the name — only a trailing one is stripped
+    ("set a timer called pasta five minutes sauce", "Pasta Five Minutes Sauce"),
+    ("timer for five", ""),
 ])
 def test_parse_label(text, expected):
     assert _parse_timer_label(_t(text)) == expected
@@ -194,3 +211,51 @@ def test_create_timer_direct_defaults_bad_minutes_to_five():
     timers = active_timers_for(user)
     assert len(timers) == 1
     assert timers[0]["duration_seconds"] == 300
+
+
+def test_skybridge_accepts_every_intent_router_minute_word():
+    """PARITY GUARD: any spoken minute word intent_router advertises must parse
+    to the same value in the production voice path — the drift between the two
+    tables produced silent 5-minute timers twice in review."""
+    from intent_router import _TIMER_MINUTE_WORDS
+    for word, minutes in _TIMER_MINUTE_WORDS.items():
+        got = _parse_timer_duration(_t(f"set a timer for {word} minutes"))
+        assert got == minutes * 60, f"{word!r}: skybridge {got}s != {minutes}m"
+
+
+# ── cross-parser parity ───────────────────────────────────────────────────────
+# Timer phrases are parsed TWICE in production by two independent
+# implementations: /api/voice/command hits skybridge_service first, chat/text
+# hits intent_router. Every divergence between them is a silently-wrong timer
+# — this review found FOUR (compound numbers, teens, hyphenated units,
+# labels). One corpus, both parsers, same answer.
+_PARITY_CORPUS = [
+    ("set a timer for five minutes", 5, ""),
+    ("set a timer for ten minutes", 10, ""),
+    ("set a timer for thirteen minutes", 13, ""),
+    ("set a timer for fourteen minutes", 14, ""),
+    ("set a timer for twenty five minutes", 25, ""),
+    ("set a timer for forty-five minutes", 45, ""),
+    # adjectival hyphenation runs THROUGH to the unit
+    ("set a twenty-five-minute timer", 25, ""),
+    ("set a 5-minute timer", 5, ""),
+    ("set a five minute timer", 5, ""),
+    ("set a 3 minute timer", 3, ""),
+    ("set a timer for 5 minutes", 5, ""),
+    ("set a timer for ten minutes called pasta", 10, "Pasta"),
+    ("set a three minute timer called eggs", 3, "Eggs"),
+    ("set a five minute timer called five", 5, "Five"),
+]
+
+
+@pytest.mark.parametrize("text,minutes,label", _PARITY_CORPUS)
+def test_both_timer_parsers_agree(text, minutes, label):
+    from intent_router import detect_intent
+
+    assert _parse_timer_duration(_t(text)) == minutes * 60, "skybridge duration"
+    intent = detect_intent(text, log_miss=False)
+    assert intent is not None and intent.name == "timer_create", "intent_router miss"
+    assert intent.slots["minutes"] == minutes, "intent_router duration"
+    if label:
+        assert _parse_timer_label(_t(text)) == label, "skybridge label"
+        assert intent.slots["label"] == label, "intent_router label"
