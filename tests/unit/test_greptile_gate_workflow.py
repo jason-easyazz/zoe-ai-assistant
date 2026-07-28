@@ -511,3 +511,15 @@ def test_summon_attempts_are_capped_per_head(tmp_path):
               greptileSummons=[{"at": "2020-01-01T00:00:00Z"}] * 2,
               greptileRun={"status": "completed", "conclusion": "skipped"})
     assert any(c.strip().startswith("@greptileai review") for c in r2["comments"]), r2["comments"]
+
+
+def test_summon_cap_also_applies_to_fresh_handoff(tmp_path):
+    """The cap must hold on BOTH branches (Codex, #1581): a revoke-then-re-apply
+    on the same sha re-enters the fresh-handoff path, and without the cap there
+    an oversized PR resumes summoning forever after the handed-off side gave up."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             greptileSummons=[{"at": "2020-01-01T00:00:00Z"}] * 3,
+             greptileRun={"status": "completed", "conclusion": "skipped"})
+    assert r["addLabels"] == 1, r["log"]              # still hands off
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+    assert any("not asking again" in m for m in r["log"]), r["log"]

@@ -73,6 +73,9 @@ jobs:
             // a diff — both mean it RAN. Requiring `success` held forever on PR #1571, which
             // sat at completed/neutral. Any real findings surface as review threads, and the
             // unresolved===0 check below covers those; this only confirms it executed.
+            // Max Greptile summons per head before the gate stops asking (both the
+            // handed-off and fresh-handoff branches enforce it).
+            const MAX_SUMMONS = 3;
             const CHECK_DONE = ['success', 'neutral', 'skipped'];
             const COPILOT = 'copilot-pull-request-reviewer';
             const CODEX = 'chatgpt-codex-connector';
@@ -436,7 +439,6 @@ jobs:
                   // minutes forever. Cap the attempts per head: after MAX_SUMMONS the
                   // gate stops asking and says why, once, loudly. A new head resets the
                   // count because the marker is sha-scoped.
-                  const MAX_SUMMONS = 3;
                   const summonsForHead = comments.filter(c =>
                     trusted(c) && (c.body || '').includes(summonMark));
                   const recentSummon = summonsForHead.some(c =>
@@ -544,11 +546,20 @@ jobs:
                 // double-summon — gLive2 is 0 precisely while the first summon is
                 // still being processed.
                 const summonMark2 = `<!-- greptile-gate:summon:${sha} -->`;
-                const recentSummon2 = comments.some(c =>
-                  trusted(c) && (c.body || '').includes(summonMark2) &&
+                const summonsForHead2 = comments.filter(c =>
+                  trusted(c) && (c.body || '').includes(summonMark2));
+                const recentSummon2 = summonsForHead2.some(c =>
                   (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
+                // The attempt cap belongs here too (Codex): a revoke-then-re-apply on
+                // the SAME sha — a thread opened and resolved — re-enters this branch,
+                // and without the cap an oversized PR resumes summoning forever from
+                // the fresh-handoff side after the handed-off side gave up.
+                const summonsExhausted2 = summonsForHead2.length >= MAX_SUMMONS;
                 if (gLive2 === null) {
                   core.warning(`PR #${pr.number}: could not read Greptile runs — label applied, summon retries next sweep`);
+                } else if (summonsExhausted2 && gLive2 === 0) {
+                  core.warning(`PR #${pr.number}: Greptile summoned ${summonsForHead2.length}x on this head ` +
+                    `with no live run — label applied, not asking again (>50-file skip limit, or no credits).`);
                 } else if (gLive2 === 0 && !recentSummon2) {
                   await ok(`PR #${pr.number} summon Greptile`, () =>
                     github.rest.issues.createComment({
