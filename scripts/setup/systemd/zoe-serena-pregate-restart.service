@@ -1,0 +1,27 @@
+# Restart the shared Serena MCP server nightly, fifteen minutes BEFORE the voice
+# replay gate's 04:30 run.
+#
+# WHY (measured 2026-07-28, the gate's first autonomous night): the box idles
+# overnight at ~558MB available — below the gate's 700MB remote-mode floor — so
+# the nightly run skips and the non-pass streak marches toward the red alarm.
+# Serena is a KNOWN leaker (~1GB regrowth over a day; already MemoryMax-capped,
+# see docs/knowledge + memory project_serena_ram_fix): restarting it at 04:15
+# frees roughly double the shortfall, and nobody uses code-intel at 4am. The
+# alternative — lowering the gate's floor toward the replay's 445MB measured
+# peak — would leave ~110MB of margin on a box where CUDA/NvMap bursts are not
+# cgroup-bounded and can kill the RUNNING brain; freeing real memory is safer
+# than shaving the safety floor.
+#
+# Install (operator): cp to ~/.config/systemd/user/, then
+#   systemctl --user daemon-reload && systemctl --user enable --now zoe-serena-pregate-restart.timer
+# RE-INSTALL NOTE: the installed unit is a copy, not a symlink — after template
+# changes, re-copy and daemon-reload (the voice-regression unit went stale for
+# 20 days this way).
+[Unit]
+Description=Nightly Serena restart before the voice replay gate (frees the leak)
+
+[Service]
+Type=oneshot
+# try-restart: if serena-mcp is not running, do nothing — this unit must never
+# START a service the operator deliberately stopped.
+ExecStart=/usr/bin/systemctl --user try-restart serena-mcp.service
