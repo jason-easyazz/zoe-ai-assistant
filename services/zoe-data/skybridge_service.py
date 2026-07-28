@@ -60,8 +60,20 @@ class SkybridgeIntent:
 _WORD_NUMBERS = {
     "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
     "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
-    "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40,
     "fifty": 50, "sixty": 60, "ninety": 90,
+}
+# COMPOUND spoken numbers ("twenty five", "forty-five"). Kept separate so the
+# duration alternation can try them LONGEST-FIRST — a flat dict would let
+# "twenty" match first and leave " five minutes" to be re-matched as 5.
+_COMPOUND_WORD_NUMBERS = {
+    f"{tens_w}{sep}{ones_w}": tens_v + ones_v
+    for tens_w, tens_v in (("twenty", 20), ("thirty", 30), ("forty", 40), ("fifty", 50))
+    for ones_w, ones_v in (("one", 1), ("two", 2), ("three", 3), ("four", 4),
+                           ("five", 5), ("six", 6), ("seven", 7), ("eight", 8), ("nine", 9))
+    for sep in (" ", "-")
 }
 
 MAX_TIMER_SECONDS = 24 * 3600
@@ -137,12 +149,19 @@ def _unit_to_seconds(unit: str) -> int:
 
 def _parse_timer_duration(text: str) -> int:
     """Total seconds from a timer phrase (digits or number-words), else 0."""
-    num = r"\d+|" + "|".join(re.escape(w) for w in _WORD_NUMBERS)
-    pattern = re.compile(r"\b(" + num + r")\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b")
+    # Compounds FIRST in the alternation, else "twenty five minutes" matches
+    # bare "five minutes" (the 25/45-minute bug caught in review).
+    all_words = {**_COMPOUND_WORD_NUMBERS, **_WORD_NUMBERS}
+    num = r"\d+|" + "|".join(
+        re.escape(w) for w in sorted(all_words, key=len, reverse=True)
+    )
+    # [\s-]* not \s*: the adjectival form hyphenates through to the unit
+    # ("a twenty-five-minute timer").
+    pattern = re.compile(r"\b(" + num + r")[\s-]*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b")
     total = 0
     found = False
     for value, unit in pattern.findall(text):
-        n = int(value) if value.isdigit() else _WORD_NUMBERS.get(value, 0)
+        n = int(value) if value.isdigit() else all_words.get(value, 0)
         total += n * _unit_to_seconds(unit)
         found = True
     if found:
@@ -153,10 +172,55 @@ def _parse_timer_duration(text: str) -> int:
     return 0
 
 
+def _strip_trailing_duration(cand: str) -> str:
+    """Remove a trailing duration phrase from a label candidate.
+
+    "pasta for five minutes" -> "pasta". Uses the SAME number vocabulary as
+    _parse_timer_duration (compounds first) so the two never disagree about
+    what counts as a duration.
+    """
+    all_words = {**_COMPOUND_WORD_NUMBERS, **_WORD_NUMBERS}
+    num = r"\d+|" + "|".join(
+        re.escape(w) for w in sorted(all_words, key=len, reverse=True)
+    )
+    unit = r"hours?|hrs?|minutes?|mins?|seconds?|secs?"
+    # Anchored at the END with no `.*` tail: only a genuinely TRAILING duration
+    # is stripped. An interior one is part of the name
+    # ("called pasta five minutes sauce" keeps every word).
+    trailing = re.compile(
+        r"(?i)\s*\b(?:for\s+)?(?:" + num + r")[\s-]*(?:" + unit + r")\b[\s.!?]*$"
+    )
+    stripped = trailing.sub("", cand).strip().strip(".!?")
+    # If the whole name IS duration-shaped ("a timer called five minutes"), the
+    # user explicitly asked for that name — keep it rather than erasing the
+    # label to a generic "Timer". Only strip when something survives.
+    return stripped or cand.strip().strip(".!?")
+
+
 def _parse_timer_label(text: str) -> str:
     """Extract an optional timer name ('for the eggs', 'called pasta'); never a
-    duration ('for 5 minutes')."""
-    m = re.search(r"\b(?:called|named|for)\s+(?:the\s+)?(.+?)\s*$", text.strip())
+    duration ('for 5 minutes').
+
+    TWO tiers, because they carry different certainty:
+
+    * EXPLICIT ``called``/``named`` — everything after the LAST such keyword is
+      the label verbatim, including digits and number words ("called 5" -> 5,
+      "called five" -> Five). Anchoring on the last keyword also stops a
+      duration-first phrase from swallowing the label ("timer for ten minutes
+      called pasta" -> Pasta, not "ten minutes called pasta").
+    * BARE ``for`` — ambiguous with a duration, so the old conservative rules
+      still apply: no digits, no unit words, no bare number words.
+    """
+    t = text.strip()
+    m = re.search(r"(?si)\b(?:called|named)\s+(?:the\s+)?(.+?)\s*$", t)
+    if m:
+        cand = m.group(1).strip().strip(".!?")
+        # A label-first phrase puts the duration AFTER the name ("timer called
+        # pasta for five minutes") — the end-anchored capture swallows it, so
+        # strip a trailing duration (with its optional leading "for").
+        cand = _strip_trailing_duration(cand)
+        return cand.title() if cand else ""
+    m = re.search(r"\bfor\s+(?:the\s+)?(.+?)\s*$", t)
     if not m:
         return ""
     cand = m.group(1).strip().strip(".!?")
@@ -164,7 +228,7 @@ def _parse_timer_label(text: str) -> str:
         return ""
     if re.search(r"\b(hours?|hrs?|minutes?|mins?|seconds?|secs?|timer)\b", cand):
         return ""
-    if cand in _WORD_NUMBERS:
+    if cand in _WORD_NUMBERS or cand in _COMPOUND_WORD_NUMBERS:
         return ""
     return cand.title()
 
