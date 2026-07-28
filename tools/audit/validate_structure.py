@@ -37,26 +37,59 @@ def load_manifest() -> Dict:
         return json.load(f)
 
 def get_all_project_files() -> Set[str]:
-    """Get all files in the project (excluding .git)."""
+    """Get all files in the project (excluding .git and git-ignored paths)."""
     files = set()
-    
+
+    # Ask git up front which paths are ignored so the walk can prune whole
+    # ignored directories (models/, data/, node_modules/, .claude/worktrees/,
+    # ...) instead of walking them and filtering afterwards — on the live
+    # checkout the unpruned walk takes minutes.
+    ignored = get_gitignored_paths()
+    ignored_dirs = {p.rstrip('/') for p in ignored if p.endswith('/')} if ignored else set()
+    ignored_files = {p for p in ignored if not p.endswith('/')} if ignored else set()
+
     for root, dirs, filenames in os.walk(PROJECT_ROOT):
-        # Skip .git directory
-        if '.git' in dirs:
-            dirs.remove('.git')
-        
+        rel_root = os.path.relpath(root, PROJECT_ROOT)
+        prefix = '' if rel_root == '.' else rel_root + '/'
+        # Skip .git and any git-ignored directory (pruned in place so os.walk
+        # never descends into them).
+        dirs[:] = [d for d in dirs if d != '.git' and prefix + d not in ignored_dirs]
+
         for filename in filenames:
             if filename == '.git':
                 continue
-            full_path = Path(root) / filename
-            relative_path = str(full_path.relative_to(PROJECT_ROOT))
+            relative_path = prefix + filename
             if filename == '.env' or (filename.startswith('.env.') and filename != '.env.example'):
+                continue
+            if relative_path in ignored_files:
                 continue
             files.add(relative_path)
 
-    # Drop git-ignored files (local-only artifacts like settings.local.json are
-    # not part of the tracked repo and shouldn't be flagged as manifest orphans).
-    return files - get_gitignored_files(files)
+    if ignored is None:
+        # git unavailable up front -- fall back to the old post-walk batch check
+        # (which itself degrades to flagging nothing extra without git).
+        return files - get_gitignored_files(files)
+    return files
+
+
+def get_gitignored_paths():
+    """All git-ignored paths, one git call. Directories carry a trailing '/'.
+
+    Returns None if git is unavailable or fails, so callers can fall back.
+    """
+    try:
+        result = subprocess.run(
+            ['git', 'ls-files', '--others', '--ignored', '--exclude-standard',
+             '--directory', '-z'],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return {p for p in result.stdout.split('\0') if p}
 
 
 def get_gitignored_files(candidates: Set[str]) -> Set[str]:
