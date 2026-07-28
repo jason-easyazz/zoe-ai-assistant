@@ -184,8 +184,11 @@ def _strip_trailing_duration(cand: str) -> str:
         re.escape(w) for w in sorted(all_words, key=len, reverse=True)
     )
     unit = r"hours?|hrs?|minutes?|mins?|seconds?|secs?"
+    # Anchored at the END with no `.*` tail: only a genuinely TRAILING duration
+    # is stripped. An interior one is part of the name
+    # ("called pasta five minutes sauce" keeps every word).
     trailing = re.compile(
-        r"(?i)\s*\b(?:for\s+)?(?:" + num + r")[\s-]*(?:" + unit + r")\b.*$"
+        r"(?i)\s*\b(?:for\s+)?(?:" + num + r")[\s-]*(?:" + unit + r")\b[\s.!?]*$"
     )
     stripped = trailing.sub("", cand).strip().strip(".!?")
     # If the whole name IS duration-shaped ("a timer called five minutes"), the

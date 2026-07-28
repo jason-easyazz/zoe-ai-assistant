@@ -73,6 +73,8 @@ def test_parse_duration(text, expected):
     # an explicitly-named timer whose NAME is duration-shaped keeps that name
     # (stripping must never erase the label entirely)
     ("set a timer called five minutes", "Five Minutes"),
+    # an INTERIOR duration is part of the name — only a trailing one is stripped
+    ("set a timer called pasta five minutes sauce", "Pasta Five Minutes Sauce"),
     ("timer for five", ""),
 ])
 def test_parse_label(text, expected):
