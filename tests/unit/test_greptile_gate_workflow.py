@@ -13,8 +13,9 @@ was introduced, fixed, and then reintroduced. So these tests do not assert on th
 YAML text — they EXECUTE the real embedded script against a stubbed GitHub API and
 assert on what it actually does.
 
-The suite also pins reviewer grace, handoff revalidation, label repair, and bounded
-Greptile re-summons while proving that disabled Bugbot checks cannot block the gate.
+The suite also pins reviewer grace; handoff revalidation via dismissal, behind-ness,
+and unresolved-thread conditions; label repair; and bounded Greptile re-summons while
+proving that disabled Bugbot checks cannot block the gate.
 """
 from __future__ import annotations
 
@@ -120,7 +121,7 @@ HARNESS = textwrap.dedent(
             checkReads += 1;
             // checksFlip: green on the first read, red on the second — a required check
             // that re-runs and fails while the summon calls are in flight.
-            const red = OPTS.checksRed || (OPTS.checksFlip && checkReads >= 2);
+            const red = OPTS.checksFlip && checkReads >= 2;
             const extra = OPTS.greptileRun
               ? [{ name: 'Greptile Review', status: OPTS.greptileRun.status || 'completed',
                    conclusion: OPTS.greptileRun.conclusion || null,
@@ -334,6 +335,22 @@ def test_grace_clock_uses_the_newest_codex_summon(tmp_path):
         codexSummons=[{"at": "2020-01-01T00:00:00Z"}, {"at": "2099-01-01T00:00:00Z"}],
     )
     assert r["addLabels"] == 0, r["log"]
+
+
+def test_regressed_handed_off_head_is_revoked_not_summoned(tmp_path):
+    """An unresolved thread revokes handoff before any Greptile re-summon."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, unresolved=True,
+             labels=[{"name": "greptile"}], markerSha="a" * 40)
+    assert r["removeLabel"] == 1 and not any(
+        c.strip().startswith("@greptileai review") for c in r["comments"])
+
+
+def test_regression_after_handoff_is_decided_on_fresh_conditions(tmp_path):
+    """A review dismissed mid-sweep is caught by fresh handoff revalidation."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             dismissMidSweep="chatgpt-codex-connector[bot]",
+             labels=[{"name": "greptile"}], markerSha="a" * 40)
+    assert r["removeLabel"] == 1
 
 
 def test_label_present_only_in_the_fresh_read_is_still_stripped(tmp_path):

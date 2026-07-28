@@ -1,7 +1,7 @@
 ---
 type: knowledge
 title: Omnigent cross-review — the in-house advisory review tier
-description: How and when to run polly (Omnigent) cross-reviews of PRs; validated 2026-07-27 on live PRs with a scored A/B; replaces Bugbot's seat and front-runs billed Greptile rounds.
+description: How and when to run polly (Omnigent) cross-reviews of PRs; validated 2026-07-27 on live PRs with a scored A/B; replaces Bugbot's seat after it was disabled 2026-07-28 due to cost and front-runs billed Greptile rounds.
 ---
 
 # Omnigent cross-review (polly) — advisory review tier
@@ -9,8 +9,8 @@ description: How and when to run polly (Omnigent) cross-reviews of PRs; validate
 Adopted 2026-07-27 after a live trial (operator decision). polly — Omnigent's
 claude-sdk agent with the built-in `cross-review` skill — reviews a PR diff with
 an independent, different-vendor sub-agent. It is the in-house replacement for
-Bugbot's seat (credits exhausted) and the pre-ready advisory tier that keeps findings from
-becoming billed Greptile rounds.
+Bugbot's seat (disabled 2026-07-28 due to cost) and the pre-ready advisory tier
+that keeps findings from becoming billed Greptile rounds.
 
 ## When to run it
 

@@ -138,6 +138,7 @@ jobs:
                     .then(r => r.data));
                 if (!cmp) return null;
 
+                // Kept as an extension point for future cheap-tier required checks.
                 const runs = await ok(`PR #${num} check runs`, () =>
                   github.paginate(github.rest.checks.listForRef, {
                     ...base, ref: sha, per_page: 100,
