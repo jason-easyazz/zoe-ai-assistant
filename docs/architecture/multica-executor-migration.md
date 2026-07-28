@@ -158,16 +158,21 @@ missing half was the executor process (`ZOE_EXECUTOR_MODE=live
 ZOE_EXECUTOR_DISPATCH=full npm run live` — dispatch defaults to DRY). The chain
 ran scout → implement → verify with the heavy lane producing a real PR
 (#1583, migration + script retirement, validators green, cross-review PASS).
-Four seam fixes landed from it (PR #1582): worktree prep for every phase (not
-just implement/verify — scout claim-defer looped forever), the real brief
-wired to the Omnigent lane (`context.body`, was the lab connectivity-proof
-brief → 30s false-positive completions), Omnigent default timeout 10min → 1h
-(a real implement outlives the proof budget), and the agent's final reply
-relayed into the completion result so the evidence gate can recover the PR
-URL. Routing: while the local Flue worker is still the lab's synthetic proof
-worker, every task carrying a real brief spawns on the Omnigent lane.
+Five seam fixes landed from it (PR #1582): worktree prep for every
+worktree-workspace phase, i.e. all but `retro` (not just implement/verify —
+scout claim-defer looped forever; `retro` is deliberately excluded because
+`_workspace_for_phase` pins it to the main checkout via a `dir:` selector, so
+its `work_dir` always exists and a task worktree would only be an orphan), the
+real brief wired to the Omnigent lane (`context.body`, was the lab
+connectivity-proof brief → 30s false-positive completions), Omnigent default
+timeout 10min → 1h (a real implement outlives the proof budget), the agent's
+final reply relayed into the completion result so the evidence gate can
+recover the PR URL, and the evidence-format seam (open-gap (b) below — closed
+in this same PR). Routing: while the local Flue worker is still the lab's
+synthetic proof worker, every task carrying a real brief spawns on the
+Omnigent lane.
 **Open gaps:** (a) real local phase workers; (b) the evidence-format seam is
-CLOSED in this same PR — the backend surfaces the completion text as
+CLOSED in this same PR (the fifth seam fix above) — the backend surfaces the completion text as
 `latest_summary` (what `pipeline_handoff._haystacks` reads) and the Omnigent
 brief demands a machine-parsed `PR_URL=`/`TESTS=`/`VALIDATORS=`/`SUMMARY=`
 (+`BLOCKER=` when blocked) block before the completion token — proven against

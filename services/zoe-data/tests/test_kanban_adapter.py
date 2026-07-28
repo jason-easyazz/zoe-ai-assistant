@@ -6000,31 +6000,113 @@ def test_converge_noop_implement_ignores_pr_substring_in_other_words(monkeypatch
     assert not calls["run"]
 
 
-@pytest.mark.asyncio
-async def test_every_non_retro_phase_gets_a_worktree(monkeypatch):
-    """The headline Phase-2 fix: EVERY dispatched phase needs its worktree, not
-    just implement/verify — the executor defers a claim forever when work_dir
-    does not exist (scout looped until its worktree was made by hand). Retro is
-    the deliberate exception: _workspace_for_phase pins it to the main checkout.
+_ALL_CHAIN_PHASES = ("scout", "implement", "verify", "review", "closeout", "retro")
 
-    Without this, reverting the dispatch guard to {implement, verify} leaves the
-    whole adapter suite green (polly cross-review, #1582).
+
+def _seed_phase_state(issue_id: str, phase: str) -> None:
+    """Journal a pipeline already sitting at ``phase`` so dispatch creates it.
+
+    The ``{"phase": ...}`` zoe-ticket key does NOT drive dispatch — the phase
+    comes from the pipeline journal (a fresh ref always starts at scout), so
+    per-phase tests must seed state the way the retro-workspace test does.
     """
-    prepared: list[str] = []
-    monkeypatch.setattr(
-        "worktree_bootstrap.prepare_kanban_worktree",
-        lambda task_id, **kwargs: (prepared.append(str(task_id)), Path(f"/tmp/worktrees/{task_id}"))[1],
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    save_state(
+        PipelineState(
+            task_ref=f"multica:{issue_id}",
+            phase=phase,
+            status="todo",
+            attempts={p: 1 for p in _ALL_CHAIN_PHASES[: _ALL_CHAIN_PHASES.index(phase)]},
+        ),
+        event="operator_resumed",
     )
 
-    for phase in ("scout", "review", "closeout"):
-        prepared.clear()
+
+def _recording_worktree_preps(monkeypatch) -> tuple[list[str], list[tuple[str, str]]]:
+    plain: list[str] = []
+    revision: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_kanban_worktree",
+        lambda task_id, **kwargs: (plain.append(str(task_id)), Path(f"/tmp/worktrees/{task_id}"))[1],
+    )
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_existing_pr_revision_worktree",
+        lambda task_id, pr_url, **kwargs: (
+            revision.append((str(task_id), str(pr_url))),
+            Path(f"/tmp/worktrees/{task_id}"),
+        )[1],
+    )
+    return plain, revision
+
+
+@pytest.mark.asyncio
+async def test_every_worktree_phase_gets_a_worktree_and_retro_is_excluded(monkeypatch):
+    """The headline Phase-2 fix: every dispatched phase whose workspace is
+    ``worktree`` needs its worktree prepared, not just implement/verify — the
+    executor defers a claim while work_dir does not exist and fails it after
+    the worker-timeout bound (scout looped until its worktree was made by
+    hand). Retro is the deliberate exception: _workspace_for_phase pins it to
+    the main checkout (``dir:`` selector), so its work_dir always exists and a
+    task worktree would only be an orphan.
+
+    Without this, reverting the dispatch guard to {implement, verify} leaves
+    the whole adapter suite green (polly cross-review, #1582).
+    """
+    plain, revision = _recording_worktree_preps(monkeypatch)
+
+    for phase in _ALL_CHAIN_PHASES:
+        plain.clear()
+        revision.clear()
+        issue_id = f"uuid-wt-{phase}"
+        _seed_phase_state(issue_id, phase)
         a = _FakeAdapter()
-        await a.dispatch(
+        result = await a.dispatch(
             {
-                "id": f"uuid-wt-{phase}",
+                "id": issue_id,
                 "identifier": f"ZOE-WT-{phase.upper()}",
                 "title": f"{phase} phase task",
-                "description": '```zoe-ticket\n{"phase":"%s"}\n```' % phase,
             }
         )
-        assert prepared, f"phase {phase!r} dispatched without preparing a worktree"
+        assert result["ok"] is True
+        assert result["phase"] == phase, f"seeded {phase!r} but dispatched {result['phase']!r}"
+        assert not revision, f"phase {phase!r} took the PR-revision path without a PR"
+        if phase == "retro":
+            assert not plain, "retro must not prepare a task worktree (main-checkout workspace)"
+        else:
+            assert plain, f"phase {phase!r} dispatched without preparing a worktree"
+
+
+@pytest.mark.asyncio
+async def test_only_implement_with_existing_pr_takes_revision_worktree_path(monkeypatch):
+    """The existing-PR revision checkout is implement-only: every other phase
+    of a ticket carrying a pr_url still gets the plain kanban worktree (retro
+    none at all)."""
+    plain, revision = _recording_worktree_preps(monkeypatch)
+    pr_url = "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"
+
+    for phase in _ALL_CHAIN_PHASES:
+        plain.clear()
+        revision.clear()
+        issue_id = f"uuid-wt-pr-{phase}"
+        _seed_phase_state(issue_id, phase)
+        a = _FakeAdapter()
+        result = await a.dispatch(
+            {
+                "id": issue_id,
+                "identifier": f"ZOE-WTPR-{phase.upper()}",
+                "title": f"{phase} phase task with PR",
+                "description": '```zoe-ticket\n{"pr_url":"%s"}\n```' % pr_url,
+            }
+        )
+        assert result["ok"] is True
+        assert result["phase"] == phase
+        if phase == "implement":
+            assert revision == [(f"t_{phase}", pr_url)]
+            assert not plain, "implement with a PR must not also prepare a plain worktree"
+        elif phase == "retro":
+            assert not plain and not revision
+        else:
+            assert plain, f"phase {phase!r} with a pr_url skipped its plain worktree"
+            assert not revision, f"phase {phase!r} wrongly took the PR-revision path"
