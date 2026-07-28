@@ -71,8 +71,23 @@ stop_worker() {
   # (exit 143); and the grep CHILD matches too but is dead by kill-time, so a
   # single `kill $pids` reports failure even when the real worker died —
   # signal per-pid and succeed if ANY landed.
+  # Signal delivery is not death: wait briefly for the pids to vanish, then
+  # escalate to KILL — otherwise the flock releases while a TERM-trapping
+  # worker is still shutting down and the next invocation overlaps it
+  # (Codex, #1578). KILL is the terminal rung; nothing to escalate past it.
   docker exec "$CONTAINER" sh -c \
-    'pids=$(grep -la "'"$SID"'" /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3 | grep -vx "$$"); n=0; for p in $pids; do kill "$p" 2>/dev/null && n=$((n+1)); done; [ "$n" -gt 0 ] && echo killed || echo none' \
+    'pids=$(grep -la "'"$SID"'" /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3 | grep -vx "$$"); n=0
+     for p in $pids; do kill "$p" 2>/dev/null && n=$((n+1)); done
+     [ "$n" -gt 0 ] || { echo none; exit 0; }
+     i=0; while [ $i -lt 5 ]; do
+       alive=0; for p in $pids; do [ -d "/proc/$p" ] && alive=1; done
+       [ "$alive" -eq 0 ] && { echo killed; exit 0; }
+       sleep 1; i=$((i+1))
+     done
+     for p in $pids; do [ -d "/proc/$p" ] && kill -9 "$p" 2>/dev/null; done
+     sleep 1
+     alive=0; for p in $pids; do [ -d "/proc/$p" ] && alive=1; done
+     [ "$alive" -eq 0 ] && echo killed-escalated || echo "STILL-ALIVE after KILL"' \
     2>/dev/null || echo unreachable
 }
 REVIEW_DONE=0

@@ -68,7 +68,10 @@ agent given write access.
 
 ## Constraints
 
-- ONE polly worker at a time repo-wide (RAM discipline on the box).
+- ONE polly worker at a time repo-wide (RAM discipline). The wrapper flock
+  serializes only its own invocations — omnigent_issue_executor and the Flue
+  heavy lane do not take the lock, so avoid overlapping those manually; a
+  shared lease across all launch paths is recorded future work.
 - debby (`debate` skill) is for design-level disputes, not diff review.
 
 ## Validation record (2026-07-27)

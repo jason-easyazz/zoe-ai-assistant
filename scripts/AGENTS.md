@@ -77,8 +77,10 @@ No child AGENTS.md files yet.
 ### cross_review.sh (maintenance)
 
 `scripts/maintenance/cross_review.sh <PR#> "<contract>"` kicks an Omnigent polly
-cross-review of a PR and prints the structured report. Constraints: ONE polly
-worker repo-wide (enforced via `flock /tmp/zoe-cross-review.lock`); advisory
+cross-review of a PR and prints the structured report. Constraints: the flock
+(`/tmp/zoe-cross-review.lock`) serializes THIS wrapper only — other polly
+launch paths (omnigent_issue_executor, the Flue heavy lane) do not take it,
+so operators must still avoid overlapping those manually; advisory
 only (never wired into greptile-gate); exit 2 = alarm (silent kick death,
 error-status session, or unreachable server) and must never be read as a clean
 review. Protocol + validation record: `docs/knowledge/omnigent-cross-review.md`.
