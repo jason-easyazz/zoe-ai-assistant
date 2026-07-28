@@ -416,8 +416,9 @@ jobs:
                   // the PR sits labeled-but-never-reviewed with the credit already
                   // spent. Treating it as DEAD re-summons instead. Caveat, accepted:
                   // a genuinely >50-file PR gains nothing (Greptile just skips again),
-                  // but each retry is harmless and bounded by the per-sha 10-minute
-                  // debounce below, while NOT re-summoning strands EVERY skipped PR.
+                  // but each retry is harmless and the ATTEMPTS are bounded by the
+                  // per-head MAX_SUMMONS cap below (the 10-minute debounce only
+                  // spaces them out), while NOT re-summoning strands EVERY skipped PR.
                   const DEAD = ['cancelled', 'timed_out', 'stale', 'skipped'];
                   const gLive = await ok(`PR #${pr.number} greptile check`, () =>
                     github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })

@@ -451,7 +451,8 @@ def test_skipped_greptile_run_does_not_block_resummon(tmp_path):
     Greptile deliberately skips PRs over ~50 files — the credit is spent and no
     review exists. Counted as LIVE, that skip suppressed re-summons forever:
     labeled-but-never-reviewed with no repair path. Re-summoning is harmless
-    (bounded by the per-sha debounce) even when the PR is still oversized."""
+    (attempts bounded by the per-head three-summon cap; the debounce only
+    spaces them out) even when the PR is still oversized."""
     # handed-off branch (DEAD)
     r = _run(tmp_path, _script(), reviewers=BOTH,
              labels=[{"name": "greptile"}], markerSha="a" * 40,
