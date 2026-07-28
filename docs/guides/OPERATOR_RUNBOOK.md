@@ -283,5 +283,5 @@ If using self-signed cert on Jetson, set `VERIFY_SSL=false` in Pi `.env.voice` a
 - Camera/mic indicator: ensure the touch panel shows a visual indicator when mic is active.
 - Wake word model runs locally on Pi — audio never leaves the device until command intent is confirmed.
 - After wake word fires, WAV audio is sent to Jetson for STT — kept in memory only, not stored.
-- Presence events (`panel_presence_events` table) are retained for 30 days by default (no automated purge yet — add cron if required).
+- Panel presence events are not persisted; the unused `panel_presence_events` table has been retired.
 - Face encodings (if vision implemented): delete on user request via admin panel or `DELETE /api/panels/{id}/presence`.
