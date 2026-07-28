@@ -226,7 +226,7 @@ async def test_complete_and_archive_both_record_reasons():
 
 @pytest.mark.asyncio
 async def test_create_dedupes_on_idempotency_key_without_inserting():
-    conn = FakeConn(fetchval_results=["existing-id"])
+    conn = FakeConn(fetchrow_result={"id": "existing-id", "status": "completed"})
     out = await eb._cmd_create(
         conn, IDENTITY,
         ["implement ZOE-9", "--assignee", "zoe-coder", "--workspace", "worktree",
@@ -239,7 +239,7 @@ async def test_create_dedupes_on_idempotency_key_without_inserting():
 @pytest.mark.asyncio
 async def test_create_takes_an_advisory_lock_before_the_dedupe_check():
     """Without the lock two concurrent creates both miss and both insert."""
-    conn = FakeConn(fetchval_results=[None, "new-id"])
+    conn = FakeConn(fetchval_results=["new-id"])
     await eb._cmd_create(
         conn, IDENTITY,
         ["implement ZOE-9", "--idempotency-key", "multica:ZOE-9:implement", "--json"],
@@ -252,7 +252,7 @@ async def test_create_takes_an_advisory_lock_before_the_dedupe_check():
 
 @pytest.mark.asyncio
 async def test_create_routes_implement_to_the_heavy_lane_and_logs_it():
-    conn = FakeConn(fetchval_results=[None, "new-id"])
+    conn = FakeConn(fetchval_results=["new-id"])
     out = await eb._cmd_create(
         conn, IDENTITY,
         ["implement ZOE-9", "--idempotency-key", "multica:ZOE-9:implement", "--json"],
@@ -266,7 +266,7 @@ async def test_create_routes_implement_to_the_heavy_lane_and_logs_it():
 
 @pytest.mark.asyncio
 async def test_create_routes_non_implement_phases_to_the_light_lane():
-    conn = FakeConn(fetchval_results=[None, "new-id"])
+    conn = FakeConn(fetchval_results=["new-id"])
     await eb._cmd_create(
         conn, IDENTITY, ["review ZOE-9", "--idempotency-key", "multica:ZOE-9:review", "--json"],
     )
@@ -280,7 +280,7 @@ async def test_create_resolves_the_symbolic_worktree_selector_to_a_real_path(mon
     would hand the executor the literal string 'worktree' as a directory and
     the worker would die before running."""
     monkeypatch.setenv("ZOE_WORKTREE_ROOT", "/tmp/wt-root")
-    conn = FakeConn(fetchval_results=[None, "task-abc"])
+    conn = FakeConn(fetchval_results=["task-abc"])
     await eb._cmd_create(
         conn, IDENTITY,
         ["implement ZOE-9", "--workspace", "worktree",
@@ -298,7 +298,7 @@ async def test_create_resolves_the_symbolic_worktree_selector_to_a_real_path(mon
 @pytest.mark.asyncio
 async def test_create_resolves_a_dir_selector_by_stripping_the_prefix(monkeypatch):
     """Retro runs pass `dir:<abs path>` (read-only from the main repo)."""
-    conn = FakeConn(fetchval_results=[None, "task-retro"])
+    conn = FakeConn(fetchval_results=["task-retro"])
     await eb._cmd_create(
         conn, IDENTITY,
         ["retro ZOE-9", "--workspace", "dir:/home/zoe/assistant",
@@ -383,3 +383,54 @@ async def test_unsupported_verb_is_refused_not_silently_ignored(monkeypatch):
 
 async def _ident():
     return IDENTITY
+
+
+def test_completion_summary_is_exposed_as_latest_summary_for_the_evidence_gate():
+    # pipeline_handoff._haystacks reads `latest_summary` (never `result`), so
+    # the completion text must surface there or FIELD= handoffs
+    # (TESTS=/VALIDATORS=/PR_URL=) are invisible to the gate and verify
+    # GATE_BLOCKs a genuinely verified phase (observed live, ZOE-6106).
+    row = {
+        "id": "abc",
+        "status": "completed",
+        "failure_reason": None,
+        "result": json.dumps({"summary": "TESTS=pytest -q: 3 passed\nVALIDATORS=validate_structure.py: exit 0"}),
+        "context": json.dumps({"title": "verify ZOE-1", "body": "", "idempotency_key": "multica:ZOE-1:verify"}),
+        "work_dir": "/wt/x",
+    }
+    mapped = eb._row_to_hermes(row)
+    assert mapped["latest_summary"] == mapped["result"]
+    assert "TESTS=" in mapped["latest_summary"]
+
+
+@pytest.mark.asyncio
+async def test_create_reactivates_an_archived_row_instead_of_deduplicating_onto_a_dead_end():
+    # The bridge archives a blocked/superseded row (status=cancelled) before an
+    # operator retries the phase; deduplicating the retry onto it would strand
+    # the phase forever. The create must re-queue the row with a fresh attempt.
+    conn = FakeConn(fetchrow_result={"id": "old-id", "status": "cancelled"})
+    out = await eb._cmd_create(
+        conn, IDENTITY,
+        ["scout ZOE-9", "--idempotency-key", "multica:ZOE-9:scout", "--body", "b",
+         "--max-retries", "2", "--json"],
+    )
+    assert out == {"id": "old-id", "deduplicated": True}
+    requeues = [
+        (s, args) for s, args in conn.statements if "SET status='queued'" in s
+    ]
+    assert requeues, "cancelled row must be reactivated, not left dead"
+    sql, args = requeues[0]
+    # The previous attempt's handoff must NOT survive: result surfaces as
+    # latest_summary (the evidence gate's input), so stale evidence would let
+    # the retry be advanced or blocked on work it never did.
+    assert "result=NULL" in sql
+    assert "session_id=NULL" in sql
+    assert "attempt=1" in sql
+    assert "created_at=now()" in sql
+    # The attempt BUDGET follows the retry's create policy, not the archived
+    # row's: failOrRequeue must judge the fresh run against the current
+    # --max-retries (here 2), or a policy change grants/denies paid sessions
+    # off a stale number.
+    assert "max_attempts=$4" in sql
+    assert args[-1] == 2
+    assert "task_requeued" in conn.logged_actions()

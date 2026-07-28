@@ -129,6 +129,35 @@ services:
     volumes:
       # The agents' workspace IS the Zoe repo, so they can build Zoe.
       - ../../:/workspace
+      # Executor task worktrees, mounted at the SAME path as on the host so the
+      # work_dir a queue task names (prepared by worktree_bootstrap under
+      # ~/.worktrees/<task_id>) resolves in-container and the agent works on
+      # the prepared branch instead of self-provisioning a divergent checkout.
+      # Follows ZOE_WORKTREE_ROOT (worktree_bootstrap.worktree_root() honours it)
+      # so an overridden root cannot leave the container mounting a directory the
+      # queue never writes to — which silently self-provisions a divergent
+      # origin/main checkout and loses the prepared branch (Codex, #1582).
+      # Must be an ABSOLUTE path: compose does not expand `~`, and the source
+      # and target stay identical because a worktree's .git pointer is absolute.
+      #
+      # WHERE the override must live: compose reads only the file(s) passed via
+      # --env-file, while host-native zoe-data ALSO loads
+      # services/zoe-data/.env (zoe-data.service loads the root env first and
+      # the service env second, so the service file wins for the app). Setting
+      # ZOE_WORKTREE_ROOT ONLY in services/zoe-data/.env would therefore move
+      # the queue's worktrees while leaving this mount on the default — exactly
+      # the divergence this interpolation exists to prevent. So the documented
+      # bring-up therefore requires the override to live in the file compose
+      # READS ($REPO/.env) — see modules/omnigent/README.md. Passing a second
+      # --env-file is not the fix: compose hard-fails (exit 15) when the file
+      # is absent, and services/zoe-data/.env is gitignored/optional.
+      - ${ZOE_WORKTREE_ROOT:-/home/zoe/.worktrees}:${ZOE_WORKTREE_ROOT:-/home/zoe/.worktrees}
+      # A worktree's .git FILE is an absolute pointer
+      # (gitdir: /home/zoe/assistant/.git/worktrees/<id>), so the main repo
+      # must also resolve at its HOST path or the mounted worktrees are not
+      # usable as git checkouts. Same bind source as /workspace; rw because
+      # worktree git operations write .git/worktrees/<id> and .git/objects.
+      - ../../:/home/zoe/assistant
       # Activate the container-relative MCP config: Claude Code (--project /workspace)
       # auto-loads /workspace/.mcp.json. The committed repo-root .mcp.json uses the HOST
       # path (--project /home/zoe/assistant), which is NOT where the repo is mounted here,
@@ -150,6 +179,48 @@ services:
       # radius, replace the host login with a fine-grained PAT scoped to this repo
       # (contents + pull-requests: write) — the mount path stays the same.
       - /home/zoe/.config/gh:/root/.config/gh:ro
+      # Greptile auth for the closeout phase's guarded merge loop
+      # (run_greploop_guard.sh → greptile_client.py): with GREPTILE_API_KEY
+      # unset the client reads $HOME/.config/zoe/greptile.env, and HOME=/root
+      # here — so without this mount a remotely-routed closeout fails Greptile
+      # auth on a deployment using the documented user-global credential file
+      # (Codex, #1582). Read-only, same pattern (and same operator-credential
+      # trust decision) as the gh mount above.
+      - /home/zoe/.config/zoe:/root/.config/zoe:ro
+      # Pipeline journal for remotely-routed review/verify phases: the briefs'
+      # mandatory pipeline_evidence_commands.py markers (mark-reviewed /
+      # mark-tested) resolve the store via pipeline_store.store_path() —
+      # $ZOE_PIPELINE_STORE_PATH else ~/.zoe/engineering_pipeline_runs.jsonl —
+      # and HOME=/root here, so without this mount every marker exits "No
+      # pipeline state found" and a compliant remote reviewer cannot complete
+      # the phase (Codex, #1582). Read-WRITE: the markers APPEND via
+      # save_state. A single-FILE bind, on purpose, NOT the ~/.zoe directory:
+      # ~/.zoe also holds multica_dispatch_paused — the host executor's
+      # emergency kill switch — and the workload that switch controls must
+      # never be able to remove its own emergency stop (Codex, #1582). The
+      # file bind stays coherent because BOTH writers keep the inode:
+      # save_state opens "a+" and appends under flock (never temp+rename),
+      # and the compactor rewrites IN PLACE (rename explicitly rejected in
+      # compact_pipeline_state.py). PRECONDITION: the host file must EXIST
+      # before `up` — docker materialises an absent bind source as a
+      # DIRECTORY, which breaks the store. The bring-up in README.md runs the
+      # idempotent touch; its verify block asserts file-writable +
+      # kill-switch-invisible.
+      # CONSTRAINT: this bind hard-codes the DEFAULT journal path on both
+      # sides, and compose does NOT pass ZOE_PIPELINE_STORE_PATH into the
+      # container — in-container pipeline_store always reads the default
+      # /root/.zoe/engineering_pipeline_runs.jsonl. So if the host relocates
+      # the journal via ZOE_PIPELINE_STORE_PATH, update the bind SOURCE only
+      # and keep the container target at the default; changing the target too
+      # additionally requires wiring the matching env into the container, or
+      # remote markers read/write the wrong file and exit "No pipeline state
+      # found" while the host pipeline looks healthy. Deliberate
+      # trade-off (Codex, #1582): env-deriving the bind was rejected — compose
+      # reads only $REPO/.env while host-native zoe-data also loads
+      # services/zoe-data/.env, the exact split-env divergence the
+      # ZOE_WORKTREE_ROOT note above documents. No known deployment overrides
+      # it today.
+      - /home/zoe/.zoe/engineering_pipeline_runs.jsonl:/root/.zoe/engineering_pipeline_runs.jsonl
       # ── Code-intel tooling (audit fix #4) ──────────────────────────────────────
       # Serena, codebase-memory, and opensrc live on the HOST only; the repo is mounted
       # but the tools were entirely absent from this container, so the MCP servers wired

@@ -44,8 +44,14 @@ export async function tick(
   const task = await claimNextTask(pool, cfg.runtimeId,
     'single lane free; claimed highest-priority oldest queued task for this runtime');
   if (!task) return { reaped, claimed: null };
-  const lane = ((task.context ?? {}) as { lane?: string }).lane;
-  if (lane === 'heavy') {
+  const ctx = (task.context ?? {}) as { lane?: string; body?: string };
+  // Real dispatches (a Phase-2 task carrying a real brief in context.body) all
+  // go to the Omnigent lane regardless of the enqueue-side lane hint: the
+  // local Flue worker is still the lab's SYNTHETIC proof worker, and routing a
+  // real verify/scout there "completes" the phase with a proof file and no
+  // actual work (observed live on ZOE-6106's verify). The local lane keeps
+  // serving synthetic lab tasks until real local phase workers land.
+  if (ctx.lane === 'heavy' || ctx.body) {
     await spawnOmnigentWorker(pool, cfg, task);
   } else {
     await spawnWorker(pool, cfg, task, state.trackedPids);

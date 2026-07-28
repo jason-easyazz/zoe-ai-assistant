@@ -105,7 +105,13 @@ function commonOmnigent(): Pick<
     omnigentBaseUrl: process.env.LAB_OMNIGENT_URL ?? 'http://127.0.0.1:6767',
     omnigentAgentId: process.env.LAB_OMNIGENT_AGENT_ID ?? 'ag_057995d1517418e6839f51d340785dd6',
     omnigentContainer: process.env.LAB_OMNIGENT_CONTAINER ?? 'zoe-omnigent',
-    omnigentTimeoutMs: Number(process.env.LAB_OMNIGENT_TIMEOUT_MS ?? '600000'),
+    // 1h: a real implement phase (edit + test + commit + push + PR) routinely
+    // outlives the lab's old 10-min connectivity-proof budget — the first live
+    // Phase-2 ticket was failed by the executor while its session was still
+    // healthily working. This is the lane FLOOR, not the per-task cap: a task
+    // whose context.max_runtime is longer (6h overnight, 90m escalation)
+    // extends its own deadline past this value (omnigent.ts maxRuntimeMs).
+    omnigentTimeoutMs: Number(process.env.LAB_OMNIGENT_TIMEOUT_MS ?? '3600000'),
     omnigentPollMs: Number(process.env.LAB_OMNIGENT_POLL_MS ?? '5000'),
   };
 }

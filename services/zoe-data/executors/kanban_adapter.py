@@ -156,10 +156,13 @@ def _board() -> str:
 
 
 def _kanban_backend() -> str:
-    """Which executor serves the kanban verbs: ``hermes`` (default) or ``executor``.
+    """Which executor serves the kanban verbs: ``executor`` (default) or ``hermes``.
 
-    Read per call, never cached, so the revert is an env flip + restart with no
-    code change (docs/architecture/perf-hardening-plan.md discipline).
+    Read per call, never cached, so the revert to the Hermes CLI is an env flip
+    (``ZOE_KANBAN_BACKEND=hermes``) + restart with no code change
+    (docs/architecture/perf-hardening-plan.md discipline). Unsetting the
+    variable keeps ``executor`` — it is the code default since the 2026-07-28
+    Phase-2 flip.
     """
     return (os.environ.get("ZOE_KANBAN_BACKEND", "executor") or "executor").strip().lower()
 
@@ -470,6 +473,43 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
         " worktree_bootstrap.py first; decide whether the fix belongs before Hermes starts,"
         " not inside the external Hermes worker. Start editing within 6 tool/model steps or"
         " call `kanban_block` with BLOCKER=IMPLEMENT_BUDGET and the missing locator.\n"
+    )
+
+
+def _prior_phase_handoffs(
+    phase: str, phase_order: list[str], existing_phases: dict[str, dict]
+) -> str:
+    """Inline completed prior-phase handoff text into the next phase's body.
+
+    The briefs tell workers to fetch prior evidence via ``kanban_show``
+    (implement reads SCOUT_SUMMARY=, review compares the verify handoff), but
+    the Omnigent lane has no board API — its protocol override tells the agent
+    to skip exactly those calls — so the handoff must travel IN the brief
+    itself or remote implement loses its accepted plan and remote review
+    blocks on "missing" verification evidence (Codex, #1582). Tail-sliced
+    because the machine-parsed FIELD= block sits at the end of a handoff.
+    Inlining a prior phase's TESTS=/VALIDATORS= lines into the BODY cannot be
+    mis-parsed as this phase's own evidence: pipeline_handoff._haystacks reads
+    latest_summary/comments/metadata/logs, and the task body feeds only the
+    deliberate PR_URL fallback.
+    """
+    if phase not in phase_order:
+        return ""
+    sections: list[str] = []
+    for prev in phase_order[: phase_order.index(phase)]:
+        row = existing_phases.get(prev) or {}
+        if (row.get("status") or "").lower() != "done":
+            continue
+        summary = str(row.get("latest_summary") or row.get("result") or "").strip()
+        if summary:
+            sections.append(f"--- {prev} handoff ---\n{summary[-1200:]}")
+    if not sections:
+        return ""
+    return (
+        "Prior-phase handoffs (authoritative, inlined; use these directly — do"
+        " not call kanban_show for them, board reads may not exist on your lane):\n"
+        + "\n".join(sections)
+        + "\n\n"
     )
 
 
@@ -846,8 +886,8 @@ class KanbanAdapter:
         # ZOE_KANBAN_BACKEND=executor the identical verb surface is served by
         # the Zoe-native executor against Multica's own agent_task_queue, so
         # every phase, gate and deterministic override above stays untouched.
-        # Default is `hermes` — shipping this file changes no behaviour, and
-        # the revert path is one env var.
+        # Code default is `executor` (flipped live 2026-07-28); the revert
+        # path is one env var: ZOE_KANBAN_BACKEND=hermes + restart.
         if _kanban_backend() == "executor":
             from executors import executor_queue_backend
 
@@ -1970,6 +2010,10 @@ class KanbanAdapter:
 
         phase, assignee, skills = entry
         task_issue = _issue_with_phase_handoff(issue, phase, state)
+        prior_handoffs = _prior_phase_handoffs(phase, phase_order, existing_phases)
+        if prior_handoffs:
+            task_issue = dict(task_issue)
+            task_issue["description"] = prior_handoffs + str(task_issue.get("description") or "")
         args = [
             "create",
             self._title(phase, identifier, task_issue),
@@ -2005,7 +2049,16 @@ class KanbanAdapter:
         chain[phase] = task_id
         if not (result or {}).get("deduplicated"):
             created.append(phase)
-        if phase in {"implement", "verify"}:
+        # Every phase task's work_dir resolves to its own ~/.worktrees/<task_id>
+        # (executor_queue_backend.resolve_workspace), and the executor defers a
+        # claim forever if that directory does not exist — so every phase needs
+        # its worktree prepared, not just implement/verify. Proven live on the
+        # first Phase-2 executor dispatch: the scout task claim-defer looped
+        # until its worktree was created by hand. Retro is the exception:
+        # _workspace_for_phase pins it to the main checkout, so preparing a
+        # task worktree would only create an orphan (and its failure would
+        # wrongly block a read-only phase).
+        if phase != "retro":
             from worktree_bootstrap import prepare_existing_pr_revision_worktree, prepare_kanban_worktree
 
             pr_url = _existing_pr_url(issue)

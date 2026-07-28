@@ -12,7 +12,7 @@
 import type pg from 'pg';
 import type { ExecutorConfig } from './config.ts';
 import { failOrRequeue } from './spawn.ts';
-import { doneToken, sessionHasToken, OmnigentApiError } from './omnigent.ts';
+import { doneToken, effectiveOmnigentTimeoutMs, sessionTokenReply, OmnigentApiError } from './omnigent.ts';
 import { activityWorkspaceId, reportTransition, type TaskRow } from './queue.ts';
 
 function pidAlive(pid: number): boolean {
@@ -65,8 +65,16 @@ export async function reapDeadWorkers(
  * the executor restarted and the poller is gone. Recovery is by evidence, not
  * liveness: if the session already holds the completion token, complete the
  * row (the work happened — do not throw it away); if the row is older than the
- * omnigent timeout + grace, fail it with a reason. Either way the CAS
- * transitions make a race with a live poller harmless.
+ * task's age bound + grace, fail it with a reason. The age bound is
+ * status-dependent: a row that REACHED `running` gets the same
+ * effectiveOmnigentTimeoutMs the poller uses — the reaper runs every tick, so
+ * judging a 90m/6h task by the 1h lane default would fail a healthy session
+ * the poller was still happily waiting on. A row that never reached running
+ * (session persisted, kick/running flip lost — a staging failure) is bounded
+ * by the staging deadline (workerTimeoutMs) instead: it never earned the
+ * task's full runtime, and a 6h overnight budget would hold the single lane
+ * >6h for work that never started. Either way the CAS transitions make a race
+ * with a live poller harmless.
  */
 async function reapOmnigentRow(
   pool: pg.Pool,
@@ -93,12 +101,12 @@ async function reapOmnigentRow(
   let evidenceObserved = false;
   if (sessionId && ctx.nonce) {
     try {
-      const hasToken = await sessionHasToken(cfg, sessionId, doneToken(ctx.nonce));
+      const reply = await sessionTokenReply(cfg, sessionId, doneToken(ctx.nonce));
       evidenceObserved = true;
-      if (hasToken) {
+      if (reply !== null) {
         const won = await reportTransition(pool, cfg.runtimeId, row, 'completed',
           `reaper found the completion token in omnigent session ${sessionId} (executor poller was lost)`,
-          { result: { ok: true, summary: `omnigent session ${sessionId} completed (recovered by reaper)`, sessionId } });
+          { result: { ok: true, summary: `omnigent session ${sessionId} completed (recovered by reaper): ${reply}`, sessionId } });
         return won ? 1 : 0;
       }
     } catch (err) {
@@ -112,10 +120,18 @@ async function reapOmnigentRow(
     evidenceObserved = true;
   }
   const ageMs = anchor ? Date.now() - anchor.getTime() : Infinity;
-  if (ageMs <= cfg.omnigentTimeoutMs + 30_000) return 0;
+  // Only a row that actually reached `running` earns the task's full
+  // effective runtime (see the function doc). The evidence check above still
+  // recovers a kicked-then-orphaned session that finished its work.
+  const reachedRunning = row.status === 'running' || full.rows[0]?.started_at != null;
+  const timeoutMs = reachedRunning
+    ? effectiveOmnigentTimeoutMs(cfg, row.context)
+    : cfg.workerTimeoutMs;
+  if (ageMs <= timeoutMs + 30_000) return 0;
   if (evidenceObserved) {
     await failOrRequeue(pool, cfg, row,
-      `reaped: omnigent-lane row exceeded session timeout + grace without a completion token (session ${sessionId ?? 'unknown'})`);
+      `reaped: omnigent-lane row exceeded its ${reachedRunning ? 'effective session' : 'staging'} ` +
+        `timeout (${timeoutMs}ms) + grace without a completion token (session ${sessionId ?? 'unknown'})`);
     return 1;
   }
   if (!ctx.evidence_stuck_logged) {

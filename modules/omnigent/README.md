@@ -75,6 +75,14 @@ PROJECT=$(docker inspect zoe-omnigent --format '{{index .Config.Labels "com.dock
 : "${PROJECT:?could not read the compose project label — is zoe-omnigent running?}"
 echo "compose project = $PROJECT   repo = $REPO"
 
+# NOTE on ZOE_WORKTREE_ROOT: compose reads ONLY the --env-file below, while
+# host-native zoe-data also loads services/zoe-data/.env (service file wins for
+# the app). If you ever override the worktree root, set it HERE in $REPO/.env —
+# setting it only in services/zoe-data/.env moves the queue's worktrees while
+# leaving this container's mount on the default, and the prepared branch goes
+# invisible in-container (#1582). Do NOT just add a second --env-file: compose
+# hard-fails (exit 15) when the file is absent, and services/zoe-data/.env is
+# gitignored/optional.
 COMPOSE="docker compose -p $PROJECT --env-file $REPO/.env -f $REPO/modules/omnigent/docker-compose.module.yml"
 
 # STOP FIRST, before the build. The build takes minutes, and a still-running root
@@ -87,13 +95,18 @@ $COMPOSE build omnigent
 # be wrong, and the failure mode is chowning nothing (or the wrong volumes) silently.
 $COMPOSE run --rm --no-deps --user 0:0 --entrypoint sh omnigent \
   -c 'chown -R 1000:1000 /root/.omnigent /root/.claude /root/.codex /root/.cursor'
+# The pipeline-journal FILE bind (see compose) requires the file to EXIST on the
+# host before up: docker materialises an absent bind source as a DIRECTORY,
+# which breaks the store. Idempotent — safe to re-run.
+mkdir -p /home/zoe/.zoe && touch /home/zoe/.zoe/engineering_pipeline_runs.jsonl
 $COMPOSE up -d omnigent
 ```
 
 Stop before chowning: a still-running root container writes new root-owned files into the
-volumes underneath you. The read-only binds (`/root/.config/gh`,
-`/root/.local/share/cursor-agent`, the `/home/zoe/...` tool paths) need nothing — they
-come from zoe-owned host paths and uid 1000 can already read them.
+volumes underneath you. The read-only binds (`/root/.config/gh`, `/root/.config/zoe` —
+the Greptile key for the closeout merge loop — `/root/.local/share/cursor-agent`, the
+`/home/zoe/...` tool paths) need nothing — they come from zoe-owned host paths and uid
+1000 can already read them.
 
 `omnigent-data` is ~12 GB, so the chown is slow but metadata-only. **Check RAM before
 building** — the box gates on it, and an image build alongside the 6 GB `llama-server`
@@ -106,6 +119,14 @@ docker exec zoe-omnigent id                       # expect uid=1000(zoe)
 for d in .omnigent .claude .codex .cursor; do \
   docker exec zoe-omnigent touch /root/$d/.wtest && echo "$d writable"; done
 find /home/zoe/assistant/.git -not -user zoe      # expect no new entries over time
+# Pipeline journal reachable, kill switch NOT: the journal bind must be a
+# writable FILE (a directory here means the container came up before the host
+# file existed — re-run the touch from bring-up and recreate the container),
+# and the host executor's emergency stop must be invisible in-container — the
+# workload the switch controls must not be able to disable it (#1582).
+docker exec zoe-omnigent sh -c \
+  'test -f /root/.zoe/engineering_pipeline_runs.jsonl && test -w /root/.zoe/engineering_pipeline_runs.jsonl \
+   && ! test -e /root/.zoe/multica_dispatch_paused && echo "journal ok, kill switch isolated"'
 ```
 
 ```bash
@@ -190,8 +211,9 @@ runs auth-less and trusts every request as the reserved `local` user. Wiring:
 - **Cloudflare Access is the gate**: `https://buildzoe.the411.life` → `zoe-cloudflared` →
   `http://zoe-omnigent:6767` (both on `zoe-network`). Unauthenticated requests 302 to
   `the411.cloudflareaccess.com`.
-- **Bring up with the repo .env**:
-  `docker compose --env-file ../../.env -f docker-compose.module.yml up -d`
+- **Bring up with the repo .env** (journal pre-create first — an absent bind source
+  materialises as a directory and breaks the pipeline store; idempotent):
+  `mkdir -p /home/zoe/.zoe && touch /home/zoe/.zoe/engineering_pipeline_runs.jsonl && docker compose --env-file ../../.env -f docker-compose.module.yml up -d`
 - **The host port is `127.0.0.1:6767` only** (host-local debugging), NOT published to the LAN —
   in header mode the server is auth-less, so a LAN-published port would let any LAN device act as
   `local` with the mounted workspace + agent credentials. The Access-gated tunnel is unaffected:
@@ -273,6 +295,8 @@ at `/workspace/CLAUDE.md`, so Claude-in-container reads the rules.
 `docker compose ... up -d` recreate is required to pick them up — the running container was
 intentionally NOT recreated by the change:
 ```bash
+# journal pre-create first — absent bind source materialises as a directory (idempotent)
+mkdir -p /home/zoe/.zoe && touch /home/zoe/.zoe/engineering_pipeline_runs.jsonl
 docker compose --env-file ../../.env -f docker-compose.module.yml up -d   # recreates with mounts
 docker exec zoe-omnigent serena --help >/dev/null && echo serena-ok
 docker exec zoe-omnigent codebase-memory-mcp --help >/dev/null && echo cbm-ok

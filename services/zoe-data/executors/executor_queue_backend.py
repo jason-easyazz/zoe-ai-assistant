@@ -224,6 +224,11 @@ def _row_to_hermes(record: asyncpg.Record) -> dict[str, Any]:
         # where the executor records WHY, so surface it under both names.
         "block_reason": record["failure_reason"] if status == "blocked" else None,
         "result": result.get("summary") or result.get("result") or "",
+        # pipeline_handoff._haystacks reads `latest_summary` (never `result`),
+        # so without this the completion text is invisible to the evidence
+        # gate and FIELD= handoffs (TESTS=/VALIDATORS=/PR_URL=) never parse —
+        # verify GATE_BLOCKs a genuinely verified phase.
+        "latest_summary": result.get("summary") or result.get("result") or "",
         # Always the RESOLVED path — recovery paths in the adapter treat this
         # as a real directory (it greps the worktree for unpushed commits).
         "workspace_path": record["work_dir"] or "",
@@ -417,13 +422,53 @@ async def _cmd_create(
         # Idempotency without touching Multica's schema: serialize creates for
         # this key so the check-then-insert cannot race a concurrent create.
         await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", idem)
-        existing = await conn.fetchval(
-            """SELECT id::text FROM agent_task_queue
+        existing_row = await conn.fetchrow(
+            """SELECT id::text AS id, status FROM agent_task_queue
                 WHERE runtime_id = $1::uuid AND context->>'idempotency_key' = $2
                 ORDER BY created_at LIMIT 1""",
             identity["runtime_id"], idem,
         )
-        if existing:
+        if existing_row:
+            existing = existing_row["id"]
+            # An archived (cancelled) row is a DEAD end: the bridge archives a
+            # blocked/superseded row before an operator retries the phase, and
+            # deduplicating a retry onto it would strand the phase forever
+            # (nothing ever claims a cancelled row). Reactivate it instead —
+            # same id, fresh attempt budget — so the retry actually runs.
+            # Completed rows stay deduplicated as-is: the chain treats the
+            # phase as done and evaluates its recorded result.
+            if existing_row["status"] == "cancelled":
+                # Full refresh, not just a status flip: the retry's create
+                # carries the AUTHORITATIVE brief (e.g. implement resumed
+                # after verify blocks rebuilds context.body with the PR
+                # revision instructions), the executor's work_dir race guard
+                # ages rows off created_at (a stale clock would instantly
+                # fail the retry), and the queue contract starts rows at
+                # attempt=1 (0 would grant an extra retry). `result` and
+                # `session_id` MUST be cleared too: they now surface as
+                # `latest_summary` (the evidence gate's input), so leaving the
+                # previous attempt's handoff behind would let the retry be
+                # judged — advanced or blocked — on evidence it never produced.
+                # `max_attempts` follows the retry's --max-retries, not the
+                # archived row's: the create policy can change between runs
+                # (e.g. a ticket newly qualifying as an actionable code-audit
+                # goal task moves 1 -> 2), and failOrRequeue must judge the
+                # fresh execution against the CURRENT budget, not a stale one.
+                await conn.execute(
+                    """UPDATE agent_task_queue
+                          SET status='queued', failure_reason=NULL, completed_at=NULL,
+                              dispatched_at=NULL, started_at=NULL, attempt=1,
+                              created_at=now(), context=$2::jsonb, work_dir=$3,
+                              result=NULL, session_id=NULL, max_attempts=$4
+                        WHERE id=$1::uuid""",
+                    existing, json.dumps(context), resolve_workspace(workspace, existing),
+                    max(1, max_retries),
+                )
+                await _log_activity(
+                    conn, identity, existing, "task_requeued",
+                    f"archived row reactivated for retried phase (idempotency key {idem}); "
+                    "brief, work_dir, attempt budget and age clock refreshed",
+                )
             return {"id": existing, "deduplicated": True}
         task_id = await conn.fetchval(
             """INSERT INTO agent_task_queue

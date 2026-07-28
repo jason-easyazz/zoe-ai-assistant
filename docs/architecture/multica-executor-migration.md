@@ -111,23 +111,24 @@ executor's `agent_runtime` row and pointing it at the REAL Multica tables
    Phase-2 `kanban_adapter` change to the minimal seam swap and preserves
    "Omnigent down → local lane still runs".
 
-### Phase 2 — re-point `kanban_adapter`  ← seam LANDED 2026-07-22, flag-dark
+### Phase 2 — re-point `kanban_adapter`  ← seam LANDED 2026-07-22; default flipped to `executor` (live 2026-07-28)
 
 Swap the dispatch target from the `hermes kanban` CLI to the Phase-1 executor.
 Keep every phase, gate and deterministic override untouched. Prove on ≥3 real
 tickets end-to-end before Phase 3.
 
-**Seam shipped (default OFF).** `kanban_adapter._run` — the single CLI call
-site, exactly as §2 predicted — now dispatches on `ZOE_KANBAN_BACKEND`:
+**Seam shipped; `executor` is now the code default.** `kanban_adapter._run` —
+the single CLI call site, exactly as §2 predicted — dispatches on
+`ZOE_KANBAN_BACKEND`:
 
 | value | behaviour |
 |---|---|
-| `hermes` (**default**) | today's `hermes kanban` CLI. Shipping this changed nothing. |
-| `executor` | `executors/executor_queue_backend.py` serves the same six verbs (`list`/`show`/`create`/`block`/`archive`/`complete`) against Multica's own `agent_task_queue` + `activity_log`. |
+| `executor` (**default**) | `executors/executor_queue_backend.py` serves the same six verbs (`list`/`show`/`create`/`block`/`archive`/`complete`) against Multica's own `agent_task_queue` + `activity_log`. |
+| `hermes` | the retired `hermes kanban` CLI path, kept as the explicit revert. |
 
 The adapter's 2,394 lines of discovered failure modes are **untouched** — 279
-of its existing tests pass unchanged. Revert path: unset the env var and
-restart (no code change, no migration).
+of its existing tests pass unchanged. Revert path: set
+`ZOE_KANBAN_BACKEND=hermes` and restart (no code change, no migration).
 
 **Proven against the REAL Multica tables** (not a scratch DB) by
 `scripts/maintenance/verify_executor_queue_backend.py` — 30/30 checks:
@@ -150,6 +151,36 @@ is `idle|working|blocked|error|offline` — NOT `agent_runtime`'s
 executor process running, and land ≥3 real tickets end-to-end (≥1 heavy via
 Omnigent). The dispatch kill switch (`~/.zoe/multica_dispatch_paused`) stays
 until that holds.
+
+**First live flip run (2026-07-28, ticket ZOE-6106) — what it proved and what it surfaced.**
+The flag needed no flip (`ZOE_KANBAN_BACKEND` code default is `executor`); the
+missing half was the executor process (`ZOE_EXECUTOR_MODE=live
+ZOE_EXECUTOR_DISPATCH=full npm run live` — dispatch defaults to DRY). The chain
+ran scout → implement → verify with the heavy lane producing a real PR
+(#1583, migration + script retirement, validators green, cross-review PASS).
+Five seam fixes landed from it (PR #1582): worktree prep for every
+worktree-workspace phase, i.e. all but `retro` (not just implement/verify —
+scout claim-defer looped forever; `retro` is deliberately excluded because
+`_workspace_for_phase` pins it to the main checkout via a `dir:` selector, so
+its `work_dir` always exists and a task worktree would only be an orphan), the
+real brief wired to the Omnigent lane (`context.body`, was the lab
+connectivity-proof brief → 30s false-positive completions), Omnigent default
+timeout 10min → 1h (a real implement outlives the proof budget), the agent's
+final reply relayed into the completion result so the evidence gate can
+recover the PR URL, and the evidence-format seam (open-gap (b) below — closed
+in this same PR). Routing: while the local Flue worker is still the lab's
+synthetic proof worker, every task carrying a real brief spawns on the
+Omnigent lane.
+**Open gaps:** (a) real local phase workers; (b) the evidence-format seam is
+CLOSED in this same PR (the fifth seam fix above) — the backend surfaces the completion text as
+`latest_summary` (what `pipeline_handoff._haystacks` reads) and the Omnigent
+brief demands a machine-parsed `PR_URL=`/`TESTS=`/`VALIDATORS=`/`SUMMARY=`
+(+`BLOCKER=` when blocked) block before the completion token — proven against
+`evidence_from_handoff` in unit tests, still to be proven on a live ticket
+passing verify. (c)
+`validate_structure.py` takes >2 min on the live checkout, so every gate
+evaluation blows the default 60s `ZOE_MULTICA_POLL_REF_TIMEOUT_S` (raised to
+300 in the live env as a band-aid; the walk needs pruning).
 
 ### Phase 3 — (superseded by §5 decision 2: Omnigent is PRIMARY from day one)
 

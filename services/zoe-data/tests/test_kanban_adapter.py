@@ -5998,3 +5998,175 @@ def test_converge_noop_implement_ignores_pr_substring_in_other_words(monkeypatch
     row = _gate_row(wt, reason="BLOCKER=GATE_BLOCKED: missing required evidence prior_result")
     assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
     assert not calls["run"]
+
+
+_ALL_CHAIN_PHASES = ("scout", "implement", "verify", "review", "closeout", "retro")
+
+
+def _seed_phase_state(issue_id: str, phase: str) -> None:
+    """Journal a pipeline already sitting at ``phase`` so dispatch creates it.
+
+    The ``{"phase": ...}`` zoe-ticket key does NOT drive dispatch — the phase
+    comes from the pipeline journal (a fresh ref always starts at scout), so
+    per-phase tests must seed state the way the retro-workspace test does.
+    """
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    save_state(
+        PipelineState(
+            task_ref=f"multica:{issue_id}",
+            phase=phase,
+            status="todo",
+            attempts={p: 1 for p in _ALL_CHAIN_PHASES[: _ALL_CHAIN_PHASES.index(phase)]},
+        ),
+        event="operator_resumed",
+    )
+
+
+def _recording_worktree_preps(monkeypatch) -> tuple[list[str], list[tuple[str, str]]]:
+    plain: list[str] = []
+    revision: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_kanban_worktree",
+        lambda task_id, **kwargs: (plain.append(str(task_id)), Path(f"/tmp/worktrees/{task_id}"))[1],
+    )
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_existing_pr_revision_worktree",
+        lambda task_id, pr_url, **kwargs: (
+            revision.append((str(task_id), str(pr_url))),
+            Path(f"/tmp/worktrees/{task_id}"),
+        )[1],
+    )
+    return plain, revision
+
+
+@pytest.mark.asyncio
+async def test_every_worktree_phase_gets_a_worktree_and_retro_is_excluded(monkeypatch):
+    """The headline Phase-2 fix: every dispatched phase whose workspace is
+    ``worktree`` needs its worktree prepared, not just implement/verify — the
+    executor defers a claim while work_dir does not exist and fails it after
+    the worker-timeout bound (scout looped until its worktree was made by
+    hand). Retro is the deliberate exception: _workspace_for_phase pins it to
+    the main checkout (``dir:`` selector), so its work_dir always exists and a
+    task worktree would only be an orphan.
+
+    Without this, reverting the dispatch guard to {implement, verify} leaves
+    the whole adapter suite green (polly cross-review, #1582).
+    """
+    plain, revision = _recording_worktree_preps(monkeypatch)
+
+    for phase in _ALL_CHAIN_PHASES:
+        plain.clear()
+        revision.clear()
+        issue_id = f"uuid-wt-{phase}"
+        _seed_phase_state(issue_id, phase)
+        a = _FakeAdapter()
+        result = await a.dispatch(
+            {
+                "id": issue_id,
+                "identifier": f"ZOE-WT-{phase.upper()}",
+                "title": f"{phase} phase task",
+            }
+        )
+        assert result["ok"] is True
+        assert result["phase"] == phase, f"seeded {phase!r} but dispatched {result['phase']!r}"
+        assert not revision, f"phase {phase!r} took the PR-revision path without a PR"
+        if phase == "retro":
+            assert not plain, "retro must not prepare a task worktree (main-checkout workspace)"
+        else:
+            assert plain, f"phase {phase!r} dispatched without preparing a worktree"
+
+
+@pytest.mark.asyncio
+async def test_only_implement_with_existing_pr_takes_revision_worktree_path(monkeypatch):
+    """The existing-PR revision checkout is implement-only: every other phase
+    of a ticket carrying a pr_url still gets the plain kanban worktree (retro
+    none at all)."""
+    plain, revision = _recording_worktree_preps(monkeypatch)
+    pr_url = "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"
+
+    for phase in _ALL_CHAIN_PHASES:
+        plain.clear()
+        revision.clear()
+        issue_id = f"uuid-wt-pr-{phase}"
+        _seed_phase_state(issue_id, phase)
+        a = _FakeAdapter()
+        result = await a.dispatch(
+            {
+                "id": issue_id,
+                "identifier": f"ZOE-WTPR-{phase.upper()}",
+                "title": f"{phase} phase task with PR",
+                "description": '```zoe-ticket\n{"pr_url":"%s"}\n```' % pr_url,
+            }
+        )
+        assert result["ok"] is True
+        assert result["phase"] == phase
+        if phase == "implement":
+            assert revision == [(f"t_{phase}", pr_url)]
+            assert not plain, "implement with a PR must not also prepare a plain worktree"
+        elif phase == "retro":
+            assert not plain and not revision
+        else:
+            assert plain, f"phase {phase!r} with a pr_url skipped its plain worktree"
+            assert not revision, f"phase {phase!r} wrongly took the PR-revision path"
+
+
+@pytest.mark.asyncio
+async def test_implement_brief_inlines_completed_scout_handoff():
+    """The Omnigent lane cannot call kanban_show (its protocol override skips
+    board API calls), so implement's SCOUT_SUMMARY handoff must travel IN the
+    dispatched brief itself, not behind a board read (Codex, #1582)."""
+    issue_id = "uuid-handoff-impl"
+    _seed_phase_state(issue_id, "implement")
+    a = _FakeAdapter(
+        list_rows=[
+            {
+                "id": "t_scout_done",
+                "status": "done",
+                "idempotency_key": f"multica:{issue_id}:scout",
+                "latest_summary": (
+                    "TOOLS_USED=codebase-memory\n"
+                    "SCOUT_SUMMARY=edit fast_tiers.py::_route, add one focused test\n"
+                    "IMPLEMENTATION_REQUIRED=true"
+                ),
+            }
+        ]
+    )
+    result = await a.dispatch({"id": issue_id, "identifier": "ZOE-HO", "title": "t"})
+    assert result["ok"] is True and result["phase"] == "implement"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    body = create[create.index("--body") + 1]
+    assert "Prior-phase handoffs" in body
+    assert "SCOUT_SUMMARY=edit fast_tiers.py::_route" in body
+
+
+@pytest.mark.asyncio
+async def test_review_brief_inlines_verify_handoff_and_skips_non_done_rows():
+    """Review must receive verify's evidence inline; rows that are not done
+    (e.g. a blocked phase) contribute nothing."""
+    issue_id = "uuid-handoff-review"
+    _seed_phase_state(issue_id, "review")
+    a = _FakeAdapter(
+        list_rows=[
+            {
+                "id": "t_verify_done",
+                "status": "done",
+                "idempotency_key": f"multica:{issue_id}:verify",
+                "latest_summary": "TESTS=pytest tests/x -q: 12 passed\nVALIDATORS=validate_structure.py: exit 0",
+            },
+            {
+                "id": "t_scout_blocked",
+                "status": "blocked",
+                "idempotency_key": f"multica:{issue_id}:scout",
+                "latest_summary": "BLOCKER=should never appear in the brief",
+            },
+        ]
+    )
+    result = await a.dispatch({"id": issue_id, "identifier": "ZOE-HOR", "title": "t"})
+    assert result["ok"] is True and result["phase"] == "review"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    body = create[create.index("--body") + 1]
+    assert "--- verify handoff ---" in body
+    assert "TESTS=pytest tests/x -q: 12 passed" in body
+    assert "should never appear in the brief" not in body
