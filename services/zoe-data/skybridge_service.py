@@ -172,6 +172,24 @@ def _parse_timer_duration(text: str) -> int:
     return 0
 
 
+def _strip_trailing_duration(cand: str) -> str:
+    """Remove a trailing duration phrase from a label candidate.
+
+    "pasta for five minutes" -> "pasta". Uses the SAME number vocabulary as
+    _parse_timer_duration (compounds first) so the two never disagree about
+    what counts as a duration.
+    """
+    all_words = {**_COMPOUND_WORD_NUMBERS, **_WORD_NUMBERS}
+    num = r"\d+|" + "|".join(
+        re.escape(w) for w in sorted(all_words, key=len, reverse=True)
+    )
+    unit = r"hours?|hrs?|minutes?|mins?|seconds?|secs?"
+    trailing = re.compile(
+        r"(?i)\s*\b(?:for\s+)?(?:" + num + r")[\s-]*(?:" + unit + r")\b.*$"
+    )
+    return trailing.sub("", cand).strip().strip(".!?")
+
+
 def _parse_timer_label(text: str) -> str:
     """Extract an optional timer name ('for the eggs', 'called pasta'); never a
     duration ('for 5 minutes').
@@ -190,6 +208,10 @@ def _parse_timer_label(text: str) -> str:
     m = re.search(r"(?si)\b(?:called|named)\s+(?:the\s+)?(.+?)\s*$", t)
     if m:
         cand = m.group(1).strip().strip(".!?")
+        # A label-first phrase puts the duration AFTER the name ("timer called
+        # pasta for five minutes") — the end-anchored capture swallows it, so
+        # strip a trailing duration (with its optional leading "for").
+        cand = _strip_trailing_duration(cand)
         return cand.title() if cand else ""
     m = re.search(r"\bfor\s+(?:the\s+)?(.+?)\s*$", t)
     if not m:

@@ -66,6 +66,10 @@ def test_parse_duration(text, expected):
     # an EXPLICIT called/named number-word is a real label; after 'for' it stays
     # a duration fragment
     ("set a five minute timer called five", "Five"),
+    # label-FIRST phrasing: the trailing duration is not part of the name
+    ("set a timer called pasta for five minutes", "Pasta"),
+    ("set a timer called pasta for 5 minutes", "Pasta"),
+    ("set a timer named eggs for twenty five minutes", "Eggs"),
     ("timer for five", ""),
 ])
 def test_parse_label(text, expected):
