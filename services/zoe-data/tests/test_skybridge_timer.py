@@ -202,3 +202,13 @@ def test_create_timer_direct_defaults_bad_minutes_to_five():
     timers = active_timers_for(user)
     assert len(timers) == 1
     assert timers[0]["duration_seconds"] == 300
+
+
+def test_skybridge_accepts_every_intent_router_minute_word():
+    """PARITY GUARD: any spoken minute word intent_router advertises must parse
+    to the same value in the production voice path — the drift between the two
+    tables produced silent 5-minute timers twice in review."""
+    from intent_router import _TIMER_MINUTE_WORDS
+    for word, minutes in _TIMER_MINUTE_WORDS.items():
+        got = _parse_timer_duration(_t(f"set a timer for {word} minutes"))
+        assert got == minutes * 60, f"{word!r}: skybridge {got}s != {minutes}m"
