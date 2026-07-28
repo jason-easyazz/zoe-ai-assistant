@@ -352,6 +352,8 @@ Default section order:
 
 When the user requests a durable behavior change, record it here or in the relevant child AGENTS.md
 
+- **Never dispatch the `cursor` sub-agent worker** from polly/Omnigent orchestration (implement, review, explore, or search) — operator directive 2026-07-28: cursor dispatches were stalling runs ("jamming things up"). Fill the different-vendor seat with `codex` / `opencode` / `hermes` / `pi` / `claude_code` instead. The operator's IDE-side Cursor `/review` tier (step 3 of the review pipeline) is a human step and is unaffected.
+
 ## Child DOX Index
 
 - [services/AGENTS.md](services/AGENTS.md) — runtime services: zoe-data production web/chat API, zoe-ui static UI + nginx, zoe-auth, MCP bridges, LiveKit

@@ -72,6 +72,9 @@ agent given write access.
   serializes only its own invocations — omnigent_issue_executor and the Flue
   heavy lane do not take the lock, so avoid overlapping those manually; a
   shared lease across all launch paths is recorded future work.
+- **`cursor` is banned as a worker** (operator directive, 2026-07-28): cursor
+  dispatches stalled runs. polly must fill the different-vendor seat with any
+  other vendor (`codex` / `opencode` / `hermes` / `pi` / `claude_code`).
 - debby (`debate` skill) is for design-level disputes, not diff review.
 
 ## Validation record (2026-07-27)
