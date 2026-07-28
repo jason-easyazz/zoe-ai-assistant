@@ -55,6 +55,12 @@ VOICE_PATH_PATTERNS = (
     "services/zoe-data/routers/voice_tts.py",
     "services/zoe-data/zoe_core_client.py",
     "services/zoe-data/fast_tiers.py",
+    # W11 expressive delivery: the mapper decides per-reply TTS speed and the
+    # waterfall applies it — both change what Zoe SOUNDS like. Codex P1 on
+    # #1579: a deploy touching only these bypassed the gate entirely, and that
+    # PR was itself such a deploy.
+    "services/zoe-data/voice_delivery.py",
+    "services/zoe-data/tts_waterfall.py",
     "*kokoro*",
     "*moonshine*",
     # The brain's serving config IS the voice path: flash-attn, KV format and

@@ -1,0 +1,18 @@
+# 04:15 — fifteen minutes before zoe-voice-regression.timer's 04:30. Measured
+# (2026-07-28): the restart frees ~300MB within seconds and serena's indexing is
+# LAZY (it grows on queries, and nothing queries code-intel at 4am), so five
+# minutes sufficed empirically — but fifteen costs nothing overnight and gives
+# margin even if a cold start ever did re-index eagerly (Codex, #1579).
+# Persistent=false ON PURPOSE: a catch-up restart at boot or mid-morning would
+# yank code-intel out from under working agents for no gate benefit — if the
+# 04:15 tick was missed, the gate simply takes its chances that night.
+[Unit]
+Description=Nightly pre-gate Serena restart timer (04:15, before the 04:30 voice gate)
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+AccuracySec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

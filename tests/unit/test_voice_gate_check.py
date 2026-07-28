@@ -185,3 +185,17 @@ def test_probe_pass_artifact_clears_the_checker(tmp_path):
     ok, _ = vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
                          baseline={"created_at": "2026-07-14T00:00:00Z"})
     assert ok is True
+
+
+def test_w11_delivery_modules_are_voice_path():
+    """A deploy touching only the W11 mapper or the waterfall changes what Zoe
+    SOUNDS like and must hit the replay gate (Codex P1, #1579 — which was
+    itself such a deploy and would have bypassed it)."""
+    from voice_gate_check import touched_voice_files, voice_path_patterns
+    touched = touched_voice_files(
+        ["services/zoe-data/voice_delivery.py",
+         "services/zoe-data/tts_waterfall.py",
+         "docs/PLANS.md"],
+        voice_path_patterns())
+    assert touched == ["services/zoe-data/voice_delivery.py",
+                       "services/zoe-data/tts_waterfall.py"], touched
