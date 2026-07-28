@@ -26,7 +26,10 @@ TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-2400}"
 # work (Codex, #1578); this bounds what THIS wrapper can add to the load.
 exec 9>/tmp/zoe-cross-review.lock
 flock 9
-PR="$1"; CONTRACT="$2"
+PR="$1"; shift
+# Join ALL remaining words — an unquoted multiword contract must not silently
+# truncate to its first word (Codex, #1578).
+CONTRACT="$*"
 case "$PR" in (*[!0-9]*|'') echo "ALARM: PR must be numeric, got: $PR" >&2; exit 1;; esac
 
 SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -H 'Content-Type: application/json' \
@@ -47,10 +50,14 @@ BRIEF="Use your cross-review skill on PR #$PR of jason-easyazz/zoe-ai-assistant.
 
 # REST cannot start claude-sdk sessions; the docker-exec kick is the only
 # working recipe (reference_omnigent_handoff_mechanics).
+# The run's output persists to a session-specific log INSIDE the container so
+# a pre-reply death (OAuth expiry, credits, rate limit) stays diagnosable —
+# the generic silent-kick ALARM points there (Codex, #1578).
+KICK_LOG="/tmp/zoe-cross-review-$SID.log"
 docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(cat <<'CROSS_REVIEW_BRIEF_7f3a9c'
 $BRIEF
 CROSS_REVIEW_BRIEF_7f3a9c
-)\" --no-log" \
+)\" --no-log > $KICK_LOG 2>&1" \
   || { echo "ALARM: docker-exec kick failed" >&2; exit 2; }
 
 # Poll. `docker exec -d` returns before the run registers, so an early `idle`
@@ -77,7 +84,7 @@ while :; do
     fi
   fi
   if [ "$saw_running" = 0 ] && [ $((now - start)) -gt 300 ]; then
-    echo "ALARM: session never reached 'running' within 300s (status: $status) — kick died silently" >&2
+    echo "ALARM: session never reached 'running' within 300s (status: $status) — kick died silently; diagnose: docker exec $CONTAINER tail -40 $KICK_LOG" >&2
     exit 2
   fi
   if [ $((now - start)) -gt "$TIMEOUT_S" ]; then
