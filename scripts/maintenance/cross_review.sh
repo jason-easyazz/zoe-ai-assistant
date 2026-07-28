@@ -53,11 +53,12 @@ BRIEF="Use your cross-review skill on PR #$PR of jason-easyazz/zoe-ai-assistant.
 # The run's output persists to a session-specific log INSIDE the container so
 # a pre-reply death (OAuth expiry, credits, rate limit) stays diagnosable —
 # the generic silent-kick ALARM points there (Codex, #1578).
+# The brief crosses into the container BASE64-ENCODED: no heredoc, so no
+# delimiter a hostile contract could escape into the authenticated shell
+# (Codex, #1578 — reproduced with a crafted delimiter line).
 KICK_LOG="/tmp/zoe-cross-review-$SID.log"
-docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(cat <<'CROSS_REVIEW_BRIEF_7f3a9c'
-$BRIEF
-CROSS_REVIEW_BRIEF_7f3a9c
-)\" --no-log > $KICK_LOG 2>&1" \
+BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)
+docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
   || { echo "ALARM: docker-exec kick failed" >&2; exit 2; }
 
 # Poll. `docker exec -d` returns before the run registers, so an early `idle`
@@ -88,7 +89,12 @@ while :; do
     exit 2
   fi
   if [ $((now - start)) -gt "$TIMEOUT_S" ]; then
-    echo "ALARM: review still '$status' after ${TIMEOUT_S}s — inspect session $SID" >&2
+    # Stop the detached worker before releasing the flock, or the next
+    # invocation would run a SECOND polly beside the stuck one (Codex, #1578).
+    # Safe pattern-kill: runs inside the container against the omnigent run
+    # cmdline carrying this unique SID; this wrapper is outside the container.
+    docker exec "$CONTAINER" pkill -f "$SID" 2>/dev/null || true
+    echo "ALARM: review still '$status' after ${TIMEOUT_S}s — worker stopped; inspect session $SID and docker exec $CONTAINER tail -40 $KICK_LOG" >&2
     exit 2
   fi
 done
