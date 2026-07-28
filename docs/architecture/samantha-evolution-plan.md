@@ -395,8 +395,13 @@ regression, ever (replay harness is the enforcement).
   longer waits on W3.3 — any ~800 MB-idle window clears it.
   **LAB MEASUREMENT DONE 2026-07-28** (live sidecar, novel text, X-Cache all-miss, brain
   and sidecar verified undisturbed): streamed first-audio median **996.5 ms** vs
-  whole-utterance **1607 ms** on a 2-sentence reply, extrapolating ~2.2–2.4 s on
-  3 sentences — **~2.2× first-audio improvement**, growing with reply length. The
+  whole-utterance **1607 ms** on a 2-sentence reply — a **MEASURED 1.61× first-audio
+  improvement (38% lower latency)**, growing with reply length. The often-quoted
+  "~2.2×" came from dividing an EXTRAPOLATED 3-sentence whole-utterance time
+  (~2.2–2.4 s) by the measured 2-sentence first-audio figure — and the 3-sentence
+  case is precisely the one that CUDA-OOMed and was therefore never timed, so no
+  3-sentence ratio is measured at all (Codex, #1581). Quote 1.61× as the evidence
+  for the flip; treat longer-reply gains as expected-but-unmeasured. The
   sharper finding: on a tight box (MemAvailable ~50–120 MB) the whole-utterance path
   **CUDA-OOMs deterministically on 3-sentence replies (4/4)** while all per-sentence
   calls succeed — flag-off LiveKit may already be silently degrading to fallback
