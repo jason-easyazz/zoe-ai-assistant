@@ -1,7 +1,7 @@
 ---
 type: knowledge
 title: Omnigent cross-review — the in-house advisory review tier
-description: How and when to run polly (Omnigent) cross-reviews of PRs; validated 2026-07-27 on live PRs with a scored A/B; replaces Bugbot's seat and front-runs billed Greptile rounds.
+description: How and when to run polly (Omnigent) cross-reviews of PRs; validated 2026-07-27 on live PRs with a scored A/B; replaces Bugbot's seat after it was disabled 2026-07-28 due to cost and front-runs billed Greptile rounds.
 ---
 
 # Omnigent cross-review (polly) — advisory review tier
@@ -9,8 +9,8 @@ description: How and when to run polly (Omnigent) cross-reviews of PRs; validate
 Adopted 2026-07-27 after a live trial (operator decision). polly — Omnigent's
 claude-sdk agent with the built-in `cross-review` skill — reviews a PR diff with
 an independent, different-vendor sub-agent. It is the in-house replacement for
-Bugbot's seat (credits exhausted) and the pre-ready advisory tier that keeps findings from
-becoming billed Greptile rounds.
+Bugbot's seat (disabled 2026-07-28 due to cost) and the pre-ready advisory tier
+that keeps findings from becoming billed Greptile rounds.
 
 ## When to run it
 
@@ -45,6 +45,22 @@ Handling the report:
 - Findings are **hypotheses** — verify each with a negative control
   (break → red → restore → green) before adopting.
 - Batch all adopted fixes into ONE push (each push triggers a Codex re-review).
+
+## Worker routing (cost policy, 2026-07-28)
+
+The fleet has two flat-rate implementation platforms: `claude_code` on Claude Max
+and `codex` on the ChatGPT subscription. That makes cross-vendor review available
+without marginal token cost. Claude Fable is also included in the Max plan and is
+useful for deep checking, while `pi` reaches OpenRouter for a metered third opinion.
+Bugbot was disabled 2026-07-28 due to cost, so this fleet covers its former seat.
+
+The 2026-07-27 A/B showed why the third platform remains useful but exceptional:
+GLM 5.2 produced the strongest OpenRouter result, while no single model caught every
+known defect. Flat-rate workers therefore handle the routine path and metered Pi is
+reserved for cases where another independent opinion is worth the spend.
+
+The binding routing, model-tier, cross-vendor, and cost-cap rules live in the root
+[`AGENTS.md`](../../AGENTS.md) review-pipeline contract.
 
 ## Fail-loudly (the Copilot lesson)
 

@@ -13,8 +13,9 @@ was introduced, fixed, and then reintroduced. So these tests do not assert on th
 YAML text — they EXECUTE the real embedded script against a stubbed GitHub API and
 assert on what it actually does.
 
-The load-bearing case is `test_red_check_during_summon_window_is_not_labelled`:
-remove the revalidation of `checksOk` and it goes red. It was verified to do so.
+The suite also pins reviewer grace; handoff revalidation via dismissal, behind-ness,
+and unresolved-thread conditions; label repair; and bounded Greptile re-summons while
+proving that disabled Bugbot checks cannot block the gate.
 """
 from __future__ import annotations
 
@@ -66,6 +67,7 @@ HARNESS = textwrap.dedent(
     const SHA = 'a'.repeat(40);
 
     let checkReads = 0;
+    let conditionReads = 0;
     let getReads = 0;
     const calls = { addLabels: 0, removeLabel: 0, comments: [], deleted: [] };
     // OPTS.staleListSha simulates the head moving between the sweep's opening
@@ -99,12 +101,12 @@ HARNESS = textwrap.dedent(
         pulls: {
           list: async () => [pr],
           // OPTS.headMovesLate: the head moves once the conditions have been re-read.
-          // Keyed on checkReads (readConditions calls listForRef), NOT on the number of
+          // Keyed on conditionReads, NOT on the number of
           // pulls.get calls — a get-count trigger fires in BOTH orderings and so cannot
           // tell whether the head check runs before or after readConditions.
           get: async () => {
             getReads += 1;
-            const moved = OPTS.headMovesLate && getReads >= 2 && checkReads >= 2;
+            const moved = OPTS.headMovesLate && getReads >= 2 && conditionReads >= 2;
             return { data: { ...pr, head: { sha: moved ? 'c'.repeat(40) : SHA },
                              // freshLabels / freshDraft: what GitHub has NOW, which the
                              // one-time pulls.list snapshot may not reflect.
@@ -114,13 +116,17 @@ HARNESS = textwrap.dedent(
           },
           listReviews: async () => listReviews(),
         },
-        repos: { compareCommits: async () => ({ data: { behind_by: OPTS.behindBy || 0 } }) },
+        repos: { compareCommits: async () => {
+          conditionReads += 1;
+          return { data: { behind_by: OPTS.behindBy || 0 } };
+        } },
         checks: {
           listForRef: async () => {
+            if (OPTS.checksFetchFails) throw new Error('checks unavailable');
             checkReads += 1;
             // checksFlip: green on the first read, red on the second — a required check
             // that re-runs and fails while the summon calls are in flight.
-            const red = OPTS.checksRed || (OPTS.checksFlip && checkReads >= 2);
+            const red = OPTS.checksFlip && checkReads >= 2;
             const extra = OPTS.greptileRun
               ? [{ name: 'Greptile Review', status: OPTS.greptileRun.status || 'completed',
                    conclusion: OPTS.greptileRun.conclusion || null,
@@ -201,23 +207,23 @@ def test_all_green_hands_off(tmp_path):
     assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
 
 
-def test_red_check_during_summon_window_is_not_labelled(tmp_path):
-    """THE regression test: conditions that change mid-sweep must be re-read.
-
-    Checks are green when the decision is made and red by the time we act. The
-    pre-action revalidation originally re-read only SHA/behindness/threads, so this
-    case was labelled anyway. Drop `st2.checksOk` from the revalidation and this
-    test goes red — verified.
-    """
+def test_failed_bugbot_check_does_not_block_handoff(tmp_path):
+    """Bugbot is disabled and must not remain an implicit required check."""
     r = _run(tmp_path, _script(), reviewers=BOTH, checksFlip=True)
-    assert r["addLabels"] == 0, r["log"]
-    assert any("conditions changed during the sweep" in m for m in r["log"]), r["log"]
+    assert r["addLabels"] == 1, r["log"]
 
 
-def test_pending_check_holds(tmp_path):
-    """A check still in flight has no meaningful conclusion — hold, never hand off."""
+def test_pending_bugbot_check_does_not_block_handoff(tmp_path):
+    """A stale in-flight Bugbot run cannot deadlock the live gate."""
     r = _run(tmp_path, _script(), reviewers=BOTH, checksPending=True)
-    assert r["addLabels"] == 0, r["log"]
+    assert r["addLabels"] == 1, r["log"]
+
+
+def test_empty_required_checks_skips_failed_checks_api(tmp_path):
+    """A Checks API outage cannot hold the gate when no checks are required."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, checksFetchFails=True)
+    assert r["addLabels"] == 1, r["log"]
+    assert not any("PR #1 check runs" in m for m in r["log"]), r["log"]
 
 
 def test_behind_branch_holds(tmp_path):
@@ -343,17 +349,20 @@ def test_grace_clock_uses_the_newest_codex_summon(tmp_path):
     assert r["addLabels"] == 0, r["log"]
 
 
-def test_regression_after_handoff_is_decided_on_fresh_conditions(tmp_path):
-    """A PR already handed off, whose checks go red during the summon window.
-
-    The revocation used to be decided from the PRE-summon read, so a regression that
-    appeared in that window left the label in place — still asserting "cheap tier
-    green" for a commit that had since failed.
-    """
-    r = _run(tmp_path, _script(), reviewers=BOTH, checksFlip=True,
+def test_regressed_handed_off_head_is_revoked_not_summoned(tmp_path):
+    """An unresolved thread revokes handoff before any Greptile re-summon."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, unresolved=True,
              labels=[{"name": "greptile"}], markerSha="a" * 40)
-    assert r["removeLabel"] == 1, r["log"]
-    assert any("regressed after handoff" in m for m in r["log"]), r["log"]
+    assert r["removeLabel"] == 1 and not any(
+        c.strip().startswith("@greptileai review") for c in r["comments"])
+
+
+def test_regression_after_handoff_is_decided_on_fresh_conditions(tmp_path):
+    """A review dismissed mid-sweep is caught by fresh handoff revalidation."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             dismissMidSweep="chatgpt-codex-connector[bot]",
+             labels=[{"name": "greptile"}], markerSha="a" * 40)
+    assert r["removeLabel"] == 1
 
 
 def test_label_present_only_in_the_fresh_read_is_still_stripped(tmp_path):
@@ -387,16 +396,6 @@ def test_failed_copilot_summon_leaves_no_grace_anchor(tmp_path):
     assert r["addLabels"] == 0, r["log"]
     posted = [c for c in r["comments"] if "greptile-gate:copilot:" in c]
     assert posted == [], f"failed mutation must post NO marker: {posted}"
-
-
-def test_regressed_handed_off_head_is_revoked_not_summoned(tmp_path):
-    """Handed off, no Greptile run, but a required check has gone RED: revoke the
-    label, do NOT spend a summon on a head about to lose its handoff (Codex,
-    #1577 — the re-summon must run behind the fresh-conditions read)."""
-    r = _run(tmp_path, _script(), reviewers=BOTH, checksRed=True,
-             labels=[{"name": "greptile"}], markerSha="a" * 40)
-    assert r["removeLabel"] == 1, r["log"]
-    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
 
 
 def test_handed_off_without_greptile_run_resummons(tmp_path):
