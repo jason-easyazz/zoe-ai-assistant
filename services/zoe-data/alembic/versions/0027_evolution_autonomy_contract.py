@@ -22,7 +22,7 @@ unconditionally — that trigger is the enforcement point: it covers EVERY creat
 code predates the columns, and stops an INSERT from self-assigning an executable
 class. It mirrors evolution_autonomy.contract_for_type; keep the two in sync.
 """
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 revision = "0027"
@@ -46,15 +46,33 @@ def _has_column(bind, table: str, col: str) -> bool:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    if not _has_column(bind, "evolution_proposals", "autonomy_class"):
-        op.add_column("evolution_proposals",
-                      sa.Column("autonomy_class", sa.Text(), nullable=False, server_default="prepare"))
-    if not _has_column(bind, "evolution_proposals", "approval_required"):
-        op.add_column("evolution_proposals",
-                      sa.Column("approval_required", sa.Text(), nullable=False, server_default=_DEFAULT_APPROVAL))
-    if not _has_column(bind, "evolution_proposals", "risk"):
-        op.add_column("evolution_proposals",
-                      sa.Column("risk", sa.Text(), nullable=False, server_default="medium"))
+    if context.is_offline_mode():
+        # `alembic upgrade --sql`: sa.inspect() cannot work on the mock bind,
+        # so the _has_column guard runs server-side instead — ADD COLUMN
+        # IF NOT EXISTS is its native Postgres equivalent (the chain is
+        # Postgres-targeted, see the trigger note below).
+        op.execute(
+            "ALTER TABLE evolution_proposals ADD COLUMN IF NOT EXISTS "
+            "autonomy_class TEXT DEFAULT 'prepare' NOT NULL"
+        )
+        op.execute(
+            "ALTER TABLE evolution_proposals ADD COLUMN IF NOT EXISTS "
+            f"approval_required TEXT DEFAULT '{_DEFAULT_APPROVAL}' NOT NULL"
+        )
+        op.execute(
+            "ALTER TABLE evolution_proposals ADD COLUMN IF NOT EXISTS "
+            "risk TEXT DEFAULT 'medium' NOT NULL"
+        )
+    else:
+        if not _has_column(bind, "evolution_proposals", "autonomy_class"):
+            op.add_column("evolution_proposals",
+                          sa.Column("autonomy_class", sa.Text(), nullable=False, server_default="prepare"))
+        if not _has_column(bind, "evolution_proposals", "approval_required"):
+            op.add_column("evolution_proposals",
+                          sa.Column("approval_required", sa.Text(), nullable=False, server_default=_DEFAULT_APPROVAL))
+        if not _has_column(bind, "evolution_proposals", "risk"):
+            op.add_column("evolution_proposals",
+                          sa.Column("risk", sa.Text(), nullable=False, server_default="medium"))
 
     # Backfill existing rows to the policy (new rows are stamped in Python at
     # creation; ADD COLUMN DEFAULT already set every existing row to review-only).
@@ -119,5 +137,9 @@ def downgrade() -> None:
         op.execute("DROP TRIGGER IF EXISTS trg_evolution_stamp_autonomy ON evolution_proposals")
         op.execute("DROP FUNCTION IF EXISTS evolution_stamp_autonomy()")
     for col in ("risk", "approval_required", "autonomy_class"):
-        if _has_column(bind, "evolution_proposals", col):
+        if context.is_offline_mode():
+            # Server-side equivalent of the _has_column guard (mock bind
+            # cannot answer sa.inspect()).
+            op.execute(f"ALTER TABLE evolution_proposals DROP COLUMN IF EXISTS {col}")
+        elif _has_column(bind, "evolution_proposals", col):
             op.drop_column("evolution_proposals", col)
