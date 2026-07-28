@@ -129,6 +129,11 @@ services:
     volumes:
       # The agents' workspace IS the Zoe repo, so they can build Zoe.
       - ../../:/workspace
+      # Executor task worktrees, mounted at the SAME path as on the host so the
+      # work_dir a queue task names (prepared by worktree_bootstrap under
+      # ~/.worktrees/<task_id>) resolves in-container and the agent works on
+      # the prepared branch instead of self-provisioning a divergent checkout.
+      - /home/zoe/.worktrees:/home/zoe/.worktrees
       # Activate the container-relative MCP config: Claude Code (--project /workspace)
       # auto-loads /workspace/.mcp.json. The committed repo-root .mcp.json uses the HOST
       # path (--project /home/zoe/assistant), which is NOT where the repo is mounted here,

@@ -137,7 +137,11 @@ export async function spawnOmnigentWorker(
     const realBrief = ctx.body ?? ctx.brief;
     const brief = [
       realBrief
-        ? `EXECUTOR TASK. Task id: ${task.id}, phase: ${phase}. Work in the directory named below; commit and push on its checked-out branch. Do not touch the live checkout (/home/zoe/assistant) directly.`
+        ? `EXECUTOR TASK. Task id: ${task.id}, phase: ${phase}. ${
+            phase === 'implement'
+              ? 'Work in the directory named below; commit and push on its checked-out branch.'
+              : 'This phase is analysis/verification: read and run checks from the directory named below, but do NOT commit or push unless the task brief explicitly says to.'
+          } Do not touch the live checkout (/home/zoe/assistant) directly.`
         : `SYNTHETIC EXECUTOR TASK (flue-executor lab). Task id: ${task.id}, phase: ${phase}.`,
       realBrief
         ? [
