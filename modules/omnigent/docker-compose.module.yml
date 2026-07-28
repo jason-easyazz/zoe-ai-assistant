@@ -187,6 +187,21 @@ services:
       # (Codex, #1582). Read-only, same pattern (and same operator-credential
       # trust decision) as the gh mount above.
       - /home/zoe/.config/zoe:/root/.config/zoe:ro
+      # Pipeline journal for remotely-routed review/verify phases: the briefs'
+      # mandatory pipeline_evidence_commands.py markers (mark-reviewed /
+      # mark-tested) resolve the store via pipeline_store.store_path() —
+      # $ZOE_PIPELINE_STORE_PATH else ~/.zoe/engineering_pipeline_runs.jsonl —
+      # and HOME=/root here, so without this mount every marker exits "No
+      # pipeline state found" and a compliant remote reviewer cannot complete
+      # the phase (Codex, #1582). Read-WRITE: the markers APPEND via
+      # save_state. A DIRECTORY bind, not a file bind, on purpose: the journal
+      # is created lazily (an absent file bind-mounts as a directory and
+      # breaks the store), and the compactor rewrites IN PLACE (rename is
+      # rejected by design in compact_pipeline_state.py), so the dir bind
+      # stays coherent across compactions. Deliberate trade-off: this exposes
+      # ~/.zoe (incl. the dispatch kill-switch marker) rw to container agents
+      # — same operator-trust decision as the push-capable gh token above.
+      - /home/zoe/.zoe:/root/.zoe
       # ── Code-intel tooling (audit fix #4) ──────────────────────────────────────
       # Serena, codebase-memory, and opensrc live on the HOST only; the repo is mounted
       # but the tools were entirely absent from this container, so the MCP servers wired

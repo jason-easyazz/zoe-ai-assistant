@@ -473,6 +473,43 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
     )
 
 
+def _prior_phase_handoffs(
+    phase: str, phase_order: list[str], existing_phases: dict[str, dict]
+) -> str:
+    """Inline completed prior-phase handoff text into the next phase's body.
+
+    The briefs tell workers to fetch prior evidence via ``kanban_show``
+    (implement reads SCOUT_SUMMARY=, review compares the verify handoff), but
+    the Omnigent lane has no board API — its protocol override tells the agent
+    to skip exactly those calls — so the handoff must travel IN the brief
+    itself or remote implement loses its accepted plan and remote review
+    blocks on "missing" verification evidence (Codex, #1582). Tail-sliced
+    because the machine-parsed FIELD= block sits at the end of a handoff.
+    Inlining a prior phase's TESTS=/VALIDATORS= lines into the BODY cannot be
+    mis-parsed as this phase's own evidence: pipeline_handoff._haystacks reads
+    latest_summary/comments/metadata/logs, and the task body feeds only the
+    deliberate PR_URL fallback.
+    """
+    if phase not in phase_order:
+        return ""
+    sections: list[str] = []
+    for prev in phase_order[: phase_order.index(phase)]:
+        row = existing_phases.get(prev) or {}
+        if (row.get("status") or "").lower() != "done":
+            continue
+        summary = str(row.get("latest_summary") or row.get("result") or "").strip()
+        if summary:
+            sections.append(f"--- {prev} handoff ---\n{summary[-1200:]}")
+    if not sections:
+        return ""
+    return (
+        "Prior-phase handoffs (authoritative, inlined; use these directly — do"
+        " not call kanban_show for them, board reads may not exist on your lane):\n"
+        + "\n".join(sections)
+        + "\n\n"
+    )
+
+
 def _issue_with_phase_handoff(issue: dict, phase: str, state: Any | None) -> dict:
     if state is None or phase not in {"verify", "review", "closeout", "retro"}:
         return issue
@@ -1970,6 +2007,10 @@ class KanbanAdapter:
 
         phase, assignee, skills = entry
         task_issue = _issue_with_phase_handoff(issue, phase, state)
+        prior_handoffs = _prior_phase_handoffs(phase, phase_order, existing_phases)
+        if prior_handoffs:
+            task_issue = dict(task_issue)
+            task_issue["description"] = prior_handoffs + str(task_issue.get("description") or "")
         args = [
             "create",
             self._title(phase, identifier, task_issue),

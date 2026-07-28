@@ -6110,3 +6110,63 @@ async def test_only_implement_with_existing_pr_takes_revision_worktree_path(monk
         else:
             assert plain, f"phase {phase!r} with a pr_url skipped its plain worktree"
             assert not revision, f"phase {phase!r} wrongly took the PR-revision path"
+
+
+@pytest.mark.asyncio
+async def test_implement_brief_inlines_completed_scout_handoff():
+    """The Omnigent lane cannot call kanban_show (its protocol override skips
+    board API calls), so implement's SCOUT_SUMMARY handoff must travel IN the
+    dispatched brief itself, not behind a board read (Codex, #1582)."""
+    issue_id = "uuid-handoff-impl"
+    _seed_phase_state(issue_id, "implement")
+    a = _FakeAdapter(
+        list_rows=[
+            {
+                "id": "t_scout_done",
+                "status": "done",
+                "idempotency_key": f"multica:{issue_id}:scout",
+                "latest_summary": (
+                    "TOOLS_USED=codebase-memory\n"
+                    "SCOUT_SUMMARY=edit fast_tiers.py::_route, add one focused test\n"
+                    "IMPLEMENTATION_REQUIRED=true"
+                ),
+            }
+        ]
+    )
+    result = await a.dispatch({"id": issue_id, "identifier": "ZOE-HO", "title": "t"})
+    assert result["ok"] is True and result["phase"] == "implement"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    body = create[create.index("--body") + 1]
+    assert "Prior-phase handoffs" in body
+    assert "SCOUT_SUMMARY=edit fast_tiers.py::_route" in body
+
+
+@pytest.mark.asyncio
+async def test_review_brief_inlines_verify_handoff_and_skips_non_done_rows():
+    """Review must receive verify's evidence inline; rows that are not done
+    (e.g. a blocked phase) contribute nothing."""
+    issue_id = "uuid-handoff-review"
+    _seed_phase_state(issue_id, "review")
+    a = _FakeAdapter(
+        list_rows=[
+            {
+                "id": "t_verify_done",
+                "status": "done",
+                "idempotency_key": f"multica:{issue_id}:verify",
+                "latest_summary": "TESTS=pytest tests/x -q: 12 passed\nVALIDATORS=validate_structure.py: exit 0",
+            },
+            {
+                "id": "t_scout_blocked",
+                "status": "blocked",
+                "idempotency_key": f"multica:{issue_id}:scout",
+                "latest_summary": "BLOCKER=should never appear in the brief",
+            },
+        ]
+    )
+    result = await a.dispatch({"id": issue_id, "identifier": "ZOE-HOR", "title": "t"})
+    assert result["ok"] is True and result["phase"] == "review"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    body = create[create.index("--body") + 1]
+    assert "--- verify handoff ---" in body
+    assert "TESTS=pytest tests/x -q: 12 passed" in body
+    assert "should never appear in the brief" not in body
