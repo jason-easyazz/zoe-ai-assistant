@@ -416,4 +416,11 @@ async def test_create_reactivates_an_archived_row_instead_of_deduplicating_onto_
     assert out == {"id": "old-id", "deduplicated": True}
     requeues = [s for s, _ in conn.statements if "SET status='queued'" in s]
     assert requeues, "cancelled row must be reactivated, not left dead"
+    # The previous attempt's handoff must NOT survive: result surfaces as
+    # latest_summary (the evidence gate's input), so stale evidence would let
+    # the retry be advanced or blocked on work it never did.
+    assert "result=NULL" in requeues[0]
+    assert "session_id=NULL" in requeues[0]
+    assert "attempt=1" in requeues[0]
+    assert "created_at=now()" in requeues[0]
     assert "task_requeued" in conn.logged_actions()

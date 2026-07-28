@@ -444,12 +444,17 @@ async def _cmd_create(
                 # revision instructions), the executor's work_dir race guard
                 # ages rows off created_at (a stale clock would instantly
                 # fail the retry), and the queue contract starts rows at
-                # attempt=1 (0 would grant an extra retry).
+                # attempt=1 (0 would grant an extra retry). `result` and
+                # `session_id` MUST be cleared too: they now surface as
+                # `latest_summary` (the evidence gate's input), so leaving the
+                # previous attempt's handoff behind would let the retry be
+                # judged — advanced or blocked — on evidence it never produced.
                 await conn.execute(
                     """UPDATE agent_task_queue
                           SET status='queued', failure_reason=NULL, completed_at=NULL,
                               dispatched_at=NULL, started_at=NULL, attempt=1,
-                              created_at=now(), context=$2::jsonb, work_dir=$3
+                              created_at=now(), context=$2::jsonb, work_dir=$3,
+                              result=NULL, session_id=NULL
                         WHERE id=$1::uuid""",
                     existing, json.dumps(context), resolve_workspace(workspace, existing),
                 )
