@@ -617,6 +617,30 @@ _PANEL_ENTER_CODE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# === TIMER MINUTES ===
+# STT spells short numbers out ("set a timer for five minutes"), so the timer
+# patterns accept these words alongside \d+. Values mirror the quantity words
+# in _parse_relative_reminder_duration plus the common spoken timer durations.
+_TIMER_MINUTE_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "twenty": 20, "twenty five": 25, "twenty-five": 25,
+    "thirty": 30, "forty five": 45, "forty-five": 45, "sixty": 60,
+}
+# Longest-first so "twenty five" wins over "twenty" in the alternation.
+_TIMER_MINUTES_PAT = r"(?:\d+|" + "|".join(
+    sorted(_TIMER_MINUTE_WORDS, key=len, reverse=True)
+) + r")"
+
+
+def _timer_minutes_value(raw: str) -> Optional[int]:
+    """Parse a _TIMER_MINUTES_PAT capture ('5' or 'five') to minutes, else None."""
+    s = (raw or "").strip().lower()
+    if s.isdigit():
+        return int(s)
+    return _TIMER_MINUTE_WORDS.get(s)
+
 
 def detect_intent(
     text: str,
@@ -1104,17 +1128,22 @@ def detect_intent(
 
     # --- TIMER CREATE ---
     for pattern in [
-        r"^(?:set|start|create|add) (?:a |an )?(?:(\d+)[\s\-]minute[s]?|(\d+)[\s\-]min[s]?) timer(?: (?:called|for|named) (.+))?$",
-        r"^(?:set|start|create) (?:a |an )?timer (?:for|of) (\d+) min(?:utes?)?(?:\s+(?:called|for|named) (.+))?$",
-        r"^(\d+) min(?:utes?)? timer(?: (?:for|called|named) (.+))?$",
+        rf"^(?:set|start|create|add) (?:a |an )?(?:({_TIMER_MINUTES_PAT})[\s\-]minute[s]?|({_TIMER_MINUTES_PAT})[\s\-]min[s]?) timer(?: (?:called|for|named) (.+))?$",
+        rf"^(?:set|start|create) (?:a |an )?timer (?:for|of) ({_TIMER_MINUTES_PAT}) min(?:utes?)?(?:\s+(?:called|for|named) (.+))?$",
+        rf"^({_TIMER_MINUTES_PAT}) min(?:utes?)? timer(?: (?:for|called|named) (.+))?$",
         r"^(?:set|start) (?:a |an )?timer$",
     ]:
         m = re.match(pattern, t)
         if m:
-            groups = [g for g in (m.groups() if m.lastindex else []) if g]
-            mins = next((g for g in groups if g and g.isdigit()), "5")
-            label = next((g for g in groups if g and not g.isdigit()), "Timer")
-            return Intent("timer_create", {"minutes": int(mins), "label": label.title()})
+            # POSITIONAL, not value-based: the label is always the final
+            # capture group, minutes always an earlier one — comparing VALUES
+            # dropped a label spelled like the duration ("... called five").
+            gs = list(m.groups()) if m.lastindex else []
+            label_raw = gs[-1] if gs else None
+            mins_raw = next((g for g in gs[:-1] if g and _timer_minutes_value(g) is not None), None)
+            mins = _timer_minutes_value(mins_raw) if mins_raw is not None else 5
+            label = label_raw if label_raw else "Timer"
+            return Intent("timer_create", {"minutes": mins, "label": label.title()})
 
     # --- RECIPE SEARCH ---
     m = re.match(
