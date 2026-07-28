@@ -438,16 +438,25 @@ async def _cmd_create(
             # Completed rows stay deduplicated as-is: the chain treats the
             # phase as done and evaluates its recorded result.
             if existing_row["status"] == "cancelled":
+                # Full refresh, not just a status flip: the retry's create
+                # carries the AUTHORITATIVE brief (e.g. implement resumed
+                # after verify blocks rebuilds context.body with the PR
+                # revision instructions), the executor's work_dir race guard
+                # ages rows off created_at (a stale clock would instantly
+                # fail the retry), and the queue contract starts rows at
+                # attempt=1 (0 would grant an extra retry).
                 await conn.execute(
                     """UPDATE agent_task_queue
                           SET status='queued', failure_reason=NULL, completed_at=NULL,
-                              dispatched_at=NULL, started_at=NULL, attempt=0
+                              dispatched_at=NULL, started_at=NULL, attempt=1,
+                              created_at=now(), context=$2::jsonb, work_dir=$3
                         WHERE id=$1::uuid""",
-                    existing,
+                    existing, json.dumps(context), resolve_workspace(workspace, existing),
                 )
                 await _log_activity(
                     conn, identity, existing, "task_requeued",
-                    f"archived row reactivated for retried phase (idempotency key {idem})",
+                    f"archived row reactivated for retried phase (idempotency key {idem}); "
+                    "brief, work_dir and age clock refreshed",
                 )
             return {"id": existing, "deduplicated": True}
         task_id = await conn.fetchval(
