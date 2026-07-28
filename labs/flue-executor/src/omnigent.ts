@@ -90,7 +90,7 @@ export async function spawnOmnigentWorker(
   cfg: ExecutorConfig,
   task: TaskRow,
 ): Promise<void> {
-  const ctx = (task.context ?? {}) as { phase?: string; brief?: string };
+  const ctx = (task.context ?? {}) as { phase?: string; brief?: string; body?: string };
   const phase = ctx.phase ?? 'implement';
   const nonce = randomBytes(6).toString('hex');
   const token = doneToken(nonce);
@@ -130,12 +130,21 @@ export async function spawnOmnigentWorker(
     // token in our own instruction text would self-complete the task. The
     // brief carries the prefix and the id as separate pieces the agent must
     // join — only a real agent reply can contain the assembled token.
+    // A real dispatch (Phase 2) carries the task brief in context.body (see
+    // executor_queue_backend.create); context.brief is the lab's synthetic
+    // field. With neither present, fall back to the read-only connectivity
+    // proof rather than letting an agent improvise work.
+    const realBrief = ctx.body ?? ctx.brief;
     const brief = [
-      `SYNTHETIC EXECUTOR TASK (flue-executor lab). Task id: ${task.id}, phase: ${phase}.`,
-      ctx.brief ?? 'No task brief was provided; treat this as a connectivity proof.',
+      realBrief
+        ? `EXECUTOR TASK. Task id: ${task.id}, phase: ${phase}. Work in the directory named below; commit and push on its checked-out branch. Do not touch the live checkout (/home/zoe/assistant) directly.`
+        : `SYNTHETIC EXECUTOR TASK (flue-executor lab). Task id: ${task.id}, phase: ${phase}.`,
+      realBrief ? `Working directory: ${task.work_dir ?? '(unset — stop and report failure)'}` : '',
+      realBrief ?? 'No task brief was provided; treat this as a connectivity proof.',
       '',
-      'Do NOT modify, create, or delete any files. Do not run commands.',
-      'When done, reply with a single line consisting of the prefix',
+      realBrief
+        ? 'When the task is genuinely done (or you are blocked), reply with a summary line, then a final line consisting of the prefix'
+        : 'Do NOT modify, create, or delete any files. Do not run commands.\nWhen done, reply with a single line consisting of the prefix',
       `"FLUE-EXEC-DONE-" immediately followed (no space) by this completion id: ${nonce}`,
     ].join('\n');
     if (brief.includes(token)) {
