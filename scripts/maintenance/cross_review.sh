@@ -76,14 +76,20 @@ stop_worker() {
     2>/dev/null || echo unreachable
 }
 REVIEW_DONE=0
+CLEANED=0
 cleanup() {
+  [ "$CLEANED" -eq 1 ] && return
+  CLEANED=1
   rm -f "${TMPJ:-}"
   if [ "$REVIEW_DONE" -ne 1 ]; then
     r=$(stop_worker)
     echo "cleanup: worker signal result: $r (session $SID)" >&2
   fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+# A signal trap that only cleans up RETURNS, and the poll loop resumes with
+# the lock held (Codex, #1578) — clean up, then actually exit.
+trap 'cleanup; exit 130' INT TERM
 
 BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)
 docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
