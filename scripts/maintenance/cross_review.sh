@@ -17,6 +17,8 @@ SERVER="${OMNIGENT_SERVER:-http://127.0.0.1:6767}"
 POLLY_ID="${OMNIGENT_POLLY_ID:-ag_057995d1517418e6839f51d340785dd6}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
 TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-2400}"
+case "$TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be a positive integer (seconds), got: $TIMEOUT_S" >&2; exit 1;; esac
+[ "$TIMEOUT_S" -gt 0 ] || { echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be > 0" >&2; exit 1; }
 
 [ $# -ge 2 ] || { echo "usage: $0 <PR-number> \"<contract>\"" >&2; exit 1; }
 
@@ -57,6 +59,32 @@ BRIEF="Use your cross-review skill on PR #$PR of jason-easyazz/zoe-ai-assistant.
 # delimiter a hostile contract could escape into the authenticated shell
 # (Codex, #1578 — reproduced with a crafted delimiter line).
 KICK_LOG="/tmp/zoe-cross-review-$SID.log"
+
+# Worker cleanup. The container image has NO pkill/procps (verified live;
+# Codex, #1578) — kill by /proc cmdline scan instead, and report honestly
+# whether anything was actually signalled. Armed as an EXIT/signal trap right
+# after the kick so SIGINT/SIGTERM/disconnect cannot orphan a worker while
+# the flock releases (Codex, #1578); disarmed once the report is out.
+stop_worker() {
+  # Two self-match traps here (both hit during control runs): the scanning
+  # sh's cmdline contains the SID (grep arg) — exclude $$ or it kills itself
+  # (exit 143); and the grep CHILD matches too but is dead by kill-time, so a
+  # single `kill $pids` reports failure even when the real worker died —
+  # signal per-pid and succeed if ANY landed.
+  docker exec "$CONTAINER" sh -c \
+    'pids=$(grep -la "'"$SID"'" /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3 | grep -vx "$$"); n=0; for p in $pids; do kill "$p" 2>/dev/null && n=$((n+1)); done; [ "$n" -gt 0 ] && echo killed || echo none' \
+    2>/dev/null || echo unreachable
+}
+REVIEW_DONE=0
+cleanup() {
+  rm -f "${TMPJ:-}"
+  if [ "$REVIEW_DONE" -ne 1 ]; then
+    r=$(stop_worker)
+    echo "cleanup: worker signal result: $r (session $SID)" >&2
+  fi
+}
+trap cleanup EXIT INT TERM
+
 BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)
 docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
   || { echo "ALARM: docker-exec kick failed" >&2; exit 2; }
@@ -91,10 +119,8 @@ while :; do
   if [ $((now - start)) -gt "$TIMEOUT_S" ]; then
     # Stop the detached worker before releasing the flock, or the next
     # invocation would run a SECOND polly beside the stuck one (Codex, #1578).
-    # Safe pattern-kill: runs inside the container against the omnigent run
-    # cmdline carrying this unique SID; this wrapper is outside the container.
-    docker exec "$CONTAINER" pkill -f "$SID" 2>/dev/null || true
-    echo "ALARM: review still '$status' after ${TIMEOUT_S}s — worker stopped; inspect session $SID and docker exec $CONTAINER tail -40 $KICK_LOG" >&2
+    r=$(stop_worker)
+    echo "ALARM: review still '$status' after ${TIMEOUT_S}s — worker signal result: $r; inspect session $SID and docker exec $CONTAINER tail -40 $KICK_LOG" >&2
     exit 2
   fi
 done
@@ -109,8 +135,8 @@ esac
 # JSON is never read (SC2259; polly finding #1 on #1578, reproduced live).
 # An idle session with NO messages is the silent-launch-failure signature —
 # alarm, never report it as a clean review.
+REVIEW_DONE=1  # normal completion — the cleanup trap must not kill a finished session's remnants
 TMPJ=$(mktemp)
-trap 'rm -f "$TMPJ"' EXIT
 curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" -o "$TMPJ" \
   || { echo "ALARM: could not fetch session $SID for the report" >&2; exit 2; }
 rc=0
