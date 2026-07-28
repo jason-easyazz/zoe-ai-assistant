@@ -63,6 +63,16 @@ _WORD_NUMBERS = {
     "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40,
     "fifty": 50, "sixty": 60, "ninety": 90,
 }
+# COMPOUND spoken numbers ("twenty five", "forty-five"). Kept separate so the
+# duration alternation can try them LONGEST-FIRST — a flat dict would let
+# "twenty" match first and leave " five minutes" to be re-matched as 5.
+_COMPOUND_WORD_NUMBERS = {
+    f"{tens_w}{sep}{ones_w}": tens_v + ones_v
+    for tens_w, tens_v in (("twenty", 20), ("thirty", 30), ("forty", 40), ("fifty", 50))
+    for ones_w, ones_v in (("one", 1), ("two", 2), ("three", 3), ("four", 4),
+                           ("five", 5), ("six", 6), ("seven", 7), ("eight", 8), ("nine", 9))
+    for sep in (" ", "-")
+}
 
 MAX_TIMER_SECONDS = 24 * 3600
 
@@ -137,12 +147,17 @@ def _unit_to_seconds(unit: str) -> int:
 
 def _parse_timer_duration(text: str) -> int:
     """Total seconds from a timer phrase (digits or number-words), else 0."""
-    num = r"\d+|" + "|".join(re.escape(w) for w in _WORD_NUMBERS)
+    # Compounds FIRST in the alternation, else "twenty five minutes" matches
+    # bare "five minutes" (the 25/45-minute bug caught in review).
+    all_words = {**_COMPOUND_WORD_NUMBERS, **_WORD_NUMBERS}
+    num = r"\d+|" + "|".join(
+        re.escape(w) for w in sorted(all_words, key=len, reverse=True)
+    )
     pattern = re.compile(r"\b(" + num + r")\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b")
     total = 0
     found = False
     for value, unit in pattern.findall(text):
-        n = int(value) if value.isdigit() else _WORD_NUMBERS.get(value, 0)
+        n = int(value) if value.isdigit() else all_words.get(value, 0)
         total += n * _unit_to_seconds(unit)
         found = True
     if found:
@@ -164,7 +179,10 @@ def _parse_timer_label(text: str) -> str:
         return ""
     if re.search(r"\b(hours?|hrs?|minutes?|mins?|seconds?|secs?|timer)\b", cand):
         return ""
-    if cand in _WORD_NUMBERS:
+    # A number-word candidate is only ambiguous after "for" ("for five" is a
+    # duration fragment); after an EXPLICIT "called/named" it is a real label
+    # ("set a five minute timer called five") — keep it.
+    if cand in _WORD_NUMBERS and not re.search(r"\b(?:called|named)\s", m.group(0)):
         return ""
     return cand.title()
 

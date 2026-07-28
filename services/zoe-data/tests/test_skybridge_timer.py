@@ -49,6 +49,10 @@ def _t(text: str) -> str:
     ("set a 3 minute timer called pasta", 180),
     ("timer for the eggs", 0),          # no duration → caller defaults
     ("set a timer", 0),
+    # compound spoken numbers — "twenty five" must NOT parse as bare "five"
+    ("set a timer for twenty five minutes", 1500),
+    ("set a timer for forty-five minutes", 2700),
+    ("set a timer for thirty two minutes", 1920),
 ])
 def test_parse_duration(text, expected):
     assert _parse_timer_duration(_t(text)) == expected
@@ -59,6 +63,10 @@ def test_parse_duration(text, expected):
     ("timer for the eggs", "Eggs"),
     ("set a 5 minute timer", ""),           # plain duration, no label
     ("set a timer for 10 minutes", ""),     # 'for <duration>' is not a label
+    # an EXPLICIT called/named number-word is a real label; after 'for' it stays
+    # a duration fragment
+    ("set a five minute timer called five", "Five"),
+    ("timer for five", ""),
 ])
 def test_parse_label(text, expected):
     assert _parse_timer_label(_t(text)) == expected
