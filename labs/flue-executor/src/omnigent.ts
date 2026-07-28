@@ -209,10 +209,11 @@ export async function spawnOmnigentWorker(
       return;
     }
     try {
-      if (await sessionHasToken(cfg, sessionId, token)) {
+      const reply = await sessionTokenReply(cfg, sessionId, token);
+      if (reply !== null) {
         await reportTransition(pool, cfg.runtimeId, runningTask, 'completed',
           `omnigent session ${sessionId} returned the completion token ${token}`,
-          { result: { ok: true, summary: `omnigent session ${sessionId} completed`, sessionId } });
+          { result: { ok: true, summary: `omnigent session ${sessionId} completed: ${reply}`, sessionId } });
         return;
       }
       // Fail FAST on fatal kick errors — do not burn the full timeout when the
@@ -263,8 +264,36 @@ export async function sessionHasToken(
   sessionId: string,
   token: string,
 ): Promise<boolean> {
+  return (await sessionTokenReply(cfg, sessionId, token)) !== null;
+}
+
+/**
+ * Find the completion token in the session's items and return the text of the
+ * item that carries it (the agent's final reply — which the brief asks to
+ * include a summary line, e.g. the PR URL). Returns null when the token is
+ * absent. The reply text travels into the completion result so the Zoe-side
+ * evidence gate can recover the PR URL from prose instead of GATE_BLOCKing a
+ * genuinely finished implement phase (observed live on ZOE-6106: PR opened,
+ * gate saw only "omnigent session … completed").
+ */
+export async function sessionTokenReply(
+  cfg: ExecutorConfig,
+  sessionId: string,
+  token: string,
+): Promise<string | null> {
   const items = await api<{ data?: unknown[]; items?: unknown[] }>(
     cfg, 'GET', `/v1/sessions/${sessionId}/items`);
-  const list = items.data ?? items.items ?? [];
-  return JSON.stringify(list).includes(token);
+  const list = (items.data ?? items.items ?? []) as unknown[];
+  for (const item of list) {
+    const flat = JSON.stringify(item);
+    if (!flat.includes(token)) continue;
+    // Prefer readable text fields; fall back to the serialized item.
+    const rec = item as Record<string, unknown>;
+    const text =
+      (typeof rec.text === 'string' && rec.text) ||
+      (typeof rec.content === 'string' && rec.content) ||
+      flat;
+    return text.slice(0, 2000);
+  }
+  return null;
 }

@@ -12,7 +12,7 @@
 import type pg from 'pg';
 import type { ExecutorConfig } from './config.ts';
 import { failOrRequeue } from './spawn.ts';
-import { doneToken, sessionHasToken, OmnigentApiError } from './omnigent.ts';
+import { doneToken, sessionTokenReply, OmnigentApiError } from './omnigent.ts';
 import { activityWorkspaceId, reportTransition, type TaskRow } from './queue.ts';
 
 function pidAlive(pid: number): boolean {
@@ -93,12 +93,12 @@ async function reapOmnigentRow(
   let evidenceObserved = false;
   if (sessionId && ctx.nonce) {
     try {
-      const hasToken = await sessionHasToken(cfg, sessionId, doneToken(ctx.nonce));
+      const reply = await sessionTokenReply(cfg, sessionId, doneToken(ctx.nonce));
       evidenceObserved = true;
-      if (hasToken) {
+      if (reply !== null) {
         const won = await reportTransition(pool, cfg.runtimeId, row, 'completed',
           `reaper found the completion token in omnigent session ${sessionId} (executor poller was lost)`,
-          { result: { ok: true, summary: `omnigent session ${sessionId} completed (recovered by reaper)`, sessionId } });
+          { result: { ok: true, summary: `omnigent session ${sessionId} completed (recovered by reaper): ${reply}`, sessionId } });
         return won ? 1 : 0;
       }
     } catch (err) {
