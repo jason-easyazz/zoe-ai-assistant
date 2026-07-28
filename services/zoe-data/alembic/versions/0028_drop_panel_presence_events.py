@@ -49,7 +49,7 @@ BEGIN
                 SELECT * FROM panel_presence_events;
         END IF;
     END IF;
-END
+END;
 $$""")
         else:
             exists = conn.exec_driver_sql(
@@ -109,7 +109,7 @@ BEGIN
         {restore_sql};
         DROP TABLE {_BACKUP};
     END IF;
-END
+END;
 $$""")
     elif conn.exec_driver_sql(
         f"SELECT to_regclass('{_BACKUP}')"

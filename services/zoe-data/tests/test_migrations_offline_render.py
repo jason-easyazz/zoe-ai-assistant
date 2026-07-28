@@ -44,6 +44,11 @@ def test_upgrade_chain_renders_offline(monkeypatch):
     assert "ADD COLUMN IF NOT EXISTS autonomy_class" in sql
     # Existence lookups must resolve via search_path, never assume 'public'.
     assert "to_regclass('public." not in sql
+    # The DO block's outer END carries an explicit semicolon. Grammatically
+    # optional (pl_gram.y: opt_semi), but pinned so the emitted script never
+    # depends on the reader knowing that.
+    assert "END;\n$$" in sql
+    assert "\nEND\n$$" not in sql
 
 
 def test_downgrade_steps_render_offline(monkeypatch):
@@ -57,3 +62,6 @@ def test_downgrade_steps_render_offline(monkeypatch):
     assert "to_regclass('panel_presence_events_backup_0028')" in sql
     assert "to_regclass('public." not in sql
     assert "DROP COLUMN IF EXISTS autonomy_class" in sql
+    # Explicit END; before the closing $$ (see the upgrade test).
+    assert "END;\n$$" in sql
+    assert "\nEND\n$$" not in sql
