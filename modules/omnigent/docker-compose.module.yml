@@ -207,10 +207,14 @@ services:
       # idempotent touch; its verify block asserts file-writable +
       # kill-switch-invisible.
       # CONSTRAINT: this bind hard-codes the DEFAULT journal path on both
-      # sides. If the host ever relocates the journal via
-      # ZOE_PIPELINE_STORE_PATH, this bind (source AND target) must be updated
-      # in lockstep or remote markers read/write the wrong file and exit "No
-      # pipeline state found" while the host pipeline looks healthy. Deliberate
+      # sides, and compose does NOT pass ZOE_PIPELINE_STORE_PATH into the
+      # container — in-container pipeline_store always reads the default
+      # /root/.zoe/engineering_pipeline_runs.jsonl. So if the host relocates
+      # the journal via ZOE_PIPELINE_STORE_PATH, update the bind SOURCE only
+      # and keep the container target at the default; changing the target too
+      # additionally requires wiring the matching env into the container, or
+      # remote markers read/write the wrong file and exit "No pipeline state
+      # found" while the host pipeline looks healthy. Deliberate
       # trade-off (Codex, #1582): env-deriving the bind was rejected — compose
       # reads only $REPO/.env while host-native zoe-data also loads
       # services/zoe-data/.env, the exact split-env divergence the
