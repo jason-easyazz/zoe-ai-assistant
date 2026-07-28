@@ -287,13 +287,23 @@ export async function sessionTokenReply(
   for (const item of list) {
     const flat = JSON.stringify(item);
     if (!flat.includes(token)) continue;
-    // Prefer readable text fields; fall back to the serialized item.
+    // Prefer readable text: top-level text/content strings, then the
+    // message-item shape content: [{type:'output_text', text}], then the
+    // serialized item as a last resort (a JSON blob still lets the Zoe-side
+    // prose PR-recovery regex work, but breaks FIELD= handoff parsing).
     const rec = item as Record<string, unknown>;
-    const text =
+    let text =
       (typeof rec.text === 'string' && rec.text) ||
       (typeof rec.content === 'string' && rec.content) ||
-      flat;
-    return text.slice(0, 2000);
+      '';
+    if (!text && Array.isArray(rec.content)) {
+      text = rec.content
+        .map((c) => (c && typeof c === 'object' && typeof (c as Record<string, unknown>).text === 'string'
+          ? ((c as Record<string, unknown>).text as string) : ''))
+        .filter(Boolean)
+        .join('\n');
+    }
+    return (text || flat).slice(0, 4000);
   }
   return null;
 }
