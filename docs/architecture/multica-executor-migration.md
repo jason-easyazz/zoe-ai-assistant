@@ -151,6 +151,29 @@ executor process running, and land ≥3 real tickets end-to-end (≥1 heavy via
 Omnigent). The dispatch kill switch (`~/.zoe/multica_dispatch_paused`) stays
 until that holds.
 
+**First live flip run (2026-07-28, ticket ZOE-6106) — what it proved and what it surfaced.**
+The flag needed no flip (`ZOE_KANBAN_BACKEND` code default is `executor`); the
+missing half was the executor process (`ZOE_EXECUTOR_MODE=live
+ZOE_EXECUTOR_DISPATCH=full npm run live` — dispatch defaults to DRY). The chain
+ran scout → implement → verify with the heavy lane producing a real PR
+(#1583, migration + script retirement, validators green, cross-review PASS).
+Four seam fixes landed from it (PR #1582): worktree prep for every phase (not
+just implement/verify — scout claim-defer looped forever), the real brief
+wired to the Omnigent lane (`context.body`, was the lab connectivity-proof
+brief → 30s false-positive completions), Omnigent default timeout 10min → 1h
+(a real implement outlives the proof budget), and the agent's final reply
+relayed into the completion result so the evidence gate can recover the PR
+URL. Routing: while the local Flue worker is still the lab's synthetic proof
+worker, every task carrying a real brief spawns on the Omnigent lane.
+**Open gaps:** (a) real local phase workers; (b) the evidence-format seam —
+Omnigent sessions report in free text and cannot call `kanban_complete`, so
+verify's `test`/`validator` evidence never parses out of the handoff and the
+gate blocks a genuinely-verified phase; needs either kanban tools in the
+session or a structured-handoff contract in the brief. (c)
+`validate_structure.py` takes >2 min on the live checkout, so every gate
+evaluation blows the default 60s `ZOE_MULTICA_POLL_REF_TIMEOUT_S` (raised to
+300 in the live env as a band-aid; the walk needs pruning).
+
 ### Phase 3 — (superseded by §5 decision 2: Omnigent is PRIMARY from day one)
 
 Per the operator decision, Omnigent is not a deferred "second executor" — the
