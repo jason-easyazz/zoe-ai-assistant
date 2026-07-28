@@ -5998,3 +5998,33 @@ def test_converge_noop_implement_ignores_pr_substring_in_other_words(monkeypatch
     row = _gate_row(wt, reason="BLOCKER=GATE_BLOCKED: missing required evidence prior_result")
     assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
     assert not calls["run"]
+
+
+@pytest.mark.asyncio
+async def test_every_non_retro_phase_gets_a_worktree(monkeypatch):
+    """The headline Phase-2 fix: EVERY dispatched phase needs its worktree, not
+    just implement/verify — the executor defers a claim forever when work_dir
+    does not exist (scout looped until its worktree was made by hand). Retro is
+    the deliberate exception: _workspace_for_phase pins it to the main checkout.
+
+    Without this, reverting the dispatch guard to {implement, verify} leaves the
+    whole adapter suite green (polly cross-review, #1582).
+    """
+    prepared: list[str] = []
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_kanban_worktree",
+        lambda task_id, **kwargs: (prepared.append(str(task_id)), Path(f"/tmp/worktrees/{task_id}"))[1],
+    )
+
+    for phase in ("scout", "review", "closeout"):
+        prepared.clear()
+        a = _FakeAdapter()
+        await a.dispatch(
+            {
+                "id": f"uuid-wt-{phase}",
+                "identifier": f"ZOE-WT-{phase.upper()}",
+                "title": f"{phase} phase task",
+                "description": '```zoe-ticket\n{"phase":"%s"}\n```' % phase,
+            }
+        )
+        assert prepared, f"phase {phase!r} dispatched without preparing a worktree"
