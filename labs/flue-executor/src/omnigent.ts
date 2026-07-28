@@ -139,7 +139,17 @@ export async function spawnOmnigentWorker(
       realBrief
         ? `EXECUTOR TASK. Task id: ${task.id}, phase: ${phase}. Work in the directory named below; commit and push on its checked-out branch. Do not touch the live checkout (/home/zoe/assistant) directly.`
         : `SYNTHETIC EXECUTOR TASK (flue-executor lab). Task id: ${task.id}, phase: ${phase}.`,
-      realBrief ? `Working directory: ${task.work_dir ?? '(unset — stop and report failure)'}` : '',
+      realBrief
+        ? [
+            `Working directory: ${task.work_dir ?? '(unset — stop and report failure)'}`,
+            // The runner is containerised with the live repo bind-mounted at
+            // /workspace; host worktree paths under ~/.worktrees are usually
+            // NOT visible in-container. Do not fail on that — self-provision.
+            'If that directory is not accessible in your environment, create your own fresh',
+            'git worktree (or clone) from the repo at /workspace on the branch the task names',
+            '(or a new branch off origin/main) and work there. Never work directly in /workspace.',
+          ].join('\n')
+        : '',
       realBrief ?? 'No task brief was provided; treat this as a connectivity proof.',
       '',
       realBrief
@@ -151,8 +161,10 @@ export async function spawnOmnigentWorker(
             '  TESTS=<the exact test/check commands you ran and their results, e.g. "pytest tests/x -q: 12 passed">',
             '  VALIDATORS=<validator commands + results, e.g. "validate_structure.py: exit 0; validate_critical_files.py: exit 0">',
             '  SUMMARY=<one-line outcome>',
+            '  BLOCKER=<ONLY if you are blocked: one line naming the blocker; omit this field entirely on success>',
             'These lines are machine-parsed by the pipeline evidence gate; without them the',
-            'phase cannot complete. After the block, add a final line consisting of the prefix',
+            'phase cannot complete, and a blocked run without BLOCKER= is recorded as a false',
+            'success. After the block, add a final line consisting of the prefix',
           ].join('\n')
         : 'Do NOT modify, create, or delete any files. Do not run commands.\nWhen done, reply with a single line consisting of the prefix',
       `"FLUE-EXEC-DONE-" immediately followed (no space) by this completion id: ${nonce}`,

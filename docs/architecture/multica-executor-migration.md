@@ -165,11 +165,13 @@ brief → 30s false-positive completions), Omnigent default timeout 10min → 1h
 relayed into the completion result so the evidence gate can recover the PR
 URL. Routing: while the local Flue worker is still the lab's synthetic proof
 worker, every task carrying a real brief spawns on the Omnigent lane.
-**Open gaps:** (a) real local phase workers; (b) the evidence-format seam —
-Omnigent sessions report in free text and cannot call `kanban_complete`, so
-verify's `test`/`validator` evidence never parses out of the handoff and the
-gate blocks a genuinely-verified phase; needs either kanban tools in the
-session or a structured-handoff contract in the brief. (c)
+**Open gaps:** (a) real local phase workers; (b) the evidence-format seam is
+CLOSED in this same PR — the backend surfaces the completion text as
+`latest_summary` (what `pipeline_handoff._haystacks` reads) and the Omnigent
+brief demands a machine-parsed `PR_URL=`/`TESTS=`/`VALIDATORS=`/`SUMMARY=`
+(+`BLOCKER=` when blocked) block before the completion token — proven against
+`evidence_from_handoff` in unit tests, still to be proven on a live ticket
+passing verify. (c)
 `validate_structure.py` takes >2 min on the live checkout, so every gate
 evaluation blows the default 60s `ZOE_MULTICA_POLL_REF_TIMEOUT_S` (raised to
 300 in the live env as a band-aid; the walk needs pruning).

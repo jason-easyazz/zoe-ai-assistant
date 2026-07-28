@@ -2010,49 +2010,53 @@ class KanbanAdapter:
         # claim forever if that directory does not exist — so every phase needs
         # its worktree prepared, not just implement/verify. Proven live on the
         # first Phase-2 executor dispatch: the scout task claim-defer looped
-        # until its worktree was created by hand.
-        from worktree_bootstrap import prepare_existing_pr_revision_worktree, prepare_kanban_worktree
+        # until its worktree was created by hand. Retro is the exception:
+        # _workspace_for_phase pins it to the main checkout, so preparing a
+        # task worktree would only create an orphan (and its failure would
+        # wrongly block a read-only phase).
+        if phase != "retro":
+            from worktree_bootstrap import prepare_existing_pr_revision_worktree, prepare_kanban_worktree
 
-        pr_url = _existing_pr_url(issue)
-        worktree_failure_reason = "kanban worktree preparation failed"
-        worktree_blocker = "BLOCKER=WORKTREE_PREPARATION_FAILED"
-        try:
-            if phase == "implement" and pr_url:
-                worktree_failure_reason = "existing PR worktree preparation failed"
-                worktree_blocker = "BLOCKER=PR_REVISION_CHECKOUT_FAILED"
-                await asyncio.to_thread(
-                    prepare_existing_pr_revision_worktree,
-                    str(task_id),
-                    pr_url,
-                )
-            else:
-                await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
-        except Exception as exc:  # noqa: BLE001
-            reason = f"{worktree_blocker}: {exc}"
-            logger.warning(
-                "kanban_adapter: worktree preparation failed for %s (%s): %s",
-                task_id,
-                phase,
-                exc,
-            )
+            pr_url = _existing_pr_url(issue)
+            worktree_failure_reason = "kanban worktree preparation failed"
+            worktree_blocker = "BLOCKER=WORKTREE_PREPARATION_FAILED"
             try:
-                await self._run(["block", str(task_id), reason[:1000]])
-            except KanbanCLIError as block_exc:
+                if phase == "implement" and pr_url:
+                    worktree_failure_reason = "existing PR worktree preparation failed"
+                    worktree_blocker = "BLOCKER=PR_REVISION_CHECKOUT_FAILED"
+                    await asyncio.to_thread(
+                        prepare_existing_pr_revision_worktree,
+                        str(task_id),
+                        pr_url,
+                    )
+                else:
+                    await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
+            except Exception as exc:  # noqa: BLE001
+                reason = f"{worktree_blocker}: {exc}"
                 logger.warning(
-                    "kanban_adapter: failed to block %s after worktree preparation failure: %s",
+                    "kanban_adapter: worktree preparation failed for %s (%s): %s",
                     task_id,
-                    block_exc,
+                    phase,
+                    exc,
                 )
-            return {
-                "ok": False,
-                "external_ref": external_ref,
-                "reason": worktree_failure_reason,
-                "phase": phase,
-                "chain": {phase: task_id},
-                "created": created,
-                "mode": mode,
-                "ready_phase_only": True,
-            }
+                try:
+                    await self._run(["block", str(task_id), reason[:1000]])
+                except KanbanCLIError as block_exc:
+                    logger.warning(
+                        "kanban_adapter: failed to block %s after worktree preparation failure: %s",
+                        task_id,
+                        block_exc,
+                    )
+                return {
+                    "ok": False,
+                    "external_ref": external_ref,
+                    "reason": worktree_failure_reason,
+                    "phase": phase,
+                    "chain": {phase: task_id},
+                    "created": created,
+                    "mode": mode,
+                    "ready_phase_only": True,
+                }
         if state is not None and state.status == "todo":
             try:
                 running = transition(state, "start")
