@@ -1,6 +1,6 @@
 """0028 — drop the unused panel presence events table."""
 
-from alembic import op
+from alembic import context, op
 
 revision = "0028"
 down_revision = "0027"
@@ -30,18 +30,35 @@ def upgrade() -> None:
     # (Codex, #1583).
     conn = op.get_bind()
     if conn.dialect.name == "postgresql":
-        exists = conn.exec_driver_sql(
-            "SELECT to_regclass('public.panel_presence_events')"
-        ).scalar()
-        if exists:
-            rows = conn.exec_driver_sql(
-                "SELECT count(*) FROM panel_presence_events"
+        if context.is_offline_mode():
+            # `alembic upgrade --sql`: the mock bind cannot return results, so
+            # the same only-if-rows-exist conditional runs server-side. Nested
+            # IFs on purpose — plpgsql plans an expression as a whole, so the
+            # table reference must not be reachable when the table is absent.
+            op.execute(f"""\
+DO $$
+BEGIN
+    IF to_regclass('public.panel_presence_events') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM panel_presence_events) THEN
+            CREATE TABLE IF NOT EXISTS {_BACKUP} AS
+                SELECT * FROM panel_presence_events;
+        END IF;
+    END IF;
+END
+$$""")
+        else:
+            exists = conn.exec_driver_sql(
+                "SELECT to_regclass('public.panel_presence_events')"
             ).scalar()
-            if rows:
-                op.execute(
-                    f"CREATE TABLE IF NOT EXISTS {_BACKUP} AS "
-                    "SELECT * FROM panel_presence_events"
-                )
+            if exists:
+                rows = conn.exec_driver_sql(
+                    "SELECT count(*) FROM panel_presence_events"
+                ).scalar()
+                if rows:
+                    op.execute(
+                        f"CREATE TABLE IF NOT EXISTS {_BACKUP} AS "
+                        "SELECT * FROM panel_presence_events"
+                    )
     op.execute("DROP TABLE IF EXISTS panel_presence_events")
 
 
@@ -64,18 +81,33 @@ CREATE TABLE IF NOT EXISTS panel_presence_events (
     # Restore whatever upgrade() preserved, then retire the backup: a downgrade
     # that leaves the rows sitting in a side table is not a restore.
     conn = op.get_bind()
-    if conn.dialect.name == "postgresql" and conn.exec_driver_sql(
+    if conn.dialect.name != "postgresql":
+        return
+    # Only rows whose panel still exists: the CTAS backup carries no FK, so
+    # a panel deleted between upgrade and downgrade would make this INSERT
+    # violate the just-recreated FK and roll back the WHOLE downgrade. The
+    # original column had ON DELETE CASCADE, so those rows were destined to
+    # disappear with their panel anyway — dropping them here reproduces that
+    # semantic instead of failing the migration (Codex, #1583).
+    restore_sql = (
+        f"INSERT INTO panel_presence_events SELECT * FROM {_BACKUP} b "
+        "WHERE EXISTS (SELECT 1 FROM panels p WHERE p.panel_id = b.panel_id) "
+        "ON CONFLICT (id) DO NOTHING"
+    )
+    if context.is_offline_mode():
+        # `alembic downgrade --sql`: the mock bind cannot return results, so
+        # the backup-exists check runs server-side instead.
+        op.execute(f"""\
+DO $$
+BEGIN
+    IF to_regclass('public.{_BACKUP}') IS NOT NULL THEN
+        {restore_sql};
+        DROP TABLE {_BACKUP};
+    END IF;
+END
+$$""")
+    elif conn.exec_driver_sql(
         f"SELECT to_regclass('public.{_BACKUP}')"
     ).scalar():
-        # Only rows whose panel still exists: the CTAS backup carries no FK, so
-        # a panel deleted between upgrade and downgrade would make this INSERT
-        # violate the just-recreated FK and roll back the WHOLE downgrade. The
-        # original column had ON DELETE CASCADE, so those rows were destined to
-        # disappear with their panel anyway — dropping them here reproduces that
-        # semantic instead of failing the migration (Codex, #1583).
-        op.execute(
-            f"INSERT INTO panel_presence_events SELECT * FROM {_BACKUP} b "
-            "WHERE EXISTS (SELECT 1 FROM panels p WHERE p.panel_id = b.panel_id) "
-            "ON CONFLICT (id) DO NOTHING"
-        )
+        op.execute(restore_sql)
         op.execute(f"DROP TABLE IF EXISTS {_BACKUP}")
