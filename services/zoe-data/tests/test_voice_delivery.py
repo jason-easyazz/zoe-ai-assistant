@@ -140,7 +140,10 @@ def test_empty_and_none_text_are_safe(monkeypatch):
 # ── Quiet hours belong to the HOUSE, not the server ────────────────────────
 
 def test_quiet_hours_use_household_timezone_not_host_clock(monkeypatch):
-    """The box runs UTC; the household is Australia/Perth (UTC+8).
+    """The test FORCES TZ=UTC to prove household-tz independence — the real box
+    runs Australia/Perth (this line previously said "the box runs UTC", which fed
+    a reviewer a false premise about the host on #1579). Whatever the host tz,
+    the household window must win:
 
     With a naive ``datetime.now()`` this fires in the middle of the afternoon and
     leaves real 2am replies neutral — the window is inverted, not merely offset.
