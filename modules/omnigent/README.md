@@ -211,8 +211,9 @@ runs auth-less and trusts every request as the reserved `local` user. Wiring:
 - **Cloudflare Access is the gate**: `https://buildzoe.the411.life` → `zoe-cloudflared` →
   `http://zoe-omnigent:6767` (both on `zoe-network`). Unauthenticated requests 302 to
   `the411.cloudflareaccess.com`.
-- **Bring up with the repo .env**:
-  `docker compose --env-file ../../.env -f docker-compose.module.yml up -d`
+- **Bring up with the repo .env** (journal pre-create first — an absent bind source
+  materialises as a directory and breaks the pipeline store; idempotent):
+  `mkdir -p /home/zoe/.zoe && touch /home/zoe/.zoe/engineering_pipeline_runs.jsonl && docker compose --env-file ../../.env -f docker-compose.module.yml up -d`
 - **The host port is `127.0.0.1:6767` only** (host-local debugging), NOT published to the LAN —
   in header mode the server is auth-less, so a LAN-published port would let any LAN device act as
   `local` with the mounted workspace + agent credentials. The Access-gated tunnel is unaffected:
@@ -294,6 +295,8 @@ at `/workspace/CLAUDE.md`, so Claude-in-container reads the rules.
 `docker compose ... up -d` recreate is required to pick them up — the running container was
 intentionally NOT recreated by the change:
 ```bash
+# journal pre-create first — absent bind source materialises as a directory (idempotent)
+mkdir -p /home/zoe/.zoe && touch /home/zoe/.zoe/engineering_pipeline_runs.jsonl
 docker compose --env-file ../../.env -f docker-compose.module.yml up -d   # recreates with mounts
 docker exec zoe-omnigent serena --help >/dev/null && echo serena-ok
 docker exec zoe-omnigent codebase-memory-mcp --help >/dev/null && echo cbm-ok
