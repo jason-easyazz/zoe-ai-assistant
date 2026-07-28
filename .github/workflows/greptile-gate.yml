@@ -139,10 +139,12 @@ jobs:
                 if (!cmp) return null;
 
                 // Kept as an extension point for future cheap-tier required checks.
-                const runs = await ok(`PR #${num} check runs`, () =>
-                  github.paginate(github.rest.checks.listForRef, {
-                    ...base, ref: sha, per_page: 100,
-                  }));
+                const runs = REQUIRED_CHECKS.length
+                  ? await ok(`PR #${num} check runs`, () =>
+                      github.paginate(github.rest.checks.listForRef, {
+                        ...base, ref: sha, per_page: 100,
+                      }))
+                  : [];
                 if (!runs) return null;
                 const byName = new Map();
                 for (const c of runs) {

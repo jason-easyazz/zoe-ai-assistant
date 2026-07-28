@@ -48,22 +48,19 @@ Handling the report:
 
 ## Worker routing (cost policy, 2026-07-28)
 
-- **`claude_code` (Claude Max, flat-rate):** primary implementer. Use Sonnet-tier
-  models for routine work and Opus-tier models for hard or multi-file work. Claude
-  Fable is included in the plan but reserved for checking: deep review passes and
-  final verification, never bulk implementation.
-- **`codex` (ChatGPT subscription, flat-rate):** second implementer for narrowly
-  scoped changes and primary independent reviewer of Claude-implemented work.
-- **Cross-vendor in both directions:** reviewer platform must differ from implementer
-  platform. Claude work → `codex` review; Codex work → `claude_code` review, with
-  Fable preferred as the reviewer model. Fable may additionally deep-check Claude's
-  own work on load-bearing PRs as a free extra pass, but never replaces the independent
-  cross-vendor review.
-- **`pi` (OpenRouter, pay-per-token):** tie-breaker or third-platform opinion only,
-  primarily GLM 5.2 for hard cases. Every dispatch must carry a hard cost-budget cap;
-  Pi is not part of the routine pipeline.
-- **Cursor Bugbot:** disabled 2026-07-28 due to cost. This free cross-review pipeline
-  covers its seat.
+The fleet has two flat-rate implementation platforms: `claude_code` on Claude Max
+and `codex` on the ChatGPT subscription. That makes cross-vendor review available
+without marginal token cost. Claude Fable is also included in the Max plan and is
+useful for deep checking, while `pi` reaches OpenRouter for a metered third opinion.
+Bugbot was disabled 2026-07-28 due to cost, so this fleet covers its former seat.
+
+The 2026-07-27 A/B showed why the third platform remains useful but exceptional:
+GLM 5.2 produced the strongest OpenRouter result, while no single model caught every
+known defect. Flat-rate workers therefore handle the routine path and metered Pi is
+reserved for cases where another independent opinion is worth the spend.
+
+The binding routing, model-tier, cross-vendor, and cost-cap rules live in the root
+[`AGENTS.md`](../../AGENTS.md) review-pipeline contract.
 
 ## Fail-loudly (the Copilot lesson)
 

@@ -103,18 +103,17 @@ services:
       # NB the passthrough is container-wide: ANTHROPIC_MODEL is forwarded to EVERY worker's
       # runner (pi/codex too). Harmless today — pi (OpenRouter/minimax) and codex (OpenAI) ignore
       # it — but a future Anthropic-backed worker added without an explicit per-dispatch model
-      # would silently inherit claude-fable-5. Re-check this line when adding workers.
+      # would silently inherit claude-opus-4-8. Re-check this line when adding workers.
       - OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY,ANTHROPIC_MODEL
-      # Default the claude_code worker to Fable 5 while discounted access lasts (operator choice
-      # 2026-06-29; Fable = the tier ABOVE Opus at ~2x its price, so REVERT when the cheap window
-      # closes — just delete this line and recreate). ANTHROPIC_MODEL is Claude Code's default-model
-      # env; a per-dispatch `args.model` from polly still wins (omnigent passes it as --model, which
-      # overrides the env), so explores can route down to cheaper models. This affects ONLY the
+      # Reviewers override to Fable per-dispatch; the default stays implementation-tier.
+      # ANTHROPIC_MODEL is Claude Code's default-model env; a per-dispatch `args.model`
+      # from polly still wins (omnigent passes it as --model, which overrides the env).
+      # This affects ONLY the
       # claude_code worker — polly's brain and codex/pi are untouched. NOT ANTHROPIC_API_KEY (never
       # set that here — it flips the CLI to metered billing); ANTHROPIC_MODEL is just the model
       # picker and rides the subscription. Forwarded to the runner via the passthrough above
       # (ANTHROPIC_MODEL is not in omnigent's default HARNESS_CREDENTIAL_ENV_VARS forward set).
-      - ANTHROPIC_MODEL=claude-fable-5
+      - ANTHROPIC_MODEL=claude-opus-4-8
       # To revert to LAN-only OIDC (only if the Cloudflare path is retired): flip provider
       # back to `oidc` and uncomment the block below. OIDC works only via http://zoe.local:6767.
       # - OMNIGENT_OIDC_ISSUER=http://zoe.local

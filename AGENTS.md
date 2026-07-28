@@ -99,7 +99,20 @@ GUARANTEE below), and it is why batching fixes into one push matters.
 Sequence:
 
 1. **Draft PR.** Invisible to Greptile.
-2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs the default pre-ready, cross-vendor advisory review on the draft PR. Worker/model routing follows the flat-rate-first cost policy in [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md). Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate.
+2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs the default pre-ready, cross-vendor advisory review on the draft PR. Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate. Binding worker routing:
+   - **`claude_code` (Claude Max, flat-rate):** primary implementer. Use Sonnet-tier
+     models for routine work and Opus-tier models for hard or multi-file work. Fable
+     is checking-only (deep review and final verification), never bulk implementation.
+   - **`codex` (ChatGPT subscription, flat-rate):** second implementer for narrow
+     changes and primary independent reviewer of Claude-implemented work.
+   - **Cross-vendor both ways:** reviewer platform must differ from implementer.
+     Claude work → `codex`; Codex work → `claude_code`, with Fable preferred. Fable
+     may additionally deep-check load-bearing Claude work but never replaces the
+     independent cross-vendor review.
+   - **`pi` (OpenRouter, pay-per-token):** tie-breaker/third opinion only, primarily
+     GLM 5.2 for hard cases. Every dispatch must have a hard cost cap; never routine.
+   - **Cursor Bugbot:** disabled 2026-07-28 due to cost; this free tier covers its seat.
+     Fleet rationale and history: [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
 3. **Local `/review` (Cursor) — free.** `.cursor/BUGBOT.md` carries the repo's review
    guide for this IDE-side command. Agents cannot run it; it is the operator's step.
 4. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does

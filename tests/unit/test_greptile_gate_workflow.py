@@ -67,6 +67,7 @@ HARNESS = textwrap.dedent(
     const SHA = 'a'.repeat(40);
 
     let checkReads = 0;
+    let conditionReads = 0;
     let getReads = 0;
     const calls = { addLabels: 0, removeLabel: 0, comments: [], deleted: [] };
     // OPTS.staleListSha simulates the head moving between the sweep's opening
@@ -100,12 +101,12 @@ HARNESS = textwrap.dedent(
         pulls: {
           list: async () => [pr],
           // OPTS.headMovesLate: the head moves once the conditions have been re-read.
-          // Keyed on checkReads (readConditions calls listForRef), NOT on the number of
+          // Keyed on conditionReads, NOT on the number of
           // pulls.get calls — a get-count trigger fires in BOTH orderings and so cannot
           // tell whether the head check runs before or after readConditions.
           get: async () => {
             getReads += 1;
-            const moved = OPTS.headMovesLate && getReads >= 2 && checkReads >= 2;
+            const moved = OPTS.headMovesLate && getReads >= 2 && conditionReads >= 2;
             return { data: { ...pr, head: { sha: moved ? 'c'.repeat(40) : SHA },
                              // freshLabels / freshDraft: what GitHub has NOW, which the
                              // one-time pulls.list snapshot may not reflect.
@@ -115,9 +116,13 @@ HARNESS = textwrap.dedent(
           },
           listReviews: async () => listReviews(),
         },
-        repos: { compareCommits: async () => ({ data: { behind_by: OPTS.behindBy || 0 } }) },
+        repos: { compareCommits: async () => {
+          conditionReads += 1;
+          return { data: { behind_by: OPTS.behindBy || 0 } };
+        } },
         checks: {
           listForRef: async () => {
+            if (OPTS.checksFetchFails) throw new Error('checks unavailable');
             checkReads += 1;
             // checksFlip: green on the first read, red on the second — a required check
             // that re-runs and fails while the summon calls are in flight.
@@ -212,6 +217,13 @@ def test_pending_bugbot_check_does_not_block_handoff(tmp_path):
     """A stale in-flight Bugbot run cannot deadlock the live gate."""
     r = _run(tmp_path, _script(), reviewers=BOTH, checksPending=True)
     assert r["addLabels"] == 1, r["log"]
+
+
+def test_empty_required_checks_skips_failed_checks_api(tmp_path):
+    """A Checks API outage cannot hold the gate when no checks are required."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, checksFetchFails=True)
+    assert r["addLabels"] == 1, r["log"]
+    assert not any("PR #1 check runs" in m for m in r["log"]), r["log"]
 
 
 def test_behind_branch_holds(tmp_path):
