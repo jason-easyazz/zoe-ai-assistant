@@ -120,12 +120,14 @@ while :; do
   sleep 30
   status=$(curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" \
     | python3 -c "import json,sys;print(json.load(sys.stdin).get('status','?'))" || echo poll-fail)
-  [ "$status" = "running" ] && saw_running=1
-  if [ "$status" != "running" ] && [ "$status" != "poll-fail" ] && [ "$saw_running" = 1 ]; then
+  # `waiting` is a NONTERMINAL Omnigent state (awaiting external work) — it
+  # both proves the run started and must keep the loop polling (Greptile P1).
+  case "$status" in (running|waiting) saw_running=1;; esac
+  if [ "$status" != "running" ] && [ "$status" != "waiting" ] && [ "$status" != "poll-fail" ] && [ "$saw_running" = 1 ]; then
     break
   fi
   now=$(date +%s)
-  if [ "$saw_running" = 0 ] && [ "$status" != "running" ] && [ "$status" != "poll-fail" ]; then
+  if [ "$saw_running" = 0 ] && [ "$status" != "running" ] && [ "$status" != "waiting" ] && [ "$status" != "poll-fail" ]; then
     # The run may have started AND finished between two polls — evidence of an
     # assistant reply means completion, not a dead kick (Codex P2, #1578).
     if curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" \
