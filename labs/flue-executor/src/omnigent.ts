@@ -185,6 +185,23 @@ export async function spawnOmnigentWorker(
         : '',
       realBrief ?? ctx.brief ?? 'No task brief was provided; treat this as a connectivity proof.',
       '',
+      // The brief above is authored for the Hermes terminal lane and mandates
+      // kanban_show/kanban_complete/kanban_block. This container exposes only
+      // Serena + codebase-memory (modules/omnigent/.mcp.json) and reports
+      // completion by the nonce below — a worker that reads the embedded
+      // protocol literally can call the absent tools a blocker and exit
+      // without the nonce, stalling the queue until timeout (Codex, #1582).
+      realBrief
+        ? [
+            'PROTOCOL OVERRIDE (this executor lane, overrides anything above):',
+            'the brief above was written for a different runtime and may instruct you to',
+            'call Kanban/board tools (kanban_show, kanban_complete, kanban_block) or other',
+            'terminal-lane tooling. Those tools DO NOT EXIST here and their absence is NOT a',
+            'blocker — ignore every such instruction. Report status ONLY via the handoff',
+            'block and completion id described below.',
+            '',
+          ].join('\n')
+        : '',
       realBrief
         ? [
             'When the task is genuinely done (or you are blocked), END your final reply with a',

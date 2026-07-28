@@ -133,11 +133,13 @@ services:
       # work_dir a queue task names (prepared by worktree_bootstrap under
       # ~/.worktrees/<task_id>) resolves in-container and the agent works on
       # the prepared branch instead of self-provisioning a divergent checkout.
-      # NOTE: this hardcodes worktree_bootstrap's DEFAULT root. If
-      # ZOE_WORKTREE_ROOT is ever pointed elsewhere, this mount (and the
-      # repo mount below) must move with it or in-container work_dir
-      # resolution silently breaks again.
-      - /home/zoe/.worktrees:/home/zoe/.worktrees
+      # Follows ZOE_WORKTREE_ROOT (worktree_bootstrap.worktree_root() honours it)
+      # so an overridden root cannot leave the container mounting a directory the
+      # queue never writes to — which silently self-provisions a divergent
+      # origin/main checkout and loses the prepared branch (Codex, #1582).
+      # Must be an ABSOLUTE path: compose does not expand `~`, and the source
+      # and target stay identical because a worktree's .git pointer is absolute.
+      - ${ZOE_WORKTREE_ROOT:-/home/zoe/.worktrees}:${ZOE_WORKTREE_ROOT:-/home/zoe/.worktrees}
       # A worktree's .git FILE is an absolute pointer
       # (gitdir: /home/zoe/assistant/.git/worktrees/<id>), so the main repo
       # must also resolve at its HOST path or the mounted worktrees are not
