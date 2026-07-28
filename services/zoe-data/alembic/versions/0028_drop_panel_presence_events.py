@@ -28,6 +28,11 @@ def upgrade() -> None:
     # then DROP TABLE panel_presence_events_backup_0028" step. It is deliberately
     # not auto-dropped: a backup the migration deletes for you is not a backup
     # (Codex, #1583).
+    # to_regclass is deliberately UNQUALIFIED everywhere in this file: the
+    # DROP/CTAS/INSERT beside it resolve via search_path, so the existence
+    # check must look in the same place. A 'public.'-qualified lookup misses
+    # a table living in a non-public active schema and skips the backup while
+    # the DROP still destroys it (Codex P1, #1583).
     conn = op.get_bind()
     if conn.dialect.name == "postgresql":
         if context.is_offline_mode():
@@ -38,7 +43,7 @@ def upgrade() -> None:
             op.execute(f"""\
 DO $$
 BEGIN
-    IF to_regclass('public.panel_presence_events') IS NOT NULL THEN
+    IF to_regclass('panel_presence_events') IS NOT NULL THEN
         IF EXISTS (SELECT 1 FROM panel_presence_events) THEN
             CREATE TABLE IF NOT EXISTS {_BACKUP} AS
                 SELECT * FROM panel_presence_events;
@@ -48,7 +53,7 @@ END
 $$""")
         else:
             exists = conn.exec_driver_sql(
-                "SELECT to_regclass('public.panel_presence_events')"
+                "SELECT to_regclass('panel_presence_events')"
             ).scalar()
             if exists:
                 rows = conn.exec_driver_sql(
@@ -100,14 +105,14 @@ CREATE TABLE IF NOT EXISTS panel_presence_events (
         op.execute(f"""\
 DO $$
 BEGIN
-    IF to_regclass('public.{_BACKUP}') IS NOT NULL THEN
+    IF to_regclass('{_BACKUP}') IS NOT NULL THEN
         {restore_sql};
         DROP TABLE {_BACKUP};
     END IF;
 END
 $$""")
     elif conn.exec_driver_sql(
-        f"SELECT to_regclass('public.{_BACKUP}')"
+        f"SELECT to_regclass('{_BACKUP}')"
     ).scalar():
         op.execute(restore_sql)
         op.execute(f"DROP TABLE IF EXISTS {_BACKUP}")

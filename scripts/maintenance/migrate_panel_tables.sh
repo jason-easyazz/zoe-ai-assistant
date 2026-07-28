@@ -93,6 +93,11 @@ CREATE TABLE IF NOT EXISTS panel_auth_challenges (
 
 CREATE INDEX IF NOT EXISTS idx_challenges_panel
     ON panel_auth_challenges(panel_id, status);
+
+-- panel_presence_events is retired (alembic 0028 drops it on Postgres, but
+-- that chain never runs against SQLite, so existing SQLite DBs keep it
+-- forever otherwise). The full-file backup taken above preserves its rows.
+DROP TABLE IF EXISTS panel_presence_events;
 SQL
 
 echo "==> Migration SQL prepared"
@@ -113,6 +118,9 @@ for tbl in panels device_tokens panel_auth_challenges; do
     ROWS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM $tbl;" 2>/dev/null || echo "ERROR")
     echo "    $tbl: $ROWS row(s)"
 done
+
+echo "==> Dropped retired table panel_presence_events (if it existed;"
+echo "    rows preserved in the pre-migration backup)."
 
 echo ""
 echo "==> Migration complete."

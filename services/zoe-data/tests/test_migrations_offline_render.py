@@ -42,6 +42,8 @@ def test_upgrade_chain_renders_offline(monkeypatch):
     assert "DROP TABLE IF EXISTS panel_presence_events" in sql
     # 0027's column guards rendered server-side, not as a live inspection.
     assert "ADD COLUMN IF NOT EXISTS autonomy_class" in sql
+    # Existence lookups must resolve via search_path, never assume 'public'.
+    assert "to_regclass('public." not in sql
 
 
 def test_downgrade_steps_render_offline(monkeypatch):
@@ -49,6 +51,9 @@ def test_downgrade_steps_render_offline(monkeypatch):
     sql = _render(monkeypatch, command.downgrade, "head:0026")
     assert "Running downgrade 0028 -> 0027" in sql
     assert "Running downgrade 0027 -> 0026" in sql
-    # 0028's conditional restore became a server-side DO block.
-    assert "to_regclass('public.panel_presence_events_backup_0028')" in sql
+    # 0028's conditional restore became a server-side DO block. Unqualified
+    # to_regclass on purpose — the lookup must resolve via search_path like
+    # the DROP/INSERT beside it, not assume 'public' (Codex P1, #1583).
+    assert "to_regclass('panel_presence_events_backup_0028')" in sql
+    assert "to_regclass('public." not in sql
     assert "DROP COLUMN IF EXISTS autonomy_class" in sql
