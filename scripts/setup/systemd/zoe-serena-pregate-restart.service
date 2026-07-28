@@ -24,4 +24,11 @@ Description=Nightly Serena restart before the voice replay gate (frees the leak)
 Type=oneshot
 # try-restart: if serena-mcp is not running, do nothing — this unit must never
 # START a service the operator deliberately stopped.
+# %t is the user runtime dir (/run/user/<uid>). MEASURED on this host: the user
+# manager already exports XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS (probe-
+# verified), so spawned units inherit them and the bare systemctl --user below
+# works from a timer with no login session. Pinned anyway as free insurance on a
+# host with a leaner manager env (Codex P1 on #1579 — accepted there, but that
+# push died with the auto-deleted branch, so it lands here).
+Environment=XDG_RUNTIME_DIR=%t
 ExecStart=/usr/bin/systemctl --user try-restart serena-mcp.service
