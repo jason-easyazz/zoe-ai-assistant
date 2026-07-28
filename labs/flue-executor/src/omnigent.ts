@@ -153,10 +153,11 @@ export async function spawnOmnigentWorker(
     // brief carries the prefix and the id as separate pieces the agent must
     // join — only a real agent reply can contain the assembled token.
     // A real dispatch (Phase 2) carries the task brief in context.body (see
-    // executor_queue_backend.create); context.brief is the lab's synthetic
-    // field. With neither present, fall back to the read-only connectivity
-    // proof rather than letting an agent improvise work.
-    const realBrief = ctx.body ?? ctx.brief;
+    // executor_queue_backend.create). context.brief is the lab's synthetic
+    // field and MUST stay on the read-only connectivity-proof path — the e2e
+    // seeds /tmp work dirs that don't exist in-container, and classifying it
+    // as real would tell the agent to self-provision and do work.
+    const realBrief = ctx.body;
     const brief = [
       realBrief
         ? `EXECUTOR TASK. Task id: ${task.id}, phase: ${phase}. ${
@@ -176,7 +177,7 @@ export async function spawnOmnigentWorker(
             '(or a new branch off origin/main) and work there. Never work directly in /workspace.',
           ].join('\n')
         : '',
-      realBrief ?? 'No task brief was provided; treat this as a connectivity proof.',
+      realBrief ?? ctx.brief ?? 'No task brief was provided; treat this as a connectivity proof.',
       '',
       realBrief
         ? [
