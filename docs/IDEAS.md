@@ -53,4 +53,10 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - **Core:** a *thin* native wrapper (Tauri, not Electron) around the existing served web UI that adds only what the browser can't: **global hotkey summon** (push-to-talk/quick-ask from any app), **tray/menu-bar residence + autostart**, and later the **"Zoe can see/act on this computer"** computer-use companion. UI stays single-source — the shell never grows its own screens (no second UI codebase). Source: Jason, 2026-07-19 (desktop UI deep-dive chat).
 - **Sequencing:** the installable-desktop path starts as **PWA polish inside the desktop-ui overhaul** (manifest/SW already ~80% there); the native shell is a separate later arc because per-OS packaging/signing (macOS needs a Mac; Jetson is ARM Linux) is a permanent maintenance tax. Detail will live in the desktop-ui overhaul plan (in progress on `claude/desktop-ui-overhaul-a512f5`).
 
+### Flip `ZOE_VAD_TAIL_MS` to 640 — the ear-tuned endpointing tail is measured but unflipped — 💡 pinned
+- **Core:** a pure operator env-flip (`ZOE_VAD_TAIL_MS=640`) already proven out by the endpointing probe and documented in the samantha evolution plan §6a + `scripts/AGENTS.md` — it just needs the operator to flip it and re-run the probe as the before/after instrument. Dropped at the 20-item cap of the 2026-07-28 senior-dev review (backlog record: ZOE-6134). Source: 2026-07-28 review.
+
+### Face enrollment & deletion UX — biometric lifecycle needs a designed front door — 💡 pinned
+- **Core:** face-ID has enrollment/retention machinery but no user-facing enroll/review/delete flow; the retention *policy* side is carded (ZOE-6129), but the UX is L-sized and product-design-heavy — no executable packet exists until Jason sketches the desired flow (where it lives in the UI, consent wording, per-person delete). Parked, not scoped. Source: 2026-07-28 review (backlog record: ZOE-6134).
+
 <!-- New ideas: copy an entry above. One line of plain English first. -->
