@@ -83,10 +83,14 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   claim → spawn → report → reap executor that will replace the Hermes gateway's
   `kanban_watchers`. Phase-1 contract lab-proven on BOTH lanes 2026-07-22
   (33/33 e2e asserts on 2026-07-22; suite since grown to 35): per-runtime advisory-lock + SKIP LOCKED single-lane
-  claim; local lane = real `flue run phase-worker` child processes; heavy lane
-  = live Omnigent (`context.lane='heavy'` → session + staged brief + runner +
+  claim; local lane = real `flue run phase-worker` child processes (still the lab's
+  SYNTHETIC proof worker); heavy lane
+  = live Omnigent (session + staged brief + runner +
   docker-exec kick, completion by nonce token — sessions settle to `idle`,
-  never `completed`); reason-mandatory transitions written through to
+  never `completed`). Routing (2026-07-28): `context.lane='heavy'` OR any task
+  carrying a real brief (`context.body`) spawns on the Omnigent lane — the
+  local lane serves only synthetic lab tasks until real local phase workers
+  land; reason-mandatory transitions written through to
   `activity_log` atomically; reap (#685) covers dead-pid running rows,
   age-stalled dispatched rows, and orphaned omnigent rows (recovered by token
   evidence). Runs only against the scratch `multica_executor_lab` DB (config

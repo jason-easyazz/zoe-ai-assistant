@@ -422,13 +422,33 @@ async def _cmd_create(
         # Idempotency without touching Multica's schema: serialize creates for
         # this key so the check-then-insert cannot race a concurrent create.
         await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", idem)
-        existing = await conn.fetchval(
-            """SELECT id::text FROM agent_task_queue
+        existing_row = await conn.fetchrow(
+            """SELECT id::text AS id, status FROM agent_task_queue
                 WHERE runtime_id = $1::uuid AND context->>'idempotency_key' = $2
                 ORDER BY created_at LIMIT 1""",
             identity["runtime_id"], idem,
         )
-        if existing:
+        if existing_row:
+            existing = existing_row["id"]
+            # An archived (cancelled) row is a DEAD end: the bridge archives a
+            # blocked/superseded row before an operator retries the phase, and
+            # deduplicating a retry onto it would strand the phase forever
+            # (nothing ever claims a cancelled row). Reactivate it instead —
+            # same id, fresh attempt budget — so the retry actually runs.
+            # Completed rows stay deduplicated as-is: the chain treats the
+            # phase as done and evaluates its recorded result.
+            if existing_row["status"] == "cancelled":
+                await conn.execute(
+                    """UPDATE agent_task_queue
+                          SET status='queued', failure_reason=NULL, completed_at=NULL,
+                              dispatched_at=NULL, started_at=NULL, attempt=0
+                        WHERE id=$1::uuid""",
+                    existing,
+                )
+                await _log_activity(
+                    conn, identity, existing, "task_requeued",
+                    f"archived row reactivated for retried phase (idempotency key {idem})",
+                )
             return {"id": existing, "deduplicated": True}
         task_id = await conn.fetchval(
             """INSERT INTO agent_task_queue

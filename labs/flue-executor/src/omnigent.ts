@@ -162,9 +162,15 @@ export async function spawnOmnigentWorker(
       realBrief
         ? `EXECUTOR TASK. Task id: ${task.id}, phase: ${phase}. ${
             phase === 'implement'
-              ? 'Work in the directory named below; commit and push on its checked-out branch.'
-              : 'This phase is analysis/verification: read and run checks from the directory named below, but do NOT commit or push unless the task brief explicitly says to.'
-          } Do not touch the live checkout (/home/zoe/assistant) directly.`
+              ? 'Work in the directory named below; commit and push on its checked-out branch. Do not touch the live checkout (/home/zoe/assistant) directly.'
+              : phase === 'retro'
+                // Retro deliberately runs from the main checkout
+                // (_workspace_for_phase pins it there): read-only learning
+                // work, so the "don't touch the live checkout" rule would
+                // contradict its own workspace.
+                ? 'This phase is read-only orchestration/learning work run from the main checkout named below: never modify, commit, or push anything.'
+                : 'This phase is analysis/verification: read and run checks from the directory named below, but do NOT commit or push unless the task brief explicitly says to. Do not touch the live checkout (/home/zoe/assistant) directly.'
+          }`
         : `SYNTHETIC EXECUTOR TASK (flue-executor lab). Task id: ${task.id}, phase: ${phase}.`,
       realBrief
         ? [

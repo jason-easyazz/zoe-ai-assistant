@@ -111,23 +111,24 @@ executor's `agent_runtime` row and pointing it at the REAL Multica tables
    Phase-2 `kanban_adapter` change to the minimal seam swap and preserves
    "Omnigent down → local lane still runs".
 
-### Phase 2 — re-point `kanban_adapter`  ← seam LANDED 2026-07-22, flag-dark
+### Phase 2 — re-point `kanban_adapter`  ← seam LANDED 2026-07-22; default flipped to `executor` (live 2026-07-28)
 
 Swap the dispatch target from the `hermes kanban` CLI to the Phase-1 executor.
 Keep every phase, gate and deterministic override untouched. Prove on ≥3 real
 tickets end-to-end before Phase 3.
 
-**Seam shipped (default OFF).** `kanban_adapter._run` — the single CLI call
-site, exactly as §2 predicted — now dispatches on `ZOE_KANBAN_BACKEND`:
+**Seam shipped; `executor` is now the code default.** `kanban_adapter._run` —
+the single CLI call site, exactly as §2 predicted — dispatches on
+`ZOE_KANBAN_BACKEND`:
 
 | value | behaviour |
 |---|---|
-| `hermes` (**default**) | today's `hermes kanban` CLI. Shipping this changed nothing. |
-| `executor` | `executors/executor_queue_backend.py` serves the same six verbs (`list`/`show`/`create`/`block`/`archive`/`complete`) against Multica's own `agent_task_queue` + `activity_log`. |
+| `executor` (**default**) | `executors/executor_queue_backend.py` serves the same six verbs (`list`/`show`/`create`/`block`/`archive`/`complete`) against Multica's own `agent_task_queue` + `activity_log`. |
+| `hermes` | the retired `hermes kanban` CLI path, kept as the explicit revert. |
 
 The adapter's 2,394 lines of discovered failure modes are **untouched** — 279
-of its existing tests pass unchanged. Revert path: unset the env var and
-restart (no code change, no migration).
+of its existing tests pass unchanged. Revert path: set
+`ZOE_KANBAN_BACKEND=hermes` and restart (no code change, no migration).
 
 **Proven against the REAL Multica tables** (not a scratch DB) by
 `scripts/maintenance/verify_executor_queue_backend.py` — 30/30 checks:
