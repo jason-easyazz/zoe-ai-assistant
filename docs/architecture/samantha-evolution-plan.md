@@ -371,7 +371,7 @@ regression, ever (replay harness is the enforcement).
   frames flow during PROCESSING/COOLDOWN, ≥250 ms sustained speech cancels the pipeline +
   `stop_playback`; #1081 fixed the barge gate against real voice — triggers 6/6, was 0/6;
   prod flags ON per #1082)
-- [x] **W1.2b** deep-quiet fast tail — **STAGED LIVE 2026-07-28** (`ZOE_VAD_TAIL_MS=640`
+- [~] **W1.2b** deep-quiet fast tail — **STAGED LIVE 2026-07-28, ACCEPTANCE PENDING** (`ZOE_VAD_TAIL_MS=640`
   on zoe-pi, two-step deploy: new daemon flag-off verified booting clean, then the
   flag; −160 ms median tail on ~80 % of turns at +2.7 pt measured false-cut upper
   bound; rollback = `ZOE_VAD_TAIL_MS=0`). Operator ear-check + next nightly gate
@@ -400,9 +400,13 @@ regression, ever (replay harness is the enforcement).
   sharper finding: on a tight box (MemAvailable ~50–120 MB) the whole-utterance path
   **CUDA-OOMs deterministically on 3-sentence replies (4/4)** while all per-sentence
   calls succeed — flag-off LiveKit may already be silently degrading to fallback
-  voices on long replies. Verdict: **prod flip justified pending the replay gate**
-  (remote mode, 700 MB floor) in an ~800 MB-idle window; M3 end-to-end and the
-  data-channel leg remain unmeasured (container needs ≥1 GB free). Unit contract
+  voices on long replies. Verdict: **COMPONENT evidence supports the flip; the DoD measurement is NOT
+  done.** The DoD asks for conversation-mode first audio measured against
+  `/ws/voice/` on the SAME utterance through the live lane — that needs the
+  on-demand LiveKit container (≥1 GB free) and was not run. What IS measured is
+  the synthesis component the flag switches. So: flip remains BLOCKED on (a) the
+  DoD's live-lane comparison and (b) a green replay gate (remote mode, 700 MB
+  floor); this evidence lowers the risk, it does not satisfy the gate. Unit contract
   7/7 green on main.
 - [~] **W1.4** live measurement session (ADR M1/M3/M4) — PARTIAL: M1 barge-in quality verified
   on real voice (#1081); M3 end-to-end latency + M4 loaded-RAM numbers still unmeasured.
