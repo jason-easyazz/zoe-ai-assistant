@@ -78,20 +78,6 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 CREATE INDEX IF NOT EXISTS idx_device_tokens_panel ON device_tokens(panel_id);
 CREATE INDEX IF NOT EXISTS idx_device_tokens_hash  ON device_tokens(token_hash);
 
--- Panel presence events (motion, face recognition, occupancy)
-CREATE TABLE IF NOT EXISTS panel_presence_events (
-    id TEXT PRIMARY KEY,
-    panel_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    payload TEXT,
-    confidence REAL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (panel_id) REFERENCES panels(panel_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_presence_panel_time
-    ON panel_presence_events(panel_id, created_at);
-
 -- PIN auth challenges for high-privilege panel actions
 CREATE TABLE IF NOT EXISTS panel_auth_challenges (
     challenge_id TEXT PRIMARY KEY,
@@ -123,7 +109,7 @@ echo "==> Applying migration..."
 sqlite3 "$DB_PATH" < "$SQL_FILE"
 
 echo "==> Verifying tables..."
-for tbl in panels device_tokens panel_presence_events panel_auth_challenges; do
+for tbl in panels device_tokens panel_auth_challenges; do
     ROWS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM $tbl;" 2>/dev/null || echo "ERROR")
     echo "    $tbl: $ROWS row(s)"
 done
