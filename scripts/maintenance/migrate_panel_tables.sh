@@ -3,15 +3,26 @@
 # Zoe database migration: panel presence platform tables
 # ============================================================
 # Safe to run multiple times (uses CREATE TABLE IF NOT EXISTS).
-# Always creates a timestamped backup first.
 #
-# Usage:  bash scripts/maintenance/migrate_panel_tables.sh [--dry-run]
+# DRY-RUN BY DEFAULT (scripts/AGENTS.md: destructive maintenance
+# scripts preview first, mutate only with the explicit flag) — the
+# default run prints the SQL and the drop candidate and changes
+# nothing. --execute creates a timestamped backup, then applies.
+#
+# Usage:  bash scripts/maintenance/migrate_panel_tables.sh [--execute]
 # ============================================================
 
 set -euo pipefail
 
-DRY_RUN=0
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+EXECUTE=0
+case "${1:-}" in
+    --execute) EXECUTE=1 ;;
+    --dry-run|"") ;;  # dry-run is the default; the flag is an accepted no-op
+    *)
+        echo "Usage: $0 [--execute]   (default: dry-run preview, no changes)"
+        exit 1
+        ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -26,16 +37,6 @@ if [ ! -f "$DB_PATH" ]; then
 fi
 
 echo "==> Database: $DB_PATH"
-
-if [ "$DRY_RUN" -eq 1 ]; then
-    echo "==> DRY RUN — no changes will be made"
-else
-    # Backup before migration
-    BACKUP="${DB_PATH}.pre-panel-migration.$(date +%Y%m%d_%H%M%S)"
-    echo "==> Backing up to $BACKUP"
-    cp "$DB_PATH" "$BACKUP"
-    echo "    Backup created: $(du -sh "$BACKUP" | cut -f1)"
-fi
 
 # --- Migration SQL -------------------------------------------------------------
 SQL_FILE="$(mktemp /tmp/zoe-migration-XXXXXX.sql)"
@@ -96,19 +97,40 @@ CREATE INDEX IF NOT EXISTS idx_challenges_panel
 
 -- panel_presence_events is retired (alembic 0028 drops it on Postgres, but
 -- that chain never runs against SQLite, so existing SQLite DBs keep it
--- forever otherwise). The full-file backup taken above preserves its rows.
+-- forever otherwise). The pre-apply backup preserves its rows.
 DROP TABLE IF EXISTS panel_presence_events;
 SQL
 
 echo "==> Migration SQL prepared"
 
-if [ "$DRY_RUN" -eq 1 ]; then
-    echo "==> SQL to be executed:"
+# --- Candidate list (printed in BOTH modes, before anything mutates) -----------
+# The only destructive statement is the DROP; show exactly what it would take.
+CANDIDATE_ROWS=$(sqlite3 "$DB_PATH" \
+    "SELECT COUNT(*) FROM panel_presence_events;" 2>/dev/null \
+    || echo "absent")
+if [ "$CANDIDATE_ROWS" = "absent" ]; then
+    echo "==> Drop candidate: panel_presence_events — not present (DROP is a no-op)"
+else
+    echo "==> Drop candidate: panel_presence_events — $CANDIDATE_ROWS row(s)"
+fi
+
+if [ "$EXECUTE" -ne 1 ]; then
+    echo "==> DRY RUN (default) — no changes made. SQL that --execute would apply:"
     cat "$SQL_FILE"
     echo ""
-    echo "==> DRY RUN complete — run without --dry-run to apply."
+    echo "==> Re-run with --execute to back up and apply."
     exit 0
 fi
+
+# --- Backup (WAL-safe), then apply ---------------------------------------------
+# The DB runs journal_mode=WAL (set above, and by the service), so committed
+# rows can live only in the -wal sidecar — a bare `cp` of the main file
+# produces a backup missing those rows. `.backup` uses SQLite's online backup
+# API, which reads through the WAL into one consistent standalone file.
+BACKUP="${DB_PATH}.pre-panel-migration.$(date +%Y%m%d_%H%M%S)"
+echo "==> Backing up to $BACKUP (sqlite3 .backup — WAL-safe)"
+sqlite3 "$DB_PATH" ".backup '$BACKUP'"
+echo "    Backup created: $(du -sh "$BACKUP" | cut -f1)"
 
 echo "==> Applying migration..."
 sqlite3 "$DB_PATH" < "$SQL_FILE"
