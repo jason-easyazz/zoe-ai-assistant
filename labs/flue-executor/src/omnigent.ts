@@ -143,7 +143,17 @@ export async function spawnOmnigentWorker(
       realBrief ?? 'No task brief was provided; treat this as a connectivity proof.',
       '',
       realBrief
-        ? 'When the task is genuinely done (or you are blocked), reply with a summary line, then a final line consisting of the prefix'
+        ? [
+            'When the task is genuinely done (or you are blocked), END your final reply with a',
+            'handoff block — one field per line, each line starting at column 0 exactly as',
+            '`FIELD=value` (single line per field, no markdown around the field names):',
+            '  PR_URL=<the GitHub PR url, if one exists>',
+            '  TESTS=<the exact test/check commands you ran and their results, e.g. "pytest tests/x -q: 12 passed">',
+            '  VALIDATORS=<validator commands + results, e.g. "validate_structure.py: exit 0; validate_critical_files.py: exit 0">',
+            '  SUMMARY=<one-line outcome>',
+            'These lines are machine-parsed by the pipeline evidence gate; without them the',
+            'phase cannot complete. After the block, add a final line consisting of the prefix',
+          ].join('\n')
         : 'Do NOT modify, create, or delete any files. Do not run commands.\nWhen done, reply with a single line consisting of the prefix',
       `"FLUE-EXEC-DONE-" immediately followed (no space) by this completion id: ${nonce}`,
     ].join('\n');
@@ -303,7 +313,9 @@ export async function sessionTokenReply(
         .filter(Boolean)
         .join('\n');
     }
-    return (text || flat).slice(0, 4000);
+    // Keep the TAIL: the machine-parsed handoff block (FIELD= lines + token)
+    // is at the end of the reply, and truncating it breaks the evidence gate.
+    return (text || flat).slice(-4000);
   }
   return null;
 }

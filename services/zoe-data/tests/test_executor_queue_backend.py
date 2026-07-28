@@ -383,3 +383,21 @@ async def test_unsupported_verb_is_refused_not_silently_ignored(monkeypatch):
 
 async def _ident():
     return IDENTITY
+
+
+def test_completion_summary_is_exposed_as_latest_summary_for_the_evidence_gate():
+    # pipeline_handoff._haystacks reads `latest_summary` (never `result`), so
+    # the completion text must surface there or FIELD= handoffs
+    # (TESTS=/VALIDATORS=/PR_URL=) are invisible to the gate and verify
+    # GATE_BLOCKs a genuinely verified phase (observed live, ZOE-6106).
+    row = {
+        "id": "abc",
+        "status": "completed",
+        "failure_reason": None,
+        "result": json.dumps({"summary": "TESTS=pytest -q: 3 passed\nVALIDATORS=validate_structure.py: exit 0"}),
+        "context": json.dumps({"title": "verify ZOE-1", "body": "", "idempotency_key": "multica:ZOE-1:verify"}),
+        "work_dir": "/wt/x",
+    }
+    mapped = eb._row_to_hermes(row)
+    assert mapped["latest_summary"] == mapped["result"]
+    assert "TESTS=" in mapped["latest_summary"]

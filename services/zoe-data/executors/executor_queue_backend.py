@@ -224,6 +224,11 @@ def _row_to_hermes(record: asyncpg.Record) -> dict[str, Any]:
         # where the executor records WHY, so surface it under both names.
         "block_reason": record["failure_reason"] if status == "blocked" else None,
         "result": result.get("summary") or result.get("result") or "",
+        # pipeline_handoff._haystacks reads `latest_summary` (never `result`),
+        # so without this the completion text is invisible to the evidence
+        # gate and FIELD= handoffs (TESTS=/VALIDATORS=/PR_URL=) never parse —
+        # verify GATE_BLOCKs a genuinely verified phase.
+        "latest_summary": result.get("summary") or result.get("result") or "",
         # Always the RESOLVED path — recovery paths in the adapter treat this
         # as a real directory (it greps the worktree for unpushed commits).
         "workspace_path": record["work_dir"] or "",
