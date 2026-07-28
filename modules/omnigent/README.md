@@ -75,6 +75,14 @@ PROJECT=$(docker inspect zoe-omnigent --format '{{index .Config.Labels "com.dock
 : "${PROJECT:?could not read the compose project label — is zoe-omnigent running?}"
 echo "compose project = $PROJECT   repo = $REPO"
 
+# NOTE on ZOE_WORKTREE_ROOT: compose reads ONLY the --env-file below, while
+# host-native zoe-data also loads services/zoe-data/.env (service file wins for
+# the app). If you ever override the worktree root, set it HERE in $REPO/.env —
+# setting it only in services/zoe-data/.env moves the queue's worktrees while
+# leaving this container's mount on the default, and the prepared branch goes
+# invisible in-container (#1582). Do NOT just add a second --env-file: compose
+# hard-fails (exit 15) when the file is absent, and services/zoe-data/.env is
+# gitignored/optional.
 COMPOSE="docker compose -p $PROJECT --env-file $REPO/.env -f $REPO/modules/omnigent/docker-compose.module.yml"
 
 # STOP FIRST, before the build. The build takes minutes, and a still-running root

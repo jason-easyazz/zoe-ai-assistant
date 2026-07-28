@@ -139,6 +139,18 @@ services:
       # origin/main checkout and loses the prepared branch (Codex, #1582).
       # Must be an ABSOLUTE path: compose does not expand `~`, and the source
       # and target stay identical because a worktree's .git pointer is absolute.
+      #
+      # WHERE the override must live: compose reads only the file(s) passed via
+      # --env-file, while host-native zoe-data ALSO loads
+      # services/zoe-data/.env (zoe-data.service loads the root env first and
+      # the service env second, so the service file wins for the app). Setting
+      # ZOE_WORKTREE_ROOT ONLY in services/zoe-data/.env would therefore move
+      # the queue's worktrees while leaving this mount on the default — exactly
+      # the divergence this interpolation exists to prevent. So the documented
+      # bring-up therefore requires the override to live in the file compose
+      # READS ($REPO/.env) — see modules/omnigent/README.md. Passing a second
+      # --env-file is not the fix: compose hard-fails (exit 15) when the file
+      # is absent, and services/zoe-data/.env is gitignored/optional.
       - ${ZOE_WORKTREE_ROOT:-/home/zoe/.worktrees}:${ZOE_WORKTREE_ROOT:-/home/zoe/.worktrees}
       # A worktree's .git FILE is an absolute pointer
       # (gitdir: /home/zoe/assistant/.git/worktrees/<id>), so the main repo
