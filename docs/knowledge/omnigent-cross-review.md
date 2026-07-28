@@ -74,7 +74,8 @@ agent given write access.
   shared lease across all launch paths is recorded future work.
 - **`cursor` is banned as a worker** (operator directive, 2026-07-28): cursor
   dispatches stalled runs. polly must fill the different-vendor seat with any
-  other vendor (`codex` / `opencode` / `hermes` / `pi` / `claude_code`).
+  other vendor (`codex` / `pi` / `claude_code`; `opencode` and `hermes` are
+  not installed on this host).
 - debby (`debate` skill) is for design-level disputes, not diff review.
 
 ## Validation record (2026-07-27)
