@@ -187,7 +187,11 @@ def _strip_trailing_duration(cand: str) -> str:
     trailing = re.compile(
         r"(?i)\s*\b(?:for\s+)?(?:" + num + r")[\s-]*(?:" + unit + r")\b.*$"
     )
-    return trailing.sub("", cand).strip().strip(".!?")
+    stripped = trailing.sub("", cand).strip().strip(".!?")
+    # If the whole name IS duration-shaped ("a timer called five minutes"), the
+    # user explicitly asked for that name — keep it rather than erasing the
+    # label to a generic "Timer". Only strip when something survives.
+    return stripped or cand.strip().strip(".!?")
 
 
 def _parse_timer_label(text: str) -> str:
