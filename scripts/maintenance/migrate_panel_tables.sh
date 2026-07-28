@@ -28,7 +28,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # --- Locate the database -------------------------------------------------------
-DB_PATH="${ZOE_DATA_DB:-$REPO_ROOT/services/zoe-data/zoe.db}"
+# Default matches database.py's DB_PATH (data/zoe.db, ZOE_DATA_DB override).
+# The root-level services/zoe-data/zoe.db is the STALE copy database.py warns
+# about at startup — never target it silently.
+DB_PATH="${ZOE_DATA_DB:-$REPO_ROOT/services/zoe-data/data/zoe.db}"
+
+STALE_DB="$REPO_ROOT/services/zoe-data/zoe.db"
+if [ -z "${ZOE_DATA_DB:-}" ] && [ -f "$STALE_DB" ]; then
+    echo "WARNING: stale SQLite file also present at $STALE_DB — that file is NOT"
+    echo "         the active database (database.py flags it at startup). This run"
+    echo "         targets the active $DB_PATH only; archive or delete the stale"
+    echo "         copy separately (backups/, per the database.py warning)."
+fi
 
 if [ ! -f "$DB_PATH" ]; then
     echo "ERROR: Database not found at $DB_PATH"
@@ -127,7 +138,9 @@ fi
 # rows can live only in the -wal sidecar — a bare `cp` of the main file
 # produces a backup missing those rows. `.backup` uses SQLite's online backup
 # API, which reads through the WAL into one consistent standalone file.
-BACKUP="${DB_PATH}.pre-panel-migration.$(date +%Y%m%d_%H%M%S)"
+# .db suffix on purpose: services/zoe-data/.gitignore ignores *.db, so the
+# snapshot cannot be committed by accident.
+BACKUP="${DB_PATH}.pre-panel-migration.$(date +%Y%m%d_%H%M%S).db"
 echo "==> Backing up to $BACKUP (sqlite3 .backup — WAL-safe)"
 sqlite3 "$DB_PATH" ".backup '$BACKUP'"
 echo "    Backup created: $(du -sh "$BACKUP" | cut -f1)"
@@ -146,5 +159,9 @@ echo "    rows preserved in the pre-migration backup)."
 
 echo ""
 echo "==> Migration complete."
-echo "    Backup available at: $BACKUP"
-echo "    To rollback: cp '$BACKUP' '$DB_PATH'"
+echo "    Backup (full-db snapshot, includes the dropped rows): $BACKUP"
+echo "    To rollback — FIRST stop zoe-data and anything else holding the db open:"
+echo "        cp '$BACKUP' '$DB_PATH'"
+echo "        rm -f '$DB_PATH-wal' '$DB_PATH-shm'  # stale sidecars would replay the DROP over the restore"
+echo "    RETENTION: the snapshot is a rollback aid, not a store — delete it once"
+echo "    the migration is verified (same convention as the 0028 backup table)."
