@@ -429,16 +429,31 @@ jobs:
                   // unreviewed for up to the debounce window. Gate-posted summons
                   // carry a sha marker; only a fresh summon FOR THIS SHA debounces.
                   const summonMark = `<!-- greptile-gate:summon:${sha} -->`;
-                  const recentSummon = comments.some(c =>
-                    trusted(c) && (c.body || '').includes(summonMark) &&
+                  // Per-head summon ATTEMPTS, not just recency (Greptile P1): treating a
+                  // `skipped` run as DEAD makes every sweep eligible to re-summon, and a
+                  // 10-minute recency debounce has no attempt limit — an oversized PR
+                  // (Greptile silently skips >50 files) would accrue a summon every ten
+                  // minutes forever. Cap the attempts per head: after MAX_SUMMONS the
+                  // gate stops asking and says why, once, loudly. A new head resets the
+                  // count because the marker is sha-scoped.
+                  const MAX_SUMMONS = 3;
+                  const summonsForHead = comments.filter(c =>
+                    trusted(c) && (c.body || '').includes(summonMark));
+                  const recentSummon = summonsForHead.some(c =>
                     (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
+                  const summonsExhausted = summonsForHead.length >= MAX_SUMMONS;
+                  if (summonsExhausted && gLive === 0) {
+                    core.warning(`PR #${pr.number}: Greptile summoned ${summonsForHead.length}x on ` +
+                      `this head with no live run — not asking again. Most likely the PR exceeds ` +
+                      `Greptile's ~50-file skip limit (split it), or the account is out of credits.`);
+                  }
                   if (gLive === null) {
                     // Fail-closed with an HONEST log (Greptile P1: the old message
                     // claimed a live run existed): unreadable is not knowledge, no
                     // summon this sweep; every later event and the 30-min schedule
                     // re-enter this branch and retry the read.
                     core.warning(`PR #${pr.number}: could not read Greptile runs — retrying next sweep`);
-                  } else if (gLive === 0 && !recentSummon) {
+                  } else if (gLive === 0 && !recentSummon && !summonsExhausted) {
                     const re = await ok(`PR #${pr.number} re-summon Greptile`, () =>
                       github.rest.issues.createComment({
                         ...base, issue_number: pr.number, body: `@greptileai review\n${summonMark}`,

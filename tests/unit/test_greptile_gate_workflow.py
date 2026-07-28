@@ -491,3 +491,23 @@ def test_stale_head_summon_does_not_debounce_the_new_head(tmp_path):
              labels=[{"name": "greptile"}], markerSha="a" * 40,
              greptileSummons=[{"at": "2099-01-01T00:00:00Z", "sha": "b" * 40}])
     assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+
+
+def test_summon_attempts_are_capped_per_head(tmp_path):
+    """Greptile P1: treating `skipped` as DEAD makes every sweep summon-eligible,
+    and a recency-only debounce has no attempt limit — an oversized PR (Greptile
+    skips >50 files) would accrue a summon every 10 minutes forever. After 3
+    aged summons for the same head the gate must stop asking."""
+    aged = [{"at": "2020-01-01T00:00:00Z"}] * 3
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             labels=[{"name": "greptile"}], markerSha="a" * 40,
+             greptileSummons=aged,
+             greptileRun={"status": "completed", "conclusion": "skipped"})
+    assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
+    assert any("not asking again" in m for m in r["log"]), r["log"]
+    # two aged summons is still under the cap -> it DOES summon
+    r2 = _run(tmp_path, _script(), reviewers=BOTH,
+              labels=[{"name": "greptile"}], markerSha="a" * 40,
+              greptileSummons=[{"at": "2020-01-01T00:00:00Z"}] * 2,
+              greptileRun={"status": "completed", "conclusion": "skipped"})
+    assert any(c.strip().startswith("@greptileai review") for c in r2["comments"]), r2["comments"]
