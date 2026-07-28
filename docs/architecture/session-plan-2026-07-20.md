@@ -105,8 +105,8 @@ uncosted — three unknowns must be answered first. **Do not rebuild
 - [ ] **`zoe-voice-regression.service` is in `failed` state** — boot race, it
       starts before Postgres accepts connections. Add a docker/Postgres ordering
       dependency. Modest impact, but a permanently-red unit masks real failures
-- [ ] **`panel_presence_events`** has no writer anywhere and 0 rows; a daily
-      purge timer runs against it. Cosmetic dead weight
+- [x] **`panel_presence_events`** — removed the unused table and purge script
+      in PR #1583.
 
 ### 3.6 Known-good, do not "fix"
 

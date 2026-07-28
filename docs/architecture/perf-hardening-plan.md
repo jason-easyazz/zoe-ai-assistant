@@ -83,8 +83,8 @@ all /health 200.
       sequencing and the trap.)
 - [ ] **3d. Pin Multica image digests** (`:latest` → digest). **Test:**
       containers healthy after `docker compose up -d`.
-- [ ] **3e. `panel_presence_events`** — delete table + purge timer, or build the
-      writer; decide, don't leave a daily no-op job.
+- [x] **3e. `panel_presence_events`** — removed the unused table and purge
+      script in PR #1583.
 
 ## Standing discipline
 
