@@ -212,3 +212,41 @@ def test_skybridge_accepts_every_intent_router_minute_word():
     for word, minutes in _TIMER_MINUTE_WORDS.items():
         got = _parse_timer_duration(_t(f"set a timer for {word} minutes"))
         assert got == minutes * 60, f"{word!r}: skybridge {got}s != {minutes}m"
+
+
+# ── cross-parser parity ───────────────────────────────────────────────────────
+# Timer phrases are parsed TWICE in production by two independent
+# implementations: /api/voice/command hits skybridge_service first, chat/text
+# hits intent_router. Every divergence between them is a silently-wrong timer
+# — this review found FOUR (compound numbers, teens, hyphenated units,
+# labels). One corpus, both parsers, same answer.
+_PARITY_CORPUS = [
+    ("set a timer for five minutes", 5, ""),
+    ("set a timer for ten minutes", 10, ""),
+    ("set a timer for thirteen minutes", 13, ""),
+    ("set a timer for fourteen minutes", 14, ""),
+    ("set a timer for twenty five minutes", 25, ""),
+    ("set a timer for forty-five minutes", 45, ""),
+    # adjectival hyphenation runs THROUGH to the unit
+    ("set a twenty-five-minute timer", 25, ""),
+    ("set a 5-minute timer", 5, ""),
+    ("set a five minute timer", 5, ""),
+    ("set a 3 minute timer", 3, ""),
+    ("set a timer for 5 minutes", 5, ""),
+    ("set a timer for ten minutes called pasta", 10, "Pasta"),
+    ("set a three minute timer called eggs", 3, "Eggs"),
+    ("set a five minute timer called five", 5, "Five"),
+]
+
+
+@pytest.mark.parametrize("text,minutes,label", _PARITY_CORPUS)
+def test_both_timer_parsers_agree(text, minutes, label):
+    from intent_router import detect_intent
+
+    assert _parse_timer_duration(_t(text)) == minutes * 60, "skybridge duration"
+    intent = detect_intent(text, log_miss=False)
+    assert intent is not None and intent.name == "timer_create", "intent_router miss"
+    assert intent.slots["minutes"] == minutes, "intent_router duration"
+    if label:
+        assert _parse_timer_label(_t(text)) == label, "skybridge label"
+        assert intent.slots["label"] == label, "intent_router label"

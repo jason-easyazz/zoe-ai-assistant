@@ -155,7 +155,9 @@ def _parse_timer_duration(text: str) -> int:
     num = r"\d+|" + "|".join(
         re.escape(w) for w in sorted(all_words, key=len, reverse=True)
     )
-    pattern = re.compile(r"\b(" + num + r")\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b")
+    # [\s-]* not \s*: the adjectival form hyphenates through to the unit
+    # ("a twenty-five-minute timer").
+    pattern = re.compile(r"\b(" + num + r")[\s-]*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b")
     total = 0
     found = False
     for value, unit in pattern.findall(text):
@@ -172,8 +174,24 @@ def _parse_timer_duration(text: str) -> int:
 
 def _parse_timer_label(text: str) -> str:
     """Extract an optional timer name ('for the eggs', 'called pasta'); never a
-    duration ('for 5 minutes')."""
-    m = re.search(r"\b(?:called|named|for)\s+(?:the\s+)?(.+?)\s*$", text.strip())
+    duration ('for 5 minutes').
+
+    TWO tiers, because they carry different certainty:
+
+    * EXPLICIT ``called``/``named`` — everything after the LAST such keyword is
+      the label verbatim, including digits and number words ("called 5" -> 5,
+      "called five" -> Five). Anchoring on the last keyword also stops a
+      duration-first phrase from swallowing the label ("timer for ten minutes
+      called pasta" -> Pasta, not "ten minutes called pasta").
+    * BARE ``for`` — ambiguous with a duration, so the old conservative rules
+      still apply: no digits, no unit words, no bare number words.
+    """
+    t = text.strip()
+    m = re.search(r"(?si)\b(?:called|named)\s+(?:the\s+)?(.+?)\s*$", t)
+    if m:
+        cand = m.group(1).strip().strip(".!?")
+        return cand.title() if cand else ""
+    m = re.search(r"\bfor\s+(?:the\s+)?(.+?)\s*$", t)
     if not m:
         return ""
     cand = m.group(1).strip().strip(".!?")
@@ -181,10 +199,7 @@ def _parse_timer_label(text: str) -> str:
         return ""
     if re.search(r"\b(hours?|hrs?|minutes?|mins?|seconds?|secs?|timer)\b", cand):
         return ""
-    # A number-word candidate is only ambiguous after "for" ("for five" is a
-    # duration fragment); after an EXPLICIT "called/named" it is a real label
-    # ("set a five minute timer called five") — keep it.
-    if cand in _WORD_NUMBERS and not re.search(r"\b(?:called|named)\s", m.group(0)):
+    if cand in _WORD_NUMBERS or cand in _COMPOUND_WORD_NUMBERS:
         return ""
     return cand.title()
 
