@@ -382,6 +382,32 @@ async function kickLogTail(cfg: ExecutorConfig, sessionId: string): Promise<stri
   }
 }
 
+/**
+ * Deepest usable reply text: walk every string in the item and return the
+ * longest one containing the token. Item schemas nest reply text differently
+ * per harness (top-level text, content strings, content[].text, deeper
+ * wrappers); the serialized-JSON fallback escapes newlines ("\n"), which
+ * breaks the column-zero FIELD= handoff parsing downstream
+ * (pipeline_handoff._KV_RE) — so real text at ANY depth beats stringify
+ * (Codex, #1582).
+ */
+export function deepTokenText(value: unknown, token: string): string {
+  if (typeof value === 'string') return value.includes(token) ? value : '';
+  let best = '';
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = deepTokenText(entry, token);
+      if (found.length > best.length) best = found;
+    }
+  } else if (value && typeof value === 'object') {
+    for (const entry of Object.values(value)) {
+      const found = deepTokenText(entry, token);
+      if (found.length > best.length) best = found;
+    }
+  }
+  return best;
+}
+
 /** Scan the session's items for the completion token. */
 export async function sessionHasToken(
   cfg: ExecutorConfig,
@@ -412,9 +438,11 @@ export async function sessionTokenReply(
     const flat = JSON.stringify(item);
     if (!flat.includes(token)) continue;
     // Prefer readable text: top-level text/content strings, then the
-    // message-item shape content: [{type:'output_text', text}], then the
-    // serialized item as a last resort (a JSON blob still lets the Zoe-side
-    // prose PR-recovery regex work, but breaks FIELD= handoff parsing).
+    // message-item shape content: [{type:'output_text', text}], then a
+    // recursive walk for any deeper-nested reply text, then the serialized
+    // item as a true last resort (a JSON blob still lets the Zoe-side prose
+    // PR-recovery regex work, but its escaped "\n" breaks FIELD= handoff
+    // parsing — see deepTokenText).
     const rec = item as Record<string, unknown>;
     let text =
       (typeof rec.text === 'string' && rec.text) ||
@@ -427,6 +455,7 @@ export async function sessionTokenReply(
         .filter(Boolean)
         .join('\n');
     }
+    if (!text) text = deepTokenText(item, token);
     // Keep the TAIL: the machine-parsed handoff block (FIELD= lines + token)
     // is at the end of the reply, and truncating it breaks the evidence gate.
     return (text || flat).slice(-4000);

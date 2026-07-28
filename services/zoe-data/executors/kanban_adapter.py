@@ -156,10 +156,13 @@ def _board() -> str:
 
 
 def _kanban_backend() -> str:
-    """Which executor serves the kanban verbs: ``hermes`` (default) or ``executor``.
+    """Which executor serves the kanban verbs: ``executor`` (default) or ``hermes``.
 
-    Read per call, never cached, so the revert is an env flip + restart with no
-    code change (docs/architecture/perf-hardening-plan.md discipline).
+    Read per call, never cached, so the revert to the Hermes CLI is an env flip
+    (``ZOE_KANBAN_BACKEND=hermes``) + restart with no code change
+    (docs/architecture/perf-hardening-plan.md discipline). Unsetting the
+    variable keeps ``executor`` — it is the code default since the 2026-07-28
+    Phase-2 flip.
     """
     return (os.environ.get("ZOE_KANBAN_BACKEND", "executor") or "executor").strip().lower()
 
@@ -883,8 +886,8 @@ class KanbanAdapter:
         # ZOE_KANBAN_BACKEND=executor the identical verb surface is served by
         # the Zoe-native executor against Multica's own agent_task_queue, so
         # every phase, gate and deterministic override above stays untouched.
-        # Default is `hermes` — shipping this file changes no behaviour, and
-        # the revert path is one env var.
+        # Code default is `executor` (flipped live 2026-07-28); the revert
+        # path is one env var: ZOE_KANBAN_BACKEND=hermes + restart.
         if _kanban_backend() == "executor":
             from executors import executor_queue_backend
 

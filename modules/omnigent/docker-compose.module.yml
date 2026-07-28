@@ -206,6 +206,16 @@ services:
       # DIRECTORY, which breaks the store. The bring-up in README.md runs the
       # idempotent touch; its verify block asserts file-writable +
       # kill-switch-invisible.
+      # CONSTRAINT: this bind hard-codes the DEFAULT journal path on both
+      # sides. If the host ever relocates the journal via
+      # ZOE_PIPELINE_STORE_PATH, this bind (source AND target) must be updated
+      # in lockstep or remote markers read/write the wrong file and exit "No
+      # pipeline state found" while the host pipeline looks healthy. Deliberate
+      # trade-off (Codex, #1582): env-deriving the bind was rejected — compose
+      # reads only $REPO/.env while host-native zoe-data also loads
+      # services/zoe-data/.env, the exact split-env divergence the
+      # ZOE_WORKTREE_ROOT note above documents. No known deployment overrides
+      # it today.
       - /home/zoe/.zoe/engineering_pipeline_runs.jsonl:/root/.zoe/engineering_pipeline_runs.jsonl
       # ── Code-intel tooling (audit fix #4) ──────────────────────────────────────
       # Serena, codebase-memory, and opensrc live on the HOST only; the repo is mounted
