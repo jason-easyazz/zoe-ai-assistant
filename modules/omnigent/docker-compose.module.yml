@@ -194,14 +194,19 @@ services:
       # and HOME=/root here, so without this mount every marker exits "No
       # pipeline state found" and a compliant remote reviewer cannot complete
       # the phase (Codex, #1582). Read-WRITE: the markers APPEND via
-      # save_state. A DIRECTORY bind, not a file bind, on purpose: the journal
-      # is created lazily (an absent file bind-mounts as a directory and
-      # breaks the store), and the compactor rewrites IN PLACE (rename is
-      # rejected by design in compact_pipeline_state.py), so the dir bind
-      # stays coherent across compactions. Deliberate trade-off: this exposes
-      # ~/.zoe (incl. the dispatch kill-switch marker) rw to container agents
-      # — same operator-trust decision as the push-capable gh token above.
-      - /home/zoe/.zoe:/root/.zoe
+      # save_state. A single-FILE bind, on purpose, NOT the ~/.zoe directory:
+      # ~/.zoe also holds multica_dispatch_paused — the host executor's
+      # emergency kill switch — and the workload that switch controls must
+      # never be able to remove its own emergency stop (Codex, #1582). The
+      # file bind stays coherent because BOTH writers keep the inode:
+      # save_state opens "a+" and appends under flock (never temp+rename),
+      # and the compactor rewrites IN PLACE (rename explicitly rejected in
+      # compact_pipeline_state.py). PRECONDITION: the host file must EXIST
+      # before `up` — docker materialises an absent bind source as a
+      # DIRECTORY, which breaks the store. The bring-up in README.md runs the
+      # idempotent touch; its verify block asserts file-writable +
+      # kill-switch-invisible.
+      - /home/zoe/.zoe/engineering_pipeline_runs.jsonl:/root/.zoe/engineering_pipeline_runs.jsonl
       # ── Code-intel tooling (audit fix #4) ──────────────────────────────────────
       # Serena, codebase-memory, and opensrc live on the HOST only; the repo is mounted
       # but the tools were entirely absent from this container, so the MCP servers wired

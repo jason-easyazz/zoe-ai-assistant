@@ -95,6 +95,10 @@ $COMPOSE build omnigent
 # be wrong, and the failure mode is chowning nothing (or the wrong volumes) silently.
 $COMPOSE run --rm --no-deps --user 0:0 --entrypoint sh omnigent \
   -c 'chown -R 1000:1000 /root/.omnigent /root/.claude /root/.codex /root/.cursor'
+# The pipeline-journal FILE bind (see compose) requires the file to EXIST on the
+# host before up: docker materialises an absent bind source as a DIRECTORY,
+# which breaks the store. Idempotent — safe to re-run.
+mkdir -p /home/zoe/.zoe && touch /home/zoe/.zoe/engineering_pipeline_runs.jsonl
 $COMPOSE up -d omnigent
 ```
 
@@ -115,6 +119,14 @@ docker exec zoe-omnigent id                       # expect uid=1000(zoe)
 for d in .omnigent .claude .codex .cursor; do \
   docker exec zoe-omnigent touch /root/$d/.wtest && echo "$d writable"; done
 find /home/zoe/assistant/.git -not -user zoe      # expect no new entries over time
+# Pipeline journal reachable, kill switch NOT: the journal bind must be a
+# writable FILE (a directory here means the container came up before the host
+# file existed — re-run the touch from bring-up and recreate the container),
+# and the host executor's emergency stop must be invisible in-container — the
+# workload the switch controls must not be able to disable it (#1582).
+docker exec zoe-omnigent sh -c \
+  'test -f /root/.zoe/engineering_pipeline_runs.jsonl && test -w /root/.zoe/engineering_pipeline_runs.jsonl \
+   && ! test -e /root/.zoe/multica_dispatch_paused && echo "journal ok, kill switch isolated"'
 ```
 
 ```bash
