@@ -449,19 +449,25 @@ async def _cmd_create(
                 # `latest_summary` (the evidence gate's input), so leaving the
                 # previous attempt's handoff behind would let the retry be
                 # judged — advanced or blocked — on evidence it never produced.
+                # `max_attempts` follows the retry's --max-retries, not the
+                # archived row's: the create policy can change between runs
+                # (e.g. a ticket newly qualifying as an actionable code-audit
+                # goal task moves 1 -> 2), and failOrRequeue must judge the
+                # fresh execution against the CURRENT budget, not a stale one.
                 await conn.execute(
                     """UPDATE agent_task_queue
                           SET status='queued', failure_reason=NULL, completed_at=NULL,
                               dispatched_at=NULL, started_at=NULL, attempt=1,
                               created_at=now(), context=$2::jsonb, work_dir=$3,
-                              result=NULL, session_id=NULL
+                              result=NULL, session_id=NULL, max_attempts=$4
                         WHERE id=$1::uuid""",
                     existing, json.dumps(context), resolve_workspace(workspace, existing),
+                    max(1, max_retries),
                 )
                 await _log_activity(
                     conn, identity, existing, "task_requeued",
                     f"archived row reactivated for retried phase (idempotency key {idem}); "
-                    "brief, work_dir and age clock refreshed",
+                    "brief, work_dir, attempt budget and age clock refreshed",
                 )
             return {"id": existing, "deduplicated": True}
         task_id = await conn.fetchval(

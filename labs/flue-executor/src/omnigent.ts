@@ -19,6 +19,7 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type pg from 'pg';
 import type { ExecutorConfig } from './config.ts';
@@ -79,6 +80,16 @@ export function doneToken(nonce: string): string {
   return `FLUE-EXEC-DONE-${nonce}`;
 }
 
+/** Parse the adapter's `context.max_runtime` ("45m", "90m", "6h") into ms;
+ * null when absent or unparseable (callers fall back to the lane default). */
+export function maxRuntimeMs(raw: string | undefined): number | null {
+  const m = /^(\d+)\s*([smh])$/i.exec((raw ?? '').trim());
+  if (!m) return null;
+  const unit = { s: 1_000, m: 60_000, h: 3_600_000 }[m[2].toLowerCase() as 's' | 'm' | 'h'];
+  const ms = Number(m[1]) * unit;
+  return ms > 0 ? ms : null;
+}
+
 /**
  * Spawn a heavy task on Omnigent: stage session + brief, launch a runner, kick
  * the claude-sdk run, then poll for the nonce until done or timeout. All state
@@ -91,7 +102,9 @@ export async function spawnOmnigentWorker(
   cfg: ExecutorConfig,
   task: TaskRow,
 ): Promise<void> {
-  const ctx = (task.context ?? {}) as { phase?: string; brief?: string; body?: string };
+  const ctx = (task.context ?? {}) as {
+    phase?: string; brief?: string; body?: string; max_runtime?: string;
+  };
   const phase = ctx.phase ?? 'implement';
   const nonce = randomBytes(6).toString('hex');
   const token = doneToken(nonce);
@@ -101,18 +114,31 @@ export async function spawnOmnigentWorker(
   // claim a task whose directory does not exist yet. Defer without burning an
   // attempt rather than briefing a remote agent against a missing checkout;
   // fail loudly if it never appears within the worker timeout.
+  //
+  // For a REAL brief, additionally require the worktree's .git entry:
+  // `git worktree add` creates the target directory before writing its .git
+  // pointer and finishing checkout, so exists-alone can pass mid-prepare
+  // (Codex, #1582). The residual mid-checkout window is bounded — the
+  // dispatcher's prepare is a synchronous subprocess, this lane stages a
+  // session + runner + kick before any agent reads the tree, and a deferral
+  // burns no attempt. Synthetic lab tasks use plain directories, not git
+  // worktrees, so they keep the exists-only check.
   const briefedWorkDir = task.work_dir;
-  if (briefedWorkDir && !existsSync(briefedWorkDir)) {
+  const workDirReady =
+    !briefedWorkDir ||
+    (existsSync(briefedWorkDir) &&
+      (!ctx.body || existsSync(join(briefedWorkDir, '.git'))));
+  if (briefedWorkDir && !workDirReady) {
     const ageMs = task.created_at ? Date.now() - new Date(task.created_at).getTime() : 0;
     if (ageMs > cfg.workerTimeoutMs) {
       await reportTransition(pool, cfg.runtimeId, task, 'failed',
-        `work_dir ${briefedWorkDir} never appeared (still missing ${Math.round(ageMs / 1000)}s after the ` +
-        'row was queued) — the dispatcher did not create the worktree');
+        `work_dir ${briefedWorkDir} never became a usable checkout (still absent or uninitialized ` +
+        `${Math.round(ageMs / 1000)}s after the row was queued) — the dispatcher did not finish preparing the worktree`);
       return;
     }
     await reportTransition(pool, cfg.runtimeId, task, 'queued',
-      `work_dir ${briefedWorkDir} does not exist yet (dispatcher still preparing the worktree) — ` +
-      'returned to the queue without burning an attempt',
+      `work_dir ${briefedWorkDir} is not ready yet (absent or mid-checkout; dispatcher still preparing ` +
+      'the worktree) — returned to the queue without burning an attempt',
       { requeue: true, keepAttempt: true, action: 'task_deferred' });
     return;
   }
@@ -194,11 +220,17 @@ export async function spawnOmnigentWorker(
       realBrief
         ? [
             'PROTOCOL OVERRIDE (this executor lane, overrides anything above):',
-            'the brief above was written for a different runtime and may instruct you to',
-            'call Kanban/board tools (kanban_show, kanban_complete, kanban_block) or other',
-            'terminal-lane tooling. Those tools DO NOT EXIST here and their absence is NOT a',
-            'blocker — ignore every such instruction. Report status ONLY via the handoff',
-            'block and completion id described below.',
+            '1. The brief above was written for a different runtime. Its BOARD API calls —',
+            '   kanban_show, kanban_complete, kanban_block, and any other kanban_* verb —',
+            '   DO NOT EXIST here and their absence is NOT a blocker. Skip exactly those',
+            '   board calls and NOTHING else: every other instruction still applies, and the',
+            '   tooling it names (git/gh, tests, validators, repo scripts such as',
+            '   run_greploop_guard.sh and pipeline_evidence_commands.py) does exist here.',
+            '   Report status ONLY via the handoff block and completion id described below.',
+            '2. NEVER rewrite history or force-push (no --force, no --force-with-lease),',
+            '   even where the brief above says to. If the PR branch is behind, update it',
+            '   with a merge from origin/main (what GitHub update-branch does), or report',
+            '   BLOCKER= instead.',
             '',
           ].join('\n')
         : '',
@@ -268,7 +300,15 @@ export async function spawnOmnigentWorker(
   }
 
   const runningTask: TaskRow = { ...task, status: 'running' };
-  const deadline = Date.now() + cfg.omnigentTimeoutMs;
+  // Per-task budget: the adapter stamps context.max_runtime ("6h" overnight,
+  // "90m" quality-escalation, "45m" interactive — kanban_adapter._max_runtime)
+  // and a long-running task must not be failed while its remote session is
+  // still healthily working (Codex, #1582). The lane default is the FLOOR,
+  // never a cap: the 1h value exists because a real implement outlived
+  // shorter budgets, so a shorter per-task hint must not reintroduce the
+  // early-kill this lane's timeout was raised to fix.
+  const timeoutMs = Math.max(cfg.omnigentTimeoutMs, maxRuntimeMs(ctx.max_runtime) ?? 0);
+  const deadline = Date.now() + timeoutMs;
   const poll = async (): Promise<void> => {
     // Ownership check first: if the row already left `running` (another
     // reporter, a reap, or test teardown), this poller has no claim — stop.
@@ -305,7 +345,7 @@ export async function spawnOmnigentWorker(
         const kickTail = await kickLogTail(cfg, sessionId);
         await failOrRequeue(pool, cfg, runningTask,
           `omnigent session ${sessionId} did not return the completion token within ` +
-            `${cfg.omnigentTimeoutMs}ms; kick log tail: ${kickTail || '(empty)'}`);
+            `${timeoutMs}ms; kick log tail: ${kickTail || '(empty)'}`);
         return;
       }
     } catch (err) {

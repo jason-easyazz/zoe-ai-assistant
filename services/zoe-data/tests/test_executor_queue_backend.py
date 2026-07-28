@@ -411,16 +411,26 @@ async def test_create_reactivates_an_archived_row_instead_of_deduplicating_onto_
     conn = FakeConn(fetchrow_result={"id": "old-id", "status": "cancelled"})
     out = await eb._cmd_create(
         conn, IDENTITY,
-        ["scout ZOE-9", "--idempotency-key", "multica:ZOE-9:scout", "--body", "b", "--json"],
+        ["scout ZOE-9", "--idempotency-key", "multica:ZOE-9:scout", "--body", "b",
+         "--max-retries", "2", "--json"],
     )
     assert out == {"id": "old-id", "deduplicated": True}
-    requeues = [s for s, _ in conn.statements if "SET status='queued'" in s]
+    requeues = [
+        (s, args) for s, args in conn.statements if "SET status='queued'" in s
+    ]
     assert requeues, "cancelled row must be reactivated, not left dead"
+    sql, args = requeues[0]
     # The previous attempt's handoff must NOT survive: result surfaces as
     # latest_summary (the evidence gate's input), so stale evidence would let
     # the retry be advanced or blocked on work it never did.
-    assert "result=NULL" in requeues[0]
-    assert "session_id=NULL" in requeues[0]
-    assert "attempt=1" in requeues[0]
-    assert "created_at=now()" in requeues[0]
+    assert "result=NULL" in sql
+    assert "session_id=NULL" in sql
+    assert "attempt=1" in sql
+    assert "created_at=now()" in sql
+    # The attempt BUDGET follows the retry's create policy, not the archived
+    # row's: failOrRequeue must judge the fresh run against the current
+    # --max-retries (here 2), or a policy change grants/denies paid sessions
+    # off a stale number.
+    assert "max_attempts=$4" in sql
+    assert args[-1] == 2
     assert "task_requeued" in conn.logged_actions()

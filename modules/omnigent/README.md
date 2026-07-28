@@ -99,9 +99,10 @@ $COMPOSE up -d omnigent
 ```
 
 Stop before chowning: a still-running root container writes new root-owned files into the
-volumes underneath you. The read-only binds (`/root/.config/gh`,
-`/root/.local/share/cursor-agent`, the `/home/zoe/...` tool paths) need nothing — they
-come from zoe-owned host paths and uid 1000 can already read them.
+volumes underneath you. The read-only binds (`/root/.config/gh`, `/root/.config/zoe` —
+the Greptile key for the closeout merge loop — `/root/.local/share/cursor-agent`, the
+`/home/zoe/...` tool paths) need nothing — they come from zoe-owned host paths and uid
+1000 can already read them.
 
 `omnigent-data` is ~12 GB, so the chown is slow but metadata-only. **Check RAM before
 building** — the box gates on it, and an image build alongside the 6 GB `llama-server`

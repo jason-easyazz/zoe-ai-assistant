@@ -179,6 +179,14 @@ services:
       # radius, replace the host login with a fine-grained PAT scoped to this repo
       # (contents + pull-requests: write) — the mount path stays the same.
       - /home/zoe/.config/gh:/root/.config/gh:ro
+      # Greptile auth for the closeout phase's guarded merge loop
+      # (run_greploop_guard.sh → greptile_client.py): with GREPTILE_API_KEY
+      # unset the client reads $HOME/.config/zoe/greptile.env, and HOME=/root
+      # here — so without this mount a remotely-routed closeout fails Greptile
+      # auth on a deployment using the documented user-global credential file
+      # (Codex, #1582). Read-only, same pattern (and same operator-credential
+      # trust decision) as the gh mount above.
+      - /home/zoe/.config/zoe:/root/.config/zoe:ro
       # ── Code-intel tooling (audit fix #4) ──────────────────────────────────────
       # Serena, codebase-memory, and opensrc live on the HOST only; the repo is mounted
       # but the tools were entirely absent from this container, so the MCP servers wired

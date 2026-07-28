@@ -108,7 +108,9 @@ function commonOmnigent(): Pick<
     // 1h: a real implement phase (edit + test + commit + push + PR) routinely
     // outlives the lab's old 10-min connectivity-proof budget — the first live
     // Phase-2 ticket was failed by the executor while its session was still
-    // healthily working.
+    // healthily working. This is the lane FLOOR, not the per-task cap: a task
+    // whose context.max_runtime is longer (6h overnight, 90m escalation)
+    // extends its own deadline past this value (omnigent.ts maxRuntimeMs).
     omnigentTimeoutMs: Number(process.env.LAB_OMNIGENT_TIMEOUT_MS ?? '3600000'),
     omnigentPollMs: Number(process.env.LAB_OMNIGENT_POLL_MS ?? '5000'),
   };
