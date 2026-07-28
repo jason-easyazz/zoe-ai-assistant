@@ -12,7 +12,7 @@
 import type pg from 'pg';
 import type { ExecutorConfig } from './config.ts';
 import { failOrRequeue } from './spawn.ts';
-import { doneToken, sessionTokenReply, OmnigentApiError } from './omnigent.ts';
+import { doneToken, effectiveOmnigentTimeoutMs, sessionTokenReply, OmnigentApiError } from './omnigent.ts';
 import { activityWorkspaceId, reportTransition, type TaskRow } from './queue.ts';
 
 function pidAlive(pid: number): boolean {
@@ -65,8 +65,11 @@ export async function reapDeadWorkers(
  * the executor restarted and the poller is gone. Recovery is by evidence, not
  * liveness: if the session already holds the completion token, complete the
  * row (the work happened — do not throw it away); if the row is older than the
- * omnigent timeout + grace, fail it with a reason. Either way the CAS
- * transitions make a race with a live poller harmless.
+ * task's EFFECTIVE omnigent timeout + grace, fail it with a reason. The age
+ * bound must be the same effectiveOmnigentTimeoutMs the poller uses — the
+ * reaper runs every tick, so judging a 90m/6h task by the 1h lane default
+ * would fail a healthy session the poller was still happily waiting on.
+ * Either way the CAS transitions make a race with a live poller harmless.
  */
 async function reapOmnigentRow(
   pool: pg.Pool,
@@ -112,10 +115,12 @@ async function reapOmnigentRow(
     evidenceObserved = true;
   }
   const ageMs = anchor ? Date.now() - anchor.getTime() : Infinity;
-  if (ageMs <= cfg.omnigentTimeoutMs + 30_000) return 0;
+  const timeoutMs = effectiveOmnigentTimeoutMs(cfg, row.context);
+  if (ageMs <= timeoutMs + 30_000) return 0;
   if (evidenceObserved) {
     await failOrRequeue(pool, cfg, row,
-      `reaped: omnigent-lane row exceeded session timeout + grace without a completion token (session ${sessionId ?? 'unknown'})`);
+      `reaped: omnigent-lane row exceeded its effective session timeout (${timeoutMs}ms) + grace ` +
+        `without a completion token (session ${sessionId ?? 'unknown'})`);
     return 1;
   }
   if (!ctx.evidence_stuck_logged) {

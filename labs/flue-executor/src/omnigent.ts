@@ -91,6 +91,19 @@ export function maxRuntimeMs(raw: string | undefined): number | null {
 }
 
 /**
+ * Effective wall-clock budget for an omnigent-lane task: the lane default
+ * (`cfg.omnigentTimeoutMs`) is the FLOOR, and a longer per-task
+ * `context.max_runtime` (6h overnight, 90m escalation) extends it. ONE shared
+ * definition for the in-process poller AND the reaper — if they disagreed, a
+ * reaper on the lane default would fail/requeue a healthy 6h session at ~1h,
+ * exactly the early-kill the per-task budget exists to prevent (Codex, #1582).
+ */
+export function effectiveOmnigentTimeoutMs(cfg: ExecutorConfig, context: unknown): number {
+  const ctx = (context ?? {}) as { max_runtime?: string };
+  return Math.max(cfg.omnigentTimeoutMs, maxRuntimeMs(ctx.max_runtime) ?? 0);
+}
+
+/**
  * Spawn a heavy task on Omnigent: stage session + brief, launch a runner, kick
  * the claude-sdk run, then poll for the nonce until done or timeout. All state
  * transitions go through the reason-mandatory queue exactly like the local
@@ -303,11 +316,10 @@ export async function spawnOmnigentWorker(
   // Per-task budget: the adapter stamps context.max_runtime ("6h" overnight,
   // "90m" quality-escalation, "45m" interactive — kanban_adapter._max_runtime)
   // and a long-running task must not be failed while its remote session is
-  // still healthily working (Codex, #1582). The lane default is the FLOOR,
-  // never a cap: the 1h value exists because a real implement outlived
-  // shorter budgets, so a shorter per-task hint must not reintroduce the
-  // early-kill this lane's timeout was raised to fix.
-  const timeoutMs = Math.max(cfg.omnigentTimeoutMs, maxRuntimeMs(ctx.max_runtime) ?? 0);
+  // still healthily working (Codex, #1582). Shared with the reaper via
+  // effectiveOmnigentTimeoutMs — see its doc for why the lane default is the
+  // FLOOR, never a cap.
+  const timeoutMs = effectiveOmnigentTimeoutMs(cfg, task.context);
   const deadline = Date.now() + timeoutMs;
   const poll = async (): Promise<void> => {
     // Ownership check first: if the row already left `running` (another
