@@ -284,4 +284,17 @@ If using self-signed cert on Jetson, set `VERIFY_SSL=false` in Pi `.env.voice` a
 - Wake word model runs locally on Pi — audio never leaves the device until command intent is confirmed.
 - After wake word fires, WAV audio is sent to Jetson for STT — kept in memory only, not stored.
 - Panel presence events are not persisted; the unused `panel_presence_events` table has been retired.
+  - **Deploy step (once per host, migration 0028):** the purge script is deleted by this change, but a
+    host may still have the **user** timer installed — verified live on the Jetson: `zoe-purge-presence.timer`
+    was active and scheduled for 03:00 daily. Leaving it armed makes it invoke a missing executable every
+    night. Retire it explicitly:
+    `systemctl --user disable --now zoe-purge-presence.timer` then remove
+    `~/.config/systemd/user/zoe-purge-presence.{timer,service}` and `systemctl --user daemon-reload`.
+    (It is a `--user` unit — `systemctl list-timers` at system scope shows nothing, which is why a
+    repo-wide search reported it absent.)
+  - **If migration 0028 left a backup:** it only creates `panel_presence_events_backup_0028` on a
+    deployment that actually had rows. That table holds presence events, which this policy says are not
+    persisted — so verify the rollback is no longer needed and then
+    `DROP TABLE panel_presence_events_backup_0028;`. It is intentionally not auto-dropped (a backup the
+    migration deletes for you is not a backup), but it must not be left indefinitely.
 - Face encodings (if vision implemented): delete on user request via admin panel or `DELETE /api/panels/{id}/presence`.

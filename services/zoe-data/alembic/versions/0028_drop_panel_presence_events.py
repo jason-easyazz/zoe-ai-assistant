@@ -21,6 +21,13 @@ def upgrade() -> None:
     # Conditional on purpose: the copy is made ONLY when there is data to lose,
     # so the normal zero-row path drops cleanly and leaves no permanent empty
     # table behind. A surviving backup table means that deployment had rows.
+    #
+    # RETENTION: this backup is a rollback aid, not a store. Presence events are
+    # documented as not persisted, so a surviving backup contradicts that policy
+    # if it is left forever — the operator runbook carries an explicit "verify,
+    # then DROP TABLE panel_presence_events_backup_0028" step. It is deliberately
+    # not auto-dropped: a backup the migration deletes for you is not a backup
+    # (Codex, #1583).
     conn = op.get_bind()
     if conn.dialect.name == "postgresql":
         exists = conn.exec_driver_sql(
@@ -60,8 +67,15 @@ CREATE TABLE IF NOT EXISTS panel_presence_events (
     if conn.dialect.name == "postgresql" and conn.exec_driver_sql(
         f"SELECT to_regclass('public.{_BACKUP}')"
     ).scalar():
+        # Only rows whose panel still exists: the CTAS backup carries no FK, so
+        # a panel deleted between upgrade and downgrade would make this INSERT
+        # violate the just-recreated FK and roll back the WHOLE downgrade. The
+        # original column had ON DELETE CASCADE, so those rows were destined to
+        # disappear with their panel anyway — dropping them here reproduces that
+        # semantic instead of failing the migration (Codex, #1583).
         op.execute(
-            f"INSERT INTO panel_presence_events SELECT * FROM {_BACKUP} "
+            f"INSERT INTO panel_presence_events SELECT * FROM {_BACKUP} b "
+            "WHERE EXISTS (SELECT 1 FROM panels p WHERE p.panel_id = b.panel_id) "
             "ON CONFLICT (id) DO NOTHING"
         )
         op.execute(f"DROP TABLE IF EXISTS {_BACKUP}")
