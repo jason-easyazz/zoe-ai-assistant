@@ -79,5 +79,19 @@ fi
 mkdir -p "${BIN_DIR}"
 ln -sfn "${TARGET}" "${BIN_DIR}/cursor-agent"
 echo "[cursor-agent] linked ${BIN_DIR}/cursor-agent -> ${TARGET}"
-echo "[cursor-agent] version now: $(current)"
+
+# PROVE the binary actually runs and reports the pin before claiming success. An
+# executable file is not a working install: an interrupted `cp -a` can leave the binary
+# in place without its bundled runtime, and the "already present" short-circuit above
+# would then skip the download forever. `current()` turns that failure into the string
+# "none", so without this check the script would print success and tell the operator to
+# recreate Omnigent with a broken harness.
+got="$(current)"
+if [ "${got}" != "${CURSOR_AGENT_VERSION}" ]; then
+  echo "[cursor-agent] FAILED: installed binary reports '${got}', expected '${CURSOR_AGENT_VERSION}'" >&2
+  echo "[cursor-agent] the install under ${INSTALL_ROOT}/${CURSOR_AGENT_VERSION} looks incomplete —" >&2
+  echo "[cursor-agent] remove that directory and re-run to force a clean download." >&2
+  exit 1
+fi
+echo "[cursor-agent] version now: ${got}"
 echo "[cursor-agent] recreate zoe-omnigent so the entrypoint re-links it in-container."

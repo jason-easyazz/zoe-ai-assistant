@@ -24,7 +24,30 @@ rm -f "${HOME}/.omnigent/host.pid" "${HOME}/.omnigent"/daemons/*.json 2>/dev/nul
 # never appeared on PATH and the Cursor harness broke with no message. /root/.local/bin
 # is owned by 1000 (chowned in the Dockerfile) and already ahead of /usr/local/bin on
 # PATH. Failure is now reported rather than swallowed.
-cursor_bin="$(ls /root/.local/share/cursor-agent/versions/*/cursor-agent 2>/dev/null | sort -V | tail -1)"
+# HONOUR THE HOST'S PIN, don't pick the newest. `sort -V | tail -1` silently selects
+# whatever the highest version directory happens to be, so a host that still has a
+# newer directory lying around (an update, then a rollback to the pin) runs the newer,
+# UNREVIEWED binary while scripts/setup/install_cursor_agent.sh --check reports the pin
+# as satisfied. omnigent 0.7.0 enforces a per-harness minimum, so which binary actually
+# runs is load-bearing, not cosmetic.
+#
+# The host's own symlink is the pin: /home/zoe/.local/bin/cursor-agent -> .../versions/<pinned>/cursor-agent.
+# That bin dir is mounted read-only (see compose), but the symlink TARGET is a host path
+# that does not exist in-container, so the link itself dangles — read the version out of
+# it and select that directory under the mounted versions/ root.
+_pin_link=/home/zoe/.local/bin/cursor-agent
+cursor_bin=""
+if [ -L "${_pin_link}" ]; then
+  _pinned_ver="$(basename "$(dirname "$(readlink "${_pin_link}")")")"
+  if [ -x "/root/.local/share/cursor-agent/versions/${_pinned_ver}/cursor-agent" ]; then
+    cursor_bin="/root/.local/share/cursor-agent/versions/${_pinned_ver}/cursor-agent"
+    echo "[entrypoint] cursor-agent pinned by host symlink -> ${_pinned_ver}"
+  else
+    echo "[entrypoint] WARNING: host pins cursor-agent ${_pinned_ver} but it is not in the mounted versions/ — falling back to newest" >&2
+  fi
+fi
+# Fallback only when the host has no symlink (or it points somewhere unmounted).
+[ -n "${cursor_bin}" ] || cursor_bin="$(ls /root/.local/share/cursor-agent/versions/*/cursor-agent 2>/dev/null | sort -V | tail -1)"
 if [ -n "${cursor_bin}" ]; then
   mkdir -p /root/.local/bin
   if ln -sf "${cursor_bin}" /root/.local/bin/cursor-agent; then

@@ -10,7 +10,7 @@ mirroring the `agent-zero` module pattern.
 |------------------|--------------|-------|
 | `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code@2.1.220` (**pinned** — see below; min `2.1.161`) |
 | `codex` CLI      | ✅ works      | `@openai/codex@0.146.0` (**pinned**; min `0.137.0`) |
-| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@^0.82.1`, `--ignore-scripts` (min `0.79.0`; kept in lockstep with `services/zoe-core/package.json`). **exact** pin, kept identical in `services/zoe-core/package.json` |
+| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@0.82.1` **exact**, `--ignore-scripts` (min `0.79.0`; identical value required in `services/zoe-core/package.json`) |
 | `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`). **omnigent 0.7.0 enforces a minimum** (`_CURSOR_MIN_VERSION`, currently `2026.06.02`) — an older binary reports `version-too-low`, not `false`. Provision it reproducibly with [`scripts/setup/install_cursor_agent.sh`](../../scripts/setup/install_cursor_agent.sh) (pinned; `--check` verifies a host without changing it). |
 | **omnigent core**| ✅ works      | `omnigent==0.7.0`, plain PyPI install — no vendored wheel needed |
 
@@ -234,7 +234,7 @@ installed in the image; a worker is "available" only if its binary is on PATH (`
 in `GET /v1/hosts → configured_harnesses`).
 
 `pi` here is a **separate, vanilla install** of the same upstream agent as `services/zoe-core`'s
-brain — pinned to `^0.82.1` to match core, but with **no** Zoe extensions / Gemma provider / soul.
+brain — pinned to `0.82.1` to match core, but with **no** Zoe extensions / Gemma provider / soul.
 It does not share state or creds with core's Pi.
 
 `pi` is wired to **OpenRouter** (default model `minimax/minimax-m3` — tool-calling + 1M context,
