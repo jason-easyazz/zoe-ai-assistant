@@ -10,8 +10,8 @@ mirroring the `agent-zero` module pattern.
 |------------------|--------------|-------|
 | `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code@2.1.220` (**pinned** — see below; min `2.1.161`) |
 | `codex` CLI      | ✅ works      | `@openai/codex@0.146.0` (**pinned**; min `0.137.0`) |
-| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@^0.82.1`, `--ignore-scripts` (min `0.79.0`; kept in lockstep with `services/zoe-core/package.json`). **Caret range, not exact** — see the pin note below |
-| `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`). **omnigent 0.7.0 enforces a minimum** (`_CURSOR_MIN_VERSION`, currently `2026.06.02`) — an older binary reports `version-too-low`, not `false`. Host updated to `2026.07.23` on 2026-07-29. |
+| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@^0.82.1`, `--ignore-scripts` (min `0.79.0`; kept in lockstep with `services/zoe-core/package.json`). **exact** pin, kept identical in `services/zoe-core/package.json` |
+| `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`). **omnigent 0.7.0 enforces a minimum** (`_CURSOR_MIN_VERSION`, currently `2026.06.02`) — an older binary reports `version-too-low`, not `false`. Provision it reproducibly with [`scripts/setup/install_cursor_agent.sh`](../../scripts/setup/install_cursor_agent.sh) (pinned; `--check` verifies a host without changing it). |
 | **omnigent core**| ✅ works      | `omnigent==0.7.0`, plain PyPI install — no vendored wheel needed |
 
 ### The aarch64 blocker (gone upstream — no longer worked around)
@@ -62,12 +62,14 @@ print('broken:', {k:v for k,v in h.items() if not isinstance(v,bool)})"
 
 ### Harness CLI pins — what is and is not guaranteed
 
-`claude` and `codex` are **exact** pins; `pi` is a **caret range** (`^0.82.1`) in both
-`modules/omnigent/Dockerfile` and `services/zoe-core/package.json`, and there is no
-committed lockfile for zoe-core — so independent installs may resolve different
-`0.82.x` releases over time. "Pinned" therefore means *deliberate* for pi, not
-*byte-reproducible*. The range is kept because the two consumers must move together
-and a caret makes that one edit instead of two.
+All three npm CLIs are **exact** pins, at both sites for `pi`
+(`modules/omnigent/Dockerfile` and `services/zoe-core/package.json`). A caret range was
+tried and rejected on review: zoe-core has no committed lockfile, so `^0.82.1` lets a
+clean build pull an unreviewed `0.82.x` and lets the two consumers drift apart — which
+defeats the whole "bumps are deliberate" invariant these pins exist to enforce. The
+convenience of one edit instead of two is not worth reopening surprise upgrades.
+`cursor-agent` is pinned separately in `scripts/setup/install_cursor_agent.sh` because
+it is a host install, not an image dependency.
 
 Exact pins buy determinism at the cost of **intentional staleness**: `claude` and
 `codex` now freeze until someone bumps them. Review them alongside each omnigent

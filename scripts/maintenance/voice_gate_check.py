@@ -67,6 +67,14 @@ VOICE_PATH_PATTERNS = (
     # slot layout all change generation behaviour. Greptile P1 on #1494 — a
     # deploy touching this unit previously bypassed the gate entirely.
     "scripts/setup/systemd/llama-server.service",
+    # zoe-core's dependency manifest pins the Pi build that zoe_core_client.py (already
+    # gated above) spawns as the brain, loading the four zoe-core extensions. The CLIENT
+    # was gated while the manifest that decides what it RUNS was not — so a deploy
+    # carrying only a Pi bump took the no-op pass. Codex P1 on #1593. The lane is dormant
+    # today (ZOE_BRAIN_BACKEND=flue, zoe-core has no node_modules), so this is preventive:
+    # it matters the moment the backend is flipped back, and by then the bump would
+    # already be merged and never replayed.
+    "services/zoe-core/package.json",
 )
 DEFAULT_MAX_AGE_H = float(os.environ.get("ZOE_VOICE_GATE_MAX_AGE_H", "24"))
 

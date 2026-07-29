@@ -39,9 +39,9 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.220 && claude --version
 RUN npm install -g @openai/codex@0.146.0 && codex --version
 # Pi — polly's 3rd worker (review/explore specialist; the only worker that can run gateway
 # models). Same upstream agent as zoe-core's brain (@earendil-works/pi-coding-agent), pinned to
-# match core's ^0.82.1, but a SEPARATE vanilla install (no Zoe extensions/Gemma/soul). The
+# match core's 0.82.1 exactly, but a SEPARATE vanilla install (no Zoe extensions/Gemma/soul). The
 # zoe-data pi_runtime_probe installs it with --ignore-scripts; mirror that here.
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@^0.82.1 && pi --version
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.82.1 && pi --version
 
 # ── GitHub CLI ───────────────────────────────────────────────────────────────
 # The workers (claude_code / codex / pi) each open their OWN PR, so they need `gh`
