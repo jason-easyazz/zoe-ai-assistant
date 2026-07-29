@@ -16,6 +16,7 @@ Secrets are never inlined — they are read from `.env` files.
 | `zoe-data.service`         | 8000  | Primary backend API |
 | `functiongemma-router.service` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M r2, CPU) — **platform-specific paths**; optional |
 | `flue-zoe-brain.service`   | 3578  | Flue Zoe-brain sidecar (optional, operator opt-in) |
+| `flue-executor.service`    | —     | Multica queue consumer (executor migration Phase 2) — **optional, operator opt-in; ships with all three safety gates ON — see below** |
 | `serena-mcp.service`       | 9121  | Shared Serena MCP code-intelligence server (dev tooling, one per HOST — see below) |
 
 Everything in this directory is a **user** unit. The `system/` subdirectory holds
@@ -162,6 +163,38 @@ bridge; check `systemctl --user status serena-mcp` before debugging.
 the sidecar behind zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam.
 Enable it only when running the Flue brain — build + env steps are in
 [labs/flue-zoe-brain/README.md](../../../labs/flue-zoe-brain/README.md).
+
+## Opt-in Multica queue consumer (`flue-executor.service`)
+
+Also deliberately NOT in the enable line. `install-jetson.sh` copies its
+template into `~/.config/systemd/user/` (the `*.service` glob) but never enables
+it — `install-jetson.sh` will `die` if a future edit ever slips it into the
+auto-enabled `SYSTEMD_SPINE`. It is the single-lane consumer of Multica's real
+`agent_task_queue` for the executor migration (Phase 2 of
+[docs/architecture/multica-executor-migration.md](../../../docs/architecture/multica-executor-migration.md)).
+
+It ships with **three safety gates ON**, and enabling the unit does NOT arm
+dispatch — going live is a separate, deliberate operator act:
+
+- **Kill switch** — while `~/.zoe/multica_dispatch_paused` exists the runner
+  idles and claims nothing. Enable the unit long before the board is unpaused;
+  removing that file is the single go-live action.
+- **Dry dispatch** — `ZOE_EXECUTOR_DISPATCH` defaults to `dry` (poll + log what
+  it WOULD claim, mutate nothing). Set `full` in `.env` only when taking it live.
+- **Single lane** — at most one task in flight per runtime.
+
+Bring it up (all operator steps — the installer does none of these):
+
+```bash
+cd ~/assistant/labs/flue-executor && npm install
+# register the executor identity in Multica (idempotent):
+python3 ~/assistant/scripts/maintenance/verify_executor_queue_backend.py
+# create the env file from the template (stays dry by default) and adjust:
+cp ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor/.env
+systemctl --user daemon-reload
+systemctl --user enable --now flue-executor   # starts DRY, kill switch still on
+journalctl --user -u flue-executor -f
+```
 
 Start order matters — see [OPERATOR_RUNBOOK.md](../../../docs/guides/OPERATOR_RUNBOOK.md).
 

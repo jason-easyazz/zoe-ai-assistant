@@ -8,7 +8,8 @@
 #   3. Start the Docker spine (db, auth, ui, home assistant)
 #   4. Run PostgreSQL migrations (alembic + auth DDL, via scripts/deploy/migrate.sh)
 #   5. Download the canonical Gemma 4 E4B-QAT + MTP brain
-#   6. Install + enable the host-native systemd spine (llama-server, zoe-data, kokoro-tts)
+#   6. Install + enable the host-native systemd spine (llama-server, zoe-data, kokoro-tts);
+#      opt-in units (flue-executor, flue-zoe-brain) are installed as inert templates only
 #   7. Health-gate the result
 #
 # Re-runnable: existing .env / models / running services are left in place.
@@ -42,6 +43,13 @@ MODELS_DIR="${HOME}/models/gemma4-e4b-qat"
 
 DOCKER_SPINE=(zoe-database zoe-auth zoe-ui homeassistant homeassistant-mcp-bridge)
 SYSTEMD_SPINE=(llama-server zoe-data kokoro-tts)
+# Opt-in units: their templates are installed (the *.service glob below copies
+# them) but they are DELIBERATELY never auto-enabled — each sits behind a
+# default-OFF seam and needs an explicit operator go-live step. flue-executor is
+# the Multica queue consumer (executor migration Phase 2); it must ship with its
+# three safety gates ON (kill switch present, ZOE_EXECUTOR_DISPATCH=dry, single
+# lane), so the installer never arms it.
+OPTIONAL_UNITS=(flue-executor flue-zoe-brain)
 LLAMA_BIN="${HOME}/llama.cpp/build-jetson-new/bin/llama-server"
 
 while [[ $# -gt 0 ]]; do
@@ -181,10 +189,25 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   fi
   # shellcheck disable=SC2206
   enable_units=(${enable_units[@]})  # drop the empty slot if llama-server removed
+  # Safety: an opt-in unit must never be auto-armed by the installer. If a future
+  # edit slips one into SYSTEMD_SPINE, fail loudly rather than silently going live.
+  for u in "${enable_units[@]}"; do
+    for opt in "${OPTIONAL_UNITS[@]}"; do
+      [[ "$u" == "$opt" ]] && die "refusing to auto-enable opt-in unit '$opt' (default-OFF safety gate)"
+    done
+  done
   if [[ ${#enable_units[@]} -gt 0 ]]; then
     systemctl --user enable --now "${enable_units[@]}"
     ok "enabled: ${enable_units[*]}"
   fi
+
+  # Surface the opt-in units: installed as inert templates, never enabled here.
+  ok "installed (NOT enabled) opt-in units: ${OPTIONAL_UNITS[*]}"
+  printf '%b\n' "  ${C_DIM}flue-executor.service = Multica queue consumer (executor migration Phase 2).${C_NC}"
+  printf '%b\n' "  ${C_DIM}Its three safety gates stay ON: kill switch ~/.zoe/multica_dispatch_paused,${C_NC}"
+  printf '%b\n' "  ${C_DIM}ZOE_EXECUTOR_DISPATCH=dry, single lane. Go-live steps: labs/flue-executor/README.md${C_NC}"
+  printf '%b\n' "  ${C_DIM}+ scripts/setup/systemd/README.md (register identity, create .env, then enable).${C_NC}"
+
   # Let user services keep running after logout on a headless box.
   loginctl enable-linger "$USER" 2>/dev/null || true
 else
