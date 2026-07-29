@@ -77,6 +77,14 @@ upgrade — that is already the moment their MINIMUMS can move
 (`onboarding/harness_install.py`), so it is the natural cadence. `npm view <pkg>
 version` against the table above is the whole check.
 
+**The zoe-core manifest is a DECLARATION, not an installer.** `services/zoe-core` has no
+committed lockfile and no `node_modules`, and `zoe_core_client.py` launches the bare
+command `pi` from `PATH` — so the version that actually runs as the brain is the
+**host-global** npm install, not whatever `package.json` says. Bumping the manifest
+without `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@<pin>` on the
+host changes nothing at runtime; bumping the host without the manifest leaves the
+declaration lying. Move both, and keep them equal to the omnigent Dockerfile's pin.
+
 Bumping `pi` across a `0.x` MINOR (as 0.79 -> 0.82 was) is not safe by inspection:
 zoe-core's `extensions/{abilities,memory,provider-local-gemma,soul}.ts` import
 `ExtensionAPI` from it. Diff that type before bumping. For 0.79.3 -> 0.82.1 it was

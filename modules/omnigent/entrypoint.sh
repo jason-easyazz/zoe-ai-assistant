@@ -43,11 +43,19 @@ if [ -L "${_pin_link}" ]; then
     cursor_bin="/root/.local/share/cursor-agent/versions/${_pinned_ver}/cursor-agent"
     echo "[entrypoint] cursor-agent pinned by host symlink -> ${_pinned_ver}"
   else
-    echo "[entrypoint] WARNING: host pins cursor-agent ${_pinned_ver} but it is not in the mounted versions/ — falling back to newest" >&2
+    # FAIL CLOSED. Falling back to "newest" here would run a DIFFERENT binary than the
+    # host pinned — silently, and specifically in the broken-install case where the
+    # operator is least likely to notice. No Cursor harness is better than an unreviewed
+    # one; omnigent reports it as unavailable and everything else keeps working.
+    echo "[entrypoint] ERROR: host pins cursor-agent ${_pinned_ver} but it is absent or not executable in the mounted versions/ — NOT falling back (run scripts/setup/install_cursor_agent.sh on the host)" >&2
+    _pin_broken=1
   fi
 fi
-# Fallback only when the host has no symlink (or it points somewhere unmounted).
-[ -n "${cursor_bin}" ] || cursor_bin="$(ls /root/.local/share/cursor-agent/versions/*/cursor-agent 2>/dev/null | sort -V | tail -1)"
+# Newest-wins ONLY when the host expressed no pin at all. A pin that exists but cannot be
+# honoured is an error, not an invitation to guess.
+if [ -z "${cursor_bin}" ] && [ -z "${_pin_broken:-}" ]; then
+  cursor_bin="$(ls /root/.local/share/cursor-agent/versions/*/cursor-agent 2>/dev/null | sort -V | tail -1)"
+fi
 if [ -n "${cursor_bin}" ]; then
   mkdir -p /root/.local/bin
   if ln -sf "${cursor_bin}" /root/.local/bin/cursor-agent; then
