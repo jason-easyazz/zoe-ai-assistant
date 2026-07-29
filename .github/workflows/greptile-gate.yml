@@ -123,6 +123,37 @@ jobs:
                   output: { title, summary },
                 }));
 
+            // Raise the blocker the moment a ready head is SEEN — not when the cheap
+            // tier finally qualifies. Creating it at handoff closed only the
+            // label->Greptile window; the far LONGER window is the whole cheap-review
+            // wait, during which `Greptile Review` AND `greptile-complete` are both
+            // absent, `validate`/`secret-scan` go green, and an absent required context
+            // does not block. An armed auto-merge can fire there on any mergeability
+            // re-evaluation (Codex P1 on #1592 — my first fix moved the window rather
+            // than removing it).
+            //
+            // Idempotent by READING first: checks.create always makes a NEW run, so an
+            // unconditional call would post one per sweep (every 30 min, plus every
+            // event) and bury the PR's checks tab.
+            const ensureBlocker = async (sha, num) => {
+              const existing = await ok(`PR #${num} ${GATE_CHECK} lookup`, () =>
+                github.paginate(github.rest.checks.listForRef, {
+                  ...{ owner: context.repo.owner, repo: context.repo.repo },
+                  ref: sha, per_page: 100,
+                }).then(rs => rs.filter(c => c.name === GATE_CHECK)));
+              // A failed READ must not cause a duplicate create; hold instead.
+              if (existing === null) return null;
+              if (existing.length) return existing;
+              const made = await setGateCheck(sha, num, {
+                status: 'in_progress',
+                title: 'Waiting for Greptile',
+                summary: 'Raised when this head was first seen. Blocks merge until the ' +
+                         'cheap tier clears, Greptile reviews this exact head, and its ' +
+                         'review completes successfully.',
+              });
+              return made ? [made] : null;
+            };
+
             const prs = await github.paginate(github.rest.pulls.list, {
               owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
             });
@@ -216,6 +247,14 @@ jobs:
                 // creates a suite whenever a head lands. Falling back to the commit
                 // date keeps a head with no suites from holding the gate forever —
                 // that failure direction is deliberate, matching the bound's purpose.
+                //
+                // CLAMPED to the PR's own timeline (Codex P2 on #1592). A branch pushed
+                // and checked long before the PR was opened has suite/commit timestamps
+                // that PREDATE the PR, so an unclamped anchor reads as already-elapsed
+                // and the cheap-review window collapses to nothing — Codex cannot have
+                // reviewed a PR that did not exist. Take the LATER of the head's
+                // timestamp and the PR's own created_at, so the grace always measures a
+                // period in which review was actually possible.
                 let headSeenAt = null;
                 const suites = await ok(`PR #${num} check suites`, () =>
                   github.paginate(github.rest.checks.listSuitesForRef, {
@@ -228,6 +267,11 @@ jobs:
                   const commit = await ok(`PR #${num} head commit`, () =>
                     github.rest.repos.getCommit({ ...base, ref: sha }));
                   headSeenAt = commit?.data?.commit?.committer?.date || null;
+                }
+                // Never earlier than the PR itself existed.
+                const prBornAt = prFull.created_at || null;
+                if (headSeenAt && prBornAt && Date.parse(prBornAt) > Date.parse(headSeenAt)) {
+                  headSeenAt = prBornAt;
                 }
 
                 const reviews = await ok(`PR #${num} reviews`, () =>
@@ -276,6 +320,12 @@ jobs:
               if (!prFull) continue;
               const sha = prFull.head.sha;
               const baseRef = prFull.base.ref;
+
+              // FIRST action on a ready head: make sure the blocking context exists.
+              // Everything below (cheap-tier waits, handoff, resolution) happens with
+              // merge already blocked, so there is no window where the requirement is
+              // absent and auto-merge can slip through.
+              await ensureBlocker(sha, pr.number);
               // Past this point `pr` (the one-time list snapshot) is valid ONLY for
               // `.number`, which cannot change. Every mutable field comes from prFull.
               // Fixing head.sha alone was not enough: `labels` was stale from the same
@@ -433,48 +483,6 @@ jobs:
               const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
 
               if (alreadyHandedOff) {
-                // Resolve the blocking check from Greptile's ACTUAL result. Until this
-                // runs, greptile-complete stays in_progress and merge is blocked — which
-                // is the point: the gap that let #1587 and #1589 merge unreviewed.
-                // Read the newest Greptile run for THIS head; only a completed one
-                // resolves anything.
-                const gRuns = await ok(`PR #${pr.number} greptile state`, () =>
-                  github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
-                    .then(rs => rs.filter(c => c.name === 'Greptile Review')));
-                if (gRuns && gRuns.length) {
-                  // ANY run still in flight -> do NOT resolve, at all. Filtering to
-                  // `completed` FIRST and then taking the newest completed makes a newer
-                  // in-flight re-review INVISIBLE, so a stale success would publish
-                  // `greptile-complete: success` while Greptile is still working — which
-                  // is the very #1587/#1589 class this check exists to close, rebuilt one
-                  // block later. This mirrors the guard the checksOk path already uses
-                  // ("still in flight -> return false", with its own note that otherwise
-                  // "an OLD success stands in for a NEW run"); the two must agree.
-                  const inFlight = gRuns.some(c => c.status !== 'completed');
-                  if (!inFlight) {
-                    const newest = gRuns.reduce((a, b) =>
-                      (Date.parse(b.completed_at || 0) >= Date.parse(a.completed_at || 0) ? b : a));
-                    // 'skipped' is Greptile declining (e.g. the >50-file limit), NOT a
-                    // pass — resolving it success would wave through the very PRs that
-                    // get no review at all. Surface it as neutral: branch protection
-                    // treats neutral as non-blocking, so the PR is not stranded, but the
-                    // check text says plainly that no review happened.
-                    const pass = newest.conclusion === 'success';
-                    const declined = ['skipped', 'cancelled', 'stale', 'neutral'].includes(newest.conclusion);
-                    await setGateCheck(sha, pr.number, {
-                      status: 'completed',
-                      conclusion: pass ? 'success' : (declined ? 'neutral' : 'failure'),
-                      title: pass ? 'Greptile reviewed this head'
-                                  : (declined ? `Greptile did not review (${newest.conclusion})`
-                                              : `Greptile concluded ${newest.conclusion}`),
-                      summary: pass
-                        ? `Greptile completed at ${newest.completed_at} on \`${sha.slice(0, 8)}\`.`
-                        : `Greptile's own check concluded \`${newest.conclusion}\` on ` +
-                          `\`${sha.slice(0, 8)}\`. Merge is not gated on this check alone — ` +
-                          `read Greptile's review before merging.`,
-                    });
-                  }
-                }
                 // Handed off, but is Greptile actually COMING? If the post-label summon
                 // failed (ok() swallows transient errors; the job can die between label
                 // and comment), the label+marker persist and no later sweep would ever
@@ -564,6 +572,78 @@ jobs:
                     if (re) core.info(`PR #${pr.number}: handed off but no live Greptile run — re-summoned`);
                   }
                 }
+                // Resolve the blocker ONLY after the FRESH conditions read above.
+                // Publishing success before revalidation lets a review dismissed during
+                // this sweep slip through: with the other required contexts already
+                // green, an armed auto-merge can run in the API window before the label
+                // revocation below lands (Codex P2 on #1592). stillOk is the same
+                // re-derived verdict the revocation uses, so the two cannot disagree.
+                if (stillOk) {
+                  // Resolve the blocking check from Greptile's ACTUAL result. Until this
+                  // runs, greptile-complete stays in_progress and merge is blocked — which
+                  // is the point: the gap that let #1587 and #1589 merge unreviewed.
+                  // Read the newest Greptile run for THIS head; only a completed one
+                  // resolves anything.
+                  const gRuns = await ok(`PR #${pr.number} greptile state`, () =>
+                    github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
+                      .then(rs => rs.filter(c => c.name === 'Greptile Review')));
+                  if (gRuns && gRuns.length) {
+                    // ANY run still in flight -> do NOT resolve, at all. Filtering to
+                    // `completed` FIRST and then taking the newest completed makes a newer
+                    // in-flight re-review INVISIBLE, so a stale success would publish
+                    // `greptile-complete: success` while Greptile is still working — which
+                    // is the very #1587/#1589 class this check exists to close, rebuilt one
+                    // block later. This mirrors the guard the checksOk path already uses
+                    // ("still in flight -> return false", with its own note that otherwise
+                    // "an OLD success stands in for a NEW run"); the two must agree.
+                    // Hold only when an in-flight run is NEWER than the latest completed
+                    // verdict. Blocking on ANY non-completed run deadlocks the context
+                    // forever if a duplicate summon leaves an OLDER run stuck in progress
+                    // while a later one completes on the same SHA (Codex P2 on #1592) —
+                    // and a permanently unresolvable required check is worse than the race
+                    // it guards. Compare start times: an in-flight run has no completed_at.
+                    // NB `Date.parse(x || 0)` is a trap: a null/absent timestamp coerces
+                    // to the STRING "0", which JS parses as a VALID date (year 2000), so a
+                    // timestamp-less in-flight run would look merely old and fail OPEN.
+                    // Parse only real strings and treat anything else as 0/unknown.
+                    const at = (v) => (typeof v === 'string' && v ? (Date.parse(v) || 0) : 0);
+                    const started = (c) => at(c.started_at);
+                    const finished = (c) => at(c.completed_at);
+                    const doneRuns = gRuns.filter(c => c.status === 'completed');
+                    const newestDone = doneRuns.length
+                      ? doneRuns.reduce((a, b) => (finished(b) >= finished(a) ? b : a))
+                      : null;
+                    // A missing/unparseable started_at on an in-flight run must HOLD, not
+                    // resolve: treating an unknown timestamp as "old" would fail OPEN, which
+                    // is the direction that lets an unreviewed head merge.
+                    const supersededBy = gRuns.filter(c => c.status !== 'completed')
+                      .filter(c => !newestDone || !started(c) || started(c) > finished(newestDone));
+                    const inFlight = supersededBy.length > 0 || !newestDone;
+                    if (!inFlight) {
+                      const newest = newestDone;
+                      // 'skipped' is Greptile declining (e.g. the >50-file limit), NOT a
+                      // pass — resolving it success would wave through the very PRs that
+                      // get no review at all. Surface it as neutral: branch protection
+                      // treats neutral as non-blocking, so the PR is not stranded, but the
+                      // check text says plainly that no review happened.
+                      const pass = newest.conclusion === 'success';
+                      const declined = ['skipped', 'cancelled', 'stale', 'neutral'].includes(newest.conclusion);
+                      await setGateCheck(sha, pr.number, {
+                        status: 'completed',
+                        conclusion: pass ? 'success' : (declined ? 'neutral' : 'failure'),
+                        title: pass ? 'Greptile reviewed this head'
+                                    : (declined ? `Greptile did not review (${newest.conclusion})`
+                                                : `Greptile concluded ${newest.conclusion}`),
+                        summary: pass
+                          ? `Greptile completed at ${newest.completed_at} on \`${sha.slice(0, 8)}\`.`
+                          : `Greptile's own check concluded \`${newest.conclusion}\` on ` +
+                            `\`${sha.slice(0, 8)}\`. Merge is not gated on this check alone — ` +
+                            `read Greptile's review before merging.`,
+                      });
+                    }
+                  }
+                }
+
                 if (!stillOk) {
                   const r = await ok(`PR #${pr.number} revoke label`, () =>
                     github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
@@ -620,12 +700,10 @@ jobs:
               // auto-merge can slip through the window between labelling and Greptile
               // registering its own check (see GATE_CHECK above). If this fails we do
               // NOT label — handing off without the blocker is precisely the race.
-              const blocked = await setGateCheck(sha, pr.number, {
-                status: 'in_progress',
-                title: 'Waiting for Greptile',
-                summary: 'The cheap tier is green and this PR is being handed to Greptile. ' +
-                         'This check blocks merge until Greptile\'s own review completes.',
-              });
+              // The blocker was raised when this head was first seen; re-assert it here
+              // so a labelling path can never proceed without it (e.g. the earlier call
+              // failed transiently). Still create-then-label: no label without a blocker.
+              const blocked = await ensureBlocker(sha, pr.number);
               if (!blocked) {
                 core.warning(`PR #${pr.number}: could not raise ${GATE_CHECK} — not labelling ` +
                              `(labelling without it would reopen the auto-merge race)`);

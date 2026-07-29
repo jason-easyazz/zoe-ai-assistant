@@ -81,7 +81,10 @@ HARNESS = textwrap.dedent(
     // matching the pre-anchor behaviour where an absent summon left graceElapsed false.
     const FUTURE = '2099-01-01T00:00:00Z';
     const pr = { number: 1, head: { sha: LIST_SHA }, base: { ref: 'main' },
-                 labels: OPTS.labels || [], draft: false };
+                 labels: OPTS.labels || [], draft: false,
+                 // The PR's own birth time clamps the Codex grace anchor: a branch
+                 // pushed long before the PR opened must not read as already-graced.
+                 created_at: OPTS.prCreatedAt || '2020-01-01T00:00:00Z' };
 
     let reviewReads = 0;
     const asReview = (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l } });
@@ -165,6 +168,7 @@ HARNESS = textwrap.dedent(
             const extra = gr.map((g) => ({
               name: 'Greptile Review', status: g.status || 'completed',
               conclusion: g.conclusion || null,
+              started_at: g.started_at || null,
               completed_at: g.completed_at || '2026-07-27T00:00:00Z' }));
             return extra.concat(['Cursor Bugbot'].map((name) => ({
               name, status: OPTS.checksPending ? 'in_progress' : 'completed',
@@ -254,10 +258,23 @@ def test_pending_bugbot_check_does_not_block_handoff(tmp_path):
     assert r["addLabels"] == 1, r["log"]
 
 
-def test_empty_required_checks_skips_failed_checks_api(tmp_path):
-    """A Checks API outage cannot hold the gate when no checks are required."""
+def test_checks_api_outage_now_holds_the_gate_fail_closed(tmp_path):
+    """A Checks API outage must HOLD the gate — a deliberate change of behaviour.
+
+    This test previously asserted the opposite ("an outage cannot hold the gate when
+    no checks are required"), which was right while the gate only READ checks. It now
+    OWNS one: `greptile-complete` is the required context that blocks merge until
+    Greptile has reviewed. If the Checks API is unreachable the gate can neither
+    confirm nor raise that blocker, and labelling anyway would hand off to Greptile
+    with no blocking context present — which is precisely the #1587/#1589 race. So the
+    gate fails CLOSED and retries on the next sweep.
+
+    The original second assertion still holds and is kept: with REQUIRED_CHECKS empty
+    the conditions read must still not fetch check RUNS.
+    """
     r = _run(tmp_path, _script(), reviewers=BOTH, checksFetchFails=True)
-    assert r["addLabels"] == 1, r["log"]
+    assert r["addLabels"] == 0, r["log"]
+    assert any("could not raise greptile-complete" in m for m in r["log"]), r["log"]
     assert not any("PR #1 check runs" in m for m in r["log"]), r["log"]
 
 
@@ -666,7 +683,78 @@ def test_stale_success_does_not_resolve_while_a_newer_greptile_run_is_in_flight(
              greptileRuns=[
                  {"status": "completed", "conclusion": "success",
                   "completed_at": "2026-07-27T00:00:00Z"},
-                 {"status": "in_progress", "conclusion": None},
+                 {"status": "in_progress", "conclusion": None,
+                  "started_at": "2026-07-28T00:00:00Z"},
              ])
     done = [c for c in r["gateChecks"] if c["status"] == "completed"]
     assert done == [], f"resolved from a stale success while a newer run was in flight: {done}"
+
+
+def test_stuck_older_run_does_not_deadlock_when_a_later_run_completed(tmp_path):
+    """A duplicate summon can leave an OLDER run stuck in_progress forever.
+
+    Blocking on ANY non-completed run would then make `greptile-complete` permanently
+    unresolvable — a required check nobody can clear is worse than the race it guards.
+    Here the stuck run STARTED before the good run finished, so it is superseded and
+    must be ignored. Codex P2 on #1592.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRuns=[
+                 {"status": "in_progress", "conclusion": None,
+                  "started_at": "2026-07-26T00:00:00Z"},                      # stuck, older
+                 {"status": "completed", "conclusion": "success",
+                  "started_at": "2026-07-26T12:00:00Z",
+                  "completed_at": "2026-07-27T00:00:00Z"},                    # later verdict
+             ])
+    assert any(c["conclusion"] == "success" for c in r["gateChecks"]), r["gateChecks"]
+
+
+def test_in_flight_run_without_a_start_time_holds(tmp_path):
+    """Unknown timestamp must fail CLOSED — treating it as old would let a head merge."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRuns=[
+                 {"status": "completed", "conclusion": "success",
+                  "completed_at": "2026-07-27T00:00:00Z"},
+                 {"status": "in_progress", "conclusion": None},   # no started_at
+             ])
+    done = [c for c in r["gateChecks"] if c["status"] == "completed"]
+    assert done == [], f"resolved despite an in-flight run of unknown age: {done}"
+
+
+def test_blocker_is_not_completed_when_conditions_regress_mid_sweep(tmp_path):
+    """A review dismissed DURING the sweep must stop the blocker resolving.
+
+    Publishing `greptile-complete: success` from the first conditions read lets an
+    armed auto-merge run in the window before the label revocation lands — the other
+    required contexts are already green by then. Resolution is therefore gated on the
+    same fresh `stillOk` verdict the revocation uses. Codex P2 on #1592.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             dismissMidSweep="chatgpt-codex-connector[bot]",
+             greptileRuns=[{"status": "completed", "conclusion": "success",
+                            "completed_at": "2026-07-27T00:00:00Z"}])
+    done = [c for c in r["gateChecks"] if c["status"] == "completed"]
+    assert done == [], f"resolved despite a mid-sweep regression: {done}"
+    assert r["removeLabel"] == 1, r["log"]
+
+
+def test_grace_anchor_is_clamped_to_the_pr_creation_time(tmp_path):
+    """A pre-existing branch must not arrive with its Codex grace already spent.
+
+    `listSuitesForRef` returns repo-wide timestamps for the SHA, so a branch pushed
+    and checked weeks before the PR was opened yields an anchor that PREDATES the PR.
+    Codex cannot have reviewed a PR that did not exist yet, so an unclamped anchor
+    collapses the cheap-review window to nothing. Codex P2 on #1592.
+    """
+    # Head seen long ago, PR opened just now -> grace must NOT be elapsed.
+    fresh_pr = _run(tmp_path, _script(), reviewers=["copilot-pull-request-reviewer[bot]"],
+                    headSeenAt="2020-01-01T00:00:00Z", prCreatedAt="2099-01-01T00:00:00Z")
+    assert fresh_pr["addLabels"] == 0, fresh_pr["log"]
+
+    # Both old -> the grace genuinely has elapsed and the gate proceeds.
+    old_pr = _run(tmp_path, _script(), reviewers=["copilot-pull-request-reviewer[bot]"],
+                  headSeenAt="2020-01-01T00:00:00Z", prCreatedAt="2020-01-01T00:00:00Z")
+    assert old_pr["addLabels"] == 1, old_pr["log"]

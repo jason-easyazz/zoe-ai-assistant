@@ -90,9 +90,23 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
 
 - `strict = true` — a PR must be **up to date with `main`** to merge (it can sit **BEHIND** if `main`
   races ahead; clear with update-branch / re-run).
-- Required status checks: **`validate`**, **`secret-scan`**, **`Greptile Review`** (since
-  2026-07-27; the GitGuardian App check is informational — the first-party `secret-scan`
-  job replaced it as required so an App outage cannot freeze `main`).
+- Required status checks: **`validate`**, **`secret-scan`**, **`Greptile Review`**, and
+  **`greptile-complete`** (since 2026-07-27; the GitGuardian App check is informational —
+  the first-party `secret-scan` job replaced it as required so an App outage cannot
+  freeze `main`).
+  - **`greptile-complete` is published by `greptile-gate.yml`, not by Greptile**, and it
+    is the check that actually closes the auto-merge race. A required context only
+    BLOCKS once it has REPORTED for the head; `Greptile Review` does not exist until
+    Greptile creates it, so before that the requirement is simply absent and an armed
+    auto-merge merges straight through. Measured: **#1589** merged 12s after the label
+    with Greptile never reviewing, and **#1587** merged 3s BEFORE its Greptile check even
+    started — which then concluded `failure`, on code already on `main`.
+  - The gate raises it `in_progress` the moment a ready head is seen and completes it
+    only from Greptile's own finished verdict (`skipped` → `neutral`, i.e. "no review
+    happened" rather than a pass).
+  - **Adding it to branch protection must happen AFTER the workflow that publishes it is
+    on `main`.** A required context no workflow produces never reports, and a context
+    that never reports blocks every PR permanently — including the one carrying the fix.
 - `required_conversation_resolution = true` — **every review thread must be resolved**, not just replied to.
 - `0` required human approvals → green checks + resolved threads = mergeable; repo `allow_auto_merge = true`.
 - **Never** `--admin` / `--force` (no bypassing protection) unless the operator explicitly asks for that
