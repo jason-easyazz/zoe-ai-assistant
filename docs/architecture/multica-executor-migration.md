@@ -189,13 +189,18 @@ depends on the raised value.
 **Provisioning wired (this PR, ZOE-6137).** `flue-executor.service` is now an
 explicit *opt-in* unit in the deploy path: `install-jetson.sh` installs its
 template (the `*.service` glob) but never enables it, prints its go-live steps,
-and will `die` if a future edit ever adds it to the auto-enabled `SYSTEMD_SPINE`
-— its three safety gates (kill switch, `ZOE_EXECUTOR_DISPATCH=dry`, single lane)
-are untouched by the installer. Documented in
+and will `die` (canonical-name comparison, so both `flue-executor` and
+`flue-executor.service` are caught) if a future edit ever adds it to the
+auto-enabled `SYSTEMD_SPINE`. The installer also **arms the kill switch** —
+`~/.zoe/multica_dispatch_paused`, created idempotently and never removed at
+install — so a fresh host is *genuinely* PAUSED (the runtime only checks the
+file's existence; without it a host is unpaused and `ZOE_EXECUTOR_DISPATCH=full`
+would claim immediately). The three safety gates (kill switch armed,
+`ZOE_EXECUTOR_DISPATCH=dry`, single lane) are all ON after install. Documented in
 [scripts/setup/systemd/README.md](../../scripts/setup/systemd/README.md). A
-fresh host now ships the unit inert-but-ready; *enabling* it and *arming*
-dispatch remain deliberate operator acts (gap (a)/end-to-end tickets still
-open).
+fresh host now ships the unit inert-but-ready and paused; *enabling* it, arming
+dispatch, and removing the kill switch remain deliberate operator acts (gap
+(a)/end-to-end tickets still open).
 
 ### Phase 3 — (superseded by §5 decision 2: Omnigent is PRIMARY from day one)
 

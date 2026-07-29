@@ -177,8 +177,10 @@ It ships with **three safety gates ON**, and enabling the unit does NOT arm
 dispatch — going live is a separate, deliberate operator act:
 
 - **Kill switch** — while `~/.zoe/multica_dispatch_paused` exists the runner
-  idles and claims nothing. Enable the unit long before the board is unpaused;
-  removing that file is the single go-live action.
+  idles and claims nothing (the runtime only checks that the file exists —
+  `labs/flue-executor/src/live-runner.ts`). **`install-jetson.sh` creates this
+  file when it installs the opt-in unit, so a fresh host is PAUSED by default.**
+  Removing it is the single go-live action (below) — never remove it at install.
 - **Dry dispatch** — `ZOE_EXECUTOR_DISPATCH` defaults to `dry` (poll + log what
   it WOULD claim, mutate nothing). Set `full` in `.env` only when taking it live.
 - **Single lane** — at most one task in flight per runtime.
@@ -192,8 +194,19 @@ python3 ~/assistant/scripts/maintenance/verify_executor_queue_backend.py
 # create the env file from the template (stays dry by default) and adjust:
 cp ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor/.env
 systemctl --user daemon-reload
-systemctl --user enable --now flue-executor   # starts DRY, kill switch still on
+systemctl --user enable --now flue-executor   # starts DRY + PAUSED (kill switch on)
 journalctl --user -u flue-executor -f
+```
+
+**Go live — the ONLY place the kill switch is removed.** Do this only after the
+≥3-ticket dry validation holds:
+
+```bash
+# 1) arm real dispatch in the env file:
+#      ZOE_EXECUTOR_DISPATCH=full   (in labs/flue-executor/.env), then restart:
+systemctl --user restart flue-executor
+# 2) unpause — the single go-live action:
+rm ~/.zoe/multica_dispatch_paused
 ```
 
 Start order matters — see [OPERATOR_RUNBOOK.md](../../../docs/guides/OPERATOR_RUNBOOK.md).

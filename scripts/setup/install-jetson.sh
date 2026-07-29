@@ -191,9 +191,12 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   enable_units=(${enable_units[@]})  # drop the empty slot if llama-server removed
   # Safety: an opt-in unit must never be auto-armed by the installer. If a future
   # edit slips one into SYSTEMD_SPINE, fail loudly rather than silently going live.
+  # Compare CANONICAL names ('<name>.service' on both sides) so a bare name AND
+  # its '.service' spelling are both caught — systemctl accepts either form.
   for u in "${enable_units[@]}"; do
     for opt in "${OPTIONAL_UNITS[@]}"; do
-      [[ "$u" == "$opt" ]] && die "refusing to auto-enable opt-in unit '$opt' (default-OFF safety gate)"
+      [[ "${u%.service}.service" == "${opt%.service}.service" ]] \
+        && die "refusing to auto-enable opt-in unit '$opt' (default-OFF safety gate)"
     done
   done
   if [[ ${#enable_units[@]} -gt 0 ]]; then
@@ -201,10 +204,24 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
     ok "enabled: ${enable_units[*]}"
   fi
 
+  # Arm the kill switch so a fresh host is GENUINELY paused before flue-executor
+  # can ever claim work. The runtime only checks for this file's existence
+  # (labs/flue-executor/src/live-runner.ts), so without it a host is UNPAUSED and
+  # an operator setting ZOE_EXECUTOR_DISPATCH=full would start claiming at once.
+  # Idempotent, and NEVER removed here — removing it is the deliberate go-live act.
+  KILL_SWITCH="${ZOE_MULTICA_KILL_SWITCH:-${HOME}/.zoe/multica_dispatch_paused}"
+  if [[ -e "$KILL_SWITCH" ]]; then
+    ok "Multica dispatch kill switch already present: $KILL_SWITCH"
+  elif mkdir -p "$(dirname "$KILL_SWITCH")" && : > "$KILL_SWITCH"; then
+    ok "armed Multica dispatch kill switch (paused): $KILL_SWITCH"
+  else
+    warn "could not create kill switch $KILL_SWITCH — create it before enabling flue-executor"
+  fi
+
   # Surface the opt-in units: installed as inert templates, never enabled here.
   ok "installed (NOT enabled) opt-in units: ${OPTIONAL_UNITS[*]}"
   printf '%b\n' "  ${C_DIM}flue-executor.service = Multica queue consumer (executor migration Phase 2).${C_NC}"
-  printf '%b\n' "  ${C_DIM}Its three safety gates stay ON: kill switch ~/.zoe/multica_dispatch_paused,${C_NC}"
+  printf '%b\n' "  ${C_DIM}Three safety gates stay ON: kill switch armed above (host is PAUSED),${C_NC}"
   printf '%b\n' "  ${C_DIM}ZOE_EXECUTOR_DISPATCH=dry, single lane. Go-live steps: labs/flue-executor/README.md${C_NC}"
   printf '%b\n' "  ${C_DIM}+ scripts/setup/systemd/README.md (register identity, create .env, then enable).${C_NC}"
 
