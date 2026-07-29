@@ -20,11 +20,26 @@ import { SESSION_ID_RE, assertSafeSessionId, spawnOmnigentWorker } from './omnig
 test('accepts both real id shapes (0.7.0 dropped the conv_ prefix)', () => {
   // <=0.4.0 shape and the bare-hex 0.7.0 shape must BOTH pass, or the guard
   // rejects every live dispatch instead of only the hostile ones.
-  assert.equal(assertSafeSessionId('conv_abc123'), 'conv_abc123');
+  assert.equal(
+    assertSafeSessionId('conv_dc2e28f9de3e4074ab7a2cb6279f5d47'),
+    'conv_dc2e28f9de3e4074ab7a2cb6279f5d47',
+  );
   assert.equal(
     assertSafeSessionId('dc2e28f9de3e4074ab7a2cb6279f5d47'),
     'dc2e28f9de3e4074ab7a2cb6279f5d47',
   );
+});
+
+test('rejects degenerate short ids (the {16,} floor, in lockstep with the other two sites)', () => {
+  // A short id is not merely odd — cross_review.sh's cleanup kills by SUBSTRING
+  // match on /proc/<pid>/cmdline, where "e" matched 5 live container processes
+  // (the omnigent server included) against 2 for a real id. This guard must not
+  // accept what its Python/bash siblings reject; drop {16,} back to + and every
+  // case below goes green, which is what makes this a control rather than decor.
+  for (const value of ['e', 'ab', 'abc123', 'conv_abc123', '0123456789abcde']) {
+    assert.equal(SESSION_ID_RE.test(value), false, JSON.stringify(value));
+    assert.throws(() => assertSafeSessionId(value), /refusing unsafe omnigent session id/);
+  }
 });
 
 test('rejects every shell metacharacter, prefixed or bare', () => {

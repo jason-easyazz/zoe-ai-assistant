@@ -95,8 +95,19 @@ export async function omnigentHealthy(cfg: ExecutorConfig): Promise<boolean> {
  * side needs `\Z` and this does not. A newline would be a shell command
  * SEPARATOR here, so `omnigent.test.ts` pins that rejection with an explicit
  * case rather than trusting the anchor to stay correct.
+ *
+ * The `{16,}` LENGTH FLOOR keeps this in lockstep with the other two sites,
+ * which is the whole point of documenting them as one rule. It is load-bearing
+ * in `cross_review.sh`, whose cleanup kills by SUBSTRING match on
+ * /proc/<pid>/cmdline — a degenerate short id there sweeps unrelated processes
+ * (measured: "e" matches 5 in the live container, the omnigent SERVER among
+ * them, vs 2 for a real id). Here the id only reaches a `-r` argument and the
+ * `/tmp/flue-exec-kick-<id>.log` path, so the floor is defence in depth — but a
+ * validator that silently accepts what its siblings reject is how the `conv_`
+ * assumption survived in three places to begin with. Real ids are 32 hex; 16 is
+ * a loose floor that does not re-pin an upstream length we do not control.
  */
-export const SESSION_ID_RE = /^(?:conv_)?[A-Za-z0-9]+$/;
+export const SESSION_ID_RE = /^(?:conv_)?[A-Za-z0-9]{16,}$/;
 
 /** Validated session id, or throw. Callers run inside the staging try/catch, so
  * a refusal becomes a reason-carrying `failed` transition, never a crash. */
