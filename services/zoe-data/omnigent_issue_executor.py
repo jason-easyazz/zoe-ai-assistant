@@ -68,7 +68,16 @@ _PR_URL_RE = re.compile(r"PR_URL=\s*(https://github\.com/[^/\s]+/[^/\s]+/pull/(\
 # 0.7.0 with "refusing unsafe Omnigent session id". Accept both shapes, keep
 # the charset strict: [A-Za-z0-9] admits no shell metacharacter, so the
 # interpolation below stays injection-free either way.
-_SESSION_ID_RE = re.compile(r"^(?:conv_)?[A-Za-z0-9]+$")
+#
+# ANCHOR WITH \Z, NOT $: Python's `$` also matches just BEFORE a final newline,
+# so `$` would accept "abc\n". A newline is a shell command SEPARATOR and the
+# sid is interpolated into the docker-exec `sh -c` string, where it splits the
+# command mid-token ("... > /tmp/omni-impl-abc\n.log 2>&1" leaves `.log` as a
+# stray second command). This hole is PRE-EXISTING — the old conv_-only regex
+# matched "conv_abc\n" too — so \Z closes it rather than merely preserving it.
+# (The bash side in cross_review.sh is unaffected: [[ =~ ]] rejects a trailing
+# newline already.)
+_SESSION_ID_RE = re.compile(r"^(?:conv_)?[A-Za-z0-9]+\Z")
 
 
 def omnigent_executor_enabled() -> bool:

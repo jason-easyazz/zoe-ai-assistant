@@ -33,6 +33,14 @@ def test_session_id_validation_rejects_shell_metachars():
         "conv_a;rm -rf", "conv_$(x)", "conv_`x`", "conv_a b",
         "a;rm -rf", "$(x)", "`x`", "a b", "a|b", "a&b", "a>b", "../etc",
         "conv_", "",
+        # TRAILING NEWLINE — the regex must be \Z-anchored, not $-anchored:
+        # Python's `$` matches before a final newline, so `$` accepts these.
+        # A newline is a shell command separator and the sid is interpolated
+        # into the docker-exec `sh -c` string, so it splits the command.
+        # NB the old conv_-only regex accepted "conv_abc\n", making this a
+        # pre-existing hole that \Z closes — swap \Z back to $ and the two
+        # cases below are the ones that go red.
+        "abc\n", "conv_abc\n", "abc\n\n", "abc\nrm -rf /",
     )
     for value in bad:
         assert oie._SESSION_ID_RE.match(value) is None, value
