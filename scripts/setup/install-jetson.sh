@@ -191,11 +191,17 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   enable_units=(${enable_units[@]})  # drop the empty slot if llama-server removed
   # Safety: an opt-in unit must never be auto-armed by the installer. If a future
   # edit slips one into SYSTEMD_SPINE, fail loudly rather than silently going live.
-  # Compare CANONICAL names ('<name>.service' on both sides) so a bare name AND
-  # its '.service' spelling are both caught — systemctl accepts either form.
+  # `systemctl enable` also accepts unit-FILE PATHS, so canonicalize by BASENAME
+  # then strip '.service' on BOTH sides — bare, '.service', and path spellings
+  # (./flue-executor.service, /tmp/flue-zoe-brain.service, dir/flue-executor) all
+  # reduce to the same key and are caught. The spine should never carry paths at
+  # all, so a '/' in an entry is itself a defect.
   for u in "${enable_units[@]}"; do
+    [[ "$u" == */* ]] && die "SYSTEMD_SPINE entry '$u' is a path, not a unit name (spine must be bare names)"
+    u_key="${u##*/}"; u_key="${u_key%.service}"
     for opt in "${OPTIONAL_UNITS[@]}"; do
-      [[ "${u%.service}.service" == "${opt%.service}.service" ]] \
+      opt_key="${opt##*/}"; opt_key="${opt_key%.service}"
+      [[ "$u_key" == "$opt_key" ]] \
         && die "refusing to auto-enable opt-in unit '$opt' (default-OFF safety gate)"
     done
   done
@@ -215,7 +221,9 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   elif mkdir -p "$(dirname "$KILL_SWITCH")" && : > "$KILL_SWITCH"; then
     ok "armed Multica dispatch kill switch (paused): $KILL_SWITCH"
   else
-    warn "could not create kill switch $KILL_SWITCH — create it before enabling flue-executor"
+    # Fail CLOSED: if we cannot create the pause file we must NOT claim the host
+    # is paused (that false claim is the exact bug class). Abort instead.
+    die "could not create kill switch $KILL_SWITCH — refusing to leave the host UNPAUSED"
   fi
 
   # Surface the opt-in units: installed as inert templates, never enabled here.

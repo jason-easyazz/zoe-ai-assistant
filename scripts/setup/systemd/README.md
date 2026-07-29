@@ -205,8 +205,9 @@ journalctl --user -u flue-executor -f
 # 1) arm real dispatch in the env file:
 #      ZOE_EXECUTOR_DISPATCH=full   (in labs/flue-executor/.env), then restart:
 systemctl --user restart flue-executor
-# 2) unpause — the single go-live action:
-rm ~/.zoe/multica_dispatch_paused
+# 2) unpause — the single go-live action (same override-aware path the installer
+#    arms; the default is ~/.zoe/multica_dispatch_paused):
+rm -f "${ZOE_MULTICA_KILL_SWITCH:-$HOME/.zoe/multica_dispatch_paused}"
 ```
 
 Start order matters — see [OPERATOR_RUNBOOK.md](../../../docs/guides/OPERATOR_RUNBOOK.md).
