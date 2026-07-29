@@ -39,11 +39,15 @@ SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -
   | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])") \
   || { echo "ALARM: session create failed against $SERVER" >&2; exit 2; }
 # The ID is interpolated into an sh -c below — reject anything that isn't a
-# plain conv_ token (same rule as omnigent_issue_executor; Codex, #1578).
-case "$SID" in
-  (conv_*) [[ "$SID" =~ ^conv_[A-Za-z0-9]+$ ]] || { echo "ALARM: malformed session id: $SID" >&2; exit 2; } ;;
-  (*) echo "ALARM: malformed session id: $SID" >&2; exit 2 ;;
-esac
+# plain alnum token, optionally conv_-prefixed (same rule as
+# omnigent_issue_executor; Codex, #1578).
+#
+# The PREFIX is not the security property and must not be required: omnigent
+# <=0.4.0 returned `conv_<hex>`, 0.7.0 returns the BARE `<hex>` (it dropped the
+# type prefix from conv_/ag_/host_ ids alike). Demanding `conv_*` made every
+# cross-review abort with "malformed session id" on 0.7.0. The strict charset
+# is what keeps the interpolation injection-free, and it is unchanged.
+[[ "$SID" =~ ^(conv_)?[A-Za-z0-9]+$ ]] || { echo "ALARM: malformed session id: $SID" >&2; exit 2; }
 echo "session: $SID" >&2
 
 # Brief goes INLINE via -p. Do not stage it as a session comment: comment

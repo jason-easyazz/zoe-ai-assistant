@@ -21,9 +21,21 @@ def test_pr_url_regex_requires_prefix_and_rejects_bare_url():
 
 
 def test_session_id_validation_rejects_shell_metachars():
+    # BOTH id shapes are legitimate: omnigent <=0.4.0 returned `conv_<hex>`,
+    # 0.7.0 returns the bare `<hex>` (upstream dropped the conv_/ag_/host_ type
+    # prefixes). Requiring the prefix hard-failed every dispatch on 0.7.0, so
+    # the prefix is optional — shell-safety is the property under test.
     assert oie._SESSION_ID_RE.match("conv_abc123") is not None
-    for bad in ("conv_a;rm -rf", "conv_$(x)", "conv_`x`", "evil", "conv_a b"):
-        assert oie._SESSION_ID_RE.match(bad) is None
+    assert oie._SESSION_ID_RE.match("dc2e28f9de3e4074ab7a2cb6279f5d47") is not None
+    # Anything carrying a shell metacharacter is still refused, prefixed or not
+    # — the sid is interpolated into the docker-exec `sh -c` string.
+    bad = (
+        "conv_a;rm -rf", "conv_$(x)", "conv_`x`", "conv_a b",
+        "a;rm -rf", "$(x)", "`x`", "a b", "a|b", "a&b", "a>b", "../etc",
+        "conv_", "",
+    )
+    for value in bad:
+        assert oie._SESSION_ID_RE.match(value) is None, value
 
 
 def test_lazy_env_accessors_honour_runtime_setenv(monkeypatch):

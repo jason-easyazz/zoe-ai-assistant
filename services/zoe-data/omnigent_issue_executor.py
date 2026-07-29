@@ -61,8 +61,14 @@ def _omnigent_container() -> str:
 # reasoning pi_executor's _PR_URL_RE documents.
 _PR_URL_RE = re.compile(r"PR_URL=\s*(https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+))")
 # A session id is used inside a `sh -c` string for the docker-exec kick, so it
-# must be a strict, shell-safe token (Omnigent ids are `conv_<hex>`).
-_SESSION_ID_RE = re.compile(r"^conv_[A-Za-z0-9]+$")
+# must be a strict, shell-safe token. The shell-safety is the whole point —
+# the `conv_` prefix never was: omnigent <=0.4.0 returned `conv_<hex>`, and
+# 0.7.0 returns the BARE `<hex>` with no type prefix (the same de-prefixing hit
+# host_/ag_ ids). Pinning the prefix therefore hard-failed every dispatch on
+# 0.7.0 with "refusing unsafe Omnigent session id". Accept both shapes, keep
+# the charset strict: [A-Za-z0-9] admits no shell metacharacter, so the
+# interpolation below stays injection-free either way.
+_SESSION_ID_RE = re.compile(r"^(?:conv_)?[A-Za-z0-9]+$")
 
 
 def omnigent_executor_enabled() -> bool:
@@ -134,7 +140,8 @@ def kick_omnigent(issue: dict) -> str:
     })
     sid = str(session["id"])
     # The sid is interpolated into a `sh -c` string below — refuse anything that
-    # is not a strict conv_<alnum> token so a hostile/malformed id can't inject.
+    # is not a strict alnum token (optionally conv_-prefixed) so a hostile or
+    # malformed id can't inject.
     if not _SESSION_ID_RE.match(sid):
         raise RuntimeError(f"refusing unsafe Omnigent session id: {sid!r}")
     _api("POST", f"/v1/sessions/{sid}/comments", {
@@ -147,7 +154,7 @@ def kick_omnigent(issue: dict) -> str:
         "Read your session comments for the implement task and do it yourself, "
         "end to end. Open ONE PR and print PR_URL=<url>, then STOP."
     )
-    # sid is validated (^conv_[A-Za-z0-9]+$); the url comes from our own env and
+    # sid is validated (^(?:conv_)?[A-Za-z0-9]+$); the url comes from our own env and
     # the kick text is JSON-quoted, so the sh -c string has no injection surface.
     server = _omnigent_url()
     subprocess.run(
