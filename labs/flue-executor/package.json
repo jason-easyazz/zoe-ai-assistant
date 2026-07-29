@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "executor": "node --experimental-strip-types src/executor.ts",
     "e2e": "node --experimental-strip-types src/e2e.ts",
+    "test:unit": "node --test src/*.test.ts",
     "live": "node --experimental-strip-types src/live-runner.ts"
   },
   "dependencies": {

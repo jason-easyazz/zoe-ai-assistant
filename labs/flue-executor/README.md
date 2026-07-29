@@ -47,10 +47,20 @@ network egress; the registered provider is a dead end by design.
 cd labs/flue-executor
 npm install
 npm run typecheck
+npm run test:unit  # pure unit tests: no DB, no network, no npm install needed
 npm run e2e        # the synthetic end-to-end proof (5 scenarios, hard asserts)
 npm run executor   # the loop itself, standalone (Ctrl-C to stop)
 npm run live       # the supervised live runner (Ctrl-C to stop)
 ```
+
+`test:unit` needs neither Postgres nor Omnigent nor `npm install` (every runtime
+import is a node builtin or local) — `node --test` type-strips the `.ts` directly.
+It covers the omnigent lane's **session-id shell guard**: the id is interpolated
+into the docker-exec `sh -c` kick, so `assertSafeSessionId` refuses anything that
+is not `^(?:conv_)?[A-Za-z0-9]+$` (both the `conv_<hex>` and the bare-hex 0.7.0
+shape). The last test is a behavioural negative control — it drives the real
+`spawnOmnigentWorker` with a hostile id over a stubbed fetch and goes red if the
+guard call is deleted from the call site, not merely if the helper is.
 
 Credentials are read at runtime from `LAB_DATABASE_URL`, or derived from
 `POSTGRES_URL` in the live service env file (`ZOE_ENV_FILE`, default

@@ -56,7 +56,9 @@ with its own README/RUNBOOK and is self-contained.
 ## Verification
 
 Repo structure validator must pass (`labs/**/*` is an approved manifest pattern in
-`.zoe/manifest.json`). Lab code is not covered by production CI by design.
+`.zoe/manifest.json`). Lab code is not covered by production CI by design — a spike
+that wants a regression net owns it locally and says so in its Child DOX Index entry
+(today: `flue-executor/` `npm run test:unit`).
 
 ## Child DOX Index
 
@@ -106,7 +108,11 @@ Repo structure validator must pass (`labs/**/*` is an approved manifest pattern 
   idles on the `~/.zoe/multica_dispatch_paused` kill switch, defaults to `dry`
   dispatch, single-lane. Shipped as the opt-in `flue-executor.service` template
   (see Forbidden). `config.ts` gained a `lab|live` mode split; lab mode is
-  unchanged and still the `npm run e2e` default.
+  unchanged and still the `npm run e2e` default. **Unit lane:** `npm run test:unit`
+  (`node --test src/*.test.ts`) needs no DB, no Omnigent and no `npm install`; it
+  pins the omnigent session-id shell guard (`assertSafeSessionId` — the third call
+  site of the docker-exec kick, agreeing with `omnigent_issue_executor.py` and
+  `cross_review.sh`) with a behavioural negative control.
 - `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
   implementation behind the `run_zoe_core` seam, per
   `docs/architecture/zoe-flue-integration.md`). Serves 21 tools (20 capability
