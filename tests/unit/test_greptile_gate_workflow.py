@@ -69,7 +69,10 @@ HARNESS = textwrap.dedent(
     let checkReads = 0;
     let conditionReads = 0;
     let getReads = 0;
-    const calls = { addLabels: 0, removeLabel: 0, comments: [], deleted: [] };
+    // `events` records ORDER, which is the whole property under test for the
+    // auto-merge race: the blocking check must be raised BEFORE the label.
+    const calls = { addLabels: 0, removeLabel: 0, comments: [], deleted: [],
+                    gateChecks: [], events: [] };
     // OPTS.staleListSha simulates the head moving between the sweep's opening
     // `pulls.list` and this PR being processed: the list is stale, `pulls.get` is current.
     const LIST_SHA = OPTS.staleListSha ? 'b'.repeat(40) : SHA;
@@ -142,6 +145,13 @@ HARNESS = textwrap.dedent(
             return (OPTS.suiteCreatedAt || [OPTS.headSeenAt || FUTURE])
               .map((created_at) => ({ created_at }));
           },
+          // The gate's OWN blocking check (greptile-complete).
+          create: async (o) => {
+            if (OPTS.gateCheckFails) throw new Error('cannot create check');
+            calls.gateChecks.push({ name: o.name, status: o.status, conclusion: o.conclusion || null });
+            calls.events.push(`check:${o.status}${o.conclusion ? '/' + o.conclusion : ''}`);
+            return { data: { id: 1 } };
+          },
           listForRef: async () => {
             if (OPTS.checksFetchFails) throw new Error('checks unavailable');
             checkReads += 1;
@@ -180,7 +190,7 @@ HARNESS = textwrap.dedent(
           }] : [])),
           createComment: async (o) => { calls.comments.push(o.body); return { data: { id: 777 } }; },
           deleteComment: async (o) => { calls.deleted.push(o.comment_id); return {}; },
-          addLabels: async () => { calls.addLabels += 1; return {}; },
+          addLabels: async () => { calls.addLabels += 1; calls.events.push('label'); return {}; },
           removeLabel: async () => { calls.removeLabel += 1; return {}; },
         },
       },
@@ -574,3 +584,65 @@ def test_summon_cap_also_applies_to_fresh_handoff(tmp_path):
     assert r["addLabels"] == 1, r["log"]              # still hands off
     assert not any(c.strip().startswith("@greptileai review") for c in r["comments"]), r["comments"]
     assert any("not asking again" in m for m in r["log"]), r["log"]
+
+
+# ── The auto-merge race (measured on #1587 and #1589) ────────────────────────
+# A required status check only BLOCKS once it has reported for the head. Greptile
+# creates `Greptile Review` only after the gate labels the PR, so between labelling
+# and that check appearing the requirement is ABSENT and an armed auto-merge merges
+# straight through. #1589 merged 12s after the label with Greptile never having
+# reviewed; #1587 merged 3s BEFORE Greptile's check even started, and Greptile then
+# concluded `failure` on code already on main. The gate therefore raises its own
+# `greptile-complete` check, in_progress, BEFORE labelling.
+
+
+def test_blocking_check_is_raised_before_the_label(tmp_path):
+    """ORDER is the property. Label-then-create leaves the same race window open."""
+    r = _run(tmp_path, _script(), reviewers=BOTH)
+    assert r["addLabels"] == 1, r["log"]
+    names = [c["name"] for c in r["gateChecks"]]
+    assert "greptile-complete" in names, r["gateChecks"]
+    ev = r["events"]
+    assert "label" in ev and "check:in_progress" in ev, ev
+    assert ev.index("check:in_progress") < ev.index("label"), (
+        f"blocking check must be raised BEFORE the label, got {ev}")
+
+
+def test_no_label_when_the_blocking_check_cannot_be_raised(tmp_path):
+    """Labelling without the blocker IS the race — so failure to raise it must hold."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, gateCheckFails=True)
+    assert r["addLabels"] == 0, r["log"]
+    assert any("could not raise" in m for m in r["log"]), r["log"]
+
+
+def test_blocking_check_resolves_success_only_when_greptile_completed(tmp_path):
+    """in_progress Greptile must NOT resolve the blocker — that is the #1589 merge."""
+    running = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+                   markerSha="a" * 40,
+                   greptileRun={"status": "in_progress", "conclusion": None})
+    done = [c for c in running["gateChecks"] if c["status"] == "completed"]
+    assert done == [], f"resolved while Greptile was still running: {done}"
+
+    passed = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+                  markerSha="a" * 40,
+                  greptileRun={"status": "completed", "conclusion": "success"})
+    assert any(c["conclusion"] == "success" for c in passed["gateChecks"]), passed["gateChecks"]
+
+
+def test_blocking_check_fails_when_greptile_failed(tmp_path):
+    """#1587's exact shape: Greptile concluded failure. The blocker must not pass."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "failure"})
+    assert any(c["conclusion"] == "failure" for c in r["gateChecks"]), r["gateChecks"]
+
+
+def test_greptile_skip_resolves_neutral_not_success(tmp_path):
+    """Greptile SKIPS PRs over ~50 files. That is 'no review happened', not a pass —
+    but it must not strand the PR either, so it resolves neutral (non-blocking) with
+    the absence stated, rather than success (which would claim a review occurred)."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "skipped"})
+    concl = [c["conclusion"] for c in r["gateChecks"] if c["status"] == "completed"]
+    assert concl == ["neutral"], concl

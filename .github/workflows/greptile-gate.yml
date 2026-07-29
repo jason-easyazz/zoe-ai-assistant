@@ -41,7 +41,9 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  checks: read
+  # WRITE, not read: the gate now publishes its own `greptile-complete` check, which
+  # is what actually blocks merge while Greptile is still reviewing (see GATE_CHECK).
+  checks: write
 
 concurrency:
   # Deliberately GLOBAL, not per-PR. This job sweeps every open PR, and on check_suite
@@ -86,6 +88,40 @@ jobs:
               try { return await fn(); }
               catch (e) { core.warning(`${label}: ${e.message}`); return null; }
             };
+
+            // ── The auto-merge race, and why this check exists ────────────────────
+            // A required status check only BLOCKS once it has reported for the head.
+            // `Greptile Review` does not exist until Greptile creates it, and Greptile
+            // only starts once this gate applies the label — so between labelling and
+            // Greptile registering there is a window where the requirement is simply
+            // absent and an armed auto-merge sails through it.
+            //
+            // Not theoretical, and not rare (measured):
+            //   #1589 merged 13:18:16, Greptile check started 13:18:16 — never reviewed.
+            //   #1587 merged 23:31:02, Greptile check started 23:31:05 — 3s AFTER the
+            //         merge, and it then concluded FAILURE on code already on main.
+            //   #1585 survived only because Greptile's check happened to already exist
+            //         (started 2m19s before the merge) — i.e. it is a race, and the
+            //         healthy cases were luck about when GitHub re-evaluated.
+            //
+            // Fix: the gate owns a check of its own. It is created `in_progress` BEFORE
+            // the label goes on, so a blocking requirement exists from the very first
+            // instant Greptile could be summoned, and it is only resolved once
+            // Greptile's own check has actually completed. Ordering is the whole point:
+            // create-then-label. Label-then-create rebuilds the same window.
+            //
+            // Requires `checks: write` (see permissions) and `greptile-complete` in the
+            // branch-protection required contexts — without the latter this check is
+            // advisory and the race stays open.
+            const GATE_CHECK = 'greptile-complete';
+            const setGateCheck = async (sha, num, { status, conclusion, title, summary }) =>
+              ok(`PR #${num} ${GATE_CHECK} ${conclusion || status}`, () =>
+                github.rest.checks.create({
+                  ...{ owner: context.repo.owner, repo: context.repo.repo },
+                  name: GATE_CHECK, head_sha: sha, status,
+                  ...(conclusion ? { conclusion } : {}),
+                  output: { title, summary },
+                }));
 
             const prs = await github.paginate(github.rest.pulls.list, {
               owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
@@ -397,6 +433,40 @@ jobs:
               const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
 
               if (alreadyHandedOff) {
+                // Resolve the blocking check from Greptile's ACTUAL result. Until this
+                // runs, greptile-complete stays in_progress and merge is blocked — which
+                // is the point: the gap that let #1587 and #1589 merge unreviewed.
+                // Read the newest Greptile run for THIS head; only a completed one
+                // resolves anything.
+                const gRuns = await ok(`PR #${pr.number} greptile state`, () =>
+                  github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
+                    .then(rs => rs.filter(c => c.name === 'Greptile Review')));
+                if (gRuns && gRuns.length) {
+                  const done = gRuns.filter(c => c.status === 'completed');
+                  if (done.length) {
+                    const newest = done.reduce((a, b) =>
+                      (Date.parse(b.completed_at || 0) >= Date.parse(a.completed_at || 0) ? b : a));
+                    // 'skipped' is Greptile declining (e.g. the >50-file limit), NOT a
+                    // pass — resolving it success would wave through the very PRs that
+                    // get no review at all. Surface it as neutral: branch protection
+                    // treats neutral as non-blocking, so the PR is not stranded, but the
+                    // check text says plainly that no review happened.
+                    const pass = newest.conclusion === 'success';
+                    const declined = ['skipped', 'cancelled', 'stale', 'neutral'].includes(newest.conclusion);
+                    await setGateCheck(sha, pr.number, {
+                      status: 'completed',
+                      conclusion: pass ? 'success' : (declined ? 'neutral' : 'failure'),
+                      title: pass ? 'Greptile reviewed this head'
+                                  : (declined ? `Greptile did not review (${newest.conclusion})`
+                                              : `Greptile concluded ${newest.conclusion}`),
+                      summary: pass
+                        ? `Greptile completed at ${newest.completed_at} on \`${sha.slice(0, 8)}\`.`
+                        : `Greptile's own check concluded \`${newest.conclusion}\` on ` +
+                          `\`${sha.slice(0, 8)}\`. Merge is not gated on this check alone — ` +
+                          `read Greptile's review before merging.`,
+                    });
+                  }
+                }
                 // Handed off, but is Greptile actually COMING? If the post-label summon
                 // failed (ok() swallows transient errors; the job can die between label
                 // and comment), the label+marker persist and no later sweep would ever
@@ -538,6 +608,22 @@ jobs:
               // Marker FIRST, then the label. If the label went on first and the comment
               // failed, the PR would sit inside Greptile's filter with no marker — and the
               // marker-less branch above would strip it again next run, flapping.
+              // BEFORE the marker and the label: raise the blocking check, so no
+              // auto-merge can slip through the window between labelling and Greptile
+              // registering its own check (see GATE_CHECK above). If this fails we do
+              // NOT label — handing off without the blocker is precisely the race.
+              const blocked = await setGateCheck(sha, pr.number, {
+                status: 'in_progress',
+                title: 'Waiting for Greptile',
+                summary: 'The cheap tier is green and this PR is being handed to Greptile. ' +
+                         'This check blocks merge until Greptile\'s own review completes.',
+              });
+              if (!blocked) {
+                core.warning(`PR #${pr.number}: could not raise ${GATE_CHECK} — not labelling ` +
+                             `(labelling without it would reopen the auto-merge race)`);
+                continue;
+              }
+
               const marker = await ok(`PR #${pr.number} marker`, () =>
                 github.rest.issues.createComment({
                   ...base, issue_number: pr.number,
