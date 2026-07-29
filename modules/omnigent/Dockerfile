@@ -52,14 +52,6 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 # Left opt-in: uncomment after granting permission, or COPY the host's proven binary in.
 # RUN curl https://cursor.com/install -fsS | bash && /root/.local/bin/cursor-agent --version
 
-# ── Locally-built dependency ─────────────────────────────────────────────────
-# omnigent <0.4.0 depended on cel-expr-python, which ships NO linux/aarch64 wheel (this
-# wheel was compiled from source for aarch64 — see wheels/ and README). As of omnigent
-# 0.4.0 the dep is EXCLUDED on aarch64 upstream, so the wheel is no longer required; the
-# COPY + UV_FIND_LINKS stay as a harmless belt-and-braces for any transitive resolver hit.
-COPY wheels/ /opt/wheels/
-ENV UV_FIND_LINKS=/opt/wheels
-
 # ── uv + Omnigent ────────────────────────────────────────────────────────────
 # uv installed via pip (avoids piping the astral bootstrap script).
 # pyyaml is for the entrypoint's idempotent ~/.omnigent/config.yaml seed (the
@@ -67,9 +59,34 @@ ENV UV_FIND_LINKS=/opt/wheels
 # entrypoint runs has no yaml otherwise.
 # omnigent is PINNED (bump deliberately): an unpinned install is Docker-layer-cached, so
 # upgrades silently DON'T happen on rebuild — and unpinned surprise upgrades bit us before
-# (the 0.3.0 jump arrived as a side effect of a pi rebuild). 0.4.0 verified on this stack
-# 2026-07-05: providers-mapping format, RUNNER_ENV_PASSTHROUGH, header auth, and the
-# entrypoint workspace-patch marker all unchanged.
+# (the 0.3.0 jump arrived as a side effect of a pi rebuild).
+#
+# RELEASE AGE — OPERATOR ACCEPTANCE ON RECORD (AGENTS.md "avoid dependencies younger than
+# ~14 days unless the user explicitly accepts the risk"). 0.7.0 was published 2026-07-27 and
+# pinned here 2026-07-29, i.e. 2 days old. The operator asked for "the latest version"
+# explicitly, was told the release was 2 days old before the build, and reaffirmed by
+# directing the PR to merge. Accepted deliberately, not by omission. The rule's target is
+# adopting brand-NEW packages; omnigent is a long-standing pinned dependency being moved
+# forward, and the jump was de-risked by diffing every coupled surface (below) before
+# building. Rollback is one line: set this pin back to 0.4.0 and rebuild.
+#
+# 0.7.0 verified on this stack 2026-07-29 (0.4.0 -> 0.7.0, a 3-release jump). Every surface
+# this module actually couples to was diffed against the 0.4.0 wheel first:
+#   * onboarding/provider_config.py is BYTE-IDENTICAL, so entrypoint.sh's OpenRouter
+#     `kind: gateway` seed (providers mapping, wire_api, api_key_ref) still parses.
+#   * host/connect.py still exports OMNIGENT_RUNNER_ENV_PASSTHROUGH, and still carries the
+#     `workspace = Path(frame.workspace).expanduser()` marker the entrypoint patches.
+#   * server/auth.py keeps OMNIGENT_AUTH_PROVIDER=header + OMNIGENT_LOCAL_SINGLE_USER ->
+#     reserved "local" user; ws_origin.py keeps OMNIGENT_WS_ALLOWED_ORIGINS.
+#   * the `server` and `host` CLI commands, host.pid/daemons/auth_tokens.json all unchanged.
+# The one BEHAVIOUR change: ANTHROPIC_MODEL joined omnigent's own default runner-credential
+# forward set, so our compose passthrough of it is now redundant (kept — see compose).
+#
+# aarch64 note: the cel-expr-python problem is GONE, not worked around. 0.7.0 replaced it
+# with `cel-python` (a pure-Python `celpy`, py3-none-any), so there is no platform wheel to
+# vendor any more — the old COPY wheels/ + UV_FIND_LINKS scaffolding was removed with this
+# bump. The other new required deps (protobuf 6.x, zstandard, python-dateutil) all publish
+# cp312 manylinux aarch64 wheels.
 # The chown runs in THIS SAME RUN, not a later one. A separate `RUN chown -R /root`
 # layer would re-record every changed file — /root is ~1.3 GB image-side, so that is
 # ~1.3 GB of pure duplication in the image. Chowning before the layer is committed
@@ -80,7 +97,7 @@ ENV UV_FIND_LINKS=/opt/wheels
 # the entrypoint's ~/.omnigent config seed all target it), so /root must be owned by
 # the runtime user or omnigent cannot write its own state.
 RUN pip install --no-cache-dir uv pyyaml \
-    && uv tool install --force -q --python 3.12 omnigent==0.4.0
+    && uv tool install --force -q --python 3.12 omnigent==0.7.0
 # A numeric `user:` has no /etc/passwd entry, and several tools (git, uv, shells)
 # fall back to "?" or fail outright when getpwuid() misses. Give uid 1000 a real
 # entry whose home is /root so ~ expands correctly inside the container.

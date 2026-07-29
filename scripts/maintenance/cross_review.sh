@@ -14,7 +14,11 @@
 set -euo pipefail
 
 SERVER="${OMNIGENT_SERVER:-http://127.0.0.1:6767}"
-POLLY_ID="${OMNIGENT_POLLY_ID:-ag_057995d1517418e6839f51d340785dd6}"
+# polly's id in the BARE hex form 0.7.0 returns (`GET /v1/agents`); <=0.4.0
+# emitted `ag_<hex>`. The prefixed form still resolves, but only via omnigent's
+# `_LEGACY_ID_PREFIXES` back-compat strip, which is type-blind (`host_<agent-hex>`
+# binds too) — it validates nothing. See omnigent_issue_executor._omnigent_agent_id.
+POLLY_ID="${OMNIGENT_POLLY_ID:-057995d1517418e6839f51d340785dd6}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
 TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-2400}"
 case "$TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be a positive integer (seconds), got: $TIMEOUT_S" >&2; exit 1;; esac
@@ -39,11 +43,26 @@ SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -
   | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])") \
   || { echo "ALARM: session create failed against $SERVER" >&2; exit 2; }
 # The ID is interpolated into an sh -c below — reject anything that isn't a
-# plain conv_ token (same rule as omnigent_issue_executor; Codex, #1578).
-case "$SID" in
-  (conv_*) [[ "$SID" =~ ^conv_[A-Za-z0-9]+$ ]] || { echo "ALARM: malformed session id: $SID" >&2; exit 2; } ;;
-  (*) echo "ALARM: malformed session id: $SID" >&2; exit 2 ;;
-esac
+# plain alnum token, optionally conv_-prefixed (same rule as
+# omnigent_issue_executor; Codex, #1578).
+#
+# The PREFIX is not the security property and must not be required: omnigent
+# <=0.4.0 returned `conv_<hex>`, 0.7.0 returns the BARE `<hex>` (it dropped the
+# type prefix from conv_/ag_/host_ ids alike). Demanding `conv_*` made every
+# cross-review abort with "malformed session id" on 0.7.0. The strict charset
+# is what keeps the interpolation injection-free, and it is unchanged.
+#
+# The {16,} LENGTH FLOOR is a second, independent property (Codex P1 on #1589),
+# and it is NOT cosmetic: stop_worker() below signals every container process
+# whose /proc/<pid>/cmdline CONTAINS this id — a SUBSTRING scan. A degenerate
+# short id would therefore match almost everything. Measured in the live
+# container: a one-character id "e" matches 5 processes (the omnigent SERVER
+# among them) against 2 for a real 32-hex id, so a malformed short id turns
+# cleanup into a container-wide kill. The old conv_ requirement blocked that
+# only by accident. Real ids are 32 hex; 16 is a deliberately loose floor that
+# still kills the degenerate case without re-pinning an upstream id length we
+# do not control.
+[[ "$SID" =~ ^(conv_)?[A-Za-z0-9]{16,}$ ]] || { echo "ALARM: malformed session id: $SID" >&2; exit 2; }
 echo "session: $SID" >&2
 
 # Brief goes INLINE via -p. Do not stage it as a session comment: comment

@@ -47,8 +47,19 @@ def _omnigent_url() -> str:
     return os.environ.get("ZOE_OMNIGENT_URL", "http://127.0.0.1:6767")
 
 
+# polly's id in the BARE 32-char hex form 0.7.0 actually returns. Omnigent
+# <=0.4.0 emitted `ag_<hex>`; 0.7.0 dropped the type prefix from agent, session
+# and host ids alike (`GET /v1/agents` now returns this exact string).
+#
+# `ag_<hex>` still RESOLVES on input, but only through `uuid_to_bytes`'s
+# `_LEGACY_ID_PREFIXES` strip (omnigent/db/db_models.py) — a back-compat shim
+# for "old bookmarked URLs, pasted ids, and pre-migration clients", and one
+# that is TYPE-BLIND: it strips any known prefix from any id type, so
+# `host_<agent-hex>` binds this agent too (verified live against 0.7.0). The
+# prefix therefore validates nothing and rides a deprecation path. Track what
+# the server returns.
 def _omnigent_agent_id() -> str:
-    return os.environ.get("ZOE_OMNIGENT_AGENT_ID", "ag_057995d1517418e6839f51d340785dd6")
+    return os.environ.get("ZOE_OMNIGENT_AGENT_ID", "057995d1517418e6839f51d340785dd6")
 
 
 def _omnigent_container() -> str:
@@ -61,8 +72,33 @@ def _omnigent_container() -> str:
 # reasoning pi_executor's _PR_URL_RE documents.
 _PR_URL_RE = re.compile(r"PR_URL=\s*(https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+))")
 # A session id is used inside a `sh -c` string for the docker-exec kick, so it
-# must be a strict, shell-safe token (Omnigent ids are `conv_<hex>`).
-_SESSION_ID_RE = re.compile(r"^conv_[A-Za-z0-9]+$")
+# must be a strict, shell-safe token. The shell-safety is the whole point —
+# the `conv_` prefix never was: omnigent <=0.4.0 returned `conv_<hex>`, and
+# 0.7.0 returns the BARE `<hex>` with no type prefix (the same de-prefixing hit
+# host_/ag_ ids). Pinning the prefix therefore hard-failed every dispatch on
+# 0.7.0 with "refusing unsafe Omnigent session id". Accept both shapes, keep
+# the charset strict: [A-Za-z0-9] admits no shell metacharacter, so the
+# interpolation below stays injection-free either way.
+#
+# ANCHOR WITH \Z, NOT $: Python's `$` also matches just BEFORE a final newline,
+# so `$` would accept "abc\n". A newline is a shell command SEPARATOR and the
+# sid is interpolated into the docker-exec `sh -c` string, where it splits the
+# command mid-token ("... > /tmp/omni-impl-abc\n.log 2>&1" leaves `.log` as a
+# stray second command). This hole is PRE-EXISTING — the old conv_-only regex
+# matched "conv_abc\n" too — so \Z closes it rather than merely preserving it.
+# (The bash side in cross_review.sh is unaffected: [[ =~ ]] rejects a trailing
+# newline already.)
+#
+# The {16,} LENGTH FLOOR mirrors cross_review.sh (Codex P1 on #1589). There the
+# floor is load-bearing — its stop_worker() kills by SUBSTRING match on
+# /proc/<pid>/cmdline, so a degenerate short id sweeps the whole container
+# (measured: "e" matches 5 processes incl. the omnigent server, vs 2 for a real
+# id). Here the sid only reaches a `-r` argument and a log path, so the floor is
+# defence in depth rather than a fix — but these two validators are documented
+# as ONE rule, and letting them drift is how the conv_ assumption survived in
+# two places to begin with. Real ids are 32 hex; 16 is a loose floor that does
+# not re-pin an upstream length we do not control.
+_SESSION_ID_RE = re.compile(r"^(?:conv_)?[A-Za-z0-9]{16,}\Z")
 
 
 def omnigent_executor_enabled() -> bool:
@@ -134,7 +170,8 @@ def kick_omnigent(issue: dict) -> str:
     })
     sid = str(session["id"])
     # The sid is interpolated into a `sh -c` string below — refuse anything that
-    # is not a strict conv_<alnum> token so a hostile/malformed id can't inject.
+    # is not a strict alnum token (optionally conv_-prefixed) so a hostile or
+    # malformed id can't inject.
     if not _SESSION_ID_RE.match(sid):
         raise RuntimeError(f"refusing unsafe Omnigent session id: {sid!r}")
     _api("POST", f"/v1/sessions/{sid}/comments", {
@@ -147,7 +184,7 @@ def kick_omnigent(issue: dict) -> str:
         "Read your session comments for the implement task and do it yourself, "
         "end to end. Open ONE PR and print PR_URL=<url>, then STOP."
     )
-    # sid is validated (^conv_[A-Za-z0-9]+$); the url comes from our own env and
+    # sid is validated (^(?:conv_)?[A-Za-z0-9]+$); the url comes from our own env and
     # the kick text is JSON-quoted, so the sh -c string has no injection surface.
     server = _omnigent_url()
     subprocess.run(

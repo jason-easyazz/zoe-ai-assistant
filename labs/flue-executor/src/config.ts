@@ -103,7 +103,12 @@ function commonOmnigent(): Pick<
 > {
   return {
     omnigentBaseUrl: process.env.LAB_OMNIGENT_URL ?? 'http://127.0.0.1:6767',
-    omnigentAgentId: process.env.LAB_OMNIGENT_AGENT_ID ?? 'ag_057995d1517418e6839f51d340785dd6',
+    // polly's id in the BARE hex form 0.7.0 returns (`GET /v1/agents`); <=0.4.0
+    // emitted `ag_<hex>`. The prefixed form still resolves, but only via
+    // omnigent's `_LEGACY_ID_PREFIXES` back-compat strip, which is type-blind
+    // (`host_<agent-hex>` binds too) — it validates nothing. See
+    // omnigent_issue_executor._omnigent_agent_id.
+    omnigentAgentId: process.env.LAB_OMNIGENT_AGENT_ID ?? '057995d1517418e6839f51d340785dd6',
     omnigentContainer: process.env.LAB_OMNIGENT_CONTAINER ?? 'zoe-omnigent',
     // 1h: a real implement phase (edit + test + commit + push + PR) routinely
     // outlives the lab's old 10-min connectivity-proof budget — the first live

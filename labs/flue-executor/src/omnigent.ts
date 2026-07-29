@@ -75,6 +75,52 @@ export async function omnigentHealthy(cfg: ExecutorConfig): Promise<boolean> {
   }
 }
 
+/**
+ * A session id is interpolated into the docker-exec `sh -c` kick string (and
+ * into that run's log path, read back by {@link kickLogTail}), so it must be a
+ * strict shell-safe token BEFORE it goes anywhere near a shell. This is the
+ * third call site of the same kick recipe; the other two already guard it and
+ * this one must agree with them:
+ *   - `services/zoe-data/omnigent_issue_executor.py` (`_SESSION_ID_RE`)
+ *   - `scripts/maintenance/cross_review.sh`
+ *
+ * BOTH id shapes are legitimate: omnigent <=0.4.0 returned `conv_<hex>`, 0.7.0
+ * returns the BARE `<hex>` (upstream dropped the `conv_`/`ag_`/`host_` type
+ * prefixes), so pinning the prefix would refuse every real 0.7.0 id. The
+ * charset is the actual safety property: `[A-Za-z0-9]` admits no shell
+ * metacharacter, prefixed or not.
+ *
+ * Anchoring: JavaScript's `$` (no `m` flag) matches ONLY at the very end of the
+ * string — it has no Python trailing-newline quirk, which is why the Python
+ * side needs `\Z` and this does not. A newline would be a shell command
+ * SEPARATOR here, so `omnigent.test.ts` pins that rejection with an explicit
+ * case rather than trusting the anchor to stay correct.
+ *
+ * The `{16,}` LENGTH FLOOR keeps this in lockstep with the other two sites,
+ * which is the whole point of documenting them as one rule. It is load-bearing
+ * in `cross_review.sh`, whose cleanup kills by SUBSTRING match on
+ * /proc/<pid>/cmdline — a degenerate short id there sweeps unrelated processes
+ * (measured: "e" matches 5 in the live container, the omnigent SERVER among
+ * them, vs 2 for a real id). Here the id only reaches a `-r` argument and the
+ * `/tmp/flue-exec-kick-<id>.log` path, so the floor is defence in depth — but a
+ * validator that silently accepts what its siblings reject is how the `conv_`
+ * assumption survived in three places to begin with. Real ids are 32 hex; 16 is
+ * a loose floor that does not re-pin an upstream length we do not control.
+ */
+export const SESSION_ID_RE = /^(?:conv_)?[A-Za-z0-9]{16,}$/;
+
+/** Validated session id, or throw. Callers run inside the staging try/catch, so
+ * a refusal becomes a reason-carrying `failed` transition, never a crash. */
+export function assertSafeSessionId(value: unknown): string {
+  if (typeof value !== 'string' || !SESSION_ID_RE.test(value)) {
+    throw new Error(
+      `refusing unsafe omnigent session id: ${JSON.stringify(value)} ` +
+        '(must be an alphanumeric token, optionally conv_-prefixed)',
+    );
+  }
+  return value;
+}
+
 /** The token the brief asks the agent to output; found in items = task done. */
 export function doneToken(nonce: string): string {
   return `FLUE-EXEC-DONE-${nonce}`;
@@ -168,7 +214,10 @@ export async function spawnOmnigentWorker(
       agent_id: cfg.omnigentAgentId,
       title: `flue-executor ${phase} task ${task.id}`,
     });
-    sessionId = session.id;
+    // Guard at the point of assignment, not just before the kick: every later
+    // use (the API paths below, the docker-exec kick, its log path) then works
+    // from an id already proven shell- and path-safe. See SESSION_ID_RE.
+    sessionId = assertSafeSessionId(session.id);
 
     // Durable ownership BEFORE anything can start running: if the executor
     // dies after the kick but before the running transition commits, the

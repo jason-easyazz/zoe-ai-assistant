@@ -4,33 +4,53 @@ Meta-harness that orchestrates the agent CLIs (Claude Code, Codex, Cursor, Pi) f
 control plane with a web/mobile UI. Intended to run as a Zoe module behind `zoe-cloudflared`,
 mirroring the `agent-zero` module pattern.
 
-## Build/run status (verified 2026-06-17 on this aarch64/Tegra host)
+## Build/run status (verified 2026-07-29 on this aarch64/Tegra host)
 
 | Component        | arm64 status | Notes |
 |------------------|--------------|-------|
-| `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code` 2.1.179, npm install clean |
-| `codex` CLI      | ✅ works      | `@openai/codex` codex-cli 0.140.0, npm install clean |
-| `cursor-agent`   | ✅ works      | already installed on host (`~/.local/bin`) |
-| **omnigent core**| ✅ works      | installs via a locally-built aarch64 wheel — see below |
+| `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code`, npm install clean (unpinned — latest at build) |
+| `codex` CLI      | ✅ works      | `@openai/codex`, npm install clean (unpinned — latest at build) |
+| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@^0.79.3`, `--ignore-scripts` |
+| `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`) |
+| **omnigent core**| ✅ works      | `omnigent==0.7.0`, plain PyPI install — no vendored wheel needed |
 
-### The blocker (resolved)
-`omnigent` depends on `cel-expr-python` (a wrapper around the CEL C++ engine, used by the
-policy system). Upstream publishes **no `linux aarch64` wheel and no sdist** — and the root
-cause is in their own `release/build_wheel.sh`, which hardcodes `bazelisk-linux-amd64`.
+### The aarch64 blocker (gone upstream — no longer worked around)
+Historically `omnigent` depended on `cel-expr-python` (a wrapper around the CEL **C++** engine,
+used by the policy system), and upstream published **no `linux aarch64` wheel and no sdist** —
+the root cause being their own `release/build_wheel.sh`, which hardcodes `bazelisk-linux-amd64`.
+We carried a locally-compiled aarch64 wheel in `wheels/` plus `UV_FIND_LINKS` to work around it.
 
-**Fix:** we compiled the wheel from source for aarch64 (cel-cpp 0.15 + Abseil + Protobuf 33 +
-antlr4 via Bazel), swapping in arm64 bazelisk. The result is vendored at
-`wheels/cel_expr_python-0.1.2-cp312-cp312-linux_aarch64.whl`; the Dockerfile points `uv` at it
-via `UV_FIND_LINKS`. Verified: `omnigent 0.1.1` runs in the built image on this Tegra host.
+That is all **retired as of the 0.7.0 bump**. Upstream replaced the dependency with
+[`cel-python`](https://pypi.org/project/cel-python/) — a **pure-Python** CEL implementation
+(`celpy`, shipped `py3-none-any`) — so there is no platform binary to build and nothing to
+vendor. The `wheels/` directory, the `COPY wheels/`, and `UV_FIND_LINKS` were removed rather
+than kept as dead scaffolding. Do not resurrect them; if a future omnigent reintroduces a
+C-extension CEL dep, git history has the build recipe.
 
-To rebuild the wheel (e.g. on a version bump): clone `github.com/cel-expr/cel-python`, install
-`bazelisk-linux-arm64` as `bazel`, copy `release/*` to the repo root, set the version in
-`pyproject.toml`, then `pip wheel . --no-build-isolation`. Cap memory if building on the live
-box (we used a 4 GB / `--jobs=1` container so it couldn't starve the running stack). Worth
-upstreaming as an aarch64 CI target.
+The other deps 0.7.0 added (`protobuf` 6.x, `zstandard`, `python-dateutil`) all publish cp312
+manylinux aarch64 wheels, so the image builds from PyPI alone.
 
-The `Dockerfile` here is otherwise correct and builds fine up to the omnigent install step; it
-would succeed on an x86_64 host (or once the aarch64 wheel lands).
+### Upgrading the pin
+`omnigent==<version>` in the `Dockerfile` is pinned **deliberately** — an unpinned install is
+Docker-layer-cached, so upgrades silently don't happen on rebuild, and an unpinned surprise
+upgrade has bitten this module before. Before bumping, diff the new wheel against the current
+one on the surfaces this module actually couples to (all verified unchanged for 0.4.0 → 0.7.0):
+
+- `onboarding/provider_config.py` — `entrypoint.sh` seeds an OpenRouter `kind: gateway` entry
+  into the `providers:` **mapping**; a format change here silently breaks the `pi` worker.
+- `host/connect.py` — must still export `OMNIGENT_RUNNER_ENV_PASSTHROUGH`, and must still
+  contain the `workspace = Path(frame.workspace).expanduser()` line the entrypoint patches
+  (the patch degrades to a no-op if the marker moves, so sessions would silently default to
+  `$HOME` instead of `/workspace`).
+- `server/auth.py` / `server/ws_origin.py` — `OMNIGENT_AUTH_PROVIDER=header`,
+  `OMNIGENT_LOCAL_SINGLE_USER`, `OMNIGENT_WS_ALLOWED_ORIGINS`.
+- the `omnigent server` / `omnigent host` CLI commands and the
+  `host.pid` / `daemons/*.json` / `auth_tokens.json` state files the entrypoint manages.
+
+**RAM gate:** check available memory before building. An image build alongside the ~6 GB
+`llama-server` can OOM the live brain (`docs/knowledge/memory-pressure-profile.md`); the
+cgroup guards do not cover CUDA/NvMap. Build in a quiet window, or stop the brain first and
+restore it after.
 
 ## Container user — runs as uid 1000 (zoe), not root
 

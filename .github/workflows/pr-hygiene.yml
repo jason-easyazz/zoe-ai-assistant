@@ -43,7 +43,6 @@ jobs:
               /^docs\/knowledge\/flag-inventory\.(md|json)$/,
               /^services\/zoe-ui\/dist\/lib\//,
               /package-lock\.json$/,
-              /^modules\/omnigent\/wheels\//,
             ];
             const OVERRIDE = 'oversized-ok';
             const WARN  = { files: 10, lines: 400 };   // research ceiling — detection falls past here
