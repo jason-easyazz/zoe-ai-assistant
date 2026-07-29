@@ -10,7 +10,7 @@ mirroring the `agent-zero` module pattern.
 |------------------|--------------|-------|
 | `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code@2.1.220` (**pinned** — see below; min `2.1.161`) |
 | `codex` CLI      | ✅ works      | `@openai/codex@0.146.0` (**pinned**; min `0.137.0`) |
-| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@^0.82.1`, `--ignore-scripts` (min `0.79.0`; kept in lockstep with `services/zoe-core/package.json`) |
+| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@^0.82.1`, `--ignore-scripts` (min `0.79.0`; kept in lockstep with `services/zoe-core/package.json`). **Caret range, not exact** — see the pin note below |
 | `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`). **omnigent 0.7.0 enforces a minimum** (`_CURSOR_MIN_VERSION`, currently `2026.06.02`) — an older binary reports `version-too-low`, not `false`. Host updated to `2026.07.23` on 2026-07-29. |
 | **omnigent core**| ✅ works      | `omnigent==0.7.0`, plain PyPI install — no vendored wheel needed |
 
@@ -59,6 +59,28 @@ import json,sys; h=json.load(sys.stdin)['hosts'][0]['configured_harnesses']
 print('usable:', sorted(k for k,v in h.items() if v is True))
 print('broken:', {k:v for k,v in h.items() if not isinstance(v,bool)})"
 ```
+
+### Harness CLI pins — what is and is not guaranteed
+
+`claude` and `codex` are **exact** pins; `pi` is a **caret range** (`^0.82.1`) in both
+`modules/omnigent/Dockerfile` and `services/zoe-core/package.json`, and there is no
+committed lockfile for zoe-core — so independent installs may resolve different
+`0.82.x` releases over time. "Pinned" therefore means *deliberate* for pi, not
+*byte-reproducible*. The range is kept because the two consumers must move together
+and a caret makes that one edit instead of two.
+
+Exact pins buy determinism at the cost of **intentional staleness**: `claude` and
+`codex` now freeze until someone bumps them. Review them alongside each omnigent
+upgrade — that is already the moment their MINIMUMS can move
+(`onboarding/harness_install.py`), so it is the natural cadence. `npm view <pkg>
+version` against the table above is the whole check.
+
+Bumping `pi` across a `0.x` MINOR (as 0.79 -> 0.82 was) is not safe by inspection:
+zoe-core's `extensions/{abilities,memory,provider-local-gemma,soul}.ts` import
+`ExtensionAPI` from it. Diff that type before bumping. For 0.79.3 -> 0.82.1 it was
+verified **purely additive** — 6 lines added, 0 removed (three new `on()` overloads,
+`registerEntryRenderer`, `registerProvider`) — and those four files import nothing
+else from pi.
 
 **RAM gate:** check available memory before building. An image build alongside the ~6 GB
 `llama-server` can OOM the live brain (`docs/knowledge/memory-pressure-profile.md`); the
