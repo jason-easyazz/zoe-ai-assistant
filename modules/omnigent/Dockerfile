@@ -61,6 +61,15 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 # upgrades silently DON'T happen on rebuild — and unpinned surprise upgrades bit us before
 # (the 0.3.0 jump arrived as a side effect of a pi rebuild).
 #
+# RELEASE AGE — OPERATOR ACCEPTANCE ON RECORD (AGENTS.md "avoid dependencies younger than
+# ~14 days unless the user explicitly accepts the risk"). 0.7.0 was published 2026-07-27 and
+# pinned here 2026-07-29, i.e. 2 days old. The operator asked for "the latest version"
+# explicitly, was told the release was 2 days old before the build, and reaffirmed by
+# directing the PR to merge. Accepted deliberately, not by omission. The rule's target is
+# adopting brand-NEW packages; omnigent is a long-standing pinned dependency being moved
+# forward, and the jump was de-risked by diffing every coupled surface (below) before
+# building. Rollback is one line: set this pin back to 0.4.0 and rebuild.
+#
 # 0.7.0 verified on this stack 2026-07-29 (0.4.0 -> 0.7.0, a 3-release jump). Every surface
 # this module actually couples to was diffed against the 0.4.0 wheel first:
 #   * onboarding/provider_config.py is BYTE-IDENTICAL, so entrypoint.sh's OpenRouter

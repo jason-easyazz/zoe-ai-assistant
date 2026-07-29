@@ -25,7 +25,7 @@ def test_session_id_validation_rejects_shell_metachars():
     # 0.7.0 returns the bare `<hex>` (upstream dropped the conv_/ag_/host_ type
     # prefixes). Requiring the prefix hard-failed every dispatch on 0.7.0, so
     # the prefix is optional — shell-safety is the property under test.
-    assert oie._SESSION_ID_RE.match("conv_abc123") is not None
+    assert oie._SESSION_ID_RE.match("conv_dc2e28f9de3e4074ab7a2cb6279f5d47") is not None
     assert oie._SESSION_ID_RE.match("dc2e28f9de3e4074ab7a2cb6279f5d47") is not None
     # Anything carrying a shell metacharacter is still refused, prefixed or not
     # — the sid is interpolated into the docker-exec `sh -c` string.
@@ -33,6 +33,12 @@ def test_session_id_validation_rejects_shell_metachars():
         "conv_a;rm -rf", "conv_$(x)", "conv_`x`", "conv_a b",
         "a;rm -rf", "$(x)", "`x`", "a b", "a|b", "a&b", "a>b", "../etc",
         "conv_", "",
+        # DEGENERATE SHORT IDS — the {16,} floor. cross_review.sh's stop_worker
+        # kills by SUBSTRING match on /proc/<pid>/cmdline, so a short id sweeps
+        # unrelated processes ("e" matched 5 in the live container, including
+        # the omnigent server, vs 2 for a real id). Drop the floor to + and
+        # every case below goes green — i.e. these are the floor's controls.
+        "e", "ab", "abc123", "conv_abc123", "0123456789abcde",
         # TRAILING NEWLINE — the regex must be \Z-anchored, not $-anchored:
         # Python's `$` matches before a final newline, so `$` accepts these.
         # A newline is a shell command separator and the sid is interpolated

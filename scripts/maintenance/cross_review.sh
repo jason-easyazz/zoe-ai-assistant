@@ -51,7 +51,18 @@ SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -
 # type prefix from conv_/ag_/host_ ids alike). Demanding `conv_*` made every
 # cross-review abort with "malformed session id" on 0.7.0. The strict charset
 # is what keeps the interpolation injection-free, and it is unchanged.
-[[ "$SID" =~ ^(conv_)?[A-Za-z0-9]+$ ]] || { echo "ALARM: malformed session id: $SID" >&2; exit 2; }
+#
+# The {16,} LENGTH FLOOR is a second, independent property (Codex P1 on #1589),
+# and it is NOT cosmetic: stop_worker() below signals every container process
+# whose /proc/<pid>/cmdline CONTAINS this id — a SUBSTRING scan. A degenerate
+# short id would therefore match almost everything. Measured in the live
+# container: a one-character id "e" matches 5 processes (the omnigent SERVER
+# among them) against 2 for a real 32-hex id, so a malformed short id turns
+# cleanup into a container-wide kill. The old conv_ requirement blocked that
+# only by accident. Real ids are 32 hex; 16 is a deliberately loose floor that
+# still kills the degenerate case without re-pinning an upstream id length we
+# do not control.
+[[ "$SID" =~ ^(conv_)?[A-Za-z0-9]{16,}$ ]] || { echo "ALARM: malformed session id: $SID" >&2; exit 2; }
 echo "session: $SID" >&2
 
 # Brief goes INLINE via -p. Do not stage it as a session comment: comment

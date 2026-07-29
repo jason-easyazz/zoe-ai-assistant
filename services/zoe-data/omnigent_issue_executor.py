@@ -88,7 +88,17 @@ _PR_URL_RE = re.compile(r"PR_URL=\s*(https://github\.com/[^/\s]+/[^/\s]+/pull/(\
 # matched "conv_abc\n" too — so \Z closes it rather than merely preserving it.
 # (The bash side in cross_review.sh is unaffected: [[ =~ ]] rejects a trailing
 # newline already.)
-_SESSION_ID_RE = re.compile(r"^(?:conv_)?[A-Za-z0-9]+\Z")
+#
+# The {16,} LENGTH FLOOR mirrors cross_review.sh (Codex P1 on #1589). There the
+# floor is load-bearing — its stop_worker() kills by SUBSTRING match on
+# /proc/<pid>/cmdline, so a degenerate short id sweeps the whole container
+# (measured: "e" matches 5 processes incl. the omnigent server, vs 2 for a real
+# id). Here the sid only reaches a `-r` argument and a log path, so the floor is
+# defence in depth rather than a fix — but these two validators are documented
+# as ONE rule, and letting them drift is how the conv_ assumption survived in
+# two places to begin with. Real ids are 32 hex; 16 is a loose floor that does
+# not re-pin an upstream length we do not control.
+_SESSION_ID_RE = re.compile(r"^(?:conv_)?[A-Za-z0-9]{16,}\Z")
 
 
 def omnigent_executor_enabled() -> bool:
