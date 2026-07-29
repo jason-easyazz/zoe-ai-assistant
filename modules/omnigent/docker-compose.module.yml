@@ -104,6 +104,11 @@ services:
       # runner (pi/codex too). Harmless today — pi (OpenRouter/minimax) and codex (OpenAI) ignore
       # it — but a future Anthropic-backed worker added without an explicit per-dispatch model
       # would silently inherit claude-fable-5. Re-check this line when adding workers.
+      # As of omnigent 0.7.0 the ANTHROPIC_MODEL half is REDUNDANT: upstream added it to
+      # _BASE_HARNESS_CREDENTIAL_ENV_VARS (host/connect.py), so the runner now receives it
+      # by default. Kept deliberately — it is a no-op when upstream forwards it anyway, and
+      # it keeps the model pin working if upstream ever drops it again. OPENROUTER_API_KEY
+      # is still NOT in that set, so it remains load-bearing.
       - OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY,ANTHROPIC_MODEL
       # Default the claude_code worker to Fable 5 while discounted access lasts (operator choice
       # 2026-06-29; Fable = the tier ABOVE Opus at ~2x its price, so REVERT when the cheap window
