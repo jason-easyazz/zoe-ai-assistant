@@ -8,10 +8,10 @@ mirroring the `agent-zero` module pattern.
 
 | Component        | arm64 status | Notes |
 |------------------|--------------|-------|
-| `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code`, npm install clean (unpinned — latest at build) |
-| `codex` CLI      | ✅ works      | `@openai/codex`, npm install clean (unpinned — latest at build) |
-| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@^0.79.3`, `--ignore-scripts` |
-| `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`) |
+| `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code@2.1.220` (**pinned** — see below; min `2.1.161`) |
+| `codex` CLI      | ✅ works      | `@openai/codex@0.146.0` (**pinned**; min `0.137.0`) |
+| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@^0.82.1`, `--ignore-scripts` (min `0.79.0`; kept in lockstep with `services/zoe-core/package.json`) |
+| `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`). **omnigent 0.7.0 enforces a minimum** (`_CURSOR_MIN_VERSION`, currently `2026.06.02`) — an older binary reports `version-too-low`, not `false`. Host updated to `2026.07.23` on 2026-07-29. |
 | **omnigent core**| ✅ works      | `omnigent==0.7.0`, plain PyPI install — no vendored wheel needed |
 
 ### The aarch64 blocker (gone upstream — no longer worked around)
@@ -46,6 +46,19 @@ one on the surfaces this module actually couples to (all verified unchanged for 
   `OMNIGENT_LOCAL_SINGLE_USER`, `OMNIGENT_WS_ALLOWED_ORIGINS`.
 - the `omnigent server` / `omnigent host` CLI commands and the
   `host.pid` / `daemons/*.json` / `auth_tokens.json` state files the entrypoint manages.
+
+**Reading `configured_harnesses` — 0.7.0 changed its TYPE.** `GET /v1/hosts` returned
+plain booleans up to 0.4.0; 0.7.0 returns `bool | str`, where the strings are failure
+reasons (`"binary-missing"`, `"version-too-low"`, `"needs-auth"`). A truthiness test
+therefore counts BROKEN harnesses as available — it reported "20 -> 23, none lost" on the
+0.7.0 bump when the truth was **20 -> 18 with Cursor lost**. Always compare with `is True`:
+
+```bash
+curl -s http://127.0.0.1:6767/v1/hosts | python3 -c "
+import json,sys; h=json.load(sys.stdin)['hosts'][0]['configured_harnesses']
+print('usable:', sorted(k for k,v in h.items() if v is True))
+print('broken:', {k:v for k,v in h.items() if not isinstance(v,bool)})"
+```
 
 **RAM gate:** check available memory before building. An image build alongside the ~6 GB
 `llama-server` can OOM the live brain (`docs/knowledge/memory-pressure-profile.md`); the
@@ -197,7 +210,7 @@ installed in the image; a worker is "available" only if its binary is on PATH (`
 in `GET /v1/hosts → configured_harnesses`).
 
 `pi` here is a **separate, vanilla install** of the same upstream agent as `services/zoe-core`'s
-brain — pinned to `^0.79.3` to match core, but with **no** Zoe extensions / Gemma provider / soul.
+brain — pinned to `^0.82.1` to match core, but with **no** Zoe extensions / Gemma provider / soul.
 It does not share state or creds with core's Pi.
 
 `pi` is wired to **OpenRouter** (default model `minimax/minimax-m3` — tool-calling + 1M context,
