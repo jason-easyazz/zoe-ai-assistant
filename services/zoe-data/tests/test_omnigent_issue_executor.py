@@ -46,9 +46,26 @@ def test_session_id_validation_rejects_shell_metachars():
         assert oie._SESSION_ID_RE.match(value) is None, value
 
 
+def test_default_agent_id_is_bare_hex_not_type_prefixed(monkeypatch):
+    """The default must be the BARE id 0.7.0 returns, not the legacy `ag_` form.
+
+    0.7.0 dropped the type prefix from agent/session/host ids. `ag_<hex>` still
+    resolves on input, but only through omnigent's `_LEGACY_ID_PREFIXES` strip —
+    a back-compat shim for pre-migration clients, and one that is type-blind
+    (`host_<agent-hex>` binds the same agent). Shipping the prefixed form as our
+    default depends on that deprecation path, so pin the bare shape.
+    """
+    monkeypatch.delenv("ZOE_OMNIGENT_AGENT_ID", raising=False)
+    default = oie._omnigent_agent_id()
+    assert "_" not in default, f"type prefix leaked back into the default: {default!r}"
+    assert len(default) == 32 and all(c in "0123456789abcdef" for c in default), default
+
+
 def test_lazy_env_accessors_honour_runtime_setenv(monkeypatch):
     monkeypatch.setenv("ZOE_OMNIGENT_URL", "http://example:9999")
     assert oie._omnigent_url() == "http://example:9999"
+    monkeypatch.setenv("ZOE_OMNIGENT_AGENT_ID", "ag_deadbeef")
+    assert oie._omnigent_agent_id() == "ag_deadbeef"
 
 
 def test_implement_brief_marks_issue_as_untrusted_data():

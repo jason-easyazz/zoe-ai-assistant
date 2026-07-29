@@ -2735,7 +2735,7 @@
       },
       "ZOE_OMNIGENT_AGENT_ID": {
         "defaults": [
-          "'ag_057995d1517418e6839f51d340785dd6'"
+          "'057995d1517418e6839f51d340785dd6'"
         ],
         "in_env_example": false,
         "readers": [

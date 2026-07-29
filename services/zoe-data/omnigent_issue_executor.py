@@ -47,8 +47,19 @@ def _omnigent_url() -> str:
     return os.environ.get("ZOE_OMNIGENT_URL", "http://127.0.0.1:6767")
 
 
+# polly's id in the BARE 32-char hex form 0.7.0 actually returns. Omnigent
+# <=0.4.0 emitted `ag_<hex>`; 0.7.0 dropped the type prefix from agent, session
+# and host ids alike (`GET /v1/agents` now returns this exact string).
+#
+# `ag_<hex>` still RESOLVES on input, but only through `uuid_to_bytes`'s
+# `_LEGACY_ID_PREFIXES` strip (omnigent/db/db_models.py) — a back-compat shim
+# for "old bookmarked URLs, pasted ids, and pre-migration clients", and one
+# that is TYPE-BLIND: it strips any known prefix from any id type, so
+# `host_<agent-hex>` binds this agent too (verified live against 0.7.0). The
+# prefix therefore validates nothing and rides a deprecation path. Track what
+# the server returns.
 def _omnigent_agent_id() -> str:
-    return os.environ.get("ZOE_OMNIGENT_AGENT_ID", "ag_057995d1517418e6839f51d340785dd6")
+    return os.environ.get("ZOE_OMNIGENT_AGENT_ID", "057995d1517418e6839f51d340785dd6")
 
 
 def _omnigent_container() -> str:

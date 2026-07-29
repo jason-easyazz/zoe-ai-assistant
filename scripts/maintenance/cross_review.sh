@@ -14,7 +14,11 @@
 set -euo pipefail
 
 SERVER="${OMNIGENT_SERVER:-http://127.0.0.1:6767}"
-POLLY_ID="${OMNIGENT_POLLY_ID:-ag_057995d1517418e6839f51d340785dd6}"
+# polly's id in the BARE hex form 0.7.0 returns (`GET /v1/agents`); <=0.4.0
+# emitted `ag_<hex>`. The prefixed form still resolves, but only via omnigent's
+# `_LEGACY_ID_PREFIXES` back-compat strip, which is type-blind (`host_<agent-hex>`
+# binds too) — it validates nothing. See omnigent_issue_executor._omnigent_agent_id.
+POLLY_ID="${OMNIGENT_POLLY_ID:-057995d1517418e6839f51d340785dd6}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
 TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-2400}"
 case "$TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be a positive integer (seconds), got: $TIMEOUT_S" >&2; exit 1;; esac

@@ -46,6 +46,27 @@ Handling the report:
   (break → red → restore → green) before adopting.
 - Batch all adopted fixes into ONE push (each push triggers a Codex re-review).
 
+## Omnigent ids are BARE hex (0.7.0) — do not re-add a type prefix
+
+Omnigent `<=0.4.0` returned type-prefixed ids (`ag_<hex>`, `conv_<hex>`,
+`host_<hex>`); **0.7.0 dropped the prefix** and returns the bare 32-char hex
+form for agents, sessions and hosts alike. Read the id from the server
+(`GET /v1/agents`, `GET /v1/hosts`) — never hand-write a prefix back on.
+
+The prefixed form still *resolves on input*, but that is a **deprecation shim,
+not a contract**: `uuid_to_bytes` (`omnigent/db/db_models.py`) strips any member
+of a `_LEGACY_ID_PREFIXES` allowlist so "old bookmarked URLs, pasted ids, and
+pre-migration clients keep resolving". It is also **type-blind** — the allowlist
+is checked, the *type* is not — so `host_<agent-hex>` binds the agent just fine
+(verified live against 0.7.0, alongside a bogus-hex control that correctly 404s).
+A prefix therefore validates nothing while riding a path upstream has marked
+legacy. The 0.7.0 upgrade already broke on the output side for exactly this
+reason; the launcher defaults were de-prefixed so the input side cannot follow.
+
+Validators that touch these ids must accept BOTH shapes and keep the charset
+strict — the shell-safety of an id interpolated into a `docker exec … sh -c`
+string is the real property, and the prefix never was.
+
 ## Worker routing (cost policy, 2026-07-28)
 
 The fleet has two flat-rate implementation platforms: `claude_code` on Claude Max
