@@ -84,11 +84,11 @@ Do not refactor the whole app as cleanup. Do not create `_new`, `_fixed`, `_v2`,
 
 ## Review pipeline — cheap reviewers first, Greptile last
 
-Three reviewers are live and they catch **different** things. On #1560 the chain ran:
+The reviewers catch **different** things. Historically, on #1560 the chain ran:
 a brittle host-path chown → **Copilot** fixed it *and introduced* a Compose project-name
 flaw → **Greptile** caught that → **Bugbot** caught a silently-failing symlink neither
-saw. Three reviewers, three distinct real defects, no overlap. So the order is not
-ceremony — it is what makes the last review cheap and clean.
+saw. Bugbot is disabled as of 2026-07-28 due to cost and is no longer part of the live
+gate or review process.
 
 **Open every PR as a DRAFT.** Greptile is configured `triggerOnDrafts: false`, so a draft
 is invisible to it and all iteration is free. Marking ready is the act of spending the
@@ -99,13 +99,22 @@ GUARANTEE below), and it is why batching fixes into one push matters.
 Sequence:
 
 1. **Draft PR.** Invisible to Greptile.
-2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs a different-vendor advisory review on the draft PR before marking ready (fills Bugbot's seat — its credits are exhausted). Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate. Full protocol: [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
-3. **Local `/review` (Cursor) — free.** Bugbot recognises the same diff later and skips
-   the cloud review, so this tier costs nothing. `.cursor/BUGBOT.md` carries the repo's
-   review guide. This is an IDE-side command — agents cannot run it; it is the operator's
-   step. **Bugbot does not reliably auto-review DRAFT PRs** (verified on #1563: a
-   `bugbot run` comment on a draft produced nothing), so on the draft tier treat local
-   `/review` as the Bugbot pass and use `bugbot run` only after marking ready, if wanted.
+2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs the default pre-ready, cross-vendor advisory review on the draft PR. Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate. Binding worker routing:
+   - **`claude_code` (Claude Max, flat-rate):** primary implementer. Use Sonnet-tier
+     models for routine work and Opus-tier models for hard or multi-file work. Fable
+     is checking-only (deep review and final verification), never bulk implementation.
+   - **`codex` (ChatGPT subscription, flat-rate):** second implementer for narrow
+     changes and primary independent reviewer of Claude-implemented work.
+   - **Cross-vendor both ways:** reviewer platform must differ from implementer.
+     Claude work → `codex`; Codex work → `claude_code`, with Fable preferred. Fable
+     may additionally deep-check load-bearing Claude work but never replaces the
+     independent cross-vendor review.
+   - **`pi` (OpenRouter, pay-per-token):** tie-breaker/third opinion only, primarily
+     GLM 5.2 for hard cases. Every dispatch must have a hard cost cap; never routine.
+   - **Cursor Bugbot:** disabled 2026-07-28 due to cost; this free tier covers its seat.
+     Fleet rationale and history: [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
+3. **Local `/review` (Cursor) — free.** `.cursor/BUGBOT.md` carries the repo's review
+   guide for this IDE-side command. Agents cannot run it; it is the operator's step.
 4. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
    NOT resolve). ~$10/mo flat for 1500 requests, and its reviews are always `COMMENTED`,
    so it can never block a merge. **Copilot's wait is BOUNDED, not unconditional**
@@ -157,10 +166,11 @@ Tier by risk; four reviewers on a one-file docs change is friction, not safety:
   extra load-bearing-only reviewer.
 
 Cost note, measured 2026-07: this repo ran **400+ reviews across 112 PRs (3.6× per PR)**
-in one month. At that volume Greptile is ~$380/mo and Bugbot ~$400–600/mo, against
-Copilot's $10 flat. The multiplier — not the PR count — was the cost, and the fix is
-draft-first plus SERIALISING PRs (see THE GUARANTEE); disabling update reviews was tried
-and reverted, because it breaks the gate. **Copilot's inline comments
+in one month. At that volume Greptile was ~$380/mo and Bugbot cost $430 before the
+operator disabled it on 2026-07-28; Copilot is $10 flat. The multiplier — not the PR
+count — was the cost, and the fix is draft-first plus SERIALISING PRs (see THE
+GUARANTEE); disabling update reviews was tried and reverted, because it breaks the gate.
+**Copilot's inline comments
 create review threads that count toward `required_conversation_resolution`**, so they must
 be resolved like any other.
 
