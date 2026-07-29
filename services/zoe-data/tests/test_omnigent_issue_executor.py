@@ -44,9 +44,21 @@ def test_session_id_validation_rejects_shell_metachars():
         # A newline is a shell command separator and the sid is interpolated
         # into the docker-exec `sh -c` string, so it splits the command.
         # NB the old conv_-only regex accepted "conv_abc\n", making this a
-        # pre-existing hole that \Z closes — swap \Z back to $ and the two
-        # cases below are the ones that go red.
-        "abc\n", "conv_abc\n", "abc\n\n", "abc\nrm -rf /",
+        # pre-existing hole that \Z closes.
+        #
+        # These MUST be >=16 alnum chars or the {16,} floor rejects them first
+        # and the newline control is VACUOUS — it would stay green with the
+        # anchoring broken. That is not hypothetical: when the floor was added,
+        # the then-short cases below silently stopped testing \Z at all
+        # (reverting \Z to $ still passed 10/10). Keep every case here
+        # length-valid so the ONLY thing that can reject it is the anchor.
+        "0123456789abcdef\n",
+        "conv_0123456789abcdef\n",
+        "dc2e28f9de3e4074ab7a2cb6279f5d47\n",
+        "0123456789abcdef\n\n",
+        "0123456789abcdef\nrm -rf /",
+        # short + newline, kept as floor coverage (rejected for length, not anchor)
+        "abc\n", "conv_abc\n",
     )
     for value in bad:
         assert oie._SESSION_ID_RE.match(value) is None, value

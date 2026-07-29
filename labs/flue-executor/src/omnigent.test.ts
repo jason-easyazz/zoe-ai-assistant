@@ -63,7 +63,22 @@ test('rejects a trailing newline (a newline is a shell command separator)', () =
   // (#1589). Pinned explicitly so a future edit to SESSION_ID_RE — adding `m`,
   // or porting the Python source verbatim — cannot silently reopen the hole:
   // `-r abc\n > /tmp/…log` would split the kick and run `.log` as a command.
-  for (const value of ['conv_abc\n', 'abc\n', 'abc\r\n', 'conv_abc\nrm -rf /', '\nabc']) {
+  //
+  // Every case MUST be >=16 alnum chars, or the `{16,}` floor rejects it before
+  // the anchor is ever exercised and this whole test becomes VACUOUS — green
+  // even with `m` added. That regression really happened on the Python side of
+  // this PR: once the floor landed, its short newline cases stopped testing the
+  // anchor at all (reverting `\Z` to `$` still passed). Length-valid cases keep
+  // the anchor as the ONLY thing that can reject them.
+  for (const value of [
+    '0123456789abcdef\n',
+    'conv_0123456789abcdef\n',
+    'dc2e28f9de3e4074ab7a2cb6279f5d47\n',
+    '0123456789abcdef\r\n',
+    'conv_0123456789abcdef\nrm -rf /',
+    '\n0123456789abcdef',
+    '0123456789abcdef\n0123456789abcdef',
+  ]) {
     assert.equal(SESSION_ID_RE.test(value), false, JSON.stringify(value));
     assert.throws(() => assertSafeSessionId(value), /refusing unsafe omnigent session id/);
   }
