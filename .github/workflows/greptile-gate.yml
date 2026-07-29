@@ -166,6 +166,34 @@ jobs:
                   return CHECK_DONE.includes(newest.conclusion);
                 });
 
+                // When GitHub first SAW this head. This is the anchor for the Codex
+                // grace below, replacing the `@codex review` comment the gate used to
+                // post. Codex reviews on PUSH, not on mention: measured across #1589,
+                // all four of its reviews landed 2-6 min after a push, and all SEVEN
+                // @mentions drew "To use Codex here, create a Codex account and connect
+                // to github" ~7s later. That reply is about the COMMENTER — the mention
+                // resolves against github-actions[bot], which has no Codex account —
+                // so the summon could never work no matter who owned the repo.
+                //
+                // Check SUITES, not runs: `runs` above is only fetched when
+                // REQUIRED_CHECKS is non-empty (it is currently []), whereas GitHub
+                // creates a suite whenever a head lands. Falling back to the commit
+                // date keeps a head with no suites from holding the gate forever —
+                // that failure direction is deliberate, matching the bound's purpose.
+                let headSeenAt = null;
+                const suites = await ok(`PR #${num} check suites`, () =>
+                  github.paginate(github.rest.checks.listSuitesForRef, {
+                    ...base, ref: sha, per_page: 100,
+                  }));
+                if (suites && suites.length) {
+                  headSeenAt = suites.map(s => s.created_at).filter(Boolean).sort()[0] || null;
+                }
+                if (!headSeenAt) {
+                  const commit = await ok(`PR #${num} head commit`, () =>
+                    github.rest.repos.getCommit({ ...base, ref: sha }));
+                  headSeenAt = commit?.data?.commit?.committer?.date || null;
+                }
+
                 const reviews = await ok(`PR #${num} reviews`, () =>
                   github.paginate(github.rest.pulls.listReviews, {
                     ...base, pull_number: num, per_page: 100,
@@ -196,7 +224,7 @@ jobs:
                   cursor = t.pageInfo.hasNextPage ? t.pageInfo.endCursor : null;
                 } while (cursor);
 
-                return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, unresolved };
+                return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, unresolved, headSeenAt };
               };
 
               // Refetch BEFORE anything reads a SHA. `pulls.list` was fetched once at the top
@@ -259,7 +287,7 @@ jobs:
               // mergeable_state, which mixes concerns and can be `unknown` while GitHub computes.
               const st = await readConditions(pr.number, sha, baseRef);
               if (!st) { core.info(`PR #${pr.number}: could not read conditions — holding`); continue; }
-              const { upToDate, checksOk, reviewedHead, unresolved } = st;
+              const { upToDate, checksOk, reviewedHead, unresolved, headSeenAt } = st;
 
               // Summon what we wait for; both are manual-trigger only.
               // Copilot's marker is computed BEFORE the summon so the summon can be
@@ -319,32 +347,27 @@ jobs:
                 }
               }
 
-              const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
-              // Same trust rule: a forged summon marker would suppress the real one and,
-              // once its timestamp aged past the grace, wave Greptile through early.
-              // NEWEST, not first. `find` returns the OLDEST match, so after a re-summon
-              // (or a retry following a failed label) a stale marker would set the grace
-              // clock and could read as elapsed while the latest @codex review is still
-              // inside its window. The handoff marker already takes the last match; these
-              // two must agree.
-              const codexSummons = comments.filter(c => c.body?.includes(codexMark) && trusted(c))
-                                            .sort(byCreated);
-              const codexSummon = codexSummons.length ? codexSummons[codexSummons.length - 1] : undefined;
-              if (!reviewedHead.has(CODEX) && !codexSummon) {
-                // Wrapped: an advisory summon must never abort the sweep for other PRs.
-                const r = await ok(`PR #${pr.number} summon Codex`, () =>
-                  github.rest.issues.createComment({
-                    ...base, issue_number: pr.number, body: `@codex review\n${codexMark}`,
-                  }));
-                if (r) core.info(`PR #${pr.number}: summoned Codex`);
-              }
-
-              // Bounded wait for Codex: hold until it reviews this head, or until the grace
-              // period since we summoned has elapsed. Expressed as a function of a
-              // reviewedHead SET so the revalidation below can re-derive it from fresh data
-              // instead of reusing a frozen verdict — see the note at the revalidation.
-              const graceElapsed = codexSummon
-                ? (Date.now() - new Date(codexSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
+              // Codex is NOT summoned. It reviews on PUSH, automatically, and the
+              // `@codex review` mention this gate used to post could never work: the
+              // mention resolves against the COMMENTER, and that is github-actions[bot],
+              // which has no Codex account. Measured on #1589 — 7 mentions, 7 replies of
+              // "To use Codex here, create a Codex account and connect to github" within
+              // ~7s each, while all 4 real reviews arrived 2-6 min after a push with no
+              // mention involved. The summon was pure noise, and it read as a broken
+              // Codex integration to anyone looking at the PR.
+              //
+              // The summon comment was, however, secretly load-bearing: it anchored the
+              // grace clock. Deleting it alone would pin graceElapsed to false and hold
+              // every PR Codex never reviews — turning cosmetic noise into a deadlock,
+              // the exact failure this bound exists to prevent. So the anchor moves to
+              // when the head APPEARED (headSeenAt, see readConditions), which is both
+              // the honest thing to measure and available without posting anything.
+              //
+              // Null headSeenAt (both the suite and commit reads failed) holds rather
+              // than passes: an unreadable condition is never a pass, and the next sweep
+              // retries within 30 min.
+              const graceElapsed = headSeenAt
+                ? (Date.now() - new Date(headSeenAt)) / 60000 >= CODEX_GRACE_MIN
                 : false;
               const codexPasses = (rh) => rh.has(CODEX) || graceElapsed;
               const codexOk = codexPasses(reviewedHead);

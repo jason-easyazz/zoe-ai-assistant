@@ -73,6 +73,10 @@ HARNESS = textwrap.dedent(
     // OPTS.staleListSha simulates the head moving between the sweep's opening
     // `pulls.list` and this PR being processed: the list is stale, `pulls.get` is current.
     const LIST_SHA = OPTS.staleListSha ? 'b'.repeat(40) : SHA;
+    // Far-future default for the head-seen anchor: the Codex grace can never read as
+    // elapsed unless a test opts in, so "Codex has not reviewed" HOLDS by default —
+    // matching the pre-anchor behaviour where an absent summon left graceElapsed false.
+    const FUTURE = '2099-01-01T00:00:00Z';
     const pr = { number: 1, head: { sha: LIST_SHA }, base: { ref: 'main' },
                  labels: OPTS.labels || [], draft: false };
 
@@ -116,11 +120,28 @@ HARNESS = textwrap.dedent(
           },
           listReviews: async () => listReviews(),
         },
-        repos: { compareCommits: async () => {
-          conditionReads += 1;
-          return { data: { behind_by: OPTS.behindBy || 0 } };
-        } },
+        repos: {
+          compareCommits: async () => {
+            conditionReads += 1;
+            return { data: { behind_by: OPTS.behindBy || 0 } };
+          },
+          // Fallback anchor for the Codex grace when the head has no check suites.
+          getCommit: async () => {
+            if (OPTS.commitFetchFails) throw new Error('commit unavailable');
+            return { data: { commit: { committer: {
+              date: OPTS.commitDate || FUTURE } } } };
+          },
+        },
         checks: {
+          // When GitHub first saw this head — the Codex grace anchor. Defaults to a
+          // FUTURE timestamp so the grace is NEVER elapsed unless a test says so,
+          // preserving the old default (no anchor -> Codex must actually review).
+          listSuitesForRef: async () => {
+            if (OPTS.suitesFetchFail) throw new Error('suites unavailable');
+            if (OPTS.noSuites) return [];
+            return (OPTS.suiteCreatedAt || [OPTS.headSeenAt || FUTURE])
+              .map((created_at) => ({ created_at }));
+          },
           listForRef: async () => {
             if (OPTS.checksFetchFails) throw new Error('checks unavailable');
             checkReads += 1;
@@ -333,20 +354,50 @@ def test_head_moving_in_the_final_window_is_not_labelled(tmp_path):
     assert any("head moved during the sweep" in m for m in r["log"]), r["log"]
 
 
-def test_grace_clock_uses_the_newest_codex_summon(tmp_path):
-    """`find` returns the OLDEST match — the grace must key off the NEWEST.
+def test_codex_is_never_summoned(tmp_path):
+    """The gate must NOT post `@codex review`.
 
-    Two trusted summon markers on the same head: one long past the 20-minute grace,
-    one just posted. Taking the older one makes the grace read as elapsed and waves
-    the PR through while the latest @codex review is still inside its window. Codex
-    has NOT reviewed here, so the only thing that could pass it is the grace.
+    Codex reviews on PUSH; the mention resolves against the COMMENTER, which is
+    github-actions[bot] and has no Codex account. Measured on #1589: 7 mentions,
+    7 "create a Codex account and connect to github" replies ~7s later, while all
+    4 real reviews followed pushes. Re-add the summon and this goes red.
     """
-    r = _run(
-        tmp_path, _script(),
-        reviewers=["copilot-pull-request-reviewer[bot]"],
-        codexSummons=[{"at": "2020-01-01T00:00:00Z"}, {"at": "2099-01-01T00:00:00Z"}],
-    )
-    assert r["addLabels"] == 0, r["log"]
+    r = _run(tmp_path, _script(), reviewers=["copilot-pull-request-reviewer[bot]"])
+    assert not any("@codex" in c for c in r["comments"]), r["comments"]
+    assert not any("greptile-gate:codex:" in c for c in r["comments"]), r["comments"]
+
+
+def test_codex_grace_is_anchored_on_the_head_not_a_summon(tmp_path):
+    """The bound survives removing the summon — it now runs from when the head appeared.
+
+    Codex has NOT reviewed in either case, so the grace is the only thing that can
+    pass the PR. A head that just landed must HOLD; one older than CODEX_GRACE_MIN
+    must proceed. Pin graceElapsed to false (the naive "just delete the summon" fix)
+    and the second case deadlocks — which is what this test exists to catch.
+    """
+    fresh = _run(tmp_path, _script(), reviewers=["copilot-pull-request-reviewer[bot]"],
+                 headSeenAt="2099-01-01T00:00:00Z")
+    assert fresh["addLabels"] == 0, fresh["log"]
+
+    aged = _run(tmp_path, _script(), reviewers=["copilot-pull-request-reviewer[bot]"],
+                headSeenAt="2020-01-01T00:00:00Z")
+    assert aged["addLabels"] == 1, aged["log"]
+
+
+def test_codex_grace_falls_back_to_the_commit_date_without_suites(tmp_path):
+    """No check suites for the head must not strand the gate forever.
+
+    The suite read is the primary anchor; the commit date is the fallback. With
+    neither available the gate HOLDS rather than passes — an unreadable condition
+    is never a pass — and the next sweep retries.
+    """
+    aged = _run(tmp_path, _script(), reviewers=["copilot-pull-request-reviewer[bot]"],
+                noSuites=True, commitDate="2020-01-01T00:00:00Z")
+    assert aged["addLabels"] == 1, aged["log"]
+
+    unreadable = _run(tmp_path, _script(), reviewers=["copilot-pull-request-reviewer[bot]"],
+                      noSuites=True, commitFetchFails=True)
+    assert unreadable["addLabels"] == 0, unreadable["log"]
 
 
 def test_regressed_handed_off_head_is_revoked_not_summoned(tmp_path):
