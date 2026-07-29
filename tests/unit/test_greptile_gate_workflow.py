@@ -158,10 +158,14 @@ HARNESS = textwrap.dedent(
             // checksFlip: green on the first read, red on the second — a required check
             // that re-runs and fails while the summon calls are in flight.
             const red = OPTS.checksFlip && checkReads >= 2;
-            const extra = OPTS.greptileRun
-              ? [{ name: 'Greptile Review', status: OPTS.greptileRun.status || 'completed',
-                   conclusion: OPTS.greptileRun.conclusion || null,
-                   completed_at: '2026-07-27T00:00:00Z' }] : [];
+            // greptileRuns (plural) puts SEVERAL runs on the same head, which is how a
+            // stale completed success can coexist with a newer in-flight re-review.
+            const gr = OPTS.greptileRuns
+              || (OPTS.greptileRun ? [OPTS.greptileRun] : []);
+            const extra = gr.map((g) => ({
+              name: 'Greptile Review', status: g.status || 'completed',
+              conclusion: g.conclusion || null,
+              completed_at: g.completed_at || '2026-07-27T00:00:00Z' }));
             return extra.concat(['Cursor Bugbot'].map((name) => ({
               name, status: OPTS.checksPending ? 'in_progress' : 'completed',
               conclusion: red ? 'failure' : 'neutral',
@@ -646,3 +650,23 @@ def test_greptile_skip_resolves_neutral_not_success(tmp_path):
              greptileRun={"status": "completed", "conclusion": "skipped"})
     concl = [c["conclusion"] for c in r["gateChecks"] if c["status"] == "completed"]
     assert concl == ["neutral"], concl
+
+
+def test_stale_success_does_not_resolve_while_a_newer_greptile_run_is_in_flight(tmp_path):
+    """A completed success + a NEWER in-flight run on the same head must NOT resolve.
+
+    Filtering to `completed` FIRST and then taking the newest completed makes an
+    in-flight re-review invisible, so the gate publishes success while Greptile is
+    still working — re-creating the #1587/#1589 class this PR exists to close. The
+    file's own checksOk path already guards this ("still in flight → return false");
+    the resolution block must apply the same rule.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRuns=[
+                 {"status": "completed", "conclusion": "success",
+                  "completed_at": "2026-07-27T00:00:00Z"},
+                 {"status": "in_progress", "conclusion": None},
+             ])
+    done = [c for c in r["gateChecks"] if c["status"] == "completed"]
+    assert done == [], f"resolved from a stale success while a newer run was in flight: {done}"

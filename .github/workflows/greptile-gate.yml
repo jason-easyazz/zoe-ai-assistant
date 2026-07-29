@@ -442,9 +442,17 @@ jobs:
                   github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
                     .then(rs => rs.filter(c => c.name === 'Greptile Review')));
                 if (gRuns && gRuns.length) {
-                  const done = gRuns.filter(c => c.status === 'completed');
-                  if (done.length) {
-                    const newest = done.reduce((a, b) =>
+                  // ANY run still in flight -> do NOT resolve, at all. Filtering to
+                  // `completed` FIRST and then taking the newest completed makes a newer
+                  // in-flight re-review INVISIBLE, so a stale success would publish
+                  // `greptile-complete: success` while Greptile is still working — which
+                  // is the very #1587/#1589 class this check exists to close, rebuilt one
+                  // block later. This mirrors the guard the checksOk path already uses
+                  // ("still in flight -> return false", with its own note that otherwise
+                  // "an OLD success stands in for a NEW run"); the two must agree.
+                  const inFlight = gRuns.some(c => c.status !== 'completed');
+                  if (!inFlight) {
+                    const newest = gRuns.reduce((a, b) =>
                       (Date.parse(b.completed_at || 0) >= Date.parse(a.completed_at || 0) ? b : a));
                     // 'skipped' is Greptile declining (e.g. the >50-file limit), NOT a
                     // pass — resolving it success would wave through the very PRs that
