@@ -119,6 +119,11 @@ jobs:
                 github.rest.checks.create({
                   ...{ owner: context.repo.owner, repo: context.repo.repo },
                   name: GATE_CHECK, head_sha: sha, status,
+                  // Check runs attach to a SHA, not a PR. Two branches can point at the
+                  // same commit, and without this a blocker created for PR A would make
+                  // PR B skip creating its own — B then inherits A's green contexts and
+                  // can merge before its OWN Greptile handoff (Codex P2 on #1592).
+                  external_id: String(num),
                   ...(conclusion ? { conclusion } : {}),
                   output: { title, summary },
                 }));
@@ -140,7 +145,8 @@ jobs:
                 github.paginate(github.rest.checks.listForRef, {
                   ...{ owner: context.repo.owner, repo: context.repo.repo },
                   ref: sha, per_page: 100,
-                }).then(rs => rs.filter(c => c.name === GATE_CHECK)));
+                }).then(rs => rs.filter(c => c.name === GATE_CHECK
+                                        && String(c.external_id || '') === String(num))));
               // A failed READ must not cause a duplicate create; hold instead.
               if (existing === null) return null;
               if (existing.length) return existing;
@@ -161,6 +167,43 @@ jobs:
             for (const pr of prs) {
               if (pr.draft) continue;
               const base = { owner: context.repo.owner, repo: context.repo.repo };
+
+              // ORDER MATTERS: the blocker is raised BEFORE any other API call that can
+              // `continue` this PR. The comments read below bails out on a transient
+              // Issues API outage, and while ensureBlocker sat after it a ready head
+              // could get NO greptile-complete run at all even with a healthy Checks
+              // API — then `validate`/`secret-scan` go green and auto-merge passes
+              // through the absent context (Codex P1 on #1592, second round).
+              // Refetch BEFORE anything reads a SHA. `pulls.list` was fetched once at the top
+              // of the sweep, so by the time this PR is processed its head may have moved —
+              // and every downstream decision keyed on the stale value: `alreadyHandedOff`
+              // would compare the marker against an old SHA (skipping both stale-label
+              // cleanup and regression revocation while the label still sits on a NEWER
+              // commit), conditions would be read for a commit nobody is merging, and the
+              // Codex marker would be written for the wrong head. One authoritative `sha`,
+              // established here, is used from this point on — `pr.head.sha` is not read again.
+              const prFull = await ok(`PR #${pr.number} get`, () =>
+                github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
+              if (!prFull) continue;
+              const sha = prFull.head.sha;
+              const baseRef = prFull.base.ref;
+
+              // FIRST action on a ready head: make sure the blocking context exists.
+              // Everything below (cheap-tier waits, handoff, resolution) happens with
+              // merge already blocked, so there is no window where the requirement is
+              // absent and auto-merge can slip through.
+              // The blocker's own started_at is the ONLY per-PR record of when this SHA
+              // became THIS PR's head: it is created the first sweep that sees the head,
+              // and scoped to this PR by external_id. Suite/commit timestamps describe the
+              // COMMIT and can predate the PR entirely — an existing PR reset to an
+              // already-checked SHA has both its suite time and its created_at before the
+              // head transition, so the clamp alone still collapsed the Codex window
+              // (Codex P2 on #1592, second round).
+              const blockerRuns = await ensureBlocker(sha, pr.number);
+              const headBecameHeadAt = (blockerRuns || [])
+                .map(c => c?.data?.started_at || c?.started_at)
+                .filter(v => typeof v === 'string' && v)
+                .sort()[0] || null;
 
               // Every list is PAGINATED. A long-lived PR exceeds 100 comments/threads/checks,
               // and a truncated list silently reads as "nothing outstanding" — the exact
@@ -268,10 +311,16 @@ jobs:
                     github.rest.repos.getCommit({ ...base, ref: sha }));
                   headSeenAt = commit?.data?.commit?.committer?.date || null;
                 }
-                // Never earlier than the PR itself existed.
+                // Never earlier than the PR itself existed...
                 const prBornAt = prFull.created_at || null;
                 if (headSeenAt && prBornAt && Date.parse(prBornAt) > Date.parse(headSeenAt)) {
                   headSeenAt = prBornAt;
+                }
+                // ...and prefer the per-PR head-observation record when we have one, since
+                // it measures the head TRANSITION rather than the commit's age.
+                if (headBecameHeadAt && (!headSeenAt ||
+                    Date.parse(headBecameHeadAt) > Date.parse(headSeenAt))) {
+                  headSeenAt = headBecameHeadAt;
                 }
 
                 const reviews = await ok(`PR #${num} reviews`, () =>
@@ -307,25 +356,6 @@ jobs:
                 return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, unresolved, headSeenAt };
               };
 
-              // Refetch BEFORE anything reads a SHA. `pulls.list` was fetched once at the top
-              // of the sweep, so by the time this PR is processed its head may have moved —
-              // and every downstream decision keyed on the stale value: `alreadyHandedOff`
-              // would compare the marker against an old SHA (skipping both stale-label
-              // cleanup and regression revocation while the label still sits on a NEWER
-              // commit), conditions would be read for a commit nobody is merging, and the
-              // Codex marker would be written for the wrong head. One authoritative `sha`,
-              // established here, is used from this point on — `pr.head.sha` is not read again.
-              const prFull = await ok(`PR #${pr.number} get`, () =>
-                github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
-              if (!prFull) continue;
-              const sha = prFull.head.sha;
-              const baseRef = prFull.base.ref;
-
-              // FIRST action on a ready head: make sure the blocking context exists.
-              // Everything below (cheap-tier waits, handoff, resolution) happens with
-              // merge already blocked, so there is no window where the requirement is
-              // absent and auto-merge can slip through.
-              await ensureBlocker(sha, pr.number);
               // Past this point `pr` (the one-time list snapshot) is valid ONLY for
               // `.number`, which cannot change. Every mutable field comes from prFull.
               // Fixing head.sha alone was not enough: `labels` was stale from the same
@@ -627,18 +657,28 @@ jobs:
                       // treats neutral as non-blocking, so the PR is not stranded, but the
                       // check text says plainly that no review happened.
                       const pass = newest.conclusion === 'success';
+                      // A DECLINED review is not a pass and must not be waved through.
+                      // `neutral` is non-blocking to branch protection, and Greptile's own
+                      // skipped check is non-blocking too — so mapping skip->neutral let an
+                      // oversized PR merge with NO Greptile review at all, the exact outcome
+                      // this gate exists to prevent (Codex P1 on #1592). It now FAILS; the
+                      // escape is the documented one (split the PR, or `oversized-ok` plus an
+                      // operator decision), not a silent green.
                       const declined = ['skipped', 'cancelled', 'stale', 'neutral'].includes(newest.conclusion);
                       await setGateCheck(sha, pr.number, {
                         status: 'completed',
-                        conclusion: pass ? 'success' : (declined ? 'neutral' : 'failure'),
+                        conclusion: pass ? 'success' : 'failure',
                         title: pass ? 'Greptile reviewed this head'
-                                    : (declined ? `Greptile did not review (${newest.conclusion})`
+                                    : (declined ? `Greptile did NOT review (${newest.conclusion})`
                                                 : `Greptile concluded ${newest.conclusion}`),
                         summary: pass
                           ? `Greptile completed at ${newest.completed_at} on \`${sha.slice(0, 8)}\`.`
                           : `Greptile's own check concluded \`${newest.conclusion}\` on ` +
-                            `\`${sha.slice(0, 8)}\`. Merge is not gated on this check alone — ` +
-                            `read Greptile's review before merging.`,
+                            `\`${sha.slice(0, 8)}\`. ` + (declined
+                              ? 'That is NOT a review — this check fails so the head cannot ' +
+                                'merge unreviewed. Split the PR (Greptile skips >~50 files) or ' +
+                                'take an explicit operator decision.'
+                              : 'Read Greptile\'s review before merging.'),
                       });
                     }
                   }

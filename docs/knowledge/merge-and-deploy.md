@@ -101,9 +101,14 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
     auto-merge merges straight through. Measured: **#1589** merged 12s after the label
     with Greptile never reviewing, and **#1587** merged 3s BEFORE its Greptile check even
     started — which then concluded `failure`, on code already on `main`.
-  - The gate raises it `in_progress` the moment a ready head is seen and completes it
-    only from Greptile's own finished verdict (`skipped` → `neutral`, i.e. "no review
-    happened" rather than a pass).
+  - The gate raises it `in_progress` the moment a ready head is seen — before any other
+    call that could abort the sweep — and completes it only from Greptile's own finished
+    verdict. A DECLINED verdict (`skipped`/`cancelled`/`stale`/`neutral`) **fails** the
+    check: Greptile skips PRs over ~50 files, and both its own skipped check and a
+    `neutral` are non-blocking, so anything softer merges a head with no review at all.
+    The escape is to split the PR, or an explicit operator decision — not a silent green.
+  - Blockers are scoped per-PR via `external_id`, because check runs attach to a SHA and
+    two branches can share a commit.
   - **Adding it to branch protection must happen AFTER the workflow that publishes it is
     on `main`.** A required context no workflow produces never reports, and a context
     that never reports blocks every PR permanently — including the one carrying the fix.

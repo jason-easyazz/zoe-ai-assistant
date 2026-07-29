@@ -163,6 +163,15 @@ HARNESS = textwrap.dedent(
             const red = OPTS.checksFlip && checkReads >= 2;
             // greptileRuns (plural) puts SEVERAL runs on the same head, which is how a
             // stale completed success can coexist with a newer in-flight re-review.
+            // Pre-existing greptile-complete runs on this SHA. `extId` defaults to THIS
+            // PR (1); a test can set a different one to model two PRs sharing a commit.
+            const gateExisting = (OPTS.gateRuns || []).map((g) => ({
+              name: 'greptile-complete',
+              external_id: g.extId === undefined ? '1' : String(g.extId),
+              status: g.status || 'in_progress',
+              conclusion: g.conclusion || null,
+              started_at: g.started_at || null,
+              completed_at: g.completed_at || null }));
             const gr = OPTS.greptileRuns
               || (OPTS.greptileRun ? [OPTS.greptileRun] : []);
             const extra = gr.map((g) => ({
@@ -170,7 +179,7 @@ HARNESS = textwrap.dedent(
               conclusion: g.conclusion || null,
               started_at: g.started_at || null,
               completed_at: g.completed_at || '2026-07-27T00:00:00Z' }));
-            return extra.concat(['Cursor Bugbot'].map((name) => ({
+            return extra.concat(gateExisting).concat(['Cursor Bugbot'].map((name) => ({
               name, status: OPTS.checksPending ? 'in_progress' : 'completed',
               conclusion: red ? 'failure' : 'neutral',
               completed_at: '2026-07-27T00:00:00Z' })));
@@ -658,15 +667,22 @@ def test_blocking_check_fails_when_greptile_failed(tmp_path):
     assert any(c["conclusion"] == "failure" for c in r["gateChecks"]), r["gateChecks"]
 
 
-def test_greptile_skip_resolves_neutral_not_success(tmp_path):
-    """Greptile SKIPS PRs over ~50 files. That is 'no review happened', not a pass —
-    but it must not strand the PR either, so it resolves neutral (non-blocking) with
-    the absence stated, rather than success (which would claim a review occurred)."""
-    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
-             markerSha="a" * 40,
-             greptileRun={"status": "completed", "conclusion": "skipped"})
-    concl = [c["conclusion"] for c in r["gateChecks"] if c["status"] == "completed"]
-    assert concl == ["neutral"], concl
+def test_greptile_decline_fails_the_blocker_rather_than_waving_it_through(tmp_path):
+    """A DECLINED review must BLOCK. Reversal of an earlier decision in this PR.
+
+    Greptile skips PRs over ~50 files. This first resolved `neutral` to avoid stranding
+    such a PR — but branch protection treats neutral as non-blocking, and Greptile's own
+    skipped check is non-blocking too, so the combination merged a head with NO review
+    at all: exactly what the gate exists to prevent (Codex P1 on #1592). Failing is the
+    safe direction; the escape is the documented one (split the PR, or `oversized-ok`
+    plus an explicit operator decision).
+    """
+    for declined in ("skipped", "cancelled", "stale", "neutral"):
+        r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+                 markerSha="a" * 40,
+                 greptileRun={"status": "completed", "conclusion": declined})
+        concl = [c["conclusion"] for c in r["gateChecks"] if c["status"] == "completed"]
+        assert concl == ["failure"], f"{declined} -> {concl}"
 
 
 def test_stale_success_does_not_resolve_while_a_newer_greptile_run_is_in_flight(tmp_path):
@@ -758,3 +774,26 @@ def test_grace_anchor_is_clamped_to_the_pr_creation_time(tmp_path):
     old_pr = _run(tmp_path, _script(), reviewers=["copilot-pull-request-reviewer[bot]"],
                   headSeenAt="2020-01-01T00:00:00Z", prCreatedAt="2020-01-01T00:00:00Z")
     assert old_pr["addLabels"] == 1, old_pr["log"]
+
+
+def test_blocker_from_another_pr_on_the_same_sha_is_not_reused(tmp_path):
+    """Check runs attach to a SHA, not a PR — two branches can share a commit.
+
+    A COMPLETED blocker created for another PR must not satisfy this one: reusing it
+    lets this PR inherit green required contexts and become mergeable before its own
+    Greptile handoff. Scoped by external_id. Codex P2 on #1592.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             gateRuns=[{"extId": 999, "status": "completed", "conclusion": "success",
+                        "completed_at": "2026-07-27T00:00:00Z"}])
+    made = [c for c in r["gateChecks"] if c["status"] == "in_progress"]
+    assert made, f"did not raise its own blocker; reused another PR's: {r['gateChecks']}"
+
+
+def test_own_existing_blocker_is_not_duplicated(tmp_path):
+    """Idempotence: checks.create always makes a NEW run, so an unconditional call
+    would post one per sweep (every 30 min plus every event) and bury the checks tab."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             gateRuns=[{"status": "in_progress", "started_at": "2026-07-27T00:00:00Z"}])
+    made = [c for c in r["gateChecks"] if c["status"] == "in_progress"]
+    assert made == [], f"re-created a blocker that already existed: {made}"
