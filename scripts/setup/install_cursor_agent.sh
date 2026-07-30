@@ -37,9 +37,24 @@ CURSOR_PINNED_VERSION="2026.07.23-e383d2b"
 CURSOR_AGENT_VERSION="${CURSOR_AGENT_VERSION:-${CURSOR_PINNED_VERSION}}"
 CURSOR_MIN_VERSION="2026.06.02"
 
-# Validate any override against the minimum. The version string format is YYYY.MM.DD-<sha>;
-# compare only the leading date part (trailing -<sha> is build metadata, NOT ordered).
+# Helper function: compare the leading YYYY.MM.DD only; the trailing -<sha> is build
+# metadata and is NOT ordered, so a lexical compare of the whole string would be wrong.
+# MUST be defined BEFORE the override validation below uses it.
+date_part() { printf '%s' "${1%%-*}"; }
+
+# Validate any override for BOTH format safety AND minimum-version compliance.
+# Format validation prevents path-traversal and ensures the value is actually a Cursor
+# version string. Only AFTER format validation do we proceed to the minimum-version check.
 if [ "${CURSOR_AGENT_VERSION}" != "${CURSOR_PINNED_VERSION}" ]; then
+  # Strict format: YYYY.MM.DD-<build> where YYYY is 4 digits, MM/DD are 2 digits,
+  # and <build> is 7+ hex chars (cursor's git short sha). Reject anything else BEFORE
+  # it flows into ${TARGET} path construction or the rm -rf below.
+  if ! printf '%s' "${CURSOR_AGENT_VERSION}" | grep -qE '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[a-f0-9]{7,}$'; then
+    echo "[cursor-agent] FAILED: CURSOR_AGENT_VERSION override '${CURSOR_AGENT_VERSION}' does not match the expected format YYYY.MM.DD-<build>" >&2
+    echo "[cursor-agent] refusing to proceed with a malformed version string (path-traversal / injection risk)" >&2
+    exit 1
+  fi
+  # Now check minimum version — the override is well-formed, safe to compare and use in paths.
   if [ "$(printf '%s\n%s\n' "$(date_part "${CURSOR_MIN_VERSION}")" "$(date_part "${CURSOR_AGENT_VERSION}")" | sort -V | head -1)" \
        != "$(date_part "${CURSOR_MIN_VERSION}")" ]; then
     echo "[cursor-agent] FAILED: CURSOR_AGENT_VERSION override '${CURSOR_AGENT_VERSION}' is below CURSOR_MIN_VERSION '${CURSOR_MIN_VERSION}'" >&2
@@ -54,10 +69,6 @@ BIN_DIR="${HOME}/.local/bin"
 TARGET="${INSTALL_ROOT}/${CURSOR_AGENT_VERSION}/cursor-agent"
 
 current() { "${BIN_DIR}/cursor-agent" --version 2>/dev/null | head -1 || echo "none"; }
-
-# Compare the leading YYYY.MM.DD only; the trailing -<sha> is build metadata and is
-# NOT ordered, so a lexical compare of the whole string would be wrong.
-date_part() { printf '%s' "${1%%-*}"; }
 
 if [ "${1:-}" = "--check" ]; then
   cur="$(current)"
