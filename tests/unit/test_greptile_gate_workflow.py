@@ -80,8 +80,11 @@ HARNESS = textwrap.dedent(
     // elapsed unless a test opts in, so "Codex has not reviewed" HOLDS by default —
     // matching the pre-anchor behaviour where an absent summon left graceElapsed false.
     const FUTURE = '2099-01-01T00:00:00Z';
+    // `state` matters: co-location confirms sharers with `cf.state !== 'open'`, so
+    // without it PR 1 is invisible as a sharer TO the other PRs and the relationship
+    // reads as one-directional when it is symmetric.
     const pr = { number: 1, head: { sha: LIST_SHA }, base: { ref: 'main' },
-                 labels: OPTS.labels || [], draft: false,
+                 labels: OPTS.labels || [], draft: false, state: 'open',
                  // The PR's own birth time clamps the Codex grace anchor: a branch
                  // pushed long before the PR opened must not read as already-graced.
                  created_at: OPTS.prCreatedAt || '2020-01-01T00:00:00Z' };
@@ -306,6 +309,25 @@ def _run(tmp_path: Path, script: str, **opts) -> dict:
 
 BOTH = ["copilot-pull-request-reviewer[bot]", "chatgpt-codex-connector[bot]"]
 
+# The job's ONLY event-specific gate. Pinned exactly, so a change to it has to be a
+# deliberate edit here rather than a silent narrowing that drops the regression events.
+EXPECTED_JOB_IF = (
+    "github.event_name != 'check_suite' || "
+    "github.event.check_suite.pull_requests[0] != null"
+)
+
+
+def _job_runs_for(event_name: str, check_suite_prs=None) -> bool:
+    """Evaluate EXPECTED_JOB_IF for one event.
+
+    Deliberately not a general GitHub-expression parser — the condition is pinned
+    verbatim above, so this only has to model that one expression. If the condition ever
+    changes, the equality assert fires first and this must be re-derived by hand.
+    """
+    if event_name != "check_suite":
+        return True                       # first clause short-circuits true
+    return bool(check_suite_prs)          # pull_requests[0] != null
+
 
 def test_the_gate_wakes_on_regression_events_not_only_on_progress(tmp_path):
     """A trigger assertion, deliberately — this one cannot be caught by executing the
@@ -335,10 +357,20 @@ def test_the_gate_wakes_on_regression_events_not_only_on_progress(tmp_path):
     # The schedule stays: it is the wake-up for every wait that is not event-driven.
     assert "schedule" in triggers, triggers
 
+    # Pin the job condition EXACTLY, then evaluate it for representative events. A
+    # substring check would pass for any condition merely mentioning check_suite —
+    # including one that gates out the regression events entirely.
     job = spec["jobs"]["label-when-others-pass"]
-    assert "check_suite" in job["if"], (
-        "the job's only event-specific gate should be the check_suite one; a new "
-        f"condition here could silently drop the regression events: {job['if']}")
+    assert job["if"] == EXPECTED_JOB_IF, (
+        "the job's event gate changed; re-derive which events can still reach the sweep "
+        f"before updating this:\n  got:      {job['if']}\n  expected: {EXPECTED_JOB_IF}")
+    # Every regression trigger must actually reach the job body...
+    for ev in ("pull_request_review", "pull_request", "schedule", "workflow_dispatch"):
+        assert _job_runs_for(ev), f"{ev} cannot reach the sweep"
+    # ...and the one event that IS filtered keeps its filter: a check_suite with no
+    # associated PR burns API budget for nothing.
+    assert _job_runs_for("check_suite", check_suite_prs=[{"number": 1}])
+    assert not _job_runs_for("check_suite", check_suite_prs=[])
 
 
 def test_all_green_hands_off(tmp_path):
@@ -753,6 +785,48 @@ def test_a_failed_head_refetch_still_leaves_a_blocking_check(tmp_path):
                 if c["external_id"] == "1" and c["status"] == "in_progress"]
     assert blocking, (
         f"refetch failed and the head was left with no blocking check: {r['gateChecks']}")
+
+
+def test_a_failed_refetch_supersedes_an_already_released_head(tmp_path):
+    """T6 must COMPOSE with T7 — the twin the provisional blocker did not cover.
+
+    The provisional call runs in NORMAL mode, where an existing completed `success`
+    counts as sufficient. So on a head that was ALREADY released it creates nothing, and
+    bailing out on a refetch failure left that success standing as the current context:
+
+        head goes green -> a review is dismissed -> the regression trigger wakes the
+        sweep -> provisional returns the existing success -> `pulls.get` fails ->
+        `continue` fires BEFORE supersedeReleasedBlocker() -> auto-merge consumes a
+        success whose contract no longer holds.
+
+    A refetch failure means the contract cannot be VERIFIED this sweep, so a released
+    blocker is unvouched-for and must be superseded by an unresolved run.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             prGetFails=True,
+             gateRuns=[{"status": "completed", "conclusion": "success",
+                        "started_at": "2026-07-27T00:00:00Z",
+                        "completed_at": "2026-07-27T00:00:00Z"}])
+    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
+    blocking = [c for c in mine if c["status"] != "completed" or c["conclusion"] != "success"]
+    assert blocking, (
+        "refetch failed and a released greptile-complete was left green — auto-merge can "
+        f"consume it: {r['gateChecks']} / {r['log']}")
+
+
+def test_a_failed_refetch_does_not_churn_a_head_that_is_still_blocked(tmp_path):
+    """The other side of that guard: supersede only what is actually RELEASED.
+
+    A head whose blocker is still `in_progress` needs no re-raise when the refetch
+    fails — it is already blocking. Re-raising anyway would post a run per sweep for
+    every PR during any API wobble.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             prGetFails=True,
+             gateRuns=[{"status": "in_progress", "started_at": "2026-07-27T00:00:00Z"}])
+    assert r["gateChecks"] == [], f"re-raised over an already-blocking run: {r['gateChecks']}"
 
 
 def test_the_provisional_blocker_is_not_duplicated_when_the_head_is_unchanged(tmp_path):
@@ -1203,6 +1277,33 @@ def test_a_co_located_greptile_run_does_not_count_as_this_prs_review(tmp_path):
              sharedShaPrs=[{"number": 100, "labels": []}])
     assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), (
         f"took a co-located PR's Greptile run as proof this PR was reviewed: {r['comments']}")
+
+
+def test_the_fresh_handoff_path_also_ignores_a_co_located_greptile_run(tmp_path):
+    """The TWIN of the test above — the path that was missed.
+
+    Attribution was applied to the handed-off branch's live-run read but not to the
+    fresh-handoff branch's. So when A and B share a head and A's run already exists, B
+    qualifies, gets labelled, sees A's run and is never summoned: both PRs logged "live
+    Greptile run already exists" and neither ever posted `@greptileai review`, leaving B
+    labelled and unreviewed indefinitely.
+
+    This PR starts UNLABELLED (no marker), so it takes the fresh-handoff path — the
+    sibling test above enters via the handed-off branch and cannot reach this code.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             sharedShaPrs=[{"number": 100, "labels": []}])
+    # PR 1 really does reach the fresh-handoff branch (both PRs in this sweep do, since
+    # they share every condition — so assert on PR-1-specific log lines, not on the
+    # sweep-wide counters).
+    assert any(m.startswith("PR #1: cheap tier green") for m in r["log"]), r["log"]
+    assert any(m.startswith("PR #1:") and "not attributable" in m for m in r["log"]), (
+        f"fresh handoff took a co-located PR's Greptile run as its own: {r['log']}")
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), (
+        f"fresh handoff did not summon under co-location: {r['comments']}")
+    # Symmetric: the co-located PR must reach the same conclusion about PR 1.
+    assert not any("live Greptile run already exists" in m for m in r["log"]), r["log"]
 
 
 def test_a_pr_arriving_on_the_head_after_the_snapshot_still_withholds(tmp_path):

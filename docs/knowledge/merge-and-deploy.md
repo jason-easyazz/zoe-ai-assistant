@@ -131,6 +131,10 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
     over-blocking there is the trade. This replaced a weaker rule that published once the
     *other* PR had cleared its own cheap tier — clearing B's cheap tier does not make a
     review of the commit into a review of A.
+    - The rule applies to **both** live-run reads — the handed-off branch's and the
+      fresh-handoff branch's. Fixing only one left the other counting a co-located PR's
+      run as its own: both PRs logged "live Greptile run already exists" and neither ever
+      summoned, so the second sat labelled and unreviewed.
     - **Who shares the head is enumerated FRESH, immediately before publishing** — the
       union of `GET /commits/{sha}/pulls` (keyed on the SHA) and a re-read of the open-PR
       list, each candidate then confirmed with `pulls.get`. The sweep's opening snapshot is
@@ -146,6 +150,19 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
     A provisional run on the list/event SHA is raised first; if the head has since moved it
     lands on a commit nobody merges (harmless) and the authoritative raise covers the new
     head, and if it has not moved the two are the same run.
+    - That provisional raise runs in **normal** mode, where an existing `success` counts as
+      sufficient — so on an already-RELEASED head it creates nothing. A failed refetch
+      therefore also **supersedes a released blocker** before giving up: a refetch failure
+      means the contract cannot be *verified* this sweep, so a green context on that head is
+      unvouched-for. Gating on the failure rather than on the triggering event is broader
+      on purpose — it covers regressions no event reports at all (a new review thread has
+      no trigger; `main` moving ahead has none either) and costs nothing on healthy sweeps.
+      The refetch also gets one retry.
+    - **Residual, not closed:** this acts on the head from the sweep's opening list. If the
+      head moved *and* the refetch failed twice, this sweep does not know the real head, so
+      a released success on *that* commit stands until the next sweep (≤30 min). Closing it
+      would need the read that just failed. Do not read the guard as "a blocking check is
+      always present" — it is "a known head is never left green unverified".
   - Publishing is **idempotent**: the verdict is only written when it would change what the
     current context says. Otherwise every 30-min sweep of a settled PR created a duplicate
     completed run and buried the checks tab.

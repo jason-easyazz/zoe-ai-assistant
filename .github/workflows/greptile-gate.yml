@@ -281,11 +281,10 @@ jobs:
 
               // PROVISIONAL blocker, on the LIST/event SHA, before the authoritative
               // refetch below. `pulls.get` can fail transiently, and this loop then
-              // `continue`s — which used to leave a ready head with NO greptile-complete
-              // run at all while `validate`/`secret-scan` were already green, so an armed
-              // auto-merge passed straight through the absent context until the next
-              // sweep. A refetch failure must leave a BLOCKING check present, never
-              // nothing (cross-review T6 on #1592).
+              // `continue`s — which used to leave a ready head with no blocking
+              // greptile-complete run while `validate`/`secret-scan` were already green,
+              // so an armed auto-merge passed straight through until the next sweep
+              // (cross-review T6 on #1592).
               //
               // Reconciliation is by construction, not by cleanup: if the head has moved,
               // this run sits on a commit nobody is merging (contexts resolve against the
@@ -311,9 +310,58 @@ jobs:
               // commit), conditions would be read for a commit nobody is merging, and the
               // Codex marker would be written for the wrong head. One authoritative `sha`,
               // established here, is used from this point on — `pr.head.sha` is not read again.
-              const prFull = await ok(`PR #${pr.number} get`, () =>
+              const getHead = () => ok(`PR #${pr.number} get`, () =>
                 github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
-              if (!prFull) continue;
+              // ONE retry. What this guards is a transient 5xx/timeout, and a second
+              // attempt costs one call while removing most of the residual documented
+              // below — which the retry narrows but cannot eliminate.
+              let prFull = await getHead();
+              if (!prFull) prFull = await getHead();
+              if (!prFull) {
+                // T6 + T7 COMPOSED (cross-review, round 6). The provisional call above
+                // runs in NORMAL mode, where an existing completed `success` counts as
+                // sufficient — so on a head that was already RELEASED it creates nothing,
+                // and bailing out here left that success standing as the current context.
+                // Sequence, reproduced on afdce72f: head goes green -> a review is
+                // dismissed -> the regression trigger wakes this sweep -> provisional
+                // returns the existing success -> `pulls.get` fails -> `continue` fires
+                // BEFORE supersedeReleasedBlocker() ever runs -> auto-merge consumes a
+                // success whose contract no longer holds.
+                //
+                // A failed refetch means the contract for this head CANNOT be verified
+                // this sweep. A released blocker is therefore unvouched-for and must be
+                // superseded. Gating on the failure rather than on the triggering event
+                // is deliberate and strictly broader: it also covers regressions that no
+                // event reports at all — a newly opened review thread (there is no
+                // `pull_request_review_thread` trigger) or `main` moving ahead — and it
+                // costs nothing on healthy sweeps, so a settled green PR never churns.
+                // Unknown (the lookup itself failed) counts as released: fail closed.
+                //
+                // This precheck only SAVES A CALL — it is not what prevents a duplicate.
+                // `ensureBlocker(..., { regressed: true })` re-reads and returns without
+                // creating when the newest run is already blocking, so calling it
+                // unconditionally would be equally correct, just an extra listForRef per
+                // PR during exactly the API wobble that got us here.
+                const released = provisional === null || !isBlocking(newestRun(provisional));
+                if (listSha && released) {
+                  const re = await ensureBlocker(listSha, pr.number, { regressed: true });
+                  if (re) core.warning(`PR #${pr.number}: could not refetch the head — superseded a ` +
+                                       `released ${GATE_CHECK} on \`${String(listSha).slice(0, 8)}\` ` +
+                                       `rather than leave an unverifiable success live`);
+                  else core.warning(`PR #${pr.number}: could not refetch the head AND could not ` +
+                                    `re-block ${GATE_CHECK} on \`${String(listSha).slice(0, 8)}\` — a ` +
+                                    `released success may still be live; retrying next sweep`);
+                }
+                // RESIDUAL, stated rather than papered over: this acts on `listSha`, the
+                // head from the sweep's opening list. If the head moved AND the refetch
+                // failed, the real head is unknown to this sweep, so a released success on
+                // THAT commit is untouched until the next one (≤30 min). Closing it would
+                // need the very read that just failed. The conjunction is deep — head
+                // moves mid-sweep, refetch fails twice, the new head already carried a
+                // published success, and its contract regressed — and every part of it
+                // self-corrects on the next sweep. See merge-and-deploy.md.
+                continue;
+              }
               const sha = prFull.head.sha;
               const baseRef = prFull.base.ref;
 
@@ -1087,10 +1135,26 @@ jobs:
                 // live-run rule as the handed-off branch.
                 // The SAME DEAD_ENDS list as the handed-off branch and the publish site
                 // — that shared constant is what stopped these two drifting.
-                const gLive2 = await ok(`PR #${pr.number} greptile run check`, () =>
+                const gLive2OnSha = await ok(`PR #${pr.number} greptile run check`, () =>
                   github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
                     .then(rs => rs.filter(c => c.name === 'Greptile Review'
                                             && !(c.status === 'completed' && DEAD_ENDS.includes(c.conclusion))).length));
+                // ATTRIBUTION, exactly as the handed-off branch applies it (T9, round 6:
+                // that round fixed only the handed-off twin, and this one still counted a
+                // co-located PR's run as its own). Reproduced: A and B share a head, A's
+                // run exists, B qualifies and gets labelled — and BOTH logged "live
+                // Greptile run already exists" while neither ever posted `@greptileai
+                // review`, so B sat labelled and unreviewed. A run on the commit is not
+                // evidence for THIS PR while anyone else is on that commit. Unreadable
+                // co-location => null, which takes the fail-closed "could not read" arm.
+                const coLoc2 = await coLocatedOpenPrs();
+                const gLive2 = (gLive2OnSha === null || coLoc2 === null) ? null
+                             : (coLoc2.length ? 0 : gLive2OnSha);
+                if (coLoc2 && coLoc2.length && gLive2OnSha) {
+                  core.info(`PR #${pr.number}: a Greptile run exists on \`${sha.slice(0, 8)}\` but ` +
+                            `PR(s) ${coLoc2.join(', ')} share this head — not attributable to this ` +
+                            `PR, so the handoff summons anyway`);
+                }
                 // Same debounce as the handed-off branch (Codex): a revoke-then-
                 // recover inside Greptile's check-creation gap would otherwise
                 // double-summon — gLive2 is 0 precisely while the first summon is
