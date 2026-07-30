@@ -29,46 +29,46 @@
 set -euo pipefail
 
 # Pinned deliberately — see the note above. Verified against omnigent 0.7.0's
-# _CURSOR_MIN_VERSION of 2026.06.02. The pin is a LITERAL constant: the installer always
-# targets and verifies exactly this build, and `--check` audits against it too. An env
-# CURSOR_AGENT_VERSION override is allowed (for testing/rollback) but it MUST clear the
-# minimum — activating a version below CURSOR_MIN_VERSION would break the Cursor harness.
+# _CURSOR_MIN_VERSION of 2026.06.02.
+#
+# THE PIN IS IMMUTABLE IN TRACKED CODE — there is deliberately NO env override. An
+# override (even a validated one) means the version this repo *says* a host runs and the
+# version it *actually* runs can differ, with nothing in git recording it — which is the
+# exact class of drift this script exists to end, and it would also decouple the version
+# from the digests pinned below. Rolling back or testing another build is a one-line
+# edit here: a tracked, reviewable change, like every other pin in this repo.
 CURSOR_PINNED_VERSION="2026.07.23-e383d2b"
-CURSOR_AGENT_VERSION="${CURSOR_AGENT_VERSION:-${CURSOR_PINNED_VERSION}}"
+CURSOR_AGENT_VERSION="${CURSOR_PINNED_VERSION}"
 CURSOR_MIN_VERSION="2026.06.02"
+
+# SHA-256 of the upstream artifact for each arch, for THIS pin. The CDN object is fetched
+# over TLS but is otherwise unauthenticated and mutable — a replaced or compromised object
+# would be extracted and then EXECUTED by the verification step below. Pinning the digest
+# makes the pin cover the bytes, not just the version string in a URL. Regenerate when the
+# pin moves:  curl -fsSL <url> | sha256sum
+CURSOR_SHA256_arm64="f40b99647cb24e0da885e97620a2048034f1fe8961910d573d827d77c4d26dcb"
+CURSOR_SHA256_x64="702ad595213bee5df0268be9f80a19f29fcceaa2a42fc55e39f2b5199051f0c4"
 
 # Helper function: compare the leading YYYY.MM.DD only; the trailing -<sha> is build
 # metadata and is NOT ordered, so a lexical compare of the whole string would be wrong.
 # MUST be defined BEFORE the override validation below uses it.
 date_part() { printf '%s' "${1%%-*}"; }
 
-# Validate any override for BOTH format safety AND minimum-version compliance.
-# Format validation prevents path-traversal and ensures the value is actually a Cursor
-# version string. Only AFTER format validation do we proceed to the minimum-version check.
-if [ "${CURSOR_AGENT_VERSION}" != "${CURSOR_PINNED_VERSION}" ]; then
-  # Strict format: YYYY.MM.DD-<build> where YYYY is 4 digits, MM/DD are 2 digits,
-  # and <build> is 7+ hex chars (cursor's git short sha). Reject anything else BEFORE
-  # it flows into ${TARGET} path construction or the rm -rf below.
-  if ! printf '%s' "${CURSOR_AGENT_VERSION}" | grep -qE '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[a-f0-9]{7,}$'; then
-    echo "[cursor-agent] FAILED: CURSOR_AGENT_VERSION override '${CURSOR_AGENT_VERSION}' does not match the expected format YYYY.MM.DD-<build>" >&2
-    echo "[cursor-agent] refusing to proceed with a malformed version string (path-traversal / injection risk)" >&2
-    exit 1
-  fi
-  # Now check minimum version — the override is well-formed, safe to compare and use in paths.
-  if [ "$(printf '%s\n%s\n' "$(date_part "${CURSOR_MIN_VERSION}")" "$(date_part "${CURSOR_AGENT_VERSION}")" | sort -V | head -1)" \
-       != "$(date_part "${CURSOR_MIN_VERSION}")" ]; then
-    echo "[cursor-agent] FAILED: CURSOR_AGENT_VERSION override '${CURSOR_AGENT_VERSION}' is below CURSOR_MIN_VERSION '${CURSOR_MIN_VERSION}'" >&2
-    echo "[cursor-agent] activating a version below the minimum would break the Cursor harness — refusing to proceed." >&2
-    exit 1
-  fi
-  echo "[cursor-agent] override: targeting ${CURSOR_AGENT_VERSION} (not the pin ${CURSOR_PINNED_VERSION})"
-fi
-
 INSTALL_ROOT="${HOME}/.local/share/cursor-agent/versions"
 BIN_DIR="${HOME}/.local/bin"
 TARGET="${INSTALL_ROOT}/${CURSOR_AGENT_VERSION}/cursor-agent"
 
 current() { "${BIN_DIR}/cursor-agent" --version 2>/dev/null | head -1 || echo "none"; }
+
+# Reject anything that is not exactly the documented read-only flag. A typo such as
+# `--chek` previously fell through this test and silently ran the MUTATING install +
+# symlink path — the opposite of what the operator asked for.
+case "${1:-}" in
+  ""|--check) : ;;
+  *) echo "unknown argument: $1" >&2
+     echo "usage: $0 [--check]" >&2
+     exit 2 ;;
+esac
 
 if [ "${1:-}" = "--check" ]; then
   cur="$(current)"
@@ -121,7 +121,25 @@ if [ "${need_install}" = 1 ]; then
   mkdir -p "${INSTALL_ROOT}"
   staging="$(mktemp -d "${INSTALL_ROOT}/.stage-${CURSOR_AGENT_VERSION}.XXXXXX")"
   trap 'rm -rf "${staging}"' EXIT
-  curl -fSL "${URL}" | tar --strip-components=1 -xzf - -C "${staging}"
+  # Download to a file first: the digest must be checked BEFORE anything is extracted,
+  # and a `curl | tar` pipe executes the extract as the bytes arrive, with no opportunity
+  # to reject them. eval-free indirect lookup of the per-arch digest.
+  eval "expected_sha=\${CURSOR_SHA256_${ARCH}:-}"
+  if [ -z "${expected_sha}" ]; then
+    echo "[cursor-agent] FAILED: no pinned sha256 for arch '${ARCH}'" >&2; exit 1
+  fi
+  tarball="${staging}/.artifact.tar.gz"
+  curl -fSL "${URL}" -o "${tarball}"
+  got_sha="$(sha256sum "${tarball}" | cut -d' ' -f1)"
+  if [ "${got_sha}" != "${expected_sha}" ]; then
+    echo "[cursor-agent] FAILED: artifact sha256 mismatch for ${CURSOR_AGENT_VERSION} (${ARCH})" >&2
+    echo "[cursor-agent]   expected ${expected_sha}" >&2
+    echo "[cursor-agent]   got      ${got_sha}" >&2
+    echo "[cursor-agent] refusing to extract or execute it." >&2
+    exit 1
+  fi
+  tar --strip-components=1 -xzf "${tarball}" -C "${staging}"
+  rm -f "${tarball}"
   chmod +x "${staging}/cursor-agent"
   # PROVE the staged binary runs and reports the pin BEFORE installing it. Verifying the
   # staged copy (not a post-link binary) means a mismatch or a broken extract aborts here
