@@ -122,12 +122,24 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
     PR's head SHA and never reads `external_id`. So a `success` on a commit is a SHARED
     assertion: published for PR A, it also satisfies PR B if B points at the same commit.
     The gate therefore withholds success while any *other* open, non-draft PR on that head
-    lacks the `greptile` label, and says so in the run log. It holds (leaves the blocker
+    has not itself handed off, and says so in the run log. It holds (leaves the blocker
     `in_progress`) rather than failing, so it self-clears once the co-located PR qualifies
-    or moves off the commit. **Known residual:** candidates come from the sweep's opening
-    PR list, so a PR whose head moves *onto* the commit mid-sweep is only seen on the next
-    sweep (≤30 min) — that PR still carries its own `in_progress` blocker meanwhile, which
-    is what stops it merging.
+    or moves off the commit. Two things make that guard sound, and both were fail-open in
+    the first cut:
+    - **Who shares the head is enumerated FRESH, immediately before publishing** — the
+      union of `GET /commits/{sha}/pulls` (keyed on the SHA) and a re-read of the open-PR
+      list, each candidate then confirmed with `pulls.get`. The sweep's opening snapshot is
+      never trusted: a PR that moved onto the commit afterwards was absent from it and
+      never refetched. Both sources are needed — the association index lags a very recent
+      push, and a `pulls.list` scan can miss what the SHA-keyed endpoint reports. If either
+      read fails the publish is withheld. Note a co-located PR's own `in_progress` blocker
+      does **not** protect it: contexts resolve by name+SHA, so a newer success supersedes
+      a pending run of the same name.
+    - **"Handed off" means the `greptile` label AND a trusted handoff marker pinned to
+      THIS SHA** — the same contract as `alreadyHandedOff`, sharing one helper. A label
+      alone is not proof: labels survive head changes, so a PR arriving on the commit with
+      a label earned for an older head read as qualified in the window before its own
+      sweep stripped it.
   - Publishing is **idempotent**: the verdict is only written when it would change what the
     current context says. Otherwise every 30-min sweep of a settled PR created a duplicate
     completed run and buried the checks tab.

@@ -108,6 +108,41 @@ jobs:
               catch (e) { core.warning(`${label}: ${e.message}`); return null; }
             };
 
+            // ── The handoff-marker contract ───────────────────────────────────────
+            // ONE implementation, at script scope, because it now has TWO callers: a
+            // PR's own `alreadyHandedOff`, and the shared-SHA coordination that decides
+            // whether a CO-LOCATED PR counts as qualified. Coordination originally read
+            // only the `greptile` label and that was fail-open — a label survives a head
+            // change, so a PR could arrive on this commit still carrying a label earned
+            // for an OLDER head and be counted as handed off before its own sweep
+            // stripped it (cross-review on #1592). The label and a marker FOR THIS SHA
+            // are the contract; anything less is a stale claim.
+            const MARK = '<!-- greptile-gate:labelled:';
+            // TRUST, not presence. This repo is PUBLIC, so anyone can post a comment
+            // containing the marker string. An unfiltered match lets a stranger forge a
+            // handoff — making the gate believe a PR was already cleared, or pinning it to
+            // a SHA of their choosing.
+            // ONLY this workflow's own bot. author_association was tried and is wrong:
+            // MEMBER and COLLABORATOR do not imply write permission, so an org member
+            // with read-only access could forge a handoff marker. There is no legitimate
+            // case for a human-authored marker either — the workflow is the only thing
+            // that writes them — so the narrowest possible rule is also the correct one.
+            const trusted = (c) =>
+              c.user?.login === 'github-actions[bot]' && c.user?.type === 'Bot';
+            // Explicit chronology: "newest marker wins" must not lean on the REST
+            // default ordering (ascending id — documented, but implicit here). The
+            // issue-comments endpoint has no sort parameter, so order in code.
+            const byCreated = (a, b) =>
+              new Date(a.created_at || 0) - new Date(b.created_at || 0);
+            // The SHA the newest TRUSTED handoff marker pins this PR to, or null.
+            const handoffShaFrom = (comments) => {
+              const marks = (comments || []).filter(c => c.body?.includes(MARK) && trusted(c))
+                                            .sort(byCreated);
+              return marks.length
+                ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
+                : null;
+            };
+
             // ── The auto-merge race, and why this check exists ────────────────────
             // A required status check only BLOCKS once it has reported for the head.
             // `Greptile Review` does not exist until Greptile creates it, and Greptile
@@ -317,35 +352,75 @@ jobs:
               // is left unresolved rather than failed, so it clears by itself on a
               // later sweep once the other PR qualifies or moves off the commit.
               //
-              // "Has handed off" is read as the `greptile` label. That is the same
-              // assertion the gate itself makes — and it is exactly right here, because
-              // Greptile's own review is per-SHA too: a review of this commit covers
-              // both PRs, so the only thing genuinely un-asserted for the co-located PR
-              // is its CHEAP tier, which is what the label attests.
+              // WHO shares the head is enumerated FRESH, immediately before publishing —
+              // never from the sweep's opening `pulls.list` snapshot. That snapshot only
+              // contains PRs that ALREADY pointed at this commit when the sweep began, so
+              // a PR that moved onto the commit afterwards was excluded from the candidate
+              // set and never refetched: this PR then published `success`, which became the
+              // NEWEST run of that name on the SHA, and the late arrival consumed it. The
+              // earlier note claiming its own `in_progress` blocker protected it was simply
+              // wrong — required contexts resolve by name+SHA, so a newer success
+              // supersedes a pending run of the same name (cross-review on #1592).
               //
-              // LIMITATION, deliberate and documented: candidates come from the sweep's
-              // opening `pulls.list` snapshot, so a PR whose head moves ONTO this commit
-              // mid-sweep is not seen until the next sweep (≤30 min). Closing that would
-              // need a `pulls.get` for every open PR on every sweep. The residual runs
-              // the same direction as the rest of the gate — the co-located PR still has
-              // its own in_progress blocker from its own head-observation, which is what
-              // stops it merging in the interim.
+              // Two independent enumerations, unioned, because neither alone is sufficient:
+              //   * `listPullRequestsAssociatedWithCommit` (GET /commits/{sha}/pulls) asks
+              //     GitHub directly which PRs are associated with the commit — the only
+              //     call that is keyed on the SHA rather than on a list we have to scan.
+              //     It also returns PRs where the commit is merely an ANCESTOR, so the
+              //     head-equality filter below still decides membership.
+              //   * a FRESH `pulls.list`, because the association index is eventually
+              //     consistent and can lag a very recent push.
+              // Either read failing means we cannot know who shares the head, so the
+              // publish is withheld — this is the direction that keeps merge blocked.
+              //
+              // "Has handed off" is the SAME contract as `alreadyHandedOff`: the
+              // `greptile` label AND a trusted handoff marker pinned to THIS SHA. The
+              // label alone was fail-open — labels survive head changes, so a PR arriving
+              // on this commit with a label earned for an older head read as qualified in
+              // the window before its own sweep stripped it. Greptile's own review is
+              // per-SHA and covers both PRs, so the co-located PR's CHEAP tier is the only
+              // thing genuinely un-asserted — and the marker is what attests it for this
+              // exact commit.
               const sharedShaHolders = async () => {
-                const cands = prs.filter(p => p.number !== pr.number && !p.draft
-                                              && p.head && p.head.sha === sha);
-                if (!cands.length) return [];
+                const assoc = await ok(`PR #${pr.number} PRs on \`${sha.slice(0, 8)}\``, () =>
+                  github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
+                    ...base, commit_sha: sha, per_page: 100,
+                  }));
+                const fresh = await ok(`PR #${pr.number} open PRs (coordination)`, () =>
+                  github.paginate(github.rest.pulls.list, {
+                    ...base, state: 'open', per_page: 100,
+                  }));
+                if (!assoc || !fresh) {
+                  core.warning(`PR #${pr.number}: could not enumerate PRs on \`${sha.slice(0, 8)}\` ` +
+                               `— withholding ${GATE_CHECK} success (cannot rule out a co-located PR)`);
+                  return ['<unreadable>'];
+                }
+                // Union by number; membership is decided by the confirm step below, so a
+                // stale entry from either source costs one `pulls.get`, never a wrong pass.
+                const seen = new Map();
+                for (const p of assoc.concat(fresh)) {
+                  if (p && p.number !== pr.number) seen.set(p.number, p);
+                }
                 const holding = [];
-                for (const c of cands) {
-                  // Confirm against the CURRENT head — the list snapshot ages exactly
-                  // the way this PR's own entry did.
+                for (const c of seen.values()) {
+                  // Confirm against the CURRENT head — every list ages, including the two
+                  // just fetched.
                   const cf = await ok(`PR #${c.number} get (shared sha)`, () =>
                     github.rest.pulls.get({ ...base, pull_number: c.number }).then(r => r.data));
                   // Unreadable => assume it shares this head and has NOT handed off.
                   // Fail closed: the cost is one more sweep, the alternative is
                   // publishing a green context for a PR we could not verify.
                   if (!cf) { holding.push(c.number); continue; }
-                  if (cf.draft || cf.head.sha !== sha) continue;   // no longer a sharer
-                  if (!(cf.labels || []).some(l => l.name === LABEL)) holding.push(cf.number);
+                  if (cf.state !== 'open' || cf.draft || cf.head.sha !== sha) continue;
+                  if (!(cf.labels || []).some(l => l.name === LABEL)) { holding.push(cf.number); continue; }
+                  // Labelled — but is the label FOR THIS HEAD? Same marker contract as
+                  // alreadyHandedOff, via the same helper, so the two cannot drift.
+                  const cc = await ok(`PR #${cf.number} comments (shared sha)`, () =>
+                    github.paginate(github.rest.issues.listComments, {
+                      ...base, issue_number: cf.number, per_page: 100,
+                    }));
+                  if (!cc) { holding.push(cf.number); continue; }   // unreadable => not proven
+                  if (handoffShaFrom(cc) !== sha) holding.push(cf.number);
                 }
                 return holding;
               };
@@ -358,26 +433,6 @@ jobs:
                 ...base, issue_number: pr.number, per_page: 100,
               }));
               if (!comments) { core.info(`PR #${pr.number}: could not read comments — holding`); continue; }
-
-              const MARK = '<!-- greptile-gate:labelled:';
-              // TRUST, not presence. This repo is PUBLIC, so anyone can post a comment
-              // containing the marker string. An unfiltered match lets a stranger forge a
-              // handoff — making the gate believe a PR was already cleared, or pinning it to
-              // a SHA of their choosing.
-              // ONLY this workflow's own bot. author_association was tried and is wrong:
-              // MEMBER and COLLABORATOR do not imply write permission, so an org member
-              // with read-only access could forge a handoff marker. There is no legitimate
-              // case for a human-authored marker either — the workflow is the only thing
-              // that writes them — so the narrowest possible rule is also the correct one.
-              const trusted = (c) =>
-                c.user?.login === 'github-actions[bot]' && c.user?.type === 'Bot';
-              // Explicit chronology: "newest marker wins" must not lean on the REST
-              // default ordering (ascending id — documented, but implicit here). The
-              // issue-comments endpoint has no sort parameter, so order in code.
-              const byCreated = (a, b) =>
-                new Date(a.created_at || 0) - new Date(b.created_at || 0);
-              const marks = comments.filter(c => c.body?.includes(MARK) && trusted(c))
-                                    .sort(byCreated);
 
               // ONE reader for EVERY gate condition, called twice: once to decide, once to
               // revalidate immediately before acting. It previously hand-copied a SUBSET of
@@ -516,9 +571,7 @@ jobs:
                 continue;
               }
 
-              const labelledSha = marks.length
-                ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
-                : null;
+              const labelledSha = handoffShaFrom(comments);
 
               const isLabelled = (prFull.labels || []).some(l => l.name === LABEL);
               // A matching marker means the handoff happened on THIS head. Do not return

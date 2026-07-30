@@ -90,12 +90,24 @@ HARNESS = textwrap.dedent(
     // protection resolves a required context by check NAME on the PR's head SHA and
     // never looks at external_id, so a success published for one of these satisfies
     // the others too — which is the whole point of the shared-SHA coordination.
-    const others = (OPTS.sharedShaPrs || []).map((o, i) => ({
-      number: o.number === undefined ? 100 + i : o.number,
-      head: { sha: o.sha || SHA }, base: { ref: 'main' },
-      labels: o.labels || [], draft: o.draft || false,
-      created_at: '2020-01-01T00:00:00Z', requested_reviewers: [] }));
-    const otherById = new Map(others.map((o) => [o.number, o]));
+    //
+    // Per-PR spec knobs:
+    //   markerSha   — the SHA this PR's own trusted handoff marker pins it to (absent
+    //                 = no marker at all, i.e. a label with no proof of handoff)
+    //   arrivesLate — NOT in the sweep's OPENING pulls.list; visible to every later
+    //                 read. Models a PR moving onto the head mid-sweep.
+    //   assocOnly   — never in ANY pulls.list; visible only via the commit->PRs
+    //                 association endpoint.
+    //   hiddenFromAssoc — the inverse: absent from the association index (which is
+    //                 eventually consistent and can lag a very recent push).
+    const otherSpecs = (OPTS.sharedShaPrs || []).map((o, i) => ({
+      spec: o,
+      pr: { number: o.number === undefined ? 100 + i : o.number,
+            head: { sha: o.sha || SHA }, base: { ref: 'main' },
+            labels: o.labels || [], draft: o.draft || false, state: o.state || 'open',
+            created_at: '2020-01-01T00:00:00Z', requested_reviewers: [] } }));
+    const otherById = new Map(otherSpecs.map((o) => [o.pr.number, o]));
+    let prListReads = 0;
 
     let reviewReads = 0;
     const asReview = (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l } });
@@ -120,7 +132,14 @@ HARNESS = textwrap.dedent(
       },
       rest: {
         pulls: {
-          list: async () => [pr].concat(others),
+          // The OPENING snapshot (first call) cannot contain a PR that moves onto the
+          // head afterwards. Coordination must therefore RE-READ rather than trust it.
+          list: async () => {
+            prListReads += 1;
+            return [pr].concat(otherSpecs
+              .filter((o) => !o.spec.assocOnly && (prListReads > 1 || !o.spec.arrivesLate))
+              .map((o) => o.pr));
+          },
           // OPTS.headMovesLate: the head moves once the conditions have been re-read.
           // Keyed on conditionReads, NOT on the number of
           // pulls.get calls — a get-count trigger fires in BOTH orderings and so cannot
@@ -129,7 +148,7 @@ HARNESS = textwrap.dedent(
             // Co-located PRs answer for themselves; only PR 1 drives the counters, so
             // adding a sharer cannot perturb the head-moves-late timing above.
             const oth = o && otherById.get(o.pull_number);
-            if (oth) return { data: oth };
+            if (oth) return { data: oth.pr };
             getReads += 1;
             const moved = OPTS.headMovesLate && getReads >= 2 && conditionReads >= 2;
             return { data: { ...pr, head: { sha: moved ? 'c'.repeat(40) : SHA },
@@ -145,6 +164,15 @@ HARNESS = textwrap.dedent(
           compareCommits: async () => {
             conditionReads += 1;
             return { data: { behind_by: OPTS.behindBy || 0 } };
+          },
+          // GET /repos/{o}/{r}/commits/{sha}/pulls — GitHub answers by SHA, so it sees a
+          // PR that moved onto the commit after the sweep's opening snapshot. It also
+          // returns PRs where the commit is merely an ANCESTOR, so the gate must decide
+          // membership by head-equality itself rather than trusting this list.
+          listPullRequestsAssociatedWithCommit: async () => {
+            if (OPTS.assocFetchFails) throw new Error('association index unavailable');
+            return [pr].concat(otherSpecs
+              .filter((o) => !o.spec.hiddenFromAssoc).map((o) => o.pr));
           },
           // Fallback anchor for the Codex grace when the head has no check suites.
           getCommit: async () => {
@@ -207,7 +235,26 @@ HARNESS = textwrap.dedent(
         issues: {
           // OPTS.markerSha: a prior handoff marker from THIS workflow's bot, pinning
           // the label to that SHA. Trust is bot-only, so the author must match exactly.
-          listComments: async () => ((OPTS.greptileSummons || []).map((c) => ({
+          listComments: async (o) => {
+            // A co-located PR has its OWN comments — it does not inherit PR 1's
+            // handoff marker. Without this, a sharer would borrow PR 1's proof of
+            // handoff and the marker contract would be untestable.
+            const oth = o && otherById.get(o.issue_number);
+            if (oth) return oth.spec.markerSha ? [{
+              user: { login: 'github-actions[bot]', type: 'Bot' },
+              created_at: '2026-07-27T00:00:00Z',
+              body: `handoff\n<!-- greptile-gate:labelled:${oth.spec.markerSha} -->`,
+            }] : [];
+            return mainComments();
+          },
+          createComment: async (o) => { calls.comments.push(o.body); return { data: { id: 777 } }; },
+          deleteComment: async (o) => { calls.deleted.push(o.comment_id); return {}; },
+          addLabels: async () => { calls.addLabels += 1; calls.events.push('label'); return {}; },
+          removeLabel: async () => { calls.removeLabel += 1; return {}; },
+        },
+      },
+    };
+    function mainComments() { return ((OPTS.greptileSummons || []).map((c) => ({
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: c.at,
             body: `@greptileai review\n<!-- greptile-gate:summon:${c.sha || 'a'.repeat(40)} -->`,
@@ -223,14 +270,7 @@ HARNESS = textwrap.dedent(
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: '2026-07-27T00:00:00Z',
             body: `handoff\n<!-- greptile-gate:labelled:${OPTS.markerSha} -->`,
-          }] : [])),
-          createComment: async (o) => { calls.comments.push(o.body); return { data: { id: 777 } }; },
-          deleteComment: async (o) => { calls.deleted.push(o.comment_id); return {}; },
-          addLabels: async () => { calls.addLabels += 1; calls.events.push('label'); return {}; },
-          removeLabel: async () => { calls.removeLabel += 1; return {}; },
-        },
-      },
-    };
+          }] : [])); }
     const log = [];
     const core = { info: (m) => log.push(String(m)), notice: (m) => log.push(String(m)),
                    warning: (m) => log.push(String(m)), setFailed: (m) => { throw new Error(m); } };
@@ -1006,15 +1046,118 @@ def test_success_is_published_once_every_co_located_pr_has_handed_off(tmp_path):
     """The positive control: the guard must withhold only for UNQUALIFIED sharers.
 
     Without this, the guard could pass its sibling test by blocking unconditionally —
-    which would strand every PR that happens to share a commit.
+    which would strand every PR that happens to share a commit. PR 100 here carries
+    BOTH halves of the contract: the label, and its own trusted handoff marker pinned
+    to this head.
     """
     r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
              markerSha="a" * 40,
              greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": [{"name": "greptile"}]}])
+             sharedShaPrs=[{"number": 100, "labels": [{"name": "greptile"}],
+                            "markerSha": "a" * 40}])
     mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
     assert any(c["conclusion"] == "success" for c in mine), (
         f"withheld success though the co-located PR had handed off: {mine}")
+
+
+def test_a_label_without_a_marker_for_this_head_is_not_a_handoff(tmp_path):
+    """A LABEL IS NOT PROOF. It survives a head change; the marker does not.
+
+    PR 100 arrives on this commit still carrying a `greptile` label earned for an older
+    head, and its own sweep has not yet stripped it. Reading the label alone counted
+    that as handed off and published a success that satisfies PR 100's required context
+    too — before PR 100's cheap tier was ever checked on THIS commit. Coordination must
+    apply the same label-plus-marker-for-this-SHA contract as `alreadyHandedOff`.
+
+    Two shapes, both of which the label-only check waved through: a marker pinned to a
+    DIFFERENT sha, and no marker at all.
+    """
+    stale = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+                 markerSha="a" * 40,
+                 greptileRun={"status": "completed", "conclusion": "success"},
+                 sharedShaPrs=[{"number": 100, "labels": [{"name": "greptile"}],
+                                "markerSha": "e" * 40}])   # earned on an older head
+    mine = [c for c in stale["gateChecks"] if c["external_id"] == "1"]
+    assert not any(c["conclusion"] == "success" for c in mine), (
+        f"a label from an OLDER head counted as handoff: {mine}")
+    assert any("share this head" in m for m in stale["log"]), stale["log"]
+
+    none = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+                markerSha="a" * 40,
+                greptileRun={"status": "completed", "conclusion": "success"},
+                sharedShaPrs=[{"number": 100, "labels": [{"name": "greptile"}]}])
+    mine = [c for c in none["gateChecks"] if c["external_id"] == "1"]
+    assert not any(c["conclusion"] == "success" for c in mine), (
+        f"a label with NO handoff marker counted as handoff: {mine}")
+
+
+def test_a_pr_arriving_on_the_head_after_the_snapshot_still_withholds(tmp_path):
+    """The opening `pulls.list` snapshot cannot see a PR that moves onto the head later.
+
+    PR 100 is absent from the sweep's first list read and present in every later one.
+    Deriving candidates from the snapshot excluded it entirely — it was never refetched
+    — so this PR published `success`, which became the NEWEST run of that name on the
+    SHA, and PR 100 consumed it. Its own `in_progress` blocker does NOT protect it:
+    required contexts resolve by name+SHA, so a newer success supersedes a pending run.
+    Coordination must therefore enumerate the head's PRs FRESH, immediately before
+    publishing.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             sharedShaPrs=[{"number": 100, "labels": [], "arrivesLate": True}])
+    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
+    assert not any(c["conclusion"] == "success" for c in mine), (
+        f"published success for a head a late-arriving PR shares: {mine}")
+    assert any("share this head" in m for m in r["log"]), r["log"]
+
+
+def test_the_commit_to_prs_association_endpoint_is_load_bearing(tmp_path):
+    """`GET /commits/{sha}/pulls` is keyed on the SHA, not on a list we have to scan.
+
+    Here PR 100 is invisible to EVERY `pulls.list` read and shows up only in the
+    association index. Drop that call and the sharer is missed. (The reverse case is
+    covered by `..._after_the_snapshot_still_withholds`, where the association index
+    lags — which is why both sources are unioned rather than either being trusted.)
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             sharedShaPrs=[{"number": 100, "labels": [], "assocOnly": True}])
+    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
+    assert not any(c["conclusion"] == "success" for c in mine), (
+        f"missed a sharer only the association endpoint reports: {mine}")
+
+
+def test_a_lagging_association_index_is_covered_by_the_fresh_pr_list(tmp_path):
+    """The other half of the union, and the reason it IS a union.
+
+    `GET /commits/{sha}/pulls` is an eventually-consistent index and can lag a very
+    recent push. Here PR 100 has already moved onto the head — a fresh `pulls.list`
+    sees it — but the association index has not caught up yet. Relying on the
+    association endpoint alone would miss it and publish a shared success.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             sharedShaPrs=[{"number": 100, "labels": [], "hiddenFromAssoc": True}])
+    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
+    assert not any(c["conclusion"] == "success" for c in mine), (
+        f"missed a sharer the association index had not indexed yet: {mine}")
+
+
+def test_an_unreadable_pr_enumeration_withholds_success(tmp_path):
+    """Fail CLOSED. If we cannot enumerate who shares the head we cannot assert
+    anything about them, and publishing a green shared context on an unverified
+    commit is the direction that lets an unreviewed head merge."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             assocFetchFails=True)
+    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
+    assert not any(c["conclusion"] == "success" for c in mine), (
+        f"published success without knowing who shares the head: {mine}")
+    assert any("could not enumerate" in m for m in r["log"]), r["log"]
 
 
 def test_a_pr_on_a_different_head_does_not_withhold_success(tmp_path):
