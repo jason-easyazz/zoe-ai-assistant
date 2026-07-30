@@ -29,11 +29,11 @@
 set -euo pipefail
 
 # Pinned deliberately — see the note above. Verified against omnigent 0.7.0's
-# _CURSOR_MIN_VERSION of 2026.06.02. The pin is a LITERAL constant so `--check` always audits
-# a host against the TRUE pin. An override is honoured for the INSTALL path only, behind a
-# separately-named flag (CURSOR_AGENT_INSTALL_VERSION) — it must never weaken the audit.
+# _CURSOR_MIN_VERSION of 2026.06.02. The pin is a LITERAL constant: the installer always
+# targets and verifies exactly this build, and `--check` audits against it too. There is NO
+# version override — provisioning any other build would defeat the whole point of the pin.
 CURSOR_PINNED_VERSION="2026.07.23-e383d2b"
-CURSOR_AGENT_VERSION="${CURSOR_AGENT_INSTALL_VERSION:-${CURSOR_PINNED_VERSION}}"
+CURSOR_AGENT_VERSION="${CURSOR_PINNED_VERSION}"
 CURSOR_MIN_VERSION="2026.06.02"
 
 INSTALL_ROOT="${HOME}/.local/share/cursor-agent/versions"
@@ -61,9 +61,23 @@ if [ "${1:-}" = "--check" ]; then
   exit 1
 fi
 
+# Decide whether a fresh staged install is needed. The active symlink must NEVER point at a
+# binary that has not been verified to report the pin, so an existing final dir is trusted
+# ONLY if it actually reports the pin. An executable-but-wrong-or-partial dir (e.g. a stale
+# build, or a half-extracted one whose cursor-agent runs but misreports) is treated as
+# invalid and reinstalled from a verified download — it is never relinked as-is.
+need_install=1
 if [ -x "${TARGET}" ]; then
-  echo "[cursor-agent] ${CURSOR_AGENT_VERSION} already present"
-else
+  existing="$("${TARGET}" --version 2>/dev/null | head -1 || echo "none")"
+  if [ "${existing}" = "${CURSOR_AGENT_VERSION}" ]; then
+    echo "[cursor-agent] ${CURSOR_AGENT_VERSION} already present and verified"
+    need_install=0
+  else
+    echo "[cursor-agent] existing ${TARGET} reports '${existing}', not '${CURSOR_AGENT_VERSION}' — reinstalling from a verified download" >&2
+  fi
+fi
+
+if [ "${need_install}" = 1 ]; then
   # The official installer resolves its own version, so it cannot be pointed at a pin;
   # fetch the versioned artifact directly instead. `cursor-agent update` is NOT usable
   # here — on arm64 it exits 1 with no message (measured 2026-07-29).
@@ -94,9 +108,9 @@ else
     echo "[cursor-agent] FAILED: staged binary reports '${staged_ver}', expected '${CURSOR_AGENT_VERSION}' — not installing" >&2
     exit 1
   fi
-  # A prior interrupted run may have left a partial (non-executable) final dir — that is
-  # exactly how TARGET failed the -x check above. Remove it so the rename lands cleanly
-  # instead of nesting the staging dir inside it, then publish atomically.
+  # Replace any prior final dir — partial (failed the -x check) OR wrong-version (failed the
+  # --version check) is exactly how we reach this staged path. Remove it so the rename lands
+  # cleanly instead of nesting the staging dir inside it, then publish atomically.
   rm -rf "${INSTALL_ROOT:?}/${CURSOR_AGENT_VERSION:?}"
   mv "${staging}" "${INSTALL_ROOT}/${CURSOR_AGENT_VERSION}"
   trap - EXIT
