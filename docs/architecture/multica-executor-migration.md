@@ -177,10 +177,33 @@ CLOSED in this same PR (the fifth seam fix above) — the backend surfaces the c
 brief demands a machine-parsed `PR_URL=`/`TESTS=`/`VALIDATORS=`/`SUMMARY=`
 (+`BLOCKER=` when blocked) block before the completion token — proven against
 `evidence_from_handoff` in unit tests, still to be proven on a live ticket
-passing verify. (c)
-`validate_structure.py` takes >2 min on the live checkout, so every gate
-evaluation blows the default 60s `ZOE_MULTICA_POLL_REF_TIMEOUT_S` (raised to
-300 in the live env as a band-aid; the walk needs pruning).
+passing verify. (c) **CLOSED (PR #1585, 2026-07-28):**
+`validate_structure.py` was walking git-ignored trees (`models/`, `data/`,
+`node_modules/`, `.claude/worktrees/`) on the live checkout — 2m07s, blowing the
+default 60s `ZOE_MULTICA_POLL_REF_TIMEOUT_S`. The walk now prunes git-ignored
+directories up front (one `git ls-files --others --ignored --directory` call):
+**2m07s → 0.17s**, measured. The 300s band-aid in the live env can be reverted
+to the 60s default (a live-env config change, operator step below); no code
+depends on the raised value.
+
+**Provisioning wired (this PR, ZOE-6137).** `flue-executor.service` is now an
+explicit *opt-in* unit in the deploy path: `install-jetson.sh` installs its
+template (the `*.service` glob) but never enables it, prints its go-live steps,
+and will `die` (canonical-name comparison, so both `flue-executor` and
+`flue-executor.service` are caught) if a future edit ever adds it to the
+auto-enabled `SYSTEMD_SPINE`. The installer is **side-effect-free with respect to
+dispatch control**: it never enables the unit and it **never touches the shared
+`~/.zoe/multica_dispatch_paused` sentinel**. That sentinel is deliberately left
+alone because the same file is read every cycle by the already-live zoe-data poll
+loop and `multica_board_runner` — recreating it on a reinstall of an established
+host would halt all live engineering dispatch. Safety after install rests on the
+two gates that ship ON by construction — `ZOE_EXECUTOR_DISPATCH=dry` (poll + log,
+mutate nothing) and single-lane — not on an installer-armed pause. Documented in
+[scripts/setup/systemd/README.md](../../scripts/setup/systemd/README.md). A fresh
+host ships the unit inert-but-ready; *enabling* it, arming the pause sentinel (an
+operator go-live tool, never an installer action), setting dispatch `full`, and
+removing the pause remain deliberate operator acts (gap (a)/end-to-end tickets
+still open).
 
 ### Phase 3 — (superseded by §5 decision 2: Omnigent is PRIMARY from day one)
 

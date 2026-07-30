@@ -82,7 +82,7 @@ function swapDbName(url: string, dbName: string): string {
 }
 
 function postgresUrlFromEnvFile(): string {
-  const envFile = process.env.ZOE_ENV_FILE ?? '/home/zoe/assistant/services/zoe-data/.env';
+  const envFile = process.env.ZOE_ENV_FILE ?? join(homedir(), 'assistant/services/zoe-data/.env');
   let text: string;
   try {
     text = readFileSync(envFile, 'utf8');

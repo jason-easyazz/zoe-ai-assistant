@@ -5,23 +5,31 @@
 # OPTIONAL and NOT enabled by default. Installing/enabling this unit is an
 # explicit operator action. Nothing here is auto-installed.
 #
-# THREE SAFETY GATES, all on until deliberately lifted:
-#   * KILL SWITCH — while ~/.zoe/multica_dispatch_paused exists the runner
-#     idles and claims nothing. It is safe to enable this unit long before the
-#     board is unpaused; removing that file is the single go-live action.
-#   * DRY DISPATCH — ZOE_EXECUTOR_DISPATCH defaults to `dry` (poll + log what it
-#     WOULD claim, mutate nothing). Set it to `full` in the env file only when
-#     the loop is being taken live.
+# The installer installs this INERT, opt-in unit and arms NO dispatch gate — it
+# never enables the unit and never touches the shared Multica pause sentinel
+# ~/.zoe/multica_dispatch_paused (that file is read every cycle by the already-live
+# board, so recreating it on a reinstall would halt live dispatch). Safety after
+# install rests on two gates that ship ON by construction:
+#   * NOT AUTO-ENABLED — installed as a template, never added to the auto-enabled
+#     systemd spine; enabling this unit is a deliberate operator act.
+#   * DRY DISPATCH (default) — ZOE_EXECUTOR_DISPATCH defaults to `dry` (poll + log
+#     what it WOULD claim, mutate nothing). Set it to `full` in the env file only
+#     when the loop is being taken live.
 #   * SINGLE LANE — the claim logic dispatches at most one task at a time per
 #     runtime, so a board of issues never fans out into concurrent Omnigent
 #     sessions (the "don't eat usage" guard).
+# OPTIONAL pause: arming ~/.zoe/multica_dispatch_paused makes the runner idle and
+# claim nothing, but that is an operator tool (it pauses the whole shared board),
+# not something install performs — see scripts/setup/systemd/README.md.
 #
 # Prereqs (the unit runs, it does not build):
 #   cd ~/assistant/labs/flue-executor && npm install
 #   # register the executor identity in Multica (idempotent):
 #   python3 ~/assistant/scripts/maintenance/verify_executor_queue_backend.py
-#   # create the env file from the template and adjust if needed:
-#   cp ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor/.env
+#   # create the env file from the template if not already present, and adjust
+#   # (-n keeps a .env you pre-created with a custom ZOE_MULTICA_KILL_SWITCH or
+#   # dispatch setting so it is not silently reset to the template default):
+#   cp -n ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor/.env
 [Unit]
 Description=Flue Executor (lab) — single-lane Multica queue consumer
 # Reads Multica's DB (via the shared zoe-database container). Restart=always
@@ -41,6 +49,14 @@ RestartSec=5
 # in. NEVER inline secrets here. The file is required (no '-' prefix): the unit
 # fails loudly if the operator has not configured it.
 Environment=ZOE_EXECUTOR_MODE=live
+# Pin the live service env file to THIS account's checkout (%h) so ZOE_ENV_FILE
+# is explicit in the unit: config.ts derives POSTGRES_URL from ZOE_ENV_FILE and,
+# when it is unset, falls back to a homedir()-derived
+# ~/assistant/services/zoe-data/.env — so a non-`zoe` operator already resolves
+# to their own home. Setting it here just makes that resolution explicit. An
+# explicit ZOE_ENV_FILE in the .env below still wins (EnvironmentFile is applied
+# after Environment).
+Environment=ZOE_ENV_FILE=%h/assistant/services/zoe-data/.env
 EnvironmentFile=%h/assistant/labs/flue-executor/.env
 
 # Light hardening (user-service compatible).
