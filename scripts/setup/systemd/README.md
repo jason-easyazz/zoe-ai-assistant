@@ -218,15 +218,24 @@ Then flip the two go-live gates in order:
 # 1) arm real dispatch in the env file:
 #      ZOE_EXECUTOR_DISPATCH=full   (in labs/flue-executor/.env), then restart:
 systemctl --user restart flue-executor
-# 2) unpause — the single go-live action (same override-aware path the installer
-#    arms; the default is ~/.zoe/multica_dispatch_paused):
-rm -f "${ZOE_MULTICA_KILL_SWITCH:-$HOME/.zoe/multica_dispatch_paused}"
+# 2) unpause — the single go-live action. Resolve the kill-switch path the SAME
+#    way the installer and service do, so you remove the path that was actually
+#    ARMED. The lab .env ZOE_MULTICA_KILL_SWITCH override wins (last uncommented
+#    assignment), else a shell export, else the default. Removing the bare
+#    default instead would leave a custom-path host still PAUSED.
+env_file=~/assistant/labs/flue-executor/.env
+line="$(grep -E '^[[:space:]]*ZOE_MULTICA_KILL_SWITCH[[:space:]]*=' "$env_file" 2>/dev/null | tail -n1)"
+val="${line#*=}"; val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+[[ "$val" == \"*\" || "$val" == \'*\' ]] && val="${val:1:${#val}-2}"
+KILL_SWITCH="${val:-${ZOE_MULTICA_KILL_SWITCH:-$HOME/.zoe/multica_dispatch_paused}}"
+rm -f "$KILL_SWITCH"          # the single go-live action
 ```
 
 **Only now — dispatch `full` AND unpaused — can real tickets flow.** Validate
 **≥3 real end-to-end tickets here**, watching `journalctl`, before treating Phase 2
-as proven. Re-arm the switch instantly to pause if anything misbehaves:
-`: > "${ZOE_MULTICA_KILL_SWITCH:-$HOME/.zoe/multica_dispatch_paused}"`.
+as proven. Re-arm the SAME resolved switch instantly to pause if anything
+misbehaves — re-resolve `KILL_SWITCH` as above in a fresh shell, then
+`: > "$KILL_SWITCH"`.
 
 Start order matters — see [OPERATOR_RUNBOOK.md](../../../docs/guides/OPERATOR_RUNBOOK.md).
 

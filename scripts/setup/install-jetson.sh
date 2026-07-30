@@ -248,8 +248,14 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   # started the unit they own its lifecycle, and a later reinstall must NOT
   # recreate the switch and idle a running executor they deliberately took live.
   # Never removed here — removing it is the deliberate go-live act.
+  # Track the ACTUAL pause state this run so the completion banner cannot make a
+  # false PAUSED claim: paused only when the switch file genuinely exists after
+  # this block (armed now, or already present). The not-re-armed branch leaves
+  # the host UNPAUSED by the operator's own go-live decision.
+  HOST_PAUSED=0
   if [[ -e "$KILL_SWITCH" ]]; then
     ok "Multica dispatch kill switch already present: $KILL_SWITCH"
+    HOST_PAUSED=1
   elif systemctl --user is-enabled flue-executor.service >/dev/null 2>&1 \
        || systemctl --user is-active flue-executor.service >/dev/null 2>&1; then
     # Operator has already enabled/started the unit — respect that go-live
@@ -257,6 +263,7 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
     warn "flue-executor already enabled/active — NOT re-arming kill switch (respecting operator go-live)"
   elif mkdir -p "$(dirname "$KILL_SWITCH")" && : > "$KILL_SWITCH"; then
     ok "armed Multica dispatch kill switch (paused): $KILL_SWITCH"
+    HOST_PAUSED=1
   else
     # Fail CLOSED: if we cannot create the pause file we must NOT claim the host
     # is paused (that false claim is the exact bug class). Abort instead.
@@ -266,9 +273,15 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   # Surface the opt-in units: installed as inert templates, never enabled here.
   ok "installed (NOT enabled) opt-in units: ${OPTIONAL_UNITS[*]}"
   printf '%b\n' "  ${C_DIM}flue-executor.service = Multica queue consumer (executor migration Phase 2).${C_NC}"
-  printf '%b\n' "  ${C_DIM}Three safety gates stay ON: kill switch armed above (host is PAUSED),${C_NC}"
-  printf '%b\n' "  ${C_DIM}ZOE_EXECUTOR_DISPATCH=dry, single lane. Go-live runbook (register identity,${C_NC}"
-  printf '%b\n' "  ${C_DIM}create .env, enable, verify dry wiring, then unpause): scripts/setup/systemd/README.md${C_NC}"
+  if [[ "$HOST_PAUSED" -eq 1 ]]; then
+    printf '%b\n' "  ${C_DIM}Three safety gates stay ON: kill switch armed above (host is PAUSED),${C_NC}"
+    printf '%b\n' "  ${C_DIM}ZOE_EXECUTOR_DISPATCH=dry, single lane. Go-live runbook (register identity,${C_NC}"
+    printf '%b\n' "  ${C_DIM}create .env, enable, verify dry wiring, then unpause): scripts/setup/systemd/README.md${C_NC}"
+  else
+    printf '%b\n' "  ${C_DIM}Operator already took executor live — kill switch NOT re-armed; host is${C_NC}"
+    printf '%b\n' "  ${C_DIM}UNPAUSED by operator decision. Other gates unchanged (ZOE_EXECUTOR_DISPATCH${C_NC}"
+    printf '%b\n' "  ${C_DIM}defaults dry, single lane). Runbook: scripts/setup/systemd/README.md${C_NC}"
+  fi
 
   # Let user services keep running after logout on a headless box.
   loginctl enable-linger "$USER" 2>/dev/null || true
