@@ -215,7 +215,11 @@ cp -n ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor
 # OPTIONAL — hold dispatch before you enable by arming the pause yourself. Note
 # this sentinel is SHARED with the live board, so it pauses live dispatch too;
 # arm it only when you mean to pause everything. Dry dispatch (above) already
-# keeps a freshly enabled unit from mutating anything, so this is belt-and-braces:
+# keeps a freshly enabled unit from mutating anything, so this is belt-and-braces.
+# Arm the path the runner actually checks — resolve it the same way the go-live
+# steps below do (from labs/flue-executor/.env; a RELATIVE override lives under
+# WorkingDirectory=labs/flue-executor, NOT your CWD) so armed == checked:
+#   cd ~/assistant/labs/flue-executor   # so a relative override resolves like the unit
 #   mkdir -p "$(dirname "<your ZOE_MULTICA_KILL_SWITCH>")" && touch "<your ZOE_MULTICA_KILL_SWITCH>"
 systemctl --user daemon-reload
 systemctl --user enable --now flue-executor   # starts DRY (mutates nothing)
@@ -271,12 +275,18 @@ reaches the dry preview. It runs a read-only preview SELECT — claims and mutat
 nothing. If you armed the switch in Step 2, remove it here and re-arm after:
 
 ```bash
-# resolve the kill-switch path the SAME way the service does:
-env_file=~/assistant/labs/flue-executor/.env
-line="$(grep -E '^[[:space:]]*ZOE_MULTICA_KILL_SWITCH[[:space:]]*=' "$env_file" 2>/dev/null | tail -n1)"
+# Resolve the kill-switch path EXACTLY as flue-executor.service does. The runner
+# reads ZOE_MULTICA_KILL_SWITCH from its EnvironmentFile (labs/flue-executor/.env,
+# NOT your shell — config.ts), defaults to ~/.zoe/multica_dispatch_paused, and
+# checks a RELATIVE override under WorkingDirectory=labs/flue-executor (the unit's
+# cwd, which existsSync() resolves against — live-runner.ts). So parse the .env,
+# default to that same path, and resolve a relative value under that dir:
+wd=~/assistant/labs/flue-executor
+line="$(grep -E '^[[:space:]]*ZOE_MULTICA_KILL_SWITCH[[:space:]]*=' "$wd/.env" 2>/dev/null | tail -n1)"
 val="${line#*=}"; val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
 [[ "$val" == \"*\" || "$val" == \'*\' ]] && val="${val:1:${#val}-2}"
-KILL_SWITCH="${val:-${ZOE_MULTICA_KILL_SWITCH:-$HOME/.zoe/multica_dispatch_paused}}"
+val="${val:-$HOME/.zoe/multica_dispatch_paused}"
+case "$val" in /*) KILL_SWITCH="$val" ;; *) KILL_SWITCH="$wd/$val" ;; esac
 
 rm -f "$KILL_SWITCH"          # dispatch is already dry (Step 1), so nothing is claimed/mutated
 journalctl --user -u flue-executor -f
@@ -294,12 +304,15 @@ remove it:
 #      ZOE_EXECUTOR_DISPATCH=full   (in labs/flue-executor/.env), then restart:
 systemctl --user restart flue-executor
 # 2) unpause (only if you armed the switch) — the go-live action. Resolve the
-#    path the SAME way the service does so you remove the path actually armed:
-env_file=~/assistant/labs/flue-executor/.env
-line="$(grep -E '^[[:space:]]*ZOE_MULTICA_KILL_SWITCH[[:space:]]*=' "$env_file" 2>/dev/null | tail -n1)"
+#    path EXACTLY as the service does (read from labs/flue-executor/.env, NOT your
+#    shell; default ~/.zoe/multica_dispatch_paused; a relative override resolves
+#    under WorkingDirectory=labs/flue-executor) so you remove the path armed:
+wd=~/assistant/labs/flue-executor
+line="$(grep -E '^[[:space:]]*ZOE_MULTICA_KILL_SWITCH[[:space:]]*=' "$wd/.env" 2>/dev/null | tail -n1)"
 val="${line#*=}"; val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
 [[ "$val" == \"*\" || "$val" == \'*\' ]] && val="${val:1:${#val}-2}"
-KILL_SWITCH="${val:-${ZOE_MULTICA_KILL_SWITCH:-$HOME/.zoe/multica_dispatch_paused}}"
+val="${val:-$HOME/.zoe/multica_dispatch_paused}"
+case "$val" in /*) KILL_SWITCH="$val" ;; *) KILL_SWITCH="$wd/$val" ;; esac
 rm -f "$KILL_SWITCH"          # the go-live action (no-op if you never armed it)
 ```
 
