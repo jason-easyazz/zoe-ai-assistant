@@ -797,3 +797,105 @@ def test_own_existing_blocker_is_not_duplicated(tmp_path):
              gateRuns=[{"status": "in_progress", "started_at": "2026-07-27T00:00:00Z"}])
     made = [c for c in r["gateChecks"] if c["status"] == "in_progress"]
     assert made == [], f"re-created a blocker that already existed: {made}"
+
+
+def test_already_successful_blocker_is_superseded_when_conditions_regress(tmp_path):
+    """A RELEASED blocker must be re-raised when the contract regresses on the same head.
+
+    The sibling test above (`..._not_completed_when_conditions_regress_mid_sweep`) only
+    proves the gate emits no NEW completion mid-sweep. That is not enough: if
+    `greptile-complete` ALREADY concluded `success` for this head on an earlier sweep,
+    emitting nothing leaves that success standing. Revoking the `greptile` label does
+    not touch a check run, so the required context stays green and an armed auto-merge
+    merges a head whose cheap tier has regressed — the gate is fail-OPEN.
+
+    Worse, `ensureBlocker` treated ANY existing run as sufficient, so it would not
+    re-raise either. Here the pre-existing run is a completed success for THIS PR
+    (external_id 1) and Codex's review is dismissed mid-sweep: the gate must supersede
+    that success with an unresolved run (in_progress, or a failure) for the same SHA.
+    Cross-review finding on #1592.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             dismissMidSweep="chatgpt-codex-connector[bot]",
+             gateRuns=[{"status": "completed", "conclusion": "success",
+                        "started_at": "2026-07-27T00:00:00Z",
+                        "completed_at": "2026-07-27T00:00:00Z"}])
+    # The regression itself is still caught (guards against the test passing because
+    # the sweep bailed out early for some unrelated reason).
+    assert r["removeLabel"] == 1, r["log"]
+    # No fresh SUCCESS may be published…
+    assert not any(c["conclusion"] == "success" for c in r["gateChecks"]), r["gateChecks"]
+    # …and the stale one must be superseded by a run that actually blocks.
+    blocking = [c for c in r["gateChecks"]
+                if c["status"] != "completed" or c["conclusion"] != "success"]
+    assert blocking, (
+        "a released greptile-complete success was left standing after the cheap tier "
+        f"regressed — auto-merge can consume it: {r['gateChecks']} / {r['log']}")
+
+
+def test_supersede_is_not_vouched_for_by_the_stale_head_observation_run(tmp_path):
+    """The REAL run list, and the case an "any blocking run exists" test cannot see.
+
+    A released head always carries BOTH runs: the `in_progress` raised when the head was
+    first seen, and the later `success` that resolved it. Superseded runs never leave
+    `listForRef`, so asking "is some run still blocking?" finds that stale pending run
+    and concludes the head is covered — while the context GitHub actually evaluates (the
+    newest run) is green. The re-raise must therefore judge the NEWEST run only.
+
+    Without this case the fix passes its own tests while the fail-open survives in
+    production, because the tests above supply the success as the ONLY existing run.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             dismissMidSweep="chatgpt-codex-connector[bot]",
+             gateRuns=[
+                 # raised at head-observation, then superseded by the success below
+                 {"status": "in_progress", "started_at": "2026-07-26T00:00:00Z"},
+                 {"status": "completed", "conclusion": "success",
+                  "started_at": "2026-07-27T00:00:00Z",
+                  "completed_at": "2026-07-27T00:00:00Z"},
+             ])
+    assert r["removeLabel"] == 1, r["log"]
+    blocking = [c for c in r["gateChecks"]
+                if c["status"] != "completed" or c["conclusion"] != "success"]
+    assert blocking, (
+        "the stale head-observation run vouched for a head whose current context is "
+        f"green — auto-merge can still consume it: {r['gateChecks']} / {r['log']}")
+
+
+def test_superseding_a_released_blocker_happens_once_not_every_sweep(tmp_path):
+    """The re-raise must key on the NEWEST run, not "a success exists somewhere".
+
+    Superseded runs stay in `listForRef` forever, so a head that was released once and
+    then re-blocked would re-raise on every sweep (every 30 min plus every event) and
+    bury the checks tab — the duplicate-create the read-first design exists to avoid.
+    Here the older success is already superseded by an in_progress run, which is what
+    GitHub actually evaluates: nothing more may be created.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, unresolved=True,
+             gateRuns=[
+                 {"status": "completed", "conclusion": "success",
+                  "started_at": "2026-07-27T00:00:00Z",
+                  "completed_at": "2026-07-27T00:00:00Z"},
+                 {"status": "in_progress", "started_at": "2026-07-28T00:00:00Z"},
+             ])
+    assert r["gateChecks"] == [], f"re-raised over an already-blocking run: {r['gateChecks']}"
+
+
+def test_released_blocker_is_superseded_when_the_head_no_longer_qualifies(tmp_path):
+    """Same fail-open, reached from the un-labelled side (the general safety net).
+
+    Once the label is gone (revoked, or removed by hand) a regressed head falls through
+    to the `!qualifies` hold instead of the handed-off branch. A `greptile-complete`
+    success from an earlier cycle on this same SHA must be superseded there too,
+    otherwise the next sweep after any regression still leaves a stale green.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, unresolved=True,
+             gateRuns=[{"status": "completed", "conclusion": "success",
+                        "started_at": "2026-07-27T00:00:00Z",
+                        "completed_at": "2026-07-27T00:00:00Z"}])
+    assert r["addLabels"] == 0, r["log"]
+    blocking = [c for c in r["gateChecks"]
+                if c["status"] != "completed" or c["conclusion"] != "success"]
+    assert blocking, f"stale success left standing on a non-qualifying head: {r['gateChecks']}"

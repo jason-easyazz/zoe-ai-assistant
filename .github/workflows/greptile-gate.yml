@@ -137,10 +137,43 @@ jobs:
             // re-evaluation (Codex P1 on #1592 — my first fix moved the window rather
             // than removing it).
             //
+            // A greptile-complete run only BLOCKS while it is UNRESOLVED — pending, or
+            // completed with a non-success conclusion. A completed `success` is a
+            // RELEASED blocker: it is exactly what an armed auto-merge consumes. That
+            // distinction is load-bearing for the regression paths below, because
+            // GitHub evaluates the LATEST run of a given name for the head, and
+            // revoking the `greptile` label does not touch a check run at all.
+            // Handles both shapes: a plain run from listForRef, and the `{data: ...}`
+            // response setGateCheck returns for a run we just created.
+            const isBlocking = (c) => {
+              const d = (c && c.data) ? c.data : c;
+              return !d || d.status !== 'completed' || d.conclusion !== 'success';
+            };
+            // Which run does GitHub actually EVALUATE? The newest one of this name for
+            // the head — superseded runs stay in `listForRef` forever. Newest by start
+            // time, which is when GitHub stamped the create.
+            const runAt = (c) => {
+              const d = (c && c.data) ? c.data : c;
+              const t = Date.parse((d && (d.started_at || d.completed_at)) || '');
+              return Number.isNaN(t) ? 0 : t;
+            };
+            const newestRun = (rs) => ((rs || []).length
+              ? rs.reduce((a, b) => (runAt(b) >= runAt(a) ? b : a))
+              : null);
+
             // Idempotent by READING first: checks.create always makes a NEW run, so an
             // unconditional call would post one per sweep (every 30 min, plus every
             // event) and bury the PR's checks tab.
-            const ensureBlocker = async (sha, num) => {
+            //
+            // `regressed` flips what counts as sufficient. Normally ANY run for this PR
+            // is enough (that idempotence is the whole point). But once the contract has
+            // stopped holding for this same head, a completed `success` is NOT a blocker
+            // — treating it as sufficient made the gate fail OPEN: the label was revoked
+            // while the required `greptile-complete` context stayed green, so auto-merge
+            // sailed through on a head whose cheap tier had regressed (cross-review on
+            // #1592). Under `regressed` only a CURRENTLY-blocking run satisfies the
+            // contract; a released one is superseded by a fresh in_progress.
+            const ensureBlocker = async (sha, num, { regressed = false } = {}) => {
               const existing = await ok(`PR #${num} ${GATE_CHECK} lookup`, () =>
                 github.paginate(github.rest.checks.listForRef, {
                   ...{ owner: context.repo.owner, repo: context.repo.repo },
@@ -149,13 +182,26 @@ jobs:
                                         && String(c.external_id || '') === String(num))));
               // A failed READ must not cause a duplicate create; hold instead.
               if (existing === null) return null;
-              if (existing.length) return existing;
+              if (existing.length) {
+                if (!regressed) return existing;
+                // Judge the NEWEST run, not "some blocking run exists anywhere in the
+                // list". That distinction is the whole fix: the in_progress raised at
+                // head-observation is STILL in this list, merely superseded, once the
+                // success is published — so an any-match would let that stale pending
+                // run vouch for a head whose CURRENT required context is green, and
+                // the fail-open would survive untouched. An already-failing (or still
+                // pending) newest run needs no re-raise; it blocks just as hard.
+                if (isBlocking(newestRun(existing))) return existing;
+              }
               const made = await setGateCheck(sha, num, {
                 status: 'in_progress',
-                title: 'Waiting for Greptile',
-                summary: 'Raised when this head was first seen. Blocks merge until the ' +
-                         'cheap tier clears, Greptile reviews this exact head, and its ' +
-                         'review completes successfully.',
+                title: regressed ? 'Re-blocked — cheap tier regressed' : 'Waiting for Greptile',
+                summary: (regressed
+                  ? `A previous \`${GATE_CHECK}\` success for this head is SUPERSEDED: the ` +
+                    'cheap-tier contract stopped holding. '
+                  : 'Raised when this head was first seen. ') +
+                  'Blocks merge until the cheap tier clears, Greptile reviews this ' +
+                  'exact head, and its review completes successfully.',
               });
               return made ? [made] : null;
             };
@@ -204,6 +250,33 @@ jobs:
                 .map(c => c?.data?.started_at || c?.started_at)
                 .filter(v => typeof v === 'string' && v)
                 .sort()[0] || null;
+
+              // Has `greptile-complete` already been RELEASED for this head? If so, any
+              // path below that concludes the contract no longer holds must supersede it
+              // — otherwise the stale green survives the label revocation and auto-merge
+              // consumes it. Derived from the runs ensureBlocker just fetched, so the
+              // common case (blocker still unresolved) costs no extra API call.
+              //
+              // Only the NEWEST run counts (same rule ensureBlocker applies): GitHub
+              // evaluates the latest run of a given name for the head, while superseded
+              // runs stay in the list forever. Keyed on "any success exists" instead, a
+              // head that was released once and then re-blocked would re-raise on EVERY
+              // sweep and bury the checks tab.
+              // A null read is treated as RELEASED on purpose: unreadable is not
+              // knowledge, and the re-raise below re-reads authoritatively. Assuming
+              // "nothing green exists" would be the fail-open direction.
+              const newestBlocker = newestRun(blockerRuns);
+              const blockerReleased = blockerRuns === null ||
+                                      (newestBlocker !== null && !isBlocking(newestBlocker));
+              const supersedeReleasedBlocker = async (why) => {
+                if (!blockerReleased) return;
+                const re = await ensureBlocker(sha, pr.number, { regressed: true });
+                if (re) core.info(`PR #${pr.number}: ${GATE_CHECK} re-blocked on ` +
+                                  `\`${sha.slice(0, 8)}\` — ${why}`);
+                else core.warning(`PR #${pr.number}: could NOT re-block ${GATE_CHECK} on ` +
+                                  `\`${sha.slice(0, 8)}\` (${why}) — a released success may ` +
+                                  `still let auto-merge through; retrying next sweep`);
+              };
 
               // Every list is PAGINATED. A long-lived PR exceeds 100 comments/threads/checks,
               // and a truncated list silently reads as "nothing outstanding" — the exact
@@ -492,8 +565,11 @@ jobs:
               // (#1573, 2026-07-27): after Copilot has reviewed earlier heads of a PR,
               // GitHub silently drops further re-requests — the mutation succeeds,
               // requested_reviewers stays empty, no review ever arrives — and a
-              // graceless required reviewer is an unbounded wait. Same trust rule,
-              // same newest-marker rule as codex.
+              // graceless required reviewer is an unbounded wait. Same trust rule and
+              // the same CODEX_GRACE_MIN bound — but a DIFFERENT anchor: Copilot's
+              // review request genuinely works, so its own summon marker (newest wins,
+              // one per head) still attests when the wait began. Codex has no marker at
+              // all any more; its grace runs from headSeenAt (see above).
               const copilotGraceElapsed = copilotSummon
                 ? (Date.now() - new Date(copilotSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
                 : false;
@@ -685,6 +761,20 @@ jobs:
                 }
 
                 if (!stillOk) {
+                  // SUPERSEDE BEFORE REVOKING, and unconditionally of whether the
+                  // revocation succeeds. The label is not what blocks merge — the check
+                  // is. If `greptile-complete` already concluded `success` for this head
+                  // on an earlier sweep, doing nothing here leaves that success standing
+                  // as a green REQUIRED context while the cheap tier has regressed, and
+                  // an armed auto-merge merges the head regardless of the label
+                  // (cross-review on #1592: the lifecycle was fail-open). A fresh
+                  // in_progress run for the same SHA is the newest run of that name, so
+                  // it blocks again; the resolution block above re-publishes success once
+                  // the contract genuinely holds, so this is self-healing, not a strand.
+                  await supersedeReleasedBlocker(
+                    `regressed after handoff (checks=${now.checksOk} ` +
+                    `copilot=${copilotPasses(now.reviewedHead)} codex=${codexPasses(now.reviewedHead)} ` +
+                    `upToDate=${now.upToDate} unresolved=${now.unresolved})`);
                   const r = await ok(`PR #${pr.number} revoke label`, () =>
                     github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
                   if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${now.checksOk} ` +
@@ -695,6 +785,15 @@ jobs:
               }
 
               if (!qualifies) {
+                // The general safety net for the same fail-open. Once the label is gone
+                // (revoked last sweep, or removed by hand) a regressed head arrives HERE
+                // rather than in the handed-off branch above — and a `greptile-complete`
+                // success from an earlier cycle on this same SHA would otherwise sit green
+                // forever. No-op unless a released blocker actually exists, so the normal
+                // hold (blocker still in_progress) costs nothing.
+                await supersedeReleasedBlocker(
+                  `head no longer qualifies (checks=${checksOk} copilot=${copilotOk} ` +
+                  `codex=${codexOk} upToDate=${upToDate} unresolved=${unresolved})`);
                 core.info(`PR #${pr.number}: holding — checks=${checksOk} copilot=${copilotOk} ` +
                           `codex=${codexOk} upToDate=${upToDate} unresolved=${unresolved}`);
                 continue;
