@@ -24,45 +24,67 @@ rm -f "${HOME}/.omnigent/host.pid" "${HOME}/.omnigent"/daemons/*.json 2>/dev/nul
 # never appeared on PATH and the Cursor harness broke with no message. /root/.local/bin
 # is owned by 1000 (chowned in the Dockerfile) and already ahead of /usr/local/bin on
 # PATH. Failure is now reported rather than swallowed.
-# HONOUR THE HOST'S PIN, don't pick the newest. `sort -V | tail -1` silently selects
-# whatever the highest version directory happens to be, so a host that still has a
-# newer directory lying around (an update, then a rollback to the pin) runs the newer,
-# UNREVIEWED binary while scripts/setup/install_cursor_agent.sh --check reports the pin
-# as satisfied. omnigent 0.7.0 enforces a per-harness minimum, so which binary actually
-# runs is load-bearing, not cosmetic.
+# HONOUR THE PIN — NEVER pick the newest. The old `sort -V | tail -1` fallback silently
+# selected the highest version directory present, so a host with a newer directory lying
+# around (an update, then a rollback to the pin) ran the newer, UNREVIEWED binary — or a
+# build below omnigent 0.7.0's per-harness minimum — while install_cursor_agent.sh --check
+# reported the pin as satisfied. Which binary actually runs is load-bearing, not cosmetic,
+# so newest-wins is gone: use the host's pin, else the repo-declared pin, else fail closed.
 #
-# The host's own symlink is the pin: /home/zoe/.local/bin/cursor-agent -> .../versions/<pinned>/cursor-agent.
-# That bin dir is mounted read-only (see compose), but the symlink TARGET is a host path
-# that does not exist in-container, so the link itself dangles — read the version out of
-# it and select that directory under the mounted versions/ root.
+# DECLARED_PIN must match scripts/setup/install_cursor_agent.sh (CURSOR_PINNED_VERSION).
+DECLARED_PIN="2026.07.23-e383d2b"
+VERSIONS_ROOT="/root/.local/share/cursor-agent/versions"
+
+# Confirm a candidate binary actually reports the version we expect before trusting it — an
+# executable file is not proof of a working, correctly-versioned install.
+_reports_pin() {  # <binary> <expected-version>
+  local got
+  got="$("${1}" --version 2>/dev/null | head -1)" || return 1
+  [ "${got}" = "${2}" ]
+}
+
+# The host's own symlink is its pin: /home/zoe/.local/bin/cursor-agent -> .../versions/<pinned>/cursor-agent.
+# That bin dir is mounted read-only (see compose), but the symlink TARGET is a host path that
+# does not exist in-container, so the link itself dangles — read the version out of it and
+# select that directory under the mounted versions/ root.
 _pin_link=/home/zoe/.local/bin/cursor-agent
 cursor_bin=""
+
+# 1) Prefer the host's pin when present and executable in the mounted versions/ root.
 if [ -L "${_pin_link}" ]; then
   _pinned_ver="$(basename "$(dirname "$(readlink "${_pin_link}")")")"
-  if [ -x "/root/.local/share/cursor-agent/versions/${_pinned_ver}/cursor-agent" ]; then
-    cursor_bin="/root/.local/share/cursor-agent/versions/${_pinned_ver}/cursor-agent"
+  _cand="${VERSIONS_ROOT}/${_pinned_ver}/cursor-agent"
+  if [ -x "${_cand}" ]; then
+    cursor_bin="${_cand}"
     echo "[entrypoint] cursor-agent pinned by host symlink -> ${_pinned_ver}"
   else
-    # FAIL CLOSED. Falling back to "newest" here would run a DIFFERENT binary than the
-    # host pinned — silently, and specifically in the broken-install case where the
-    # operator is least likely to notice. No Cursor harness is better than an unreviewed
-    # one; omnigent reports it as unavailable and everything else keeps working.
-    echo "[entrypoint] ERROR: host pins cursor-agent ${_pinned_ver} but it is absent or not executable in the mounted versions/ — NOT falling back (run scripts/setup/install_cursor_agent.sh on the host)" >&2
-    _pin_broken=1
+    echo "[entrypoint] host pins cursor-agent ${_pinned_ver} but it is absent or not executable in the mounted versions/ — trying the repo-declared pin ${DECLARED_PIN}" >&2
   fi
 fi
-# Newest-wins ONLY when the host expressed no pin at all. A pin that exists but cannot be
-# honoured is an error, not an invitation to guess.
-if [ -z "${cursor_bin}" ] && [ -z "${_pin_broken:-}" ]; then
-  cursor_bin="$(ls /root/.local/share/cursor-agent/versions/*/cursor-agent 2>/dev/null | sort -V | tail -1)"
-fi
-if [ -n "${cursor_bin}" ]; then
-  mkdir -p /root/.local/bin
-  if ln -sf "${cursor_bin}" /root/.local/bin/cursor-agent; then
-    echo "[entrypoint] cursor-agent linked -> ${cursor_bin}"
-  else
-    echo "[entrypoint] WARNING: could not link cursor-agent into /root/.local/bin — the Cursor harness will not resolve" >&2
+
+# 2) No usable host pin: activate ONLY the repository-declared pin, and verify its reported
+#    --version before linking. Never the newest directory.
+if [ -z "${cursor_bin}" ]; then
+  _cand="${VERSIONS_ROOT}/${DECLARED_PIN}/cursor-agent"
+  if [ -x "${_cand}" ] && _reports_pin "${_cand}" "${DECLARED_PIN}"; then
+    cursor_bin="${_cand}"
+    echo "[entrypoint] cursor-agent set to repo-declared pin -> ${DECLARED_PIN}"
   fi
+fi
+
+# 3) FAIL CLOSED. Neither the host pin nor the declared pin yielded a verified binary.
+#    Linking an arbitrary version would defeat the pin and risk a below-minimum harness, so
+#    refuse rather than guess — a loud non-zero exit beats a silently wrong Cursor harness.
+if [ -z "${cursor_bin}" ]; then
+  echo "[entrypoint] ERROR: no verified cursor-agent pin available — host pin absent/broken and ${VERSIONS_ROOT}/${DECLARED_PIN}/cursor-agent is missing or unverifiable. Run scripts/setup/install_cursor_agent.sh on the host, then recreate this container." >&2
+  exit 1
+fi
+
+mkdir -p /root/.local/bin
+if ln -sf "${cursor_bin}" /root/.local/bin/cursor-agent; then
+  echo "[entrypoint] cursor-agent linked -> ${cursor_bin}"
+else
+  echo "[entrypoint] WARNING: could not link cursor-agent into /root/.local/bin — the Cursor harness will not resolve" >&2
 fi
 
 # GitHub auth for the workers: with the host's gh login mounted read-only at
