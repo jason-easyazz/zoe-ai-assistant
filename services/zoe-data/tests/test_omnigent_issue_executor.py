@@ -21,14 +21,69 @@ def test_pr_url_regex_requires_prefix_and_rejects_bare_url():
 
 
 def test_session_id_validation_rejects_shell_metachars():
-    assert oie._SESSION_ID_RE.match("conv_abc123") is not None
-    for bad in ("conv_a;rm -rf", "conv_$(x)", "conv_`x`", "evil", "conv_a b"):
-        assert oie._SESSION_ID_RE.match(bad) is None
+    # BOTH id shapes are legitimate: omnigent <=0.4.0 returned `conv_<hex>`,
+    # 0.7.0 returns the bare `<hex>` (upstream dropped the conv_/ag_/host_ type
+    # prefixes). Requiring the prefix hard-failed every dispatch on 0.7.0, so
+    # the prefix is optional — shell-safety is the property under test.
+    assert oie._SESSION_ID_RE.match("conv_dc2e28f9de3e4074ab7a2cb6279f5d47") is not None
+    assert oie._SESSION_ID_RE.match("dc2e28f9de3e4074ab7a2cb6279f5d47") is not None
+    # Anything carrying a shell metacharacter is still refused, prefixed or not
+    # — the sid is interpolated into the docker-exec `sh -c` string.
+    bad = (
+        "conv_a;rm -rf", "conv_$(x)", "conv_`x`", "conv_a b",
+        "a;rm -rf", "$(x)", "`x`", "a b", "a|b", "a&b", "a>b", "../etc",
+        "conv_", "",
+        # DEGENERATE SHORT IDS — the {16,} floor. cross_review.sh's stop_worker
+        # kills by SUBSTRING match on /proc/<pid>/cmdline, so a short id sweeps
+        # unrelated processes ("e" matched 5 in the live container, including
+        # the omnigent server, vs 2 for a real id). Drop the floor to + and
+        # every case below goes green — i.e. these are the floor's controls.
+        "e", "ab", "abc123", "conv_abc123", "0123456789abcde",
+        # TRAILING NEWLINE — the regex must be \Z-anchored, not $-anchored:
+        # Python's `$` matches before a final newline, so `$` accepts these.
+        # A newline is a shell command separator and the sid is interpolated
+        # into the docker-exec `sh -c` string, so it splits the command.
+        # NB the old conv_-only regex accepted "conv_abc\n", making this a
+        # pre-existing hole that \Z closes.
+        #
+        # These MUST be >=16 alnum chars or the {16,} floor rejects them first
+        # and the newline control is VACUOUS — it would stay green with the
+        # anchoring broken. That is not hypothetical: when the floor was added,
+        # the then-short cases below silently stopped testing \Z at all
+        # (reverting \Z to $ still passed 10/10). Keep every case here
+        # length-valid so the ONLY thing that can reject it is the anchor.
+        "0123456789abcdef\n",
+        "conv_0123456789abcdef\n",
+        "dc2e28f9de3e4074ab7a2cb6279f5d47\n",
+        "0123456789abcdef\n\n",
+        "0123456789abcdef\nrm -rf /",
+        # short + newline, kept as floor coverage (rejected for length, not anchor)
+        "abc\n", "conv_abc\n",
+    )
+    for value in bad:
+        assert oie._SESSION_ID_RE.match(value) is None, value
+
+
+def test_default_agent_id_is_bare_hex_not_type_prefixed(monkeypatch):
+    """The default must be the BARE id 0.7.0 returns, not the legacy `ag_` form.
+
+    0.7.0 dropped the type prefix from agent/session/host ids. `ag_<hex>` still
+    resolves on input, but only through omnigent's `_LEGACY_ID_PREFIXES` strip —
+    a back-compat shim for pre-migration clients, and one that is type-blind
+    (`host_<agent-hex>` binds the same agent). Shipping the prefixed form as our
+    default depends on that deprecation path, so pin the bare shape.
+    """
+    monkeypatch.delenv("ZOE_OMNIGENT_AGENT_ID", raising=False)
+    default = oie._omnigent_agent_id()
+    assert "_" not in default, f"type prefix leaked back into the default: {default!r}"
+    assert len(default) == 32 and all(c in "0123456789abcdef" for c in default), default
 
 
 def test_lazy_env_accessors_honour_runtime_setenv(monkeypatch):
     monkeypatch.setenv("ZOE_OMNIGENT_URL", "http://example:9999")
     assert oie._omnigent_url() == "http://example:9999"
+    monkeypatch.setenv("ZOE_OMNIGENT_AGENT_ID", "ag_deadbeef")
+    assert oie._omnigent_agent_id() == "ag_deadbeef"
 
 
 def test_implement_brief_marks_issue_as_untrusted_data():

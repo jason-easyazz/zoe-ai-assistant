@@ -104,6 +104,11 @@ services:
       # runner (pi/codex too). Harmless today — pi (OpenRouter/minimax) and codex (OpenAI) ignore
       # it — but a future Anthropic-backed worker added without an explicit per-dispatch model
       # would silently inherit claude-opus-4-8. Re-check this line when adding workers.
+      # As of omnigent 0.7.0 the ANTHROPIC_MODEL half is REDUNDANT: upstream added it to
+      # _BASE_HARNESS_CREDENTIAL_ENV_VARS (host/connect.py), so the runner now receives it
+      # by default. Kept deliberately — it is a no-op when upstream forwards it anyway, and
+      # it keeps the model pin working if upstream ever drops it again. OPENROUTER_API_KEY
+      # is still NOT in that set, so it remains load-bearing.
       - OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY,ANTHROPIC_MODEL
       # Reviewers override to Fable per-dispatch; the default stays implementation-tier.
       # ANTHROPIC_MODEL is Claude Code's default-model env; a per-dispatch `args.model`
@@ -111,8 +116,8 @@ services:
       # This affects ONLY the
       # claude_code worker — polly's brain and codex/pi are untouched. NOT ANTHROPIC_API_KEY (never
       # set that here — it flips the CLI to metered billing); ANTHROPIC_MODEL is just the model
-      # picker and rides the subscription. Forwarded to the runner via the passthrough above
-      # (ANTHROPIC_MODEL is not in omnigent's default HARNESS_CREDENTIAL_ENV_VARS forward set).
+      # picker and rides the subscription. Reaches the runner via the passthrough above AND,
+      # since 0.7.0, via omnigent's own default forward set (see the note on the passthrough).
       - ANTHROPIC_MODEL=claude-opus-4-8
       # To revert to LAN-only OIDC (only if the Cloudflare path is retired): flip provider
       # back to `oidc` and uncomment the block below. OIDC works only via http://zoe.local:6767.
