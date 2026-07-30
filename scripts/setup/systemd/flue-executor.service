@@ -21,8 +21,8 @@
 #   # register the executor identity in Multica (idempotent):
 #   python3 ~/assistant/scripts/maintenance/verify_executor_queue_backend.py
 #   # create the env file from the template if not already present, and adjust
-#   # (-n keeps a .env you pre-created with a custom ZOE_MULTICA_KILL_SWITCH so
-#   # the installer-armed path is not silently reset to the template default):
+#   # (-n keeps a .env you pre-created with a custom ZOE_MULTICA_KILL_SWITCH or
+#   # dispatch setting so it is not silently reset to the template default):
 #   cp -n ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor/.env
 [Unit]
 Description=Flue Executor (lab) — single-lane Multica queue consumer

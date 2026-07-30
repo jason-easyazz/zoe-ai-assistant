@@ -46,9 +46,11 @@ SYSTEMD_SPINE=(llama-server zoe-data kokoro-tts)
 # Opt-in units: their templates are installed (the *.service glob below copies
 # them) but they are DELIBERATELY never auto-enabled — each sits behind a
 # default-OFF seam and needs an explicit operator go-live step. flue-executor is
-# the Multica queue consumer (executor migration Phase 2); it must ship with its
-# three safety gates ON (kill switch present, ZOE_EXECUTOR_DISPATCH=dry, single
-# lane), so the installer never arms it.
+# the Multica queue consumer (executor migration Phase 2); it ships inert — not
+# enabled, ZOE_EXECUTOR_DISPATCH defaults dry, single lane. The installer never
+# touches the shared Multica dispatch pause sentinel: arming that pause is an
+# operator go-live action, not a provisioning side effect (it is also read by the
+# live zoe-data poll loop, so recreating it on reinstall would halt live dispatch).
 OPTIONAL_UNITS=(flue-executor flue-zoe-brain)
 LLAMA_BIN="${HOME}/llama.cpp/build-jetson-new/bin/llama-server"
 
@@ -210,78 +212,18 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
     ok "enabled: ${enable_units[*]}"
   fi
 
-  # Resolve the kill-switch path from the SAME source the SERVICE reads, so the
-  # path we ARM is the path live-runner.ts actually checks. The unit loads
-  # `EnvironmentFile=%h/assistant/labs/flue-executor/.env`, so a
-  # ZOE_MULTICA_KILL_SWITCH override THERE — not one merely exported in this
-  # installer's shell — is what the runner watches. Read that file first (its
-  # value wins), then a shell export, then the documented default. Otherwise the
-  # installer could arm the default path while ZOE_EXECUTOR_DISPATCH=full claims
-  # work against a DIFFERENT, un-armed path.
-  LAB_ENV_FILE="${HOME}/assistant/labs/flue-executor/.env"
-  # Echo the last uncommented `ZOE_MULTICA_KILL_SWITCH=...` value (systemd
-  # EnvironmentFile semantics: literal KEY=value, last assignment wins),
-  # matching how config.ts consumes process.env.ZOE_MULTICA_KILL_SWITCH verbatim.
-  kill_switch_override() { # <env-file> -> print value, or return 1 if unset
-    [[ -r "$1" ]] || return 1
-    local line val
-    line="$(grep -E '^[[:space:]]*ZOE_MULTICA_KILL_SWITCH[[:space:]]*=' "$1" | tail -n1)" || true
-    [[ -n "$line" ]] || return 1
-    val="${line#*=}"
-    val="${val#"${val%%[![:space:]]*}"}"   # ltrim
-    val="${val%"${val##*[![:space:]]}"}"   # rtrim
-    if [[ "$val" == \"*\" || "$val" == \'*\' ]]; then val="${val:1:${#val}-2}"; fi
-    [[ -n "$val" ]] || return 1
-    printf '%s' "$val"
-  }
-  if switch_override="$(kill_switch_override "$LAB_ENV_FILE")"; then
-    KILL_SWITCH="$switch_override"
-  else
-    KILL_SWITCH="${ZOE_MULTICA_KILL_SWITCH:-${HOME}/.zoe/multica_dispatch_paused}"
-  fi
-
-  # Arm the kill switch so a fresh host is GENUINELY paused before flue-executor
-  # can ever claim work. The runtime only checks for this file's existence
-  # (labs/flue-executor/src/live-runner.ts), so without it a host is UNPAUSED and
-  # an operator setting ZOE_EXECUTOR_DISPATCH=full would start claiming at once.
-  # ARM ONLY ON GENUINE FIRST PROVISIONING: once the operator has enabled or
-  # started the unit they own its lifecycle, and a later reinstall must NOT
-  # recreate the switch and idle a running executor they deliberately took live.
-  # Never removed here — removing it is the deliberate go-live act.
-  # Track the ACTUAL pause state this run so the completion banner cannot make a
-  # false PAUSED claim: paused only when the switch file genuinely exists after
-  # this block (armed now, or already present). The not-re-armed branch leaves
-  # the host UNPAUSED by the operator's own go-live decision.
-  HOST_PAUSED=0
-  if [[ -e "$KILL_SWITCH" ]]; then
-    ok "Multica dispatch kill switch already present: $KILL_SWITCH"
-    HOST_PAUSED=1
-  elif systemctl --user is-enabled flue-executor.service >/dev/null 2>&1 \
-       || systemctl --user is-active flue-executor.service >/dev/null 2>&1; then
-    # Operator has already enabled/started the unit — respect that go-live
-    # decision and do NOT re-arm (re-arming would idle a running executor).
-    warn "flue-executor already enabled/active — NOT re-arming kill switch (respecting operator go-live)"
-  elif mkdir -p "$(dirname "$KILL_SWITCH")" && : > "$KILL_SWITCH"; then
-    ok "armed Multica dispatch kill switch (paused): $KILL_SWITCH"
-    HOST_PAUSED=1
-  else
-    # Fail CLOSED: if we cannot create the pause file we must NOT claim the host
-    # is paused (that false claim is the exact bug class). Abort instead.
-    die "could not create kill switch $KILL_SWITCH — refusing to leave the host UNPAUSED"
-  fi
-
   # Surface the opt-in units: installed as inert templates, never enabled here.
+  # The installer deliberately does NOT touch the shared Multica dispatch pause
+  # sentinel (~/.zoe/multica_dispatch_paused). That file is also read every cycle
+  # by the live zoe-data poll loop and multica_board_runner, so recreating it at
+  # install time would HALT all live engineering dispatch on a reinstall of an
+  # established host. Pausing/arming dispatch is an explicit operator go-live
+  # action, never a provisioning side effect (runbook: scripts/setup/systemd/README.md).
   ok "installed (NOT enabled) opt-in units: ${OPTIONAL_UNITS[*]}"
   printf '%b\n' "  ${C_DIM}flue-executor.service = Multica queue consumer (executor migration Phase 2).${C_NC}"
-  if [[ "$HOST_PAUSED" -eq 1 ]]; then
-    printf '%b\n' "  ${C_DIM}Three safety gates stay ON: kill switch armed above (host is PAUSED),${C_NC}"
-    printf '%b\n' "  ${C_DIM}ZOE_EXECUTOR_DISPATCH=dry, single lane. Go-live runbook (register identity,${C_NC}"
-    printf '%b\n' "  ${C_DIM}create .env, enable, verify dry wiring, then unpause): scripts/setup/systemd/README.md${C_NC}"
-  else
-    printf '%b\n' "  ${C_DIM}Operator already took executor live — kill switch NOT re-armed; host is${C_NC}"
-    printf '%b\n' "  ${C_DIM}UNPAUSED by operator decision. Other gates unchanged (ZOE_EXECUTOR_DISPATCH${C_NC}"
-    printf '%b\n' "  ${C_DIM}defaults dry, single lane). Runbook: scripts/setup/systemd/README.md${C_NC}"
-  fi
+  printf '%b\n' "  ${C_DIM}Ships inert: not enabled, ZOE_EXECUTOR_DISPATCH defaults dry, single lane.${C_NC}"
+  printf '%b\n' "  ${C_DIM}Go-live is an operator runbook step (register identity, create .env, arm the${C_NC}"
+  printf '%b\n' "  ${C_DIM}dispatch pause yourself, enable, verify dry wiring): scripts/setup/systemd/README.md${C_NC}"
 
   # Let user services keep running after logout on a headless box.
   loginctl enable-linger "$USER" 2>/dev/null || true

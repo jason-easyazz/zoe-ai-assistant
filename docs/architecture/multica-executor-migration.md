@@ -191,16 +191,19 @@ explicit *opt-in* unit in the deploy path: `install-jetson.sh` installs its
 template (the `*.service` glob) but never enables it, prints its go-live steps,
 and will `die` (canonical-name comparison, so both `flue-executor` and
 `flue-executor.service` are caught) if a future edit ever adds it to the
-auto-enabled `SYSTEMD_SPINE`. The installer also **arms the kill switch** —
-`~/.zoe/multica_dispatch_paused`, created idempotently and never removed at
-install — so a fresh host is *genuinely* PAUSED (the runtime only checks the
-file's existence; without it a host is unpaused and `ZOE_EXECUTOR_DISPATCH=full`
-would claim immediately). The three safety gates (kill switch armed,
-`ZOE_EXECUTOR_DISPATCH=dry`, single lane) are all ON after install. Documented in
-[scripts/setup/systemd/README.md](../../scripts/setup/systemd/README.md). A
-fresh host now ships the unit inert-but-ready and paused; *enabling* it, arming
-dispatch, and removing the kill switch remain deliberate operator acts (gap
-(a)/end-to-end tickets still open).
+auto-enabled `SYSTEMD_SPINE`. The installer is **side-effect-free with respect to
+dispatch control**: it never enables the unit and it **never touches the shared
+`~/.zoe/multica_dispatch_paused` sentinel**. That sentinel is deliberately left
+alone because the same file is read every cycle by the already-live zoe-data poll
+loop and `multica_board_runner` — recreating it on a reinstall of an established
+host would halt all live engineering dispatch. Safety after install rests on the
+two gates that ship ON by construction — `ZOE_EXECUTOR_DISPATCH=dry` (poll + log,
+mutate nothing) and single-lane — not on an installer-armed pause. Documented in
+[scripts/setup/systemd/README.md](../../scripts/setup/systemd/README.md). A fresh
+host ships the unit inert-but-ready; *enabling* it, arming the pause sentinel (an
+operator go-live tool, never an installer action), setting dispatch `full`, and
+removing the pause remain deliberate operator acts (gap (a)/end-to-end tickets
+still open).
 
 ### Phase 3 — (superseded by §5 decision 2: Omnigent is PRIMARY from day one)
 
