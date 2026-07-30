@@ -57,9 +57,9 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/* && gh --version
 
-# ── Cursor harness (second-class) ────────────────────────────────────────────
-# Requires piping the cursor.com installer, which needs a remote-script permission.
-# Left opt-in: uncomment after granting permission, or COPY the host's proven binary in.
+# ── Cursor harness (first-class, pinned) ─────────────────────────────────────
+# Cursor is now pinned (install_cursor_agent.sh), mounted via compose volume, and
+# entrypoint-activated. The pinned installer replaces the piped curl workflow.
 # RUN curl https://cursor.com/install -fsS | bash && /root/.local/bin/cursor-agent --version
 
 # ── uv + Omnigent ────────────────────────────────────────────────────────────

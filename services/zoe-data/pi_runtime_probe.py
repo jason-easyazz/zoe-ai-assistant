@@ -18,7 +18,7 @@ from typing import Any, Mapping
 
 PI_MIN_NODE_VERSION = (22, 19, 0)
 PI_INSTALL_PACKAGE = "@earendil-works/pi-coding-agent"
-PI_INSTALL_COMMAND = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+PI_INSTALL_COMMAND = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.82.1"
 
 
 class PiRuntimeConfigError(ValueError):
