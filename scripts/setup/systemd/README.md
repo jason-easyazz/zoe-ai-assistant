@@ -205,8 +205,11 @@ Bring it up (all operator steps — the installer does none of these):
 cd ~/assistant/labs/flue-executor && npm install
 # register the executor identity in Multica (idempotent):
 python3 ~/assistant/scripts/maintenance/verify_executor_queue_backend.py
-# create the env file from the template (stays dry by default) and adjust:
-cp ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor/.env
+# create the env file from the template IF NOT ALREADY PRESENT (stays dry by
+# default) and adjust. -n (no-clobber) PRESERVES a .env you pre-created with a
+# custom ZOE_MULTICA_KILL_SWITCH per the callout above, so the path the installer
+# already armed is not silently reset to the template default:
+cp -n ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor/.env
 # Set a NON-DEFAULT ZOE_MULTICA_KILL_SWITCH here only AFTER install (the callout
 # above recommends before)? The installer armed the path it saw at install time,
 # NOT this one — arm YOUR path now so the unit starts genuinely PAUSED:
