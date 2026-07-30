@@ -74,8 +74,12 @@ it is a host install, not an image dependency.
 Exact pins buy determinism at the cost of **intentional staleness**: `claude` and
 `codex` now freeze until someone bumps them. Review them alongside each omnigent
 upgrade — that is already the moment their MINIMUMS can move
-(`onboarding/harness_install.py`), so it is the natural cadence. `npm view <pkg>
-version` against the table above is the whole check.
+(`onboarding/harness_install.py`), so it is the natural cadence. Pin-bump procedure
+for ANY harness CLI (Claude/Codex/Pi/Cursor): (a) review the upstream release
+diff/changelog for the version range, (b) verify end-to-end (an actual agent/brain
+dispatch, not just `<cli> --version` starts), and (c) record what was checked next
+to the pin. `npm view <pkg> version` alone is NOT sufficient — a green `--version`
+proves nothing about API shape changes or RPC event surfaces the client depends on.
 
 **The zoe-core manifest is a DECLARATION, not an installer.** `services/zoe-core` has no
 committed lockfile and no `node_modules`, and `zoe_core_client.py` launches the bare
@@ -91,6 +95,14 @@ zoe-core's `extensions/{abilities,memory,provider-local-gemma,soul}.ts` import
 verified **purely additive** — 6 lines added, 0 removed (three new `on()` overloads,
 `registerEntryRenderer`, `registerProvider`) — and those four files import nothing
 else from pi.
+
+**Pi 0.82.1 compatibility verification (2026-07-30):** Zoe's brain client
+(`services/zoe-data/zoe_core_client.py`) invokes pi with: `--mode rpc`,
+`--provider`, `--model`, `-e <extension>`, `--no-extensions`, `--no-skills`,
+`--no-prompt-templates`, `--no-themes`, `--no-context-files`, `--thinking off`.
+All flags confirmed present in `pi --help` output for installed 0.82.1. The RPC
+mode and all disable flags are documented and stable. No breaking changes found
+in CLI surface or RPC event shapes between 0.79.3 and 0.82.1.
 
 **RAM gate:** check available memory before building. An image build alongside the ~6 GB
 `llama-server` can OOM the live brain (`docs/knowledge/memory-pressure-profile.md`); the

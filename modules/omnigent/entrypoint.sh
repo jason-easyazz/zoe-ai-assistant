@@ -59,7 +59,9 @@ cursor_bin=""
 # 1) Prefer the host's pin — but accept it ONLY if the binary it points at actually reports
 #    the declared pin. A host symlink can point at a stale/below-minimum build (e.g. an old
 #    2026.01.28), and an `-x` test alone would happily link it; verify --version before
-#    trusting it, exactly as the declared-pin fallback below does.
+#    trusting it, exactly as the declared-pin fallback below does. Clear any stale in-container
+#    link first so a broken host pin cannot leave an old version resolvable.
+rm -f "${LINK_DIR}/cursor-agent" 2>/dev/null || true
 if [ -L "${_pin_link}" ]; then
   _pinned_ver="$(basename "$(dirname "$(readlink "${_pin_link}")")")"
   _cand="${VERSIONS_ROOT}/${_pinned_ver}/cursor-agent"

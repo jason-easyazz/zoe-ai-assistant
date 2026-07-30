@@ -30,11 +30,24 @@ set -euo pipefail
 
 # Pinned deliberately — see the note above. Verified against omnigent 0.7.0's
 # _CURSOR_MIN_VERSION of 2026.06.02. The pin is a LITERAL constant: the installer always
-# targets and verifies exactly this build, and `--check` audits against it too. There is NO
-# version override — provisioning any other build would defeat the whole point of the pin.
+# targets and verifies exactly this build, and `--check` audits against it too. An env
+# CURSOR_AGENT_VERSION override is allowed (for testing/rollback) but it MUST clear the
+# minimum — activating a version below CURSOR_MIN_VERSION would break the Cursor harness.
 CURSOR_PINNED_VERSION="2026.07.23-e383d2b"
-CURSOR_AGENT_VERSION="${CURSOR_PINNED_VERSION}"
+CURSOR_AGENT_VERSION="${CURSOR_AGENT_VERSION:-${CURSOR_PINNED_VERSION}}"
 CURSOR_MIN_VERSION="2026.06.02"
+
+# Validate any override against the minimum. The version string format is YYYY.MM.DD-<sha>;
+# compare only the leading date part (trailing -<sha> is build metadata, NOT ordered).
+if [ "${CURSOR_AGENT_VERSION}" != "${CURSOR_PINNED_VERSION}" ]; then
+  if [ "$(printf '%s\n%s\n' "$(date_part "${CURSOR_MIN_VERSION}")" "$(date_part "${CURSOR_AGENT_VERSION}")" | sort -V | head -1)" \
+       != "$(date_part "${CURSOR_MIN_VERSION}")" ]; then
+    echo "[cursor-agent] FAILED: CURSOR_AGENT_VERSION override '${CURSOR_AGENT_VERSION}' is below CURSOR_MIN_VERSION '${CURSOR_MIN_VERSION}'" >&2
+    echo "[cursor-agent] activating a version below the minimum would break the Cursor harness — refusing to proceed." >&2
+    exit 1
+  fi
+  echo "[cursor-agent] override: targeting ${CURSOR_AGENT_VERSION} (not the pin ${CURSOR_PINNED_VERSION})"
+fi
 
 INSTALL_ROOT="${HOME}/.local/share/cursor-agent/versions"
 BIN_DIR="${HOME}/.local/bin"
@@ -117,19 +130,23 @@ if [ "${need_install}" = 1 ]; then
   echo "[cursor-agent] installed ${CURSOR_AGENT_VERSION} -> ${INSTALL_ROOT}/${CURSOR_AGENT_VERSION}"
 fi
 
-mkdir -p "${BIN_DIR}"
-ln -sfn "${TARGET}" "${BIN_DIR}/cursor-agent"
-echo "[cursor-agent] linked ${BIN_DIR}/cursor-agent -> ${TARGET}"
-
-# Final confirmation via the LINKED binary — proves the symlink resolves and the published
-# install runs. This also covers the "already present" path, which skips staging entirely.
-# `current()` collapses any failure to the string "none", which will not match the pin.
-got="$(current)"
+# Final confirmation via the TARGET binary BEFORE updating the symlink. Validates that the
+# published install (or the "already present" path) runs and reports the pin BEFORE making
+# it active. If ${TARGET} is executable but reports the wrong version (e.g. an interrupted
+# earlier copy), we exit here WITHOUT touching the symlink — never leave the host worse
+# than before. `current()` reads the LINKED binary, so test TARGET directly first.
+got="$("${TARGET}" --version 2>/dev/null | head -1 || echo "none")"
 if [ "${got}" != "${CURSOR_AGENT_VERSION}" ]; then
-  echo "[cursor-agent] FAILED: linked binary reports '${got}', expected '${CURSOR_AGENT_VERSION}'" >&2
+  echo "[cursor-agent] FAILED: ${TARGET} reports '${got}', expected '${CURSOR_AGENT_VERSION}'" >&2
   echo "[cursor-agent] the install under ${INSTALL_ROOT}/${CURSOR_AGENT_VERSION} looks incomplete —" >&2
   echo "[cursor-agent] remove that directory and re-run to force a clean download." >&2
   exit 1
 fi
+
+# Only NOW that ${TARGET} is proven to report the pin do we make it active. This ensures
+# an interrupted install or a wrong-version directory never clobbers a working symlink.
+mkdir -p "${BIN_DIR}"
+ln -sfn "${TARGET}" "${BIN_DIR}/cursor-agent"
+echo "[cursor-agent] linked ${BIN_DIR}/cursor-agent -> ${TARGET}"
 echo "[cursor-agent] version now: ${got}"
 echo "[cursor-agent] recreate zoe-omnigent so the entrypoint re-links it in-container."
