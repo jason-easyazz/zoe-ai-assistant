@@ -143,20 +143,37 @@ the load-bearing property and it is worth credits:
 | `triggerOnUpdates` | **true** | that up-to-date head actually gets reviewed |
 | `triggerOnDrafts` | **false** | iteration in draft stays free |
 | `Greptile Review` required | **yes** | the gate is real |
-| `greptile-complete` required | **yes** | the review actually LANDED before the merge |
+| `greptile-complete` produced | **yes** (not yet REQUIRED — see below) | the review LANDED before the merge |
 
-**`greptile-complete` is published by `greptile-gate.yml`, not by Greptile**, and without
-it in the required contexts the guarantee above has a hole. A required check only BLOCKS
-once it has REPORTED for the head; `Greptile Review` does not exist until Greptile creates
-it, so before that the requirement is simply absent and an armed auto-merge merges straight
-through. Measured: **#1589** merged 12s after the label with Greptile never reviewing, and
-**#1587** merged 3s BEFORE its Greptile check even started — which then concluded `failure`,
-on code already on `main`. The gate raises `greptile-complete` `in_progress` the moment it
-sees a ready head and completes it only from Greptile's own finished verdict. Add it to
-branch protection **only after the workflow publishing it is on `main`** — a required
-context nothing produces never reports, and blocks every PR permanently. Full lifecycle
-(declines fail, per-PR `external_id` scoping, shared-SHA coordination):
-[docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md).
+**`greptile-complete` is published by `greptile-gate.yml`, not by Greptile.** A required
+check only BLOCKS once it has REPORTED for the head; `Greptile Review` does not exist until
+Greptile creates it, so before that the requirement is simply absent and an armed auto-merge
+merges straight through. Measured: **#1589** merged 12s after the label with Greptile never
+reviewing, and **#1587** merged 3s BEFORE its Greptile check even started — which then
+concluded `failure`, on code already on `main`. The gate raises `greptile-complete`
+`in_progress` the moment it sees a ready head and completes it only from Greptile's own
+finished verdict.
+
+**Shipped behaviour of the gate check (as of this PR):**
+- **Single open PR on a head → normal publish.** The gate resolves `greptile-complete` from
+  Greptile's own verdict (declines — `skipped`/`cancelled`/`stale`/`neutral` — FAIL, they
+  are not a review); publishes are idempotent; a regression, a released-head refetch/read
+  failure, or a base retarget SUPERSEDES a stale success with a fresh `in_progress`.
+- **More than one open PR (drafts included) sharing the exact head SHA → HOLD.** Branch
+  protection resolves a required context by check NAME on the head SHA (never `external_id`),
+  so a success published for one PR would satisfy every other PR on the same commit. Rather
+  than attribute per-PR, the gate simply never publishes a shared success: the blocker stays
+  `in_progress`, the sweep names the sharers, and it clears once they close, retarget, or
+  move off the commit. This closes the whole shared-SHA fail-open family at the source —
+  there is never a shared success to inherit.
+
+**DEFERRED to a dedicated follow-up PR (NOT shipped here):** (1) full per-PR shared-SHA
+coordination that publishes a correctly-attributed success while a head is shared, and
+(2) adding `greptile-complete` to branch protection's **required** contexts. Until (2), the
+gate publishes the check but nothing enforces it — add it to branch protection **only after
+the workflow publishing it is on `main`**, or a required context nothing produces will block
+every PR permanently. Full lifecycle (declines fail, per-PR `external_id` scoping, blunt
+shared-SHA HOLD): [docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md).
 
 `triggerOnUpdates: false` was tried on 2026-07-26 and **reverted the same day**. It looks
 like a saving and it silently breaks the guarantee: `strict` forces a branch update, and

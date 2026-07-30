@@ -83,26 +83,20 @@ HARNESS = textwrap.dedent(
     // `state` matters: co-location confirms sharers with `cf.state !== 'open'`, so
     // without it PR 1 is invisible as a sharer TO the other PRs and the relationship
     // reads as one-directional when it is symmetric.
-    const pr = { number: 1, head: { sha: LIST_SHA }, base: { ref: 'main' },
+    // OPTS.baseRef: the PR's CURRENT base branch. Defaults to 'main'. A test sets it
+    // different from the handoff marker's base (OPTS.markerBase) to model a retarget.
+    const pr = { number: 1, head: { sha: LIST_SHA }, base: { ref: OPTS.baseRef || 'main' },
                  labels: OPTS.labels || [], draft: false, state: 'open',
                  // The PR's own birth time clamps the Codex grace anchor: a branch
                  // pushed long before the PR opened must not read as already-graced.
                  created_at: OPTS.prCreatedAt || '2020-01-01T00:00:00Z' };
 
-    // OPTS.sharedShaPrs: OTHER open PRs pointing at the same head commit. Branch
-    // protection resolves a required context by check NAME on the PR's head SHA and
-    // never looks at external_id, so a success published for one of these satisfies
-    // the others too — which is the whole point of the shared-SHA coordination.
-    //
-    // Per-PR spec knobs:
-    //   markerSha   — the SHA this PR's own trusted handoff marker pins it to (absent
-    //                 = no marker at all, i.e. a label with no proof of handoff)
-    //   arrivesLate — NOT in the sweep's OPENING pulls.list; visible to every later
-    //                 read. Models a PR moving onto the head mid-sweep.
-    //   assocOnly   — never in ANY pulls.list; visible only via the commit->PRs
-    //                 association endpoint.
-    //   hiddenFromAssoc — the inverse: absent from the association index (which is
-    //                 eventually consistent and can lag a very recent push).
+    // OPTS.sharedShaPrs: OTHER open PRs (drafts included) visible to the fresh
+    // co-location `pulls.list`. Branch protection resolves a required context by check
+    // NAME on the head SHA and never looks at external_id, so a success published for
+    // PR 1 would satisfy any of these that share its head — which is exactly what the
+    // blunt HOLD rule refuses to let happen. Spec knobs: `number`, `sha` (defaults to
+    // PR 1's head), `draft`, `state`.
     const otherSpecs = (OPTS.sharedShaPrs || []).map((o, i) => ({
       spec: o,
       pr: { number: o.number === undefined ? 100 + i : o.number,
@@ -135,13 +129,14 @@ HARNESS = textwrap.dedent(
       },
       rest: {
         pulls: {
-          // The OPENING snapshot (first call) cannot contain a PR that moves onto the
-          // head afterwards. Coordination must therefore RE-READ rather than trust it.
+          // Call #1 is the sweep's opening snapshot. Every later call is the blunt
+          // co-location enumeration, which reads the list FRESH. OPTS.coLocListFails
+          // fails only that later read (never the opening one, which is unwrapped and
+          // would crash the whole sweep) so the fail-closed HOLD can be exercised.
           list: async () => {
             prListReads += 1;
-            return [pr].concat(otherSpecs
-              .filter((o) => !o.spec.assocOnly && (prListReads > 1 || !o.spec.arrivesLate))
-              .map((o) => o.pr));
+            if (OPTS.coLocListFails && prListReads >= 2) throw new Error('open PR list unavailable');
+            return [pr].concat(otherSpecs.map((o) => o.pr));
           },
           // OPTS.headMovesLate: the head moves once the conditions have been re-read.
           // Keyed on conditionReads, NOT on the number of
@@ -170,16 +165,11 @@ HARNESS = textwrap.dedent(
         repos: {
           compareCommits: async () => {
             conditionReads += 1;
+            // OPTS.compareFails: the authoritative conditions read is unavailable, so
+            // readConditions returns null. On a RELEASED head that must supersede the
+            // stale greptile-complete success (3a), not just hold.
+            if (OPTS.compareFails) throw new Error('compare unavailable');
             return { data: { behind_by: OPTS.behindBy || 0 } };
-          },
-          // GET /repos/{o}/{r}/commits/{sha}/pulls — GitHub answers by SHA, so it sees a
-          // PR that moved onto the commit after the sweep's opening snapshot. It also
-          // returns PRs where the commit is merely an ANCESTOR, so the gate must decide
-          // membership by head-equality itself rather than trusting this list.
-          listPullRequestsAssociatedWithCommit: async () => {
-            if (OPTS.assocFetchFails) throw new Error('association index unavailable');
-            return [pr].concat(otherSpecs
-              .filter((o) => !o.spec.hiddenFromAssoc).map((o) => o.pr));
           },
           // Fallback anchor for the Codex grace when the head has no check suites.
           getCommit: async () => {
@@ -245,15 +235,10 @@ HARNESS = textwrap.dedent(
           // OPTS.markerSha: a prior handoff marker from THIS workflow's bot, pinning
           // the label to that SHA. Trust is bot-only, so the author must match exactly.
           listComments: async (o) => {
-            // A co-located PR has its OWN comments — it does not inherit PR 1's
-            // handoff marker. Without this, a sharer would borrow PR 1's proof of
-            // handoff and the marker contract would be untestable.
+            // A co-located PR has its OWN (empty) comments — it does not inherit PR 1's
+            // handoff marker.
             const oth = o && otherById.get(o.issue_number);
-            if (oth) return oth.spec.markerSha ? [{
-              user: { login: 'github-actions[bot]', type: 'Bot' },
-              created_at: '2026-07-27T00:00:00Z',
-              body: `handoff\n<!-- greptile-gate:labelled:${oth.spec.markerSha} -->`,
-            }] : [];
+            if (oth) return [];
             return mainComments();
           },
           createComment: async (o) => { calls.comments.push(o.body); return { data: { id: 777 } }; },
@@ -278,7 +263,10 @@ HARNESS = textwrap.dedent(
           }))).concat(OPTS.markerSha ? [{
             user: { login: 'github-actions[bot]', type: 'Bot' },
             created_at: '2026-07-27T00:00:00Z',
-            body: `handoff\n<!-- greptile-gate:labelled:${OPTS.markerSha} -->`,
+            // OPTS.markerBase encodes the base the handoff was earned against; absent
+            // models a legacy (base-agnostic) marker.
+            body: `handoff\n<!-- greptile-gate:labelled:${OPTS.markerSha}` +
+                  `${OPTS.markerBase ? ' base=' + OPTS.markerBase : ''} -->`,
           }] : [])); }
     const log = [];
     const core = { info: (m) => log.push(String(m)), notice: (m) => log.push(String(m)),
@@ -1200,179 +1188,174 @@ def test_neutral_greptile_verdict_stays_re_summonable(tmp_path):
     assert any(c.strip().startswith("@greptileai review") for c in r2["comments"]), r2["comments"]
 
 
-# ── Shared-SHA coordination ──────────────────────────────────────────────────
+# ── Co-located PRs: the blunt HOLD rule ──────────────────────────────────────
 # `external_id` scopes the gate's own LOOKUP of its blocker, but branch protection
 # resolves a required context by check NAME on the PR's head SHA and never looks at
 # external_id. Two open PRs can point at the same commit, so a success published for
-# one satisfies the other's required context too — while that other PR's own blocker
-# is still in_progress and its cheap tier has never been checked.
+# one satisfies the other's required context too. The elaborate per-PR attribution
+# layer that tried to publish anyway was collapsed to one rule: if MORE THAN ONE open
+# PR (drafts included) shares the exact head SHA, never publish a shared success —
+# HOLD. Because a shared head yields no published success, no other PR can inherit one,
+# which closes the whole shared-SHA fail-open family at the source.
 
 
-def test_success_is_withheld_while_a_co_located_pr_has_not_handed_off(tmp_path):
-    """PR 100 shares this head and carries no `greptile` label — so publishing success
-    for PR 1 would hand PR 100 a green required context it never earned. Hold instead;
-    the blocker stays in_progress and clears once PR 100 qualifies or moves."""
+def test_shared_head_withholds_success(tmp_path):
+    """2+ open PRs on the same head SHA -> HOLD. Publishing success for PR 1 would
+    satisfy PR 100's required context too, so the blunt rule withholds it and leaves
+    the blocker in_progress. Remove the shared-head guard and this goes red."""
     r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
              markerSha="a" * 40,
              greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": []}])
+             sharedShaPrs=[{"number": 100}])
     mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
     assert not any(c["conclusion"] == "success" for c in mine), (
-        f"published a success that also satisfies unqualified PR 100: {mine}")
+        f"published a success that also satisfies co-located PR 100: {mine}")
     assert any("share this head" in m for m in r["log"]), r["log"]
 
 
-def test_success_is_withheld_even_when_the_co_located_pr_has_handed_off(tmp_path):
-    """A co-located PR withholds success REGARDLESS of its own state.
+def test_single_pr_on_the_head_publishes(tmp_path):
+    """The positive control: with nobody else on the head the verdict IS publishable.
 
-    This reverses an earlier, weaker rule on this PR. Coordination used to ask whether
-    the OTHER PR had cleared its cheap tier (label + handoff marker for this SHA) and
-    published success once it had. But clearing PR 100's cheap tier does not make
-    Greptile's review of the COMMIT into a review of PR 1 — a `Greptile Review` run
-    carries nothing naming the PR it reviewed, and the two PRs can differ in base branch
-    and review context entirely. So while anyone else is on this head, the verdict is
-    unattributable and success is withheld.
-
-    Strictly stronger than the label-plus-marker contract it replaces: that contract
-    would have published here.
+    Without this every HOLD test could pass by blocking unconditionally, which would
+    strand every PR. PR 100 sits on a DIFFERENT commit, so PR 1 is alone on its head.
     """
     r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
              markerSha="a" * 40,
              greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": [{"name": "greptile"}],
-                            "markerSha": "a" * 40}])
-    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
-    assert not any(c["conclusion"] == "success" for c in mine), (
-        f"published an unattributable verdict because the sharer looked qualified: {mine}")
-    assert any("cannot be attributed" in m or "share this head" in m for m in r["log"]), r["log"]
-
-
-def test_the_sharer_is_alone_positive_control(tmp_path):
-    """The guard must withhold only when someone ELSE is on the head.
-
-    Without this, every test above could pass by blocking unconditionally — which would
-    strand every PR in the repo. PR 100 sits on a different commit, so PR 1 is alone on
-    its head and the verdict IS attributable.
-    """
-    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
-             markerSha="a" * 40,
-             greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": [], "sha": "d" * 40}])
+             sharedShaPrs=[{"number": 100, "sha": "d" * 40}])
     mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
     assert any(c["conclusion"] == "success" for c in mine), (
         f"withheld success though this PR is alone on its head: {mine}")
 
 
-def test_a_co_located_greptile_run_does_not_count_as_this_prs_review(tmp_path):
-    """The summon side of the same attribution problem.
-
-    A completed `Greptile Review` run on the head made PR 1 look already-reviewed, so it
-    was never summoned — and a later sweep published its blocker from that run. When the
-    run may belong to PR 100 it is not evidence for PR 1: treat it as no live run and
-    summon. Bounded by MAX_SUMMONS, so this cannot loop.
-    """
+def test_a_draft_sharer_still_withholds_success(tmp_path):
+    """Drafts are INCLUDED. A draft on the same commit would inherit a published
+    success the instant it is marked ready — so it counts as a sharer and the gate
+    holds. Restrict the enumeration to non-draft PRs and this goes red."""
     r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
              markerSha="a" * 40,
              greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": []}])
-    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), (
-        f"took a co-located PR's Greptile run as proof this PR was reviewed: {r['comments']}")
-
-
-def test_the_fresh_handoff_path_also_ignores_a_co_located_greptile_run(tmp_path):
-    """The TWIN of the test above — the path that was missed.
-
-    Attribution was applied to the handed-off branch's live-run read but not to the
-    fresh-handoff branch's. So when A and B share a head and A's run already exists, B
-    qualifies, gets labelled, sees A's run and is never summoned: both PRs logged "live
-    Greptile run already exists" and neither ever posted `@greptileai review`, leaving B
-    labelled and unreviewed indefinitely.
-
-    This PR starts UNLABELLED (no marker), so it takes the fresh-handoff path — the
-    sibling test above enters via the handed-off branch and cannot reach this code.
-    """
-    r = _run(tmp_path, _script(), reviewers=BOTH,
-             greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": []}])
-    # PR 1 really does reach the fresh-handoff branch (both PRs in this sweep do, since
-    # they share every condition — so assert on PR-1-specific log lines, not on the
-    # sweep-wide counters).
-    assert any(m.startswith("PR #1: cheap tier green") for m in r["log"]), r["log"]
-    assert any(m.startswith("PR #1:") and "not attributable" in m for m in r["log"]), (
-        f"fresh handoff took a co-located PR's Greptile run as its own: {r['log']}")
-    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), (
-        f"fresh handoff did not summon under co-location: {r['comments']}")
-    # Symmetric: the co-located PR must reach the same conclusion about PR 1.
-    assert not any("live Greptile run already exists" in m for m in r["log"]), r["log"]
-
-
-def test_a_pr_arriving_on_the_head_after_the_snapshot_still_withholds(tmp_path):
-    """The opening `pulls.list` snapshot cannot see a PR that moves onto the head later.
-
-    PR 100 is absent from the sweep's first list read and present in every later one.
-    Deriving candidates from the snapshot excluded it entirely — it was never refetched
-    — so this PR published `success`, which became the NEWEST run of that name on the
-    SHA, and PR 100 consumed it. Its own `in_progress` blocker does NOT protect it:
-    required contexts resolve by name+SHA, so a newer success supersedes a pending run.
-    Coordination must therefore enumerate the head's PRs FRESH, immediately before
-    publishing.
-    """
-    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
-             markerSha="a" * 40,
-             greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": [], "arrivesLate": True}])
+             sharedShaPrs=[{"number": 100, "draft": True}])
     mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
     assert not any(c["conclusion"] == "success" for c in mine), (
-        f"published success for a head a late-arriving PR shares: {mine}")
+        f"published a success a draft on the same head would inherit: {mine}")
     assert any("share this head" in m for m in r["log"]), r["log"]
 
 
-def test_the_commit_to_prs_association_endpoint_is_load_bearing(tmp_path):
-    """`GET /commits/{sha}/pulls` is keyed on the SHA, not on a list we have to scan.
-
-    Here PR 100 is invisible to EVERY `pulls.list` read and shows up only in the
-    association index. Drop that call and the sharer is missed. (The reverse case is
-    covered by `..._after_the_snapshot_still_withholds`, where the association index
-    lags — which is why both sources are unioned rather than either being trusted.)
-    """
-    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
-             markerSha="a" * 40,
-             greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": [], "assocOnly": True}])
-    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
-    assert not any(c["conclusion"] == "success" for c in mine), (
-        f"missed a sharer only the association endpoint reports: {mine}")
-
-
-def test_a_lagging_association_index_is_covered_by_the_fresh_pr_list(tmp_path):
-    """The other half of the union, and the reason it IS a union.
-
-    `GET /commits/{sha}/pulls` is an eventually-consistent index and can lag a very
-    recent push. Here PR 100 has already moved onto the head — a fresh `pulls.list`
-    sees it — but the association index has not caught up yet. Relying on the
-    association endpoint alone would miss it and publish a shared success.
-    """
-    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
-             markerSha="a" * 40,
-             greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": [], "hiddenFromAssoc": True}])
-    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
-    assert not any(c["conclusion"] == "success" for c in mine), (
-        f"missed a sharer the association index had not indexed yet: {mine}")
-
-
 def test_an_unreadable_pr_enumeration_withholds_success(tmp_path):
-    """Fail CLOSED. If we cannot enumerate who shares the head we cannot assert
-    anything about them, and publishing a green shared context on an unverified
-    commit is the direction that lets an unreviewed head merge."""
+    """Fail CLOSED. If the co-location `pulls.list` cannot be read we cannot rule out a
+    sharer, and publishing a green shared context on an unverified commit is the
+    direction that lets an unreviewed head merge — so hold."""
     r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
              markerSha="a" * 40,
              greptileRun={"status": "completed", "conclusion": "success"},
-             assocFetchFails=True)
+             coLocListFails=True)
     mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
     assert not any(c["conclusion"] == "success" for c in mine), (
         f"published success without knowing who shares the head: {mine}")
-    assert any("could not enumerate" in m for m in r["log"]), r["log"]
+    assert any("could not enumerate open PRs" in m for m in r["log"]), r["log"]
+
+
+# ── 3a: a failed conditions read must supersede a RELEASED head ───────────────
+# The failed-refetch supersede (test_a_failed_refetch_supersedes_an_already_released
+# _head) covers `pulls.get`. Its twin is a `readConditions` failure — compare/reviews/
+# threads/suites — on a head whose `greptile-complete` already concluded success: the
+# contract cannot be verified this sweep, so the released success is unvouched-for and
+# must be re-blocked rather than left green.
+
+
+def test_conditions_read_failure_supersedes_a_released_head(tmp_path):
+    """readConditions returns null (compare unreachable) on a head already carrying a
+    completed `greptile-complete` success. The gate must supersede that success with an
+    unresolved run — gating on the FAILURE, not on any particular event. Drop the
+    supersede at the `!st` bail and this goes red (the success is left standing)."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             compareFails=True,   # makes readConditions return null
+             gateRuns=[{"status": "completed", "conclusion": "success",
+                        "started_at": "2026-07-27T00:00:00Z",
+                        "completed_at": "2026-07-27T00:00:00Z"}])
+    # No fresh success may be published…
+    assert not any(c["conclusion"] == "success" for c in r["gateChecks"]), r["gateChecks"]
+    # …and the released one must be superseded by a run that actually blocks.
+    blocking = [c for c in r["gateChecks"]
+                if c["status"] != "completed" or c["conclusion"] != "success"]
+    assert blocking, (
+        "a conditions-read failure left a released greptile-complete success standing "
+        f"— auto-merge can consume it: {r['gateChecks']} / {r['log']}")
+
+
+def test_conditions_read_failure_does_not_churn_a_still_blocked_head(tmp_path):
+    """The other side of 3a: supersede only what is RELEASED. A head whose blocker is
+    still in_progress needs no re-raise when the conditions read fails — re-raising
+    would post a run per sweep for every PR during any API wobble."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             compareFails=True,
+             gateRuns=[{"status": "in_progress", "started_at": "2026-07-27T00:00:00Z"}])
+    made = [c for c in r["gateChecks"] if c["status"] == "in_progress"]
+    assert made == [], f"re-raised over an already-blocking run: {r['gateChecks']}"
+
+
+# ── 3b: a base-branch retarget invalidates handoff + greptile evidence ────────
+# The handoff marker binds to base+head. A retarget changes the diff Greptile must
+# review without moving the head SHA, so a handoff earned against the old base is
+# stale: the sweep must strip the label AND supersede the `greptile-complete` success
+# published for the old base. The `edited` trigger wakes the gate on the retarget.
+
+
+def test_base_retarget_invalidates_handoff_and_greptile_evidence(tmp_path):
+    """PR handed off & greptile-complete=success against base `develop`; now retargeted
+    to `main` (head unchanged). The marker no longer matches base+head, so the label is
+    stripped and the released success is superseded. Bind the marker to head alone (drop
+    the base token from the match) and this goes red — the stale success survives."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40, markerBase="develop", baseRef="main",
+             greptileRun={"status": "completed", "conclusion": "success"},
+             gateRuns=[{"status": "completed", "conclusion": "success",
+                        "started_at": "2026-07-27T00:00:00Z",
+                        "completed_at": "2026-07-27T00:00:00Z"}])
+    # The stale-base handoff is not honoured — the label is stripped…
+    assert r["removeLabel"] == 1, r["log"]
+    assert any("stale label removed" in m for m in r["log"]), r["log"]
+    # …and the greptile-complete success earned against the old base is superseded.
+    assert not any(c["conclusion"] == "success" for c in r["gateChecks"]), r["gateChecks"]
+    blocking = [c for c in r["gateChecks"]
+                if c["status"] != "completed" or c["conclusion"] != "success"]
+    assert blocking, (
+        "a base retarget left the old-base greptile-complete success green — auto-merge "
+        f"can consume it against the new base: {r['gateChecks']} / {r['log']}")
+
+
+def test_same_base_handoff_is_still_honoured(tmp_path):
+    """The positive control for 3b: a marker whose base MATCHES the current base is a
+    valid handoff and must NOT be stripped. Otherwise base-binding would re-handoff
+    every PR on every sweep."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40, markerBase="main", baseRef="main",
+             greptileRun={"status": "in_progress", "conclusion": None})
+    assert r["removeLabel"] == 0, r["log"]
+    assert not any("stale label removed" in m for m in r["log"]), r["log"]
+
+
+def test_legacy_marker_without_a_base_token_is_base_agnostic(tmp_path):
+    """A pre-deploy marker carries no base token and must match on head alone, so an
+    in-flight PR is not needlessly re-handed-off when this ships. Head matches, no base
+    recorded -> still handed off, label kept."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,   # no markerBase -> legacy marker
+             baseRef="main",
+             greptileRun={"status": "in_progress", "conclusion": None})
+    assert r["removeLabel"] == 0, r["log"]
+
+
+def test_edited_event_reaches_the_sweep_for_a_retarget(tmp_path):
+    """The `edited` trigger (fired on a base-branch change) must be on the pull_request
+    types so a retarget wakes the gate rather than waiting for the 30-min schedule."""
+    spec = yaml.safe_load(WORKFLOW.read_text())
+    triggers = spec[True] if True in spec else spec["on"]
+    assert "edited" in set(triggers["pull_request"]["types"]), triggers["pull_request"]
+
 
 
 def test_superseding_a_released_blocker_happens_once_not_every_sweep(tmp_path):

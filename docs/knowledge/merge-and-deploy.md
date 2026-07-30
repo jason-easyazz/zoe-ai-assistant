@@ -90,10 +90,12 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
 
 - `strict = true` — a PR must be **up to date with `main`** to merge (it can sit **BEHIND** if `main`
   races ahead; clear with update-branch / re-run).
-- Required status checks: **`validate`**, **`secret-scan`**, **`Greptile Review`**, and
-  **`greptile-complete`** (since 2026-07-27; the GitGuardian App check is informational —
-  the first-party `secret-scan` job replaced it as required so an App outage cannot
-  freeze `main`).
+- Required status checks: **`validate`**, **`secret-scan`**, **`Greptile Review`** (the
+  GitGuardian App check is informational — the first-party `secret-scan` job replaced it as
+  required so an App outage cannot freeze `main`). **`greptile-complete` is PRODUCED by the
+  gate but is NOT yet a required context** — adding it to branch protection is DEFERRED to a
+  dedicated follow-up PR (a required context nothing yet enforces still publishes correctly;
+  add it only after the workflow publishing it is on `main`, or it blocks every PR forever).
   - **`greptile-complete` is published by `greptile-gate.yml`, not by Greptile**, and it
     is the check that actually closes the auto-merge race. A required context only
     BLOCKS once it has REPORTED for the head; `Greptile Review` does not exist until
@@ -117,33 +119,42 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
     dismissed a live rerun as superseded and published the stale result. `started_at` has
     one-second resolution, so **ties hold** — an in-flight run tying with the completed one
     is treated as live, and tied completed attempts are ordered by check-run id.
-  - **A shared head commit blocks success outright.** Nothing the gate reads is per-PR:
-    `greptile-complete` is scoped by `external_id` for the gate's own lookup, but branch
-    protection resolves a required context by check NAME on the head SHA and ignores
-    `external_id`; and a `Greptile Review` run says a *commit* was reviewed without naming
-    the PR that asked. So with two open PRs on one commit, a success published for A also
-    satisfies B, and A's review made B look already-reviewed (B was never summoned, and a
-    later sweep published B's blocker from A's result — worst when the two have different
-    bases). The rule is therefore blunt: while any *other* open, non-draft PR shares the
-    head, success is withheld and Greptile is still summoned. It holds (blocker stays
-    `in_progress`, never failed), so it self-clears once the other PR closes, retargets, or
-    moves off the commit. Two open PRs on an identical head commit is pathological, and
-    over-blocking there is the trade. This replaced a weaker rule that published once the
-    *other* PR had cleared its own cheap tier — clearing B's cheap tier does not make a
-    review of the commit into a review of A.
-    - The rule applies to **both** live-run reads — the handed-off branch's and the
-      fresh-handoff branch's. Fixing only one left the other counting a co-located PR's
-      run as its own: both PRs logged "live Greptile run already exists" and neither ever
-      summoned, so the second sat labelled and unreviewed.
-    - **Who shares the head is enumerated FRESH, immediately before publishing** — the
-      union of `GET /commits/{sha}/pulls` (keyed on the SHA) and a re-read of the open-PR
-      list, each candidate then confirmed with `pulls.get`. The sweep's opening snapshot is
-      never trusted: a PR that moved onto the commit afterwards was absent from it and
-      never refetched. Both sources are needed — the association index lags a very recent
-      push, and a `pulls.list` scan can miss what the SHA-keyed endpoint reports. If either
-      read fails the head is treated as shared. Note a co-located PR's own `in_progress`
-      blocker does **not** protect it: contexts resolve by name+SHA, so a newer success
-      supersedes a pending run of the same name.
+  - **A shared head commit blocks success outright — one blunt, fail-closed rule.**
+    Nothing the gate reads is per-PR: `greptile-complete` is scoped by `external_id` for the
+    gate's own lookup, but branch protection resolves a required context by check NAME on the
+    head SHA and ignores `external_id`; and a `Greptile Review` run says a *commit* was
+    reviewed without naming the PR that asked. So with two open PRs on one commit, a success
+    published for A would also satisfy B. Rather than reconstruct per-PR attribution — an
+    elaborate coordination layer (cross-PR SHA holders, `gLive` co-location math, per-run
+    attribution) that kept surfacing fresh fail-open edge cases — the rule is now the
+    bluntest safe one: **if MORE THAN ONE open PR (DRAFTS INCLUDED) shares the exact head
+    SHA, HOLD** — never publish a shared success. The blocker stays `in_progress` (never
+    failed), the sweep names the sharers, and it self-clears once the others close, retarget,
+    or move off the commit. Because a shared head never yields a published success, there is
+    never a shared green context to inherit — which closes the whole shared-SHA fail-open
+    family at the source, with no inheritance/attribution/run-scoping left to get wrong.
+    - **Consulted at the PUBLISH site only.** Summoning is *not* gated on co-location: an
+      extra Greptile summon on a pathological shared head is harmless and bounded by the
+      three-summons-per-head cap. This is why the old `gLive`/`gLive2` attribution on both
+      the handed-off and fresh-handoff live-run reads is gone.
+    - **Enumerated FRESH** via a re-read of the open-PR list (`pulls.list`, which INCLUDES
+      drafts), filtered to PRs whose head SHA equals this one. The sweep's opening snapshot
+      is not trusted — a PR that moved onto the commit afterwards was absent from it. A read
+      failure treats the head as shared (fail closed). Residual, stated: a sharer visible
+      only via the eventually-consistent `GET /commits/{sha}/pulls` association index (absent
+      from `pulls.list`) is not seen until the next sweep — holding is the safe direction
+      regardless. **Full per-PR shared-SHA coordination is DEFERRED to a follow-up PR.**
+  - **A conditions-read failure on a released head supersedes the stale success (3a).** The
+    twin of the failed-refetch supersede below: if `readConditions` (compare/reviews/threads/
+    suites) fails on a head whose `greptile-complete` already concluded `success`, the
+    contract cannot be verified this sweep, so the released success is re-blocked with a fresh
+    `in_progress` rather than left green. Gated on the failure, not on any event.
+  - **A base-branch retarget invalidates handoff + Greptile evidence (3b).** The handoff
+    marker binds to **base+head** (`<sha> base=<ref>`; legacy markers with no base token
+    match on head alone). A retarget changes the diff Greptile must review without moving the
+    head SHA, so a handoff earned against the old base is stale: the sweep strips the label
+    and supersedes the `greptile-complete` success published for the old base. The gate wakes
+    on the `edited` event (which fires on a base change) rather than waiting for the schedule.
   - **A blocker is raised before the authoritative `pulls.get`, not after.** That refetch
     can fail transiently, and the sweep then skips the PR — which used to leave a ready
     head with no `greptile-complete` run at all while the other required checks were green.
