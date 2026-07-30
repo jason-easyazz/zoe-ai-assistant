@@ -143,6 +143,20 @@ the load-bearing property and it is worth credits:
 | `triggerOnUpdates` | **true** | that up-to-date head actually gets reviewed |
 | `triggerOnDrafts` | **false** | iteration in draft stays free |
 | `Greptile Review` required | **yes** | the gate is real |
+| `greptile-complete` required | **yes** | the review actually LANDED before the merge |
+
+**`greptile-complete` is published by `greptile-gate.yml`, not by Greptile**, and without
+it in the required contexts the guarantee above has a hole. A required check only BLOCKS
+once it has REPORTED for the head; `Greptile Review` does not exist until Greptile creates
+it, so before that the requirement is simply absent and an armed auto-merge merges straight
+through. Measured: **#1589** merged 12s after the label with Greptile never reviewing, and
+**#1587** merged 3s BEFORE its Greptile check even started — which then concluded `failure`,
+on code already on `main`. The gate raises `greptile-complete` `in_progress` the moment it
+sees a ready head and completes it only from Greptile's own finished verdict. Add it to
+branch protection **only after the workflow publishing it is on `main`** — a required
+context nothing produces never reports, and blocks every PR permanently. Full lifecycle
+(declines fail, per-PR `external_id` scoping, shared-SHA coordination):
+[docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md).
 
 `triggerOnUpdates: false` was tried on 2026-07-26 and **reverted the same day**. It looks
 like a saving and it silently breaks the guarantee: `strict` forces a branch update, and

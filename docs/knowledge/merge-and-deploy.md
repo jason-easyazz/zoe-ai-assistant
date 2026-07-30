@@ -103,12 +103,34 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
     started — which then concluded `failure`, on code already on `main`.
   - The gate raises it `in_progress` the moment a ready head is seen — before any other
     call that could abort the sweep — and completes it only from Greptile's own finished
-    verdict. A DECLINED verdict (`skipped`/`cancelled`/`stale`/`neutral`) **fails** the
-    check: Greptile skips PRs over ~50 files, and both its own skipped check and a
-    `neutral` are non-blocking, so anything softer merges a head with no review at all.
-    The escape is to split the PR, or an explicit operator decision — not a silent green.
+    verdict. A DECLINED verdict (`skipped`/`cancelled`/`stale`/`timed_out`/`neutral`)
+    **fails** the check: Greptile skips PRs over ~50 files, and both its own skipped check
+    and a `neutral` are non-blocking, so anything softer merges a head with no review at
+    all. The escape is to split the PR, or an explicit operator decision — not a silent
+    green. That same list also marks a run DEAD for the re-summon path, so a declined head
+    stays retryable (bounded by three summons per head); the two uses share one constant
+    in the workflow because they drifted apart once and stranded neutral verdicts.
+  - **The current verdict is the newest ATTEMPT, ranked by start time — not the last run
+    to finish.** Greptile's attempts overlap: a rerun routinely begins while the previous
+    one is still running, and can finish first. Ranking by completion picked the wrong
+    verdict, and comparing an in-flight run's start against a completed run's *completion*
+    dismissed a live rerun as superseded and published the stale result.
   - Blockers are scoped per-PR via `external_id`, because check runs attach to a SHA and
     two branches can share a commit.
+  - **Shared-SHA coordination — the limit of `external_id`.** That scoping fixes the gate's
+    own lookup, but branch protection resolves a required context by check NAME on the
+    PR's head SHA and never reads `external_id`. So a `success` on a commit is a SHARED
+    assertion: published for PR A, it also satisfies PR B if B points at the same commit.
+    The gate therefore withholds success while any *other* open, non-draft PR on that head
+    lacks the `greptile` label, and says so in the run log. It holds (leaves the blocker
+    `in_progress`) rather than failing, so it self-clears once the co-located PR qualifies
+    or moves off the commit. **Known residual:** candidates come from the sweep's opening
+    PR list, so a PR whose head moves *onto* the commit mid-sweep is only seen on the next
+    sweep (≤30 min) — that PR still carries its own `in_progress` blocker meanwhile, which
+    is what stops it merging.
+  - Publishing is **idempotent**: the verdict is only written when it would change what the
+    current context says. Otherwise every 30-min sweep of a settled PR created a duplicate
+    completed run and buried the checks tab.
   - **Adding it to branch protection must happen AFTER the workflow that publishes it is
     on `main`.** A required context no workflow produces never reports, and a context
     that never reports blocks every PR permanently — including the one carrying the fix.

@@ -86,6 +86,17 @@ HARNESS = textwrap.dedent(
                  // pushed long before the PR opened must not read as already-graced.
                  created_at: OPTS.prCreatedAt || '2020-01-01T00:00:00Z' };
 
+    // OPTS.sharedShaPrs: OTHER open PRs pointing at the same head commit. Branch
+    // protection resolves a required context by check NAME on the PR's head SHA and
+    // never looks at external_id, so a success published for one of these satisfies
+    // the others too — which is the whole point of the shared-SHA coordination.
+    const others = (OPTS.sharedShaPrs || []).map((o, i) => ({
+      number: o.number === undefined ? 100 + i : o.number,
+      head: { sha: o.sha || SHA }, base: { ref: 'main' },
+      labels: o.labels || [], draft: o.draft || false,
+      created_at: '2020-01-01T00:00:00Z', requested_reviewers: [] }));
+    const otherById = new Map(others.map((o) => [o.number, o]));
+
     let reviewReads = 0;
     const asReview = (l) => ({ commit_id: SHA, state: 'COMMENTED', user: { login: l } });
     // OPTS.dismissMidSweep: a login present on the first read and gone on the second —
@@ -109,12 +120,16 @@ HARNESS = textwrap.dedent(
       },
       rest: {
         pulls: {
-          list: async () => [pr],
+          list: async () => [pr].concat(others),
           // OPTS.headMovesLate: the head moves once the conditions have been re-read.
           // Keyed on conditionReads, NOT on the number of
           // pulls.get calls — a get-count trigger fires in BOTH orderings and so cannot
           // tell whether the head check runs before or after readConditions.
-          get: async () => {
+          get: async (o) => {
+            // Co-located PRs answer for themselves; only PR 1 drives the counters, so
+            // adding a sharer cannot perturb the head-moves-late timing above.
+            const oth = o && otherById.get(o.pull_number);
+            if (oth) return { data: oth };
             getReads += 1;
             const moved = OPTS.headMovesLate && getReads >= 2 && conditionReads >= 2;
             return { data: { ...pr, head: { sha: moved ? 'c'.repeat(40) : SHA },
@@ -151,7 +166,11 @@ HARNESS = textwrap.dedent(
           // The gate's OWN blocking check (greptile-complete).
           create: async (o) => {
             if (OPTS.gateCheckFails) throw new Error('cannot create check');
-            calls.gateChecks.push({ name: o.name, status: o.status, conclusion: o.conclusion || null });
+            // external_id is recorded so a test with co-located PRs can attribute each
+            // run to the PR that created it.
+            calls.gateChecks.push({ name: o.name, status: o.status,
+                                    conclusion: o.conclusion || null,
+                                    external_id: String(o.external_id) });
             calls.events.push(`check:${o.status}${o.conclusion ? '/' + o.conclusion : ''}`);
             return { data: { id: 1 } };
           },
@@ -726,6 +745,53 @@ def test_stuck_older_run_does_not_deadlock_when_a_later_run_completed(tmp_path):
     assert any(c["conclusion"] == "success" for c in r["gateChecks"]), r["gateChecks"]
 
 
+def test_overlapping_rerun_is_not_mistaken_for_a_superseded_run(tmp_path):
+    """Greptile's attempts OVERLAP — start-vs-completion is the wrong comparison.
+
+    A rerun routinely BEGINS while the previous attempt is still running. Comparing the
+    in-flight run's start against the completed run's COMPLETION marks such a rerun as
+    "older", dismisses it as superseded, and publishes success from the stale verdict
+    while Greptile is still reviewing — the exact #1587/#1589 class this check closes.
+
+    Here the rerun starts at 11:00, after the earlier attempt started (10:00) but before
+    it finished (12:00). It is the NEWER attempt and must hold the blocker. Restore
+    `started(c) > finished(newestDone)` and this goes red.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRuns=[
+                 {"status": "completed", "conclusion": "success",
+                  "started_at": "2026-07-27T10:00:00Z",
+                  "completed_at": "2026-07-27T12:00:00Z"},
+                 {"status": "in_progress", "conclusion": None,
+                  "started_at": "2026-07-27T11:00:00Z"},   # overlaps the run above
+             ])
+    done = [c for c in r["gateChecks"] if c["status"] == "completed"]
+    assert done == [], f"published from a stale verdict while a rerun was in flight: {done}"
+
+
+def test_current_verdict_is_the_newest_attempt_not_the_last_to_finish(tmp_path):
+    """Completion order is not attempt order when a rerun outruns a slow predecessor.
+
+    Attempt A starts 10:00 and grinds until 14:00 (failure); rerun B starts 11:00 and
+    finishes at 12:00 (success). B is the current attempt, so the head's verdict is
+    success. Ranking completed runs by `completed_at` picks A and publishes failure for
+    a head Greptile actually passed.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRuns=[
+                 {"status": "completed", "conclusion": "failure",
+                  "started_at": "2026-07-27T10:00:00Z",
+                  "completed_at": "2026-07-27T14:00:00Z"},   # earlier attempt, slower
+                 {"status": "completed", "conclusion": "success",
+                  "started_at": "2026-07-27T11:00:00Z",
+                  "completed_at": "2026-07-27T12:00:00Z"},   # later attempt, faster
+             ])
+    concl = [c["conclusion"] for c in r["gateChecks"] if c["status"] == "completed"]
+    assert concl == ["success"], f"took the last run to FINISH, not the newest attempt: {concl}"
+
+
 def test_in_flight_run_without_a_start_time_holds(tmp_path):
     """Unknown timestamp must fail CLOSED — treating it as old would let a head merge."""
     r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
@@ -862,6 +928,106 @@ def test_supersede_is_not_vouched_for_by_the_stale_head_observation_run(tmp_path
     assert blocking, (
         "the stale head-observation run vouched for a head whose current context is "
         f"green — auto-merge can still consume it: {r['gateChecks']} / {r['log']}")
+
+
+def test_published_verdict_is_not_republished_on_every_sweep(tmp_path):
+    """Idempotent publish. `checks.create` always makes a NEW run, and this block is
+    re-entered on every 30-min sweep plus every event for as long as the PR sits
+    handed-off and green — so an unconditional call posted a duplicate completed run
+    forever and buried the checks tab. The verdict here is already published and
+    unchanged, so nothing may be created."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             gateRuns=[{"status": "completed", "conclusion": "success",
+                        "started_at": "2026-07-27T00:00:00Z",
+                        "completed_at": "2026-07-27T00:00:00Z"}])
+    assert r["gateChecks"] == [], f"re-published an unchanged verdict: {r['gateChecks']}"
+
+
+def test_a_changed_verdict_is_still_published(tmp_path):
+    """The positive control for the idempotence guard: it must skip only when the
+    current context already says the intended thing. Greptile now concludes failure
+    while the published context is success — that MUST be written."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "failure"},
+             gateRuns=[{"status": "completed", "conclusion": "success",
+                        "started_at": "2026-07-27T00:00:00Z",
+                        "completed_at": "2026-07-27T00:00:00Z"}])
+    assert any(c["conclusion"] == "failure" for c in r["gateChecks"]), r["gateChecks"]
+
+
+def test_neutral_greptile_verdict_stays_re_summonable(tmp_path):
+    """`neutral` was a DEAD END at the publish site but absent from both live-run lists.
+
+    So a neutral verdict published `failure` AND counted as a live run on every sweep:
+    no re-summon could ever fire, and the PR was permanently blocked with no repair
+    path. It is a decline, so it must fail the blocker AND stay retryable — the single
+    DEAD_ENDS list is what keeps those two answers in agreement.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "neutral"})
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), (
+        f"a neutral verdict is a dead end and must be re-summonable: {r['comments']}")
+    concl = [c["conclusion"] for c in r["gateChecks"] if c["status"] == "completed"]
+    assert concl == ["failure"], f"neutral must still FAIL the blocker: {concl}"
+    # fresh-handoff branch (the second live-run list) must agree
+    r2 = _run(tmp_path, _script(), reviewers=BOTH,
+              greptileRun={"status": "completed", "conclusion": "neutral"})
+    assert r2["addLabels"] == 1, r2["log"]
+    assert any(c.strip().startswith("@greptileai review") for c in r2["comments"]), r2["comments"]
+
+
+# ── Shared-SHA coordination ──────────────────────────────────────────────────
+# `external_id` scopes the gate's own LOOKUP of its blocker, but branch protection
+# resolves a required context by check NAME on the PR's head SHA and never looks at
+# external_id. Two open PRs can point at the same commit, so a success published for
+# one satisfies the other's required context too — while that other PR's own blocker
+# is still in_progress and its cheap tier has never been checked.
+
+
+def test_success_is_withheld_while_a_co_located_pr_has_not_handed_off(tmp_path):
+    """PR 100 shares this head and carries no `greptile` label — so publishing success
+    for PR 1 would hand PR 100 a green required context it never earned. Hold instead;
+    the blocker stays in_progress and clears once PR 100 qualifies or moves."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             sharedShaPrs=[{"number": 100, "labels": []}])
+    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
+    assert not any(c["conclusion"] == "success" for c in mine), (
+        f"published a success that also satisfies unqualified PR 100: {mine}")
+    assert any("share this head" in m for m in r["log"]), r["log"]
+
+
+def test_success_is_published_once_every_co_located_pr_has_handed_off(tmp_path):
+    """The positive control: the guard must withhold only for UNQUALIFIED sharers.
+
+    Without this, the guard could pass its sibling test by blocking unconditionally —
+    which would strand every PR that happens to share a commit.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             sharedShaPrs=[{"number": 100, "labels": [{"name": "greptile"}]}])
+    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
+    assert any(c["conclusion"] == "success" for c in mine), (
+        f"withheld success though the co-located PR had handed off: {mine}")
+
+
+def test_a_pr_on_a_different_head_does_not_withhold_success(tmp_path):
+    """Only PRs on the SAME commit share the context. An unrelated open PR on another
+    head must not hold this one — otherwise any unqualified PR in the repo blocks
+    every other PR's blocker from ever resolving."""
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             sharedShaPrs=[{"number": 100, "labels": [], "sha": "d" * 40}])
+    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
+    assert any(c["conclusion"] == "success" for c in mine), (
+        f"an unrelated PR on a different head withheld success: {mine}")
 
 
 def test_superseding_a_released_blocker_happens_once_not_every_sweep(tmp_path):
