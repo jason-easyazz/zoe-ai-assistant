@@ -104,6 +104,33 @@ All flags confirmed present in `pi --help` output for installed 0.82.1. The RPC
 mode and all disable flags are documented and stable. No breaking changes found
 in CLI surface or RPC event shapes between 0.79.3 and 0.82.1.
 
+**Cursor 2026.01.28 → 2026.07.23-e383d2b coupled-surface review (2026-07-30):** the
+five-month jump was reviewed against the THREE surfaces omnigent 0.7.0 actually couples to
+(`omnigent/cursor_native.py`, `omnigent/onboarding/harness_install.py` in the installed
+0.7.x tool), NOT by `--version` alone:
+- **Auth** — ambient `cursor-agent login`, credentials in `$HOME/.cursor`, no API key /
+  gateway credential (`cursor_native.py` module docstring; `harness_install.py` CURSOR
+  block). Omnigent never re-runs login per job; it relies on the persisted host `~/.cursor`
+  mounted into the `omnigent-cursor` volume. The credential store path and the ambient-login
+  model are unchanged in the 0.7.0 integration.
+- **Launch flags** — `omnigent cursor` spawns `cursor-agent` as a **bare-args interactive
+  TUI**; the only argv omnigent forms are `--resume <uuid>` (session resume), the `models`
+  catalog read, and `--version` (install/entrypoint gate). This is a minimal, long-stable
+  flag set; none of it is new or removed at the pin.
+- **Runner output** — the TUI is attached directly to a runner-owned tmux terminal and is
+  **not machine-parsed**; the only parsed output is `--version`'s first line
+  (`YYYY.MM.DD[-build]`, consumed by the installer + entrypoint) and canonical-UUID chat ids.
+  Both formats are unchanged.
+
+The load-bearing point: **omnigent 0.7.0 itself declares the supported Cursor floor as
+`_CURSOR_MIN_VERSION = 2026.06.02`, and the pin 2026.07.23-e383d2b sits ABOVE that floor** —
+so all three coupled surfaces are validated against the exact omnigent version this repo now
+runs. The retired `2026.01.28` was BELOW the floor (reported `version-too-low`), which is the
+reason for the bump, not a surface we must keep working. A paid end-to-end Cursor-worker
+dispatch was deliberately **not** run (cost); this static review from 0.7.0 source is the
+record. Confirming operator smoke at the next container recreate: `docker exec -it
+zoe-omnigent cursor-agent status` (auth intact) + one interactive turn (launch/runner intact).
+
 **RAM gate:** check available memory before building. An image build alongside the ~6 GB
 `llama-server` can OOM the live brain (`docs/knowledge/memory-pressure-profile.md`); the
 cgroup guards do not cover CUDA/NvMap. Build in a quiet window, or stop the brain first and

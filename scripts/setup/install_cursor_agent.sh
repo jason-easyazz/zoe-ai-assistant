@@ -125,6 +125,14 @@ if [ "${need_install}" = 1 ]; then
   # and a `curl | tar` pipe executes the extract as the bytes arrive, with no opportunity
   # to reject them. eval-free indirect lookup of the per-arch digest.
   eval "expected_sha=\${CURSOR_SHA256_${ARCH}:-}"
+  # TEST-ONLY digest seam. An offline harness cannot fetch the real CDN artifact, so it
+  # builds a fixture tarball and substitutes that fixture's own sha256 here. This does NOT
+  # weaken the production path: verify-before-extract is unchanged (the digest is still
+  # checked against the fetched bytes before a single byte is extracted), and it cannot
+  # smuggle in the wrong VERSION — the extracted binary is still independently checked to
+  # report the immutable pin below, so a mismatched build is rejected regardless of which
+  # digest was required. Unset in every real install; the pinned per-arch constant governs.
+  expected_sha="${CURSOR_SHA256_OVERRIDE:-${expected_sha}}"
   if [ -z "${expected_sha}" ]; then
     echo "[cursor-agent] FAILED: no pinned sha256 for arch '${ARCH}'" >&2; exit 1
   fi

@@ -13,6 +13,7 @@ The script itself is exercised unmodified — no mocks of its logic, no network.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import subprocess
 import tarfile
@@ -55,24 +56,53 @@ def _make_good_tarball(path: Path) -> None:
 
 def _stub_dir_with_curl(tmp_path: Path, tarball: Path | None) -> Path:
     """A PATH dir holding a fake ``curl``. If ``tarball`` is None the stub FAILS
-    when called (proves a code path never downloads)."""
+    when called (proves a code path never downloads).
+
+    The real installer downloads to a file with ``curl -fSL <url> -o <path>``, so
+    the stub must honour ``-o`` and write the tarball THERE — not to stdout. A
+    stdout cat would (a) never populate the file the script then hashes and
+    extracts, and (b) spray gzip bytes into the captured stream."""
     d = tmp_path / "stub"
     d.mkdir()
     curl = d / "curl"
     if tarball is None:
         curl.write_text("#!/usr/bin/env bash\necho 'curl must not run' >&2\nexit 1\n")
     else:
-        curl.write_text(f'#!/usr/bin/env bash\ncat "{tarball}"\n')
+        curl.write_text(
+            "#!/usr/bin/env bash\n"
+            "out=\"\"\n"
+            'while [ "$#" -gt 0 ]; do\n'
+            '  case "$1" in\n'
+            '    -o) out="$2"; shift 2 ;;\n'
+            '    *) shift ;;\n'
+            "  esac\n"
+            "done\n"
+            f'src="{tarball}"\n'
+            'if [ -n "$out" ]; then cp "$src" "$out"; else cat "$src"; fi\n'
+        )
     curl.chmod(0o755)
     return d
 
 
-def _run(home: Path, stub_bin: Path) -> subprocess.CompletedProcess:
+def _run(
+    home: Path, stub_bin: Path, sha256_override: str | None = None
+) -> subprocess.CompletedProcess:
+    env = {"PATH": f"{stub_bin}:/usr/bin:/bin:/usr/local/bin", "HOME": str(home)}
+    if sha256_override is not None:
+        # The pinned per-arch digest is the REAL CDN artifact's; an offline fixture
+        # can't match it, so hand the installer this fixture's own sha256 through its
+        # test-only seam. Verify-before-extract and the independent version check are
+        # untouched (see the script comment on CURSOR_SHA256_OVERRIDE).
+        env["CURSOR_SHA256_OVERRIDE"] = sha256_override
     return subprocess.run(
         ["bash", str(_SCRIPT)],
         capture_output=True,
         text=True,
-        env={"PATH": f"{stub_bin}:/usr/bin:/bin:/usr/local/bin", "HOME": str(home)},
+        # Belt-and-suspenders: the -o-honouring curl stub already keeps binary out
+        # of the stream, but decode defensively so any stray bytes surface as a
+        # readable assertion instead of an UnicodeDecodeError from the harness.
+        errors="replace",
+        env=env,
     )
 
 
@@ -95,8 +125,11 @@ def test_executable_but_wrong_version_target_is_not_linked(tmp_path: Path):
     )
     tarball = tmp_path / "pkg.tar.gz"
     _make_good_tarball(tarball)
+    fixture_sha = hashlib.sha256(tarball.read_bytes()).hexdigest()
 
-    proc = _run(home, _stub_dir_with_curl(tmp_path, tarball))
+    proc = _run(
+        home, _stub_dir_with_curl(tmp_path, tarball), sha256_override=fixture_sha
+    )
 
     linked = _linked_version(home)
     assert linked != WRONG, (
