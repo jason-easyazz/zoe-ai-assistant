@@ -114,35 +114,46 @@ sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --
     to finish.** Greptile's attempts overlap: a rerun routinely begins while the previous
     one is still running, and can finish first. Ranking by completion picked the wrong
     verdict, and comparing an in-flight run's start against a completed run's *completion*
-    dismissed a live rerun as superseded and published the stale result.
-  - Blockers are scoped per-PR via `external_id`, because check runs attach to a SHA and
-    two branches can share a commit.
-  - **Shared-SHA coordination — the limit of `external_id`.** That scoping fixes the gate's
-    own lookup, but branch protection resolves a required context by check NAME on the
-    PR's head SHA and never reads `external_id`. So a `success` on a commit is a SHARED
-    assertion: published for PR A, it also satisfies PR B if B points at the same commit.
-    The gate therefore withholds success while any *other* open, non-draft PR on that head
-    has not itself handed off, and says so in the run log. It holds (leaves the blocker
-    `in_progress`) rather than failing, so it self-clears once the co-located PR qualifies
-    or moves off the commit. Two things make that guard sound, and both were fail-open in
-    the first cut:
+    dismissed a live rerun as superseded and published the stale result. `started_at` has
+    one-second resolution, so **ties hold** — an in-flight run tying with the completed one
+    is treated as live, and tied completed attempts are ordered by check-run id.
+  - **A shared head commit blocks success outright.** Nothing the gate reads is per-PR:
+    `greptile-complete` is scoped by `external_id` for the gate's own lookup, but branch
+    protection resolves a required context by check NAME on the head SHA and ignores
+    `external_id`; and a `Greptile Review` run says a *commit* was reviewed without naming
+    the PR that asked. So with two open PRs on one commit, a success published for A also
+    satisfies B, and A's review made B look already-reviewed (B was never summoned, and a
+    later sweep published B's blocker from A's result — worst when the two have different
+    bases). The rule is therefore blunt: while any *other* open, non-draft PR shares the
+    head, success is withheld and Greptile is still summoned. It holds (blocker stays
+    `in_progress`, never failed), so it self-clears once the other PR closes, retargets, or
+    moves off the commit. Two open PRs on an identical head commit is pathological, and
+    over-blocking there is the trade. This replaced a weaker rule that published once the
+    *other* PR had cleared its own cheap tier — clearing B's cheap tier does not make a
+    review of the commit into a review of A.
     - **Who shares the head is enumerated FRESH, immediately before publishing** — the
       union of `GET /commits/{sha}/pulls` (keyed on the SHA) and a re-read of the open-PR
       list, each candidate then confirmed with `pulls.get`. The sweep's opening snapshot is
       never trusted: a PR that moved onto the commit afterwards was absent from it and
       never refetched. Both sources are needed — the association index lags a very recent
       push, and a `pulls.list` scan can miss what the SHA-keyed endpoint reports. If either
-      read fails the publish is withheld. Note a co-located PR's own `in_progress` blocker
-      does **not** protect it: contexts resolve by name+SHA, so a newer success supersedes
-      a pending run of the same name.
-    - **"Handed off" means the `greptile` label AND a trusted handoff marker pinned to
-      THIS SHA** — the same contract as `alreadyHandedOff`, sharing one helper. A label
-      alone is not proof: labels survive head changes, so a PR arriving on the commit with
-      a label earned for an older head read as qualified in the window before its own
-      sweep stripped it.
+      read fails the head is treated as shared. Note a co-located PR's own `in_progress`
+      blocker does **not** protect it: contexts resolve by name+SHA, so a newer success
+      supersedes a pending run of the same name.
+  - **A blocker is raised before the authoritative `pulls.get`, not after.** That refetch
+    can fail transiently, and the sweep then skips the PR — which used to leave a ready
+    head with no `greptile-complete` run at all while the other required checks were green.
+    A provisional run on the list/event SHA is raised first; if the head has since moved it
+    lands on a commit nobody merges (harmless) and the authoritative raise covers the new
+    head, and if it has not moved the two are the same run.
   - Publishing is **idempotent**: the verdict is only written when it would change what the
     current context says. Otherwise every 30-min sweep of a settled PR created a duplicate
     completed run and buried the checks tab.
+  - **The workflow wakes on regressions, not only on progress.** `pull_request_review`
+    listens for `dismissed` and `edited` as well as `submitted`, and `pull_request` for
+    `review_requested` — those are the events that *break* a published success. With
+    `submitted` alone the green context survived until the next 30-minute cron tick, which
+    is exactly the window an armed auto-merge needs.
   - **Adding it to branch protection must happen AFTER the workflow that publishes it is
     on `main`.** A required context no workflow produces never reports, and a context
     that never reports blocks every PR permanently — including the one carrying the fix.

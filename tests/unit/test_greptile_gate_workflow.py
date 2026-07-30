@@ -149,6 +149,10 @@ HARNESS = textwrap.dedent(
             // adding a sharer cannot perturb the head-moves-late timing above.
             const oth = o && otherById.get(o.pull_number);
             if (oth) return { data: oth.pr };
+            // OPTS.prGetFails: the AUTHORITATIVE refetch is unavailable. The sweep then
+            // skips this PR entirely, so whatever blocking check exists at that moment is
+            // all that stands between a green cheap tier and an armed auto-merge.
+            if (OPTS.prGetFails) throw new Error('pulls.get unavailable');
             getReads += 1;
             const moved = OPTS.headMovesLate && getReads >= 2 && conditionReads >= 2;
             return { data: { ...pr, head: { sha: moved ? 'c'.repeat(40) : SHA },
@@ -221,9 +225,11 @@ HARNESS = textwrap.dedent(
               completed_at: g.completed_at || null }));
             const gr = OPTS.greptileRuns
               || (OPTS.greptileRun ? [OPTS.greptileRun] : []);
-            const extra = gr.map((g) => ({
+            const extra = gr.map((g, i) => ({
               name: 'Greptile Review', status: g.status || 'completed',
               conclusion: g.conclusion || null,
+              // Check-run ids break a started_at tie unambiguously.
+              id: g.id === undefined ? 1000 + i : g.id,
               started_at: g.started_at || null,
               completed_at: g.completed_at || '2026-07-27T00:00:00Z' }));
             return extra.concat(gateExisting).concat(['Cursor Bugbot'].map((name) => ({
@@ -299,6 +305,40 @@ def _run(tmp_path: Path, script: str, **opts) -> dict:
 
 
 BOTH = ["copilot-pull-request-reviewer[bot]", "chatgpt-codex-connector[bot]"]
+
+
+def test_the_gate_wakes_on_regression_events_not_only_on_progress(tmp_path):
+    """A trigger assertion, deliberately — this one cannot be caught by executing the
+    script, because it decides whether the script RUNS at all.
+
+    `pull_request_review: [submitted]` alone meant the gate only woke when a condition
+    IMPROVED. The events that break a published `greptile-complete: success` are the
+    opposite ones: a review `dismissed` (the case `codexOk` is explicitly not monotone
+    for), a review `edited`, or a fresh `review_requested` that makes Copilot pending
+    again. Without them the success stayed green until the next cron tick — up to 30
+    minutes in which an armed auto-merge merges a regressed head.
+
+    The job body needs no per-event handling: its only event-specific logic is the
+    `check_suite` guard, and every other event falls through to the full open-PR sweep.
+    That is asserted here too, so adding a trigger can never silently do nothing.
+    """
+    spec = yaml.safe_load(WORKFLOW.read_text())
+    # `on:` parses as the boolean True in YAML 1.1 unless quoted.
+    triggers = spec[True] if True in spec else spec["on"]
+
+    review = set(triggers["pull_request_review"]["types"])
+    assert {"submitted", "dismissed", "edited"} <= review, review
+
+    pull = set(triggers["pull_request"]["types"])
+    assert {"ready_for_review", "synchronize", "opened", "review_requested"} <= pull, pull
+
+    # The schedule stays: it is the wake-up for every wait that is not event-driven.
+    assert "schedule" in triggers, triggers
+
+    job = spec["jobs"]["label-when-others-pass"]
+    assert "check_suite" in job["if"], (
+        "the job's only event-specific gate should be the check_suite one; a new "
+        f"condition here could silently drop the regression events: {job['if']}")
 
 
 def test_all_green_hands_off(tmp_path):
@@ -697,6 +737,34 @@ def test_blocking_check_is_raised_before_the_label(tmp_path):
         f"blocking check must be raised BEFORE the label, got {ev}")
 
 
+def test_a_failed_head_refetch_still_leaves_a_blocking_check(tmp_path):
+    """A transient `pulls.get` failure must never leave the head UNBLOCKED.
+
+    The authoritative refetch runs before the head-observation blocker, and a failure
+    `continue`s this PR. That left a ready head with NO greptile-complete run at all
+    while `validate`/`secret-scan` were already green — so the required context was
+    simply absent and an armed auto-merge passed through it until the next sweep, up to
+    30 minutes later. A provisional blocker on the list/event SHA closes that window:
+    whatever else fails, something blocking is present.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, prGetFails=True)
+    assert r["addLabels"] == 0, r["log"]
+    blocking = [c for c in r["gateChecks"]
+                if c["external_id"] == "1" and c["status"] == "in_progress"]
+    assert blocking, (
+        f"refetch failed and the head was left with no blocking check: {r['gateChecks']}")
+
+
+def test_the_provisional_blocker_is_not_duplicated_when_the_head_is_unchanged(tmp_path):
+    """The provisional and authoritative raises are the SAME run when the head has not
+    moved — otherwise every sweep would post two blockers instead of one and bury the
+    checks tab, which is the cost the read-first design exists to avoid."""
+    r = _run(tmp_path, _script(), reviewers=BOTH,
+             gateRuns=[{"status": "in_progress", "started_at": "2026-07-27T00:00:00Z"}])
+    made = [c for c in r["gateChecks"] if c["status"] == "in_progress"]
+    assert made == [], f"raised a blocker that already existed: {made}"
+
+
 def test_no_label_when_the_blocking_check_cannot_be_raised(tmp_path):
     """Labelling without the blocker IS the race — so failure to raise it must hold."""
     r = _run(tmp_path, _script(), reviewers=BOTH, gateCheckFails=True)
@@ -830,6 +898,44 @@ def test_current_verdict_is_the_newest_attempt_not_the_last_to_finish(tmp_path):
              ])
     concl = [c["conclusion"] for c in r["gateChecks"] if c["status"] == "completed"]
     assert concl == ["success"], f"took the last run to FINISH, not the newest attempt: {concl}"
+
+
+def test_a_rerun_tying_on_started_at_holds_rather_than_publishing(tmp_path):
+    """Equal `started_at` must HOLD — "cannot tell which is later" is never a pass.
+
+    `started_at` has one-second resolution, so a completed attempt and a live rerun
+    sharing a timestamp is ordinary rather than exotic. With a strict `>` the running
+    rerun read as superseded and the stale completed verdict was published while
+    Greptile was still working.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRuns=[
+                 {"status": "completed", "conclusion": "success",
+                  "started_at": "2026-07-27T10:00:00Z",
+                  "completed_at": "2026-07-27T12:00:00Z"},
+                 {"status": "in_progress", "conclusion": None,
+                  "started_at": "2026-07-27T10:00:00Z"},   # exact tie
+             ])
+    done = [c for c in r["gateChecks"] if c["status"] == "completed"]
+    assert done == [], f"a tie on started_at published the stale verdict: {done}"
+
+
+def test_tied_completed_attempts_are_ordered_by_check_run_id(tmp_path):
+    """With started_at tied, the verdict must still be deterministic — not whichever
+    order the API happened to return. Check-run ids increase monotonically, so the
+    higher id is the later attempt."""
+    runs = [
+        {"status": "completed", "conclusion": "failure", "id": 500,
+         "started_at": "2026-07-27T10:00:00Z", "completed_at": "2026-07-27T12:00:00Z"},
+        {"status": "completed", "conclusion": "success", "id": 900,
+         "started_at": "2026-07-27T10:00:00Z", "completed_at": "2026-07-27T11:00:00Z"},
+    ]
+    for order in (runs, list(reversed(runs))):
+        r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+                 markerSha="a" * 40, greptileRuns=order)
+        concl = [c["conclusion"] for c in r["gateChecks"] if c["status"] == "completed"]
+        assert concl == ["success"], f"id tiebreak not applied (order={order[0]['id']}): {concl}"
 
 
 def test_in_flight_run_without_a_start_time_holds(tmp_path):
@@ -1042,13 +1148,19 @@ def test_success_is_withheld_while_a_co_located_pr_has_not_handed_off(tmp_path):
     assert any("share this head" in m for m in r["log"]), r["log"]
 
 
-def test_success_is_published_once_every_co_located_pr_has_handed_off(tmp_path):
-    """The positive control: the guard must withhold only for UNQUALIFIED sharers.
+def test_success_is_withheld_even_when_the_co_located_pr_has_handed_off(tmp_path):
+    """A co-located PR withholds success REGARDLESS of its own state.
 
-    Without this, the guard could pass its sibling test by blocking unconditionally —
-    which would strand every PR that happens to share a commit. PR 100 here carries
-    BOTH halves of the contract: the label, and its own trusted handoff marker pinned
-    to this head.
+    This reverses an earlier, weaker rule on this PR. Coordination used to ask whether
+    the OTHER PR had cleared its cheap tier (label + handoff marker for this SHA) and
+    published success once it had. But clearing PR 100's cheap tier does not make
+    Greptile's review of the COMMIT into a review of PR 1 — a `Greptile Review` run
+    carries nothing naming the PR it reviewed, and the two PRs can differ in base branch
+    and review context entirely. So while anyone else is on this head, the verdict is
+    unattributable and success is withheld.
+
+    Strictly stronger than the label-plus-marker contract it replaces: that contract
+    would have published here.
     """
     r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
              markerSha="a" * 40,
@@ -1056,39 +1168,41 @@ def test_success_is_published_once_every_co_located_pr_has_handed_off(tmp_path):
              sharedShaPrs=[{"number": 100, "labels": [{"name": "greptile"}],
                             "markerSha": "a" * 40}])
     mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
-    assert any(c["conclusion"] == "success" for c in mine), (
-        f"withheld success though the co-located PR had handed off: {mine}")
+    assert not any(c["conclusion"] == "success" for c in mine), (
+        f"published an unattributable verdict because the sharer looked qualified: {mine}")
+    assert any("cannot be attributed" in m or "share this head" in m for m in r["log"]), r["log"]
 
 
-def test_a_label_without_a_marker_for_this_head_is_not_a_handoff(tmp_path):
-    """A LABEL IS NOT PROOF. It survives a head change; the marker does not.
+def test_the_sharer_is_alone_positive_control(tmp_path):
+    """The guard must withhold only when someone ELSE is on the head.
 
-    PR 100 arrives on this commit still carrying a `greptile` label earned for an older
-    head, and its own sweep has not yet stripped it. Reading the label alone counted
-    that as handed off and published a success that satisfies PR 100's required context
-    too — before PR 100's cheap tier was ever checked on THIS commit. Coordination must
-    apply the same label-plus-marker-for-this-SHA contract as `alreadyHandedOff`.
-
-    Two shapes, both of which the label-only check waved through: a marker pinned to a
-    DIFFERENT sha, and no marker at all.
+    Without this, every test above could pass by blocking unconditionally — which would
+    strand every PR in the repo. PR 100 sits on a different commit, so PR 1 is alone on
+    its head and the verdict IS attributable.
     """
-    stale = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
-                 markerSha="a" * 40,
-                 greptileRun={"status": "completed", "conclusion": "success"},
-                 sharedShaPrs=[{"number": 100, "labels": [{"name": "greptile"}],
-                                "markerSha": "e" * 40}])   # earned on an older head
-    mine = [c for c in stale["gateChecks"] if c["external_id"] == "1"]
-    assert not any(c["conclusion"] == "success" for c in mine), (
-        f"a label from an OLDER head counted as handoff: {mine}")
-    assert any("share this head" in m for m in stale["log"]), stale["log"]
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             sharedShaPrs=[{"number": 100, "labels": [], "sha": "d" * 40}])
+    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
+    assert any(c["conclusion"] == "success" for c in mine), (
+        f"withheld success though this PR is alone on its head: {mine}")
 
-    none = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
-                markerSha="a" * 40,
-                greptileRun={"status": "completed", "conclusion": "success"},
-                sharedShaPrs=[{"number": 100, "labels": [{"name": "greptile"}]}])
-    mine = [c for c in none["gateChecks"] if c["external_id"] == "1"]
-    assert not any(c["conclusion"] == "success" for c in mine), (
-        f"a label with NO handoff marker counted as handoff: {mine}")
+
+def test_a_co_located_greptile_run_does_not_count_as_this_prs_review(tmp_path):
+    """The summon side of the same attribution problem.
+
+    A completed `Greptile Review` run on the head made PR 1 look already-reviewed, so it
+    was never summoned — and a later sweep published its blocker from that run. When the
+    run may belong to PR 100 it is not evidence for PR 1: treat it as no live run and
+    summon. Bounded by MAX_SUMMONS, so this cannot loop.
+    """
+    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
+             markerSha="a" * 40,
+             greptileRun={"status": "completed", "conclusion": "success"},
+             sharedShaPrs=[{"number": 100, "labels": []}])
+    assert any(c.strip().startswith("@greptileai review") for c in r["comments"]), (
+        f"took a co-located PR's Greptile run as proof this PR was reviewed: {r['comments']}")
 
 
 def test_a_pr_arriving_on_the_head_after_the_snapshot_still_withholds(tmp_path):
@@ -1158,19 +1272,6 @@ def test_an_unreadable_pr_enumeration_withholds_success(tmp_path):
     assert not any(c["conclusion"] == "success" for c in mine), (
         f"published success without knowing who shares the head: {mine}")
     assert any("could not enumerate" in m for m in r["log"]), r["log"]
-
-
-def test_a_pr_on_a_different_head_does_not_withhold_success(tmp_path):
-    """Only PRs on the SAME commit share the context. An unrelated open PR on another
-    head must not hold this one — otherwise any unqualified PR in the repo blocks
-    every other PR's blocker from ever resolving."""
-    r = _run(tmp_path, _script(), reviewers=BOTH, labels=[{"name": "greptile"}],
-             markerSha="a" * 40,
-             greptileRun={"status": "completed", "conclusion": "success"},
-             sharedShaPrs=[{"number": 100, "labels": [], "sha": "d" * 40}])
-    mine = [c for c in r["gateChecks"] if c["external_id"] == "1"]
-    assert any(c["conclusion"] == "success" for c in mine), (
-        f"an unrelated PR on a different head withheld success: {mine}")
 
 
 def test_superseding_a_released_blocker_happens_once_not_every_sweep(tmp_path):

@@ -16,13 +16,22 @@ name: greptile-gate
 on:
   check_suite:
     types: [completed]
+  # WAKE ON REGRESSIONS, not only on progress. `submitted` alone meant the gate only
+  # ever ran when a condition IMPROVED. The conditions that break a published
+  # `greptile-complete: success` are the opposite events: `dismissed` drops a review
+  # back out of the submitted set (the case `codexOk` is explicitly NOT monotone for),
+  # and `edited` can change a review's state. Without these the success stayed green
+  # until the next cron tick — up to 30 minutes in which an armed auto-merge merges a
+  # head whose cheap tier has already regressed.
   pull_request_review:
-    types: [submitted]
+    types: [submitted, dismissed, edited]
   # ready_for_review is not optional: if every cheap review finishes while the PR is
   # still a draft, neither event above fires again when it is marked ready, and the
   # gate would never run for that PR at all.
+  # review_requested is the same regression class: a fresh Copilot request makes
+  # `copilotPending` true, which withdraws the Copilot grace and un-qualifies the PR.
   pull_request:
-    types: [ready_for_review, synchronize, opened]
+    types: [ready_for_review, synchronize, opened, review_requested]
   # NOTE: thread-resolution has NO workflow trigger. `pull_request_review_thread`
   # is a real webhook event but NOT a valid `on:` event — with it present the file
   # failed GitHub's parser and the workflow never executed at all (every push run
@@ -109,14 +118,12 @@ jobs:
             };
 
             // ── The handoff-marker contract ───────────────────────────────────────
-            // ONE implementation, at script scope, because it now has TWO callers: a
-            // PR's own `alreadyHandedOff`, and the shared-SHA coordination that decides
-            // whether a CO-LOCATED PR counts as qualified. Coordination originally read
-            // only the `greptile` label and that was fail-open — a label survives a head
-            // change, so a PR could arrive on this commit still carrying a label earned
-            // for an OLDER head and be counted as handed off before its own sweep
-            // stripped it (cross-review on #1592). The label and a marker FOR THIS SHA
-            // are the contract; anything less is a stale claim.
+            // What makes a PR "handed off" ON A HEAD: the `greptile` label AND a trusted
+            // marker pinned to THIS SHA (see `alreadyHandedOff`). The label alone is never
+            // proof — labels survive head changes, so a PR carries one earned for an older
+            // commit until its own sweep strips it. Co-located PRs are NOT assessed with
+            // this contract any more: a sharer blocks regardless of its own state, because
+            // its cheap tier was never the un-attributable part (see the co-location note).
             const MARK = '<!-- greptile-gate:labelled:';
             // TRUST, not presence. This repo is PUBLIC, so anyone can post a comment
             // containing the marker string. An unfiltered match lets a stranger forge a
@@ -272,6 +279,24 @@ jobs:
               if (pr.draft) continue;
               const base = { owner: context.repo.owner, repo: context.repo.repo };
 
+              // PROVISIONAL blocker, on the LIST/event SHA, before the authoritative
+              // refetch below. `pulls.get` can fail transiently, and this loop then
+              // `continue`s — which used to leave a ready head with NO greptile-complete
+              // run at all while `validate`/`secret-scan` were already green, so an armed
+              // auto-merge passed straight through the absent context until the next
+              // sweep. A refetch failure must leave a BLOCKING check present, never
+              // nothing (cross-review T6 on #1592).
+              //
+              // Reconciliation is by construction, not by cleanup: if the head has moved,
+              // this run sits on a commit nobody is merging (contexts resolve against the
+              // PR's CURRENT head, so it cannot block or clear anything), and the
+              // authoritative call below raises the real one on the new SHA. If the head
+              // has NOT moved — the overwhelmingly common case — the authoritative call
+              // finds this very run and returns it, so no duplicate is created and the
+              // API cost is unchanged.
+              const listSha = pr.head && pr.head.sha;
+              const provisional = listSha ? await ensureBlocker(listSha, pr.number) : null;
+
               // ORDER MATTERS: the blocker is raised BEFORE any other API call that can
               // `continue` this PR. The comments read below bails out on a transient
               // Issues API outage, and while ensureBlocker sat after it a ready head
@@ -303,7 +328,17 @@ jobs:
               // already-checked SHA has both its suite time and its created_at before the
               // head transition, so the clamp alone still collapsed the Codex window
               // (Codex P2 on #1592, second round).
-              const blockerRuns = await ensureBlocker(sha, pr.number);
+              // Reuse the provisional result when the head did not move — it is the same
+              // lookup on the same SHA, so re-calling would only spend a second read.
+              // A null provisional (its read failed) falls through to a fresh attempt.
+              const blockerRuns = (listSha === sha && provisional)
+                ? provisional
+                : await ensureBlocker(sha, pr.number);
+              if (listSha !== sha) {
+                core.info(`PR #${pr.number}: head moved since the sweep list ` +
+                          `(${String(listSha).slice(0, 8)} -> ${sha.slice(0, 8)}); the ` +
+                          `provisional blocker stays on the old commit, which nothing merges`);
+              }
               const headBecameHeadAt = (blockerRuns || [])
                 .map(c => c?.data?.started_at || c?.started_at)
                 .filter(v => typeof v === 'string' && v)
@@ -336,64 +371,61 @@ jobs:
                                   `still let auto-merge through; retrying next sweep`);
               };
 
-              // ── Shared-SHA coordination (cross-review P1 on #1592) ──────────────
-              // `external_id` scopes OUR lookup of the blocker. It does NOT scope
-              // GitHub's evaluation of it: branch protection resolves a required
-              // context for a PR by check NAME on that PR's head SHA, and never looks
-              // at external_id. Two open PRs can point at the SAME commit, and then a
-              // `greptile-complete: success` published for PR A ALSO satisfies PR B —
-              // B becomes mergeable while its own blocker still sits in_progress and
-              // its own cheap tier has never been checked. Per-PR scoping fixed the
-              // create side of that (B raises its own run) but not the read side.
+              // ── Co-located PRs: nothing about this head is per-PR ────────────────
+              // Both of the gate's evidence sources attach to a COMMIT, not to a PR:
+              //   * `greptile-complete` — `external_id` scopes OUR lookup of it, but not
+              //     GitHub's evaluation. Branch protection resolves a required context by
+              //     check NAME on the PR's head SHA and never reads external_id, so a
+              //     success published for PR A also satisfies PR B on the same commit.
+              //   * `Greptile Review` — the run says a COMMIT was reviewed, not which PR
+              //     asked. With A and B on one head, A's completed run made B look
+              //     already-reviewed: B was never summoned, and a later sweep published
+              //     B's blocker from A's result. B merges with no review of its own, and
+              //     the two can differ in base branch and review context entirely
+              //     (cross-review T9 on #1592).
               //
-              // So `success` is a SHARED assertion about the head, and may only be
-              // published when it holds for EVERY open PR on that head. Any co-located
-              // PR that has not itself handed off keeps this one BLOCKING. The blocker
-              // is left unresolved rather than failed, so it clears by itself on a
-              // later sweep once the other PR qualifies or moves off the commit.
+              // Neither is attributable, so the rule is the blunt one: while ANY other
+              // open, non-draft PR shares this head, a Greptile run on it is not evidence
+              // for THIS PR. Hold — do not publish success — and keep summoning (bounded
+              // by MAX_SUMMONS). This is deliberately stricter than the per-sharer
+              // handoff check it replaces: that check asked whether the OTHER PR had
+              // cleared its cheap tier, which does not make Greptile's review of the
+              // commit into a review of THIS PR.
               //
-              // WHO shares the head is enumerated FRESH, immediately before publishing —
-              // never from the sweep's opening `pulls.list` snapshot. That snapshot only
-              // contains PRs that ALREADY pointed at this commit when the sweep began, so
-              // a PR that moved onto the commit afterwards was excluded from the candidate
-              // set and never refetched: this PR then published `success`, which became the
-              // NEWEST run of that name on the SHA, and the late arrival consumed it. The
-              // earlier note claiming its own `in_progress` blocker protected it was simply
-              // wrong — required contexts resolve by name+SHA, so a newer success
-              // supersedes a pending run of the same name (cross-review on #1592).
+              // The blocker is left unresolved rather than failed, so it clears by itself
+              // once the other PR closes, retargets, or moves off the commit. Two open PRs
+              // on an identical head commit is pathological, and over-blocking there is
+              // the trade this gate exists to make.
               //
-              // Two independent enumerations, unioned, because neither alone is sufficient:
+              // Enumerated FRESH, never from the sweep's opening `pulls.list` snapshot:
+              // that snapshot only holds PRs already on this commit when the sweep began,
+              // so a PR that moved onto it afterwards was excluded and never refetched.
+              // Two sources, unioned, because neither alone is sufficient:
               //   * `listPullRequestsAssociatedWithCommit` (GET /commits/{sha}/pulls) asks
               //     GitHub directly which PRs are associated with the commit — the only
-              //     call that is keyed on the SHA rather than on a list we have to scan.
-              //     It also returns PRs where the commit is merely an ANCESTOR, so the
+              //     call keyed on the SHA rather than on a list we have to scan. It also
+              //     returns PRs where the commit is merely an ANCESTOR, so the
               //     head-equality filter below still decides membership.
               //   * a FRESH `pulls.list`, because the association index is eventually
               //     consistent and can lag a very recent push.
-              // Either read failing means we cannot know who shares the head, so the
-              // publish is withheld — this is the direction that keeps merge blocked.
-              //
-              // "Has handed off" is the SAME contract as `alreadyHandedOff`: the
-              // `greptile` label AND a trusted handoff marker pinned to THIS SHA. The
-              // label alone was fail-open — labels survive head changes, so a PR arriving
-              // on this commit with a label earned for an older head read as qualified in
-              // the window before its own sweep stripped it. Greptile's own review is
-              // per-SHA and covers both PRs, so the co-located PR's CHEAP tier is the only
-              // thing genuinely un-asserted — and the marker is what attests it for this
-              // exact commit.
-              const sharedShaHolders = async () => {
+              // Either read failing returns null — we cannot rule out a sharer, so the
+              // callers hold. Memoised: at most one enumeration per PR per sweep.
+              let coLocatedCache;
+              const coLocatedOpenPrs = async () => {
+                if (coLocatedCache !== undefined) return coLocatedCache;
                 const assoc = await ok(`PR #${pr.number} PRs on \`${sha.slice(0, 8)}\``, () =>
                   github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
                     ...base, commit_sha: sha, per_page: 100,
                   }));
-                const fresh = await ok(`PR #${pr.number} open PRs (coordination)`, () =>
+                const fresh = await ok(`PR #${pr.number} open PRs (co-location)`, () =>
                   github.paginate(github.rest.pulls.list, {
                     ...base, state: 'open', per_page: 100,
                   }));
                 if (!assoc || !fresh) {
                   core.warning(`PR #${pr.number}: could not enumerate PRs on \`${sha.slice(0, 8)}\` ` +
-                               `— withholding ${GATE_CHECK} success (cannot rule out a co-located PR)`);
-                  return ['<unreadable>'];
+                               `— treating this head as shared (cannot rule out a co-located PR)`);
+                  coLocatedCache = null;
+                  return null;
                 }
                 // Union by number; membership is decided by the confirm step below, so a
                 // stale entry from either source costs one `pulls.get`, never a wrong pass.
@@ -401,28 +433,21 @@ jobs:
                 for (const p of assoc.concat(fresh)) {
                   if (p && p.number !== pr.number) seen.set(p.number, p);
                 }
-                const holding = [];
+                const sharers = [];
                 for (const c of seen.values()) {
                   // Confirm against the CURRENT head — every list ages, including the two
                   // just fetched.
-                  const cf = await ok(`PR #${c.number} get (shared sha)`, () =>
+                  const cf = await ok(`PR #${c.number} get (co-location)`, () =>
                     github.rest.pulls.get({ ...base, pull_number: c.number }).then(r => r.data));
-                  // Unreadable => assume it shares this head and has NOT handed off.
-                  // Fail closed: the cost is one more sweep, the alternative is
-                  // publishing a green context for a PR we could not verify.
-                  if (!cf) { holding.push(c.number); continue; }
+                  // Unreadable => assume it DOES share this head. Fail closed: the cost is
+                  // one more sweep, the alternative is publishing a green shared context
+                  // for a PR we could not verify.
+                  if (!cf) { sharers.push(c.number); continue; }
                   if (cf.state !== 'open' || cf.draft || cf.head.sha !== sha) continue;
-                  if (!(cf.labels || []).some(l => l.name === LABEL)) { holding.push(cf.number); continue; }
-                  // Labelled — but is the label FOR THIS HEAD? Same marker contract as
-                  // alreadyHandedOff, via the same helper, so the two cannot drift.
-                  const cc = await ok(`PR #${cf.number} comments (shared sha)`, () =>
-                    github.paginate(github.rest.issues.listComments, {
-                      ...base, issue_number: cf.number, per_page: 100,
-                    }));
-                  if (!cc) { holding.push(cf.number); continue; }   // unreadable => not proven
-                  if (handoffShaFrom(cc) !== sha) holding.push(cf.number);
+                  sharers.push(cf.number);
                 }
-                return holding;
+                coLocatedCache = sharers;
+                return sharers;
               };
 
               // Every list is PAGINATED. A long-lived PR exceeds 100 comments/threads/checks,
@@ -759,10 +784,25 @@ jobs:
                   // but each retry is harmless and the ATTEMPTS are bounded by the
                   // per-head MAX_SUMMONS cap below (the 10-minute debounce only
                   // spaces them out), while NOT re-summoning strands EVERY skipped PR.
-                  const gLive = await ok(`PR #${pr.number} greptile check`, () =>
+                  const gLiveOnSha = await ok(`PR #${pr.number} greptile check`, () =>
                     github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
                       .then(rs => rs.filter(c => c.name === 'Greptile Review'
                                               && !(c.status === 'completed' && DEAD_ENDS.includes(c.conclusion))).length));
+                  // ATTRIBUTION (T9). A `Greptile Review` run is attached to the COMMIT and
+                  // carries nothing that names the PR it reviewed. While another open PR
+                  // shares this head, that run may be ITS review — different base, different
+                  // context — so it is not evidence THIS PR was reviewed. Treat it as no
+                  // live run: summon (still bounded by MAX_SUMMONS), and the publish gate
+                  // below refuses success for the same reason. Unreadable co-location =>
+                  // null, which takes the fail-closed "could not read" arm.
+                  const coLoc = await coLocatedOpenPrs();
+                  const gLive = (gLiveOnSha === null || coLoc === null) ? null
+                              : (coLoc.length ? 0 : gLiveOnSha);
+                  if (coLoc && coLoc.length && gLiveOnSha) {
+                    core.info(`PR #${pr.number}: a Greptile run exists on \`${sha.slice(0, 8)}\` but ` +
+                              `PR(s) ${coLoc.join(', ')} share this head — it cannot be attributed ` +
+                              `to this PR, so it does not count as reviewed`);
+                  }
                   // Debounce: Greptile takes real time to CREATE its check run after a
                   // summon; every event in that gap would re-enter this branch and post
                   // another summon (Codex). A trusted summon comment younger than
@@ -839,13 +879,22 @@ jobs:
                     // Parse only real strings and treat anything else as 0/unknown.
                     const at = (v) => (typeof v === 'string' && v ? (Date.parse(v) || 0) : 0);
                     const started = (c) => at(c.started_at);
+                    // Check-run ids are monotonically increasing, so they break a
+                    // started_at tie unambiguously — `started_at` has one-second
+                    // resolution and two attempts on one head routinely land inside it.
+                    const idOf = (c) => (typeof c.id === 'number' ? c.id : -1);
                     const doneRuns = gRuns.filter(c => c.status === 'completed');
                     // ATTEMPT order is START order, not completion order. Ranking the
                     // completed runs by `completed_at` picks the wrong verdict whenever a
                     // rerun finishes before a slower earlier attempt does — the later
                     // attempt is the current one regardless of who crossed the line first.
+                    // Ties on started_at fall through to the id, so the chosen verdict is
+                    // deterministic rather than dependent on API list order.
+                    const laterAttempt = (a, b) => (started(b) !== started(a)
+                      ? started(b) > started(a)
+                      : idOf(b) > idOf(a));
                     const newestDone = doneRuns.length
-                      ? doneRuns.reduce((a, b) => (started(b) >= started(a) ? b : a))
+                      ? doneRuns.reduce((a, b) => (laterAttempt(a, b) ? b : a))
                       : null;
                     // Start-vs-START, never start-vs-completion (cross-review P1 on #1592).
                     // Greptile's attempts OVERLAP: a rerun routinely begins while the
@@ -857,8 +906,16 @@ jobs:
                     // A missing/unparseable started_at on an in-flight run must HOLD, not
                     // resolve: treating an unknown timestamp as "old" would fail OPEN, which
                     // is the direction that lets an unreviewed head merge.
+                    // TIES HOLD (`>=`, cross-review T10 on #1592). `started_at` has
+                    // one-second resolution, so a completed attempt and a live rerun
+                    // sharing a timestamp is ordinary, not exotic — and with a strict `>`
+                    // the running rerun read as superseded and the stale completed verdict
+                    // was published while Greptile was still working. Equal timestamps mean
+                    // we cannot tell which is later, and "cannot tell" must never resolve.
+                    // The residual is a stuck run tying exactly with the completed one,
+                    // which then holds the context: over-blocking, the accepted direction.
                     const supersededBy = gRuns.filter(c => c.status !== 'completed')
-                      .filter(c => !newestDone || !started(c) || started(c) > started(newestDone));
+                      .filter(c => !newestDone || !started(c) || started(c) >= started(newestDone));
                     const inFlight = supersededBy.length > 0 || !newestDone;
                     if (!inFlight) {
                       const newest = newestDone;
@@ -872,16 +929,20 @@ jobs:
                       // operator decision), not a silent green. DEAD_ENDS is shared with
                       // both live-run reads so a decline stays re-summonable.
                       const declined = DEAD_ENDS.includes(newest.conclusion);
-                      // A SUCCESS is a shared assertion about the SHA — only publish it
-                      // once it is true for every open PR on that head. See the note on
-                      // sharedShaHolders; a failure needs no such check, because
-                      // over-blocking a co-located PR is the safe direction.
-                      const holders = pass ? await sharedShaHolders() : [];
-                      if (pass && holders.length) {
+                      // A SUCCESS is a shared assertion about the SHA, twice over: it
+                      // satisfies every co-located PR's required context, and the verdict
+                      // it is drawn from cannot be attributed to THIS PR either (see the
+                      // co-location note). So it is published only when this PR is alone
+                      // on the head. Null = unreadable = treated as shared. A failure
+                      // needs no such check — over-blocking a co-located PR is the safe
+                      // direction.
+                      const sharers = pass ? await coLocatedOpenPrs() : [];
+                      if (pass && (sharers === null || sharers.length)) {
                         core.warning(`PR #${pr.number}: Greptile passed \`${sha.slice(0, 8)}\`, but ` +
-                          `PR(s) ${holders.join(', ')} share this head and have not handed off — ` +
-                          `NOT publishing ${GATE_CHECK} success (it would satisfy their required ` +
-                          `context too). Holding; clears once they qualify or move off the head.`);
+                          `PR(s) ${(sharers || ['<unreadable>']).join(', ')} share this head — NOT ` +
+                          `publishing ${GATE_CHECK} success. That run cannot be attributed to this ` +
+                          `PR, and the success would satisfy their required context too. Holding; ` +
+                          `clears once they close, retarget, or move off this commit.`);
                       } else {
                         // IDEMPOTENT: checks.create always makes a NEW run, and this block
                         // is re-entered on every sweep (every 30 min) plus every event for
