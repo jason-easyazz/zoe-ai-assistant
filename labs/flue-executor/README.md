@@ -1,8 +1,12 @@
 # Flue Executor (lab-only) — Phase 1 of the Multica executor migration
 
-> **STATUS: LAB SPIKE. NOT WIRED INTO PRODUCTION.** Hand-started only; never a
-> systemd unit, never CI, never imported by any service. See
-> [`docs/architecture/multica-executor-migration.md`](../../docs/architecture/multica-executor-migration.md).
+> **STATUS: opt-in Phase-2 unit — installed inert, default-OFF.** `install-jetson.sh`
+> ships `flue-executor.service` as an installed-but-never-enabled template behind
+> three safety gates (kill switch armed, `ZOE_EXECUTOR_DISPATCH=dry`, single lane).
+> It is not imported by any service and does nothing until an operator deliberately
+> enables and unpauses it. **Go-live runbook (the only source of truth for enabling
+> it): [`scripts/setup/systemd/README.md`](../../scripts/setup/systemd/README.md).**
+> Design: [`docs/architecture/multica-executor-migration.md`](../../docs/architecture/multica-executor-migration.md).
 
 ## What this proves
 

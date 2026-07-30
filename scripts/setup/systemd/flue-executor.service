@@ -41,6 +41,13 @@ RestartSec=5
 # in. NEVER inline secrets here. The file is required (no '-' prefix): the unit
 # fails loudly if the operator has not configured it.
 Environment=ZOE_EXECUTOR_MODE=live
+# Default the live service env file to THIS account's checkout (%h) so a non-`zoe`
+# operator boots without hand-editing: config.ts derives POSTGRES_URL from
+# ZOE_ENV_FILE and otherwise falls back to a hard-coded
+# /home/zoe/assistant/services/zoe-data/.env, which does not exist under another
+# home and restart-loops the unit. An explicit ZOE_ENV_FILE in the .env below
+# still wins (EnvironmentFile is applied after Environment).
+Environment=ZOE_ENV_FILE=%h/assistant/services/zoe-data/.env
 EnvironmentFile=%h/assistant/labs/flue-executor/.env
 
 # Light hardening (user-service compatible).

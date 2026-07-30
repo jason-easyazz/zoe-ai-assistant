@@ -198,8 +198,21 @@ systemctl --user enable --now flue-executor   # starts DRY + PAUSED (kill switch
 journalctl --user -u flue-executor -f
 ```
 
-**Go live — the ONLY place the kill switch is removed.** Do this only after the
-≥3-ticket dry validation holds:
+**Go live — the ONLY place the kill switch is removed.** The pre-unpause gate is
+**dry wiring verification, not a ticket count.** Dry dispatch cannot claim or
+advance a ticket — it only logs the next queued id — so a "≥3 real tickets" bar is
+physically unreachable until dispatch is live. Verify the wiring first, flip the
+two go-live gates, and only then validate real tickets.
+
+Pre-unpause check (still `dry` + paused — safe, mutates nothing): confirm the
+runner starts clean, resolves its runtime identity, and its `would claim <id>` log
+names the tickets you expect, with no crash or restart loop:
+
+```bash
+journalctl --user -u flue-executor -f   # expect a steady dry/idle log, no restarts
+```
+
+Then flip the two go-live gates in order:
 
 ```bash
 # 1) arm real dispatch in the env file:
@@ -209,6 +222,11 @@ systemctl --user restart flue-executor
 #    arms; the default is ~/.zoe/multica_dispatch_paused):
 rm -f "${ZOE_MULTICA_KILL_SWITCH:-$HOME/.zoe/multica_dispatch_paused}"
 ```
+
+**Only now — dispatch `full` AND unpaused — can real tickets flow.** Validate
+**≥3 real end-to-end tickets here**, watching `journalctl`, before treating Phase 2
+as proven. Re-arm the switch instantly to pause if anything misbehaves:
+`: > "${ZOE_MULTICA_KILL_SWITCH:-$HOME/.zoe/multica_dispatch_paused}"`.
 
 Start order matters — see [OPERATOR_RUNBOOK.md](../../../docs/guides/OPERATOR_RUNBOOK.md).
 
