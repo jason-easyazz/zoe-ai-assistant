@@ -141,10 +141,22 @@ def revision_matches(artifact: dict[str, Any], expect_revision: str | None) -> t
         return False, ("voice replay-gate artifact records NO revision, so it cannot be "
                        f"attributed to {expect_revision[:8]} — re-run the probe against a "
                        "checkout of this PR's head")
+    # Two ways attribution fails, and BOTH block. `dirty` is "we looked and found
+    # uncommitted changes". `clean_verified is False` is "we could not look at
+    # all" — a failed `git status` (unreadable index, bad GIT_INDEX_FILE). Unknown
+    # is not clean, so the second case is checked explicitly rather than left to
+    # `bool(None)`, which reads as clean and is exactly the fail-open the binding
+    # exists to prevent. An older artifact with no `clean_verified` key still
+    # works, because it only reaches here with `dirty` explicitly false.
     if rev.get("dirty"):
         return False, (f"voice replay-gate ran against a DIRTY worktree at "
                        f"{str(rev.get('commit'))[:8]} — an uncommitted tree cannot be "
                        "attributed to a commit; commit or stash, then re-run the probe")
+    if rev.get("clean_verified") is False:
+        return False, (f"voice replay-gate could NOT verify the worktree was clean at "
+                       f"{str(rev.get('commit'))[:8]} (git status failed) — cleanliness was "
+                       "never established, so the run cannot be attributed to that commit. "
+                       "Fix the checkout and re-run the probe.")
     got = str(rev.get("commit"))
     if got != expect_revision:
         return False, (f"voice replay-gate ran against commit {got[:8]}, but this PR's head "

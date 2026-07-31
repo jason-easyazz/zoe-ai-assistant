@@ -373,11 +373,23 @@ def service_revision(service_dir: Any) -> dict[str, Any] | None:
         return None
     # `status --porcelain` covers the whole checkout, not just services/zoe-data:
     # an uncommitted edit anywhere in the tree breaks attribution to the commit.
-    dirty = _git("status", "--porcelain")
+    #
+    # FAIL CLOSED ON AN UNREADABLE STATUS. `_git` returns None both for "git said
+    # nothing" and for "git failed" (unreadable index, a bad inherited
+    # GIT_INDEX_FILE, a permissions problem), and `bool(None)` is False — so a
+    # failed cleanliness check used to record the tree as CLEAN. That is a real
+    # fail-open in the revision binding: cleanliness was never established, yet a
+    # matching commit would clear `--expect-revision`. Unknown is not clean.
+    status = _git("status", "--porcelain")
+    clean_verified = status is not None
     return {
         "commit": commit,
         "tree": _git("rev-parse", "HEAD^{tree}"),
-        "dirty": bool(dirty),
+        "dirty": True if not clean_verified else bool(status),
+        # Distinguishes "we looked and it was dirty" from "we could not look".
+        # Both block, but only one of them is a repo state the operator can fix
+        # by committing, so the gate's message should not have to guess.
+        "clean_verified": clean_verified,
         "service_dir": str(repo),
     }
 

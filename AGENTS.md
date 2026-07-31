@@ -128,14 +128,21 @@ Two properties make it trustworthy rather than merely present:
   dirty worktree, which cannot be attributed to a commit at all) is refused. Practical
   consequence, and it is the correct fail-closed cost: a voice-path PR needs the probe run
   against a **checkout of that PR's head**, and re-run after every push to it.
-- **The PR is DATA, never code.** A pull request is untrusted input, and the evidence job
-  runs on the Jetson — the box that also runs the live voice brain. Both jobs check out
-  `base.sha` and run the checker from that trusted tree; the PR enters only as an
-  API-supplied changed-file list plus a 40-hex head sha. Running the PR's own copy of the
-  checker would have allowed both a **bypass** (edit it to report no voice files) and
-  **arbitrary code execution on the Jetson**. Fork PRs additionally cannot reach the
-  self-hosted runner without a maintainer applying `voice-gate-approved`. The trust model
-  is stated at the top of `.github/workflows/voice-gate.yml`; if you edit that file, the
+- **The PR is DATA, never code — and it does not get to define its own gate.** A pull
+  request is untrusted input, and the evidence job runs on the Jetson, the box that also
+  runs the live voice brain. Two rules hold the line. (1) Every checkout pins `base.sha`;
+  the PR enters only as an API-supplied changed-file list plus a 40-hex head sha. Running
+  the PR's own copy of the checker allowed both a **bypass** (edit it to report no voice
+  files) and **arbitrary code execution on the Jetson**. (2) The workflow triggers on
+  **`pull_request_target`**, so its *definition* comes from the base ref — on a plain
+  `pull_request` trigger GitHub runs the workflow file from the PR head, and the PR could
+  simply delete the fork gate or make the verdict `exit 0`, authoring the very check that
+  gates it. Because a `pull_request_target` run is associated with the base commit, the
+  `verdict` job publishes the `voice-gate` context explicitly against the PR head. Fork PRs
+  cannot reach the self-hosted runner without a maintainer applying `voice-gate-approved`.
+  The full trust model and its residual risk are at the top of
+  `.github/workflows/voice-gate.yml` and in
+  [merge-and-deploy.md](docs/knowledge/merge-and-deploy.md); if you edit that workflow, the
   question is not "is this safe?" but "does this read, write, or execute anything the PR
   author controls?"
 

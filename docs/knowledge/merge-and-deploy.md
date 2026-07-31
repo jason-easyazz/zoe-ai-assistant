@@ -33,16 +33,21 @@ focused local check **before** merge — a green PR auto-deploys, so a bad merge
 
 ### The voice replay-gate runs at PR time AND on the CD path
 
-**PR time (`voice-gate`, required, since 2026-07-30).** The gate used to be post-merge only,
+**PR time (`voice-gate`, required, since 2026-07-31).** The gate used to be post-merge only,
 which left a real gap: a voice-path PR could go green, merge, and then be permanently
 refused by the deploy gate — a *green main that will not deploy*, found after the fact with
 the change already on the trunk. `.github/workflows/voice-gate.yml` now asserts the same
-contract before merge. Its `scope` job classifies the PR diff on a hosted runner
-(`voice_gate_check.py --scope-only`, always exit 0) and only a voice-path verdict escalates
-to the self-hosted `replay-evidence` job, where the artifact actually lives. The `voice-gate`
-summary job runs `if: always()` so the required context reports a conclusion on **every** PR:
-trivially green when no voice-path file changed. Unblock a red one exactly as below — re-run
-the probe on the Jetson, then re-run the workflow.
+contract before merge. Its `scope` job classifies the PR's changed-file list (fetched from the
+API — never a checkout of the PR) and only a voice-path verdict escalates to the self-hosted
+`replay-evidence` job, where the artifact actually lives. The `verdict` job runs `if: always()`
+and publishes the `voice-gate` context against the PR head, so it reports a conclusion on
+**every** PR: trivially green when no voice-path file changed.
+
+Two things make it evidence rather than ceremony, and both cost something:
+**the artifact must be BOUND to the PR head** (`--expect-revision`), so the probe has to be run
+against a checkout of that commit and re-run after every push to it; and **the whole workflow runs
+trusted code only** (see *The gate's own trust model* below). Unblock a red one with the
+`git worktree add <head>` + probe recipe the check's output prints.
 
 **Deploy time (unchanged, defence in depth).** CD is how changes actually reach the box, so
 the **voice replay-gate also runs on the runner**, not only on the manual `deploy_live.sh`
@@ -98,7 +103,7 @@ clobber them); untracked runtime artifacts on the live tree (`data/chroma/`, `da
 sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --hard` intentionally has
 **no** clean-tree refuse — CD overwrites the tree to match `main` by contract.
 
-## Protected `main` — the merge gates (re-tiered 2026-07-30)
+## Protected `main` — the merge gates (re-tiered 2026-07-31)
 
 **The required gate is DETERMINISTIC and locally runnable.** Anything judgement-shaped —
 an LLM reading a diff — is advisory. Rationale, tiering and worker routing:
@@ -139,6 +144,51 @@ The inverse matters for **auto-merge**: a required context that has not yet repo
 not hold the merge. Measured on #1587 — the PR merged 3 seconds before its review check
 started, which then concluded `failure` on code already on `main`. "Green" means "every
 required context has REPORTED success"; a missing context is not the same as a red one.
+
+### The gate's own trust model (why `voice-gate` is `pull_request_target`)
+
+A `pull_request`-triggered workflow runs **the workflow file from the PR head**. For a workflow
+that produces a REQUIRED context that is a self-referential hole: the PR authors the check that
+gates it. A PR could delete the fork gate, repoint the "trusted" checkout at its own head, or make
+the verdict `exit 0` — and for `voice-gate` the second of those means **arbitrary code execution on
+the Jetson**, which also runs the live voice brain.
+
+`voice-gate.yml` and `break-glass.yml` therefore both trigger on **`pull_request_target`**, which
+reads the definition from the base ref. The PR under review cannot rewrite either one.
+
+`pull_request_target` is dangerous by default — it runs with a write token and repository secrets —
+and is safe here for exactly one reason: **neither workflow ever checks out or executes a byte the
+PR author controls.** Every checkout pins `base.sha`; the PR enters only as an API-supplied
+changed-file list and a 40-hex head sha. Adding a step that fetches the head ref, runs an install,
+or executes a script from the PR tree converts this trigger into RCE with a write token.
+`tests/unit/test_required_gate_workflows.py` asserts all of it: base-pinned checkouts,
+`persist-credentials: false`, the fork gate, and that only these two workflows hold `checks: write`.
+
+Because a `pull_request_target` run is associated with the **base** commit, the verdict cannot be a
+job named `voice-gate` (it would report on the wrong SHA and the PR would wait forever). The
+`verdict` job publishes a check run explicitly named `voice-gate` against `pull_request.head.sha`.
+
+**Residual risk, stated.** Nothing here stops a PR from editing `.github/workflows/voice-gate.yml`
+itself — the edit simply does not take effect for that PR's own gate; it takes effect once merged.
+So the remaining exposure is "a malicious workflow edit gets merged", which is a review problem,
+not a workflow problem. Two things bound it in this repo: it is solo-owner (PRs come from the owner
+and trusted agents, and a workflow diff is highly visible and multi-agent reviewed), and forks are
+covered separately below. **The native GitHub settings that close it properly, if the repo ever
+takes outside contributions:**
+
+- `Settings → Actions → General → Fork pull request workflows from outside collaborators →`
+  **`Require approval for all external contributors`** — a maintainer must approve before ANY
+  workflow runs for a fork PR. This is repo configuration, not workflow content, so a PR cannot
+  disable it. It is the real control for the self-hosted-runner exposure; the `voice-gate-approved`
+  label gate in the workflow is defence in depth on top of it, not a substitute.
+- Branch protection **`Require review from Code Owners`** plus a `CODEOWNERS` entry for
+  `/.github/**`, which forces a second party to approve any workflow change. This does not bite
+  today (`required_approving_review_count` is 0 on a solo-owner repo) and turning it on would mean
+  no PR can ever merge without a second human — which is why it is documented rather than enabled.
+
+Running a self-hosted runner for a PUBLIC repo is something GitHub explicitly warns against. The
+combination that makes it acceptable here is: trusted code only, fork PRs gated, and the external-
+contributor approval setting above.
 
 ### Break-glass — recovery from a required-check outage
 
@@ -201,7 +251,7 @@ write-level access. If a future change removes the break-glass path, switch to `
 
 ## Greptile / greploop gotchas
 
-Greptile is **advisory** as of 2026-07-30 — it no longer gates a merge, so none of these
+Greptile is **advisory** as of 2026-07-31 — it no longer gates a merge, so none of these
 stall a PR any more. They still decide whether you get the advisory review you paid for.
 
 - **Greptile silently SKIPS large PRs** (>~50 files) and ignores `docs/archive/**`. The credit
@@ -281,11 +331,13 @@ PR forever:**
 - Repo must be on a **GitHub Team/Enterprise** plan (the option is absent on Free/personal).
 - Required checks must run on the **`merge_group`** event — add `on: merge_group:` to `validate.yml`;
   the queue evaluates checks on a temporary `gh-readonly-queue/...` ref.
-- Every REQUIRED check must report on `merge_group`. Since 2026-07-31 that is `validate`,
-  `secret-scan` and `voice-gate` — all first-party workflows carrying `on: merge_group:`, so this
-  prerequisite is already met. **Greptile is no longer a factor here:** it was demoted to advisory
-  on the same date, so a queue can never wait on a `Greptile Review` status that never arrives.
-  Removing that dependency is one of the things the re-tiering bought.
+- Every REQUIRED check must report on `merge_group`. `validate` and `secret-scan` already carry
+  `on: merge_group:`. **`voice-gate` does NOT and must be given a merge_group path before a queue
+  is enabled** — it publishes its context against `pull_request.head.sha`, and a merge_group event
+  has no pull request, so a queued run would never report and the queue would stall forever.
+  **Greptile is no longer a factor here:** it was demoted to advisory on 2026-07-31, so a queue can
+  never wait on a `Greptile Review` status that never arrives. Removing that dependency is one of
+  the things the re-tiering bought.
 - Changing branch protection / enabling the queue is an `enforce_admins`-protected operator action;
   agents prepare the `merge_group` CI wiring, the human flips the setting.
 

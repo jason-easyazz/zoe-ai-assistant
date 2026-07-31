@@ -155,6 +155,36 @@ jobs:
               return st.length ? st[0].state : 'missing';
             };
 
+            // ---- 2b. REVALIDATE THE HEAD, immediately before writing anything ----
+            // The head can move between the opening `pulls.get` and here (a push
+            // lands, or an agent updates the branch). Everything above was read for
+            // `sha`, and the substitute checks are about to be published AGAINST
+            // `sha` — so on a moved head the override would land on a commit nobody
+            // is merging, the CURRENT head would stay blocked, and the single-use
+            // label would be consumed anyway. The audit trail would then record an
+            // override that did nothing, which is worse than no override at all:
+            // the operator believes they are unblocked and they are not.
+            //
+            // ABORT rather than retarget. Publishing against the NEW head would be
+            // overriding checks nobody has looked at — the state was read for the
+            // old one. Aborting leaves the label in place, so the workflow simply
+            // re-runs on the next event with fresh reads, and the owner keeps their
+            // escape hatch. Fail-closed on enforcement, recoverable for the owner.
+            const fresh = await github.rest.pulls.get({ ...base, pull_number: num })
+              .then(r => r.data).catch(() => null);
+            if (!fresh || fresh.head.sha !== sha) {
+              const now = fresh ? fresh.head.sha : 'unreadable';
+              await github.rest.issues.createComment({ ...base, issue_number: num,
+                body: `⏸️ **break-glass ABORTED — the head moved.**\n\n` +
+                      `Read state for \`${sha.slice(0, 8)}\`, but the head is now ` +
+                      `\`${String(now).slice(0, 8)}\`. Nothing was overridden, and the ` +
+                      `\`${LABEL}\` label has been LEFT IN PLACE so the override is not ` +
+                      `consumed for a commit nobody is merging.\n\n` +
+                      `Re-apply the label (or push again) to retry against the current head.` });
+              core.setFailed(`break-glass aborted: head moved ${sha} -> ${now}; label not consumed`);
+              return;
+            }
+
             const GREEN = ['success', 'neutral', 'skipped'];
             const forced = [], untouched = [];
             for (const name of REQUIRED) {

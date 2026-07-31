@@ -1,6 +1,6 @@
 """Structural guards for the DETERMINISTIC required merge gate.
 
-The re-tiering (2026-07-30) made the required set `validate`, `secret-scan`,
+The re-tiering (2026-07-31) made the required set `validate`, `secret-scan`,
 `voice-gate` — all deterministic, all locally runnable — and demoted Greptile to
 advisory. Two failure modes of a required-status-check gate are structural rather
 than behavioural, so they are asserted here rather than in a behavioural suite:
@@ -46,16 +46,27 @@ def _on(spec: dict) -> dict:
 
 def test_every_required_context_is_produced_by_a_job():
     """A required context nothing produces never reports, and a context that never
-    reports blocks every PR permanently. Prove each one maps to a real job."""
+    reports blocks every PR permanently.
+
+    A context is produced either by a JOB of that name, or — for `voice-gate` —
+    by an explicit `checks.create` naming it. The published form exists because a
+    `pull_request_target` run is associated with the BASE commit, so a job named
+    `voice-gate` would report against the wrong SHA."""
     produced = {}
     for wf in WORKFLOWS.glob("*.yml"):
         spec = yaml.safe_load(wf.read_text())
         for job_id, job in (spec.get("jobs") or {}).items():
             # The check-run name is the job's `name:` if set, else its id.
             produced[job.get("name", job_id)] = wf.name
+        # Contexts published by name through the Checks API.
+        text = wf.read_text()
+        if "checks.create" in text:
+            for ctx in REQUIRED_CONTEXTS:
+                if f"'{ctx}'" in text:
+                    produced.setdefault(ctx, wf.name)
     missing = [c for c in REQUIRED_CONTEXTS if c not in produced]
     assert not missing, (
-        f"required contexts with no producing job: {missing}. Adding one of these to "
+        f"required contexts with no producer: {missing}. Adding one of these to "
         f"branch protection would freeze main permanently. Produced: {sorted(produced)}")
 
 
@@ -67,7 +78,7 @@ def test_voice_gate_reports_on_every_pull_request():
     be the classic footgun: the workflow simply does not report on unmatched PRs,
     and GitHub waits for it forever."""
     spec = _load("voice-gate.yml")
-    pr = _on(spec)["pull_request"] or {}
+    pr = _on(spec)["pull_request_target"] or {}
     assert "paths" not in pr and "paths-ignore" not in pr, (
         "voice-gate must NOT use a paths filter: a path-filtered required check does "
         "not report on unmatched PRs and blocks them forever. The voice-path decision "
@@ -80,22 +91,56 @@ def test_voice_gate_reports_on_every_pull_request():
         assert t in pr["types"], pr["types"]
 
 
-def test_voice_gate_summary_job_always_reports():
+def test_voice_gate_verdict_job_always_reports():
     """`if: always()` plus `needs` on both jobs is the mechanism: without it, a
-    skipped `replay-evidence` skips the summary too, and the required context
+    skipped `replay-evidence` skips the verdict too, and the required context
     never concludes."""
     jobs = _load("voice-gate.yml")["jobs"]
-    assert "voice-gate" in jobs, "the required context needs a job of exactly that name"
-    gate = jobs["voice-gate"]
-    assert str(gate["if"]).strip() == "always()", gate.get("if")
-    assert set(gate["needs"]) == {"scope", "replay-evidence"}, gate["needs"]
+    verdict = jobs["verdict"]
+    assert str(verdict["if"]).strip() == "always()", verdict.get("if")
+    assert set(verdict["needs"]) == {"scope", "replay-evidence"}, verdict["needs"]
 
     # The expensive half must be the ONLY conditional one, and must be the only
     # job pinned to the self-hosted box.
     assert jobs["replay-evidence"]["runs-on"] == "self-hosted"
     assert "needs.scope.outputs.voice" in str(jobs["replay-evidence"]["if"])
     assert jobs["scope"]["runs-on"] == "ubuntu-latest"
-    assert jobs["voice-gate"]["runs-on"] == "ubuntu-latest"
+    assert verdict["runs-on"] == "ubuntu-latest"
+
+
+def test_voice_gate_definition_is_immutable_from_the_pr():
+    """THE fix for the self-referential gate.
+
+    On a plain `pull_request` trigger GitHub runs the workflow file FROM THE PR
+    HEAD — so a PR could edit this file to delete the fork gate, repoint the
+    trusted checkout at its own head, or make the verdict `exit 0`, and thereby
+    author the required check that is supposed to gate it. `pull_request_target`
+    reads the definition from the BASE ref, which the PR cannot rewrite."""
+    spec = _load("voice-gate.yml")
+    on = _on(spec)
+    assert "pull_request_target" in on, (
+        "voice-gate must trigger on pull_request_target: with `pull_request` the PR "
+        "supplies the workflow definition and can author its own required check")
+    assert "pull_request" not in on, (
+        "a `pull_request` trigger alongside pull_request_target reintroduces a "
+        "PR-authored run of this workflow")
+
+
+def test_voice_gate_publishes_its_context_against_the_pr_head():
+    """A `pull_request_target` run is associated with the BASE commit, so a job
+    NAMED `voice-gate` would report against the wrong SHA and the PR would wait
+    forever. The verdict must publish explicitly against `pull_request.head.sha`."""
+    jobs = _load("voice-gate.yml")["jobs"]
+    assert "voice-gate" not in jobs, (
+        "a job named `voice-gate` under pull_request_target reports the context on the "
+        "BASE sha, not the PR head — publish it explicitly instead")
+    script = ""
+    for step in jobs["verdict"]["steps"]:
+        script += str((step.get("with") or {}).get("script", ""))
+    assert "checks.create" in script, script[:400]
+    assert "head_sha: headSha" in script, script[:400]
+    assert "pr.head.sha" in script, script[:400]
+    assert "name: CONTEXT" in script and "const CONTEXT = 'voice-gate'" in script
 
 
 def test_no_voice_gate_job_ever_checks_out_pr_controlled_code():
@@ -186,18 +231,36 @@ def test_voice_gate_consumes_the_pr_as_data_not_code():
     assert "scripts/maintenance/voice_gate_check.py" in run, run
 
 
-def test_only_the_break_glass_workflow_may_publish_required_contexts():
-    """`checks: write` is the capability to publish a required context. Exactly one
-    workflow is allowed to hold it — the audited owner break-glass. Anything else
-    holding it can make itself a merge gate, or silently satisfy one."""
-    holders = []
-    for wf in WORKFLOWS.glob("*.yml"):
+def test_checks_write_is_held_by_exactly_the_two_workflows_that_need_it():
+    """`checks: write` is the capability to publish — or silently SATISFY — a
+    required context. It is the single most dangerous permission in this repo, so
+    the holder list is pinned by name.
+
+    Exactly two may hold it, for different reasons:
+      * `voice-gate.yml` publishes the `voice-gate` context itself (a
+        pull_request_target run is associated with the base commit, so the context
+        has to be published against the PR head explicitly);
+      * `break-glass.yml` publishes substitute contexts during an outage.
+
+    Both are `pull_request_target`, i.e. their definitions come from the base ref
+    and a PR cannot rewrite them. That pairing is the point: a workflow that can
+    publish a required context must not be one a PR can author. Anything else
+    acquiring this permission can make itself a merge gate, or satisfy one."""
+    holders = {}
+    for wf in sorted(WORKFLOWS.glob("*.yml")):
         spec = yaml.safe_load(wf.read_text())
         perms = spec.get("permissions") or {}
         if isinstance(perms, dict) and perms.get("checks") == "write":
-            holders.append(wf.name)
-    assert holders == ["break-glass.yml"], (
-        f"unexpected workflows holding checks:write: {holders}")
+            holders[wf.name] = spec
+    assert sorted(holders) == ["break-glass.yml", "voice-gate.yml"], (
+        f"unexpected workflows holding checks:write: {sorted(holders)}")
+    for name, spec in holders.items():
+        assert "pull_request_target" in _on(spec), (
+            f"{name} can publish a required context but is not pull_request_target — a "
+            "PR could supply its definition and publish its own green context")
+        assert "pull_request" not in _on(spec), (
+            f"{name} also triggers on `pull_request`, which runs a PR-authored copy of a "
+            "workflow that can publish required contexts")
 
 
 def test_break_glass_is_admin_only_and_audited():

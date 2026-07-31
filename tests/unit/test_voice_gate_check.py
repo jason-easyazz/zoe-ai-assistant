@@ -320,6 +320,64 @@ def test_probe_reports_a_dirty_tree_honestly(tmp_path):
                         expect_revision=head)[0] is False
 
 
+def test_unverifiable_cleanliness_is_rejected(tmp_path):
+    """FINDING A, consumer side. `clean_verified: False` means the probe could not
+    RUN `git status` at all — cleanliness was never established. Unknown is not
+    clean, and a matching commit must not rescue it."""
+    art = artifact_with_revision()
+    art["revision"]["clean_verified"] = False
+    ok, why = vgc.evaluate(art, now_epoch=NOW, max_age_s=DAY, expect_revision=PR_SHA)
+    assert ok is False
+    assert "could NOT verify" in why
+
+
+def test_older_artifacts_without_clean_verified_still_work(tmp_path):
+    """Back-compat: an artifact predating the `clean_verified` key only reaches the
+    check with `dirty` explicitly false, so a missing key must not block it."""
+    art = artifact_with_revision()
+    art["revision"].pop("clean_verified", None)
+    assert vgc.evaluate(art, now_epoch=NOW, max_age_s=DAY,
+                        expect_revision=PR_SHA)[0] is True
+
+
+def test_unreadable_git_status_is_recorded_as_dirty(tmp_path, monkeypatch):
+    """FINDING A, producer side — a genuine fail-open.
+
+    `_git` returns None both for "git printed nothing" and for "git FAILED"
+    (unreadable index, a bad inherited GIT_INDEX_FILE, a permissions problem), and
+    `bool(None)` is False — so a failed cleanliness check recorded the worktree as
+    CLEAN and a matching commit cleared `--expect-revision` with cleanliness never
+    established. Simulate a failing `git status` and require the opposite."""
+    repo, head = _git_repo(tmp_path)
+    real_run = vrp.subprocess.run
+
+    def fake_run(cmd, **kw):
+        if "status" in cmd:
+            class Failed:
+                returncode = 128
+                stdout = ""
+                stderr = "fatal: could not read index"
+            return Failed()
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(vrp.subprocess, "run", fake_run)
+    rev = vrp.service_revision(str(repo / "services" / "zoe-data"))
+    assert rev["commit"] == head, "the commit is still readable"
+    assert rev["dirty"] is True, "an unreadable status must NOT read as clean"
+    assert rev["clean_verified"] is False
+
+    args = _Args(tmp_path)
+    args.service_dir = str(repo / "services" / "zoe-data")
+    vrp.emit_result(args, status="pass", summary={"n_samples": 20},
+                    said_vs_did=[], speed_deltas={}, baseline={})
+    import json as _json
+    payload = _json.loads(args.results.read_text())
+    ok, why = vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
+                           expect_revision=head)
+    assert ok is False, "a matching commit must not clear an unverifiable tree"
+    assert "DIRTY" in why or "could NOT verify" in why
+
+
 def test_probe_without_a_service_dir_records_no_revision(tmp_path):
     """Back-compat: emit_result is also called with lightweight arg objects. A
     missing revision must be None (and therefore unattributed), never a crash."""
