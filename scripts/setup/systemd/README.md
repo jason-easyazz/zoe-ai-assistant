@@ -16,6 +16,7 @@ Secrets are never inlined — they are read from `.env` files.
 | `zoe-data.service`         | 8000  | Primary backend API |
 | `functiongemma-router.service` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M r2, CPU) — **platform-specific paths**; optional |
 | `flue-zoe-brain.service`   | 3578  | Flue Zoe-brain sidecar (optional, operator opt-in) |
+| `flue-executor.service`    | —     | Multica queue consumer (executor migration Phase 2) — **optional, operator opt-in; ships inert (not enabled, dispatch defaults dry) — see below** |
 | `serena-mcp.service`       | 9121  | Shared Serena MCP code-intelligence server (dev tooling, one per HOST — see below) |
 
 Everything in this directory is a **user** unit. The `system/` subdirectory holds
@@ -162,6 +163,164 @@ bridge; check `systemctl --user status serena-mcp` before debugging.
 the sidecar behind zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam.
 Enable it only when running the Flue brain — build + env steps are in
 [labs/flue-zoe-brain/README.md](../../../labs/flue-zoe-brain/README.md).
+
+## Opt-in Multica queue consumer (`flue-executor.service`)
+
+Also deliberately NOT in the enable line. `install-jetson.sh` copies its
+template into `~/.config/systemd/user/` (the `*.service` glob) but never enables
+it — `install-jetson.sh` will `die` if a future edit ever slips it into the
+auto-enabled `SYSTEMD_SPINE`. It is the single-lane consumer of Multica's real
+`agent_task_queue` for the executor migration (Phase 2 of
+[docs/architecture/multica-executor-migration.md](../../../docs/architecture/multica-executor-migration.md)).
+
+**The installer is side-effect-free with respect to dispatch control.** It
+installs the inert unit and stops there — it never enables it and it **never
+touches the shared Multica dispatch pause sentinel**
+(`~/.zoe/multica_dispatch_paused`). That is deliberate: the same sentinel is read
+every cycle by the already-live zoe-data poll loop and `multica_board_runner`, so
+recreating it on a reinstall of an established host would **halt all live
+engineering dispatch**. Pausing is an operator go-live decision, not a
+provisioning side effect.
+
+Two gates ship ON by construction, and one is an operator tool:
+
+- **Dry dispatch (default)** — `ZOE_EXECUTOR_DISPATCH` defaults to `dry`: the
+  runner polls and logs what it WOULD claim and **mutates nothing**
+  (`labs/flue-executor/src/config.ts`). This is the gate that makes a freshly
+  enabled unit safe on its own. Set `full` in `.env` only when taking it live.
+- **Single lane** — at most one task in flight per runtime.
+- **Kill switch (operator-armed)** — while `~/.zoe/multica_dispatch_paused`
+  exists the runner idles and claims nothing (the runtime only checks that the
+  file exists — `labs/flue-executor/src/live-runner.ts`). The installer does NOT
+  create it; **you arm it yourself** when you want to hold dispatch. Because it
+  is shared with the live board, arm the same file only when you intend to pause
+  the whole board.
+
+> **Non-default kill-switch path?** The runner watches the path from
+> `ZOE_MULTICA_KILL_SWITCH` in `labs/flue-executor/.env` (else the default
+> `~/.zoe/multica_dispatch_paused`). If you set an override, arm THAT path when
+> you want to pause, and confirm it matches the runner's `kill-switch=<path>`
+> startup log.
+
+Bring it up (all operator steps — the installer does none of these):
+
+```bash
+cd ~/assistant/labs/flue-executor && npm install
+# register the executor identity in Multica (idempotent):
+python3 ~/assistant/scripts/maintenance/verify_executor_queue_backend.py
+# create the env file from the template IF NOT ALREADY PRESENT (stays dry by
+# default) and adjust. -n (no-clobber) PRESERVES a .env you pre-created with a
+# custom ZOE_MULTICA_KILL_SWITCH, so it is not silently reset to the template:
+cp -n ~/assistant/labs/flue-executor/.env.example ~/assistant/labs/flue-executor/.env
+# OPTIONAL — hold dispatch before you enable by arming the pause yourself. Note
+# this sentinel is SHARED with the live board, so it pauses live dispatch too;
+# arm it only when you mean to pause everything. Dry dispatch (above) already
+# keeps a freshly enabled unit from mutating anything, so this is belt-and-braces.
+# Arm the path the runner actually checks — resolve it the same way the go-live
+# steps below do (from labs/flue-executor/.env; a RELATIVE override lives under
+# WorkingDirectory=labs/flue-executor, NOT your CWD) so armed == checked:
+#   cd ~/assistant/labs/flue-executor   # so a relative override resolves like the unit
+#   mkdir -p "$(dirname "<your ZOE_MULTICA_KILL_SWITCH>")" && touch "<your ZOE_MULTICA_KILL_SWITCH>"
+systemctl --user daemon-reload
+systemctl --user enable --now flue-executor   # starts DRY (mutates nothing)
+journalctl --user -u flue-executor -f
+```
+
+**Go live.** The pre-live gate is **dry wiring verification, not a ticket
+count.** Dry dispatch cannot claim or advance a ticket — it only logs the next
+queued id — so a "≥3 real tickets" bar is physically unreachable until dispatch
+is live. Verify the wiring first, flip the go-live gate, and only then validate
+real tickets.
+
+**Step 1 — FORCE and VERIFY dry BEFORE touching the switch.** This is the gate
+that makes every switch manipulation below safe. On a host whose `.env` was
+previously `full` (e.g. a re-provisioned box), removing the switch while dispatch
+is still `full` would claim REAL work while you believe you are read-only. So pin
+`dry` first and PROVE it from the startup log — do not proceed until you see
+`dispatch=dry`:
+
+```bash
+# pin dry in the env file (dry is the default, but a previously-live host may
+# carry ZOE_EXECUTOR_DISPATCH=full):
+env_file=~/assistant/labs/flue-executor/.env
+if grep -qE '^[[:space:]]*ZOE_EXECUTOR_DISPATCH=' "$env_file"; then
+  sed -i 's/^[[:space:]]*ZOE_EXECUTOR_DISPATCH=.*/ZOE_EXECUTOR_DISPATCH=dry/' "$env_file"
+else
+  printf 'ZOE_EXECUTOR_DISPATCH=dry\n' >> "$env_file"
+fi
+systemctl --user restart flue-executor
+journalctl --user -u flue-executor -n 20
+# REQUIRED evidence before continuing — the startup line MUST show dispatch=dry:
+#   [live] runtime "<name>" (<uuid>) dispatch=dry poll=<n>ms kill-switch=<path>
+#   [live] DRY dispatch — will report what it WOULD claim, mutating nothing.
+# If it reads dispatch=full, STOP — fix the .env and restart before going on.
+```
+
+**Step 2 — (only if the switch is armed) confirm the paused idle branch.** While
+the switch is present the runner takes the idle branch and **never reaches the
+dry-preview**, so `would claim` cannot appear yet — that is expected, not a
+fault. Skip this step entirely if you did not arm the switch:
+
+```bash
+journalctl --user -u flue-executor -f
+# expect a steady idle with NO restart loop:
+#   [live] kill switch present — idling (claiming nothing).
+# Confirm <path> from the startup line is the file you armed — the runner watches
+# exactly this path (armed file == runner's checked path).
+```
+
+**Step 3 — dry-preview of the queue wiring (STILL dry, dispatch=dry already
+verified in Step 1).** With dry proven, ensure the switch is absent so the runner
+reaches the dry preview. It runs a read-only preview SELECT — claims and mutates
+nothing. If you armed the switch in Step 2, remove it here and re-arm after:
+
+```bash
+# Resolve the kill-switch path EXACTLY as flue-executor.service does. The runner
+# reads ZOE_MULTICA_KILL_SWITCH from its EnvironmentFile (labs/flue-executor/.env,
+# NOT your shell — config.ts), defaults to ~/.zoe/multica_dispatch_paused, and
+# checks a RELATIVE override under WorkingDirectory=labs/flue-executor (the unit's
+# cwd, which existsSync() resolves against — live-runner.ts). So parse the .env,
+# default to that same path, and resolve a relative value under that dir:
+wd=~/assistant/labs/flue-executor
+line="$(grep -E '^[[:space:]]*ZOE_MULTICA_KILL_SWITCH[[:space:]]*=' "$wd/.env" 2>/dev/null | tail -n1)"
+val="${line#*=}"; val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+[[ "$val" == \"*\" || "$val" == \'*\' ]] && val="${val:1:${#val}-2}"
+val="${val:-$HOME/.zoe/multica_dispatch_paused}"
+case "$val" in /*) KILL_SWITCH="$val" ;; *) KILL_SWITCH="$wd/$val" ;; esac
+
+rm -f "$KILL_SWITCH"          # dispatch is already dry (Step 1), so nothing is claimed/mutated
+journalctl --user -u flue-executor -f
+# expect, per tick (this is the queued-id evidence):
+#   [live] dry tick: would claim <id>     # or: would claim - (queue empty / lane busy)
+# If you armed the switch in Step 2, re-arm it now to stay paused until go-live:
+#   : > "$KILL_SWITCH"
+```
+
+**Step 4 — go live.** Flip dispatch to `full`, then (if you armed the switch)
+remove it:
+
+```bash
+# 1) arm real dispatch in the env file:
+#      ZOE_EXECUTOR_DISPATCH=full   (in labs/flue-executor/.env), then restart:
+systemctl --user restart flue-executor
+# 2) unpause (only if you armed the switch) — the go-live action. Resolve the
+#    path EXACTLY as the service does (read from labs/flue-executor/.env, NOT your
+#    shell; default ~/.zoe/multica_dispatch_paused; a relative override resolves
+#    under WorkingDirectory=labs/flue-executor) so you remove the path armed:
+wd=~/assistant/labs/flue-executor
+line="$(grep -E '^[[:space:]]*ZOE_MULTICA_KILL_SWITCH[[:space:]]*=' "$wd/.env" 2>/dev/null | tail -n1)"
+val="${line#*=}"; val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+[[ "$val" == \"*\" || "$val" == \'*\' ]] && val="${val:1:${#val}-2}"
+val="${val:-$HOME/.zoe/multica_dispatch_paused}"
+case "$val" in /*) KILL_SWITCH="$val" ;; *) KILL_SWITCH="$wd/$val" ;; esac
+rm -f "$KILL_SWITCH"          # the go-live action (no-op if you never armed it)
+```
+
+**Only now — dispatch `full`** (and unpaused, if you had armed the switch) — can
+real tickets flow. Validate **≥3 real end-to-end tickets here**, watching
+`journalctl`, before treating Phase 2 as proven. To pause in a hurry, arm the
+switch again — re-resolve `KILL_SWITCH` as above in a fresh shell, then
+`: > "$KILL_SWITCH"` (this pauses the whole board).
 
 Start order matters — see [OPERATOR_RUNBOOK.md](../../../docs/guides/OPERATOR_RUNBOOK.md).
 

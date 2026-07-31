@@ -8,7 +8,8 @@
 #   3. Start the Docker spine (db, auth, ui, home assistant)
 #   4. Run PostgreSQL migrations (alembic + auth DDL, via scripts/deploy/migrate.sh)
 #   5. Download the canonical Gemma 4 E4B-QAT + MTP brain
-#   6. Install + enable the host-native systemd spine (llama-server, zoe-data, kokoro-tts)
+#   6. Install + enable the host-native systemd spine (llama-server, zoe-data, kokoro-tts);
+#      opt-in units (flue-executor, flue-zoe-brain) are installed as inert templates only
 #   7. Health-gate the result
 #
 # Re-runnable: existing .env / models / running services are left in place.
@@ -42,6 +43,15 @@ MODELS_DIR="${HOME}/models/gemma4-e4b-qat"
 
 DOCKER_SPINE=(zoe-database zoe-auth zoe-ui homeassistant homeassistant-mcp-bridge)
 SYSTEMD_SPINE=(llama-server zoe-data kokoro-tts)
+# Opt-in units: their templates are installed (the *.service glob below copies
+# them) but they are DELIBERATELY never auto-enabled — each sits behind a
+# default-OFF seam and needs an explicit operator go-live step. flue-executor is
+# the Multica queue consumer (executor migration Phase 2); it ships inert — not
+# enabled, ZOE_EXECUTOR_DISPATCH defaults dry, single lane. The installer never
+# touches the shared Multica dispatch pause sentinel: arming that pause is an
+# operator go-live action, not a provisioning side effect (it is also read by the
+# live zoe-data poll loop, so recreating it on reinstall would halt live dispatch).
+OPTIONAL_UNITS=(flue-executor flue-zoe-brain)
 LLAMA_BIN="${HOME}/llama.cpp/build-jetson-new/bin/llama-server"
 
 while [[ $# -gt 0 ]]; do
@@ -181,10 +191,40 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   fi
   # shellcheck disable=SC2206
   enable_units=(${enable_units[@]})  # drop the empty slot if llama-server removed
+  # Safety: an opt-in unit must never be auto-armed by the installer. If a future
+  # edit slips one into SYSTEMD_SPINE, fail loudly rather than silently going live.
+  # `systemctl enable` also accepts unit-FILE PATHS, so canonicalize by BASENAME
+  # then strip '.service' on BOTH sides — bare, '.service', and path spellings
+  # (./flue-executor.service, /tmp/flue-zoe-brain.service, dir/flue-executor) all
+  # reduce to the same key and are caught. The spine should never carry paths at
+  # all, so a '/' in an entry is itself a defect.
+  for u in "${enable_units[@]}"; do
+    [[ "$u" == */* ]] && die "SYSTEMD_SPINE entry '$u' is a path, not a unit name (spine must be bare names)"
+    u_key="${u##*/}"; u_key="${u_key%.service}"
+    for opt in "${OPTIONAL_UNITS[@]}"; do
+      opt_key="${opt##*/}"; opt_key="${opt_key%.service}"
+      [[ "$u_key" == "$opt_key" ]] \
+        && die "refusing to auto-enable opt-in unit '$opt' (default-OFF safety gate)"
+    done
+  done
   if [[ ${#enable_units[@]} -gt 0 ]]; then
     systemctl --user enable --now "${enable_units[@]}"
     ok "enabled: ${enable_units[*]}"
   fi
+
+  # Surface the opt-in units: installed as inert templates, never enabled here.
+  # The installer deliberately does NOT touch the shared Multica dispatch pause
+  # sentinel (~/.zoe/multica_dispatch_paused). That file is also read every cycle
+  # by the live zoe-data poll loop and multica_board_runner, so recreating it at
+  # install time would HALT all live engineering dispatch on a reinstall of an
+  # established host. Pausing/arming dispatch is an explicit operator go-live
+  # action, never a provisioning side effect (runbook: scripts/setup/systemd/README.md).
+  ok "installed (NOT enabled) opt-in units: ${OPTIONAL_UNITS[*]}"
+  printf '%b\n' "  ${C_DIM}flue-executor.service = Multica queue consumer (executor migration Phase 2).${C_NC}"
+  printf '%b\n' "  ${C_DIM}Ships inert: not enabled, ZOE_EXECUTOR_DISPATCH defaults dry, single lane.${C_NC}"
+  printf '%b\n' "  ${C_DIM}Go-live is an operator runbook step (register identity, create .env, arm the${C_NC}"
+  printf '%b\n' "  ${C_DIM}dispatch pause yourself, enable, verify dry wiring): scripts/setup/systemd/README.md${C_NC}"
+
   # Let user services keep running after logout on a headless box.
   loginctl enable-linger "$USER" 2>/dev/null || true
 else
