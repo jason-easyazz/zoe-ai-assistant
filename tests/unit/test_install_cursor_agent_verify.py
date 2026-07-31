@@ -8,13 +8,24 @@ wrong-version dir could become the active symlink (PR #1593, round 2).
 
 Real filesystem in ``tmp_path``; a stubbed ``curl`` emits a tarball carrying a
 GOOD (pin-reporting) cursor-agent so the recovery path runs end to end offline.
-The script itself is exercised unmodified — no mocks of its logic, no network.
+No mocks of the script's logic, no network.
+
+The installer verifies the fetched artifact against a HARDCODED per-arch SHA-256 and
+has NO env/argv override for it — deliberately, so nothing an inherited environment
+can reach may swap the pinned digest (a spoofed ``--version`` would otherwise restore
+a fake authenticity). An offline fixture tarball therefore cannot match the real
+pinned digest, so the download-path test runs a TEMP COPY of the script whose per-arch
+digest constants are string-replaced with the fixture's own sha256 (see
+``_script_with_fixture_digest``). The production script on disk is never modified and
+exposes no seam; the negative-control test runs the UNMODIFIED script to prove the
+pinned check still aborts a non-matching artifact before extraction.
 """
 from __future__ import annotations
 
 import gzip
 import hashlib
 import io
+import re
 import subprocess
 import tarfile
 from pathlib import Path
@@ -84,25 +95,37 @@ def _stub_dir_with_curl(tmp_path: Path, tarball: Path | None) -> Path:
     return d
 
 
+def _script_with_fixture_digest(dst_dir: Path, fixture_sha: str) -> Path:
+    """A temp COPY of the installer whose hardcoded per-arch SHA-256 constants are
+    string-replaced with ``fixture_sha`` — the ONLY way to make the pinned digest
+    check pass offline without a production override. Both arch constants are patched
+    so the copy verifies whichever arch the test host resolves via ``uname -m``. The
+    production script on disk is untouched and exposes no env/argv seam."""
+    text = _SCRIPT.read_text()
+    patched, n = re.subn(
+        r'(CURSOR_SHA256_(?:arm64|x64)=")[0-9a-fA-F]{64}(")',
+        rf"\g<1>{fixture_sha}\g<2>",
+        text,
+    )
+    assert n == 2, f"expected to patch 2 pinned digest constants, patched {n}"
+    copy = dst_dir / "install_cursor_agent.sh"
+    copy.write_text(patched)
+    copy.chmod(0o755)
+    return copy
+
+
 def _run(
-    home: Path, stub_bin: Path, sha256_override: str | None = None
+    home: Path, stub_bin: Path, script: Path = _SCRIPT
 ) -> subprocess.CompletedProcess:
-    env = {"PATH": f"{stub_bin}:/usr/bin:/bin:/usr/local/bin", "HOME": str(home)}
-    if sha256_override is not None:
-        # The pinned per-arch digest is the REAL CDN artifact's; an offline fixture
-        # can't match it, so hand the installer this fixture's own sha256 through its
-        # test-only seam. Verify-before-extract and the independent version check are
-        # untouched (see the script comment on CURSOR_SHA256_OVERRIDE).
-        env["CURSOR_SHA256_OVERRIDE"] = sha256_override
     return subprocess.run(
-        ["bash", str(_SCRIPT)],
+        ["bash", str(script)],
         capture_output=True,
         text=True,
         # Belt-and-suspenders: the -o-honouring curl stub already keeps binary out
         # of the stream, but decode defensively so any stray bytes surface as a
         # readable assertion instead of an UnicodeDecodeError from the harness.
         errors="replace",
-        env=env,
+        env={"PATH": f"{stub_bin}:/usr/bin:/bin:/usr/local/bin", "HOME": str(home)},
     )
 
 
@@ -126,10 +149,9 @@ def test_executable_but_wrong_version_target_is_not_linked(tmp_path: Path):
     tarball = tmp_path / "pkg.tar.gz"
     _make_good_tarball(tarball)
     fixture_sha = hashlib.sha256(tarball.read_bytes()).hexdigest()
+    script = _script_with_fixture_digest(tmp_path, fixture_sha)
 
-    proc = _run(
-        home, _stub_dir_with_curl(tmp_path, tarball), sha256_override=fixture_sha
-    )
+    proc = _run(home, _stub_dir_with_curl(tmp_path, tarball), script=script)
 
     linked = _linked_version(home)
     assert linked != WRONG, (
@@ -144,6 +166,33 @@ def test_executable_but_wrong_version_target_is_not_linked(tmp_path: Path):
         + proc.stdout
         + proc.stderr
     )
+
+
+def test_wrong_digest_aborts_before_extract(tmp_path: Path):
+    """SECURITY: verify-before-extract fires on the UNMODIFIED production script. A
+    fetched artifact whose sha256 does not match the hardcoded per-arch pin must be
+    rejected BEFORE extraction — nothing extracted, no version dir published, symlink
+    never written — even though the fixture binary would report the pin on --version
+    (a spoof the digest check exists to stop). Run against ``_SCRIPT`` directly with
+    NO digest patch, proving the pin cannot be bypassed via env/argv/inherited state."""
+    home = tmp_path / "home"
+    tarball = tmp_path / "pkg.tar.gz"
+    _make_good_tarball(tarball)  # good binary, but its sha != the real pinned digest
+
+    proc = _run(home, _stub_dir_with_curl(tmp_path, tarball))  # unmodified script
+
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "sha256 mismatch" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+    # Zero version dirs published (the staging temp dir is trap-removed on abort) and
+    # no active symlink — the artifact was never extracted or linked.
+    versions = home / ".local/share/cursor-agent/versions"
+    published = (
+        [p for p in versions.iterdir() if not p.name.startswith(".")]
+        if versions.exists()
+        else []
+    )
+    assert published == [], f"artifact was extracted despite digest mismatch: {published}"
+    assert not (home / ".local/bin/cursor-agent").exists(), proc.stdout + proc.stderr
 
 
 def test_correct_version_target_is_reused_without_download(tmp_path: Path):
