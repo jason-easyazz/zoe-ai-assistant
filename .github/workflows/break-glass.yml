@@ -1,0 +1,281 @@
+# OWNER BREAK-GLASS — the recovery path for a required-check OUTAGE.
+#
+# THE FAILURE THIS EXISTS FOR (measured, 2026-07-27): a repo-wide Copilot outage
+# deadlocked every open PR, including the PR that carried the fix for the
+# deadlock. `enforce_admins: true` means not even the owner can merge past a
+# stuck required context, and this is a solo-owner repo with no second human to
+# escalate to. A gate that can permanently freeze `main` with no in-band recovery
+# is not a safe gate, however correct its enforcement is.
+#
+# WHAT IT ACTUALLY DOES — stated plainly, because a security control described
+# more narrowly than it behaves is a trap for whoever reads the description:
+#
+#   THIS OVERRIDES ANY NON-GREEN REQUIRED CONTEXT, INCLUDING A GENUINELY FAILING
+#   ONE. It does not — and cannot — distinguish "the check never reported because
+#   the vendor is down" from "the check ran and said no". A missing `validate` and
+#   a RED `validate` are both forced to success. `secret-scan` is in the covered
+#   set, so this can override a REAL secret-scan failure and merge a commit that
+#   the scanner flagged as containing a credential.
+#
+# That is a deliberate, audited, owner-emergency capability, not an oversight. The
+# alternative — excluding `secret-scan` — recreates the permanent freeze whenever
+# GitGuardian is the thing that is down, which is the failure this exists to fix.
+# Distinguishing "stuck" from "failing" would also be exactly the wrong place to
+# put cleverness: the whole point is a path that still works when the machinery
+# for deciding things is the machinery that is broken.
+#
+# The INTENDED use is an outage. Using it on a check that is red for a real reason
+# is a decision to merge known-bad code, and the audit trail is written so that
+# decision is permanently attributable.
+#
+# HOW IT IS KEPT HONEST:
+#   * ADMIN ONLY — the actor's permission is verified against the API, not
+#     inferred from being able to apply a label. `write` is not enough.
+#   * SINGLE USE — the label is removed after firing, so it is armed per head.
+#     A new push re-blocks and needs a fresh, deliberate re-application.
+#   * MINIMAL BLAST RADIUS — contexts that are already green are left untouched
+#     and reported as such; only non-green contexts are forced.
+#   * LOUD — every use posts a permanent audit comment naming the actor, the SHA,
+#     each forced context and ITS REAL STATE at the time, so a forced `failure` is
+#     visibly different from a forced `missing` in the record.
+#   * NOT A THREAD BYPASS — `required_conversation_resolution` is unaffected.
+#     Unresolved review threads still block the merge, and that is intentional:
+#     an outage cannot make a thread unresolvable.
+#   * NOT A PROTECTION BYPASS — it publishes check runs through the normal API.
+#     It cannot force-push, cannot merge, and cannot alter branch protection.
+#
+# TRIGGER: pull_request_target, so the PRIVILEGED workflow definition comes from
+# the base branch and cannot be redefined by the PR under review. No PR code is
+# checked out or executed here.
+name: break-glass
+
+on:
+  pull_request_target:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to break-glass"
+        required: true
+        type: string
+      reason:
+        description: "Why the normal gate cannot be satisfied (recorded in the audit trail)"
+        required: true
+        type: string
+
+# Declared per JOB, not here. `checks: write` is the capability to satisfy the
+# merge gate, so the repo-wide rule is that it is never granted at workflow level
+# — see tests/unit/test_required_gate_workflows.py.
+permissions:
+  contents: read
+
+concurrency:
+  group: break-glass-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  break-glass:
+    # Only fire for the break-glass label itself — this workflow would otherwise
+    # run on every label added to every PR.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'break-glass'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Publishing the substitute contexts — the whole point of this workflow.
+      checks: write
+      # Reading the PR + its check state, and writing the audit comment / removing
+      # the label. `issues: write` is what covers comments and labels on a PR.
+      pull-requests: write
+      issues: write
+      contents: read
+    steps:
+      - name: Force the required contexts, audited
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Must match branch protection's required contexts EXACTLY. Kept as a
+            // literal rather than read from the protection API on purpose: reading
+            // it needs an admin token this workflow deliberately does not have, and
+            // a hardcoded list is reviewable in the diff. If you change branch
+            // protection, change this line in the same PR.
+            // NOT `voice-gate`: that check is INFORMATIONAL, not branch-protected
+            // (descoped 2026-07-31), so there is nothing about it to override —
+            // and overriding a check nobody is blocked on would only add noise to
+            // the audit trail.
+            const REQUIRED = ['validate', 'secret-scan'];
+            const LABEL = 'break-glass';
+            const base = { owner: context.repo.owner, repo: context.repo.repo };
+
+            const num = context.eventName === 'workflow_dispatch'
+              ? Number(context.payload.inputs.pr)
+              : context.payload.pull_request.number;
+            const reason = context.eventName === 'workflow_dispatch'
+              ? context.payload.inputs.reason
+              : `\`${LABEL}\` label applied (no reason field on the label path — state it in a reply)`;
+            const actor = context.actor;
+
+            const pr = (await github.rest.pulls.get({ ...base, pull_number: num })).data;
+            const sha = pr.head.sha;
+
+            // ---- 1. ADMIN ONLY -------------------------------------------------
+            // Applying a label needs only `write`. Break-glass needs `admin`, so
+            // verify it directly. On the label path a non-admin's label is also
+            // STRIPPED, so a failed attempt leaves no armed state behind.
+            const perm = (await github.rest.repos.getCollaboratorPermissionLevel({
+              ...base, username: actor })).data.permission;
+            if (perm !== 'admin') {
+              if (context.eventName !== 'workflow_dispatch') {
+                await github.rest.issues.removeLabel({ ...base, issue_number: num, name: LABEL })
+                  .catch(() => {});
+              }
+              await github.rest.issues.createComment({ ...base, issue_number: num,
+                body: `⛔ **break-glass REFUSED** — @${actor} has \`${perm}\` permission; ` +
+                      `break-glass requires \`admin\`. Nothing was overridden.` });
+              core.setFailed(`break-glass requires admin; ${actor} has ${perm}`);
+              return;
+            }
+
+            // ---- 2. Force every NON-GREEN required context ----------------------
+            // Note what this does and does not discriminate: a context already
+            // green is left alone (minimal blast radius), but everything else is
+            // forced regardless of WHY it is not green. A `missing` context and a
+            // `failure` context are both overridden — see the header. The real
+            // state is captured per context and written into the audit trail, so
+            // "I overrode an outage" and "I overrode a red check" are permanently
+            // distinguishable in the record even though the mechanism is the same.
+            const runs = await github.paginate(github.rest.checks.listForRef, {
+              ...base, ref: sha, per_page: 100 });
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              ...base, ref: sha, per_page: 100 });
+
+            // Newest run per name wins — an old success must not stand in for a
+            // current failure (same rule the gate uses).
+            const ts = (c) => {
+              const t = Date.parse(c.completed_at || c.started_at || '');
+              return Number.isNaN(t) ? -1 : t;
+            };
+            const stateOf = (name) => {
+              const mine = runs.filter(c => c.name === name);
+              if (mine.length) {
+                const newest = mine.reduce((a, b) => (ts(b) >= ts(a) ? b : a));
+                return newest.status === 'completed' ? (newest.conclusion || 'completed')
+                                                     : newest.status;
+              }
+              const st = statuses.filter(s => s.context === name);
+              return st.length ? st[0].state : 'missing';
+            };
+
+            // ---- 2b. REVALIDATE THE HEAD, immediately before writing anything ----
+            // The head can move between the opening `pulls.get` and here (a push
+            // lands, or an agent updates the branch). Everything above was read for
+            // `sha`, and the substitute checks are about to be published AGAINST
+            // `sha` — so on a moved head the override would land on a commit nobody
+            // is merging, the CURRENT head would stay blocked, and the single-use
+            // label would be consumed anyway. The audit trail would then record an
+            // override that did nothing, which is worse than no override at all:
+            // the operator believes they are unblocked and they are not.
+            //
+            // ABORT rather than retarget. Publishing against the NEW head would be
+            // overriding checks nobody has looked at — the state was read for the
+            // old one. Aborting leaves the label in place, so the workflow simply
+            // re-runs on the next event with fresh reads, and the owner keeps their
+            // escape hatch. Fail-closed on enforcement, recoverable for the owner.
+            const fresh = await github.rest.pulls.get({ ...base, pull_number: num })
+              .then(r => r.data).catch(() => null);
+            if (!fresh || fresh.head.sha !== sha) {
+              const now = fresh ? fresh.head.sha : 'unreadable';
+              await github.rest.issues.createComment({ ...base, issue_number: num,
+                body: `⏸️ **break-glass ABORTED — the head moved.**\n\n` +
+                      `Read state for \`${sha.slice(0, 8)}\`, but the head is now ` +
+                      `\`${String(now).slice(0, 8)}\`. Nothing was overridden, and the ` +
+                      `\`${LABEL}\` label has been LEFT IN PLACE so the override is not ` +
+                      `consumed for a commit nobody is merging.\n\n` +
+                      `Re-apply the label (or push again) to retry against the current head.` });
+              core.setFailed(`break-glass aborted: head moved ${sha} -> ${now}; label not consumed`);
+              return;
+            }
+
+            const GREEN = ['success', 'neutral', 'skipped'];
+            const forced = [], untouched = [];
+            for (const name of REQUIRED) {
+              const state = stateOf(name);
+              if (GREEN.includes(state)) { untouched.push(`${name} (\`${state}\`)`); continue; }
+              await github.rest.checks.create({
+                ...base, name, head_sha: sha, status: 'completed', conclusion: 'success',
+                output: {
+                  title: `BREAK-GLASS override by @${actor}`,
+                  summary: `This context was force-published by the break-glass workflow.\n\n` +
+                           `* Real state at override time: \`${state}\`\n` +
+                           `* Requested by: @${actor} (verified \`admin\`)\n` +
+                           `* Reason: ${reason}\n\n` +
+                           `This is NOT a passing check. It is an audited admin override ` +
+                           `of a required context that was not green. Note the real state ` +
+                           `above: if it says \`failure\`, this check RAN AND FAILED and ` +
+                           `the failure was deliberately overridden.`,
+                },
+              });
+              forced.push(`${name} (was \`${state}\`)`);
+            }
+
+            // ---- 3. Disarm — but only if the override is still for the live head -
+            // The pre-write revalidation above narrows the race; it cannot close it,
+            // because the checks are published one API call at a time and a push can
+            // land between them. GitHub offers no compare-and-swap on a check run.
+            //
+            // So re-read once more, AFTER publishing, and let the head decide whether
+            // to spend the label. If it moved, the substitute checks are stranded on
+            // a superseded commit (harmless — nobody merges it) but the CURRENT head
+            // is still blocked, so consuming the single-use label would leave the
+            // owner with a spent escape hatch and a PR that is no better off.
+            // Leaving it armed is strictly safer: the label is idempotent, and a
+            // stale published check can never make a newer head mergeable.
+            const after = await github.rest.pulls.get({ ...base, pull_number: num })
+              .then(r => r.data).catch(() => null);
+            const headStillCurrent = !!after && after.head.sha === sha;
+            if (context.eventName !== 'workflow_dispatch' && headStillCurrent) {
+              await github.rest.issues.removeLabel({ ...base, issue_number: num, name: LABEL })
+                .catch(() => {});
+            }
+            // Note for whoever reads this next: break-glass is NOT re-triggered by a
+            // push (its only PR trigger is `labeled`), so an armed label does not
+            // self-retry. Removing and re-applying it — or a manual dispatch — is the
+            // retry. The audit comment below says so rather than leaving the operator
+            // to infer it.
+
+            // ---- 4. Permanent audit trail --------------------------------------
+            const body = [
+              `🔓 **BREAK-GLASS used on \`${sha.slice(0, 8)}\`**`,
+              ``,
+              `| field | value |`,
+              `|---|---|`,
+              `| actor | @${actor} (verified \`admin\`) |`,
+              `| head | \`${sha}\` |`,
+              `| reason | ${reason} |`,
+              `| forced | ${forced.length ? forced.join(', ') : '_none — every required context was already green_'} |`,
+              `| untouched | ${untouched.length ? untouched.join(', ') : '_none_'} |`,
+              ``,
+              ...(headStillCurrent
+                ? [`The \`${LABEL}\` label has been removed — this override is single-use and`,
+                   `applies to this head commit only. A new push re-blocks normally.`]
+                : [`⚠️ **The head moved WHILE these checks were being published**, so the`,
+                   `override landed on \`${sha.slice(0, 8)}\` and the current head is still`,
+                   `blocked. The \`${LABEL}\` label was LEFT IN PLACE so it is not spent for a`,
+                   `commit nobody is merging — but note break-glass only triggers on \`labeled\`,`,
+                   `so it does NOT retry by itself: remove and re-apply the label (or run the`,
+                   `workflow manually) to publish for the current head.`]),
+              ``,
+              `Unresolved review threads are NOT bypassed by this override.`,
+              ``,
+              `**Scope of this override:** every non-green required context above was forced,`,
+              `regardless of why it was not green. A \`was \\\`failure\\\`\` entry means that`,
+              `check RAN AND FAILED and the failure was overridden — including \`secret-scan\`,`,
+              `which means a commit the scanner flagged may have been merged. This capability`,
+              `is deliberate and owner-only; the intended use is a vendor/runner OUTAGE.`,
+              ``,
+              `Normal enforcement is unchanged. If a required context is failing for a`,
+              `REAL reason, the fix is to fix the code.`,
+            ].join('\n');
+            await github.rest.issues.createComment({ ...base, issue_number: num, body });
+            core.notice(`break-glass: forced [${forced.join(', ') || 'nothing'}] on ${sha} for @${actor}`);

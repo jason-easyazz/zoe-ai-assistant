@@ -340,6 +340,60 @@ EMPTY_SUMMARY = {"n_samples": 0, "ok_rate": 0.0, "ok": 0, "fail": 0,
                  "verdicts": {}, "medians_ms": {}}
 
 
+def service_revision(service_dir: Any) -> dict[str, Any] | None:
+    """Git identity of the tree this probe actually EXERCISED.
+
+    The artifact is evidence, and evidence must name what it is evidence FOR.
+    Without this, a fresh passing run against `main` is indistinguishable from one
+    against the PR under review, so the PR gate would accept the wrong code's
+    result and clear every voice PR for the whole freshness window. Records the
+    commit, the tree sha, and whether the worktree was DIRTY — a dirty tree is
+    reported honestly and `voice_gate_check.py --expect-revision` refuses it,
+    because an uncommitted tree cannot be attributed to any commit.
+
+    Returns None when the revision cannot be determined (no service dir, not a git
+    checkout, git unavailable). The gate treats a missing revision as unattributed
+    and blocks whenever it was asked to bind one — never as a pass."""
+    if not service_dir:
+        return None
+    repo = Path(service_dir)
+    if not repo.exists():
+        return None
+
+    def _git(*a: str) -> str | None:
+        try:
+            proc = subprocess.run(["git", "-C", str(repo), *a],
+                                  capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return proc.stdout.strip() if proc.returncode == 0 else None
+
+    commit = _git("rev-parse", "HEAD")
+    if not commit:
+        return None
+    # `status --porcelain` covers the whole checkout, not just services/zoe-data:
+    # an uncommitted edit anywhere in the tree breaks attribution to the commit.
+    #
+    # FAIL CLOSED ON AN UNREADABLE STATUS. `_git` returns None both for "git said
+    # nothing" and for "git failed" (unreadable index, a bad inherited
+    # GIT_INDEX_FILE, a permissions problem), and `bool(None)` is False — so a
+    # failed cleanliness check used to record the tree as CLEAN. That is a real
+    # fail-open in the revision binding: cleanliness was never established, yet a
+    # matching commit would clear `--expect-revision`. Unknown is not clean.
+    status = _git("status", "--porcelain")
+    clean_verified = status is not None
+    return {
+        "commit": commit,
+        "tree": _git("rev-parse", "HEAD^{tree}"),
+        "dirty": True if not clean_verified else bool(status),
+        # Distinguishes "we looked and it was dirty" from "we could not look".
+        # Both block, but only one of them is a repo state the operator can fix
+        # by committing, so the gate's message should not have to guess.
+        "clean_verified": clean_verified,
+        "service_dir": str(repo),
+    }
+
+
 def emit_result(args, *, status: str, summary: dict[str, Any],
                 said_vs_did: list[str], speed_deltas: dict[str, Any],
                 baseline: dict[str, Any], reason: str = "") -> dict[str, Any]:
@@ -371,6 +425,10 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         "said_vs_did_regressions": said_vs_did,
         "per_stage_speed_deltas": speed_deltas,
         "baseline_ref": baseline_ref,
+        # WHAT CODE THIS IS EVIDENCE FOR. Read by voice_gate_check.py
+        # --expect-revision (the PR gate). getattr: emit_result is also called
+        # with lightweight arg objects that carry no service_dir.
+        "revision": service_revision(getattr(args, "service_dir", None)),
         "summary": summary,                     # back-compat: n_samples / ok_rate / medians_ms
         "non_pass_streak": streak,              # consecutive runs with status != "pass"
         "non_pass_alert_after": alert_after,

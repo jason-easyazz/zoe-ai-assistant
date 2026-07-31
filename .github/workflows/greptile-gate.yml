@@ -1,39 +1,50 @@
-# Greptile is the LAST reviewer, and this workflow is what enforces that.
+# Greptile is ADVISORY. This workflow is a COST CONTROLLER, not a merge gate.
 #
-# Greptile is filtered (dashboard) to only review PRs carrying the `greptile` label.
-# Without the label it ignores the PR entirely and costs nothing. This job adds the
-# label only once the cheap tier has finished, so Greptile's single review lands on a
-# final, up-to-date head with no outstanding findings.
+# WHAT CHANGED AND WHY (the re-tiering, 2026-07-31):
+# Greptile is a non-deterministic SaaS reviewer. `Greptile Review` WAS a REQUIRED
+# status check in branch protection until 2026-07-31, when it was DEMOTED to
+# advisory as part of this work — a merge gate that depends on a third-party
+# service we do not control is a merge gate that a vendor outage can freeze.
+# Around that requirement this workflow had grown the machinery a required SaaS
+# gate implies: cross-PR shared-SHA coordination, Copilot bounded-grace summons
+# with forgery-resistant markers, a full SHA-revalidation lifecycle, and a
+# `checksOk` term reading an EMPTY `REQUIRED_CHECKS` list — vacuously true, so the
+# condition it looked like it enforced was enforcing nothing at all. ~573 lines of
+# inline JavaScript whose only CI coverage was actionlint, and the source of an
+# 11-round fail-open cascade in review.
 #
-# WHY THAT ORDERING IS LOAD-BEARING (learned the hard way, 2026-07-26):
-# Greptile deduplicates by PR diff. If it reviews early and `strict` then forces a
-# branch update, it correctly refuses to re-review the unchanged diff — leaving the
-# required check stranded on the previous commit and the PR permanently unmergeable.
-# Reviewing once, last, on an already-current head avoids that entirely, and drops the
-# cost from the 3.6 reviews/PR measured in July to one.
+# The merge gate is now DETERMINISTIC and locally runnable — `validate`,
+# `secret-scan`, `voice-gate` — and semantic review is the cross-vendor diff
+# review (flat-rate, in-house). Greptile stays as an advisory reviewer for
+# high-risk changes. See AGENTS.md "Review pipeline" for the full tiering.
+#
+# WHAT THIS FILE STILL DOES, AND WHY IT IS WORTH KEEPING:
+# Greptile is dashboard-filtered to PRs carrying the `greptile` label, so without
+# the label it ignores the PR and costs nothing. Applying that label only once a
+# PR is settled — up to date with `main` and with no unresolved threads — is what
+# keeps Greptile's billed review landing ONCE, on a final head. That ordering is
+# still load-bearing and still measured: Greptile dedups by PR diff, so a review
+# on an early head followed by a `strict` branch update means it correctly
+# refuses to re-review, and the spend bought nothing. This is the cheapest form
+# of that control, with nothing left that pretends to gate a merge.
 name: greptile-gate
 
 on:
   check_suite:
     types: [completed]
-  pull_request_review:
-    types: [submitted]
-  # ready_for_review is not optional: if every cheap review finishes while the PR is
-  # still a draft, neither event above fires again when it is marked ready, and the
-  # gate would never run for that PR at all.
+  # ready_for_review is not optional: if the cheap tier finishes while the PR is
+  # still a draft, no other event fires when it is marked ready, and the gate
+  # would never run for that PR at all.
   pull_request:
     types: [ready_for_review, synchronize, opened]
   # NOTE: thread-resolution has NO workflow trigger. `pull_request_review_thread`
   # is a real webhook event but NOT a valid `on:` event — with it present the file
   # failed GitHub's parser and the workflow never executed at all (every push run
-  # was a zero-job parse failure; actionlint catches it, PyYAML does not). Resolving
-  # the last thread is instead picked up by the schedule below, worst case ~30min
-  # later — slower than an event, but a gate that runs slowly beats one that never
-  # parses.
-  # The Codex grace period is only evaluated when this workflow RUNS. Without a timer,
-  # a silent Codex plus no other activity means the gate never wakes to notice the grace
-  # elapsed — the bounded wait added to fix a deadlock would become one. This is the
-  # wake-up for every wait in this file that is not event-driven.
+  # was a zero-job parse failure; actionlint catches it, PyYAML does not).
+  # Resolving the last thread is picked up by the schedule below instead, worst
+  # case ~30min later. Slower than an event, but a gate that runs slowly beats one
+  # that never parses. This is also the only wake-up for anything here that is not
+  # event-driven.
   schedule:
     - cron: '*/30 * * * *'
   workflow_dispatch:
@@ -44,43 +55,31 @@ permissions:
   checks: read
 
 concurrency:
-  # Deliberately GLOBAL, not per-PR. This job sweeps every open PR, and on check_suite
-  # events there is no `pull_request.number` to key on — a run_id fallback is unique per
-  # run and would give no protection whatsoever. Serialising the workflow is correct.
+  # Deliberately GLOBAL, not per-PR. This job sweeps every open PR, and on
+  # check_suite events there is no `pull_request.number` to key on — a run_id
+  # fallback is unique per run and would give no protection whatsoever.
   group: greptile-gate
   cancel-in-progress: false
 
 jobs:
-  label-when-others-pass:
+  label-when-settled:
     # check_suite fires for EVERY suite in the repo, including pushes to main —
-    # and this job sweeps all open PRs, so suites with no associated PR would
-    # burn API budget for nothing (Copilot). Skip those. Trade-off, stated: a
-    # main-push suite correlates with a merge that puts other PRs BEHIND, so
-    # skipping it delays behind-ness revocation by up to one schedule tick
-    # (30min) — acceptable, the label self-corrects and Greptile ignores drafts.
-    # Note check_suite.pull_requests omits fork PRs; this repo works from
-    # same-repo branches, where it is populated.
+    # and this job sweeps all open PRs, so suites with no associated PR would burn
+    # API budget for nothing. Skip those. Trade-off, stated: a main-push suite
+    # correlates with a merge that puts other PRs BEHIND, so skipping it delays
+    # behind-ness detection by up to one schedule tick (30min) — acceptable, the
+    # label self-corrects and Greptile ignores drafts. Note check_suite.pull_requests
+    # omits fork PRs; this repo works from same-repo branches, where it is populated.
     if: github.event_name != 'check_suite' || github.event.check_suite.pull_requests[0] != null
     runs-on: ubuntu-latest
     steps:
-      - name: Add the greptile label once the cheap tier is done
+      - name: Label + summon Greptile once a PR is settled
         uses: actions/github-script@v7
         with:
           script: |
             const LABEL = 'greptile';
-            const REQUIRED_CHECKS = [];
-            // Max Greptile summons per head before the gate stops asking (both the
-            // handed-off and fresh-handoff branches enforce it).
+            // Max Greptile summons per head before the gate stops asking.
             const MAX_SUMMONS = 3;
-            const CHECK_DONE = ['success', 'neutral', 'skipped'];
-            const COPILOT = 'copilot-pull-request-reviewer';
-            const CODEX = 'chatgpt-codex-connector';
-            // Codex is summoned and WAITED FOR, but with a bound. Requiring it outright
-            // would stall the routine tier (AGENTS.md: local review + Copilot); not waiting
-            // at all lets Greptile run concurrently with it, so a Codex finding lands after
-            // the credit is already spent. A bounded wait satisfies both: Greptile really is
-            // last when Codex participates, and an absent Codex cannot deadlock the gate.
-            const CODEX_GRACE_MIN = 20;
 
             const ok = async (label, fn) => {
               try { return await fn(); }
@@ -95,9 +94,9 @@ jobs:
               if (pr.draft) continue;
               const base = { owner: context.repo.owner, repo: context.repo.repo };
 
-              // Every list is PAGINATED. A long-lived PR exceeds 100 comments/threads/checks,
-              // and a truncated list silently reads as "nothing outstanding" — the exact
-              // false-clear this gate exists to prevent.
+              // Every list is PAGINATED. A long-lived PR exceeds 100 comments or
+              // threads, and a truncated list silently reads as "nothing
+              // outstanding" — the exact false-clear this ordering exists to avoid.
               const comments = await ok(`PR #${pr.number} comments`, () =>
                 github.paginate(github.rest.issues.listComments, {
                 ...base, issue_number: pr.number, per_page: 100,
@@ -105,15 +104,13 @@ jobs:
               if (!comments) { core.info(`PR #${pr.number}: could not read comments — holding`); continue; }
 
               const MARK = '<!-- greptile-gate:labelled:';
-              // TRUST, not presence. This repo is PUBLIC, so anyone can post a comment
-              // containing the marker string. An unfiltered match lets a stranger forge a
-              // handoff — making the gate believe a PR was already cleared, or pinning it to
-              // a SHA of their choosing.
-              // ONLY this workflow's own bot. author_association was tried and is wrong:
-              // MEMBER and COLLABORATOR do not imply write permission, so an org member
-              // with read-only access could forge a handoff marker. There is no legitimate
-              // case for a human-authored marker either — the workflow is the only thing
-              // that writes them — so the narrowest possible rule is also the correct one.
+              // TRUST, not presence. This repo is PUBLIC, so anyone can post a
+              // comment containing the marker string. An unfiltered match lets a
+              // stranger forge a handoff — making the gate believe a PR was already
+              // cleared, or pinning it to a SHA of their choosing. ONLY this
+              // workflow's own bot: author_association was tried and is wrong, since
+              // MEMBER and COLLABORATOR do not imply write permission. There is no
+              // legitimate human-authored marker either.
               const trusted = (c) =>
                 c.user?.login === 'github-actions[bot]' && c.user?.type === 'Bot';
               // Explicit chronology: "newest marker wins" must not lean on the REST
@@ -124,125 +121,64 @@ jobs:
               const marks = comments.filter(c => c.body?.includes(MARK) && trusted(c))
                                     .sort(byCreated);
 
-              // ONE reader for EVERY gate condition, called twice: once to decide, once to
-              // revalidate immediately before acting. It previously hand-copied a SUBSET of
-              // the conditions into the revalidation block, and the subset drifted — twice.
-              // Round 4 added condition revalidation but copied only SHA/behindness/threads,
-              // so a check that re-ran red or a review submitted during the sweep still got
-              // the label. Enumerating conditions in two places is the bug; there is now one
-              // place, so the two cannot disagree.
-              // Returns null if ANY read failed — an unreadable condition is never a pass.
-              const readConditions = async (num, sha, baseRef) => {
-                const cmp = await ok(`PR #${num} compare`, () =>
-                  github.rest.repos.compareCommits({ ...base, base: baseRef, head: sha })
-                    .then(r => r.data));
-                if (!cmp) return null;
-
-                // Kept as an extension point for future cheap-tier required checks.
-                const runs = REQUIRED_CHECKS.length
-                  ? await ok(`PR #${num} check runs`, () =>
-                      github.paginate(github.rest.checks.listForRef, {
-                        ...base, ref: sha, per_page: 100,
-                      }))
-                  : [];
-                if (!runs) return null;
-                const byName = new Map();
-                for (const c of runs) {
-                  if (!byName.has(c.name)) byName.set(c.name, []);
-                  byName.get(c.name).push(c);
-                }
-                // A run only has a meaningful `conclusion` once `status === 'completed'`, and
-                // sorting on started_at alone lets a queued run with a null timestamp lose to
-                // an older completed one — either way an OLD success stands in for a NEW run.
-                const ts = (c) => {
-                  const t = Date.parse(c.completed_at || c.started_at || '');
-                  return Number.isNaN(t) ? -1 : t;
-                };
-                const checksOk = REQUIRED_CHECKS.every((n) => {
-                  const all = byName.get(n) || [];
-                  if (!all.length) return false;                              // never ran
-                  if (all.some(c => c.status !== 'completed')) return false;  // still in flight
-                  const newest = all.reduce((a, b) => (ts(b) >= ts(a) ? b : a));
-                  return CHECK_DONE.includes(newest.conclusion);
-                });
-
-                const reviews = await ok(`PR #${num} reviews`, () =>
-                  github.paginate(github.rest.pulls.listReviews, {
-                    ...base, pull_number: num, per_page: 100,
-                  }));
-                if (!reviews) return null;
-                // PENDING is not submitted — counting it treats a review that has not
-                // happened as a pass.
-                const reviewedHead = new Set(
-                  reviews.filter(r => r.commit_id === sha &&
-                                      ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED'].includes(r.state))
-                         .map(r => (r.user?.login || '').replace(/\[bot\]$/, ''))
-                );
-
-                // Paginate: `first: 100` silently truncates, and a truncated page reads as
-                // "no unresolved threads".
-                let unresolved = 0, cursor = null;
-                do {
-                  const q = await ok(`PR #${num} threads`, () => github.graphql(`
-                    query($owner:String!,$repo:String!,$num:Int!,$cursor:String){
-                      repository(owner:$owner,name:$repo){
-                        pullRequest(number:$num){
-                          reviewThreads(first:100, after:$cursor){
-                            pageInfo{ hasNextPage endCursor } nodes{ isResolved } } } } }`,
-                    { owner: base.owner, repo: base.repo, num, cursor }));
-                  if (!q) return null;
-                  const t = q.repository.pullRequest.reviewThreads;
-                  unresolved += t.nodes.filter(n => !n.isResolved).length;
-                  cursor = t.pageInfo.hasNextPage ? t.pageInfo.endCursor : null;
-                } while (cursor);
-
-                return { upToDate: cmp.behind_by === 0, checksOk, reviewedHead, unresolved };
-              };
-
-              // Refetch BEFORE anything reads a SHA. `pulls.list` was fetched once at the top
-              // of the sweep, so by the time this PR is processed its head may have moved —
-              // and every downstream decision keyed on the stale value: `alreadyHandedOff`
-              // would compare the marker against an old SHA (skipping both stale-label
-              // cleanup and regression revocation while the label still sits on a NEWER
-              // commit), conditions would be read for a commit nobody is merging, and the
-              // Codex marker would be written for the wrong head. One authoritative `sha`,
-              // established here, is used from this point on — `pr.head.sha` is not read again.
+              // Refetch BEFORE anything reads a SHA. `pulls.list` was fetched once at
+              // the top of the sweep, so by the time this PR is processed its head may
+              // have moved — and every downstream decision keys on it: the stale-label
+              // comparison, the summon marker, the handoff marker. One authoritative
+              // `sha`, established here; `pr.head.sha` is never read again. `labels`
+              // and `draft` come from here too — a stale label snapshot silently
+              // disables the stale-label repair path.
               const prFull = await ok(`PR #${pr.number} get`, () =>
                 github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
               if (!prFull) continue;
               const sha = prFull.head.sha;
               const baseRef = prFull.base.ref;
-              // Past this point `pr` (the one-time list snapshot) is valid ONLY for
-              // `.number`, which cannot change. Every mutable field comes from prFull.
-              // Fixing head.sha alone was not enough: `labels` was stale from the same
-              // object, which is worse, because a stale label snapshot silently disables
-              // BOTH repair paths — revocation only runs when alreadyHandedOff is true,
-              // and stale-label stripping only when isLabelled is true.
               if (prFull.draft) {
-                // The cheap `pr.draft` filter above avoids fetching for the common case,
-                // but the snapshot ages: a PR marked draft since the sweep started must not
-                // be labelled. (The opposite drift — draft in the list, ready now — is
-                // self-correcting; the schedule picks it up next pass.)
+                // The cheap `pr.draft` filter above avoids a fetch in the common case,
+                // but the snapshot ages: a PR marked draft since the sweep started must
+                // not be labelled. (The opposite drift — draft in the list, ready now —
+                // is self-correcting; the schedule picks it up next pass.)
                 core.info(`PR #${pr.number}: became a draft during the sweep — skipping`);
                 continue;
               }
 
+              // Behind-ness is MEASURED, not inferred from mergeable_state, which mixes
+              // concerns and can be `unknown` while GitHub computes it.
+              const cmp = await ok(`PR #${pr.number} compare`, () =>
+                github.rest.repos.compareCommits({ ...base, base: baseRef, head: sha })
+                  .then(r => r.data));
+              if (!cmp) { core.info(`PR #${pr.number}: could not compare — holding`); continue; }
+              const upToDate = cmp.behind_by === 0;
+
+              // Paginate: `first: 100` silently truncates, and a truncated page reads
+              // as "no unresolved threads".
+              let unresolved = 0, cursor = null, threadsOk = true;
+              do {
+                const q = await ok(`PR #${pr.number} threads`, () => github.graphql(`
+                  query($owner:String!,$repo:String!,$num:Int!,$cursor:String){
+                    repository(owner:$owner,name:$repo){
+                      pullRequest(number:$num){
+                        reviewThreads(first:100, after:$cursor){
+                          pageInfo{ hasNextPage endCursor } nodes{ isResolved } } } } }`,
+                  { owner: base.owner, repo: base.repo, num: pr.number, cursor }));
+                if (!q) { threadsOk = false; break; }
+                const t = q.repository.pullRequest.reviewThreads;
+                unresolved += t.nodes.filter(n => !n.isResolved).length;
+                cursor = t.pageInfo.hasNextPage ? t.pageInfo.endCursor : null;
+              } while (cursor);
+              if (!threadsOk) { core.info(`PR #${pr.number}: could not read threads — holding`); continue; }
+
               const labelledSha = marks.length
                 ? marks[marks.length - 1].body.split(MARK)[1].split('-->')[0].trim()
                 : null;
-
               const isLabelled = (prFull.labels || []).some(l => l.name === LABEL);
-              // A matching marker means the handoff happened on THIS head. Do not return
-              // early: conditions can regress on the same SHA (a thread opened, a check
-              // re-run failing, main moving ahead), and the label asserts "cheap tier
-              // green". Leaving it in place would keep asserting something untrue, so fall
-              // through, re-evaluate, and strip it below if it no longer holds.
               const alreadyHandedOff = isLabelled && labelledSha === sha;
 
               if (isLabelled && !alreadyHandedOff) {
-                // Stale or unknown provenance (applied by hand, or the comment was deleted):
-                // strip it so the PR re-qualifies rather than sitting inside Greptile's
-                // filter re-reviewing on every push.
+                // Stale (the head moved) or unknown provenance (applied by hand, or the
+                // marker comment was deleted). Strip it so the PR re-qualifies rather
+                // than sitting inside Greptile's filter and being re-reviewed — and
+                // re-billed — on every single push.
                 const r = await ok(`PR #${pr.number} removeLabel`, () =>
                   github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
                 if (!r) {
@@ -250,261 +186,97 @@ jobs:
                   continue;
                 }
                 core.info(`PR #${pr.number}: stale label removed — re-qualifying in this same pass`);
-                // Deliberately NO `continue`: fall through and re-evaluate now. Waiting for
-                // the next event would stall a PR that is otherwise ready, and there may not
-                // BE another event.
+                // Deliberately NO `continue`: fall through and re-evaluate now. Waiting
+                // for the next event would stall a PR that is otherwise ready, and there
+                // may not BE another event.
               }
 
-              // Behind-ness is MEASURED here (inside readConditions), not inferred from
-              // mergeable_state, which mixes concerns and can be `unknown` while GitHub computes.
-              const st = await readConditions(pr.number, sha, baseRef);
-              if (!st) { core.info(`PR #${pr.number}: could not read conditions — holding`); continue; }
-              const { upToDate, checksOk, reviewedHead, unresolved } = st;
+              // A run only has a meaningful `conclusion` once `status === 'completed'`.
+              // cancelled/timed_out/stale are infra deaths on an immutable head and must
+              // not suppress a re-summon forever; a completed success/failure is a real
+              // verdict and does. `skipped` is DEAD too: Greptile deliberately skips PRs
+              // over ~50 files, and counting that skip as LIVE strands the PR
+              // labeled-but-never-reviewed with the credit already spent. Re-summoning
+              // an oversized PR gains nothing but is harmless, and the ATTEMPTS are
+              // bounded by MAX_SUMMONS below.
+              const DEAD = ['cancelled', 'timed_out', 'stale', 'skipped'];
+              const liveGreptileRuns = () => ok(`PR #${pr.number} greptile check`, () =>
+                github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
+                  .then(rs => rs.filter(c => c.name === 'Greptile Review'
+                                          && !(c.status === 'completed' && DEAD.includes(c.conclusion))).length));
 
-              // Summon what we wait for; both are manual-trigger only.
-              // Copilot's marker is computed BEFORE the summon so the summon can be
-              // gated on its absence — the same only-once-per-head rule codex has.
-              // Without that gate, every sweep posted a fresh marker and the newest-
-              // marker rule reset the grace clock forever (Bugbot, High): the exact
-              // unbounded wait the grace was added to remove, rebuilt one commit later.
-              const copilotMark = `<!-- greptile-gate:copilot:${sha} -->`;
-              const copilotSummons = comments.filter(c => c.body?.includes(copilotMark) && trusted(c))
-                                             .sort(byCreated);
-              const copilotSummon = copilotSummons.length ? copilotSummons[copilotSummons.length - 1] : undefined;
-              const requested = new Set((prFull.requested_reviewers || [])
-                .map(r => (r.login || '').replace(/\[bot\]$/, '').toLowerCase()));
-              const copilotPending = requested.has('copilot') || requested.has(COPILOT);
-              if (!reviewedHead.has(COPILOT) && !copilotPending && !copilotSummon) {
-                // REST requestReviewers returns 200 and silently does NOTHING for Copilot
-                // — verified: requested_reviewers stayed empty afterwards. Copilot is a Bot
-                // node, so it must go through GraphQL requestReviews(botIds:). `userIds:`
-                // errors with "Could not resolve to User node".
-                //
-                // COPILOT_BOT_ID is Copilot's global Bot node id (verified 2026-07-27). It is
-                // not discoverable from this PR when Copilot is absent, which is exactly when
-                // we need it — so it is pinned. If GitHub ever changes it the mutation fails
-                // and the warning below names the cause rather than silently never summoning.
-                // SUMMON FIRST, marker only on SUCCESS (Greptile P1, twice): a grace
-                // anchor must attest that the summon actually happened — a marker that
-                // outlives a failed mutation (or a failed cleanup of one) eventually
-                // authorises handoff for a reviewer nobody requested. With the marker
-                // gated on mutation success, that class is closed outright. The chosen
-                // residual runs the SAFE direction: if the marker post chronically
-                // fails, each sweep re-summons (idempotent — GitHub drops or dedups
-                // the request) and the PR HOLDS, loudly, until a marker sticks. The
-                // !copilotSummon gate above still prevents the clock-reset loop: a
-                // marker is only ever posted while none exists for this head.
-                const COPILOT_BOT_ID = 'BOT_kgDOCnlnWA';
-                const r = await ok(`PR #${pr.number} request Copilot`, async () => {
-                  const q = await github.graphql(`
-                    query($owner:String!,$repo:String!,$num:Int!){
-                      repository(owner:$owner,name:$repo){ pullRequest(number:$num){ id } } }`,
-                    { owner: base.owner, repo: base.repo, num: pr.number });
-                  return github.graphql(`
-                    mutation($pr:ID!,$bot:ID!){
-                      requestReviews(input:{pullRequestId:$pr, botIds:[$bot], union:true}){
-                        pullRequest{ number } } }`,
-                    { pr: q.repository.pullRequest.id, bot: COPILOT_BOT_ID });
-                });
-                if (r) {
-                  core.info(`PR #${pr.number}: requested Copilot`);
-                  const marker = await ok(`PR #${pr.number} copilot marker`, () =>
-                    github.rest.issues.createComment({
-                      ...base, issue_number: pr.number,
-                      body: `Requested Copilot review.\n${copilotMark}`,
-                    }));
-                  if (!marker) core.warning(`PR #${pr.number}: copilot marker failed — will re-summon next sweep until one sticks (holds, never hands off unasked)`);
-                } else {
-                  core.warning(`PR #${pr.number}: could NOT request Copilot — no marker posted, no grace starts; retrying next sweep`);
+              // Summon bookkeeping, shared by both the handed-off and fresh-handoff
+              // paths. Debounce PER HEAD: Greptile takes real time to CREATE its check
+              // run after a summon, and a PR-wide match let the OLD head's summon
+              // suppress the NEW head's, leaving a fresh push unreviewed. The attempt
+              // CAP is separate from the debounce: a 10-minute recency rule has no
+              // limit, so an oversized PR would accrue a summon every ten minutes
+              // forever. A new head resets the count because the marker is sha-scoped.
+              const summonMark = `<!-- greptile-gate:summon:${sha} -->`;
+              const summonsForHead = comments.filter(c =>
+                trusted(c) && (c.body || '').includes(summonMark));
+              const recentSummon = summonsForHead.some(c =>
+                (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
+              const summonsExhausted = summonsForHead.length >= MAX_SUMMONS;
+
+              const summonGreptile = async (why) => {
+                const live = await liveGreptileRuns();
+                if (live === null) {
+                  // Fail-closed with an HONEST log: unreadable is not knowledge, so no
+                  // summon this sweep. Every later event and the 30-min schedule retry.
+                  core.warning(`PR #${pr.number}: could not read Greptile runs — retrying next sweep`);
+                  return;
                 }
-              }
-
-              const codexMark = `<!-- greptile-gate:codex:${sha} -->`;
-              // Same trust rule: a forged summon marker would suppress the real one and,
-              // once its timestamp aged past the grace, wave Greptile through early.
-              // NEWEST, not first. `find` returns the OLDEST match, so after a re-summon
-              // (or a retry following a failed label) a stale marker would set the grace
-              // clock and could read as elapsed while the latest @codex review is still
-              // inside its window. The handoff marker already takes the last match; these
-              // two must agree.
-              const codexSummons = comments.filter(c => c.body?.includes(codexMark) && trusted(c))
-                                            .sort(byCreated);
-              const codexSummon = codexSummons.length ? codexSummons[codexSummons.length - 1] : undefined;
-              if (!reviewedHead.has(CODEX) && !codexSummon) {
-                // Wrapped: an advisory summon must never abort the sweep for other PRs.
-                const r = await ok(`PR #${pr.number} summon Codex`, () =>
+                if (live !== 0) {
+                  core.info(`PR #${pr.number}: live Greptile run already exists for this head — no fresh summon`);
+                  return;
+                }
+                if (summonsExhausted) {
+                  core.warning(`PR #${pr.number}: Greptile summoned ${summonsForHead.length}x on this ` +
+                    `head with no live run — not asking again. Most likely the PR exceeds Greptile's ` +
+                    `~50-file skip limit (split it), or the account is out of credits.`);
+                  return;
+                }
+                if (recentSummon) {
+                  core.info(`PR #${pr.number}: a summon for this head is already in flight — debounced`);
+                  return;
+                }
+                const re = await ok(`PR #${pr.number} summon Greptile`, () =>
                   github.rest.issues.createComment({
-                    ...base, issue_number: pr.number, body: `@codex review\n${codexMark}`,
+                    ...base, issue_number: pr.number, body: `@greptileai review\n${summonMark}`,
                   }));
-                if (r) core.info(`PR #${pr.number}: summoned Codex`);
-              }
-
-              // Bounded wait for Codex: hold until it reviews this head, or until the grace
-              // period since we summoned has elapsed. Expressed as a function of a
-              // reviewedHead SET so the revalidation below can re-derive it from fresh data
-              // instead of reusing a frozen verdict — see the note at the revalidation.
-              const graceElapsed = codexSummon
-                ? (Date.now() - new Date(codexSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
-                : false;
-              const codexPasses = (rh) => rh.has(CODEX) || graceElapsed;
-              const codexOk = codexPasses(reviewedHead);
-
-              // Copilot gets the SAME bounded grace, for a failure mode observed live
-              // (#1573, 2026-07-27): after Copilot has reviewed earlier heads of a PR,
-              // GitHub silently drops further re-requests — the mutation succeeds,
-              // requested_reviewers stays empty, no review ever arrives — and a
-              // graceless required reviewer is an unbounded wait. Same trust rule,
-              // same newest-marker rule as codex.
-              const copilotGraceElapsed = copilotSummon
-                ? (Date.now() - new Date(copilotSummon.created_at)) / 60000 >= CODEX_GRACE_MIN
-                : false;
-              // A GENUINELY pending request (visible in requested_reviewers — rare,
-              // since GitHub usually drops it, which is the whole story here) means
-              // Copilot is actually coming: hold for it rather than waving the grace
-              // through (Codex P2). The grace covers the silent-drop case only.
-              const copilotPasses = (rh) => rh.has(COPILOT) || (copilotGraceElapsed && !copilotPending);
-              if (copilotPasses(reviewedHead) && !reviewedHead.has(COPILOT)) {
-                core.info(`PR #${pr.number}: Copilot grace elapsed — proceeding`);
-              }
-              if (codexOk && !reviewedHead.has(CODEX)) {
-                core.info(`PR #${pr.number}: Codex grace elapsed — proceeding`);
-              }
-
-              const copilotOk = copilotPasses(reviewedHead);
-              const qualifies = checksOk && copilotOk && codexOk && upToDate && unresolved === 0;
+                if (re) core.info(`PR #${pr.number}: summoned Greptile (${why})`);
+              };
 
               if (alreadyHandedOff) {
                 // Handed off, but is Greptile actually COMING? If the post-label summon
-                // failed (ok() swallows transient errors; the job can die between label
-                // and comment), the label+marker persist and no later sweep would ever
-                // re-summon — labeled-but-never-reviewed forever (Codex P1, #1577). A
-                // missing Greptile Review check-run for this head means the review has
-                // not started: re-post the summon. Idempotent once the review exists.
-                // (re-summon decision moved BELOW the fresh-conditions read — Codex:
-                // summoning before revalidating could spend a review on a head that
-                // has already regressed and is about to have its label revoked.)
-                // Only act on the label if the PR has REGRESSED — then the label is a
-                // false claim and must go; it will be re-applied once the condition clears.
-                // Re-read first: `qualifies` above was computed BEFORE the summon calls, and
-                // a check that went red or a thread opened in that window is exactly the
-                // regression this branch exists to catch. Deciding not to revoke from
-                // pre-summon data would leave the label asserting something already untrue.
-                const now = await readConditions(pr.number, sha, baseRef);
-                // DELIBERATELY fail-open here, and only here (both Bugbot and Copilot
-                // flagged it — the asymmetry is the design, not an oversight): on a
-                // transient read failure, a false REVOKE costs a full re-handoff cycle
-                // and puts the PR back through Greptile's filter (billed), while a
-                // false KEEP costs nothing — the label just holds the PR in the filter
-                // until the next sweep (≤30min) re-reads and revokes if real. Where
-                // null blocks LABELLING the asymmetry runs the other way: a false
-                // label spends the review this gate exists to protect.
-                if (!now) { core.info(`PR #${pr.number}: could not re-read conditions — leaving label as is`); continue; }
-                const stillOk = now.checksOk && copilotPasses(now.reviewedHead) &&
-                                codexPasses(now.reviewedHead) && now.upToDate && now.unresolved === 0;
-                if (stillOk) {
-                  // Still green: is Greptile actually COMING? A swallowed post-label
-                  // summon failure leaves label+marker with no review ever starting
-                  // (Codex P1); re-post the summon only now that the fresh read says
-                  // the handoff is still deserved. Idempotent once the review exists.
-                  // A LIVE run = pending, or completed without a dead-end conclusion.
-                  // A run that concluded cancelled/timed_out/stale is an infra death on
-                  // this immutable head and must not block a re-summon forever (Codex);
-                  // a completed failure/success is a real review verdict and does.
-                  // `skipped` is DEAD too: Greptile deliberately skips PRs over ~50
-                  // files, and counting that skip as LIVE blocks re-summons forever —
-                  // the PR sits labeled-but-never-reviewed with the credit already
-                  // spent. Treating it as DEAD re-summons instead. Caveat, accepted:
-                  // a genuinely >50-file PR gains nothing (Greptile just skips again),
-                  // but each retry is harmless and the ATTEMPTS are bounded by the
-                  // per-head MAX_SUMMONS cap below (the 10-minute debounce only
-                  // spaces them out), while NOT re-summoning strands EVERY skipped PR.
-                  const DEAD = ['cancelled', 'timed_out', 'stale', 'skipped'];
-                  const gLive = await ok(`PR #${pr.number} greptile check`, () =>
-                    github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
-                      .then(rs => rs.filter(c => c.name === 'Greptile Review'
-                                              && !(c.status === 'completed' && DEAD.includes(c.conclusion))).length));
-                  // Debounce: Greptile takes real time to CREATE its check run after a
-                  // summon; every event in that gap would re-enter this branch and post
-                  // another summon (Codex). A trusted summon comment younger than
-                  // 10 minutes means one is already in flight.
-                  // Debounce PER HEAD (Greptile P1): a PR-wide match let the OLD
-                  // head's summon suppress the NEW head's, leaving a fresh push
-                  // unreviewed for up to the debounce window. Gate-posted summons
-                  // carry a sha marker; only a fresh summon FOR THIS SHA debounces.
-                  const summonMark = `<!-- greptile-gate:summon:${sha} -->`;
-                  // Per-head summon ATTEMPTS, not just recency (Greptile P1): treating a
-                  // `skipped` run as DEAD makes every sweep eligible to re-summon, and a
-                  // 10-minute recency debounce has no attempt limit — an oversized PR
-                  // (Greptile silently skips >50 files) would accrue a summon every ten
-                  // minutes forever. Cap the attempts per head: after MAX_SUMMONS the
-                  // gate stops asking and says why, once, loudly. A new head resets the
-                  // count because the marker is sha-scoped.
-                  const summonsForHead = comments.filter(c =>
-                    trusted(c) && (c.body || '').includes(summonMark));
-                  const recentSummon = summonsForHead.some(c =>
-                    (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
-                  const summonsExhausted = summonsForHead.length >= MAX_SUMMONS;
-                  if (summonsExhausted && gLive === 0) {
-                    core.warning(`PR #${pr.number}: Greptile summoned ${summonsForHead.length}x on ` +
-                      `this head with no live run — not asking again. Most likely the PR exceeds ` +
-                      `Greptile's ~50-file skip limit (split it), or the account is out of credits.`);
-                  }
-                  if (gLive === null) {
-                    // Fail-closed with an HONEST log (Greptile P1: the old message
-                    // claimed a live run existed): unreadable is not knowledge, no
-                    // summon this sweep; every later event and the 30-min schedule
-                    // re-enter this branch and retry the read.
-                    core.warning(`PR #${pr.number}: could not read Greptile runs — retrying next sweep`);
-                  } else if (gLive === 0 && !recentSummon && !summonsExhausted) {
-                    const re = await ok(`PR #${pr.number} re-summon Greptile`, () =>
-                      github.rest.issues.createComment({
-                        ...base, issue_number: pr.number, body: `@greptileai review\n${summonMark}`,
-                      }));
-                    if (re) core.info(`PR #${pr.number}: handed off but no live Greptile run — re-summoned`);
-                  }
-                }
-                if (!stillOk) {
-                  const r = await ok(`PR #${pr.number} revoke label`, () =>
-                    github.rest.issues.removeLabel({ ...base, issue_number: pr.number, name: LABEL }));
-                  if (r) core.info(`PR #${pr.number}: regressed after handoff (checks=${now.checksOk} ` +
-                                   `copilot=${copilotPasses(now.reviewedHead)} codex=${codexPasses(now.reviewedHead)} ` +
-                                   `upToDate=${now.upToDate} unresolved=${now.unresolved}) — label revoked`);
-                }
+                // failed (ok() swallows transient errors; the job can die between the
+                // label and the comment), the label and marker persist and no later
+                // sweep would re-summon — labeled-but-never-reviewed forever. A missing
+                // live run for this head means the review never started.
+                await summonGreptile('handed off with no live run');
                 continue;
               }
 
-              if (!qualifies) {
-                core.info(`PR #${pr.number}: holding — checks=${checksOk} copilot=${copilotOk} ` +
-                          `codex=${codexOk} upToDate=${upToDate} unresolved=${unresolved}`);
+              // ADVISORY note on what is NOT checked here any more: this used to also
+              // require a Copilot review and a bounded Codex grace on the head. Both are
+              // gone. The Codex summon provably never worked — an `@codex` mention
+              // resolves against the COMMENTER, and this workflow comments as
+              // `github-actions[bot]`, which has no Codex account (measured across
+              // #1589: 7 mentions, 7 "not connected" replies; every real Codex review
+              // followed a PUSH). And with Greptile advisory, sequencing it behind other
+              // reviewers no longer protects a merge gate — only a bill.
+              if (!(upToDate && unresolved === 0)) {
+                core.info(`PR #${pr.number}: holding — upToDate=${upToDate} unresolved=${unresolved}`);
                 continue;
               }
 
-              // REVALIDATE immediately before acting, through the SAME reader — so every
-              // condition is re-checked, not the three that happened to get copied here.
-              // `pulls.list` was fetched at the top of the sweep, and the summon calls above
-              // take real time; a push, a red re-run, a new review or a new thread in that
-              // window would otherwise be labelled as green.
-              const st2 = await readConditions(pr.number, sha, baseRef);
-              if (!st2) { core.info(`PR #${pr.number}: could not re-read conditions — skipping this pass`); continue; }
-              // EVERY condition is re-derived, codex included. An earlier version froze
-              // codexOk on the claim that it only moves false->true for a fixed head. That
-              // claim is false: a review can be DISMISSED, which drops it back out of the
-              // submitted-review set. No condition here gets to be special.
-              const codexOk2 = codexPasses(st2.reviewedHead);
-              if (!(st2.checksOk && copilotPasses(st2.reviewedHead) && codexOk2 &&
-                    st2.upToDate && st2.unresolved === 0)) {
-                core.info(`PR #${pr.number}: conditions changed during the sweep ` +
-                          `(checks=${st2.checksOk} copilot=${copilotPasses(st2.reviewedHead)} ` +
-                          `codex=${codexOk2} upToDate=${st2.upToDate} unresolved=${st2.unresolved}) — skipping this pass`);
-                continue;
-              }
-
-              // Head check LAST, immediately before acting. GitHub offers no compare-and-swap,
-              // so a window between the final check and the write cannot be eliminated — only
-              // narrowed. Doing it here rather than before readConditions() shrinks it from
-              // "four API calls" to "one", and the residual is self-correcting: the marker
-              // embeds this SHA, so if the head moved the next sweep sees labelledSha !== sha
-              // and strips the label rather than leaving a false claim standing.
+              // Head check LAST, immediately before acting. GitHub offers no
+              // compare-and-swap, so the window between the final read and the write
+              // cannot be eliminated, only narrowed. The residual is self-correcting:
+              // the marker embeds this SHA, so if the head moved, the next sweep sees
+              // labelledSha !== sha and strips the label rather than leaving a false
+              // claim standing.
               const fresh = await ok(`PR #${pr.number} revalidate head`, () =>
                 github.rest.pulls.get({ ...base, pull_number: pr.number }).then(r => r.data));
               if (!fresh || fresh.head.sha !== sha) {
@@ -513,61 +285,27 @@ jobs:
               }
 
               // Marker FIRST, then the label. If the label went on first and the comment
-              // failed, the PR would sit inside Greptile's filter with no marker — and the
-              // marker-less branch above would strip it again next run, flapping.
+              // failed, the PR would sit inside Greptile's filter with no marker — and
+              // the marker-less branch above would strip it again next run, flapping.
               const marker = await ok(`PR #${pr.number} marker`, () =>
                 github.rest.issues.createComment({
                   ...base, issue_number: pr.number,
-                  body: `Handing off to Greptile — cheap tier green on \`${sha.slice(0, 8)}\`.\n${MARK}${sha} -->`,
+                  body: `Handing off to Greptile (advisory) — settled on \`${sha.slice(0, 8)}\`.\n${MARK}${sha} -->`,
                 }));
               if (!marker) { core.warning(`PR #${pr.number}: marker failed — not labelling`); continue; }
 
               const applied = await ok(`PR #${pr.number} addLabel`, () =>
                 github.rest.issues.addLabels({ ...base, issue_number: pr.number, labels: [LABEL] }));
-              if (applied) {
-                core.notice(`PR #${pr.number}: cheap tier green, branch current, threads clear — handing off to Greptile.`);
-                // MEASURED on the pipeline's first autonomous run (#1575, 2026-07-27):
-                // the label alone does NOT wake Greptile — 12 labeled minutes, no
-                // review. The label admits the PR through the dashboard filter; the
-                // summon is what starts the review.
-                // But NOT unconditionally (Codex): after a regress-then-clear cycle on
-                // the SAME sha, a Greptile run already exists for this head, and a
-                // fresh summon would bill a re-review of a reviewed diff. Same
-                // live-run rule as the handed-off branch.
-                // Same list as DEAD in the handed-off branch — `skipped` included,
-                // rationale (the >50-file skip) lives there.
-                const DEAD2 = ['cancelled', 'timed_out', 'stale', 'skipped'];
-                const gLive2 = await ok(`PR #${pr.number} greptile run check`, () =>
-                  github.paginate(github.rest.checks.listForRef, { ...base, ref: sha, per_page: 100 })
-                    .then(rs => rs.filter(c => c.name === 'Greptile Review'
-                                            && !(c.status === 'completed' && DEAD2.includes(c.conclusion))).length));
-                // Same debounce as the handed-off branch (Codex): a revoke-then-
-                // recover inside Greptile's check-creation gap would otherwise
-                // double-summon — gLive2 is 0 precisely while the first summon is
-                // still being processed.
-                const summonMark2 = `<!-- greptile-gate:summon:${sha} -->`;
-                const summonsForHead2 = comments.filter(c =>
-                  trusted(c) && (c.body || '').includes(summonMark2));
-                const recentSummon2 = summonsForHead2.some(c =>
-                  (Date.now() - new Date(c.created_at)) < 10 * 60 * 1000);
-                // The attempt cap belongs here too (Codex): a revoke-then-re-apply on
-                // the SAME sha — a thread opened and resolved — re-enters this branch,
-                // and without the cap an oversized PR resumes summoning forever from
-                // the fresh-handoff side after the handed-off side gave up.
-                const summonsExhausted2 = summonsForHead2.length >= MAX_SUMMONS;
-                if (gLive2 === null) {
-                  core.warning(`PR #${pr.number}: could not read Greptile runs — label applied, summon retries next sweep`);
-                } else if (summonsExhausted2 && gLive2 === 0) {
-                  core.warning(`PR #${pr.number}: Greptile summoned ${summonsForHead2.length}x on this head ` +
-                    `with no live run — label applied, not asking again (>50-file skip limit, or no credits).`);
-                } else if (gLive2 === 0 && !recentSummon2) {
-                  await ok(`PR #${pr.number} summon Greptile`, () =>
-                    github.rest.issues.createComment({
-                      ...base, issue_number: pr.number, body: `@greptileai review\n${summonMark2}`,
-                    }));
-                } else if (gLive2 !== 0) {
-                  core.info(`PR #${pr.number}: live Greptile run already exists for this head — label re-applied without a fresh summon`);
-                }
+              if (!applied) {
+                core.warning(`PR #${pr.number}: marker posted but label failed — will retry next run`);
+                continue;
               }
-              else core.warning(`PR #${pr.number}: marker posted but label failed — will retry next run`);
+              core.notice(`PR #${pr.number}: settled — handing off to Greptile (advisory).`);
+              // MEASURED on the pipeline's first autonomous run (#1575, 2026-07-27):
+              // the label alone does NOT wake Greptile — 12 labeled minutes, no review.
+              // The label admits the PR through the dashboard filter; the summon is what
+              // starts the review. Not unconditional: after a strip-then-relabel cycle on
+              // the SAME sha a run may already exist, and a fresh summon would bill a
+              // re-review of an already-reviewed diff. summonGreptile() enforces that.
+              await summonGreptile('fresh handoff');
             }

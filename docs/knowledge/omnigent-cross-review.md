@@ -67,18 +67,42 @@ Validators that touch these ids must accept BOTH shapes and keep the charset
 strict — the shell-safety of an id interpolated into a `docker exec … sh -c`
 string is the real property, and the prefix never was.
 
-## Worker routing (cost policy, 2026-07-28)
+## Worker routing (cost policy, updated 2026-07-30)
 
 The fleet has two flat-rate implementation platforms: `claude_code` on Claude Max
 and `codex` on the ChatGPT subscription. That makes cross-vendor review available
-without marginal token cost. Claude Fable is also included in the Max plan and is
-useful for deep checking, while `pi` reaches OpenRouter for a metered third opinion.
-Bugbot was disabled 2026-07-28 due to cost, so this fleet covers its former seat.
+without marginal token cost, which is why **cross-vendor diff review is the ROUTINE
+semantic gate** in the re-tiered pipeline — the reviewer that actually reads intent,
+run on every PR, at no marginal cost.
+
+**Correction (2026-07-30) — Fable is METERED, not the free always-on checker.**
+Earlier text here implied `claude-fable-5` rode the flat-rate Max plan alongside
+Opus/Sonnet. It does not. **Fable draws on a SEPARATE metered credit pool that can be
+exhausted**, and when those credits run out Fable is simply unavailable — a bad property
+for anything a routine process depends on.
+
+- **The free, always-on Anthropic-family checker is Opus/Sonnet on the Max plan.** That
+  is the default for reviewing and checking, and it is what "the Claude side of the
+  cross-vendor pair" means.
+- **Reserve Fable for topped-up-credit strong-check moments** — a deliberate deep check
+  on genuinely load-bearing work, chosen because the work warrants the spend and the
+  credits are known to be available. Never bulk implementation, never the assumed default
+  reviewer, never a routine step's dependency.
+- If a routine step appears to "need Fable", the routing is wrong: use Opus/Sonnet.
 
 The 2026-07-27 A/B showed why the third platform remains useful but exceptional:
 GLM 5.2 produced the strongest OpenRouter result, while no single model caught every
-known defect. Flat-rate workers therefore handle the routine path and metered Pi is
-reserved for cases where another independent opinion is worth the spend.
+known defect. So `pi` (OpenRouter, pay-per-token) is a **strict tie-breaker** — a genuine
+disagreement between two independent reviewers, or a case neither could settle — always
+under a hard cost cap, never as a routine third pass.
+
+Bugbot was disabled 2026-07-28 due to cost; this fleet covers its former seat.
+
+**Deterministic caps, not model-assigned severity.** Keep bounded-attempt caps
+(`MAX_SUMMONS`-style) on any loop that re-asks a model — a countable cap is the only
+reliable termination condition. But never gate on a severity a model assigned to its own
+finding: it is not reproducible across runs and it hands merge control to prompt phrasing.
+Humans triage severity; machines report findings.
 
 The binding routing, model-tier, cross-vendor, and cost-cap rules live in the root
 [`AGENTS.md`](../../AGENTS.md) review-pipeline contract.
