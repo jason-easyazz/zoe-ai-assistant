@@ -111,13 +111,12 @@ an LLM reading a diff — is advisory. Rationale, tiering and worker routing:
 
 - `strict = true` — a PR must be **up to date with `main`** to merge (it can sit **BEHIND** if `main`
   races ahead; clear with update-branch / re-run).
-- Required status checks: **`validate`**, **`secret-scan`**, **`voice-gate`**.
+- Required status checks: **`validate`**, **`secret-scan`**. That is the whole list.
   - The GitGuardian App check is informational — the first-party `secret-scan` job replaced
     it as required so an App outage cannot freeze `main`.
-  - **`voice-gate`** (added 2026-07-31) runs the replay-gate assertion at PR time, closing
-    the "green main that will not deploy" gap. It **always reports a conclusion**: PRs with
-    no voice-path files pass trivially; only a voice-path diff escalates to the self-hosted
-    evidence job. The post-merge deploy assertion stays as defence in depth.
+  - **`voice-gate` is INFORMATIONAL, not required** (descoped 2026-07-31 — see below). It
+    runs on every PR, fails closed, and publishes a visible `voice-gate` check on the PR
+    head. Red must be heeded; it does not branch-protection-block on its own.
   - **`Greptile Review` was DEMOTED from required to advisory on 2026-07-31.** It was a
     required status check from 2026-07-27 until then. It came off the required path because
     a non-deterministic third-party service we do not control must not be able to freeze
@@ -168,47 +167,29 @@ Because a `pull_request_target` run is associated with the **base** commit, the 
 job named `voice-gate` (it would report on the wrong SHA and the PR would wait forever). The
 `verdict` job publishes a check run explicitly named `voice-gate` against `pull_request.head.sha`.
 
-**A name-only required context cannot authenticate its producer — and that is a PRE-merge
-concern, not only a post-merge one.** Branch protection's legacy `contexts` form matches a
-required check purely BY NAME, and GitHub publishes a check run for every workflow job
-automatically — no `checks: write` needed. So a PR that adds `.github/workflows/anything.yml`
-containing a job named `voice-gate` publishes a passing `voice-gate` check **on its own head,
-before merge**. An earlier version of this section implied the exposure only began once a
-malicious workflow edit was merged. That was wrong: adding a *competing producer* takes effect
-immediately, for the PR that adds it.
+**What this trust model does and does not cover.** It protects the *self-hosted execution*
+and the *honesty of the published result*: a PR cannot run its own code on the Jetson, and
+cannot rewrite the verdict that gets published about it. It does NOT make the published check
+unforgeable — any workflow job named `voice-gate` publishes a check of that name. That is
+precisely why `voice-gate` is informational rather than required; see *Why `voice-gate` is not
+a required context* below. A forged green `voice-gate` on an informational check buys an
+attacker nothing except a misleading badge, and the deploy gate still refuses the change.
 
-Four things bound it, in order of how much they actually do:
+Three things bound the remaining exposure, in order of how much they actually do:
 
-1. **The competing-producer guard** (`verdict` job in `voice-gate.yml`). It reads the PR's changed
-   `.github/workflows/**` files as data and fails the verdict if any file other than
-   `.github/workflows/voice-gate.yml` looks like a `voice-gate` producer — a job id, a `name:`
-   override, or a Checks API call naming the context. It runs in the base-owned
-   `pull_request_target` workflow, so **the PR cannot disable it**. An unreadable file, or the
-   guard itself erroring, fails closed. It deliberately does NOT police `validate` /
-   `secret-scan`: those are legitimately jobs in `validate.yml`, and flagging every CI edit would
-   be noise with no override — their PR-editability is a separate residual, below.
-2. **`Require approval for all external contributors`** (repo setting; see below). A PR cannot
-   disable it, and it stops fork workflows running at all until a maintainer approves.
-3. **Mandatory multi-agent review of every workflow change.** A `.github/workflows/**` diff is
+1. **`Require approval for all external contributors`** (repo setting; see below). A PR cannot
+   disable it, and it stops fork workflows running at all until a maintainer approves. This is
+   the real control for the self-hosted-runner exposure.
+2. **Mandatory multi-agent review of every workflow change.** A `.github/workflows/**` diff is
    highly visible and is exactly what the cross-vendor review step exists to catch. This is
    process, not enforcement — treat it as such.
-4. **The solo-owner threat model.** PRs come from the owner and trusted agents. This is the
+3. **The solo-owner threat model.** PRs come from the owner and trusted agents. This is the
    assumption everything above is proportionate to, and it is the assumption that would have to
    be revisited first if the repo ever accepted untrusted external contributions.
 
-**Known residuals, not closed:**
-
-- `validate` and `secret-scan` are produced by `pull_request`-triggered jobs in `validate.yml`, so
-  a PR can weaken them in its own run. This is the general "a PR supplies its own CI" property and
-  is not specific to this gate.
-- A malicious edit to `voice-gate.yml` itself still lands if it is MERGED (it cannot affect the PR
-  that carries it, since the definition comes from the base ref). That is a review problem.
-- **The heavyweight fix, deliberately NOT built:** authenticate the producer rather than its name —
-  a dedicated GitHub App publishing the context (branch protection can pin a required context to an
-  `app_id`), or organization-level **required workflows** / rulesets. Both were judged
-  disproportionate for a solo-owner personal repo, and app-pinning specifically conflicts with
-  break-glass (see the cutover section). **Revisit both if this repo ever accepts untrusted
-  external contributors** — that is the trigger condition, not a vague "someday".
+**Known residual, not closed:** a malicious edit to `voice-gate.yml` itself still lands if it
+is MERGED (it cannot affect the PR that carries it, since the definition comes from the base
+ref). That is a review problem, not a workflow one.
 
 **The native GitHub settings that harden this further:**
 
@@ -256,43 +237,73 @@ merge, or alter branch protection; it only publishes check runs through the norm
 intended use is an OUTAGE; using it on a genuinely red check is a decision to merge known-bad
 code, permanently attributable to whoever did it.
 
-### Applying the required-context cutover
+### Cutover: nothing to change in branch protection
 
-`enforce_admins`-protected operator action — an agent must not run this:
+**The required set is already `validate` + `secret-scan` and stays that way.** `voice-gate`
+is informational, so there is no context to add and no `gh api` call to run. The whole
+post-merge step is creating the break-glass label:
 
 ```bash
-# -F for the BOOLEAN, -f for the string contexts. Using -f strict=true sends the
-# string "true", which the endpoint rejects — leaving voice-gate unrequired while
-# the command looks like it succeeded.
-gh api -X PATCH repos/jason-easyazz/zoe-ai-assistant/branches/main/protection/required_status_checks \
-  -F strict=true \
-  -f 'contexts[]=validate' \
-  -f 'contexts[]=secret-scan' \
-  -f 'contexts[]=voice-gate'
+gh label create break-glass -d "audited admin override of a stuck required context" -c B60205
+```
 
-# verify — never assume the PATCH took
+If you want to confirm the required set is what this doc claims:
+
+```bash
 gh api repos/jason-easyazz/zoe-ai-assistant/branches/main/protection/required_status_checks \
   --jq '{strict, contexts}'
 ```
 
-**Security trade-off of using legacy `contexts` rather than app-pinned `checks`.** The
-`contexts` form matches a required check **by name only** — it cannot authenticate the
-producer. Any app that can publish a check run with that name satisfies it, and, more
-sharply, **any workflow job named `voice-gate` does too**, because GitHub publishes a check
-run per job automatically. The `checks` form pins each context to an `app_id` and would close
-that.
+(An earlier draft of this work planned to add `voice-gate` here. That plan is withdrawn —
+see *Why `voice-gate` is not a required context* below. If you are following an old runbook
+or PR description that says to add it, do not.)
 
-We deliberately use `contexts` anyway: app-pinning to GitHub Actions (15368) still would not
-distinguish our workflow from another Actions workflow in the same repo, and pinning to a
-*dedicated* App is the heavyweight option we chose not to build (see the trust-model section).
-Meanwhile pinning at all is precisely what would stop break-glass publishing substitute
-contexts, and that escape is worth more here than the extra pinning.
+### Why `voice-gate` is not a required context
 
-What actually covers the gap is the **competing-producer guard** in the base-owned `verdict`
-job, plus the fork-approval setting — both described in the trust-model section above, along
-with the residuals. If a future change removes the break-glass path, or the repo starts
-accepting untrusted external contributions, switch to `checks` with a dedicated App and
-re-tighten.
+**A name-only required context cannot authenticate its PRODUCER.** Branch protection's legacy
+`contexts` form matches purely by name, and GitHub publishes a check run for every workflow
+job automatically — no `checks: write` needed. So if `voice-gate` were required, a PR could
+satisfy it by adding any workflow with a job named `voice-gate`, on its own head, before
+merge.
+
+**A code-scanning guard against that is an arms race, and we lost the first round.** A guard
+in the base-owned verdict job scanned the PR's changed workflow files for a competing
+`voice-gate` producer. It keyed on a two-space-indented job id and was bypassed with **four
+spaces**. Every fix in that direction is a new regex against an attacker with a YAML parser;
+the guard is gone, along with the requirement that made it necessary.
+
+**The requirement was never where voice enforcement lived.** What actually stops an unproven
+voice change:
+
+1. **The post-merge deploy gate — the real block, unchanged.** `deploy.yml` refuses to
+   advance the live tree when the incoming diff touches the voice path without a fresh
+   passing artifact. It is fail-closed, it runs on the box, and nothing in a PR can influence
+   it. This is the control that matters.
+2. **The visible PR-time result**, plus mandatory multi-agent review of the diff and
+   `required_conversation_resolution`. A red `voice-gate` is unmissable on the PR and is meant
+   to be heeded; it is enforced by review discipline, not by branch protection.
+
+Note the cost of the descope, honestly: the "green main that will not deploy" gap is narrowed
+rather than closed. A voice PR can still merge red and then be refused at deploy — the
+difference is that now you were *told* before merging.
+
+**The proper fix, deferred.** Authenticate the producer instead of its name:
+
+- **Repository RULESETS → required workflows.** These authenticate by workflow **PATH**, not
+  by check name, which is exactly the property missing here — and it is a settings change with
+  no code to maintain and no regex to lose. This is the preferred path.
+- **A dedicated GitHub App** publishing the context, with branch protection pinning the
+  required context to its `app_id`.
+
+Adopt either **only if this repo starts taking untrusted external contributors** — that is the
+trigger condition, not a vague someday. Note that app-pinning also conflicts with break-glass
+(a pinned context cannot be substituted by the Actions token), so that trade would have to be
+re-decided at the same time.
+
+**Still true of `validate` and `secret-scan`:** they are produced by `pull_request`-triggered
+jobs, so a PR can weaken them in its own run. That is the general "a PR supplies its own CI"
+property, covered by the same review discipline, and it is the reason the required set is kept
+small and boring rather than clever.
 
 ## Greptile / greploop gotchas
 

@@ -1,9 +1,19 @@
 """Structural guards for the DETERMINISTIC required merge gate.
 
-The re-tiering (2026-07-31) made the required set `validate`, `secret-scan`,
-`voice-gate` — all deterministic, all locally runnable — and demoted Greptile to
-advisory. Two failure modes of a required-status-check gate are structural rather
-than behavioural, so they are asserted here rather than in a behavioural suite:
+The re-tiering (2026-07-31) made the required set `validate` and `secret-scan` —
+deterministic and locally runnable — and demoted Greptile to advisory.
+
+`voice-gate` is deliberately NOT required. Branch protection's name-only
+`contexts` cannot authenticate a check's PRODUCER: any workflow job named
+`voice-gate` publishes a check of that name automatically, so a PR could satisfy
+the gate with its own trivially-passing job. A code-scanning guard against that
+was tried and abandoned as an arms race (the first version keyed on a two-space
+indent and was bypassed with four). The check still runs and still fails closed;
+enforcement lives in the post-merge deploy gate plus review. See
+docs/knowledge/merge-and-deploy.md.
+
+Two failure modes of a required-status-check gate are structural rather than
+behavioural, so they are asserted here rather than in a behavioural suite:
 
   * **A required context that does not report BLOCKS FOREVER.** GitHub waits for
     it indefinitely; there is no timeout. A `paths:` filter, a job-level `if:`
@@ -32,7 +42,7 @@ WORKFLOWS = REPO / ".github" / "workflows"
 # The required contexts, mirroring branch protection. Kept as a literal so that a
 # change to the gate has to touch this list, this test, and branch protection in
 # the same PR — the coupling is the point.
-REQUIRED_CONTEXTS = ("validate", "secret-scan", "voice-gate")
+REQUIRED_CONTEXTS = ("validate", "secret-scan")
 
 
 def _load(name: str) -> dict:
@@ -48,22 +58,14 @@ def test_every_required_context_is_produced_by_a_job():
     """A required context nothing produces never reports, and a context that never
     reports blocks every PR permanently.
 
-    A context is produced either by a JOB of that name, or — for `voice-gate` —
-    by an explicit `checks.create` naming it. The published form exists because a
-    `pull_request_target` run is associated with the BASE commit, so a job named
-    `voice-gate` would report against the wrong SHA."""
+    Both required contexts are plain jobs in `validate.yml`. (`voice-gate` is NOT
+    in this set — it is informational; see the module docstring.)"""
     produced = {}
     for wf in WORKFLOWS.glob("*.yml"):
         spec = yaml.safe_load(wf.read_text())
         for job_id, job in (spec.get("jobs") or {}).items():
             # The check-run name is the job's `name:` if set, else its id.
             produced[job.get("name", job_id)] = wf.name
-        # Contexts published by name through the Checks API.
-        text = wf.read_text()
-        if "checks.create" in text:
-            for ctx in REQUIRED_CONTEXTS:
-                if f"'{ctx}'" in text:
-                    produced.setdefault(ctx, wf.name)
     missing = [c for c in REQUIRED_CONTEXTS if c not in produced]
     assert not missing, (
         f"required contexts with no producer: {missing}. Adding one of these to "
@@ -71,18 +73,19 @@ def test_every_required_context_is_produced_by_a_job():
 
 
 def test_voice_gate_reports_on_every_pull_request():
-    """THE property that makes `voice-gate` safe as a UNIVERSAL required context.
+    """An informational check earns its keep only by being present every time.
 
-    It must run on all PRs and report a conclusion on all of them — passing
-    trivially where the replay gate does not apply. A `paths:` filter here would
-    be the classic footgun: the workflow simply does not report on unmatched PRs,
-    and GitHub waits for it forever."""
+    A signal that is ABSENT on some PRs reads as "fine" and quietly stops being
+    looked at; one that is reliably there is worth heeding when it goes red. A
+    `paths:` filter is the classic way to lose that — the workflow simply does not
+    report on unmatched PRs. (When this check WAS slated to be required, the same
+    filter would have blocked those PRs forever instead. Same rule, milder
+    consequence.)"""
     spec = _load("voice-gate.yml")
     pr = _on(spec)["pull_request_target"] or {}
     assert "paths" not in pr and "paths-ignore" not in pr, (
-        "voice-gate must NOT use a paths filter: a path-filtered required check does "
-        "not report on unmatched PRs and blocks them forever. The voice-path decision "
-        "belongs in the scope JOB, which always runs and always reports.")
+        "voice-gate must NOT use a paths filter: the voice-path decision belongs in "
+        "the scope JOB, which always runs and always reports.")
     # `edited` is what GitHub fires on a BASE-BRANCH retarget, which changes the
     # diff without moving the head SHA. Without it a retargeted PR keeps a scope
     # verdict computed against the old base.
@@ -93,8 +96,8 @@ def test_voice_gate_reports_on_every_pull_request():
 
 def test_voice_gate_verdict_job_always_reports():
     """`if: always()` plus `needs` on both jobs is the mechanism: without it, a
-    skipped `replay-evidence` skips the verdict too, and the required context
-    never concludes."""
+    skipped `replay-evidence` skips the verdict too, and no check is published at
+    all — the silent-absence failure the test above is about."""
     jobs = _load("voice-gate.yml")["jobs"]
     verdict = jobs["verdict"]
     assert str(verdict["if"]).strip() == "always()", verdict.get("if")
@@ -109,13 +112,14 @@ def test_voice_gate_verdict_job_always_reports():
 
 
 def test_voice_gate_definition_is_immutable_from_the_pr():
-    """THE fix for the self-referential gate.
+    """Still load-bearing even though the check is informational.
 
     On a plain `pull_request` trigger GitHub runs the workflow file FROM THE PR
-    HEAD — so a PR could edit this file to delete the fork gate, repoint the
-    trusted checkout at its own head, or make the verdict `exit 0`, and thereby
-    author the required check that is supposed to gate it. `pull_request_target`
-    reads the definition from the BASE ref, which the PR cannot rewrite."""
+    HEAD — so a PR could edit this file to delete the fork gate or repoint the
+    trusted checkout at its own head, and that second one is arbitrary code
+    execution on the Jetson. The honesty of the signal matters too: a verdict a PR
+    can rewrite to `success` is worse than no verdict. `pull_request_target` reads
+    the definition from the BASE ref, which the PR cannot rewrite."""
     spec = _load("voice-gate.yml")
     on = _on(spec)
     assert "pull_request_target" in on, (
@@ -126,14 +130,15 @@ def test_voice_gate_definition_is_immutable_from_the_pr():
         "PR-authored run of this workflow")
 
 
-def test_voice_gate_publishes_its_context_against_the_pr_head():
+def test_voice_gate_publishes_its_check_against_the_pr_head():
     """A `pull_request_target` run is associated with the BASE commit, so a job
-    NAMED `voice-gate` would report against the wrong SHA and the PR would wait
-    forever. The verdict must publish explicitly against `pull_request.head.sha`."""
+    NAMED `voice-gate` would report against the base SHA and the result would not
+    appear on the commit under review at all. Publish explicitly against
+    `pull_request.head.sha`."""
     jobs = _load("voice-gate.yml")["jobs"]
     assert "voice-gate" not in jobs, (
-        "a job named `voice-gate` under pull_request_target reports the context on the "
-        "BASE sha, not the PR head — publish it explicitly instead")
+        "a job named `voice-gate` under pull_request_target reports on the BASE sha, "
+        "not the PR head — publish it explicitly instead")
     script = ""
     for step in jobs["verdict"]["steps"]:
         script += str((step.get("with") or {}).get("script", ""))
@@ -262,25 +267,6 @@ def test_voice_gate_checks_write_is_scoped_to_the_verdict_job_only():
     # workflow default wholesale, so an undeclared job silently inherits.
     for job_id, cfg in jobs.items():
         assert "permissions" in cfg, f"{job_id} does not declare its own permissions"
-
-
-def test_the_competing_producer_guard_is_present_and_base_owned():
-    """Branch protection matches a required context BY NAME and cannot authenticate
-    its producer — and GitHub publishes a check run per job automatically, needing
-    no `checks: write`. So a PR adding any workflow with a job named `voice-gate`
-    publishes its own passing gate on its own head, BEFORE merge.
-
-    The guard must live in the `pull_request_target` workflow (definition from the
-    base ref), or the PR could simply delete it."""
-    spec = _load("voice-gate.yml")
-    assert "pull_request_target" in _on(spec), "the guard is only meaningful if base-owned"
-    script = ""
-    for step in spec["jobs"]["verdict"]["steps"]:
-        script += str((step.get("with") or {}).get("script", ""))
-    assert "findCompetingProducers" in script, "the competing-producer guard is missing"
-    assert "SANCTIONED" in script and ".github/workflows/voice-gate.yml" in script
-    # It must consider the guard failing to be a failure, not a pass.
-    assert "guard could not run" in script
 
 
 def test_checks_write_is_held_by_exactly_the_two_workflows_that_need_it():

@@ -136,12 +136,18 @@ def _run_completed(name, conclusion):
 
 # --- positive control -------------------------------------------------------
 def test_admin_override_forces_only_non_green_contexts(tmp_path):
-    """`validate` is green and must be left alone; the other two are missing and
+    """`validate` is green and must be left alone; `secret-scan` is missing and
     must be forced. Without this control every negative below could pass by doing
-    nothing at all."""
+    nothing at all.
+
+    The covered set is exactly branch protection's required set — `validate` and
+    `secret-scan`. `voice-gate` is NOT in it: that check is informational, so there
+    is nothing about it to override, and forcing it would only add noise to the
+    audit trail."""
     r = _run(tmp_path, runs=[_run_completed("validate", "success")])
     forced = {c["name"] for c in r["checksCreated"]}
-    assert forced == {"secret-scan", "voice-gate"}, r["checksCreated"]
+    assert forced == {"secret-scan"}, r["checksCreated"]
+    assert "voice-gate" not in forced, "an informational check must not be overridden"
     assert all(c["sha"] == "a" * 40 for c in r["checksCreated"])
     assert all(c["conclusion"] == "success" for c in r["checksCreated"])
     assert r["removeLabel"] == 1, "the label must be consumed on a successful override"
@@ -217,8 +223,7 @@ def test_a_failing_context_is_overridden_and_the_audit_says_so(tmp_path):
     state is recorded, so a forced `failure` is permanently distinguishable from a
     forced `missing`."""
     r = _run(tmp_path, runs=[_run_completed("secret-scan", "failure"),
-                             _run_completed("validate", "success"),
-                             _run_completed("voice-gate", "success")])
+                             _run_completed("validate", "success")])
     forced = {c["name"]: c for c in r["checksCreated"]}
     assert set(forced) == {"secret-scan"}, r["checksCreated"]
     assert "`failure`" in forced["secret-scan"]["summary"], forced["secret-scan"]["summary"]
@@ -231,7 +236,7 @@ def test_a_failing_context_is_overridden_and_the_audit_says_so(tmp_path):
 def test_an_already_fully_green_head_forces_nothing(tmp_path):
     """Blast radius: if nothing is stuck, nothing is overridden."""
     r = _run(tmp_path, runs=[_run_completed(n, "success")
-                             for n in ("validate", "secret-scan", "voice-gate")])
+                             for n in ("validate", "secret-scan")])
     assert r["checksCreated"] == []
     audit = [c for c in r["comments"] if "BREAK-GLASS used" in c][0]
     assert "_none — every required context was already green_" in audit

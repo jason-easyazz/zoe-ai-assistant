@@ -100,7 +100,11 @@ jobs:
             // it needs an admin token this workflow deliberately does not have, and
             // a hardcoded list is reviewable in the diff. If you change branch
             // protection, change this line in the same PR.
-            const REQUIRED = ['validate', 'secret-scan', 'voice-gate'];
+            // NOT `voice-gate`: that check is INFORMATIONAL, not branch-protected
+            // (descoped 2026-07-31), so there is nothing about it to override —
+            // and overriding a check nobody is blocked on would only add noise to
+            // the audit trail.
+            const REQUIRED = ['validate', 'secret-scan'];
             const LABEL = 'break-glass';
             const base = { owner: context.repo.owner, repo: context.repo.repo };
 

@@ -1,12 +1,37 @@
-# The voice replay gate, promoted to a PR-TIME REQUIRED check.
+# The voice replay gate, run at PR TIME as an INFORMATIONAL check.
 #
 # WHY IT MOVED LEFT: the replay gate used to run ONLY post-merge (deploy.yml and
 # scripts/maintenance/deploy_live.sh), fail-closed. That left a real gap — a
 # voice-path PR could go green, merge, and then be permanently REFUSED by the
 # deploy gate: a "green main that will not deploy", discovered after the fact,
-# with the change already on the trunk. Asserting the same thing before the merge
-# closes it. The deploy-side assertion STAYS (defence in depth, and it is the last
-# thing standing between an unproven voice path and Jason's actual house).
+# with the change already on the trunk. Surfacing the same answer before the merge
+# closes it. The deploy-side assertion STAYS and is THE enforcement point — it is
+# the last thing standing between an unproven voice path and Jason's actual house.
+#
+# ===================== INFORMATIONAL, NOT BRANCH-PROTECTED ===================
+# `voice-gate` is deliberately NOT in `required_status_checks` (descoped
+# 2026-07-31). It still runs on every PR, still fails closed, and its red is
+# meant to be heeded — but it does not block a merge by itself.
+#
+# WHY NOT REQUIRED: branch protection's name-only `contexts` cannot authenticate
+# the PRODUCER of a check. Any workflow job named `voice-gate` publishes a check
+# of that name automatically — no `checks: write` needed — so a PR could satisfy
+# the gate with its own trivially-passing job, on its own head, pre-merge. A
+# code-scanning guard against that was tried and is an ARMS RACE: the first
+# version matched a two-space-indented job id and was bypassed with four spaces.
+# Removing the requirement removes the need to win that race, and costs little,
+# because the requirement was never where voice enforcement actually lived.
+#
+# WHAT ENFORCES VOICE REGRESSIONS INSTEAD:
+#   (a) this check's visible red + mandatory multi-agent review of the PR +
+#       `required_conversation_resolution`; and
+#   (b) the POST-MERGE fail-closed gate in deploy.yml, unchanged — a voice-path
+#       change with no fresh passing artifact does not reach the box, full stop.
+# The proper fix, deferred: repo RULESETS -> required workflows, which
+# authenticate by workflow PATH rather than check name (a settings change, no
+# code), or a dedicated GitHub App. Adopt either only if this repo ever takes
+# untrusted external contributors. See docs/knowledge/merge-and-deploy.md.
+# =============================================================================
 #
 # ============================ TRUST MODEL (read this) ========================
 # A pull request is UNTRUSTED INPUT. This workflow runs a job on `self-hosted` —
@@ -26,12 +51,12 @@
 #     below pins `base.sha`. If you ever add a step that fetches the head ref,
 #     runs `npm install`, or executes a script from the PR tree, this trigger
 #     turns into remote code execution WITH a write token. Do not.
-#   * THE REQUIRED CONTEXT IS PUBLISHED, NOT INFERRED FROM A JOB NAME. A
+#   * THE CHECK IS PUBLISHED, NOT INFERRED FROM A JOB NAME. A
 #     `pull_request_target` run is associated with the BASE commit, so a job
-#     called `voice-gate` would report against the wrong SHA and the PR would wait
-#     forever for a context that never arrives. The `verdict` job therefore
+#     called `voice-gate` would report against the base SHA and the result would
+#     not appear on the commit under review at all. The `verdict` job therefore
 #     publishes a check run explicitly named `voice-gate` against
-#     `pull_request.head.sha`. That also removes all ambiguity about which commit
+#     `pull_request.head.sha`, which also removes any ambiguity about which commit
 #     the verdict is about.
 #
 #   * NOTHING from the PR head is ever CHECKED OUT or EXECUTED. Not on the
@@ -55,13 +80,13 @@
 # this read, write, or execute anything the PR author controls?"
 # =============================================================================
 #
-# WHY IT IS SAFE AS A UNIVERSAL REQUIRED CONTEXT: `voice-gate` runs on EVERY PR
-# and ALWAYS reports a conclusion. On a PR that touches no voice-path file it
-# passes trivially and never involves the Jetson. Only a voice-path diff
-# escalates to the real assertion. This is deliberate: a required context that
-# reports on only SOME PRs is worse than no gate — GitHub blocks forever waiting
-# for a check that will never arrive (which is why `paths:` filters are absent
-# here; a path-filtered workflow simply does not report on unmatched PRs).
+# IT REPORTS ON EVERY PR: `voice-gate` runs on all of them and ALWAYS reaches a
+# conclusion. On a PR that touches no voice-path file it passes trivially and
+# never involves the Jetson; only a voice-path diff escalates to the real
+# assertion. That is worth keeping even though nothing blocks on it — a signal
+# that is ABSENT reads as "fine", while one that is red is unmissable. (It is
+# also why there are no `paths:` filters here: a path-filtered workflow simply
+# does not report on unmatched PRs.)
 #
 # WHERE THE EVIDENCE LIVES: the replay-gate artifact is written on the Jetson by
 # scripts/maintenance/voice_regression_probe.py (~/.cache/zoe/*.json). A hosted
@@ -239,13 +264,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      # The ONLY grant of checks:write in this workflow — publishing the required
-      # `voice-gate` context against the PR head.
+      # The ONLY grant of checks:write in this workflow — publishing the
+      # `voice-gate` check against the PR head. Nothing else: the verdict reads
+      # its inputs from the event payload and its two `needs` results, checks
+      # nothing out, and calls no other API. (It briefly also held contents+
+      # pull-requests read for the competing-producer guard; that guard is gone
+      # with the required-context requirement, so the reads go with it.)
       checks: write
-      # Both reads are demonstrably needed by the competing-producer guard below:
-      # the changed-file list, and the content of any changed workflow file.
-      contents: read
-      pull-requests: read
     steps:
       - name: Decide and publish the voice-gate context
         uses: actions/github-script@v7
@@ -268,86 +293,9 @@ jobs:
             const isFork = pr.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`;
             core.info(`scope=${scopeResult} voice=${voice} evidence=${evidence} fork=${isFork}`);
 
-            // ---- COMPETING-PRODUCER GUARD --------------------------------------
-            // Branch protection matches a required context BY NAME. It cannot
-            // authenticate the producer, so ANY workflow that publishes a check run
-            // named `voice-gate` satisfies the gate — and GitHub publishes a check
-            // run for every job automatically, no `checks: write` needed. A PR that
-            // adds `.github/workflows/anything.yml` with a job called `voice-gate`
-            // therefore publishes its own passing gate, PRE-merge, on its own head.
-            //
-            // This guard lives in the base-owned pull_request_target workflow, so
-            // the PR cannot disable it: editing this file has no effect on its own
-            // run. It reads the PR's workflow files as DATA (never executes them)
-            // and fails the verdict if any file other than the sanctioned one looks
-            // like a `voice-gate` producer.
-            //
-            // Deliberately NOT extended to `validate` / `secret-scan`: those are
-            // legitimately defined as jobs in validate.yml, and flagging every PR
-            // that edits CI would be noise with no override. Their PR-editability
-            // is a separate, documented residual (see merge-and-deploy.md).
-            const SANCTIONED = '.github/workflows/voice-gate.yml';
-            const findCompetingProducers = async () => {
-              const changed = await github.paginate(github.rest.pulls.listFiles, {
-                owner: context.repo.owner, repo: context.repo.repo,
-                pull_number: pr.number, per_page: 100,
-              });
-              const suspects = changed.filter(f =>
-                f.filename.startsWith('.github/workflows/') &&
-                f.status !== 'removed' &&
-                f.filename !== SANCTIONED);
-              const hits = [];
-              for (const f of suspects) {
-                let text;
-                try {
-                  const res = await github.rest.repos.getContent({
-                    owner: context.repo.owner, repo: context.repo.repo,
-                    path: f.filename, ref: headSha,
-                  });
-                  text = Buffer.from(res.data.content, 'base64').toString('utf8');
-                } catch (e) {
-                  // Unreadable is not evidence of innocence.
-                  hits.push(`${f.filename} (could not be read: ${e.message})`);
-                  continue;
-                }
-                // Targeted signals, not a bare substring match — a comment
-                // mentioning voice-gate in another workflow is legitimate and must
-                // not block the PR. These are the three ways a file can actually
-                // publish the context: a job id, a job/check `name:` override, or
-                // an explicit Checks API call.
-                const asJobId = /^\s{2}["']?voice-gate["']?\s*:/m.test(text);
-                const asName = /^\s*name:\s*["']?voice-gate["']?\s*$/m.test(text);
-                const viaApi = /checks\.create|\/check-runs/.test(text) &&
-                               /voice-gate/.test(text);
-                const why = [asJobId && 'job id', asName && '`name:` override',
-                             viaApi && 'Checks API call'].filter(Boolean);
-                if (why.length) hits.push(`${f.filename} (${why.join(', ')})`);
-              }
-              return hits;
-            };
-
-            let competing;
-            try {
-              competing = await findCompetingProducers();
-            } catch (e) {
-              // The guard itself failing is not permission to skip it.
-              competing = [`(guard could not run: ${e.message})`];
-            }
-
             let conclusion = 'failure', title = '', summary = '';
 
-            if (competing.length) {
-              title = 'A second `voice-gate` producer was added by this PR';
-              summary = `Branch protection matches a required context by NAME and cannot ` +
-                `authenticate its producer, so a workflow other than \`${SANCTIONED}\` that ` +
-                `publishes a \`voice-gate\` check would satisfy the merge gate on this PR's ` +
-                `own head.\n\nFlagged:\n\n` +
-                competing.map(h => `* \`${h}\``).join('\n') +
-                `\n\nIf this is legitimate (renaming the gate, splitting the workflow), land ` +
-                `it as a separate, reviewed change to \`${SANCTIONED}\` and branch protection ` +
-                `together — not alongside other work. This guard runs from the base ref and ` +
-                `cannot be disabled by the PR it is checking.`;
-            } else if (scopeResult !== 'success') {
+            if (scopeResult !== 'success') {
               // Could not classify -> fail closed. An unreadable scope job is not
               // evidence of a non-voice PR.
               title = 'Could not determine whether this PR touches the voice path';

@@ -100,26 +100,45 @@ cannot run locally is a gate you cannot debug when it is the thing that is broke
 
 ### Tier 1 — the REQUIRED gate (deterministic, blocking)
 
-Exactly three contexts block a merge. Each is reproducible on a laptop:
+Exactly two contexts block a merge. Both are reproducible on a laptop:
 
 | context | what it proves | run it locally |
 |---|---|---|
 | `validate` | structure + critical-file validators, offline-memory policy, Alembic migrations, **actionlint with a negative control**, `py_compile` over every zoe-data module, the `ci_safe` unit lanes + full zoe-auth suite | `python3 tools/audit/validate_structure.py`; `pytest services/zoe-data/tests -m ci_safe` |
 | `secret-scan` | ggshield over **branch history**, not just the head tree | `ggshield secret scan ci` |
-| `voice-gate` | a voice-path diff has a fresh, passing replay-gate artifact **produced by exercising this PR's head commit** | `python3 scripts/maintenance/voice_gate_check.py --scope-only --diff origin/main...HEAD` |
 
 Plus `required_conversation_resolution` (every thread resolved) and `strict` (up to date
 with `main`). Keep this set MINIMAL — every addition is a new way to freeze `main`.
 
-**`voice-gate` is new and closes a real gap.** The replay gate used to run post-merge
-only, fail-closed, so a voice-path PR could go green, merge, and then be permanently
-refused by the deploy gate: a *green main that will not deploy*, discovered after the
-fact. It now runs at PR time too. It is safe as a universal required context because it
-**always reports a conclusion**: PRs touching no voice-path file pass trivially and never
-involve the Jetson; only a voice-path diff escalates to the self-hosted assertion. The
-post-merge deploy check STAYS — defence in depth.
+### `voice-gate` — INFORMATIONAL, fail-closed, not branch-protected
 
-Two properties make it trustworthy rather than merely present:
+`voice-gate` runs on every PR and publishes a visible check on the PR head. **It is
+deliberately not a required context.** Red must be heeded; it does not block by itself.
+
+**Why not required:** branch protection's name-only `contexts` cannot authenticate a
+check's PRODUCER — any workflow job named `voice-gate` publishes a check of that name
+automatically, so a PR could satisfy the gate with its own trivially-passing job. A
+code-scanning guard against that was tried and **abandoned as an arms race**: the first
+version keyed on a two-space-indented job id and was bypassed with four spaces. The
+requirement was removed rather than the regex hardened.
+
+**What actually enforces voice regressions:**
+
+1. **The post-merge deploy gate in `deploy.yml` — the real block, unchanged.** A
+   voice-path change with no fresh passing artifact does not reach the box. Fail-closed,
+   runs on the Jetson, nothing in a PR can influence it.
+2. **The visible PR-time result**, plus mandatory multi-agent review and
+   `required_conversation_resolution`.
+
+Stated honestly: this narrows the *green main that will not deploy* gap rather than closing
+it. A voice PR can still merge red and be refused at deploy — the difference is you were
+told first. The proper fix is deferred: repo **rulesets → required workflows** authenticate
+by workflow PATH rather than check name (a settings change, no code to maintain), or a
+dedicated GitHub App. Adopt either only if this repo takes untrusted external contributors.
+
+Two properties still make the signal trustworthy rather than merely present — and they
+matter more, not less, now that nothing blocks on it (a check nobody can trust is worse
+than no check, because a green one gets believed):
 
 - **The evidence is BOUND to the PR head.** Freshness plus `status: pass` does not say
   *which code* was tested — a passing run against `main` would otherwise clear every voice
@@ -136,14 +155,10 @@ Two properties make it trustworthy rather than merely present:
   files) and **arbitrary code execution on the Jetson**. (2) The workflow triggers on
   **`pull_request_target`**, so its *definition* comes from the base ref — on a plain
   `pull_request` trigger GitHub runs the workflow file from the PR head, and the PR could
-  simply delete the fork gate or make the verdict `exit 0`, authoring the very check that
-  gates it. Because a `pull_request_target` run is associated with the base commit, the
+  simply delete the fork gate or make the verdict `exit 0`, authoring the very verdict
+  published about it. Because a `pull_request_target` run is associated with the base commit, the
   `verdict` job publishes the `voice-gate` context explicitly against the PR head. Fork PRs
   cannot reach the self-hosted runner without a maintainer applying `voice-gate-approved`.
-  A base-owned guard in the `verdict` job also fails the gate if a PR adds any OTHER
-  workflow that would publish a `voice-gate` check — branch protection matches a required
-  context by NAME and cannot authenticate its producer, and a competing producer takes
-  effect PRE-merge, on the PR's own head.
   The full trust model and its residual risk are at the top of
   `.github/workflows/voice-gate.yml` and in
   [merge-and-deploy.md](docs/knowledge/merge-and-deploy.md); if you edit that workflow, the
@@ -235,7 +250,8 @@ resolved like any other.
 | setting | value | guarantees |
 |---|---|---|
 | branch protection `strict` | **true** | the PR is up to date with `main` |
-| `validate` + `secret-scan` + `voice-gate` required | **yes** | the merged commit is deterministically verified |
+| `validate` + `secret-scan` required | **yes** | the merged commit is deterministically verified |
+| `voice-gate` informational | **runs on every PR** | a voice regression is visible before merge (enforced at deploy) |
 | `required_conversation_resolution` | **true** | no finding is merged unaddressed |
 | `triggerOnDrafts` | **false** | iteration in draft stays free |
 | Greptile required | **no** (advisory) | a SaaS outage cannot freeze `main` |
@@ -341,7 +357,7 @@ For reviewable development work:
 - Work from feature branches and open pull requests; `main` is protected.
 - Do not bypass branch protection or use administrator merges unless the operator explicitly asks for that emergency path. The **`break-glass` label** is the sanctioned, audited escape for a required-check OUTAGE — see the Review pipeline section.
 - Keep PRs small; use `/split-to-prs` when a branch grows too large.
-- **The deterministic gate is the merge condition** (`validate`, `secret-scan`, `voice-gate`); cross-vendor review is the routine semantic pass; Greptile is advisory and on-demand for high-risk work.
+- **The deterministic gate is the merge condition** (`validate`, `secret-scan`); cross-vendor review is the routine semantic pass; `voice-gate` and Greptile are informational/advisory — heed them, but they do not block.
 - For Zoe engineering tasks, prefer `scripts/maintenance/greploop_guard.py --packet-only` or `--once` before broad expensive-agent repair.
 - Cheap models must receive one generated fix packet for one finding or CI failure; never hand them the whole PR.
 - Use Cursor's Greptile MCP to fetch review status/comments.
@@ -350,7 +366,7 @@ For reviewable development work:
 
 Merge mechanics & gotchas — canonical record: **[docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md)** (read it before driving any PR to merge). The load-bearing rules:
 - A green check **≠ resolved threads**. `required_conversation_resolution` is the gate that enforces "5/5, every comment sorted" — mark every thread resolved (GraphQL `resolveReviewThread`), don't just reply. The `break-glass` override does NOT bypass this.
-- **Arm auto-merge** (`gh pr merge <n> --squash --auto`) instead of merging by hand. `strict` drains a batch **serially** — nudge one PR per merge. **Auto-merge fires the moment the required set is green, and a required context that has not yet REPORTED does not hold it**: measured on #1587, a PR merged 3 seconds before its review check even started (which then concluded `failure`, on code already on `main`). This is why every required context must always report a conclusion — see `voice-gate`'s always-reports design and `tests/unit/test_required_gate_workflows.py`.
+- **Arm auto-merge** (`gh pr merge <n> --squash --auto`) instead of merging by hand. `strict` drains a batch **serially** — nudge one PR per merge. **Auto-merge fires the moment the required set is green, and a required context that has not yet REPORTED does not hold it**: measured on #1587, a PR merged 3 seconds before its review check even started (which then concluded `failure`, on code already on `main`). This is why every required context must always report a conclusion — see `tests/unit/test_required_gate_workflows.py`.
 - **New tests reach CI by marker, not enumeration, on the main lanes.** `services/zoe-data/tests` + repo-root `tests/unit` are marker-based (co-located `pytestmark = pytest.mark.ci_safe`, registered in `pytest.ini`) and `services/zoe-auth/tests` runs full-directory — all three are enumeration-free, and hand-listing files there silently drops new tests (the failure this rule used to cause). Do NOT edit `validate.yml` for these lanes. Only the remaining explicitly-enumerated lanes need a YAML entry — confirm the file actually runs in its CI job. SSOT: [tests/AGENTS.md](tests/AGENTS.md) + [docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md).
 - GitGuardian scans **branch history**: a leaked/test cred in an intermediate commit fails even with a clean head tree. Scrub via a clean re-branch (squash to one commit on a new branch, replacement PR) — force-push is blocked by design.
 - Never `--admin`/`--force`; squash-only; the **human merges** (or armed auto-merge does) — agents never bypass the gate.

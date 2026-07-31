@@ -1,20 +1,19 @@
 """Behavioural tests for the `verdict` job in .github/workflows/voice-gate.yml.
 
-The verdict is what actually publishes the REQUIRED `voice-gate` context, so it
-is the single point where the whole gate becomes real or becomes theatre. These
-tests execute the real embedded script against a stubbed GitHub API.
+The verdict publishes the `voice-gate` check on the PR head. That check is
+INFORMATIONAL — it is deliberately not in `required_status_checks` (descoped
+2026-07-31, because a name-only required context cannot authenticate its
+producer and guarding that in code proved to be an arms race). Enforcement of
+voice regressions lives in the post-merge deploy gate plus review.
 
-The competing-producer guard is the subtle one. Branch protection matches a
-required context BY NAME and cannot authenticate its producer — and GitHub
-publishes a check run for every job automatically, with no `checks: write`
-needed. So a PR that adds `.github/workflows/anything.yml` containing a job named
-`voice-gate` publishes its own passing gate, on its own head, BEFORE merge. The
-guard lives in this base-owned `pull_request_target` workflow precisely so the PR
-under review cannot delete it.
+Informational is not the same as unimportant: a check nobody can trust is worse
+than no check, because a green one gets believed. So these tests execute the real
+embedded script against a stubbed GitHub API and pin that the verdict is HONEST —
+it reports on every PR, fails closed on every ambiguity, and is addressed to the
+commit under review rather than the base.
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
 import shutil
@@ -56,20 +55,6 @@ HARNESS = textwrap.dedent(
     const github = {
       paginate: async (fn, o) => fn(o),
       rest: {
-        pulls: {
-          listFiles: async () => {
-            if (OPTS.listFilesFails) throw new Error('listFiles unavailable');
-            return (OPTS.changedFiles || []).map(
-              (f) => (typeof f === 'string' ? { filename: f, status: 'modified' } : f));
-          },
-        },
-        repos: {
-          getContent: async (o) => {
-            const body = (OPTS.contents || {})[o.path];
-            if (body === undefined) throw new Error('not found');
-            return { data: { content: Buffer.from(body, 'utf8').toString('base64') } };
-          },
-        },
         checks: {
           create: async (o) => {
             calls.checksCreated.push({ name: o.name, sha: o.head_sha,
@@ -134,7 +119,7 @@ def test_verdict_publishes_voice_gate_against_the_pr_head(tmp_path):
 
 
 def test_non_voice_pr_passes_trivially(tmp_path):
-    """The common case, and the reason this context is safe to require on every PR."""
+    """The common case: no voice files, no Jetson involvement, honest green."""
     r = _run(tmp_path, voice="false")
     assert r["check"]["conclusion"] == "success"
     assert "Not applicable" in r["check"]["title"]
@@ -164,101 +149,3 @@ def test_fork_without_approval_is_named_explicitly(tmp_path):
     assert r["check"]["conclusion"] == "failure"
     assert "maintainer approval" in r["check"]["title"]
     assert "voice-gate-approved" in r["check"]["summary"]
-
-
-# --- the competing-producer guard -------------------------------------------
-COMPETING = """name: helper
-on: [pull_request]
-jobs:
-  voice-gate:
-    runs-on: ubuntu-latest
-    steps:
-      - run: "true"
-"""
-
-
-def test_a_second_voice_gate_producer_fails_the_verdict(tmp_path):
-    """THE guard. A job named `voice-gate` in any other workflow publishes a check
-    of that name automatically — satisfying a name-matched required context on the
-    PR's OWN head, before merge, with no `checks: write` anywhere."""
-    r = _run(tmp_path, voice="false",
-             changedFiles=[".github/workflows/helper.yml"],
-             contents={".github/workflows/helper.yml": COMPETING})
-    assert r["check"]["conclusion"] == "failure", r["check"]
-    assert "second `voice-gate` producer" in r["check"]["title"]
-    assert "helper.yml" in r["check"]["summary"]
-    assert "job id" in r["check"]["summary"]
-
-
-def test_a_name_override_producer_is_caught(tmp_path):
-    """The job id is not the only way to name a check — a `name:` override does it
-    too, and would slip past an id-only match."""
-    wf = ("name: helper\non: [pull_request]\njobs:\n  innocuous:\n"
-          "    name: voice-gate\n    runs-on: ubuntu-latest\n    steps:\n      - run: \"true\"\n")
-    r = _run(tmp_path, changedFiles=[".github/workflows/helper.yml"],
-             contents={".github/workflows/helper.yml": wf})
-    assert r["check"]["conclusion"] == "failure"
-    assert "`name:` override" in r["check"]["summary"]
-
-
-def test_a_checks_api_producer_is_caught(tmp_path):
-    """Publishing via the Checks API rather than a job name."""
-    wf = ("name: helper\non: [pull_request]\njobs:\n  x:\n    runs-on: ubuntu-latest\n"
-          "    steps:\n      - uses: actions/github-script@v7\n        with:\n"
-          "          script: |\n"
-          "            await github.rest.checks.create({name: 'voice-gate', conclusion: 'success'});\n")
-    r = _run(tmp_path, changedFiles=[".github/workflows/helper.yml"],
-             contents={".github/workflows/helper.yml": wf})
-    assert r["check"]["conclusion"] == "failure"
-    assert "Checks API call" in r["check"]["summary"]
-
-
-def test_an_unreadable_changed_workflow_fails_closed(tmp_path):
-    """Unreadable is not evidence of innocence."""
-    r = _run(tmp_path, changedFiles=[".github/workflows/helper.yml"], contents={})
-    assert r["check"]["conclusion"] == "failure"
-    assert "could not be read" in r["check"]["summary"]
-
-
-def test_a_failing_guard_does_not_wave_the_pr_through(tmp_path):
-    """The guard itself erroring is not permission to skip it."""
-    r = _run(tmp_path, listFilesFails=True)
-    assert r["check"]["conclusion"] == "failure"
-    assert "guard could not run" in r["check"]["summary"]
-
-
-def test_the_sanctioned_workflow_itself_is_not_flagged(tmp_path):
-    """Editing voice-gate.yml must not self-trip the guard — that edit cannot
-    affect this PR's own run anyway (the definition comes from the base ref), and
-    flagging it would make the gate unmaintainable."""
-    r = _run(tmp_path, changedFiles=[".github/workflows/voice-gate.yml"],
-             contents={".github/workflows/voice-gate.yml": WORKFLOW.read_text()})
-    assert r["check"]["conclusion"] == "success", r["check"]
-
-
-def test_an_unrelated_workflow_mentioning_voice_gate_is_not_flagged(tmp_path):
-    """A comment referencing the gate is legitimate and common. A bare substring
-    match would block ordinary CI work with no override, so the guard keys on the
-    three ways a file can actually PUBLISH the context."""
-    wf = ("name: other\non: [pull_request]\njobs:\n  build:\n"
-          "    # see voice-gate.yml for the replay-gate contract\n"
-          "    runs-on: ubuntu-latest\n    steps:\n      - run: \"true\"\n")
-    r = _run(tmp_path, changedFiles=[".github/workflows/other.yml"],
-             contents={".github/workflows/other.yml": wf})
-    assert r["check"]["conclusion"] == "success", r["check"]
-
-
-def test_a_deleted_workflow_is_not_flagged(tmp_path):
-    """A removed file publishes nothing."""
-    r = _run(tmp_path,
-             changedFiles=[{"filename": ".github/workflows/helper.yml", "status": "removed"}],
-             contents={})
-    assert r["check"]["conclusion"] == "success", r["check"]
-
-
-def test_non_workflow_files_are_not_scanned(tmp_path):
-    """The guard is about workflow files; ordinary source must not be fetched or
-    matched (a python file containing the string `voice-gate` is routine)."""
-    r = _run(tmp_path, changedFiles=["scripts/maintenance/voice_gate_check.py"],
-             contents={})
-    assert r["check"]["conclusion"] == "success", r["check"]
