@@ -84,7 +84,7 @@ Do not refactor the whole app as cleanup. Do not create `_new`, `_fixed`, `_v2`,
 
 ## Review pipeline — deterministic gate, semantic review, advisory SaaS
 
-**Re-tiered 2026-07-30** (4-vendor review consensus + this repo's own incident history).
+**Re-tiered 2026-07-31** (4-vendor review consensus + this repo's own incident history).
 The principle: **what BLOCKS a merge must be deterministic, locally runnable, and
 reproducible on demand.** Everything judgement-shaped — an LLM reading a diff — is
 advisory. It is still where most real defects are caught, and it is still mandatory
@@ -106,7 +106,7 @@ Exactly three contexts block a merge. Each is reproducible on a laptop:
 |---|---|---|
 | `validate` | structure + critical-file validators, offline-memory policy, Alembic migrations, **actionlint with a negative control**, `py_compile` over every zoe-data module, the `ci_safe` unit lanes + full zoe-auth suite | `python3 tools/audit/validate_structure.py`; `pytest services/zoe-data/tests -m ci_safe` |
 | `secret-scan` | ggshield over **branch history**, not just the head tree | `ggshield secret scan ci` |
-| `voice-gate` | a voice-path diff has a fresh, passing replay-gate artifact against the current baseline | `python3 scripts/maintenance/voice_gate_check.py --scope-only --diff origin/main...HEAD` |
+| `voice-gate` | a voice-path diff has a fresh, passing replay-gate artifact **produced by exercising this PR's head commit** | `python3 scripts/maintenance/voice_gate_check.py --scope-only --diff origin/main...HEAD` |
 
 Plus `required_conversation_resolution` (every thread resolved) and `strict` (up to date
 with `main`). Keep this set MINIMAL — every addition is a new way to freeze `main`.
@@ -118,6 +118,26 @@ fact. It now runs at PR time too. It is safe as a universal required context bec
 **always reports a conclusion**: PRs touching no voice-path file pass trivially and never
 involve the Jetson; only a voice-path diff escalates to the self-hosted assertion. The
 post-merge deploy check STAYS — defence in depth.
+
+Two properties make it trustworthy rather than merely present:
+
+- **The evidence is BOUND to the PR head.** Freshness plus `status: pass` does not say
+  *which code* was tested — a passing run against `main` would otherwise clear every voice
+  PR for the whole 24h window. The probe now records the commit it exercised and the gate
+  passes `--expect-revision <PR head sha>`, so an artifact for any other commit (or from a
+  dirty worktree, which cannot be attributed to a commit at all) is refused. Practical
+  consequence, and it is the correct fail-closed cost: a voice-path PR needs the probe run
+  against a **checkout of that PR's head**, and re-run after every push to it.
+- **The PR is DATA, never code.** A pull request is untrusted input, and the evidence job
+  runs on the Jetson — the box that also runs the live voice brain. Both jobs check out
+  `base.sha` and run the checker from that trusted tree; the PR enters only as an
+  API-supplied changed-file list plus a 40-hex head sha. Running the PR's own copy of the
+  checker would have allowed both a **bypass** (edit it to report no voice files) and
+  **arbitrary code execution on the Jetson**. Fork PRs additionally cannot reach the
+  self-hosted runner without a maintainer applying `voice-gate-approved`. The trust model
+  is stated at the top of `.github/workflows/voice-gate.yml`; if you edit that file, the
+  question is not "is this safe?" but "does this read, write, or execute anything the PR
+  author controls?"
 
 **Coverage is EVIDENCE, not a gate.** Report it, read it, do not auto-block on a
 threshold; a coverage number is trivially satisfiable without testing anything real.
@@ -138,7 +158,7 @@ Binding worker routing:
 - **`codex` (ChatGPT subscription, flat-rate):** second implementer for narrow changes,
   and primary independent reviewer of Claude-implemented work.
 - **Fable (`claude-fable-5`) — METERED, NOT the free always-on checker.** *(correction,
-  2026-07-30: earlier notes implied Fable rode the flat-rate Max plan.)* Fable draws on a
+  2026-07-31: earlier notes implied Fable rode the flat-rate Max plan.)* Fable draws on a
   **separate metered credit pool that can be exhausted**, and when it is exhausted it is
   simply unavailable. Reserve it for **topped-up-credit strong-check moments** — a
   deliberate deep check on genuinely load-bearing work — never for bulk implementation and
@@ -163,7 +183,8 @@ report findings.
 
 ### Tier 3 — Greptile: ADVISORY, on demand for high-risk changes
 
-Greptile is a non-deterministic SaaS reviewer and is **not** a required context. It is
+Greptile was a REQUIRED status check from 2026-07-27 until **2026-07-31, when it was demoted
+to advisory** — a non-deterministic third-party service must not be able to freeze `main`. It is
 still genuinely good at whole-repo context, so keep it for high-risk work — voice path,
 auth, migrations, anything flag-gated — and skip it for routine changes.
 
@@ -223,10 +244,18 @@ timeout. With `enforce_admins: true` and a solo owner there is no in-band escape
   that are **not already green**, posts a permanent audit comment naming actor / head /
   reason / each forced context and its real state, and then **removes the label** — the
   override is single-use and applies to that head commit only.
+- **It overrides ANY non-green required context, including a genuinely FAILING one.** It
+  cannot distinguish "never reported because the vendor is down" from "ran and said no".
+  `secret-scan` is covered, so it **can override a real secret-scan failure**. That is a
+  deliberate audited owner-emergency capability, not an oversight — excluding `secret-scan`
+  would recreate the permanent freeze whenever GitGuardian is what is down. The audit
+  comment records each context's real state, so a forced `failure` is distinguishable from
+  a forced `missing` forever.
 - It does **not** bypass `required_conversation_resolution`. Unresolved threads still
-  block, deliberately: an outage cannot make a thread unresolvable.
-- **This is for OUTAGES, not for red checks.** A check failing for a real reason is a bug
-  to fix. Every use is permanently visible on the PR.
+  block, deliberately: an outage cannot make a thread unresolvable. It also cannot
+  force-push, merge, or change branch protection — it only publishes check runs.
+- **The intended use is an OUTAGE.** Using it on a genuinely red check is a decision to
+  merge known-bad code, and the audit trail makes that permanently attributable.
 - Normal enforcement is unchanged. Still never `--admin` / `--force`.
 
 ### Tier by risk

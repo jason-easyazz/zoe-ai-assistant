@@ -8,9 +8,35 @@
 # closes it. The deploy-side assertion STAYS (defence in depth, and it is the last
 # thing standing between an unproven voice path and Jason's actual house).
 #
+# ============================ TRUST MODEL (read this) ========================
+# A pull request is UNTRUSTED INPUT. This workflow runs a job on `self-hosted` —
+# the Jetson that also runs the live voice brain — so "untrusted" here means
+# "arbitrary code execution on the production box" if it is got wrong.
+#
+#   * NOTHING from the PR head is ever CHECKED OUT or EXECUTED. Not on the
+#     self-hosted runner, and not on the hosted one either. Both jobs check out
+#     `github.event.pull_request.base.sha` — code that is already merged and
+#     reviewed — and run the checker from THAT tree.
+#   * The pull request enters only as DATA: a changed-file list fetched from the
+#     GitHub API, and a 40-hex head SHA. Reading a filename can do nothing;
+#     running the PR's own copy of the checker could do anything.
+#   * Two distinct attacks are closed by the same rule. (a) BYPASS: a PR that
+#     edits voice_gate_check.py to print `voice=false` would have waved itself
+#     through, because the gate was running the PR's own classifier. (b) RCE: a
+#     fork PR touching any voice-path file would have executed its own
+#     voice_gate_check.py on the Jetson.
+#   * FORK PRs additionally cannot reach the self-hosted runner at all without an
+#     explicit maintainer action — see `replay-evidence`'s `if:`. Defence in
+#     depth: even with only trusted code executing, a fork should not be able to
+#     make the production box do work on demand.
+#
+# If you add a step here, the question to ask is not "is this safe?" but "does
+# this read, write, or execute anything the PR author controls?"
+# =============================================================================
+#
 # WHY IT IS SAFE AS A UNIVERSAL REQUIRED CONTEXT: `voice-gate` runs on EVERY PR
 # and ALWAYS reports a conclusion. On a PR that touches no voice-path file it
-# passes trivially and never involves the Jetson at all. Only a voice-path diff
+# passes trivially and never involves the Jetson. Only a voice-path diff
 # escalates to the real assertion. This is deliberate: a required context that
 # reports on only SOME PRs is worse than no gate — GitHub blocks forever waiting
 # for a check that will never arrive (which is why `paths:` filters are absent
@@ -29,8 +55,9 @@ on:
     # BRANCH changes. A retarget changes the diff without moving the head SHA, so
     # without it a PR could be re-based onto a target where its diff DOES touch
     # voice while carrying a scope verdict computed against the old base.
-    # (Salvaged from #1592, which established the same fact for its own reasons.)
-    types: [opened, synchronize, reopened, edited]
+    # `labeled` re-runs the gate when a maintainer approves a fork PR for the
+    # self-hosted job (see `replay-evidence`).
+    types: [opened, synchronize, reopened, edited, labeled]
   # Harmless until a merge queue exists (none is produced without one), but a
   # required check that cannot report on merge_group stalls a queue forever —
   # same reasoning as validate.yml. See docs/knowledge/merge-queue-switch.md.
@@ -39,6 +66,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: voice-gate-${{ github.event.pull_request.number || github.ref }}
@@ -46,10 +74,13 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------- scope ----
-  # Hosted, cheap, runs on every PR. Decides ONLY "does this diff touch the voice
-  # runtime path" — it never reads the artifact and never blocks. The voice-path
-  # glob set lives in scripts/maintenance/voice_gate_check.py so the PR gate and
-  # the deploy gate can never disagree about what "voice path" means.
+  # Hosted, cheap, runs on every PR. Decides ONLY "does this change touch the
+  # voice runtime path" — it never reads the artifact and never blocks. The
+  # voice-path glob set lives in scripts/maintenance/voice_gate_check.py so the PR
+  # gate and the deploy gate can never disagree about what "voice path" means.
+  #
+  # TRUSTED CODE, UNTRUSTED DATA: the checker comes from the BASE commit; the
+  # changed-file list comes from the API. The PR's own tree is never fetched.
   scope:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -57,38 +88,66 @@ jobs:
       voice: ${{ steps.scope.outputs.voice }}
       files: ${{ steps.scope.outputs.files }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the BASE commit (trusted code only)
+        uses: actions/checkout@v4
         with:
-          # The scope job diffs against the merge base, so it needs real history.
-          # A shallow clone makes `git diff base...HEAD` fail, which the checker
-          # treats as UNKNOWN and therefore as voice-touching — fail-closed, but
-          # it would escalate every PR to the Jetson for no reason.
-          fetch-depth: 0
+          # NOT the PR head, and NOT the default merge ref — both contain code the
+          # PR author controls. `base.sha` is already on the target branch.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          # No git history needed any more: the changed-file list comes from the
+          # API rather than `git diff`, which also removes the shallow-clone trap.
+          fetch-depth: 1
+          # Do not leave a usable credential on the runner for later steps.
+          persist-credentials: false
 
-      - name: Classify the diff (voice-path or not)
-        id: scope
+      - name: Fetch the changed-file list (data, not code)
+        id: files
+        if: github.event_name == 'pull_request'
         env:
-          # merge_group has no pull_request payload; fall back to its base.
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          if [ -z "${BASE_SHA}" ]; then
-            # No base to diff against (workflow_dispatch). Pass no range at all:
-            # the checker treats a missing range as UNKNOWN -> gate required.
-            python3 scripts/maintenance/voice_gate_check.py --scope-only --repo .
-          else
-            # Three-dot: diff against the MERGE BASE, so commits landing on main
-            # after this branch forked are not misread as part of the PR.
+          set -euo pipefail
+          # --paginate: a truncated file list would silently read as "no voice
+          # files changed" on a large PR — the exact false-clear this gate exists
+          # to prevent.
+          gh api --paginate "repos/${REPO}/pulls/${PR}/files" \
+            --jq '.[].filename' > changed-files.txt
+          echo "Changed files: $(wc -l < changed-files.txt)"
+
+      - name: Classify the change (voice-path or not)
+        id: scope
+        run: |
+          set -euo pipefail
+          if [ -f changed-files.txt ]; then
             python3 scripts/maintenance/voice_gate_check.py \
-              --scope-only --repo . --diff "${BASE_SHA}...HEAD"
+              --scope-only --changed-files-from changed-files.txt
+          else
+            # merge_group / workflow_dispatch: no PR file list available. The
+            # checker treats a missing list as UNKNOWN -> gate required.
+            python3 scripts/maintenance/voice_gate_check.py --scope-only
           fi
 
   # ------------------------------------------------------------- evidence ----
   # Self-hosted, and ONLY for voice-path PRs. Asserts the same artifact contract
-  # the deploy path asserts: a fresh, PASSING replay-gate result produced against
-  # the CURRENT baseline. Missing / stale / skipped / failed all BLOCK.
+  # the deploy path asserts — plus the revision binding, which the deploy path
+  # does not need and the PR path cannot do without: a fresh passing artifact from
+  # `main` would otherwise clear every voice PR for the whole freshness window.
+  #
+  # FORK GATING: a fork PR reaches this job only when a maintainer applies the
+  # `voice-gate-approved` label. Without that it stays skipped, and the summary
+  # job below then FAILS the PR (fail-closed) with instructions. Same-repo PRs —
+  # how this repo actually works — are unaffected. An `environment:` with required
+  # reviewers can be layered on top for a second, GitHub-enforced approval; it is
+  # deliberately not wired here because a missing environment blocks every PR.
   replay-evidence:
     needs: scope
-    if: needs.scope.outputs.voice == 'true'
+    if: >-
+      needs.scope.outputs.voice == 'true' &&
+      github.event_name == 'pull_request' &&
+      (github.event.pull_request.head.repo.full_name == github.repository ||
+       contains(github.event.pull_request.labels.*.name, 'voice-gate-approved'))
     runs-on: self-hosted
     # Bounds a hung read. Note this does NOT bound QUEUE time: if the Jetson
     # runner is offline this job waits, `voice-gate` waits with it, and the PR is
@@ -96,14 +155,32 @@ jobs:
     # (.github/workflows/break-glass.yml) is the documented recovery.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the BASE commit (trusted code only)
+        uses: actions/checkout@v4
+        with:
+          # THE load-bearing line for the self-hosted runner. Checking out the PR
+          # head here would execute attacker-controlled code on the box that runs
+          # the live voice brain.
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
 
-      - name: Assert a fresh passing replay-gate result
+      - name: Assert a fresh passing replay-gate result BOUND to this PR head
+        env:
+          # The PR head enters as a 40-hex string and is only ever COMPARED
+          # against the sha the probe recorded. The checker validates its shape
+          # and refuses anything else.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FILES: ${{ needs.scope.outputs.files }}
         run: |
-          echo "Voice-path files in this PR: ${{ needs.scope.outputs.files }}"
-          # --require: the scope job already decided this PR needs the gate, so
-          # assert unconditionally rather than re-deriving the diff on the box.
-          python3 scripts/maintenance/voice_gate_check.py --require --repo .
+          set -euo pipefail
+          echo "Voice-path files in this PR: ${FILES}"
+          echo "Requiring replay-gate evidence bound to ${HEAD_SHA}"
+          # --require: scope already decided this PR needs the gate.
+          # --expect-revision: the artifact must record having exercised THIS
+          # commit. Freshness alone is not evidence for this PR's code.
+          python3 scripts/maintenance/voice_gate_check.py \
+            --require --expect-revision "${HEAD_SHA}"
 
   # ----------------------------------------------------------- the verdict ----
   # THE REQUIRED CONTEXT. `if: always()` plus `needs` on both jobs is what
@@ -122,14 +199,16 @@ jobs:
           VOICE: ${{ needs.scope.outputs.voice }}
           FILES: ${{ needs.scope.outputs.files }}
           EVIDENCE_RESULT: ${{ needs.replay-evidence.result }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          echo "scope=${SCOPE_RESULT} voice=${VOICE} evidence=${EVIDENCE_RESULT}"
+          echo "scope=${SCOPE_RESULT} voice=${VOICE} evidence=${EVIDENCE_RESULT} fork=${IS_FORK}"
 
           # 1. Could not classify -> fail closed. An unreadable scope job is not
           #    evidence of a non-voice PR.
           if [ "${SCOPE_RESULT}" != "success" ]; then
-            echo "::error::voice-gate: the scope job ended '${SCOPE_RESULT}' — cannot tell whether this PR touches the voice path, so it is treated as if it does. Re-run the job; if it keeps failing, fix the scope step (it is plain git + python, runnable locally: python3 scripts/maintenance/voice_gate_check.py --scope-only --diff origin/main...HEAD)."
+            echo "::error::voice-gate: the scope job ended '${SCOPE_RESULT}' — cannot tell whether this PR touches the voice path, so it is treated as if it does. Re-run the job; if it keeps failing, fix the scope step (it is plain python over an API-supplied file list, runnable locally: python3 scripts/maintenance/voice_gate_check.py --scope-only --diff origin/main...HEAD)."
             exit 1
           fi
 
@@ -147,18 +226,34 @@ jobs:
 
           # 3. Voice-path files -> the evidence job is the verdict, fail-closed.
           if [ "${EVIDENCE_RESULT}" = "success" ]; then
-            echo "voice-gate: PASS — voice-path change with a fresh passing replay-gate result."
+            echo "voice-gate: PASS — voice-path change with a fresh passing replay-gate result bound to ${HEAD_SHA}."
             {
               echo "### voice-gate: PASS (replay gate proven)"
               echo ""
               echo "Voice-path files: \`${FILES}\`"
+              echo ""
+              echo "Evidence bound to head \`${HEAD_SHA}\`."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          # 'skipped' here means the self-hosted job never ran despite being
+          # A fork PR whose evidence job was gated off looks identical to a
+          # missing runner unless it is named — say which it is.
+          if [ "${EVIDENCE_RESULT}" = "skipped" ] && [ "${IS_FORK}" = "true" ]; then
+            echo "::error::voice-gate: BLOCKED — this fork PR changes the voice runtime path (${FILES}). The replay-gate evidence job runs on the self-hosted Jetson and is NOT run for forks automatically. A maintainer must review the diff and apply the 'voice-gate-approved' label to allow it."
+            {
+              echo "### voice-gate: BLOCKED (fork PR needs maintainer approval)"
+              echo ""
+              echo "Voice-path files: \`${FILES}\`"
+              echo ""
+              echo "A maintainer must review this diff and apply \`voice-gate-approved\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # 'skipped' otherwise means the self-hosted job never ran despite being
           # required — name that case explicitly, it looks like a pass otherwise.
-          echo "::error::voice-gate: BLOCKED — this PR changes the voice runtime path (${FILES}) and the replay-gate evidence job ended '${EVIDENCE_RESULT}'. On the Jetson as user zoe, run: flock /tmp/zoe-voice-harness.lock python3 scripts/maintenance/voice_regression_probe.py --samples 20 --service-dir /home/zoe/assistant/services/zoe-data — then re-run this workflow. If the self-hosted runner is offline, see the break-glass procedure in docs/knowledge/merge-and-deploy.md."
+          echo "::error::voice-gate: BLOCKED — this PR changes the voice runtime path (${FILES}) and the replay-gate evidence job ended '${EVIDENCE_RESULT}'. The evidence must be BOUND to this head (${HEAD_SHA}): on the Jetson as user zoe, check out this commit and run the probe against it — git worktree add ~/.worktrees/voice-gate ${HEAD_SHA} && flock /tmp/zoe-voice-harness.lock python3 scripts/maintenance/voice_regression_probe.py --samples 20 --service-dir ~/.worktrees/voice-gate/services/zoe-data — then re-run this workflow. An artifact for any other commit is evidence for different code and will not clear this PR. If the self-hosted runner is offline, see the break-glass procedure in docs/knowledge/merge-and-deploy.md."
           {
             echo "### voice-gate: BLOCKED"
             echo ""
@@ -166,6 +261,6 @@ jobs:
             echo ""
             echo "Replay-gate evidence job: \`${EVIDENCE_RESULT}\`"
             echo ""
-            echo "Re-run the replay probe on the Jetson, then re-run this workflow."
+            echo "Evidence must be bound to head \`${HEAD_SHA}\` — re-run the probe against a checkout of that commit."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1

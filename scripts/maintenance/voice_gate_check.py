@@ -114,6 +114,37 @@ def parse_iso_z(ts: str | None) -> float | None:
     return None
 
 
+def revision_matches(artifact: dict[str, Any], expect_revision: str | None) -> tuple[bool, str]:
+    """The gate result must come from exercising THIS revision.
+
+    Freshness + status do not bind an artifact to the code under review. A passing
+    run against `main`, or against an unrelated earlier commit, is fresh and
+    passing — and would clear every voice PR for the whole freshness window. That
+    is evidence for some OTHER code presented as evidence for this one.
+
+    When `expect_revision` is supplied (the PR gate always supplies it) the
+    artifact must carry `revision.commit` equal to it, and must not have come from
+    a DIRTY tree: an uncommitted worktree cannot be attributed to a commit, so the
+    recorded sha would be a claim about code that was not the code that ran."""
+    if not expect_revision:
+        return True, ""
+    rev = artifact.get("revision")
+    if not isinstance(rev, dict) or not rev.get("commit"):
+        return False, ("voice replay-gate artifact records NO revision, so it cannot be "
+                       f"attributed to {expect_revision[:8]} — re-run the probe against a "
+                       "checkout of this PR's head")
+    if rev.get("dirty"):
+        return False, (f"voice replay-gate ran against a DIRTY worktree at "
+                       f"{str(rev.get('commit'))[:8]} — an uncommitted tree cannot be "
+                       "attributed to a commit; commit or stash, then re-run the probe")
+    got = str(rev.get("commit"))
+    if got != expect_revision:
+        return False, (f"voice replay-gate ran against commit {got[:8]}, but this PR's head "
+                       f"is {expect_revision[:8]} — that artifact is evidence for DIFFERENT "
+                       "code. Re-run the probe against a checkout of this PR's head.")
+    return True, ""
+
+
 def baseline_matches(artifact: dict[str, Any], baseline: dict[str, Any] | None) -> tuple[bool, str]:
     """The gate result must have been produced against the CURRENT baseline.
 
@@ -136,11 +167,13 @@ def baseline_matches(artifact: dict[str, Any], baseline: dict[str, Any] | None) 
 
 
 def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: float,
-             baseline: dict[str, Any] | None = None) -> tuple[bool, str]:
+             baseline: dict[str, Any] | None = None,
+             expect_revision: str | None = None) -> tuple[bool, str]:
     """The heartbeat check, pure and unit-testable. Returns (allowed, reason).
 
     Blocks unless the artifact exists, has status == "pass", is fresh (within
-    max_age_s), and was produced against the current baseline."""
+    max_age_s), was produced against the current baseline, and — when
+    `expect_revision` is given — was produced by exercising that exact revision."""
     if artifact is None:
         return False, ("no voice replay-gate result artifact — the gate never ran "
                        "(a missing artifact is NOT a pass)")
@@ -161,8 +194,14 @@ def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: fl
     ok, why = baseline_matches(artifact, baseline)
     if not ok:
         return False, why
+    ok, why = revision_matches(artifact, expect_revision)
+    if not ok:
+        return False, why
+    bound = ""
+    if expect_revision:
+        bound = f", bound to {expect_revision[:8]}"
     return True, (f"voice replay-gate PASS ({age_s / 3600:.1f}h old, "
-                  f"n={((artifact.get('summary') or {}).get('n_samples'))})")
+                  f"n={((artifact.get('summary') or {}).get('n_samples'))}{bound})")
 
 
 def load_json(path: Path) -> dict[str, Any] | None:
@@ -212,10 +251,28 @@ def _emit_github_output(**pairs: str) -> None:
         print(f"voice-gate: could not write GITHUB_OUTPUT ({exc})", file=sys.stderr)
 
 
+def read_changed_files(path: Path) -> list[str] | None:
+    """Read a newline-separated changed-file list. None if unreadable.
+
+    This is how the PR gate learns what a pull request touched WITHOUT checking
+    out or executing any of its code: the file list comes from the GitHub API as
+    inert data, and this trusted (base-branch) checker classifies it. Reading a
+    filename can do nothing; running the PR's own checker could do anything."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"voice-gate: could not read changed-file list {path} ({exc})", file=sys.stderr)
+        return None
+    return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+
 def _scope_only(args: argparse.Namespace) -> int:
     """The scope job's whole body: classify the diff, publish the verdict, exit 0."""
     changed: list[str] | None
-    if not args.diff:
+    if args.changed_files_from:
+        # PR path: the file list is DATA supplied by the workflow (GitHub API).
+        changed = read_changed_files(args.changed_files_from)
+    elif not args.diff:
         # No range to narrow with: treat as "unknown", i.e. gate required.
         changed = None
     else:
@@ -252,9 +309,28 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-baseline-check", action="store_true",
                     help="skip the baseline-identity match (freshness + status only)")
     ap.add_argument("--scope-only", action="store_true",
-                    help="report whether --diff touches the voice path and exit 0 "
+                    help="report whether the change touches the voice path and exit 0 "
                          "without asserting any artifact (PR-time scope job)")
+    ap.add_argument("--changed-files-from", type=Path, metavar="PATH",
+                    help="read the changed-file list from PATH (one per line) instead "
+                         "of running git diff. The PR gate uses this so a pull request "
+                         "is consumed as DATA, never executed.")
+    ap.add_argument("--expect-revision", metavar="SHA",
+                    help="require the artifact to record having exercised this exact "
+                         "commit. The PR gate always passes the PR head sha; without it "
+                         "any fresh passing artifact (e.g. from main) would clear the PR.")
     args = ap.parse_args(argv)
+
+    # A revision is an opaque identifier that only ever gets COMPARED, but pin the
+    # shape anyway: a malformed value should fail loudly here rather than silently
+    # mismatch and read as an ordinary evidence failure.
+    if args.expect_revision:
+        rev = args.expect_revision.strip().lower()
+        if len(rev) != 40 or any(c not in "0123456789abcdef" for c in rev):
+            print(f"voice-gate: --expect-revision must be a 40-char hex sha, got "
+                  f"{args.expect_revision!r}", file=sys.stderr)
+            return 1
+        args.expect_revision = rev
 
     # 0. SCOPE-ONLY: answer "does this diff touch voice?" and stop. Used by the
     #    PR-time gate's scope job, which runs on a GitHub-hosted runner where the
@@ -290,20 +366,37 @@ def main(argv: list[str] | None = None) -> int:
     baseline = None if args.no_baseline_check else load_json(args.baseline)
     allowed, reason = evaluate(
         artifact, now_epoch=time.time(),
-        max_age_s=args.max_age_hours * 3600.0, baseline=baseline)
+        max_age_s=args.max_age_hours * 3600.0, baseline=baseline,
+        expect_revision=args.expect_revision)
 
     if allowed:
         print(f"voice-gate: OK — {reason}  (artifact: {args.artifact})")
         return 0
-    print(f"voice-gate: BLOCKED — {reason}\n"
-          f"  artifact: {args.artifact}\n"
-          "  Run the replay gate against the current baseline before deploying a "
-          "voice-path change:\n"
-          "    flock /tmp/zoe-voice-harness.lock \\\n"
-          "      python3 scripts/maintenance/voice_regression_probe.py\n"
-          "  (--service-dir auto-resolves to the live services/zoe-data, incl. "
-          "from a git worktree)",
-          file=sys.stderr)
+    msg = [f"voice-gate: BLOCKED — {reason}", f"  artifact: {args.artifact}"]
+    if args.expect_revision:
+        # PR gate: the evidence must come from exercising THIS commit, so the
+        # probe has to run against a checkout of it — not against the live tree.
+        msg += [
+            f"  Run the replay gate against THIS PR's head ({args.expect_revision[:8]}) "
+            "on the Jetson as user zoe:",
+            f"    git -C /home/zoe/assistant fetch origin {args.expect_revision}",
+            f"    git worktree add ~/.worktrees/voice-gate {args.expect_revision}",
+            "    flock /tmp/zoe-voice-harness.lock \\",
+            "      python3 scripts/maintenance/voice_regression_probe.py \\",
+            "        --samples 20 --service-dir ~/.worktrees/voice-gate/services/zoe-data",
+            "  The probe records the commit it exercised; an artifact for any other",
+            "  commit is evidence for different code and will not clear this PR.",
+        ]
+    else:
+        msg += [
+            "  Run the replay gate against the current baseline before deploying a "
+            "voice-path change:",
+            "    flock /tmp/zoe-voice-harness.lock \\",
+            "      python3 scripts/maintenance/voice_regression_probe.py",
+            "  (--service-dir auto-resolves to the live services/zoe-data, incl. "
+            "from a git worktree)",
+        ]
+    print("\n".join(msg), file=sys.stderr)
     return 1
 
 

@@ -187,6 +187,178 @@ def test_probe_pass_artifact_clears_the_checker(tmp_path):
     assert ok is True
 
 
+# --- revision binding: evidence must name what it is evidence FOR -----------
+# Freshness + status do NOT bind an artifact to the code under review. Before
+# this, a fresh passing run against `main` cleared every voice PR for the whole
+# freshness window — evidence for some other code, presented as evidence for
+# this one.
+PR_SHA = "1" * 40
+OTHER_SHA = "2" * 40
+
+
+def artifact_with_revision(commit=PR_SHA, dirty=False, **kw):
+    art = artifact(**kw)
+    art["revision"] = {"commit": commit, "tree": "t" * 40, "dirty": dirty,
+                       "service_dir": "/x/services/zoe-data"}
+    return art
+
+
+def test_artifact_for_a_different_sha_is_rejected():
+    """THE hole this closes: a fresh, passing, current-baseline artifact produced
+    against ANY other commit must not clear this PR."""
+    ok, why = vgc.evaluate(artifact_with_revision(commit=OTHER_SHA),
+                           now_epoch=NOW, max_age_s=DAY, expect_revision=PR_SHA)
+    assert ok is False
+    assert "DIFFERENT" in why
+    assert OTHER_SHA[:8] in why and PR_SHA[:8] in why
+
+
+def test_artifact_without_a_revision_is_rejected_when_binding_is_required():
+    """Artifacts predating revision-recording (and any probe that could not
+    resolve one) are UNATTRIBUTED. Unattributed is not a pass."""
+    ok, why = vgc.evaluate(artifact(), now_epoch=NOW, max_age_s=DAY,
+                           expect_revision=PR_SHA)
+    assert ok is False
+    assert "NO revision" in why
+
+
+def test_dirty_worktree_artifact_is_rejected():
+    """A dirty tree cannot be attributed to a commit — the recorded sha would be a
+    claim about code that is not the code that ran."""
+    ok, why = vgc.evaluate(artifact_with_revision(dirty=True),
+                           now_epoch=NOW, max_age_s=DAY, expect_revision=PR_SHA)
+    assert ok is False
+    assert "DIRTY" in why
+
+
+def test_matching_revision_clears():
+    """Positive control — without it every negative above could pass by blocking
+    unconditionally."""
+    ok, why = vgc.evaluate(artifact_with_revision(),
+                           now_epoch=NOW, max_age_s=DAY, expect_revision=PR_SHA)
+    assert ok is True
+    assert PR_SHA[:8] in why
+
+
+def test_revision_binding_is_opt_in_for_the_deploy_path():
+    """The deploy path binds by incoming DIFF plus freshness and passes no
+    expected revision; adding the PR-side check must not start blocking deploys."""
+    ok, _ = vgc.evaluate(artifact(), now_epoch=NOW, max_age_s=DAY,
+                         expect_revision=None)
+    assert ok is True
+
+
+def test_revision_binding_composes_with_the_other_gates():
+    """A matching revision must not RESCUE an otherwise-bad artifact — a stale or
+    non-pass result stays blocked even when the sha lines up."""
+    stale = artifact_with_revision(age_h=48.0)
+    assert vgc.evaluate(stale, now_epoch=NOW, max_age_s=DAY,
+                        expect_revision=PR_SHA)[0] is False
+    skipped = artifact_with_revision(status="skip")
+    assert vgc.evaluate(skipped, now_epoch=NOW, max_age_s=DAY,
+                        expect_revision=PR_SHA)[0] is False
+
+
+def test_malformed_expect_revision_is_refused_loudly(tmp_path, capsys):
+    """A malformed sha must fail as a CONFIGURATION error, not silently mismatch
+    and read as an ordinary evidence failure."""
+    assert vgc.main(["--require", "--expect-revision", "not-a-sha",
+                     "--artifact", str(tmp_path / "none.json")]) == 1
+    assert "40-char hex" in capsys.readouterr().err
+
+
+# --- the probe records what it exercised (producer side) --------------------
+def _git_repo(tmp_path, dirty=False):
+    """A throwaway git checkout with a services/zoe-data dir, like the real one."""
+    import os as _os
+    import subprocess as sp
+    repo = tmp_path / "r"
+    (repo / "services" / "zoe-data").mkdir(parents=True)
+    env = {**_os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    sp.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "f.txt").write_text("x\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "c"], check=True, env=env)
+    head = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+    if dirty:
+        (repo / "f.txt").write_text("uncommitted edit\n")
+    return repo, head
+
+
+def test_probe_records_the_service_revision(tmp_path):
+    """The producer half of the binding: the artifact must carry the commit the
+    probe actually ran against, or the gate has nothing to compare."""
+    import json as _json
+    repo, head = _git_repo(tmp_path)
+    args = _Args(tmp_path)
+    args.service_dir = str(repo / "services" / "zoe-data")
+    vrp.emit_result(args, status="pass", summary={"n_samples": 20},
+                    said_vs_did=[], speed_deltas={}, baseline={})
+    payload = _json.loads(args.results.read_text())
+    assert payload["revision"]["commit"] == head
+    assert payload["revision"]["dirty"] is False
+    # end to end: this artifact clears its OWN sha and nothing else
+    assert vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
+                        expect_revision=head)[0] is True
+    assert vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
+                        expect_revision=OTHER_SHA)[0] is False
+
+
+def test_probe_reports_a_dirty_tree_honestly(tmp_path):
+    """It must not launder an uncommitted tree into a clean-looking attribution."""
+    import json as _json
+    repo, head = _git_repo(tmp_path, dirty=True)
+    args = _Args(tmp_path)
+    args.service_dir = str(repo / "services" / "zoe-data")
+    vrp.emit_result(args, status="pass", summary={"n_samples": 20},
+                    said_vs_did=[], speed_deltas={}, baseline={})
+    payload = _json.loads(args.results.read_text())
+    assert payload["revision"]["dirty"] is True
+    assert vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
+                        expect_revision=head)[0] is False
+
+
+def test_probe_without_a_service_dir_records_no_revision(tmp_path):
+    """Back-compat: emit_result is also called with lightweight arg objects. A
+    missing revision must be None (and therefore unattributed), never a crash."""
+    import json as _json
+    args = _Args(tmp_path)
+    vrp.emit_result(args, status="pass", summary={"n_samples": 20},
+                    said_vs_did=[], speed_deltas={}, baseline={})
+    assert _json.loads(args.results.read_text())["revision"] is None
+
+
+# --- changed-file list as DATA (the PR is never executed) -------------------
+def test_changed_files_from_classifies_without_git(tmp_path, monkeypatch, capsys):
+    """The PR gate learns what changed from an API-supplied file list, so it never
+    has to fetch or run the PR's own tree."""
+    listing = tmp_path / "changed.txt"
+    listing.write_text("docs/PLANS.md\nservices/zoe-data/fast_tiers.py\n")
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    assert vgc.main(["--scope-only", "--changed-files-from", str(listing)]) == 0
+    body = out.read_text()
+    assert "voice=true" in body
+    assert "services/zoe-data/fast_tiers.py" in body
+
+    listing.write_text("docs/PLANS.md\nREADME.md\n")
+    out.write_text("")
+    assert vgc.main(["--scope-only", "--changed-files-from", str(listing)]) == 0
+    assert "voice=false" in out.read_text()
+    assert "CLEAR" in capsys.readouterr().out
+
+
+def test_unreadable_changed_file_list_fails_closed(tmp_path, monkeypatch):
+    """A missing list is UNKNOWN, not 'nothing changed'."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    assert vgc.main(["--scope-only",
+                     "--changed-files-from", str(tmp_path / "nope.txt")]) == 0
+    assert "voice=true" in out.read_text()
+
+
 # --- scope classification (the PR-time gate's first half) -------------------
 # `--scope-only` runs on a hosted runner where the replay artifact CANNOT exist.
 # It classifies and never asserts, which is what lets the required `voice-gate`

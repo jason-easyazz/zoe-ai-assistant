@@ -1,15 +1,17 @@
 # Greptile is ADVISORY. This workflow is a COST CONTROLLER, not a merge gate.
 #
-# WHAT CHANGED AND WHY (the re-tiering, 2026-07-30):
-# Greptile is a non-deterministic SaaS reviewer. It was never a required context
-# in branch protection, but this workflow was built as though it were about to
-# become one, and grew the machinery that implies: cross-PR shared-SHA
-# coordination, Copilot bounded-grace summons with forgery-resistant markers,
-# a full SHA-revalidation lifecycle, and a `checksOk` term reading an EMPTY
-# `REQUIRED_CHECKS` list — vacuously true, so the condition it looked like it
-# enforced was enforcing nothing at all. ~573 lines of inline JavaScript whose
-# only CI coverage was actionlint, and the source of an 11-round fail-open
-# cascade in review.
+# WHAT CHANGED AND WHY (the re-tiering, 2026-07-31):
+# Greptile is a non-deterministic SaaS reviewer. `Greptile Review` WAS a REQUIRED
+# status check in branch protection until 2026-07-31, when it was DEMOTED to
+# advisory as part of this work — a merge gate that depends on a third-party
+# service we do not control is a merge gate that a vendor outage can freeze.
+# Around that requirement this workflow had grown the machinery a required SaaS
+# gate implies: cross-PR shared-SHA coordination, Copilot bounded-grace summons
+# with forgery-resistant markers, a full SHA-revalidation lifecycle, and a
+# `checksOk` term reading an EMPTY `REQUIRED_CHECKS` list — vacuously true, so the
+# condition it looked like it enforced was enforcing nothing at all. ~573 lines of
+# inline JavaScript whose only CI coverage was actionlint, and the source of an
+# 11-round fail-open cascade in review.
 #
 # The merge gate is now DETERMINISTIC and locally runnable — `validate`,
 # `secret-scan`, `voice-gate` — and semantic review is the cross-vendor diff

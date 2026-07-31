@@ -109,14 +109,16 @@ an LLM reading a diff — is advisory. Rationale, tiering and worker routing:
 - Required status checks: **`validate`**, **`secret-scan`**, **`voice-gate`**.
   - The GitGuardian App check is informational — the first-party `secret-scan` job replaced
     it as required so an App outage cannot freeze `main`.
-  - **`voice-gate`** (added 2026-07-30) runs the replay-gate assertion at PR time, closing
+  - **`voice-gate`** (added 2026-07-31) runs the replay-gate assertion at PR time, closing
     the "green main that will not deploy" gap. It **always reports a conclusion**: PRs with
     no voice-path files pass trivially; only a voice-path diff escalates to the self-hosted
     evidence job. The post-merge deploy assertion stays as defence in depth.
-  - **`Greptile Review` is NOT required.** A note here previously claimed it was made
-    required on 2026-07-27; the live branch-protection API never carried it (verified
-    2026-07-30: contexts were `validate`, `secret-scan` only). It is now advisory by
-    design — a non-deterministic SaaS reviewer is not on the required path.
+  - **`Greptile Review` was DEMOTED from required to advisory on 2026-07-31.** It was a
+    required status check from 2026-07-27 until then. It came off the required path because
+    a non-deterministic third-party service we do not control must not be able to freeze
+    `main` — the same reasoning that moved secret scanning from the GitGuardian App to the
+    first-party `secret-scan` job. Greptile still runs and still posts its review; nothing
+    about its findings changed, only whether they hold the merge button.
 - `required_conversation_resolution = true` — **every review thread must be resolved**, not just replied to.
 - `0` required human approvals → green checks + resolved threads = mergeable; repo `allow_auto_merge = true`.
 - **Never** `--admin` / `--force` (no bypassing protection). Merge with `gh pr merge <n> --squash --auto`.
@@ -148,14 +150,54 @@ carrying the fix. `.github/workflows/break-glass.yml` is the in-band escape:
    with a PR number and a reason.
 2. It verifies the actor is a repo **admin** via the API — `write` (enough to apply a
    label) is deliberately not enough. A non-admin's label is stripped and refused.
-3. It force-publishes **only** the required contexts that are not already green, each
-   carrying an output naming the override, the actor and the context's real state.
+3. It force-publishes the required contexts that are not already green, each carrying an
+   output naming the override, the actor and the context's real state.
 4. It posts a permanent audit comment and **removes the label**. The override is
    single-use and bound to that head commit; a new push re-blocks normally.
 
-It does **not** bypass `required_conversation_resolution` — unresolved threads still
-block, deliberately, because an outage cannot make a thread unresolvable. Use it for
-OUTAGES, never for a check that is red for a real reason.
+**What it actually overrides — stated plainly.** It cannot distinguish "the check never
+reported because the vendor is down" from "the check ran and said no". **Any non-green
+required context is forced, including a genuinely FAILING one.** `secret-scan` is in the
+covered set, so this **can override a real secret-scan failure** and merge a commit the
+scanner flagged. That is a deliberate, audited, owner-emergency capability: excluding
+`secret-scan` would recreate the permanent freeze whenever GitGuardian is the thing that
+is down, which is the failure this exists to fix. The audit comment records each context's
+real state, so a forced `failure` is permanently distinguishable from a forced `missing`.
+
+It does **not** bypass `required_conversation_resolution` — unresolved threads still block,
+deliberately, because an outage cannot make a thread unresolvable. It also cannot force-push,
+merge, or alter branch protection; it only publishes check runs through the normal API. The
+intended use is an OUTAGE; using it on a genuinely red check is a decision to merge known-bad
+code, permanently attributable to whoever did it.
+
+### Applying the required-context cutover
+
+`enforce_admins`-protected operator action — an agent must not run this:
+
+```bash
+# -F for the BOOLEAN, -f for the string contexts. Using -f strict=true sends the
+# string "true", which the endpoint rejects — leaving voice-gate unrequired while
+# the command looks like it succeeded.
+gh api -X PATCH repos/jason-easyazz/zoe-ai-assistant/branches/main/protection/required_status_checks \
+  -F strict=true \
+  -f 'contexts[]=validate' \
+  -f 'contexts[]=secret-scan' \
+  -f 'contexts[]=voice-gate'
+
+# verify — never assume the PATCH took
+gh api repos/jason-easyazz/zoe-ai-assistant/branches/main/protection/required_status_checks \
+  --jq '{strict, contexts}'
+```
+
+**Security trade-off of using legacy `contexts` rather than app-pinned `checks`.** The
+`contexts` form matches a required check **by name only**, so *any* app that can publish a
+check run with that name satisfies it. The `checks` form pins each context to an `app_id`.
+We deliberately use `contexts`: app-pinning to GitHub Actions (15368) is precisely what
+would stop the break-glass workflow publishing substitute contexts, and that escape is
+worth more here than the extra pinning. The residual risk is bounded by who can publish
+check runs at all — only apps installed on this repo, all of which are already trusted with
+write-level access. If a future change removes the break-glass path, switch to `checks` with
+`app_id: 15368` and re-tighten.
 
 ## Greptile / greploop gotchas
 
@@ -182,11 +224,15 @@ With `strict = true` only **one** PR can be up-to-date at a time, so a batch of 
 
 - The instant one PR merges, every other open PR goes **BEHIND** and must be branch-updated
   (`gh pr update-branch <n>`) before it can merge. Cascade: nudge **one** PR per merge.
-- **Each branch-update re-runs all checks AND triggers a fresh Greptile review on the new commit,**
-  which frequently posts **new** threads — so updating a "clean" PR can un-clean it (the *re-review
-  treadmill*). Don't mass-update the whole batch; it just re-triggers everyone's Greptile at once.
+- **Each branch-update re-runs all required checks.** It also re-triggers Greptile on any PR
+  still carrying the `greptile` label, which frequently posts **new** threads — so updating a
+  "clean" PR can un-clean it (the *re-review treadmill*). Since Greptile became advisory
+  (2026-07-31) this is a cost and thread-resolution concern, not a merge blocker: only PRs you
+  deliberately labelled for the advisory pass are affected. Still don't mass-update the batch.
 - Branch-update re-review findings are usually **real** (the new commit pulls in others' merged
-  changes): fix-if-real / reply+resolve-if-addressed — don't just re-update and hope.
+  changes): fix-if-real / reply+resolve-if-addressed — don't just re-update and hope. Note the
+  resulting THREADS still block, because `required_conversation_resolution` applies to every
+  thread regardless of who opened it.
 - **Arm auto-merge** so a PR self-merges the moment it's green + resolved + current:
   `gh pr merge <n> --squash --auto --delete-branch`. This is **not** a bypass — GitHub still holds it
   until every gate passes; it just removes the manual click.
@@ -235,11 +281,13 @@ PR forever:**
 - Repo must be on a **GitHub Team/Enterprise** plan (the option is absent on Free/personal).
 - Required checks must run on the **`merge_group`** event — add `on: merge_group:` to `validate.yml`;
   the queue evaluates checks on a temporary `gh-readonly-queue/...` ref.
-- **Greptile must post its `Greptile Review` status on `merge_group` commits.** If Greptile only reacts
-  to `pull_request`, the queue waits on a status that never arrives. **Do not enable the queue until
-  this is proven** — Greptile is a non-negotiable gate here.
+- Every REQUIRED check must report on `merge_group`. Since 2026-07-31 that is `validate`,
+  `secret-scan` and `voice-gate` — all first-party workflows carrying `on: merge_group:`, so this
+  prerequisite is already met. **Greptile is no longer a factor here:** it was demoted to advisory
+  on the same date, so a queue can never wait on a `Greptile Review` status that never arrives.
+  Removing that dependency is one of the things the re-tiering bought.
 - Changing branch protection / enabling the queue is an `enforce_admins`-protected operator action;
-  agents prepare the `merge_group` CI wiring and verify Greptile, the human flips the setting.
+  agents prepare the `merge_group` CI wiring, the human flips the setting.
 
 ## Worktree hygiene
 

@@ -7,24 +7,42 @@
 # escalate to. A gate that can permanently freeze `main` with no in-band recovery
 # is not a safe gate, however correct its enforcement is.
 #
-# THE RULE: enforcement stays exactly as strict as it was. This does not weaken,
-# soften, or add exceptions to any check. It only gives the OWNER a deliberate,
-# audited, single-use override for the case where a required context is not
-# reporting at all — an infrastructure outage, an offline self-hosted runner, a
-# revoked third-party token.
+# WHAT IT ACTUALLY DOES — stated plainly, because a security control described
+# more narrowly than it behaves is a trap for whoever reads the description:
+#
+#   THIS OVERRIDES ANY NON-GREEN REQUIRED CONTEXT, INCLUDING A GENUINELY FAILING
+#   ONE. It does not — and cannot — distinguish "the check never reported because
+#   the vendor is down" from "the check ran and said no". A missing `validate` and
+#   a RED `validate` are both forced to success. `secret-scan` is in the covered
+#   set, so this can override a REAL secret-scan failure and merge a commit that
+#   the scanner flagged as containing a credential.
+#
+# That is a deliberate, audited, owner-emergency capability, not an oversight. The
+# alternative — excluding `secret-scan` — recreates the permanent freeze whenever
+# GitGuardian is the thing that is down, which is the failure this exists to fix.
+# Distinguishing "stuck" from "failing" would also be exactly the wrong place to
+# put cleverness: the whole point is a path that still works when the machinery
+# for deciding things is the machinery that is broken.
+#
+# The INTENDED use is an outage. Using it on a check that is red for a real reason
+# is a decision to merge known-bad code, and the audit trail is written so that
+# decision is permanently attributable.
 #
 # HOW IT IS KEPT HONEST:
 #   * ADMIN ONLY — the actor's permission is verified against the API, not
 #     inferred from being able to apply a label. `write` is not enough.
 #   * SINGLE USE — the label is removed after firing, so it is armed per head.
 #     A new push re-blocks and needs a fresh, deliberate re-application.
-#   * ONLY WHAT IS STUCK — contexts that are already green are left untouched and
-#     reported as such; only genuinely non-green contexts are forced.
+#   * MINIMAL BLAST RADIUS — contexts that are already green are left untouched
+#     and reported as such; only non-green contexts are forced.
 #   * LOUD — every use posts a permanent audit comment naming the actor, the SHA,
-#     each forced context and its real state at the time.
+#     each forced context and ITS REAL STATE at the time, so a forced `failure` is
+#     visibly different from a forced `missing` in the record.
 #   * NOT A THREAD BYPASS — `required_conversation_resolution` is unaffected.
 #     Unresolved review threads still block the merge, and that is intentional:
 #     an outage cannot make a thread unresolvable.
+#   * NOT A PROTECTION BYPASS — it publishes check runs through the normal API.
+#     It cannot force-push, cannot merge, and cannot alter branch protection.
 #
 # TRIGGER: pull_request_target, so the PRIVILEGED workflow definition comes from
 # the base branch and cannot be redefined by the PR under review. No PR code is
@@ -107,10 +125,14 @@ jobs:
               return;
             }
 
-            // ---- 2. Only force what is actually stuck ---------------------------
-            // A context already green is left alone: the override should be as
-            // small as the outage, and the audit trail should say exactly which
-            // checks were not reporting on their own.
+            // ---- 2. Force every NON-GREEN required context ----------------------
+            // Note what this does and does not discriminate: a context already
+            // green is left alone (minimal blast radius), but everything else is
+            // forced regardless of WHY it is not green. A `missing` context and a
+            // `failure` context are both overridden — see the header. The real
+            // state is captured per context and written into the audit trail, so
+            // "I overrode an outage" and "I overrode a red check" are permanently
+            // distinguishable in the record even though the mechanism is the same.
             const runs = await github.paginate(github.rest.checks.listForRef, {
               ...base, ref: sha, per_page: 100 });
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
@@ -146,8 +168,10 @@ jobs:
                            `* Real state at override time: \`${state}\`\n` +
                            `* Requested by: @${actor} (verified \`admin\`)\n` +
                            `* Reason: ${reason}\n\n` +
-                           `This is NOT a passing check. It is an audited override of a ` +
-                           `required context that was not reporting.`,
+                           `This is NOT a passing check. It is an audited admin override ` +
+                           `of a required context that was not green. Note the real state ` +
+                           `above: if it says \`failure\`, this check RAN AND FAILED and ` +
+                           `the failure was deliberately overridden.`,
                 },
               });
               forced.push(`${name} (was \`${state}\`)`);
@@ -178,8 +202,14 @@ jobs:
               ``,
               `Unresolved review threads are NOT bypassed by this override.`,
               ``,
+              `**Scope of this override:** every non-green required context above was forced,`,
+              `regardless of why it was not green. A \`was \\\`failure\\\`\` entry means that`,
+              `check RAN AND FAILED and the failure was overridden — including \`secret-scan\`,`,
+              `which means a commit the scanner flagged may have been merged. This capability`,
+              `is deliberate and owner-only; the intended use is a vendor/runner OUTAGE.`,
+              ``,
               `Normal enforcement is unchanged. If a required context is failing for a`,
-              `REAL reason, fix the code — this path is for outages only.`,
+              `REAL reason, the fix is to fix the code.`,
             ].join('\n');
             await github.rest.issues.createComment({ ...base, issue_number: num, body });
             core.notice(`break-glass: forced [${forced.join(', ') || 'nothing'}] on ${sha} for @${actor}`);
