@@ -25,13 +25,23 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 # ── Harness CLIs (verified to run on arm64/Tegra) ────────────────────────────
 # Separate layers so a failure pinpoints the culprit; the --version calls smoke-test them.
-RUN npm install -g @anthropic-ai/claude-code && claude --version
-RUN npm install -g @openai/codex && codex --version
+#
+# ALL THREE ARE PINNED, for the same reason omnigent is (see the note further down):
+# an UNPINNED `npm install -g` is Docker-layer-cached, so it does NOT re-resolve on a
+# rebuild — it silently freezes at whatever was latest when the layer was first built.
+# These two sat unpinned and the README claimed "latest at build", which was false:
+# codex was stuck at 0.145.0 while 0.146.0 was current, and no rebuild would have
+# moved it because the layer never invalidated. Pinning makes the freeze explicit and
+# the bump deliberate. omnigent 0.7.0 also enforces per-harness MINIMUMS
+# (`onboarding/harness_install.py`: claude >= 2.1.161, codex >= 0.137.0, pi >= 0.79.0)
+# and reports a too-old binary as `version-too-low` in GET /v1/hosts — not as `false`.
+RUN npm install -g @anthropic-ai/claude-code@2.1.220 && claude --version
+RUN npm install -g @openai/codex@0.146.0 && codex --version
 # Pi — polly's 3rd worker (review/explore specialist; the only worker that can run gateway
 # models). Same upstream agent as zoe-core's brain (@earendil-works/pi-coding-agent), pinned to
-# match core's ^0.79.3, but a SEPARATE vanilla install (no Zoe extensions/Gemma/soul). The
+# match core's 0.82.1 exactly, but a SEPARATE vanilla install (no Zoe extensions/Gemma/soul). The
 # zoe-data pi_runtime_probe installs it with --ignore-scripts; mirror that here.
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@^0.79.3 && pi --version
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.82.1 && pi --version
 
 # ── GitHub CLI ───────────────────────────────────────────────────────────────
 # The workers (claude_code / codex / pi) each open their OWN PR, so they need `gh`
@@ -47,9 +57,9 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/* && gh --version
 
-# ── Cursor harness (second-class) ────────────────────────────────────────────
-# Requires piping the cursor.com installer, which needs a remote-script permission.
-# Left opt-in: uncomment after granting permission, or COPY the host's proven binary in.
+# ── Cursor harness (first-class, pinned) ─────────────────────────────────────
+# Cursor is now pinned (install_cursor_agent.sh), mounted via compose volume, and
+# entrypoint-activated. The pinned installer replaces the piped curl workflow.
 # RUN curl https://cursor.com/install -fsS | bash && /root/.local/bin/cursor-agent --version
 
 # ── uv + Omnigent ────────────────────────────────────────────────────────────
