@@ -83,7 +83,11 @@ HARNESS = textwrap.dedent(
       } },
     };
     process.env.SCOPE_RESULT = OPTS.scopeResult || 'success';
-    process.env.VOICE = OPTS.voice || 'false';
+    // `=== undefined` (not `||`): a real scope job with a missing/empty
+    // GITHUB_OUTPUT value sets this env var to the literal empty string, which
+    // is exactly the case under test — `||` would silently coerce that back to
+    // 'false' and hide the bug. Only an unspecified option defaults to 'false'.
+    process.env.VOICE = OPTS.voice === undefined ? 'false' : OPTS.voice;
     process.env.FILES = OPTS.files || '';
     process.env.EVIDENCE_RESULT = OPTS.evidenceResult || 'skipped';
 
@@ -141,6 +145,30 @@ def test_unreadable_scope_fails_closed(tmp_path):
     """An unreadable scope job is not evidence of a non-voice PR."""
     r = _run(tmp_path, scopeResult="failure")
     assert r["check"]["conclusion"] == "failure"
+
+
+# --- FIX: a missing/empty/unexpected `voice` output must fail closed --------
+# scope can report `success` while still publishing no usable `voice` value —
+# e.g. it could not write $GITHUB_OUTPUT. Only an EXPLICIT 'false' may be read
+# as non-voice; anything else must be treated as unclassified.
+def test_missing_voice_output_fails_closed_even_when_scope_succeeded(tmp_path):
+    """The exact bug: scope job succeeds, but `voice` never got published (the
+    harness's default env leaves VOICE unset -> the empty string here)."""
+    r = _run(tmp_path, voice="")
+    assert r["check"]["conclusion"] == "failure"
+    assert r["failed"], "the run must go red alongside the published context"
+
+
+def test_unexpected_voice_value_fails_closed(tmp_path):
+    r = _run(tmp_path, voice="garbage")
+    assert r["check"]["conclusion"] == "failure"
+
+
+def test_explicit_false_is_the_only_value_that_clears(tmp_path):
+    """Positive control — without it, the fail-closed tests above could pass by
+    blocking unconditionally regardless of `voice`."""
+    r = _run(tmp_path, voice="false")
+    assert r["check"]["conclusion"] == "success"
 
 
 def test_fork_without_approval_is_named_explicitly(tmp_path):

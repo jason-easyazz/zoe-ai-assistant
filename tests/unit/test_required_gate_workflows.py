@@ -28,6 +28,10 @@ These are cheap to assert and expensive to discover in production.
 """
 from __future__ import annotations
 
+import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -234,6 +238,37 @@ def test_voice_gate_consumes_the_pr_as_data_not_code():
     # The classifier that RUNS must be the one from the base checkout, never a
     # path that could resolve into PR-controlled content.
     assert "scripts/maintenance/voice_gate_check.py" in run, run
+
+
+def test_pr_files_jq_filter_surfaces_rename_source_paths():
+    """FIX: `.filename` alone reports only a rename's DESTINATION path — the
+    API's `.previous_filename` (the source) was being discarded. Renaming a
+    gated voice file (e.g. services/zoe-data/fast_tiers.py) to a non-matching
+    path would then silently classify as no voice-path change. The `--jq`
+    filter that builds changed-files.txt must emit BOTH names for a rename, and
+    this asserts it against a real `jq`, not just a substring in the YAML."""
+    jq = shutil.which("jq")
+    if not jq:
+        pytest.skip("jq not available in this environment")
+    run = _executed_shell(_load("voice-gate.yml")["jobs"]["scope"])
+    m = re.search(r"--jq '([^']*)'", run)
+    assert m, f"no --jq filter found in the scope job's changed-file fetch: {run}"
+    filt = m.group(1)
+    assert "previous_filename" in filt, (
+        f"the jq filter drops previous_filename, the rename-evasion bug: {filt!r}")
+
+    sample = [
+        {"filename": "services/zoe-data/renamed_away.py",
+         "previous_filename": "services/zoe-data/fast_tiers.py", "status": "renamed"},
+        {"filename": "docs/PLANS.md", "status": "modified"},
+    ]
+    proc = subprocess.run([jq, "-r", filt], input=json.dumps(sample),
+                          capture_output=True, text=True, check=True)
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    assert "services/zoe-data/fast_tiers.py" in lines, (
+        f"renamed-away voice file's OLD path missing from jq output: {lines}")
+    assert "services/zoe-data/renamed_away.py" in lines, lines
+    assert "docs/PLANS.md" in lines, lines
 
 
 def test_checks_write_is_never_granted_at_workflow_level():

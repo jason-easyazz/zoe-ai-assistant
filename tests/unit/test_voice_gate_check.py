@@ -519,3 +519,130 @@ def test_w11_delivery_modules_are_voice_path():
         voice_path_patterns())
     assert touched == ["services/zoe-data/voice_delivery.py",
                        "services/zoe-data/tts_waterfall.py"], touched
+
+
+# --- FIX: scope must fail CLOSED when it cannot publish its verdict ---------
+# `_emit_github_output` used to swallow an OSError and let `_scope_only` return
+# 0 anyway — the scope job then "succeeded" with no `voice` output at all, and
+# the verdict job's `voice !== 'true'` check read that absence as 'non-voice'
+# and published green. A verdict that never reached $GITHUB_OUTPUT must never
+# be read downstream as a non-voice PR.
+def test_emit_github_output_reports_write_failure(tmp_path, monkeypatch):
+    """A directory is not appendable — `open(path, 'a')` raises OSError."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path))
+    assert vgc._emit_github_output(voice="true") is False
+
+
+def test_emit_github_output_succeeds_when_writable(tmp_path, monkeypatch):
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    assert vgc._emit_github_output(voice="true") is True
+    assert "voice=true" in out.read_text()
+
+
+def test_emit_github_output_is_a_noop_outside_actions(monkeypatch):
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert vgc._emit_github_output(voice="true") is True
+
+
+def test_unwritable_github_output_fails_the_scope_job(tmp_path, monkeypatch, capsys):
+    """THE fix: an unwritable $GITHUB_OUTPUT must fail the scope job (exit 1),
+    not report success with a verdict nobody downstream can see. A failed scope
+    job routes into the verdict's existing `scopeResult != 'success'` fail-closed
+    branch instead of being silently read as 'non-voice'."""
+    listing = tmp_path / "changed.txt"
+    listing.write_text("docs/PLANS.md\n")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path))  # a directory: unwritable
+    rc = vgc.main(["--scope-only", "--changed-files-from", str(listing)])
+    assert rc == 1, "an unwritable GITHUB_OUTPUT must fail the scope job, never pass silently"
+    assert "could not publish" in capsys.readouterr().err.lower()
+
+
+def test_writable_github_output_still_exits_zero(tmp_path, monkeypatch):
+    """Regression guard: the fix above must not make the ordinary, writable case
+    fail too — --scope-only still always exits 0 when it CAN publish."""
+    listing = tmp_path / "changed.txt"
+    listing.write_text("docs/PLANS.md\n")
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    assert vgc.main(["--scope-only", "--changed-files-from", str(listing)]) == 0
+    assert "voice=false" in out.read_text()
+
+
+# --- FIX: a renamed voice-path file must not evade classification -----------
+# `git diff --name-only` reports only a rename's DESTINATION path — the source
+# never appears, with or without `-M`. Renaming a gated file (e.g.
+# services/zoe-data/fast_tiers.py) to a non-matching path therefore made
+# `git_changed_files` (used by BOTH deploy.yml and deploy_live.sh via `--diff`)
+# report no voice-path change at all.
+def _rename_repo(tmp_path):
+    """base commit with services/zoe-data/fast_tiers.py, then a commit that
+    renames it to a non-matching path. Returns (repo, base_sha)."""
+    import os as _os
+    import subprocess as sp
+    repo = tmp_path / "r"
+    (repo / "services" / "zoe-data").mkdir(parents=True)
+    env = {**_os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    sp.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "services" / "zoe-data" / "fast_tiers.py").write_text("x = 1\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True, env=env)
+    base = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+    sp.run(["git", "-C", str(repo), "mv",
+           "services/zoe-data/fast_tiers.py", "services/zoe-data/renamed_away.py"],
+          check=True, cwd=str(repo))
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "rename"], check=True, env=env)
+    return repo, base
+
+
+def test_git_changed_files_surfaces_both_sides_of_a_rename(tmp_path):
+    repo, base = _rename_repo(tmp_path)
+    changed = vgc.git_changed_files(repo, f"{base}...HEAD")
+    assert "services/zoe-data/fast_tiers.py" in changed, changed
+    assert "services/zoe-data/renamed_away.py" in changed, changed
+
+
+def test_renamed_voice_file_still_classifies_as_voice_path(tmp_path):
+    """THE fix, end to end through the classifier the deploy path calls."""
+    repo, base = _rename_repo(tmp_path)
+    changed = vgc.git_changed_files(repo, f"{base}...HEAD")
+    hits = vgc.touched_voice_files(changed, vgc.VOICE_PATH_PATTERNS)
+    assert "services/zoe-data/fast_tiers.py" in hits, (
+        "renaming a gated voice file away must still require the replay gate")
+
+
+def test_deploy_path_diff_detects_a_renamed_voice_file(tmp_path, monkeypatch, capsys):
+    """Integration: the deploy path (`--diff`, no --require, as called by both
+    deploy.yml and deploy_live.sh) must block a rename-away of a gated file
+    exactly like it would block the file's ordinary modification."""
+    repo, base = _rename_repo(tmp_path)
+    rc = vgc.main(["--repo", str(repo), "--diff", f"{base}...HEAD",
+                   "--artifact", str(tmp_path / "no-such-artifact.json")])
+    assert rc == 1, "a renamed-away voice file must still require (and here fail) the gate"
+    assert "fast_tiers.py" in capsys.readouterr().out
+
+
+def test_ordinary_non_rename_diff_is_unaffected(tmp_path):
+    """Regression guard: switching `git_changed_files` from --name-only to
+    --name-status -M must not change behaviour for plain adds/modifies."""
+    import os as _os
+    import subprocess as sp
+    repo = tmp_path / "r"
+    repo.mkdir()
+    env = {**_os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    sp.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "README.md").write_text("base\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True, env=env)
+    base = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+    (repo / "docs.md").write_text("new file\n")
+    (repo / "README.md").write_text("modified\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "changes"], check=True, env=env)
+
+    changed = vgc.git_changed_files(repo, f"{base}...HEAD")
+    assert sorted(changed) == ["README.md", "docs.md"]

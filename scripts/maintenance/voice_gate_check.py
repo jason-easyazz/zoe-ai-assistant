@@ -20,9 +20,10 @@ PR-TIME wiring (.github/workflows/voice-gate.yml — the INFORMATIONAL
 runs BEFORE merge, not only at deploy, so a voice-path PR that would be refused
 by the deploy gate is visible up front rather than after the merge. The PR lane
 splits into two calls: `--scope-only` classifies the PR diff on a hosted runner
-(always exit 0), and only a VOICE verdict escalates to `--require` on the
-self-hosted Jetson, where the artifact actually lives. Enforcement remains the
-deploy-side check below — the PR-time one informs, it does not block.
+(exits 0 once its verdict is published to $GITHUB_OUTPUT — see Exit codes
+below), and only a VOICE verdict escalates to `--require` on the self-hosted
+Jetson, where the artifact actually lives. Enforcement remains the deploy-side
+check below — the PR-time one informs, it does not block.
 
 Deploy wiring: BOTH deploy paths call this with the incoming git range, between
 the fetch and the tree-advance — the manual scripts/maintenance/deploy_live.sh
@@ -34,7 +35,10 @@ unwedge procedure is in docs/knowledge/merge-and-deploy.md. See
 docs/knowledge/voice-pipeline.md for the artifact contract.
 
 Exit codes: 0 = allowed (fresh pass, or no voice-path change); 1 = blocked.
-`--scope-only` is the exception: it classifies and ALWAYS exits 0.
+`--scope-only` is mostly the exception: it classifies and exits 0 regardless of
+the verdict (VOICE or CLEAR) — EXCEPT when it cannot publish that verdict to
+$GITHUB_OUTPUT, which fails the job (exit 1) rather than let the classification
+vanish and be read downstream as 'non-voice'.
 
 Examples:
     # deploy path: gate only if the incoming diff touches the voice runtime
@@ -233,12 +237,35 @@ def load_json(path: Path) -> dict[str, Any] | None:
 
 
 def git_changed_files(repo: Path, diff_range: str) -> list[str]:
+    """Changed file paths in `diff_range`, including BOTH sides of a rename.
+
+    `--name-only` (the obvious choice) reports only a rename's DESTINATION
+    path — the source never appears, with or without `-M`. A voice-gated file
+    renamed to a non-matching path would therefore vanish from classification
+    entirely: the deploy path (deploy.yml / deploy_live.sh, both of which call
+    this via `--diff`) would wave the change through unproven. `--name-status
+    -M` instead, parsed by hand: a rename line is `R<score>\\told\\tnew`, so
+    both names go into the list; ordinary add/modify/delete lines are
+    `<status>\\tpath` as before. `-M` is explicit so rename detection does not
+    depend on the runner's `diff.renames` config."""
     proc = subprocess.run(
-        ["git", "-C", str(repo), "diff", "--name-only", diff_range],
+        ["git", "-C", str(repo), "diff", "--name-status", "-M", diff_range],
         capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or f"git diff {diff_range} failed")
-    return [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    files: list[str] = []
+    for line in proc.stdout.splitlines():
+        parts = line.split("\t")
+        if not parts or not parts[0].strip():
+            continue
+        status = parts[0]
+        if status.startswith(("R", "C")) and len(parts) >= 3:
+            # Rename/copy: both the old and new path matter for classification.
+            files.append(parts[1].strip())
+            files.append(parts[2].strip())
+        elif len(parts) >= 2:
+            files.append(parts[1].strip())
+    return [f for f in files if f]
 
 
 def scope_verdict(changed: list[str] | None, patterns: tuple[str, ...]) -> tuple[bool, list[str], str]:
@@ -259,17 +286,26 @@ def scope_verdict(changed: list[str] | None, patterns: tuple[str, ...]) -> tuple
                        "changed) — replay gate not required")
 
 
-def _emit_github_output(**pairs: str) -> None:
-    """Append key=value lines to $GITHUB_OUTPUT when running under Actions."""
+def _emit_github_output(**pairs: str) -> bool:
+    """Append key=value lines to $GITHUB_OUTPUT when running under Actions.
+
+    Returns False only when Actions expects output (GITHUB_OUTPUT is set) and
+    the write failed. That failure matters: the scope job's own exit code is
+    not evidence its verdict actually reached the workflow — an OSError here
+    means `needs.scope.outputs.voice` stays empty downstream, and an empty
+    value must never be read as 'non-voice'. Returns True when there is
+    nothing to write (not running under Actions) or the write succeeded."""
     out = os.environ.get("GITHUB_OUTPUT")
     if not out:
-        return
+        return True
     try:
         with open(out, "a", encoding="utf-8") as fh:
             for key, value in pairs.items():
                 fh.write(f"{key}={value}\n")
-    except OSError as exc:  # pragma: no cover - runner filesystem failure
+        return True
+    except OSError as exc:
         print(f"voice-gate: could not write GITHUB_OUTPUT ({exc})", file=sys.stderr)
+        return False
 
 
 def read_changed_files(path: Path) -> list[str] | None:
@@ -288,7 +324,15 @@ def read_changed_files(path: Path) -> list[str] | None:
 
 
 def _scope_only(args: argparse.Namespace) -> int:
-    """The scope job's whole body: classify the diff, publish the verdict, exit 0."""
+    """The scope job's whole body: classify the diff and publish the verdict.
+
+    Exits 0 once the verdict is actually published to $GITHUB_OUTPUT. If it
+    cannot be published, this FAILS the job (exit 1) instead: a scope job that
+    reports success with no `voice` output leaves `needs.scope.outputs.voice`
+    empty downstream, and an empty value must never be read as 'non-voice'
+    (the verdict job would otherwise wave the PR through). Failing the job
+    routes it into the verdict's existing `scopeResult != 'success'` fail-closed
+    branch instead."""
     changed: list[str] | None
     if args.changed_files_from:
         # PR path: the file list is DATA supplied by the workflow (GitHub API).
@@ -305,8 +349,13 @@ def _scope_only(args: argparse.Namespace) -> int:
 
     needs_gate, hits, reason = scope_verdict(changed, voice_path_patterns())
     print(f"voice-gate scope: {'VOICE' if needs_gate else 'CLEAR'} — {reason}")
-    _emit_github_output(voice="true" if needs_gate else "false",
-                        files=",".join(hits))
+    published = _emit_github_output(voice="true" if needs_gate else "false",
+                                    files=",".join(hits))
+    if not published:
+        print("voice-gate: could not publish the scope verdict to $GITHUB_OUTPUT — "
+              "failing the scope job so the missing output cannot be read downstream "
+              "as 'non-voice'", file=sys.stderr)
+        return 1
     return 0
 
 

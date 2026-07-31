@@ -172,8 +172,15 @@ jobs:
           # --paginate: a truncated file list would silently read as "no voice
           # files changed" on a large PR — the exact false-clear this gate exists
           # to prevent.
+          #
+          # BOTH `.filename` (destination) AND `.previous_filename` (source, only
+          # present on a rename): a file renamed AWAY from a gated voice path
+          # only shows its new name in `.filename`, which will not match any
+          # voice-path glob. Without the old name in the list, renaming
+          # services/zoe-data/fast_tiers.py to anything else would silently
+          # classify as no voice-path change.
           gh api --paginate "repos/${REPO}/pulls/${PR}/files" \
-            --jq '.[].filename' > changed-files.txt
+            --jq '.[] | .filename, (.previous_filename // empty)' > changed-files.txt
           echo "Changed files: $(wc -l < changed-files.txt)"
 
       - name: Classify the change (voice-path or not)
@@ -303,12 +310,25 @@ jobs:
                 `DOES touch the voice runtime path. Re-run the job. The classifier is plain ` +
                 `python over an API-supplied file list and runs locally:\n\n` +
                 '```\npython3 scripts/maintenance/voice_gate_check.py --scope-only --diff origin/main...HEAD\n```';
-            } else if (voice !== 'true') {
-              // The common case: it passes trivially and never involves the
-              // Jetson, which is what makes running on every PR cheap.
+            } else if (voice === 'false') {
+              // The common case: an EXPLICIT non-voice classification. It
+              // passes trivially and never involves the Jetson, which is what
+              // makes running on every PR cheap.
               conclusion = 'success';
               title = 'Not applicable — no voice-runtime files changed';
               summary = 'This PR touches no voice-runtime files, so the replay gate does not apply.';
+            } else if (voice !== 'true') {
+              // scope reported success but published no usable `voice` output
+              // (missing/empty/unexpected — e.g. it could not write
+              // $GITHUB_OUTPUT). That is NOT evidence of a non-voice PR: only
+              // an explicit 'false' may clear this check, so treat anything
+              // else as unclassified and fail closed, same as a failed scope
+              // job.
+              title = 'Scope job produced no usable verdict';
+              summary = `The scope job completed but its \`voice\` output was ` +
+                `${JSON.stringify(voice)} (neither \`'true'\` nor \`'false'\`), so this PR is ` +
+                `treated as if it DOES touch the voice runtime path. Re-run the job; if it keeps ` +
+                `happening, check that the runner can write to \`$GITHUB_OUTPUT\`.`;
             } else if (evidence === 'success') {
               conclusion = 'success';
               title = 'Replay gate proven for this head';
