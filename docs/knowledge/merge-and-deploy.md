@@ -168,13 +168,49 @@ Because a `pull_request_target` run is associated with the **base** commit, the 
 job named `voice-gate` (it would report on the wrong SHA and the PR would wait forever). The
 `verdict` job publishes a check run explicitly named `voice-gate` against `pull_request.head.sha`.
 
-**Residual risk, stated.** Nothing here stops a PR from editing `.github/workflows/voice-gate.yml`
-itself — the edit simply does not take effect for that PR's own gate; it takes effect once merged.
-So the remaining exposure is "a malicious workflow edit gets merged", which is a review problem,
-not a workflow problem. Two things bound it in this repo: it is solo-owner (PRs come from the owner
-and trusted agents, and a workflow diff is highly visible and multi-agent reviewed), and forks are
-covered separately below. **The native GitHub settings that close it properly, if the repo ever
-takes outside contributions:**
+**A name-only required context cannot authenticate its producer — and that is a PRE-merge
+concern, not only a post-merge one.** Branch protection's legacy `contexts` form matches a
+required check purely BY NAME, and GitHub publishes a check run for every workflow job
+automatically — no `checks: write` needed. So a PR that adds `.github/workflows/anything.yml`
+containing a job named `voice-gate` publishes a passing `voice-gate` check **on its own head,
+before merge**. An earlier version of this section implied the exposure only began once a
+malicious workflow edit was merged. That was wrong: adding a *competing producer* takes effect
+immediately, for the PR that adds it.
+
+Four things bound it, in order of how much they actually do:
+
+1. **The competing-producer guard** (`verdict` job in `voice-gate.yml`). It reads the PR's changed
+   `.github/workflows/**` files as data and fails the verdict if any file other than
+   `.github/workflows/voice-gate.yml` looks like a `voice-gate` producer — a job id, a `name:`
+   override, or a Checks API call naming the context. It runs in the base-owned
+   `pull_request_target` workflow, so **the PR cannot disable it**. An unreadable file, or the
+   guard itself erroring, fails closed. It deliberately does NOT police `validate` /
+   `secret-scan`: those are legitimately jobs in `validate.yml`, and flagging every CI edit would
+   be noise with no override — their PR-editability is a separate residual, below.
+2. **`Require approval for all external contributors`** (repo setting; see below). A PR cannot
+   disable it, and it stops fork workflows running at all until a maintainer approves.
+3. **Mandatory multi-agent review of every workflow change.** A `.github/workflows/**` diff is
+   highly visible and is exactly what the cross-vendor review step exists to catch. This is
+   process, not enforcement — treat it as such.
+4. **The solo-owner threat model.** PRs come from the owner and trusted agents. This is the
+   assumption everything above is proportionate to, and it is the assumption that would have to
+   be revisited first if the repo ever accepted untrusted external contributions.
+
+**Known residuals, not closed:**
+
+- `validate` and `secret-scan` are produced by `pull_request`-triggered jobs in `validate.yml`, so
+  a PR can weaken them in its own run. This is the general "a PR supplies its own CI" property and
+  is not specific to this gate.
+- A malicious edit to `voice-gate.yml` itself still lands if it is MERGED (it cannot affect the PR
+  that carries it, since the definition comes from the base ref). That is a review problem.
+- **The heavyweight fix, deliberately NOT built:** authenticate the producer rather than its name —
+  a dedicated GitHub App publishing the context (branch protection can pin a required context to an
+  `app_id`), or organization-level **required workflows** / rulesets. Both were judged
+  disproportionate for a solo-owner personal repo, and app-pinning specifically conflicts with
+  break-glass (see the cutover section). **Revisit both if this repo ever accepts untrusted
+  external contributors** — that is the trigger condition, not a vague "someday".
+
+**The native GitHub settings that harden this further:**
 
 - `Settings → Actions → General → Fork pull request workflows from outside collaborators →`
   **`Require approval for all external contributors`** — a maintainer must approve before ANY
@@ -240,14 +276,23 @@ gh api repos/jason-easyazz/zoe-ai-assistant/branches/main/protection/required_st
 ```
 
 **Security trade-off of using legacy `contexts` rather than app-pinned `checks`.** The
-`contexts` form matches a required check **by name only**, so *any* app that can publish a
-check run with that name satisfies it. The `checks` form pins each context to an `app_id`.
-We deliberately use `contexts`: app-pinning to GitHub Actions (15368) is precisely what
-would stop the break-glass workflow publishing substitute contexts, and that escape is
-worth more here than the extra pinning. The residual risk is bounded by who can publish
-check runs at all — only apps installed on this repo, all of which are already trusted with
-write-level access. If a future change removes the break-glass path, switch to `checks` with
-`app_id: 15368` and re-tighten.
+`contexts` form matches a required check **by name only** — it cannot authenticate the
+producer. Any app that can publish a check run with that name satisfies it, and, more
+sharply, **any workflow job named `voice-gate` does too**, because GitHub publishes a check
+run per job automatically. The `checks` form pins each context to an `app_id` and would close
+that.
+
+We deliberately use `contexts` anyway: app-pinning to GitHub Actions (15368) still would not
+distinguish our workflow from another Actions workflow in the same repo, and pinning to a
+*dedicated* App is the heavyweight option we chose not to build (see the trust-model section).
+Meanwhile pinning at all is precisely what would stop break-glass publishing substitute
+contexts, and that escape is worth more here than the extra pinning.
+
+What actually covers the gap is the **competing-producer guard** in the base-owned `verdict`
+job, plus the fork-approval setting — both described in the trust-model section above, along
+with the residuals. If a future change removes the break-glass path, or the repo starts
+accepting untrusted external contributions, switch to `checks` with a dedicated App and
+re-tighten.
 
 ## Greptile / greploop gotchas
 

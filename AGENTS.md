@@ -140,6 +140,10 @@ Two properties make it trustworthy rather than merely present:
   gates it. Because a `pull_request_target` run is associated with the base commit, the
   `verdict` job publishes the `voice-gate` context explicitly against the PR head. Fork PRs
   cannot reach the self-hosted runner without a maintainer applying `voice-gate-approved`.
+  A base-owned guard in the `verdict` job also fails the gate if a PR adds any OTHER
+  workflow that would publish a `voice-gate` check — branch protection matches a required
+  context by NAME and cannot authenticate its producer, and a competing producer takes
+  effect PRE-merge, on the PR's own head.
   The full trust model and its residual risk are at the top of
   `.github/workflows/voice-gate.yml` and in
   [merge-and-deploy.md](docs/knowledge/merge-and-deploy.md); if you edit that workflow, the

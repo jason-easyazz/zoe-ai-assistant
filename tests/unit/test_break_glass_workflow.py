@@ -69,6 +69,12 @@ HARNESS = textwrap.dedent(
             // NEW head — a push landed between the opening read and the write.
             const sha = (OPTS.headMovesBeforeWrite && getReads >= 2) ? MOVED : SHA;
             if (OPTS.refetchFails && getReads >= 2) throw new Error('pulls.get failed');
+            // OPTS.headMovesAfterWrite: the head is stable through the pre-write
+            // revalidation (get #2) and moves only on the POST-publication read
+            // (get #3) — a push landing between the checks.create calls.
+            if (OPTS.headMovesAfterWrite && getReads >= 3) {
+              return { data: { number: 7, head: { sha: MOVED } } };
+            }
             return { data: { number: 7, head: { sha } } };
           },
         },
@@ -171,6 +177,24 @@ def test_unreadable_refetch_also_aborts_without_consuming_the_label(tmp_path):
     assert r["checksCreated"] == []
     assert r["removeLabel"] == 0
     assert any("ABORTED" in c for c in r["comments"]), r["comments"]
+
+
+def test_head_moving_after_publication_leaves_the_label_armed(tmp_path):
+    """The pre-write revalidation narrows the race but cannot close it: the checks
+    are published one API call at a time and there is no compare-and-swap. If a
+    push lands mid-publication the substitute checks are stranded on a superseded
+    commit — harmless, nobody merges it — but the CURRENT head is still blocked, so
+    spending the single-use label would leave the owner with no escape hatch and a
+    PR that is no better off."""
+    r = _run(tmp_path, headMovesAfterWrite=True)
+    assert r["checksCreated"], "publication still happened for the head it read"
+    assert r["removeLabel"] == 0, "the label must stay armed when the head moved"
+    audit = [c for c in r["comments"] if "BREAK-GLASS used" in c][0]
+    assert "head moved WHILE these checks were being published" in audit
+    assert "LEFT IN PLACE" in audit
+    # break-glass only triggers on `labeled`, so an armed label does NOT self-retry
+    # — the operator has to be told that explicitly.
+    assert "does NOT retry by itself" in audit
 
 
 # --- admin gate -------------------------------------------------------------

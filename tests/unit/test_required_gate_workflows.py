@@ -231,6 +231,58 @@ def test_voice_gate_consumes_the_pr_as_data_not_code():
     assert "scripts/maintenance/voice_gate_check.py" in run, run
 
 
+def test_checks_write_is_never_granted_at_workflow_level():
+    """`checks: write` is the capability to SATISFY the merge gate, so it is scoped
+    to the single job that publishes, never to a whole workflow.
+
+    A workflow-level grant hands the write-capable token to every job in the file —
+    including `replay-evidence`, which runs on the Jetson. A long-lived production
+    box holding a token that can satisfy branch protection is a standing risk that
+    job has no use for: it reads one JSON file."""
+    for wf in sorted(WORKFLOWS.glob("*.yml")):
+        spec = yaml.safe_load(wf.read_text())
+        top = spec.get("permissions") or {}
+        assert not (isinstance(top, dict) and top.get("checks") == "write"), (
+            f"{wf.name} grants checks:write at WORKFLOW level — every job in the file "
+            "inherits it. Move it to the one job that publishes.")
+
+
+def test_voice_gate_checks_write_is_scoped_to_the_verdict_job_only():
+    """Pinned by job. `verdict` publishes the context; nothing else may be able to."""
+    jobs = _load("voice-gate.yml")["jobs"]
+    holders = [j for j, cfg in jobs.items()
+               if (cfg.get("permissions") or {}).get("checks") == "write"]
+    assert holders == ["verdict"], f"checks:write must be verdict-only, got {holders}"
+    evidence = jobs["replay-evidence"]["permissions"]
+    assert evidence.get("checks") is None, (
+        "the SELF-HOSTED job must never hold checks:write — it runs on the Jetson")
+    assert set(evidence) == {"contents"} and evidence["contents"] == "read", (
+        f"replay-evidence must be read-only, got {evidence}")
+    # Every job declares its own block: a job-level `permissions:` REPLACES the
+    # workflow default wholesale, so an undeclared job silently inherits.
+    for job_id, cfg in jobs.items():
+        assert "permissions" in cfg, f"{job_id} does not declare its own permissions"
+
+
+def test_the_competing_producer_guard_is_present_and_base_owned():
+    """Branch protection matches a required context BY NAME and cannot authenticate
+    its producer — and GitHub publishes a check run per job automatically, needing
+    no `checks: write`. So a PR adding any workflow with a job named `voice-gate`
+    publishes its own passing gate on its own head, BEFORE merge.
+
+    The guard must live in the `pull_request_target` workflow (definition from the
+    base ref), or the PR could simply delete it."""
+    spec = _load("voice-gate.yml")
+    assert "pull_request_target" in _on(spec), "the guard is only meaningful if base-owned"
+    script = ""
+    for step in spec["jobs"]["verdict"]["steps"]:
+        script += str((step.get("with") or {}).get("script", ""))
+    assert "findCompetingProducers" in script, "the competing-producer guard is missing"
+    assert "SANCTIONED" in script and ".github/workflows/voice-gate.yml" in script
+    # It must consider the guard failing to be a failure, not a pass.
+    assert "guard could not run" in script
+
+
 def test_checks_write_is_held_by_exactly_the_two_workflows_that_need_it():
     """`checks: write` is the capability to publish — or silently SATISFY — a
     required context. It is the single most dangerous permission in this repo, so
@@ -249,9 +301,11 @@ def test_checks_write_is_held_by_exactly_the_two_workflows_that_need_it():
     holders = {}
     for wf in sorted(WORKFLOWS.glob("*.yml")):
         spec = yaml.safe_load(wf.read_text())
-        perms = spec.get("permissions") or {}
-        if isinstance(perms, dict) and perms.get("checks") == "write":
-            holders[wf.name] = spec
+        # JOB level — the workflow level is asserted empty of it separately, so
+        # scanning only the top would now match nothing and pass vacuously.
+        for cfg in (spec.get("jobs") or {}).values():
+            if ((cfg.get("permissions") or {}).get("checks") == "write"):
+                holders[wf.name] = spec
     assert sorted(holders) == ["break-glass.yml", "voice-gate.yml"], (
         f"unexpected workflows holding checks:write: {sorted(holders)}")
     for name, spec in holders.items():

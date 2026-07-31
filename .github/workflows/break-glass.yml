@@ -63,11 +63,11 @@ on:
         required: true
         type: string
 
+# Declared per JOB, not here. `checks: write` is the capability to satisfy the
+# merge gate, so the repo-wide rule is that it is never granted at workflow level
+# — see tests/unit/test_required_gate_workflows.py.
 permissions:
   contents: read
-  checks: write
-  pull-requests: write
-  issues: write
 
 concurrency:
   group: break-glass-${{ github.event.pull_request.number || inputs.pr }}
@@ -82,6 +82,14 @@ jobs:
       github.event.label.name == 'break-glass'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      # Publishing the substitute contexts — the whole point of this workflow.
+      checks: write
+      # Reading the PR + its check state, and writing the audit comment / removing
+      # the label. `issues: write` is what covers comments and labels on a PR.
+      pull-requests: write
+      issues: write
+      contents: read
     steps:
       - name: Force the required contexts, audited
         uses: actions/github-script@v7
@@ -207,13 +215,30 @@ jobs:
               forced.push(`${name} (was \`${state}\`)`);
             }
 
-            // ---- 3. Disarm ------------------------------------------------------
-            // Single-use, per head. A later push re-blocks and needs a fresh,
-            // deliberate re-application rather than inheriting a standing bypass.
-            if (context.eventName !== 'workflow_dispatch') {
+            // ---- 3. Disarm — but only if the override is still for the live head -
+            // The pre-write revalidation above narrows the race; it cannot close it,
+            // because the checks are published one API call at a time and a push can
+            // land between them. GitHub offers no compare-and-swap on a check run.
+            //
+            // So re-read once more, AFTER publishing, and let the head decide whether
+            // to spend the label. If it moved, the substitute checks are stranded on
+            // a superseded commit (harmless — nobody merges it) but the CURRENT head
+            // is still blocked, so consuming the single-use label would leave the
+            // owner with a spent escape hatch and a PR that is no better off.
+            // Leaving it armed is strictly safer: the label is idempotent, and a
+            // stale published check can never make a newer head mergeable.
+            const after = await github.rest.pulls.get({ ...base, pull_number: num })
+              .then(r => r.data).catch(() => null);
+            const headStillCurrent = !!after && after.head.sha === sha;
+            if (context.eventName !== 'workflow_dispatch' && headStillCurrent) {
               await github.rest.issues.removeLabel({ ...base, issue_number: num, name: LABEL })
                 .catch(() => {});
             }
+            // Note for whoever reads this next: break-glass is NOT re-triggered by a
+            // push (its only PR trigger is `labeled`), so an armed label does not
+            // self-retry. Removing and re-applying it — or a manual dispatch — is the
+            // retry. The audit comment below says so rather than leaving the operator
+            // to infer it.
 
             // ---- 4. Permanent audit trail --------------------------------------
             const body = [
@@ -227,8 +252,15 @@ jobs:
               `| forced | ${forced.length ? forced.join(', ') : '_none — every required context was already green_'} |`,
               `| untouched | ${untouched.length ? untouched.join(', ') : '_none_'} |`,
               ``,
-              `The \`${LABEL}\` label has been removed — this override is single-use and`,
-              `applies to this head commit only. A new push re-blocks normally.`,
+              ...(headStillCurrent
+                ? [`The \`${LABEL}\` label has been removed — this override is single-use and`,
+                   `applies to this head commit only. A new push re-blocks normally.`]
+                : [`⚠️ **The head moved WHILE these checks were being published**, so the`,
+                   `override landed on \`${sha.slice(0, 8)}\` and the current head is still`,
+                   `blocked. The \`${LABEL}\` label was LEFT IN PLACE so it is not spent for a`,
+                   `commit nobody is merging — but note break-glass only triggers on \`labeled\`,`,
+                   `so it does NOT retry by itself: remove and re-apply the label (or run the`,
+                   `workflow manually) to publish for the current head.`]),
               ``,
               `Unresolved review threads are NOT bypassed by this override.`,
               ``,
