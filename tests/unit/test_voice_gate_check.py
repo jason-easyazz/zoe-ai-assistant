@@ -419,8 +419,8 @@ def test_unreadable_changed_file_list_fails_closed(tmp_path, monkeypatch):
 
 # --- scope classification (the PR-time gate's first half) -------------------
 # `--scope-only` runs on a hosted runner where the replay artifact CANNOT exist.
-# It classifies and never asserts, which is what lets the required `voice-gate`
-# context report a conclusion on every PR instead of only on voice-path ones.
+# It classifies and never asserts, which is what lets the `voice-gate` check
+# report a conclusion on every PR instead of only on voice-path ones.
 def test_scope_clear_when_no_voice_files():
     needs, hits, why = vgc.scope_verdict(
         ["docs/PLANS.md", "services/zoe-ui/index.html"], vgc.VOICE_PATH_PATTERNS)

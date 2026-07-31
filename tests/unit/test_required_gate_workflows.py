@@ -270,20 +270,21 @@ def test_voice_gate_checks_write_is_scoped_to_the_verdict_job_only():
 
 
 def test_checks_write_is_held_by_exactly_the_two_workflows_that_need_it():
-    """`checks: write` is the capability to publish — or silently SATISFY — a
-    required context. It is the single most dangerous permission in this repo, so
-    the holder list is pinned by name.
+    """`checks: write` is the capability to publish — or silently SATISFY — a check
+    of any name. It is the single most dangerous permission in this repo, so the
+    holder list is pinned by name.
 
     Exactly two may hold it, for different reasons:
-      * `voice-gate.yml` publishes the `voice-gate` context itself (a
-        pull_request_target run is associated with the base commit, so the context
+      * `voice-gate.yml` publishes its own INFORMATIONAL `voice-gate` check (a
+        pull_request_target run is associated with the base commit, so the check
         has to be published against the PR head explicitly);
-      * `break-glass.yml` publishes substitute contexts during an outage.
+      * `break-glass.yml` publishes substitute REQUIRED contexts during an outage.
 
     Both are `pull_request_target`, i.e. their definitions come from the base ref
-    and a PR cannot rewrite them. That pairing is the point: a workflow that can
-    publish a required context must not be one a PR can author. Anything else
-    acquiring this permission can make itself a merge gate, or satisfy one."""
+    and a PR cannot rewrite them. That pairing is the point: a workflow holding
+    this permission must not be one a PR can author — for break-glass because it
+    could otherwise satisfy the merge gate, and for voice-gate because a verdict a
+    PR can rewrite to `success` is worse than no verdict at all."""
     holders = {}
     for wf in sorted(WORKFLOWS.glob("*.yml")):
         spec = yaml.safe_load(wf.read_text())

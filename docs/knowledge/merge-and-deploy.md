@@ -33,15 +33,19 @@ focused local check **before** merge — a green PR auto-deploys, so a bad merge
 
 ### The voice replay-gate runs at PR time AND on the CD path
 
-**PR time (`voice-gate`, required, since 2026-07-31).** The gate used to be post-merge only,
-which left a real gap: a voice-path PR could go green, merge, and then be permanently
-refused by the deploy gate — a *green main that will not deploy*, found after the fact with
-the change already on the trunk. `.github/workflows/voice-gate.yml` now asserts the same
-contract before merge. Its `scope` job classifies the PR's changed-file list (fetched from the
-API — never a checkout of the PR) and only a voice-path verdict escalates to the self-hosted
-`replay-evidence` job, where the artifact actually lives. The `verdict` job runs `if: always()`
-and publishes the `voice-gate` context against the PR head, so it reports a conclusion on
-**every** PR: trivially green when no voice-path file changed.
+**PR time (`voice-gate` — INFORMATIONAL, fail-closed, NOT branch-protected).** The gate used
+to run post-merge only, which left a real gap: a voice-path PR could go green, merge, and then
+be permanently refused by the deploy gate — a *green main that will not deploy*, found after
+the fact with the change already on the trunk. `.github/workflows/voice-gate.yml` now surfaces
+the same answer before merge. Its `scope` job classifies the PR's changed-file list (fetched
+from the API — never a checkout of the PR) and only a voice-path verdict escalates to the
+self-hosted `replay-evidence` job, where the artifact actually lives. The `verdict` job runs
+`if: always()` and publishes the `voice-gate` check against the PR head, so it reports a
+conclusion on **every** PR: trivially green when no voice-path file changed.
+
+It does **not** block the merge — see *Why `voice-gate` is not a required context* below. Red
+is meant to be heeded, and merging past it means accepting that the deploy will be refused
+until the probe is run.
 
 Two things make it evidence rather than ceremony, and both cost something:
 **the artifact must be BOUND to the PR head** (`--expect-revision`), so the probe has to be run

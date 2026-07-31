@@ -249,15 +249,15 @@ jobs:
             --require --expect-revision "${HEAD_SHA}"
 
   # ----------------------------------------------------------- the verdict ----
-  # PUBLISHES THE REQUIRED CONTEXT. `if: always()` plus `needs` on both jobs is
-  # what guarantees a conclusion on every PR, including ones where
-  # `replay-evidence` was skipped.
+  # PUBLISHES THE `voice-gate` CHECK — informational, fail-closed, NOT
+  # branch-protected. `if: always()` plus `needs` on both jobs is what guarantees a
+  # conclusion on every PR, including ones where `replay-evidence` was skipped: a
+  # signal that is sometimes ABSENT reads as "fine" and stops being looked at.
   #
-  # The context is published by NAME (`voice-gate`) against the PR HEAD sha rather
+  # The check is published by NAME (`voice-gate`) against the PR HEAD sha rather
   # than inferred from this job's name — a `pull_request_target` run is associated
-  # with the BASE commit, so a job named `voice-gate` would report on the wrong
-  # SHA and the PR would block forever. Keep the published name in sync with
-  # branch protection's required contexts.
+  # with the BASE commit, so a job named `voice-gate` would report on the base SHA
+  # and the result would not appear on the commit under review at all.
   verdict:
     needs: [scope, replay-evidence]
     if: always()
@@ -304,8 +304,8 @@ jobs:
                 `python over an API-supplied file list and runs locally:\n\n` +
                 '```\npython3 scripts/maintenance/voice_gate_check.py --scope-only --diff origin/main...HEAD\n```';
             } else if (voice !== 'true') {
-              // The common case, and the reason this context is safe to require on
-              // every PR: it passes trivially and never involves the Jetson.
+              // The common case: it passes trivially and never involves the
+              // Jetson, which is what makes running on every PR cheap.
               conclusion = 'success';
               title = 'Not applicable — no voice-runtime files changed';
               summary = 'This PR touches no voice-runtime files, so the replay gate does not apply.';
@@ -332,9 +332,16 @@ jobs:
                 '  python3 scripts/maintenance/voice_regression_probe.py \\\n' +
                 '    --samples 20 --service-dir ~/.worktrees/voice-gate/services/zoe-data\n' +
                 '```\n\n' +
-                `An artifact for any other commit is evidence for different code and will not ` +
-                `clear this PR. If the self-hosted runner is offline, see the break-glass ` +
-                `procedure in docs/knowledge/merge-and-deploy.md.`;
+                `An artifact for any other commit is evidence for different code and will ` +
+                `not clear this check.\n\n` +
+                `**This check is informational — it does not block the merge.** If the ` +
+                `self-hosted runner is offline it simply cannot report evidence, and this ` +
+                `check shows its fail-closed state; no override is needed or available ` +
+                `(break-glass covers the REQUIRED contexts, which this is not). The real ` +
+                `block is the POST-MERGE gate in deploy.yml: a voice-path change with no ` +
+                `fresh passing artifact does not reach the box. Merging past a red ` +
+                `voice-gate means accepting that the deploy will be refused until the probe ` +
+                `is run.`;
             }
 
             // Publish against the PR HEAD, not this run's SHA (which is the base).
@@ -348,8 +355,8 @@ jobs:
             core.summary.addHeading(`voice-gate: ${conclusion}`, 3).addRaw(summary);
             await core.summary.write();
             if (conclusion !== 'success') {
-              // Fail the job too, so the run itself is visibly red. The PUBLISHED
-              // context is what branch protection reads, but a green run next to a
-              // red context reads as a glitch rather than a decision.
+              // Fail the job too, so the run itself is visibly red. Nothing blocks
+              // on either signal, so both exist to be SEEN — and a green run sitting
+              // next to a red check reads as a glitch rather than a decision.
               core.setFailed(`${CONTEXT}: ${title}`);
             }

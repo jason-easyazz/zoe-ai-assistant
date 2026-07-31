@@ -15,13 +15,14 @@ artifact is missing, stale, from a different baseline, or status != "pass", it
 fails LOUDLY (non-zero exit + a clear message) so a voice-path deploy cannot
 proceed on an unproven voice path.
 
-PR-TIME wiring (.github/workflows/voice-gate.yml — the REQUIRED `voice-gate`
-context): the same assertion runs BEFORE merge, not only at deploy. Without it
-a voice-path PR could merge green and then be permanently refused by the deploy
-gate — a "green main that will not deploy". The PR lane splits into two calls:
-`--scope-only` classifies the PR diff on a hosted runner (always exit 0), and
-only a VOICE verdict escalates to `--require` on the self-hosted Jetson, where
-the artifact actually lives.
+PR-TIME wiring (.github/workflows/voice-gate.yml — the INFORMATIONAL
+`voice-gate` check, fail-closed but NOT branch-protected): the same assertion
+runs BEFORE merge, not only at deploy, so a voice-path PR that would be refused
+by the deploy gate is visible up front rather than after the merge. The PR lane
+splits into two calls: `--scope-only` classifies the PR diff on a hosted runner
+(always exit 0), and only a VOICE verdict escalates to `--require` on the
+self-hosted Jetson, where the artifact actually lives. Enforcement remains the
+deploy-side check below — the PR-time one informs, it does not block.
 
 Deploy wiring: BOTH deploy paths call this with the incoming git range, between
 the fetch and the tree-advance — the manual scripts/maintenance/deploy_live.sh
