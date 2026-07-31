@@ -391,10 +391,11 @@ PR forever:**
 - Repo must be on a **GitHub Team/Enterprise** plan (the option is absent on Free/personal).
 - Required checks must run on the **`merge_group`** event — add `on: merge_group:` to `validate.yml`;
   the queue evaluates checks on a temporary `gh-readonly-queue/...` ref.
-- Every REQUIRED check must report on `merge_group`. `validate` and `secret-scan` already carry
-  `on: merge_group:`. **`voice-gate` does NOT and must be given a merge_group path before a queue
-  is enabled** — it publishes its context against `pull_request.head.sha`, and a merge_group event
-  has no pull request, so a queued run would never report and the queue would stall forever.
+- Every REQUIRED check must report on `merge_group`. The required set is `validate` + `secret-scan`,
+  and both already carry `on: merge_group:`. **`voice-gate` is INFORMATIONAL, not required, so it is
+  NOT a queue prerequisite** — the queue does not wait on it and it needs no `merge_group` path. (Its
+  context is published against `pull_request.head.sha`; a merge_group event has no pull request, but
+  since nothing gates on `voice-gate`, that is harmless rather than a stall.)
   **Greptile is no longer a factor here:** it was demoted to advisory on 2026-07-31, so a queue can
   never wait on a `Greptile Review` status that never arrives. Removing that dependency is one of
   the things the re-tiering bought.
