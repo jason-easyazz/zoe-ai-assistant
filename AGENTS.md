@@ -82,97 +82,180 @@ Service helpers should be small capability blocks with explicit parameters, stru
 
 Do not refactor the whole app as cleanup. Do not create `_new`, `_fixed`, `_v2`, `_old`, backup, or duplicate router files.
 
-## Review pipeline — cheap reviewers first, Greptile last
+## Review pipeline — deterministic gate, semantic review, advisory SaaS
 
-The reviewers catch **different** things. Historically, on #1560 the chain ran:
-a brittle host-path chown → **Copilot** fixed it *and introduced* a Compose project-name
-flaw → **Greptile** caught that → **Bugbot** caught a silently-failing symlink neither
-saw. Bugbot is disabled as of 2026-07-28 due to cost and is no longer part of the live
-gate or review process.
+**Re-tiered 2026-07-30** (4-vendor review consensus + this repo's own incident history).
+The principle: **what BLOCKS a merge must be deterministic, locally runnable, and
+reproducible on demand.** Everything judgement-shaped — an LLM reading a diff — is
+advisory. It is still where most real defects are caught, and it is still mandatory
+process; it just does not hold the merge button.
 
-**Open every PR as a DRAFT.** Greptile is configured `triggerOnDrafts: false`, so a draft
-is invisible to it and all iteration is free. Marking ready is the act of spending the
-first review — don't do it until the PR is genuinely finished. `triggerOnUpdates` is
-**true**, so any later push or branch update is reviewed too: that is deliberate (see THE
-GUARANTEE below), and it is why batching fixes into one push matters.
+Why the change: the required path used to depend on a non-deterministic SaaS reviewer
+and on bot reviewers whose availability we do not control. That produced (a) a
+repo-wide Copilot outage on 2026-07-27 that deadlocked **every** open PR including the
+one carrying the fix, (b) a gate controller of ~573 lines of inline JavaScript whose
+only CI coverage was actionlint and whose `REQUIRED_CHECKS = []` made its central
+condition vacuously true, and (c) an 11-round fail-open cascade in review. A gate you
+cannot run locally is a gate you cannot debug when it is the thing that is broken.
 
-Sequence:
+### Tier 1 — the REQUIRED gate (deterministic, blocking)
 
-1. **Draft PR.** Invisible to Greptile.
-2. **Omnigent cross-review (polly) — free, in-house.** `scripts/maintenance/cross_review.sh <PR#> "<contract>"` runs the default pre-ready, cross-vendor advisory review on the draft PR. Findings are hypotheses: verify with negative controls, batch fixes into one push. Advisory only — never wired into the gate. Binding worker routing:
-   - **`claude_code` (Claude Max, flat-rate):** primary implementer. Use Sonnet-tier
-     models for routine work and Opus-tier models for hard or multi-file work. Fable
-     is checking-only (deep review and final verification), never bulk implementation.
-   - **`codex` (ChatGPT subscription, flat-rate):** second implementer for narrow
-     changes and primary independent reviewer of Claude-implemented work.
-   - **Cross-vendor both ways:** reviewer platform must differ from implementer.
-     Claude work → `codex`; Codex work → `claude_code`, with Fable preferred. Fable
-     may additionally deep-check load-bearing Claude work but never replaces the
-     independent cross-vendor review.
-   - **`pi` (OpenRouter, pay-per-token):** tie-breaker/third opinion only, primarily
-     GLM 5.2 for hard cases. Every dispatch must have a hard cost cap; never routine.
-   - **Cursor Bugbot:** disabled 2026-07-28 due to cost; this free tier covers its seat.
-     Fleet rationale and history: [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
-3. **Local `/review` (Cursor) — free.** `.cursor/BUGBOT.md` carries the repo's review
-   guide for this IDE-side command. Agents cannot run it; it is the operator's step.
-4. **Copilot** — `gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does
-   NOT resolve). ~$10/mo flat for 1500 requests, and its reviews are always `COMMENTED`,
-   so it can never block a merge. **Copilot's wait is BOUNDED, not unconditional**
-   (operator-approved 2026-07-27): the gate summons Copilot once per head and anchors a
-   server-timestamped summon marker on SUCCESS only; if Copilot has not reviewed within
-   the grace window (reuses `CODEX_GRACE_MIN`, 20 min) and no request is genuinely
-   pending, the gate proceeds to Greptile without it. Two sharp edges of that bound,
-   so nobody reads it as a hard 20 minutes: (a) a still-PENDING request holds the gate
-   past the grace (an outage that accepts requests but never reviews holds until the
-   request is cleared — `gh pr edit <n> --remove-reviewer` — or Copilot answers), and
-   a manual `--add-reviewer` re-arms that hold; (b) the grace is evaluated only when
-   the gate RUNS (review/check events or the `*/30` cron), so a quiet PR clears in
-   20–50 min wall-clock, not 20. Motivation: a repo-wide Copilot outage on 2026-07-27
-   deadlocked every PR — including the PR that carried the fix.
+Exactly three contexts block a merge. Each is reproducible on a laptop:
+
+| context | what it proves | run it locally |
+|---|---|---|
+| `validate` | structure + critical-file validators, offline-memory policy, Alembic migrations, **actionlint with a negative control**, `py_compile` over every zoe-data module, the `ci_safe` unit lanes + full zoe-auth suite | `python3 tools/audit/validate_structure.py`; `pytest services/zoe-data/tests -m ci_safe` |
+| `secret-scan` | ggshield over **branch history**, not just the head tree | `ggshield secret scan ci` |
+| `voice-gate` | a voice-path diff has a fresh, passing replay-gate artifact against the current baseline | `python3 scripts/maintenance/voice_gate_check.py --scope-only --diff origin/main...HEAD` |
+
+Plus `required_conversation_resolution` (every thread resolved) and `strict` (up to date
+with `main`). Keep this set MINIMAL — every addition is a new way to freeze `main`.
+
+**`voice-gate` is new and closes a real gap.** The replay gate used to run post-merge
+only, fail-closed, so a voice-path PR could go green, merge, and then be permanently
+refused by the deploy gate: a *green main that will not deploy*, discovered after the
+fact. It now runs at PR time too. It is safe as a universal required context because it
+**always reports a conclusion**: PRs touching no voice-path file pass trivially and never
+involve the Jetson; only a voice-path diff escalates to the self-hosted assertion. The
+post-merge deploy check STAYS — defence in depth.
+
+**Coverage is EVIDENCE, not a gate.** Report it, read it, do not auto-block on a
+threshold; a coverage number is trivially satisfiable without testing anything real.
+
+### Tier 2 — cross-vendor diff review (the routine SEMANTIC gate, flat-rate)
+
+`scripts/maintenance/cross_review.sh <PR#> "<contract>"` — the default pre-ready step on
+the draft PR, and the reviewer that actually reads intent. **Flat-rate, so it is the
+routine path, not the exceptional one.** Findings are hypotheses: verify each with a
+negative control, batch every fix into one push. Advisory to the machine, mandatory to
+the process — a PR should not be marked ready until it has had one.
+
+Binding worker routing:
+
+- **`claude_code` (Claude Max, flat-rate):** primary implementer. Sonnet-tier for routine
+  work, Opus-tier for hard or multi-file work. **Opus/Sonnet on the Max plan is the free,
+  always-on Anthropic-family checker** — reach for these by default.
+- **`codex` (ChatGPT subscription, flat-rate):** second implementer for narrow changes,
+  and primary independent reviewer of Claude-implemented work.
+- **Fable (`claude-fable-5`) — METERED, NOT the free always-on checker.** *(correction,
+  2026-07-30: earlier notes implied Fable rode the flat-rate Max plan.)* Fable draws on a
+  **separate metered credit pool that can be exhausted**, and when it is exhausted it is
+  simply unavailable. Reserve it for **topped-up-credit strong-check moments** — a
+  deliberate deep check on genuinely load-bearing work — never for bulk implementation and
+  never as the assumed default reviewer. If a routine step "needs Fable", the routing is
+  wrong: use Opus/Sonnet.
+- **Cross-vendor both ways:** the reviewer's platform must differ from the implementer's.
+  Claude work → `codex`. Codex work → `claude_code` (Opus/Sonnet by default; Fable only
+  when credits are topped up and the work warrants it).
+- **`pi` (OpenRouter, pay-per-token) — STRICT tie-breaker only.** Primarily GLM 5.2, for a
+  genuine disagreement between two independent reviewers or a case neither could settle.
+  **Every dispatch carries a hard cost cap.** Never routine, never a third routine pass.
+- **Cursor Bugbot:** disabled 2026-07-28 due to cost; this tier covers its former seat.
+  Fleet rationale and history: [docs/knowledge/omnigent-cross-review.md](docs/knowledge/omnigent-cross-review.md).
+
+**Deterministic round caps, and no AI-assigned severity as a gate input.** Keep the
+`MAX_SUMMONS`-style bounded-attempt pattern everywhere a loop asks a model to try again —
+a cap you can count is the only reliable termination condition. But do **NOT** gate on a
+severity label a model assigned to its own finding (`P1`/`blocking`/`critical`): that is
+the model grading its own homework, it is not reproducible across runs, and it hands
+merge control to whichever prompt phrasing was in play. Humans triage severity; machines
+report findings.
+
+### Tier 3 — Greptile: ADVISORY, on demand for high-risk changes
+
+Greptile is a non-deterministic SaaS reviewer and is **not** a required context. It is
+still genuinely good at whole-repo context, so keep it for high-risk work — voice path,
+auth, migrations, anything flag-gated — and skip it for routine changes.
+
+`.github/workflows/greptile-gate.yml` is now a **cost controller, not a gate**: Greptile
+is dashboard-filtered to PRs carrying the `greptile` label, and the workflow applies that
+label only once a PR is settled (up to date, no unresolved threads), then summons once.
+That ordering is still load-bearing — Greptile dedups by PR diff, so a review on an early
+head followed by a `strict` branch update means it correctly refuses to re-review and the
+spend bought nothing. The workflow holds `checks: read`, never `checks: write`; it cannot
+publish a required context, and a test asserts that.
+
+### Tier 4 — Copilot: optional, never blocking
+
+`gh pr edit <n> --add-reviewer @copilot` (that syntax; the bot login does NOT resolve).
+~$10/mo flat. Its reviews are always `COMMENTED`, so it can never block a merge — and it
+is no longer WAITED FOR by anything. The bounded-grace summon machinery that used to wait
+for it is **deleted**: it existed to sequence a required Greptile behind Copilot, and with
+Greptile advisory there is nothing to sequence. Copilot's inline comments still create
+review threads that count toward `required_conversation_resolution`, so they must be
+resolved like any other.
+
+### Sequence
+
+1. **Draft PR.** Invisible to Greptile (`triggerOnDrafts: false`), so all iteration is free.
+2. **Cross-vendor review** (Tier 2) — the routine semantic gate.
+3. **Local `/review` (Cursor) — free.** `.cursor/BUGBOT.md` carries the repo's guide for
+   this IDE-side command. Agents cannot run it; it is the operator's step.
+4. **Copilot** (optional).
 5. **Batch the fixes.** Collect every finding, fix once, push once. Fix-push-fix-push
-   multiplies reviews AND multiplies the chance a fix introduces a new bug — which is
-   exactly what happened on #1560.
-6. **Mark ready** → Greptile reviews once, as the final gate → resolve threads → merge.
+   multiplies reviews AND multiplies the chance a fix introduces a new bug — exactly what
+   happened on #1560.
+6. **Mark ready.** The deterministic gate must be green and every thread resolved. Add the
+   `greptile` label for high-risk work if you want the advisory pass.
 
-**THE GUARANTEE — every merge is up-to-date AND reviewed at that exact commit.** This is
-the load-bearing property and it is worth credits:
+### THE GUARANTEE — every merge is up-to-date AND deterministically verified at that commit
 
 | setting | value | guarantees |
 |---|---|---|
 | branch protection `strict` | **true** | the PR is up to date with `main` |
-| `triggerOnUpdates` | **true** | that up-to-date head actually gets reviewed |
+| `validate` + `secret-scan` + `voice-gate` required | **yes** | the merged commit is deterministically verified |
+| `required_conversation_resolution` | **true** | no finding is merged unaddressed |
 | `triggerOnDrafts` | **false** | iteration in draft stays free |
-| `Greptile Review` required | **yes** | the gate is real |
+| Greptile required | **no** (advisory) | a SaaS outage cannot freeze `main` |
 
-`triggerOnUpdates: false` was tried on 2026-07-26 and **reverted the same day**. It looks
-like a saving and it silently breaks the guarantee: `strict` forces a branch update, and
-Greptile then skips the new head because the PR diff is unchanged — correct dedup on its
-part, but it leaves the merged commit with no review and the required check permanently
-absent. Measured, same PR: `update-branch -> COMPLETED` with it true; three consecutive
-`SKIPPED` with it false. Do not turn it off again.
+The guarantee is now carried by checks we own and can run locally, so a vendor outage
+degrades review quality instead of halting the repo.
 
-**Cost comes from CONCURRENCY, not from update reviews.** July's 3.6 reviews/PR was
-`strict` cascading across ~8 simultaneously open PRs — every merge updated the other
-seven, each billing a review. Serialise instead: keep one or two PRs in flight and it
-settles at ~2 reviews per PR (one at ready, one after the final branch update). Draft-first
-keeps all iteration before that free, so you only ever pay once the work is finished.
+### Owner break-glass — `main` can never be unrecoverably frozen
 
-Tier by risk; four reviewers on a one-file docs change is friction, not safety:
-- **Routine** (docs, config, generated files, tests, UI) → cross-review (step 2) + local `/review` + Copilot, then
-  mark ready for the single Greptile pass. Greptile is a REQUIRED check, so every PR gets
-  it; the tiering decides how much cheap review happens BEFORE that, not whether it runs.
-- **Load-bearing** (voice path, auth, migrations, anything flag-gated) → the full chain.
-  Cross-review applies to BOTH tiers — it is the free default pre-ready step, not an
-  extra load-bearing-only reviewer.
+A required context that stops reporting blocks every PR **forever**; GitHub has no
+timeout. With `enforce_admins: true` and a solo owner there is no in-band escape, and on
+2026-07-27 that is exactly what happened. So:
 
-Cost note, measured 2026-07: this repo ran **400+ reviews across 112 PRs (3.6× per PR)**
-in one month. At that volume Greptile was ~$380/mo and Bugbot cost $430 before the
-operator disabled it on 2026-07-28; Copilot is $10 flat. The multiplier — not the PR
-count — was the cost, and the fix is draft-first plus SERIALISING PRs (see THE
-GUARANTEE); disabling update reviews was tried and reverted, because it breaks the gate.
-**Copilot's inline comments
-create review threads that count toward `required_conversation_resolution`**, so they must
-be resolved like any other.
+- Apply the **`break-glass`** label to a PR (or run the `break-glass` workflow with a PR
+  number and a reason). `.github/workflows/break-glass.yml` verifies the actor is a repo
+  **admin** via the API (`write` is not enough), force-publishes only the required contexts
+  that are **not already green**, posts a permanent audit comment naming actor / head /
+  reason / each forced context and its real state, and then **removes the label** — the
+  override is single-use and applies to that head commit only.
+- It does **not** bypass `required_conversation_resolution`. Unresolved threads still
+  block, deliberately: an outage cannot make a thread unresolvable.
+- **This is for OUTAGES, not for red checks.** A check failing for a real reason is a bug
+  to fix. Every use is permanently visible on the PR.
+- Normal enforcement is unchanged. Still never `--admin` / `--force`.
+
+### Tier by risk
+
+Four reviewers on a one-file docs change is friction, not safety.
+
+- **Routine** (docs, config, generated files, tests, UI) → deterministic gate + cross-vendor
+  review. Skip Greptile.
+- **Load-bearing** (voice path, auth, migrations, anything flag-gated) → the full chain,
+  Greptile included as the advisory whole-repo pass.
+
+Cross-review applies to BOTH tiers — it is the free default, not a load-bearing-only extra.
+
+### Cost
+
+Measured 2026-07: **400+ reviews across 112 PRs (3.6× per PR)** in one month — Greptile
+~$380/mo, Bugbot $430 before it was disabled, Copilot $10 flat. The multiplier, not the
+PR count, was the cost, and it came from **concurrency**: `strict` cascading across ~8
+simultaneously open PRs, where every merge updated the other seven and each update billed
+a review. The fixes are draft-first and **serialising PRs** — one or two in flight. Making
+Greptile advisory removes the rest: an advisory reviewer you invoke for high-risk work
+only is billed a handful of times a month rather than on every head of every PR.
+
+(Historical note, kept because it explains the `triggerOnUpdates` setting: turning it off
+was tried on 2026-07-26 and reverted the same day — `strict` forces a branch update, and
+Greptile then correctly skips the unchanged diff, leaving the merged commit unreviewed
+with the check permanently absent. That failure mode is now moot for MERGE purposes, since
+Greptile no longer gates, but leave the setting alone: an advisory review of a stale head
+is still a wasted one.)
 
 ## One workstream, one PR — combine before review, not after
 
@@ -212,22 +295,22 @@ meant to fire there:
 - the hard limit exists because **Greptile silently skips PRs over ~50 files** — past that you
   get no review at all while still paying for it, which is worse than a blocked PR
 
-## Greptile PR loop
+## PR loop
 
 For reviewable development work:
 - Work from feature branches and open pull requests; `main` is protected.
-- Do not bypass branch protection or use administrator merges unless the operator explicitly asks for that emergency path.
+- Do not bypass branch protection or use administrator merges unless the operator explicitly asks for that emergency path. The **`break-glass` label** is the sanctioned, audited escape for a required-check OUTAGE — see the Review pipeline section.
 - Keep PRs small; use `/split-to-prs` when a branch grows too large.
-- Let Greptile review every PR independently.
+- **The deterministic gate is the merge condition** (`validate`, `secret-scan`, `voice-gate`); cross-vendor review is the routine semantic pass; Greptile is advisory and on-demand for high-risk work.
 - For Zoe engineering tasks, prefer `scripts/maintenance/greploop_guard.py --packet-only` or `--once` before broad expensive-agent repair.
 - Cheap models must receive one generated fix packet for one finding or CI failure; never hand them the whole PR.
 - Use Cursor's Greptile MCP to fetch review status/comments.
 - Use the `github-greptile-loop` Hermes skill to delegate heavier fix/re-review loops.
-- Do not treat Greptile as a replacement for local Zoe verification; run focused tests and live health checks before marking work merge-ready.
+- Do not treat any AI reviewer as a replacement for local Zoe verification; run focused tests and live health checks before marking work merge-ready.
 
 Merge mechanics & gotchas — canonical record: **[docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md)** (read it before driving any PR to merge). The load-bearing rules:
-- A green `Greptile Review` **check ≠ resolved threads**. `required_conversation_resolution` is the gate that enforces "5/5, every comment sorted" — mark every thread resolved (GraphQL `resolveReviewThread`), don't just reply.
-- **Arm auto-merge** (`gh pr merge <n> --squash --auto`) instead of merging by hand. `strict` drains a batch **serially** — nudge one PR per merge, and expect each branch-update to re-trigger a fresh Greptile review that may post new threads (the re-review treadmill).
+- A green check **≠ resolved threads**. `required_conversation_resolution` is the gate that enforces "5/5, every comment sorted" — mark every thread resolved (GraphQL `resolveReviewThread`), don't just reply. The `break-glass` override does NOT bypass this.
+- **Arm auto-merge** (`gh pr merge <n> --squash --auto`) instead of merging by hand. `strict` drains a batch **serially** — nudge one PR per merge. **Auto-merge fires the moment the required set is green, and a required context that has not yet REPORTED does not hold it**: measured on #1587, a PR merged 3 seconds before its review check even started (which then concluded `failure`, on code already on `main`). This is why every required context must always report a conclusion — see `voice-gate`'s always-reports design and `tests/unit/test_required_gate_workflows.py`.
 - **New tests reach CI by marker, not enumeration, on the main lanes.** `services/zoe-data/tests` + repo-root `tests/unit` are marker-based (co-located `pytestmark = pytest.mark.ci_safe`, registered in `pytest.ini`) and `services/zoe-auth/tests` runs full-directory — all three are enumeration-free, and hand-listing files there silently drops new tests (the failure this rule used to cause). Do NOT edit `validate.yml` for these lanes. Only the remaining explicitly-enumerated lanes need a YAML entry — confirm the file actually runs in its CI job. SSOT: [tests/AGENTS.md](tests/AGENTS.md) + [docs/knowledge/merge-and-deploy.md](docs/knowledge/merge-and-deploy.md).
 - GitGuardian scans **branch history**: a leaked/test cred in an intermediate commit fails even with a clean head tree. Scrub via a clean re-branch (squash to one commit on a new branch, replacement PR) — force-push is blocked by design.
 - Never `--admin`/`--force`; squash-only; the **human merges** (or armed auto-merge does) — agents never bypass the gate.

@@ -1,0 +1,185 @@
+# OWNER BREAK-GLASS — the recovery path for a required-check OUTAGE.
+#
+# THE FAILURE THIS EXISTS FOR (measured, 2026-07-27): a repo-wide Copilot outage
+# deadlocked every open PR, including the PR that carried the fix for the
+# deadlock. `enforce_admins: true` means not even the owner can merge past a
+# stuck required context, and this is a solo-owner repo with no second human to
+# escalate to. A gate that can permanently freeze `main` with no in-band recovery
+# is not a safe gate, however correct its enforcement is.
+#
+# THE RULE: enforcement stays exactly as strict as it was. This does not weaken,
+# soften, or add exceptions to any check. It only gives the OWNER a deliberate,
+# audited, single-use override for the case where a required context is not
+# reporting at all — an infrastructure outage, an offline self-hosted runner, a
+# revoked third-party token.
+#
+# HOW IT IS KEPT HONEST:
+#   * ADMIN ONLY — the actor's permission is verified against the API, not
+#     inferred from being able to apply a label. `write` is not enough.
+#   * SINGLE USE — the label is removed after firing, so it is armed per head.
+#     A new push re-blocks and needs a fresh, deliberate re-application.
+#   * ONLY WHAT IS STUCK — contexts that are already green are left untouched and
+#     reported as such; only genuinely non-green contexts are forced.
+#   * LOUD — every use posts a permanent audit comment naming the actor, the SHA,
+#     each forced context and its real state at the time.
+#   * NOT A THREAD BYPASS — `required_conversation_resolution` is unaffected.
+#     Unresolved review threads still block the merge, and that is intentional:
+#     an outage cannot make a thread unresolvable.
+#
+# TRIGGER: pull_request_target, so the PRIVILEGED workflow definition comes from
+# the base branch and cannot be redefined by the PR under review. No PR code is
+# checked out or executed here.
+name: break-glass
+
+on:
+  pull_request_target:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to break-glass"
+        required: true
+        type: string
+      reason:
+        description: "Why the normal gate cannot be satisfied (recorded in the audit trail)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: break-glass-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  break-glass:
+    # Only fire for the break-glass label itself — this workflow would otherwise
+    # run on every label added to every PR.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'break-glass'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Force the required contexts, audited
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Must match branch protection's required contexts EXACTLY. Kept as a
+            // literal rather than read from the protection API on purpose: reading
+            // it needs an admin token this workflow deliberately does not have, and
+            // a hardcoded list is reviewable in the diff. If you change branch
+            // protection, change this line in the same PR.
+            const REQUIRED = ['validate', 'secret-scan', 'voice-gate'];
+            const LABEL = 'break-glass';
+            const base = { owner: context.repo.owner, repo: context.repo.repo };
+
+            const num = context.eventName === 'workflow_dispatch'
+              ? Number(context.payload.inputs.pr)
+              : context.payload.pull_request.number;
+            const reason = context.eventName === 'workflow_dispatch'
+              ? context.payload.inputs.reason
+              : `\`${LABEL}\` label applied (no reason field on the label path — state it in a reply)`;
+            const actor = context.actor;
+
+            const pr = (await github.rest.pulls.get({ ...base, pull_number: num })).data;
+            const sha = pr.head.sha;
+
+            // ---- 1. ADMIN ONLY -------------------------------------------------
+            // Applying a label needs only `write`. Break-glass needs `admin`, so
+            // verify it directly. On the label path a non-admin's label is also
+            // STRIPPED, so a failed attempt leaves no armed state behind.
+            const perm = (await github.rest.repos.getCollaboratorPermissionLevel({
+              ...base, username: actor })).data.permission;
+            if (perm !== 'admin') {
+              if (context.eventName !== 'workflow_dispatch') {
+                await github.rest.issues.removeLabel({ ...base, issue_number: num, name: LABEL })
+                  .catch(() => {});
+              }
+              await github.rest.issues.createComment({ ...base, issue_number: num,
+                body: `⛔ **break-glass REFUSED** — @${actor} has \`${perm}\` permission; ` +
+                      `break-glass requires \`admin\`. Nothing was overridden.` });
+              core.setFailed(`break-glass requires admin; ${actor} has ${perm}`);
+              return;
+            }
+
+            // ---- 2. Only force what is actually stuck ---------------------------
+            // A context already green is left alone: the override should be as
+            // small as the outage, and the audit trail should say exactly which
+            // checks were not reporting on their own.
+            const runs = await github.paginate(github.rest.checks.listForRef, {
+              ...base, ref: sha, per_page: 100 });
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              ...base, ref: sha, per_page: 100 });
+
+            // Newest run per name wins — an old success must not stand in for a
+            // current failure (same rule the gate uses).
+            const ts = (c) => {
+              const t = Date.parse(c.completed_at || c.started_at || '');
+              return Number.isNaN(t) ? -1 : t;
+            };
+            const stateOf = (name) => {
+              const mine = runs.filter(c => c.name === name);
+              if (mine.length) {
+                const newest = mine.reduce((a, b) => (ts(b) >= ts(a) ? b : a));
+                return newest.status === 'completed' ? (newest.conclusion || 'completed')
+                                                     : newest.status;
+              }
+              const st = statuses.filter(s => s.context === name);
+              return st.length ? st[0].state : 'missing';
+            };
+
+            const GREEN = ['success', 'neutral', 'skipped'];
+            const forced = [], untouched = [];
+            for (const name of REQUIRED) {
+              const state = stateOf(name);
+              if (GREEN.includes(state)) { untouched.push(`${name} (\`${state}\`)`); continue; }
+              await github.rest.checks.create({
+                ...base, name, head_sha: sha, status: 'completed', conclusion: 'success',
+                output: {
+                  title: `BREAK-GLASS override by @${actor}`,
+                  summary: `This context was force-published by the break-glass workflow.\n\n` +
+                           `* Real state at override time: \`${state}\`\n` +
+                           `* Requested by: @${actor} (verified \`admin\`)\n` +
+                           `* Reason: ${reason}\n\n` +
+                           `This is NOT a passing check. It is an audited override of a ` +
+                           `required context that was not reporting.`,
+                },
+              });
+              forced.push(`${name} (was \`${state}\`)`);
+            }
+
+            // ---- 3. Disarm ------------------------------------------------------
+            // Single-use, per head. A later push re-blocks and needs a fresh,
+            // deliberate re-application rather than inheriting a standing bypass.
+            if (context.eventName !== 'workflow_dispatch') {
+              await github.rest.issues.removeLabel({ ...base, issue_number: num, name: LABEL })
+                .catch(() => {});
+            }
+
+            // ---- 4. Permanent audit trail --------------------------------------
+            const body = [
+              `🔓 **BREAK-GLASS used on \`${sha.slice(0, 8)}\`**`,
+              ``,
+              `| field | value |`,
+              `|---|---|`,
+              `| actor | @${actor} (verified \`admin\`) |`,
+              `| head | \`${sha}\` |`,
+              `| reason | ${reason} |`,
+              `| forced | ${forced.length ? forced.join(', ') : '_none — every required context was already green_'} |`,
+              `| untouched | ${untouched.length ? untouched.join(', ') : '_none_'} |`,
+              ``,
+              `The \`${LABEL}\` label has been removed — this override is single-use and`,
+              `applies to this head commit only. A new push re-blocks normally.`,
+              ``,
+              `Unresolved review threads are NOT bypassed by this override.`,
+              ``,
+              `Normal enforcement is unchanged. If a required context is failing for a`,
+              `REAL reason, fix the code — this path is for outages only.`,
+            ].join('\n');
+            await github.rest.issues.createComment({ ...base, issue_number: num, body });
+            core.notice(`break-glass: forced [${forced.join(', ') || 'nothing'}] on ${sha} for @${actor}`);

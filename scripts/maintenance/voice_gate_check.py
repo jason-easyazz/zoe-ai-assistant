@@ -15,6 +15,14 @@ artifact is missing, stale, from a different baseline, or status != "pass", it
 fails LOUDLY (non-zero exit + a clear message) so a voice-path deploy cannot
 proceed on an unproven voice path.
 
+PR-TIME wiring (.github/workflows/voice-gate.yml — the REQUIRED `voice-gate`
+context): the same assertion runs BEFORE merge, not only at deploy. Without it
+a voice-path PR could merge green and then be permanently refused by the deploy
+gate — a "green main that will not deploy". The PR lane splits into two calls:
+`--scope-only` classifies the PR diff on a hosted runner (always exit 0), and
+only a VOICE verdict escalates to `--require` on the self-hosted Jetson, where
+the artifact actually lives.
+
 Deploy wiring: BOTH deploy paths call this with the incoming git range, between
 the fetch and the tree-advance — the manual scripts/maintenance/deploy_live.sh
 AND the continuous-deploy runner (.github/workflows/deploy.yml), which is how
@@ -25,10 +33,13 @@ unwedge procedure is in docs/knowledge/merge-and-deploy.md. See
 docs/knowledge/voice-pipeline.md for the artifact contract.
 
 Exit codes: 0 = allowed (fresh pass, or no voice-path change); 1 = blocked.
+`--scope-only` is the exception: it classifies and ALWAYS exits 0.
 
 Examples:
     # deploy path: gate only if the incoming diff touches the voice runtime
     voice_gate_check.py --repo /home/zoe/assistant --diff HEAD..FETCH_HEAD
+    # PR path, step 1: classify only (never blocks, never reads the artifact)
+    voice_gate_check.py --scope-only --diff origin/main...HEAD
     # force the assertion regardless of any diff
     voice_gate_check.py --require
 """
@@ -170,6 +181,57 @@ def git_changed_files(repo: Path, diff_range: str) -> list[str]:
     return [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
 
 
+def scope_verdict(changed: list[str] | None, patterns: tuple[str, ...]) -> tuple[bool, list[str], str]:
+    """Classify a diff. Returns (needs_gate, hits, reason). Pure + unit-testable.
+
+    `changed is None` means the diff could not be computed. That is NOT "no voice
+    files changed" — it is "unknown", and unknown must demand the strongest
+    evidence available rather than wave a possible voice-path change through.
+    Same fail-closed rule as the deploy path."""
+    if changed is None:
+        return True, [], ("could not compute the diff — requiring the replay gate "
+                          "(unknown is not a pass)")
+    hits = touched_voice_files(changed, patterns)
+    if hits:
+        return True, hits, (f"voice-path change detected ({', '.join(hits)}) — a fresh "
+                            "passing replay-gate result is REQUIRED")
+    return False, [], (f"no voice-path files in the diff ({len(changed)} file(s) "
+                       "changed) — replay gate not required")
+
+
+def _emit_github_output(**pairs: str) -> None:
+    """Append key=value lines to $GITHUB_OUTPUT when running under Actions."""
+    out = os.environ.get("GITHUB_OUTPUT")
+    if not out:
+        return
+    try:
+        with open(out, "a", encoding="utf-8") as fh:
+            for key, value in pairs.items():
+                fh.write(f"{key}={value}\n")
+    except OSError as exc:  # pragma: no cover - runner filesystem failure
+        print(f"voice-gate: could not write GITHUB_OUTPUT ({exc})", file=sys.stderr)
+
+
+def _scope_only(args: argparse.Namespace) -> int:
+    """The scope job's whole body: classify the diff, publish the verdict, exit 0."""
+    changed: list[str] | None
+    if not args.diff:
+        # No range to narrow with: treat as "unknown", i.e. gate required.
+        changed = None
+    else:
+        try:
+            changed = git_changed_files(args.repo, args.diff)
+        except RuntimeError as exc:
+            print(f"voice-gate: could not compute diff {args.diff!r} ({exc})", file=sys.stderr)
+            changed = None
+
+    needs_gate, hits, reason = scope_verdict(changed, voice_path_patterns())
+    print(f"voice-gate scope: {'VOICE' if needs_gate else 'CLEAR'} — {reason}")
+    _emit_github_output(voice="true" if needs_gate else "false",
+                        files=",".join(hits))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--artifact", type=Path,
@@ -189,7 +251,20 @@ def main(argv: list[str] | None = None) -> int:
                     help="assert a fresh pass regardless of any diff")
     ap.add_argument("--no-baseline-check", action="store_true",
                     help="skip the baseline-identity match (freshness + status only)")
+    ap.add_argument("--scope-only", action="store_true",
+                    help="report whether --diff touches the voice path and exit 0 "
+                         "without asserting any artifact (PR-time scope job)")
     args = ap.parse_args(argv)
+
+    # 0. SCOPE-ONLY: answer "does this diff touch voice?" and stop. Used by the
+    #    PR-time gate's scope job, which runs on a GitHub-hosted runner where the
+    #    replay artifact cannot exist. Splitting scope from assertion is what lets
+    #    the required check report a conclusion on EVERY PR: no-voice PRs are
+    #    decided here and never touch the Jetson. ALWAYS exits 0 — this step
+    #    classifies, it does not enforce; the summary job turns the classification
+    #    into the verdict.
+    if args.scope_only:
+        return _scope_only(args)
 
     # 1. Decide whether this deploy needs the gate at all. Default is to require
     #    it; --diff narrows that to "only when the incoming change touches voice".

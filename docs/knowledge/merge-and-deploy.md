@@ -31,10 +31,22 @@ tree == main), and the live checkout is pinned to `main`, not a feature branch. 
 runner-vs-runner by the `production` concurrency group (`cancel-in-progress: false`). Still run a
 focused local check **before** merge — a green PR auto-deploys, so a bad merge is live.
 
-### The CD path enforces the voice replay-gate
+### The voice replay-gate runs at PR time AND on the CD path
 
-CD is how changes actually reach the box, so the **voice replay-gate runs on the runner**, not only on
-the manual `deploy_live.sh` path. Its pull step runs `scripts/maintenance/voice_gate_check.py --repo
+**PR time (`voice-gate`, required, since 2026-07-30).** The gate used to be post-merge only,
+which left a real gap: a voice-path PR could go green, merge, and then be permanently
+refused by the deploy gate — a *green main that will not deploy*, found after the fact with
+the change already on the trunk. `.github/workflows/voice-gate.yml` now asserts the same
+contract before merge. Its `scope` job classifies the PR diff on a hosted runner
+(`voice_gate_check.py --scope-only`, always exit 0) and only a voice-path verdict escalates
+to the self-hosted `replay-evidence` job, where the artifact actually lives. The `voice-gate`
+summary job runs `if: always()` so the required context reports a conclusion on **every** PR:
+trivially green when no voice-path file changed. Unblock a red one exactly as below — re-run
+the probe on the Jetson, then re-run the workflow.
+
+**Deploy time (unchanged, defence in depth).** CD is how changes actually reach the box, so
+the **voice replay-gate also runs on the runner**, not only on the manual `deploy_live.sh`
+path. Its pull step runs `scripts/maintenance/voice_gate_check.py --repo
 /home/zoe/assistant --diff "${prev}..${target}"` **after** the fetch and **before** the `reset --hard`,
 inside the same `flock /tmp/zoe-deploy.lock`. (Before this, merging a voice-path change auto-deployed it
 with the mandatory gate never running — a gate that can silently not-run is not a gate.)
@@ -86,25 +98,76 @@ clobber them); untracked runtime artifacts on the live tree (`data/chroma/`, `da
 sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --hard` intentionally has
 **no** clean-tree refuse — CD overwrites the tree to match `main` by contract.
 
-## Protected `main` — the merge gates (verified live 2026-06-26)
+## Protected `main` — the merge gates (re-tiered 2026-07-30)
+
+**The required gate is DETERMINISTIC and locally runnable.** Anything judgement-shaped —
+an LLM reading a diff — is advisory. Rationale, tiering and worker routing:
+[`AGENTS.md`](../../AGENTS.md) "Review pipeline".
 
 - `strict = true` — a PR must be **up to date with `main`** to merge (it can sit **BEHIND** if `main`
   races ahead; clear with update-branch / re-run).
-- Required status checks: **`validate`**, **`secret-scan`**, **`Greptile Review`** (since
-  2026-07-27; the GitGuardian App check is informational — the first-party `secret-scan`
-  job replaced it as required so an App outage cannot freeze `main`).
+- Required status checks: **`validate`**, **`secret-scan`**, **`voice-gate`**.
+  - The GitGuardian App check is informational — the first-party `secret-scan` job replaced
+    it as required so an App outage cannot freeze `main`.
+  - **`voice-gate`** (added 2026-07-30) runs the replay-gate assertion at PR time, closing
+    the "green main that will not deploy" gap. It **always reports a conclusion**: PRs with
+    no voice-path files pass trivially; only a voice-path diff escalates to the self-hosted
+    evidence job. The post-merge deploy assertion stays as defence in depth.
+  - **`Greptile Review` is NOT required.** A note here previously claimed it was made
+    required on 2026-07-27; the live branch-protection API never carried it (verified
+    2026-07-30: contexts were `validate`, `secret-scan` only). It is now advisory by
+    design — a non-deterministic SaaS reviewer is not on the required path.
 - `required_conversation_resolution = true` — **every review thread must be resolved**, not just replied to.
 - `0` required human approvals → green checks + resolved threads = mergeable; repo `allow_auto_merge = true`.
-- **Never** `--admin` / `--force` (no bypassing protection) unless the operator explicitly asks for that
-  emergency path. Merge with `gh pr merge <n> --squash --auto`.
+- **Never** `--admin` / `--force` (no bypassing protection). Merge with `gh pr merge <n> --squash --auto`.
+
+### A required context that does not REPORT blocks forever
+
+GitHub waits on a required context indefinitely — there is no timeout — and `enforce_admins
+= true` means the owner cannot merge past it either. Three ways to create that state, all
+of which have bitten this repo or were one step away from it:
+
+- adding a context to branch protection **before** the workflow producing it is on `main`;
+- a `paths:` filter on a required workflow (it simply does not report on unmatched PRs);
+- a job-level `if:` without `always()` on the job carrying the required name.
+
+`tests/unit/test_required_gate_workflows.py` asserts against all three.
+
+The inverse matters for **auto-merge**: a required context that has not yet reported does
+not hold the merge. Measured on #1587 — the PR merged 3 seconds before its review check
+started, which then concluded `failure` on code already on `main`. "Green" means "every
+required context has REPORTED success"; a missing context is not the same as a red one.
+
+### Break-glass — recovery from a required-check outage
+
+On 2026-07-27 a repo-wide Copilot outage deadlocked every open PR, including the one
+carrying the fix. `.github/workflows/break-glass.yml` is the in-band escape:
+
+1. Apply the **`break-glass`** label to the PR (create it once: `gh label create break-glass
+   -d "audited admin override of a stuck required context"`), or run the workflow manually
+   with a PR number and a reason.
+2. It verifies the actor is a repo **admin** via the API — `write` (enough to apply a
+   label) is deliberately not enough. A non-admin's label is stripped and refused.
+3. It force-publishes **only** the required contexts that are not already green, each
+   carrying an output naming the override, the actor and the context's real state.
+4. It posts a permanent audit comment and **removes the label**. The override is
+   single-use and bound to that head commit; a new push re-blocks normally.
+
+It does **not** bypass `required_conversation_resolution` — unresolved threads still
+block, deliberately, because an outage cannot make a thread unresolvable. Use it for
+OUTAGES, never for a check that is red for a real reason.
 
 ## Greptile / greploop gotchas
 
-- **Greptile silently SKIPS large PRs** (>~50 files) and ignores `docs/archive/**`. If the
-  `Greptile Review` check never posts, the PR can't satisfy the gate → **keep PRs small** (use
-  `/split-to-prs` when a branch grows). This is *the* reason big PRs stall.
+Greptile is **advisory** as of 2026-07-30 — it no longer gates a merge, so none of these
+stall a PR any more. They still decide whether you get the advisory review you paid for.
+
+- **Greptile silently SKIPS large PRs** (>~50 files) and ignores `docs/archive/**`. The credit
+  is spent and no review exists → **keep PRs small** (use `/split-to-prs` when a branch grows).
+  `greptile-gate.yml` bounds re-summons at 3 per head and then says so, loudly, once.
 - **Resolve threads via GraphQL `resolveReviewThread`** — replying to a Greptile comment does NOT
-  satisfy `required_conversation_resolution`; the thread must be marked resolved.
+  satisfy `required_conversation_resolution`; the thread must be marked resolved. This one DOES
+  still block a merge: thread resolution is required regardless of who opened the thread.
 - **Verify a merge via REST, not GraphQL.** On this host the GraphQL `pr view` is unreliable (phantom
   merged states / SHAs). Trust `gh api repos/:owner/:repo/pulls/N --jq .merged` and the commits on
   `main`.

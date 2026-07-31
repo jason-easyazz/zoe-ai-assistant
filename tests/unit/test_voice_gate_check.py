@@ -187,6 +187,96 @@ def test_probe_pass_artifact_clears_the_checker(tmp_path):
     assert ok is True
 
 
+# --- scope classification (the PR-time gate's first half) -------------------
+# `--scope-only` runs on a hosted runner where the replay artifact CANNOT exist.
+# It classifies and never asserts, which is what lets the required `voice-gate`
+# context report a conclusion on every PR instead of only on voice-path ones.
+def test_scope_clear_when_no_voice_files():
+    needs, hits, why = vgc.scope_verdict(
+        ["docs/PLANS.md", "services/zoe-ui/index.html"], vgc.VOICE_PATH_PATTERNS)
+    assert needs is False
+    assert hits == []
+    assert "not required" in why
+
+
+def test_scope_requires_gate_on_voice_files():
+    needs, hits, why = vgc.scope_verdict(
+        ["docs/PLANS.md", "services/zoe-data/fast_tiers.py"], vgc.VOICE_PATH_PATTERNS)
+    assert needs is True
+    assert hits == ["services/zoe-data/fast_tiers.py"]
+    assert "REQUIRED" in why
+
+
+def test_scope_fails_closed_when_the_diff_is_unknown():
+    """An uncomputable diff is NOT 'no voice files changed'. Reading it as clear
+    would let a voice-path PR through on a git failure — the same fail-closed rule
+    the deploy path uses, applied one gate earlier."""
+    needs, hits, why = vgc.scope_verdict(None, vgc.VOICE_PATH_PATTERNS)
+    assert needs is True
+    assert hits == []
+    assert "not a pass" in why
+
+
+def test_scope_only_always_exits_zero(tmp_path, monkeypatch, capsys):
+    """The scope job CLASSIFIES; it must never be the thing that fails.
+
+    If scope could exit non-zero it would fail the job, and the summary job would
+    then have to distinguish 'scope failed' from 'scope says voice' — the exact
+    ambiguity that produces a required check with no conclusion. Both branches,
+    including the unreadable-diff branch, exit 0."""
+    import os as _os
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    assert _os.environ["GITHUB_OUTPUT"] == str(out)
+
+    # unreadable range (not a git repo) -> fail-closed classification, still exit 0
+    assert vgc.main(["--scope-only", "--repo", str(tmp_path), "--diff", "a...b"]) == 0
+    assert "voice=true" in out.read_text()
+    assert "VOICE" in capsys.readouterr().out
+
+    # no --diff at all -> unknown -> gate required, still exit 0
+    out.write_text("")
+    assert vgc.main(["--scope-only", "--repo", str(tmp_path)]) == 0
+    assert "voice=true" in out.read_text()
+
+
+def test_scope_only_reports_clear_for_a_non_voice_diff(tmp_path, monkeypatch, capsys):
+    """The common case, end to end through the CLI: a real git repo whose diff
+    touches no voice file must publish voice=false so the Jetson is never involved."""
+    import os as _os
+    import subprocess as sp
+    repo = tmp_path / "r"
+    repo.mkdir()
+    env = {**_os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    sp.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "README.md").write_text("base\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True, env=env)
+    base = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+    (repo / "docs.md").write_text("docs only\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "docs"], check=True, env=env)
+
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    assert vgc.main(["--scope-only", "--repo", str(repo), "--diff", f"{base}...HEAD"]) == 0
+    assert "voice=false" in out.read_text()
+    assert "CLEAR" in capsys.readouterr().out
+
+    # and the same repo with a voice-path file flips it to true
+    (repo / "services" / "zoe-data").mkdir(parents=True)
+    (repo / "services" / "zoe-data" / "fast_tiers.py").write_text("x = 1\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "voice"], check=True, env=env)
+    out.write_text("")
+    assert vgc.main(["--scope-only", "--repo", str(repo), "--diff", f"{base}...HEAD"]) == 0
+    body = out.read_text()
+    assert "voice=true" in body
+    assert "services/zoe-data/fast_tiers.py" in body
+
+
 def test_w11_delivery_modules_are_voice_path():
     """A deploy touching only the W11 mapper or the waterfall changes what Zoe
     SOUNDS like and must hit the replay gate (Codex P1, #1579 — which was

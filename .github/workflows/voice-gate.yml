@@ -1,0 +1,171 @@
+# The voice replay gate, promoted to a PR-TIME REQUIRED check.
+#
+# WHY IT MOVED LEFT: the replay gate used to run ONLY post-merge (deploy.yml and
+# scripts/maintenance/deploy_live.sh), fail-closed. That left a real gap — a
+# voice-path PR could go green, merge, and then be permanently REFUSED by the
+# deploy gate: a "green main that will not deploy", discovered after the fact,
+# with the change already on the trunk. Asserting the same thing before the merge
+# closes it. The deploy-side assertion STAYS (defence in depth, and it is the last
+# thing standing between an unproven voice path and Jason's actual house).
+#
+# WHY IT IS SAFE AS A UNIVERSAL REQUIRED CONTEXT: `voice-gate` runs on EVERY PR
+# and ALWAYS reports a conclusion. On a PR that touches no voice-path file it
+# passes trivially and never involves the Jetson at all. Only a voice-path diff
+# escalates to the real assertion. This is deliberate: a required context that
+# reports on only SOME PRs is worse than no gate — GitHub blocks forever waiting
+# for a check that will never arrive (which is why `paths:` filters are absent
+# here; a path-filtered workflow simply does not report on unmatched PRs).
+#
+# WHERE THE EVIDENCE LIVES: the replay-gate artifact is written on the Jetson by
+# scripts/maintenance/voice_regression_probe.py (~/.cache/zoe/*.json). A hosted
+# runner cannot see it and never will, so the assertion step runs on the
+# self-hosted runner. It only READS a small JSON file — it never loads Kokoro, so
+# it does not need the memory-headroom gate that self-hosted-tests.yml needs.
+name: voice-gate
+
+on:
+  pull_request:
+    # `edited` is not decoration: it is the event GitHub fires when a PR's BASE
+    # BRANCH changes. A retarget changes the diff without moving the head SHA, so
+    # without it a PR could be re-based onto a target where its diff DOES touch
+    # voice while carrying a scope verdict computed against the old base.
+    # (Salvaged from #1592, which established the same fact for its own reasons.)
+    types: [opened, synchronize, reopened, edited]
+  # Harmless until a merge queue exists (none is produced without one), but a
+  # required check that cannot report on merge_group stalls a queue forever —
+  # same reasoning as validate.yml. See docs/knowledge/merge-queue-switch.md.
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------- scope ----
+  # Hosted, cheap, runs on every PR. Decides ONLY "does this diff touch the voice
+  # runtime path" — it never reads the artifact and never blocks. The voice-path
+  # glob set lives in scripts/maintenance/voice_gate_check.py so the PR gate and
+  # the deploy gate can never disagree about what "voice path" means.
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      voice: ${{ steps.scope.outputs.voice }}
+      files: ${{ steps.scope.outputs.files }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The scope job diffs against the merge base, so it needs real history.
+          # A shallow clone makes `git diff base...HEAD` fail, which the checker
+          # treats as UNKNOWN and therefore as voice-touching — fail-closed, but
+          # it would escalate every PR to the Jetson for no reason.
+          fetch-depth: 0
+
+      - name: Classify the diff (voice-path or not)
+        id: scope
+        env:
+          # merge_group has no pull_request payload; fall back to its base.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          if [ -z "${BASE_SHA}" ]; then
+            # No base to diff against (workflow_dispatch). Pass no range at all:
+            # the checker treats a missing range as UNKNOWN -> gate required.
+            python3 scripts/maintenance/voice_gate_check.py --scope-only --repo .
+          else
+            # Three-dot: diff against the MERGE BASE, so commits landing on main
+            # after this branch forked are not misread as part of the PR.
+            python3 scripts/maintenance/voice_gate_check.py \
+              --scope-only --repo . --diff "${BASE_SHA}...HEAD"
+          fi
+
+  # ------------------------------------------------------------- evidence ----
+  # Self-hosted, and ONLY for voice-path PRs. Asserts the same artifact contract
+  # the deploy path asserts: a fresh, PASSING replay-gate result produced against
+  # the CURRENT baseline. Missing / stale / skipped / failed all BLOCK.
+  replay-evidence:
+    needs: scope
+    if: needs.scope.outputs.voice == 'true'
+    runs-on: self-hosted
+    # Bounds a hung read. Note this does NOT bound QUEUE time: if the Jetson
+    # runner is offline this job waits, `voice-gate` waits with it, and the PR is
+    # blocked. That is the fail-closed direction, and the break-glass label
+    # (.github/workflows/break-glass.yml) is the documented recovery.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert a fresh passing replay-gate result
+        run: |
+          echo "Voice-path files in this PR: ${{ needs.scope.outputs.files }}"
+          # --require: the scope job already decided this PR needs the gate, so
+          # assert unconditionally rather than re-deriving the diff on the box.
+          python3 scripts/maintenance/voice_gate_check.py --require --repo .
+
+  # ----------------------------------------------------------- the verdict ----
+  # THE REQUIRED CONTEXT. `if: always()` plus `needs` on both jobs is what
+  # guarantees a conclusion on every PR, including ones where `replay-evidence`
+  # was skipped. Keep this job's name (`voice-gate`) in sync with branch
+  # protection's required contexts.
+  voice-gate:
+    needs: [scope, replay-evidence]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Decide
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          VOICE: ${{ needs.scope.outputs.voice }}
+          FILES: ${{ needs.scope.outputs.files }}
+          EVIDENCE_RESULT: ${{ needs.replay-evidence.result }}
+        run: |
+          set -euo pipefail
+          echo "scope=${SCOPE_RESULT} voice=${VOICE} evidence=${EVIDENCE_RESULT}"
+
+          # 1. Could not classify -> fail closed. An unreadable scope job is not
+          #    evidence of a non-voice PR.
+          if [ "${SCOPE_RESULT}" != "success" ]; then
+            echo "::error::voice-gate: the scope job ended '${SCOPE_RESULT}' — cannot tell whether this PR touches the voice path, so it is treated as if it does. Re-run the job; if it keeps failing, fix the scope step (it is plain git + python, runnable locally: python3 scripts/maintenance/voice_gate_check.py --scope-only --diff origin/main...HEAD)."
+            exit 1
+          fi
+
+          # 2. No voice-path files -> trivially green. The common case, and the
+          #    reason this context is safe to require on every PR.
+          if [ "${VOICE}" != "true" ]; then
+            echo "voice-gate: PASS — this PR touches no voice-runtime files, so the replay gate does not apply."
+            {
+              echo "### voice-gate: PASS (not applicable)"
+              echo ""
+              echo "No voice-runtime files in this diff — the replay gate is not required."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # 3. Voice-path files -> the evidence job is the verdict, fail-closed.
+          if [ "${EVIDENCE_RESULT}" = "success" ]; then
+            echo "voice-gate: PASS — voice-path change with a fresh passing replay-gate result."
+            {
+              echo "### voice-gate: PASS (replay gate proven)"
+              echo ""
+              echo "Voice-path files: \`${FILES}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # 'skipped' here means the self-hosted job never ran despite being
+          # required — name that case explicitly, it looks like a pass otherwise.
+          echo "::error::voice-gate: BLOCKED — this PR changes the voice runtime path (${FILES}) and the replay-gate evidence job ended '${EVIDENCE_RESULT}'. On the Jetson as user zoe, run: flock /tmp/zoe-voice-harness.lock python3 scripts/maintenance/voice_regression_probe.py --samples 20 --service-dir /home/zoe/assistant/services/zoe-data — then re-run this workflow. If the self-hosted runner is offline, see the break-glass procedure in docs/knowledge/merge-and-deploy.md."
+          {
+            echo "### voice-gate: BLOCKED"
+            echo ""
+            echo "Voice-path files: \`${FILES}\`"
+            echo ""
+            echo "Replay-gate evidence job: \`${EVIDENCE_RESULT}\`"
+            echo ""
+            echo "Re-run the replay probe on the Jetson, then re-run this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
