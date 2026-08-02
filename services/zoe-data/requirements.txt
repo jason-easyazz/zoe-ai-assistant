@@ -1,22 +1,54 @@
-fastapi==0.115.0
+fastapi==0.141.1
 uvicorn[standard]==0.32.0
-pydantic==2.12.5
-aiosqlite==0.20.0
+pydantic==2.13.4
+aiosqlite==0.22.1
 asyncpg>=0.29.0
 alembic>=1.13.0
 psycopg2-binary>=2.9.0
-python-multipart==0.0.12
+python-multipart==0.0.32
 httpx==0.28.0
-aiohttp==3.14.1
+aiohttp==3.14.3
 websockets==14.0
-python-jose[cryptography]==3.3.0
+python-jose[cryptography]==3.5.0
 PyJWT==2.13.0
 passlib[bcrypt]==1.7.4
 ag-ui-protocol==0.1.14
 python-json-logger>=4.1.0
 
+# ── Vector memory store ───────────────────────────────────────────────────
+# BOTH pins are exact, and the chromadb one is the load-bearing half.
+#
+# mempalace 3.3.1 declares only `chromadb>=0.5.0`, so without an explicit pin a
+# resolver is free to install chromadb 1.5.x against a 0.6.x on-disk palace. That
+# is not a clean upgrade: mempalace's own changelog documents `_fix_blob_seq_ids`
+# misreading chromadb 1.5.x's sysdb-10 BLOB format as legacy 0.6.x big-endian
+# BLOBs, causing **silent drawer-write drops** on palaces migrated in that state
+# (recovery is `mempalace repair --mode max-seq-id`). Silently losing writes is
+# strictly worse than the 2026-07-31 crash-loop, which at least announced itself.
+#
+# Upgrading mempalace to 3.6.0 FORCES that migration (it requires
+# chromadb>=1.5.4,<2), so the two move together or not at all. 3.6.0 does carry
+# real fixes for our exact failure — HNSW divergence detection before opening
+# ChromaDB, and derived-index damage distinguished from data loss — so it is
+# worth doing, but only via: copy the palace, `mempalace migrate` in a throwaway
+# venv, then reconcile row counts against a `scripts/maintenance/export_memory_store.py`
+# export and confirm `memory_recall_probe` still self-recalls. Not in place.
+#
+# Live-verified combination (2026-08-02, 3507 drawers + 17686 audit rows):
+mempalace==3.3.1
+chromadb==0.6.3
+
 # ── Voice dependencies (Jetson/server-side) ───────────────────────────────
-# Jetson torch/ctranslate2 wheels currently emit runtime failures with NumPy 2.x.
+# `numpy<2` guards MORE than the voice path — do not relax or relocate it as
+# part of a voice-only change. Jetson torch/ctranslate2 wheels fail at runtime
+# on NumPy 2.x, AND chromadb 0.6.3 declares a bare unbounded `numpy`, so this
+# ceiling is the only thing stopping a memory-store install from pulling NumPy
+# 2.x (verified 2026-08-02: `mempalace==3.3.1 chromadb==0.6.3` alone resolves to
+# numpy 2.2.6; adding this line pins it back to 1.26.4). NumPy 2 is a C-ABI
+# break, and the packages compiled against 1.x here are kokoro, moonshine-voice,
+# chroma-hnswlib, ctranslate2, soundfile, soxr and Resemblyzer — i.e. both
+# canonical rocks plus the vector index. On aarch64 the realistic failure is
+# "no matching wheel" and a dead voice path.
 numpy<2
 # Cloud TTS fallback (fast, AU Neural voice)
 edge-tts>=6.1.12

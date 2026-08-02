@@ -149,7 +149,7 @@ jobs:
       files: ${{ steps.scope.outputs.files }}
     steps:
       - name: Check out the BASE commit (trusted code only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # NOT the PR head, and NOT the default merge ref — both contain code the
           # PR author controls. `base.sha` is already on the target branch.
@@ -229,7 +229,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the BASE commit (trusted code only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # THE load-bearing line for the self-hosted runner. Checking out the PR
           # head here would execute attacker-controlled code on the box that runs
@@ -280,7 +280,7 @@ jobs:
       checks: write
     steps:
       - name: Decide and publish the voice-gate context
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
           VOICE: ${{ needs.scope.outputs.voice }}

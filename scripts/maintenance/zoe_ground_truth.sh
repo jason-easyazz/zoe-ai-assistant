@@ -167,7 +167,21 @@ if [ -s "$applog" ]; then
   ok "app log live ($recs app records in last 500 lines, $tb tracebacks)"
 else bad "app log EMPTY/ABSENT — app-level logging may be broken again (pre-#1468 blackout signature)"; fi
 avail=$(free -m 2>/dev/null | awk '/Mem:/{print $7}')
-[ -n "$avail" ] && dim "available memory: ${avail}Mi  (voice replay gate needs ≥2000)"
+# The floor is PER-MODE and lives in voice_regression_probe.resolve_min_mem()
+# (remote 700 / inprocess 1500, both measured). Read it from there rather than
+# hardcoding: a stale copy here reads as an unreachable bar and talks people out
+# of running a gate that would in fact have run.
+vmin=$(python3 - <<'PY' 2>/dev/null
+import importlib.util, os
+p = os.path.expanduser("~/assistant/scripts/maintenance/voice_regression_probe.py")
+try:
+    s = importlib.util.spec_from_file_location("_vp", p); m = importlib.util.module_from_spec(s)
+    s.loader.exec_module(m); print(f"{m.resolve_min_mem('remote')}/{m.resolve_min_mem('inprocess')}")
+except Exception:
+    print("")
+PY
+)
+[ -n "$avail" ] && dim "available memory: ${avail}Mi  (voice replay gate floor ${vmin:-remote 700 / inprocess 1500} MB)"
 if [ -d "$HOME/assistant/.git" ]; then
   br=$(git -C "$HOME/assistant" rev-parse --abbrev-ref HEAD 2>/dev/null)
   behind=$(git -C "$HOME/assistant" rev-list --count HEAD..origin/main 2>/dev/null)
