@@ -92,7 +92,7 @@ jobs:
       contents: read
     steps:
       - name: Force the required contexts, audited
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             // Must match branch protection's required contexts EXACTLY. Kept as a
