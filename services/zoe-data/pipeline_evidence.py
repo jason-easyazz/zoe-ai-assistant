@@ -17,7 +17,13 @@ from pydantic import BaseModel, Field, field_validator
 PipelinePhase = Literal["scout", "implement", "verify", "review", "closeout", "retro"]
 PipelineStatus = Literal["todo", "running", "blocked", "done"]
 BlockClassification = Literal["scope_split_required"]
-EvidenceKind = Literal["tool", "test", "validator", "pr", "greptile", "human", "log"]
+# `cross_review` MUST NEVER appear in any phase's required-evidence set below
+# (or in any EvidenceProfile). It is discharged ONLY via the explicit, flag-gated
+# `human` subtraction in missing_required_evidence; requiring it directly would
+# let a bare kind-marker satisfy a phase and bypass the provenance check.
+EvidenceKind = Literal[
+    "tool", "test", "validator", "pr", "greptile", "human", "log", "cross_review"
+]
 EvidenceProfile = Literal["default", "audit", "code", "health"]
 TransitionOutcome = Literal[
     "start",
@@ -70,6 +76,89 @@ _EVIDENCE_PROFILES: dict[EvidenceProfile, dict[PipelinePhase, set[EvidenceKind]]
     },
 }
 
+# A cross_review sign-off is only trustworthy when bound to the reviewed commit
+# — a full or abbreviated git SHA (lowercased before matching), mirroring how
+# validator/handoff evidence is tied to a content_hash rather than a bare claim.
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+# Only an explicit approve verdict counts; a blocking/request-changes verdict
+# (or any unrecognised value) never substitutes for a human review sign-off.
+_CROSS_REVIEW_APPROVE_VERDICTS = frozenset({"approve", "approved"})
+
+# The set of MODEL PLATFORMS the cross-vendor gate recognises. An identity that
+# does not resolve into this set is UNKNOWN, and the sign-off check fails closed
+# on it (see valid_cross_review_signoff) — an unrecognised reviewer/implementer
+# is never treated as a valid distinct vendor that passes the cross-vendor rule.
+_KNOWN_PLATFORMS: frozenset[str] = frozenset({"anthropic", "openai", "openrouter"})
+
+# Vendor identities are normalised to their MODEL PLATFORM before the
+# cross-vendor comparison so aliases cannot smuggle a same-vendor reviewer past
+# the gate (AGENTS.md cross-vendor routing: "the reviewer's platform must differ
+# from the implementer's"). The whole Anthropic-hosted family collapses to
+# `anthropic` — claude/claude_code, the `claude-sdk` harness, every
+# Opus/Sonnet/Haiku tier and Fable (`claude-fable-5`); the OpenAI / ChatGPT /
+# codex family (incl. every `gpt-*` id like `gpt-5.4`) to `openai`; pi/GLM
+# (`glm-*`) to `openrouter`. Prefix families below catch the versioned model ids
+# the harness actually configures without enumerating every point release.
+#
+# NOT mapped, on purpose: `cursor` (Bugbot — disabled), `hermes`, and
+# `opencode`/`openclaw` (retired). Their underlying platform is not deterministic
+# from the token, so they resolve to UNKNOWN and fail closed rather than be
+# trusted as a distinct vendor. Add a mapping here only once a harness's platform
+# is fixed and known.
+_VENDOR_ALIASES: dict[str, str] = {
+    "claude": "anthropic",
+    "claude_code": "anthropic",
+    "claude-code": "anthropic",
+    "claudecode": "anthropic",
+    "claude-sdk": "anthropic",
+    "claude-fable-5": "anthropic",
+    "claude-test": "anthropic",
+    "anthropic": "anthropic",
+    "opus": "anthropic",
+    "sonnet": "anthropic",
+    "haiku": "anthropic",
+    "fable": "anthropic",
+    "codex": "openai",
+    "openai": "openai",
+    "chatgpt": "openai",
+    "gpt": "openai",
+    "pi": "openrouter",
+    "openrouter": "openrouter",
+    "glm": "openrouter",
+}
+
+# Prefix -> platform for versioned model ids (matched only after an exact alias
+# miss). `claude-*` -> anthropic covers claude-3-opus / claude-fable-5 / any
+# future tier; `gpt*` -> openai covers gpt-5.4 / gpt-5.5-medium; `glm*` ->
+# openrouter covers glm-4.6 / glm5.2.
+_VENDOR_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("claude", "anthropic"),
+    ("gpt", "openai"),
+    ("glm", "openrouter"),
+)
+
+
+def normalize_vendor(name: str | None) -> str:
+    """Collapse a reviewer/implementer identity to its canonical model platform.
+
+    Returns "" for an empty/whitespace identity. An exact alias (claude_code,
+    claude-sdk, codex, fable, …) maps to its platform, then a versioned-id prefix
+    (claude-fable-5, gpt-5.4, glm-4.6) maps to its family; anything else falls
+    back to its own lowercased token so distinct unknown vendors stay distinct
+    while identical ones stay equal. Callers that must fail closed on an
+    unrecognised vendor check the result against ``_KNOWN_PLATFORMS`` — a
+    fall-through token is deliberately NOT a member.
+    """
+    token = (name or "").strip().lower()
+    if not token:
+        return ""
+    if token in _VENDOR_ALIASES:
+        return _VENDOR_ALIASES[token]
+    for prefix, platform in _VENDOR_PREFIXES:
+        if token.startswith(prefix):
+            return platform
+    return token
+
 _PROFILE_TAG_RE = re.compile(r"evidence_profile:\s*(\w+)", re.I)
 _SCOPE_SPLIT_REASON_RE = re.compile(
     r"\b(?:PROTOCOL_VIOLATION|TURN_BUDGET|CONTEXT_LIMIT|TOKEN_LIMIT|TOO_BROAD|"
@@ -113,6 +202,20 @@ class PipelineState(BaseModel):
     phase: PipelinePhase = "implement"
     status: PipelineStatus = "todo"
     evidence_profile: EvidenceProfile = "default"
+    # Flag (default OFF => unchanged behaviour): when True, an approving
+    # cross_review sign-off with verifiable provenance may satisfy the review
+    # phase in place of `human`. Live pipelines keep human-in-the-loop review
+    # until a downstream producer both emits the evidence and sets this True.
+    allow_cross_review_signoff: bool = False
+    # TRUSTED anchors for the cross_review provenance check — set by the harness
+    # dispatcher / PR-creation seam, NEVER derived from the evidence item itself.
+    # `pr_head_sha`: the authoritative PR head the sign-off must be bound to (an
+    # approval's commit_sha must match it EXACTLY). `implementer_platform`: the
+    # MODEL PLATFORM that produced the diff, so the reviewer can be required to
+    # differ from it. Both unset => no autonomous cross_review can clear review
+    # (fail-closed: there is nothing trustworthy to compare against).
+    pr_head_sha: str | None = None
+    implementer_platform: str | None = None
     attempts: dict[PipelinePhase, int] = Field(default_factory=dict)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     history: list[TransitionRecord] = Field(default_factory=list)
@@ -253,15 +356,142 @@ def issue_evidence_profile(issue: dict | None) -> EvidenceProfile:
     return "default"
 
 
+def issue_allows_cross_review_signoff(issue: dict | None) -> bool:
+    """Resolve the cross_review-substitution flag from STRUCTURED Multica metadata.
+
+    Mirrors ``issue_evidence_profile`` but reads ONLY structured sources — the
+    explicit ``metadata`` key and the ``parse_ticket_block`` ticket-block tag —
+    with a truthy value in {"1", "true", "yes"}. There is deliberately NO free-text
+    title/description substring fallback: this flag gates an autonomous
+    cross_review -> squash-merge -> auto-deploy path, so a ticket that merely
+    *mentions* the flag name (or one that explicitly opts out) must never flip it
+    on. Absence or an explicit "false"/"no"/"0" resolves to False.
+    """
+    issue = issue or {}
+    meta = issue.get("metadata") or {}
+    try:
+        from multica_ticket_contract import parse_ticket_block
+
+        meta = {**parse_ticket_block(issue.get("description") or ""), **meta}
+    except Exception:
+        pass
+    raw = meta.get("allow_cross_review_signoff")
+    if raw is None:
+        raw = issue.get("allow_cross_review_signoff")
+    return str(raw or "").strip().lower() in {"1", "true", "yes"}
+
+
+def issue_implementer_platform(issue: dict | None) -> str | None:
+    """Resolve the implementer's MODEL PLATFORM from STRUCTURED Multica metadata.
+
+    Reads ONLY the structured ``implementer_platform`` key (explicit ``metadata``
+    or the ``parse_ticket_block`` ticket-block tag) — never free-text — and
+    normalises aliases (claude_code -> anthropic, codex -> openai, …) so the
+    recorded platform is directly comparable with a reviewer's. Returns None when
+    absent/blank, which keeps the cross_review provenance check fail-closed until
+    the trusted dispatcher records who implemented the diff.
+    """
+    issue = issue or {}
+    meta = issue.get("metadata") or {}
+    try:
+        from multica_ticket_contract import parse_ticket_block
+
+        meta = {**parse_ticket_block(issue.get("description") or ""), **meta}
+    except Exception:
+        pass
+    raw = meta.get("implementer_platform")
+    if raw is None:
+        raw = issue.get("implementer_platform")
+    normalized = normalize_vendor(str(raw or ""))
+    return normalized or None
+
+
 def required_evidence_for(state: PipelineState, phase: PipelinePhase | None = None) -> set[EvidenceKind]:
     selected = phase or state.phase
     profile_map = _EVIDENCE_PROFILES.get(state.evidence_profile, _REQUIRED_EVIDENCE)
     return profile_map.get(selected, set())
 
 
+def valid_cross_review_signoff(state: PipelineState) -> bool:
+    """True if a trustworthy APPROVING cross_review sign-off is present.
+
+    A cross_review kind marker is not enough on its own — that would let a bare
+    self-claim ("I reviewed it, looks good") clear review. To count as a stand-in
+    for a human sign-off the entry must carry verifiable provenance, mirroring how
+    validator/handoff evidence is bound to a content_hash rather than trusted on
+    its say-so. The evidence must carry:
+
+    - ``passed is True`` (an unresolved/failed review never counts),
+    - a non-empty ``reviewer`` (or ``vendor``) naming the reviewing agent/vendor,
+    - an explicit ``verdict`` of approve — a ``blocking``/``request_changes``
+      verdict (or any unrecognised value) is rejected,
+    - a ``commit_sha`` (or ``sha``) that looks like a real git SHA.
+
+    And it is checked against the TRUSTED anchors on ``state`` (set by the harness,
+    not by the evidence), so a producer cannot self-certify the two facts that
+    matter:
+
+    - the approval's ``commit_sha`` must EXACTLY match ``state.pr_head_sha`` — a
+      stale (post-review) or fabricated SHA that merely *looks* like a git hash no
+      longer clears review,
+    - the reviewer's normalised platform must DIFFER from
+      ``state.implementer_platform`` — a same-vendor or self-asserted reviewer
+      never satisfies the cross-vendor rule,
+    - BOTH the reviewer's and the implementer's normalised platform must resolve
+      to a KNOWN platform (``_KNOWN_PLATFORMS``). An unrecognised token is not a
+      valid distinct vendor: it fails closed rather than clearing the gate by
+      merely differing from a known implementer.
+
+    Both anchors are required: if ``state`` has no recorded PR head or no recorded
+    (known) implementer platform, there is nothing trustworthy to compare against
+    and the sign-off is rejected (fail-closed).
+    """
+    impl_platform = normalize_vendor(state.implementer_platform)
+    if impl_platform not in _KNOWN_PLATFORMS:
+        return False
+    expected_head = str(state.pr_head_sha or "").strip().lower()
+    if not _SHA_RE.match(expected_head):
+        return False
+    for item in state.evidence:
+        if item.kind != "cross_review" or item.passed is not True:
+            continue
+        meta = item.metadata or {}
+        reviewer = str(meta.get("reviewer") or meta.get("vendor") or "").strip()
+        verdict = str(meta.get("verdict") or "").strip().lower()
+        commit_sha = str(meta.get("commit_sha") or meta.get("sha") or "").strip().lower()
+        if not reviewer:
+            continue
+        if verdict not in _CROSS_REVIEW_APPROVE_VERDICTS:
+            continue
+        if not _SHA_RE.match(commit_sha):
+            continue
+        if commit_sha != expected_head:
+            continue
+        reviewer_platform = normalize_vendor(reviewer)
+        # Fail closed on an unrecognised reviewer: an unknown token must NOT be
+        # treated as a valid distinct vendor just because it differs from a known
+        # implementer platform.
+        if reviewer_platform not in _KNOWN_PLATFORMS:
+            continue
+        if reviewer_platform == impl_platform:
+            continue
+        return True
+    return False
+
+
 def missing_required_evidence(state: PipelineState, phase: PipelinePhase | None = None) -> set[EvidenceKind]:
     selected = phase or state.phase
-    return required_evidence_for(state, selected) - evidence_kinds(state)
+    missing = required_evidence_for(state, selected) - evidence_kinds(state)
+    # Review acceptance = human OR a valid approving cross_review, gated behind
+    # allow_cross_review_signoff (default OFF preserves human-required behaviour).
+    if (
+        selected == "review"
+        and "human" in missing
+        and state.allow_cross_review_signoff
+        and valid_cross_review_signoff(state)
+    ):
+        missing = missing - {"human"}
+    return missing
 
 
 def implement_validator_hash(state: PipelineState) -> str | None:

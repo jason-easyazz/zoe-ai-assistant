@@ -43,10 +43,43 @@ def test_bootstrap_and_reload(isolated_store):
     state = asyncio.run(store.bootstrap_state("multica:abc"))
     assert state.task_ref == "multica:abc"
     assert state.phase == "implement"
+    # Absent issue metadata => cross_review opt-in stays default-off and no
+    # implementer platform is recorded (fail-closed anchors).
+    assert state.allow_cross_review_signoff is False
+    assert state.implementer_platform is None
 
     reloaded = store.load_latest_state("multica:abc")
     assert reloaded is not None
     assert reloaded.phase == "implement"
+
+
+def test_bootstrap_persists_cross_review_optin_and_implementer(isolated_store):
+    import asyncio
+
+    issue = {
+        "metadata": {
+            "allow_cross_review_signoff": "true",
+            "implementer_platform": "claude_code",
+        }
+    }
+    state = asyncio.run(store.bootstrap_state("multica:xreview-optin", issue=issue))
+    assert state.allow_cross_review_signoff is True
+    assert state.implementer_platform == "anthropic"
+
+    reloaded = store.load_latest_state("multica:xreview-optin")
+    assert reloaded is not None
+    assert reloaded.allow_cross_review_signoff is True
+    assert reloaded.implementer_platform == "anthropic"
+
+
+def test_bootstrap_cross_review_optin_defaults_off_without_structured_flag(isolated_store):
+    import asyncio
+
+    # Free-text mention of the flag must NOT enable it; opt-out stays off.
+    issue = {"title": "discuss allow_cross_review_signoff", "description": "should we enable it?"}
+    state = asyncio.run(store.bootstrap_state("multica:xreview-freetext", issue=issue))
+    assert state.allow_cross_review_signoff is False
+    assert state.implementer_platform is None
 
 
 def test_stale_save_preserves_concurrently_written_evidence(isolated_store):
