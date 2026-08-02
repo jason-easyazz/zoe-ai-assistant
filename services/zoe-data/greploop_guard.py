@@ -101,6 +101,9 @@ _CI_OK_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 # empty/missing named check must never become mergeable merely because every
 # check that did happen to report was green.
 _DETERMINISTIC_REQUIRED_CHECKS = frozenset({"validate", "secret-scan"})
+# Branch protection pins both deterministic contexts to GitHub Actions. A
+# same-named success from any other installed App is not required-check evidence.
+_GITHUB_ACTIONS_APP_ID = 15368
 ALLOWED_TASK_TYPES = {"FIX_GREPTILE_FINDING", "FIX_CI_FAILURE", "SUMMARIZE_BLOCKER"}
 HIGH_RISK_PREFIXES = (
     ".github/workflows/",
@@ -928,6 +931,7 @@ def _required_checks_at_head(
         name: [] for name in _DETERMINISTIC_REQUIRED_CHECKS
     }
     stale: list[str] = []
+    wrong_app: list[str] = []
     for run in runs:
         if not isinstance(run, dict):
             continue
@@ -936,6 +940,10 @@ def _required_checks_at_head(
             continue
         if str(run.get("head_sha") or "").lower() != head_sha.lower():
             stale.append(name)
+            continue
+        app = run.get("app")
+        if not isinstance(app, dict) or app.get("id") != _GITHUB_ACTIONS_APP_ID:
+            wrong_app.append(name)
             continue
         by_name[name].append(run)
 
@@ -955,13 +963,19 @@ def _required_checks_at_head(
         elif conclusion != "SUCCESS":
             failures.append(f"{name}:{conclusion}")
     if missing:
-        suffix = f"; stale-head={sorted(set(stale))}" if stale else ""
+        details = []
+        if stale:
+            details.append(f"stale-head={sorted(set(stale))}")
+        if wrong_app:
+            details.append(f"wrong-app={sorted(set(wrong_app))}")
+        suffix = f"; {'; '.join(details)}" if details else ""
         return {
             "ok": False,
             "reason": "REQUIRED_CHECKS_MISSING",
             "detail": f"required checks absent at current head: {missing}{suffix}",
             "missing": missing,
             "stale": sorted(set(stale)),
+            "wrong_app": sorted(set(wrong_app)),
         }
     if pending:
         return {
@@ -1946,7 +1960,17 @@ async def merge_pr_when_ready(
                 "required_checks": state["required_checks"],
                 "assessment": assessment,
             }
-        proc = _run_gh(["pr", "merge", str(pr_number), "--squash"], repo=repo)
+        proc = _run_gh(
+            [
+                "pr",
+                "merge",
+                str(pr_number),
+                "--squash",
+                "--match-head-commit",
+                required["head_sha"],
+            ],
+            repo=repo,
+        )
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout or "").strip()
             state["terminal_state"] = "BLOCKED_MERGE_FAILED"

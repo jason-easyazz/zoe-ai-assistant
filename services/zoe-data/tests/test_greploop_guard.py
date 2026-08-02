@@ -456,13 +456,21 @@ def test_ci_status_from_rollup_rejects_empty_rollup():
     assert out["reason"] == "CI_NO_CHECKS"
 
 
-def _required_check_run(name, head_sha, *, status="completed", conclusion="success"):
+def _required_check_run(
+    name,
+    head_sha,
+    *,
+    status="completed",
+    conclusion="success",
+    app_id=greploop_guard._GITHUB_ACTIONS_APP_ID,
+):
     return {
         "id": 1,
         "name": name,
         "head_sha": head_sha,
         "status": status,
         "conclusion": conclusion,
+        "app": {"id": app_id},
     }
 
 
@@ -523,6 +531,28 @@ def test_required_checks_at_head_accepts_both_successes(monkeypatch):
     )
 
     assert greploop_guard._required_checks_at_head(head)["ok"] is True
+
+
+def test_required_checks_at_head_ignores_same_named_successes_from_other_apps(monkeypatch):
+    head = "a" * 40
+    runs = [
+        _required_check_run("validate", head, app_id=99999),
+        _required_check_run("secret-scan", head, app_id=99999),
+    ]
+    monkeypatch.setattr(
+        greploop_guard,
+        "_run_gh_api",
+        lambda *args, **kwargs: type(
+            "P", (), {"returncode": 0, "stdout": json.dumps({"check_runs": runs}), "stderr": ""}
+        )(),
+    )
+
+    out = greploop_guard._required_checks_at_head(head)
+
+    assert out["ok"] is False
+    assert out["reason"] == "REQUIRED_CHECKS_MISSING"
+    assert out["missing"] == ["secret-scan", "validate"]
+    assert out["wrong_app"] == ["secret-scan", "validate"]
 
 
 def test_required_checks_at_head_rejects_non_object_payload(monkeypatch):
@@ -2088,7 +2118,14 @@ async def test_merge_pr_when_ready_merges_when_assessment_passes(tmp_path, monke
     assert out["ok"] is True
     assert out["state"] == "MERGED"
     assert out["merge_commit"] == "deadbeef"
-    assert ["pr", "merge", "66", "--squash"] in calls
+    assert [
+        "pr",
+        "merge",
+        "66",
+        "--squash",
+        "--match-head-commit",
+        "a" * 40,
+    ] in calls
 
 
 @pytest.mark.asyncio
