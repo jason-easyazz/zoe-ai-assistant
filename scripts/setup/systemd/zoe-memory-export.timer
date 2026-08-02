@@ -1,0 +1,25 @@
+# Runs the nightly memory export (see the .service).
+#
+# 02:40 local: after the nightly memory digest (~03:00 is the digest's own slot,
+# and we want a copy of the store as it stands BEFORE the digest mutates it),
+# and well clear of the Sunday 04:00 consolidation pass.
+#
+# Persistent=true: unlike a health watchdog, a missed run is a real gap in the
+# backup history — if the box was asleep or down at 02:40, take the export at
+# the next opportunity rather than waiting a full day.
+#
+# Enable:
+#   systemctl --user enable --now zoe-memory-export.timer
+
+[Unit]
+Description=Nightly Zoe memory-store export
+
+[Timer]
+OnCalendar=*-*-* 02:40:00
+Persistent=true
+# Spread the start so the export never lands exactly on another timer's tick.
+RandomizedDelaySec=300
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

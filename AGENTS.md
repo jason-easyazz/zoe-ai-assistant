@@ -33,9 +33,35 @@ Reach for raw `grep`/`Read` only when the MCP bus genuinely can't answer.
 
 ### Serena is ONE shared server — read via Serena, EDIT in your own worktree
 
-`.mcp.json` points every agent at a **single long-lived** Serena server
-(`http://127.0.0.1:9121/mcp`, unit `scripts/setup/systemd/serena-mcp.service`).
-It is not spawned per agent. Two consequences are load-bearing:
+There is **one long-lived** Serena server (`http://127.0.0.1:9121/mcp`, unit
+`scripts/setup/systemd/serena-mcp.service`) — but "every agent uses it" is a
+property of **each agent's own config file**, not something `.mcp.json` can
+enforce on the fleet. Every agent runtime has a SEPARATE config and each must
+point at that URL:
+
+| agent | config | correct Serena entry |
+|---|---|---|
+| Claude Code | `.mcp.json` | `{"type": "http", "url": "http://127.0.0.1:9121/mcp"}` |
+| Codex | `.codex/config.toml` | `url = "http://127.0.0.1:9121/mcp"` (needs codex ≥ 0.130) |
+
+**codebase-memory is the mirror-image case — do not apply the same fix.** It is
+**stdio-only** (0.8.1; its `--port` is the UI graph viewer, not a transport), so
+there is no shared server to point at and per-agent spawning is unavoidable.
+Both configs must launch it via
+`scripts/maintenance/codebase_memory_capped.sh`, which memory-caps each spawn —
+never the raw binary, which is unbounded (measured 2026-08-02: fourteen live,
+~1.27 GB, one resident 2.3 days). Both properties are pinned by
+`tests/unit/test_agent_mcp_memory_bounds.py`.
+
+**A `command =` / `command:` entry in ANY of them silently reintroduces
+per-agent stdio spawning**, and nothing alarms: the shared server stays up and
+healthy, `serena_mcp_health.sh` passes, and the extra processes are invisible
+unless you count them. Measured 2026-08-02 — `.codex/config.toml` still carried
+the old stdio spawn, so two live Codex sessions were holding SEVEN private
+Serenas (~1.4 GB) *beside* a healthy shared server. The reaper does not help
+here: those processes have live parents, so they are not orphans. Audit with
+`pgrep -af "serena start-mcp-server" | wc -l` — anything above 1 means an agent
+config was missed. Two further consequences are load-bearing:
 
 - **It is pinned to `--project /home/zoe/assistant` — the LIVE checkout.** So
   **navigation/read is correct** (agents branch off fresh `origin/main`, so the

@@ -1,0 +1,42 @@
+# Nightly plain-JSON export of the vector memory store.
+#
+# WHY: the 2026-07-31 torn-HNSW incident was recovered by delete-collection +
+# re-embed, which only worked because the documents live in SQLite. Nothing had
+# ever verified that independently, and there was no copy to reconcile against.
+# This unit makes that copy nightly.
+#
+# Deliberately NOT ordered After=zoe-data.service and NOT bound to it: the
+# export reads ~/.mempalace/chroma.sqlite3 read-only and needs neither the API
+# nor the embedder, so it must still run on exactly the nights zoe-data is
+# crash-looping — which is when the copy matters most.
+#
+# Enable (linger is already on for Zoe hosts; required by the whole --user stack):
+#   systemctl --user enable --now zoe-memory-export.timer
+
+[Unit]
+Description=Nightly JSON export of the Zoe vector memory store
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=%t
+# The export is the household's complete personal-memory payload in plaintext.
+# The script sets 0700/0600 explicitly (so a hand-run export is private too);
+# this covers anything else the unit creates. Neither alone covers both paths.
+UMask=0077
+# User journald has NO persistent storage on this host (`journalctl --user`
+# returns "No journal files were found"), so stdout-only output is lost — and a
+# backup job that fails invisibly is the failure it exists to prevent.
+StandardOutput=append:%h/.zoe-logs/memory-export.log
+StandardError=append:%h/.zoe-logs/memory-export.log
+# --keep 14: ~2 MB gzipped per run on the current store, so ~28 MB steady state.
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/export_memory_store.py --keep 14
+# Tombstone report rides along on the same nightly tick. Prefixed '-' because it
+# exits 2 by design when a collection crosses the warn threshold: that is a
+# report worth reading in the journal, never a reason to fail the BACKUP that
+# just succeeded.
+ExecStart=-/usr/bin/python3 %h/assistant/scripts/maintenance/check_memory_tombstones.py
+# The export is a backup job, not a service: it must never contend with the
+# voice path or the brain for CPU/IO.
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20

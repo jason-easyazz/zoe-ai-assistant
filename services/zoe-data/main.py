@@ -809,8 +809,38 @@ async def _run_memory_capture_startup_probe() -> None:
             svc.search("startup probe", user_id="family-admin", limit=1, timeout_s=3.0),
             timeout=10.0,
         )
-        _memory_capture_health = {"status": "ok", "detail": "extractor+service ready"}
-        logger.info("Memory capture startup probe: OK")
+        # Correctness, not just plumbing: a torn HNSW persist (2026-07-31) had
+        # search "working" while returning garbage neighbours for hours. Verify
+        # a real stored row can recall itself; a MISS marks memory degraded so
+        # /health (and the ground-truth script) surface it immediately.
+        #
+        # Deliberately isolated in its own try/except so it can NEVER reach the
+        # strict-mode re-raise below. A corrupt index is precisely when the
+        # service must stay up and observable — lexical recall may still answer,
+        # and an operator needs a live /health to diagnose from. Crash-looping on
+        # a bad index is the failure this whole probe exists to catch, not a
+        # response to it.
+        recall = {"status": "skipped", "detail": "not run"}
+        try:
+            from memory_recall_probe import run_self_recall_check
+
+            recall = await asyncio.wait_for(
+                svc._run_sync(lambda: run_self_recall_check(svc._collection())),
+                timeout=15.0,
+            )
+        except Exception as _recall_exc:
+            recall = {"status": "degraded",
+                      "detail": f"self-recall check did not complete: {_recall_exc}"}
+
+        if recall["status"] == "degraded":
+            _memory_capture_health = {"status": "degraded", "detail": recall["detail"][:240]}
+            logger.error("Memory capture startup probe: %s", recall["detail"])
+        else:
+            _memory_capture_health = {
+                "status": "ok",
+                "detail": f"extractor+service ready; self-recall {recall['status']}",
+            }
+            logger.info("Memory capture startup probe: OK (self-recall %s)", recall["status"])
     except Exception as exc:
         detail = str(exc) or type(exc).__name__
         _memory_capture_health = {"status": "degraded", "detail": detail[:240]}

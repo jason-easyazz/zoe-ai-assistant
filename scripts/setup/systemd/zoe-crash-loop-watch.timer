@@ -1,0 +1,28 @@
+# Polls for a zoe-data crash loop (see the .service).
+#
+# Every 2 minutes: at the observed ~13 s restart cycle that is ~9 restarts per
+# tick, comfortably over the default threshold of 5, so a real loop is caught
+# within about two minutes of starting rather than the ~8 minutes the
+# 2026-07-31 outage ran unnoticed.
+#
+# Persistent=false: a missed check while the box was down is not worth
+# replaying — the next tick re-evaluates live state, and an alert about an
+# outage that has already ended is noise. (Contrast the memory export, which is
+# Persistent=true because a missed backup is a real gap.)
+#
+# OnBootSec=3min: give zoe-data its normal boot startup (which legitimately
+# includes a few restarts while Postgres comes up) before watching.
+#
+# Enable:
+#   systemctl --user enable --now zoe-crash-loop-watch.timer
+
+[Unit]
+Description=Periodic zoe-data crash-loop watch
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=20s
+
+[Install]
+WantedBy=timers.target
