@@ -147,3 +147,25 @@ def test_alert_not_marked_delivered_when_send_fails(rig, monkeypatch):
     configure(restarts=60, healthy=False)
     mod.check(threshold=5, cooldown=1800, dry_run=False)
     assert len(sent) == 1 and "crash-looping" in sent[0]
+
+
+def test_prefers_dedicated_recipient_setting_over_retired_allow_list():
+    """TELEGRAM_ALLOWED_USERS is retired in .env.example, so a freshly
+    provisioned host has none — reading only it meant zero recipients and a
+    crash loop reported to nobody."""
+    assert mod._recipients({"ZOE_ALERT_TELEGRAM_CHAT_IDS": "111,222"}) == ["111", "222"]
+
+
+def test_falls_back_to_legacy_key_for_existing_hosts():
+    assert mod._recipients({"TELEGRAM_ALLOWED_USERS": "999"}) == ["999"]
+
+
+def test_dedicated_setting_wins_when_both_present():
+    assert mod._recipients(
+        {"ZOE_ALERT_TELEGRAM_CHAT_IDS": "111", "TELEGRAM_ALLOWED_USERS": "999"}
+    ) == ["111"]
+
+
+def test_no_recipients_is_reported_loudly_not_silently(capsys):
+    """The absence of a recipient must be visible; a silent alerter is the bug."""
+    assert mod._recipients({}) == []

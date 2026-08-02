@@ -19,6 +19,15 @@ Description=Nightly JSON export of the Zoe vector memory store
 [Service]
 Type=oneshot
 Environment=XDG_RUNTIME_DIR=%t
+# The export is the household's complete personal-memory payload in plaintext.
+# The script sets 0700/0600 explicitly (so a hand-run export is private too);
+# this covers anything else the unit creates. Neither alone covers both paths.
+UMask=0077
+# User journald has NO persistent storage on this host (`journalctl --user`
+# returns "No journal files were found"), so stdout-only output is lost — and a
+# backup job that fails invisibly is the failure it exists to prevent.
+StandardOutput=append:%h/.zoe-logs/memory-export.log
+StandardError=append:%h/.zoe-logs/memory-export.log
 # --keep 14: ~2 MB gzipped per run on the current store, so ~28 MB steady state.
 ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/export_memory_store.py --keep 14
 # Tombstone report rides along on the same nightly tick. Prefixed '-' because it

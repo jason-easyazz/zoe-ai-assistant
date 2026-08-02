@@ -65,6 +65,17 @@ def _row_metadata(conn: sqlite3.Connection, rowid: int) -> tuple[str | None, dic
 
 def export(db_path: str, out_dir: str, *, compress: bool, keep: int) -> str:
     conn = _connect_ro(db_path)
+    # SNAPSHOT CONSISTENCY (review: Greptile). The scan issues one query per
+    # collection plus one per row, and zoe-data writes memory continuously — so
+    # without a spanning read transaction the queries observe different database
+    # states and the "recovery" export can contain a row set that never existed
+    # at any instant. `BEGIN` on a read-only connection starts a deferred read
+    # transaction; under WAL (Chroma's default) that pins one consistent
+    # snapshot for its lifetime WITHOUT blocking writers. Isolation is set to
+    # None so sqlite3 stops managing transactions implicitly and our explicit
+    # BEGIN/COMMIT is honoured.
+    conn.isolation_level = None
+    conn.execute("BEGIN")
     collections: dict[str, list] = {}
     total = 0
     for cid, cname in conn.execute("SELECT id, name FROM collections ORDER BY name"):
@@ -80,10 +91,22 @@ def export(db_path: str, out_dir: str, *, compress: bool, keep: int) -> str:
             records.append({"id": emb_id, "document": doc, "metadata": meta})
         collections[cname] = records
         total += len(records)
+    conn.execute("COMMIT")
     conn.close()
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    os.makedirs(out_dir, exist_ok=True)
+    # PERMISSIONS (review: Greptile). This file is the household's complete
+    # personal-memory payload in plaintext. `os.makedirs`/`open` take their mode
+    # from the inherited umask, so a permissive umask would publish it to every
+    # local account with parent-directory access. Set the modes explicitly here
+    # rather than relying on a service-level UMask, so a hand-run export is as
+    # private as the timer-run one. (The unit sets UMask=0077 as well — belt and
+    # braces, since neither alone covers both invocation paths.)
+    os.makedirs(out_dir, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(out_dir, 0o700)  # exist_ok=True skips mode on an existing dir
+    except OSError:
+        pass
     name = f"memory-export-{stamp}.json" + (".gz" if compress else "")
     path = os.path.join(out_dir, name)
     payload = {
@@ -97,10 +120,16 @@ def export(db_path: str, out_dir: str, *, compress: bool, keep: int) -> str:
     # Write to a temp sibling then rename, so a crash mid-write can never leave a
     # truncated file that looks like a valid export.
     tmp = path + ".partial"
-    opener = gzip.open if compress else open
-    with opener(tmp, "wb") as fh:
-        fh.write(blob)
-    os.replace(tmp, path)
+    # 0600 before any bytes land: create the fd with the mode already set rather
+    # than chmod-ing after writing, which would leave a readable window.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as raw:  # closes fd
+        if compress:
+            with gzip.GzipFile(fileobj=raw, mode="wb") as fh:
+                fh.write(blob)
+        else:
+            raw.write(blob)
+    os.replace(tmp, path)  # rename preserves the 0600 mode
 
     print(f"memory export: {total} records across {len(collections)} collections -> {path}")
     for cname, recs in sorted(collections.items()):

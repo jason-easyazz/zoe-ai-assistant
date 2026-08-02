@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import pickle
 import sqlite3
@@ -125,11 +126,19 @@ def compact(palace: str, collection: str, *, assume_yes: bool) -> int:
         return 1
     s = stats[collection]
 
-    # Guard 2: an export before any destructive step, always.
+    # Guard 2: an export of THIS palace before any destructive step, always.
+    #
+    # The --db argument is load-bearing (review: Codex). Without it the exporter
+    # defaults to ~/.mempalace, so `--palace /path/to/copy --execute X` would back
+    # up the DEFAULT palace while deleting and rebuilding a DIFFERENT one — a
+    # successful export would clear the safety guard for a target that has no
+    # backup at all. A guard that passes while protecting the wrong thing is
+    # worse than no guard.
     here = os.path.dirname(os.path.abspath(__file__))
-    print("taking a pre-compaction export first...")
+    palace_db = os.path.join(palace, "chroma.sqlite3")
+    print(f"taking a pre-compaction export of {palace_db} first...")
     rc = subprocess.run([sys.executable, os.path.join(here, "export_memory_store.py"),
-                         "--keep", "14"]).returncode
+                         "--db", palace_db, "--keep", "14"]).returncode
     if rc != 0:
         print("REFUSING: pre-compaction export failed; not touching the index.", file=sys.stderr)
         return 1
@@ -146,13 +155,51 @@ def compact(palace: str, collection: str, *, assume_yes: bool) -> int:
     col = client.get_collection(collection)
     data = col.get(include=["documents", "metadatas"])
     ids, docs, metas = data["ids"], data["documents"], data["metadatas"]
+
+    # Spill the rows to a local file BEFORE deleting anything. The in-memory
+    # copy is the primary restore source, but it dies with the process — and the
+    # window being protected is exactly the one where the process may die.
+    salvage = os.path.join(
+        os.path.expanduser("~/.zoe"), f"compaction-salvage-{collection}.json")
+    os.makedirs(os.path.dirname(salvage), mode=0o700, exist_ok=True)
+    fd = os.open(salvage, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"collection": collection, "ids": ids,
+                   "documents": docs, "metadatas": metas}, fh)
+    print(f"salvage copy: {salvage} ({len(ids)} rows)")
+
     print(f"read {len(ids)} rows; deleting and re-adding...")
     client.delete_collection(collection)
     fresh = client.create_collection(collection)
     B = 256
-    for i in range(0, len(ids), B):
-        fresh.add(ids=ids[i:i+B], documents=docs[i:i+B], metadatas=metas[i:i+B])
-        print(f"  {min(i+B, len(ids))}/{len(ids)}")
+    written = 0
+    try:
+        for i in range(0, len(ids), B):
+            fresh.add(ids=ids[i:i+B], documents=docs[i:i+B], metadatas=metas[i:i+B])
+            written = min(i + B, len(ids))
+            print(f"  {written}/{len(ids)}")
+    except Exception as exc:
+        # A batch failed AFTER delete_collection: the collection is now empty or
+        # partial and recall is silently degraded (review: Greptile). Retry the
+        # remainder once from the in-memory rows; if that also fails, say
+        # exactly how to restore rather than leaving the operator to discover
+        # missing memories later.
+        print(f"\n!! rebuild FAILED after {written}/{len(ids)} rows: {exc}", file=sys.stderr)
+        print("!! attempting to re-add the remainder...", file=sys.stderr)
+        try:
+            for i in range(written, len(ids), B):
+                fresh.add(ids=ids[i:i+B], documents=docs[i:i+B], metadatas=metas[i:i+B])
+                written = min(i + B, len(ids))
+            print(f"recovered: all {written} rows restored", file=sys.stderr)
+        except Exception as exc2:
+            print(f"!! recovery FAILED at {written}/{len(ids)}: {exc2}", file=sys.stderr)
+            print(f"!! {collection} IS INCOMPLETE — recall is degraded until restored.",
+                  file=sys.stderr)
+            print(f"!! Restore from the salvage copy: {salvage}", file=sys.stderr)
+            print(f"!! (or the pre-compaction export in ~/.zoe/memory-exports)",
+                  file=sys.stderr)
+            return 1
+    os.unlink(salvage)  # only on full success — otherwise it is the restore path
     print(f"done: {collection} rebuilt with {len(ids)} rows")
     return 0
 

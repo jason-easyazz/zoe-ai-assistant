@@ -76,6 +76,25 @@ def _save_state(state: dict) -> None:
     os.replace(tmp, STATE_PATH)
 
 
+def _recipients(env: dict) -> list[str]:
+    """Chat ids to alert, newest setting first.
+
+    `TELEGRAM_ALLOWED_USERS` is RETIRED — `labs/flue-zoe-telegram/.env.example`
+    says so explicitly, and a host provisioned from that example has no such
+    key. Reading only it (as this did) meant every freshly-provisioned host
+    would find zero recipients and print "alert NOT delivered" forever while a
+    crash loop ran unannounced (review: Codex). That is precisely the silent-
+    failure class this watcher exists to end, so the dedicated setting comes
+    first and the retired key is kept only as a fallback for hosts still
+    carrying it.
+    """
+    for key in ("ZOE_ALERT_TELEGRAM_CHAT_IDS", "TELEGRAM_ALLOWED_USERS"):
+        ids = [u.strip() for u in env.get(key, "").split(",") if u.strip()]
+        if ids:
+            return ids
+    return []
+
+
 def _telegram(text: str) -> bool:
     """Best-effort send. Returns True if delivered."""
     try:
@@ -85,10 +104,16 @@ def _telegram(text: str) -> bool:
         print(f"crash-watch: cannot read telegram env ({exc}); alert NOT delivered",
               file=sys.stderr)
         return False
+    # Environment wins over the file, so an operator can point alerts somewhere
+    # else without editing the bot's own env.
+    env = {**env, **{k: v for k, v in os.environ.items()
+                     if k in ("ZOE_ALERT_TELEGRAM_CHAT_IDS", "TELEGRAM_BOT_TOKEN")}}
     token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
-    users = [u.strip() for u in env.get("TELEGRAM_ALLOWED_USERS", "").split(",") if u.strip()]
+    users = _recipients(env)
     if not token or not users:
-        print("crash-watch: telegram not configured; alert NOT delivered", file=sys.stderr)
+        print("crash-watch: NO ALERT RECIPIENT CONFIGURED — a crash loop would go "
+              "unreported. Set ZOE_ALERT_TELEGRAM_CHAT_IDS (comma-separated chat "
+              f"ids) in {TELEGRAM_ENV} or the environment.", file=sys.stderr)
         return False
     ok = False
     for chat_id in users:
