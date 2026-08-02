@@ -826,6 +826,16 @@ def _run_gh(args: list[str], *, repo: str = DEFAULT_REPO, check: bool = False) -
     )
 
 
+def _run_gh_api(args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run ``gh api`` (which does not accept the ``--repo`` CLI flag)."""
+    return subprocess.run(
+        ["gh", "api", *args],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+
 def _parse_gh_json(proc: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     if proc.returncode != 0:
         raise GuardError((proc.stderr or proc.stdout or "gh command failed").strip())
@@ -883,14 +893,12 @@ def _required_checks_at_head(
             "reason": "REQUIRED_CHECKS_HEAD_UNKNOWN",
             "detail": "current PR head SHA is missing or malformed",
         }
-    proc = _run_gh(
+    proc = _run_gh_api(
         [
-            "api",
             f"repos/{repo}/commits/{head_sha}/check-runs?filter=latest&per_page=100",
             "-H",
             "Accept: application/vnd.github+json",
-        ],
-        repo=repo,
+        ]
     )
     if proc.returncode != 0:
         return {

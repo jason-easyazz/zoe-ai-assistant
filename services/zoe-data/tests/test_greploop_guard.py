@@ -496,7 +496,7 @@ def _required_check_run(name, head_sha, *, status="completed", conclusion="succe
 def test_required_checks_at_head_fail_closed(monkeypatch, runs, reason):
     monkeypatch.setattr(
         greploop_guard,
-        "_run_gh",
+        "_run_gh_api",
         lambda *args, **kwargs: type(
             "P", (), {"returncode": 0, "stdout": json.dumps({"check_runs": runs}), "stderr": ""}
         )(),
@@ -516,13 +516,34 @@ def test_required_checks_at_head_accepts_both_successes(monkeypatch):
     ]
     monkeypatch.setattr(
         greploop_guard,
-        "_run_gh",
+        "_run_gh_api",
         lambda *args, **kwargs: type(
             "P", (), {"returncode": 0, "stdout": json.dumps({"check_runs": runs}), "stderr": ""}
         )(),
     )
 
     assert greploop_guard._required_checks_at_head(head)["ok"] is True
+
+
+def test_required_checks_api_targets_exact_head_without_repo_flag(monkeypatch):
+    head = "a" * 40
+    calls = []
+    runs = [
+        _required_check_run("validate", head),
+        _required_check_run("secret-scan", head),
+    ]
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda args, **kwargs: calls.append(args) or type(
+            "P", (), {"returncode": 0, "stdout": json.dumps({"check_runs": runs}), "stderr": ""}
+        )(),
+    )
+
+    assert greploop_guard._required_checks_at_head(head)["ok"] is True
+    assert calls[0][:2] == ["gh", "api"]
+    assert f"/commits/{head}/check-runs" in calls[0][2]
+    assert "--repo" not in calls[0]
 
 
 def test_gh_mergeable_state_blocks_non_mergeable_and_unknown_state(monkeypatch):
