@@ -39,10 +39,19 @@ property of **each agent's own config file**, not something `.mcp.json` can
 enforce on the fleet. Every agent runtime has a SEPARATE config and each must
 point at that URL:
 
-| agent | config | correct entry |
+| agent | config | correct Serena entry |
 |---|---|---|
 | Claude Code | `.mcp.json` | `{"type": "http", "url": "http://127.0.0.1:9121/mcp"}` |
 | Codex | `.codex/config.toml` | `url = "http://127.0.0.1:9121/mcp"` (needs codex ≥ 0.130) |
+
+**codebase-memory is the mirror-image case — do not apply the same fix.** It is
+**stdio-only** (0.8.1; its `--port` is the UI graph viewer, not a transport), so
+there is no shared server to point at and per-agent spawning is unavoidable.
+Both configs must launch it via
+`scripts/maintenance/codebase_memory_capped.sh`, which memory-caps each spawn —
+never the raw binary, which is unbounded (measured 2026-08-02: fourteen live,
+~1.27 GB, one resident 2.3 days). Both properties are pinned by
+`tests/unit/test_agent_mcp_memory_bounds.py`.
 
 **A `command =` / `command:` entry in ANY of them silently reintroduces
 per-agent stdio spawning**, and nothing alarms: the shared server stays up and

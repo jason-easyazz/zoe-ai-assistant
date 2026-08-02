@@ -12,5 +12,11 @@
 [mcp_servers.serena]
 url = "http://127.0.0.1:9121/mcp"
 
+# codebase-memory is stdio-ONLY (0.8.1: `--help` offers only "Run MCP server on
+# stdio"; its --port is the UI graph viewer, not a transport), so unlike Serena
+# it cannot be consolidated onto one shared server — every agent session gets its
+# own copy by design. What was wrong is that each copy was UNBOUNDED: 14 live at
+# once totalling ~1.27GB on 2026-08-02, one at 473MB, one resident 2.3 days.
+# The launcher wraps each spawn in a memory-capped systemd scope.
 [mcp_servers.codebase-memory]
-command = "/home/zoe/.local/bin/codebase-memory-mcp"
+command = "/home/zoe/assistant/scripts/maintenance/codebase_memory_capped.sh"
