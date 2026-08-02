@@ -2572,6 +2572,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_MULTICA_TRIAGE_JUDGE": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/multica_triage_judge.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MULTICA_WORKSPACE_ID": {
         "defaults": [
           "''"
