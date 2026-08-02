@@ -9,6 +9,8 @@ default-OFF feature flag.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from multica_triage_judge import (
@@ -114,6 +116,68 @@ def test_admit_carries_evidence_and_serializes():
         "reviewed_ref",
         "confidence",
     }
+
+
+class _Custom:
+    """A non-JSON-native object a classifier might sneak into evidence."""
+
+    def __init__(self, tag):
+        self.tag = tag
+
+    def __str__(self):
+        return f"<custom {self.tag}>"
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {"a set", "of", "strings"},  # set: not JSON-serializable
+        [ValueError("boom")],  # Exception object inside a list
+        _Custom("x"),  # bare custom object (wrapped into a single-item list)
+        [{"nested": {"deep", "set"}}],  # non-serializable nested inside a dict
+        ({1, 2}, _Custom("y")),  # tuple of non-serializable items
+    ],
+)
+def test_admit_evidence_is_always_json_serializable(evidence):
+    # A classifier returning non-JSON-native evidence must not break the verdict's
+    # to_dict() -> json.dumps() serialization downstream. _coerce_evidence coerces
+    # anything that is not JSON-native to its str().
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(
+            {
+                "disposition": "admit",
+                "reason_code": ADMIT_REASON_CODE,
+                "reason": "relevant",
+                "evidence": evidence,
+                "confidence": 0.9,
+            }
+        ),
+        commit_sha=SHA,
+    )
+    assert verdict.disposition == "admit"
+    # the whole verdict serializes cleanly — no TypeError from a stray set/object.
+    dumped = json.dumps(verdict.to_dict())
+    assert isinstance(dumped, str)
+    assert isinstance(verdict.to_dict()["evidence"], list)
+
+
+def test_reject_evidence_with_exception_serializes():
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(
+            {
+                "disposition": "reject",
+                "reason_code": "already_shipped",
+                "reason": "landed in #123",
+                "evidence": RuntimeError("already merged"),
+            }
+        ),
+        commit_sha=SHA,
+    )
+    # a bare Exception becomes a single stringified item, still serializable.
+    assert verdict.to_dict()["evidence"] == ["already merged"]
+    json.dumps(verdict.to_dict())
 
 
 # --------------------------------------------------------------------------- #
@@ -401,6 +465,36 @@ def test_admit_verdict_cannot_be_constructed_malformed(kwargs):
     base.update(kwargs)
     with pytest.raises(ValueError):
         TriageVerdict(**base)
+
+
+@pytest.mark.parametrize("bad_reason", ["", "   ", None])
+def test_admit_with_empty_reason_cannot_be_constructed(bad_reason):
+    with pytest.raises(ValueError):
+        TriageVerdict(
+            disposition="admit",
+            reason=bad_reason,
+            reason_code=ADMIT_REASON_CODE,
+            evidence=[],
+            zoe_kind="bug",
+            reviewed_ref=f"ZOE-1@{SHA}",
+            confidence=0.9,
+        )
+
+
+@pytest.mark.parametrize("bad_code", sorted(REJECT_REASON_CODES))
+def test_admit_with_reject_reason_code_cannot_be_constructed(bad_code):
+    # an admit disposition must carry reason_code == ADMIT_REASON_CODE; a
+    # reject-only code (e.g. 'duplicate', 'needs_info') must not construct an admit.
+    with pytest.raises(ValueError):
+        TriageVerdict(
+            disposition="admit",
+            reason="relevant",
+            reason_code=bad_code,
+            evidence=[],
+            zoe_kind="bug",
+            reviewed_ref=f"ZOE-1@{SHA}",
+            confidence=0.9,
+        )
 
 
 def test_reject_verdict_needs_no_confidence_or_concrete_ref():

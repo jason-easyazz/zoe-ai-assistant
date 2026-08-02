@@ -75,15 +75,19 @@ MIN_CONFIDENCE = 0.5
 #: map to ``done`` to match multica_apply_triage_dispositions.py EXACTLY. Codes
 #: that mean "this will not be worked" cancel. ``needs_info`` is the safe HOLD
 #: outcome: no auto board mutation, ticket stays in backlog for a human.
+# NOTE: "canceled" is the US spelling deliberately — it matches the board's
+# status vocabulary at services/zoe-data/main.py:679
+# ("... 'in_review', 'done', 'canceled'"). Do NOT "correct" it to "cancelled":
+# that would emit a target_status the board does not recognise.
 _CLOSE_STATUS: dict[str, str | None] = {
     "duplicate": "done",
     "wont_fix": "done",
     "monitor": "done",
     "already_shipped": "done",
-    "stale": "canceled",
-    "not_reproducible": "canceled",
-    "not_a_bug": "canceled",
-    "out_of_scope": "canceled",
+    "stale": "canceled",  # matches main.py:679 board vocab (US spelling)
+    "not_reproducible": "canceled",  # matches main.py:679 board vocab (US spelling)
+    "not_a_bug": "canceled",  # matches main.py:679 board vocab (US spelling)
+    "out_of_scope": "canceled",  # matches main.py:679 board vocab (US spelling)
     "needs_info": None,
 }
 
@@ -104,7 +108,8 @@ class TriageVerdict:
     """Machine-readable admission verdict for one backlog ticket.
 
     Structural invariant (enforced in :meth:`__post_init__`): an ``admit``
-    verdict MUST carry a valid ``confidence`` (a finite number in
+    verdict MUST carry a non-empty ``reason``, ``reason_code == ADMIT_REASON_CODE``
+    (``"relevant"``), a valid ``confidence`` (a finite number in
     ``[MIN_CONFIDENCE, 1.0]``) AND a concrete ``reviewed_ref`` of the form
     ``<ticket-ref>@<valid-sha>`` (no ``unknown`` sentinel). A caller therefore
     cannot construct a false admit directly — a reject/fail-closed verdict has
@@ -121,6 +126,15 @@ class TriageVerdict:
 
     def __post_init__(self) -> None:
         if self.disposition == "admit":
+            if not isinstance(self.reason, str) or not self.reason.strip():
+                raise ValueError(
+                    f"admit verdict requires a non-empty reason; got {self.reason!r}"
+                )
+            if self.reason_code != ADMIT_REASON_CODE:
+                raise ValueError(
+                    "admit verdict requires reason_code == "
+                    f"{ADMIT_REASON_CODE!r}; got {self.reason_code!r}"
+                )
             if not _confidence_ok(self.confidence):
                 raise ValueError(
                     "admit verdict requires a finite confidence in "
@@ -254,14 +268,40 @@ def _reviewed_ref(ticket: Mapping[str, Any], commit_sha: str) -> str:
     return f"{_ticket_ref(ticket)}@{sha}"
 
 
-def _coerce_evidence(value: Any) -> list[Any]:
-    if isinstance(value, list):
+def _json_safe(value: Any) -> Any:
+    """Recursively coerce ``value`` into a JSON-serializable shape.
+
+    JSON-native scalars (``str``/``int``/``float``/``bool``/``None``) pass
+    through unchanged; ``list``/``tuple`` are recursed into lists and ``dict`` is
+    recursed with stringified keys (``json.dumps`` only accepts str/number/bool/
+    None keys); anything else — a ``set``, an ``Exception``, a custom object —
+    becomes its ``str()``. This guarantees a classifier-supplied evidence item
+    survives :meth:`TriageVerdict.to_dict` -> ``json.dumps`` without raising.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
         return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return str(value)
+
+
+def _coerce_evidence(value: Any) -> list[Any]:
+    """Normalize classifier ``evidence`` into a JSON-serializable list.
+
+    ``None`` -> ``[]``; a ``list``/``tuple`` is flattened to a list; anything else
+    is wrapped in a single-item list. Every element is then run through
+    :func:`_json_safe`, so a classifier that returns a ``set`` / an ``Exception``
+    / a custom object cannot break downstream serialization of the verdict.
+    """
     if value is None:
-        return []
-    if isinstance(value, tuple):
-        return list(value)
-    return [value]
+        items: list[Any] = []
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        items = [value]
+    return [_json_safe(item) for item in items]
 
 
 def _fail_closed(
