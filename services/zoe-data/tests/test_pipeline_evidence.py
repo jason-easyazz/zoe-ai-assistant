@@ -417,6 +417,12 @@ def test_cross_review_without_sha_or_verdict_does_not_satisfy():
     no_verdict = with_evidence(no_verdict, _approving_cross_review(metadata={"verdict": ""}))
     assert missing_required_evidence(no_verdict) == {"human"}
 
+    # Empty reviewer/vendor identity (unattributable) => does not satisfy.
+    no_reviewer = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+    no_reviewer = with_evidence(no_reviewer, _approving_cross_review(metadata={"reviewer": "", "vendor": ""}))
+    assert missing_required_evidence(no_reviewer) == {"human"}
+    assert valid_cross_review_signoff(no_reviewer) is False
+
     # Bare self-claim with no provenance metadata at all.
     bare = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
     bare = with_evidence(
@@ -454,10 +460,32 @@ def test_blocking_verdict_cross_review_does_not_satisfy():
         assert valid_cross_review_signoff(state) is False, verdict
 
 
-def test_cross_review_signoff_resolver_reads_issue_metadata():
+def test_cross_review_signoff_resolver_reads_structured_metadata():
     from pipeline_evidence import issue_allows_cross_review_signoff
 
+    # Explicit structured metadata key.
     assert issue_allows_cross_review_signoff({"metadata": {"allow_cross_review_signoff": "true"}}) is True
-    assert issue_allows_cross_review_signoff({"description": "run with allow_cross_review_signoff"}) is True
+    assert issue_allows_cross_review_signoff({"metadata": {"allow_cross_review_signoff": True}}) is True
+    # Structured ticket-block tag in the description (parse_ticket_block).
+    ticket = "prep\n```zoe-ticket\n{\"allow_cross_review_signoff\": true}\n```\ntail"
+    assert issue_allows_cross_review_signoff({"description": ticket}) is True
+    # Absence resolves to False.
     assert issue_allows_cross_review_signoff({"title": "ordinary task"}) is False
     assert issue_allows_cross_review_signoff(None) is False
+
+
+def test_cross_review_signoff_resolver_rejects_optout_and_freetext():
+    from pipeline_evidence import issue_allows_cross_review_signoff
+
+    # (i) Explicit opt-out must resolve False, not be flipped on by substring matching.
+    assert issue_allows_cross_review_signoff({"metadata": {"allow_cross_review_signoff": "false"}}) is False
+    assert issue_allows_cross_review_signoff({"metadata": {"allow_cross_review_signoff": False}}) is False
+    assert issue_allows_cross_review_signoff({"metadata": {"allow_cross_review_signoff": "no"}}) is False
+    # (ii) A ticket that merely MENTIONS the flag name in free text (no structured
+    # truthy tag) must NOT enable it — the safety-critical flag is spoof-resistant.
+    assert issue_allows_cross_review_signoff(
+        {"title": "discuss allow_cross_review_signoff", "description": "should we set cross-review-signoff?"}
+    ) is False
+    # A structured opt-out tag in the description likewise stays False.
+    ticket_off = "```zoe-ticket\n{\"allow_cross_review_signoff\": false}\n```"
+    assert issue_allows_cross_review_signoff({"description": ticket_off}) is False

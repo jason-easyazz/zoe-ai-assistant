@@ -17,6 +17,10 @@ from pydantic import BaseModel, Field, field_validator
 PipelinePhase = Literal["scout", "implement", "verify", "review", "closeout", "retro"]
 PipelineStatus = Literal["todo", "running", "blocked", "done"]
 BlockClassification = Literal["scope_split_required"]
+# `cross_review` MUST NEVER appear in any phase's required-evidence set below
+# (or in any EvidenceProfile). It is discharged ONLY via the explicit, flag-gated
+# `human` subtraction in missing_required_evidence; requiring it directly would
+# let a bare kind-marker satisfy a phase and bypass the provenance check.
 EvidenceKind = Literal[
     "tool", "test", "validator", "pr", "greptile", "human", "log", "cross_review"
 ]
@@ -269,11 +273,15 @@ def issue_evidence_profile(issue: dict | None) -> EvidenceProfile:
 
 
 def issue_allows_cross_review_signoff(issue: dict | None) -> bool:
-    """Resolve the cross_review-substitution flag from Multica metadata/tags.
+    """Resolve the cross_review-substitution flag from STRUCTURED Multica metadata.
 
-    Mirrors ``issue_evidence_profile``: reads explicit metadata first, then falls
-    back to a description tag. Default is False (human-required) so nothing changes
-    until a producer opts a pipeline in.
+    Mirrors ``issue_evidence_profile`` but reads ONLY structured sources — the
+    explicit ``metadata`` key and the ``parse_ticket_block`` ticket-block tag —
+    with a truthy value in {"1", "true", "yes"}. There is deliberately NO free-text
+    title/description substring fallback: this flag gates an autonomous
+    cross_review -> squash-merge -> auto-deploy path, so a ticket that merely
+    *mentions* the flag name (or one that explicitly opts out) must never flip it
+    on. Absence or an explicit "false"/"no"/"0" resolves to False.
     """
     issue = issue or {}
     meta = issue.get("metadata") or {}
@@ -283,17 +291,10 @@ def issue_allows_cross_review_signoff(issue: dict | None) -> bool:
         meta = {**parse_ticket_block(issue.get("description") or ""), **meta}
     except Exception:
         pass
-    truthy = {"1", "true", "yes"}
-    if str(meta.get("allow_cross_review_signoff") or issue.get("allow_cross_review_signoff") or "").strip().lower() in truthy:
-        return True
-    haystack = " ".join(
-        [
-            str(issue.get("title") or ""),
-            str(issue.get("description") or ""),
-            json.dumps(meta),
-        ]
-    ).lower()
-    return "allow_cross_review_signoff" in haystack or "cross-review-signoff" in haystack
+    raw = meta.get("allow_cross_review_signoff")
+    if raw is None:
+        raw = issue.get("allow_cross_review_signoff")
+    return str(raw or "").strip().lower() in {"1", "true", "yes"}
 
 
 def required_evidence_for(state: PipelineState, phase: PipelinePhase | None = None) -> set[EvidenceKind]:
