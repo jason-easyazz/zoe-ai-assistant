@@ -373,6 +373,7 @@ def test_skip_implementation_uses_audit_evidence_profile():
 # when the allow_cross_review_signoff flag is on (default OFF => unchanged). ---
 
 _GOOD_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+_OTHER_SHA = "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567"
 
 
 def _approving_cross_review(**overrides):
@@ -386,13 +387,22 @@ def _approving_cross_review(**overrides):
     )
 
 
-def test_cross_review_signoff_satisfies_review_when_flag_on():
-    state = PipelineState(
+def _review_state(**overrides):
+    """A review-phase state with the trusted anchors set (flag on, PR head bound,
+    implementer = claude_code so the default `codex` reviewer is cross-vendor)."""
+    params = dict(
         task_ref="multica:1",
         phase="review",
-        status="running",
         allow_cross_review_signoff=True,
+        pr_head_sha=_GOOD_SHA,
+        implementer_platform="claude_code",
     )
+    params.update(overrides)
+    return PipelineState(**params)
+
+
+def test_cross_review_signoff_satisfies_review_when_flag_on():
+    state = _review_state(status="running")
     state = with_evidence(state, _approving_cross_review())
 
     assert missing_required_evidence(state) == set()
@@ -407,24 +417,24 @@ def test_cross_review_without_sha_or_verdict_does_not_satisfy():
     from pipeline_evidence import valid_cross_review_signoff
 
     # Missing commit SHA.
-    no_sha = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+    no_sha = _review_state()
     no_sha = with_evidence(no_sha, _approving_cross_review(metadata={"commit_sha": ""}))
     assert missing_required_evidence(no_sha) == {"human"}
     assert valid_cross_review_signoff(no_sha) is False
 
     # Missing verdict.
-    no_verdict = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+    no_verdict = _review_state()
     no_verdict = with_evidence(no_verdict, _approving_cross_review(metadata={"verdict": ""}))
     assert missing_required_evidence(no_verdict) == {"human"}
 
     # Empty reviewer/vendor identity (unattributable) => does not satisfy.
-    no_reviewer = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+    no_reviewer = _review_state()
     no_reviewer = with_evidence(no_reviewer, _approving_cross_review(metadata={"reviewer": "", "vendor": ""}))
     assert missing_required_evidence(no_reviewer) == {"human"}
     assert valid_cross_review_signoff(no_reviewer) is False
 
     # Bare self-claim with no provenance metadata at all.
-    bare = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+    bare = _review_state()
     bare = with_evidence(
         bare,
         EvidenceItem(kind="cross_review", summary="I reviewed it, looks good", passed=True),
@@ -434,9 +444,82 @@ def test_cross_review_without_sha_or_verdict_does_not_satisfy():
         transition(bare, "complete")
 
 
+def test_cross_review_sha_must_match_pr_head():
+    """A well-formed but stale/fabricated SHA no longer clears review — the
+    approval's commit_sha must EXACTLY match the state's authoritative PR head."""
+    from pipeline_evidence import valid_cross_review_signoff
+
+    # Evidence SHA is a valid git hash but not the recorded PR head => rejected.
+    mismatched = _review_state(pr_head_sha=_GOOD_SHA)
+    mismatched = with_evidence(mismatched, _approving_cross_review(metadata={"commit_sha": _OTHER_SHA}))
+    assert valid_cross_review_signoff(mismatched) is False
+    assert missing_required_evidence(mismatched) == {"human"}
+
+    # No authoritative PR head recorded at all => nothing to bind to => rejected.
+    no_head = _review_state(pr_head_sha=None)
+    no_head = with_evidence(no_head, _approving_cross_review())
+    assert valid_cross_review_signoff(no_head) is False
+    assert missing_required_evidence(no_head) == {"human"}
+
+    # Exact match (case-insensitive) => accepted.
+    exact = _review_state(pr_head_sha=_GOOD_SHA.upper())
+    exact = with_evidence(exact, _approving_cross_review(metadata={"commit_sha": _GOOD_SHA}))
+    assert valid_cross_review_signoff(exact) is True
+
+
+def test_cross_review_reviewer_must_differ_from_implementer():
+    """The reviewer's normalised platform must differ from the implementer's;
+    aliases of the same vendor cannot slip a same-vendor reviewer through."""
+    from pipeline_evidence import valid_cross_review_signoff
+
+    # No implementer platform recorded => cannot prove cross-vendor => rejected.
+    no_impl = _review_state(implementer_platform=None)
+    no_impl = with_evidence(no_impl, _approving_cross_review())
+    assert valid_cross_review_signoff(no_impl) is False
+
+    # Same literal vendor => rejected.
+    same = _review_state(implementer_platform="codex")
+    same = with_evidence(same, _approving_cross_review(metadata={"reviewer": "codex"}))
+    assert valid_cross_review_signoff(same) is False
+
+    # Aliases of the same platform (claude_code vs sonnet -> both anthropic) => rejected.
+    alias = _review_state(implementer_platform="claude_code")
+    alias = with_evidence(alias, _approving_cross_review(metadata={"reviewer": "sonnet"}))
+    assert valid_cross_review_signoff(alias) is False
+
+    # openai family both sides (codex implementer, openai reviewer) => rejected.
+    openai_both = _review_state(implementer_platform="codex")
+    openai_both = with_evidence(openai_both, _approving_cross_review(metadata={"reviewer": "openai"}))
+    assert valid_cross_review_signoff(openai_both) is False
+
+    # Genuinely different platforms (anthropic implementer, openai reviewer) => accepted.
+    cross = _review_state(implementer_platform="claude_code")
+    cross = with_evidence(cross, _approving_cross_review(metadata={"reviewer": "codex"}))
+    assert valid_cross_review_signoff(cross) is True
+
+
+def test_normalize_vendor_collapses_aliases():
+    from pipeline_evidence import normalize_vendor
+
+    assert normalize_vendor("claude_code") == normalize_vendor("Sonnet") == "anthropic"
+    assert normalize_vendor("Fable") == "anthropic"
+    assert normalize_vendor("codex") == normalize_vendor("OpenAI") == "openai"
+    assert normalize_vendor("pi") == normalize_vendor("glm") == "openrouter"
+    assert normalize_vendor("") == ""
+    assert normalize_vendor(None) == ""
+    # Unknown vendors map to their own token (distinct stays distinct).
+    assert normalize_vendor("acme") == "acme"
+    assert normalize_vendor("acme") != normalize_vendor("other")
+
+
 def test_cross_review_flag_off_still_requires_human():
     # Flag default OFF: a fully valid approving cross_review is ignored.
-    state = PipelineState(task_ref="multica:1", phase="review")
+    state = PipelineState(
+        task_ref="multica:1",
+        phase="review",
+        pr_head_sha=_GOOD_SHA,
+        implementer_platform="claude_code",
+    )
     assert state.allow_cross_review_signoff is False
     state = with_evidence(state, _approving_cross_review())
 
@@ -454,7 +537,7 @@ def test_blocking_verdict_cross_review_does_not_satisfy():
     from pipeline_evidence import valid_cross_review_signoff
 
     for verdict in ("blocking", "request_changes", "reject"):
-        state = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+        state = _review_state()
         state = with_evidence(state, _approving_cross_review(metadata={"verdict": verdict}))
         assert missing_required_evidence(state) == {"human"}, verdict
         assert valid_cross_review_signoff(state) is False, verdict
@@ -489,3 +572,17 @@ def test_cross_review_signoff_resolver_rejects_optout_and_freetext():
     # A structured opt-out tag in the description likewise stays False.
     ticket_off = "```zoe-ticket\n{\"allow_cross_review_signoff\": false}\n```"
     assert issue_allows_cross_review_signoff({"description": ticket_off}) is False
+
+
+def test_issue_implementer_platform_resolver_reads_structured_metadata():
+    from pipeline_evidence import issue_implementer_platform
+
+    # Structured metadata, normalised to platform.
+    assert issue_implementer_platform({"metadata": {"implementer_platform": "claude_code"}}) == "anthropic"
+    assert issue_implementer_platform({"metadata": {"implementer_platform": "codex"}}) == "openai"
+    # Structured ticket-block tag.
+    ticket = "prep\n```zoe-ticket\n{\"implementer_platform\": \"codex\"}\n```\ntail"
+    assert issue_implementer_platform({"description": ticket}) == "openai"
+    # Absence resolves to None (fail-closed anchor).
+    assert issue_implementer_platform({"title": "ordinary task"}) is None
+    assert issue_implementer_platform(None) is None
