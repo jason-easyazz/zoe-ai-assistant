@@ -360,3 +360,12 @@ labs/router-90-campaign/results/gen1-lineage.json
 # 48k phantom orphans (issue #6104). Never tracked, never vendored.
 /.worktrees/
 /.polly/
+# Same class, missed by the list above and therefore still visible to any
+# `git status --porcelain` on the live checkout (2026-08-02: these four were
+# the entire reason deploy_zoe_data_when_ready.sh reported NOT-READY).
+# `/wt-*` and `/polly-verify-*` are agent-created git WORKTREES at the repo
+# root; `modules/omnigent/wheels/` is a 14 MB build-artifact cache.
+/.polly-work/
+/polly-verify-*/
+/wt-*/
+modules/omnigent/wheels/
