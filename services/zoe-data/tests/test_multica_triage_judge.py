@@ -18,6 +18,8 @@ from multica_triage_judge import (
     REJECT_REASON_CODES,
     DispositionAction,
     TriageVerdict,
+    _admit_reviewed_ref_ok,
+    _confidence_ok,
     disposition_action,
     judge_ticket,
     run_triage,
@@ -95,6 +97,7 @@ def test_admit_carries_evidence_and_serializes():
                 "reason_code": ADMIT_REASON_CODE,
                 "reason": "relevant",
                 "evidence": [{"kind": "repro", "ref": "log#42"}],
+                "confidence": 0.9,
             }
         ),
         commit_sha=SHA,
@@ -109,6 +112,7 @@ def test_admit_carries_evidence_and_serializes():
         "evidence",
         "zoe_kind",
         "reviewed_ref",
+        "confidence",
     }
 
 
@@ -266,6 +270,154 @@ def test_unparseable_confidence_fails_closed():
 
 
 # --------------------------------------------------------------------------- #
+# False-admit guards: confidence gate (fix 1)
+# --------------------------------------------------------------------------- #
+
+
+def _admit_raw(**overrides):
+    raw = {
+        "disposition": "admit",
+        "reason_code": ADMIT_REASON_CODE,
+        "reason": "relevant",
+        "confidence": 0.9,
+    }
+    raw.update(overrides)
+    return raw
+
+
+def _assert_needs_info(verdict):
+    assert verdict.disposition == "reject"
+    assert verdict.reason_code == FAIL_CLOSED_REASON_CODE
+    assert verdict.is_admit is False
+    # a fail-closed verdict never auto-closes a ticket
+    assert disposition_action(verdict).target_status is None
+
+
+def test_admit_missing_confidence_fails_closed():
+    raw = _admit_raw()
+    del raw["confidence"]
+    _assert_needs_info(judge_ticket(_ticket(), classifier=_fake(raw), commit_sha=SHA))
+
+
+def test_admit_nan_confidence_fails_closed():
+    verdict = judge_ticket(
+        _ticket(), classifier=_fake(_admit_raw(confidence=float("nan"))), commit_sha=SHA
+    )
+    _assert_needs_info(verdict)
+
+
+def test_admit_positive_inf_confidence_fails_closed():
+    verdict = judge_ticket(
+        _ticket(), classifier=_fake(_admit_raw(confidence=float("inf"))), commit_sha=SHA
+    )
+    _assert_needs_info(verdict)
+
+
+def test_admit_confidence_above_one_fails_closed():
+    verdict = judge_ticket(
+        _ticket(), classifier=_fake(_admit_raw(confidence=1.5)), commit_sha=SHA
+    )
+    _assert_needs_info(verdict)
+
+
+def test_admit_boolean_confidence_fails_closed():
+    # bool is a subclass of int; True must NOT be treated as a 1.0 confidence.
+    verdict = judge_ticket(
+        _ticket(), classifier=_fake(_admit_raw(confidence=True)), commit_sha=SHA
+    )
+    _assert_needs_info(verdict)
+
+
+# --------------------------------------------------------------------------- #
+# False-admit guards: reviewed_ref binding (fix 2)
+# --------------------------------------------------------------------------- #
+
+
+def test_admit_missing_ticket_ref_fails_closed():
+    # ticket has no reference/identifier/id -> no concrete ref -> never admit.
+    verdict = judge_ticket(
+        {"zoe_kind": "bug", "title": "t"}, classifier=_fake(_admit_raw()), commit_sha=SHA
+    )
+    _assert_needs_info(verdict)
+
+
+@pytest.mark.parametrize("bad_sha", ["", "   ", "nothex!!", "12345", "ZZZZZZZ", "g" * 40])
+def test_admit_blank_or_malformed_sha_fails_closed(bad_sha):
+    verdict = judge_ticket(_ticket(), classifier=_fake(_admit_raw()), commit_sha=bad_sha)
+    _assert_needs_info(verdict)
+
+
+def test_admit_short_hex_sha_is_accepted():
+    # a 7-char short SHA is valid per ^[0-9a-f]{7,40}$
+    verdict = judge_ticket(
+        _ticket(reference="ZOE-1"), classifier=_fake(_admit_raw()), commit_sha="abc1234"
+    )
+    assert verdict.disposition == "admit"
+    assert verdict.reviewed_ref == "ZOE-1@abc1234"
+
+
+# --------------------------------------------------------------------------- #
+# Structural invariant (fix 3): every successful admit is well-formed, and a
+# malformed admit cannot be constructed directly.
+# --------------------------------------------------------------------------- #
+
+
+def test_every_successful_admit_has_valid_confidence_and_concrete_reviewed_ref():
+    verdict = judge_ticket(_ticket(reference="ZOE-42"), classifier=_fake(_admit_raw()), commit_sha=SHA)
+    assert verdict.disposition == "admit"
+    # confidence carried, valid, and within the admit band
+    assert _confidence_ok(verdict.confidence)
+    # reviewed_ref is concrete: <ticket-ref>@<valid-sha>, no 'unknown'
+    assert _admit_reviewed_ref_ok(verdict.reviewed_ref)
+    ref, _, sha = verdict.reviewed_ref.partition("@")
+    assert ref == "ZOE-42"
+    assert sha == SHA
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"confidence": None},  # missing confidence
+        {"confidence": 0.1},  # below MIN_CONFIDENCE
+        {"confidence": float("nan")},  # NaN
+        {"confidence": float("inf")},  # +inf
+        {"confidence": 1.5},  # > 1.0
+        {"confidence": True},  # boolean
+        {"confidence": 0.9, "reviewed_ref": "unknown@unknown"},  # no concrete ref
+        {"confidence": 0.9, "reviewed_ref": "ZOE-1@unknown"},  # invalid sha
+        {"confidence": 0.9, "reviewed_ref": "ZOE-1@nothex"},  # malformed sha
+    ],
+)
+def test_admit_verdict_cannot_be_constructed_malformed(kwargs):
+    base = dict(
+        disposition="admit",
+        reason="relevant",
+        reason_code=ADMIT_REASON_CODE,
+        evidence=[],
+        zoe_kind="bug",
+        reviewed_ref=f"ZOE-1@{SHA}",
+        confidence=0.9,
+    )
+    base.update(kwargs)
+    with pytest.raises(ValueError):
+        TriageVerdict(**base)
+
+
+def test_reject_verdict_needs_no_confidence_or_concrete_ref():
+    # the structural guard applies to admits only
+    verdict = TriageVerdict(
+        disposition="reject",
+        reason="held",
+        reason_code=FAIL_CLOSED_REASON_CODE,
+        evidence=[],
+        zoe_kind="bug",
+        reviewed_ref="unknown@unknown",
+    )
+    assert verdict.disposition == "reject"
+    assert verdict.confidence is None
+
+
+# --------------------------------------------------------------------------- #
 # Carry-through fields
 # --------------------------------------------------------------------------- #
 
@@ -274,7 +426,12 @@ def test_zoe_kind_carried_through_from_ticket():
     verdict = judge_ticket(
         _ticket(zoe_kind="harness_fix"),
         classifier=_fake(
-            {"disposition": "admit", "reason_code": ADMIT_REASON_CODE, "reason": "relevant"}
+            {
+                "disposition": "admit",
+                "reason_code": ADMIT_REASON_CODE,
+                "reason": "relevant",
+                "confidence": 0.9,
+            }
         ),
         commit_sha=SHA,
     )
@@ -307,7 +464,12 @@ def test_reviewed_ref_has_ticket_ref_and_sha():
     verdict = judge_ticket(
         _ticket(reference="ZOE-777"),
         classifier=_fake(
-            {"disposition": "admit", "reason_code": ADMIT_REASON_CODE, "reason": "relevant"}
+            {
+                "disposition": "admit",
+                "reason_code": ADMIT_REASON_CODE,
+                "reason": "relevant",
+                "confidence": 0.9,
+            }
         ),
         commit_sha=SHA,
     )
@@ -318,7 +480,12 @@ def test_reviewed_ref_falls_back_to_identifier_then_id():
     verdict = judge_ticket(
         {"identifier": "ZOE-555", "id": "uuid-1"},
         classifier=_fake(
-            {"disposition": "admit", "reason_code": ADMIT_REASON_CODE, "reason": "relevant"}
+            {
+                "disposition": "admit",
+                "reason_code": ADMIT_REASON_CODE,
+                "reason": "relevant",
+                "confidence": 0.9,
+            }
         ),
         commit_sha=SHA,
     )
@@ -352,7 +519,12 @@ def test_run_triage_runs_when_enabled(monkeypatch):
     verdict = run_triage(
         _ticket(),
         classifier=_fake(
-            {"disposition": "admit", "reason_code": ADMIT_REASON_CODE, "reason": "relevant"}
+            {
+                "disposition": "admit",
+                "reason_code": ADMIT_REASON_CODE,
+                "reason": "relevant",
+                "confidence": 0.9,
+            }
         ),
         commit_sha=SHA,
     )

@@ -30,6 +30,8 @@ Design rules that hold this safe:
 from __future__ import annotations
 
 import dataclasses
+import math
+import re
 from typing import Any, Callable, Mapping
 
 from typed_env import env_bool
@@ -99,7 +101,15 @@ Classifier = Callable[[Mapping[str, Any]], Any]
 
 @dataclasses.dataclass(frozen=True)
 class TriageVerdict:
-    """Machine-readable admission verdict for one backlog ticket."""
+    """Machine-readable admission verdict for one backlog ticket.
+
+    Structural invariant (enforced in :meth:`__post_init__`): an ``admit``
+    verdict MUST carry a valid ``confidence`` (a finite number in
+    ``[MIN_CONFIDENCE, 1.0]``) AND a concrete ``reviewed_ref`` of the form
+    ``<ticket-ref>@<valid-sha>`` (no ``unknown`` sentinel). A caller therefore
+    cannot construct a false admit directly — a reject/fail-closed verdict has
+    no such requirement.
+    """
 
     disposition: str  # "admit" | "reject"
     reason: str
@@ -107,6 +117,20 @@ class TriageVerdict:
     evidence: list[Any]
     zoe_kind: str
     reviewed_ref: str
+    confidence: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.disposition == "admit":
+            if not _confidence_ok(self.confidence):
+                raise ValueError(
+                    "admit verdict requires a finite confidence in "
+                    f"[{MIN_CONFIDENCE}, 1.0]; got {self.confidence!r}"
+                )
+            if not _admit_reviewed_ref_ok(self.reviewed_ref):
+                raise ValueError(
+                    "admit verdict requires a concrete reviewed_ref "
+                    f"(<ticket-ref>@<sha>); got {self.reviewed_ref!r}"
+                )
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -158,12 +182,59 @@ def triage_judge_enabled() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _ticket_ref(ticket: Mapping[str, Any]) -> str:
+#: A commit SHA is a 7-40 char hex string (short or full git SHA).
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+
+#: An admit's reviewed_ref must be ``<concrete-ref>@<valid-sha>`` (no sentinel).
+_ADMIT_REVIEWED_REF_RE = re.compile(r"^(?P<ref>.+)@(?P<sha>[0-9a-f]{7,40})$", re.IGNORECASE)
+
+
+def _concrete_ticket_ref(ticket: Mapping[str, Any]) -> str | None:
+    """The ticket's concrete reference, or ``None`` if it has no usable id."""
     for key in ("reference", "identifier", "id"):
         val = ticket.get(key)
         if val is not None and str(val).strip():
             return str(val).strip()
-    return "unknown"
+    return None
+
+
+def _ticket_ref(ticket: Mapping[str, Any]) -> str:
+    """Best-effort ticket ref for a reject verdict; ``"unknown"`` if none present."""
+    return _concrete_ticket_ref(ticket) or "unknown"
+
+
+def _valid_sha(commit_sha: Any) -> str | None:
+    """Normalized commit SHA if it is a valid 7-40 char hex string, else ``None``."""
+    if not isinstance(commit_sha, str):
+        return None
+    sha = commit_sha.strip()
+    return sha if _SHA_RE.match(sha) else None
+
+
+def _confidence_ok(value: Any) -> bool:
+    """True iff ``value`` is a real, finite number in ``[0.0, 1.0]`` and at least
+    :data:`MIN_CONFIDENCE`.
+
+    Booleans are rejected (``bool`` subclasses ``int``); NaN and ±inf are
+    rejected via :func:`math.isfinite`; strings and other non-numerics are
+    rejected. This is the single admit-confidence predicate shared by the
+    :class:`TriageVerdict` structural guard and :func:`judge_ticket`.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    f = float(value)
+    return math.isfinite(f) and 0.0 <= f <= 1.0 and f >= MIN_CONFIDENCE
+
+
+def _admit_reviewed_ref_ok(reviewed_ref: Any) -> bool:
+    """True iff ``reviewed_ref`` is ``<concrete-ref>@<valid-sha>`` (no ``unknown``)."""
+    if not isinstance(reviewed_ref, str):
+        return False
+    m = _ADMIT_REVIEWED_REF_RE.match(reviewed_ref)
+    if m is None:
+        return False
+    ref = m.group("ref").strip()
+    return bool(ref) and ref != "unknown"
 
 
 def _carried_zoe_kind(ticket: Mapping[str, Any], raw: Any) -> str:
@@ -230,9 +301,11 @@ def judge_ticket(
          "reason": str, "evidence": list, "confidence": float(0..1),
          "zoe_kind": <optional override>}
 
-    Any exception, non-dict result, unknown/inconsistent reason_code, missing
-    reason, or confidence below :data:`MIN_CONFIDENCE` FAILS CLOSED to a
-    ``needs_info`` reject — never admit.
+    Any exception, non-dict result, unknown/inconsistent reason_code, or missing
+    reason FAILS CLOSED to a ``needs_info`` reject — never admit. An ADMIT
+    additionally requires a present, finite, in-range confidence at least
+    :data:`MIN_CONFIDENCE`, a concrete ticket reference, and a valid hex
+    ``commit_sha``; any shortfall on the admit path fails closed (never admit).
     """
     try:
         raw = classifier(ticket)
@@ -263,16 +336,37 @@ def judge_ticket(
             ticket, commit_sha, raw, f"reject with non-reject reason_code: {reason_code!r}"
         )
 
-    # Confidence gate (optional field; absent = trusted).
+    # Confidence gate + reviewed_ref binding. An ADMIT must carry a present,
+    # finite, in-range confidence >= MIN_CONFIDENCE AND a concrete ticket ref +
+    # a valid hex commit SHA — otherwise it would feed autonomous work toward a
+    # live-deploy merge under a bogus 'unknown@unknown' provenance. Any shortfall
+    # fails closed to needs_info (never admit). A reject need not carry
+    # confidence, but a present-but-invalid one still fails closed (safe: hold).
     confidence = raw.get("confidence")
-    if confidence is not None:
-        try:
-            if float(confidence) < MIN_CONFIDENCE:
-                return _fail_closed(
-                    ticket, commit_sha, raw, f"low confidence: {confidence!r}"
-                )
-        except (TypeError, ValueError):
-            return _fail_closed(ticket, commit_sha, raw, f"unparseable confidence: {confidence!r}")
+    if disposition == "admit":
+        if confidence is None:
+            return _fail_closed(ticket, commit_sha, raw, "admit missing confidence")
+        if not _confidence_ok(confidence):
+            return _fail_closed(
+                ticket,
+                commit_sha,
+                raw,
+                f"admit confidence not a finite number in "
+                f"[{MIN_CONFIDENCE}, 1.0]: {confidence!r}",
+            )
+        if _concrete_ticket_ref(ticket) is None:
+            return _fail_closed(ticket, commit_sha, raw, "admit missing ticket reference")
+        if _valid_sha(commit_sha) is None:
+            return _fail_closed(
+                ticket, commit_sha, raw, f"admit with invalid commit SHA: {commit_sha!r}"
+            )
+        admit_confidence: float | None = float(confidence)
+    else:
+        if confidence is not None and not _confidence_ok(confidence):
+            return _fail_closed(
+                ticket, commit_sha, raw, f"low or invalid confidence: {confidence!r}"
+            )
+        admit_confidence = None
 
     return TriageVerdict(
         disposition=disposition,
@@ -281,6 +375,7 @@ def judge_ticket(
         evidence=_coerce_evidence(raw.get("evidence")),
         zoe_kind=_carried_zoe_kind(ticket, raw),
         reviewed_ref=_reviewed_ref(ticket, commit_sha),
+        confidence=admit_confidence,
     )
 
 
