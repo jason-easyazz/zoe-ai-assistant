@@ -498,7 +498,8 @@ def test_admit_with_reject_reason_code_cannot_be_constructed(bad_code):
 
 
 def test_reject_verdict_needs_no_confidence_or_concrete_ref():
-    # the structural guard applies to admits only
+    # a reject needs no confidence and no concrete reviewed_ref — only a valid
+    # reject reason_code and a non-empty reason (see the reject-guard tests below)
     verdict = TriageVerdict(
         disposition="reject",
         reason="held",
@@ -509,6 +510,166 @@ def test_reject_verdict_needs_no_confidence_or_concrete_ref():
     )
     assert verdict.disposition == "reject"
     assert verdict.confidence is None
+
+
+# --------------------------------------------------------------------------- #
+# Review-hardening: evidence coercion stays fail-closed (finding 1)
+# --------------------------------------------------------------------------- #
+
+
+class _StrRaises:
+    """An evidence object whose str() raises — a classifier could return one."""
+
+    def __str__(self):
+        raise RuntimeError("cannot stringify")
+
+
+def test_admit_evidence_with_raising_str_fails_closed():
+    # __str__ raising during evidence coercion happens AFTER the classifier-only
+    # exception handler ends; judge_ticket must still return needs_info, not raise.
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(_admit_raw(evidence=[_StrRaises()])),
+        commit_sha=SHA,
+    )
+    _assert_needs_info(verdict)
+
+
+def test_reject_evidence_with_raising_str_fails_closed():
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(
+            {
+                "disposition": "reject",
+                "reason_code": "duplicate",
+                "reason": "dupe",
+                "evidence": _StrRaises(),
+            }
+        ),
+        commit_sha=SHA,
+    )
+    _assert_needs_info(verdict)
+
+
+def test_admit_cyclic_list_evidence_fails_closed():
+    cyclic: list = []
+    cyclic.append(cyclic)  # list reachable from itself
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(_admit_raw(evidence=cyclic)),
+        commit_sha=SHA,
+    )
+    _assert_needs_info(verdict)
+
+
+def test_admit_cyclic_dict_evidence_fails_closed():
+    cyclic: dict = {}
+    cyclic["self"] = cyclic
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(_admit_raw(evidence=[cyclic])),
+        commit_sha=SHA,
+    )
+    _assert_needs_info(verdict)
+
+
+def test_shared_acyclic_evidence_is_not_a_false_cycle():
+    # the same acyclic dict appearing twice at sibling positions is NOT a cycle;
+    # it must serialize cleanly and keep the admit.
+    shared = {"kind": "repro"}
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(_admit_raw(evidence=[shared, shared])),
+        commit_sha=SHA,
+    )
+    assert verdict.disposition == "admit"
+    assert verdict.to_dict()["evidence"] == [{"kind": "repro"}, {"kind": "repro"}]
+    json.dumps(verdict.to_dict())
+
+
+# --------------------------------------------------------------------------- #
+# Review-hardening: 'unknown' sentinel reference (finding 2)
+# --------------------------------------------------------------------------- #
+
+
+def test_admit_prefers_valid_identifier_over_unknown_reference():
+    # preferred 'reference' is the literal 'unknown' sentinel but a valid
+    # identifier follows -> admit on the identifier, never 'unknown@sha'.
+    verdict = judge_ticket(
+        _ticket(reference="unknown", identifier="ZOE-321"),
+        classifier=_fake(_admit_raw()),
+        commit_sha=SHA,
+    )
+    assert verdict.disposition == "admit"
+    assert verdict.reviewed_ref == f"ZOE-321@{SHA}"
+
+
+def test_admit_every_ref_unknown_fails_closed():
+    # every candidate is the sentinel -> no concrete ref -> needs_info, NOT a
+    # ValueError from constructing an invalid 'unknown@sha' reviewed_ref.
+    verdict = judge_ticket(
+        {"reference": "unknown", "identifier": "unknown", "id": "unknown", "zoe_kind": "bug"},
+        classifier=_fake(_admit_raw()),
+        commit_sha=SHA,
+    )
+    _assert_needs_info(verdict)
+
+
+# --------------------------------------------------------------------------- #
+# Review-hardening: reject verdicts validated in the constructor (finding 3)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"reason_code": "duplicate", "reason": ""},  # empty reason
+        {"reason_code": "duplicate", "reason": "   "},  # whitespace-only reason
+        {"reason_code": "duplicate", "reason": None},  # non-string reason
+        {"reason_code": ADMIT_REASON_CODE, "reason": "x"},  # admit-only code on a reject
+        {"reason_code": "bogus", "reason": "x"},  # out-of-vocab code
+    ],
+)
+def test_reject_verdict_cannot_be_constructed_malformed(kwargs):
+    base = dict(
+        disposition="reject",
+        reason="held",
+        reason_code="duplicate",
+        evidence=[],
+        zoe_kind="bug",
+        reviewed_ref="unknown@unknown",
+    )
+    base.update(kwargs)
+    with pytest.raises(ValueError):
+        TriageVerdict(**base)
+
+
+@pytest.mark.parametrize("bad_disposition", ["maybe", "closed", "", "ADMIT", "hold"])
+def test_arbitrary_disposition_cannot_be_constructed(bad_disposition):
+    with pytest.raises(ValueError):
+        TriageVerdict(
+            disposition=bad_disposition,
+            reason="x",
+            reason_code="duplicate",
+            evidence=[],
+            zoe_kind="bug",
+            reviewed_ref="unknown@unknown",
+        )
+
+
+@pytest.mark.parametrize("code", sorted(REJECT_REASON_CODES))
+def test_valid_reject_still_constructs_for_every_reject_code(code):
+    # every real reject reason_code + a non-empty reason must still construct.
+    verdict = TriageVerdict(
+        disposition="reject",
+        reason=f"judged {code}",
+        reason_code=code,
+        evidence=[],
+        zoe_kind="bug",
+        reviewed_ref="unknown@unknown",
+    )
+    assert verdict.disposition == "reject"
+    assert verdict.reason_code == code
 
 
 # --------------------------------------------------------------------------- #

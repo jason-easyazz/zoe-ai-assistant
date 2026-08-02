@@ -107,13 +107,22 @@ Classifier = Callable[[Mapping[str, Any]], Any]
 class TriageVerdict:
     """Machine-readable admission verdict for one backlog ticket.
 
-    Structural invariant (enforced in :meth:`__post_init__`): an ``admit``
-    verdict MUST carry a non-empty ``reason``, ``reason_code == ADMIT_REASON_CODE``
-    (``"relevant"``), a valid ``confidence`` (a finite number in
-    ``[MIN_CONFIDENCE, 1.0]``) AND a concrete ``reviewed_ref`` of the form
-    ``<ticket-ref>@<valid-sha>`` (no ``unknown`` sentinel). A caller therefore
-    cannot construct a false admit directly — a reject/fail-closed verdict has
-    no such requirement.
+    Structural invariant (enforced in :meth:`__post_init__`):
+
+    * Every verdict — admit OR reject — MUST carry a ``disposition`` in
+      ``{"admit", "reject"}`` and a non-empty ``reason``.
+    * An ``admit`` additionally requires ``reason_code == ADMIT_REASON_CODE``
+      (``"relevant"``), a valid ``confidence`` (a finite number in
+      ``[MIN_CONFIDENCE, 1.0]``) AND a concrete ``reviewed_ref`` of the form
+      ``<ticket-ref>@<valid-sha>`` (no ``unknown`` sentinel).
+    * A ``reject`` requires ``reason_code`` in :data:`REJECT_REASON_CODES` — so
+      a directly-reconstructed reject cannot smuggle an admit-only or unknown
+      code past :func:`disposition_action` (which would otherwise emit a
+      closing board action carrying an out-of-vocab label, or — with an empty
+      reason — a ``Triage: <code> - `` note with no rationale).
+
+    A caller therefore cannot construct a false admit OR a malformed reject
+    directly.
     """
 
     disposition: str  # "admit" | "reject"
@@ -125,11 +134,16 @@ class TriageVerdict:
     confidence: float | None = None
 
     def __post_init__(self) -> None:
+        if self.disposition not in ("admit", "reject"):
+            raise ValueError(
+                "verdict disposition must be 'admit' or 'reject'; "
+                f"got {self.disposition!r}"
+            )
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise ValueError(
+                f"verdict requires a non-empty reason; got {self.reason!r}"
+            )
         if self.disposition == "admit":
-            if not isinstance(self.reason, str) or not self.reason.strip():
-                raise ValueError(
-                    f"admit verdict requires a non-empty reason; got {self.reason!r}"
-                )
             if self.reason_code != ADMIT_REASON_CODE:
                 raise ValueError(
                     "admit verdict requires reason_code == "
@@ -144,6 +158,13 @@ class TriageVerdict:
                 raise ValueError(
                     "admit verdict requires a concrete reviewed_ref "
                     f"(<ticket-ref>@<sha>); got {self.reviewed_ref!r}"
+                )
+        else:  # reject
+            if self.reason_code not in REJECT_REASON_CODES:
+                raise ValueError(
+                    "reject verdict requires reason_code in the reject "
+                    f"vocabulary {sorted(REJECT_REASON_CODES)}; "
+                    f"got {self.reason_code!r}"
                 )
 
     def to_dict(self) -> dict[str, Any]:
@@ -204,11 +225,24 @@ _ADMIT_REVIEWED_REF_RE = re.compile(r"^(?P<ref>.+)@(?P<sha>[0-9a-f]{7,40})$", re
 
 
 def _concrete_ticket_ref(ticket: Mapping[str, Any]) -> str | None:
-    """The ticket's concrete reference, or ``None`` if it has no usable id."""
+    """The ticket's concrete reference, or ``None`` if it has no usable id.
+
+    Prefers the first ``reference`` / ``identifier`` / ``id`` that is a
+    non-empty, non-sentinel string. The literal ``"unknown"`` sentinel is
+    skipped, not returned: an admit built on it would yield ``unknown@<sha>``,
+    which :meth:`TriageVerdict.__post_init__` rejects — so if a ticket's
+    preferred field is ``"unknown"`` but a real ``identifier``/``id`` follows,
+    we admit on the real one, and if *every* candidate is the sentinel we
+    return ``None`` (the admit path then fails closed to needs_info rather than
+    raising).
+    """
     for key in ("reference", "identifier", "id"):
         val = ticket.get(key)
-        if val is not None and str(val).strip():
-            return str(val).strip()
+        if val is None:
+            continue
+        candidate = str(val).strip()
+        if candidate and candidate != "unknown":
+            return candidate
     return None
 
 
@@ -268,22 +302,35 @@ def _reviewed_ref(ticket: Mapping[str, Any], commit_sha: str) -> str:
     return f"{_ticket_ref(ticket)}@{sha}"
 
 
-def _json_safe(value: Any) -> Any:
+def _json_safe(value: Any, _seen: frozenset[int] = frozenset()) -> Any:
     """Recursively coerce ``value`` into a JSON-serializable shape.
 
     JSON-native scalars (``str``/``int``/``float``/``bool``/``None``) pass
     through unchanged; ``list``/``tuple`` are recursed into lists and ``dict`` is
     recursed with stringified keys (``json.dumps`` only accepts str/number/bool/
     None keys); anything else — a ``set``, an ``Exception``, a custom object —
-    becomes its ``str()``. This guarantees a classifier-supplied evidence item
-    survives :meth:`TriageVerdict.to_dict` -> ``json.dumps`` without raising.
+    becomes its ``str()``.
+
+    Two adversarial inputs a classifier could supply are NOT swallowed here and
+    instead RAISE — a **cyclic** container (a list/dict reachable from itself)
+    and an object whose ``str()`` itself raises. ``_seen`` carries the ids of
+    the containers on the current recursion path (a fresh frozenset per branch,
+    so a shared-but-acyclic reference is not a false positive); re-encountering
+    one raises ``ValueError`` rather than recursing forever. The caller in
+    :func:`judge_ticket` wraps the evidence-coercion step so any such failure
+    fails closed to a ``needs_info`` verdict — judge_ticket never raises — while
+    a benign non-native item still serializes via ``str()``.
     """
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
+    if isinstance(value, (dict, list, tuple)):
+        vid = id(value)
+        if vid in _seen:
+            raise ValueError("cyclic evidence container")
+        nested = _seen | {vid}
+        if isinstance(value, dict):
+            return {str(k): _json_safe(v, nested) for k, v in value.items()}
+        return [_json_safe(v, nested) for v in value]
     return str(value)
 
 
@@ -294,6 +341,10 @@ def _coerce_evidence(value: Any) -> list[Any]:
     is wrapped in a single-item list. Every element is then run through
     :func:`_json_safe`, so a classifier that returns a ``set`` / an ``Exception``
     / a custom object cannot break downstream serialization of the verdict.
+
+    Pathological input (a cyclic container, or an object whose ``str()`` raises)
+    makes :func:`_json_safe` raise; :func:`judge_ticket` wraps the call so that
+    surfaces as a ``needs_info`` fail-closed verdict rather than escaping.
     """
     if value is None:
         items: list[Any] = []
@@ -408,15 +459,23 @@ def judge_ticket(
             )
         admit_confidence = None
 
-    return TriageVerdict(
-        disposition=disposition,
-        reason=reason.strip(),
-        reason_code=reason_code,
-        evidence=_coerce_evidence(raw.get("evidence")),
-        zoe_kind=_carried_zoe_kind(ticket, raw),
-        reviewed_ref=_reviewed_ref(ticket, commit_sha),
-        confidence=admit_confidence,
-    )
+    # Final assembly also fails closed. Evidence coercion touches
+    # classifier-controlled objects (a cyclic container, or an object whose
+    # __str__ raises) and TriageVerdict.__post_init__ can still reject an
+    # inconsistent verdict — either would otherwise escape this handler and let
+    # judge_ticket raise on bad input. Any failure here yields needs_info.
+    try:
+        return TriageVerdict(
+            disposition=disposition,
+            reason=reason.strip(),
+            reason_code=reason_code,
+            evidence=_coerce_evidence(raw.get("evidence")),
+            zoe_kind=_carried_zoe_kind(ticket, raw),
+            reviewed_ref=_reviewed_ref(ticket, commit_sha),
+            confidence=admit_confidence,
+        )
+    except Exception as exc:  # noqa: BLE001 — total contract: any failure -> needs_info
+        return _fail_closed(ticket, commit_sha, raw, f"verdict assembly failed: {exc!r}")
 
 
 def disposition_action(verdict: TriageVerdict) -> DispositionAction | None:
