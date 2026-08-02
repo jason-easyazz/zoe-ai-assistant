@@ -96,6 +96,11 @@ FORBIDDEN_ACTIONS = [
     "bypass_hooks",
 ]
 _CI_OK_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+# PR #1594 established these as the complete deterministic branch-protection
+# set. Keep this fail-closed assertion independent of the generic rollup: an
+# empty/missing named check must never become mergeable merely because every
+# check that did happen to report was green.
+_DETERMINISTIC_REQUIRED_CHECKS = frozenset({"validate", "secret-scan"})
 ALLOWED_TASK_TYPES = {"FIX_GREPTILE_FINDING", "FIX_CI_FAILURE", "SUMMARIZE_BLOCKER"}
 HIGH_RISK_PREFIXES = (
     ".github/workflows/",
@@ -865,6 +870,100 @@ def _ci_status_from_rollup(rollup: list[dict[str, Any]]) -> dict[str, Any]:
     if failures:
         return {"ok": False, "reason": "CI_FAILED", "failures": failures, "pending": pending}
     return {"ok": True, "pending": pending, "failures": failures}
+
+
+def _required_checks_at_head(
+    head_sha: str, *, repo: str = DEFAULT_REPO
+) -> dict[str, Any]:
+    """Require PR #1594's deterministic checks to succeed on exactly *head_sha*."""
+    head_sha = str(head_sha or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha):
+        return {
+            "ok": False,
+            "reason": "REQUIRED_CHECKS_HEAD_UNKNOWN",
+            "detail": "current PR head SHA is missing or malformed",
+        }
+    proc = _run_gh(
+        [
+            "api",
+            f"repos/{repo}/commits/{head_sha}/check-runs?filter=latest&per_page=100",
+            "-H",
+            "Accept: application/vnd.github+json",
+        ],
+        repo=repo,
+    )
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "reason": "REQUIRED_CHECKS_READ_FAILED",
+            "detail": (proc.stderr or proc.stdout or "GitHub check-runs query failed").strip(),
+        }
+    try:
+        payload = _parse_gh_json(proc)
+    except GuardError as exc:
+        return {"ok": False, "reason": "REQUIRED_CHECKS_READ_FAILED", "detail": str(exc)}
+
+    runs = payload.get("check_runs")
+    if not isinstance(runs, list):
+        return {
+            "ok": False,
+            "reason": "REQUIRED_CHECKS_READ_FAILED",
+            "detail": "GitHub check-runs response omitted check_runs",
+        }
+    by_name: dict[str, list[dict[str, Any]]] = {
+        name: [] for name in _DETERMINISTIC_REQUIRED_CHECKS
+    }
+    stale: list[str] = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        name = str(run.get("name") or "")
+        if name not in by_name:
+            continue
+        if str(run.get("head_sha") or "").lower() != head_sha.lower():
+            stale.append(name)
+            continue
+        by_name[name].append(run)
+
+    missing = sorted(name for name, matches in by_name.items() if not matches)
+    pending: list[str] = []
+    failures: list[str] = []
+    for name, matches in by_name.items():
+        if not matches:
+            continue
+        # A rerun must supersede an older success. Check-run ids increase with
+        # creation, so do not rely on response ordering when choosing the newest.
+        run = max(matches, key=lambda item: int(item.get("id") or 0))
+        status = str(run.get("status") or "").upper()
+        conclusion = str(run.get("conclusion") or "").upper()
+        if status != "COMPLETED" or not conclusion:
+            pending.append(name)
+        elif conclusion != "SUCCESS":
+            failures.append(f"{name}:{conclusion}")
+    if missing:
+        suffix = f"; stale-head={sorted(set(stale))}" if stale else ""
+        return {
+            "ok": False,
+            "reason": "REQUIRED_CHECKS_MISSING",
+            "detail": f"required checks absent at current head: {missing}{suffix}",
+            "missing": missing,
+            "stale": sorted(set(stale)),
+        }
+    if pending:
+        return {
+            "ok": False,
+            "reason": "REQUIRED_CHECKS_PENDING",
+            "detail": f"required checks pending at current head: {sorted(pending)}",
+            "pending": sorted(pending),
+        }
+    if failures:
+        return {
+            "ok": False,
+            "reason": "REQUIRED_CHECKS_FAILED",
+            "detail": f"required checks failed at current head: {sorted(failures)}",
+            "failures": sorted(failures),
+        }
+    return {"ok": True, "head_sha": head_sha, "checks": sorted(by_name)}
 
 
 def _actionable_greptile_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1786,6 +1885,52 @@ async def merge_pr_when_ready(
                 "already_merged": True,
                 "merge_commit": (merged.get("mergeCommit") or {}).get("oid"),
                 "pr_url": merged.get("url"),
+            }
+        # Re-read the PR immediately before the irreversible merge and bind the
+        # deterministic gate to that exact head. Branch protection also enforces
+        # these checks, but the autonomous controller must never *attempt* a
+        # merge on a vacuously-green rollup or on evidence for an older commit.
+        final_observation = _gh_pr_observation(pr_number, repo=repo)
+        required = _required_checks_at_head(
+            str(final_observation.get("headRefOid") or ""), repo=repo
+        ) if final_observation.get("ok") else {
+            "ok": False,
+            "reason": "REQUIRED_CHECKS_HEAD_UNKNOWN",
+            "detail": str(final_observation.get("detail") or "current PR head could not be read"),
+        }
+        if not required.get("ok"):
+            blocker = str(required.get("reason") or "REQUIRED_CHECKS_NOT_READY")
+            state["terminal_state"] = "BLOCKED_NOT_READY"
+            state["merge_blockers"] = [blocker]
+            state["required_checks"] = required
+            _write_json(pr_number, "status.json", state)
+            _record_guardrail(pr_number, f"merge blocked: {blocker}: {required.get('detail', '')}")
+            return {
+                "ok": False,
+                "state": "BLOCKED_NOT_READY",
+                "blockers": [blocker],
+                "required_checks": required,
+                "assessment": assessment,
+            }
+        confirmed_observation = _gh_pr_observation(pr_number, repo=repo)
+        confirmed_head = str(confirmed_observation.get("headRefOid") or "")
+        if not confirmed_observation.get("ok") or confirmed_head != required["head_sha"]:
+            blocker = "REQUIRED_CHECKS_HEAD_CHANGED"
+            detail = (
+                f"PR head changed while required checks were verified: "
+                f"{required['head_sha']} -> {confirmed_head or 'unknown'}"
+            )
+            state["terminal_state"] = "BLOCKED_NOT_READY"
+            state["merge_blockers"] = [blocker]
+            state["required_checks"] = {**required, "ok": False, "reason": blocker, "detail": detail}
+            _write_json(pr_number, "status.json", state)
+            _record_guardrail(pr_number, f"merge blocked: {blocker}: {detail}")
+            return {
+                "ok": False,
+                "state": "BLOCKED_NOT_READY",
+                "blockers": [blocker],
+                "required_checks": state["required_checks"],
+                "assessment": assessment,
             }
         proc = _run_gh(["pr", "merge", str(pr_number), "--squash"], repo=repo)
         if proc.returncode != 0:

@@ -456,6 +456,75 @@ def test_ci_status_from_rollup_rejects_empty_rollup():
     assert out["reason"] == "CI_NO_CHECKS"
 
 
+def _required_check_run(name, head_sha, *, status="completed", conclusion="success"):
+    return {
+        "id": 1,
+        "name": name,
+        "head_sha": head_sha,
+        "status": status,
+        "conclusion": conclusion,
+    }
+
+
+@pytest.mark.parametrize(
+    ("runs", "reason"),
+    [
+        ([_required_check_run("validate", "a" * 40)], "REQUIRED_CHECKS_MISSING"),
+        (
+            [
+                _required_check_run("validate", "a" * 40),
+                _required_check_run("secret-scan", "a" * 40, status="in_progress", conclusion=None),
+            ],
+            "REQUIRED_CHECKS_PENDING",
+        ),
+        (
+            [
+                _required_check_run("validate", "a" * 40),
+                _required_check_run("secret-scan", "a" * 40, conclusion="failure"),
+            ],
+            "REQUIRED_CHECKS_FAILED",
+        ),
+        (
+            [
+                _required_check_run("validate", "b" * 40),
+                _required_check_run("secret-scan", "b" * 40),
+            ],
+            "REQUIRED_CHECKS_MISSING",
+        ),
+    ],
+)
+def test_required_checks_at_head_fail_closed(monkeypatch, runs, reason):
+    monkeypatch.setattr(
+        greploop_guard,
+        "_run_gh",
+        lambda *args, **kwargs: type(
+            "P", (), {"returncode": 0, "stdout": json.dumps({"check_runs": runs}), "stderr": ""}
+        )(),
+    )
+
+    out = greploop_guard._required_checks_at_head("a" * 40)
+
+    assert out["ok"] is False
+    assert out["reason"] == reason
+
+
+def test_required_checks_at_head_accepts_both_successes(monkeypatch):
+    head = "a" * 40
+    runs = [
+        _required_check_run("validate", head),
+        _required_check_run("secret-scan", head),
+    ]
+    monkeypatch.setattr(
+        greploop_guard,
+        "_run_gh",
+        lambda *args, **kwargs: type(
+            "P", (), {"returncode": 0, "stdout": json.dumps({"check_runs": runs}), "stderr": ""}
+        )(),
+    )
+
+    assert greploop_guard._required_checks_at_head(head)["ok"] is True
+
+
 def test_gh_mergeable_state_blocks_non_mergeable_and_unknown_state(monkeypatch):
     def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
         return type(
@@ -1965,6 +2034,16 @@ async def test_merge_pr_when_ready_merges_when_assessment_passes(tmp_path, monke
     monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
     monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
     monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda *args, **kwargs: {"ok": True, "headRefOid": "a" * 40},
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_required_checks_at_head",
+        lambda *args, **kwargs: {"ok": True, "head_sha": "a" * 40},
+    )
     monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
 
     out = await greploop_guard.merge_pr_when_ready(66)
@@ -1973,6 +2052,47 @@ async def test_merge_pr_when_ready_merges_when_assessment_passes(tmp_path, monke
     assert out["state"] == "MERGED"
     assert out["merge_commit"] == "deadbeef"
     assert ["pr", "merge", "66", "--squash"] in calls
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_when_ready_never_merges_without_required_checks(tmp_path, monkeypatch):
+    async def fake_assess(_pr_number, **_kwargs):
+        return {"ready": True, "blockers": [], "greptile": {}, "gh": {"ok": True}}
+
+    async def fake_status(**_kwargs):
+        return {"confidenceScore": 5, "reviewIsRunning": False, "headSha": "a" * 40}
+
+    calls = []
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda *args, **kwargs: {"ok": True, "headRefOid": "a" * 40},
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_required_checks_at_head",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "reason": "REQUIRED_CHECKS_MISSING",
+            "detail": "required checks absent at current head: ['secret-scan']",
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_run_gh",
+        lambda args, **kwargs: calls.append(args) or type(
+            "P", (), {"returncode": 0, "stdout": "{}", "stderr": ""}
+        )(),
+    )
+
+    out = await greploop_guard.merge_pr_when_ready(66)
+
+    assert out["state"] == "BLOCKED_NOT_READY"
+    assert out["blockers"] == ["REQUIRED_CHECKS_MISSING"]
+    assert not any(args[:2] == ["pr", "merge"] for args in calls)
 
 
 @pytest.mark.asyncio
