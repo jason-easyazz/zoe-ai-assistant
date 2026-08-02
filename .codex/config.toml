@@ -1,9 +1,16 @@
 # Repo-local Codex config — version-controlled so a clean checkout has code-intel.
 # Registers the same MCP servers as the root .mcp.json (Claude Code's), for Codex.
 
+# Serena: attach to the ONE shared server (systemd `serena-mcp.service`, port
+# 9121) — never `command =`, which stdio-spawns a private ~200-270 MB Serena per
+# Codex session. Measured 2026-08-02: two live Codex sessions were holding SEVEN
+# such spawns (~1.4 GB) alongside the shared server, on a 15.6 GB box whose brain
+# + TTS already occupy ~9 GB. That is the exact fleet-wide overcommit that OOM-ed
+# the live voice brain on 2026-07-16 and motivated the shared server; this file
+# had simply never been migrated with `.mcp.json`.
+# Needs codex >= 0.130 (url/streamable-http MCP support in RawMcpServerConfig).
 [mcp_servers.serena]
-command = "/home/zoe/.local/bin/serena"
-args = ["start-mcp-server", "--context", "codex", "--project", "/home/zoe/assistant", "--transport", "stdio", "--enable-web-dashboard", "false"]
+url = "http://127.0.0.1:9121/mcp"
 
 [mcp_servers.codebase-memory]
 command = "/home/zoe/.local/bin/codebase-memory-mcp"
