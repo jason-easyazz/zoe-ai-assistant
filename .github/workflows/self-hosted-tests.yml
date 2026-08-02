@@ -92,7 +92,7 @@ jobs:
           exit 1
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # The self-hosted runner is NOT a fresh box: it's the Jetson that already
       # runs the live stack, so the Jetson-specific Python deps (torch, onnx,
