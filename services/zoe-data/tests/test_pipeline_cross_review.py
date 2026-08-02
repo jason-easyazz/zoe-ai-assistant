@@ -50,7 +50,14 @@ def test_approve_matching_sha_different_vendor_produces_valid_evidence():
     assert len(calls) == 1
     assert calls[0].pr_number == 1597
     assert evidence is not None
-    state = PipelineState(task_ref="multica:T1", evidence=[evidence])
+    state = PipelineState(
+        task_ref="multica:T1",
+        phase="review",
+        pr_head_sha=_HEAD_SHA,
+        implementer_platform="openai",
+        allow_cross_review_signoff=True,
+        evidence=[evidence],
+    )
     assert valid_cross_review_signoff(state) is True
 
 
