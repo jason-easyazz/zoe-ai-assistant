@@ -2,7 +2,7 @@ fastapi==0.125.0
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic[email]==2.5.0
-python-multipart==0.0.6
+python-multipart==0.0.31
 bcrypt==4.1.2
 argon2-cffi==23.1.0
 pyjwt==2.13.0
