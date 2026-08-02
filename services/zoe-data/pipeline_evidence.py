@@ -84,19 +84,35 @@ _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 # (or any unrecognised value) never substitutes for a human review sign-off.
 _CROSS_REVIEW_APPROVE_VERDICTS = frozenset({"approve", "approved"})
 
+# The set of MODEL PLATFORMS the cross-vendor gate recognises. An identity that
+# does not resolve into this set is UNKNOWN, and the sign-off check fails closed
+# on it (see valid_cross_review_signoff) — an unrecognised reviewer/implementer
+# is never treated as a valid distinct vendor that passes the cross-vendor rule.
+_KNOWN_PLATFORMS: frozenset[str] = frozenset({"anthropic", "openai", "openrouter"})
+
 # Vendor identities are normalised to their MODEL PLATFORM before the
 # cross-vendor comparison so aliases cannot smuggle a same-vendor reviewer past
-# the gate (AGENTS.md L193-195: "the reviewer's platform must differ from the
-# implementer's"). The whole Anthropic-hosted family — claude/claude_code and
-# every Opus/Sonnet/Haiku/Fable tier — collapses to `anthropic`; the OpenAI /
-# ChatGPT / codex family to `openai`; pi/GLM to `openrouter`. An unrecognised
-# identity maps to its own lowercased token, so two *identical* unknown vendors
-# still read as same-vendor (rejected) while genuinely distinct ones do not.
+# the gate (AGENTS.md cross-vendor routing: "the reviewer's platform must differ
+# from the implementer's"). The whole Anthropic-hosted family collapses to
+# `anthropic` — claude/claude_code, the `claude-sdk` harness, every
+# Opus/Sonnet/Haiku tier and Fable (`claude-fable-5`); the OpenAI / ChatGPT /
+# codex family (incl. every `gpt-*` id like `gpt-5.4`) to `openai`; pi/GLM
+# (`glm-*`) to `openrouter`. Prefix families below catch the versioned model ids
+# the harness actually configures without enumerating every point release.
+#
+# NOT mapped, on purpose: `cursor` (Bugbot — disabled), `hermes`, and
+# `opencode`/`openclaw` (retired). Their underlying platform is not deterministic
+# from the token, so they resolve to UNKNOWN and fail closed rather than be
+# trusted as a distinct vendor. Add a mapping here only once a harness's platform
+# is fixed and known.
 _VENDOR_ALIASES: dict[str, str] = {
     "claude": "anthropic",
     "claude_code": "anthropic",
     "claude-code": "anthropic",
     "claudecode": "anthropic",
+    "claude-sdk": "anthropic",
+    "claude-fable-5": "anthropic",
+    "claude-test": "anthropic",
     "anthropic": "anthropic",
     "opus": "anthropic",
     "sonnet": "anthropic",
@@ -111,19 +127,37 @@ _VENDOR_ALIASES: dict[str, str] = {
     "glm": "openrouter",
 }
 
+# Prefix -> platform for versioned model ids (matched only after an exact alias
+# miss). `claude-*` -> anthropic covers claude-3-opus / claude-fable-5 / any
+# future tier; `gpt*` -> openai covers gpt-5.4 / gpt-5.5-medium; `glm*` ->
+# openrouter covers glm-4.6 / glm5.2.
+_VENDOR_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("claude", "anthropic"),
+    ("gpt", "openai"),
+    ("glm", "openrouter"),
+)
+
 
 def normalize_vendor(name: str | None) -> str:
     """Collapse a reviewer/implementer identity to its canonical model platform.
 
-    Returns "" for an empty/whitespace identity. A known alias (claude_code,
-    codex, fable, …) maps to its platform; anything else falls back to its own
-    lowercased token so distinct unknown vendors stay distinct while identical
-    ones stay equal.
+    Returns "" for an empty/whitespace identity. An exact alias (claude_code,
+    claude-sdk, codex, fable, …) maps to its platform, then a versioned-id prefix
+    (claude-fable-5, gpt-5.4, glm-4.6) maps to its family; anything else falls
+    back to its own lowercased token so distinct unknown vendors stay distinct
+    while identical ones stay equal. Callers that must fail closed on an
+    unrecognised vendor check the result against ``_KNOWN_PLATFORMS`` — a
+    fall-through token is deliberately NOT a member.
     """
     token = (name or "").strip().lower()
     if not token:
         return ""
-    return _VENDOR_ALIASES.get(token, token)
+    if token in _VENDOR_ALIASES:
+        return _VENDOR_ALIASES[token]
+    for prefix, platform in _VENDOR_PREFIXES:
+        if token.startswith(prefix):
+            return platform
+    return token
 
 _PROFILE_TAG_RE = re.compile(r"evidence_profile:\s*(\w+)", re.I)
 _SCOPE_SPLIT_REASON_RE = re.compile(
@@ -402,14 +436,18 @@ def valid_cross_review_signoff(state: PipelineState) -> bool:
       longer clears review,
     - the reviewer's normalised platform must DIFFER from
       ``state.implementer_platform`` — a same-vendor or self-asserted reviewer
-      never satisfies the cross-vendor rule.
+      never satisfies the cross-vendor rule,
+    - BOTH the reviewer's and the implementer's normalised platform must resolve
+      to a KNOWN platform (``_KNOWN_PLATFORMS``). An unrecognised token is not a
+      valid distinct vendor: it fails closed rather than clearing the gate by
+      merely differing from a known implementer.
 
     Both anchors are required: if ``state`` has no recorded PR head or no recorded
-    implementer platform, there is nothing trustworthy to compare against and the
-    sign-off is rejected (fail-closed).
+    (known) implementer platform, there is nothing trustworthy to compare against
+    and the sign-off is rejected (fail-closed).
     """
     impl_platform = normalize_vendor(state.implementer_platform)
-    if not impl_platform:
+    if impl_platform not in _KNOWN_PLATFORMS:
         return False
     expected_head = str(state.pr_head_sha or "").strip().lower()
     if not _SHA_RE.match(expected_head):
@@ -429,7 +467,13 @@ def valid_cross_review_signoff(state: PipelineState) -> bool:
             continue
         if commit_sha != expected_head:
             continue
-        if normalize_vendor(reviewer) == impl_platform:
+        reviewer_platform = normalize_vendor(reviewer)
+        # Fail closed on an unrecognised reviewer: an unknown token must NOT be
+        # treated as a valid distinct vendor just because it differs from a known
+        # implementer platform.
+        if reviewer_platform not in _KNOWN_PLATFORMS:
+            continue
+        if reviewer_platform == impl_platform:
             continue
         return True
     return False

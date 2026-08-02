@@ -512,6 +512,76 @@ def test_normalize_vendor_collapses_aliases():
     assert normalize_vendor("acme") != normalize_vendor("other")
 
 
+def test_normalize_vendor_maps_real_repo_identifiers():
+    """This repo's REAL configured reviewer/harness/model ids must collapse to
+    their platform — a missed alias is a same-vendor bypass (the Fable/claude-sdk
+    reviewer that previously fell through to its own distinct token)."""
+    from pipeline_evidence import normalize_vendor
+
+    # Anthropic family: harness id, Fable id, and every tier.
+    for anthropic_id in ("claude-fable-5", "claude-sdk", "claude-test", "fable", "opus", "Sonnet", "HAIKU"):
+        assert normalize_vendor(anthropic_id) == "anthropic", anthropic_id
+    # Versioned claude-* ids collapse via the prefix family too.
+    assert normalize_vendor("claude-3-opus") == "anthropic"
+
+    # OpenAI family: codex, the gpt-* versioned ids, and brand aliases.
+    for openai_id in ("codex", "gpt", "gpt-5.4", "gpt-5.5-medium", "OpenAI", "chatgpt"):
+        assert normalize_vendor(openai_id) == "openai", openai_id
+
+    # pi / OpenRouter family, including versioned glm-* ids.
+    for or_id in ("pi", "openrouter", "glm", "glm-4.6", "GLM5.2"):
+        assert normalize_vendor(or_id) == "openrouter", or_id
+
+
+def test_cross_review_real_anthropic_reviewer_is_same_vendor_rejected():
+    """The reported bug: an Anthropic reviewer reporting this repo's REAL id
+    (claude-fable-5 / claude-sdk) must normalise to `anthropic` and be rejected
+    as same-vendor against an `anthropic` implementer — not slip through as a
+    distinct unrecognised token."""
+    from pipeline_evidence import valid_cross_review_signoff
+
+    for reviewer_id in ("claude-fable-5", "claude-sdk", "fable", "opus"):
+        state = _review_state(implementer_platform="anthropic")
+        state = with_evidence(state, _approving_cross_review(metadata={"reviewer": reviewer_id}))
+        assert valid_cross_review_signoff(state) is False, reviewer_id
+        assert missing_required_evidence(state) == {"human"}, reviewer_id
+
+
+def test_cross_review_unknown_reviewer_fails_closed():
+    """An unrecognised/garbage reviewer identity is NOT a valid distinct vendor —
+    it must fail closed rather than clear the gate by merely differing from a
+    known implementer platform."""
+    from pipeline_evidence import valid_cross_review_signoff
+
+    for junk in ("acme", "totally-made-up", "reviewer-1", "x"):
+        state = _review_state(implementer_platform="anthropic")
+        state = with_evidence(state, _approving_cross_review(metadata={"reviewer": junk}))
+        assert valid_cross_review_signoff(state) is False, junk
+        assert missing_required_evidence(state) == {"human"}, junk
+
+
+def test_cross_review_unknown_implementer_fails_closed():
+    """An implementer platform that cannot be resolved to a KNOWN platform leaves
+    nothing trustworthy to compare against => sign-off rejected."""
+    from pipeline_evidence import valid_cross_review_signoff
+
+    state = _review_state(implementer_platform="mystery-harness")
+    state = with_evidence(state, _approving_cross_review(metadata={"reviewer": "codex"}))
+    assert valid_cross_review_signoff(state) is False
+    assert missing_required_evidence(state) == {"human"}
+
+
+def test_cross_review_known_cross_vendor_pair_still_accepted():
+    """Regression guard: a genuine cross-vendor pair (codex reviewer vs anthropic
+    implementer) still clears review after the fail-closed tightening."""
+    from pipeline_evidence import valid_cross_review_signoff
+
+    state = _review_state(implementer_platform="anthropic")
+    state = with_evidence(state, _approving_cross_review(metadata={"reviewer": "codex"}))
+    assert valid_cross_review_signoff(state) is True
+    assert missing_required_evidence(state) == set()
+
+
 def test_cross_review_flag_off_still_requires_human():
     # Flag default OFF: a fully valid approving cross_review is ignored.
     state = PipelineState(
