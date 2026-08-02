@@ -1,0 +1,5 @@
+# Dependencies installed from the committed package-lock.json.
+node_modules/
+# The root .gitignore blanket-ignores *.json; re-include this service's
+# committed lockfile so installs are deterministic (see PR for rationale).
+!package-lock.json
