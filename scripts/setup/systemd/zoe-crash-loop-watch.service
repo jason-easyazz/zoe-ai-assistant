@@ -1,0 +1,27 @@
+# Alerts the operator when zoe-data is crash-looping (2026-07-31: 37+ restarts
+# over ~8 minutes, discovered only because a human tried to talk to Zoe).
+#
+# WHY A TIMER AND NOT `OnFailure=` ON zoe-data: zoe-data runs Restart=always, so
+# a crash loop never reaches systemd's `failed` state and OnFailure= never fires.
+# Making it fire would mean adding StartLimitBurst — i.e. telling systemd to STOP
+# restarting Zoe — which converts a self-healing transient into a permanent
+# outage. Polling costs nothing and changes zoe-data's behaviour not at all.
+#
+# The alert goes out over flue-zoe-telegram's bot token because that is a
+# SEPARATE process: zoe-data's own announce/voice path needs zoe-data to be up,
+# so it can never report its own death.
+#
+# Enable:
+#   systemctl --user enable --now zoe-crash-loop-watch.timer
+
+[Unit]
+Description=Watch zoe-data for crash loops and alert the operator
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=%t
+# Exit 2 means "loop detected and alerted" — a successful detection, not a unit
+# failure, so SuccessExitStatus keeps the timer's own status clean.
+SuccessExitStatus=0 2
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/zoe_crash_loop_watch.py
+Nice=5
