@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-07-29T00:00:00Z
+timestamp: 2026-08-02T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-07-29T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-07-29. The table body is deterministic (sorted, no
+Last generated: 2026-08-02. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-448 flags; 447 not documented in `.env.example`.
+449 flags; 448 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -263,6 +263,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MULTICA_AUTOPIOT_STALE_HOURS` | `'2'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_MULTICA_AUTO_ADMIT` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_BLOCKED_RESUME_BUDGET` | `4` | yes | NO | `services/zoe-data/main.py` |
+| `ZOE_MULTICA_CROSS_REVIEW` | `'false'` | no | NO | `services/zoe-data/pipeline_cross_review.py` |
 | `ZOE_MULTICA_DISPATCH_PAUSE_FILE` | `''` | no | NO | `services/zoe-data/multica_dispatch_control.py` |
 | `ZOE_MULTICA_KILL_SWITCH` | `dynamic` | no | NO | `services/zoe-data/multica_board_runner.py` |
 | `ZOE_MULTICA_NATIVE_COMMENT_GUARD` | `-` | no | NO | `scripts/maintenance/multica_health_report.py` |

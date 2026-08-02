@@ -20,7 +20,9 @@ from pipeline_evidence import (
     block_fingerprint,
     build_scope_split_packet,
     can_complete_phase,
+    issue_allows_cross_review_signoff,
     issue_evidence_profile,
+    issue_implementer_platform,
     missing_required_evidence,
     record_block_fingerprint,
     scope_split_required,
@@ -256,6 +258,13 @@ async def bootstrap_state(
         task_ref=task_ref,
         phase=start_phase,
         evidence_profile=issue_evidence_profile(issue),
+        # Persist the cross_review opt-in + implementer platform from the issue's
+        # STRUCTURED metadata (structured-only; no free-text fallback). Without
+        # this the resolver never reaches state and the flag stays inert at its
+        # default False; the implementer platform is the trusted anchor the
+        # cross-vendor provenance check compares reviewers against.
+        allow_cross_review_signoff=issue_allows_cross_review_signoff(issue),
+        implementer_platform=issue_implementer_platform(issue),
     )
     try:
         return await _run_io(partial(save_state, state, event="bootstrap"))
