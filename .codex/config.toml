@@ -1,9 +1,22 @@
 # Repo-local Codex config — version-controlled so a clean checkout has code-intel.
 # Registers the same MCP servers as the root .mcp.json (Claude Code's), for Codex.
 
+# Serena: attach to the ONE shared server (systemd `serena-mcp.service`, port
+# 9121) — never `command =`, which stdio-spawns a private ~200-270 MB Serena per
+# Codex session. Measured 2026-08-02: two live Codex sessions were holding SEVEN
+# such spawns (~1.4 GB) alongside the shared server, on a 15.6 GB box whose brain
+# + TTS already occupy ~9 GB. That is the exact fleet-wide overcommit that OOM-ed
+# the live voice brain on 2026-07-16 and motivated the shared server; this file
+# had simply never been migrated with `.mcp.json`.
+# Needs codex >= 0.130 (url/streamable-http MCP support in RawMcpServerConfig).
 [mcp_servers.serena]
-command = "/home/zoe/.local/bin/serena"
-args = ["start-mcp-server", "--context", "codex", "--project", "/home/zoe/assistant", "--transport", "stdio", "--enable-web-dashboard", "false"]
+url = "http://127.0.0.1:9121/mcp"
 
+# codebase-memory is stdio-ONLY (0.8.1: `--help` offers only "Run MCP server on
+# stdio"; its --port is the UI graph viewer, not a transport), so unlike Serena
+# it cannot be consolidated onto one shared server — every agent session gets its
+# own copy by design. What was wrong is that each copy was UNBOUNDED: 14 live at
+# once totalling ~1.27GB on 2026-08-02, one at 473MB, one resident 2.3 days.
+# The launcher wraps each spawn in a memory-capped systemd scope.
 [mcp_servers.codebase-memory]
-command = "/home/zoe/.local/bin/codebase-memory-mcp"
+command = "/home/zoe/assistant/scripts/maintenance/codebase_memory_capped.sh"
