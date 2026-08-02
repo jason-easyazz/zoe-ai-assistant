@@ -366,3 +366,98 @@ def test_skip_implementation_uses_audit_evidence_profile():
 
     assert skipped.phase == "verify"
     assert skipped.evidence_profile == "audit"
+
+
+# --- cross_review sign-off: an autonomous different-vendor review may clear the
+# review phase in place of `human`, but only with verifiable provenance and only
+# when the allow_cross_review_signoff flag is on (default OFF => unchanged). ---
+
+_GOOD_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+
+
+def _approving_cross_review(**overrides):
+    metadata = {"reviewer": "codex", "verdict": "approve", "commit_sha": _GOOD_SHA}
+    metadata.update(overrides.pop("metadata", {}))
+    return EvidenceItem(
+        kind="cross_review",
+        summary=overrides.pop("summary", "codex cross-review approved the diff"),
+        passed=overrides.pop("passed", True),
+        metadata=metadata,
+    )
+
+
+def test_cross_review_signoff_satisfies_review_when_flag_on():
+    state = PipelineState(
+        task_ref="multica:1",
+        phase="review",
+        status="running",
+        allow_cross_review_signoff=True,
+    )
+    state = with_evidence(state, _approving_cross_review())
+
+    assert missing_required_evidence(state) == set()
+    assert can_complete_phase(state) is True
+
+    next_state = transition(state, "complete")
+    assert next_state.phase == "closeout"
+    assert next_state.status == "todo"
+
+
+def test_cross_review_without_sha_or_verdict_does_not_satisfy():
+    from pipeline_evidence import valid_cross_review_signoff
+
+    # Missing commit SHA.
+    no_sha = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+    no_sha = with_evidence(no_sha, _approving_cross_review(metadata={"commit_sha": ""}))
+    assert missing_required_evidence(no_sha) == {"human"}
+    assert valid_cross_review_signoff(no_sha) is False
+
+    # Missing verdict.
+    no_verdict = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+    no_verdict = with_evidence(no_verdict, _approving_cross_review(metadata={"verdict": ""}))
+    assert missing_required_evidence(no_verdict) == {"human"}
+
+    # Bare self-claim with no provenance metadata at all.
+    bare = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+    bare = with_evidence(
+        bare,
+        EvidenceItem(kind="cross_review", summary="I reviewed it, looks good", passed=True),
+    )
+    assert missing_required_evidence(bare) == {"human"}
+    with pytest.raises(ValueError, match="missing required evidence"):
+        transition(bare, "complete")
+
+
+def test_cross_review_flag_off_still_requires_human():
+    # Flag default OFF: a fully valid approving cross_review is ignored.
+    state = PipelineState(task_ref="multica:1", phase="review")
+    assert state.allow_cross_review_signoff is False
+    state = with_evidence(state, _approving_cross_review())
+
+    assert missing_required_evidence(state) == {"human"}
+    assert can_complete_phase(state) is False
+    with pytest.raises(ValueError, match="missing required evidence"):
+        transition(state, "complete")
+
+    # And a human sign-off still clears it as before.
+    state = with_evidence(state, EvidenceItem(kind="human", summary="human approved", passed=True))
+    assert transition(state, "complete").phase == "closeout"
+
+
+def test_blocking_verdict_cross_review_does_not_satisfy():
+    from pipeline_evidence import valid_cross_review_signoff
+
+    for verdict in ("blocking", "request_changes", "reject"):
+        state = PipelineState(task_ref="multica:1", phase="review", allow_cross_review_signoff=True)
+        state = with_evidence(state, _approving_cross_review(metadata={"verdict": verdict}))
+        assert missing_required_evidence(state) == {"human"}, verdict
+        assert valid_cross_review_signoff(state) is False, verdict
+
+
+def test_cross_review_signoff_resolver_reads_issue_metadata():
+    from pipeline_evidence import issue_allows_cross_review_signoff
+
+    assert issue_allows_cross_review_signoff({"metadata": {"allow_cross_review_signoff": "true"}}) is True
+    assert issue_allows_cross_review_signoff({"description": "run with allow_cross_review_signoff"}) is True
+    assert issue_allows_cross_review_signoff({"title": "ordinary task"}) is False
+    assert issue_allows_cross_review_signoff(None) is False

@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field, field_validator
 PipelinePhase = Literal["scout", "implement", "verify", "review", "closeout", "retro"]
 PipelineStatus = Literal["todo", "running", "blocked", "done"]
 BlockClassification = Literal["scope_split_required"]
-EvidenceKind = Literal["tool", "test", "validator", "pr", "greptile", "human", "log"]
+EvidenceKind = Literal[
+    "tool", "test", "validator", "pr", "greptile", "human", "log", "cross_review"
+]
 EvidenceProfile = Literal["default", "audit", "code", "health"]
 TransitionOutcome = Literal[
     "start",
@@ -70,6 +72,14 @@ _EVIDENCE_PROFILES: dict[EvidenceProfile, dict[PipelinePhase, set[EvidenceKind]]
     },
 }
 
+# A cross_review sign-off is only trustworthy when bound to the reviewed commit
+# — a full or abbreviated git SHA (lowercased before matching), mirroring how
+# validator/handoff evidence is tied to a content_hash rather than a bare claim.
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+# Only an explicit approve verdict counts; a blocking/request-changes verdict
+# (or any unrecognised value) never substitutes for a human review sign-off.
+_CROSS_REVIEW_APPROVE_VERDICTS = frozenset({"approve", "approved"})
+
 _PROFILE_TAG_RE = re.compile(r"evidence_profile:\s*(\w+)", re.I)
 _SCOPE_SPLIT_REASON_RE = re.compile(
     r"\b(?:PROTOCOL_VIOLATION|TURN_BUDGET|CONTEXT_LIMIT|TOKEN_LIMIT|TOO_BROAD|"
@@ -113,6 +123,11 @@ class PipelineState(BaseModel):
     phase: PipelinePhase = "implement"
     status: PipelineStatus = "todo"
     evidence_profile: EvidenceProfile = "default"
+    # Flag (default OFF => unchanged behaviour): when True, an approving
+    # cross_review sign-off with verifiable provenance may satisfy the review
+    # phase in place of `human`. Live pipelines keep human-in-the-loop review
+    # until a downstream producer both emits the evidence and sets this True.
+    allow_cross_review_signoff: bool = False
     attempts: dict[PipelinePhase, int] = Field(default_factory=dict)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     history: list[TransitionRecord] = Field(default_factory=list)
@@ -253,15 +268,86 @@ def issue_evidence_profile(issue: dict | None) -> EvidenceProfile:
     return "default"
 
 
+def issue_allows_cross_review_signoff(issue: dict | None) -> bool:
+    """Resolve the cross_review-substitution flag from Multica metadata/tags.
+
+    Mirrors ``issue_evidence_profile``: reads explicit metadata first, then falls
+    back to a description tag. Default is False (human-required) so nothing changes
+    until a producer opts a pipeline in.
+    """
+    issue = issue or {}
+    meta = issue.get("metadata") or {}
+    try:
+        from multica_ticket_contract import parse_ticket_block
+
+        meta = {**parse_ticket_block(issue.get("description") or ""), **meta}
+    except Exception:
+        pass
+    truthy = {"1", "true", "yes"}
+    if str(meta.get("allow_cross_review_signoff") or issue.get("allow_cross_review_signoff") or "").strip().lower() in truthy:
+        return True
+    haystack = " ".join(
+        [
+            str(issue.get("title") or ""),
+            str(issue.get("description") or ""),
+            json.dumps(meta),
+        ]
+    ).lower()
+    return "allow_cross_review_signoff" in haystack or "cross-review-signoff" in haystack
+
+
 def required_evidence_for(state: PipelineState, phase: PipelinePhase | None = None) -> set[EvidenceKind]:
     selected = phase or state.phase
     profile_map = _EVIDENCE_PROFILES.get(state.evidence_profile, _REQUIRED_EVIDENCE)
     return profile_map.get(selected, set())
 
 
+def valid_cross_review_signoff(state: PipelineState) -> bool:
+    """True if a trustworthy APPROVING cross_review sign-off is present.
+
+    A cross_review kind marker is not enough on its own — that would let a bare
+    self-claim ("I reviewed it, looks good") clear review. To count as a stand-in
+    for a human sign-off the entry must carry verifiable provenance, mirroring how
+    validator/handoff evidence is bound to a content_hash rather than trusted on
+    its say-so:
+
+    - ``passed is True`` (an unresolved/failed review never counts),
+    - a non-empty ``reviewer`` (or ``vendor``) naming the reviewing agent/vendor,
+    - an explicit ``verdict`` of approve — a ``blocking``/``request_changes``
+      verdict (or any unrecognised value) is rejected,
+    - a ``commit_sha`` (or ``sha``) that looks like a real git SHA, binding the
+      approval to the reviewed commit.
+    """
+    for item in state.evidence:
+        if item.kind != "cross_review" or item.passed is not True:
+            continue
+        meta = item.metadata or {}
+        reviewer = str(meta.get("reviewer") or meta.get("vendor") or "").strip()
+        verdict = str(meta.get("verdict") or "").strip().lower()
+        commit_sha = str(meta.get("commit_sha") or meta.get("sha") or "").strip().lower()
+        if not reviewer:
+            continue
+        if verdict not in _CROSS_REVIEW_APPROVE_VERDICTS:
+            continue
+        if not _SHA_RE.match(commit_sha):
+            continue
+        return True
+    return False
+
+
 def missing_required_evidence(state: PipelineState, phase: PipelinePhase | None = None) -> set[EvidenceKind]:
     selected = phase or state.phase
-    return required_evidence_for(state, selected) - evidence_kinds(state)
+    missing = required_evidence_for(state, selected) - evidence_kinds(state)
+    # Review acceptance = human OR a valid approving cross_review, gated behind
+    # allow_cross_review_signoff (default OFF preserves human-required behaviour).
+    if (
+        selected == "review"
+        and "human" in missing
+        and state.allow_cross_review_signoff
+        and valid_cross_review_signoff(state)
+    ):
+        missing = missing - {"human"}
+    return missing
 
 
 def implement_validator_hash(state: PipelineState) -> str | None:
