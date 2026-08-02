@@ -2492,6 +2492,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_MULTICA_CROSS_REVIEW": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/pipeline_cross_review.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MULTICA_DISPATCH_PAUSE_FILE": {
         "defaults": [
           "''"

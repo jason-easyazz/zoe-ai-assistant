@@ -263,6 +263,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MULTICA_AUTOPIOT_STALE_HOURS` | `'2'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_MULTICA_AUTO_ADMIT` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_BLOCKED_RESUME_BUDGET` | `4` | yes | NO | `services/zoe-data/main.py` |
+| `ZOE_MULTICA_CROSS_REVIEW` | `'false'` | no | NO | `services/zoe-data/pipeline_cross_review.py` |
 | `ZOE_MULTICA_DISPATCH_PAUSE_FILE` | `''` | no | NO | `services/zoe-data/multica_dispatch_control.py` |
 | `ZOE_MULTICA_KILL_SWITCH` | `dynamic` | no | NO | `services/zoe-data/multica_board_runner.py` |
 | `ZOE_MULTICA_NATIVE_COMMENT_GUARD` | `-` | no | NO | `scripts/maintenance/multica_health_report.py` |
