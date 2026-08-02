@@ -910,6 +910,12 @@ def _required_checks_at_head(
         payload = _parse_gh_json(proc)
     except GuardError as exc:
         return {"ok": False, "reason": "REQUIRED_CHECKS_READ_FAILED", "detail": str(exc)}
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "reason": "REQUIRED_CHECKS_READ_FAILED",
+            "detail": "GitHub check-runs response was not a JSON object",
+        }
 
     runs = payload.get("check_runs")
     if not isinstance(runs, list):

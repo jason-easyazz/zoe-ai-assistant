@@ -525,6 +525,22 @@ def test_required_checks_at_head_accepts_both_successes(monkeypatch):
     assert greploop_guard._required_checks_at_head(head)["ok"] is True
 
 
+def test_required_checks_at_head_rejects_non_object_payload(monkeypatch):
+    monkeypatch.setattr(
+        greploop_guard,
+        "_run_gh_api",
+        lambda *args, **kwargs: type(
+            "P", (), {"returncode": 0, "stdout": "[]", "stderr": ""}
+        )(),
+    )
+
+    out = greploop_guard._required_checks_at_head("a" * 40)
+
+    assert out["ok"] is False
+    assert out["reason"] == "REQUIRED_CHECKS_READ_FAILED"
+    assert out["detail"] == "GitHub check-runs response was not a JSON object"
+
+
 def test_required_checks_api_targets_exact_head_without_repo_flag(monkeypatch):
     head = "a" * 40
     calls = []
