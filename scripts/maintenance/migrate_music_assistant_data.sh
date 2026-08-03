@@ -100,6 +100,22 @@ log() { printf 'ma-migrate: %s\n' "$*"; }
 # EXISTING destination without --mirror, overwrote matching live files, and the
 # script wrote the marker and reported DONE. The probe must yield an explicit
 # yes/no, with anything else fatal.
+# Container-state query that FAILS CLOSED (review: Codex — the post-stop poll's
+# `docker ps | grep || break` treated a daemon outage as "stopped", and the
+# final check skipped its fatal branch on the same producer error: the script
+# logged `stopped` and copied with the writer state unknown, risking exactly
+# the torn-SQLite snapshot the stop exists to prevent).
+container_running() {  # -> 0=running 1=stopped, exits on unknowable state
+    local out
+    if ! out="$(docker ps --format '{{.Names}}' 2>&1)"; then
+        log "FATAL: cannot query container state mid-run — \`docker ps\` failed:"
+        printf '%s\n' "$out" | sed 's/^/ma-migrate:   /' >&2
+        log "Refusing to continue with the writer state unknown."
+        exit 1
+    fi
+    printf '%s\n' "$out" | grep -qx "$CONTAINER"
+}
+
 sudo_probe() {  # sudo_probe -e|-f|-d|-L PATH  -> 0=yes 1=no, exits on indeterminate
     local out
     out="$(sudo sh -c 'if test "$1" "$2"; then echo yes; else echo no; fi' _ "$1" "$2" 2>&1)"
@@ -407,11 +423,12 @@ if [[ $running -eq 1 ]]; then
     log "stopping $CONTAINER (a live writer would tear the databases)"
     docker stop "$CONTAINER" >/dev/null
     for _ in $(seq 1 30); do
-        docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" || break
+        container_running || break
         sleep 1
     done
-    docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" \
-        && { log "FATAL: $CONTAINER did not stop"; exit 1; }
+    if container_running; then
+        log "FATAL: $CONTAINER did not stop"; exit 1
+    fi
     log "stopped"
 fi
 

@@ -509,3 +509,16 @@ def test_relative_env_values_resolve_against_the_compose_base():
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert 'env_val="$REPO_ROOT/$env_val"' in src
     assert "the way COMPOSE does" in src
+
+
+def test_post_stop_container_polls_fail_closed():
+    """The post-stop poll's `docker ps | grep || break` treated a daemon outage
+    as "stopped", and the final check skipped its fatal branch on the same
+    producer error — the script logged `stopped` and copied with the writer
+    state unknown, risking the torn snapshot the stop prevents (review: Codex).
+    All container-state queries now route through one fail-closed helper."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "container_running()" in src
+    assert "cannot query container state mid-run" in src
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "grep -qx \"$CONTAINER\" || break" not in code
