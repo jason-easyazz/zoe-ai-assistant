@@ -357,6 +357,29 @@ if [[ -f "$ENV_FILE" ]]; then
     fi
 fi
 
+# A NON-DEFAULT destination must be PERSISTED, not just exported for one run
+# (review: Codex): with no .env entry, only the printed one-shot restart command
+# remembers the custom path — any later ordinary `docker compose up` evaluates
+# the compose default and recreates MA against an empty or stale store. The
+# compose default is read from the compose file itself so drift is caught.
+COMPOSE_FILE="$REPO_ROOT/docker-compose.modules.yml"
+if [[ -f "$COMPOSE_FILE" ]]; then
+    compose_default="$(sed -nE 's/.*\$\{ZOE_MA_DATA:-([^}]*)\}.*/\1/p' "$COMPOSE_FILE" | awk 'NR==1')"
+    if [[ -n "$compose_default" ]]; then
+        compose_default_abs="$(sudo readlink -m -- "$compose_default")"
+        if [[ "$DEST" != "$compose_default_abs" && -z "${env_val:-}" ]]; then
+            log "FATAL: destination $DEST is not the Compose default"
+            log "($compose_default_abs) and $ENV_FILE does not pin it."
+            log "Only this run's one-shot assignment would know the custom path;"
+            log "the next plain 'docker compose up' would mount the default and"
+            log "recreate Music Assistant against an empty or stale store."
+            log "Persist it first, then re-run:"
+            log "  echo $(printf '%q' "ZOE_MA_DATA=$DEST") >> $(printf '%q' "$ENV_FILE")"
+            exit 1
+        fi
+    fi
+fi
+
 if sudo_probe -f "$DEST/$MARKER"; then
     log "FATAL: destination carries a completion marker — the migration already ran:"
     sudo cat "$DEST/$MARKER" 2>/dev/null | sed 's/^/ma-migrate:   /'

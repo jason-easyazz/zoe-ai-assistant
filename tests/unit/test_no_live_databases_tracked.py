@@ -487,3 +487,14 @@ def test_env_parser_accepts_compose_dotenv_syntax():
     unvalidated value still reached interpolation (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert "(export[[:space:]]+)?ZOE_MA_DATA=" in src
+
+
+def test_non_default_destination_must_be_persisted():
+    """With no .env entry, only the printed one-shot restart command remembers a
+    custom path — any later plain `docker compose up` evaluates the compose
+    default and recreates MA against an empty or stale store (review: Codex).
+    The compose default is read from the compose FILE so drift is also caught."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "is not the Compose default" in src
+    assert "Persist it first, then re-run" in src
+    assert 'COMPOSE_FILE="$REPO_ROOT/docker-compose.modules.yml"' in src
