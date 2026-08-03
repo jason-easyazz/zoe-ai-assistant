@@ -536,6 +536,49 @@ def test_zoe_core_lockfile_is_voice_path():
     assert needs is True and hits == ["services/zoe-core/package-lock.json"]
 
 
+# --- the LIVE brain lane (ZOE_BRAIN_BACKEND=flue) ---------------------------
+# The gate matched services/zoe-core (the DORMANT fallback) but not the Flue
+# sidecar that has actually answered voice turns since 2026-07-03. Because
+# deploy.yml calls this same module, the post-merge deploy gate inherited the
+# identical blind spot: a change to the speaking brain took the no-op pass at
+# BOTH ends.
+@pytest.mark.parametrize("path", [
+    "labs/flue-zoe-brain/src/app.ts",
+    "labs/flue-zoe-brain/src/agents/zoe.ts",       # nested, via the src/* glob
+    "labs/flue-zoe-brain/package.json",
+    "labs/flue-zoe-brain/package-lock.json",
+    "labs/flue-zoe-brain/flue.config.ts",
+    "labs/flue-zoe-brain/tsconfig.json",
+    "scripts/setup/systemd/flue-zoe-brain.service",
+    "services/zoe-data/zoe_flue_client.py",
+    "services/zoe-data/brain_dispatch.py",
+])
+def test_live_flue_brain_lane_is_voice_path(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    # end to end through the classifier both the deploy and PR paths call
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    # An unmerged parallel port nothing deploys — gating it would charge every
+    # experimental commit a 20-sample Kokoro replay. Its prefix is one character
+    # from the gated lane, so this also pins that the globs are prefix-exact.
+    "labs/flue-zoe-brain-2x/src/app.ts",
+    "labs/flue-zoe-brain-2x/package.json",
+    # Not deployed: never compiled into dist/server.mjs, never served.
+    "labs/flue-zoe-brain/test/route_identity.test.ts",
+    "labs/flue-zoe-brain/parity/hard_gate.py",
+    "labs/flue-zoe-brain/README.md",
+])
+def test_flue_non_deployed_paths_do_not_gate(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path], pats) == []
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is False and hits == []
+
+
 # --- FIX: scope must fail CLOSED when it cannot publish its verdict ---------
 # `_emit_github_output` used to swallow an OSError and let `_scope_only` return
 # 0 anyway — the scope job then "succeeded" with no `voice` output at all, and
