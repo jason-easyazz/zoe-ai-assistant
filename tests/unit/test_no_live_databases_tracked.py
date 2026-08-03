@@ -195,3 +195,21 @@ def test_migration_copies_into_a_clean_destination():
     assert "--remove-destination" in src, "belt-and-braces against following dest links"
     # the clear must happen BEFORE the copy, or the damage is already done
     assert src.index("clearing non-empty destination") < src.index("cp -a --remove-destination")
+
+
+def test_migration_rejects_containment_in_both_directions():
+    """A one-way "is DEST inside REPO" test passes for an ANCESTOR like
+    `/home/zoe`. The script would then report a non-empty destination, advise
+    --mirror, and `sudo rm -rf` every top-level entry beneath it — including the
+    checkout and the source databases. Codex reproduced the SRC=DEST case with
+    both databases deleted. The guard would cause the loss it exists to prevent.
+    """
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "destination and source are the same path" in src
+    assert "ANCESTOR of the source" in src
+    assert "ANCESTOR of the git checkout" in src
+    assert "destination is inside the source" in src
+    assert "destination is inside the git checkout" in src
+    # containment must be decided on canonicalised paths, and before any clearing
+    assert 'SRC_ABS="$(readlink -m' in src
+    assert src.index("ANCESTOR of the git checkout") < src.index("clearing non-empty destination")

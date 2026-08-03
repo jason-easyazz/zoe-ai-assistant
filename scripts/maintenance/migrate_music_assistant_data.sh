@@ -81,19 +81,50 @@ log() { printf 'ma-migrate: %s\n' "$*"; }
 # rejected here rather than trusted. Canonicalise first: `./data/...`,
 # symlinks and `..` traversal all have to resolve.
 DEST_ABS="$(readlink -m -- "$DEST")"
+SRC_ABS="$(readlink -m -- "$SRC")"
 REPO_ABS="$(readlink -m -- "$REPO_ROOT")"
 case "$DEST" in
     /*) ;;
     *)  log "FATAL: destination must be an ABSOLUTE path, got: $DEST"; exit 1 ;;
 esac
-if [[ "$DEST_ABS" == "$REPO_ABS" || "$DEST_ABS" == "$REPO_ABS"/* ]]; then
+
+# Containment must be checked in BOTH directions, and against the source as well
+# as the repo (review: Codex, who reproduced the SRC=DEST case: both databases
+# deleted). A one-way "is DEST inside REPO" test passes for an ANCESTOR such as
+# `/home/zoe` — and the script would then report a non-empty destination, advise
+# `--mirror`, and `sudo rm -rf` every top-level entry under it, including the
+# checkout and the very databases being migrated. The guard would do the damage
+# it exists to prevent.
+contains() {  # contains PARENT CHILD -> 0 if CHILD is PARENT or beneath it
+    [[ "$2" == "$1" || "$2" == "$1"/* ]]
+}
+if [[ "$DEST_ABS" == "$SRC_ABS" ]]; then
+    log "FATAL: destination and source are the same path: $DEST_ABS"; exit 1
+fi
+if contains "$DEST_ABS" "$SRC_ABS"; then
+    log "FATAL: destination is an ANCESTOR of the source."
+    log "  dest: $DEST_ABS"
+    log "  src : $SRC_ABS"
+    log "Clearing it (--mirror) would delete the source databases themselves."
+    exit 1
+fi
+if contains "$SRC_ABS" "$DEST_ABS"; then
+    log "FATAL: destination is inside the source: $DEST_ABS"; exit 1
+fi
+if contains "$REPO_ABS" "$DEST_ABS"; then
     log "FATAL: destination is inside the git checkout: $DEST_ABS"
     log "That is the hazard this migration exists to remove — deploy_live.sh runs"
     log "\`git reset --hard\`, and gitignored runtime data there would be destroyed"
     log "with nothing dirty to warn you. Choose a path outside $REPO_ABS."
     exit 1
 fi
+if contains "$DEST_ABS" "$REPO_ABS"; then
+    log "FATAL: destination is an ANCESTOR of the git checkout: $DEST_ABS"
+    log "Clearing it (--mirror) would delete the checkout at $REPO_ABS."
+    exit 1
+fi
 DEST="$DEST_ABS"
+SRC="$SRC_ABS"
 
 [[ -d "$SRC" ]] || { log "FATAL: source does not exist: $SRC"; exit 1; }
 
