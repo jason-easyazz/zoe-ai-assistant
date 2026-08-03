@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-447 flags; 446 not documented in `.env.example`.
+448 flags; 447 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -91,6 +91,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_CORE_IDLE_TIMEOUT_S` | `'20'` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_MAX_CONCURRENCY` | `'2'` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_MAX_WORKERS` | `'4'` | no | NO | `services/zoe-data/zoe_core_client.py` |
+| `ZOE_CORE_MEMORY_TIMEOUT_MS` | `'2000'` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_MODEL_ID` | `'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'` | no | NO | `services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_MODEL_URL` | `-` | no | NO | `services/zoe-core/bench/pi_brain_latency.py` |
 | `ZOE_CORE_PI_COMMAND` | `'pi'` | no | NO | `services/zoe-data/zoe_core_client.py` |
