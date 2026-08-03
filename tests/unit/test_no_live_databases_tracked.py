@@ -263,3 +263,25 @@ def test_manifests_are_materialised_and_validated():
     assert "source manifest is EMPTY" in src
     assert "could not enumerate the source" in src
     assert "verified 0 files" in src, "a zero-file verification must fail, not pass"
+
+
+def test_checksum_walk_is_materialised_and_validated():
+    """`find … || true` masks a walk that emitted some paths then failed: the
+    zero-count guard sees a non-zero count and passes, so the script promises
+    every-file verification while later files were never read. A PARTIAL walk
+    must be as fatal as an empty one (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert 'sudo find "$SRC" -type f -print0 > "$_filelist"' in src
+    assert "source walk failed part-way" in src
+    assert "-print0 || true" not in src
+
+
+def test_closing_instructions_do_not_overstate_step_a():
+    """The success message is the terminal instruction of the pre-deploy
+    procedure. Saying the next deploy 'untracks the DBs' would let the operator
+    believe credential removal is done and skip step B — the databases are still
+    tracked at this commit (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "RE-POINTS THE BIND MOUNT ONLY" in src
+    assert "SEPARATE step B, still outstanding" in src
+    assert "deploy the commit that untracks the DBs" not in src

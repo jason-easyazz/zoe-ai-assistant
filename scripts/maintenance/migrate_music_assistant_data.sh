@@ -359,6 +359,18 @@ if [[ -n "$extra" ]]; then
 fi
 
 log "verifying by checksum…"
+# Materialise the walk and check its status BEFORE iterating (review: Codex).
+# `find … || true` masks a producer that emitted some paths and then failed on
+# an I/O or traversal error: `checked` ends up non-zero, so the zero-count guard
+# below does not fire, and the script reports every-file verification when later
+# files were never read at all. A partial walk must be as fatal as an empty one.
+_filelist="$(mktemp)"
+trap 'rm -f "$_man_src" "$_man_dst" "$_filelist"' EXIT
+if ! sudo find "$SRC" -type f -print0 > "$_filelist"; then
+    log "FATAL: source walk failed part-way — cannot promise every-file verification."
+    log "Destination is NOT trustworthy; do not start Music Assistant against it."
+    exit 1
+fi
 fail=0; checked=0
 while IFS= read -r -d '' f; do
     rel="${f#$SRC/}"
@@ -368,7 +380,7 @@ while IFS= read -r -d '' f; do
     a=$(sudo sha256sum "$f" | awk '{print $1}')
     b=$(sudo sha256sum "$DEST/$rel" | awk '{print $1}')
     if [[ "$a" != "$b" ]]; then log "  CHECKSUM MISMATCH: $rel"; fail=1; else checked=$((checked+1)); fi
-done < <(sudo find "$SRC" -type f -print0 || true)
+done < "$_filelist"
 
 # Same masked-producer hazard as the manifests: a failing enumeration would
 # verify ZERO files and still report success. The source has ≥2 databases by
@@ -389,7 +401,11 @@ log "verified $checked/$checked files"
 log ""
 log "DONE. Original left in place as rollback."
 log "Next, IN THIS ORDER:"
-log "  1. deploy the commit that untracks the DBs + re-points the bind mount"
+log "  1. deploy STEP A — it RE-POINTS THE BIND MOUNT ONLY."
+log "     It does NOT untrack the databases: auth.db, library.db and their WALs"
+log "     are still tracked at this commit, so the credentials remain in git"
+log "     history and CD will keep rolling those paths back. Untracking is a"
+log "     SEPARATE step B, still outstanding after this. (review: Codex)"
 log "  2. ZOE_MA_DATA=$DEST docker compose -f docker-compose.modules.yml up -d music-assistant"
 log "     (the resolved destination is spelled out because a one-shot"
 log "      \`ZOE_MA_DATA=... ./migrate…\` does not survive this script exiting —"
