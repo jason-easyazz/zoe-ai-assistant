@@ -498,3 +498,14 @@ def test_non_default_destination_must_be_persisted():
     assert "is not the Compose default" in src
     assert "Persist it first, then re-run" in src
     assert 'COMPOSE_FILE="$REPO_ROOT/docker-compose.modules.yml"' in src
+
+
+def test_relative_env_values_resolve_against_the_compose_base():
+    """Compose resolves a relative bind source against the compose FILE's
+    directory; the guard canonicalised it against the caller's cwd. From
+    /tmp/work, `.env: ./ma` + env `/tmp/work/ma` passed equality while Compose
+    would mount $REPO_ROOT/ma — silently returning live data to the checkout
+    (review: Codex). Same base, or the comparison compares nothing."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert 'env_val="$REPO_ROOT/$env_val"' in src
+    assert "the way COMPOSE does" in src

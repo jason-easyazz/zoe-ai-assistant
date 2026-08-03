@@ -343,6 +343,16 @@ if [[ -f "$ENV_FILE" ]]; then
     env_val="${env_val%\"}"; env_val="${env_val#\"}"
     env_val="${env_val%\'}"; env_val="${env_val#\'}"
     if [[ -n "$env_val" ]]; then
+        # Resolve relative values the way COMPOSE does — against the compose
+        # file's parent directory, not the caller's cwd (review: Codex). From
+        # /tmp/work, `.env: ZOE_MA_DATA=./ma` + `ZOE_MA_DATA=/tmp/work/ma` in
+        # the environment passed the equality check here, while the later
+        # Compose run mounted $REPO_ROOT/ma — silently returning live data to
+        # the checkout. Same base directory, or the comparison compares nothing.
+        case "$env_val" in
+            /*) : ;;
+            *)  env_val="$REPO_ROOT/$env_val" ;;
+        esac
         env_abs="$(sudo readlink -m -- "$env_val")"
         if [[ "$env_abs" != "$DEST" ]]; then
             log "FATAL: $ENV_FILE sets ZOE_MA_DATA=$env_val"
