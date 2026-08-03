@@ -85,6 +85,92 @@ is the recorded scan outcome required by the root AGENTS.md skill-safety rule.
 - **#2227's user-level half**: the container's `/root/.claude.json`, `/root/.cursor`, `/root/.codex` are live MCP/credential surfaces omp would scan; fenced by pointing `HOME` at a clean dir in the wrapper.
 - No omnigent restart needed for apply/rollback — config is re-read per dispatch.
 
+
+### The fence also bounds LIFETIME, not just environment
+
+*Added 2026-08-03 after omp trial-002.*
+
+**The hole.** Omnigent's 240s per-turn idle watchdog marked a turn failed, and
+the metered omp child **kept working**: it resumed 49s after the "kill", burned
+two more turns / $0.065, then sat orphaned for 8 minutes on a dead ACP channel
+until it was killed by hand. A metered child that outlives its kill switch is
+unbounded spend — the env fence stops omp reaching the *wrong key*, this stops
+it spending the *right one* forever.
+
+**Why it survived** (installed omnigent 0.7.0, read in-container):
+
+| what | where | consequence |
+|---|---|---|
+| the idle watchdog is an `asyncio.timeout` that CANCELS the `run_turn` coroutine and re-raises as `response.failed` | `runtime/harnesses/_scaffold.py:1483-1513` | a coroutine cancellation, not a process kill |
+| the cancel path is `except BaseException: raise` plus a `finally:` that only cancels the injection watcher and flushes OTel | `runtime/harnesses/_executor_adapter.py:483-519` | neither `interrupt_session` (the cooperative ACP `session/cancel`) nor `close()` is called — **the child is sent nothing at all, not even a protocol message** |
+| the child is spawned with no `start_new_session` / `preexec_fn` | `inner/acp_executor.py:323-332` | it stays in the harness runner's own process group, so it is in no group anyone signals |
+| the only real kill, `AcpExecutor.close()`, does `proc.terminate()` — SIGTERM to one PID, never `killpg` | `inner/acp_executor.py:1148-1158` | omp's own tool subprocesses survive even when it does run |
+| `close()` is reachable only from ASGI lifespan teardown | `_executor_adapter.py:1104-1118` | and the runner's `os._exit` hard-exit (`_runner.py:193-202`) and process_manager's SIGKILL escalation (`process_manager.py:1433`) both skip it |
+
+**Nothing in the package uses `killpg`. Every kill is per-PID.** So the
+turn-fail window leaks a working child, and the harness-teardown window leaks
+it *permanently*.
+
+**The fix — `omp-acp-supervisor`, installed beside the wrapper.** The fence no
+longer `exec`s omp; it execs a supervisor that runs omp in its **own process
+group** and kills that whole group when the parent goes away. `exec` keeps the
+PID, so the supervisor is the harness's direct child and `PR_SET_PDEATHSIG` is
+armed against the right process. Three independent triggers:
+
+1. **`prctl(PR_SET_PDEATHSIG, SIGTERM)`** — instant, fires even if the
+   supervisor is wedged in a syscall. This is what closes the orphan hole.
+2. **`getppid()` poll (1s)** — belt for the PDEATHSIG corner cases (it keys on
+   the *creating thread*, and it is Linux-only).
+3. **ACP stdin EOF** — covers omnigent's own `close()` path, which closes the
+   child's stdin before terminating.
+
+Then SIGTERM the group, 5s grace, SIGKILL, reap. A hard-exit timer force-kills
+and exits if teardown itself stalls. The supervisor is **fail-closed like the
+rest of the fence**: a missing supervisor or missing `python3` exits 78 and no
+dispatch happens.
+
+**What it deliberately does NOT fix.** It cannot see a *turn* failure — per the
+table above omnigent emits nothing on the ACP channel when the watchdog trips,
+so there is nothing for a wrapper to observe. This turns the residual exposure
+from *forever* into *until the harness runner exits*. Closing it properly needs
+an upstream change (call `interrupt_session` on the watchdog cancel path).
+
+**Two traps, both measured, both of which cost a red run before they were
+understood:**
+
+- **A zombie is still a process-group member.** The teardown loop polls
+  `killpg(pgid, 0)` to learn when the group is empty, and that keeps succeeding
+  while the killed leader is unreaped — so the loop burned the full 5s grace on
+  an already-dead group and then SIGKILLed a corpse. `proc.poll()` must be
+  called *inside* the wait loop. First run: heartbeat stopped at 0.9s but the
+  supervisor was still alive at 12s.
+- **"fd 0 is a pipe" does NOT mean "this is the ACP channel."**
+  `omp-settings-commands.sh` drives its key list through
+  `echo "$FENCE" | while read`, so every one-shot `omp config get` *also* has a
+  pipe on stdin. Relaying it ate the remaining keys and the EOF killed the
+  command mid-flight — the read-back went from 6/6 PASS to one FAIL and an
+  aborted loop. stdin watching is therefore opt-in, armed by the fence **only
+  for the `acp` subcommand**; every other invocation stays byte-transparent and
+  gets process-group + parent-death containment only.
+
+**Verification** (host, fake ACP agent — no metered dispatch):
+
+| test | result |
+|---|---|
+| parent SIGKILLed mid-session (the real failure mode: no lifespan teardown) | heartbeat stops 0.9s after parent death; supervisor and grandchild both gone |
+| **negative control — same agent under the pre-supervisor wrapper** | **orphan survives the full window; agent + grandchild both still running (reproduces trial-002)** |
+| stdin EOF only, parent alive (omnigent's `close()` path) | supervisor exits rc=143 in 0.1s, heartbeat stops |
+| agent traps and ignores SIGTERM | SIGKILL escalation at 5.0s, heartbeat stops |
+| parent-death detector in isolation (stdin watching off) | heartbeat stops; proves the two detectors are independent |
+| one-shot `omp <cmd>` with non-pipe stdin | stdout and exit code passed through unchanged |
+| missing supervisor | exits 78, no dispatch |
+| in-container fence read-back through the new wrapper | 6/6 PASS, `RESULT: fence VERIFIED in harness scope` |
+
+The fake agent is the honest part of this: it completes an ACP handshake and
+then **deliberately ignores stdin close and loops forever**, which is exactly
+what omp did on 2026-08-03. An agent that exits politely on EOF would have made
+the broken wrapper look fine.
+
 ## Status
 
 Evaluation only — nothing installed into the live container, no config applied, no dispatch run.
