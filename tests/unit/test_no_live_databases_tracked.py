@@ -215,7 +215,7 @@ def test_migration_rejects_containment_in_both_directions():
     assert "destination is inside the source" in src
     assert "destination is inside the git checkout" in src
     # containment must be decided on canonicalised paths, and before any clearing
-    assert 'SRC_ABS="$(readlink -m' in src
+    assert 'SRC_ABS="$(sudo readlink -m' in src
     assert src.index("ANCESTOR of the git checkout") < src.index("clearing non-empty destination")
 
 
@@ -244,7 +244,7 @@ def test_destination_symlink_checked_before_canonicalisation():
     `-L "$DEST"` guard placed after that could never fire for the links it was
     written to catch — and --mirror would erase the target (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert src.index('destination path is a symlink') < src.index('DEST_ABS="$(readlink -m')
+    assert src.index('destination path is a symlink') < src.index('DEST_ABS="$(sudo readlink -m')
 
 
 def test_no_sigpipe_prone_pipelines():
@@ -330,3 +330,18 @@ def test_emitted_restart_command_is_shell_quoted():
     metacharacters) while MA is still stopped (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert """ZOE_MA_DATA=$(printf '%q' "$DEST")""" in src
+
+
+def test_destination_inspection_runs_with_copy_privileges():
+    """Unprivileged `[[ -L ]]`/`readlink -m` cannot traverse a root-owned 0700
+    ancestor, so a symlink hidden beneath one reported "not a link" while the
+    privileged `mkdir/cp` followed it — copying the store as root into the
+    link's target. Checks must see the same filesystem as the actions
+    (review: Codex, reproduced)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert 'sudo test -L "$DEST"' in src
+    assert 'DEST_ABS="$(sudo readlink -m -- "$DEST")"' in src
+    # no unprivileged inspection of DEST may remain in non-comment code
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert '[[ -L "$DEST" ]]' not in code
+    assert '[[ -e "$DEST" ]]' not in code

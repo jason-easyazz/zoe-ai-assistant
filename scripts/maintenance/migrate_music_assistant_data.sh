@@ -98,14 +98,20 @@ log() { printf 'ma-migrate: %s\n' "$*"; }
 # and DEST is later replaced by its target — so the `-L "$DEST"` guard further
 # down could never fire for exactly the links it was written to catch, and
 # --mirror would erase the link's TARGET as root.
-if [[ -L "$DEST" ]]; then
-    log "FATAL: destination path is a symlink: $DEST -> $(readlink -- "$DEST")"
+# All inspection here runs under sudo — the SAME privileges as the copy
+# (review: Codex, reproduced). An unprivileged `[[ -L ]]`/`readlink -m` cannot
+# traverse a root-owned 0700 ancestor, so a symlink hidden beneath one reported
+# "not a link" and canonicalised to itself — while the later `sudo mkdir/cp`
+# happily followed it, copying the store as root into the link's target.
+# Checks and actions must see the same filesystem.
+if sudo test -L "$DEST"; then
+    log "FATAL: destination path is a symlink: $DEST -> $(sudo readlink -- "$DEST")"
     log "Refusing: clearing or copying would act on the link's target."
     exit 1
 fi
-DEST_ABS="$(readlink -m -- "$DEST")"
-SRC_ABS="$(readlink -m -- "$SRC")"
-REPO_ABS="$(readlink -m -- "$REPO_ROOT")"
+DEST_ABS="$(sudo readlink -m -- "$DEST")"
+SRC_ABS="$(sudo readlink -m -- "$SRC")"
+REPO_ABS="$(sudo readlink -m -- "$REPO_ROOT")"
 case "$DEST" in
     /*) ;;
     *)  log "FATAL: destination must be an ABSOLUTE path, got: $DEST"; exit 1 ;;
@@ -222,7 +228,7 @@ log "files      : $(sudo find "$SRC" -type f 2>/dev/null | wc -l)"
 if [[ "$EXECUTE" -eq 0 ]]; then
     log ""
     log "DRY RUN — nothing changed. Would:"
-    if [[ -d "$DEST" && -n "$(sudo find "$DEST" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+    if sudo test -d "$DEST" && [[ -n "$(sudo find "$DEST" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
         if [[ "$MIRROR" -eq 1 ]]; then
             log "  0. DELETE these existing destination entries (--mirror):"
             sudo find "$DEST" -mindepth 1 -maxdepth 1 -printf '  %y %p\n' 2>/dev/null \
@@ -261,7 +267,7 @@ fi
 # with the retained pre-migration copies in SRC and silently lose auth, library,
 # settings and playlist changes. A re-run is only safe while SRC is still the
 # live store. Compare newest mtimes and refuse to go backwards.
-if [[ -d "$DEST" && -n "$(sudo find "$DEST" -type f -print -quit 2>/dev/null)" ]]; then
+if sudo test -d "$DEST" && [[ -n "$(sudo find "$DEST" -type f -print -quit 2>/dev/null)" ]]; then
     # `sort -rn | head -1` gives sort a SIGPIPE once head exits; with
     # `set -euo pipefail` that is exit 141 and the script dies — AFTER Music
     # Assistant has been stopped, leaving the service down and no diagnostic.
@@ -297,13 +303,13 @@ fi
 # absent/empty, or --mirror clears it first, and the copy then lands in a
 # freshly-created empty directory. --remove-destination is belt-and-braces for
 # any path this reasoning missed.
-if [[ -e "$DEST" ]]; then
-    if [[ -L "$DEST" ]]; then
+if sudo test -e "$DEST"; then
+    if sudo test -L "$DEST"; then
         log "FATAL: destination is itself a symlink: $DEST"
         log "Refusing — the copy would write through it as root."
         exit 1
     fi
-    if [[ ! -d "$DEST" ]]; then
+    if ! sudo test -d "$DEST"; then
         log "FATAL: destination exists and is not a directory: $DEST"; exit 1
     fi
     if [[ -n "$(sudo find "$DEST" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
