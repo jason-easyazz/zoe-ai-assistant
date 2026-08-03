@@ -22,10 +22,18 @@
 # applied AUTOMATICALLY on merge, before any operator could run this script —
 # documentation of a required order cannot bind automation. Hence:
 #
-#   STEP A (merged first, NON-DESTRUCTIVE): re-point the bind mount + ship this
-#     script. Deleting nothing, CD can deploy it freely. Then run this script and
-#     recreate the container: MA now writes to $DEST, and `data/music-assistant`
-#     goes STATIC — which already fixes the permanently-dirty deploy block.
+#   STEP A: re-point the bind mount + ship this script. NOT "safe to deploy
+#     whenever" — that claim was wrong (review: Codex). The four databases are
+#     still TRACKED in step A, so CD's `git reset --hard` replaces the LIVE
+#     auth.db/library.db with the older COMMITTED versions. No deletion needed;
+#     the rollback alone is the data loss. So the migration must run BEFORE
+#     step A reaches the box:
+#       1. run this script --execute (stops MA, copies to $DEST, leaves stopped)
+#       2. merge step A; CD deploys it. data/music-assistant gets rolled back to
+#          the committed state — now harmless, MA no longer reads that path.
+#       3. start MA against $DEST with the verified copy.
+#     Leaving MA STOPPED between 1 and 3 is deliberate: it cannot write to the
+#     doomed path, nor serve rolled-back data.
 #   STEP B (separate PR, later): untrack the now-static files. By then nothing
 #     writes there, so `reset --hard` deleting them is harmless.
 #
