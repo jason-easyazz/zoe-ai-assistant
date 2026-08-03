@@ -166,3 +166,14 @@ def test_migration_prints_restart_command_with_resolved_destination():
     initialise an EMPTY store (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert 'ZOE_MA_DATA=$DEST docker compose' in src
+
+
+def test_migration_manifest_covers_non_regular_entries():
+    """`find -type f` hides symlinks, dirs and device nodes from BOTH manifests,
+    so a stale symlinked sidecar in the destination survived --execute while the
+    script printed DONE — and Music Assistant would follow it when opening its
+    store. Codex reproduced this with a `stale.db-wal` symlink."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "find . -mindepth 1 | sort" in src, "manifest must cover all entry types"
+    assert "find . -type f | sort" not in src, "the -type f manifest must not come back"
+    assert "rm -rf" in src, "--mirror must be able to remove dirs/symlinks, not just files"

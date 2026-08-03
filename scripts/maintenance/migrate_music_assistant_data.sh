@@ -189,14 +189,24 @@ sudo cp -a "$SRC/." "$DEST/"
 # in DEST that is NOT in SRC survived unseen — a stale WAL/journal or an old
 # credential artifact could become part of the store MA starts against. Compare
 # full manifests in BOTH directions.
+# ALL entry types, not just regular files (review: Codex, who reproduced it with
+# a stale `stale.db-wal` symlink that survived --execute while the script printed
+# DONE). `-type f` hides symlinks, dirs, FIFOs and device nodes from BOTH sides
+# of the comparison — and a symlinked sidecar is precisely the kind of thing MA
+# would then follow when opening its store. `-mindepth 1` so the root itself is
+# not reported.
 extra=$(comm -13 \
-    <(cd "$SRC"  && sudo find . -type f | sort) \
-    <(cd "$DEST" && sudo find . -type f | sort))
+    <(cd "$SRC"  && sudo find . -mindepth 1 | sort) \
+    <(cd "$DEST" && sudo find . -mindepth 1 | sort))
 if [[ -n "$extra" ]]; then
     if [[ "$MIRROR" -eq 1 ]]; then
         log "removing files present in destination but not in source (--mirror):"
         printf '%s\n' "$extra" | sed 's/^/ma-migrate:   /'
-        while IFS= read -r rel; do [[ -n "$rel" ]] && sudo rm -f -- "$DEST/${rel#./}"; done <<<"$extra"
+        # Reverse order so children go before their parents, and -rf so a stale
+        # directory or symlink is removed rather than skipped.
+        while IFS= read -r rel; do
+            [[ -n "$rel" ]] && sudo rm -rf -- "$DEST/${rel#./}"
+        done < <(printf '%s\n' "$extra" | sort -r)
     else
         log "FATAL: destination has files the source does not:"
         printf '%s\n' "$extra" | sed 's/^/ma-migrate:   /'
