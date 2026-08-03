@@ -162,7 +162,7 @@ SRC="$SRC_ABS"
 [[ -d "$SRC" ]] || { log "FATAL: source does not exist: $SRC"; exit 1; }
 
 # The directory alone is NOT evidence the stores are there (review: Codex). Run
-# this AFTER the untracking commit has deployed — the exact ordering failure it
+# this AFTER step B (the untracking commit) has deployed — the ordering failure it
 # guards — and the databases are gone while ignored settings/playlists/sidecars
 # remain, so a directory check passes, remnants get copied, and it prints DONE.
 # The operator then restarts MA against an incomplete store. Require the stores.
@@ -192,7 +192,7 @@ fi
 if [[ ${#missing[@]} -gt 0 ]]; then
     log "FATAL: source is missing live databases: ${missing[*]}"
     log "$SRC exists but has no stores — this is what it looks like AFTER the"
-    log "untracking commit deployed. Copying now would produce an incomplete"
+    log "step B (untracking) deployed. Copying now would produce an incomplete"
     log "destination that reports success. Restore from ~/.zoe/deploy-backups or"
     log "git history before retrying; do NOT start Music Assistant against it."
     exit 1

@@ -276,6 +276,17 @@ def test_checksum_walk_is_materialised_and_validated():
     assert "-print0 || true" not in src
 
 
+def test_agents_contract_describes_step_a_as_mount_only():
+    """The DOX contract is what an agent reads FIRST, so a wrong sequence there
+    outranks a wrong message in the script. I corrected the success text, then
+    --help, and still left scripts/AGENTS.md saying step A is 'the untracking
+    commit' — three instances of one error (review: Codex)."""
+    doc = (ROOT / "scripts" / "AGENTS.md").read_text()
+    assert "deploy the untracking commit" not in doc
+    assert "step A is mount-only" in doc.lower() or "STEP A** re-points" in doc
+    assert "STEP B is still outstanding" in doc
+
+
 def test_no_operator_instruction_claims_the_next_deploy_untracks():
     """EVERY operator-facing exit must say the same thing. I corrected the
     success message and left the identical false wording in --help, so an
