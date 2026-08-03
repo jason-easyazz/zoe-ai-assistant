@@ -1,0 +1,25 @@
+{
+  "_fixture_note": "SYNTHETIC, not recorded. No TAVILY_API_KEY is configured on this box (measured 2026-08-03), so a real response could not be captured. Shape follows Tavily's documented /search response: results[] of {title,url,content,score}. Re-record with a real key before trusting the parser against production.",
+  "query": "capital of Australia",
+  "response_time": 1.21,
+  "results": [
+    {
+      "title": "Canberra - Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Canberra",
+      "content": "Canberra is the capital city of Australia and the largest population centre in the Australian Capital Territory.",
+      "score": 0.97
+    },
+    {
+      "title": "Canberra | History, Map, Population, Climate, & Facts | Britannica",
+      "url": "https://www.britannica.com/place/Canberra",
+      "content": "Canberra, federal capital of the Commonwealth of Australia. It occupies part of the Australian Capital Territory.",
+      "score": 0.91
+    },
+    {
+      "title": "Australia's Capital City",
+      "url": "https://www.australia.gov.au/canberra",
+      "content": "Canberra was selected as the site of the national capital in 1908 as a compromise between Sydney and Melbourne.",
+      "score": 0.84
+    }
+  ]
+}

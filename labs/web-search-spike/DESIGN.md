@@ -1,6 +1,6 @@
 ---
 type: design-record
-status: lab spike — recommendation pending operator review
+status: lab spike — free-only, measurement harness built, corpus run pending
 date: 2026-08-03
 source: oh-my-pi (MIT) — packages/coding-agent/src/web/
 ---
@@ -12,9 +12,22 @@ Zoe should be able to answer "tickets to Bali atm" from the live web, and to
 oh-my-pi's web layer actually yields, the sidecar-vs-port decision, and the
 answer shape a voice product needs.
 
-**Recommendation: Option B — port the pattern to Python inside Zoe.** Reasons
-below; the short version is that Option A's premise (lift the TS layer and run
-it) does not survive a dependency check, and the box has no RAM to spare.
+## Operator decisions (2026-08-03)
+
+1. **FREE-ONLY.** No Tavily PAYGO, no Brave, no paid tiers. Tavily's *free*
+   tier (1,000 credits/month ≈ **33 searches/day**) is the primary engine when
+   configured; everything else must cost nothing. §8 records the resulting
+   tier order.
+2. **Choose by MEASUREMENT, not paper reasoning.** Precedent: CloakBrowser
+   looked worse on paper for Hermes and tested materially better. So the
+   deliverable is not a recommendation dressed as a conclusion — it is
+   `eval/`, a comparison harness that runs a fixed corpus against every free
+   combination and produces the data. §9.
+
+**Recommendation: Option B — port the pattern to Python inside Zoe** — and
+specifically **Option C for the engine tier: use the already-installed `ddgs`
+rather than a hand-rolled parser** (§7, revised after measurement). Option A's
+premise does not survive a dependency check, and the box has no RAM to spare.
 
 ---
 
@@ -165,26 +178,31 @@ session.** oh-my-pi's own DDG error string says the same thing: *"DuckDuckGo
 throttles automated HTML searches from datacenter/shared-egress IPs; configure
 a credentialed provider such as Brave, Tavily, Exa, or Kagi."*
 
+External verification (operator, 2026-08-03) confirms this is **documented
+steady state, not a bad afternoon**: the ~12-request home-IP block is reported
+for `ddgs` across major versions since 2024. So DuckDuckGo availability is a
+**bonus, never load-bearing**.
+
 Three consequences:
 
-1. **`public.ts`'s consensus fan-out is worth less than it looks here.** It
-   assumes five engines answer; on this box one does. The dedup + consensus
-   code is still right (it merges the two DDG endpoints, and would merge Tavily
-   with DDG), but multi-engine agreement is not available for free.
-2. **Tavily should stay the primary tier**, with key-free DDG as the free
-   fallback — which is exactly the chain `zoe_agent.py` already implements. The
-   spike strengthens the existing design rather than replacing it.
+1. **Single-engine scraping cannot be the foundation.** This is what pushed the
+   engine tier onto `ddgs`'s 18-engine metasearch instead of one hand-rolled
+   parser (§7).
+2. **Tavily FREE is the primary tier**, hard-capped at 33/day (§8), with `ddgs`
+   opportunistic beneath it.
 3. **Structured scrapers are the reliable tier and were never blocked.** For a
    household assistant, a large share of "are you sure?" claims are
-   Wikipedia-shaped facts. **Claim checks should hit Wikipedia first and the
-   search engines second** — faster (0.46–0.76 s vs 1.2–1.7 s), more precise,
-   and not subject to bot challenges.
+   Wikipedia-shaped facts. **Claim checks hit Wikipedia first and engines
+   second** — faster (0.46–0.76 s vs 1.2–1.7 s), more precise, and not subject
+   to bot challenges. `check_claim()` implements exactly that ordering.
 
-**Corollary for correctness:** a bot challenge arrives as a *success* status
-with a plausible body. A parser that merely finds no matches reports "no
-results", and the brain then tells Jason there is nothing — when the truth is
-the lookup failed. `is_blocked()` raises `EngineBlocked` instead, and a
-negative-control test asserts it (`test_bot_challenge_raises_rather_than_returning_empty`).
+**Corollary for correctness:** a refusal arrives looking like a success — a bot
+challenge is HTTP 200/202 with a plausible body, and `ddgs` reports total
+blockage as the literal string `"No results found."`. Either way, code that
+merely finds nothing reports "no results", and the brain then tells Jason there
+is nothing — when the truth is the lookup failed. Both paths now raise
+(`is_blocked()` for raw bodies, `EnginesBlocked` for the `ddgs` tier), each
+pinned by a negative-control test.
 
 ---
 
@@ -192,9 +210,10 @@ negative-control test asserts it (`test_bot_challenge_raises_rather_than_returni
 
 Not proposed for merge yet — this is a lab record. The prod shape would be:
 
-1. Lift `_web_search_ddg` out of `zoe_agent.py` into `web_search_provider.py`,
-   adding this spike's DDG parser, consensus merge and `EngineBlocked`
-   detection to the existing Tavily → ddgs → CloakBrowser chain.
+1. Fold the block-vs-empty guard and the tier ordering into
+   `web_search_provider.py`, alongside the existing `tavily_search_sync`, and
+   lift `_web_search_ddg` out of `zoe_agent.py` to join it. **The `ddgs` call
+   is the only DuckDuckGo path that survives** (§7).
 2. Add `packet.py` as the shared formatter, so every caller is budget-capped.
 3. New `services/zoe-data/routers/web.py` — `GET /api/web/search`,
    `Depends(require_internal_token)`, `geo.py` rate-limit + SSRF discipline.
@@ -207,7 +226,123 @@ Not proposed for merge yet — this is a lab record. The prod shape would be:
    `~/.zoe-voice-samples` under `flock /tmp/zoe-voice-harness.lock`** before any
    deploy.
 
-Open questions for the operator: whether to fund a Tavily key (the free tier is
-1k searches/month) or accept DDG's unreliability; and whether claim-backing
-should be automatic on "are you sure?" or an explicit opt-in, given it adds
-1–3 s to a spoken turn.
+Open question for the operator: whether claim-backing is automatic on "are you
+sure?" or explicit opt-in, given it adds 1–3 s to a spoken turn. The free-vs-paid
+question is now deferred to `eval/` data rather than argued (§9).
+
+---
+
+## 7. Option C — `ddgs` was already installed, and it wins
+
+**Red-team finding, and it was correct: §1–3 posed a false dichotomy.**
+`services/zoe-data/requirements.txt` already ships `ddgs>=6.0` (installed:
+**9.14.4**), which has its own `html.duckduckgo.com` parser, a Wikipedia engine,
+a ranker and `extract()`. So the real choice was never "lift TypeScript vs
+hand-write Python" — there was a third option sitting in the dependency list.
+
+### The measurement that settled it
+
+Taken while `html.duckduckgo.com` was actively serving us 202 + `anomaly-modal`:
+
+```
+DDGS().text("capital of Australia", backend="duckduckgo")
+    -> DDGSException("No results found.")            (0.75 s)
+DDGS().text("capital of Australia", backend="auto")
+    -> 5 real results                                 (1.77 s)
+```
+
+`ddgs` 9.14.4 is **not** a DuckDuckGo scraper. It is a metasearch aggregator
+over 18 engines (`ddgs/engines/`: duckduckgo, bing, brave, google, mojeek,
+startpage, wikipedia, yahoo, yandex, grokipedia, …) that fans out on a
+`ThreadPoolExecutor`, dedups via `ResultsAggregator` keyed on `href`, and ranks
+with `SimpleFilterRanker` (`ddgs/ddgs.py:400-450`). **It answered at the exact
+moment our hand-rolled single-engine parser was 100% blocked.**
+
+That is decisive on the operator's own terms — measurement over paper. Our
+parser had one engine; `ddgs` has eighteen and already implements the dedup +
+ranking we ported from `public.ts`.
+
+### The call
+
+**`ddgs` is the engine tier. The custom DuckDuckGo parser is DELETED** —
+`parse_ddg_html`, `parse_ddg_lite`, their transport, and both HTML fixtures are
+gone from this branch. Only one DuckDuckGo parser exists in the chain, and it is
+the better-tested, better-covered, already-shipped one.
+
+### What survives, and why it is not special pleading
+
+Two gaps are real, both verified against `ddgs` source rather than assumed:
+
+1. **`ddgs` conflates BLOCKED with EMPTY.** `ddgs/ddgs.py:454` is
+   `raise DDGSException(err or "No results found.")` — the same exception, and
+   frequently the same literal message, whether every engine refused us or the
+   query genuinely has no hits. Measured above. Unwrapped, that is precisely the
+   failure §5 warns about: Zoe says "there's nothing" when the lookup never
+   happened. `engines.search()` disambiguates with a **control query** (a query
+   that must have hits; if even that returns nothing we are blocked, not empty)
+   and raises `EnginesBlocked` instead. The control verdict is memoised for
+   120 s so a failure storm cannot double our request rate into an engine that
+   is already throttling us.
+2. **`ddgs` gives results no engine attribution.** Nothing in a returned row
+   says which of the 18 answered, so the comparison harness cannot report which
+   engines are alive. `engines.search_by_backend()` probes each individually for
+   `eval/` only — never on the lookup path.
+
+Both are ~40 lines of wrapper over `ddgs`, not a reimplementation of it. That is
+the honest boundary: **`ddgs` does the searching; we only add the two things it
+does not do.**
+
+---
+
+## 8. Free-only tier order (operator decision)
+
+| tier | what | cost | measured role |
+|---|---|---|---|
+| **0 — structured scrapers** | Wikipedia + HN JSON APIs | free, unlimited | Never blocked, fastest (0.46–0.76 s). **Tried FIRST for claim checks.** |
+| **1 — Tavily FREE** | `api.tavily.com` `search_depth=basic` | 1,000 credits/mo ≈ **33/day** | Primary open-lookup engine *when configured*. **Not configured on this box** — reported as `unconfigured`, never scored as zero. |
+| **2 — `ddgs`** | 18-engine metasearch | free | **Opportunistic only.** Home-IP blocks are documented steady state, so availability is a bonus, never load-bearing. |
+| **extract — Jina Reader** | `GET https://r.jina.ai/<url>` | free, ~20 RPM | **Enrichment only.** Measured 8.5 s / 133 KB on one Wikipedia page, and **403 `AbuseAlleviationError`** on britannica.com — the anonymous tier is domain-restricted. Never on a spoken critical path. |
+
+The 33/day ceiling is enforced **client-side** (`ZOE_TAVILY_DAILY_BUDGET`,
+default 33) because Tavily's API does not return remaining quota. It is a
+spend-limiter, not an accountant — it exists so a corpus run cannot burn the
+month in an afternoon.
+
+**CloakBrowser note:** `cloakbrowser` 0.3.28 *is* installed, but
+`browser_broker.py`'s executor returns a **base64 PNG screenshot only**
+(`BrowserEvidence.screenshots`) — no page text — so the broker as it stands
+cannot feed a text packet. Text extraction would need
+`page.locator("body").inner_text()`, which `mcp_server.py`'s
+`cloakbrowser_fetch` already does. Recorded rather than worked around.
+
+---
+
+## 9. The instrument — `eval/`
+
+Per the operator's second decision, the deliverable is the measuring device,
+not the verdict. `eval/` runs a **fixed 25-query corpus** (factual, technical,
+current-events, local/prices, how-to, and claim pairs with known-true and
+known-false claims) against every available free combination, recording per
+query: results, latency, status, and a keyword score.
+
+Three properties make it trustworthy rather than merely present:
+
+- **A blocked tier reports BLOCKED**, never a silently shorter list. Status is
+  one of `ok | empty | blocked | unconfigured | budget-exhausted | error`.
+- **A combination that never succeeded scores `None`, not `0.0`.** Averaging a
+  blocked run to zero would rank it "bad" when it is *unmeasured* — a
+  distinction the whole exercise depends on.
+- **The automatic score is explicitly a smoke signal.** Keyword hit-rate catches
+  empty or off-topic output; it cannot rank answer quality. The generated
+  markdown sheet has a Verdict column the operator fills in, and that is the
+  data the free-vs-paid decision uses.
+
+A 4-query smoke run is committed at `eval/results/EXAMPLE-smoke-run.md`. Two
+signals already visible: `jina-extract` has a **16.97 s median** (confirming it
+is an enrichment tier, not a lookup tier), and `ddgs+scrapers` scored *lower*
+than `ddgs` alone — most likely the keyword proxy penalising the Wikipedia
+extract for crowding snippets out of the token budget, which is exactly the kind
+of artefact the automatic score must not be trusted to interpret.
+
+**Not run yet: the full corpus.** It is operator-triggered
+(`python3 eval/run_eval.py --all`), and the Tavily rows need a key.

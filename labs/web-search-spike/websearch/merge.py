@@ -1,15 +1,23 @@
-"""Cross-engine dedup + consensus ranking + a soft/hard deadline fan-out.
+"""Cross-TIER dedup + consensus ranking + a soft/hard deadline fan-out.
 
-Ported from oh-my-pi (MIT) `src/web/search/providers/public.ts`. Two ideas are
-worth keeping and both survive the port intact:
+Ported from oh-my-pi (MIT) `src/web/search/providers/public.ts`.
 
-1. **Consensus ranking.** Rank a URL by how many engines returned it, then by
-   its best per-engine rank. Agreement between independent indexes is a much
-   better relevance signal than any single engine's ordering.
+SCOPE NOTE (2026-08-03): this merges across **tiers** — Tavily-free, `ddgs`,
+structured scrapers — not across search engines. `ddgs` already dedups and
+ranks *within* its own 18-engine fan-out (`ResultsAggregator` keyed on `href`,
+then `SimpleFilterRanker`), so re-implementing that would be the second of two
+rankers on the same data. What `ddgs` cannot do is reconcile its output with a
+Tavily result set and a Wikipedia extract, which is exactly this module's job.
+
+Two ideas from `public.ts` survive intact and are the reason to keep it:
+
+1. **Consensus ranking.** Rank a URL by how many INDEPENDENT TIERS returned it,
+   then by its best per-tier rank. Agreement between a paid index and a free
+   metasearch is a much stronger relevance signal than either one's ordering.
 2. **A soft deadline.** Return as soon as the soft deadline passes AND at least
-   one engine has answered; keep waiting (to the hard cap) if nothing has. A
-   voice product cannot block on the slowest engine, but it also must not
-   return empty just because the fast engine was the one that got blocked.
+   one tier has answered; keep waiting (to the hard cap) if nothing has. A
+   voice product cannot block on the slowest tier, but must not return empty
+   just because the fast tier was the one that got blocked.
 """
 
 from __future__ import annotations
@@ -54,7 +62,12 @@ class _Merged:
 
 
 def consensus_merge(batches: list[list[Result]], limit: int = 8) -> list[Result]:
-    """Merge per-engine result lists into one consensus-ranked list."""
+    """Merge per-tier result lists into one consensus-ranked list.
+
+    `Result.engines` counts distinct contributing TIERS (`Result.engine`
+    values), so a URL returned by both Tavily and `ddgs` outranks one returned
+    by either alone.
+    """
     merged: dict[str, _Merged] = {}
     for batch in batches:
         for rank, result in enumerate(batch):

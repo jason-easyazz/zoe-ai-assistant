@@ -1,0 +1,38 @@
+{
+  "_note": "Fixed query corpus for the free-tier comparison harness. Stable by design: changing it invalidates comparison across runs. Add queries, avoid editing existing ones. `expect` terms are lowercase substrings used for a crude automatic keyword score — they are a SMOKE SIGNAL, not a relevance metric; the operator's manual sheet is the real judgement.",
+  "version": 1,
+  "queries": [
+    {"id": "fact-01", "type": "factual", "q": "capital of Australia", "expect": ["canberra"]},
+    {"id": "fact-02", "type": "factual", "q": "how tall is Mount Kosciuszko", "expect": ["2228", "2,228", "kosciuszko"]},
+    {"id": "fact-03", "type": "factual", "q": "who wrote the Wind in the Willows", "expect": ["grahame"]},
+    {"id": "fact-04", "type": "factual", "q": "boiling point of water at sea level", "expect": ["100", "212"]},
+    {"id": "fact-05", "type": "factual", "q": "what language is spoken in Bali", "expect": ["balinese", "indonesian"]},
+
+    {"id": "tech-01", "type": "technical", "q": "Jetson Orin Nano memory bandwidth", "expect": ["gb/s", "bandwidth"]},
+    {"id": "tech-02", "type": "technical", "q": "python httpx timeout default", "expect": ["timeout", "httpx"]},
+    {"id": "tech-03", "type": "technical", "q": "what is Kokoro TTS", "expect": ["tts", "speech", "kokoro"]},
+
+    {"id": "news-01", "type": "current-events", "q": "latest Australian interest rate decision", "expect": ["rba", "rate", "cash rate"]},
+    {"id": "news-02", "type": "current-events", "q": "who is the prime minister of Australia", "expect": ["albanese", "prime minister"]},
+    {"id": "news-03", "type": "current-events", "q": "current AUD to USD exchange rate", "expect": ["aud", "usd", "exchange"]},
+    {"id": "news-04", "type": "current-events", "q": "weather forecast Perth this week", "expect": ["perth", "forecast"]},
+
+    {"id": "local-01", "type": "local-prices", "q": "cheap flights Perth to Bali", "expect": ["bali", "flight", "perth"]},
+    {"id": "local-02", "type": "local-prices", "q": "flights to Bali from Australia price", "expect": ["bali", "$", "fare", "flight"]},
+    {"id": "local-03", "type": "local-prices", "q": "Geraldton Western Australia population", "expect": ["geraldton", "population"]},
+    {"id": "local-04", "type": "local-prices", "q": "best time of year to visit Bali", "expect": ["dry season", "april", "bali"]},
+    {"id": "local-05", "type": "local-prices", "q": "average price of a carton of beer Australia", "expect": ["carton", "beer", "$"]},
+
+    {"id": "howto-01", "type": "howto", "q": "how to descale a kettle with vinegar", "expect": ["vinegar", "descale"]},
+    {"id": "howto-02", "type": "howto", "q": "how long to boil an egg soft", "expect": ["minute", "egg"]},
+    {"id": "howto-03", "type": "howto", "q": "how to remove red wine stain from carpet", "expect": ["stain", "wine"]},
+
+    {"id": "claim-t01", "type": "claim-true", "q": "Canberra is the capital of Australia", "truth": true, "expect": ["canberra", "capital"]},
+    {"id": "claim-t02", "type": "claim-true", "q": "Bali is part of Indonesia", "truth": true, "expect": ["indonesia", "bali"]},
+    {"id": "claim-t03", "type": "claim-true", "q": "the Great Barrier Reef is off the coast of Queensland", "truth": true, "expect": ["queensland", "reef"]},
+
+    {"id": "claim-f01", "type": "claim-false", "q": "Sydney is the capital of Australia", "truth": false, "expect": ["canberra", "not"]},
+    {"id": "claim-f02", "type": "claim-false", "q": "Bali is in Thailand", "truth": false, "expect": ["indonesia", "not"]},
+    {"id": "claim-f03", "type": "claim-false", "q": "the Jetson Orin Nano has 64GB of RAM", "truth": false, "expect": ["8gb", "4gb", "16gb"]}
+  ]
+}

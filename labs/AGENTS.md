@@ -218,29 +218,44 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
 - `web-search-spike/` — design + spike for live web lookups ("tickets to Bali
   atm") and claim-backing ("are you sure?"), mining **oh-my-pi** (MIT)
-  `packages/coding-agent/src/web/`. **Dependency verdict: that layer is NOT
-  liftable** — it imports `@oh-my-pi/pi-utils` 78× and that package hard-depends
-  on `@oh-my-pi/pi-natives` (Rust); every key-free engine value-imports the
+  `packages/coding-agent/src/web/`. **Operator decisions 2026-08-03: FREE-ONLY**
+  (no Tavily PAYGO, no Brave, no paid tiers) and **choose by MEASUREMENT, not
+  paper reasoning** — so the headline deliverable is `eval/`, an
+  operator-triggered comparison harness, not a recommendation.
+  **Dependency verdict: oh-my-pi's layer is NOT liftable** — it imports
+  `@oh-my-pi/pi-utils` 78× and that package hard-depends on
+  `@oh-my-pi/pi-natives` (Rust); every key-free engine value-imports the
   puppeteer browser registry; `Bun.sleep`/`Bun.Encoding` pin it to Bun. So the
-  spike **ports the algorithms to Python** (recommendation: in-process in
-  zoe-data, NOT a Bun sidecar — the box measured 216–293 MB free of 15.6 GB
-  with 3.7–5.3 GB already swapped): key-free DuckDuckGo `html/`+`lite/` parsing
-  with bot-challenge detection, oh-my-pi's cross-engine dedup + consensus
-  ranking + soft/hard deadline fan-out, URL-matched structured scrapers
-  (Wikipedia, HN — pure JSON, no DOM library), a **token-budgeted result
-  packet** built for the 8k Gemma brain (oh-my-pi has no equivalent; it renders
-  for large-context models), and claim-backing query shaping (neutral +
+  spike ports the ALGORITHMS to Python, in-process in zoe-data, **NOT** a Bun
+  sidecar (box measured 216–293 MB free of 15.6 GB with 3.7–5.3 GB swapped).
+  **Engine tier settled by measurement (Option C): `ddgs` won and the custom
+  DuckDuckGo parser was DELETED** — `ddgs>=6.0` is already in
+  `requirements.txt` (installed 9.14.4) and is a **metasearch aggregator over 18
+  engines** with its own dedup + ranker, not a DDG scraper; measured while DDG
+  was actively blocking us, `backend="duckduckgo"` raised but `backend="auto"`
+  returned 5 real results in 1.77 s. **There is exactly one DDG parser in the
+  chain and it is the shipped one.** What survives is a ~40-line wrapper over
+  two verified `ddgs` gaps: (a) `ddgs/ddgs.py:454` raises the SAME exception for
+  "every engine blocked" and "no hits", so `search()` disambiguates with a
+  control query and raises `EnginesBlocked` — otherwise Zoe reports "there's
+  nothing" when the lookup never happened; (b) results carry no engine
+  attribution, so `search_by_backend()` supplies harness provenance.
+  Tier order: **0** structured scrapers (Wikipedia/HN JSON APIs, never blocked,
+  lead claim checks) → **1** Tavily FREE (≈33/day, client-side budget via
+  `ZOE_TAVILY_DAILY_BUDGET`; unconfigured here and reported as such, never
+  scored zero) → **2** `ddgs` opportunistic → Jina Reader keyless extract as
+  **enrichment only** (16.97 s median, 133 KB/page, 403 on some domains).
+  Also carries a **token-budgeted result packet** for the 8k Gemma brain
+  (oh-my-pi has no equivalent) and claim-backing query shaping (neutral +
   contradiction queries; evidence, never a verdict). **Zero new dependencies** —
-  `httpx` is already a zoe-data dep. Key measured finding: **key-free search is
-  a fallback tier, not a foundation** — only DDG answers from this box
-  (Startpage/Mojeek captcha, Ecosia 403, Brave 429, searx.be challenge) and DDG
-  itself blocked after ~12 requests (HTTP **202** + `anomaly-modal`, >20 min),
-  so Tavily should stay primary and structured scrapers — never blocked, ~2×
-  faster — should lead claim checks. Hand-run only; nothing prod-wired, no
-  systemd unit, no CI. Regression net: `python3 -m pytest tests -q` (44 offline
-  fixture tests, no network, **no `ci_safe` marker** — `labs/` is outside every
-  CI lane) plus `python3 demo.py --replay`. README/DESIGN are records, not
-  contracts.
+  `httpx` + `ddgs` already ship. Recorded finding: `browser_broker.py` cannot
+  feed a text packet (its executor returns a base64 PNG screenshot only).
+  Hand-run only; nothing prod-wired, no systemd unit, no CI. `eval/results/*.json`
+  are gitignored run artifacts; `eval/results/EXAMPLE-smoke-run.md` is a
+  committed 4-query sample of the instrument's output. Regression net:
+  `python3 -m pytest tests -q` (45 offline tests, no network, the `ddgs` tier
+  driven by an injected fake searcher, **no `ci_safe` marker** — `labs/` is
+  outside every CI lane). README/DESIGN are records, not contracts.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%

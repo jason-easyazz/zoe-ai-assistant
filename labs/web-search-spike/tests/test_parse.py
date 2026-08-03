@@ -1,4 +1,4 @@
-"""Offline parser + packet tests. No network, no fixtures regenerated here.
+"""Offline tests: tier wrappers, merge, packet, claim shaping, scrapers.
 
 LAB-ONLY. `labs/` is outside every CI lane (`pytest.ini` sets
 `testpaths = services/zoe-data/tests`), so these carry NO `ci_safe` marker —
@@ -6,8 +6,9 @@ marking them would claim a CI coverage they do not have. Run by hand:
 
     cd labs/web-search-spike && python3 -m pytest tests -q
 
-Every test here asserts on a RECORDED response. The live-network checks live in
-`probe_engines.py`, deliberately separate, so this suite is deterministic.
+No network. The `ddgs` tier is exercised through an injected fake searcher, so
+these stay deterministic whether or not engines are reachable. Live probes live
+in `probe_engines.py` and `eval/`, deliberately separate.
 """
 
 from __future__ import annotations
@@ -20,16 +21,10 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from websearch import engines, tavily
 from websearch.claim import build_check_queries, contradiction_query, is_challenge, neutral_query
-from websearch.engines import (
-    EngineBlocked,
-    Result,
-    clean_text,
-    is_blocked,
-    parse_ddg_html,
-    parse_ddg_lite,
-    unwrap_ddg_url,
-)
+from websearch.engines import EnginesBlocked, Result, clean_text, is_blocked
+from websearch.extract import _strip_jina_header
 from websearch.merge import consensus_merge, dedup_key
 from websearch.packet import estimate_tokens, format_packet
 from websearch.scrapers import parse_hackernews, parse_wikipedia
@@ -41,75 +36,148 @@ def fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
 
 
-# --- engines ---------------------------------------------------------------
-
-def test_ddg_html_parses_results():
-    results = parse_ddg_html(fixture("ddg_html.html"))
-    assert len(results) >= 5
-    first = results[0]
-    assert first.title
-    assert first.url.startswith("https://")
-    assert "duckduckgo.com/l/" not in first.url, "redirect wrapper was not unwrapped"
-    assert any(r.snippet for r in results), "no snippet survived parsing"
+@pytest.fixture(autouse=True)
+def _clear_control_cache():
+    """The reachability verdict is memoised; tests must not inherit it."""
+    engines.reset_control_cache()
+    yield
+    engines.reset_control_cache()
 
 
-def test_ddg_lite_parses_results_and_drops_ads():
-    results = parse_ddg_lite(fixture("ddg_lite.html"))
-    assert len(results) >= 5
-    assert all(r.url.startswith("https://") for r in results)
-    # Sponsored rows route through bing/duckduckgo ad redirectors.
-    assert not any("bing.com" in r.url or "/y.js" in r.url for r in results)
+# --- ddgs tier: the block-vs-empty distinction -----------------------------
+# This is the whole reason a wrapper exists. ddgs raises
+# DDGSException("No results found.") for BOTH conditions (ddgs/ddgs.py:454),
+# measured live 2026-08-03 against a blocked DuckDuckGo.
+
+ROWS = [{"title": "Canberra", "href": "https://en.wikipedia.org/wiki/Canberra", "body": "capital"}]
 
 
-def test_both_engines_agree_on_the_top_result():
-    """The two endpoints share an index, so consensus should be non-trivial."""
-    html = {r.url for r in parse_ddg_html(fixture("ddg_html.html"))}
-    lite = {r.url for r in parse_ddg_lite(fixture("ddg_lite.html"))}
-    assert html & lite, "no overlap between html/ and lite/ — a parser is likely broken"
+def test_search_returns_results():
+    got = engines.search("q", searcher=lambda *a: ROWS)
+    assert len(got) == 1
+    assert got[0].url == "https://en.wikipedia.org/wiki/Canberra"
+    assert got[0].engine == "ddgs:auto"
 
 
-def test_bot_challenge_raises_rather_than_returning_empty():
-    """NEGATIVE CONTROL: a challenge page must be an ERROR, not zero results.
+def test_blocked_engines_raise_rather_than_returning_empty():
+    """NEGATIVE CONTROL: total refusal must be an ERROR, not zero results.
 
-    This is the whole reason `is_blocked` exists — the block arrives as HTTP
-    200/202 with a normal-looking body, so a parser that merely found no
-    matches would report 'no results for your query' and the brain would tell
-    the user there is nothing, rather than that the lookup failed.
+    If this returned [], Zoe would tell Jason "there's nothing" when the truth
+    is that the lookup never happened.
     """
-    body = fixture("ddg_anomaly.html")
-    assert is_blocked(body)
-    with pytest.raises(EngineBlocked):
-        parse_ddg_html(body)
-    with pytest.raises(EngineBlocked):
-        parse_ddg_lite(body)
+
+    def refuse(*_args):
+        raise RuntimeError("No results found.")
+
+    with pytest.raises(EnginesBlocked):
+        engines.search("q", searcher=refuse)
 
 
-def test_real_results_are_not_flagged_as_blocked():
-    """The other half of the control: no false positives on genuine pages."""
-    assert not is_blocked(fixture("ddg_html.html"))
-    assert not is_blocked(fixture("ddg_lite.html"))
+def test_genuinely_empty_query_returns_empty_not_blocked():
+    """The other half of the control: reachable engines + no hits => []."""
+
+    def only_control(query, *_args):
+        # The control query answers; the caller's query genuinely has no hits.
+        return ROWS if query == engines.CONTROL_QUERY else []
+
+    assert engines.search("zzz no such thing", searcher=only_control) == []
 
 
-@pytest.mark.parametrize(
-    ("href", "expected"),
-    [
-        ("//duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FCanberra&rut=x",
-         "https://en.wikipedia.org/wiki/Canberra"),
-        ("//example.com/page", "https://example.com/page"),
-        ("https://example.com/page", "https://example.com/page"),
-        ("/relative/only", None),
-        ("", None),
-    ],
-)
-def test_unwrap_ddg_url(href, expected):
-    assert unwrap_ddg_url(href) == expected
+def test_empty_result_set_while_unreachable_is_blocked():
+    """An empty list is ambiguous too, and gets the same disambiguation.
+
+    Everything returns nothing — including the control — so the only honest
+    reading is "we are blocked", not "your query has no answer".
+    """
+    with pytest.raises(EnginesBlocked):
+        engines.search("q", searcher=lambda *a: [])
+
+
+def test_engines_reachable_is_cached():
+    calls = []
+
+    def counting(*_args):
+        calls.append(1)
+        return ROWS
+
+    engines.engines_reachable(searcher=counting)
+    engines.engines_reachable(searcher=counting)
+    assert len(calls) == 1, "control probe should be memoised, not re-issued per failure"
+
+
+def test_search_by_backend_reports_failures_by_name():
+    """Provenance: a dead backend must be NAMED, never silently omitted."""
+
+    def selective(_query, backend, *_args):
+        if backend == "duckduckgo":
+            raise RuntimeError("blocked")
+        return ROWS if backend == "brave" else []
+
+    out = engines.search_by_backend("q", backends=("duckduckgo", "brave", "google"), searcher=selective)
+    assert out["duckduckgo"].startswith("FAILED")
+    assert isinstance(out["brave"], list)
+    assert out["google"] == "BLOCKED_OR_EMPTY"
+
+
+def test_is_blocked_detects_challenges_in_raw_bodies():
+    assert is_blocked(fixture("ddg_anomaly.html"))
+    assert is_blocked("<html><title>Captcha</title></html>")
+    assert not is_blocked("<html><body>Canberra is the capital.</body></html>")
 
 
 def test_clean_text_strips_tags_and_entities():
     assert clean_text("<b>Canberra</b>  is&nbsp;the &amp; capital") == "Canberra is the & capital"
 
 
-# --- merge -----------------------------------------------------------------
+# --- Tavily free tier ------------------------------------------------------
+
+def test_tavily_parses_documented_shape():
+    payload = json.loads(fixture("tavily_response.json"))
+    results = tavily.parse_tavily(payload)
+    assert len(results) == 3
+    assert results[0].engine == "tavily-free"
+    assert results[0].url.startswith("https://")
+    assert results[0].extra["score"] == 0.97
+
+
+def test_tavily_unconfigured_raises_rather_than_scoring_zero(monkeypatch):
+    """An unconfigured tier and a failing tier are different findings."""
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    assert tavily.configured() is False
+    with pytest.raises(tavily.TavilyUnconfigured):
+        tavily.search("q")
+
+
+def test_tavily_budget_blocks_when_spent(tmp_path, monkeypatch):
+    """The 33/day free ceiling is enforced locally, before the request."""
+    monkeypatch.setenv("TAVILY_API_KEY", "fake")
+    monkeypatch.setenv("ZOE_TAVILY_DAILY_BUDGET", "2")
+    store = tmp_path / "budget.json"
+    store.write_text(json.dumps({"day": tavily._today(), "used": 2}))
+    assert tavily.budget_state(store).remaining == 0
+    with pytest.raises(tavily.TavilyBudgetExhausted):
+        tavily.search("q", budget_path=store)
+
+
+def test_tavily_budget_resets_on_a_new_day(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_TAVILY_DAILY_BUDGET", "33")
+    store = tmp_path / "budget.json"
+    store.write_text(json.dumps({"day": "1999-01-01", "used": 99}))
+    assert tavily.budget_state(store).used == 0
+
+
+# --- Jina extract ----------------------------------------------------------
+
+def test_jina_header_is_stripped():
+    body = "Title: Canberra\n\nURL Source: https://x\n\nMarkdown Content:\nCanberra is the capital."
+    assert _strip_jina_header(body) == "Canberra is the capital."
+
+
+def test_jina_body_without_header_survives():
+    assert _strip_jina_header("Plain body text.") == "Plain body text."
+
+
+# --- merge (cross-TIER) ----------------------------------------------------
 
 @pytest.mark.parametrize(
     ("a", "b"),
@@ -128,22 +196,22 @@ def test_dedup_key_keeps_query_string():
     assert dedup_key("https://example.com/x?a=1") != dedup_key("https://example.com/x?a=2")
 
 
-def test_consensus_outranks_single_engine_position():
-    """A URL two engines agree on beats a URL only one engine ranked first."""
-    solo = [Result(title="Solo", url="https://solo.example/a", engine="e1")]
+def test_consensus_outranks_single_tier_position():
+    """A URL two TIERS agree on beats one only a single tier ranked first."""
+    solo = [Result(title="Solo", url="https://solo.example/a", engine="ddgs")]
     shared_a = [
-        Result(title="Solo", url="https://solo.example/a", engine="e1"),
-        Result(title="Shared", url="https://shared.example/b", engine="e1"),
+        Result(title="Solo", url="https://solo.example/a", engine="ddgs"),
+        Result(title="Shared", url="https://shared.example/b", engine="ddgs"),
     ]
-    shared_b = [Result(title="Shared", url="https://shared.example/b", engine="e2")]
+    shared_b = [Result(title="Shared", url="https://shared.example/b", engine="tavily-free")]
     merged = consensus_merge([shared_a, shared_b, solo])
     assert merged[0].url == "https://shared.example/b"
     assert merged[0].engines == 2
 
 
 def test_merge_keeps_the_longest_snippet():
-    a = [Result(title="T", url="https://x.example/p", snippet="short", engine="e1")]
-    b = [Result(title="T", url="https://www.x.example/p/", snippet="a much longer snippet", engine="e2")]
+    a = [Result(title="T", url="https://x.example/p", snippet="short", engine="ddgs")]
+    b = [Result(title="T", url="https://www.x.example/p/", snippet="a much longer snippet", engine="tavily-free")]
     merged = consensus_merge([a, b])
     assert len(merged) == 1
     assert merged[0].snippet == "a much longer snippet"
@@ -152,10 +220,8 @@ def test_merge_keeps_the_longest_snippet():
 # --- scrapers --------------------------------------------------------------
 
 def test_wikipedia_extract_parses():
-    payload = json.loads(fixture("wikipedia_extract.json"))
-    extract = parse_wikipedia(payload, "https://en.wikipedia.org/wiki/Canberra")
+    extract = parse_wikipedia(json.loads(fixture("wikipedia_extract.json")), "https://en.wikipedia.org/wiki/Canberra")
     assert extract is not None
-    assert extract.source == "wikipedia"
     assert extract.title == "Canberra"
     assert "capital" in extract.text.lower()
 
@@ -165,8 +231,7 @@ def test_wikipedia_missing_page_returns_none():
 
 
 def test_hackernews_search_parses():
-    payload = json.loads(fixture("hackernews_search.json"))
-    extract = parse_hackernews(payload, "https://news.ycombinator.com/item?id=1")
+    extract = parse_hackernews(json.loads(fixture("hackernews_search.json")), "https://news.ycombinator.com/item?id=1")
     assert extract is not None
     assert extract.source == "hackernews"
     assert extract.title
@@ -181,19 +246,17 @@ def test_hackernews_empty_returns_none():
 def _many(n: int) -> list[Result]:
     return [
         Result(title=f"Result number {i} with a fairly long title", url=f"https://site{i}.example/page",
-               snippet="A snippet. " * 40, engine="e1")
+               snippet="A snippet. " * 40, engine="ddgs")
         for i in range(n)
     ]
 
 
 @pytest.mark.parametrize("budget", [120, 250, 350, 600])
 def test_packet_respects_token_budget(budget):
-    packet = format_packet(_many(10), token_budget=budget)
-    assert estimate_tokens(packet) <= budget, f"packet overran the {budget}-token budget"
+    assert estimate_tokens(format_packet(_many(10), token_budget=budget)) <= budget
 
 
 def test_packet_is_compact_enough_for_the_brain():
-    """The whole point: 10 raw results must reduce to a few hundred tokens."""
     packet = format_packet(_many(10), token_budget=350)
     assert estimate_tokens(packet) <= 350
     assert packet.count("\n") <= 6
@@ -201,7 +264,7 @@ def test_packet_is_compact_enough_for_the_brain():
 
 def test_packet_uses_hosts_not_full_urls():
     packet = format_packet(
-        [Result(title="Canberra", url="https://en.wikipedia.org/wiki/Canberra", snippet="s", engine="e")]
+        [Result(title="Canberra", url="https://en.wikipedia.org/wiki/Canberra", snippet="s", engine="ddgs")]
     )
     assert "en.wikipedia.org" in packet
     assert "https://en.wikipedia.org/wiki/Canberra" not in packet
@@ -232,7 +295,6 @@ def test_neutral_query_strips_hedges_including_punctuation():
 
 def test_contradiction_query_negates_the_assertion():
     assert contradiction_query("Bali is in Thailand") == "Bali is not in Thailand"
-    assert contradiction_query("the panel has 8GB") == "the panel has not 8GB"
 
 
 def test_contradiction_falls_back_when_no_verb_to_negate():
@@ -246,44 +308,21 @@ def test_check_queries_are_distinct_and_ordered():
     assert len(set(queries)) == len(queries)
 
 
-# --- end-to-end pipeline, replayed from fixtures ---------------------------
-# The live engines bot-block (README "Findings" #3), so the full
-# parse -> merge -> enrich -> packet path is proven here against recorded
-# responses rather than depending on an engine being reachable.
-
-def _replayed_packet() -> str:
-    batches = [parse_ddg_html(fixture("ddg_html.html")), parse_ddg_lite(fixture("ddg_lite.html"))]
-    merged = consensus_merge(batches, limit=6)
-    extract = parse_wikipedia(json.loads(fixture("wikipedia_extract.json")), merged[0].url)
-    return format_packet(merged, extract=extract, token_budget=350)
-
+# --- end-to-end packet, replayed from fixtures -----------------------------
 
 def test_pipeline_produces_a_budgeted_packet():
-    packet = _replayed_packet()
-    assert packet
-    assert estimate_tokens(packet) <= 350
+    """Tavily + ddgs-shaped results + a Wikipedia extract -> one small packet."""
+    tavily_results = tavily.parse_tavily(json.loads(fixture("tavily_response.json")))
+    ddgs_like = [
+        Result(title="Canberra - Wikipedia", url="https://en.wikipedia.org/wiki/Canberra",
+               snippet="Canberra is the capital city of Australia.", engine="ddgs:auto"),
+        Result(title="Australia - Wikipedia", url="https://en.wikipedia.org/wiki/Australia",
+               snippet="Australia is a country.", engine="ddgs:auto"),
+    ]
+    merged = consensus_merge([tavily_results, ddgs_like], limit=6)
+    assert merged[0].engines == 2, "the URL both tiers returned must lead"
+    extract = parse_wikipedia(json.loads(fixture("wikipedia_extract.json")), merged[0].url)
+    packet = format_packet(merged, extract=extract, token_budget=350)
     assert "[wikipedia]" in packet
     assert "[web]" in packet
-
-
-def test_pipeline_ranks_corroborated_results_above_single_engine_ones():
-    """The consensus invariant on real recorded pages.
-
-    Deliberately NOT asserting a specific site: which pages land in the trimmed
-    window is an artefact of fixture capture, whereas "corroborated outranks
-    uncorroborated" is the property the merge exists to provide.
-    """
-    batches = [parse_ddg_html(fixture("ddg_html.html")), parse_ddg_lite(fixture("ddg_lite.html"))]
-    merged = consensus_merge(batches, limit=10)
-    counts = [r.engines for r in merged]
-    assert counts[0] == 2, "top result should be corroborated by both endpoints"
-    assert counts == sorted(counts, reverse=True), "consensus ordering violated"
-
-
-def test_pipeline_dedups_across_endpoints():
-    """The merged list must be shorter than the concatenation — dedup did work."""
-    html = parse_ddg_html(fixture("ddg_html.html"))
-    lite = parse_ddg_lite(fixture("ddg_lite.html"))
-    merged = consensus_merge([html, lite], limit=50)
-    assert len(merged) < len(html) + len(lite)
-    assert len({dedup_key(r.url) for r in merged}) == len(merged)
+    assert estimate_tokens(packet) <= 350

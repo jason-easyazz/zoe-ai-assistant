@@ -1,54 +1,74 @@
-"""Key-free search engines: plain HTTP + regex parsing, no browser, no new deps.
+"""Engine tier — a thin wrapper over `ddgs`, which zoe-data already ships.
 
-Ported from oh-my-pi (MIT) `src/web/search/providers/duckduckgo.ts` — the
-regex parse of DuckDuckGo's no-JS HTML frontend, its `uddg=` redirect
-unwrapping and its `anomaly-modal` bot-challenge detection. The upstream
-module also carries a headless-browser escalation path; it is deliberately
-NOT ported (see DESIGN.md §3) — every engine here is plain `httpx`.
+DESIGN CALL (2026-08-03, revised): **`ddgs` is the engine tier. The custom
+DuckDuckGo HTML parser this module used to carry has been DELETED.**
 
-Measured on this box 2026-08-03: of oh-my-pi's key-free engine set, only
-DuckDuckGo answers. Startpage/Ecosia/Mojeek/Brave/searx.be all bot-block.
-So the second engine is DDG's independent `lite/` endpoint rather than a
-second vendor — see README.md "Findings".
+The first pass of this spike hand-ported oh-my-pi's DuckDuckGo regex parser.
+That was the wrong call, and measurement — not reasoning — settled it. See
+DESIGN.md §7 for the full Option C analysis; the decisive evidence:
+
+    # taken while html.duckduckgo.com was serving 202 + anomaly-modal to us
+    DDGS().text(q, backend="duckduckgo") -> DDGSException("No results found.")
+    DDGS().text(q, backend="auto")       -> 5 real results in 1.77 s
+
+`ddgs` 9.14.4 is not a DuckDuckGo scraper; it is a **metasearch aggregator over
+18 engines** (duckduckgo, bing, brave, google, mojeek, startpage, wikipedia,
+yahoo, yandex, grokipedia, …) with its own `ResultsAggregator` dedup (keyed on
+`href`) and `SimpleFilterRanker`. It answered at the exact moment our
+single-engine parser was 100% blocked. Keeping a hand-rolled parser beside it
+would mean two DuckDuckGo parsers in one chain, the worse one load-bearing.
+
+WHAT SURVIVES from the first pass, because `ddgs` genuinely lacks it:
+
+1. **Blocked != empty.** `ddgs/ddgs.py:454` raises `DDGSException(err or "No
+   results found.")` for BOTH "every engine was blocked" and "this query has no
+   hits" — measured above. Unwrapped, that makes Zoe tell Jason "there's
+   nothing" when the truth is the lookup failed. `search()` below disambiguates
+   with a control query and raises `EnginesBlocked` rather than returning `[]`.
+2. **Provenance.** `ddgs` gives results no per-engine attribution, so you cannot
+   tell which of the 18 answered. The eval harness needs that to compare
+   combinations, so `search_by_backend()` probes each individually.
 """
 
 from __future__ import annotations
 
 import html as _html
 import re
-import urllib.parse
+import time
 from dataclasses import dataclass, field
 
-import httpx
+# Text backends worth attributing separately in the eval harness. `auto` fans
+# out across all of them; these are the ones whose individual health we care
+# about when diagnosing a bad run.
+NAMED_BACKENDS = ("duckduckgo", "brave", "google", "mojeek", "startpage", "wikipedia")
 
-DDG_HTML_URL = "https://html.duckduckgo.com/html/"
-DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
+# A query that must always have hits. If even this returns nothing, the tier is
+# blocked or down — that is not a property of the caller's query.
+CONTROL_QUERY = "wikipedia"
 
-UA_BROWSER = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
-)
 # Wikimedia and most JSON APIs REJECT a generic browser UA (measured: 403) but
-# accept a descriptive one. Structured scrapers must identify themselves.
+# accept a descriptive one. Every tier that talks to an API identifies itself.
 UA_POLITE = "ZoeAssistant/0.1 (local household assistant; contact: jason@easyazz.com)"
 
-DEFAULT_TIMEOUT_S = 8.0
+# Re-probing the control on every failure would double our request rate into an
+# engine that is already rate-limiting us, so a verdict is reused briefly.
+_CONTROL_TTL_S = 120.0
+_control_cache: tuple[float, bool] | None = None
 
 
-class EngineBlocked(RuntimeError):
-    """The engine served a bot challenge instead of results (often HTTP 200)."""
+class EnginesBlocked(RuntimeError):
+    """Every engine refused us. NOT the same as "this query has no results"."""
 
 
 @dataclass(slots=True)
 class Result:
-    """One search hit. Mirrors oh-my-pi's `SearchSource`, minus the fields a
-    voice product never reads."""
+    """One search hit, normalised across tiers (ddgs, Tavily, scrapers)."""
 
     title: str
     url: str
     snippet: str = ""
     engine: str = ""
-    # Populated by merge.consensus_merge: how many engines returned this URL.
+    # Set by merge.consensus_merge: how many TIERS returned this URL.
     engines: int = 1
     rank: int = 0
     extra: dict = field(default_factory=dict)
@@ -63,35 +83,13 @@ def clean_text(value: str) -> str:
     return _WS_RE.sub(" ", _html.unescape(_TAG_RE.sub(" ", value))).strip()
 
 
-def unwrap_ddg_url(href: str) -> str | None:
-    """Resolve a DDG result href to the real target.
-
-    DDG routes clicks through `//duckduckgo.com/l/?uddg=<encoded>`; we want the
-    unwrapped URL. Handles redirect wrappers, protocol-relative and absolute
-    links (oh-my-pi duckduckgo.ts `unwrapResultUrl`).
-    """
-    if not href:
-        return None
-    decoded = href.replace("&amp;", "&")
-    wrapped = re.search(r"[?&]uddg=([^&]+)", decoded)
-    if wrapped:
-        try:
-            return urllib.parse.unquote(wrapped.group(1))
-        except Exception:  # noqa: BLE001
-            return None
-    if decoded.startswith("//"):
-        return f"https:{decoded}"
-    if decoded.startswith(("http://", "https://")):
-        return decoded
-    return None
-
-
 def is_blocked(body: str) -> bool:
-    """True when the body is a bot challenge rather than results.
+    """True when a RAW HTML body is a bot challenge rather than content.
 
-    Engines mix status codes on these (DDG serves 200 and 202), so the body is
-    the only reliable signal — the Mojeek probe returned HTTP 200 with a
-    `<title>Captcha</title>` page. Status 200 is NOT proof of results.
+    Still needed for the tiers that hand us raw bodies (Jina Reader,
+    CloakBrowser) — `ddgs` parses internally so it never exposes one. Engines
+    mix status codes on these: DuckDuckGo serves 202, and Mojeek served HTTP
+    200 with `<title>Captcha</title>`, so **status is not a usable signal**.
     """
     low = body.lower()
     return any(
@@ -100,117 +98,100 @@ def is_blocked(body: str) -> bool:
     )
 
 
-# --- DuckDuckGo html/ ------------------------------------------------------
-
-_BLOCK_RE = re.compile(
-    r'<div\b[^>]*\bclass="[^"]*\bresult\b[^"]*"[^>]*>(.*?)'
-    r'(?=<div\b[^>]*\bclass="[^"]*\bresult\b|<div\b[^>]*\bclass="[^"]*\bnav-link\b|$)',
-    re.S,
-)
-_TITLE_RE = re.compile(r'<a\b[^>]*\bclass="[^"]*\bresult__a\b[^"]*"[^>]*\bhref="([^"]+)"[^>]*>(.*?)</a>', re.S)
-_SNIPPET_RE = re.compile(
-    r'<(?:a|div|span)\b[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*"[^>]*>(.*?)</(?:a|div|span)>', re.S
-)
-
-
-def parse_ddg_html(body: str) -> list[Result]:
-    """Parse DDG's `html/` results page. Pure function — the offline test seam."""
-    if is_blocked(body):
-        raise EngineBlocked("duckduckgo html/ served a bot challenge")
+def _to_results(rows: list[dict], engine: str) -> list[Result]:
     out: list[Result] = []
-    seen: set[str] = set()
-    for block in _BLOCK_RE.finditer(body):
-        chunk = block.group(1)
-        title_m = _TITLE_RE.search(chunk)
-        if not title_m:
+    for rank, row in enumerate(rows):
+        url = str(row.get("href") or row.get("url") or "").strip()
+        title = clean_text(str(row.get("title") or ""))
+        if not url or not title:
             continue
-        url = unwrap_ddg_url(title_m.group(1))
-        title = clean_text(title_m.group(2))
-        if not url or not title or url in seen:
-            continue
-        seen.add(url)
-        snippet_m = _SNIPPET_RE.search(chunk)
         out.append(
             Result(
                 title=title,
                 url=url,
-                snippet=clean_text(snippet_m.group(1)) if snippet_m else "",
-                engine="ddg-html",
-                rank=len(out),
+                snippet=clean_text(str(row.get("body") or row.get("snippet") or "")),
+                engine=engine,
+                rank=rank,
             )
         )
     return out
 
 
-# --- DuckDuckGo lite/ ------------------------------------------------------
+def _raw_search(query: str, backend: str, limit: int, timeout: float) -> list[dict]:
+    """The single point that touches `ddgs`. Injectable for offline tests."""
+    from ddgs import DDGS
 
-# `lite/` emits SINGLE-quoted attributes in attribute order `href` then `class`
-# (measured 2026-08-03), so these patterns are quote- and order-agnostic. A
-# double-quote-only regex silently matched nothing — see README "Findings".
-_LITE_ROW_RE = re.compile(r"<tr\b([^>]*)>(.*?)</tr>", re.S | re.I)
-_LITE_LINK_RE = re.compile(
-    r"""<a\b(?=[^>]*\bclass\s*=\s*['"][^'"]*\bresult-link\b)[^>]*\bhref\s*=\s*['"]([^'"]+)['"][^>]*>(.*?)</a>""",
-    re.S | re.I,
-)
-_LITE_SNIP_RE = re.compile(
-    r"""<td\b[^>]*\bclass\s*=\s*['"][^'"]*\bresult-snippet\b[^'"]*['"][^>]*>(.*?)</td>""", re.S | re.I
-)
+    return DDGS(timeout=timeout).text(query, max_results=limit, backend=backend)
 
 
-def parse_ddg_lite(body: str) -> list[Result]:
-    """Parse DDG's `lite/` table layout — different markup, same index.
+def engines_reachable(searcher=None, *, timeout: float = 10.0, force: bool = False) -> bool:
+    """Can we reach ANY engine right now? Memoised for `_CONTROL_TTL_S`.
 
-    Useful as a fallback: when `html/` trips the anomaly modal, `lite/` often
-    still answers. Sponsored rows (`<tr class="result-sponsored">`) are
-    dropped — they are ads, not results, and a voice answer must never cite one.
+    This is the block-vs-empty disambiguator: it asks a question that always
+    has an answer, so a null result can only mean the tier is refusing us.
     """
-    if is_blocked(body):
-        raise EngineBlocked("duckduckgo lite/ served a bot challenge")
-    out: list[Result] = []
-    seen: set[str] = set()
-    pending: Result | None = None
-    for row in _LITE_ROW_RE.finditer(body):
-        attrs, inner = row.group(1), row.group(2)
-        if "result-sponsored" in attrs:
-            pending = None
+    global _control_cache
+    now = time.monotonic()
+    if not force and _control_cache is not None and now - _control_cache[0] < _CONTROL_TTL_S:
+        return _control_cache[1]
+    search_fn = searcher or _raw_search
+    try:
+        ok = bool(search_fn(CONTROL_QUERY, "auto", 3, timeout))
+    except Exception:  # noqa: BLE001 - any control failure means "not reachable"
+        ok = False
+    _control_cache = (now, ok)
+    return ok
+
+
+def reset_control_cache() -> None:
+    """Test seam — drop the memoised reachability verdict."""
+    global _control_cache
+    _control_cache = None
+
+
+def search(
+    query: str,
+    *,
+    limit: int = 8,
+    backend: str = "auto",
+    timeout: float = 10.0,
+    searcher=None,
+) -> list[Result]:
+    """Search via `ddgs`, distinguishing BLOCKED from genuinely-empty.
+
+    Raises `EnginesBlocked` when no engine will answer us at all; returns `[]`
+    only when engines are reachable and the query truly has no hits.
+    """
+    search_fn = searcher or _raw_search
+    try:
+        rows = search_fn(query, backend, limit, timeout)
+    except Exception as exc:  # noqa: BLE001 - ddgs raises DDGSException for BOTH cases
+        if engines_reachable(searcher):
+            return []
+        raise EnginesBlocked(f"no engine answered ({type(exc).__name__}: {exc})") from exc
+    if not rows:
+        if engines_reachable(searcher):
+            return []
+        raise EnginesBlocked("no engine answered (empty result set)")
+    return _to_results(rows, f"ddgs:{backend}")
+
+
+def search_by_backend(
+    query: str, *, limit: int = 8, timeout: float = 10.0, backends=NAMED_BACKENDS, searcher=None
+) -> dict[str, list[Result] | str]:
+    """Per-backend provenance for the eval harness.
+
+    `ddgs` gives results no engine attribution, so the only way to learn which
+    engines are alive is to ask each one. Values are a result list, or a string
+    describing the failure — never a silent empty list.
+    """
+    search_fn = searcher or _raw_search
+    out: dict[str, list[Result] | str] = {}
+    for backend in backends:
+        try:
+            rows = search_fn(query, backend, limit, timeout)
+        except Exception as exc:  # noqa: BLE001
+            out[backend] = f"FAILED {type(exc).__name__}: {str(exc)[:90]}"
             continue
-        snippet_m = _LITE_SNIP_RE.search(inner)
-        if snippet_m and pending is not None:
-            pending.snippet = clean_text(snippet_m.group(1))
-            pending = None
-            continue
-        link_m = _LITE_LINK_RE.search(inner)
-        if not link_m:
-            continue
-        url = unwrap_ddg_url(link_m.group(1))
-        title = clean_text(link_m.group(2))
-        if not url or not title or url in seen:
-            continue
-        seen.add(url)
-        pending = Result(title=title, url=url, engine="ddg-lite", rank=len(out))
-        out.append(pending)
+        out[backend] = _to_results(rows, f"ddgs:{backend}") if rows else "BLOCKED_OR_EMPTY"
     return out
-
-
-# --- transport -------------------------------------------------------------
-
-def _post(client: httpx.Client, url: str, data: dict, referer: str = "") -> str:
-    headers = {"User-Agent": UA_BROWSER, "Accept-Language": "en-US,en;q=0.9"}
-    if referer:
-        headers["Referer"] = referer
-    resp = client.post(url, data=data, headers=headers)
-    resp.raise_for_status()
-    return resp.text
-
-
-def search_ddg_html(query: str, client: httpx.Client, limit: int = 10) -> list[Result]:
-    body = _post(client, DDG_HTML_URL, {"q": query, "kl": "us-en", "b": ""}, "https://html.duckduckgo.com/")
-    return parse_ddg_html(body)[:limit]
-
-
-def search_ddg_lite(query: str, client: httpx.Client, limit: int = 10) -> list[Result]:
-    body = _post(client, DDG_LITE_URL, {"q": query}, "https://lite.duckduckgo.com/")
-    return parse_ddg_lite(body)[:limit]
-
-
-ENGINES = {"ddg-html": search_ddg_html, "ddg-lite": search_ddg_lite}
