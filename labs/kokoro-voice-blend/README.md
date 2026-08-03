@@ -5,8 +5,8 @@ made by weighted linear blends or slerp of existing voice tensors — computed
 pure-numpy from `/home/zoe/models/voices-v1.0.bin`, so generating candidates
 never loads a second Kokoro next to the live sidecar (the OOM hazard).
 
-**Status:** candidates generated + audition WAVs rendered. Nothing here is
-wired into the live voice path; Jason auditions and picks first.
+**Status:** candidates generated. Nothing here is wired into the live voice
+path; Jason auditions and picks first.
 
 ## Candidates (pinned recipes in `blend_zoe_voices.py`)
 
@@ -23,28 +23,19 @@ float32 on use). Regenerate byte-identically with the script.
 
 ## How to audition
 
-WAVs of a fixed test paragraph (plus an `af_sky` baseline) live at
-`/tmp/zoe-voice-blend-samples/*.wav` (24 kHz mono, `aplay <file>` works).
-Regenerate any time:
+Generate the candidate tensors, then audition through the **live Kokoro
+sidecar** (the only synthesiser — the in-process ONNX renderer was retired
+with its ONNX dependency):
 
 ```bash
-python3 labs/kokoro-voice-blend/blend_zoe_voices.py           # tensors only (no lock)
-python3 labs/kokoro-voice-blend/blend_zoe_voices.py --audio   # + WAVs (CPU onnx ~600MB, unloads on exit)
+python3 labs/kokoro-voice-blend/blend_zoe_voices.py   # tensors only
 ```
 
-The `--audio` step acquires `/tmp/zoe-voice-harness.lock` itself (bounded
-5-minute wait, fails loudly) — do **not** wrap it in an outer `flock`, the
-wrapper's lock would block the script's own acquire until timeout.
-It also refuses to run while the live `kokoro-tts.service` sidecar is up
-unless you pass `--force-alongside-sidecar` AND `MemAvailable` is at least
-3 GB (the flock only excludes other harness runs, not the sidecar).
-
-Audition rendering is verified against the **installed** `kokoro-onnx==0.5.0`,
-whose `Kokoro.create()` accepts `voice: str | np.ndarray[float32]` — blended
-tensors are passed directly, bypassing the by-name voice lookup by design
-(the WAVs in `/tmp/zoe-voice-blend-samples/` were produced this way). If the
-installed package is upgraded, re-check that signature first
-(`opensrc path pypi:kokoro-onnx@<version>`).
+Build an augmented voices bin (below), point the sidecar at it via
+`ZOE_KOKORO_VOICES`, restart `kokoro-tts.service`, then use the touch panel's
+"Zoe's voice" **Preview** to hear each candidate by name. The sidecar's
+`/synthesize` accepts a voice **name** only, so a candidate must be in the
+loaded bin to be auditioned.
 
 To tweak a mix: edit the `CANDIDATES` recipes and rerun — everything is
 deterministic from the stock voices bin.
@@ -54,14 +45,13 @@ deterministic from the stock voices bin.
 Where the live voice comes from today:
 
 - **Sidecar** `scripts/setup/kokoro_sidecar.py` (systemd `kokoro-tts.service`,
-  port 10201, default backend `onnx`) loads
-  `ZOE_KOKORO_MODEL=/home/zoe/models/kokoro-v1.0.onnx` +
+  port 10201, Kokoro PyTorch/CUDA) reads the voice catalogue from
   `ZOE_KOKORO_VOICES=/home/zoe/models/voices-v1.0.bin`; default voice name
   from `KOKORO_VOICE` (default `af_sky`). `/synthesize` accepts a voice
   **name** only — it must exist in the loaded voices bin.
 - **zoe-data** (`services/zoe-data/tts_waterfall.py`) sends
-  `ZOE_KOKORO_VOICE` (default `af_sky`) to the sidecar, and its own
-  kokoro-onnx fallback uses the same `ZOE_KOKORO_MODEL`/`ZOE_KOKORO_VOICES`.
+  `ZOE_KOKORO_VOICE` (default `af_sky`) to the sidecar over HTTP; it holds no
+  in-process TTS model of its own.
 
 Once Jason picks a candidate (say `zoe_dawn`):
 
@@ -83,5 +73,5 @@ Once Jason picks a candidate (say `zoe_dawn`):
 
 ## Forbidden (inherited from `labs/AGENTS.md`)
 
-Not wired into any service/unit/CI; hand-run only. The `--audio` step
-self-acquires the voice-harness flock.
+Not wired into any service/unit/CI; hand-run only. Pure-numpy tensor math —
+loads no model.

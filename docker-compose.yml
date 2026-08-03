@@ -136,7 +136,7 @@ services:
   # 1. NATIVE STACK (primary, active for Zoe touch panel):
   #    - Wake word:   openWakeWord ONNX model on Pi daemon (zoe_voice_daemon.py)
   #    - STT:         Moonshine v2 Medium in zoe-data (/api/voice/transcribe)
-  #    - TTS:         Kokoro ONNX → Edge TTS → espeak-ng waterfall (/api/voice/synthesize)
+  #    - TTS:         Kokoro sidecar → Edge TTS → espeak-ng waterfall (/api/voice/synthesize)
   #    - Barge-in:    Silero VAD on Pi during TTS playback
   #    - Speaker ID:  resemblyzer 256-dim embeddings on Pi
   #    This stack is NOT in Docker — the Pi daemon runs as a systemd service.

@@ -29,11 +29,11 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    gate-abstain, shortlist miss, sidecar failure, timeout, or malformed decode — never an error to
    the user (~14.8% of turns fall through to the brain; router decision p50 ~393 ms). This front is
    the biggest single contributor to the post-2026-07-02 median drop (see *Latency wins* below).
-3. **TTS — Kokoro on CUDA** (`ZOE_KOKORO_BACKEND=pytorch`, set by `kokoro-tts.service`; RTF ~0.08,
-   live-verified `device":"cuda"` on `:10201/health`), sidecar on `127.0.0.1:10201`, via a waterfall
-   in `routers/voice_tts.py`: **Kokoro → Edge TTS → espeak-ng** (each falls back to the next). NB the
-   *code* default in `scripts/setup/kokoro_sidecar.py` is still `onnx`/CPU — the live speedup comes
-   from the systemd unit forcing `pytorch`, not from the code default.
+3. **TTS — Kokoro on CUDA** (PyTorch, RTF ~0.08, live-verified `device":"cuda"` on
+   `:10201/health`), out-of-process sidecar on `127.0.0.1:10201`, via a waterfall in
+   `routers/voice_tts.py`: **Kokoro → Edge TTS → espeak-ng** (each falls back to the next).
+   PyTorch/CUDA is the sidecar's sole backend; it falls back to CPU on its own only if CUDA
+   cannot load, reporting `degraded=true` on `/health`. zoe-data holds no in-process TTS model.
 
 Per-stage timings are exported to Prometheus as `zoe_voice_stage_seconds`
 (`services/zoe-data/voice_metrics.py`), scraped at `:8000/metrics`.
@@ -261,11 +261,12 @@ widened to ~1.6 s. Pinned by `tests/unit/test_voice_wake_no_dead_air.py`.
 
 **2. TTS slower than real time (reply plays back chopped).**
 `turn_stream` synthesizes the reply sentence-by-sentence and feeds a single persistent `aplay` pipe.
-That only works if synthesis outruns playback. On the ONNX/**CPU** backend Kokoro ran at **RTF
+That only works if synthesis outruns playback. On a **CPU** backend Kokoro ran at **RTF
 ~1.0–1.8x** — slower than real time — so the pipe *had* to run dry at every chunk boundary (ALSA
 underrun -> gap). Short chunks made it worse: per-call overhead pushed a 10-char stub to RTF 1.8x,
-so the very chunking that bought fast first-audio was what starved the pipe. Fix: Kokoro on CUDA
-(`ZOE_KOKORO_BACKEND=pytorch`), RTF **0.08x**. **Diagnostic: if replies ever sound chopped again,
+so the very chunking that bought fast first-audio was what starved the pipe. Fix: the Kokoro
+PyTorch sidecar on CUDA, RTF **0.08x** (it falls back to CPU only if CUDA cannot load, and reports
+`degraded=true` on `/health` when it does). **Diagnostic: if replies ever sound chopped again,
 check `curl localhost:10201/health` for `device` and `degraded` first** — a busy box can OOM the
 CUDA init and silently drop back to CPU.
 

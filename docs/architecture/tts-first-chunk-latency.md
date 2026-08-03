@@ -22,6 +22,12 @@ related:
 > **MEASURE-ONLY.** No behaviour change lands from this doc until reviewed. The rocks
 > (Gemma brain, Moonshine STT, Kokoro TTS) are untouched. Numbers below are from the
 > LIVE sidecar on this Jetson Orin NX 16GB, 2026-06-25.
+>
+> **SUPERSEDED (2026-08-03):** the in-process ONNX/CPU Kokoro backend this analysis
+> centres on has since been **retired** — the Kokoro PyTorch sidecar is now the sole
+> backend, and there is no `ZOE_KOKORO_BACKEND` switch or `onnx` code default any more.
+> The CPU-vs-CUDA first-chunk tradeoff below is kept as a historical measurement; the
+> live path runs PyTorch on CUDA (falling back to CPU only if CUDA cannot load).
 
 ## What was unmeasured
 

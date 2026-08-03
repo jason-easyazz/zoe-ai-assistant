@@ -14,7 +14,7 @@ Resolution order (``resolve_tts_voice``):
 Everything here is fail-open: any DB or voices-bin error degrades to the env
 default / empty catalogue — a broken settings store must never break speech.
 
-Catalogue: the voices bin (``ZOE_KOKORO_VOICES``, the kokoro-onnx NPZ archive)
+Catalogue: the voices bin (``ZOE_KOKORO_VOICES``, the Kokoro NPZ archive)
 is the single source of truth for which voice names exist — stock ``af_*`` etc.
 plus any ``zoe_*`` blends present in an operator-installed augmented bin (built
 by ``labs/kokoro-voice-blend/blend_zoe_voices.py --emit-bin``). The UI never
@@ -65,7 +65,7 @@ def _voices_bin_path() -> str:
 def list_kokoro_voices() -> list[str]:
     """Names available in the loaded voices bin (sorted), [] if unreadable.
 
-    The kokoro-onnx voices bin is an NPZ (zip of ``<name>.npy`` members), so the
+    The Kokoro voices bin is an NPZ (zip of ``<name>.npy`` members), so the
     catalogue is just the zip namelist — no numpy import, no tensor loads.
     Cached by (path, mtime) so a swapped/augmented bin is picked up on the next
     call without a restart of zoe-data (the SIDECAR still needs its documented

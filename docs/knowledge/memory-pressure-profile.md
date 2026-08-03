@@ -88,10 +88,10 @@ was running** — the on-demand reap (below) had it stopped.
 
 ### Kokoro sidecar (PID 1547)
 
-- Backend is **PyTorch on CUDA, ~2.3 GB** (`ZOE_KOKORO_BACKEND=pytorch` in `kokoro-tts.service`).
-  This memory is **load-bearing and must not be reclaimed**: the ONNX/CPU backend (~600 MB) is
-  slower than real time (RTF ~1.0–1.8x vs 0.08x on CUDA), so the sentence-streamed voice pipe
-  starves and every reply plays back chopped into pieces. Budget the 2.3 GB; don't "save" it.
+- Backend is **PyTorch on CUDA, ~2.3 GB** (the sidecar's sole backend). This memory is
+  **load-bearing and must not be reclaimed**: on a CPU fallback (~600 MB) synthesis is slower
+  than real time (RTF ~1.0–1.8x vs 0.08x on CUDA), so the sentence-streamed voice pipe starves
+  and every reply plays back chopped into pieces. Budget the 2.3 GB; don't "save" it.
 - CUDA init needs ~2.3 GB free at load. If the box is busy it OOMs (`NvMapMemAllocInternalTagged:
   error 12`) and silently degrades to CPU — the sidecar now retries, logs `DEGRADED`, and sets
   `degraded=true` on `/health`. The unit is ordered `After=llama-server.service` so the brain
@@ -132,8 +132,9 @@ non-model memory owner on the box, and none of it is Zoe runtime.
   (`col.get(where=...)`, `memory_service.py:1273`, `:1468-1473`) — never semantically queried.
 - **Distinct embedding stacks in one process = 2** (Chroma's ONNX MiniLM-L6-v2 + fastembed
   bge-small-en-v1.5), plus Moonshine's ONNX session for STT.
-- **Latent in-process Kokoro**: `tts_waterfall.py:45-49` lazy-imports `kokoro_onnx` as a TTS
-  fallback — if the sidecar waterfall step fails, zoe-data itself loads a ~600 MB model.
+- **In-process Kokoro fallback removed**: `tts_waterfall.py` used to lazy-load an in-process
+  ONNX TTS model (~600 MB) if the sidecar waterfall step failed. That latent load is gone — TTS
+  is the PyTorch sidecar over HTTP only, so zoe-data never loads a TTS model in-process.
 - **Engineering harness + Multica poll loop run in-process** (`services/zoe-data/main.py:312` ff.;
   named as Wave 4 "fence the engineering harness" in the
   [tech-debt plan](../architecture/tech-debt-remediation-plan.md), line 179).

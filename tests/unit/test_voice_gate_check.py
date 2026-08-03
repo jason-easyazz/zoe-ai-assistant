@@ -521,6 +521,21 @@ def test_w11_delivery_modules_are_voice_path():
                        "services/zoe-data/tts_waterfall.py"], touched
 
 
+def test_zoe_data_requirements_is_voice_path():
+    """The zoe-data dependency manifest pins the STT/TTS/router stack the voice path
+    loads (moonshine-voice, edge-tts, fastembed, numpy). A dep bump — even a pin change
+    with no code diff — can change what the voice path RUNS, so a diff touching ONLY
+    requirements.txt must still require the replay gate."""
+    from voice_gate_check import scope_verdict, touched_voice_files, voice_path_patterns
+    pats = voice_path_patterns()
+    assert touched_voice_files(
+        ["services/zoe-data/requirements.txt", "docs/PLANS.md"], pats
+    ) == ["services/zoe-data/requirements.txt"]
+    # end to end through the classifier the deploy/PR path calls
+    needs, hits, _ = scope_verdict(["services/zoe-data/requirements.txt"], pats)
+    assert needs is True and hits == ["services/zoe-data/requirements.txt"]
+
+
 def test_zoe_core_lockfile_is_voice_path():
     """A Pi/transitive-dep bump can be regenerated into package-lock.json WITHOUT
     touching package.json, so a diff touching ONLY the lockfile must still require

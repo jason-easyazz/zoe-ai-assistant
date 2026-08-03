@@ -31,15 +31,11 @@ from tts_waterfall import (
     _clean_for_speech,
     _has_espeak_ng,
     _kokoro_http_client,
-    _stream_kokoro_sentence_wavs,
     _synthesize_edge_tts,
     _synthesize_espeak,
-    _synthesize_kokoro,
     _synthesize_kokoro_sidecar,
     _synthesize_local_service,
     edge_tts_available,
-    kokoro_configured,
-    kokoro_ready,
 )
 
 logger = logging.getLogger(__name__)
@@ -1757,19 +1753,12 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
     content_type = "audio/wav"
     provider = "none"
 
-    # ── TTS waterfall: Kokoro sidecar → Kokoro ONNX → local sidecar → Edge TTS → espeak-ng ──
+    # ── TTS waterfall: Kokoro sidecar → local sidecar → Edge TTS → espeak-ng ──
     # Kokoro sidecar — GPU-accelerated natural af_sky voice (~150ms warm on Jetson).
     if mode != "cloud":
         audio_bytes = await _synthesize_kokoro_sidecar(text)
         if audio_bytes:
             provider = "kokoro-sidecar"
-            content_type = "audio/wav"
-
-    # Kokoro ONNX — offline fallback (CPU ~1.1s on Jetson, fast if CUDA available).
-    if audio_bytes is None and mode != "cloud":
-        audio_bytes = await _synthesize_kokoro(text)
-        if audio_bytes:
-            provider = "kokoro-onnx"
             content_type = "audio/wav"
 
     if audio_bytes is None and mode in {"hybrid", "local"}:
@@ -1876,16 +1865,11 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
             provider = "none"
             error_msg: Optional[str] = None
 
-            # Waterfall: Kokoro sidecar → Kokoro ONNX → local sidecar → Edge TTS → espeak
+            # Waterfall: Kokoro sidecar → local sidecar → Edge TTS → espeak
             if mode != "cloud":
                 audio_bytes = await _synthesize_kokoro_sidecar(sentence)
                 if audio_bytes:
                     provider = "kokoro-sidecar"
-
-            if audio_bytes is None and mode != "cloud":
-                audio_bytes = await _synthesize_kokoro(sentence)
-                if audio_bytes:
-                    provider = "kokoro-onnx"
 
             if audio_bytes is None and mode in {"hybrid", "local"} and local_tts_url:
                 audio_bytes = await _synthesize_local_service(sentence, profile=profile, base_url=local_tts_url)
@@ -3825,7 +3809,8 @@ async def voice_command(
                             "text": s[:200],
                         })
 
-                        # Prefer kokoro-sidecar (natural GPU voice); fall back to Kokoro stream
+                        # Prefer kokoro-sidecar (natural GPU voice); fall back to the
+                        # full /synthesize waterfall (local → Edge → espeak) if it's down.
                         wav_bytes = await _synthesize_kokoro_sidecar(s)
                         _tts_provider = "kokoro-sidecar"
                         if wav_bytes:
@@ -3846,28 +3831,7 @@ async def voice_command(
                             chunk_index += 1
                             return
 
-                        sent_any = False
-                        async for wav_bytes in _stream_kokoro_sentence_wavs(s):
-                            if _t_first_audio is None:
-                                _t_first_audio = time.monotonic() - t_chat_start
-                                try:
-                                    from voice_metrics import voice_stage_seconds
-                                    voice_stage_seconds.labels(stage="tts_first_byte").observe(_t_first_audio)
-                                except Exception:
-                                    pass
-                            header = _json.dumps({
-                                "chunk": chunk_index,
-                                "text": s[:80],
-                                "provider": "kokoro-onnx-stream",
-                            })
-                            yield (header + "\n").encode()
-                            yield base64.b64encode(wav_bytes) + b"\n"
-                            chunk_index += 1
-                            sent_any = True
-
-                        if sent_any:
-                            return
-                        # Fallback if stream synthesis unavailable.
+                        # Sidecar down — fall back to the full synth waterfall.
                         audio_resp = await synthesize({"text": s}, caller=caller)
                         if _t_first_audio is None:
                             _t_first_audio = time.monotonic() - t_chat_start
@@ -4549,8 +4513,6 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         _ack_audio = None
         try:
             _ack_audio = await _synthesize_kokoro_sidecar(_fast_ack)
-            if not _ack_audio:
-                _ack_audio = await _synthesize_kokoro(_fast_ack)
         except Exception as _tts_exc:
             logger.warning("voice/turn_stream conversation ack TTS failed: %s", _tts_exc)
 
@@ -4639,8 +4601,6 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             _phrase = random.choice(_fillers) if _fillers else "One sec."
             try:
                 _fill_audio = await _synthesize_kokoro_sidecar(_phrase)
-                if not _fill_audio:
-                    _fill_audio = await _synthesize_kokoro(_phrase)
                 if _fill_audio:
                     logger.info("voice/turn_stream filler spoken (%r) while brain works", _phrase)
                     return [
@@ -4784,7 +4744,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
                 except Exception:
                     _wav = None
                 if not _wav:
-                    # Sidecar down — use the full synth fallback chain (kokoro-onnx
+                    # Sidecar down — use the full synth fallback chain (local
                     # -> edge-tts -> espeak) so the panel is never left silent.
                     try:
                         _resp = await synthesize({"text": _sentence}, caller=caller)
