@@ -23,19 +23,22 @@ float32 on use). Regenerate byte-identically with the script.
 
 ## How to audition
 
-Generate the candidate tensors, then audition through the **live Kokoro
-sidecar** (the only synthesiser — the in-process ONNX renderer was retired
-with its ONNX dependency):
+Generate the candidate tensors:
 
 ```bash
 python3 labs/kokoro-voice-blend/blend_zoe_voices.py   # tensors only
 ```
 
-Build an augmented voices bin (below), point the sidecar at it via
-`ZOE_KOKORO_VOICES`, restart `kokoro-tts.service`, then use the touch panel's
-"Zoe's voice" **Preview** to hear each candidate by name. The sidecar's
-`/synthesize` accepts a voice **name** only, so a candidate must be in the
-loaded bin to be auditioned.
+**There is no working audition path for these blended candidates today.** The
+in-process ONNX renderer that could synthesise straight from a candidate tensor
+was retired along with the `kokoro-onnx` dependency, and the live Kokoro
+**PyTorch sidecar** is not a drop-in for it: `scripts/setup/kokoro_sidecar.py`
+`_load_pipeline()` never reads `ZOE_KOKORO_VOICES`, so pointing that env at an
+augmented bin and restarting `kokoro-tts.service` does **not** load the custom
+`zoe_*` blends — the sidecar's `/synthesize` only accepts a voice **name**
+already present in the pipeline's own loaded voice set. Auditioning a custom
+blend therefore needs the sidecar-side wiring in the deploy step below (teaching
+the sidecar to load an augmented bin), which is **not done in this spike**.
 
 To tweak a mix: edit the `CANDIDATES` recipes and rerun — everything is
 deterministic from the stock voices bin.
