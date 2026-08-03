@@ -134,6 +134,15 @@ class TriageVerdict:
     confidence: float | None = None
 
     def __post_init__(self) -> None:
+        # Normalize evidence into a JSON-safe list on DIRECT construction too
+        # (e.g. by TT2), mirroring judge_ticket's _coerce_evidence path. Without
+        # this, a directly-built verdict could carry non-serializable evidence
+        # (a set, a cyclic list) that only blows up later at to_dict()/
+        # json.dumps(). _coerce_evidence coerces benign non-native items to
+        # str() and RAISES on pathological input (cyclic container, or an
+        # object whose __str__ raises) — which fails construction closed rather
+        # than admitting evidence that cannot be serialized.
+        object.__setattr__(self, "evidence", _coerce_evidence(self.evidence))
         if self.disposition not in ("admit", "reject"):
             raise ValueError(
                 "verdict disposition must be 'admit' or 'reject'; "
@@ -241,7 +250,10 @@ def _concrete_ticket_ref(ticket: Mapping[str, Any]) -> str | None:
         if val is None:
             continue
         candidate = str(val).strip()
-        if candidate and candidate != "unknown":
+        # Case-insensitive sentinel check: "Unknown"/"UNKNOWN"/" unknown " must
+        # fail closed exactly like lowercase "unknown" — otherwise a mixed-case
+        # sentinel would be admitted as a concrete ref and yield "Unknown@<sha>".
+        if candidate and candidate.lower() != "unknown":
             return candidate
     return None
 
@@ -282,7 +294,9 @@ def _admit_reviewed_ref_ok(reviewed_ref: Any) -> bool:
     if m is None:
         return False
     ref = m.group("ref").strip()
-    return bool(ref) and ref != "unknown"
+    # Case-insensitive sentinel check, mirroring _concrete_ticket_ref: a
+    # mixed-case "Unknown@<sha>" must fail closed like "unknown@<sha>".
+    return bool(ref) and ref.lower() != "unknown"
 
 
 def _carried_zoe_kind(ticket: Mapping[str, Any], raw: Any) -> str:
@@ -305,11 +319,13 @@ def _reviewed_ref(ticket: Mapping[str, Any], commit_sha: str) -> str:
 def _json_safe(value: Any, _seen: frozenset[int] = frozenset()) -> Any:
     """Recursively coerce ``value`` into a JSON-serializable shape.
 
-    JSON-native scalars (``str``/``int``/``float``/``bool``/``None``) pass
-    through unchanged; ``list``/``tuple`` are recursed into lists and ``dict`` is
-    recursed with stringified keys (``json.dumps`` only accepts str/number/bool/
-    None keys); anything else — a ``set``, an ``Exception``, a custom object —
-    becomes its ``str()``.
+    JSON-native scalars (``str``/``int``/``bool``/``None`` and *finite*
+    ``float``) pass through unchanged; a non-finite ``float`` (``nan``/±``inf``)
+    becomes its ``str()`` so the result stays valid under
+    ``json.dumps(..., allow_nan=False)``; ``list``/``tuple`` are recursed into
+    lists and ``dict`` is recursed with stringified keys (``json.dumps`` only
+    accepts str/number/bool/None keys); anything else — a ``set``, an
+    ``Exception``, a custom object — becomes its ``str()``.
 
     Two adversarial inputs a classifier could supply are NOT swallowed here and
     instead RAISE — a **cyclic** container (a list/dict reachable from itself)
@@ -321,8 +337,14 @@ def _json_safe(value: Any, _seen: frozenset[int] = frozenset()) -> Any:
     fails closed to a ``needs_info`` verdict — judge_ticket never raises — while
     a benign non-native item still serializes via ``str()``.
     """
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, (str, int, bool)):
         return value
+    if isinstance(value, float):
+        # Non-finite floats (nan / inf / -inf) are NOT valid JSON under
+        # json.dumps(..., allow_nan=False); coerce them to their str() form
+        # ("nan"/"inf"/"-inf") so the returned evidence always serializes as
+        # standard JSON. Finite floats pass through unchanged.
+        return value if math.isfinite(value) else str(value)
     if isinstance(value, (dict, list, tuple)):
         vid = id(value)
         if vid in _seen:

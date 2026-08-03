@@ -673,6 +673,145 @@ def test_valid_reject_still_constructs_for_every_reject_code(code):
 
 
 # --------------------------------------------------------------------------- #
+# P2 hardening: 'unknown' sentinel is case-insensitive (fix 1)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("sentinel", ["Unknown", "UNKNOWN", " Unknown ", "unKNOWN"])
+def test_admit_mixed_case_unknown_ref_fails_closed(sentinel):
+    # every candidate ref is a mixed-case 'unknown' sentinel -> no concrete ref
+    # -> needs_info, exactly like lowercase 'unknown' (fail closed, never admit).
+    verdict = judge_ticket(
+        {"reference": sentinel, "identifier": sentinel, "id": sentinel, "zoe_kind": "bug"},
+        classifier=_fake(_admit_raw()),
+        commit_sha=SHA,
+    )
+    _assert_needs_info(verdict)
+
+
+@pytest.mark.parametrize(
+    "bad_ref",
+    [f"Unknown@{SHA}", f"UNKNOWN@{SHA}", "unKNOWN@abc1234", f" unknown @{SHA}"],
+)
+def test_admit_reviewed_ref_ok_rejects_mixed_case_unknown(bad_ref):
+    # the reviewed_ref predicate rejects a mixed-case 'unknown' ref just like
+    # the lowercase sentinel, so a directly-built admit cannot smuggle one in.
+    assert _admit_reviewed_ref_ok(bad_ref) is False
+
+
+@pytest.mark.parametrize("sentinel", ["Unknown", "UNKNOWN", "unKNOWN"])
+def test_admit_verdict_with_mixed_case_unknown_ref_cannot_be_constructed(sentinel):
+    with pytest.raises(ValueError):
+        TriageVerdict(
+            disposition="admit",
+            reason="relevant",
+            reason_code=ADMIT_REASON_CODE,
+            evidence=[],
+            zoe_kind="bug",
+            reviewed_ref=f"{sentinel}@{SHA}",
+            confidence=0.9,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# P2 hardening: direct construction normalizes/rejects evidence (fix 2)
+# --------------------------------------------------------------------------- #
+
+
+def test_direct_verdict_coerces_non_serializable_evidence():
+    # a verdict built DIRECTLY (e.g. by TT2), bypassing judge_ticket's
+    # _coerce_evidence, must still normalize non-serializable evidence (a set)
+    # to a JSON-safe form rather than accept it and blow up later at
+    # to_dict()/json.dumps().
+    verdict = TriageVerdict(
+        disposition="reject",
+        reason="held",
+        reason_code="duplicate",
+        evidence=[{1, 2}],
+        zoe_kind="bug",
+        reviewed_ref="unknown@unknown",
+    )
+    ev = verdict.to_dict()["evidence"]
+    assert ev == [str({1, 2})]  # set coerced to its str()
+    dumped = json.dumps(verdict.to_dict())  # must not raise
+    assert isinstance(dumped, str)
+
+
+def test_direct_verdict_with_cyclic_evidence_is_rejected_not_left_raising():
+    # a cyclic evidence list cannot be made JSON-safe; direct construction fails
+    # closed (raises at construction) rather than yielding a verdict whose
+    # to_dict()/json.dumps() raises later.
+    cyclic: list = []
+    cyclic.append(cyclic)
+    with pytest.raises(ValueError):
+        TriageVerdict(
+            disposition="reject",
+            reason="held",
+            reason_code="duplicate",
+            evidence=cyclic,
+            zoe_kind="bug",
+            reviewed_ref="unknown@unknown",
+        )
+
+
+def test_direct_verdict_wraps_bare_non_serializable_evidence():
+    # a bare (non-list) non-serializable evidence value is wrapped into a
+    # single-item JSON-safe list, matching judge_ticket's coercion.
+    verdict = TriageVerdict(
+        disposition="reject",
+        reason="held",
+        reason_code="duplicate",
+        evidence=_Custom("z"),
+        zoe_kind="bug",
+        reviewed_ref="unknown@unknown",
+    )
+    assert verdict.to_dict()["evidence"] == ["<custom z>"]
+    json.dumps(verdict.to_dict())
+
+
+# --------------------------------------------------------------------------- #
+# P2 hardening: non-finite float evidence serializes as standard JSON (fix 3)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_float", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_float_evidence_serializes_as_standard_json(bad_float):
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(_admit_raw(evidence=[bad_float])),
+        commit_sha=SHA,
+    )
+    assert verdict.disposition == "admit"
+    ev = verdict.to_dict()["evidence"]
+    assert ev == [str(bad_float)]  # coerced to "nan"/"inf"/"-inf"
+    # standard JSON: allow_nan=False must NOT raise on the returned evidence.
+    dumped = json.dumps(verdict.to_dict(), allow_nan=False)
+    assert isinstance(dumped, str)
+
+
+@pytest.mark.parametrize("bad_float", [float("nan"), float("inf"), float("-inf")])
+def test_bare_non_finite_float_evidence_serializes_as_standard_json(bad_float):
+    # a bare (non-list) non-finite float is wrapped and coerced too.
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(_admit_raw(evidence=bad_float)),
+        commit_sha=SHA,
+    )
+    assert verdict.to_dict()["evidence"] == [str(bad_float)]
+    json.dumps(verdict.to_dict(), allow_nan=False)
+
+
+def test_finite_float_evidence_passes_through_unchanged():
+    verdict = judge_ticket(
+        _ticket(),
+        classifier=_fake(_admit_raw(evidence=[0.75, 3, -1.5])),
+        commit_sha=SHA,
+    )
+    assert verdict.to_dict()["evidence"] == [0.75, 3, -1.5]
+    json.dumps(verdict.to_dict(), allow_nan=False)
+
+
+# --------------------------------------------------------------------------- #
 # Carry-through fields
 # --------------------------------------------------------------------------- #
 
