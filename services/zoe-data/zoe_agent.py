@@ -3635,9 +3635,16 @@ async def _llm_call(
 #
 # llama.cpp reuses cached KV only up to the FIRST token that differs, and BOTH
 # caches in front of this model are prefix caches, so both depend on that:
-#   - the slot's own KV. `--cache-reuse` is dropped from llama-server.service
-#     because KV shifting cannot reuse past the 512-token sliding window on SWA
-#     models, so partial-divergence recovery is a no-op here.
+#   - the slot's own KV. `--cache-reuse` (KV-shift recovery from a PARTIAL
+#     divergence) is omitted from llama-server.service by CHOICE, not because it
+#     would be ignored: upstream #21468 was closed as fixed by #22288
+#     (2026-04-24) and that fix is in our build — there is no Gemma/SWA
+#     exclusion. It is conditionally off, because
+#     `llama_kv_cache_iswa::get_can_shift()` requires
+#     `kv_base->get_size() == kv_swa->get_size()` and the SWA layers are sized
+#     by the 512-token window. `--swa-full` equalises them and re-enables it,
+#     but equalising them IS the cost — ~50x SWA cache growth (30 MiB ->
+#     1,536 MiB measured on Gemma E2B), unaffordable on this 15.6G box.
 #   - `--cache-ram 2048`, which the unit calls its "working replacement" — and
 #     it is, but NOT as a mitigation for a moving head. It retains several whole
 #     prompt states and picks between them by `get_common_prefix`
@@ -3645,9 +3652,10 @@ async def _llm_call(
 #     skipping any candidate matching under 25% of its cached prompt. That
 #     widens the set of candidate prefixes; it never makes a divergence cheap,
 #     and older states have older heads, so they match a slid head no better.
-# A stable prefix is therefore the precondition for both — prefix stability is
-# what lets --cache-ram hit past the system prompt at all, rather than something
-# --cache-ram spares us from needing.
+# So exact common-prefix reuse is the only AFFORDABLE path here — a RAM-budget
+# tradeoff, not an upstream limitation — and a stable prefix is the precondition
+# for both caches. Prefix stability is what lets --cache-ram hit past the system
+# prompt at all, rather than something --cache-ram spares us from needing.
 #
 # That is why the system prompt is kept byte-identical every turn. The message
 # right after it has to be stable for exactly the same reason: selecting the
