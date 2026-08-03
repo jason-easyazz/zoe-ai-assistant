@@ -1,0 +1,173 @@
+---
+type: knowledge
+status: WIP — prep-only, checkpointed mid-research at reboot
+topic: numpy-2 migration on the Jetson Orin NX (JetPack 6.2.1 / CUDA 12.6)
+created: 2026-08-04
+---
+
+# numpy-2 Jetson migration — prep notes (WIP)
+
+**Status: WIP.** Deliverables 1 (premise check) and the box survey are COMPLETE and
+verified. Deliverables 2 (bump matrix), 3 (build plan), 4 (window runbook) are
+INCOMPLETE — checkpointed at a forced reboot. Resume from "Open items" at the bottom.
+
+## Verdict (deliverable 1) — PREBUILT numpy-2-COMPATIBLE WHEELS EXIST
+
+**The handoff premise is STALE.** The claim "NVIDIA ships only numpy-1
+onnxruntime-gpu wheels for JP6/cu126" was true of `onnxruntime-gpu` **1.23.0**
+(NVIDIA said so on the forums, 2025-08-12) but is **no longer true**:
+`onnxruntime-gpu` **1.24.0** is published on the live jp6/cu126 index and is
+**built against NumPy 2.x headers**.
+
+Consequence: **the migration is a wheel install, not an on-device source build.**
+Deliverable 3 (the onnxruntime source-build script) is very likely MOOT.
+
+### The index MOVED — first correction
+
+| | |
+|---|---|
+| `https://pypi.jetson-ai-lab.dev` | **DEAD** — `getaddrinfo ENOTFOUND`, domain no longer resolves |
+| `https://pypi.jetson-ai-lab.io` | **LIVE** — devpi instance, this is the current one |
+
+Exposed indexes: `jp6/cu126`, `jp6/cu128`, `jp6/cu129`, `sbsa/cu130`, `sbsa/dev`.
+Our box is **jp6/cu126**.
+
+devpi file-URL form (the `../../+f/...` hrefs on the listing page resolve
+index-scoped, NOT root-scoped — root `/jp6/+f/...` returns 404):
+
+```
+https://pypi.jetson-ai-lab.io/jp6/cu126/+f/<sha3>/<sha13>/<filename>
+```
+
+### onnxruntime-gpu wheels available on jp6/cu126 (read 2026-08-04)
+
+| version | filename | sha256 |
+|---|---|---|
+| **1.24.0** | `onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl` | `d980b934b9a29c1a9d6f39751edd7662b69fadd75556a10ff363773a58ce0950` |
+| 1.23.0 | `onnxruntime_gpu-1.23.0-cp310-cp310-linux_aarch64.whl` | `4ebe6a8902dc7708434b2e1541b3fe629ebf434e16ab5537d1d6a622b42c622b` |
+
+Direct URL for 1.24.0 (verified HTTP 200, 73,617,978 bytes):
+
+```
+https://pypi.jetson-ai-lab.io/jp6/cu126/+f/d98/0b934b9a29c1a/onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl
+```
+
+`cp310` matches the box's Python 3.10.12. Only cp310 is published — Python
+version is therefore pinned by the wheel, not a free choice.
+
+### Evidence that 1.24.0 is numpy-2 built
+
+1. **Declared dependency has no upper bound.** From the wheel's `METADATA`:
+   `Requires-Dist: numpy>=1.21.6`, `Requires-Python: >=3.10`. Necessary but not
+   sufficient — a numpy-1-built wheel can declare the same thing.
+2. **C-ABI signature in `onnxruntime/capi/onnxruntime_pybind11_state.so`.** The
+   `import_array()` machinery embeds the module name it imports; NumPy 2 renamed
+   `numpy.core` → `numpy._core`. The 1.24.0 binary contains:
+   - `numpy._core._multiarray_umath` **and** `numpy.core._multiarray_umath`
+     (the numpy-2 header's forward path plus its numpy-1 fallback)
+   - `numpy._core.multiarray failed to import` (numpy-2 form of the error string)
+   - `_ZN8pybind116detail27import_numpy_core_submoduleEPKc` — pybind11's
+     numpy-2-aware helper (pybind11 ≥ 2.12)
+   - `numpy.bool` (restored in numpy 2)
+
+   A numpy-1-built module contains only the `numpy.core.…` forms.
+
+   The residual string `module was compiled against NumPy C-API version 0x%x
+   (NumPy 1.20)` is **not** counter-evidence: that is the standard compat-warning
+   template baked into the headers, naming the `NPY_FEATURE_VERSION` baseline a
+   numpy-2 build targets for backward compatibility.
+
+3. **The detector was negative-controlled — it does go red.** Scanning the box's
+   installed extensions with `.np2probe/abi_scan.sh` cleanly separates the two
+   populations:
+   - **numpy-1 form** (`numpy.core.multiarray failed to import`): every
+     `numpy` 1.26.4 submodule, `spacy`, `thinc`, `blis`, and the whole of
+     `/usr/lib/python3/dist-packages` (`scipy`, `pandas`, `matplotlib`).
+   - **numpy-2 form** (`numpy._core.…`): `sklearn`, `pyarrow`, and the installed
+     `onnxruntime` 1.23.2 in `~/.local`.
+
+   Both outcomes occur in the same scan, so the instrument discriminates rather
+   than always saying "numpy 2". Per `[[feedback_verify_your_instruments]]`.
+
+**Not yet done:** an actual `import onnxruntime` under numpy 2 in a throwaway
+venv. Deliberately deferred — at survey time the box reported ~0 GB available RAM
+with the brain live, and the voice-stack memory doctrine forbids burning headroom.
+This is the first step of the execution window, not of prep.
+
+### Reference thread
+
+NVIDIA forum, *"Onnxruntime-gpu wheel with numpy 2.x support"* (topic 341795):
+AastaLLL, 2025-08-12 — *"Our prebuilt supports numpy 1.x for dependency issues.
+You can build it from the source if a higher numpy version is preferred."* That
+answer is about **1.23.0** and predates the 1.24.0 wheel. Do not cite it as
+current.
+
+## Box ground truth (measured 2026-08-04, read-only)
+
+| fact | measured value | note |
+|---|---|---|
+| L4T | **R36.4.3** (`/etc/nv_tegra_release`) | handoff said 36.4.7 — **handoff is wrong**, box is 36.4.3 |
+| JetPack | 6.2.1+b38 | `nvidia-jetpack` meta package |
+| CUDA | 12.6.68 | `/usr/local/cuda-12.6` |
+| OS / Python | Ubuntu 22.04.5, Python 3.10.12 | cp310 wheels only |
+| RAM | 15 GB total, ~12 GB used, **~0 GB available** | brain live; no build headroom |
+| swap | 50 GB `/swapfile` + 8× ~1 GB zram | swap-backed build is feasible |
+| cores | 8 | bound `-j` if a build is ever needed |
+| disk | 1.4 TB free on `/` | not a constraint |
+| ccache | **NOT installed** | would need installing if a source build happens |
+
+### Live ONNX runtime is CPU-only — investigate before assuming
+
+`~/.local/lib/python3.10/site-packages` has **`onnxruntime` 1.23.2** (upstream
+PyPI CPU build), **not** `onnxruntime-gpu`:
+
+- `get_available_providers()` → `['AzureExecutionProvider', 'CPUExecutionProvider']`
+- no `libonnxruntime_providers_cuda.so` / `_tensorrt.so` present
+- and it is **already numpy-2-header-built**
+
+Two consequences to chase on resume:
+
+1. If nothing on the box actually uses `onnxruntime-gpu`, then the NVIDIA
+   numpy-1 wheel is **not in the dependency set at all**, and the stated reason
+   for `numpy<2` is doubly stale. The real blocker is then whatever
+   `services/zoe-data/requirements.txt` lines 42–52 describe.
+2. Conversely there may be a **service venv** distinct from `~/.local` that does
+   carry `onnxruntime-gpu`. Not yet enumerated. **Resolve this first on resume.**
+
+### ctranslate2
+
+`https://pypi.jetson-ai-lab.io/jp6/cu126/ctranslate2/` is a **plain upstream-PyPI
+passthrough** (devpi mirror; entries point at `files.pythonhosted.org`, incl.
+ancient cp36 macOS wheels). There is **no Jetson-specific ctranslate2 build** —
+so if ctranslate2 is needed, it comes from upstream aarch64 manylinux wheels, not
+from a Jetson source build. Whether anything still uses it (Moonshine replaced
+Whisper; it may be dead) is **still open** — the repo inventory had not returned
+at checkpoint time.
+
+## Tooling produced
+
+- `scripts/maintenance/numpy_abi_scan.sh` — read-only numpy-C-ABI signature
+  scanner. Usage: `bash scripts/maintenance/numpy_abi_scan.sh <site-packages-dir>`.
+  Prints one line per compiled extension with the numpy-1 or numpy-2 marker. This
+  is the verification instrument for the whole migration: run it before and after
+  to prove every extension is numpy-2 built. It reads files only — no imports, no
+  installs, so it is safe to run against a live service venv.
+
+## Open items (resume brief)
+
+1. **Repo inventory / bump matrix (deliverable 2)** — a background inventory agent
+   was dispatched over all `requirements*.txt` / `pyproject.toml`, compiled-vs-pure
+   numpy dependents, ctranslate2 liveness, Moonshine/Kokoro/silero/pyannote
+   packaging, and service venv layout. It had **not reported** at checkpoint. Re-run it.
+2. **Resolve the onnxruntime-gpu question** — enumerate every venv the services
+   actually run from and `abi_scan.sh` each. Determines whether onnxruntime-gpu is
+   in scope at all.
+3. **ctranslate2 dead-or-alive** — grep for `ctranslate2` / `faster_whisper` /
+   `WhisperModel` in live `services/` code.
+4. **Deliverable 3** — likely reduces to "not needed"; keep only a stub rationale
+   unless (2) shows a genuinely numpy-1-only compiled dep with no wheel.
+5. **Deliverable 4** — the window runbook. With wheels instead of a build the
+   window shrinks dramatically; re-estimate once (1)–(3) land.
+6. Quote `services/zoe-data/requirements.txt` lines 42–52 verbatim into this note.
+
+Nothing in this prep compiled anything, stopped any service, or changed any pin.
