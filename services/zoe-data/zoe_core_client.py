@@ -139,6 +139,12 @@ def _worker_env(user_id: str, *, voice_mode: bool = False) -> dict[str, str]:
     if token:
         env["ZOE_INTERNAL_TOKEN"] = token
     env.setdefault("ZOE_CORE_ALLOW_WRITES", "true")
+    # Claim the memory block for this seam (see _memory_block / _memory_packet_block).
+    # With this set, extensions/memory.ts contributes NOTHING to the system prompt,
+    # so the prompt stays byte-identical across a session's turns and llama.cpp can
+    # reuse the cached KV prefix. Unset (standalone `pi`, bench/, zoe-core/test) the
+    # extension keeps composing the block itself, exactly as it always did.
+    env["ZOE_CORE_MEMORY_SEAM"] = "1"
     if voice_mode and _VOICE_MODEL_MAXTOKENS > 0:
         env["ZOE_CORE_MODEL_MAXTOKENS"] = str(_VOICE_MODEL_MAXTOKENS)
     return env
@@ -637,6 +643,97 @@ _VOICE_BREVITY = (
 )
 
 
+# ── The memory block rides HERE, not on the system prompt ────────────────────
+#
+# extensions/memory.ts used to compose the /api/memories/for-prompt packet onto
+# the SYSTEM PROMPT every turn. The packet is keyed on the user's message, so it
+# changed on essentially every turn — and llama.cpp reuses cached KV only for an
+# EXACT common prefix (`--cache-reuse` is off for Gemma's shared-KV + SWA
+# attention, where KV shifting is unsupported). The reusable prefix therefore
+# ended at the last byte of SOUL.md and the whole conversation was re-prefilled
+# every single turn. Folding it in here instead puts the volatile bytes in the
+# TAIL, past everything cacheable, and leaves the system prompt as pure SOUL.md.
+#
+# Two ordering rules, both established by measurement against
+# test_zoe_core_client.py::test_tool_action_dispatches (15 runs, 14/15 baseline):
+#
+#   * The directive rides WITH the packet and never without it. Keeping the
+#     directive unconditional — the obvious way to make it static and therefore
+#     cacheable — scored 6/15: told to lead with what it remembers when it
+#     remembers nothing, the 4B brain chats instead of calling its tools. Dropping
+#     the directive from that same build restored 15/15.
+#   * `message` stays LAST. Pi's own tail slot (a `custom` message, appended
+#     AFTER the user message) scored 9/15 and costs the request its recency
+#     position for nothing the seam does not already provide.
+#
+# The seam and the extension must never BOTH inject: `_worker_env` sets
+# ZOE_CORE_MEMORY_SEAM=1, which makes memory.ts contribute nothing. A
+# caller-supplied `db_memory_context` also suppresses the fetch below, so the
+# ZOE_CHAT_INJECT_DB_MEMORY escape hatch in routers/chat.py cannot double up.
+
+# Matches extensions/memory.ts's own slice, so both sides key recall identically.
+_PACKET_MESSAGE_CHARS = 500
+_PACKET_TIMEOUT_S = float(os.environ.get("ZOE_CORE_MEMORY_TIMEOUT_MS", "2000")) / 1000.0
+
+# How the brain should USE the packet. Byte-for-byte the same string as
+# MEMORY_USAGE_DIRECTIVE in services/zoe-core/extensions/memory.ts — the two run
+# in different processes so the constant cannot be shared, and the copies are
+# pinned equal by tests/test_zoe_core_memory_packet_placement.py. Change both or
+# neither.
+_MEMORY_USAGE_DIRECTIVE = (
+    "Use what you know about the user (below) naturally, the way a close friend would. "
+    "When they greet you or open a conversation, and you know of something timely — a "
+    "date in the next day or two, or a worry they've been carrying — LEAD with it warmly "
+    "(e.g. \"Morning! Don't forget the dentist at 3 today.\"), then ask how they are. "
+    "If something is clearly relevant to what they just said, bring it up even unasked. "
+    "Don't recite the whole list, don't force a fact when none fits, never mention citation ids."
+)
+
+
+def _memory_block(packet: str) -> str:
+    """Directive + packet, or "" — the directive NEVER appears alone (see above)."""
+    packet = (packet or "").strip()
+    if not packet:
+        return ""
+    return f"{_MEMORY_USAGE_DIRECTIVE}\n\n{packet}"
+
+
+async def _memory_packet_block(message: str, user_id: str) -> str:
+    """The /api/memories/for-prompt packet for this turn, or "" — NEVER raises.
+
+    Calls the composer function directly (routers.memories.memory_for_prompt)
+    rather than an HTTP self-call: same event loop, no socket round-trip. `_=None`
+    skips the FastAPI internal-token dependency, which guards the HTTP surface and
+    not in-process callers; the endpoint itself fails closed for guest/unknown
+    users. Same shape as zoe_flue_client._fetch_for_prompt_packet.
+
+    Fail-open and time-boxed on the same budget the extension used: memory must
+    never block or break a turn.
+    """
+    if not (user_id or "").strip():
+        return ""  # fail closed: unknown user → never another user's memories
+    try:
+        # `limit` MUST be passed explicitly: called directly (not through FastAPI)
+        # its default is the Query() descriptor object, not an int. This is the
+        # same value the endpoint would have resolved for the extension's HTTP
+        # call, so the packet is identical to the one memory.ts used to fetch.
+        from routers.memories import _PROMPT_PACKET_MAX_FACTS, memory_for_prompt
+
+        result = await asyncio.wait_for(
+            memory_for_prompt(
+                user_id=user_id,
+                message=(message or "")[:_PACKET_MESSAGE_CHARS],
+                limit=_PROMPT_PACKET_MAX_FACTS,
+                _=None,
+            ),
+            timeout=_PACKET_TIMEOUT_S,
+        )
+        return str((result or {}).get("packet") or "").strip()
+    except Exception as exc:  # noqa: BLE001 - memory is best-effort, never a turn breaker
+        logger.debug("zoe-core: memory packet unavailable (non-fatal): %s", exc)
+        return ""
+
+
 def _compose_message(
     message: str,
     *,
@@ -644,12 +741,16 @@ def _compose_message(
     db_memory_context: str | None,
     portrait: str | None,
     voice_mode: bool = False,
+    memory_packet: str | None = None,
 ) -> str:
-    """Prepend any caller-supplied context the extensions don't already inject.
+    """Prepend the per-turn context the brain needs ahead of the user's words.
 
-    Soul + per-turn memory packet come from the extensions; we only fold in the
-    extras chat.py passes (recent history, portrait, precomputed memory context),
-    and — for voice turns — a brevity directive so spoken replies stay short.
+    Soul + the static memory-usage directive come from the extensions; we fold in
+    the memory packet (see above), the extras chat.py passes (recent history,
+    portrait, precomputed memory context), and — for voice turns — a brevity
+    directive so spoken replies stay short.
+
+    `message` is always LAST. Nothing may be appended after it.
     """
     parts: list[str] = []
     if voice_mode:
@@ -658,6 +759,12 @@ def _compose_message(
         parts.append(f"[About you]\n{portrait.strip()}")
     if db_memory_context:
         parts.append(f"[What you remember]\n{db_memory_context.strip()}")
+    else:
+        # Not labelled like the block above: these are the exact bytes the memory
+        # extension used to put on the system prompt, moved verbatim.
+        block = _memory_block(memory_packet or "")
+        if block:
+            parts.append(block)
     if history:
         lines = []
         for turn in history[-12:]:
@@ -689,9 +796,13 @@ async def run_zoe_core_streaming(
     Yields assistant text deltas. On any failure, raises so the caller's existing
     fallback handling applies (we never silently swallow a brain failure).
     """
+    # Skip the fetch entirely when the caller already supplied memory context —
+    # _compose_message would ignore the packet anyway, and this is the whole
+    # once-not-twice guarantee (see _memory_packet_block).
+    packet = "" if db_memory_context else await _memory_packet_block(message, user_id)
     composed = _compose_message(
         message, history=history, db_memory_context=db_memory_context,
-        portrait=portrait, voice_mode=voice_mode,
+        portrait=portrait, voice_mode=voice_mode, memory_packet=packet,
     )
     # Bound concurrent brain turns (see _MAX_CONCURRENCY), but only for the
     # duration of actual generation — NOT for however long the consumer takes to

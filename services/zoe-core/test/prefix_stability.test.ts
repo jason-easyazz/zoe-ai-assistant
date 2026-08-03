@@ -12,7 +12,10 @@
  *
  *   • `extensions/memory.ts` composed a freshly-fetched, message-keyed memory
  *     packet onto the system prompt, so the reusable prefix ended at the last
- *     byte of SOUL.md.
+ *     byte of SOUL.md. In production (`ZOE_CORE_MEMORY_SEAM=1`) the packet now
+ *     rides in the user message, folded in by zoe-data's `_compose_message`
+ *     AHEAD of the user's own words — the seam, not Pi's post-user-message
+ *     `custom` slot, which measurably cost tool selection.
  *   • `extensions/abilities.ts` recomputed progressive disclosure from the LAST
  *     MESSAGE ONLY, so the tool set oscillated (no ability declares tier "core",
  *     so an off-topic turn disclosed zero tools).
@@ -36,9 +39,9 @@ import { fileURLToPath } from "node:url";
 
 import soulExtension from "../extensions/soul.ts";
 import memoryExtension, {
-  MEMORY_PACKET_CUSTOM_TYPE,
+  MEMORY_SEAM_ENV,
   MEMORY_USAGE_DIRECTIVE,
-  memorySystemPrompt,
+  memoryBlock,
 } from "../extensions/memory.ts";
 import {
   createDisclosureHandler,
@@ -124,9 +127,10 @@ function packetFor(message: string): string {
 
 // ── (1) the system prompt is byte-identical across turns ─────────────────────
 
-test("system prompt is byte-identical across two turns with different messages", async () => {
+test("seam mode: system prompt is byte-identical across two different turns", async () => {
   process.env.ZOE_CORE_USER_ID = USER;
   process.env.ZOE_CORE_SOUL_PATH = SOUL_PATH;
+  process.env[MEMORY_SEAM_ENV] = "1";
   const stub = stubForPromptFetch(packetFor);
   try {
     const pi = stubPi();
@@ -141,46 +145,37 @@ test("system prompt is byte-identical across two turns with different messages",
       first.systemPrompt,
       "the system prompt moved between turns — the KV prefix ends at the first differing byte",
     );
-    // Not vacuous: the packets themselves genuinely differed this run.
+    // Not vacuous: the packets these turns WOULD have produced genuinely differ.
     assert.notEqual(packetFor(TURN_A), packetFor(TURN_B));
-    assert.deepEqual(stub.seen, [TURN_A, TURN_B], "both turns fetched their own packet");
+    // ONE injection site: in seam mode the extension does not fetch at all.
+    assert.deepEqual(stub.seen, [], "the extension fetched a packet the seam already injects");
+    assert.deepEqual(first.messages, [], "nothing may be appended after the user message");
+    // Nothing of memory's is left on the system prompt — the seam owns the whole
+    // block, directive included (an unconditional directive cost tool selection;
+    // see the header). So the system prompt is exactly the soul.
+    assert.ok(!first.systemPrompt.includes(MEMORY_USAGE_DIRECTIVE));
   } finally {
     stub.restore();
+    delete process.env[MEMORY_SEAM_ENV];
   }
 });
 
-test("the volatile packet still reaches the brain — as a tail turn, verbatim", async () => {
+test("standalone mode: the extension still injects the packet itself", async () => {
+  // The `pi` CLI, bench/ and test_brick3_memory.py have no seam to fold the
+  // packet in, so the original self-service behaviour must survive unchanged.
   process.env.ZOE_CORE_USER_ID = USER;
   process.env.ZOE_CORE_SOUL_PATH = SOUL_PATH;
+  delete process.env[MEMORY_SEAM_ENV];
   const stub = stubForPromptFetch(packetFor);
   try {
     const pi = stubPi();
     soulExtension(pi as never);
     memoryExtension(pi as never);
 
-    const first = await runTurn(pi.handlers, TURN_A);
-    const second = await runTurn(pi.handlers, TURN_B);
-
-    for (const [turn, prompt] of [
-      [first, TURN_A],
-      [second, TURN_B],
-    ] as const) {
-      assert.equal(turn.messages.length, 1, "exactly one memory turn per turn — never zero, never two");
-      const msg = turn.messages[0] as {
-        customType: string;
-        content: { type: string; text: string }[];
-        display: boolean;
-      };
-      assert.equal(msg.customType, MEMORY_PACKET_CUSTOM_TYPE);
-      assert.equal(msg.display, false, "context-only, as invisible as the old system-prompt block");
-      // Byte-for-byte the same packet text the old code put in the system prompt.
-      assert.equal(msg.content[0].text, packetFor(prompt));
-      // ...and it is NOT in the system prompt any more.
-      assert.ok(!turn.systemPrompt.includes(packetFor(prompt)));
-    }
-    // The behaviour contract that survives: the usage directive is still told to
-    // the model, and it is still on the system prompt.
-    assert.ok(first.systemPrompt.includes(MEMORY_USAGE_DIRECTIVE));
+    const turn = await runTurn(pi.handlers, TURN_A);
+    assert.deepEqual(stub.seen, [TURN_A]);
+    assert.ok(turn.systemPrompt.includes(packetFor(TURN_A)), "standalone lost its memory packet");
+    assert.ok(turn.systemPrompt.includes(MEMORY_USAGE_DIRECTIVE));
   } finally {
     stub.restore();
   }
@@ -191,21 +186,32 @@ test("NEGATIVE CONTROL: the pre-fix composition moves the system prompt every tu
   // the system prompt. If this ever passes the assertion above, the test is not
   // measuring what it claims to measure.
   const legacySystemPrompt = (base: string, packet: string) => {
-    if (!packet) return base;
-    const block = `${MEMORY_USAGE_DIRECTIVE}\n\n${packet}`;
+    const block = memoryBlock(packet);
+    if (!block) return base;
     return base ? `${base}\n\n${block}` : block;
   };
   const base = "SOUL";
-  const legacyA = legacySystemPrompt(base, packetFor(TURN_A));
-  const legacyB = legacySystemPrompt(base, packetFor(TURN_B));
-  assert.notEqual(legacyB, legacyA, "the control is no longer controlling");
+  assert.notEqual(
+    legacySystemPrompt(base, packetFor(TURN_B)),
+    legacySystemPrompt(base, packetFor(TURN_A)),
+    "the control is no longer controlling",
+  );
+});
 
-  // And the fixed composition, on the same inputs, does not move.
-  assert.equal(memorySystemPrompt(base, true), memorySystemPrompt(base, true));
+test("the usage directive never appears without a packet", async () => {
+  // MEASURED, not stylistic: an unconditional directive scored 6/15 on
+  // test_tool_action_dispatches against a 14/15 baseline — told to lead with what
+  // it remembers when it remembers nothing, the brain stops calling its tools.
+  assert.equal(memoryBlock(""), "");
+  assert.equal(memoryBlock("   "), "");
+  const block = memoryBlock(packetFor(TURN_A));
+  assert.ok(block.startsWith(MEMORY_USAGE_DIRECTIVE));
+  assert.ok(block.endsWith(packetFor(TURN_A)));
 });
 
 test("unknown user: no packet fetched, and the system prompt is still stable", async () => {
   delete process.env.ZOE_CORE_USER_ID;
+  delete process.env[MEMORY_SEAM_ENV];
   process.env.ZOE_CORE_SOUL_PATH = SOUL_PATH;
   const stub = stubForPromptFetch(packetFor);
   try {
@@ -230,17 +236,24 @@ test("unknown user: no packet fetched, and the system prompt is still stable", a
   }
 });
 
-test("an unchanged packet is not re-appended (context growth is bounded)", async () => {
+test("NEGATIVE CONTROL: standalone mode DOES move the system prompt", async () => {
+  // Proves the seam-mode assertion above is measuring the flag, not a tautology:
+  // the very same extension, with the seam flag off, fails it.
   process.env.ZOE_CORE_USER_ID = USER;
   process.env.ZOE_CORE_SOUL_PATH = SOUL_PATH;
-  const stub = stubForPromptFetch(() => "## What I know about you\n- stable fact [mem:1]");
+  delete process.env[MEMORY_SEAM_ENV];
+  const stub = stubForPromptFetch(packetFor);
   try {
     const pi = stubPi();
+    soulExtension(pi as never);
     memoryExtension(pi as never);
     const first = await runTurn(pi.handlers, TURN_A);
     const second = await runTurn(pi.handlers, TURN_B);
-    assert.equal(first.messages.length, 1);
-    assert.equal(second.messages.length, 0, "an identical packet was appended twice");
+    assert.notEqual(
+      second.systemPrompt,
+      first.systemPrompt,
+      "the control is no longer controlling",
+    );
   } finally {
     stub.restore();
   }

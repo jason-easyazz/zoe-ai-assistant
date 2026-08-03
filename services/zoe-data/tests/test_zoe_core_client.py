@@ -214,6 +214,20 @@ async def stub(monkeypatch):
     import importlib
     import zoe_core_client
     importlib.reload(zoe_core_client)
+
+    # The memory packet is fetched by the SEAM now (in-process, straight into
+    # routers.memories — no socket round-trip), not by the memory.ts extension
+    # over HTTP, so the stub's for-prompt route no longer sees it. Serve it from
+    # the same `s.packet` and record the hit, so `memory_hits()` keeps meaning
+    # "the brain was given memory this turn".
+    async def _seam_packet(message: str, user_id: str) -> str:
+        if not (user_id or "").strip():
+            return ""  # mirror the real fail-closed path
+        with s._lock:
+            s.requests.append({"m": "GET", "path": f"/api/memories/for-prompt?message={message[:80]}"})
+        return str(s.packet.get("packet") or "")
+
+    monkeypatch.setattr(zoe_core_client, "_memory_packet_block", _seam_packet)
     try:
         yield s, zoe_core_client
     finally:

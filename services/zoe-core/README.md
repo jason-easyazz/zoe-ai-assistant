@@ -44,7 +44,7 @@ via Pi's extension hooks.
 
 1. **Provider** — Pi runs on local Gemma. ✅ done (`extensions/provider-local-gemma.ts`)
 2. **Soul** — Zoe's persona replaces Pi's default coding-assistant prompt. ✅ done (`SOUL.md` + `extensions/soul.ts`)
-3. **Memory** — MemPalace packet injected per turn via `before_agent_start`, fetched from zoe-data's internal `/api/memories/for-prompt` (compact, cited, fail-open). ✅ done (`extensions/memory.ts`). Hindsight/Graphiti compose into the same packet later. The packet rides in the conversation TAIL, not the system prompt — see the KV-prefix contract below.
+3. **Memory** — MemPalace packet injected per turn from zoe-data's internal `/api/memories/for-prompt` (compact, cited, fail-open). ✅ done (`extensions/memory.ts` standalone; `zoe_core_client` seam in production). Hindsight/Graphiti compose into the same packet later. The packet rides in the user message, not the system prompt — see the KV-prefix contract below.
 4. **Abilities** — native zoe-data tools + delegation tools (Hermes/OpenClaw); safety rails as `tool_call` gates.
 5. **Cutover (benchmark-gated)** — only after the Samantha tests + Pi-vs-`zoe_agent` benchmarks pass: point chat/voice at the zoe-core brain, intent fast-path in front, retire `zoe_agent.py`. Until then, lab-only; `zoe_agent` stays production.
 
@@ -70,21 +70,33 @@ shifting is unsupported. So every byte that varies turn-to-turn re-prefills
 everything after it, and the two things at the FRONT of every request are frozen
 by construction:
 
-- **System prompt** (`extensions/soul.ts` → `extensions/memory.ts`) carries only
-  text whose inputs are per-PROCESS constants: SOUL.md, and the static
-  `MEMORY_USAGE_DIRECTIVE` (gated on `ZOE_CORE_USER_ID`, which zoe-data bakes into
-  each worker's spawn env). The **volatile** memory packet is returned as a Pi
-  `custom` message instead, which Pi appends *after* the user message and converts
-  to a `user` turn on the wire — the model reads the same bytes, just later.
+- **System prompt** is pure `SOUL.md`. Driven by zoe-data (`ZOE_CORE_MEMORY_SEAM=1`,
+  set in `_worker_env`), `extensions/memory.ts` contributes nothing at all; the
+  **volatile** memory directive + packet are folded into the USER MESSAGE by
+  `zoe_core_client._compose_message`, ahead of the user's own words. Standalone
+  runs (`pi` CLI, `bench/`, `test/`) do not set the flag and keep the extension's
+  original self-service behaviour — they are one-shot, so caching does not apply.
 - **Tool block** (`extensions/abilities.ts`) is disclosed monotonely: a domain
   stays active for `ZOE_CORE_DISCLOSURE_WINDOW_TURNS` turns (default 6 — zoe-data
   replays `history[-12:]`) after it was last relevant, instead of being recomputed
   from the last message alone. `setActiveTools` is still called on *every* turn:
   that call is the unconditional strip of Pi's coding builtins.
 
-The `/api/memories/for-prompt` fetch lives **only** in `extensions/memory.ts` for
-this lane — `zoe_core_client._compose_message` deliberately does not add it (see
-`ZOE_CHAT_INJECT_DB_MEMORY` in `routers/chat.py`).
+Two orderings here were **measured**, against
+`test_zoe_core_client.py::test_tool_action_dispatches` (15 runs each, 14/15
+baseline). Re-measure before changing either:
+
+| variant | score | why it lost |
+|---|---|---|
+| directive kept unconditionally on the system prompt (so it is static, hence cacheable) | **6/15** | told to lead with what it remembers when it remembers nothing, the 4B brain chats instead of calling tools. Dropping the directive from that same build restored 15/15. |
+| packet in Pi's tail slot (a `custom` message, appended *after* the user message) | **9/15** | costs the user's request the recency position |
+| **shipped**: directive+packet in the user message, `message` last | **14/15** | — |
+
+The `/api/memories/for-prompt` fetch happens **once**: the seam
+(`_memory_packet_block`, in-process) in production, the extension when standalone.
+A caller-supplied `db_memory_context` suppresses the seam's fetch (see
+`ZOE_CHAT_INJECT_DB_MEMORY` in `routers/chat.py`). `MEMORY_USAGE_DIRECTIVE` exists
+in both runtimes and is pinned byte-equal by a test.
 
 Deterministic suite (no model, no `node_modules`; needs Node ≥ 22.18 for built-in
 TypeScript type stripping):
