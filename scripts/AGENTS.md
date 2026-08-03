@@ -126,13 +126,17 @@ of these numbers are pinned by `tests/unit/test_cross_review_poll.py`.
 `subprocess.run(timeout=2500)`, which kills only the shell — the EXIT trap never
 fires, so the detached polly worker outlives the released flock and the next
 invocation runs a second polly beside the orphan. Every phase is therefore
-explicitly bounded (create curl, registration budget + its HTTP timeout, a
-`timeout(1)`-wrapped docker-exec kick, the poll budget + its HTTP timeout, the
-report curl, a `timeout(1)`-wrapped cleanup), and the wrapper CHECKS the sum at
-startup and exits 1 on inversion — so raising `CROSS_REVIEW_TIMEOUT_S` fails
-loudly rather than silently re-inverting. Default poll budget is 2000s (not
-2400) to leave real margin. The unbounded `flock` wait is deliberately excluded:
-nothing exists to orphan before the lock is held.
+explicitly bounded (the `flock -w` wait, create curl, registration budget + its
+HTTP timeout, a `timeout(1)`-wrapped docker-exec kick, the poll budget + its
+HTTP timeout, the report curl, a `timeout(1)`-wrapped cleanup), and the wrapper
+CHECKS the sum at startup and exits 1 on inversion — so raising
+`CROSS_REVIEW_TIMEOUT_S` fails loudly rather than silently re-inverting. Default
+poll budget is 1800s (not 2400) to leave real margin. **The lock wait is IN the
+sum**: the caller's timer starts at `subprocess.run`, BEFORE the lock is
+acquired, so an unbounded wait leaves less than the post-lock worst case and the
+run is then killed *after* it has created a session and kicked a worker.
+Refusing at the lock (`exit 2`) is strictly better — a queued invocation would
+have waited most of a full review anyway.
 
 Its exit codes are diagnostic — 3 never-registered, 4 poll-lost,
 5 timeout, 6 never-running, 7 dispatch-failed — and the wrapper collapses all of

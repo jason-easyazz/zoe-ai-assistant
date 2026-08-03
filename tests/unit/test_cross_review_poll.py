@@ -809,6 +809,8 @@ def _wrapper_budget():
     phases = {
         "poll": _sh_env_default("CROSS_REVIEW_TIMEOUT_S"),
         "register": _sh_env_default("CROSS_REVIEW_REGISTER_TIMEOUT_S"),
+        # The caller's clock runs during the lock wait too, so it is IN the sum.
+        "lock-wait": _sh_const("LOCK_WAIT_MAX_S"),
         "create": _sh_const("CREATE_MAX_S"),
         "register-http": _sh_const("REGISTER_HTTP_TIMEOUT_S"),
         "kick": _sh_const("KICK_MAX_S"),
@@ -883,6 +885,27 @@ def test_wrapper_refuses_an_inverted_budget_before_touching_anything():
     reg = _run_wrapper(CROSS_REVIEW_REGISTER_TIMEOUT_S=phases["register"] + headroom)
     assert reg.returncode == 1
     assert "budget inversion" in reg.stderr
+
+
+def test_the_flock_wait_is_bounded_and_counted():
+    """The caller's timer runs while we block on the lock (Codex P1, #1624).
+
+    An unbounded `flock 9` eats the margin invisibly and the run is killed AFTER
+    it has created a session and kicked a worker -- the orphan the budget exists
+    to prevent. Bounding it is only half the fix: the cap must also be IN the
+    sum, or the arithmetic still under-counts.
+    """
+    sh = _WRAPPER_PATH.read_text()
+    code = "\n".join(l for l in sh.splitlines() if not l.lstrip().startswith("#"))
+    assert re.search(r'^flock\s+9\s*$', code, re.MULTILINE) is None, (
+        "an unbounded flock wait spends the caller's budget before the lock is held"
+    )
+    assert 'flock -w "$LOCK_WAIT_MAX_S" 9' in code
+    assert "another cross-review still holds" in code, "a lock timeout must alarm, not exit silently"
+
+    _worst, _caller, phases = _wrapper_budget()
+    assert phases["lock-wait"] == _sh_const("LOCK_WAIT_MAX_S") > 0
+    assert "LOCK_WAIT_MAX_S +" in code, "the cap must be summed into OVERHEAD_S"
 
 
 def test_agents_md_publishes_the_corrected_bounds():

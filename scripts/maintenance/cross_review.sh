@@ -32,10 +32,12 @@ SERVER="${OMNIGENT_SERVER:-http://127.0.0.1:6767}"
 # binds too) — it validates nothing. See omnigent_issue_executor._omnigent_agent_id.
 POLLY_ID="${OMNIGENT_POLLY_ID:-057995d1517418e6839f51d340785dd6}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
-# 2000, not 2400: the poll budget is the only large term in the BUDGET
+# 1800, not 2400: the poll budget is the only large term in the BUDGET
 # arithmetic below, and 2400 put the wrapper's worst-case wall ABOVE the
-# caller's 2500s subprocess timeout (Codex, #1618).
-TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-2000}"
+# caller's 2500s subprocess timeout (Codex, #1618). It came down again once the
+# bounded flock wait joined the sum (Codex P1, #1624). 30 minutes remains far
+# more than a polly cross-review has ever needed.
+TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-1800}"
 case "$TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be a positive integer (seconds), got: $TIMEOUT_S" >&2; exit 1;; esac
 [ "$TIMEOUT_S" -gt 0 ] || { echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be > 0" >&2; exit 1; }
 # Validated HERE, not left to argparse: an unvalidated value reaches the poller
@@ -58,18 +60,26 @@ case "$REGISTER_TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_REGISTER_T
 # left as a comment, so raising CROSS_REVIEW_TIMEOUT_S cannot silently
 # reintroduce the inversion — it fails loudly at startup instead.
 #
-# Deliberately EXCLUDED: the `flock` wait below, which is unbounded. Nothing
-# exists to orphan during it — no session, no worker, no temp file — so a
-# caller-side kill there is harmless, and bounding it would turn legitimate
-# serialization into a spurious failure.
+# THE `flock` WAIT COUNTS TOO, and an earlier revision of this block wrongly
+# excluded it on the grounds that nothing exists to orphan while merely waiting
+# (Codex P1, #1624). That misses which clock is running: the caller's timer
+# starts at `subprocess.run`, BEFORE the lock is acquired. So a lock wait longer
+# than the margin leaves less than the post-lock worst case, and the script then
+# proceeds to create a session and kick a worker with a deadline it can no
+# longer meet — reproducing exactly the orphan this block exists to prevent.
+# The wait is therefore BOUNDED, and failing loudly at the lock is strictly
+# better than being killed mid-review: a queued invocation would in any case
+# wait most of a full review, so `LOCK_WAIT_MAX_S` is a cap on futility, not on
+# legitimate serialization.
 CALLER_TIMEOUT_S=2500       # mirrors _CROSS_REVIEW_TIMEOUT_S; pinned by tests/unit/test_cross_review_poll.py
+LOCK_WAIT_MAX_S=120         # flock -w: the caller's clock runs during this too
 CREATE_MAX_S=60             # curl --max-time on POST /v1/sessions
 REGISTER_HTTP_TIMEOUT_S=30  # await-registration overshoots its budget by at most one request
 KICK_MAX_S=30               # timeout(1) around the detached docker-exec kick
 POLL_HTTP_TIMEOUT_S=60      # poll() returns within --timeout-s + one request
 FETCH_MAX_S=60              # curl --max-time on the report GET
 CLEANUP_MAX_S=20            # timeout(1) around stop_worker's docker exec
-OVERHEAD_S=$(( CREATE_MAX_S + REGISTER_TIMEOUT_S + REGISTER_HTTP_TIMEOUT_S + KICK_MAX_S ))
+OVERHEAD_S=$(( LOCK_WAIT_MAX_S + CREATE_MAX_S + REGISTER_TIMEOUT_S + REGISTER_HTTP_TIMEOUT_S + KICK_MAX_S ))
 OVERHEAD_S=$(( OVERHEAD_S + POLL_HTTP_TIMEOUT_S + FETCH_MAX_S + CLEANUP_MAX_S ))
 WORST_CASE_S=$(( TIMEOUT_S + OVERHEAD_S ))
 [ "$WORST_CASE_S" -lt "$CALLER_TIMEOUT_S" ] || {
@@ -83,8 +93,14 @@ WORST_CASE_S=$(( TIMEOUT_S + OVERHEAD_S ))
 # polly launch paths (omnigent_issue_executor, the Flue heavy lane) do not take
 # this lock — a shared lease across all launchers is future cross-subsystem
 # work (Codex, #1578); this bounds what THIS wrapper can add to the load.
+# BOUNDED (`-w`), because the caller's subprocess timer is already running while
+# we block here — see BUDGET above. An unbounded wait silently eats the margin
+# and the run gets killed AFTER it has spawned a worker (Codex P1, #1624).
 exec 9>/tmp/zoe-cross-review.lock
-flock 9
+flock -w "$LOCK_WAIT_MAX_S" 9 || {
+  echo "ALARM: another cross-review still holds /tmp/zoe-cross-review.lock after ${LOCK_WAIT_MAX_S}s — refusing to start with too little of the caller's ${CALLER_TIMEOUT_S}s budget left to finish; retry once it releases" >&2
+  exit 2
+}
 PR="$1"; shift
 # Join ALL remaining words — an unquoted multiword contract must not silently
 # truncate to its first word (Codex, #1578).
