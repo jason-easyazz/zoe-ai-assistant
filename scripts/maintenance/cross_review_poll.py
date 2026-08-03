@@ -13,10 +13,13 @@ told. Doctrine: a review lane fails LOUDLY.
 
 What this module adds per failure mode:
 
-  empty body / non-JSON / HTML error page / 5xx / connection refused
+  empty body / non-JSON / HTML error page / 5xx / connection refused /
+  truncated read (http.client.HTTPException)
       -> TRANSIENT. Bounded consecutive retries with exponential backoff,
-         declaring poll-lost after at most 121s at the wrapper's defaults while
-         still riding out a ~60s server restart (both pinned by tests; see
+         declaring poll-lost after 121s of SLEEPS at the wrapper's defaults
+         (plus the requests' own duration, which is ~0 for these fast-failing
+         shapes and up to http_timeout each for a stalling endpoint) while
+         still riding out a ~60s server restart (all pinned by tests; see
          poll() for the arithmetic). On exhaustion: one terminal ALARM line
          naming the session, exit 4.
   404 `not_found` (session gone / never registered)
@@ -24,6 +27,8 @@ What this module adds per failure mode:
          exit 3 (registration guard). Never silently absorbed as a blip.
   valid JSON with no `status` key
       -> TRANSIENT (a schema surprise is not a terminal verdict).
+  report payload whose `items` is not a list (schema drift)
+      -> classified and alarmed, exit 4. Never iterated into a TypeError.
   hard overall timeout while still running/waiting
       -> exit 5.
   never reaches running/waiting within the grace window
@@ -41,6 +46,7 @@ change to cross_review.sh's contract.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import sys
 import time
@@ -98,6 +104,14 @@ def fetch_session(server: str, sid: str, timeout: float):
     url = f"{server.rstrip('/')}/v1/sessions/{sid}"
     try:
         status, ctype, body = _http_get(url, timeout)
+    except http.client.HTTPException as exc:
+        # `http.client.IncompleteRead` (a peer that closed mid-body, i.e. shorter
+        # than its own Content-Length) and its siblings BadStatusLine /
+        # LineTooLong derive from Exception, NOT from URLError or OSError, so
+        # they slip past both handlers below and terminate the poller with a
+        # TRACEBACK instead of the one terminal alarm line this module promises
+        # (Codex, #1618). A truncated read is a transport fault like any other.
+        return TRANSIENT, None, f"HTTP protocol error: {type(exc).__name__}: {exc}"
     except urllib.error.URLError as exc:
         return TRANSIENT, None, f"connection error: {exc.reason}"
     except OSError as exc:
@@ -147,7 +161,14 @@ def has_assistant_message(doc) -> bool:
     """
     if not isinstance(doc, dict):
         return False
-    for it in doc.get("items") or []:
+    # `or []` alone is not a type guard: a schema-drifted scalar (`{"items": 1}`)
+    # is truthy and non-iterable, so the loop below would raise TypeError out of
+    # the poll loop as a traceback (Codex, #1618). Here the honest answer to
+    # "does this doc prove a run happened" is simply no.
+    items = doc.get("items")
+    if not isinstance(items, list):
+        return False
+    for it in items:
         if not isinstance(it, dict) or it.get("type") != "message":
             continue
         data = it.get("data") if isinstance(it.get("data"), dict) else {}
@@ -207,12 +228,30 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
     production defaults, not the 61s the backoff schedule implies (codex
     cross-review, #1618).
 
-    Worst-case time to declare poll-lost, at the defaults the wrapper uses
-    (interval 30, max_transient 8, cap = interval):
+    Worst-case SLEEP schedule before declaring poll-lost, at the defaults the
+    wrapper uses (interval 30, max_transient 8, cap = interval):
 
         30 (first interval, before the first poll)
       + 1 + 2 + 4 + 8 + 16 + 30 + 30   (backoffs before the 8th failed fetch)
       = 121s
+
+    121s is the SLEEP total, and it is the whole wall clock only for faults that
+    answer IMMEDIATELY -- connection refused, empty body, 5xx, 404, unparseable
+    body. A STALLING endpoint (accepts the connection, then never answers)
+    instead burns up to `http_timeout` per attempt, so its wall is
+
+        121 + max_transient * http_timeout = 121 + 8*60 = 601s
+
+    at the defaults (Codex, #1618). This is documented rather than capped on
+    purpose: shrinking each request's timeout to the residual detection budget
+    would hand a slow-but-HEALTHY Omnigent a sub-second timeout near the end of a
+    streak, converting server load into a fabricated poll-lost -- a FALSE ALARM
+    in the one lane whose entire thesis is that a lost review must be real and
+    loud. The run stays bounded regardless: `timeout_s` is re-checked at the top
+    of every iteration and each iteration adds at most one sleep (itself capped
+    by the remaining budget) plus one fetch, so poll() always returns within
+    `timeout_s + http_timeout`. cross_review.sh's budget arithmetic uses exactly
+    that bound. Both numbers are pinned by tests.
 
     `max_transient` is 8 rather than 6 precisely so that OUTAGE TOLERANCE
     survives collapsing the double sleep: once the padding interval is gone,
@@ -353,8 +392,25 @@ def extract_report(path: str, sid: str) -> int:
         )
         return EXIT_POLL_LOST
 
+    # Classify the container shape BEFORE iterating it. `d.get("items") or []`
+    # guarded only the missing/empty case; a schema-drifted scalar such as
+    # `{"items": 1}` is truthy and non-iterable, so the loop raised TypeError and
+    # the wrapper printed a Python traceback instead of this module's single
+    # session-scoped "re-dispatch required" alarm (Codex, #1618). Every sibling
+    # field (doc / data / content) was already guarded; `items` was the gap.
+    items = d.get("items", [])
+    if items is None:
+        items = []
+    if not isinstance(items, list):
+        _alarm(
+            f"ALARM: the session payload for {sid} carried a non-list 'items' "
+            f"({type(items).__name__}) — payload shape changed, no report retrieved; "
+            "re-dispatch required"
+        )
+        return EXIT_POLL_LOST
+
     texts = []
-    for it in d.get("items") or []:
+    for it in items:
         if not isinstance(it, dict) or it.get("type") != "message":
             continue
         data = it.get("data") if isinstance(it.get("data"), dict) else {}
