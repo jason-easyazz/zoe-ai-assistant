@@ -431,7 +431,10 @@ def test_future_compose_mount_is_validated_via_compose_itself():
     invocation semantics) and requires the mount Compose reports to equal the
     validated destination (review: Codex x3)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert "env -u ZOE_MA_DATA docker compose" in src
+    # round 31: masking one variable was not enough — an .env value like
+    # ${CUSTOM_MA_PATH:-default} inherits any transient shell variable. env -i
+    # makes the .env and compose file the ONLY interpolation inputs.
+    assert 'env -i PATH="$PATH" HOME="$HOME" docker compose' in src
     assert "config --format json" in src
     assert "future plain 'docker compose up' would mount" in src
     code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))

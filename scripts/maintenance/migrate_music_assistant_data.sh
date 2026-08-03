@@ -361,9 +361,14 @@ fi
 # relative values against the wrong base, then missed whitespace around `=`.
 # Re-implementing Compose's grammar one spelling at a time loses by
 # construction). `docker compose config` is Compose's OWN resolution — .env
-# grammar, quoting, relative bases, defaults — run with ZOE_MA_DATA masked from
-# the environment so it answers for a FUTURE PLAIN invocation, not this run's
-# one-shot assignment. Whatever that future invocation would mount must be
+# grammar, quoting, relative bases, defaults — run under a SANITIZED
+# environment (env -i, review: Codex round 31) so it answers for a FUTURE PLAIN
+# invocation. Masking only ZOE_MA_DATA was not enough: an .env value like
+# ${CUSTOM_MA_PATH:-default} inherits any transient shell variable, validating
+# a path the future will not resolve — MA would later start on the default
+# (empty or stale) with the marker blocking the corrective rerun. env -i means
+# the only interpolation inputs are the .env and the compose file themselves,
+# which is exactly what a fresh shell provides. Whatever that future invocation would mount must be
 # exactly the destination validated here; otherwise MA later restarts against
 # an unvalidated path (or an empty default) no guard ever saw.
 # THE PENDING COMPOSE FILE, not the live one (review: Codex — in the mandated
@@ -389,7 +394,7 @@ if [[ ! -f "$COMPOSE_FILE" ]]; then
     exit 1
 fi
 if true; then
-    if ! compose_json="$(cd "$REPO_ROOT" && env -u ZOE_MA_DATA docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" config --format json 2>&1)"; then
+    if ! compose_json="$(cd "$REPO_ROOT" && env -i PATH="$PATH" HOME="$HOME" docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" config --format json 2>&1)"; then
         log "FATAL: cannot resolve the effective Compose configuration:"
         printf '%s\n' "$compose_json" | awk 'NR<=4' | sed 's/^/ma-migrate:   /' >&2
         log "Refusing: the future mount source cannot be validated."
