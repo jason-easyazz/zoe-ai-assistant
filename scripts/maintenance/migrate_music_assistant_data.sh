@@ -104,7 +104,17 @@ esac
 # checkout and the very databases being migrated. The guard would do the damage
 # it exists to prevent.
 contains() {  # contains PARENT CHILD -> 0 if CHILD is PARENT or beneath it
-    [[ "$2" == "$1" || "$2" == "$1"/* ]]
+    # The filesystem root needs its own case (review: Codex). With PARENT="/"
+    # the naive pattern becomes `//*`, which matches nothing — so `ZOE_MA_DATA=/`
+    # slipped past BOTH ancestor guards and --mirror would have run `rm -rf` over
+    # every top-level entry on the box. Strip any trailing slash first so
+    # `/home/zoe/` behaves like `/home/zoe` too.
+    local parent="${1%/}" child="${2%/}"
+    if [[ -z "$parent" ]]; then          # PARENT was "/" (or "")
+        [[ "$child" == /* ]]             # everything lives under the root
+    else
+        [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+    fi
 }
 if [[ "$DEST_ABS" == "$SRC_ABS" ]]; then
     log "FATAL: destination and source are the same path: $DEST_ABS"; exit 1
@@ -178,6 +188,18 @@ log "files      : $(sudo find "$SRC" -type f 2>/dev/null | wc -l)"
 if [[ "$EXECUTE" -eq 0 ]]; then
     log ""
     log "DRY RUN — nothing changed. Would:"
+    if [[ -d "$DEST" ]] && sudo find "$DEST" -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
+        if [[ "$MIRROR" -eq 1 ]]; then
+            log "  0. DELETE these existing destination entries (--mirror):"
+            sudo find "$DEST" -mindepth 1 -maxdepth 1 -printf '  %y %p\n' 2>/dev/null \
+                | sed 's/^/ma-migrate:   /'
+        else
+            log "  !! destination is NOT empty and --mirror was not given — the"
+            log "     real run would REFUSE. Entries present:"
+            sudo find "$DEST" -mindepth 1 -maxdepth 1 -printf '  %y %p\n' 2>/dev/null \
+                | sed 's/^/ma-migrate:   /'
+        fi
+    fi
     log "  1. stop $CONTAINER"
     log "  2. cp -a $SRC/. -> $DEST/   (preserves root-owned files; container writes as root)"
     log "  3. verify every file by sha256"
@@ -244,6 +266,12 @@ if [[ -e "$DEST" ]]; then
     fi
     if sudo find "$DEST" -mindepth 1 -print -quit | grep -q .; then
         if [[ "$MIRROR" -eq 1 ]]; then
+            # Destructive maintenance must print the candidate list BEFORE acting
+            # (scripts/AGENTS.md; review: Codex — a generic message then silent
+            # deletion gave the operator nothing to review).
+            log "--mirror will DELETE these destination entries:"
+            sudo find "$DEST" -mindepth 1 -maxdepth 1 -printf '  %y %p\n' 2>/dev/null \
+                | sed 's/^/ma-migrate: /'
             log "clearing non-empty destination (--mirror) so the copy lands clean"
             sudo find "$DEST" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
         else

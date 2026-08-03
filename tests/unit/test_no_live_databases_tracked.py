@@ -213,3 +213,23 @@ def test_migration_rejects_containment_in_both_directions():
     # containment must be decided on canonicalised paths, and before any clearing
     assert 'SRC_ABS="$(readlink -m' in src
     assert src.index("ANCESTOR of the git checkout") < src.index("clearing non-empty destination")
+
+
+def test_containment_helper_handles_the_filesystem_root():
+    """`contains "/" X` built the pattern `//*`, which matches nothing — so
+    ZOE_MA_DATA=/ bypassed BOTH ancestor guards and --mirror would have run
+    `rm -rf` over every top-level entry on the box (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert 'local parent="${1%/}"' in src, "trailing slash must be normalised"
+    assert '[[ "$child" == /* ]]' in src, "root must be treated as ancestor of everything"
+
+
+def test_mirror_lists_deletion_candidates_before_acting():
+    """Destructive maintenance prints the candidate list before deleting
+    (scripts/AGENTS.md). A generic message then silent deletion gave the
+    operator nothing to review, and the dry-run never inspected the destination
+    at all (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "will DELETE these destination entries" in src
+    assert "DELETE these existing destination entries" in src, "dry-run must preview too"
+    assert src.index("will DELETE these destination entries") < src.index("-exec rm -rf")
