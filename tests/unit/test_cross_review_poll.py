@@ -788,6 +788,230 @@ def test_poll_always_returns_within_timeout_plus_one_request(monkeypatch, clock)
     assert clock.now() <= timeout_s + http_timeout, "poll() overran its documented bound"
 
 
+# ------------------------------ the completed-report fetch (Codex #1618, unfixed) ---
+#
+# The last one-shot HTTP call in the lane. `curl -sf "$SERVER/v1/sessions/$SID"
+# -o "$TMPJ"` gave the transcript GET a single attempt with no classification,
+# so a 502, a truncated body or an Omnigent restarting in the second between
+# "poll saw idle" and "read the transcript" discarded a review that had ALREADY
+# BEEN PAID FOR and forced a full re-dispatch -- the one response still exempt
+# from this module's bounded-classification contract.
+
+
+def _report_defaults():
+    """The argparse defaults the wrapper's `report --server` mode runs with."""
+    return crp.build_parser().parse_args(
+        ["report", "--server", SERVER, "--session-id", SID]
+    )
+
+
+def _fetch_report(clock, script=None, monkeypatch=None, **over):
+    d = _report_defaults()
+    kw = {
+        "budget_s": d.budget_s, "interval_s": d.interval_s,
+        "max_gone": d.max_gone, "http_timeout": d.http_timeout_s,
+    }
+    kw.update(over)
+    if script is not None:
+        _patch_http(monkeypatch, script)
+    return crp.fetch_report(SERVER, SID, sleep=clock.sleep, now=clock.now, **kw)
+
+
+def test_report_fetch_defaults_are_the_documented_ones():
+    d = _report_defaults()
+    assert (d.budget_s, d.interval_s, d.max_gone, d.http_timeout_s) == (90.0, 30.0, 3, 60.0)
+    assert d.payload is None, "the fetch mode must not require a payload file"
+
+
+def test_report_fetch_rides_out_a_transient_blip_and_still_prints_the_report(
+    monkeypatch, capsys, clock
+):
+    """The fix, green: three of the incident's own body shapes, then the report."""
+    fake = _patch_http(
+        monkeypatch,
+        [
+            _resp(body=EMPTY_BODY),
+            _resp(ctype="text/html", body=HTML_ERROR_PAGE),
+            _resp(status=502, body=b""),
+            _idle_with_report("BLOCKING: none. CLEAN."),
+        ],
+    )
+    rc = _fetch_report(clock)
+    assert rc == crp.EXIT_OK
+    out = capsys.readouterr()
+    assert out.out.strip() == "BLOCKING: none. CLEAN."
+    assert out.err.strip() == "", "a recovered blip must not alarm"
+    assert fake.calls == 4
+    assert clock.slept == [1, 2, 4], "exponential backoff, one sleep per retry"
+
+
+def test_negative_control_a_one_shot_report_fetch_loses_the_same_review(
+    monkeypatch, capsys, clock
+):
+    """Break the fix: with no retry budget the identical script throws the
+    completed review away, which is exactly what `curl -sf` did.
+
+    Red then green on ONE fixture, so the recovery above cannot be an artefact
+    of a forgiving script.
+    """
+    script = [_resp(status=502, body=b""), _idle_with_report("CLEAN.")]
+
+    fake = _patch_http(monkeypatch, script)
+    rc = crp.fetch_report(SERVER, SID, 0, 30, 3, 60, sleep=clock.sleep, now=clock.now)
+    assert rc == crp.EXIT_POLL_LOST
+    assert fake.calls == 1, "one shot, exactly as `curl -sf` gave it"
+    out = capsys.readouterr()
+    assert out.out.strip() == "", "the review is gone, and nothing is printed as a report"
+    assert len(out.err.strip().splitlines()) == 1
+
+    fake = _patch_http(monkeypatch, script)
+    assert _fetch_report(clock) == crp.EXIT_OK
+    assert capsys.readouterr().out.strip() == "CLEAN."
+    assert fake.calls == 2, "the retry is what recovers it"
+
+
+def test_report_fetch_budget_exhaustion_alarms_once_and_exits_poll_lost(
+    monkeypatch, capsys, clock
+):
+    """Bounded, and bounded EXACTLY: 8 attempts across the 90s budget.
+
+    Fetches land at t = 0, 1, 3, 7, 15, 31, 61, 90 -- the last sleep is clipped
+    to the residual budget, so the loop cannot overshoot it by a backoff step.
+    """
+    fake = _patch_http(monkeypatch, [_resp(status=502, body=b"")])
+    rc = _fetch_report(clock)
+    assert rc == crp.EXIT_POLL_LOST
+    assert fake.calls == 8, "retries must be BOUNDED, not unlimited"
+    assert clock.slept == [1, 2, 4, 8, 16, 30, 29]
+    assert clock.now() == 90 == _report_defaults().budget_s
+    out = capsys.readouterr()
+    assert out.out.strip() == "", "a lost report must never print a 'report'"
+    err = out.err.strip().splitlines()
+    assert len(err) == 1, f"exactly one terminal line, got: {err}"
+    assert SID in err[0] and "re-dispatch required" in err[0]
+    assert "the review finished but its report was lost" in err[0]
+
+
+def test_report_fetch_rides_out_a_60s_restart(monkeypatch, capsys, clock):
+    """Parity with poll(): the budget is sized for a server restart, because a
+    report lost here costs the whole ~20-minute review."""
+
+    class Restart:
+        def __init__(self, clk):
+            self.clk = clk
+            self.first_failure = None
+            self.failures = 0
+
+        def __call__(self, url, timeout):
+            if self.first_failure is None:
+                self.first_failure = self.clk.now()
+            if self.clk.now() - self.first_failure < 60:
+                self.failures += 1
+                raise ConnectionRefusedError(111, "connection refused")
+            return _idle_with_report("CLEAN.")
+
+    restart = Restart(clock)
+    monkeypatch.setattr(crp, "_http_get", restart)
+    assert _fetch_report(clock) == crp.EXIT_OK, "a 60s restart must NOT lose the report"
+    assert capsys.readouterr().out.strip() == "CLEAN."
+    assert restart.failures == 6, "6 attempts fall inside the 60s outage (t=0..31)"
+    assert clock.now() == 61, "and the 7th, at t=61, recovers it"
+
+
+def test_report_fetch_confirms_a_vanished_transcript_before_believing_it(
+    monkeypatch, capsys, clock
+):
+    fake = _patch_http(monkeypatch, [_resp(status=404, body=NOT_FOUND_BODY)])
+    rc = _fetch_report(clock)
+    assert rc == crp.EXIT_POLL_LOST
+    assert fake.calls == 3 == _report_defaults().max_gone, (
+        "one 404 is not proof; the confirmation must be bounded too"
+    )
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1
+    assert SID in err[0] and "re-dispatch required" in err[0]
+    assert "disappeared before its report" in err[0]
+
+
+def test_report_fetch_does_not_retry_a_well_formed_but_unusable_payload(
+    monkeypatch, capsys, clock
+):
+    """A 200 that parses is a VERDICT, not a transport fault: classify it once.
+
+    Retrying it would burn the budget re-reading a payload that will not change
+    and replace a precise alarm with a generic timeout one.
+    """
+    drifted = _resp(body=json.dumps({"id": SID, "status": "idle", "items": 1}).encode())
+    fake = _patch_http(monkeypatch, [drifted])
+    rc = _fetch_report(clock)
+    assert rc == crp.EXIT_POLL_LOST
+    assert fake.calls == 1 and clock.slept == []
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1
+    assert "non-list 'items'" in err[0] and "re-dispatch required" in err[0]
+
+
+def test_report_fetch_returns_within_budget_plus_one_request(monkeypatch, clock):
+    """The bound cross_review.sh's BUDGET arithmetic relies on.
+
+    Against a stalling endpoint the budget check sits BEFORE each new fetch, so
+    at most one sleep (clipped to the residual budget) plus one request lands
+    past --budget-s.
+    """
+    d = _report_defaults()
+    stall = Stalling(clock)
+    monkeypatch.setattr(crp, "_http_get", stall)
+    rc = _fetch_report(clock)
+    assert rc == crp.EXIT_POLL_LOST
+    assert clock.now() <= d.budget_s + d.http_timeout_s, "fetch_report() overran its bound"
+    assert stall.calls >= 2, "even a stalling endpoint gets more than one attempt"
+
+
+def test_report_cli_wires_both_modes_and_rejects_an_ambiguous_one(
+    monkeypatch, tmp_path, capsys
+):
+    """The FILE mode stays -- it is the only way to drive an unusable payload
+    shape offline -- so the two modes must be selected explicitly."""
+    _patch_http(monkeypatch, [_idle_with_report("fetched")])
+    assert crp.main(["report", "--server", SERVER, "--session-id", SID]) == crp.EXIT_OK
+    assert capsys.readouterr().out.strip() == "fetched"
+
+    p = tmp_path / "s.json"
+    p.write_bytes(json.dumps({"items": [
+        {"type": "message", "data": {"role": "assistant", "content": "from file"}}
+    ]}).encode())
+    assert crp.main(["report", "--session-id", SID, "--payload", str(p)]) == crp.EXIT_OK
+    assert capsys.readouterr().out.strip() == "from file"
+
+    for argv in (
+        ["report", "--session-id", SID],
+        ["report", "--session-id", SID, "--payload", str(p), "--server", SERVER],
+    ):
+        assert crp.main(argv) == crp.EXIT_USAGE
+        out = capsys.readouterr()
+        assert out.out.strip() == ""
+        assert len(out.err.strip().splitlines()) == 1
+        assert "EXACTLY ONE" in out.err
+
+
+def test_wrapper_fetches_the_report_through_the_poller_not_a_one_shot_curl():
+    """Structural: the wrapper must not reintroduce an unclassified GET."""
+    code = "\n".join(
+        l for l in _WRAPPER_PATH.read_text().splitlines() if not l.lstrip().startswith("#")
+    )
+    assert 'report --server "$SERVER"' in code
+    assert '--budget-s "$REPORT_BUDGET_S"' in code
+    assert '--http-timeout-s "$REPORT_HTTP_TIMEOUT_S"' in code
+    curls = re.findall(r"^\s*curl\b[^\n]*", code, re.MULTILINE)
+    assert len(curls) == 1, f"the only remaining curl is the session-create POST: {curls}"
+    assert "-X POST" in curls[0] and "/v1/sessions" in curls[0]
+    assert "FETCH_MAX_S" not in code, "the one-shot report timeout must stay gone"
+    assert "TMPJ" not in code, "no temp payload file survives the fetch mode"
+    # Declaring the constants is not counting them: both terms must be IN the
+    # OVERHEAD sum, or the startup inversion check under-counts the wall.
+    assert "REPORT_BUDGET_S + REPORT_HTTP_TIMEOUT_S" in code
+
+
 # ------------------------------------------- wrapper budget vs caller timeout ---
 
 
@@ -815,7 +1039,10 @@ def _wrapper_budget():
         "register-http": _sh_const("REGISTER_HTTP_TIMEOUT_S"),
         "kick": _sh_const("KICK_MAX_S"),
         "poll-http": _sh_const("POLL_HTTP_TIMEOUT_S"),
-        "fetch": _sh_const("FETCH_MAX_S"),
+        # The report GET is no longer one curl --max-time: it is a retry budget
+        # plus one request, and fetch_report() returns within their sum.
+        "report-budget": _sh_const("REPORT_BUDGET_S"),
+        "report-http": _sh_const("REPORT_HTTP_TIMEOUT_S"),
         "cleanup": _sh_const("CLEANUP_MAX_S"),
         # `timeout -k` escalation, once per timeout-wrapped phase (kick, cleanup).
         "kill-after": 2 * _sh_const("TIMEOUT_KILL_AFTER_S"),
@@ -830,6 +1057,11 @@ def test_wrapper_worst_case_wall_fits_inside_the_caller_timeout():
     EXIT trap and the detached worker outlives the released flock. The old
     numbers (60 create + 60 register + 2400 poll + 60 fetch = 2580) already
     exceeded the caller's 2500s cap before counting the kick or the cleanup.
+
+    Retrying the report fetch bought that phase 90s of budget on top of its 60s
+    request timeout (it was a single 60s curl), so the shipped worst case moved
+    2250 -> 2340 against the same 2500s cap: 160s of margin, deliberately spent
+    on not throwing away a finished review.
     """
     worst, caller, phases = _wrapper_budget()
 
@@ -845,6 +1077,13 @@ def test_wrapper_worst_case_wall_fits_inside_the_caller_timeout():
     assert worst < caller, f"budget inversion: {worst}s >= {caller}s ({phases})"
     # Real margin, not one second of it.
     assert caller - worst >= 120, f"only {caller - worst}s of margin ({phases})"
+    # The report phase is the retry budget PLUS one request, matching
+    # fetch_report()'s documented bound -- counting only one of the two would
+    # under-count the wall by exactly the amount that used to invert this sum.
+    assert phases["report-budget"] + phases["report-http"] == 150
+    assert (worst, caller - worst) == (2340, 160), (
+        f"shipped budget moved: {worst}s worst case, {caller - worst}s margin ({phases})"
+    )
 
     # And the old configuration really was inverted, so this test can fail.
     old = worst - phases["poll"] + 2400
@@ -940,3 +1179,12 @@ def test_agents_md_publishes_the_corrected_bounds():
     assert "601s" in doc, "the stalling-endpoint wall must be published"
     assert "--timeout-s + --http-timeout-s" in doc
     assert str(_sh_env_default("CROSS_REVIEW_TIMEOUT_S")) in doc, "the poll default must be published"
+
+    # The report fetch: its budget, its bound, and that a retried phase costs
+    # budget PLUS one request (the term an earlier sum would have dropped).
+    assert "--budget-s + --http-timeout-s" in doc
+    assert f"**{_sh_const('REPORT_BUDGET_S')}s**" in doc, "the report budget must be published"
+    worst, caller, _phases = _wrapper_budget()
+    assert f"**{worst}s against the caller's {caller}s**" in doc, (
+        "the shipped worst case must be published, and it moved"
+    )

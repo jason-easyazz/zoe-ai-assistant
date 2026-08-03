@@ -14,9 +14,11 @@
 # 2 = kick/poll failure or silent-death alarm (session ended with no report).
 #
 # Every HTTP body is parsed by scripts/maintenance/cross_review_poll.py, never
-# by an inline `json.load`. That module checks HTTP status / emptiness /
-# content-type before parsing, retries transient faults with bounded backoff,
-# and on exhaustion prints ONE terminal line naming the session and
+# by an inline `json.load` — and every RESPONSE in the lane (create, poll,
+# report) is fetched AND classified there, none of them one-shot. That module
+# checks HTTP status / emptiness / content-type before parsing, retries
+# transient faults with bounded backoff, and on exhaustion prints ONE terminal
+# line naming the session and
 # "re-dispatch required". Its distinct exit codes (3 never-registered,
 # 4 poll-lost, 5 timeout, 6 never-running, 7 dispatch-failed) are diagnostic;
 # this wrapper collapses them all to its long-standing public `exit 2`.
@@ -77,7 +79,13 @@ CREATE_MAX_S=60             # curl --max-time on POST /v1/sessions
 REGISTER_HTTP_TIMEOUT_S=30  # await-registration overshoots its budget by at most one request
 KICK_MAX_S=30               # timeout(1) around the detached docker-exec kick
 POLL_HTTP_TIMEOUT_S=60      # poll() returns within --timeout-s + one request
-FETCH_MAX_S=60              # curl --max-time on the report GET
+# The report GET was the last one-shot HTTP call in the lane: a single
+# `curl -sf` whose failure discarded a COMPLETED review and forced a full
+# re-dispatch (Codex, #1618 — closed without a fix at the time). It now runs
+# through the poller's classify-and-retry path like everything else, so it
+# costs a retry budget plus one request instead of one --max-time.
+REPORT_BUDGET_S=90          # fetch_report() sleep/retry budget; rides out a ~60s restart
+REPORT_HTTP_TIMEOUT_S=60    # fetch_report() returns within --budget-s + one request
 CLEANUP_MAX_S=20            # timeout(1) around stop_worker's docker exec
 # `timeout N cmd` is NOT a hard bound: it sends TERM and then waits forever if
 # the command ignores it, so a wedged docker CLI would run past the advertised
@@ -86,7 +94,7 @@ CLEANUP_MAX_S=20            # timeout(1) around stop_worker's docker exec
 # BOTH timeout-wrapped phases, so it is counted twice.
 TIMEOUT_KILL_AFTER_S=5      # timeout -k: the KILL escalation after TERM is ignored
 OVERHEAD_S=$(( LOCK_WAIT_MAX_S + CREATE_MAX_S + REGISTER_TIMEOUT_S + REGISTER_HTTP_TIMEOUT_S + KICK_MAX_S ))
-OVERHEAD_S=$(( OVERHEAD_S + POLL_HTTP_TIMEOUT_S + FETCH_MAX_S + CLEANUP_MAX_S ))
+OVERHEAD_S=$(( OVERHEAD_S + POLL_HTTP_TIMEOUT_S + REPORT_BUDGET_S + REPORT_HTTP_TIMEOUT_S + CLEANUP_MAX_S ))
 OVERHEAD_S=$(( OVERHEAD_S + 2 * TIMEOUT_KILL_AFTER_S ))
 WORST_CASE_S=$(( TIMEOUT_S + OVERHEAD_S ))
 [ "$WORST_CASE_S" -lt "$CALLER_TIMEOUT_S" ] || {
@@ -214,7 +222,6 @@ CLEANED=0
 cleanup() {
   [ "$CLEANED" -eq 1 ] && return
   CLEANED=1
-  rm -f "${TMPJ:-}"
   if [ "$REVIEW_DONE" -ne 1 ]; then
     r=$(stop_worker)
     echo "cleanup: worker signal result: $r (session $SID)" >&2
@@ -263,15 +270,21 @@ case "$status" in
   *) echo "ALARM: session ended in error status '$status' — inspect session $SID" >&2; exit 2 ;;
 esac
 
-# Report extraction. The session JSON goes through a temp FILE, never a pipe
-# into stdin (SC2259; polly finding #1 on #1578, reproduced live). An idle
-# session with NO messages is the silent-launch-failure signature — alarm,
-# never report it as a clean review.
+# Report extraction. The FETCH lives in the poller too (`report --server`), so
+# the transcript GET gets the same classification + bounded backoff as every
+# other response in this lane. It used to be a one-shot
+# `curl -sf … -o "$TMPJ"`: a 502, a truncated body or an Omnigent restarting in
+# the second between "poll saw idle" and this line threw away a review that had
+# already cost ~20 minutes of worker, and the only remedy was a full
+# re-dispatch — the one response in the lane still exempt from the
+# bounded-classification contract (Codex, #1618).
+#
+# An idle session with NO messages is the silent-launch-failure signature —
+# alarm, never report it as a clean review. The poller prints its own ALARM for
+# every unusable payload shape (unreachable, empty, non-JSON, non-object,
+# non-list `items`, zero assistant messages) and for an exhausted fetch budget;
+# this wrapper only maps the outcome onto its public `exit 2`, never set -e's
+# raw 1 (Codex, #1578).
 REVIEW_DONE=1  # normal completion — the cleanup trap must not kill a finished session's remnants
-TMPJ=$(mktemp)
-curl -sf --connect-timeout 5 --max-time "$FETCH_MAX_S" "$SERVER/v1/sessions/$SID" -o "$TMPJ" \
-  || { echo "ALARM: could not fetch session $SID for the report" >&2; exit 2; }
-# The extractor prints its own ALARM for every unusable payload shape (missing,
-# empty, non-JSON, non-object, zero assistant messages) — this wrapper only maps
-# the outcome onto its public `exit 2`, never set -e's raw 1 (Codex, #1578).
-python3 "$POLLER" report --session-id "$SID" --payload "$TMPJ" || exit 2
+python3 "$POLLER" report --server "$SERVER" --session-id "$SID" \
+  --budget-s "$REPORT_BUDGET_S" --http-timeout-s "$REPORT_HTTP_TIMEOUT_S" || exit 2

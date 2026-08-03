@@ -93,8 +93,9 @@ only (never wired into greptile-gate); exit 2 = alarm (silent kick death,
 error-status session, or unreachable server) and must never be read as a clean
 review. Protocol + validation record: `docs/knowledge/omnigent-cross-review.md`.
 
-**Never parse an HTTP body in the shell.** Every response — session create,
-poll, report — goes through `scripts/maintenance/cross_review_poll.py`, which
+**Never parse an HTTP body in the shell, and never fetch one ONE-SHOT.** Every
+response — session create, poll, report — goes through
+`scripts/maintenance/cross_review_poll.py`, which
 checks HTTP status, emptiness and content-type BEFORE parsing, retries
 transient faults (empty body / non-JSON / 5xx / connection refused / a truncated
 read — `http.client.HTTPException` derives from `Exception`, so it escapes a
@@ -121,6 +122,21 @@ slow-but-healthy Omnigent a sub-second timeout and manufacture a false
 poll-lost. `poll()` always returns within `--timeout-s + --http-timeout-s`. All
 of these numbers are pinned by `tests/unit/test_cross_review_poll.py`.
 
+**The report fetch is bounded-retried too — it is the one that costs a whole
+review.** `report` takes either `--server/--session-id` (FETCH: the same
+`fetch_session` classification plus exponential backoff, default budget **90s**,
+`--http-timeout-s` 60s, returns within `--budget-s + --http-timeout-s`) or
+`--payload <file>` (read a payload the caller already holds; keep it — it is the
+only way to drive an unusable payload shape offline). The wrapper uses the fetch
+mode: the transcript GET used to be a one-shot `curl -sf … -o "$TMPJ"`, so a
+502, a truncated body or an Omnigent restart in the second between "poll saw
+idle" and "read the transcript" discarded a COMPLETED review — ~20 minutes of
+worker — and forced a full re-dispatch. Fetches land at t = 0, 1, 3, 7, 15, 31,
+61, 90, so a ~60s restart is ridden out here exactly as it is in `poll()`. A
+200 that parses is a VERDICT, not a transport fault: an unusable payload shape
+(non-list `items`, zero assistant messages) alarms on the FIRST response rather
+than burning the budget re-reading it.
+
 **The wrapper's worst-case wall must stay BELOW its caller's timeout.**
 `services/zoe-data/pipeline_cross_review.py` runs the script under
 `subprocess.run(timeout=2500)`, which kills only the shell — the EXIT trap never
@@ -128,12 +144,15 @@ fires, so the detached polly worker outlives the released flock and the next
 invocation runs a second polly beside the orphan. Every phase is therefore
 explicitly bounded (the `flock -w` wait, create curl, registration budget + its
 HTTP timeout, a `timeout(1)`-wrapped docker-exec kick, the poll budget + its
-HTTP timeout, the report curl, a `timeout(1)`-wrapped cleanup — **every
-`timeout` carries `-k`**, since without it TERM is sent and then waited on
-forever, which is not a bound at all), and the wrapper
+HTTP timeout, the report fetch budget + its HTTP timeout, a `timeout(1)`-wrapped
+cleanup — **every `timeout` carries `-k`**, since without it TERM is sent and
+then waited on forever, which is not a bound at all), and the wrapper
 CHECKS the sum at startup and exits 1 on inversion — so raising
 `CROSS_REVIEW_TIMEOUT_S` fails loudly rather than silently re-inverting. Default
-poll budget is 1800s (not 2400) to leave real margin. **The lock wait is IN the
+poll budget is 1800s (not 2400) to leave real margin; the shipped worst case is
+**2340s against the caller's 2500s**, i.e. 160s of margin. **A retried phase
+costs its budget AND one request** — the report fetch adds `90 + 60`, not 90, so
+count both terms or the startup check under-counts the wall. **The lock wait is IN the
 sum**: the caller's timer starts at `subprocess.run`, BEFORE the lock is
 acquired, so an unbounded wait leaves less than the post-lock worst case and the
 run is then killed *after* it has created a session and kicked a worker.
