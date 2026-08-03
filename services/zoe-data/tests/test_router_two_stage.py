@@ -134,6 +134,60 @@ def test_validate_call_filters_illegal_names_and_args():
         "made_up_tool", {}, ["made_up_tool"]) == (None, {})
 
 
+def test_call_re_greedy_inner_is_coupled_to_brace_free_grammar():
+    """PIN: _CALL_RE's greedy `(.*)` depends on `inner ::= [^{}]*`.
+
+    The sidecar is grammar-constrained, so nested braces are IMPOSSIBLE in
+    production — this input exists only to make the coupling loud. If a
+    grammar change ever reddens this test, that is the conscious decision
+    point: widen the grammar and _CALL_RE together, or keep inner brace-free.
+    """
+    # Line-exact (see the two-call pin): a substring check would survive an
+    # alternation like `inner ::= [^{}]* | nested`.
+    assert "inner ::= [^{}]*" in router_two_stage.build_grammar(
+        ["set_timer"]).splitlines()
+
+    raw = "call:set_timer{label:{nested:1},minutes:10}"
+    name, inner = router_two_stage._CALL_RE.search(raw).groups()
+    # The tool NAME — the actual routing decision — survives regardless.
+    assert name == "set_timer"
+    # ...but the greedy tail swallows the inner braces wholesale,
+    assert inner == "label:{nested:1},minutes:10"
+    # and the advisory args come out mangled: `label` empty, `nested` leaked
+    # up a level. Harmless today (args are advisory and validate_call filters
+    # them to the schema); asserted so it can never change silently.
+    assert router_two_stage.parse_call(raw) == (
+        "set_timer", {"label": "", "nested": 1, "minutes": 10})
+
+
+def test_call_re_over_matches_two_calls_in_one_string():
+    """PIN: _CALL_RE also assumes the grammar emits exactly ONE call.
+
+    `root ::= chat | call` permits a single call, so a two-call string is
+    impossible in production. Same rationale as the nested-brace pin: if the
+    grammar ever learns to emit a sequence, this test reddens and that is the
+    conscious decision point — make the extraction non-greedy / iterate
+    matches, or keep root single-call.
+    """
+    # Line-exact, NOT a substring: `root ::= chat | call+` contains
+    # `root ::= chat | call`, so `in <str>` would silently keep passing after
+    # exactly the widening this test exists to catch.
+    assert "root ::= chat | call" in router_two_stage.build_grammar(
+        ["get_time"]).splitlines()
+
+    raw = "call:get_time{} call:add_reminder{title:<escape>bins<escape>}"
+    name, inner = router_two_stage._CALL_RE.search(raw).groups()
+    # The FIRST name wins, but the greedy tail runs past that call's own `}`
+    # and swallows the second call whole,
+    assert name == "get_time"
+    assert inner == "} call:add_reminder{title:<escape>bins<escape>"
+    # so the second call's NAME leaks in as an arg key on the first. Harmless
+    # today (validate_call drops non-schema keys); asserted so a grammar
+    # change to a call sequence can't degrade extraction silently.
+    assert router_two_stage.parse_call(raw) == (
+        "get_time", {"call": "add_reminder", "title": "bins"})
+
+
 def test_build_grammar_contains_shortlist_and_chat_escape():
     g = router_two_stage.build_grammar(["get_time", "set_timer"])
     assert '"get_time" | "set_timer"' in g
