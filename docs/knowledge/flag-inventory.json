@@ -730,6 +730,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CORE_MEMORY_TIMEOUT_MS": {
+        "defaults": [
+          "'2000'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_CORE_MODEL_ID": {
         "defaults": [
           "'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'"
