@@ -31,6 +31,16 @@ timestamp: 2026-07-06T21:15:00Z
 > The snapshot below is retained as the evidence that motivated the fix — do not
 > read its numbers as current.
 
+> **STATUS 2026-08-03 — the two `flue-*` sidecars were MISSED by that fix and are
+> now capped in their templates.** `flue-zoe-brain` is not "lab": under
+> `ZOE_BRAIN_BACKEND=flue` it is the **top** dispatch lane (flue > core > legacy),
+> and it was running `MemoryMax=infinity` / `MemorySwapMax=infinity` while 87% paged
+> out. `flue-zoe-telegram` had no memory directives at all. Measurements, chosen
+> caps and the operator apply/rollback sequence are in
+> [the 2026-08-03 section below](#2026-08-03--flue-sidecar-caps-apply-runbook).
+> Pinned by `tests/unit/test_systemd_memory_protection.py` so the gap cannot
+> silently reopen for the next unit.
+
 Read-only profile of the live host taken 2026-07-06 ~21:10 (host uptime 3d 6h). Numbers are a
 point-in-time snapshot — calmer than the reviewed spike (1.1–2.6 GB free, swap 23 GB deep) but the
 ownership shape is the durable fact. Context: the 2026-07-04 architecture review flagged memory as
@@ -169,3 +179,186 @@ usage signal + idle monitor task) is generic to any docker sidecar with a clear 
 6. **Generalize the LiveKit reap** (voice_livekit.py pattern) to idle docker sidecars: at snapshot,
    homeassistant (370 MB swap) and music-assistant (325 MB swap) are the visible candidates; Kokoro
    is already de-facto reaped by swap.
+
+---
+
+## 2026-08-03 — flue sidecar caps (apply runbook)
+
+The #1409 pass fixed the units it knew about. Both `flue-*` sidecars shipped
+uncapped and stayed that way, so this is the same finding a second time: the
+protection was applied per-unit by hand and nothing enforced the *class*.
+
+### Measured, read-only, on the live Orin
+
+Box at sample time: **15 Gi total, 190 Mi available, 11 Gi of 57 Gi swap in use.**
+Both units had been up 3h15m (restarted 11:28 / 11:30 AWST).
+
+| | `flue-zoe-brain` (PID 1562) | `flue-zoe-telegram` (PID 6584) |
+|---|---|---|
+| `VmRSS` | **2.0 MB** | **6.1 MB** |
+| `VmSwap` | **70.4 MB** | **65.2 MB** |
+| `VmHWM` (peak RSS) | **132.8 MB** | **145.9 MB** |
+| cgroup `memory.current` | 10.4 MB | 19.7 MB |
+| cgroup `memory.swap.current` | 72.1 MB | 68.2 MB |
+| effective `MemoryLow` | 512M *(local drop-in)* | **0** |
+| `MemoryMax` / `MemorySwapMax` | `infinity` / `infinity` | `infinity` / `infinity` |
+
+**87%** of the brain lane and **78%** of the Telegram bridge were on disk.
+
+Two facts from the same sample do the load-bearing work:
+
+- **`MemoryLow` is not swap immunity — proven here, not argued.** `flue-zoe-brain`
+  has carried `MemoryLow=512M` as a drop-in since 2026-07-09 and was *still* 87%
+  swapped. In the same instant `llama-server` (`MemoryLow=6G` **+
+  `MemorySwapMax=0`**) held 6.38 GB resident and **0** swap. The swap directive is
+  what holds the line; the floor only changes reclaim ordering.
+- **`MemoryMax` is safe on these two in a way it is not on `llama-server`.** Both
+  are pure userspace Node — verified **0** CUDA/NvMap mappings in
+  `/proc/<pid>/maps` — so cgroup accounting is complete and a ceiling genuinely
+  bounds them. The "hard ceiling + no swap turns a spike into an OOM kill" caveat
+  is about a 5.6 GB unified-memory process, not a ~130 MB sidecar.
+
+Worth knowing when reading any `MemoryLow` on this box: every ancestor cgroup
+(`user.slice` → `user-1000.slice` → `user@1000.service` → `app.slice`) has
+`memory.low=0`, and `/sys/fs/cgroup` is mounted with `memory_recursiveprot`. The
+leaf floors are set, the branches above them are not.
+
+### Chosen caps
+
+| Unit | `MemorySwapMax` | `MemoryLow` | `MemoryMax` | why |
+|---|---|---|---|---|
+| `flue-zoe-brain` | `0` | `512M` | `1G` | floor = 3.9x measured peak and matches the value already live, so the template converges with the box instead of being overridden by it; ceiling = 7.7x, deliberately generous because a breach OOM-kills the live brain lane |
+| `flue-zoe-telegram` | `0` | `256M` | `768M` | floor = 1.75x measured peak, lower than the brain because a cold Telegram reply is a slow message not a voice fault; ceiling = 5.3x, tighter because `Restart=always` makes a kill cheap here |
+
+`VmHWM` was sampled 3h after a restart on an **already-starved** box, so the
+kernel never let either process grow. Treat both peaks as a **lower bound** on the
+unstressed peak — that is why the ceilings are 5-8x rather than the usual 2x.
+Re-read `memory.current` after a week of normal traffic and tighten if warranted.
+
+Headroom: this adds 768 MB to the box's soft-protected total (llama 6G + kokoro
+3G + zoe-data 2G = 11G → **11.75G of 15.6G**). `MemoryLow` is a protection
+*ceiling*, not a reservation — it costs nothing while unused.
+
+### Apply — operator steps
+
+Nothing below is done by an agent, and none of it is urgent: the units are
+*already* running degraded, so waiting for a genuinely quiet moment costs nothing.
+
+**1. Check the box can absorb a restart.** This is the real precondition.
+
+```bash
+free -h                      # want >1 GB available, NOT the 190 MB of the sample
+systemctl --user is-active llama-server kokoro-tts zoe-data
+```
+
+`MemorySwapMax=0` means the restarted process must fault its ~150 MB working set
+into **RAM that cannot be pushed back out**. At 190 MB available that allocation
+competes directly with the voice stack, and the loser is chosen by the kernel.
+150 MB is small, so the risk is modest — but it is not zero, and the whole point
+of the change is that these pages can no longer be relieved by swap. Restart at an
+idle time.
+
+(Setting `memory.swap.max=0` on the *running* cgroup does not force existing swap
+back in — the kernel just stops swapping out from then on. The pressure moment is
+the restart, not the reload.)
+
+**2. Write the drop-ins — do NOT copy the templates over the installed units.**
+The installed copies carry host-specific edits (`llama-server`'s binary/model
+paths are the reason this rule exists). Mirror the tracked values in a drop-in:
+
+```bash
+mkdir -p ~/.config/systemd/user/flue-zoe-brain.service.d
+cat > ~/.config/systemd/user/flue-zoe-brain.service.d/memory.conf <<'CONF'
+# Live brain lane (ZOE_BRAIN_BACKEND=flue) must not be paged out. Measured
+# 2026-08-03: VmRSS 2.0 MB vs VmSwap 70.4 MB (87% swapped) under MemoryLow alone.
+# Tracked in scripts/setup/systemd/flue-zoe-brain.service.
+[Service]
+MemorySwapMax=0
+MemoryLow=512M
+MemoryMax=1G
+CONF
+
+mkdir -p ~/.config/systemd/user/flue-zoe-telegram.service.d
+cat > ~/.config/systemd/user/flue-zoe-telegram.service.d/memory.conf <<'CONF'
+# Channel bridge had NO memory directives, so cgroup memory.low was 0. Measured
+# 2026-08-03: VmRSS 6.1 MB vs VmSwap 65.2 MB.
+# Tracked in scripts/setup/systemd/flue-zoe-telegram.service.
+[Service]
+MemorySwapMax=0
+MemoryLow=256M
+MemoryMax=768M
+CONF
+
+systemctl --user daemon-reload
+```
+
+The brain's existing `memory.conf` held only `MemoryLow=512M`; the heredoc
+replaces it and keeps that value, so the redundant
+`~/.config/systemd/user.control/flue-zoe-brain.service.d/50-MemoryLow.conf`
+(written by an old `systemctl set-property`, same 512M) stays consistent and can
+be left alone.
+
+**3. Restart the brain — expect a brief lane outage, and verify the fallback.**
+zoe-data dispatches **flue > core > legacy**, so while `:3578` is down chat
+should keep answering on the `core` lane. That fallback is the thing to confirm,
+because a silent failure here looks like "Zoe went quiet".
+
+```bash
+# Probe chat BEFORE restarting, so you have a known-good comparison.
+curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' http://localhost:8000/health
+
+systemctl --user restart flue-zoe-brain
+
+# Immediately, while :3578 is still coming up — zoe-data must still answer.
+curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' http://localhost:8000/health
+# ...and a real turn through the fallback lane (expect a slower but valid reply):
+#   ask Zoe anything from the panel or Telegram, or drive /api/chat directly.
+```
+
+If chat fails during the window that is a **fallback bug**, not a memory bug —
+roll back (step 6) and investigate `brain_dispatch.py` separately.
+
+**4. Post-restart checks.**
+
+```bash
+systemctl --user status flue-zoe-brain --no-pager      # active (running)
+curl -sf http://localhost:3578/health                  # brain lane back up
+systemctl --user show flue-zoe-brain \
+  -p MemorySwapMax -p MemoryLow -p MemoryMax
+#   expect MemorySwapMax=0, MemoryLow=536870912, MemoryMax=1073741824
+```
+
+Then drive **one real brain turn** and confirm it is served by the flue lane, not
+still falling back. Checking the unit is active is not the same as checking it is
+being *used* — what exists is not what runs.
+
+**5. Restart Telegram** (independent, no brain impact):
+
+```bash
+systemctl --user restart flue-zoe-telegram
+systemctl --user show flue-zoe-telegram -p MemorySwapMax -p MemoryLow -p MemoryMax
+```
+Send the bot a message to confirm the bridge reconnected.
+
+**6. Confirm the fix took, ~an hour later.** The success signal is swap that
+stops growing:
+
+```bash
+grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value flue-zoe-brain)/status
+# VmSwap should be 0 and stay 0
+```
+
+### Rollback
+
+```bash
+rm -f ~/.config/systemd/user/flue-zoe-brain.service.d/memory.conf
+rm -f ~/.config/systemd/user/flue-zoe-telegram.service.d/memory.conf
+systemctl --user daemon-reload
+systemctl --user restart flue-zoe-brain flue-zoe-telegram
+```
+
+Removing the drop-in reverts to the installed unit. If the *template* has also
+been installed on this host, the caps live there too — check
+`systemctl --user cat flue-zoe-brain` and remove the block from
+`~/.config/systemd/user/flue-zoe-brain.service` as well, or the rollback is
+incomplete.

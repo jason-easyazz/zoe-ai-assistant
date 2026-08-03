@@ -335,12 +335,29 @@ reply after idle) rather than a resource one.
 |------|-----------------|-------------|-------------|
 | `llama-server` | `0` | `6G` | *(none — see below)* |
 | `kokoro-tts`   | `0` | `3G` | `4G` |
+| `flue-zoe-brain` | `0` | `512M` | `1G` |
+| `flue-zoe-telegram` | `0` | `256M` | `768M` |
 | `serena-mcp`   | `2G` | — | `2G` (dev tooling, deliberately yields) |
+
+The set above is pinned by `tests/unit/test_systemd_memory_protection.py`. It
+enforces the *doctrine* (swap denied, a floor set, and a ceiling paired with the
+denial) rather than the exact numbers, so retuning a cap is fine and dropping one
+is not. Add a new latency-critical user unit to `NO_SWAP_UNITS` there.
 
 Measured on the live box 2026-07-18, **before** these directives existed:
 llama-server had **1,457 MB** and kokoro-tts **1,489 MB** paged out — ~3 GB of the
 voice path on disk. `kokoro-tts` had no memory directives at all (cgroup
 `memory.low` was `0`), so the kernel reclaimed it first.
+
+The same thing was true of both `flue-*` sidecars until 2026-08-03 — that pass
+fixed the units it knew about and nothing enforced the class. `flue-zoe-brain` is
+the **top** brain lane under `ZOE_BRAIN_BACKEND=flue` (flue > core > legacy) and
+was 87% paged out; `flue-zoe-telegram` had no directives at all. Measurements,
+sizing rationale and the operator apply/rollback sequence:
+[`docs/knowledge/memory-pressure-profile.md`](../../../docs/knowledge/memory-pressure-profile.md)
+(2026-08-03 section). **Applying these live means a drop-in, not a template copy**
+— the installed units carry host-specific edits (llama-server's binary and model
+paths), so `cp`-ing a template over one clobbers them.
 
 Two things worth knowing before changing these:
 
@@ -358,8 +375,16 @@ Two things worth knowing before changing these:
   turns a transient spike into an OOM kill. Kokoro can take one because it is
   bounded (~2.3 GB CUDA-resident, does not grow with load).
 
+- **A ceiling is only meaningful where cgroup accounting is complete.** Both
+  `flue-*` sidecars are pure userspace Node (verified 0 CUDA/NvMap mappings in
+  `/proc/<pid>/maps`), so `MemoryMax` genuinely bounds them. On Tegra, a process
+  allocating through NvMap does *not* have its GPU/unified pages fully accounted
+  to the cgroup — which is the other half of why llama-server gets no ceiling.
+
 Headroom check (why this fits): brain + kokoro fully resident ≈ **9.6 GB** of
-15.6 GB, leaving ~6 GB for zoe-data (~0.9 GB) and everything else.
+15.6 GB, plus the flue floors (768 MB combined) ≈ **10.4 GB**, leaving ~5 GB for
+zoe-data (~0.9 GB) and everything else. `MemoryLow` is a protection *ceiling*,
+not a reservation — an unused floor costs nothing.
 
 **Do not add `Nice=-N` or `OOMScoreAdjust=-N` to user units.** A `--user` unit
 cannot raise priority (`ulimit -e` is 0 here). systemd accepts the directive, the

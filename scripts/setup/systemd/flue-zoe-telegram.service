@@ -30,6 +30,36 @@ RestartSec=5
 # a missing TELEGRAM_BOT_TOKEN anyway.
 EnvironmentFile=%h/assistant/labs/flue-zoe-telegram/.env
 
+# ── Keep the channel bridge out of swap ──────────────────────────────────────
+# Same gap as flue-zoe-brain.service, and worse: measured on the live Orin
+# 2026-08-03 this unit had NO memory directives at all, so its cgroup
+# `memory.low` was 0 — zero reclaim protection, the exact state kokoro-tts was
+# in before #1409. It held VmRSS 6.1 MB against VmSwap 65.2 MB (78% paged out),
+# with MemoryMax and MemorySwapMax both `infinity`.
+#
+# Consequence is a product bug, not just a number: the first Telegram reply
+# after an idle period faults the bridge back from disk before it can even
+# reach zoe-data. This unit is also what `zoe_crash_loop_watch.py` sends its
+# alerts through, so it must not be cold exactly when the box is in trouble.
+#
+# Pure userspace Node (0 CUDA/NvMap mappings verified in /proc/<pid>/maps), so
+# cgroup accounting is complete and MemoryMax genuinely bounds it.
+#
+# Sizing, from measurement (VmHWM = peak RSS = 145.9 MB):
+#   MemoryLow=256M  — 1.75x the measured peak, enough to hold the working set.
+#                     A lower floor than the brain's 512M on purpose: a cold
+#                     Telegram reply is a slow message, not a voice-path fault.
+#   MemoryMax=768M  — 5.3x the measured peak. Tighter than the brain's 1G
+#                     because Restart=always makes an OOM kill cheap here.
+# VmHWM was sampled 3h after a restart on an already-starved box, so it is a
+# LOWER bound on the unstressed peak — hence the multiples above 2x.
+#
+# Apply runbook: docs/knowledge/memory-pressure-profile.md.
+# No Nice=-N / OOMScoreAdjust=-N — silently dropped on a --user unit.
+MemorySwapMax=0
+MemoryLow=256M
+MemoryMax=768M
+
 # Light hardening (user-service compatible).
 NoNewPrivileges=true
 RestrictRealtime=true

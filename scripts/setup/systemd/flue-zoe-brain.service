@@ -32,6 +32,48 @@ Environment=PORT=3578
 # ZOE_BRAIN_TOKEN/ZOE_BRAIN_OPEN anyway.
 EnvironmentFile=%h/assistant/labs/flue-zoe-brain/.env
 
+# ── Keep the LIVE brain lane out of swap ─────────────────────────────────────
+# This unit is not "lab" in practice: with ZOE_BRAIN_BACKEND=flue it is the TOP
+# dispatch lane (flue > core > legacy, services/zoe-core/README.md), so a
+# swapped-out sidecar is a slow first reply on the real chat/voice path — the
+# same class of product bug the voice stack was fixed for in #1409.
+#
+# It was missed by that pass. Measured on the live Orin 2026-08-03 (uptime 3h15m,
+# box at 190 MB available / 11 GB swap in use): MemoryMax and MemorySwapMax were
+# both `infinity`, and the process held VmRSS 2.0 MB against VmSwap 70.4 MB —
+# 87% of it paged to disk. MemoryLow=512M had been applied as a local drop-in
+# since 2026-07-09 and did NOT prevent that: MemoryLow is reclaim resistance,
+# never swap immunity. MemorySwapMax=0 is the line that holds (llama-server,
+# same box, same moment: 6.38 GB resident and 0 swap).
+#
+# MemoryMax is SAFE here in a way it is not for llama-server. This is a pure
+# userspace Node process — verified 0 CUDA/NvMap mappings in /proc/<pid>/maps —
+# so cgroup accounting is complete and the ceiling actually bounds it. The
+# llama-server caveat (hard ceiling + no swap turns a spike into an OOM kill)
+# applies to a 5.6 GB unified-memory process, not to a ~130 MB sidecar.
+#
+# Sizing, from measurement (VmHWM = peak RSS = 132.8 MB):
+#   MemoryLow=512M  — 3.9x the measured peak, so the whole working set sits
+#                     inside the protected zone. Also exactly the value already
+#                     live in the drop-in, so the template converges with the
+#                     box rather than being silently overridden by it.
+#   MemoryMax=1G    — 7.7x the measured peak. Deliberately generous: a breach
+#                     OOM-kills the live brain lane. It exists to catch a
+#                     runaway V8 heap (uncapped Node on a 15.6 GB box can reach
+#                     GBs), not to run close to normal usage.
+# VmHWM was sampled 3h after a restart on an already-starved box, so the kernel
+# never let this process grow — treat it as a LOWER bound on the unstressed
+# peak. That is why the ceiling is ~8x and not the usual ~2x.
+#
+# Apply runbook (and why you write a drop-in instead of copying this file over
+# the installed unit): docs/knowledge/memory-pressure-profile.md.
+#
+# No Nice=-N / OOMScoreAdjust=-N: a --user unit cannot raise priority on this
+# box and systemd SILENTLY DROPS the value while reporting success.
+MemorySwapMax=0
+MemoryLow=512M
+MemoryMax=1G
+
 # Light hardening (user-service compatible).
 NoNewPrivileges=true
 RestrictRealtime=true
