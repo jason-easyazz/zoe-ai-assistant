@@ -15,19 +15,25 @@ raises, then asserts the new code degrades to a retry instead.
 
 from __future__ import annotations
 
+import http.client
 import importlib.util
 import io
 import json
+import os
+import re
+import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.ci_safe
 
-_MODULE_PATH = (
-    Path(__file__).resolve().parents[2] / "scripts" / "maintenance" / "cross_review_poll.py"
-)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_MODULE_PATH = _REPO_ROOT / "scripts" / "maintenance" / "cross_review_poll.py"
+_WRAPPER_PATH = _MODULE_PATH.parent / "cross_review.sh"
+_CALLER_PATH = _REPO_ROOT / "services" / "zoe-data" / "pipeline_cross_review.py"
 
 
 def _load_module():
@@ -145,12 +151,90 @@ def test_fetch_session_classifies_every_body_shape(
 
 
 def test_fetch_session_connection_refused_is_transient(monkeypatch):
-    import urllib.error
-
     _patch_http(monkeypatch, [urllib.error.URLError(ConnectionRefusedError(111, "refused"))])
     kind, _doc, detail = crp.fetch_session(SERVER, SID, 5)
     assert kind == crp.TRANSIENT
     assert "connection error" in detail
+
+
+# ------------------------------------------------- truncated reads (Codex #1618) ---
+
+# A peer that closes the connection mid-body: `resp.read()` raises this from
+# INSIDE _http_get, i.e. past every status/content-type check.
+TRUNCATED_READ = http.client.IncompleteRead(b'{"id":"x","stat', 240)
+
+
+def _old_transport_classify(raiser):
+    """The pre-fix handler set: URLError and OSError only.
+
+    The negative control for the truncated-read finding. If the premise is
+    wrong -- if IncompleteRead were somehow caught by these -- this helper
+    would return instead of raising and the control below would fail.
+    """
+    try:
+        return raiser()
+    except urllib.error.URLError as exc:  # pragma: no cover - the point is it misses
+        return f"connection error: {exc.reason}"
+    except OSError as exc:  # pragma: no cover - the point is it misses
+        return f"connection error: {exc}"
+
+
+def test_negative_control_truncated_read_escaped_the_old_handlers(monkeypatch):
+    """Break the fix: the old handler pair lets IncompleteRead through as a traceback."""
+    # The hierarchy IS the bug: neither base class catches it.
+    assert not isinstance(TRUNCATED_READ, (urllib.error.URLError, OSError))
+    assert isinstance(TRUNCATED_READ, Exception)
+
+    def _raise():
+        raise TRUNCATED_READ
+
+    with pytest.raises(http.client.IncompleteRead):
+        _old_transport_classify(_raise)
+
+    # And the new classifier absorbs it as a retryable transport fault.
+    _patch_http(monkeypatch, [TRUNCATED_READ])
+    kind, doc, detail = crp.fetch_session(SERVER, SID, 5)
+    assert kind == crp.TRANSIENT
+    assert doc is None
+    assert "IncompleteRead" in detail
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TRUNCATED_READ,
+        http.client.BadStatusLine("garbage"),
+        http.client.LineTooLong("header line"),
+    ],
+    ids=["incomplete-read", "bad-status-line", "line-too-long"],
+)
+def test_every_http_protocol_error_is_transient(monkeypatch, exc):
+    _patch_http(monkeypatch, [exc])
+    kind, _doc, detail = crp.fetch_session(SERVER, SID, 5)
+    assert kind == crp.TRANSIENT
+    assert "HTTP protocol error" in detail
+
+
+def test_poll_rides_out_a_truncated_read_and_still_reports(monkeypatch, clock):
+    """End to end: a mid-poll truncation must retry, not terminate the poller."""
+    _patch_http(monkeypatch, [_running(), TRUNCATED_READ, _idle_with_report()])
+    rc = crp.poll(
+        SERVER, SID, timeout_s=600, interval_s=30, running_grace_s=300,
+        max_transient=6, max_gone=3, http_timeout=60, sleep=clock.sleep, now=clock.now,
+    )
+    assert rc == crp.EXIT_OK
+
+
+def test_poll_alarms_loudly_when_every_read_is_truncated(monkeypatch, capsys, clock):
+    _patch_http(monkeypatch, [TRUNCATED_READ])
+    rc = crp.poll(
+        SERVER, SID, timeout_s=100000, interval_s=30, running_grace_s=300,
+        max_transient=4, max_gone=3, http_timeout=60, sleep=clock.sleep, now=clock.now,
+    )
+    assert rc == crp.EXIT_POLL_LOST
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1, f"exactly one terminal line, got: {err}"
+    assert SID in err[0] and "re-dispatch required" in err[0]
 
 
 # ----------------------------------------------------------- negative control ---
@@ -554,3 +638,305 @@ def test_wrapper_no_longer_parses_any_body_inline():
     assert "json.load" not in code, "response parsing belongs in cross_review_poll.py"
     assert "poll-fail" not in code, "the silent nonterminal sentinel must stay gone"
     assert "cross_review_poll.py" in code, "the wrapper must actually call the poller"
+
+
+# ------------------------------------------- schema-drifted `items` (Codex #1618) ---
+
+# Truthy AND non-iterable: `x or []` passes it straight into the `for` loop.
+SCALAR_ITEMS = [1, 3.5, True, "items", {"0": "a"}]
+
+
+def _old_iter_items(d):
+    """The pre-fix idiom, verbatim: truthiness where a type guard was needed."""
+    return [it for it in d.get("items") or []]
+
+
+@pytest.mark.parametrize("bad", SCALAR_ITEMS, ids=lambda v: type(v).__name__)
+def test_negative_control_scalar_items_raised_out_of_the_old_idiom(bad):
+    """Break the fix: `or []` lets a scalar reach the loop and raise TypeError.
+
+    A dict or a str IS iterable, so those do not raise -- they silently yield
+    keys/characters, which is the quieter half of the same bug (the extractor
+    then reports "zero ASSISTANT messages" and blames the reviewer). Both halves
+    are now classified as drift.
+    """
+    if isinstance(bad, (dict, str)):
+        assert _old_iter_items({"items": bad}) == list(bad)
+    else:
+        with pytest.raises(TypeError):
+            _old_iter_items({"items": bad})
+
+
+@pytest.mark.parametrize("bad", SCALAR_ITEMS, ids=lambda v: type(v).__name__)
+def test_extract_report_classifies_a_non_list_items(tmp_path, capsys, bad):
+    """The fix: one alarm line and a diagnostic exit code, never a traceback."""
+    p = tmp_path / "s.json"
+    p.write_bytes(json.dumps({"id": SID, "items": bad}).encode())
+    rc = crp.extract_report(str(p), SID)
+    assert rc == crp.EXIT_POLL_LOST
+    out = capsys.readouterr()
+    assert out.out.strip() == "", "a broken payload must never print a 'report'"
+    err = out.err.strip().splitlines()
+    assert len(err) == 1, f"exactly one terminal line, got: {err}"
+    assert SID in err[0] and "re-dispatch required" in err[0]
+    assert "non-list 'items'" in err[0]
+
+
+def test_extract_report_still_accepts_a_missing_or_null_items(tmp_path, capsys):
+    """The guard must classify DRIFT, not merely absence: both stay the
+    zero-assistant-messages alarm they already were."""
+    for body in (b'{"id":"x"}', b'{"id":"x","items":null}'):
+        p = tmp_path / "s.json"
+        p.write_bytes(body)
+        assert crp.extract_report(str(p), SID) == crp.EXIT_POLL_LOST
+        err = capsys.readouterr().err
+        assert "zero ASSISTANT messages" in err
+        assert "non-list" not in err
+
+
+@pytest.mark.parametrize("bad", SCALAR_ITEMS, ids=lambda v: type(v).__name__)
+def test_has_assistant_message_survives_a_non_list_items(bad):
+    assert crp.has_assistant_message({"status": "idle", "items": bad}) is False
+
+
+def test_poll_does_not_traceback_on_a_scalar_items(monkeypatch, capsys, clock):
+    """The poll-path half: has_assistant_message() is reached on the very first
+    non-running status, so a drifted payload used to raise there instead."""
+    drifted = _resp(body=json.dumps({"id": SID, "status": "idle", "items": 1}).encode())
+    _patch_http(monkeypatch, [drifted])
+    rc = crp.poll(
+        SERVER, SID, timeout_s=100000, interval_s=30, running_grace_s=120,
+        max_transient=6, max_gone=3, http_timeout=60, sleep=clock.sleep, now=clock.now,
+    )
+    assert rc == crp.EXIT_NEVER_RUNNING
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1
+    assert SID in err[0] and "re-dispatch required" in err[0]
+
+
+# ------------------------------------- the poll-loss bound INCLUDING HTTP time ---
+
+
+class Stalling:
+    """An endpoint that accepts the connection and never answers.
+
+    Burns the full per-request timeout on the fake clock, then raises the
+    TimeoutError a real socket timeout produces.
+    """
+
+    def __init__(self, clk):
+        self.clk = clk
+        self.calls = 0
+
+    def __call__(self, url, timeout):
+        self.calls += 1
+        self.clk.t += timeout
+        raise TimeoutError("timed out")
+
+
+def test_stalling_endpoint_wall_is_sleeps_plus_http_time_not_sleeps_alone(
+    monkeypatch, capsys, clock
+):
+    """Pins what the documented bound actually covers (Codex, #1618).
+
+    The old docstring promised "at most 121s" to declare poll-lost; 121s is the
+    SLEEP schedule. A stalling endpoint adds up to --http-timeout-s per attempt,
+    so the real wall at production defaults is 121 + 8*60 = 601s. Documented
+    rather than capped: shrinking each request's timeout to the residual budget
+    would turn a slow-but-healthy server into a fabricated poll-lost.
+    """
+    d = _poll_defaults()
+    stall = Stalling(clock)
+    monkeypatch.setattr(crp, "_http_get", stall)
+
+    rc = crp.poll(
+        SERVER, SID, timeout_s=d.timeout_s, interval_s=d.interval_s,
+        running_grace_s=d.running_grace_s, max_transient=d.max_transient,
+        max_gone=d.max_gone, http_timeout=d.http_timeout_s,
+        sleep=clock.sleep, now=clock.now,
+    )
+    assert rc == crp.EXIT_POLL_LOST
+    assert stall.calls == d.max_transient == 8
+
+    sleeps = 30 + (1 + 2 + 4 + 8 + 16 + 30 + 30)
+    http_time = d.max_transient * d.http_timeout_s
+    assert sleeps == 121 and http_time == 480
+    assert clock.now() == sleeps + http_time == 601, (
+        "the bound must account for request duration, not sleeps alone"
+    )
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and "re-dispatch required" in err[0]
+
+
+def test_poll_always_returns_within_timeout_plus_one_request(monkeypatch, clock):
+    """The bound cross_review.sh's BUDGET arithmetic relies on.
+
+    Even against a stalling endpoint with an unlimited retry budget, the hard
+    timeout check at the top of each iteration means at most one extra sleep
+    (capped by the remaining budget) plus one request lands past --timeout-s.
+    """
+    timeout_s, http_timeout = 100.0, 60.0
+    stall = Stalling(clock)
+    monkeypatch.setattr(crp, "_http_get", stall)
+
+    rc = crp.poll(
+        SERVER, SID, timeout_s=timeout_s, interval_s=30, running_grace_s=300,
+        max_transient=10**6, max_gone=10**6, http_timeout=http_timeout,
+        sleep=clock.sleep, now=clock.now,
+    )
+    assert rc == crp.EXIT_TIMEOUT
+    assert clock.now() <= timeout_s + http_timeout, "poll() overran its documented bound"
+
+
+# ------------------------------------------- wrapper budget vs caller timeout ---
+
+
+def _sh_const(name: str) -> int:
+    """Read an integer constant assigned in cross_review.sh."""
+    m = re.search(rf"^{name}=(\d+)\b", _WRAPPER_PATH.read_text(), re.MULTILINE)
+    assert m, f"{name} is not declared in cross_review.sh"
+    return int(m.group(1))
+
+
+def _sh_env_default(var: str) -> int:
+    m = re.search(rf'\$\{{{var}:-(\d+)\}}', _WRAPPER_PATH.read_text())
+    assert m, f"{var} has no numeric default in cross_review.sh"
+    return int(m.group(1))
+
+
+def _wrapper_budget():
+    """(worst_case_wall_s, caller_timeout_s) at the wrapper's shipped defaults."""
+    phases = {
+        "poll": _sh_env_default("CROSS_REVIEW_TIMEOUT_S"),
+        "register": _sh_env_default("CROSS_REVIEW_REGISTER_TIMEOUT_S"),
+        # The caller's clock runs during the lock wait too, so it is IN the sum.
+        "lock-wait": _sh_const("LOCK_WAIT_MAX_S"),
+        "create": _sh_const("CREATE_MAX_S"),
+        "register-http": _sh_const("REGISTER_HTTP_TIMEOUT_S"),
+        "kick": _sh_const("KICK_MAX_S"),
+        "poll-http": _sh_const("POLL_HTTP_TIMEOUT_S"),
+        "fetch": _sh_const("FETCH_MAX_S"),
+        "cleanup": _sh_const("CLEANUP_MAX_S"),
+        # `timeout -k` escalation, once per timeout-wrapped phase (kick, cleanup).
+        "kill-after": 2 * _sh_const("TIMEOUT_KILL_AFTER_S"),
+    }
+    return sum(phases.values()), _sh_const("CALLER_TIMEOUT_S"), phases
+
+
+def test_wrapper_worst_case_wall_fits_inside_the_caller_timeout():
+    """The budget inversion, as arithmetic (Codex, #1618).
+
+    `subprocess.run` kills only the shell, so a caller-side timeout skips the
+    EXIT trap and the detached worker outlives the released flock. The old
+    numbers (60 create + 60 register + 2400 poll + 60 fetch = 2580) already
+    exceeded the caller's 2500s cap before counting the kick or the cleanup.
+    """
+    worst, caller, phases = _wrapper_budget()
+
+    # The caller constant the wrapper mirrors must not drift out from under it.
+    caller_src = re.search(r"^_CROSS_REVIEW_TIMEOUT_S = (\d+)", _CALLER_PATH.read_text(),
+                           re.MULTILINE)
+    assert caller_src, "the caller no longer declares _CROSS_REVIEW_TIMEOUT_S"
+    assert int(caller_src.group(1)) == caller, (
+        f"cross_review.sh mirrors CALLER_TIMEOUT_S={caller} but "
+        f"pipeline_cross_review.py now uses {caller_src.group(1)}"
+    )
+
+    assert worst < caller, f"budget inversion: {worst}s >= {caller}s ({phases})"
+    # Real margin, not one second of it.
+    assert caller - worst >= 120, f"only {caller - worst}s of margin ({phases})"
+
+    # And the old configuration really was inverted, so this test can fail.
+    old = worst - phases["poll"] + 2400
+    assert old > caller, "the pre-fix budget must be provably over the cap"
+
+
+def _run_wrapper(**env_overrides):
+    env = dict(os.environ)
+    env.update({k: str(v) for k, v in env_overrides.items()})
+    return subprocess.run(
+        ["bash", str(_WRAPPER_PATH)],  # no args: the usage check is AFTER the budget guard
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+
+
+def test_wrapper_refuses_an_inverted_budget_before_touching_anything():
+    """The runtime guard, red then green, with no network and no flock taken.
+
+    An operator raising CROSS_REVIEW_TIMEOUT_S must not be able to silently
+    re-invert the budget; the guard runs before the usage check, the lock and
+    the first curl, so this exercises it with zero side effects.
+    """
+    worst, caller, phases = _wrapper_budget()
+    headroom = caller - worst  # how much the poll budget may still grow
+    max_ok = phases["poll"] + headroom - 1
+
+    over = _run_wrapper(CROSS_REVIEW_TIMEOUT_S=max_ok + 1)
+    assert over.returncode == 1, over.stderr
+    assert "budget inversion" in over.stderr
+    assert str(caller) in over.stderr
+
+    # One second under the boundary the guard passes and the script proceeds to
+    # its ordinary usage error -- so the guard is a real edge, not a blanket no.
+    under = _run_wrapper(CROSS_REVIEW_TIMEOUT_S=max_ok)
+    assert under.returncode == 1
+    assert "budget inversion" not in under.stderr
+    assert "usage:" in under.stderr
+
+    # The registration budget is in the same sum and must be checked too.
+    reg = _run_wrapper(CROSS_REVIEW_REGISTER_TIMEOUT_S=phases["register"] + headroom)
+    assert reg.returncode == 1
+    assert "budget inversion" in reg.stderr
+
+
+def test_the_flock_wait_is_bounded_and_counted():
+    """The caller's timer runs while we block on the lock (Codex P1, #1624).
+
+    An unbounded `flock 9` eats the margin invisibly and the run is killed AFTER
+    it has created a session and kicked a worker -- the orphan the budget exists
+    to prevent. Bounding it is only half the fix: the cap must also be IN the
+    sum, or the arithmetic still under-counts.
+    """
+    sh = _WRAPPER_PATH.read_text()
+    code = "\n".join(l for l in sh.splitlines() if not l.lstrip().startswith("#"))
+    assert re.search(r'^flock\s+9\s*$', code, re.MULTILINE) is None, (
+        "an unbounded flock wait spends the caller's budget before the lock is held"
+    )
+    assert 'flock -w "$LOCK_WAIT_MAX_S" 9' in code
+    assert "another cross-review still holds" in code, "a lock timeout must alarm, not exit silently"
+
+    _worst, _caller, phases = _wrapper_budget()
+    assert phases["lock-wait"] == _sh_const("LOCK_WAIT_MAX_S") > 0
+    assert "LOCK_WAIT_MAX_S +" in code, "the cap must be summed into OVERHEAD_S"
+
+
+def test_every_timeout_wrapper_escalates_to_kill():
+    """`timeout N cmd` is not a hard bound (Codex P1 + Greptile P1, #1624).
+
+    It sends TERM and then waits FOREVER if the command ignores it, so a wedged
+    docker CLI runs past the advertised budget and is killed by the caller
+    instead -- EXIT trap skipped, worker orphaned. `-k` is the escalation that
+    makes the phase limit real, and it has to be in the sum like every other
+    phase.
+    """
+    code = "\n".join(
+        l for l in _WRAPPER_PATH.read_text().splitlines() if not l.lstrip().startswith("#")
+    )
+    wrappers = re.findall(r"^\s*timeout\b[^\n]*", code, re.MULTILINE)
+    assert wrappers, "the timeout(1) wrappers vanished"
+    for w in wrappers:
+        assert '-k "$TIMEOUT_KILL_AFTER_S"' in w, f"no KILL escalation: {w.strip()[:80]}"
+
+    _worst, _caller, phases = _wrapper_budget()
+    assert phases["kill-after"] == 2 * _sh_const("TIMEOUT_KILL_AFTER_S") > 0
+    assert len(wrappers) == 2, "a new timeout wrapper must be counted in OVERHEAD_S too"
+    assert "2 * TIMEOUT_KILL_AFTER_S" in code, "the escalation must be summed into OVERHEAD_S"
+
+
+def test_agents_md_publishes_the_corrected_bounds():
+    """The contract must not keep advertising a bound the code no longer claims."""
+    doc = (_MODULE_PATH.parents[1] / "AGENTS.md").read_text()
+    assert "121s of SLEEPS" in doc, "the sleeps-only qualifier must be published"
+    assert "601s" in doc, "the stalling-endpoint wall must be published"
+    assert "--timeout-s + --http-timeout-s" in doc
+    assert str(_sh_env_default("CROSS_REVIEW_TIMEOUT_S")) in doc, "the poll default must be published"
