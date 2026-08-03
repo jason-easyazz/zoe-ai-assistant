@@ -63,14 +63,19 @@ EnvironmentFile=%h/assistant/labs/flue-zoe-brain/.env
 #      under the ceiling. Measured on this box 2026-08-03:
 #        - V8 reads the cgroup limit and sizes its JS heap to ~51% of it
 #          (MemoryMax 512M/768M/1G/2G -> heap_size_limit 259/396/524/1048 MB;
-#          4144 MB uncapped). So a runaway *JS heap* self-limits and throws a
-#          graceful heap-OOM well before the cgroup fires. That much is safe.
-#        - But EXTERNAL memory — Buffers, ArrayBuffers, stream chunks — is not
-#          in V8's old-space budget and is NOT covered by that self-limiting.
-#          A Buffer allocation loop under MemoryMax=1G + MemorySwapMax=0 was
+#          4144 MB uncapped). A runaway *JS heap* therefore hits V8's own limit
+#          first. That still usually TERMINATES the process ("FATAL ERROR:
+#          JavaScript heap out of memory") — the gain is a logged, attributable
+#          failure with a stack instead of an opaque SIGKILL, not survival.
+#        - EXTERNAL memory — Buffers, ArrayBuffers, stream chunks — is not in
+#          V8's old-space budget and is NOT covered by that self-limiting. A
+#          Buffer allocation loop under MemoryMax=1G + MemorySwapMax=0 was
 #          SIGKILLed by the cgroup (exit 137), not caught by V8.
-#      Streamed llama-server responses are exactly that external-buffer path, so
-#      the sidecar's real growth path is the one the runtime does NOT bound.
+#      That is a demonstrated RISK, not a measured workload profile: it proves
+#      external buffers can reach the ceiling unmediated. Whether this sidecar's
+#      streamed llama-server responses actually allocate that way at volume has
+#      NOT been measured — treat it as the plausible exposure that justifies
+#      headroom, and re-read memory.current after real traffic.
 #
 #   MemoryLow=512M  — unchanged, and exactly the value already live in the
 #                     drop-in, so the template converges with the box rather
@@ -80,13 +85,23 @@ EnvironmentFile=%h/assistant/labs/flue-zoe-brain/.env
 #                     it keeps V8's own heap budget at ~1 GB, so normal
 #                     operation never runs near the kill threshold.
 #
-# Why this unit keeps a ceiling at all, when llama-server and zoe-data do not:
-# an OOM kill here is a DEGRADATION, not an outage. zoe-data dispatches
-# flue > core > legacy, so a dead sidecar falls back to the core lane and chat
-# keeps answering (that fallback is verified in the apply runbook). Against
-# that, going uncapped would let V8 size its heap to 4144 MB — on a 15.6 GB box
-# where llama-server already holds ~6.4 GB, an unbounded sidecar that cannot be
-# swapped is a threat to the brain rock itself. Bounded, with room.
+# Why this unit keeps a ceiling at all, when llama-server and zoe-data do not.
+# NOT because a kill here is harmless — it is not. There is NO core-lane
+# failover: brain_dispatch.use_flue_brain() picks the lane from
+# ZOE_BRAIN_BACKEND alone (no health check, no re-dispatch), and with that env
+# set to 'flue' — as it is live — a dead sidecar makes zoe_flue_client emit the
+# canned "Sorry, I had trouble reaching my brain just now." for EVERY turn until
+# systemd restarts it. "flue > core > legacy" is configuration precedence
+# evaluated once, not a runtime chain. The real reasons are narrower:
+#   - Blast radius is still strictly smaller than zoe-data's. Brain turns fail;
+#     the panel, HA, TTS, Multica and the rest of the API keep serving.
+#   - Recovery is cheap and automatic: Restart=always + RestartSec=5 on a small
+#     Node process, versus zoe-data's cold reload of Moonshine + fastembed +
+#     Chroma.
+#   - Uncapped, V8 would size its heap to 4144 MB. On a 15.6 GB box where
+#     llama-server already holds ~6.4 GB, an unbounded sidecar that cannot be
+#     swapped threatens the brain ROCK — a worse outage than its own death.
+# Bounded, with real room, is the lesser risk. It is a trade, not a free win.
 #
 # Apply runbook (and why you write a drop-in instead of copying this file over
 # the installed unit): docs/knowledge/memory-pressure-profile.md.

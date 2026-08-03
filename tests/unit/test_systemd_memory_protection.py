@@ -20,9 +20,10 @@ did. Measured on the live Orin 2026-08-03, both `infinity`/`infinity`:
 That is the gap this test closes. It pins the DOCTRINE, not the numbers:
 retuning a cap is fine, dropping one is not.
 
-Why the floors keep failing on this box, in one line: every ancestor cgroup
-(`user.slice` -> `user-1000.slice` -> `user@1000.service` -> `app.slice`) has
-`memory.low=0`, and an effective floor is capped by its ancestors', so a leaf
+Why the floors keep failing ON THIS HOST (a slice-configuration property, not a
+kernel law, and fixable by protecting the ancestor slices): an effective floor is
+capped by its ancestors', and `user.slice` -> `user-1000.slice` ->
+`user@1000.service` -> `app.slice` all read `memory.low=0`, so a leaf
 `MemoryLow` computes to 0 whatever it says. `MemorySwapMax` has no such
 propagation — measured across six live units, every one that denies swap holds
 0 swap and every one that does not is 96-98% out, regardless of its floor.
@@ -116,14 +117,29 @@ def _parse_size(value: str) -> int:
     return int(match.group(1)) * _SCALE[match.group(2)]
 
 
-def _directives(unit: str) -> dict[str, str]:
-    """Last-wins map of `Key=value` directives, comments and blanks dropped."""
+def _directives(unit: str, section: str = "Service") -> dict[str, str]:
+    """Last-wins map of `Key=value` directives from ONE section.
+
+    Section-aware on purpose. The first version of this parser ignored `[...]`
+    headers entirely and merged every section into one map, so a resource
+    directive moved to `[Unit]` or `[Install]` — where systemd silently ignores
+    it, because these are `[Service]`-only settings — still read as present and
+    the whole suite stayed green while the protection was actually gone. That is
+    the same "documents a guarantee that does not exist" failure as the
+    silently-dropped `Nice=-N`, so it is parsed, not assumed.
+    """
     path = UNIT_DIR / unit
     assert path.exists(), f"{unit} is pinned by this test but missing from {UNIT_DIR}"
     out: dict[str, str] = {}
+    current: str | None = None
     for line in path.read_text().splitlines():
         line = line.strip()
-        if not line or line.startswith(("#", ";", "[")):
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1].strip()
+            continue
+        if current != section:
             continue
         key, sep, value = line.partition("=")
         if sep:
@@ -207,6 +223,38 @@ def test_ceiling_leaves_headroom_over_the_floor(unit):
         f"the floor does not cover (external buffers, stream chunks) hits the "
         f"OOM killer rather than a throttle"
     )
+
+
+def test_the_parser_only_reads_the_service_section(tmp_path, monkeypatch):
+    """Guards the parser itself. `MemorySwapMax` in `[Unit]` or `[Install]` is
+    silently ignored by systemd, so a parser that merges sections would report
+    full protection for a unit that has none — every other test in this file
+    rests on this being right."""
+    unit = tmp_path / "section-probe.service"
+    unit.write_text(
+        "[Unit]\n"
+        "Description=probe\n"
+        "MemorySwapMax=0\n"          # ignored by systemd — wrong section
+        "\n"
+        "[Service]\n"
+        "ExecStart=/bin/true\n"
+        "MemoryLow=512M\n"
+        "\n"
+        "[Install]\n"
+        "MemoryMax=1G\n"             # ignored by systemd — wrong section
+        "WantedBy=default.target\n"
+    )
+    monkeypatch.setitem(globals(), "UNIT_DIR", tmp_path)
+    service = _directives("section-probe.service")
+    assert "MemoryLow" in service, "a real [Service] directive must be read"
+    assert "MemorySwapMax" not in service, (
+        "MemorySwapMax was declared in [Unit], where systemd ignores it — the "
+        "parser must not report it as protection"
+    )
+    assert "MemoryMax" not in service, (
+        "MemoryMax was declared in [Install], where systemd ignores it"
+    )
+    assert _directives("section-probe.service", section="Unit")["MemorySwapMax"] == "0"
 
 
 def test_every_tight_ceiling_exception_states_a_reason():

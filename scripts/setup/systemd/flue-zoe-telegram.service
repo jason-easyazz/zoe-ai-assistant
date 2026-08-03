@@ -49,12 +49,17 @@ EnvironmentFile=%h/assistant/labs/flue-zoe-telegram/.env
 # of VmHWM (145.9 MB), and VmHWM was sampled on an already-starved box, so it is
 # a LOWER bound on the unstressed peak. See flue-zoe-brain.service for the full
 # measurement; the load-bearing part applies here identically: V8 sizes its JS
-# heap to ~51% of the cgroup ceiling and self-limits gracefully, but EXTERNAL
-# memory (Buffers, stream chunks) is outside that budget and gets SIGKILLed by
-# the cgroup instead (verified: exit 137 under MemoryMax=1G + MemorySwapMax=0).
+# heap to ~51% of the cgroup ceiling, so a JS-heap runaway hits V8's limit first
+# (a logged, attributable heap-OOM — which still usually terminates the process,
+# it is just not an opaque SIGKILL). EXTERNAL memory (Buffers, stream chunks) is
+# outside that budget and CAN reach the ceiling unmediated (verified: exit 137
+# under MemoryMax=1G + MemorySwapMax=0).
 #
-#   MemoryLow=256M  — unchanged. A lower floor than the brain's 512M on purpose:
-#                     a cold Telegram reply is a slow message, not a voice fault.
+#   MemoryLow=256M  — carried over unchanged from 5c06fe8a, which introduced
+#                     this unit's first-ever memory directives; before that the
+#                     unit had none at all and its cgroup memory.low was 0.
+#                     A lower floor than the brain's 512M on purpose: a cold
+#                     Telegram reply is a slow message, not a voice fault.
 #   MemoryMax=1G    — ~7x the (understated) measured peak, and half the brain's
 #                     backstop. Deliberately tighter than the brain because this
 #                     bridge long-polls small JSON rather than streaming model

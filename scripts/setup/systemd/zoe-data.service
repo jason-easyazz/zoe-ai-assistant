@@ -54,11 +54,14 @@ Environment=LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda-12.6/lib64:/usr/lib/aa
 #   zoe-data      (MemoryLow=2G, swap uncapped)      40 MB resident, 1056 MB out
 # Every unit that denies swap holds 0 swap; every unit that does not is 96-98%
 # out REGARDLESS of its floor. MemoryLow is reclaim ordering, not swap immunity.
-# The mechanism is in the hierarchy: every ancestor cgroup (user.slice →
-# user-1000.slice → user@1000.service → app.slice) has memory.low=0, and an
-# effective floor is capped by its ancestors' — so a leaf floor here computes to
-# 0 no matter what value is written. MemorySwapMax is a per-cgroup hard limit
-# with no such propagation, which is why it is the directive that holds.
+# The mechanism is in the hierarchy: an effective floor is capped by its
+# ancestors', and on THIS host every ancestor cgroup (user.slice →
+# user-1000.slice → user@1000.service → app.slice) reads memory.low=0, so a leaf
+# floor computes to 0 no matter what value is written. That is a property of the
+# host's slice configuration — NOT a kernel law — and it is fixable by giving
+# the ancestor slices protection; that is a host-wide change nobody has made, so
+# re-measure rather than assuming it holds on a rebuilt box. MemorySwapMax is a
+# per-cgroup hard limit with no such propagation, which is why it holds here.
 #
 # MemoryLow=2G is kept anyway (it is free, it matches live, and it orders
 # reclaim correctly if the ancestor slices are ever given protection). It sits

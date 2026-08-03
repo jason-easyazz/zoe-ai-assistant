@@ -371,11 +371,16 @@ after idle waits on ~1 GB faulting off the NVMe swapfile. Measured 2026-08-03
 with that 2G floor already in force: `VmRSS` **40 MB** against `VmSwap`
 **1,056 MB** — **96% paged out**.
 
-- **A leaf `MemoryLow` is capped by its ancestors, and every ancestor here is
-  `0`.** `user.slice` → `user-1000.slice` → `user@1000.service` → `app.slice` all
-  have `memory.low=0`, so an effective floor computes to 0 no matter what a unit
-  writes. That is the mechanism behind "`MemoryLow` is not swap immunity", and it
-  is why the floors are kept for ordering while `MemorySwapMax=0` does the work.
+- **A leaf `MemoryLow` is capped by its ancestors — and on THIS host every
+  ancestor is `0`.** `user.slice` → `user-1000.slice` → `user@1000.service` →
+  `app.slice` all read `memory.low=0`, so an effective floor computes to 0 no
+  matter what a unit writes. **This is a property of the host's slice
+  configuration, not a kernel law and not a fact about the units**: give the
+  ancestor slices protection and the leaf floors start meaning something. It has
+  not been done here — it is a host-wide change with a blast radius beyond any
+  one unit — which is why the floors are kept for ordering while
+  `MemorySwapMax=0` does the actual work. Re-measure before assuming it still
+  holds on a rebuilt or differently-provisioned box.
   Across six live units on 2026-08-03 the split was total: every unit denying
   swap held **0** swap (llama-server 6,053 MB resident, kokoro-tts 2,198 MB),
   every unit not denying it was **96–98%** out regardless of its floor.
@@ -417,22 +422,31 @@ Two things worth knowing before changing these:
   error. What actually decides throttle-vs-kill on a Node unit, measured here:
   V8 reads the cgroup limit and sizes its JS heap to **~51%** of it (`MemoryMax`
   512M/768M/1G/2G → `heap_size_limit` 259/396/524/1048 MB; **4144 MB uncapped**),
-  so a runaway *JS heap* self-limits and throws gracefully — but **external
-  memory (Buffers, ArrayBuffers, stream chunks) is outside that budget and is
-  not covered.** A Buffer loop under `MemoryMax=1G` + `MemorySwapMax=0` was
-  **SIGKILLed by the cgroup (exit 137)**, not caught by V8. Streamed
-  llama-server responses are exactly that path. Ceilings are backstops against a
-  leak, not working limits — `tests/unit/test_systemd_memory_protection.py`
-  requires `MemoryMax` ≥ **3×** `MemoryLow` (bounded, non-growing workloads like
-  kokoro are a documented exception in `TIGHT_CEILING_OK`).
+  so a JS-heap runaway hits V8's own limit first — which still usually
+  *terminates* the process (`FATAL ERROR: JavaScript heap out of memory`); the
+  gain is a logged, attributable failure rather than an opaque SIGKILL, not
+  survival. **External memory (Buffers, ArrayBuffers, stream chunks) sits
+  outside that budget and can reach the ceiling unmediated**: a Buffer loop
+  under `MemoryMax=1G` + `MemorySwapMax=0` was **SIGKILLed (exit 137)**. Treat
+  that as a demonstrated *risk* justifying headroom — it shows external buffers
+  *can* hit the ceiling, not that streamed responses are the principal path
+  here, which has not been measured. Ceilings are backstops against a leak, not
+  working limits: `tests/unit/test_systemd_memory_protection.py` requires
+  `MemoryMax` ≥ **3×** `MemoryLow` (bounded, non-growing workloads like kokoro
+  are a documented exception in `TIGHT_CEILING_OK`).
 - **Why the `flue-*` units keep a ceiling when llama-server and zoe-data do
-  not.** An OOM kill of a flue sidecar is a *degradation*, not an outage:
-  zoe-data dispatches flue > core > legacy, so a dead brain sidecar falls back
-  to the core lane and chat keeps answering. Uncapped, though, V8 would size its
-  heap to 4144 MB — on a 15.6 GB box where llama-server already holds ~6.4 GB,
-  an unbounded sidecar that cannot be swapped threatens the brain rock itself.
-  Bounded, with room, is the right trade there; for zoe-data (no fallback at
-  all) it is not.
+  not — and NOT because a kill there is harmless.** There is **no core-lane
+  failover**: `brain_dispatch.use_flue_brain()` picks the lane from
+  `ZOE_BRAIN_BACKEND` alone, so with that set to `flue` (as it is live) a dead
+  sidecar makes every brain turn return a canned "trouble reaching my brain"
+  string until systemd restarts it. The actual reasons are narrower: the blast
+  radius is still strictly smaller than zoe-data's (panel, HA, TTS and the rest
+  of the API keep serving), recovery is automatic and cheap (`Restart=always`,
+  `RestartSec=5`, small Node process, versus zoe-data's cold reload of Moonshine
+  + fastembed + Chroma), and uncapped V8 would size its heap to 4144 MB — on a
+  15.6 GB box where llama-server holds ~6.4 GB, an unbounded unswappable sidecar
+  threatens the brain **rock**, a worse outage than its own death. A trade, not
+  a free win.
 
 Headroom check (why this fits): brain + kokoro fully resident ≈ **9.6 GB** of
 15.6 GB, plus the flue floors (768 MB combined) and zoe-data's 2G ≈ **12.4 GB**

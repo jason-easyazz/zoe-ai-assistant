@@ -261,28 +261,46 @@ The observed peak is the wrong quantity. The right one is how the runtime behave
 | 2G | 1048 MB |
 | *(uncapped)* | **4144 MB** |
 
-**V8 reads the cgroup limit and sizes its JS heap to ~51% of it.** So a runaway
-*JS heap* self-limits and throws a graceful heap-OOM well before the cgroup
-fires. That half is safe, and it is why a ceiling is not automatically a kill.
+**V8 reads the cgroup limit and sizes its JS heap to ~51% of it.** So a JS-heap
+runaway hits V8's own limit before the cgroup fires. Be precise about what that
+buys: V8 heap exhaustion still usually **terminates** the process (`FATAL ERROR:
+JavaScript heap out of memory`). The gain is a *logged, attributable* failure
+with a stack — not survival, and not a graceful degradation.
 
-**But external memory is not in that budget.** Buffers, ArrayBuffers and stream
+**External memory is not in that budget.** Buffers, ArrayBuffers and stream
 chunks live outside V8's old space, so the self-limiting does not cover them. A
 `Buffer.alloc` loop under `MemoryMax=1G` + `MemorySwapMax=0` was **SIGKILLed by
-the cgroup — exit 137**, not caught by V8. Streamed llama-server responses are
-exactly that external-buffer path, so **the brain sidecar's real growth path is
-the one the runtime does not bound.** That is the concrete reason its ceiling
-moved to a genuine backstop instead of a working limit.
+the cgroup — exit 137**, not caught by V8.
+
+Read that as a demonstrated **risk**, not a workload profile: it proves external
+buffers *can* reach the ceiling unmediated. Whether the brain sidecar's streamed
+llama-server responses actually allocate that way at volume has **not** been
+measured. It is the plausible exposure that justifies real headroom — re-read
+`memory.current` after a week of normal traffic and tighten if it stays flat.
 
 ### Why these two keep a ceiling when llama-server and zoe-data do not
 
-An OOM kill of a flue sidecar is a **degradation, not an outage**: zoe-data
-dispatches flue > core > legacy, so a dead brain sidecar falls back to the core
-lane and chat keeps answering (that fallback is the thing the apply runbook below
-tells you to verify). Against that, going uncapped would let V8 size its heap to
-**4144 MB** — on a 15.6 GB box where llama-server already holds ~6.4 GB, an
-unbounded sidecar that *cannot be swapped* is a threat to the brain rock itself.
-Bounded with real room is the right trade here. For `zoe-data`, which has no
-fallback at all, it is not — hence its `MEMORY_MAX_EXEMPT` entry.
+**Not because a kill here is harmless — it is not.** There is **no core-lane
+failover**, contrary to what this runbook said before 2026-08-03:
+`brain_dispatch.use_flue_brain()` selects the lane from `ZOE_BRAIN_BACKEND`
+alone, with no health check and no re-dispatch, so with that env set to `flue`
+(**live**) a dead sidecar makes `zoe_flue_client` return a canned "trouble
+reaching my brain" string for every turn until systemd restarts it. The reasons
+are narrower, and they are trades:
+
+- **Blast radius is still strictly smaller than zoe-data's.** Brain turns fail;
+  the panel, Home Assistant, TTS, Multica and the rest of the API keep serving.
+  A zoe-data kill takes all of it at once.
+- **Recovery is automatic and cheap** — `Restart=always` + `RestartSec=5` on a
+  small Node process, against zoe-data's cold reload of Moonshine + fastembed +
+  Chroma (and, under swap denial, a 3.16 GB startup transient).
+- **Uncapped is worse than capped.** V8 would size its heap to **4144 MB**; on a
+  15.6 GB box where llama-server holds ~6.4 GB, an unbounded sidecar that
+  *cannot be swapped* threatens the brain **rock** — a strictly worse outage
+  than the sidecar's own death.
+
+For `zoe-data` none of the first two hold, which is why it is in
+`MEMORY_MAX_EXEMPT` instead.
 
 `tests/unit/test_systemd_memory_protection.py` now requires `MemoryMax` ≥ **3×**
 `MemoryLow`: the floor is sized to hold the working set, so a backstop needs at
@@ -358,25 +376,58 @@ replaces it and keeps that value, so the redundant
 (written by an old `systemctl set-property`, same 512M) stays consistent and can
 be left alone.
 
-**3. Restart the brain — expect a brief lane outage, and verify the fallback.**
-zoe-data dispatches **flue > core > legacy**, so while `:3578` is down chat
-should keep answering on the `core` lane. That fallback is the thing to confirm,
-because a silent failure here looks like "Zoe went quiet".
+**3. Restart the brain — and know that there is NO core-lane fallback.**
+
+> **CORRECTED 2026-08-03.** An earlier version of this step said "zoe-data
+> dispatches flue > core > legacy, so while `:3578` is down chat should keep
+> answering on the `core` lane." **That is wrong**, and it is the kind of wrong
+> that makes an operator misread a real outage as expected behaviour. Verified in
+> code: `brain_dispatch.use_flue_brain()` selects the lane from
+> `ZOE_BRAIN_BACKEND` **alone** — there is no health check and no re-dispatch.
+> With the env set to `flue` (**confirmed live**: present in the running
+> zoe-data process env and in `services/zoe-data/.env`), a down sidecar means
+> `zoe_flue_client` catches the transport error and yields a canned string:
+>
+> > `Sorry, I had trouble reaching my brain just now. Could you try again?`
+>
+> "flue > core > legacy" is a **configuration precedence evaluated once**, not a
+> runtime failover chain. So `:3578` down = every brain turn fails, for the whole
+> window. Plan the restart accordingly.
+
+That canned string is also the thing that makes the check below *decidable* — it
+is an exact literal, so which lane served a turn is observable rather than
+inferred. Do NOT use `systemctl --user restart` for this: it waits for the
+replacement to come up, so the window is too short to observe and you can end up
+"verifying" a fallback that never happened.
 
 ```bash
-# Probe chat BEFORE restarting, so you have a known-good comparison.
-curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' http://localhost:8000/health
+# 0) Known-good BEFORE: a real brain turn must give a real answer.
+#    (/health only proves zoe-data is up — it never touches the brain lane.)
+curl -sf http://localhost:3578/health && echo "flue lane UP"
 
-systemctl --user restart flue-zoe-brain
+# 1) STOP (not restart) so the down-window is yours to inspect.
+systemctl --user stop flue-zoe-brain
 
-# Immediately, while :3578 is still coming up — zoe-data must still answer.
-curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' http://localhost:8000/health
-# ...and a real turn through the fallback lane (expect a slower but valid reply):
-#   ask Zoe anything from the panel or Telegram, or drive /api/chat directly.
+# 2) Confirm the lane is actually down — connection refused, not a slow 200.
+curl -s -o /dev/null -w '%{http_code}\n' --max-time 3 http://localhost:3578/health || echo "refused = down"
+
+# 3) Drive a REAL brain turn (panel, Telegram, or /api/chat) and ASSERT the lane.
+#    Expected while stopped — the literal fallback sentinel:
+#      "Sorry, I had trouble reaching my brain just now. Could you try again?"
+#    Any other coherent reply means something ELSE served it: re-read
+#    ZOE_BRAIN_BACKEND in the RUNNING process before trusting this runbook.
+tr '\0' '\n' < /proc/$(systemctl --user show -p MainPID --value zoe-data)/environ \
+  | grep ZOE_BRAIN_BACKEND
+
+# 4) Bring it back and confirm the flue lane serves again.
+systemctl --user start flue-zoe-brain
+curl -sf http://localhost:3578/health && echo "flue lane UP"
 ```
 
-If chat fails during the window that is a **fallback bug**, not a memory bug —
-roll back (step 6) and investigate `brain_dispatch.py` separately.
+Then drive one more real turn: a **coherent answer instead of the sentinel** is
+the proof the flue lane is serving. If the sentinel persists after `:3578` is
+healthy, that is a client/token problem, not a memory one — roll back (step 6)
+and investigate `zoe_flue_client` separately.
 
 **4. Post-restart checks.**
 
@@ -388,9 +439,9 @@ systemctl --user show flue-zoe-brain \
 #   expect MemorySwapMax=0, MemoryLow=536870912, MemoryMax=2147483648
 ```
 
-Then drive **one real brain turn** and confirm it is served by the flue lane, not
-still falling back. Checking the unit is active is not the same as checking it is
-being *used* — what exists is not what runs.
+Checking the unit is active is not the same as checking it is being *used* —
+what exists is not what runs. Step 3 already gives the decidable version of that
+check (sentinel vs coherent answer); this step only confirms the caps landed.
 
 **5. Restart Telegram** (independent, no brain impact):
 
@@ -528,21 +579,58 @@ Same shape as the flue apply, with one materially different risk. **The standing
 operator authorisation to restart zoe-data does not make this an agent step** —
 the sizing is agent work, the apply is the operator's.
 
-**1. Pick the window deliberately.** zoe-data is the product; a restart is a
-visible outage of chat, voice and the panel, not a lane failover. There is no
-fallback to verify here because there is nothing to fall back to.
+**1. Make room FIRST — do not just wait for a quiet moment.** zoe-data is the
+product; a restart is a visible outage of chat, voice and the panel, not a lane
+failover. There is no fallback to verify here because there is nothing to fall
+back to.
+
+The `>1 GB available` gate used for the flue sidecars **does not transfer, and
+copying it here would be the error.** It was sized for their combined ~150 MB.
+zoe-data must fault a **~1.1 GB steady working set into RAM that can no longer
+be pushed back out**, and its startup transient is larger still — `VmHWM`
+**3.16 GB** was recorded 15 minutes after a restart on 2026-07-06 (warmups +
+first turns), *with* swap available to absorb it. Under `MemorySwapMax=0` that
+absorption is gone. So a 1 GB gate is below even the steady figure, never mind
+the transient.
+
+Measured on the live box while writing this (2026-08-03): **430 MB available**,
+2.5 GB buff/cache, 12.3 GB used. Starting from there, quiesce the dev tooling —
+all of it is agent-fleet infrastructure, none of it is Zoe runtime:
 
 ```bash
-free -h                    # want >1 GB available — NOT the 346 MB of the sample
+# The single largest reclaimable consumer: the shared Serena MCP server.
+# Dev tooling by design (Nice=10, OOMScoreAdjust=500 — it exists to yield).
+systemctl --user stop serena-mcp          # measured 1045 MB RSS
+
+# Stray per-agent Serena stdio spawns. Doctrine says exactly ONE server should
+# exist; 5 extra were live at sample time (~180 MB visible). >1 = a misconfigured
+# agent, see scripts/AGENTS.md. Close those agent sessions.
+pgrep -af "serena start-mcp-server" | wc -l
+
+# Per-agent codebase-memory servers (8 live at sample time, capped 512M/768M
+# each by codebase_memory_capped.sh). They exit with their agent — close the
+# sessions rather than killing the servers.
+pgrep -fc codebase-memory
+
+# Host-side Claude Code sessions (232 MB RSS + 233 MB swap at sample time).
+pgrep -fc ccd-cli
+
+free -m                                   # RE-CHECK after quiescing
 systemctl --user is-active llama-server kokoro-tts
 curl -sf http://localhost:8000/health
 ```
 
-`MemorySwapMax=0` means the restarted process must fault its ~1.1 GB working set
-into RAM that can no longer be pushed back out. That is **~7× the flue sidecars'
-combined ~150 MB**, on a box that was at 346 MB available when sampled, and it
-competes directly with the brain and TTS. This is the one step where waiting for
-a genuinely quiet moment is load-bearing rather than polite.
+**Gate: ≥2.5 GB available before restarting**, and stop if you cannot get there
+— the two rocks (llama-server ~6.4 GB, kokoro ~2.2 GB) are themselves
+`MemorySwapMax=0`, so they cannot yield to make room and the kernel's only
+remaining victim is whichever process asks next. Quiescing the tooling above
+released roughly 1.5-2 GB in practice, which is the difference between the
+sampled 430 MB and a safe window.
+
+That gate is deliberately below the 3.16 GB startup `VmHWM`: file-backed cache
+(2.5 GB at sample time) is reclaimable under pressure and covers the gap, and no
+ceiling is set on zoe-data, so a transient overshoot degrades the box rather than
+killing the process. If you want the conservative version, wait for ≥3.5 GB.
 
 **2. Write the drop-in** (never `cp` the template over the installed unit — the
 installed copy carries host-specific `Environment=` lines this template does not
