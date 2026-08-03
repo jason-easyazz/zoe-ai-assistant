@@ -496,18 +496,168 @@ def _finish(body: str, title: str, text_limit: int, strategy: str) -> ExtractedT
     )
 
 
+# --- post-load settle ------------------------------------------------------
+#
+# `wait_until="domcontentloaded"` returns the moment the initial HTML is
+# parsed. For a client-rendered page that is an EMPTY SHELL: the framework
+# bundle has not run, so `page.content()` yields a `<div id="root"></div>` and
+# extraction reports a plausible-looking ~0-char success. Measured 2026-08-03,
+# two pages defeated the text path this way and BOTH are settle-wait shaped:
+# reddit.com (React SPA) and thespruceeats.com (lazy-hydrated recipe body).
+#
+# A fixed sleep alone is the wrong instrument in both directions — too short
+# for a slow bundle, pure waste on a server-rendered page. So the policy has
+# three independent, individually-disableable stages, and the last one is
+# CONTENT-driven: poll until the extraction actually clears a floor, then stop.
+#
+# DEFAULT IS OFF. `SettlePolicy()` waits for nothing, so every existing caller
+# keeps its current timing and cost; a settle is something you ask for.
+
+
+@dataclass(slots=True)
+class SettlePolicy:
+    """How long to let a page finish rendering before extracting text.
+
+    All four knobs are independently disableable with ``0``:
+
+    - ``network_idle_ms`` — cap on waiting for Playwright's ``networkidle``.
+      A TIMEOUT HERE IS NOT AN ERROR: analytics beacons, websockets and
+      polling widgets mean many live pages never go idle at all, so the wait
+      is best-effort and its expiry is recorded rather than raised.
+    - ``settle_ms`` — flat pause afterwards, for work that starts *because*
+      the network went quiet (hydration, layout).
+    - ``min_chars`` — the content floor. While extraction is below it, re-read
+      the DOM every ``poll_ms``. This is the stage that actually fixes an SPA,
+      because it is keyed on the thing we want (text) rather than on a proxy
+      for it (time).
+    - ``max_wait_ms`` — hard ceiling on the polling stage, so a page that
+      never renders costs a bounded amount instead of hanging the chain.
+    """
+
+    network_idle_ms: int = 0
+    settle_ms: int = 0
+    min_chars: int = 0
+    poll_ms: int = 500
+    max_wait_ms: int = 0
+
+    @property
+    def active(self) -> bool:
+        return bool(self.network_idle_ms or self.settle_ms or (self.min_chars and self.max_wait_ms))
+
+    @classmethod
+    def from_params(cls, params: dict[str, Any] | None) -> "SettlePolicy":
+        """Build from plan params / JSON. Unknown keys ignored, bad values -> 0."""
+        params = params or {}
+        nested = params.get("settle")
+        if isinstance(nested, dict):
+            params = {**params, **nested}
+
+        def _int(key: str, default: int) -> int:
+            try:
+                return max(0, int(params.get(key, default) or 0))
+            except (TypeError, ValueError):
+                return default
+
+        return cls(
+            network_idle_ms=_int("network_idle_ms", 0),
+            settle_ms=_int("settle_ms", 0),
+            min_chars=_int("settle_min_chars", 0) or _int("min_chars", 0),
+            poll_ms=_int("poll_ms", 500) or 500,
+            max_wait_ms=_int("max_wait_ms", 0),
+        )
+
+
+#: Tuned for client-rendered pages (React/Next SPAs, lazy-hydrated article
+#: bodies) — the two shapes that defeated the plain text path on 2026-08-03.
+SETTLE_SPA = SettlePolicy(
+    network_idle_ms=8_000, settle_ms=400, min_chars=1_000, poll_ms=750, max_wait_ms=12_000
+)
+#: For a page already known to be server-rendered but slow to paint.
+SETTLE_LIGHT = SettlePolicy(network_idle_ms=4_000, settle_ms=250)
+
+
+async def settle_and_extract(
+    page: Any,
+    *,
+    policy: SettlePolicy,
+    text_limit: int = 20_000,
+    now: Callable[[], float] = time.monotonic,
+) -> tuple[ExtractedText, list[dict[str, Any]]]:
+    """Apply `policy`, then extract. Returns the extract plus a settle LOG.
+
+    Takes a duck-typed `page` (``content()``, ``wait_for_load_state()``,
+    ``wait_for_timeout()``) rather than a Playwright ``Page``, so the whole
+    settle policy is testable offline with a fake page and a fake clock — no
+    Chromium, no network. `now` is injected for the same reason.
+
+    The log is the point: every stage records what it did and why it stopped,
+    so a caller can tell "the page was slow and we waited" apart from "the page
+    never rendered and we gave up", and neither is silent.
+    """
+    log: list[dict[str, Any]] = []
+
+    if policy.network_idle_ms:
+        started = now()
+        try:
+            await page.wait_for_load_state("networkidle", timeout=policy.network_idle_ms)
+            log.append({"stage": "networkidle", "outcome": "idle", "waited_ms": _ms(now() - started)})
+        except Exception as exc:  # noqa: BLE001 - a page that never idles is NORMAL
+            log.append(
+                {
+                    "stage": "networkidle",
+                    "outcome": "timeout",
+                    "waited_ms": _ms(now() - started),
+                    "detail": type(exc).__name__,
+                }
+            )
+
+    if policy.settle_ms:
+        await page.wait_for_timeout(policy.settle_ms)
+        log.append({"stage": "settle", "outcome": "slept", "waited_ms": policy.settle_ms})
+
+    extracted = extract_main_text(await page.content(), text_limit=text_limit)
+
+    if policy.min_chars and policy.max_wait_ms and extracted.chars < policy.min_chars:
+        deadline = now() + policy.max_wait_ms / 1000.0
+        polls = 0
+        while extracted.chars < policy.min_chars and now() < deadline:
+            await page.wait_for_timeout(policy.poll_ms)
+            polls += 1
+            extracted = extract_main_text(await page.content(), text_limit=text_limit)
+        log.append(
+            {
+                "stage": "content-floor",
+                "outcome": "reached" if extracted.chars >= policy.min_chars else "gave-up",
+                "polls": polls,
+                "chars": extracted.chars,
+                "floor": policy.min_chars,
+            }
+        )
+
+    return extracted, log
+
+
+def _ms(seconds: float) -> int:
+    return int(round(seconds * 1000))
+
+
 async def fetch_page_text(
     url: str,
     *,
     text_limit: int = 20_000,
     timeout_ms: int = 30_000,
     wait_until: str = "domcontentloaded",
+    settle: SettlePolicy | None = None,
 ) -> dict[str, Any]:
     """Fetch ONE url through CloakBrowser and return extracted main-content text.
 
     The in-process entry point: importable and awaitable directly, with no
     broker/plan/executor ceremony. `execute_text_extraction` is the same
     capability reached through the normal broker plan pipeline.
+
+    `settle` (default: none) lets a client-rendered page finish before the DOM
+    is read — see `SettlePolicy` and the `SETTLE_SPA` preset. Omitting it keeps
+    the previous timing exactly, so no existing caller pays for the option.
 
     Never raises for an ordinary failure — returns ``{"ok": False, "error": ...}``
     so a caller enriching a search packet degrades instead of exploding.
@@ -541,9 +691,10 @@ async def fetch_page_text(
         await guard_browser_page(page)
         await page.goto(url, wait_until=wait_until, timeout=timeout_ms)
         final_url = page.url
-        html = await page.content()
+        extracted, settle_log = await settle_and_extract(
+            page, policy=settle or SettlePolicy(), text_limit=text_limit
+        )
         page_title = await page.title()
-        extracted = extract_main_text(html, text_limit=text_limit)
         return {
             "ok": True,
             "url": url,
@@ -553,6 +704,7 @@ async def fetch_page_text(
             "chars": extracted.chars,
             "truncated": extracted.truncated,
             "strategy": extracted.strategy,
+            "settle": settle_log,
             "elapsed_s": round(time.monotonic() - started, 3),
         }
     except Exception as exc:  # noqa: BLE001
@@ -629,10 +781,16 @@ def build_cloak_executor() -> BrowserExecutor | None:
                 # skipped here deliberately: encoding a PNG we would throw away
                 # costs time and a few MB of peak RSS per page.
                 if plan.action in ("extract_text", "fetch_text"):
-                    html = await page.content()
-                    page_title = await page.title()
                     limit = int(plan.params.get("text_limit") or 20_000)
-                    extracted = extract_main_text(html, text_limit=limit)
+                    extracted, settle_log = await settle_and_extract(
+                        page,
+                        policy=SettlePolicy.from_params(plan.params),
+                        text_limit=limit,
+                    )
+                    page_title = await page.title()
+                    action_log.extend(
+                        {"action": "settle", **entry} for entry in settle_log
+                    )
                     action_log.append(
                         {"action": "extract_text", "chars": extracted.chars,
                          "strategy": extracted.strategy}
@@ -652,6 +810,7 @@ def build_cloak_executor() -> BrowserExecutor | None:
                         "chars": extracted.chars,
                         "truncated": extracted.truncated,
                         "strategy": extracted.strategy,
+                        "settle": settle_log,
                         "final_url": final_url,
                         "evidence": asdict(evidence),
                     }
