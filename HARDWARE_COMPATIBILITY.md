@@ -369,9 +369,8 @@ Zoe uses a waterfall of TTS providers, attempted in order until one succeeds:
 ```
 1. Kokoro PyTorch sidecar  :10201  af_sky  GPU  ~150–400ms warm  ← primary / natural voice
 2. wyoming-piper           :10200  en_GB-cori  CPU  ~111ms       ← fast fallback (British accent)
-3. Kokoro ONNX             in-process  af_sky  CPU  ~900ms       ← slow fallback
-4. Edge TTS (cloud)        internet    en-AU-NatashaNeural       ← cloud fallback
-5. espeak-ng               in-process  robotic                   ← last resort
+3. Edge TTS (cloud)        internet    en-AU-NatashaNeural       ← cloud fallback
+4. espeak-ng               in-process  robotic                   ← last resort
 ```
 
 ### Primary voice: Kokoro PyTorch sidecar

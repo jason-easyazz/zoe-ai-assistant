@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-451 flags; 450 not documented in `.env.example`.
+448 flags; 447 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -185,7 +185,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE` | `'3'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `ZOE_KANBAN_SKIP_SCOUT` | `''` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_TERMINAL_TOOL_GRACE` | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
-| `ZOE_KOKORO_BACKEND` | `-` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_BRAIN_HEALTH_URL` | `'http://127.0.0.1:11434/health'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_BRAIN_POLL_S` | `'2'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_BRAIN_WAIT_S` | `'180'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
@@ -196,11 +195,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_KOKORO_CACHE_PERSIST` | `True` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_CUDA_ATTEMPTS` | `'3'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_CUDA_RETRY_DELAY_S` | `'6'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
-| `ZOE_KOKORO_MODEL` | `''`, `'/home/zoe/models/kokoro-v1.0.onnx'` | no | NO | `scripts/setup/kokoro_sidecar.py`<br>`services/zoe-data/tts_waterfall.py` |
 | `ZOE_KOKORO_SIDECAR_URL` | `'http://127.0.0.1:10201'` | no | NO | `scripts/perf/measure_tts.py`<br>`services/zoe-data/main.py`<br>`services/zoe-data/tts_waterfall.py` |
-| `ZOE_KOKORO_SPEED` | `'1.15'` | no | NO | `services/zoe-data/tts_waterfall.py` |
 | `ZOE_KOKORO_VOICE` | `''`, `'af_sky'` | no | NO | `scripts/perf/measure_tts.py`<br>`services/zoe-data/voice_settings.py` |
-| `ZOE_KOKORO_VOICES` | `''`, `'/home/zoe/models/voices-v1.0.bin'` | no | NO | `scripts/setup/kokoro_sidecar.py`<br>`services/zoe-data/tts_waterfall.py`<br>`services/zoe-data/voice_settings.py` |
+| `ZOE_KOKORO_VOICES` | `''` | no | NO | `services/zoe-data/voice_settings.py` |
 | `ZOE_LATENCY_BASELINE` | `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_LATENCY_RESULTS` | `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_LATENCY_SAMPLES` | `'2'` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
@@ -480,11 +477,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Lab flags (`labs/` — not prod)
 
-6 flags; 6 not documented in `.env.example`.
+5 flags; 5 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
-| `ZOE_KOKORO_MODEL` | `'/home/zoe/models/kokoro-v1.0.onnx'` | no | NO | `labs/kokoro-voice-blend/blend_zoe_voices.py` |
 | `ZOE_KOKORO_VOICES` | `'/home/zoe/models/voices-v1.0.bin'` | no | NO | `labs/kokoro-voice-blend/blend_zoe_voices.py` |
 | `ZOE_LIVE_ROOT` | `-` | no | NO | `labs/flue-zoe-brain/parity/gatelib.py` |
 | `ZOE_PGU_SID` | `-` | no | NO | `labs/flue-zoe-brain/parity/tool_breadth_gate.py` |

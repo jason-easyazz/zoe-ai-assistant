@@ -1,12 +1,15 @@
-"""TTS synthesis engines for the voice waterfall (Kokoro sidecar / Kokoro ONNX /
-local sidecar / Edge TTS / espeak-ng).
+"""TTS synthesis engines for the voice waterfall (Kokoro sidecar / local sidecar /
+Edge TTS / espeak-ng).
 
 Pure mechanics extracted verbatim from routers/voice_tts.py: engine availability
-checks, the per-engine synthesis calls, the Kokoro model + pooled-HTTP-client
-singletons, and the speech-text normalisation the engines share. The waterfall
-ORDER (which engine is tried before which) is policy and stays inline in the
-/synthesize, /speak and /stream handlers in routers/voice_tts.py — pinned there
-by test_canonical_invariants.py and test_voice_smoke_ci.py.
+checks, the per-engine synthesis calls, the pooled Kokoro-sidecar HTTP client, and
+the speech-text normalisation the engines share. The waterfall ORDER (which engine
+is tried before which) is policy and stays inline in the /synthesize, /speak and
+/stream handlers in routers/voice_tts.py — pinned there by
+test_canonical_invariants.py and test_voice_smoke_ci.py.
+
+Production TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py),
+reached over HTTP by _synthesize_kokoro_sidecar. There is no in-process TTS model.
 """
 import asyncio
 import concurrent.futures
@@ -25,37 +28,6 @@ import httpx
 import voice_settings
 
 logger = logging.getLogger(__name__)
-
-
-# ── Kokoro ONNX model singleton ────────────────────────────────────────────
-# Loaded once at module level to avoid ~500ms per-call initialisation.
-_kokoro_instance = None
-_kokoro_lock = asyncio.Lock()
-_kokoro_model_path_loaded: str = ""
-
-
-async def _get_kokoro_instance():
-    """Return cached Kokoro instance, loading lazily on first call."""
-    global _kokoro_instance, _kokoro_model_path_loaded
-    model_path = os.environ.get("ZOE_KOKORO_MODEL", "").strip()
-    if not model_path or not os.path.isfile(model_path):
-        return None
-    async with _kokoro_lock:
-        if _kokoro_instance is not None and _kokoro_model_path_loaded == model_path:
-            return _kokoro_instance
-        try:
-            from kokoro_onnx import Kokoro  # type: ignore
-            voices_path = os.environ.get("ZOE_KOKORO_VOICES", "").strip() or None
-            _kokoro_instance = Kokoro(model_path, voices_path=voices_path)
-            _kokoro_model_path_loaded = model_path
-            logger.info("Kokoro ONNX model loaded from %s", model_path)
-            return _kokoro_instance
-        except ImportError:
-            logger.debug("kokoro-onnx not installed; Kokoro TTS unavailable")
-            return None
-        except Exception as exc:
-            logger.warning("Kokoro ONNX model load failed: %s", exc)
-            return None
 
 
 def _has_espeak_ng() -> bool:
@@ -331,89 +303,3 @@ async def _synthesize_kokoro_sidecar(text: str, voice: Optional[str] = None) -> 
         logger.debug("kokoro-sidecar unavailable: %s", exc)
         return None
 
-
-async def _synthesize_kokoro(text: str, voice: Optional[str] = None) -> Optional[bytes]:
-    """Synthesize using Kokoro ONNX (thewh1teagle/kokoro-onnx).
-
-    ~82M param ONNX model — sub-100ms first chunk on Jetson CUDA, natural AU voice.
-    Install: pip install kokoro-onnx
-    Model: download from https://github.com/thewh1teagle/kokoro-onnx/releases
-    Set ZOE_KOKORO_MODEL to the path of the kokoro-v1.0.onnx file.
-    Voice resolves per call: explicit override → persisted preference →
-    ZOE_KOKORO_VOICE env default (af_sky). Uses module-level cached instance to
-    avoid ~500ms model load per call.
-    """
-    kokoro = await _get_kokoro_instance()
-    if kokoro is None:
-        return None
-    voice = await voice_settings.resolve_tts_voice(voice)
-    try:
-        import numpy as np
-        import wave
-        import io
-
-        def _kokoro_sync():
-            kokoro_speed = float(os.environ.get("ZOE_KOKORO_SPEED", "1.15"))
-            samples, sample_rate = kokoro.create(text, voice=voice, speed=kokoro_speed, lang="en-us")
-            samples_int16 = (samples * 32767).astype(np.int16)
-            buf = io.BytesIO()
-            with wave.open(buf, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(sample_rate)
-                wf.writeframes(samples_int16.tobytes())
-            return buf.getvalue()
-
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _kokoro_sync)
-    except Exception as exc:
-        logger.warning("Kokoro TTS failed: %s", exc)
-        return None
-
-
-def _wav_bytes_from_float32_samples(samples, sample_rate: int) -> bytes:
-    """Convert float32 [-1,1] samples to mono WAV bytes."""
-    import io
-    import wave
-    import numpy as np
-
-    clipped = np.clip(samples, -1.0, 1.0)
-    pcm16 = (clipped * 32767.0).astype(np.int16)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(int(sample_rate))
-        wf.writeframes(pcm16.tobytes())
-    return buf.getvalue()
-
-
-async def _stream_kokoro_sentence_wavs(sentence: str, voice: Optional[str] = None):
-    """Yield WAV chunks from Kokoro create_stream() for one sentence."""
-    kokoro = await _get_kokoro_instance()
-    if kokoro is None or not hasattr(kokoro, "create_stream"):
-        return
-    voice = await voice_settings.resolve_tts_voice(voice)
-    kokoro_speed = float(os.environ.get("ZOE_KOKORO_SPEED", "1.15"))
-    try:
-        async for samples, sample_rate in kokoro.create_stream(
-            sentence, voice=voice, speed=kokoro_speed, lang="en-us"
-        ):
-            if samples is None:
-                continue
-            try:
-                yield _wav_bytes_from_float32_samples(samples, sample_rate)
-            except Exception:
-                continue
-    except Exception as exc:
-        logger.warning("Kokoro create_stream failed: %s", exc)
-        return
-
-
-def kokoro_ready() -> bool:
-    return _kokoro_instance is not None
-
-
-def kokoro_configured() -> bool:
-    model_path = os.environ.get("ZOE_KOKORO_MODEL", "").strip()
-    return bool(model_path and os.path.isfile(model_path) and importlib.util.find_spec("kokoro_onnx") is not None)

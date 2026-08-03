@@ -146,7 +146,7 @@ def test_tts_live_waterfall_keeps_kokoro_before_edge_before_espeak():
     src = _data_src("routers/voice_tts.py")
     start = src.index("async def synthesize(")
     body = src[start:src.index("\nasync def ", start + 1)]  # just the synthesize() route body
-    i_kokoro = body.find("_synthesize_kokoro")  # first hit = the Kokoro sidecar attempt
+    i_kokoro = body.find("_synthesize_kokoro_sidecar")  # the Kokoro sidecar attempt
     i_edge = body.find("_synthesize_edge_tts")
     i_espeak = body.find("_synthesize_espeak")
     assert 0 <= i_kokoro < i_edge < i_espeak, (
