@@ -131,7 +131,17 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   blessed deploy (`deploy_live.sh`) invokes. If the incoming git diff touches the **voice runtime
   path** (`voice_tts.py` / `zoe_core_client.py` / `fast_tiers.py` / `*kokoro*` / `*moonshine*`, plus
   the **live** brain lane — `labs/flue-zoe-brain/` deployed source, `zoe_flue_client.py`,
-  `brain_dispatch.py`, `flue-zoe-brain.service` — and the dormant zoe-core fallback's manifest;
+  `brain_dispatch.py`, `flue-zoe-brain.service` — the dormant zoe-core fallback's manifest, and the
+  whole two-stage router: its serving unit `functiongemma-router.service` **and** its decision
+  modules `router_two_stage.py` + `semantic_router.py`, gated for different reasons (serving config
+  vs. the logic that picks the tool) because either half alone leaves a hole. That router's
+  regression class is silent by construction — `decide()` returns `None` on any failure and the
+  caller keeps the weaker similarity route, while a plain logic edit just returns a different tool
+  without erroring — so nothing goes red anywhere. **Not** gated, and kept out by using literal
+  paths rather than `*router*` / `setup/systemd/*` wildcards: the routers' tests, the `labs/` eval
+  and training harnesses, the offline `scripts/maintenance/router_*.py` tooling, and
+  `models/router_head_mlp.joblib` (whose promotion path replay-gates through `router_selftrain.py`'s
+  ratchet — a hand-committed head swap remains a known open gap);
   override `ZOE_VOICE_GATE_PATHS`), it asserts a **fresh** (`< ZOE_VOICE_GATE_MAX_AGE_H`, default 24h)
   **passing** artifact **matching the current baseline** before the restart — else it fails loudly
   (non-zero exit) and the deploy is refused. Non-voice deploys are a no-op pass. **It never runs the

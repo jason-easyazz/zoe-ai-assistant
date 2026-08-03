@@ -579,19 +579,36 @@ def test_flue_non_deployed_paths_do_not_gate(path):
     assert needs is False and hits == []
 
 
-# --- the two-stage router FRONT (ZOE_ROUTER_HEAD=active) --------------------
-# Same class as the flue lane above, found by cross-review on #1613. The router
-# sidecar's unit is its serving config (model, --ctx-size, --parallel, memory
-# caps) and docs/CANONICAL.md puts the two-stage router ON the voice path — but
-# it matched no glob, so a change to it took the no-op pass at PR time and at
-# deploy. It is the worst one to leave ungated because its failure is SILENT:
-# router_two_stage.decide() returns None on timeout and semantic_router falls
-# back to the similarity route, so a regression shows up only as worse tool
-# selection, which is precisely what a said-vs-did replay measures.
+# --- the two-stage router: SERVING CONFIG + ROUTING DECISION ----------------
+# Found by cross-review on #1613. docs/CANONICAL.md puts the two-stage router ON
+# the voice path (ZOE_ROUTER_HEAD=active), but neither half matched a glob, so a
+# change to either took the no-op pass at PR time AND at deploy. Both halves are
+# pinned separately because they are gated for DIFFERENT reasons — the unit is
+# serving config (which GGUF, --ctx-size, --parallel, memory caps), the modules
+# are the logic that picks the tool — and either alone leaves a real hole.
+#
+# This is the worst class to leave ungated because it is SILENT by construction:
+# router_two_stage.decide() returns None from a blanket `except Exception`
+# (router_two_stage.py:291-294) and semantic_router keeps the weaker similarity
+# route on None (:546-566, "brain-safe"), while a plain logic edit just returns a
+# different tool without erroring at all. Nothing goes red anywhere; only a
+# said-vs-did replay sees it.
 def test_router_sidecar_unit_is_voice_path():
     path = "scripts/setup/systemd/functiongemma-router.service"
     pats = vgc.voice_path_patterns()
     assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    "services/zoe-data/router_two_stage.py",
+    "services/zoe-data/semantic_router.py",
+])
+def test_router_decision_modules_are_voice_path(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    # end to end through the classifier both the deploy and PR paths call
     needs, hits, _ = vgc.scope_verdict([path], pats)
     assert needs is True and hits == [path]
 
@@ -607,6 +624,35 @@ def test_router_sidecar_unit_is_voice_path():
 def test_unrelated_systemd_units_do_not_gate(path):
     pats = vgc.voice_path_patterns()
     assert vgc.touched_voice_files([path], pats) == []
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is False and hits == []
+
+
+@pytest.mark.parametrize("path", [
+    # Co-located tests: mechanism-only, never run inside a voice turn. Gating
+    # them would charge a 20-sample Kokoro replay for a test-only diff.
+    "services/zoe-data/tests/test_router_two_stage.py",
+    "services/zoe-data/tests/test_router_head_shadow.py",
+    # Lab eval + training harnesses — offline, not deployed.
+    "labs/router-90-campaign/prod_path_eval.py",
+    "labs/two-stage-router-eval/run_two_stage.py",
+    # Offline scoring / self-train tooling, outside the request path.
+    "scripts/maintenance/router_shadow_report.py",
+    "scripts/maintenance/router_selftrain.py",
+    # The stage-1 checkpoint is gated by the self-train ratchet's own replay
+    # gate, not by this one — pin that it is genuinely absent here.
+    "services/zoe-data/models/router_head_mlp.joblib",
+])
+def test_router_offline_paths_do_not_gate(path):
+    """The globs are LITERAL module paths, not a `*router*` wildcard.
+
+    A wildcard would sweep in every one of these — and the two it would sweep
+    in most often (the co-located tests and the self-train scripts) are the
+    ones that change most, which is how a gate stops being worth having."""
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path], pats) == []
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is False and hits == []
 
 
 # --- FIX: scope must fail CLOSED when it cannot publish its verdict ---------

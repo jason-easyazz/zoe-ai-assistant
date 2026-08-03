@@ -129,19 +129,80 @@ VOICE_PATH_PATTERNS = (
     # turn gets answered by, and neither matched any glob above.
     "services/zoe-data/zoe_flue_client.py",
     "services/zoe-data/brain_dispatch.py",
-    # THE TWO-STAGE ROUTER FRONT. docs/CANONICAL.md lists it as a fast
-    # tool-router *front on the voice path* (LIVE, ZOE_ROUTER_HEAD=active), and
-    # its serving config decides routing quality for every voice turn — the
-    # model it loads, --ctx-size, --parallel and (since 2026-08-03) its memory
-    # caps. Exactly the llama-server.service / flue-zoe-brain.service case: the
-    # UNIT is the serving config, so it is gated for the same reason they are.
+    # THE TWO-STAGE ROUTER — its serving UNIT *and* the code that makes the
+    # routing decision. docs/CANONICAL.md lists the two-stage router as a LIVE
+    # tool-router FRONT on the voice path (ZOE_ROUTER_HEAD=active), and
+    # semantic_router.route() is Tier-1 for every voice turn — called straight
+    # from routers/voice_tts.py and fast_tiers.py, both gated above. Three files,
+    # two distinct reasons, and BOTH are needed: the unit is the serving config
+    # (which GGUF is loaded, --ctx-size, --parallel, and since 2026-08-03 its
+    # memory caps), exactly the llama-server.service / flue-zoe-brain.service
+    # case; the two modules are the logic that decides WHICH TOOL a voice turn
+    # fires. Gating either alone leaves the other able to change routing behaviour
+    # and take the no-op pass.
     #
-    # This one matters more than its size suggests, because its failure mode is
-    # silent. router_two_stage.decide() returns None on any timeout and
-    # semantic_router falls back to the similarity route, so a regression here
-    # never surfaces as an error — only as worse tool selection. A said-vs-did
-    # replay is the only thing that catches it.
+    # Gated because the regression is SILENT BY CONSTRUCTION at both ends,
+    # verified in code rather than assumed:
+    #   - router_two_stage.decide() wraps its whole body in `except Exception`
+    #     and returns None (router_two_stage.py:291-294) — a logger.warning is
+    #     the only trace.
+    #   - the caller keeps the WEAKER similarity route on None:
+    #     semantic_router._two_stage_active() swallows to None (:465-472) and
+    #     route() applies the decision only `if decision is not None` (:546-566,
+    #     whose own comment reads "decision None -> similarity behavior
+    #     unchanged (brain-safe)").
+    # That covers the ERROR path, which is what a swapped-out or slow sidecar
+    # produces: the 1.5s timeout elapses, decide() returns None, and the turn is
+    # routed by the weaker path having burned the whole budget. A non-error logic
+    # edit is quieter still: remap DOMAIN_TOOLS, move the chat gate, or reword a
+    # ROUTES example and the router simply returns a DIFFERENT tool. Nothing
+    # raises, nothing logs a regression, every health check stays green. Only a
+    # said-vs-did replay against the real-voice corpus sees any of it.
+    #
+    # The cost objection does not survive the log: these are the LOWEST-churn
+    # files in the gated set (measured on main 2026-08-03 — router_two_stage.py
+    # 2 commits ever, semantic_router.py 5, against 110 for the already-gated
+    # routers/voice_tts.py), so this buys the coverage for a handful of replay
+    # runs a year.
+    #
+    # Their ci_safe suites do NOT substitute. test_router_two_stage.py (24) and
+    # test_router_head_shadow.py (19) are MECHANISM tests against monkeypatched
+    # heads and sidecars — parse, gate arithmetic, fallback plumbing, log shape.
+    # They pin that the wiring works and are blind to routing QUALITY, which is
+    # exactly what a DOMAIN_TOOLS / ROUTES / threshold edit changes.
+    # Nor does the corpus eval, and least of all for semantic_router:
+    # labs/router-90-campaign/prod_path_eval.py drives the frozen 81-case corpus
+    # through route_two_stage(), which embeds and calls router_two_stage.decide()
+    # DIRECTLY — it never executes route()'s similarity matrix, its threshold, or
+    # the two-stage/similarity merge. Its pytest wrapper
+    # (tests/integration/test_router_prod_path.py) is opt-in behind
+    # ZOE_ROUTER_PROD_PATH_EVAL=1 and integration-marked, so it runs in no default
+    # lane. Neither module has a cheaper check that would catch this class.
     "scripts/setup/systemd/functiongemma-router.service",
+    "services/zoe-data/router_two_stage.py",
+    "services/zoe-data/semantic_router.py",
+    # SELF-GATING, and deliberately so: the unit path above matches a file this
+    # very PR changes, so the PR that introduced these three patterns needs
+    # head-bound replay evidence to merge. That is correct — it changes the
+    # serving config of a unit on the voice path. (The two MODULE patterns do not
+    # add that property; the unit already did. voice_gate_check.py itself is
+    # still NOT in its own list, verified: gating the checker would charge a
+    # replay for every pattern edit, and a pattern edit cannot change what Zoe
+    # says. The residual risk — a PR that WEAKENS this list waving itself
+    # through — is covered by review and the both-direction tests, not replay.)
+    #
+    # DELIBERATELY ABSENT, and the literal paths above keep them that way: the
+    # co-located tests, the labs/ eval + training harnesses, and the offline
+    # scoring/self-train scripts under scripts/maintenance/. None of them runs
+    # inside a voice turn, so gating them would charge a 20-sample Kokoro replay
+    # for a diff that cannot change what Zoe says. Literal module paths, not a
+    # `*router*` wildcard, are what keeps them out — and the same reason the unit
+    # is one literal path rather than `scripts/setup/systemd/*`. Also absent:
+    # services/zoe-data/models/router_head_mlp.joblib — the stage-1 checkpoint IS
+    # tracked and swapping it does change routing, but its promotion path already
+    # replay-gates (router_selftrain.py's `replay_gate_passed` ratchet). That
+    # covers the automated loop only; a hand-committed head swap is still an open
+    # gap, tracked separately rather than folded in here.
 )
 DEFAULT_MAX_AGE_H = float(os.environ.get("ZOE_VOICE_GATE_MAX_AGE_H", "24"))
 
