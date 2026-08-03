@@ -54,6 +54,28 @@ both on the optional local-ML path (off by default; postinstalls blocked by bun)
 harvesting, obfuscation, or covert telemetry beyond the autoqa endpoint fenced above. This section
 is the recorded scan outcome required by the root AGENTS.md skill-safety rule.
 
+## Supply-chain & runtime hardening (external verification, 2026-08-03)
+
+- **Release binaries are unverifiable** — no signatures, checksums, or SLSA/Sigstore attestations
+  on any asset (the npm-provenance in ci.yml covers only the dead `oh-my-pi` npm package). At
+  ~1.5 releases/day, **pin one exact version and record the SHA-256 we audited** (see Wiring
+  above) — never "latest".
+- **Enforce the fence OUTSIDE the process.** Two open upstream issues make in-process settings
+  insufficient: #3293 (read/write outside cwd without approval) and #2227 (MCP discovery scans
+  11+ config dirs by default). Run omp in the Omnigent container with read-only mounts, no
+  ambient MCP configs, and no ambient credentials beyond the dedicated capped key.
+- **AutoQA discrepancy — unresolved, fence stands.** Upstream says the telemetry concern was
+  fixed 2026-05-20 (#1224→#1226); our hands-on 17.2.5 check found `dev.autoqa` defaulting ON.
+  Keep `PI_AUTO_QA=0` regardless and verify by `config get` read-back.
+- **ACP is a safe seam**: wire protocol v1, stable since 2025-11; multi-vendor governance;
+  60+ agents / 13+ editors. If any component needs the SDK, pin `@agentclientprotocol/sdk ~1.3.x`
+  — the `@zed-industries/agent-client-protocol` package is **abandoned** (0.4.5, 2025-10). Watch
+  the `schema-v2.0.0-alpha.*` drafts before any major SDK bump.
+- **Project health**: 387 contributors but ~60% of 90-day commits are the author (plus the
+  project's own bot at #2); badlogic (upstream pi author) contributes directly; zero advisories.
+  arm64 binaries get ~30 downloads/release vs 331 x64 — expect to be an early finder of arm64
+  bugs. Upstream pi itself moved to `earendil-works/pi` (v0.83.0, ~500 commits/month).
+
 ## Status
 
 Evaluation only — nothing installed into the live container, no config applied, no dispatch run.
