@@ -59,7 +59,7 @@ usage() {
 Usage: migrate_music_assistant_data.sh [--execute]
 
 Copies Music Assistant's live data from the git checkout to a location outside
-it, so untracking the databases cannot destroy them on the next deploy.
+it, so the mount can be re-pointed without a deploy destroying live data.
 
   (default)   dry-run: report what would happen, touch nothing
   --execute   stop the container, copy, verify, leave the container stopped
@@ -67,7 +67,13 @@ it, so untracking the databases cannot destroy them on the next deploy.
   src : $SRC
   dest: $DEST   (override with ZOE_MA_DATA)
 
-After --execute succeeds: deploy the untracking commit, then start the container.
+After --execute succeeds:
+  1. deploy STEP A — it RE-POINTS THE BIND MOUNT ONLY. It does NOT untrack the
+     databases; auth.db/library.db and their WALs stay tracked at that commit,
+     so the credentials remain in git history and CD keeps rolling those paths
+     back. Untracking is a separate STEP B, still outstanding.
+  2. ZOE_MA_DATA=<dest> docker compose -f docker-compose.modules.yml up -d music-assistant
+  3. confirm: curl -s http://localhost:8095/info
 EOF
 }
 
@@ -412,7 +418,7 @@ fi
 
 if [[ "$fail" -ne 0 ]]; then
     log "FAILED verification — destination is NOT trustworthy."
-    log "The original at $SRC is untouched; do NOT deploy the untracking commit."
+    log "The original at $SRC is untouched; do NOT deploy step A yet."
     exit 1
 fi
 

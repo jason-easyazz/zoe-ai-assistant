@@ -276,6 +276,17 @@ def test_checksum_walk_is_materialised_and_validated():
     assert "-print0 || true" not in src
 
 
+def test_no_operator_instruction_claims_the_next_deploy_untracks():
+    """EVERY operator-facing exit must say the same thing. I corrected the
+    success message and left the identical false wording in --help, so an
+    operator who never reaches the terminal text would still believe step B was
+    done and leave credentials in git indefinitely (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "deploy the untracking commit" not in src
+    # both the --help path and the success path must name step A as mount-only
+    assert src.count("RE-POINTS THE BIND MOUNT ONLY") >= 2
+
+
 def test_closing_instructions_do_not_overstate_step_a():
     """The success message is the terminal instruction of the pre-deploy
     procedure. Saying the next deploy 'untracks the DBs' would let the operator
