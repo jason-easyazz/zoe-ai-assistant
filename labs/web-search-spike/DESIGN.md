@@ -299,7 +299,7 @@ does not do.**
 | tier | what | cost | measured role |
 |---|---|---|---|
 | **0 — structured scrapers** | Wikipedia + HN JSON APIs | free, unlimited | Never blocked, fastest (0.46–0.76 s). **Tried FIRST for claim checks.** |
-| **1 — Tavily FREE** | `api.tavily.com` `search_depth=basic` | 1,000 credits/mo ≈ **33/day** | Primary open-lookup engine *when configured*. **Not configured on this box** — reported as `unconfigured`, never scored as zero. |
+| **1 — Tavily FREE** | `api.tavily.com` `search_depth=basic` | 1,000 credits/mo ≈ **33/day** | Primary open-lookup engine. **Configured — the key is in `services/zoe-data/.env`** (an earlier note wrongly called it absent; the harness had simply not sourced it). MEASURED 2026-08-03: `tavily-free` 26/26 ok, mean 0.910, median 2.22 s. |
 | **2 — `ddgs`** | 18-engine metasearch | free | **Opportunistic only.** Home-IP blocks are documented steady state, so availability is a bonus, never load-bearing. |
 | **extract — Jina Reader** | `GET https://r.jina.ai/<url>` | free, ~20 RPM | **Enrichment only.** Measured 8.5 s / 133 KB on one Wikipedia page, and **403 `AbuseAlleviationError`** on britannica.com — the anonymous tier is domain-restricted. Never on a spoken critical path. |
 
@@ -308,12 +308,24 @@ default 33) because Tavily's API does not return remaining quota. It is a
 spend-limiter, not an accountant — it exists so a corpus run cannot burn the
 month in an afternoon.
 
-**CloakBrowser note:** `cloakbrowser` 0.3.28 *is* installed, but
-`browser_broker.py`'s executor returns a **base64 PNG screenshot only**
-(`BrowserEvidence.screenshots`) — no page text — so the broker as it stands
-cannot feed a text packet. Text extraction would need
-`page.locator("body").inner_text()`, which `mcp_server.py`'s
-`cloakbrowser_fetch` already does. Recorded rather than worked around.
+**CloakBrowser tier (`extract — CloakBrowser`, added 2026-08-03).** The broker
+used to return a **base64 PNG screenshot only**, so it could not feed a text
+packet. PR **#1626** adds readability-lite main-content extraction to
+`browser_broker.py`; `websearch/cloak.py` imports it **by path** (never a
+vendored copy) so the eval scores the real implementation, and reports the tier
+UNAVAILABLE against a checkout without the PR.
+
+Measured 2026-08-03: **4.57 s** isolated for one Wikipedia page, **~553 MB peak
+RSS across 12 Chromium processes**. Corpus run: 24/26 ok, 2 blocked, mean 0.771.
+
+The trade against Jina is the whole point: CloakBrowser is roughly **twice as
+fast** (4.57 s vs 8.5 s), never domain-restricted, and needs no third party —
+but it spends **half a gigabyte of local RAM** on a 15.6 GB box that also runs
+the voice brain, where Jina spends none. Run it capped
+(`systemd-run --user --scope -p MemoryMax=1024M`) and never on a spoken critical
+path. Its *stealth* advantage — the actual reason to prefer it — stayed
+**unmeasured**: `ddgs` did not block once across either full run, so there was
+nothing to bypass.
 
 ---
 

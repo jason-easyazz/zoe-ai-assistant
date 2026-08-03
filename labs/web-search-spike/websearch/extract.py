@@ -18,12 +18,16 @@ Jina is an ENRICHMENT tier for a page we already chose, capped hard on both
 bytes and time — never on the critical path of a spoken answer.
 
 CloakBrowser is the local fallback (`cloakbrowser` 0.3.28 IS installed on this
-box). `services/zoe-data/browser_broker.py` wraps it, but its executor returns
-a **base64 PNG screenshot only** — `BrowserEvidence.screenshots`, no page text
-— so the broker as it stands cannot feed a text packet. Extracting text needs
-`page.locator("body").inner_text()`, which is what `mcp_server.py`'s
-`cloakbrowser_fetch` already does. Recorded here as a finding for the harness;
-this module calls CloakBrowser directly rather than through the broker.
+box). `services/zoe-data/browser_broker.py` wraps it, and its executor used to
+return a **base64 PNG screenshot only** — no page text — so the broker could
+not feed a text packet.
+
+RESOLVED by PR #1626 (`feat/browser-broker-text-extraction`), which adds
+readability-lite main-content extraction to the broker. The tier lives in
+`cloak.py`, which imports that function **by path** so the eval scores the real
+implementation rather than a copy. MEASURED 2026-08-03: 4.57 s and ~553 MB peak
+RSS across 12 Chromium processes for one Wikipedia page — faster than Jina's
+8.5 s, but the RAM is local and Jina's is someone else's.
 """
 
 from __future__ import annotations

@@ -114,11 +114,14 @@ engines are reachable.
    `AbuseAlleviationError`** on britannica.com — the anonymous tier is
    domain-restricted.
 
-7. **`browser_broker.py` cannot feed a text packet.** CloakBrowser 0.3.28 is
-   installed, but the broker's executor returns a base64 **PNG screenshot only**
-   — no page text. Text would need `page.locator("body").inner_text()`, as
-   `mcp_server.py`'s `cloakbrowser_fetch` already does. Recorded, not worked
-   around.
+7. **`browser_broker.py` could not feed a text packet — FIXED, and now
+   measured.** The broker's executor returned a base64 **PNG screenshot only**.
+   PR **#1626** (`feat/browser-broker-text-extraction`) adds readability-lite
+   main-content extraction; `websearch/cloak.py` imports it **by path** so the
+   eval scores the real implementation and reports the tier UNAVAILABLE against
+   a checkout without the PR. Measured: **4.57 s** and **~553 MB peak RSS
+   across 12 Chromium processes** for one Wikipedia page — *faster* than Jina
+   (8.5 s), but the RAM is ours and Jina's is not.
 
 8. **The result packet had to be built, not borrowed.** oh-my-pi renders for a
    large-context coding model; Zoe's 8k Gemma needs a hard ceiling. 10 results
@@ -140,7 +143,9 @@ engines are reachable.
 | Jina Reader | **16.97 s median**, 133 KB/page, 403 on some domains |
 | Smoke-run medians (4 queries) | scrapers 1.57 s · ddgs 3.51 s · ddgs+scrapers 4.09 s · all-free 9.08 s · jina 16.97 s |
 | **Full-run medians (26 queries, 2026-08-03)** | scrapers **1.20 s** (p90 1.32) · ddgs **4.20 s** (p90 13.69) · ddgs+scrapers **2.94 s** (p90 4.77) · all-free **3.37 s** (p90 13.43) · jina **9.13 s** (p90 19.60, max 31.87) |
-| Full-run auto-scores (smoke signal only) | scrapers 0.388 · ddgs 0.917 · ddgs+scrapers 0.881 · all-free 0.833 · jina 0.599; Tavily tiers **unconfigured, unmeasured** |
+| Full-run auto-scores (smoke signal only) | scrapers 0.388 · ddgs 0.917 · ddgs+scrapers 0.881 · all-free 0.833 · jina 0.599 |
+| **Tavily, now MEASURED (2026-08-03, `20260803T134932Z`)** | `tavily-free` **0.910** / 26 queries / 26 ok / 0 blocked · `tavily+scrapers` **0.810** / **7-query sub-sample** / 7 ok. Budget spent **33/33 exactly**. The earlier "unconfigured" was a HARNESS-ENV error, not a missing key — it lives in `services/zoe-data/.env` |
+| **`cloakbrowser`, new tier (2026-08-03)** | **0.771** / 26 queries / 24 ok / **2 blocked** (Reddit SPA `Page.content`; thespruceeats no text). Median **10.02 s** but **load-contaminated** — `load1` 4.4–5.2, 4 co-resident agents; isolated smoke was 4.57 s |
 | Claim check (`check_claim`, 4 fresh samples) | **11.9–26.6 s wall** — the worst returned **0 results**, both shaped queries deadline-exceeded (prior 15.7 s was a mid-range draw) |
 | `ddgs` blocks in the full run | **0** across ~104 calls — the documented home-IP block did not reproduce that day |
 | Live `look_up()` end to end | 5.28 s, **312 tokens**, 6 results, Wikipedia extract leading |

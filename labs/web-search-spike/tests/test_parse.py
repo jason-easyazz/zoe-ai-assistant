@@ -131,13 +131,52 @@ def test_clean_text_strips_tags_and_entities():
 
 # --- Tavily free tier ------------------------------------------------------
 
-def test_tavily_parses_documented_shape():
+def test_tavily_parses_real_recorded_response():
+    """Parses a REAL recorded response, not a hand-written guess at the shape.
+
+    The previous fixture was synthetic (no key was configured when it was
+    written) and it was wrong where it counted: 3 results instead of 6, and no
+    `answer`/`raw_content`/`images`/`follow_up_questions` keys at all. Parsing
+    a fixture we invented only ever proved the parser matched our own
+    assumptions.
+    """
     payload = json.loads(fixture("tavily_response.json"))
+    assert payload["_fixture_note"].startswith("REAL, RECORDED")
+
     results = tavily.parse_tavily(payload)
-    assert len(results) == 3
+    assert len(results) == 6
     assert results[0].engine == "tavily-free"
-    assert results[0].url.startswith("https://")
-    assert results[0].extra["score"] == 0.97
+    assert results[0].url == "https://en.wikipedia.org/wiki/Canberra"
+    assert results[0].extra["score"] == pytest.approx(0.9394, abs=1e-3)
+    # Ranks are dense and ordered as returned.
+    assert [r.rank for r in results] == [0, 1, 2, 3, 4, 5]
+    assert all(r.title and r.url.startswith("https://") for r in results)
+
+
+def test_tavily_tolerates_the_real_null_fields():
+    """`raw_content` is null and `answer` absent on the free/basic tier."""
+    payload = json.loads(fixture("tavily_response.json"))
+    assert all(row["raw_content"] is None for row in payload["results"])
+    results = tavily.parse_tavily(payload)
+    assert all(isinstance(r.snippet, str) for r in results)
+
+
+def test_recorded_fixture_contains_no_api_key():
+    """A recorded fixture is response data; it must never carry a credential.
+
+    `_maybe_capture` writes the RESPONSE only — the request body holds
+    `api_key` and is never serialised. This pins that, so re-recording can
+    never quietly commit a key.
+    """
+    payload = json.loads(fixture("tavily_response.json"))
+    # Scan the DATA, not the `_fixture_note` prose — the note legitimately
+    # names the field it is promising never to contain.
+    payload.pop("_fixture_note", None)
+    raw = json.dumps(payload)
+    assert "api_key" not in raw
+    # Tavily keys are `tvly-` prefixed; catch any that ever leaks in.
+    assert "tvly-" not in raw
+    assert "request_id" not in raw, "per-call account correlation id should be stripped"
 
 
 def test_tavily_unconfigured_raises_rather_than_scoring_zero(monkeypatch):

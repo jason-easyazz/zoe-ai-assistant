@@ -38,6 +38,8 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from websearch import tavily
+from websearch.cloak import available as cloak_available
+from websearch.cloak import cloak_fetch
 from websearch.engines import EnginesBlocked
 from websearch.engines import search as ddgs_search
 from websearch.extract import ExtractUnavailable, cloakbrowser_available, jina_reader
@@ -198,6 +200,39 @@ def combo_jina_extract(query: str) -> dict:
     }
 
 
+def combo_cloakbrowser(query: str) -> dict:
+    """Local CloakBrowser page extraction, measured on a URL the free engines found.
+
+    FLOW CHOICE — deliberately a byte-for-byte mirror of `combo_jina_extract`:
+    same discovery (`ddgs`, limit=3), same target (`results[0].url`), same
+    packet shape (extracted page text). The ONLY difference is which extraction
+    backend reads the page. That isolates the variable under test, so the two
+    rows are directly comparable; any other flow would confound extraction
+    quality with a different discovery tier.
+
+    WHAT THIS DOES NOT MEASURE, and it is the interesting gap: CloakBrowser's
+    actual selling point is STEALTH — passing Cloudflare/FingerprintJS where a
+    plain HTTP client is refused. Driving a search engine page with it would
+    test that, but `ddgs` did not block once across the previous full run, so
+    there was nothing to bypass. On this corpus CloakBrowser is being scored
+    purely as an extractor. Its stealth value remains UNMEASURED, not disproven.
+    """
+    try:
+        results = ddgs_search(query, limit=3)
+    except EnginesBlocked as exc:
+        raise EnginesBlocked(f"cloakbrowser combo needs a URL and ddgs is blocked: {exc}") from exc
+    if not results:
+        return {"status": "empty", "results": [], "packet": ""}
+    page = cloak_fetch(results[0].url)
+    return {
+        "status": "ok",
+        "results": [{"title": results[0].title, "url": results[0].url}],
+        "packet": page.text[:1200],
+        "extract_chars": len(page.text),
+        "truncated": page.truncated,
+    }
+
+
 COMBOS = {
     "scrapers": (combo_scrapers, "Tier 0 alone — Wikipedia search + structured extract"),
     "ddgs": (combo_ddgs, "ddgs metasearch (18 engines) alone"),
@@ -206,6 +241,7 @@ COMBOS = {
     "tavily+scrapers": (combo_tavily_plus_scrapers, "Tavily free + structured enrichment"),
     "all-free": (combo_all_free, "Every configured free tier, consensus-merged"),
     "jina-extract": (combo_jina_extract, "Jina Reader page extraction (enrichment tier)"),
+    "cloakbrowser": (combo_cloakbrowser, "CloakBrowser local page extraction (same flow as jina-extract)"),
 }
 
 NEEDS_TAVILY = {"tavily-free", "tavily+scrapers"}
@@ -298,6 +334,38 @@ def cross_combo_overlap(report: dict) -> dict:
     return out
 
 
+def load_carried(paths: list[str]) -> list[dict]:
+    """Carry combos forward from earlier runs, verbatim and clearly labelled.
+
+    Re-running every combination on every pass would burn budget and clock to
+    re-measure things that did not change. But a carried row was measured on a
+    DIFFERENT DAY, against a live web that moved, on a box under different
+    load — so it is tagged `carried_from` with its original stamp, excluded
+    from the overlap computation, and marked in the report. Cross-run latency
+    in particular is not a like-for-like comparison.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in paths:
+        path = pathlib.Path(raw)
+        if not path.is_file():
+            print(f"WARN --merge-from: no such file {path}; skipping")
+            continue
+        old = json.loads(path.read_text())
+        for combo in old.get("combos", []):
+            name = combo["combo"]
+            if name in seen:
+                continue
+            seen.add(name)
+            combo = dict(combo)
+            combo["carried_from"] = combo.get("carried_from") or old.get("stamp", path.stem)
+            combo["carried_n_queries"] = old.get("n_queries")
+            out.append(combo)
+    if out:
+        print(f"carried forward {len(out)} combo(s): {', '.join(c['combo'] for c in out)}")
+    return out
+
+
 # --- reporting -------------------------------------------------------------
 
 def write_manual_sheet(report: dict, path: pathlib.Path) -> None:
@@ -314,20 +382,35 @@ def write_manual_sheet(report: dict, path: pathlib.Path) -> None:
         "",
         "## Automatic summary",
         "",
-        "| combo | ok | blocked | empty | err | mean score | median latency |",
-        "|---|---|---|---|---|---|---|",
+    ]
+    if report.get("carried_stamps"):
+        lines += [
+            "> **CONDITIONS DIFFER — do not compare latency across runs.** Rows marked",
+            f"> `carried` were measured in an earlier run (`{', '.join(report['carried_stamps'])}`)",
+            "> and are reproduced verbatim, not re-run. Between then and now the live web",
+            "> moved, the box's load changed, and the query set may differ. Treat `carried`",
+            "> vs measured **latency** as non-comparable, and `score` as indicative only.",
+            "> Rows measured together in THIS run are comparable with each other.",
+            "",
+        ]
+    lines += [
+        "| combo | n | ok | blocked | empty | err | mean score | median latency | when |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for combo in report["combos"]:
         score = combo["mean_score"]
+        when = f"carried `{combo['carried_from']}`" if combo.get("carried_from") else "**this run**"
         lines.append(
-            f"| `{combo['combo']}` | {combo['ok']} | {combo['blocked']} | {combo['empty']} | "
+            f"| `{combo['combo']}` | {combo['n']} | {combo['ok']} | {combo['blocked']} | {combo['empty']} | "
             f"{combo['errors']} | {score if score is not None else '**unmeasured**'} | "
-            f"{combo['median_latency_s']}s |"
+            f"{combo['median_latency_s']}s | {when} |"
         )
 
     lines += ["", "## Per-query verdicts (operator fills Verdict + Notes)", ""]
     for combo in report["combos"]:
-        lines += [f"### `{combo['combo']}` — {combo['description']}", "",
+        origin = (f"  ·  **carried from `{combo['carried_from']}`, not re-run**"
+                  if combo.get("carried_from") else "")
+        lines += [f"### `{combo['combo']}` — {combo['description']}{origin}", "",
                   "| id | type | query | status | score | latency | Verdict (good/ok/bad) | Notes |",
                   "|---|---|---|---|---|---|---|---|"]
         for row in combo["rows"]:
@@ -351,8 +434,18 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="list combinations + tier health")
     parser.add_argument("--limit", type=int, help="only the first N corpus queries (smoke run)")
     parser.add_argument("--type", help="only queries of this type")
+    parser.add_argument(
+        "--id", action="append",
+        help="only these corpus ids (repeatable) — used to run a budgeted Tavily sub-sample",
+    )
     parser.add_argument("--delay", type=float, default=2.0, help="seconds between queries (rate-limit courtesy)")
     parser.add_argument("--report", help="re-render the manual sheet from an existing results JSON")
+    parser.add_argument(
+        "--merge-from", action="append",
+        help="carry combos forward from an earlier results JSON (repeatable). "
+             "Rows are copied verbatim and tagged with their ORIGINAL run stamp — "
+             "they were measured under different conditions and are not re-run.",
+    )
     args = parser.parse_args()
 
     if args.report:
@@ -369,8 +462,9 @@ def main() -> int:
         print("Tier health:")
         for tier, state in status.items():
             print(f"  {tier:<14} {state}")
+        cloak_ok, cloak_reason = cloak_available()
         print(f"  cloakbrowser   {'installed' if cloakbrowser_available() else 'absent'}"
-              "  (broker returns SCREENSHOTS only — no page text; see extract.py)")
+              f"  ·  text tier: {'ready' if cloak_ok else 'UNAVAILABLE'} — {cloak_reason}")
         print("\nCombinations:")
         for name, (_fn, desc) in COMBOS.items():
             blocked = " [needs TAVILY_API_KEY]" if name in NEEDS_TAVILY and not tavily.configured() else ""
@@ -381,12 +475,20 @@ def main() -> int:
     queries = corpus["queries"]
     if args.type:
         queries = [q for q in queries if q["type"] == args.type]
+    if args.id:
+        wanted = set(args.id)
+        queries = [q for q in queries if q["id"] in wanted]
+        missing = wanted - {q["id"] for q in queries}
+        if missing:
+            parser.error(f"unknown corpus id(s): {sorted(missing)}")
     if args.limit:
         queries = queries[: args.limit]
 
+    carried = load_carried(args.merge_from or [])
+
     names = list(COMBOS) if args.all else (args.combo or [])
-    if not names:
-        parser.error("pass --combo NAME (repeatable), --all, or --list")
+    if not names and not carried:
+        parser.error("pass --combo NAME (repeatable), --all, --merge-from FILE, or --list")
 
     runnable = []
     for name in names:
@@ -402,7 +504,7 @@ def main() -> int:
                 continue
         runnable.append(name)
 
-    if not runnable:
+    if not runnable and not carried:
         print("nothing runnable — see the skip reasons above")
         return 1
 
@@ -412,13 +514,19 @@ def main() -> int:
         "corpus_version": corpus["version"],
         "n_queries": len(queries),
         "tier_status": status,
-        "combos": [],
+        "combos": list(carried),
+        "carried_stamps": sorted({c["carried_from"] for c in carried}),
     }
     for name in runnable:
         print(f"\n=== {name} ({len(queries)} queries) ===")
         report["combos"].append(run_combo(name, queries, args.delay))
 
-    report["cross_combo_overlap"] = cross_combo_overlap(report)
+    # Overlap compares WHICH URLS combos agreed on. Carried rows came from a
+    # different run, and the live web moved between them, so mixing them in
+    # would report drift as disagreement. Measured combos only.
+    report["cross_combo_overlap"] = cross_combo_overlap(
+        {"combos": [c for c in report["combos"] if not c.get("carried_from")]}
+    )
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     out_json = RESULTS / f"{stamp}.json"

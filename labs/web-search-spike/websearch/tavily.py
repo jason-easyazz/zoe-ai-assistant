@@ -16,10 +16,15 @@ zoe-data already has a Tavily client (`services/zoe-data/web_search_provider.py`
 score the tier. On promotion the budget guard moves into that module and this
 one is deleted — there must not be two Tavily clients.
 
-MEASURED 2026-08-03: no `TAVILY_API_KEY` is configured on this box, so this
-tier reports `unconfigured` and the harness records it as such. It does NOT
-silently score zero — an unconfigured tier and a failing tier are different
-findings.
+CORRECTION 2026-08-03: an earlier note here claimed no `TAVILY_API_KEY` was
+configured on this box. That was WRONG — the key is in
+`services/zoe-data/.env`, and the tier was recorded `unconfigured` only because
+the harness was run without sourcing it. Both Tavily combos are now measured
+(`eval/results/20260803T134932Z.md`). Source the key into the run environment;
+never print, commit, or write it to a results file.
+
+The `unconfigured` path still matters and is still tested: an unconfigured tier
+and a failing tier are different findings, and neither is silently scored zero.
 """
 
 from __future__ import annotations
@@ -135,7 +140,31 @@ def search(
             owned.close()
 
     _record_spend(budget_path)
+    _maybe_capture(query, payload)
     return parse_tavily(payload)
+
+
+def _maybe_capture(query: str, payload: dict) -> None:
+    """Opt-in raw-RESPONSE capture, so fixtures can be recorded from real calls.
+
+    Enabled by setting ``ZOE_TAVILY_CAPTURE_DIR``. This exists because a
+    hand-written fixture cannot prove the parser matches production — the old
+    `tests/fixtures/tavily_response.json` was synthetic and said so.
+
+    SECURITY: captures the RESPONSE ONLY. The request body carries `api_key`
+    and is never written. Tavily's response does not echo the key back;
+    `test_capture_writes_response_only` pins that no captured file contains it.
+    """
+    target = os.environ.get("ZOE_TAVILY_CAPTURE_DIR", "").strip()
+    if not target:
+        return
+    try:
+        directory = pathlib.Path(target)
+        directory.mkdir(parents=True, exist_ok=True)
+        slug = "".join(c if c.isalnum() else "-" for c in query.lower())[:60].strip("-")
+        (directory / f"{slug}.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError:
+        pass  # a capture that cannot persist must not break the lookup
 
 
 def parse_tavily(payload: dict) -> list[Result]:

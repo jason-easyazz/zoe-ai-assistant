@@ -242,9 +242,26 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   attribution, so `search_by_backend()` supplies harness provenance.
   Tier order: **0** structured scrapers (Wikipedia/HN JSON APIs, never blocked,
   lead claim checks) → **1** Tavily FREE (≈33/day, client-side budget via
-  `ZOE_TAVILY_DAILY_BUDGET`; unconfigured here and reported as such, never
-  scored zero) → **2** `ddgs` opportunistic → Jina Reader keyless extract as
-  **enrichment only** (16.97 s median, 133 KB/page, 403 on some domains).
+  `ZOE_TAVILY_DAILY_BUDGET`) → **2** `ddgs` opportunistic → keyless extract as
+  **enrichment only**: Jina Reader (16.97 s median, 133 KB/page, 403 on some
+  domains) or local CloakBrowser.
+  **CORRECTION 2026-08-03 — Tavily is CONFIGURED and now MEASURED.** An earlier
+  note here said "unconfigured"; the key is in `services/zoe-data/.env` and the
+  harness had simply not sourced it. `tavily-free` 26/26 ok / mean 0.910 /
+  median 2.22 s; `tavily+scrapers` mean 0.810 over a **7-query sub-sample**
+  (n≠26, not like-for-like). Budget spent **33/33 exactly**. The recorded
+  fixture `tests/fixtures/tavily_response.json` is now a REAL response — the
+  synthetic one had 3 results where production returns 6 and omitted
+  `answer`/`raw_content`/`images` entirely. Source the key, never commit it.
+  **CloakBrowser extract tier added 2026-08-03**, enabled by PR #1626 (broker
+  text extraction — the broker previously returned a PNG only).
+  `websearch/cloak.py` imports that function **by path**, never a vendored copy,
+  and reports UNAVAILABLE against a checkout without the PR — a lab→prod READ,
+  not lab code wired into zoe-data. Measured: 24/26 ok, 2 blocked, mean 0.771;
+  **4.57 s and ~553 MB peak RSS over 12 Chromium processes** for one page. Run
+  browsers capped (`systemd-run --user --scope -p MemoryMax=1024M`). Its
+  *stealth* advantage is **unmeasured** — `ddgs` never blocked, so there was
+  nothing to bypass.
   Also carries a **token-budgeted result packet** for the 8k Gemma brain
   (oh-my-pi has no equivalent) and claim-backing query shaping (neutral +
   contradiction queries; evidence, never a verdict). **Zero new dependencies** —
