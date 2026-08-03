@@ -245,8 +245,101 @@ def test_poll_exhausts_bounded_retries_and_alarms_loudly(monkeypatch, capsys, cl
     assert len(err) == 1, f"exactly one terminal line, got: {err}"
     assert SID in err[0]
     assert "re-dispatch required" in err[0]
-    # It must alarm in seconds, not burn the whole 100000s budget.
-    assert clock.now() < 300
+    # Exact, not "some number under 300": one sleep per iteration, so the first
+    # interval plus the backoffs before the 4th failed fetch. A loose bound here
+    # is what let the 211s double-sleep regression through review.
+    assert clock.now() == 30 + (1 + 2 + 4)
+
+
+def _poll_defaults():
+    """The argparse defaults the wrapper actually runs with (it overrides only
+    --timeout-s), read off the parser so the test cannot drift from the CLI."""
+    ns = crp.build_parser().parse_args(
+        ["poll", "--server", SERVER, "--session-id", SID, "--timeout-s", "2400"]
+    )
+    return ns
+
+
+def test_poll_lost_bound_at_production_defaults_is_30_plus_1_2_4_8_16_30_30(monkeypatch, capsys, clock):
+    """Pins the worst case at the defaults the wrapper really uses: 121s.
+
+    The regression this exists for: sleeping the full interval AND the backoff
+    every iteration made this (30+1)+(30+2)+(30+4)+(30+8)+(30+16)+30 = 211s,
+    which the old loosely-bounded, non-default-config test could not see.
+    """
+    d = _poll_defaults()
+    assert d.interval_s == 30 and d.max_transient == 8, "defaults moved — retune the bound"
+
+    fake = _patch_http(monkeypatch, [_resp(body=EMPTY_BODY)])
+    rc = crp.poll(
+        SERVER, SID, timeout_s=d.timeout_s, interval_s=d.interval_s,
+        running_grace_s=d.running_grace_s, max_transient=d.max_transient,
+        max_gone=d.max_gone, http_timeout=d.http_timeout_s,
+        sleep=clock.sleep, now=clock.now,
+    )
+    assert rc == crp.EXIT_POLL_LOST
+    assert fake.calls == 8
+    expected = 30 + (1 + 2 + 4 + 8 + 16 + 30 + 30)
+    assert expected == 121
+    assert clock.now() == expected, f"poll-lost must land at exactly {expected}s"
+    # And nowhere near the old silent-spin budget.
+    assert clock.now() < d.timeout_s / 10
+
+
+def test_one_sleep_per_iteration_on_the_transient_path(monkeypatch, clock):
+    """The mechanism, asserted directly: no iteration sleeps twice.
+
+    Bounding only the total would still pass if a future edit rebalanced the
+    two sleeps, so assert the sleep SCHEDULE is exactly interval-then-backoffs.
+    """
+    _patch_http(monkeypatch, [_resp(body=EMPTY_BODY)])
+    crp.poll(
+        SERVER, SID, timeout_s=100000, interval_s=30, running_grace_s=300,
+        max_transient=5, max_gone=3, http_timeout=60, sleep=clock.sleep, now=clock.now,
+    )
+    # 5 fetches => the interval before the 1st, then a backoff before each of
+    # the other 4. The 5th failure exhausts and returns without sleeping again.
+    assert clock.slept == [30, 1, 2, 4, 8], "one sleep per iteration: interval, then backoffs"
+
+
+def test_a_60s_server_restart_is_ridden_out_at_production_defaults(monkeypatch, capsys, clock):
+    """Tolerance must survive collapsing the double sleep.
+
+    Removing the padding interval spends the retry budget purely in backoff, so
+    a 6-retry budget would have exhausted 31s into a restart. With max_transient
+    8 the failed fetches land at t=0,1,3,7,15,31,61,91 from the first failure:
+    a 60s outage accrues 6 and then recovers.
+    """
+    d = _poll_defaults()
+
+    class Restart:
+        """Fails every fetch for 60s of clock time, then serves a real session."""
+
+        def __init__(self, clk):
+            self.clk = clk
+            self.first_failure = None
+            self.failures = 0
+
+        def __call__(self, url, timeout):
+            if self.first_failure is None:
+                self.first_failure = self.clk.now()
+            if self.clk.now() - self.first_failure < 60:
+                self.failures += 1
+                raise ConnectionRefusedError(111, "connection refused")
+            return _idle_with_report()
+
+    restart = Restart(clock)
+    monkeypatch.setattr(crp, "_http_get", restart)
+    rc = crp.poll(
+        SERVER, SID, timeout_s=d.timeout_s, interval_s=d.interval_s,
+        running_grace_s=d.running_grace_s, max_transient=d.max_transient,
+        max_gone=d.max_gone, http_timeout=d.http_timeout_s,
+        sleep=clock.sleep, now=clock.now,
+    )
+    assert rc == crp.EXIT_OK, "a 60s restart must NOT be declared poll-lost"
+    assert capsys.readouterr().out.strip() == "idle"
+    assert restart.failures == 6, "6 transients accrue in a 60s outage"
+    assert restart.failures < d.max_transient, "with margin left before exhaustion"
 
 
 def test_poll_vanished_session_is_not_absorbed_as_a_blip(monkeypatch, capsys, clock):
@@ -396,17 +489,48 @@ def test_extract_report_never_reports_an_unusable_payload_as_clean(tmp_path, cap
     assert SID in err[0] and "re-dispatch required" in err[0]
 
 
-def test_exit_codes_are_all_distinct_and_nonzero():
-    codes = {
-        "never_registered": crp.EXIT_NEVER_REGISTERED,
-        "poll_lost": crp.EXIT_POLL_LOST,
-        "timeout": crp.EXIT_TIMEOUT,
-        "never_running": crp.EXIT_NEVER_RUNNING,
-        "dispatch_failed": crp.EXIT_DISPATCH_FAILED,
-    }
-    assert len(set(codes.values())) == len(codes)
-    assert all(c != 0 for c in codes.values())
-    assert crp.EXIT_USAGE not in set(codes.values())
+def test_exit_codes_match_the_documented_mapping_exactly():
+    """Pin the NUMBERS, not just their uniqueness.
+
+    Asserting only distinctness let a code/contract naming mismatch through
+    review (codex, #1618). scripts/AGENTS.md and the cross_review.sh header
+    both publish this table; if it changes, all three change together.
+    """
+    assert crp.EXIT_OK == 0
+    assert crp.EXIT_USAGE == 1
+    assert crp.EXIT_NEVER_REGISTERED == 3
+    assert crp.EXIT_POLL_LOST == 4
+    assert crp.EXIT_TIMEOUT == 5
+    assert crp.EXIT_NEVER_RUNNING == 6
+    assert crp.EXIT_DISPATCH_FAILED == 7
+
+    codes = [
+        crp.EXIT_NEVER_REGISTERED, crp.EXIT_POLL_LOST, crp.EXIT_TIMEOUT,
+        crp.EXIT_NEVER_RUNNING, crp.EXIT_DISPATCH_FAILED,
+    ]
+    assert len(set(codes)) == len(codes)
+    assert all(c not in (crp.EXIT_OK, crp.EXIT_USAGE) for c in codes)
+
+    # The published table must agree with the code, verbatim.
+    for doc in (
+        (_MODULE_PATH.parent / "cross_review.sh").read_text(),
+        (_MODULE_PATH.parents[1] / "AGENTS.md").read_text(),
+    ):
+        for code, label in (
+            (crp.EXIT_NEVER_REGISTERED, "never-registered"),
+            (crp.EXIT_POLL_LOST, "poll-lost"),
+            (crp.EXIT_TIMEOUT, "timeout"),
+            (crp.EXIT_NEVER_RUNNING, "never-running"),
+            (crp.EXIT_DISPATCH_FAILED, "dispatch-failed"),
+        ):
+            assert f"{code} {label}" in doc, f"undocumented/renamed: {code} {label}"
+
+
+def test_wrapper_validates_the_registration_budget_env_var():
+    """Bad input must hit this script's alarm, not an argparse traceback."""
+    sh = (_MODULE_PATH.parent / "cross_review.sh").read_text()
+    assert "CROSS_REVIEW_REGISTER_TIMEOUT_S must be a positive integer" in sh
+    assert 'REGISTER_TIMEOUT_S" -gt 0' in sh
 
 
 def test_cli_wires_every_subcommand(tmp_path, capsys):

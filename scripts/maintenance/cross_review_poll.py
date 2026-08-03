@@ -14,8 +14,11 @@ told. Doctrine: a review lane fails LOUDLY.
 What this module adds per failure mode:
 
   empty body / non-JSON / HTML error page / 5xx / connection refused
-      -> TRANSIENT. Bounded consecutive retries with exponential backoff.
-         On exhaustion: one terminal ALARM line naming the session, exit 4.
+      -> TRANSIENT. Bounded consecutive retries with exponential backoff,
+         declaring poll-lost after at most 121s at the wrapper's defaults while
+         still riding out a ~60s server restart (both pinned by tests; see
+         poll() for the arithmetic). On exhaustion: one terminal ALARM line
+         naming the session, exit 4.
   404 `not_found` (session gone / never registered)
       -> GONE. Its own short bounded confirmation budget, then exit 4 (poll) or
          exit 3 (registration guard). Never silently absorbed as a blip.
@@ -196,13 +199,35 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
 
     On success prints the terminal status on stdout and returns EXIT_OK. Every
     failure path prints one terminal alarm line and returns a distinct code.
+
+    EXACTLY ONE sleep per iteration -- `next_sleep` carries the interval on the
+    healthy path and the backoff on a retry. Sleeping the full interval AND the
+    backoff (the shape this started as) made a mid-poll dead endpoint take
+    (30+1)+(30+2)+(30+4)+(30+8)+(30+16)+30 = 211s to declare poll-lost at
+    production defaults, not the 61s the backoff schedule implies (codex
+    cross-review, #1618).
+
+    Worst-case time to declare poll-lost, at the defaults the wrapper uses
+    (interval 30, max_transient 8, cap = interval):
+
+        30 (first interval, before the first poll)
+      + 1 + 2 + 4 + 8 + 16 + 30 + 30   (backoffs before the 8th failed fetch)
+      = 121s
+
+    `max_transient` is 8 rather than 6 precisely so that OUTAGE TOLERANCE
+    survives collapsing the double sleep: once the padding interval is gone,
+    the retry budget is spent purely in backoff, so a ~60s server restart would
+    exhaust a 6-retry budget at 31s. Failed fetches land at t=0,1,3,7,15,31,61,91
+    from the first failure, so a 60s outage accrues 6 transients and recovers.
+    Detection speed and restart tolerance trade directly against each other
+    here; both numbers are pinned by tests.
     """
     start = now()
     saw_running = False
     transient_run = 0
     gone_run = 0
     status = "?"
-    last_detail = ""
+    next_sleep = interval_s
 
     while True:
         elapsed = now() - start
@@ -215,13 +240,13 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
             )
             return EXIT_TIMEOUT
 
-        sleep(min(interval_s, remaining))
+        sleep(min(next_sleep, remaining))
+        next_sleep = interval_s  # healthy default; a retry branch overrides it
 
         kind, doc, detail = fetch_session(server, sid, http_timeout)
 
         if kind == GONE:
             gone_run += 1
-            last_detail = detail
             if gone_run >= max_gone:
                 _alarm(
                     f"ALARM: session {sid} disappeared mid-poll ({detail}, confirmed "
@@ -229,12 +254,11 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
                     "re-dispatch required"
                 )
                 return EXIT_POLL_LOST
-            sleep(_backoff(gone_run - 1, interval_s))
+            next_sleep = _backoff(gone_run - 1, interval_s)
             continue
 
         if kind == TRANSIENT:
             transient_run += 1
-            last_detail = detail
             if transient_run >= max_transient:
                 _alarm(
                     f"ALARM: session {sid} unreadable — {transient_run} consecutive "
@@ -242,7 +266,7 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
                     "giving up with no report and re-dispatch required"
                 )
                 return EXIT_POLL_LOST
-            sleep(_backoff(transient_run - 1, interval_s))
+            next_sleep = _backoff(transient_run - 1, interval_s)
             continue
 
         gone_run = 0
@@ -252,7 +276,6 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
             # Valid JSON, no usable status. A schema surprise is not a verdict:
             # retry it rather than breaking the loop on a bogus terminal value.
             transient_run += 1
-            last_detail = "session JSON carried no 'status' field"
             if transient_run >= max_transient:
                 _alarm(
                     f"ALARM: session {sid} returned {transient_run} consecutive "
@@ -260,7 +283,7 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
                     "report retrieved; re-dispatch required"
                 )
                 return EXIT_POLL_LOST
-            sleep(_backoff(transient_run - 1, interval_s))
+            next_sleep = _backoff(transient_run - 1, interval_s)
             continue
 
         # Only a well-formed reply clears the retry budget. Resetting on any
@@ -425,7 +448,9 @@ def build_parser() -> argparse.ArgumentParser:
     pol.add_argument("--timeout-s", type=float, required=True)
     pol.add_argument("--interval-s", type=float, default=30.0)
     pol.add_argument("--running-grace-s", type=float, default=300.0)
-    pol.add_argument("--max-transient", type=int, default=6)
+    # 8, not 6: with the double sleep gone the retry budget is spent purely in
+    # backoff, and 6 would exhaust 31s into a server restart. See poll().
+    pol.add_argument("--max-transient", type=int, default=8)
     pol.add_argument("--max-gone", type=int, default=3)
     pol.add_argument("--http-timeout-s", type=float, default=60.0)
 

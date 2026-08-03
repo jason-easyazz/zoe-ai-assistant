@@ -34,6 +34,12 @@ CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
 TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-2400}"
 case "$TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be a positive integer (seconds), got: $TIMEOUT_S" >&2; exit 1;; esac
 [ "$TIMEOUT_S" -gt 0 ] || { echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be > 0" >&2; exit 1; }
+# Validated HERE, not left to argparse: an unvalidated value reaches the poller
+# as a usage error and prints a traceback instead of this script's single
+# session-scoped alarm line (codex cross-review, #1618).
+REGISTER_TIMEOUT_S="${CROSS_REVIEW_REGISTER_TIMEOUT_S:-60}"
+case "$REGISTER_TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_REGISTER_TIMEOUT_S must be a positive integer (seconds), got: $REGISTER_TIMEOUT_S" >&2; exit 1;; esac
+[ "$REGISTER_TIMEOUT_S" -gt 0 ] || { echo "ALARM: CROSS_REVIEW_REGISTER_TIMEOUT_S must be > 0" >&2; exit 1; }
 
 [ $# -ge 2 ] || { echo "usage: $0 <PR-number> \"<contract>\"" >&2; exit 1; }
 
@@ -89,7 +95,7 @@ echo "session: $SID" >&2
 # worker on it — bailing here costs nothing, whereas an unreadable session
 # after the kick means a detached polly with no poller. Bounded and short.
 python3 "$POLLER" await-registration --server "$SERVER" --session-id "$SID" \
-  --budget-s "${CROSS_REVIEW_REGISTER_TIMEOUT_S:-60}" || exit 2
+  --budget-s "$REGISTER_TIMEOUT_S" || exit 2
 
 # Brief goes INLINE via -p. Do not stage it as a session comment: comment
 # staging fails silently and polly wakes to an empty session (2026-07-27).
@@ -165,8 +171,9 @@ docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVE
 # The old inline loop's real defect was that a bad body degraded to the sentinel
 # `poll-fail`, which was neither terminal nor alarming — a vanished session
 # (404, which `curl -sf` renders as an empty body) spun in silence for the full
-# ${TIMEOUT_S}s and then blamed the timeout. Now it alarms in seconds and names
-# the session.
+# ${TIMEOUT_S}s and then blamed the timeout. The bound is now at most 121s at
+# these defaults (a vanished session ~33s), while a ~60s server restart is still
+# ridden out; both numbers are pinned by tests/unit/test_cross_review_poll.py.
 set +e
 status=$(python3 "$POLLER" poll --server "$SERVER" --session-id "$SID" --timeout-s "$TIMEOUT_S")
 poll_rc=$?
