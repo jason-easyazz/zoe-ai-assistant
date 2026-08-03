@@ -12,6 +12,7 @@ This is **knowledge / records** (descriptive facts), not a DOX contract. See the
 
 ## Concepts
 
+- [omp builder adoption (GO-WITH-CONDITIONS)](omp-builder-adoption.md) — 2026-08-03 evaluation of oh-my-pi as an Omnigent ACP builder harness: one-config-block wiring, arm64 standalone binary, the 4-condition security fence (capped OpenRouter key, PI_AUTO_QA=0, autoUpdate off, web_search fenced), and the recorded skillspector waiver.
 - [Zoe tool stack](zoe-tool-stack.md) — the installed agent tooling (graphify, opensrc, Multica, Pi, Hermes, OpenClaw, MemPalace, SkillSpector) and how the pieces relate.
 - [Runtime topology](runtime-topology.md) — the live runtime: host, services, ports, where each is served from and logs to, the touch panel, and the no-pipeline deploy. Orientation before touching the running system.
 - [Voice pipeline](voice-pipeline.md) — the STT → brain → TTS path, the replay-sample regression corpus, and the caveat that the warm harness understates real live latency.
