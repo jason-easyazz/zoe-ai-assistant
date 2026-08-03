@@ -180,9 +180,47 @@ if [[ -d "$DEST" ]] && sudo find "$DEST" -type f -print -quit 2>/dev/null | grep
     fi
 fi
 
+# COPY INTO A CLEAN DESTINATION, ALWAYS (review: Codex).
+#
+# The overlay design kept producing distinct bugs — stale leftovers, then stale
+# symlinks, then the serious one: a symlink in DEST at a name that ALSO exists
+# in SRC. GNU cp -a follows a destination symlink, so `sudo cp` would overwrite
+# whatever it points at, AS ROOT, leaving the link in place; the name-based
+# manifest sees a match rather than an "extra", and sha256sum follows the link
+# too, so the script would still print DONE. That is a root-privileged arbitrary
+# write dressed as a successful migration.
+#
+# Rather than enumerate the hazards, remove the class: the destination is either
+# absent/empty, or --mirror clears it first, and the copy then lands in a
+# freshly-created empty directory. --remove-destination is belt-and-braces for
+# any path this reasoning missed.
+if [[ -e "$DEST" ]]; then
+    if [[ -L "$DEST" ]]; then
+        log "FATAL: destination is itself a symlink: $DEST"
+        log "Refusing — the copy would write through it as root."
+        exit 1
+    fi
+    if [[ ! -d "$DEST" ]]; then
+        log "FATAL: destination exists and is not a directory: $DEST"; exit 1
+    fi
+    if sudo find "$DEST" -mindepth 1 -print -quit | grep -q .; then
+        if [[ "$MIRROR" -eq 1 ]]; then
+            log "clearing non-empty destination (--mirror) so the copy lands clean"
+            sudo find "$DEST" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+        else
+            log "FATAL: destination is not empty: $DEST"
+            sudo find "$DEST" -mindepth 1 -maxdepth 1 -printf '  %p\n' 2>/dev/null | head -10 | sed 's/^/ma-migrate: /'
+            log "Copying into it risks writing THROUGH a symlink as root and"
+            log "leaving stale entries MA would open. Re-run with --mirror to"
+            log "clear it first, or remove it yourself."
+            exit 1
+        fi
+    fi
+fi
+
 sudo mkdir -p "$DEST"
-log "copying (ownership + timestamps preserved)…"
-sudo cp -a "$SRC/." "$DEST/"
+log "copying (ownership + timestamps preserved) into a clean destination…"
+sudo cp -a --remove-destination "$SRC/." "$DEST/"
 
 # ---- (3) stale files in DEST (review: Codex) -----------------------------
 # `cp -a` overlays; it never deletes. Verification walked SRC only, so anything
@@ -208,6 +246,8 @@ if [[ -n "$extra" ]]; then
             [[ -n "$rel" ]] && sudo rm -rf -- "$DEST/${rel#./}"
         done < <(printf '%s\n' "$extra" | sort -r)
     else
+        # Should be unreachable now the destination is cleared before copying;
+        # kept as a tripwire in case that guarantee is ever weakened.
         log "FATAL: destination has files the source does not:"
         printf '%s\n' "$extra" | sed 's/^/ma-migrate:   /'
         log "These would join the store Music Assistant starts against — a stale"

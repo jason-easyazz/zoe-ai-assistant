@@ -177,3 +177,21 @@ def test_migration_manifest_covers_non_regular_entries():
     assert "find . -mindepth 1 | sort" in src, "manifest must cover all entry types"
     assert "find . -type f | sort" not in src, "the -type f manifest must not come back"
     assert "rm -rf" in src, "--mirror must be able to remove dirs/symlinks, not just files"
+
+
+def test_migration_copies_into_a_clean_destination():
+    """The overlay design produced three escalating bugs — stale files, stale
+    symlinks, then a symlink at a name ALSO in the source. GNU `cp -a` follows a
+    destination symlink, so `sudo cp` would overwrite its target AS ROOT while
+    the name-based manifest saw a match and sha256sum followed the link too:
+    a root-privileged arbitrary write reported as DONE (review: Codex).
+
+    Rather than enumerate hazards, the class is removed — the destination is
+    absent/empty or --mirror clears it, and the copy lands in a fresh directory.
+    """
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "destination is not empty" in src, "must refuse a dirty destination"
+    assert "destination is itself a symlink" in src
+    assert "--remove-destination" in src, "belt-and-braces against following dest links"
+    # the clear must happen BEFORE the copy, or the damage is already done
+    assert src.index("clearing non-empty destination") < src.index("cp -a --remove-destination")
