@@ -423,15 +423,20 @@ def test_completion_marker_is_the_primary_direction_defence():
     assert 'sudo tee "$DEST/$MARKER"' in src
 
 
-def test_compose_env_file_value_must_match_the_validated_destination():
-    """Compose interpolates ${ZOE_MA_DATA} from the PROJECT .env as well as the
-    process environment, and the script read only the latter — so a value in
-    the repo .env (including ./data/music-assistant) would be mounted
-    UNVALIDATED by an ordinary `docker compose up`, bypassing every containment
-    check here (review: Codex)."""
+def test_future_compose_mount_is_validated_via_compose_itself():
+    """Rounds 20/25/28: hand-rolled dotenv parsing missed the `export` form,
+    then the relative base, then whitespace around `=` — re-implementing
+    Compose's grammar one spelling at a time loses by construction. The guard
+    now runs `docker compose config` with ZOE_MA_DATA masked (future plain
+    invocation semantics) and requires the mount Compose reports to equal the
+    validated destination (review: Codex x3)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert 'ENV_FILE="$REPO_ROOT/.env"' in src
-    assert "Compose auto-loads .env for interpolation" in src
+    assert "env -u ZOE_MA_DATA docker compose" in src
+    assert "config --format json" in src
+    assert "future plain 'docker compose up' would mount" in src
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "sed -nE 's/^[[:space:]]*(export" not in code, (
+        "no hand-rolled dotenv parsing may return")
 
 
 def test_marker_pathname_is_reserved_in_the_source():
@@ -453,7 +458,8 @@ def test_config_preflight_precedes_the_container_stop():
     neither refusal invokes stop."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     stop_at = src.index('docker stop "$CONTAINER"')
-    assert src.index("Compose interpolates ${ZOE_MA_DATA}") < stop_at
+    # (anchor updated with the effective-mount refactor; property unchanged)
+    assert src.index("WHAT WILL COMPOSE ACTUALLY MOUNT") < stop_at
     assert src.index("destination carries a completion marker") < stop_at
 
 
@@ -489,36 +495,6 @@ def test_filesystem_probes_yield_explicit_yes_no():
     # branch-deciding probe may appear on DEST/marker paths
     assert 'if sudo test -e "$DEST"' not in code
     assert 'if sudo test -f "$DEST/$MARKER"' not in code
-
-
-def test_env_parser_accepts_compose_dotenv_syntax():
-    """Compose dotenv supports `export KEY=...`, leading whitespace, and single
-    or double quotes; a column-zero-only match skipped the export form, so the
-    unvalidated value still reached interpolation (review: Codex)."""
-    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert "(export[[:space:]]+)?ZOE_MA_DATA=" in src
-
-
-def test_non_default_destination_must_be_persisted():
-    """With no .env entry, only the printed one-shot restart command remembers a
-    custom path — any later plain `docker compose up` evaluates the compose
-    default and recreates MA against an empty or stale store (review: Codex).
-    The compose default is read from the compose FILE so drift is also caught."""
-    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert "is not the Compose default" in src
-    assert "Persist it first, then re-run" in src
-    assert 'COMPOSE_FILE="$REPO_ROOT/docker-compose.modules.yml"' in src
-
-
-def test_relative_env_values_resolve_against_the_compose_base():
-    """Compose resolves a relative bind source against the compose FILE's
-    directory; the guard canonicalised it against the caller's cwd. From
-    /tmp/work, `.env: ./ma` + env `/tmp/work/ma` passed equality while Compose
-    would mount $REPO_ROOT/ma — silently returning live data to the checkout
-    (review: Codex). Same base, or the comparison compares nothing."""
-    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert 'env_val="$REPO_ROOT/$env_val"' in src
-    assert "the way COMPOSE does" in src
 
 
 def test_post_stop_container_polls_fail_closed():

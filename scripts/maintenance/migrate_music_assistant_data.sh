@@ -356,69 +356,52 @@ fi
 # pure configuration/state validation needing nothing stopped — failing them
 # AFTER `docker stop` turns a config error into an avoidable service outage,
 # since the script exits without copying or restarting.
-# Compose interpolates ${ZOE_MA_DATA} from the PROJECT .env as well as the
-# process environment — and the script only reads the latter (review: Codex).
-# With ZOE_MA_DATA in the repo .env, this script would validate and copy to the
-# DEFAULT while a later ordinary `docker compose up` mounts the UNVALIDATED
-# .env value — including ./data/music-assistant, restoring the in-checkout
-# store past every containment check. The effective Compose value must agree
-# with what was validated here.
-ENV_FILE="$REPO_ROOT/.env"
-# Deliberately UNPRIVILEGED: Compose reads .env as the invoking user, so this
-# check must see exactly what Compose will see — a root-only-readable .env that
-# Compose cannot read cannot influence interpolation either.
-if [[ -f "$ENV_FILE" ]]; then
-    # Compose dotenv accepts `export KEY=...`, leading whitespace and single or
-    # double quotes (review: Codex — a column-zero-only match skipped the
-    # `export` form, so the unvalidated value still reached interpolation).
-    env_val="$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?ZOE_MA_DATA=//p' "$ENV_FILE" | tail -1)"
-    env_val="${env_val%\"}"; env_val="${env_val#\"}"
-    env_val="${env_val%\'}"; env_val="${env_val#\'}"
-    if [[ -n "$env_val" ]]; then
-        # Resolve relative values the way COMPOSE does — against the compose
-        # file's parent directory, not the caller's cwd (review: Codex). From
-        # /tmp/work, `.env: ZOE_MA_DATA=./ma` + `ZOE_MA_DATA=/tmp/work/ma` in
-        # the environment passed the equality check here, while the later
-        # Compose run mounted $REPO_ROOT/ma — silently returning live data to
-        # the checkout. Same base directory, or the comparison compares nothing.
-        case "$env_val" in
-            /*) : ;;
-            *)  env_val="$REPO_ROOT/$env_val" ;;
-        esac
-        env_abs="$(sudo readlink -m -- "$env_val")"
-        if [[ "$env_abs" != "$DEST" ]]; then
-            log "FATAL: $ENV_FILE sets ZOE_MA_DATA=$env_val"
-            log "which resolves to: $env_abs"
-            log "but this run is validating/copying to: $DEST"
-            log "Compose auto-loads .env for interpolation, so an ordinary"
-            log "'docker compose up' would mount the UNVALIDATED .env value,"
-            log "bypassing every check here. Align them: either remove the"
-            log ".env entry or run with ZOE_MA_DATA=$env_abs (so it is validated)."
-            exit 1
-        fi
-    fi
-fi
-
-# A NON-DEFAULT destination must be PERSISTED, not just exported for one run
-# (review: Codex): with no .env entry, only the printed one-shot restart command
-# remembers the custom path — any later ordinary `docker compose up` evaluates
-# the compose default and recreates MA against an empty or stale store. The
-# compose default is read from the compose file itself so drift is caught.
+# WHAT WILL COMPOSE ACTUALLY MOUNT? Ask Compose (review: Codex, rounds 20/25/28
+# — my hand-rolled dotenv parsing missed the `export` form, then resolved
+# relative values against the wrong base, then missed whitespace around `=`.
+# Re-implementing Compose's grammar one spelling at a time loses by
+# construction). `docker compose config` is Compose's OWN resolution — .env
+# grammar, quoting, relative bases, defaults — run with ZOE_MA_DATA masked from
+# the environment so it answers for a FUTURE PLAIN invocation, not this run's
+# one-shot assignment. Whatever that future invocation would mount must be
+# exactly the destination validated here; otherwise MA later restarts against
+# an unvalidated path (or an empty default) no guard ever saw.
 COMPOSE_FILE="$REPO_ROOT/docker-compose.modules.yml"
 if [[ -f "$COMPOSE_FILE" ]]; then
-    compose_default="$(sed -nE 's/.*\$\{ZOE_MA_DATA:-([^}]*)\}.*/\1/p' "$COMPOSE_FILE" | awk 'NR==1')"
-    if [[ -n "$compose_default" ]]; then
-        compose_default_abs="$(sudo readlink -m -- "$compose_default")"
-        if [[ "$DEST" != "$compose_default_abs" && -z "${env_val:-}" ]]; then
-            log "FATAL: destination $DEST is not the Compose default"
-            log "($compose_default_abs) and $ENV_FILE does not pin it."
-            log "Only this run's one-shot assignment would know the custom path;"
-            log "the next plain 'docker compose up' would mount the default and"
-            log "recreate Music Assistant against an empty or stale store."
-            log "Persist it first, then re-run:"
-            log "  echo $(printf '%q' "ZOE_MA_DATA=$DEST") >> $(printf '%q' "$ENV_FILE")"
-            exit 1
-        fi
+    if ! compose_json="$(cd "$REPO_ROOT" && env -u ZOE_MA_DATA docker compose -f "$COMPOSE_FILE" config --format json 2>&1)"; then
+        log "FATAL: cannot resolve the effective Compose configuration:"
+        printf '%s\n' "$compose_json" | awk 'NR<=4' | sed 's/^/ma-migrate:   /' >&2
+        log "Refusing: the future mount source cannot be validated."
+        exit 1
+    fi
+    future_src="$(printf '%s' "$compose_json" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    for v in d["services"]["music-assistant"]["volumes"]:
+        if isinstance(v,dict) and v.get("target")=="/data":
+            print(v.get("source","")); break
+        if isinstance(v,str) and v.endswith(":/data"):
+            print(v.rsplit(":",1)[0]); break
+except Exception as e:
+    print("PARSE-ERROR:"+str(e))
+')"
+    case "$future_src" in
+        PARSE-ERROR:*|"")
+            log "FATAL: could not extract music-assistant /data source from compose config: $future_src"
+            exit 1 ;;
+    esac
+    future_abs="$(sudo readlink -m -- "$future_src")"
+    if [[ "$future_abs" != "$DEST" ]]; then
+        log "FATAL: a future plain 'docker compose up' would mount:"
+        log "    $future_abs"
+        log "but this run is validating/copying to:"
+        log "    $DEST"
+        log "(Compose resolved that from its .env/defaults with this run's one-shot"
+        log "ZOE_MA_DATA masked — i.e. what happens after your shell forgets it.)"
+        log "Persist the destination so Compose agrees, then re-run:"
+        log "  echo $(printf '%q' "ZOE_MA_DATA=$DEST") >> $(printf '%q' "$REPO_ROOT/.env")"
+        exit 1
     fi
 fi
 
