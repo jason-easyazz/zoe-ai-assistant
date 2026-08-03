@@ -1,6 +1,6 @@
 ---
 type: lab-record
-status: free-only reframe done; comparison harness built; full corpus run pending operator
+status: free-only reframe done; comparison harness built; FULL corpus run DONE 2026-08-03 (eval/results/20260803T112640Z.md) — operator Verdict column still empty
 date: 2026-08-03
 ---
 
@@ -41,7 +41,7 @@ Full design record + evidence: **[DESIGN.md](DESIGN.md)**.
 | `websearch/scrapers.py` | URL-matched structured scrapers: Wikipedia + Hacker News. Pure JSON, no DOM library. |
 | `websearch/packet.py` | Token-budgeted result packet for the Gemma 4 E4B brain. **Not** in oh-my-pi. |
 | `websearch/claim.py` | Claim-backing query shaping — neutral + contradiction queries. Evidence, never a verdict. |
-| `eval/` | **The instrument.** Fixed 25-query corpus + combination runner + operator scoring sheet. |
+| `eval/` | **The instrument.** Fixed 26-query corpus + combination runner + operator scoring sheet. Full-run report: `eval/results/20260803T112640Z.md`. |
 | `demo.py`, `probe_engines.py` | Live demo; engine reachability matrix. |
 | `tests/` | 45 offline tests. No network. |
 
@@ -59,7 +59,7 @@ python3 probe_engines.py            # which raw engines answer from this box
 
 python3 eval/run_eval.py --list     # combinations + live tier health
 python3 eval/run_eval.py --all --limit 4   # smoke run
-python3 eval/run_eval.py --all      # the real 25-query corpus run
+python3 eval/run_eval.py --all      # the real 26-query corpus run (~35 min)
 ```
 
 **Tests are LAB-only and carry no `ci_safe` marker.** `pytest.ini` sets
@@ -139,6 +139,10 @@ engines are reachable.
 | HN Algolia API | 0.58 s |
 | Jina Reader | **16.97 s median**, 133 KB/page, 403 on some domains |
 | Smoke-run medians (4 queries) | scrapers 1.57 s · ddgs 3.51 s · ddgs+scrapers 4.09 s · all-free 9.08 s · jina 16.97 s |
+| **Full-run medians (26 queries, 2026-08-03)** | scrapers **1.20 s** (p90 1.32) · ddgs **4.20 s** (p90 13.69) · ddgs+scrapers **2.94 s** (p90 4.77) · all-free **3.37 s** (p90 13.43) · jina **9.13 s** (p90 19.60, max 31.87) |
+| Full-run auto-scores (smoke signal only) | scrapers 0.388 · ddgs 0.917 · ddgs+scrapers 0.881 · all-free 0.833 · jina 0.599; Tavily tiers **unconfigured, unmeasured** |
+| Claim check (`check_claim`, 4 fresh samples) | **11.9–26.6 s wall** — the worst returned **0 results**, both shaped queries deadline-exceeded (prior 15.7 s was a mid-range draw) |
+| `ddgs` blocks in the full run | **0** across ~104 calls — the documented home-IP block did not reproduce that day |
 | Live `look_up()` end to end | 5.28 s, **312 tokens**, 6 results, Wikipedia extract leading |
 | Tavily free ceiling | 1,000 credits/mo ≈ **33/day**, enforced client-side |
 | New runtime dependencies | **0** (`httpx` + `ddgs` already shipped) |
