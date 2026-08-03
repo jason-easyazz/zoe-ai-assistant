@@ -169,7 +169,9 @@ def test_migration_prints_restart_command_with_resolved_destination():
     # PROPERTY (the resolved dest is carried into the restart command), not the
     # exact spelling, so the two tests cannot contradict each other again.
     assert "ZOE_MA_DATA=$(printf '%q' \"$DEST\")" in src
-    assert "docker compose -f docker-compose.modules.yml up -d music-assistant" in src
+    assert 'docker compose -f $(printf \'%q\' "$REPO_ROOT/docker-compose.modules.yml")' in src, (
+        "the emitted restart command must anchor the compose file to REPO_ROOT — "
+        "a bare relative path fails from any other cwd, with MA already stopped")
 
 
 def test_migration_manifest_covers_non_regular_entries():
@@ -425,3 +427,15 @@ def test_marker_pathname_is_reserved_in_the_source():
     assert "source contains the reserved marker name" in src
     # MARKER must be defined before the source-reservation check uses it
     assert src.index('MARKER=".ma-migration-complete"') < src.index("reserved marker name")
+
+
+def test_config_preflight_precedes_the_container_stop():
+    """The .env-mismatch and completion-marker refusals are pure configuration
+    checks; failing them AFTER `docker stop` turns a config error into an
+    avoidable service outage, since the script exits without copying or
+    restarting (review: Codex). Verified behaviourally with a docker stub:
+    neither refusal invokes stop."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    stop_at = src.index('docker stop "$CONTAINER"')
+    assert src.index("Compose interpolates ${ZOE_MA_DATA}") < stop_at
+    assert src.index("destination carries a completion marker") < stop_at

@@ -78,7 +78,7 @@ After --execute succeeds:
      databases; auth.db/library.db and their WALs stay tracked at that commit,
      so the credentials remain in git history and CD keeps rolling those paths
      back. Untracking is a separate STEP B, still outstanding.
-  2. ZOE_MA_DATA=<dest> docker compose -f docker-compose.modules.yml up -d music-assistant
+  2. ZOE_MA_DATA=<dest> docker compose -f /home/zoe/assistant/docker-compose.modules.yml up -d music-assistant
   3. confirm: curl -s http://localhost:8095/info
 EOF
 }
@@ -302,33 +302,10 @@ if [[ "$_dest_nonempty" -eq 1 ]]; then
     exit 0
 fi
 
-# A live writer mid-copy yields torn SQLite files that verify fine and open badly.
-if [[ $running -eq 1 ]]; then
-    log "stopping $CONTAINER (a live writer would tear the databases)"
-    docker stop "$CONTAINER" >/dev/null
-    for _ in $(seq 1 30); do
-        docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" || break
-        sleep 1
-    done
-    docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" \
-        && { log "FATAL: $CONTAINER did not stop"; exit 1; }
-    log "stopped"
-fi
-
-# DIRECTION SAFETY (review: Greptile). "Idempotent" was wrong: after the deploy
-# Music Assistant writes to DEST, so re-running would overlay those newer files
-# with the retained pre-migration copies in SRC and silently lose auth, library,
-# settings and playlist changes. A re-run is only safe while SRC is still the
-# live store. Compare newest mtimes and refuse to go backwards.
-# COMPLETION MARKER — the primary direction defence (review: Codex, who
-# reproduced the mtime heuristic being defeated at its root: `git reset --hard`
-# rewrites the rolled-back tracked databases with FRESH mtimes, so after step A
-# deploys, the STALE source compares "newer" than the cp -a-preserved
-# destination; the non-empty error then recommends --mirror, which clears the
-# valid migrated store and replaces it with rolled-back data. Checkout mtimes
-# cannot decide direction, so a successful migration writes a persistent marker
-# into the destination, and its presence refuses ALL further copies — --mirror
-# included — until an operator deliberately removes it.)
+# PREFLIGHT THAT MUST PRECEDE THE STOP (review: Codex): both checks below are
+# pure configuration/state validation needing nothing stopped — failing them
+# AFTER `docker stop` turns a config error into an avoidable service outage,
+# since the script exits without copying or restarting.
 # Compose interpolates ${ZOE_MA_DATA} from the PROJECT .env as well as the
 # process environment — and the script only reads the latter (review: Codex).
 # With ZOE_MA_DATA in the repo .env, this script would validate and copy to the
@@ -365,6 +342,34 @@ if sudo test -f "$DEST/$MARKER"; then
     exit 1
 fi
 
+
+# A live writer mid-copy yields torn SQLite files that verify fine and open badly.
+if [[ $running -eq 1 ]]; then
+    log "stopping $CONTAINER (a live writer would tear the databases)"
+    docker stop "$CONTAINER" >/dev/null
+    for _ in $(seq 1 30); do
+        docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" || break
+        sleep 1
+    done
+    docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" \
+        && { log "FATAL: $CONTAINER did not stop"; exit 1; }
+    log "stopped"
+fi
+
+# DIRECTION SAFETY (review: Greptile). "Idempotent" was wrong: after the deploy
+# Music Assistant writes to DEST, so re-running would overlay those newer files
+# with the retained pre-migration copies in SRC and silently lose auth, library,
+# settings and playlist changes. A re-run is only safe while SRC is still the
+# live store. Compare newest mtimes and refuse to go backwards.
+# COMPLETION MARKER — the primary direction defence (review: Codex, who
+# reproduced the mtime heuristic being defeated at its root: `git reset --hard`
+# rewrites the rolled-back tracked databases with FRESH mtimes, so after step A
+# deploys, the STALE source compares "newer" than the cp -a-preserved
+# destination; the non-empty error then recommends --mirror, which clears the
+# valid migrated store and replaces it with rolled-back data. Checkout mtimes
+# cannot decide direction, so a successful migration writes a persistent marker
+# into the destination, and its presence refuses ALL further copies — --mirror
+# included — until an operator deliberately removes it.)
 # The probe itself must FAIL CLOSED (review: Codex — same masked-producer class
 # as the manifests): command substitution inside [[ -n ]] discards find's exit
 # status, so a transient sudo/traversal failure looked like "destination empty",
@@ -562,7 +567,7 @@ log "     SEPARATE step B, still outstanding after this. (review: Codex)"
 # verifies fine, then the unquoted paste word-splits — Compose gets the wrong
 # path (or evaluates metacharacters) while MA is still stopped. printf %q makes
 # the emitted command correct for any path we accepted.
-log "  2. ZOE_MA_DATA=$(printf '%q' "$DEST") docker compose -f docker-compose.modules.yml up -d music-assistant"
+log "  2. ZOE_MA_DATA=$(printf '%q' "$DEST") docker compose -f $(printf '%q' "$REPO_ROOT/docker-compose.modules.yml") up -d music-assistant"
 log "     (the resolved destination is spelled out because a one-shot"
 log "      \`ZOE_MA_DATA=... ./migrate…\` does not survive this script exiting —"
 log "      Compose would otherwise fall back to its default and initialise an"
