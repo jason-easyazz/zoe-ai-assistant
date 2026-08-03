@@ -74,14 +74,18 @@ so the cache-buster isn't itself synthesized as spoken words.)
 - **Novel brain clause** (cache miss — the usual case for a real, varied reply) →
   **~1.0–1.7s median** on CPU before the first byte (1.0–3.7s range).
 
-## Headline finding: TTS first audio is on CPU, and dominates the post-brain wait
+## Headline finding: TTS first audio was on CPU, and dominated the post-brain wait
 
-`/health` reports `device: "cpu (onnx)"`. This is a **deliberate config choice**, not
-a failure: `ZOE_KOKORO_BACKEND` defaults to `onnx`, which runs Kokoro on CPU (~600MB)
-to free the ~2.3GB the PyTorch/CUDA build would hold. On a 16GB box already at ~11.6GB
-used (~600–800MB free), that RAM is the constraint — the "~150ms warm GPU" promised in
-the `voice_tts.py` / sidecar comments describes the **non-default `pytorch` backend**,
-which is not what runs.
+*(Historical — see the SUPERSEDED banner above. At the time of measurement the ONNX/CPU
+backend existed and was the default; it has since been retired, and the live path now
+runs the PyTorch sidecar on CUDA.)*
+
+At measurement time `/health` reported `device: "cpu (onnx)"`. This was a **deliberate
+config choice**, not a failure: `ZOE_KOKORO_BACKEND` then defaulted to `onnx`, which ran
+Kokoro on CPU (~600MB) to free the ~2.3GB the PyTorch/CUDA build would hold. On a 16GB box
+already at ~11.6GB used (~600–800MB free), that RAM was the constraint — the "~150ms warm
+GPU" promised in the `voice_tts.py` / sidecar comments described the then-non-default
+`pytorch` backend, which was not what ran.
 
 Net effect on a cache-miss reply:
 
@@ -118,11 +122,12 @@ phrases hide it behind instant cache hits.
    stage on the live panel without a replay. One-line instrumentation, no behaviour
    change — but it touches `voice_tts.py`, owned elsewhere this task; flag for that owner.
 
-4. **Backend tradeoff is a RAM decision, not a TTS bug.** If/when the RAM budget frees
-   up (e.g. brain/STT footprint drops), flipping `ZOE_KOKORO_BACKEND=pytorch` would
-   move synth to CUDA and collapse the cold first-chunk from seconds to the promised
-   ~150ms. That is a memory-budget call for Jason, recorded here so the tradeoff is
-   explicit — not a swap of the rock.
+4. **Backend tradeoff was a RAM decision, not a TTS bug.** At the time this was framed as
+   a memory-budget call: when the RAM budget freed up (e.g. brain/STT footprint dropping),
+   moving synth from the ONNX/CPU backend to the PyTorch/CUDA one would collapse the cold
+   first-chunk from seconds to ~150ms. *This was resolved by retiring the ONNX/CPU backend
+   entirely — the PyTorch sidecar on CUDA is now the sole synthesizer (there is no
+   `ZOE_KOKORO_BACKEND` switch), so the tradeoff no longer exists.*
 
 ## How to reproduce
 
