@@ -54,10 +54,17 @@ def _tools_from_source() -> set[str]:
     raise AssertionError("TOOLS list not found in mcp_server.py")
 
 
-def _tools_from_doc() -> set[str]:
-    """Names under the '## MCP Tools' heading only — the file lists OpenClaw
-    skills and UI pages in the same bullet style, and those are not TOOLS."""
-    names: set[str] = set()
+def _tools_from_doc() -> list[str]:
+    """Names under the '## MCP Tools' heading, IN FILE ORDER.
+
+    A list, not a set (review: Codex). `agent_sync._build_capabilities_md`
+    emits `sorted(mcp_tools)`, so a snapshot whose entries are out of order or
+    duplicated is rewritten on the next run — dirtying the tracked file and
+    re-creating the very deploy block this guards. Set comparison is blind to
+    both. The file also lists OpenClaw skills and UI pages in the same bullet
+    style, so the section scope stays.
+    """
+    names: list[str] = []
     in_section = False
     for line in CAPS.read_text().splitlines():
         if line.startswith("## "):
@@ -65,7 +72,7 @@ def _tools_from_doc() -> set[str]:
             continue
         t = line.strip()
         if in_section and t.startswith("- `") and t.endswith("`"):
-            names.add(t.strip("`- "))
+            names.append(t.strip("`- "))
     return names
 
 
@@ -76,7 +83,7 @@ def test_tools_list_is_parseable():
 
 
 def test_documented_tools_all_exist_in_source():
-    doc, src = _tools_from_doc(), _tools_from_source()
+    doc, src = set(_tools_from_doc()), _tools_from_source()
     stale = doc - src
     assert not stale, (
         "CAPABILITIES.md documents tools that no longer exist in mcp_server.py "
@@ -88,10 +95,31 @@ def test_every_source_tool_is_documented():
     """The direction that actually recurs: a tool added without regenerating the
     snapshot. agent_sync then rewrites the tracked file on the live host and
     re-creates the deploy-blocking dirtiness."""
-    doc, src = _tools_from_doc(), _tools_from_source()
+    doc, src = set(_tools_from_doc()), _tools_from_source()
     undocumented = src - doc
     assert not undocumented, (
         "mcp_server.py has tools missing from CAPABILITIES.md — regenerate it "
         "(agent_sync) and commit, or every zoe-data start will dirty a tracked "
         f"file and block the next deploy: {sorted(undocumented)}"
     )
+
+
+def test_documented_tools_are_sorted_and_unique():
+    """agent_sync writes `sorted(mcp_tools)`, so anything else it would rewrite.
+
+    Out-of-order or duplicated entries pass a set comparison but still dirty the
+    tracked file on the next service start (review: Codex).
+    """
+    doc = _tools_from_doc()
+    dupes = sorted({t for t in doc if doc.count(t) > 1})
+    assert not dupes, f"CAPABILITIES.md lists duplicate tools: {dupes}"
+    assert doc == sorted(doc), (
+        "CAPABILITIES.md tools are not in sorted order, so agent_sync will "
+        "rewrite the file on the next zoe-data start and block the next deploy"
+    )
+
+
+def test_documented_order_matches_what_agent_sync_would_write():
+    """The end-to-end property: the committed snapshot is byte-equivalent, for
+    this section, to what the next regeneration produces."""
+    assert _tools_from_doc() == sorted(_tools_from_source())
