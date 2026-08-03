@@ -89,8 +89,13 @@ VOICE_PATH_PATTERNS = (
     # carrying only a Pi bump took the no-op pass. Codex P1 on #1593. The lane is dormant
     # today (ZOE_BRAIN_BACKEND=flue, zoe-core has no node_modules), so this is preventive:
     # it matters the moment the backend is flipped back, and by then the bump would
-    # already be merged and never replayed.
+    # already be merged and never replayed. The lockfile is the OTHER half of that
+    # manifest and is what `npm ci` actually installs: a Pi or transitive-dep bump can
+    # be regenerated into package-lock.json WITHOUT touching package.json, so gating
+    # only the manifest left that path open. Both must be gated. Codex P1 on #1602 (the
+    # PR that committed the lockfile for exactly this determinism).
     "services/zoe-core/package.json",
+    "services/zoe-core/package-lock.json",
 )
 DEFAULT_MAX_AGE_H = float(os.environ.get("ZOE_VOICE_GATE_MAX_AGE_H", "24"))
 
