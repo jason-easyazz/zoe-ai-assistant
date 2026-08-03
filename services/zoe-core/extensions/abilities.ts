@@ -122,6 +122,36 @@ export function disclosureWindowTurns(): number {
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_DISCLOSURE_WINDOW_TURNS;
 }
 
+// `event.prompt` is NOT the user's utterance — it is the whole composed prompt
+// zoe-data's `_compose_message` sends: portrait, memory directive + packet,
+// `[Recent conversation]` (the replayed history[-12:]), then the utterance.
+// Verified live by instrumenting this handler and capturing what arrives.
+//
+// Matching relevance against all of that re-armed a domain on EVERY turn as long
+// as one keyword sat anywhere in the retained window — history the user is no
+// longer talking about kept `lastRelevantTurn` fresh, so the window below could
+// never decay and tools stayed disclosed indefinitely. That defeats the whole
+// point of progressive disclosure on a ~2B model.
+//
+// The seam therefore introduces the user's turn with this marker, and disclosure
+// matches only what follows it. Kept byte-for-byte in sync with `_UTTERANCE_MARKER`
+// in services/zoe-data/zoe_core_client.py (pinned by a test).
+export const UTTERANCE_MARKER = "[The user just said]";
+
+/**
+ * The latest user utterance out of a composed prompt.
+ *
+ * Falls back to the whole prompt when the marker is absent — a STANDALONE `pi`
+ * run, or a seam turn with no context blocks at all, where the prompt IS the
+ * utterance. Splits on the LAST occurrence so a user who types the marker
+ * themselves can only narrow their own text, never reach back into history.
+ */
+export function latestUtterance(prompt: string): string {
+  const needle = `${UTTERANCE_MARKER}\n`;
+  const at = prompt.lastIndexOf(needle);
+  return at === -1 ? prompt : prompt.slice(at + needle.length);
+}
+
 /** Per-session disclosure memory: which domain was last relevant, and when. */
 export interface DisclosureState {
   turn: number;
@@ -177,7 +207,10 @@ export function nextActiveTools(
 export function createDisclosureHandler(pi: ExtensionAPI, abilities: CapabilityEntry[]) {
   const state = createDisclosureState();
   return async (event: unknown) => {
-    const msg = String((event as { prompt?: unknown })?.prompt ?? "").toLowerCase();
+    // Scope to the latest utterance — see UTTERANCE_MARKER. Matching the whole
+    // composed prompt keeps every domain in the retained window permanently armed.
+    const composed = String((event as { prompt?: unknown })?.prompt ?? "");
+    const msg = latestUtterance(composed).toLowerCase();
     const active = nextActiveTools(abilities, msg, state);
     const setActiveTools = (pi as { setActiveTools?: (names: string[]) => void }).setActiveTools;
     if (typeof setActiveTools !== "function") {

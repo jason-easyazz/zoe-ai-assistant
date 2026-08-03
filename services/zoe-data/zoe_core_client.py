@@ -28,13 +28,14 @@ import concurrent.futures
 import contextlib
 import json
 import logging
+import math
 import os
 import subprocess
 import time
 import uuid
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, AsyncIterator, Mapping
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping
 
 from pi_intent_classifier import (
     _assistant_text_from_rpc_event,
@@ -369,10 +370,28 @@ class _ZoeCoreWorker:
                 proc.kill()
                 await proc.wait()
 
-    async def stream(self, message: str, *, timeout_s: float) -> AsyncIterator[str]:
-        """Send one turn; yield assistant text deltas (suffixes) as they arrive."""
+    async def stream(
+        self,
+        message: "str | Callable[[], Awaitable[str]]",
+        *,
+        timeout_s: float,
+    ) -> AsyncIterator[str]:
+        """Send one turn; yield assistant text deltas (suffixes) as they arrive.
+
+        `message` may be a coroutine FACTORY instead of a string, in which case it
+        is awaited INSIDE the per-session lock. That placement is the ordering
+        contract, not a style choice: the memory recall fetch that composes the
+        prompt is the only slow step before the turn, and awaiting it in the caller
+        (outside this lock) let a later same-session request overtake an earlier one
+        whose recall was stalled. Before the seam owned recall, the fetch happened
+        inside the memory.ts extension — i.e. after the prompt was written, with
+        this lock already held — so arrival order was preserved. Composing here
+        restores exactly that.
+        """
         async with self._lock:
             self.last_used = time.monotonic()
+            if not isinstance(message, str):
+                message = await message()
             try:
                 await self._ensure_started()
                 assert self.proc and self.proc.stdin and self.proc.stdout
@@ -708,11 +727,16 @@ def _packet_timeout_s() -> float:
     if raw:
         try:
             parsed = float(raw)
-            if parsed > 0:
+            # isfinite is load-bearing, not belt-and-braces: float("inf") and
+            # float("1e10000") both parse cleanly and both pass `> 0`, and
+            # asyncio.wait_for(timeout=inf) waits FOREVER — a typo would hang the
+            # core lane on a memory fetch instead of degrading past it. (NaN fails
+            # `> 0` already; isfinite covers it too.)
+            if parsed > 0 and math.isfinite(parsed):
                 ms = parsed
             else:
                 logger.warning(
-                    "ZOE_CORE_MEMORY_TIMEOUT_MS=%r is not positive; using %.0fms",
+                    "ZOE_CORE_MEMORY_TIMEOUT_MS=%r is not a positive finite number; using %.0fms",
                     raw, _DEFAULT_PACKET_TIMEOUT_MS,
                 )
         except ValueError:
@@ -735,6 +759,14 @@ _MEMORY_USAGE_DIRECTIVE = (
     "If something is clearly relevant to what they just said, bring it up even unasked. "
     "Don't recite the whole list, don't force a fact when none fits, never mention citation ids."
 )
+
+
+# Introduces the user's own turn at the end of a composed prompt. Byte-for-byte
+# the same string as UTTERANCE_MARKER in services/zoe-core/extensions/abilities.ts,
+# which splits on it to scope progressive disclosure to the latest utterance; the
+# two run in different processes so the constant cannot be shared, and the copies
+# are pinned equal by tests/test_zoe_core_memory_packet_placement.py.
+_UTTERANCE_MARKER = "[The user just said]"
 
 
 def _memory_block(packet: str) -> str:
@@ -798,6 +830,14 @@ def _compose_message(
     directive so spoken replies stay short.
 
     `message` is always LAST. Nothing may be appended after it.
+
+    When any context block is present the user's turn is introduced by
+    `_UTTERANCE_MARKER`. That label is the boundary `extensions/abilities.ts`
+    uses to scope progressive disclosure to the LATEST utterance — without it
+    `event.prompt` is this whole composed string, so a domain keyword sitting in
+    the replayed history or the memory packet re-armed that domain on every turn
+    and the disclosure window could never decay. With no context blocks the
+    composed message is the bare `message`, byte-for-byte as before.
     """
     parts: list[str] = []
     if voice_mode:
@@ -824,7 +864,9 @@ def _compose_message(
                 lines.append(f"{role}: {content}")
         if lines:
             parts.append("[Recent conversation]\n" + "\n".join(lines))
-    parts.append(message)
+    if not parts:
+        return message  # no context at all → the bare utterance, unchanged
+    parts.append(f"{_UTTERANCE_MARKER}\n{message}")
     return "\n\n".join(parts)
 
 
@@ -846,15 +888,20 @@ async def run_zoe_core_streaming(
     Yields assistant text deltas. On any failure, raises so the caller's existing
     fallback handling applies (we never silently swallow a brain failure).
     """
-    # Fetched unconditionally: this is the ONLY /api/memories/for-prompt call in
-    # the lane (memory.ts stands down via ZOE_CORE_MEMORY_SEAM), and it must NOT be
-    # skipped when the caller supplied db_memory_context — the endpoint folds in
-    # pending-contact offers that no other path produces. See the header.
-    packet = await _memory_packet_block(message, user_id)
-    composed = _compose_message(
-        message, history=history, db_memory_context=db_memory_context,
-        portrait=portrait, voice_mode=voice_mode, memory_packet=packet,
-    )
+    # Composition is DEFERRED into the worker's per-session lock (see
+    # _ZoeCoreWorker.stream): awaiting the recall fetch out here let a later
+    # same-session request overtake an earlier one whose recall was stalled.
+    #
+    # The fetch itself is unconditional: this is the ONLY /api/memories/for-prompt
+    # call in the lane (memory.ts stands down via ZOE_CORE_MEMORY_SEAM), and it
+    # must NOT be skipped when the caller supplied db_memory_context — the endpoint
+    # folds in pending-contact offers that no other path produces. See the header.
+    async def _compose() -> str:
+        packet = await _memory_packet_block(message, user_id)
+        return _compose_message(
+            message, history=history, db_memory_context=db_memory_context,
+            portrait=portrait, voice_mode=voice_mode, memory_packet=packet,
+        )
     # Bound concurrent brain turns (see _MAX_CONCURRENCY), but only for the
     # duration of actual generation — NOT for however long the consumer takes to
     # process each delta. A naive `async with _brain_sem(): async for delta in
@@ -878,7 +925,7 @@ async def run_zoe_core_streaming(
         try:
             async with _brain_sem():
                 worker = await _worker_for(user_id, session_id, voice_mode=voice_mode)
-                async for delta in worker.stream(composed, timeout_s=_TIMEOUT_S):
+                async for delta in worker.stream(_compose, timeout_s=_TIMEOUT_S):
                     await queue.put(delta)
         except BaseException as exc:  # noqa: BLE001 - re-raised to the consumer below
             errors.append(exc)

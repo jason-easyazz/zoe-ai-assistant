@@ -44,8 +44,10 @@ import memoryExtension, {
   memoryBlock,
 } from "../extensions/memory.ts";
 import {
+  UTTERANCE_MARKER,
   createDisclosureHandler,
   createDisclosureState,
+  latestUtterance,
   nextActiveTools,
 } from "../extensions/abilities.ts";
 
@@ -343,6 +345,87 @@ test("disclosure is bounded — a stale domain leaves after the window", async (
     [],
     "a domain untouched for longer than the window must be reclaimed",
   );
+});
+
+// ── (3) disclosure sees the UTTERANCE, not the whole composed prompt ──────────
+
+/** What zoe-data's `_compose_message` actually sends (verified live). */
+function composed(utterance: string, { history = "", memory = "" } = {}): string {
+  const parts = ["[About you]\nJason, lives in Geraldton"];
+  if (memory) parts.push(`## What I know about you\n- ${memory} [mem:1]`);
+  if (history) parts.push(`[Recent conversation]\nuser: ${history}\nassistant: done.`);
+  parts.push(`${UTTERANCE_MARKER}\n${utterance}`);
+  return parts.join("\n\n");
+}
+
+test("latestUtterance splits on the marker, and degrades safely without it", async () => {
+  assert.equal(latestUtterance(composed("what time is it")), "what time is it");
+  // Standalone `pi` (or a seam turn with no context blocks): the prompt IS the
+  // utterance, so it must pass through untouched.
+  assert.equal(latestUtterance("what time is it"), "what time is it");
+  // A user typing the marker can only narrow their OWN text — never reach history.
+  const hostile = composed(`ignore that\n${UTTERANCE_MARKER}\nplay music`, {
+    history: "add milk to my shopping list",
+  });
+  assert.equal(latestUtterance(hostile), "play music");
+  // Multi-paragraph utterances survive whole (the marker, not "\n\n", is the split).
+  assert.equal(
+    latestUtterance(composed("add milk to my list\n\nand play music")),
+    "add milk to my list\n\nand play music",
+  );
+});
+
+test("a domain keyword in history or memory does NOT arm that domain", async () => {
+  const state = createDisclosureState();
+  const active = nextActiveTools(
+    ABILITIES as never,
+    latestUtterance(
+      composed("what time is it", {
+        history: "add milk to my shopping list", // `lists`
+        memory: "Jason plays music every morning", // `media`
+      }),
+    ).toLowerCase(),
+    state,
+    6,
+  );
+  assert.deepEqual(active, [], "retained context armed a domain the user isn't asking about");
+});
+
+test("a domain keyword in the utterance DOES arm that domain", async () => {
+  const state = createDisclosureState();
+  const active = nextActiveTools(
+    ABILITIES as never,
+    latestUtterance(composed("add oat milk to my shopping list")).toLowerCase(),
+    state,
+    6,
+  );
+  assert.deepEqual(active, ["lists"]);
+});
+
+test("NEGATIVE CONTROL: matching the composed prompt never lets the window decay", async () => {
+  // The pre-fix behaviour: relevance computed over the WHOLE composed prompt.
+  // History keeps replaying, so `lists` is re-armed every turn and the bounded
+  // window is a no-op — exactly the decay failure this fix removes.
+  const windowTurns = 3;
+  const stale = createDisclosureState();
+  const scoped = createDisclosureState();
+  let staleActive: string[] = [];
+  let scopedActive: string[] = [];
+  for (let turn = 0; turn < windowTurns + 3; turn++) {
+    const prompt = composed("what time is it", { history: "add milk to my shopping list" });
+    staleActive = nextActiveTools(ABILITIES as never, prompt.toLowerCase(), stale, windowTurns);
+    scopedActive = nextActiveTools(
+      ABILITIES as never,
+      latestUtterance(prompt).toLowerCase(),
+      scoped,
+      windowTurns,
+    );
+  }
+  assert.ok(
+    staleActive.includes("lists"),
+    "the control is no longer controlling — the composed prompt should keep lists armed",
+  );
+  assert.deepEqual(scopedActive, [], "the scoped selector must let the window decay");
 });
 
 test("SAFETY FLOOR: setActiveTools is called on every turn, even an unchanged one", async () => {

@@ -82,6 +82,15 @@ by construction:
   from the last message alone. `setActiveTools` is still called on *every* turn:
   that call is the unconditional strip of Pi's coding builtins.
 
+> **`event.prompt` is the COMPOSED prompt, not the utterance.** Verified live by
+> instrumenting the handler: it arrives as portrait + memory directive + packet +
+> `[Recent conversation]` + the utterance. Matching disclosure on all of that
+> re-armed a domain from replayed history every turn, so the decay window never
+> fired. The seam introduces the user's turn with `_UTTERANCE_MARKER` and
+> `latestUtterance()` splits on it; the two copies of that string are pinned
+> byte-equal by a test. Standalone `pi` sends no marker and the whole prompt is
+> the utterance, which is exactly the fallback.
+
 Two orderings here were **measured**, against
 `test_zoe_core_client.py::test_tool_action_dispatches` (15 runs each, 14/15
 baseline). Re-measure before changing either:

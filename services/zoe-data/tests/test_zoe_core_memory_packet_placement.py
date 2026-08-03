@@ -44,6 +44,9 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m ci_safe` lane
 
+import asyncio
+import json
+import types
 from pathlib import Path
 
 _ZOE_DATA = Path(__file__).resolve().parents[1]
@@ -98,6 +101,56 @@ def test_the_directive_never_appears_without_a_packet():
     )
     assert zc._MEMORY_USAGE_DIRECTIVE not in composed
     assert composed == "add bread to my shopping list"
+
+
+def test_the_two_copies_of_the_utterance_marker_are_byte_identical():
+    """abilities.ts splits the composed prompt on this exact string.
+
+    A drift here is silent and total: the marker would never be found, the split
+    would fall back to the whole prompt, and disclosure would go back to being
+    re-armed by replayed history on every turn.
+    """
+    import re
+
+    import zoe_core_client as zc
+
+    source = (_ZOE_DATA.parent / "zoe-core" / "extensions" / "abilities.ts").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r'UTTERANCE_MARKER = "([^"]+)"', source)
+    assert match, "could not find UTTERANCE_MARKER in abilities.ts — did it move?"
+    assert match.group(1) == zc._UTTERANCE_MARKER
+
+
+def test_composed_prompt_puts_the_marker_before_the_utterance():
+    import zoe_core_client as zc
+
+    composed = zc._compose_message(
+        "what time is it",
+        history=[{"role": "user", "content": "add milk to my shopping list"}],
+        db_memory_context=None,
+        portrait="Jason",
+        memory_packet=_PACKET,
+    )
+    assert composed.endswith(f"{zc._UTTERANCE_MARKER}\nwhat time is it")
+    # The keyword that must NOT reach disclosure is present but ahead of the marker.
+    assert "shopping list" in composed.split(zc._UTTERANCE_MARKER)[0]
+
+
+def test_bare_message_is_unchanged_when_there_is_no_context():
+    """No context blocks → no marker: the prompt stays byte-for-byte the message."""
+    import zoe_core_client as zc
+
+    assert (
+        zc._compose_message(
+            "what time is it",
+            history=None,
+            db_memory_context=None,
+            portrait=None,
+            memory_packet="",
+        )
+        == "what time is it"
+    )
 
 
 def test_the_two_copies_of_the_usage_directive_are_byte_identical():
@@ -175,7 +228,9 @@ async def test_voice_style_turn_still_reaches_the_for_prompt_endpoint(monkeypatc
     composed_seen: list[str] = []
 
     async def _fake_stream(self, message, *, timeout_s):
-        composed_seen.append(message)
+        # `message` is a compose FACTORY now — awaited inside the per-session lock
+        # so a stalled recall can't be overtaken (see the ordering test below).
+        composed_seen.append(message if isinstance(message, str) else await message())
         yield "ok"
 
     monkeypatch.setattr(zc, "_memory_packet_block", _fake_packet)
@@ -229,6 +284,12 @@ def test_no_packet_means_no_block():
         ("2s", 2.0),
         ("0", 2.0),
         ("-100", 2.0),
+        # float() parses these cleanly and they pass `> 0`, but
+        # asyncio.wait_for(timeout=inf) waits forever — a typo would hang the lane.
+        ("inf", 2.0),
+        ("Infinity", 2.0),
+        ("1e10000", 2.0),
+        ("nan", 2.0),
     ],
 )
 def test_packet_timeout_falls_back_instead_of_raising(monkeypatch, raw, expected):
@@ -312,6 +373,89 @@ async def test_memory_packet_block_passes_an_explicit_limit(monkeypatch):
     assert seen["limit"] == 8
     assert len(seen["message"]) == 500, "message slice must match the extension's 500 chars"
     assert seen["_"] is None, "the internal-token dependency must be bypassed in-process"
+
+
+class _FakeStdin:
+    def __init__(self, sink: list) -> None:
+        self._sink = sink
+
+    def write(self, data: bytes) -> None:
+        self._sink.append(json.loads(data.decode())["message"])
+
+    async def drain(self) -> None:
+        return None
+
+
+async def _yield_until(predicate, *, steps: int = 200) -> bool:
+    """Advance the event loop until `predicate()` holds. No sleeps — `sleep(0)`
+    just yields to the scheduler, so this is deterministic rather than timed."""
+    for _ in range(steps):
+        if predicate():
+            return True
+        await asyncio.sleep(0)
+    return predicate()
+
+
+@pytest.mark.asyncio
+async def test_same_session_turns_keep_submission_order_when_recall_stalls():
+    """A stalled recall on the FIRST turn must not let a later turn overtake it.
+
+    Composition (which awaits the memory fetch) runs INSIDE the per-session lock.
+    Awaiting it in the caller instead let request B — submitted second, with fast
+    recall — reach the worker lock while A was still fetching, and B's turn would
+    be sent to the brain first. Before the seam owned recall this could not happen:
+    memory.ts fetched inside the Pi process, i.e. with the lock already held.
+    """
+    import zoe_core_client as zc
+
+    sent: list[str] = []
+    worker = zc._ZoeCoreWorker.__new__(zc._ZoeCoreWorker)
+    worker._lock = asyncio.Lock()
+    worker.last_used = 0.0
+    worker.proc = types.SimpleNamespace(
+        stdin=_FakeStdin(sent), stdout=object(), returncode=None
+    )
+
+    async def _ensure_started() -> None:
+        return None
+
+    async def _read_turn(request_id: str, timeout_s: float):
+        yield "ok"
+
+    worker._ensure_started = _ensure_started
+    worker._read_turn = _read_turn
+
+    a_compose_entered = asyncio.Event()
+    release_a = asyncio.Event()
+
+    async def _compose_a() -> str:
+        a_compose_entered.set()
+        await release_a.wait()  # the stalled recall
+        return "A"
+
+    async def _compose_b() -> str:
+        return "B"
+
+    async def _drain(compose) -> None:
+        async for _ in worker.stream(compose, timeout_s=5.0):
+            pass
+
+    task_a = asyncio.ensure_future(_drain(_compose_a))
+    assert await _yield_until(a_compose_entered.is_set), "A never started composing"
+
+    # B is submitted SECOND, and its recall is instant. Let it run as far as it
+    # can — queued on the lock if A holds it, all the way to the brain if not.
+    task_b = asyncio.ensure_future(_drain(_compose_b))
+    assert await _yield_until(lambda: bool(worker._lock._waiters) or bool(sent)), (
+        "B never got anywhere — the test would prove nothing"
+    )
+
+    # Now release A's stalled recall and let both finish.
+    release_a.set()
+    await asyncio.gather(task_a, task_b)
+
+    # THE ASSERTION: submission order, not recall-completion order.
+    assert sent == ["A", "B"], f"same-session turns were reordered: {sent}"
 
 
 def test_memory_extension_hands_the_block_to_the_seam():
