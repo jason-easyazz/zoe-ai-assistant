@@ -579,6 +579,36 @@ def test_flue_non_deployed_paths_do_not_gate(path):
     assert needs is False and hits == []
 
 
+# --- the two-stage router FRONT (ZOE_ROUTER_HEAD=active) --------------------
+# Same class as the flue lane above, found by cross-review on #1613. The router
+# sidecar's unit is its serving config (model, --ctx-size, --parallel, memory
+# caps) and docs/CANONICAL.md puts the two-stage router ON the voice path — but
+# it matched no glob, so a change to it took the no-op pass at PR time and at
+# deploy. It is the worst one to leave ungated because its failure is SILENT:
+# router_two_stage.decide() returns None on timeout and semantic_router falls
+# back to the similarity route, so a regression shows up only as worse tool
+# selection, which is precisely what a said-vs-did replay measures.
+def test_router_sidecar_unit_is_voice_path():
+    path = "scripts/setup/systemd/functiongemma-router.service"
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    # Prefix-exactness, same discipline as the flue-zoe-brain-2x case: the glob
+    # is one literal unit file, not a systemd-directory wildcard. Unrelated
+    # units must NOT start charging a 20-sample Kokoro replay.
+    "scripts/setup/systemd/serena-mcp.service",
+    "scripts/setup/systemd/zoe-memory-export.service",
+    "scripts/setup/systemd/functiongemma-router.service.d/override.conf",
+])
+def test_unrelated_systemd_units_do_not_gate(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path], pats) == []
+
+
 # --- FIX: scope must fail CLOSED when it cannot publish its verdict ---------
 # `_emit_github_output` used to swallow an OSError and let `_scope_only` return
 # 0 anyway — the scope job then "succeeded" with no `voice` output at all, and

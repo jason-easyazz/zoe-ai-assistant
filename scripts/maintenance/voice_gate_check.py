@@ -129,6 +129,19 @@ VOICE_PATH_PATTERNS = (
     # turn gets answered by, and neither matched any glob above.
     "services/zoe-data/zoe_flue_client.py",
     "services/zoe-data/brain_dispatch.py",
+    # THE TWO-STAGE ROUTER FRONT. docs/CANONICAL.md lists it as a fast
+    # tool-router *front on the voice path* (LIVE, ZOE_ROUTER_HEAD=active), and
+    # its serving config decides routing quality for every voice turn — the
+    # model it loads, --ctx-size, --parallel and (since 2026-08-03) its memory
+    # caps. Exactly the llama-server.service / flue-zoe-brain.service case: the
+    # UNIT is the serving config, so it is gated for the same reason they are.
+    #
+    # This one matters more than its size suggests, because its failure mode is
+    # silent. router_two_stage.decide() returns None on any timeout and
+    # semantic_router falls back to the similarity route, so a regression here
+    # never surfaces as an error — only as worse tool selection. A said-vs-did
+    # replay is the only thing that catches it.
+    "scripts/setup/systemd/functiongemma-router.service",
 )
 DEFAULT_MAX_AGE_H = float(os.environ.get("ZOE_VOICE_GATE_MAX_AGE_H", "24"))
 

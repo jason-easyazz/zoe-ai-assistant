@@ -709,3 +709,184 @@ Checked in the same pass for the same template/live drift:
 rescue. Left untouched deliberately: writing caps for a unit nobody runs is
 speculative sizing with no measurement behind it. If hermes-agent is ever
 re-enabled, size it from a fresh `VmHWM` and add it to `NO_SWAP_UNITS` then.
+
+## 2026-08-03 (later still) — `functiongemma-router`: the silent one
+
+Fourth unit, same class, and the one that would have gone unnoticed longest.
+Raised as a Codex P2 on #1613 and deferred there; closed here.
+
+`functiongemma-router.service` reads as an optional accelerator, which is why it
+was skipped. It is not: `docs/CANONICAL.md` lists the two-stage router as a fast
+tool-router **front on the voice path**, `ZOE_ROUTER_HEAD=active` was confirmed in
+the **running** zoe-data process environment, and `/health` on `:11436` answered
+`{"status":"ok"}` at sample time.
+
+### Measured, read-only, on the live Orin
+
+PID 1564, `ActiveEnterTimestamp` 2026-08-03 11:28:22 AWST (up ~6h05m). Box at
+**1,168 MB available**, 2.3 GB swap in use — note this is a far less starved box
+than the 190–430 MB seen earlier the same day, because it had been quiesced.
+
+```
+VmRSS 411.7 MB / VmSwap 156.9 MB / VmHWM 598.8 MB     -> 27.6% paged out
+cgroup memory.current 372.0 MB / memory.swap.current 155.8 MB
+```
+
+Live directives before the change — **fully unprotected, and with no drift to
+untangle**: `MemoryLow=0`, `MemoryMax=infinity`, `MemorySwapMax=infinity`, and
+**no drop-in directory at all** (`~/.config/systemd/user/functiongemma-router.service.d/`
+does not exist). Unlike zoe-data, there was no untracked live protection to
+preserve — the tracked template and the live unit agreed, and both had nothing.
+
+`VmHWM` here is only **1.05×** `VmRSS+VmSwap`. That matters for sizing: on the
+`flue-*` units the same ratio was 1.8–2.1×, meaning those processes never got to
+grow and their peak was a lower bound. This one has settled at its natural
+working set, so **598.8 MB is a peak a floor can legitimately be sized from** —
+and it independently confirms the "~600 MB" in the unit's own header comment.
+
+### Why a swapped router is worse than a slow one
+
+This is the only unit in the set whose caller has a **real, working fallback**,
+and that is precisely what makes it dangerous. (Contrast the flue lane, where the
+fallback claimed in the first draft of this document turned out not to exist.)
+
+`router_two_stage.py` enforces a strict **1.5 s** client timeout
+(`ZOE_ROUTER_TWO_STAGE_TIMEOUT_S`, default confirmed unset live) against a
+measured **424 ms p50** — the whole budget is ~3.5× a normal decode, and faulting
+~600 MB back off the NVMe swapfile does not fit in it. On timeout:
+
+- `router_two_stage.py:291-294` — `except Exception` → logs a WARNING → returns `None`.
+- `semantic_router.py:546-566` — `decision is None` → the similarity decision
+  computed *before* the call (lines 528-533) is kept unchanged. The comment on
+  line 566 says it outright: `# decision None → similarity behavior unchanged (brain-safe)`.
+
+So a router kill or a swapped router is **not an outage**: turns keep answering
+via the similarity route → brain. The cost is (a) up to 1.5 s burned per turn
+before falling back, and (b) routing quality silently dropping off the proven
+90.1% overall / 0% chat-false-positive config to the weaker similarity path.
+Nothing errors, nothing goes red, no health check notices. **This is the exact
+silent-degradation class the swap-denial work exists to kill.**
+
+Note the asymmetry: if the sidecar is *down* the connection is refused
+**instantly**, so a dead router costs routing quality but no latency. A *swapped*
+router costs both. Dead is cheaper than swapped.
+
+### Decision
+
+```
+MemorySwapMax=0   MemoryLow=768M   MemoryMax=1G
+```
+
+- **Floor 768M** = 1.28× the 598.8 MB `VmHWM`, the same margin kokoro-tts uses
+  over its 2,465 MB peak. Sized from measurement, *not* reverse-engineered to
+  clear a ratio test — see below.
+- **Ceiling 1G**, and a ceiling is **safe** here despite this being the same
+  `llama-server` binary that is `MEMORY_MAX_EXEMPT` on `:11434`. That exemption is
+  about GPU/NvMap pages escaping cgroup accounting; this instance runs
+  **`--n-gpu-layers 0`**. Verified in `/proc/1564/maps`: exactly **one** `/dev/nv`
+  mapping — a single 4 KB `/dev/nvgpu/igpu0/ctrl` control page — and **zero**
+  `/dev/nvmap` allocations. The nvidia `.so` libraries are mapped (Jetson CUDA
+  build) but are ordinary file-backed pages. No weights, no KV cache on device ⇒
+  accounting is complete ⇒ `MemoryMax` genuinely bounds this cgroup.
+  **The discriminator is `-ngl`, not the binary.**
+
+**On the 1.33× ceiling-to-floor ratio** (below `MIN_CEILING_TO_FLOOR_RATIO = 3`,
+so it is a documented `TIGHT_CEILING_OK` entry). The 3× rule exists for runtimes
+whose *uncovered* allocation grows with load — V8 external buffers and stream
+chunks, which get SIGKILLed rather than throttled. llama.cpp here is bounded at
+startup: fixed 270M Q8_0 GGUF, fixed `--ctx-size 4096` KV cache, `--parallel 1`.
+The only allocation outside the floor is grammar/jinja/HTTP scratch for **one**
+in-flight request. Same class as kokoro-tts, and sized by the same method.
+
+This was a deliberate choice against the alternative of setting the floor to
+640M (1.07× the peak) purely so a 2G ceiling would clear 3×. That would be
+choosing a number to make a test pass — the exact anti-pattern
+`TIGHT_CEILING_OK`'s "state a reason" requirement guards. **The tighter backstop
+is also the better one on merit**: an OOM kill here is a degradation with an
+automatic, cheap recovery (`Restart=always`, `RestartSec=5`), so catching a leak
+early beats leaving 2.5 GB of *unswappable* headroom on a 15.6 GB box where
+llama-server holds ~6.4 GB.
+
+### Apply — operator steps
+
+Materially **cheaper than either previous apply**, because of the fallback above.
+
+**1. Restart at idle, but the gate is small.** The router must fault ~600 MB into
+RAM it can no longer be pushed out of. A `>1.5 GB available` gate is ample (the
+box read 1,168 MB while writing this — quiesce Serena first if it is low; see the
+zoe-data quiesce list above).
+
+**2. Know what the down-window costs.** ~10–20 s (model load plus the
+`ExecStartPost` health+identity gate). During it, `:11436` refuses instantly and
+every turn falls back to the similarity route per `semantic_router.py:566` —
+**chat and voice keep answering, with degraded tool selection**. This is a real
+verified fallback, unlike the flue lane's. Do not restart mid-conversation
+anyway; degraded routing is still a worse answer.
+
+**3. Apply via a drop-in, never a template copy** — the installed unit carries
+host-specific binary and model paths.
+
+```bash
+mkdir -p ~/.config/systemd/user/functiongemma-router.service.d
+cat > ~/.config/systemd/user/functiongemma-router.service.d/memory.conf <<'EOF'
+[Service]
+# Two-stage router FRONT on the voice path (docs/CANONICAL.md,
+# ZOE_ROUTER_HEAD=active). A paged-out router blows router_two_stage.py's 1.5 s
+# timeout, decide() returns None, and semantic_router silently keeps the weaker
+# similarity route — degraded routing with nothing red anywhere. Measured
+# 2026-08-03 uncapped: VmRSS 411.7 MB vs VmSwap 156.9 MB (27.6% out),
+# VmHWM 598.8 MB. Ceiling is safe because this instance is -ngl 0 (0 /dev/nvmap
+# mappings) — NOT because it is llama-server, which is exempt on :11434.
+# Tracked in scripts/setup/systemd/functiongemma-router.service.
+MemorySwapMax=0
+MemoryLow=768M
+MemoryMax=1G
+EOF
+systemctl --user daemon-reload
+systemctl --user restart functiongemma-router
+```
+
+**4. Verify — caps read back, AND a real round-trip.** `systemctl is-active` is
+not proof; neither is `/health` alone, since it answers before the model is
+necessarily serving the right GGUF.
+
+```bash
+# (a) the caps are actually in force
+systemctl --user show functiongemma-router \
+  -p MemorySwapMax,MemoryLow,MemoryMax
+#   expect MemorySwapMax=0, MemoryLow=805306368, MemoryMax=1073741824
+
+# (b) healthy AND serving the r2 GGUF (the identity half of the startup gate)
+curl -sf http://127.0.0.1:11436/health
+curl -sf http://127.0.0.1:11436/props | grep -q r2-Q8_0.gguf && echo "r2 OK"
+
+# (c) a REAL decode round-trip — proves it routes, not just that it listens
+curl -s --max-time 5 http://127.0.0.1:11436/completion \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"what time is it","n_predict":16}' | head -c 200
+
+# (d) resident and staying that way
+grep -E 'VmRSS|VmSwap|VmHWM' /proc/$(systemctl --user show -p MainPID --value \
+  functiongemma-router)/status
+# VmSwap should be 0 and stay 0; VmRSS should sit near the ~600 MB real working
+# set rather than the 411 MB that meant a quarter of it was on disk.
+```
+
+**5. End-to-end, the only check that matters.** Drive a real voice turn whose
+routing the two-stage owns (a tool-shaped utterance, e.g. a timer or weather
+request) and confirm the tool fires. Routing quality is what this unit protects,
+so a lane-level check is the verification — not a memory number.
+
+### Rollback
+
+```bash
+rm -f ~/.config/systemd/user/functiongemma-router.service.d/memory.conf
+systemctl --user daemon-reload
+systemctl --user restart functiongemma-router
+```
+
+Because there was **no pre-existing drop-in and no live protection**, this
+rollback lands on genuinely nothing — the fully-uncapped state measured above.
+That is unlike zoe-data, where `user.control/50-*.conf` copies restore a real
+prior floor. If the *template* has also been installed on this host, the block
+lives there too — check `systemctl --user cat functiongemma-router`.
