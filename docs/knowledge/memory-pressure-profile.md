@@ -237,13 +237,60 @@ leaf floors are set, the branches above them are not.
 
 | Unit | `MemorySwapMax` | `MemoryLow` | `MemoryMax` | why |
 |---|---|---|---|---|
-| `flue-zoe-brain` | `0` | `512M` | `1G` | floor = 3.9x measured peak and matches the value already live, so the template converges with the box instead of being overridden by it; ceiling = 7.7x, deliberately generous because a breach OOM-kills the live brain lane |
-| `flue-zoe-telegram` | `0` | `256M` | `768M` | floor = 1.75x measured peak, lower than the brain because a cold Telegram reply is a slow message not a voice fault; ceiling = 5.3x, tighter because `Restart=always` makes a kill cheap here |
+| `flue-zoe-brain` | `0` | `512M` | **`2G`** | floor matches the value already live, so the template converges with the box instead of being overridden by it; ceiling is a leak BACKSTOP, sized from runtime behaviour rather than a `VmHWM` multiple — see the correction below |
+| `flue-zoe-telegram` | `0` | `256M` | **`1G`** | floor lower than the brain's because a cold Telegram reply is a slow message not a voice fault; ceiling half the brain's — this bridge long-polls small JSON rather than streaming model output, so it has far less external-buffer exposure, and `Restart=always` makes a kill cheap |
 
-`VmHWM` was sampled 3h after a restart on an **already-starved** box, so the
-kernel never let either process grow. Treat both peaks as a **lower bound** on the
-unstressed peak — that is why the ceilings are 5-8x rather than the usual 2x.
-Re-read `memory.current` after a week of normal traffic and tighten if warranted.
+> **CORRECTED 2026-08-03 (same day, red-team review).** The ceilings above were
+> originally `1G` / `768M`, sized as a multiple of `VmHWM`. **That method was
+> wrong** and the reasoning is kept here because the wrong version is seductive:
+> `VmHWM` was sampled on an already-starved box, so it is a *lower* bound on the
+> unstressed peak and every multiple of it inherits the error. Re-read
+> `memory.current` after a week of normal traffic before trusting any of these.
+
+### What actually decides throttle-vs-kill on a Node unit (measured)
+
+The observed peak is the wrong quantity. The right one is how the runtime behaves
+*under* the ceiling — measured on this box 2026-08-03 with transient
+`systemd-run --user --scope` probes:
+
+| cgroup `MemoryMax` | V8 `heap_size_limit` |
+|---|---|
+| 512M | 259 MB |
+| 768M | 396 MB |
+| 1G | 524 MB |
+| 2G | 1048 MB |
+| *(uncapped)* | **4144 MB** |
+
+**V8 reads the cgroup limit and sizes its JS heap to ~51% of it.** So a runaway
+*JS heap* self-limits and throws a graceful heap-OOM well before the cgroup
+fires. That half is safe, and it is why a ceiling is not automatically a kill.
+
+**But external memory is not in that budget.** Buffers, ArrayBuffers and stream
+chunks live outside V8's old space, so the self-limiting does not cover them. A
+`Buffer.alloc` loop under `MemoryMax=1G` + `MemorySwapMax=0` was **SIGKILLed by
+the cgroup — exit 137**, not caught by V8. Streamed llama-server responses are
+exactly that external-buffer path, so **the brain sidecar's real growth path is
+the one the runtime does not bound.** That is the concrete reason its ceiling
+moved to a genuine backstop instead of a working limit.
+
+### Why these two keep a ceiling when llama-server and zoe-data do not
+
+An OOM kill of a flue sidecar is a **degradation, not an outage**: zoe-data
+dispatches flue > core > legacy, so a dead brain sidecar falls back to the core
+lane and chat keeps answering (that fallback is the thing the apply runbook below
+tells you to verify). Against that, going uncapped would let V8 size its heap to
+**4144 MB** — on a 15.6 GB box where llama-server already holds ~6.4 GB, an
+unbounded sidecar that *cannot be swapped* is a threat to the brain rock itself.
+Bounded with real room is the right trade here. For `zoe-data`, which has no
+fallback at all, it is not — hence its `MEMORY_MAX_EXEMPT` entry.
+
+`tests/unit/test_systemd_memory_protection.py` now requires `MemoryMax` ≥ **3×**
+`MemoryLow`: the floor is sized to hold the working set, so a backstop needs at
+least two more floors above it for allocation the floor never covered. The
+threshold is 3 and not 2 deliberately — the brain's original `512M`/`1G` was
+*exactly* 2×, so a 2× rule would have ratified the bug it exists to catch.
+Bounded, non-growing workloads (kokoro's ~2.3 GB CUDA-resident model) are a
+documented exception in `TIGHT_CEILING_OK`.
 
 Headroom: this adds 768 MB to the box's soft-protected total (llama 6G + kokoro
 3G + zoe-data 2G = 11G → **11.75G of 15.6G**). `MemoryLow` is a protection
@@ -282,10 +329,13 @@ cat > ~/.config/systemd/user/flue-zoe-brain.service.d/memory.conf <<'CONF'
 # Live brain lane (ZOE_BRAIN_BACKEND=flue) must not be paged out. Measured
 # 2026-08-03: VmRSS 2.0 MB vs VmSwap 70.4 MB (87% swapped) under MemoryLow alone.
 # Tracked in scripts/setup/systemd/flue-zoe-brain.service.
+# MemoryMax is a leak BACKSTOP, not a working limit: V8 self-limits its JS heap
+# to ~51% of it, but external Buffers/stream chunks are outside that budget and
+# would be SIGKILLed by the cgroup (exit 137, measured at 1G).
 [Service]
 MemorySwapMax=0
 MemoryLow=512M
-MemoryMax=1G
+MemoryMax=2G
 CONF
 
 mkdir -p ~/.config/systemd/user/flue-zoe-telegram.service.d
@@ -296,7 +346,7 @@ cat > ~/.config/systemd/user/flue-zoe-telegram.service.d/memory.conf <<'CONF'
 [Service]
 MemorySwapMax=0
 MemoryLow=256M
-MemoryMax=768M
+MemoryMax=1G
 CONF
 
 systemctl --user daemon-reload
@@ -335,7 +385,7 @@ systemctl --user status flue-zoe-brain --no-pager      # active (running)
 curl -sf http://localhost:3578/health                  # brain lane back up
 systemctl --user show flue-zoe-brain \
   -p MemorySwapMax -p MemoryLow -p MemoryMax
-#   expect MemorySwapMax=0, MemoryLow=536870912, MemoryMax=1073741824
+#   expect MemorySwapMax=0, MemoryLow=536870912, MemoryMax=2147483648
 ```
 
 Then drive **one real brain turn** and confirm it is served by the flue lane, not

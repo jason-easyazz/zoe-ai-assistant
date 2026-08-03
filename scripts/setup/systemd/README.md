@@ -336,8 +336,8 @@ reply after idle) rather than a resource one.
 | `llama-server` | `0` | `6G` | *(none — see below)* |
 | `kokoro-tts`   | `0` | `3G` | `4G` |
 | `zoe-data`     | `0` | `2G` | *(none — see below)* — also `CPUWeight`/`IOWeight` `300` |
-| `flue-zoe-brain` | `0` | `512M` | `1G` |
-| `flue-zoe-telegram` | `0` | `256M` | `768M` |
+| `flue-zoe-brain` | `0` | `512M` | `2G` |
+| `flue-zoe-telegram` | `0` | `256M` | `1G` |
 | `serena-mcp`   | `2G` | — | `2G` (dev tooling, deliberately yields) |
 
 The set above is pinned by `tests/unit/test_systemd_memory_protection.py`. It
@@ -410,6 +410,29 @@ Two things worth knowing before changing these:
   `/proc/<pid>/maps`), so `MemoryMax` genuinely bounds them. On Tegra, a process
   allocating through NvMap does *not* have its GPU/unified pages fully accounted
   to the cgroup — which is the other half of why llama-server gets no ceiling.
+- **Size a ceiling from the RUNTIME's behaviour under it, never as a multiple of
+  a `VmHWM` you sampled on a starved box.** That method sized both `flue-*`
+  ceilings on 2026-08-03 and was corrected the same day: a starved `VmHWM` is a
+  *lower* bound on the unstressed peak, so every multiple of it inherits the
+  error. What actually decides throttle-vs-kill on a Node unit, measured here:
+  V8 reads the cgroup limit and sizes its JS heap to **~51%** of it (`MemoryMax`
+  512M/768M/1G/2G → `heap_size_limit` 259/396/524/1048 MB; **4144 MB uncapped**),
+  so a runaway *JS heap* self-limits and throws gracefully — but **external
+  memory (Buffers, ArrayBuffers, stream chunks) is outside that budget and is
+  not covered.** A Buffer loop under `MemoryMax=1G` + `MemorySwapMax=0` was
+  **SIGKILLed by the cgroup (exit 137)**, not caught by V8. Streamed
+  llama-server responses are exactly that path. Ceilings are backstops against a
+  leak, not working limits — `tests/unit/test_systemd_memory_protection.py`
+  requires `MemoryMax` ≥ **3×** `MemoryLow` (bounded, non-growing workloads like
+  kokoro are a documented exception in `TIGHT_CEILING_OK`).
+- **Why the `flue-*` units keep a ceiling when llama-server and zoe-data do
+  not.** An OOM kill of a flue sidecar is a *degradation*, not an outage:
+  zoe-data dispatches flue > core > legacy, so a dead brain sidecar falls back
+  to the core lane and chat keeps answering. Uncapped, though, V8 would size its
+  heap to 4144 MB — on a 15.6 GB box where llama-server already holds ~6.4 GB,
+  an unbounded sidecar that cannot be swapped threatens the brain rock itself.
+  Bounded, with room, is the right trade there; for zoe-data (no fallback at
+  all) it is not.
 
 Headroom check (why this fits): brain + kokoro fully resident ≈ **9.6 GB** of
 15.6 GB, plus the flue floors (768 MB combined) and zoe-data's 2G ≈ **12.4 GB**

@@ -52,18 +52,41 @@ EnvironmentFile=%h/assistant/labs/flue-zoe-brain/.env
 # llama-server caveat (hard ceiling + no swap turns a spike into an OOM kill)
 # applies to a 5.6 GB unified-memory process, not to a ~130 MB sidecar.
 #
-# Sizing, from measurement (VmHWM = peak RSS = 132.8 MB):
-#   MemoryLow=512M  — 3.9x the measured peak, so the whole working set sits
-#                     inside the protected zone. Also exactly the value already
-#                     live in the drop-in, so the template converges with the
-#                     box rather than being silently overridden by it.
-#   MemoryMax=1G    — 7.7x the measured peak. Deliberately generous: a breach
-#                     OOM-kills the live brain lane. It exists to catch a
-#                     runaway V8 heap (uncapped Node on a 15.6 GB box can reach
-#                     GBs), not to run close to normal usage.
-# VmHWM was sampled 3h after a restart on an already-starved box, so the kernel
-# never let this process grow — treat it as a LOWER bound on the unstressed
-# peak. That is why the ceiling is ~8x and not the usual ~2x.
+# Sizing. The first pass here used a multiple of VmHWM (132.8 MB) and landed on
+# MemoryMax=1G. That method was wrong twice over and the ceiling is now 2G:
+#
+#   1. VmHWM was sampled on an already-starved box, so it is a LOWER bound on
+#      the unstressed peak — the kernel never let this process grow. Any
+#      multiple of it inherits that error.
+#   2. More importantly, the number that decides whether a ceiling is a THROTTLE
+#      or a KILL is not the observed peak at all — it is how the RUNTIME behaves
+#      under the ceiling. Measured on this box 2026-08-03:
+#        - V8 reads the cgroup limit and sizes its JS heap to ~51% of it
+#          (MemoryMax 512M/768M/1G/2G -> heap_size_limit 259/396/524/1048 MB;
+#          4144 MB uncapped). So a runaway *JS heap* self-limits and throws a
+#          graceful heap-OOM well before the cgroup fires. That much is safe.
+#        - But EXTERNAL memory — Buffers, ArrayBuffers, stream chunks — is not
+#          in V8's old-space budget and is NOT covered by that self-limiting.
+#          A Buffer allocation loop under MemoryMax=1G + MemorySwapMax=0 was
+#          SIGKILLed by the cgroup (exit 137), not caught by V8.
+#      Streamed llama-server responses are exactly that external-buffer path, so
+#      the sidecar's real growth path is the one the runtime does NOT bound.
+#
+#   MemoryLow=512M  — unchanged, and exactly the value already live in the
+#                     drop-in, so the template converges with the box rather
+#                     than being silently overridden by it.
+#   MemoryMax=2G    — a BACKSTOP against a genuine leak, deliberately not a
+#                     working limit: ~15x the (understated) measured peak, and
+#                     it keeps V8's own heap budget at ~1 GB, so normal
+#                     operation never runs near the kill threshold.
+#
+# Why this unit keeps a ceiling at all, when llama-server and zoe-data do not:
+# an OOM kill here is a DEGRADATION, not an outage. zoe-data dispatches
+# flue > core > legacy, so a dead sidecar falls back to the core lane and chat
+# keeps answering (that fallback is verified in the apply runbook). Against
+# that, going uncapped would let V8 size its heap to 4144 MB — on a 15.6 GB box
+# where llama-server already holds ~6.4 GB, an unbounded sidecar that cannot be
+# swapped is a threat to the brain rock itself. Bounded, with room.
 #
 # Apply runbook (and why you write a drop-in instead of copying this file over
 # the installed unit): docs/knowledge/memory-pressure-profile.md.
@@ -72,7 +95,7 @@ EnvironmentFile=%h/assistant/labs/flue-zoe-brain/.env
 # box and systemd SILENTLY DROPS the value while reporting success.
 MemorySwapMax=0
 MemoryLow=512M
-MemoryMax=1G
+MemoryMax=2G
 
 # Light hardening (user-service compatible).
 NoNewPrivileges=true

@@ -74,6 +74,32 @@ MEMORY_MAX_EXEMPT = {
     ),
 }
 
+# Units allowed to run a ceiling CLOSE to their floor, with the reason. Normally
+# a ceiling must leave real headroom over the protected working set, or normal
+# operation runs against the kill threshold and the "ceiling" is really a
+# throttle waiting to become an outage. A bounded workload that does not grow
+# with load is the legitimate exception.
+TIGHT_CEILING_OK = {
+    "kokoro-tts.service": (
+        "Bounded ~2.3 GB CUDA-resident model that does not grow with load — the "
+        "floor is sized to hold the whole working set and the ceiling only has "
+        "to sit above it, so 3G/4G is deliberate rather than tight."
+    ),
+}
+
+# How much room a ceiling must leave above the floor for everything the floor
+# does NOT cover. On Node units that is the decisive quantity: V8 sizes its JS
+# heap to ~51% of the cgroup ceiling and self-limits gracefully, but external
+# memory (Buffers, stream chunks) sits outside that budget and is SIGKILLed by
+# the cgroup instead — measured 2026-08-03, exit 137 under MemoryMax=1G.
+#
+# 3x, not 2x, and the difference is the whole point: the floor is sized to hold
+# the working set, so a backstop needs at least TWO more floors above it for
+# allocation the floor never covered. flue-zoe-brain's original 512M/1G was
+# exactly 2x — it looked like headroom and was the value this rule exists to
+# reject, so a threshold of 2 would have ratified the bug instead of catching it.
+MIN_CEILING_TO_FLOOR_RATIO = 3
+
 # Units that must win CPU and disk against the agent fleet. Weights are the only
 # priority knob a --user unit actually gets: Nice=-N/OOMScoreAdjust=-N are
 # silently dropped (see the elevated-priority test below), so if these go
@@ -156,6 +182,45 @@ def test_floor_sits_below_the_ceiling(unit):
         f"{unit} has MemoryLow={directives['MemoryLow']} >= "
         f"MemoryMax={directives['MemoryMax']}"
     )
+
+
+def test_ceiling_leaves_headroom_over_the_floor(unit):
+    """A ceiling barely above the floor is a kill threshold sitting inside the
+    normal operating range. This is the 2026-08-03 red-team finding: both flue
+    ceilings had been sized as a multiple of a VmHWM sampled on a STARVED box —
+    a lower bound on the real peak — which is the wrong quantity entirely. What
+    decides throttle-vs-kill is what the runtime allocates OUTSIDE the floor's
+    protection: V8 self-limits its JS heap to ~51% of the ceiling, but Buffers
+    and stream chunks are external memory and get SIGKILLed (exit 137, measured)
+    instead. Ceilings are backstops against a leak, not working limits."""
+    directives = _directives(unit)
+    if "MemoryMax" not in directives:
+        pytest.skip(f"{unit} has no MemoryMax")
+    if unit in TIGHT_CEILING_OK:
+        pytest.skip(f"{unit} is a documented tight-ceiling exception: {TIGHT_CEILING_OK[unit]}")
+    low = _parse_size(directives["MemoryLow"])
+    ceiling = _parse_size(directives["MemoryMax"])
+    assert ceiling >= MIN_CEILING_TO_FLOOR_RATIO * low, (
+        f"{unit} has MemoryMax={directives['MemoryMax']} against "
+        f"MemoryLow={directives['MemoryLow']} — under "
+        f"{MIN_CEILING_TO_FLOOR_RATIO}x the floor, so a normal spike in memory "
+        f"the floor does not cover (external buffers, stream chunks) hits the "
+        f"OOM killer rather than a throttle"
+    )
+
+
+def test_every_tight_ceiling_exception_states_a_reason():
+    """Same discipline as MEMORY_MAX_EXEMPT: an exception added as a bare name
+    to silence a red test is exactly the failure being guarded against."""
+    for unit, reason in TIGHT_CEILING_OK.items():
+        assert unit in NO_SWAP_UNITS, (
+            f"{unit} is listed as a tight-ceiling exception but is not a "
+            f"no-swap unit; the exception has no meaning there"
+        )
+        assert reason and len(reason) > 40, (
+            f"{unit} claims a tight-ceiling exception with no substantive "
+            f"rationale; state why its workload cannot grow into the ceiling"
+        )
 
 
 def test_the_flue_sidecars_are_actually_covered():
