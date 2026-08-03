@@ -259,20 +259,40 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   and reports UNAVAILABLE against a checkout without the PR — a lab→prod READ,
   not lab code wired into zoe-data. Measured: 24/26 ok, 2 blocked, mean 0.771;
   **4.57 s and ~553 MB peak RSS over 12 Chromium processes** for one page. Run
-  browsers capped (`systemd-run --user --scope -p MemoryMax=1024M`). Its
-  *stealth* advantage is **unmeasured** — `ddgs` never blocked, so there was
-  nothing to bypass.
+  browsers capped (`systemd-run --user --scope -p MemoryMax=1024M`).
+  **Stealth is now MEASURED (2026-08-03) and it is real** — the earlier
+  "unmeasured" note is superseded. `eval/botwall-corpus.json` (12 URLs chosen
+  *because* they resist a plain client, all discovered by live `ddgs` search
+  rather than hand-guessed) + `eval/run_botwall.py`: plain `httpx` got the
+  target on **4/12**, CloakBrowser rendered **12/12**, and it was the only tier
+  to read BWS/Dan Murphy's/Bottlemart (HTTP 403, Akamai) and Liquorland/First
+  Choice (Cloudflare challenge served at HTTP **200**). A settle A/B on the same
+  corpus — `SettlePolicy` the only variable — moved **6/12** from `thin`/`error`
+  to `ok`, so PR #1626's post-load settle is load-bearing for this tier, not a
+  refinement. Reports: `eval/results/botwall-20260803T141253Z.md` and
+  `eval/results/emu-export-geraldton-2026-08-03.md` (a live commercial query
+  end to end, with per-source tier attribution).
+  **`websearch/chain.py` is the fallback policy**: httpx -> jina -> CloakBrowser,
+  falling through on BLOCKED (status or challenge body) or THIN (below a
+  documented, overridable content floor), with **every hop recorded** in
+  `FetchResult.provenance`. It is strictly lazy and strictly sequential — the
+  browser is never called, constructed or *imported* when a cheaper tier
+  answered, and `fetch_urls` is sequential by design: two concurrent Chromiums
+  (~1.1 GB) do not fit beside the mlocked voice brain. `run_botwall.py` re-reads
+  `MemFree` before **every** launch and aborts under `--min-free-mb`.
   Also carries a **token-budgeted result packet** for the 8k Gemma brain
   (oh-my-pi has no equivalent) and claim-backing query shaping (neutral +
   contradiction queries; evidence, never a verdict). **Zero new dependencies** —
-  `httpx` + `ddgs` already ship. Recorded finding: `browser_broker.py` cannot
-  feed a text packet (its executor returns a base64 PNG screenshot only).
+  `httpx` + `ddgs` already ship.
   Hand-run only; nothing prod-wired, no systemd unit, no CI. `eval/results/*.json`
-  are gitignored run artifacts; `eval/results/EXAMPLE-smoke-run.md` is a
-  committed 4-query sample of the instrument's output. Regression net:
-  `python3 -m pytest tests -q` (48 offline tests, no network, the `ddgs` tier
-  driven by an injected fake searcher, **no `ci_safe` marker** — `labs/` is
-  outside every CI lane). README/DESIGN are records, not contracts.
+  and `eval/results/botwall-text/` are gitignored/uncommitted run artifacts —
+  scraped third-party page text is neither reviewable in a PR nor ours to
+  vendor; `eval/botwall-corpus.json` (an INPUT) is force-added past the `*.json`
+  ignore, as `eval/corpus.json` already is. Regression net:
+  `python3 -m pytest tests -q` (**99** offline tests, no network and no
+  Chromium, the `ddgs` tier driven by an injected fake searcher and the browser
+  tier by canned tier responses, **no `ci_safe` marker** — `labs/` is outside
+  every CI lane). README/DESIGN are records, not contracts.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
