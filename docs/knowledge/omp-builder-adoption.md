@@ -36,8 +36,12 @@ harness inside Omnigent — never as Zoe's brain (that stays Flue + pi-ai on the
    repo fragments) plus a persistent install UUID to `https://qa.omp.sh/v1/grievances`.
 3. **`marketplace.autoUpdate` pinned `off`.** Its `auto` mode executes `new Function()` over
    fetched plugin source; there is no global plugin kill switch.
-4. **`web_search` disabled or provider-restricted** (operator judgement): 6 default providers
-   scrape public endpoints with spoofed headers from the home IP.
+4. **`web_search` disabled in the builder lane** — but the honest rationale is volume and
+   autonomy, not the scraping itself: Zoe's own lookup chain already scrapes via `ddgs` with a
+   randomized UA from the same IP (`zoe_agent.py` `DDGS().text()`, `backend="auto"` = 11 engines).
+   The distinction that holds: user-triggered, low-volume lookups vs an autonomous builder
+   hammering endpoints unattended. Align both sides when the search-stack decision
+   (Tavily-primary + fallback tier) lands; until then the builder gets no scraping.
 
 ## Scan record (skillspector waiver)
 
