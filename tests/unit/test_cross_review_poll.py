@@ -817,6 +817,8 @@ def _wrapper_budget():
         "poll-http": _sh_const("POLL_HTTP_TIMEOUT_S"),
         "fetch": _sh_const("FETCH_MAX_S"),
         "cleanup": _sh_const("CLEANUP_MAX_S"),
+        # `timeout -k` escalation, once per timeout-wrapped phase (kick, cleanup).
+        "kill-after": 2 * _sh_const("TIMEOUT_KILL_AFTER_S"),
     }
     return sum(phases.values()), _sh_const("CALLER_TIMEOUT_S"), phases
 
@@ -906,6 +908,29 @@ def test_the_flock_wait_is_bounded_and_counted():
     _worst, _caller, phases = _wrapper_budget()
     assert phases["lock-wait"] == _sh_const("LOCK_WAIT_MAX_S") > 0
     assert "LOCK_WAIT_MAX_S +" in code, "the cap must be summed into OVERHEAD_S"
+
+
+def test_every_timeout_wrapper_escalates_to_kill():
+    """`timeout N cmd` is not a hard bound (Codex P1 + Greptile P1, #1624).
+
+    It sends TERM and then waits FOREVER if the command ignores it, so a wedged
+    docker CLI runs past the advertised budget and is killed by the caller
+    instead -- EXIT trap skipped, worker orphaned. `-k` is the escalation that
+    makes the phase limit real, and it has to be in the sum like every other
+    phase.
+    """
+    code = "\n".join(
+        l for l in _WRAPPER_PATH.read_text().splitlines() if not l.lstrip().startswith("#")
+    )
+    wrappers = re.findall(r"^\s*timeout\b[^\n]*", code, re.MULTILINE)
+    assert wrappers, "the timeout(1) wrappers vanished"
+    for w in wrappers:
+        assert '-k "$TIMEOUT_KILL_AFTER_S"' in w, f"no KILL escalation: {w.strip()[:80]}"
+
+    _worst, _caller, phases = _wrapper_budget()
+    assert phases["kill-after"] == 2 * _sh_const("TIMEOUT_KILL_AFTER_S") > 0
+    assert len(wrappers) == 2, "a new timeout wrapper must be counted in OVERHEAD_S too"
+    assert "2 * TIMEOUT_KILL_AFTER_S" in code, "the escalation must be summed into OVERHEAD_S"
 
 
 def test_agents_md_publishes_the_corrected_bounds():

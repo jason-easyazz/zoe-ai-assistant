@@ -79,8 +79,15 @@ KICK_MAX_S=30               # timeout(1) around the detached docker-exec kick
 POLL_HTTP_TIMEOUT_S=60      # poll() returns within --timeout-s + one request
 FETCH_MAX_S=60              # curl --max-time on the report GET
 CLEANUP_MAX_S=20            # timeout(1) around stop_worker's docker exec
+# `timeout N cmd` is NOT a hard bound: it sends TERM and then waits forever if
+# the command ignores it, so a wedged docker CLI would run past the advertised
+# budget and be killed by the caller instead — trap skipped, worker orphaned
+# (Codex P1 + Greptile P1, #1624). `-k` is what escalates to KILL. It applies to
+# BOTH timeout-wrapped phases, so it is counted twice.
+TIMEOUT_KILL_AFTER_S=5      # timeout -k: the KILL escalation after TERM is ignored
 OVERHEAD_S=$(( LOCK_WAIT_MAX_S + CREATE_MAX_S + REGISTER_TIMEOUT_S + REGISTER_HTTP_TIMEOUT_S + KICK_MAX_S ))
 OVERHEAD_S=$(( OVERHEAD_S + POLL_HTTP_TIMEOUT_S + FETCH_MAX_S + CLEANUP_MAX_S ))
+OVERHEAD_S=$(( OVERHEAD_S + 2 * TIMEOUT_KILL_AFTER_S ))
 WORST_CASE_S=$(( TIMEOUT_S + OVERHEAD_S ))
 [ "$WORST_CASE_S" -lt "$CALLER_TIMEOUT_S" ] || {
   echo "ALARM: budget inversion — worst-case wall ${WORST_CASE_S}s (poll ${TIMEOUT_S}s + ${OVERHEAD_S}s of bounded phases) is not below the caller's ${CALLER_TIMEOUT_S}s subprocess timeout; a kill there orphans the detached worker. Lower CROSS_REVIEW_TIMEOUT_S (max $(( CALLER_TIMEOUT_S - OVERHEAD_S - 1 ))) or CROSS_REVIEW_REGISTER_TIMEOUT_S." >&2
@@ -187,7 +194,7 @@ stop_worker() {
   # '"$SID"' quote dance below. (The directive is needed only because the
   # timeout(1) prefix stops shellcheck recognising the `sh -c` payload as code.)
   # shellcheck disable=SC2016
-  timeout "$CLEANUP_MAX_S" docker exec "$CONTAINER" sh -c \
+  timeout -k "$TIMEOUT_KILL_AFTER_S" "$CLEANUP_MAX_S" docker exec "$CONTAINER" sh -c \
     'pids=$(grep -la "'"$SID"'" /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3 | grep -vx "$$"); n=0
      for p in $pids; do kill "$p" 2>/dev/null && n=$((n+1)); done
      [ "$n" -gt 0 ] || { echo none; exit 0; }
@@ -222,7 +229,7 @@ BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)
 # `docker exec -d` returns as soon as the container accepts the exec, but that
 # is still an unbounded RPC to the daemon — bound it so the BUDGET arithmetic
 # above holds end to end (Codex, #1618).
-timeout "$KICK_MAX_S" docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
+timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
   || { echo "ALARM: docker-exec kick failed" >&2; exit 2; }
 
 # Poll. The loop lives in cross_review_poll.py so that every response body is

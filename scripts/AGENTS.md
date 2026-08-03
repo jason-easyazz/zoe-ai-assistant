@@ -128,7 +128,9 @@ fires, so the detached polly worker outlives the released flock and the next
 invocation runs a second polly beside the orphan. Every phase is therefore
 explicitly bounded (the `flock -w` wait, create curl, registration budget + its
 HTTP timeout, a `timeout(1)`-wrapped docker-exec kick, the poll budget + its
-HTTP timeout, the report curl, a `timeout(1)`-wrapped cleanup), and the wrapper
+HTTP timeout, the report curl, a `timeout(1)`-wrapped cleanup — **every
+`timeout` carries `-k`**, since without it TERM is sent and then waited on
+forever, which is not a bound at all), and the wrapper
 CHECKS the sum at startup and exits 1 on inversion — so raising
 `CROSS_REVIEW_TIMEOUT_S` fails loudly rather than silently re-inverting. Default
 poll budget is 1800s (not 2400) to leave real margin. **The lock wait is IN the
