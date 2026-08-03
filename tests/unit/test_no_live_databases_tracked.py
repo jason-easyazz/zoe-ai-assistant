@@ -387,3 +387,19 @@ def test_all_source_symlinks_are_rejected_not_just_databases():
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert "source contains symlinks" in src
     assert 'sudo find "$SRC" -type l' in src
+
+
+def test_completion_marker_is_the_primary_direction_defence():
+    """`git reset --hard` rewrites rolled-back blobs with FRESH mtimes, so after
+    step A deploys the stale source compares NEWER and the mtime heuristic
+    permits the run; --mirror would then clear the migrated store and replace it
+    with rolled-back data. Codex reproduced this. Checkout mtimes cannot decide
+    direction — a persistent marker in the destination can."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert 'MARKER=".ma-migration-complete"' in src
+    assert "destination carries a completion marker" in src
+    # the gate must precede BOTH the mirror clearing and the copy
+    assert src.index("destination carries a completion marker") < src.index("clearing non-empty destination")
+    assert src.index("destination carries a completion marker") < src.index("cp -a --remove-destination")
+    # and success must write it
+    assert 'sudo tee "$DEST/$MARKER"' in src

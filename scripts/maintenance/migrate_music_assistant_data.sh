@@ -305,6 +305,27 @@ fi
 # with the retained pre-migration copies in SRC and silently lose auth, library,
 # settings and playlist changes. A re-run is only safe while SRC is still the
 # live store. Compare newest mtimes and refuse to go backwards.
+# COMPLETION MARKER — the primary direction defence (review: Codex, who
+# reproduced the mtime heuristic being defeated at its root: `git reset --hard`
+# rewrites the rolled-back tracked databases with FRESH mtimes, so after step A
+# deploys, the STALE source compares "newer" than the cp -a-preserved
+# destination; the non-empty error then recommends --mirror, which clears the
+# valid migrated store and replaces it with rolled-back data. Checkout mtimes
+# cannot decide direction, so a successful migration writes a persistent marker
+# into the destination, and its presence refuses ALL further copies — --mirror
+# included — until an operator deliberately removes it.)
+MARKER=".ma-migration-complete"
+if sudo test -f "$DEST/$MARKER"; then
+    log "FATAL: destination carries a completion marker — the migration already ran:"
+    sudo cat "$DEST/$MARKER" 2>/dev/null | sed 's/^/ma-migrate:   /'
+    log "Copying again would overwrite the migrated store (after step A deploys,"
+    log "the source is ROLLED-BACK data with misleadingly fresh mtimes)."
+    log "Only if you are CERTAIN Music Assistant has never started against this"
+    log "destination and the source is still live, remove the marker first:"
+    log "  sudo rm $(printf '%q' "$DEST/$MARKER")"
+    exit 1
+fi
+
 # The probe itself must FAIL CLOSED (review: Codex — same masked-producer class
 # as the manifests): command substitution inside [[ -n ]] discards find's exit
 # status, so a transient sudo/traversal failure looked like "destination empty",
@@ -482,6 +503,12 @@ if [[ "$fail" -ne 0 ]]; then
     exit 1
 fi
 
+# Write the completion marker INSIDE the destination so it travels with the
+# store and survives everything short of deleting the store itself.
+printf 'migrated_at=%s\nsource=%s\nfiles_verified=%s\n' \
+    "$(date -Is)" "$SRC" "$checked" | sudo tee "$DEST/$MARKER" >/dev/null
+sudo chmod 600 "$DEST/$MARKER"
+log "completion marker written: $DEST/$MARKER"
 log "verified $checked/$checked files"
 log ""
 log "DONE. Original left in place as rollback."
