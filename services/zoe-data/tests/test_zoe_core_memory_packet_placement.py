@@ -32,8 +32,11 @@ ONE injection site, never two:
   nothing at all. Standalone runs (the `pi` CLI, `bench/`,
   `services/zoe-core/test`) leave it unset and keep fetching for themselves, so
   the agent still works with no zoe-data driving it.
-* A caller-supplied `db_memory_context` suppresses the seam's own fetch, so
-  `routers/chat.py`'s `ZOE_CHAT_INJECT_DB_MEMORY` escape hatch cannot double up.
+"Once" means one FETCH SITE, not one block. The packet is emitted independently of
+a caller-supplied `db_memory_context`: the voice path always supplies one, and only
+the endpoint folds in pending-contact offers. Making the two mutually exclusive was
+a regression caught in review — see
+`test_voice_style_turn_still_reaches_the_for_prompt_endpoint`.
 """
 from __future__ import annotations
 
@@ -127,8 +130,13 @@ def test_the_two_copies_of_the_usage_directive_are_byte_identical():
     )
 
 
-def test_caller_supplied_context_wins_and_suppresses_the_packet():
-    """`db_memory_context` and the fetched packet must never BOTH appear."""
+def test_caller_context_and_the_packet_are_independent():
+    """Both blocks appear — the packet is NOT suppressed by db_memory_context.
+
+    REGRESSION GUARD (found in review on #1615). Making them mutually exclusive
+    looks like a tidy once-not-twice rule and silently breaks voice: see
+    test_voice_style_turn_still_reaches_the_for_prompt_endpoint below.
+    """
     import zoe_core_client as zc
 
     composed = zc._compose_message(
@@ -139,8 +147,60 @@ def test_caller_supplied_context_wins_and_suppresses_the_packet():
         memory_packet=_PACKET,
     )
     assert "- explicitly supplied fact" in composed
-    assert _PACKET not in composed, "double-injected: caller context AND the fetched packet"
-    assert composed.count("[What you remember]") == 1
+    assert _PACKET in composed, (
+        "the for-prompt packet was suppressed by db_memory_context — that drops "
+        "pending-contact offers, which only the endpoint produces"
+    )
+
+
+@pytest.mark.asyncio
+async def test_voice_style_turn_still_reaches_the_for_prompt_endpoint(monkeypatch):
+    """A voice turn supplies db_memory_context AND must still hit the endpoint.
+
+    `_fold_pending_contact_offers` (routers/memories.py, flag
+    ZOE_PERSON_SUGGEST_ENABLED) runs ONLY inside `memory_for_prompt`. The voice
+    recall block (`_voice_brain_memory` → `_voice_recall_packet`) is built from
+    MemoryService.search / zoe_memory_compose and never calls it, so skipping the
+    fetch when db_memory_context is present drops every pending "Would you like me
+    to add <name> as a contact?" offer from the voice path.
+    """
+    import zoe_core_client as zc
+
+    calls: list[str] = []
+
+    async def _fake_packet(message: str, user_id: str) -> str:
+        calls.append(user_id)
+        return _PACKET
+
+    composed_seen: list[str] = []
+
+    async def _fake_stream(self, message, *, timeout_s):
+        composed_seen.append(message)
+        yield "ok"
+
+    monkeypatch.setattr(zc, "_memory_packet_block", _fake_packet)
+    monkeypatch.setattr(zc._ZoeCoreWorker, "stream", _fake_stream)
+
+    chunks = [
+        c
+        async for c in zc.run_zoe_core_streaming(
+            "add bread to my list",
+            "voice-session",
+            "family-admin",
+            # Exactly what routers/voice_tts.py passes on every voice turn.
+            db_memory_context="[What you remember]\n- likes oat milk",
+            portrait="Jason",
+            voice_mode=True,
+        )
+    ]
+
+    assert chunks == ["ok"]
+    assert calls == ["family-admin"], "the voice turn never called the for-prompt endpoint"
+    assert len(composed_seen) == 1
+    composed = composed_seen[0]
+    assert "- likes oat milk" in composed, "voice recall block lost"
+    assert _PACKET in composed, "for-prompt packet lost on the voice path"
+    assert composed.endswith("add bread to my list")
 
 
 def test_no_packet_means_no_block():
@@ -155,6 +215,47 @@ def test_no_packet_means_no_block():
     )
     assert composed == "what's on tomorrow"
     assert "[What you remember]" not in composed
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, 2.0),
+        ("", 2.0),
+        ("   ", 2.0),
+        ("5000", 5.0),
+        ("1500.5", 1.5005),
+        ("garbage", 2.0),
+        ("2s", 2.0),
+        ("0", 2.0),
+        ("-100", 2.0),
+    ],
+)
+def test_packet_timeout_falls_back_instead_of_raising(monkeypatch, raw, expected):
+    """An operator typo must degrade to the default, never break the lane.
+
+    A module-level `float(os.environ[...])` raised ValueError at IMPORT, before
+    _memory_packet_block's fail-open handling could apply — so every core-brain
+    request died instead of one turn continuing without memory.
+    """
+    import zoe_core_client as zc
+
+    monkeypatch.delenv("ZOE_CORE_MEMORY_TIMEOUT_MS", raising=False)
+    if raw is not None:
+        monkeypatch.setenv("ZOE_CORE_MEMORY_TIMEOUT_MS", raw)
+    assert zc._packet_timeout_s() == pytest.approx(expected)
+
+
+def test_no_module_level_float_of_the_timeout_env():
+    """The parse must stay inside the function — an import-time float() is the bug."""
+    source = (_ZOE_DATA / "zoe_core_client.py").read_text(encoding="utf-8")
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "ZOE_CORE_MEMORY_TIMEOUT_MS" not in stripped:
+            continue
+        assert not line[:1].strip() or "def " in stripped, (
+            f"module-level read of the timeout env — parse it lazily instead: {line!r}"
+        )
 
 
 @pytest.mark.asyncio

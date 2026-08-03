@@ -18,6 +18,7 @@ Run it directly with either of:
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,6 +30,19 @@ _SUITE = _REPO / "services" / "zoe-core" / "test" / "prefix_stability.test.ts"
 
 # Node's built-in TypeScript type stripping is unflagged from 22.18.0.
 _MIN_NODE = (22, 18)
+
+
+def tap_summary(stdout: str) -> "tuple[int | None, int | None]":
+    """(pass, fail) counts from a TAP summary, or (None, None) if not TAP.
+
+    Anchored on the counts rather than on a formatted line, so it cannot be
+    satisfied by a reporter that happens to print similar-looking text.
+    """
+    passed = re.search(r"^# pass (\d+)$", stdout, re.MULTILINE)
+    failed = re.search(r"^# fail (\d+)$", stdout, re.MULTILINE)
+    if not passed or not failed:
+        return None, None
+    return int(passed.group(1)), int(failed.group(1))
 
 
 def _node_version() -> "tuple[int, int] | None":
@@ -56,8 +70,12 @@ def test_zoe_core_prefix_stability_suite():
         pytest.skip(f"node {version} < {_MIN_NODE} — no built-in TypeScript type stripping")
     assert _SUITE.is_file(), f"missing zoe-core prefix suite at {_SUITE}"
 
+    # Pin the reporter. `node --test` picks its DEFAULT reporter otherwise, and the
+    # default is not stable across versions: Node 22 emits TAP (`# fail 0`) while
+    # Node 24 emits the spec reporter (`ℹ fail 0`), so parsing the default output
+    # made any newer runner false-red on a green suite.
     result = subprocess.run(
-        ["node", "--test", str(_SUITE)],
+        ["node", "--test", "--test-reporter=tap", str(_SUITE)],
         capture_output=True,
         text=True,
         timeout=180,
@@ -68,5 +86,27 @@ def test_zoe_core_prefix_stability_suite():
         f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
     )
     # A node --test run that collects nothing exits 0. Pin that it actually ran.
-    assert "# fail 0" in result.stdout, f"unexpected node --test summary:\n{result.stdout}"
-    assert "# pass 0" not in result.stdout, "the node suite collected no tests — vacuous pass"
+    passed, failed = tap_summary(result.stdout)
+    assert (passed, failed) != (None, None), (
+        f"unrecognised node --test TAP summary:\n{result.stdout}"
+    )
+    assert failed == 0, f"node reported failures:\n{result.stdout}"
+    assert passed > 0, "the node suite collected no tests — vacuous pass"
+
+
+def test_tap_summary_parses_the_pinned_reporter_format():
+    """Guards the parser itself, including the Node-24 shape that broke it.
+
+    Node's DEFAULT reporter is version-dependent — 22 emits TAP, 24 emits the spec
+    reporter (`ℹ fail 0`) — so the old `"# fail 0" in stdout` substring check went
+    false-red on a green suite under a newer runtime. We pin `--test-reporter=tap`
+    AND parse the counts, so the spec shape is now recognised as unparseable
+    (loud) rather than silently read as a failure.
+    """
+    tap = "TAP version 13\nok 1 - t\n1..1\n# tests 1\n# pass 11\n# fail 0\n"
+    assert tap_summary(tap) == (11, 0)
+    assert tap_summary("# tests 3\n# pass 1\n# fail 2\n") == (1, 2)
+    # The Node 24 spec-reporter shape: NOT silently treated as a pass or a fail.
+    spec = "ℹ tests 11\nℹ pass 11\nℹ fail 0\n"
+    assert tap_summary(spec) == (None, None)
+    assert tap_summary("") == (None, None)

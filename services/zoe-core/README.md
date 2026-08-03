@@ -94,9 +94,12 @@ baseline). Re-measure before changing either:
 
 The `/api/memories/for-prompt` fetch happens **once**: the seam
 (`_memory_packet_block`, in-process) in production, the extension when standalone.
-A caller-supplied `db_memory_context` suppresses the seam's fetch (see
-`ZOE_CHAT_INJECT_DB_MEMORY` in `routers/chat.py`). `MEMORY_USAGE_DIRECTIVE` exists
-in both runtimes and is pinned byte-equal by a test.
+"Once" means one fetch *site*, not one block — the packet is emitted independently
+of a caller-supplied `db_memory_context`. Do not make them mutually exclusive: the
+voice path always supplies `db_memory_context`, and only the endpoint runs
+`_fold_pending_contact_offers`, so suppressing the fetch drops pending
+"add this contact?" offers from voice. `MEMORY_USAGE_DIRECTIVE` exists in both
+runtimes and is pinned byte-equal by a test.
 
 Deterministic suite (no model, no `node_modules`; needs Node ≥ 22.18 for built-in
 TypeScript type stripping):

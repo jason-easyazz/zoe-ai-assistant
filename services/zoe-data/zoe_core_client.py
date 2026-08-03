@@ -666,14 +666,61 @@ _VOICE_BREVITY = (
 #     AFTER the user message) scored 9/15 and costs the request its recency
 #     position for nothing the seam does not already provide.
 #
-# The seam and the extension must never BOTH inject: `_worker_env` sets
-# ZOE_CORE_MEMORY_SEAM=1, which makes memory.ts contribute nothing. A
-# caller-supplied `db_memory_context` also suppresses the fetch below, so the
-# ZOE_CHAT_INJECT_DB_MEMORY escape hatch in routers/chat.py cannot double up.
+# ONE FETCH SITE, not one block. `_worker_env` sets ZOE_CORE_MEMORY_SEAM=1, which
+# makes memory.ts contribute nothing, so /api/memories/for-prompt is requested
+# exactly once per turn — here. It is NOT mutually exclusive with a caller-supplied
+# `db_memory_context`, and making it so was a REGRESSION (caught in review on
+# #1615):
+#
+#   * The VOICE path always passes a nonempty db_memory_context
+#     (`_voice_brain_memory` → `_voice_recall_packet`, routers/voice_tts.py), and
+#     that packet is built from MemoryService.search / zoe_memory_compose —
+#     it never calls memory_for_prompt. But `_fold_pending_contact_offers`
+#     (routers/memories.py:725, flag `ZOE_PERSON_SUGGEST_ENABLED`) runs ONLY
+#     inside memory_for_prompt. Suppressing the fetch therefore dropped every
+#     pending "Would you like me to add <name> as a contact?" offer from voice —
+#     the endpoint carries additions the voice recall block does not.
+#   * It also inverted ZOE_CHAT_INJECT_DB_MEMORY, whose documented meaning
+#     (routers/chat.py) is "ON restores the old DOUBLE injection".
+#
+# So both blocks are emitted independently, exactly as they were before this
+# change: on chat db_memory_context is None by default and only the packet
+# appears; on voice both do, which is what the replay corpus was gated against.
 
 # Matches extensions/memory.ts's own slice, so both sides key recall identically.
 _PACKET_MESSAGE_CHARS = 500
-_PACKET_TIMEOUT_S = float(os.environ.get("ZOE_CORE_MEMORY_TIMEOUT_MS", "2000")) / 1000.0
+_DEFAULT_PACKET_TIMEOUT_MS = 2000.0
+
+
+def _packet_timeout_s() -> float:
+    """The memory budget in seconds, falling back on an unparseable setting.
+
+    Read at call time and never at import: a module-level `float(os.environ[...])`
+    raised ValueError during import on an operator typo, which took out the whole
+    core brain lane — strictly worse than the fail-open behaviour the rest of this
+    path is built on. A bad or non-positive value degrades to the default instead.
+    """
+    # The literal default is kept in the getenv call so tools/audit/flag_inventory.py
+    # can extract it statically; _DEFAULT_PACKET_TIMEOUT_MS covers the invalid-value
+    # path. The parametrized timeout test exercises both, so they cannot drift apart.
+    raw = (os.environ.get("ZOE_CORE_MEMORY_TIMEOUT_MS", "2000") or "").strip()
+    ms = _DEFAULT_PACKET_TIMEOUT_MS
+    if raw:
+        try:
+            parsed = float(raw)
+            if parsed > 0:
+                ms = parsed
+            else:
+                logger.warning(
+                    "ZOE_CORE_MEMORY_TIMEOUT_MS=%r is not positive; using %.0fms",
+                    raw, _DEFAULT_PACKET_TIMEOUT_MS,
+                )
+        except ValueError:
+            logger.warning(
+                "ZOE_CORE_MEMORY_TIMEOUT_MS=%r is not a number; using %.0fms",
+                raw, _DEFAULT_PACKET_TIMEOUT_MS,
+            )
+    return ms / 1000.0
 
 # How the brain should USE the packet. Byte-for-byte the same string as
 # MEMORY_USAGE_DIRECTIVE in services/zoe-core/extensions/memory.ts — the two run
@@ -726,7 +773,7 @@ async def _memory_packet_block(message: str, user_id: str) -> str:
                 limit=_PROMPT_PACKET_MAX_FACTS,
                 _=None,
             ),
-            timeout=_PACKET_TIMEOUT_S,
+            timeout=_packet_timeout_s(),
         )
         return str((result or {}).get("packet") or "").strip()
     except Exception as exc:  # noqa: BLE001 - memory is best-effort, never a turn breaker
@@ -759,12 +806,15 @@ def _compose_message(
         parts.append(f"[About you]\n{portrait.strip()}")
     if db_memory_context:
         parts.append(f"[What you remember]\n{db_memory_context.strip()}")
-    else:
-        # Not labelled like the block above: these are the exact bytes the memory
-        # extension used to put on the system prompt, moved verbatim.
-        block = _memory_block(memory_packet or "")
-        if block:
-            parts.append(block)
+    # INDEPENDENT of db_memory_context, never an elif — the voice path always
+    # supplies one, and the for-prompt packet carries additions (pending-contact
+    # offers) that the voice recall block does not. See the header.
+    #
+    # Not labelled like the block above: these are the exact bytes the memory
+    # extension used to put on the system prompt, moved verbatim.
+    block = _memory_block(memory_packet or "")
+    if block:
+        parts.append(block)
     if history:
         lines = []
         for turn in history[-12:]:
@@ -796,10 +846,11 @@ async def run_zoe_core_streaming(
     Yields assistant text deltas. On any failure, raises so the caller's existing
     fallback handling applies (we never silently swallow a brain failure).
     """
-    # Skip the fetch entirely when the caller already supplied memory context —
-    # _compose_message would ignore the packet anyway, and this is the whole
-    # once-not-twice guarantee (see _memory_packet_block).
-    packet = "" if db_memory_context else await _memory_packet_block(message, user_id)
+    # Fetched unconditionally: this is the ONLY /api/memories/for-prompt call in
+    # the lane (memory.ts stands down via ZOE_CORE_MEMORY_SEAM), and it must NOT be
+    # skipped when the caller supplied db_memory_context — the endpoint folds in
+    # pending-contact offers that no other path produces. See the header.
+    packet = await _memory_packet_block(message, user_id)
     composed = _compose_message(
         message, history=history, db_memory_context=db_memory_context,
         portrait=portrait, voice_mode=voice_mode, memory_packet=packet,
