@@ -299,21 +299,26 @@ def test_agents_contract_describes_step_a_as_mount_only():
 def test_no_operator_instruction_claims_the_next_deploy_untracks():
     """EVERY operator-facing exit must say the same thing. I corrected the
     success message and left the identical false wording in --help, so an
-    operator who never reaches the terminal text would still believe step B was
-    done and leave credentials in git indefinitely (review: Codex)."""
+    operator who never reaches the terminal text got the wrong status
+    (review: Codex; historical — both steps now merged)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert "deploy the untracking commit" not in src
     # step B merged: BOTH operator-facing paths must describe the migration as
     # historical/complete, and neither may claim a step is outstanding.
     assert src.count("HISTORICAL") >= 2
     assert "still outstanding" not in src
+    # future-tense forms, not just one phrase (review: Codex — the header kept
+    # "STEP B (separate PR, later)" after the first "all-sites" fix)
+    assert "separate PR, later" not in src
+    assert "STEP B (separate PR" not in src
 
 
 def test_closing_instructions_do_not_overstate_step_a():
     """The success message is the terminal instruction of the pre-deploy
     procedure. Saying the next deploy 'untracks the DBs' would let the operator
-    believe credential removal is done and skip step B — the databases are still
-    tracked at this commit (review: Codex)."""
+    receive the wrong status. Historical: step B (#1631) has merged and the
+    databases are untracked; the pin now enforces completed-state wording
+    (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     # step B is merged: the script must now describe the migration as COMPLETE
     # and must not claim any step is still outstanding.
@@ -372,7 +377,7 @@ def test_direction_check_probe_fails_closed():
 def test_header_does_not_claim_order_independence():
     """An earlier revision said 'each step is independently safe in any order' —
     directly contradicting the required sequence above it. Step A before
-    --execute rolls the live databases back; step B before step A deletes stores
+    --execute rolled the live databases back; step B before step A would delete stores
     the old mount still serves (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert "independently safe in any order" not in src

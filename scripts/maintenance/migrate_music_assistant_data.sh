@@ -34,13 +34,14 @@
 #       3. start MA against $DEST with the verified copy.
 #     Leaving MA STOPPED between 1 and 3 is deliberate: it cannot write to the
 #     doomed path, nor serve rolled-back data.
-#   STEP B (separate PR, later): untrack the now-static files. By then nothing
-#     writes there, so `reset --hard` deleting them is harmless.
+#   STEP B (#1631, MERGED): untracked the by-then-static files — nothing wrote
+#     there any more, so `reset --hard` deleting them was harmless.
 #
 # The ORDER ABOVE IS THE ONLY SAFE ORDER (an earlier revision claimed the steps
 # were order-independent — false, review: Codex): step A before --execute rolls
 # the tracked live databases back and switches the mount before they are copied;
-# step B before step A deletes stores the old mount still serves.
+# step B before step A would have deleted stores the old mount still served.
+# BOTH STEPS ARE NOW COMPLETE; this header is the historical design record.
 #
 # SAFE BY CONSTRUCTION:
 #   * dry-run by default (scripts/AGENTS.md contract); --execute to act
@@ -248,7 +249,7 @@ dest_nonempty() {
 sudo test -d "$SRC" || { log "FATAL: source does not exist: $SRC"; exit 1; }
 
 # The directory alone is NOT evidence the stores are there (review: Codex). Run
-# this AFTER step B (the untracking commit) has deployed — the ordering failure it
+# this after step B (the untracking commit, now merged) deployed — the ordering failure it
 # guards — and the databases are gone while ignored settings/playlists/sidecars
 # remain, so a directory check passes, remnants get copied, and it prints DONE.
 # The operator then restarts MA against an incomplete store. Require the stores.
