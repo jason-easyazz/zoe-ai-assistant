@@ -11,7 +11,18 @@
 #
 # Exit codes: 0 = report retrieved (printed to stdout), 1 = usage,
 # 2 = kick/poll failure or silent-death alarm (session ended with no report).
+#
+# Every HTTP body is parsed by scripts/maintenance/cross_review_poll.py, never
+# by an inline `json.load`. That module checks HTTP status / emptiness /
+# content-type before parsing, retries transient faults with bounded backoff,
+# and on exhaustion prints ONE terminal line naming the session and
+# "re-dispatch required". Its distinct exit codes (3 never-registered,
+# 4 poll-lost, 5 timeout, 6 never-running, 7 dispatch-failed) are diagnostic;
+# this wrapper collapses them all to its long-standing public `exit 2`.
 set -euo pipefail
+
+POLLER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cross_review_poll.py"
+[ -f "$POLLER" ] || { echo "ALARM: poller module missing: $POLLER" >&2; exit 2; }
 
 SERVER="${OMNIGENT_SERVER:-http://127.0.0.1:6767}"
 # polly's id in the BARE hex form 0.7.0 returns (`GET /v1/agents`); <=0.4.0
@@ -38,10 +49,17 @@ PR="$1"; shift
 CONTRACT="$*"
 case "$PR" in (*[!0-9]*|'') echo "ALARM: PR must be numeric, got: $PR" >&2; exit 1;; esac
 
-SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -H 'Content-Type: application/json' \
-  -d "{\"agent_id\":\"$POLLY_ID\",\"title\":\"cross-review PR #$PR\"}" \
-  | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])") \
-  || { echo "ALARM: session create failed against $SERVER" >&2; exit 2; }
+# The create response goes through a FILE, then a validating parser. Piping it
+# into `json.load(sys.stdin)['id']` conflated "the server refused" with "the
+# server accepted and answered with an empty body" — and the second case leaves
+# an ORPHANED session whose id nobody holds, which is exactly how the 2026-08-03
+# review on #1614 came back `not_found` with no poller attached.
+TMPC=$(mktemp)
+curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -H 'Content-Type: application/json' \
+  -d "{\"agent_id\":\"$POLLY_ID\",\"title\":\"cross-review PR #$PR\"}" -o "$TMPC" \
+  || { rm -f "$TMPC"; echo "ALARM: session create failed against $SERVER" >&2; exit 2; }
+SID=$(python3 "$POLLER" session-id --payload "$TMPC") || { rm -f "$TMPC"; exit 2; }
+rm -f "$TMPC"
 # The ID is interpolated into an sh -c below — reject anything that isn't a
 # plain alnum token, optionally conv_-prefixed (same rule as
 # omnigent_issue_executor; Codex, #1578).
@@ -64,6 +82,14 @@ SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -
 # do not control.
 [[ "$SID" =~ ^(conv_)?[A-Za-z0-9]{16,}$ ]] || { echo "ALARM: malformed session id: $SID" >&2; exit 2; }
 echo "session: $SID" >&2
+
+# Dispatch-race guard. A POST that returned an id is NOT proof that a
+# subsequent GET resolves it: the crashed 2026-08-03 run's session was
+# `not_found` afterwards. Confirm the session is readable BEFORE spending a
+# worker on it — bailing here costs nothing, whereas an unreadable session
+# after the kick means a detached polly with no poller. Bounded and short.
+python3 "$POLLER" await-registration --server "$SERVER" --session-id "$SID" \
+  --budget-s "${CROSS_REVIEW_REGISTER_TIMEOUT_S:-60}" || exit 2
 
 # Brief goes INLINE via -p. Do not stage it as a session comment: comment
 # staging fails silently and polly wakes to an empty session (2026-07-27).
@@ -129,89 +155,41 @@ BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)
 docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
   || { echo "ALARM: docker-exec kick failed" >&2; exit 2; }
 
-# Poll. `docker exec -d` returns before the run registers, so an early `idle`
-# is a slow START, not completion — require having SEEN `running` once before
-# treating a non-running status as terminal (polly finding #2 on #1578).
-start=$(date +%s)
-saw_running=0
-status=""
-while :; do
-  sleep 30
-  status=$(curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" \
-    | python3 -c "import json,sys;print(json.load(sys.stdin).get('status','?'))" || echo poll-fail)
-  # `waiting` is a NONTERMINAL Omnigent state (awaiting external work) — it
-  # both proves the run started and must keep the loop polling (Greptile P1).
-  case "$status" in (running|waiting) saw_running=1;; esac
-  if [ "$status" != "running" ] && [ "$status" != "waiting" ] && [ "$status" != "poll-fail" ] && [ "$saw_running" = 1 ]; then
-    break
-  fi
-  now=$(date +%s)
-  if [ "$saw_running" = 0 ] && [ "$status" != "running" ] && [ "$status" != "waiting" ] && [ "$status" != "poll-fail" ]; then
-    # The run may have started AND finished between two polls — evidence of an
-    # assistant reply means completion, not a dead kick (Codex P2, #1578).
-    if curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" \
-        | python3 -c "import json,sys;d=json.load(sys.stdin);sys.exit(0 if any(i.get('type')=='message' and (i.get('data',{}).get('role') or i.get('role'))=='assistant' for i in d.get('items',[])) else 1)" 2>/dev/null; then
-      saw_running=1; continue
-    fi
-  fi
-  if [ "$saw_running" = 0 ] && [ $((now - start)) -gt 300 ]; then
-    echo "ALARM: session never reached 'running' within 300s (status: $status) — kick died silently; diagnose: docker exec $CONTAINER tail -40 $KICK_LOG" >&2
-    exit 2
-  fi
-  if [ $((now - start)) -gt "$TIMEOUT_S" ]; then
-    # Stop the detached worker before releasing the flock, or the next
-    # invocation would run a SECOND polly beside the stuck one (Codex, #1578).
-    r=$(stop_worker)
-    echo "ALARM: review still '$status' after ${TIMEOUT_S}s — worker signal result: $r; inspect session $SID and docker exec $CONTAINER tail -40 $KICK_LOG" >&2
-    exit 2
-  fi
-done
+# Poll. The loop lives in cross_review_poll.py so that every response body is
+# status/emptiness/content-type checked before parsing. On success it prints the
+# terminal status; on any failure it prints its own single terminal ALARM line
+# and exits non-zero — the EXIT trap then stops the detached worker before the
+# flock releases, so the next invocation cannot run a SECOND polly beside a
+# stuck one (Codex, #1578).
+#
+# The old inline loop's real defect was that a bad body degraded to the sentinel
+# `poll-fail`, which was neither terminal nor alarming — a vanished session
+# (404, which `curl -sf` renders as an empty body) spun in silence for the full
+# ${TIMEOUT_S}s and then blamed the timeout. Now it alarms in seconds and names
+# the session.
+set +e
+status=$(python3 "$POLLER" poll --server "$SERVER" --session-id "$SID" --timeout-s "$TIMEOUT_S")
+poll_rc=$?
+set -e
+if [ "$poll_rc" -ne 0 ]; then
+  echo "diagnose: docker exec $CONTAINER tail -40 $KICK_LOG" >&2
+  exit 2
+fi
 
 case "$status" in
   idle) : ;;  # normal completion — sessions end idle, never 'completed'
   *) echo "ALARM: session ended in error status '$status' — inspect session $SID" >&2; exit 2 ;;
 esac
 
-# Report extraction. The session JSON goes through a temp FILE — piping curl
-# into `python3 - <<'PY'` makes the heredoc win the fight for stdin and the
-# JSON is never read (SC2259; polly finding #1 on #1578, reproduced live).
-# An idle session with NO messages is the silent-launch-failure signature —
-# alarm, never report it as a clean review.
+# Report extraction. The session JSON goes through a temp FILE, never a pipe
+# into stdin (SC2259; polly finding #1 on #1578, reproduced live). An idle
+# session with NO messages is the silent-launch-failure signature — alarm,
+# never report it as a clean review.
 REVIEW_DONE=1  # normal completion — the cleanup trap must not kill a finished session's remnants
 TMPJ=$(mktemp)
 curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" -o "$TMPJ" \
   || { echo "ALARM: could not fetch session $SID for the report" >&2; exit 2; }
-rc=0
-python3 - "$SID" "$TMPJ" <<'PY' || rc=$?
-import json, sys
-d = json.load(open(sys.argv[2]))
-texts = []
-for it in d.get("items", []):
-    if it.get("type") != "message":
-        continue
-    role = it.get("data", {}).get("role") or it.get("role") or ""
-    if role != "assistant":
-        continue  # the inline kick prompt is a message item too (Codex P2)
-    c = it.get("data", {}).get("content") or it.get("content") or ""
-    if isinstance(c, list):
-        c = " ".join(str(x.get("text", "")) for x in c if isinstance(x, dict))
-    c = str(c).strip()
-    if c:  # tool_use-only assistant items reduce to "" — a blank is not a report (Codex, #1578)
-        texts.append(c)
-if not texts:
-    print(f"ALARM: session {sys.argv[1]} ended idle with zero ASSISTANT messages — "
-          "the kick died silently (check container auth: claude OAuth expires 2026-08-22).",
-          file=sys.stderr)
-    sys.exit(2)
-# Reports can span messages — print the tail of the conversation, not just
-# the last message (polly non-blocking on #1578).
-print("\n\n---\n\n".join(texts[-3:]))
-PY
-if [ "$rc" -ne 0 ]; then
-  # rc=2 is the zero-assistant-messages ALARM (already printed its own message).
-  # Anything else is a parse/schema crash — still a report-stage incident, not
-  # a usage error: exit 2 like every other alarm (Codex, #1578), never set -e's
-  # raw 1.
-  [ "$rc" -ne 2 ] && echo "ALARM: report extraction failed (exit $rc) for session $SID — inspect the payload shape" >&2
-  exit 2
-fi
+# The extractor prints its own ALARM for every unusable payload shape (missing,
+# empty, non-JSON, non-object, zero assistant messages) — this wrapper only maps
+# the outcome onto its public `exit 2`, never set -e's raw 1 (Codex, #1578).
+python3 "$POLLER" report --session-id "$SID" --payload "$TMPJ" || exit 2

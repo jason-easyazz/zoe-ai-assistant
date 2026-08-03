@@ -91,5 +91,21 @@ so operators must still avoid overlapping those manually; advisory
 only (never wired into greptile-gate); exit 2 = alarm (silent kick death,
 error-status session, or unreachable server) and must never be read as a clean
 review. Protocol + validation record: `docs/knowledge/omnigent-cross-review.md`.
-Verification: `bash -n`, plus the dogfood pattern — review changes to this
-script with the script itself.
+
+**Never parse an HTTP body in the shell.** Every response — session create,
+poll, report — goes through `scripts/maintenance/cross_review_poll.py`, which
+checks HTTP status, emptiness and content-type BEFORE parsing, retries
+transient faults (empty body / non-JSON / 5xx / connection refused) with
+bounded backoff, and treats a 404 `not_found` as a vanished session rather than
+a blip. Its exit codes are diagnostic — 3 never-registered, 4 poll-lost,
+5 timeout, 6 never-running, 7 dispatch-failed — and the wrapper collapses all of
+them to its public `exit 2`. Every failure prints exactly one terminal line
+carrying the session id and `re-dispatch required`; grep for that string.
+
+The wrapper also confirms the session is READABLE before spending a worker on
+it (`await-registration`, budget via `CROSS_REVIEW_REGISTER_TIMEOUT_S`, default
+60s): a POST that returned an id is not proof a GET resolves it.
+
+Verification: `bash -n`, `pytest tests/unit/test_cross_review_poll.py` (offline,
+`ci_safe`, canned fixtures + a fake clock — no network, no live Omnigent), plus
+the dogfood pattern — review changes to this script with the script itself.
