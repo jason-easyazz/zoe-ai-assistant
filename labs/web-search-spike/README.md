@@ -34,16 +34,19 @@ Full design record + evidence: **[DESIGN.md](DESIGN.md)**.
 
 | File | What |
 |---|---|
-| `websearch/engines.py` | `ddgs` wrapper: blocked-vs-empty disambiguation + per-backend provenance. **No custom DDG parser** — see below. |
+| `websearch/engines.py` | `ddgs` wrapper: blocked-vs-empty disambiguation + per-backend provenance + the `BLOCK_MARKERS` bot-wall detector. **No custom DDG parser** — see below. |
 | `websearch/tavily.py` | Tavily free tier with a client-side 33/day budget guard. |
-| `websearch/extract.py` | Jina Reader keyless page extraction; CloakBrowser availability probe. |
+| `websearch/extract.py` | Jina Reader keyless page extraction. |
+| `websearch/direct.py` | **Tier 0 of the page read**: plain `httpx` GET, browser headers, refusal detection by status AND body. Shares the broker's extractor so tier comparisons vary only the transport. |
+| `websearch/cloak.py` | CloakBrowser tier — imports PR #1626's `fetch_page_text` **by path**, and asks it for the `SETTLE_SPA` post-load wait. |
+| `websearch/chain.py` | **The fallback chain.** httpx -> jina -> CloakBrowser, with every hop recorded in `FetchResult.provenance`. Strictly lazy + strictly sequential: the browser is never launched, constructed or *imported* when a cheaper tier answered. |
 | `websearch/merge.py` | Cross-**tier** dedup + consensus ranking + soft/hard deadline (oh-my-pi `public.ts`). |
 | `websearch/scrapers.py` | URL-matched structured scrapers: Wikipedia + Hacker News. Pure JSON, no DOM library. |
 | `websearch/packet.py` | Token-budgeted result packet for the Gemma 4 E4B brain. **Not** in oh-my-pi. |
 | `websearch/claim.py` | Claim-backing query shaping — neutral + contradiction queries. Evidence, never a verdict. |
-| `eval/` | **The instrument.** Fixed 26-query corpus + combination runner + operator scoring sheet. Full-run report: `eval/results/20260803T112640Z.md`. |
+| `eval/` | **The instruments.** `run_eval.py` + the 26-query corpus (tier *combinations* on general knowledge); `run_botwall.py` + `botwall-corpus.json` (12 deliberately hostile URLs — CloakBrowser scored at its actual job). |
 | `demo.py`, `probe_engines.py` | Live demo; engine reachability matrix. |
-| `tests/` | 48 offline tests. No network. |
+| `tests/` | 99 offline tests. No network, no Chromium. |
 
 ## How to run
 
@@ -61,6 +64,25 @@ python3 eval/run_eval.py --list     # combinations + live tier health
 python3 eval/run_eval.py --all --limit 4   # smoke run
 python3 eval/run_eval.py --all      # the real 26-query corpus run (~35 min)
 ```
+
+### The bot-wall corpus (the CloakBrowser experiment)
+
+```bash
+export ZOE_BROWSER_BROKER_PATH=/path/to/#1626-worktree/services/zoe-data/browser_broker.py
+
+python3 eval/run_botwall.py --tier httpx        # ~10 s
+python3 eval/run_botwall.py --tier jina         # ~3 min
+systemd-run --user --scope -p MemoryMax=1536M -- python3 eval/run_botwall.py --tier cloakbrowser
+systemd-run --user --scope -p MemoryMax=1536M -- python3 eval/run_botwall.py --tier cloakbrowser --no-settle   # A/B control
+systemd-run --user --scope -p MemoryMax=1536M -- python3 eval/run_botwall.py --chain
+python3 eval/run_botwall.py --report
+```
+
+**The `systemd-run` scope is not decoration.** Each CloakBrowser launch is
+~553 MB and this box runs the live voice brain (7.9 GB, mlocked) plus Kokoro
+(2.2 GB); measured free memory during these runs was 100-720 MB. The harness
+also re-reads `MemFree` before **every** launch and aborts rather than
+launching under `--min-free-mb` (default 380). One Chromium at a time, always.
 
 **Tests are LAB-only and carry no `ci_safe` marker.** `pytest.ini` sets
 `testpaths = services/zoe-data/tests`, so `labs/` is outside every CI lane;
@@ -127,7 +149,46 @@ engines are reachable.
    large-context coding model; Zoe's 8k Gemma needs a hard ceiling. 10 results
    → ≤350 tokens, ≤6 lines, hosts not URLs.
 
-9. **Several of my own bugs were silent, not loud** — a double-quote-only regex
+9. **CloakBrowser's stealth value is no longer unmeasured — and it is real.**
+   The 26-query run said so itself: `ddgs` never blocked, so there was nothing
+   to bypass and the browser was scored purely as an extractor.
+   `eval/botwall-corpus.json` is the missing experiment — 12 URLs chosen
+   *because* they resist a plain client. Result: **plain `httpx` got 4/12,
+   CloakBrowser got 12/12**, and it was the ONLY tier that read BWS (HTTP 403,
+   Akamai), Liquorland and First Choice (Cloudflare challenge served at HTTP
+   **200**), Dan Murphy's (403) and Bottlemart (403).
+
+10. **The post-load settle is what makes the browser tier work at all.** A/B on
+    the same corpus, same tier, `SettlePolicy` the only variable: **6 of 12
+    URLs move from `thin`/`error` to `ok`**, including both known regressions
+    (Reddit `error` -> 717 chars; Bottlemart `error` -> 2,531 chars) and every
+    major-chain price page (BWS 113 -> 8,607 chars; Liquorland 533 -> 4,111).
+    Without it CloakBrowser reads a bot wall's shell and reports success.
+
+11. **A length floor is a proxy, and a proxy can be satisfied without the thing
+    it proxies for.** Measured: `cellarbrations.rsgwa.com.au` returned 759
+    chars to httpx — over the 600-char floor — so the chain accepted it and
+    stopped. Those 759 chars had no prices; CloakBrowser's 4,915 had the Emu
+    Export special the query was about. `fetch_url(accept=…)` lets a caller
+    that knows what it wants say so. `accept` runs *after* the floor and can
+    only make the chain try harder, never lower the bar.
+
+12. **A generic "did we get content?" heuristic OVERSTATES on exactly the
+    hardest pages.** Jina read the BWS product page at 20,000 characters with
+    278 dollar-sign tokens and contained neither the product nor its price —
+    the whole extract was nav chrome and price-range filter facets. The
+    botwall harness therefore reports a **target** column (the product name
+    with a price beside it) next to the size, and the verdict is read from the
+    target.
+
+13. **Some pages are not walled and still have no price.** Thirsty Camel
+    rendered for *all three* tiers and printed "To view in store availability
+    and pricing for this product:" instead of a number; Bottlemart's landing
+    page is promotions plus a "MY STORE" selector. Those need a browser that
+    **clicks**, which is a different capability from one that navigates. Naming
+    that boundary precisely is a result, not a gap.
+
+14. **Several of my own bugs were silent, not loud** — a double-quote-only regex
    that returned 0 results instead of erroring; two `claim.py` regexes that
    failed on trailing punctuation; a fixture trim that truncated the top result;
    and a test whose own first assertion raised. Every one produced
@@ -152,8 +213,14 @@ engines are reachable.
 | Tavily free ceiling | 1,000 credits/mo ≈ **33/day**, enforced client-side |
 | New runtime dependencies | **0** (`httpx` + `ddgs` already shipped) |
 | Resident RAM added | **0** (in-process; box had 216–293 MB free of 15.6 GB) |
-| Offline test suite | 48 tests, 0.32 s, no network |
+| **Bot-wall corpus (12 hostile URLs, 2026-08-03)** | httpx **4/12** got the target · jina **2/12** · **cloakbrowser 12/12 rendered, 6/8 price pages yielded a price** |
+| **Settle A/B (same tier, same corpus)** | **6/12 URLs improve** — 4 `thin`->`ok`, 2 `error`->`ok`. BWS 113->8,607 chars; Liquorland 533->4,111; Reddit 0->717 |
+| Chain end-to-end over the corpus | 12/12 served · **4 by httpx alone (no Chromium launched)** · 8 escalated · httpx hops 0.1-1.5 s, cloak hops ~20-26 s |
+| Offline test suite | **99 tests, 0.46 s**, no network, no Chromium |
 
-Negative controls run: disabling block detection, the consensus sort, the
-packet budget cap, and the eval harness's `blocked_tiers` verdict each turned
-the relevant tests **red**; restoring them returned the suite to green.
+Negative controls run, each verified to turn the relevant tests **red** before
+being restored: disabling block detection, the consensus sort, the packet
+budget cap, the eval harness's `blocked_tiers` verdict, the chain's
+fall-through on refusal (12 red), the chain's stop-on-success (2 red — the
+cost control), the `accept` predicate (1 red), and the broker's content-floor
+settle stage (3 red).

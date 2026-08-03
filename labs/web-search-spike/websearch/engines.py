@@ -83,19 +83,69 @@ def clean_text(value: str) -> str:
     return _WS_RE.sub(" ", _html.unescape(_TAG_RE.sub(" ", value))).strip()
 
 
+#: Substrings that identify a bot challenge in a RAW HTML body.
+#:
+#: Two families, kept together because the caller cannot tell them apart:
+#:  - SEARCH-ENGINE challenges (the original set, measured on this box).
+#:  - COMMERCIAL bot walls — Cloudflare, DataDome, PerimeterX, Imperva/Incapsula
+#:    and Akamai. Added 2026-08-03 for the botwall corpus: Australian retail
+#:    (BWS, Liquorland, Bottlemart) sits behind these, and their interstitials
+#:    are frequently served with HTTP **200**, so a status check alone reads
+#:    them as content.
+#:
+#: Every marker must be specific enough not to fire on ordinary prose. That is
+#: why the list has no bare "captcha", no bare "blocked", and no "robot":
+#: a page ABOUT captchas, an out-of-stock notice, or a robotics article would
+#: all trip those, and a false positive is worse than a miss — it escalates a
+#: perfectly readable page to a 550 MB Chromium launch.
+BLOCK_MARKERS = (
+    # search engines
+    "anomaly-modal",
+    "anomaly.js",
+    "<title>captcha",
+    "unusual traffic",
+    "verifying your browser",
+    # Cloudflare
+    "just a moment...",
+    "cf-browser-verification",
+    "cf_chl_opt",
+    "challenges.cloudflare.com",
+    "attention required! | cloudflare",
+    "enable javascript and cookies to continue",
+    # DataDome / PerimeterX / Imperva / Akamai
+    "datadome",
+    "px-captcha",
+    "_incapsula_resource",
+    "incapsula incident id",
+    "reference #18.",          # Akamai "Access Denied" reference block
+    "akamai reference",
+    # generic hard walls
+    "access to this page has been denied",
+    "you have been blocked",
+    "request unsuccessful. incapsula",
+    "pardon our interruption",  # Distil/Imperva
+    # MEASURED 2026-08-03 on the botwall corpus — these three were MISSED by
+    # the list above and scored `thin` instead of `blocked`, which is exactly
+    # the "a refusal looks like a thin page" bug this chain exists to prevent.
+    "you've been blocked by network security",      # Reddit, via Jina Reader
+    "checking the site connection security",        # Cloudflare, newer wording
+    "blocked by network security",
+)
+
+
 def is_blocked(body: str) -> bool:
     """True when a RAW HTML body is a bot challenge rather than content.
 
-    Still needed for the tiers that hand us raw bodies (Jina Reader,
-    CloakBrowser) — `ddgs` parses internally so it never exposes one. Engines
-    mix status codes on these: DuckDuckGo serves 202, and Mojeek served HTTP
-    200 with `<title>Captcha</title>`, so **status is not a usable signal**.
+    Needed for every tier that hands us raw bodies (direct httpx, Jina Reader,
+    CloakBrowser) — `ddgs` parses internally so it never exposes one.
+
+    **Status is not a usable signal on its own**: DuckDuckGo serves 202, Mojeek
+    served HTTP 200 with `<title>Captcha</title>`, and Cloudflare's "Just a
+    moment..." interstitial is a 200 or a 403 depending on the site's
+    configuration. So the chain checks status AND body, and either is enough.
     """
     low = body.lower()
-    return any(
-        marker in low
-        for marker in ("anomaly-modal", "anomaly.js", "<title>captcha", "unusual traffic", "verifying your browser")
-    )
+    return any(marker in low for marker in BLOCK_MARKERS)
 
 
 def _to_results(rows: list[dict], engine: str) -> list[Result]:

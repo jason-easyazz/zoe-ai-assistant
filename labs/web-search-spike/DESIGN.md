@@ -358,3 +358,70 @@ of artefact the automatic score must not be trusted to interpret.
 
 **Not run yet: the full corpus.** It is operator-triggered
 (`python3 eval/run_eval.py --all`), and the Tavily rows need a key.
+
+---
+
+## 10. The fallback CHAIN, and the experiment that justified it (2026-08-03)
+
+§9's harness compared tier *combinations*. It could not answer the question
+CloakBrowser actually exists to answer, and its own report said so: *"`ddgs` did
+not block once across either run, so there was nothing to bypass… its stealth
+value is UNMEASURED, not disproven."* A corpus of general-knowledge questions
+lands on Wikipedia, and nobody bot-walls Wikipedia.
+
+### 10a. The chain — `websearch/chain.py`
+
+`fetch_url(url)` reads one URL through **httpx -> jina -> CloakBrowser**, cheapest
+first, falling through when a tier is BLOCKED (status 401/403/407/429/451/503, or
+a challenge body at any status) or THIN (below a documented content floor).
+
+Three properties are load-bearing, and each has a negative control:
+
+1. **Every hop is recorded.** `FetchResult.provenance` names each tier, its
+   verdict, and why — never summarised, never empty. This is the same rule as
+   `EnginesBlocked` one layer down: a refusal that arrives looking like a
+   success is the failure mode, and silence is how it hides.
+2. **The browser is the FLOOR, not a peer.** It is never called, never
+   constructed, and never *imported* on a run where a cheaper tier answered
+   (`cloak.py` loads the broker module from disk at import, so a speculative
+   import is itself real work). Verified with a spy; removing the stop-on-success
+   turns 2 tests red. On this box that is a memory-safety property, not an
+   optimisation.
+3. **Vocabulary of four, not two.** `blocked` and `error` both fall through but
+   are different findings: a wall is a property of the site, a timeout is a
+   property of the night.
+
+**The floor is necessary and not sufficient — measured, not theorised.**
+`cellarbrations.rsgwa.com.au` gave httpx 759 chars (over the 600 floor, so the
+chain stopped) with no prices at all, while CloakBrowser's 4,915 chars carried
+the Emu Export special. `accept=` lets a caller state its actual criterion; it
+runs *after* the floor and can only escalate, never lower the bar.
+
+### 10b. What the bot-wall corpus measured
+
+`eval/botwall-corpus.json` — 12 URLs chosen *because* they resist a plain
+client, all **discovered by live `ddgs` search** rather than hand-guessed (a
+guessed URL that 404s would be scored as a wall, which is a fabricated finding).
+Every tier is attempted on every URL independently, because running only the
+chain would leave later tiers unmeasured on exactly the pages the earlier ones
+handled.
+
+| finding | evidence |
+|---|---|
+| **Stealth is real** | httpx got the target on **4/12**; CloakBrowser rendered **12/12**. It was the ONLY tier to read BWS (403, Akamai), Dan Murphy's (403), Bottlemart (403), Liquorland and First Choice (Cloudflare challenge at HTTP **200**). |
+| **The settle-wait is what makes it work** | Same tier, same corpus, `SettlePolicy` the only variable: **6/12 improve**. BWS 113 -> 8,607 chars; Liquorland 533 -> 4,111; Reddit `error` -> 717; Bottlemart `error` -> 2,531. |
+| **Status alone is not a wall detector** | Liquorland and First Choice serve a Cloudflare challenge with **HTTP 200**. `BLOCK_MARKERS` had to grow commercial-wall entries; three more (Reddit's *"you've been blocked by network security"*, Cloudflare's *"checking the site connection security"*) were found MISSING by this corpus and were scoring `thin` instead of `blocked`. |
+| **Length is not evidence** | Jina read BWS at 20,000 chars / 278 `$` tokens containing neither the product nor its price — pure nav chrome and filter facets. Hence the corpus's `target` column. |
+| **Not every failure is a wall** | Thirsty Camel rendered for all three tiers and simply has no price on the page ("To view in store availability and pricing…"); Bottlemart's landing page is promotions plus a store selector; Dan Murphy's article rendered completely with no price element for a logged-out, store-less session. Three genuinely different limits that a coarser harness would have merged. |
+
+### 10c. What this does NOT license
+
+CloakBrowser earns the **last** slot and only that. It cost ~20-26 s and
+~553 MB per launch against httpx's 0.1-1.5 s, and on this corpus the cheap tier
+was sufficient a third of the time. A chain that reached for the browser first
+would be 20x slower and would put a Chromium beside the voice brain for pages
+that never needed one. The measured case for it is precisely: *when a cheaper
+tier is REFUSED, it converts a hard failure into an answer.*
+
+The live commercial run is recorded separately:
+`eval/results/emu-export-geraldton-2026-08-03.md`.

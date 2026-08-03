@@ -52,11 +52,21 @@ class ExtractUnavailable(RuntimeError):
 
 @dataclass(slots=True)
 class Page:
+    """One page read, normalised across the three extraction tiers.
+
+    `tier` and `detail` are provenance, not decoration: the fallback chain
+    records them so a caller can always answer "which tier actually served
+    this, and what did the cheaper ones say?" — see `chain.py`.
+    """
+
     url: str
     text: str
     tier: str
     elapsed_s: float
     truncated: bool = False
+    title: str = ""
+    #: Free-text note from the serving tier (status, byte count, strategy).
+    detail: str = ""
 
 
 def _strip_jina_header(body: str) -> str:
@@ -66,8 +76,19 @@ def _strip_jina_header(body: str) -> str:
     return body[idx + len(marker) :].strip() if idx >= 0 else body.strip()
 
 
-def jina_reader(url: str, *, timeout: float = JINA_TIMEOUT_S, client: httpx.Client | None = None) -> Page:
-    """Fetch a page as markdown via keyless Jina Reader."""
+def jina_reader(
+    url: str,
+    *,
+    text_limit: int = MAX_EXTRACT_CHARS,
+    timeout: float = JINA_TIMEOUT_S,
+    client: httpx.Client | None = None,
+) -> Page:
+    """Fetch a page as markdown via keyless Jina Reader.
+
+    `text_limit` is accepted so this matches the `Tier` signature in `chain.py`
+    — every tier must be callable the same way or the chain has to special-case
+    one of them, and a chain with a special case is a chain that drifts.
+    """
     started = time.monotonic()
     owned = client or httpx.Client(timeout=timeout, follow_redirects=True, trust_env=False)
     try:
@@ -89,9 +110,14 @@ def jina_reader(url: str, *, timeout: float = JINA_TIMEOUT_S, client: httpx.Clie
         raise ExtractUnavailable(f"jina returned a bot challenge for {url}")
 
     text = _strip_jina_header(body)
-    truncated = len(text) > MAX_EXTRACT_CHARS
+    truncated = len(text) > text_limit
     return Page(
-        url=url, text=text[:MAX_EXTRACT_CHARS], tier="jina", elapsed_s=elapsed, truncated=truncated
+        url=url,
+        text=text[:text_limit],
+        tier="jina",
+        elapsed_s=elapsed,
+        truncated=truncated,
+        detail=f"HTTP {resp.status_code}, {len(body)}B markdown",
     )
 
 

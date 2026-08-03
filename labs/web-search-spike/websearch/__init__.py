@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from functools import partial
 
 from . import tavily as _tavily
+from .chain import CONTENT_FLOOR_CHARS, FetchResult, Hop, fetch_url, fetch_urls
 from .claim import build_check_queries, is_challenge
 from .engines import EnginesBlocked, Result
 from .engines import search as ddgs_search
@@ -44,9 +45,11 @@ from .packet import DEFAULT_TOKEN_BUDGET, estimate_tokens, format_packet
 from .scrapers import Extract, scrape
 
 __all__ = [
-    "Lookup", "look_up", "check_claim", "read_page", "is_challenge", "tier_status",
+    "Lookup", "look_up", "check_claim", "read_page", "research",
+    "is_challenge", "tier_status",
     "Result", "Extract", "format_packet", "estimate_tokens",
     "EnginesBlocked", "ExtractUnavailable",
+    "FetchResult", "Hop", "fetch_url", "fetch_urls", "CONTENT_FLOOR_CHARS",
 ]
 
 
@@ -69,30 +72,62 @@ class Lookup:
         return bool(self.packet)
 
 
+def _tavily_status() -> str:
+    """Three states, three strings. `ready (0/33 left)` was a CONTRADICTION.
+
+    Measured 2026-08-03: with the budget fully spent this reported
+    `ready (0/33 left today)` while `_search_tiers` was — correctly — refusing
+    to dispatch the tier at all. A status line that says "ready" about a tier
+    the code will not call is exactly the kind of instrument that makes a
+    reader trust the wrong thing.
+    """
+    if not _tavily.configured():
+        return "unconfigured (TAVILY_API_KEY unset)"
+    budget = _tavily.budget_state()
+    if budget.remaining <= 0:
+        return f"budget-exhausted ({budget.used}/{budget.limit} spent today) — chain degrades past it"
+    return f"ready ({budget.remaining}/{budget.limit} left today)"
+
+
 def tier_status() -> dict[str, str]:
     """What each free tier can do right now — for the harness and the demo."""
-    budget = _tavily.budget_state()
     return {
         "scrapers": "ready",
-        "tavily-free": (
-            f"ready ({budget.remaining}/{budget.limit} left today)"
-            if _tavily.configured()
-            else "unconfigured (TAVILY_API_KEY unset)"
-        ),
+        "tavily-free": _tavily_status(),
         "ddgs": "ready (opportunistic — blocks are steady state)",
         "jina": "ready (enrichment only — ~20 RPM, domain-restricted)",
+        "cloakbrowser": "fallback floor — launched ONLY when a cheaper tier is refused",
     }
 
 
 def _search_tiers(query: str, limit: int) -> tuple[list[list[Result]], dict[str, str], list[str]]:
-    """Run the free search tiers in parallel; report every refusal by name."""
-    tasks: dict[str, object] = {"ddgs": partial(ddgs_search, query, limit=limit)}
-    if _tavily.configured():
-        tasks["tavily-free"] = partial(_tavily.search, query, limit=limit)
+    """Run the free search tiers in parallel; report every refusal by name.
 
-    batches, failures = fan_out(tasks)
+    Tavily has THREE distinct non-answers and they must not collapse into one
+    string. `unconfigured` means the tier was never asked; `budget-exhausted`
+    means the 33/day free ceiling is spent and the chain must degrade past it
+    (an expected, planned-for state, not an incident); anything else is a real
+    failure. `fan_out` would render all three as `"TavilyX: ..."`, so the
+    exhausted case is pre-checked here — it is the one the chain is DESIGNED
+    to survive, and a design has to be observable to be testable.
+    """
+    tasks: dict[str, object] = {"ddgs": partial(ddgs_search, query, limit=limit)}
+    failures: dict[str, str] = {}
+
     if not _tavily.configured():
         failures["tavily-free"] = "unconfigured (TAVILY_API_KEY unset)"
+    else:
+        budget = _tavily.budget_state()
+        if budget.remaining <= 0:
+            failures["tavily-free"] = (
+                f"budget-exhausted (local daily cap {budget.used}/{budget.limit} spent) "
+                "— degrading to the free tiers, as designed"
+            )
+        else:
+            tasks["tavily-free"] = partial(_tavily.search, query, limit=limit)
+
+    batches, tier_failures = fan_out(tasks)
+    failures.update(tier_failures)
     used = [batch[0].engine for batch in batches if batch]
     return batches, failures, used
 
@@ -158,3 +193,48 @@ def check_claim(claim: str, *, limit: int = 5, token_budget: int = DEFAULT_TOKEN
 def read_page(url: str) -> str:
     """Enrichment: page -> text via Jina Reader. Raises `ExtractUnavailable`."""
     return jina_reader(url).text
+
+
+@dataclass(slots=True)
+class Research:
+    """A lookup PLUS the pages actually read, each with its own tier trail."""
+
+    lookup: Lookup
+    pages: list[FetchResult] = field(default_factory=list)
+
+    @property
+    def fallbacks(self) -> list[FetchResult]:
+        """The URLs where a cheap tier was refused and something else served."""
+        return [p for p in self.pages if p.fell_back]
+
+    @property
+    def unreadable(self) -> list[FetchResult]:
+        """URLs EVERY tier refused. A finding, not an omission."""
+        return [p for p in self.pages if not p.ok]
+
+
+def research(
+    query: str,
+    *,
+    limit: int = 8,
+    read_top: int = 3,
+    floor: int = CONTENT_FLOOR_CHARS,
+    use_jina: bool = True,
+    url_filter=None,
+) -> Research:
+    """Full chain: search discovery -> scrapers -> per-URL read with fallback.
+
+    This is the end-to-end shape `look_up` deliberately does not have.
+    `look_up` returns SNIPPETS, which is right for a spoken answer; but a
+    question like "what does this cost" is not answerable from a snippet — the
+    number lives on the page. So `research` reads the pages, and each read
+    carries its own `provenance` naming the tier that served it.
+
+    Reads are SEQUENTIAL (`fetch_urls`): never two Chromiums at once.
+    """
+    lookup = look_up(query, limit=limit)
+    urls = [r.url for r in lookup.results]
+    if url_filter is not None:
+        urls = [u for u in urls if url_filter(u)]
+    pages = fetch_urls(urls[:read_top], floor=floor, use_jina=use_jina)
+    return Research(lookup=lookup, pages=pages)

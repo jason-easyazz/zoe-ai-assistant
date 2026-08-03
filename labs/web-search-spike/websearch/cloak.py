@@ -54,6 +54,10 @@ DEFAULT_BROKER = LIVE_ZOE_DATA / "browser_broker.py"
 # second bound, so one wedged page cannot stall a 26-query run.
 CLOAK_TIMEOUT_MS = 30_000
 
+# Sentinel: `settle=None` must mean "no settle", which is DIFFERENT from
+# "caller did not specify" (-> the tier's own default policy).
+_UNSET = object()
+
 _broker_mod = None
 
 
@@ -115,19 +119,42 @@ def available() -> tuple[bool, str]:
     return True, f"ready (broker: {path})"
 
 
-def cloak_fetch(url: str, *, text_limit: int = MAX_EXTRACT_CHARS) -> Page:
+def settle_policy(module):
+    """The post-load settle this tier asks for, or `None` on an older broker.
+
+    CloakBrowser is the LAST tier: by the time it runs, two cheaper tiers have
+    already refused, so the URLs that reach it are disproportionately the
+    client-rendered ones. Reading the DOM at `domcontentloaded` on those gets
+    an empty shell — a refusal wearing a success's clothes, which is the exact
+    failure this chain exists to prevent. So the tier that is meant to be the
+    FLOOR must wait for the page it was escalated to.
+
+    Degrades to `None` (previous behaviour) against a broker without
+    `SETTLE_SPA`, so this module keeps working while PR #1626 is in flight.
+    """
+    return getattr(module, "SETTLE_SPA", None)
+
+
+def cloak_fetch(url: str, *, text_limit: int = MAX_EXTRACT_CHARS, settle=_UNSET) -> Page:
     """Fetch ONE url through CloakBrowser and return extracted main-content text.
 
-    Returns the same `Page` shape as `jina_reader`, so the two extraction tiers
-    are directly comparable. Raises `ExtractUnavailable` on refusal/failure —
-    the harness records that as `blocked` rather than folding it into "no
-    content", matching the tier-honesty rule.
+    Returns the same `Page` shape as `jina_reader`, so the extraction tiers are
+    directly comparable. Raises `ExtractUnavailable` on refusal/failure — the
+    harness records that as `blocked` rather than folding it into "no content",
+    matching the tier-honesty rule.
+
+    `settle` defaults to `SETTLE_SPA` (see `settle_policy`); pass `None` to
+    reproduce the pre-settle timing, which is what the botwall corpus does to
+    measure what the settle is actually worth.
     """
     module = _load_broker()
+    kwargs = {"text_limit": text_limit, "timeout_ms": CLOAK_TIMEOUT_MS}
+    policy = settle_policy(module) if settle is _UNSET else settle
+    if policy is not None:
+        kwargs["settle"] = policy
+
     started = time.monotonic()
-    result = asyncio.run(
-        module.fetch_page_text(url, text_limit=text_limit, timeout_ms=CLOAK_TIMEOUT_MS)
-    )
+    result = asyncio.run(module.fetch_page_text(url, **kwargs))
     elapsed = time.monotonic() - started
 
     if not result.get("ok"):
@@ -137,10 +164,14 @@ def cloak_fetch(url: str, *, text_limit: int = MAX_EXTRACT_CHARS) -> Page:
     if not text.strip():
         raise ExtractUnavailable(f"cloakbrowser returned no text for {url}")
 
+    settle_log = result.get("settle") or []
+    note = "; ".join(f"{e.get('stage')}={e.get('outcome')}" for e in settle_log) or "no settle"
     return Page(
-        url=url,
+        url=result.get("final_url") or url,
         text=text,
         tier="cloakbrowser",
         elapsed_s=elapsed,
         truncated=bool(result.get("truncated")),
+        title=result.get("title") or "",
+        detail=f"{result.get('strategy', '?')}; settle: {note}",
     )
