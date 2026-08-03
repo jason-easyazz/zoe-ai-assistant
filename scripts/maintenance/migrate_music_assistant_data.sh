@@ -376,7 +376,19 @@ fi
 # paths against the live root, i.e. exactly the future post-deploy invocation.)
 SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="${ZOE_MA_COMPOSE_FILE:-$SCRIPT_REPO/docker-compose.modules.yml}"
-if [[ -f "$COMPOSE_FILE" ]]; then
+# The file's absence is ALWAYS an error, never a skip (review: Codex, who
+# reproduced a misspelled ZOE_MA_COMPOSE_FILE silently bypassing the entire
+# effective-mount validation — copy done, marker written, exit 0, and the
+# future mount unvalidated). The pending compose file ships in the same
+# revision as this script, so a missing default means a broken checkout and a
+# missing override means a typo; both must stop the run.
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+    log "FATAL: pending compose file not found: $COMPOSE_FILE"
+    log "The effective-mount validation cannot run without it. Check"
+    log "ZOE_MA_COMPOSE_FILE (if set) or the script's checkout."
+    exit 1
+fi
+if true; then
     if ! compose_json="$(cd "$REPO_ROOT" && env -u ZOE_MA_DATA docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" config --format json 2>&1)"; then
         log "FATAL: cannot resolve the effective Compose configuration:"
         printf '%s\n' "$compose_json" | awk 'NR<=4' | sed 's/^/ma-migrate:   /' >&2

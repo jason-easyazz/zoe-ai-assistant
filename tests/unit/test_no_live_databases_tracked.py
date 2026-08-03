@@ -521,3 +521,14 @@ def test_compose_guard_validates_the_pending_file_not_the_live_one():
     assert 'SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"' in src
     assert '--project-directory "$REPO_ROOT"' in src
     assert 'ZOE_MA_COMPOSE_FILE:-$SCRIPT_REPO' in src
+
+
+def test_missing_pending_compose_file_is_fatal():
+    """A misspelled ZOE_MA_COMPOSE_FILE silently skipped the effective-mount
+    validation: copy done, marker written, exit 0, future mount unvalidated
+    (review: Codex, reproduced). The pending file ships with the script, so
+    absence is always a broken checkout or a typo — never a skip."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "pending compose file not found" in src
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert 'if [[ -f "$COMPOSE_FILE" ]]; then' not in code, "the fail-open wrapper must not return"
