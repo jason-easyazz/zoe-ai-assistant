@@ -233,3 +233,33 @@ def test_mirror_lists_deletion_candidates_before_acting():
     assert "will DELETE these destination entries" in src
     assert "DELETE these existing destination entries" in src, "dry-run must preview too"
     assert src.index("will DELETE these destination entries") < src.index("-exec rm -rf")
+
+
+def test_destination_symlink_checked_before_canonicalisation():
+    """`readlink -m` resolves the link and DEST is replaced by its target, so a
+    `-L "$DEST"` guard placed after that could never fire for the links it was
+    written to catch — and --mirror would erase the target (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert src.index('destination path is a symlink') < src.index('DEST_ABS="$(readlink -m')
+
+
+def test_no_sigpipe_prone_pipelines():
+    """`find … | head -N` SIGPIPEs the producer once head exits; under
+    `set -euo pipefail` that is exit 141 — and it fires AFTER the container is
+    stopped, leaving MA down with no diagnostic. Codex reproduced it with a
+    10,000-file directory."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "| head" not in code, "use awk 'NR<=N', which consumes the whole stream"
+    assert "sort -rn" not in code, "use an awk max, not sort|head"
+    assert "-print -quit 2>/dev/null | grep -q" not in code
+
+
+def test_manifests_are_materialised_and_validated():
+    """Bash does not propagate a process-substitution exit status, so a failing
+    `sudo find` yields an EMPTY source manifest — every destination entry then
+    looks extra and --mirror deletes valid data (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "source manifest is EMPTY" in src
+    assert "could not enumerate the source" in src
+    assert "verified 0 files" in src, "a zero-file verification must fail, not pass"

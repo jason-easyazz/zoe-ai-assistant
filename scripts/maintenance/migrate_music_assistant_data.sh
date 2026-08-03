@@ -88,6 +88,15 @@ log() { printf 'ma-migrate: %s\n' "$*"; }
 # (review: Codex). Compose substitutes the same ${ZOE_MA_DATA}, so this must be
 # rejected here rather than trusted. Canonicalise first: `./data/...`,
 # symlinks and `..` traversal all have to resolve.
+# Test the ORIGINAL path first (review: Codex). `readlink -m` resolves the link,
+# and DEST is later replaced by its target — so the `-L "$DEST"` guard further
+# down could never fire for exactly the links it was written to catch, and
+# --mirror would erase the link's TARGET as root.
+if [[ -L "$DEST" ]]; then
+    log "FATAL: destination path is a symlink: $DEST -> $(readlink -- "$DEST")"
+    log "Refusing: clearing or copying would act on the link's target."
+    exit 1
+fi
 DEST_ABS="$(readlink -m -- "$DEST")"
 SRC_ABS="$(readlink -m -- "$SRC")"
 REPO_ABS="$(readlink -m -- "$REPO_ROOT")"
@@ -188,7 +197,7 @@ log "files      : $(sudo find "$SRC" -type f 2>/dev/null | wc -l)"
 if [[ "$EXECUTE" -eq 0 ]]; then
     log ""
     log "DRY RUN — nothing changed. Would:"
-    if [[ -d "$DEST" ]] && sudo find "$DEST" -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
+    if [[ -d "$DEST" && -n "$(sudo find "$DEST" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
         if [[ "$MIRROR" -eq 1 ]]; then
             log "  0. DELETE these existing destination entries (--mirror):"
             sudo find "$DEST" -mindepth 1 -maxdepth 1 -printf '  %y %p\n' 2>/dev/null \
@@ -227,13 +236,21 @@ fi
 # with the retained pre-migration copies in SRC and silently lose auth, library,
 # settings and playlist changes. A re-run is only safe while SRC is still the
 # live store. Compare newest mtimes and refuse to go backwards.
-if [[ -d "$DEST" ]] && sudo find "$DEST" -type f -print -quit 2>/dev/null | grep -q .; then
-    newest_src=$(sudo find "$SRC"  -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
-    newest_dst=$(sudo find "$DEST" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+if [[ -d "$DEST" && -n "$(sudo find "$DEST" -type f -print -quit 2>/dev/null)" ]]; then
+    # `sort -rn | head -1` gives sort a SIGPIPE once head exits; with
+    # `set -euo pipefail` that is exit 141 and the script dies — AFTER Music
+    # Assistant has been stopped, leaving the service down and no diagnostic.
+    # Codex reproduced it with a 10,000-file directory. awk consumes the whole
+    # stream, so nothing is ever signalled. Every `find | head` in this script
+    # has the same hazard and uses `awk 'NR<=N'` for the same reason; the
+    # emptiness probes use command substitution rather than `| grep -q`.
+    # (review: Codex)
+    newest_src=$(sudo find "$SRC"  -type f -printf '%T@\n' 2>/dev/null | awk 'BEGIN{m=0}{if($1>m)m=$1}END{print m+0}')
+    newest_dst=$(sudo find "$DEST" -type f -printf '%T@\n' 2>/dev/null | awk 'BEGIN{m=0}{if($1>m)m=$1}END{print m+0}')
     if [[ -n "$newest_dst" && -n "$newest_src" ]] \
        && awk -v a="$newest_dst" -v b="$newest_src" 'BEGIN{exit !(a>b)}'; then
         log "FATAL: destination has NEWER data than the source."
-        log "  newest in dest: $(sudo find "$DEST" -type f -newermt "@$newest_src" -printf '%p\n' 2>/dev/null | head -3 | tr '\n' ' ')"
+        log "  newest in dest: $(sudo find "$DEST" -type f -newermt "@$newest_src" -printf '%p\n' 2>/dev/null | awk 'NR<=3' | tr '\n' ' ')"
         log "This means Music Assistant has already been running against $DEST."
         log "Copying now would overwrite live state with the pre-migration snapshot."
         log "The migration is already done — you do not need to re-run it."
@@ -264,7 +281,7 @@ if [[ -e "$DEST" ]]; then
     if [[ ! -d "$DEST" ]]; then
         log "FATAL: destination exists and is not a directory: $DEST"; exit 1
     fi
-    if sudo find "$DEST" -mindepth 1 -print -quit | grep -q .; then
+    if [[ -n "$(sudo find "$DEST" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
         if [[ "$MIRROR" -eq 1 ]]; then
             # Destructive maintenance must print the candidate list BEFORE acting
             # (scripts/AGENTS.md; review: Codex — a generic message then silent
@@ -276,7 +293,7 @@ if [[ -e "$DEST" ]]; then
             sudo find "$DEST" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
         else
             log "FATAL: destination is not empty: $DEST"
-            sudo find "$DEST" -mindepth 1 -maxdepth 1 -printf '  %p\n' 2>/dev/null | head -10 | sed 's/^/ma-migrate: /'
+            sudo find "$DEST" -mindepth 1 -maxdepth 1 -printf '  %p\n' 2>/dev/null | awk 'NR<=10' | sed 's/^/ma-migrate: /'
             log "Copying into it risks writing THROUGH a symlink as root and"
             log "leaving stale entries MA would open. Re-run with --mirror to"
             log "clear it first, or remove it yourself."
@@ -300,9 +317,26 @@ sudo cp -a --remove-destination "$SRC/." "$DEST/"
 # of the comparison — and a symlinked sidecar is precisely the kind of thing MA
 # would then follow when opening its store. `-mindepth 1` so the root itself is
 # not reported.
-extra=$(comm -13 \
-    <(cd "$SRC"  && sudo find . -mindepth 1 | sort) \
-    <(cd "$DEST" && sudo find . -mindepth 1 | sort))
+# Process substitution hides producer failure: bash does not propagate the exit
+# status of <(...) to comm, so a failing `sudo find` yields an EMPTY source
+# manifest, every destination entry looks "extra", and --mirror deletes valid
+# data. Materialise both, check status, and refuse an empty source manifest —
+# the source is known non-empty by this point, so empty means the enumeration
+# failed. (review: Codex)
+_man_src="$(mktemp)"; _man_dst="$(mktemp)"
+trap 'rm -f "$_man_src" "$_man_dst"' EXIT
+if ! (cd "$SRC" && sudo find . -mindepth 1 | sort) > "$_man_src"; then
+    log "FATAL: could not enumerate the source at $SRC"; exit 1
+fi
+if ! (cd "$DEST" && sudo find . -mindepth 1 | sort) > "$_man_dst"; then
+    log "FATAL: could not enumerate the destination at $DEST"; exit 1
+fi
+if [[ ! -s "$_man_src" ]]; then
+    log "FATAL: source manifest is EMPTY — enumeration failed."
+    log "Refusing: every destination entry would look extra and be deleted."
+    exit 1
+fi
+extra=$(comm -13 "$_man_src" "$_man_dst")
 if [[ -n "$extra" ]]; then
     if [[ "$MIRROR" -eq 1 ]]; then
         log "removing files present in destination but not in source (--mirror):"
@@ -334,7 +368,16 @@ while IFS= read -r -d '' f; do
     a=$(sudo sha256sum "$f" | awk '{print $1}')
     b=$(sudo sha256sum "$DEST/$rel" | awk '{print $1}')
     if [[ "$a" != "$b" ]]; then log "  CHECKSUM MISMATCH: $rel"; fail=1; else checked=$((checked+1)); fi
-done < <(sudo find "$SRC" -type f -print0)
+done < <(sudo find "$SRC" -type f -print0 || true)
+
+# Same masked-producer hazard as the manifests: a failing enumeration would
+# verify ZERO files and still report success. The source has ≥2 databases by
+# construction (checked at start), so zero checked means the walk failed.
+if [[ "$checked" -eq 0 ]]; then
+    log "FATAL: verified 0 files — the source enumeration failed."
+    log "Destination is NOT trustworthy; do not start Music Assistant against it."
+    exit 1
+fi
 
 if [[ "$fail" -ne 0 ]]; then
     log "FAILED verification — destination is NOT trustworthy."
