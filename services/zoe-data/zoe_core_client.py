@@ -769,12 +769,26 @@ _MEMORY_USAGE_DIRECTIVE = (
 _UTTERANCE_MARKER = "[The user just said]"
 
 
+# The memory block is DELIMITED so `extensions/memory.ts` can strip superseded
+# copies out of Pi's retained conversation before each LLM call (see its `context`
+# handler). Pi retains every user message it is sent, so an undelimited block
+# accumulated one full memory snapshot per turn — burning the 32k window and
+# leaving corrected facts, and resolved "add this contact?" offers, permanently
+# readable in older turns. Same vocabulary as the flue lane's `_RECALL_BLOCK_OPEN`.
+# Kept byte-for-byte in sync with MEMORY_BLOCK_OPEN/CLOSE in memory.ts (pinned by
+# a test).
+_MEMORY_BLOCK_OPEN = "[MEMORY CONTEXT]"
+_MEMORY_BLOCK_CLOSE = "[END MEMORY CONTEXT]"
+
+
 def _memory_block(packet: str) -> str:
-    """Directive + packet, or "" — the directive NEVER appears alone (see above)."""
+    """Directive + packet, delimited, or "" — the directive NEVER appears alone."""
     packet = (packet or "").strip()
     if not packet:
         return ""
-    return f"{_MEMORY_USAGE_DIRECTIVE}\n\n{packet}"
+    return (
+        f"{_MEMORY_BLOCK_OPEN}\n{_MEMORY_USAGE_DIRECTIVE}\n\n{packet}\n{_MEMORY_BLOCK_CLOSE}"
+    )
 
 
 async def _memory_packet_block(message: str, user_id: str) -> str:

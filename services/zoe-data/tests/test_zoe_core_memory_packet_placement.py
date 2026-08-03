@@ -90,7 +90,10 @@ def test_the_directive_never_appears_without_a_packet():
 
     assert zc._memory_block("") == ""
     assert zc._memory_block("   \n ") == ""
-    assert zc._memory_block(_PACKET) == f"{zc._MEMORY_USAGE_DIRECTIVE}\n\n{_PACKET}"
+    assert zc._memory_block(_PACKET) == (
+        f"{zc._MEMORY_BLOCK_OPEN}\n{zc._MEMORY_USAGE_DIRECTIVE}\n\n"
+        f"{_PACKET}\n{zc._MEMORY_BLOCK_CLOSE}"
+    )
 
     composed = zc._compose_message(
         "add bread to my shopping list",
@@ -101,6 +104,38 @@ def test_the_directive_never_appears_without_a_packet():
     )
     assert zc._MEMORY_USAGE_DIRECTIVE not in composed
     assert composed == "add bread to my shopping list"
+
+
+def test_the_memory_block_is_delimited_on_both_sides():
+    """memory.ts strips superseded blocks by these exact markers.
+
+    Pi retains every user message it is sent, so an undelimited block accumulated
+    one memory snapshot per turn. A drift here is silent: the strip would match
+    nothing and every superseded snapshot would stay in the request.
+    """
+    import re
+
+    import zoe_core_client as zc
+
+    source = (_ZOE_DATA.parent / "zoe-core" / "extensions" / "memory.ts").read_text(
+        encoding="utf-8"
+    )
+    for name, expected in (
+        ("MEMORY_BLOCK_OPEN", zc._MEMORY_BLOCK_OPEN),
+        ("MEMORY_BLOCK_CLOSE", zc._MEMORY_BLOCK_CLOSE),
+    ):
+        match = re.search(rf'{name} = "([^"]+)"', source)
+        assert match, f"could not find {name} in memory.ts — did it move?"
+        assert match.group(1) == expected, f"{name} drifted between the two runtimes"
+
+
+def test_composed_memory_block_is_wrapped_in_the_markers():
+    import zoe_core_client as zc
+
+    block = zc._memory_block(_PACKET)
+    assert block.startswith(f"{zc._MEMORY_BLOCK_OPEN}\n{zc._MEMORY_USAGE_DIRECTIVE}")
+    assert block.endswith(f"{_PACKET}\n{zc._MEMORY_BLOCK_CLOSE}")
+    assert zc._memory_block("") == ""
 
 
 def test_the_two_copies_of_the_utterance_marker_are_byte_identical():

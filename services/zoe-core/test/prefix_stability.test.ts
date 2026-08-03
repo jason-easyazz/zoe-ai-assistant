@@ -39,9 +39,13 @@ import { fileURLToPath } from "node:url";
 
 import soulExtension from "../extensions/soul.ts";
 import memoryExtension, {
+  MEMORY_BLOCK_CLOSE,
+  MEMORY_BLOCK_OPEN,
   MEMORY_SEAM_ENV,
   MEMORY_USAGE_DIRECTIVE,
   memoryBlock,
+  stripMemoryBlocks,
+  stripSupersededMemory,
 } from "../extensions/memory.ts";
 import {
   UTTERANCE_MARKER,
@@ -62,13 +66,16 @@ interface Handler {
 }
 
 function stubPi() {
-  const handlers: Handler[] = [];
+  const handlers: Handler[] = []; // the before_agent_start chain, in order
+  const byEvent = new Map<string, Handler[]>();
   const activeToolCalls: string[][] = [];
   return {
     handlers,
+    byEvent,
     activeToolCalls,
-    on(_event: string, handler: Handler) {
-      handlers.push(handler);
+    on(event: string, handler: Handler) {
+      byEvent.set(event, [...(byEvent.get(event) ?? []), handler]);
+      if (event === "before_agent_start") handlers.push(handler);
     },
     registerTool() {},
     setActiveTools(names: string[]) {
@@ -207,8 +214,10 @@ test("the usage directive never appears without a packet", async () => {
   assert.equal(memoryBlock(""), "");
   assert.equal(memoryBlock("   "), "");
   const block = memoryBlock(packetFor(TURN_A));
-  assert.ok(block.startsWith(MEMORY_USAGE_DIRECTIVE));
-  assert.ok(block.endsWith(packetFor(TURN_A)));
+  assert.ok(block.startsWith(`${MEMORY_BLOCK_OPEN}\n${MEMORY_USAGE_DIRECTIVE}`));
+  assert.ok(block.endsWith(`${packetFor(TURN_A)}\n${MEMORY_BLOCK_CLOSE}`));
+  // The delimiters must round-trip: what the seam writes, the strip removes.
+  assert.equal(stripMemoryBlocks(block), "");
 });
 
 test("unknown user: no packet fetched, and the system prompt is still stable", async () => {
@@ -347,7 +356,150 @@ test("disclosure is bounded — a stale domain leaves after the window", async (
   );
 });
 
-// ── (3) disclosure sees the UTTERANCE, not the whole composed prompt ──────────
+// ── (3) superseded memory blocks are elided from the retained conversation ───
+//
+// Pi keeps every user message it is sent, so without elision turn N's request
+// carries N memory snapshots — the 32k window fills with duplicates and corrected
+// facts (and resolved "add this contact?" offers) stay readable in older turns.
+
+/** One composed user message as the seam builds it. */
+function userTurn(utterance: string, packet?: string) {
+  const parts = ["[About you]\nJason, lives in Geraldton"];
+  if (packet) {
+    parts.push(`${MEMORY_BLOCK_OPEN}\n${MEMORY_USAGE_DIRECTIVE}\n\n${packet}\n${MEMORY_BLOCK_CLOSE}`);
+  }
+  parts.push(`${UTTERANCE_MARKER}\n${utterance}`);
+  return { role: "user", content: [{ type: "text", text: parts.join("\n\n") }] };
+}
+
+function assistantTurn(text: string) {
+  return { role: "assistant", content: [{ type: "text", text }] };
+}
+
+function allText(messages: readonly { content?: unknown }[]): string {
+  return messages
+    .map((m) => (Array.isArray(m.content) ? m.content.map((c: never) => (c as { text?: string }).text ?? "").join("") : String(m.content ?? "")))
+    .join("\n");
+}
+
+function blockCount(messages: readonly { content?: unknown }[]): number {
+  return allText(messages).split(MEMORY_BLOCK_OPEN).length - 1;
+}
+
+/** A realistic long session: every turn carries its own fresh snapshot. */
+function session(turns: number, packetFor: (turn: number) => string) {
+  const messages: ReturnType<typeof userTurn>[] | object[] = [];
+  for (let t = 0; t < turns; t++) {
+    messages.push(userTurn(`question ${t}`, packetFor(t)));
+    if (t < turns - 1) messages.push(assistantTurn(`answer ${t}`));
+  }
+  return messages as { role?: string; content?: unknown }[];
+}
+
+test("N turns leave exactly ONE memory block in the request", async () => {
+  const turns = 8;
+  const raw = session(turns, (t) => `## What I know about you\n- fact as of turn ${t} [mem:${t}]`);
+  assert.equal(blockCount(raw), turns, "fixture is not accumulating — test would be vacuous");
+
+  const view = stripSupersededMemory(raw);
+  assert.equal(blockCount(view), 1, "superseded memory snapshots are still in the request");
+  // ...and it is the NEWEST one, sitting in the last user message.
+  assert.ok(allText(view).includes(`fact as of turn ${turns - 1}`));
+  assert.ok(!allText(view).includes("fact as of turn 0"));
+});
+
+test("a corrected fact does not survive in an older turn", async () => {
+  const raw = [
+    userTurn("what's my dog called", "## What I know about you\n- the dog is named Rex [mem:1]"),
+    assistantTurn("Rex!"),
+    userTurn("no, he's Pixel", "## What I know about you\n- the dog is named Pixel [mem:2]"),
+  ];
+  const view = stripSupersededMemory(raw);
+  const text = allText(view);
+  assert.ok(text.includes("Pixel"), "the current fact was dropped");
+  assert.ok(!text.includes("Rex [mem:1]"), "the superseded fact is still readable");
+});
+
+test("a resolved pending-contact offer stops being asked", async () => {
+  // The imperative case: `_fold_pending_contact_offers` writes an instruction, not
+  // a fact. Left in history it makes Zoe re-ask a question already answered.
+  const offer = '## What I know about you\n- Ask the user: "Would you like me to add Sam as a contact?" [pending-contact]';
+  const raw = [
+    userTurn("morning", offer),
+    assistantTurn("Would you like me to add Sam as a contact?"),
+    userTurn("yes please", "## What I know about you\n- Sam is Jason's brother [mem:9]"),
+  ];
+  const view = stripSupersededMemory(raw);
+  assert.ok(!allText(view).includes("[pending-contact]"), "the resolved offer is still being asked");
+  assert.ok(allText(view).includes("Sam is Jason's brother"));
+});
+
+test("elision touches ONLY superseded user messages", async () => {
+  const raw = session(3, (t) => `## What I know about you\n- fact ${t}`);
+  const view = stripSupersededMemory(raw);
+  assert.equal(view.length, raw.length, "messages must never be dropped, only trimmed");
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i].role !== "user") {
+      assert.equal(view[i], raw[i], "an assistant message was rewritten");
+    }
+  }
+  // The newest user message is untouched — identity, not just equality.
+  assert.equal(view.at(-1), raw.at(-1));
+  // The utterances all survive: only the memory block goes.
+  for (let t = 0; t < 3; t++) assert.ok(allText(view).includes(`question ${t}`));
+  // And the surrounding blocks survive too.
+  assert.equal(allText(view).split("[About you]").length - 1, 3);
+});
+
+test("elision is idempotent and a no-op without blocks", async () => {
+  const raw = session(4, (t) => `## What I know about you\n- fact ${t}`);
+  const once = stripSupersededMemory(raw);
+  assert.deepEqual(stripSupersededMemory(once), once);
+
+  // No memory this turn → nothing to strip → the request is untouched, so the KV
+  // prefix runs the whole way.
+  const bare = [userTurn("hi"), assistantTurn("hello"), userTurn("still here")];
+  assert.equal(stripSupersededMemory(bare), bare);
+});
+
+test("stripMemoryBlocks leaves surrounding text intact", async () => {
+  const text = `[About you]\nJason\n\n${MEMORY_BLOCK_OPEN}\ndirective\n\npacket\n${MEMORY_BLOCK_CLOSE}\n\n${UTTERANCE_MARKER}\nhello`;
+  assert.equal(stripMemoryBlocks(text), `[About you]\nJason\n\n${UTTERANCE_MARKER}\nhello`);
+  assert.equal(stripMemoryBlocks("no block here"), "no block here");
+});
+
+test("the elision is REGISTERED on the context event, not merely implemented", async () => {
+  // Without this the whole fix can be reverted by deleting one `pi.on(...)` line
+  // and every unit test above still passes — they call the function directly.
+  // Verified live too: instrumenting this handler showed a real two-turn session
+  // going from 2 memory blocks to 1 on the second turn.
+  const pi = stubPi();
+  memoryExtension(pi as never);
+
+  const contextHandlers = pi.byEvent.get("context") ?? [];
+  assert.equal(contextHandlers.length, 1, "no context handler is registered");
+
+  const raw = session(5, (t) => `## What I know about you\n- fact as of turn ${t}`);
+  const result = (await contextHandlers[0]({ type: "context", messages: raw })) as {
+    messages: { content?: unknown }[];
+  };
+  assert.ok(result?.messages, "the handler returned no messages");
+  assert.equal(blockCount(result.messages), 1);
+  assert.ok(!allText(result.messages).includes("fact as of turn 0"));
+
+  // A non-context payload must not blow up the handler.
+  assert.equal(await contextHandlers[0]({ type: "context" }), undefined);
+});
+
+test("NEGATIVE CONTROL: without elision the request accumulates every snapshot", async () => {
+  const turns = 8;
+  const raw = session(turns, (t) => `## What I know about you\n- fact as of turn ${t}`);
+  // The pre-fix behaviour is simply: hand the messages through untouched.
+  assert.equal(blockCount(raw), turns, "the control is no longer controlling");
+  assert.ok(allText(raw).includes("fact as of turn 0"), "stale snapshot should still be present");
+});
+
+// ── (4) disclosure sees the UTTERANCE, not the whole composed prompt ──────────
 
 /** What zoe-data's `_compose_message` actually sends (verified live). */
 function composed(utterance: string, { history = "", memory = "" } = {}): string {

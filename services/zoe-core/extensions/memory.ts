@@ -112,7 +112,10 @@ export function seamOwnsPacket(): boolean {
 export function memoryBlock(packet: string): string {
   const trimmed = (packet ?? "").trim();
   if (!trimmed) return "";
-  return `${MEMORY_USAGE_DIRECTIVE}\n\n${trimmed}`;
+  // Delimited identically to the seam's `_memory_block`, so one strip rule covers
+  // both. (Standalone puts this on the SYSTEM prompt, which Pi replaces each turn,
+  // so nothing accumulates there — the markers are for symmetry, not for elision.)
+  return `${MEMORY_BLOCK_OPEN}\n${MEMORY_USAGE_DIRECTIVE}\n\n${trimmed}\n${MEMORY_BLOCK_CLOSE}`;
 }
 
 export async function fetchMemoryPacket(message: string): Promise<string> {
@@ -133,7 +136,113 @@ export async function fetchMemoryPacket(message: string): Promise<string> {
   }
 }
 
+// ── Superseded-packet elision (Pi retains every user message it is sent) ─────
+//
+// The seam folds the memory block into the user message, and Pi keeps that
+// message in its conversation forever — one long-lived process per
+// (user_id, session_id). So without this, turn N's request carried N memory
+// snapshots: the 32k window filled with duplicates, corrected facts stayed
+// readable in older turns, and an imperative "Ask the user: would you like me to
+// add <name> as a contact?" survived being resolved. The old system-prompt
+// injection did not have this problem because a system prompt is REPLACED.
+//
+// Pi's `context` event is the fix, and it is a genuine ephemeral slot rather than
+// a history rewrite: the runner hands handlers a `structuredClone` of the
+// messages and `transformContext` (pi-agent-core agent-loop.js) feeds the result
+// to the provider ONLY — `context.messages`, the retained state, is untouched.
+// pi-agent-core documents the hook for exactly this ("Context window management
+// (pruning old messages)"). So the model sees one packet; nothing is destroyed.
+//
+// KV-PREFIX COST, accepted deliberately and measured: eliding the previous turn's
+// block changes bytes that were already in the cache, so reuse now ends at that
+// block instead of running to the end of the conversation — one exchange is
+// re-prefilled per turn. That is unavoidable for ANY design that stops resending
+// superseded context (an ephemeral insert shifts positions just as an elision
+// does), and it is bounded and constant, unlike the pre-PR behaviour where a
+// message-keyed packet on the system prompt re-prefilled the ENTIRE conversation
+// every turn. On a turn with no memory there is nothing to strip and the prefix
+// runs the whole way.
+export const MEMORY_BLOCK_OPEN = "[MEMORY CONTEXT]";
+export const MEMORY_BLOCK_CLOSE = "[END MEMORY CONTEXT]";
+
+function escapeForRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const MEMORY_BLOCK_RE = new RegExp(
+  `\\n*${escapeForRegExp(MEMORY_BLOCK_OPEN)}\\n[\\s\\S]*?\\n${escapeForRegExp(MEMORY_BLOCK_CLOSE)}\\n*`,
+  "g",
+);
+
+/** Every delimited memory block removed, with the surrounding blank line healed. */
+export function stripMemoryBlocks(text: string): string {
+  if (!text.includes(MEMORY_BLOCK_OPEN)) return text;
+  return text.replace(MEMORY_BLOCK_RE, "\n\n").trim();
+}
+
+/** Minimal structural view of a Pi conversation message. */
+interface ContextMessage {
+  role?: string;
+  content?: string | { type?: string; text?: string }[];
+}
+
+function stripMessage(message: ContextMessage): ContextMessage {
+  const content = message.content;
+  if (typeof content === "string") {
+    const stripped = stripMemoryBlocks(content);
+    return stripped === content ? message : { ...message, content: stripped };
+  }
+  if (!Array.isArray(content)) return message;
+  let changed = false;
+  const parts = content.map((part) => {
+    if (part?.type !== "text" || typeof part.text !== "string") return part;
+    const stripped = stripMemoryBlocks(part.text);
+    if (stripped === part.text) return part;
+    changed = true;
+    return { ...part, text: stripped };
+  });
+  return changed ? { ...message, content: parts } : message;
+}
+
+/**
+ * The per-request view with every memory block except the newest one removed.
+ *
+ * The LAST user message keeps its block — that is this turn's memory, and it sits
+ * ahead of the user's own words where it was measured to belong. Everything older
+ * is superseded by it and is dropped.
+ */
+export function stripSupersededMemory<T extends ContextMessage>(messages: readonly T[]): T[] {
+  let newestUser = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") {
+      newestUser = i;
+      break;
+    }
+  }
+  if (newestUser <= 0) return messages as T[]; // nothing is superseded yet
+  let changed = false;
+  const view = messages.map((message, i) => {
+    if (i === newestUser || message?.role !== "user") return message;
+    const stripped = stripMessage(message) as T;
+    if (stripped !== message) changed = true;
+    return stripped;
+  });
+  // Return the ORIGINAL array when nothing was superseded. Identity matters here:
+  // "no memory this turn" must be a true no-op, so the KV prefix runs the whole
+  // way instead of paying for an elision that removed nothing.
+  return changed ? view : (messages as T[]);
+}
+
 export default function (pi: ExtensionAPI) {
+  // Fired before EVERY LLM call, including each step of a tool loop — which is
+  // correct: the newest user message is the same one throughout a turn, so its
+  // block is kept and only genuinely older ones are dropped.
+  pi.on("context", async (event) => {
+    const messages = (event as { messages?: ContextMessage[] })?.messages;
+    if (!Array.isArray(messages)) return;
+    return { messages: stripSupersededMemory(messages) as never };
+  });
+
   pi.on("before_agent_start", async (event) => {
     // Production (seam-driven): contribute NOTHING to the system prompt, so it is
     // byte-identical on every turn of the session and the KV prefix survives.
