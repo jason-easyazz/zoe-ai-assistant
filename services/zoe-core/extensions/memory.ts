@@ -62,6 +62,7 @@
  * `services/zoe-data/tests/test_zoe_core_memory_packet_placement.py`.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { HISTORY_CLOSE, HISTORY_MARKER } from "./abilities.ts";
 
 const ZOE_DATA_URL = process.env.ZOE_DATA_URL ?? "http://127.0.0.1:8000";
 const INTERNAL_TOKEN = process.env.ZOE_INTERNAL_TOKEN ?? "";
@@ -139,9 +140,9 @@ export async function fetchMemoryPacket(message: string): Promise<string> {
   }
 }
 
-// ── Superseded-packet elision (Pi retains every user message it is sent) ─────
+// ── Superseded-CONTEXT elision (Pi retains every user message it is sent) ────
 //
-// The seam folds the memory block into the user message, and Pi keeps that
+// The seam folds its context blocks into the user message, and Pi keeps that
 // message in its conversation forever — one long-lived process per
 // (user_id, session_id). So without this, turn N's request carried N memory
 // snapshots: the 32k window filled with duplicates, corrected facts stayed
@@ -149,24 +150,70 @@ export async function fetchMemoryPacket(message: string): Promise<string> {
 // add <name> as a contact?" survived being resolved. The old system-prompt
 // injection did not have this problem because a system prompt is REPLACED.
 //
+// EVERY block the seam composes has that shape, not just the memory packet, and
+// the memory packet is not even the biggest of them:
+//
+//   * `[About you]` — a near-constant portrait paragraph, repeated verbatim.
+//   * `[What you remember]` — the caller-supplied recall block (the voice path
+//     always supplies one), re-queried per turn.
+//   * `[Recent conversation]` — `history[-12:]`, REPLAYED ON EVERY TURN. This is
+//     the expensive one: an N-turn session carried N copies of an overlapping
+//     12-turn window, on top of the real retained conversation those turns are
+//     already in. Quadratic in the session length, and entirely superseded.
+//
+// So the strip is over the whole TABLE of blocks below, not one pair.
+//
 // Pi's `context` event is the fix, and it is a genuine ephemeral slot rather than
 // a history rewrite: the runner hands handlers a `structuredClone` of the
 // messages and `transformContext` (pi-agent-core agent-loop.js) feeds the result
 // to the provider ONLY — `context.messages`, the retained state, is untouched.
 // pi-agent-core documents the hook for exactly this ("Context window management
-// (pruning old messages)"). So the model sees one packet; nothing is destroyed.
+// (pruning old messages)"). So the model sees one copy; nothing is destroyed.
 //
 // KV-PREFIX COST, accepted deliberately and measured: eliding the previous turn's
-// block changes bytes that were already in the cache, so reuse now ends at that
-// block instead of running to the end of the conversation — one exchange is
+// blocks changes bytes that were already in the cache, so reuse now ends at that
+// message instead of running to the end of the conversation — one exchange is
 // re-prefilled per turn. That is unavoidable for ANY design that stops resending
 // superseded context (an ephemeral insert shifts positions just as an elision
 // does), and it is bounded and constant, unlike the pre-PR behaviour where a
 // message-keyed packet on the system prompt re-prefilled the ENTIRE conversation
-// every turn. On a turn with no memory there is nothing to strip and the prefix
-// runs the whole way.
+// every turn. On a turn with no context blocks there is nothing to strip and the
+// prefix runs the whole way.
+//
+// WIDENING THE STRIP FROM ONE BLOCK TO FOUR ADDS NOTHING TO THAT COST. The break
+// point is already the previous user message — the portrait sits a few hundred
+// bytes EARLIER inside that same message, so the boundary moves within one
+// message rather than to an earlier one. The bound stays "~one exchange", and the
+// tokens reclaimed are far larger: `[Recent conversation]` alone is up to 12
+// replayed turns per superseded message.
 export const MEMORY_BLOCK_OPEN = "[MEMORY CONTEXT]";
 export const MEMORY_BLOCK_CLOSE = "[END MEMORY CONTEXT]";
+
+// The seam's other two labels. `[Recent conversation]` is owned by abilities.ts —
+// it PARSES that block to seed disclosure on a restarted worker — and is imported
+// rather than copied, so this runtime holds exactly one spelling of it.
+//
+// Each close is `"[END " + label.slice(1)`, the rule MEMORY_BLOCK_OPEN/CLOSE
+// already follow, mirrored by `_close_marker` in zoe_core_client.py.
+export const PORTRAIT_BLOCK_OPEN = "[About you]";
+export const PORTRAIT_BLOCK_CLOSE = "[END About you]";
+export const RECALL_BLOCK_OPEN = "[What you remember]";
+export const RECALL_BLOCK_CLOSE = "[END What you remember]";
+
+/**
+ * Every delimited block the seam folds into a user message, in composition order.
+ *
+ * Pinned equal to `_CONTEXT_BLOCKS` in services/zoe-data/zoe_core_client.py by a
+ * test: the two runtimes are separate processes, and a drift is SILENT — the strip
+ * would simply match nothing and every superseded copy would stay in the request,
+ * which is the bug this exists to prevent.
+ */
+export const CONTEXT_BLOCKS: readonly (readonly [string, string])[] = [
+  [PORTRAIT_BLOCK_OPEN, PORTRAIT_BLOCK_CLOSE],
+  [RECALL_BLOCK_OPEN, RECALL_BLOCK_CLOSE],
+  [MEMORY_BLOCK_OPEN, MEMORY_BLOCK_CLOSE],
+  [HISTORY_MARKER, HISTORY_CLOSE],
+];
 
 // ── Delimiter-collision guard (mirrors `_neutralize_markers` in zoe_core_client) ─
 //
@@ -200,8 +247,11 @@ export function neutralizeMarkers(text: string): string {
   return out;
 }
 
+const OPEN_MARKERS = new Set(CONTEXT_BLOCKS.map(([open]) => open));
+const CLOSE_MARKERS = new Set(CONTEXT_BLOCKS.map(([, close]) => close));
+
 /**
- * Every delimited memory block removed, with the surrounding blank line healed.
+ * Every seam-composed context block removed, with the surrounding blank line healed.
  *
  * DEFENSIVE BY CONSTRUCTION, independent of the guard above — the guard is the
  * fix, this is the backstop for content that reached the conversation before it,
@@ -210,19 +260,31 @@ export function neutralizeMarkers(text: string): string {
  *   * A delimiter counts only as a WHOLE LINE. Composition always emits it that
  *     way, so an inline mention ("the [MEMORY CONTEXT] marker") is not ours and
  *     the text is returned untouched.
- *   * Elision runs from the FIRST open line to the LAST close line — greedy, not
- *     the non-greedy regex this replaces. On well-formed input (exactly one block
- *     per composed message) the two are identical; on hostile input the greedy
- *     span swallows the injected delimiter instead of stopping at it.
+ *   * ONE CONTIGUOUS SPAN, from the first line that is ANY open delimiter to the
+ *     last line that is ANY close delimiter — not one pass per pair.
  *   * An open line with NO close after it elides to the END of the message.
  *
- * Both choices are the same deliberate trade: this only ever runs on SUPERSEDED
- * user messages, so over-eliding costs some already-stale context, while
- * under-eliding leaks exactly the stale facts and resolved offers the whole
- * mechanism exists to remove. Prefer over-eliding, always.
+ * WHY ONE SPAN AND NOT FOUR PASSES. Per-pair passes were tried and are UNSAFE, and
+ * the negative control in test/prefix_stability.test.ts reproduces it: a memory
+ * whose text is the line `[END About you]` makes the portrait pass — greedy to the
+ * LAST close of its own pair — run from the real portrait open right through the
+ * `[MEMORY CONTEXT]` OPEN line. The memory pass then finds no open of its own,
+ * returns the text untouched, and the rest of the superseded packet (stale facts, a
+ * resolved contact offer) LEAKS. Over-eliding one block must never under-elide
+ * another; a single span cannot destroy an anchor it has not already passed.
+ *
+ * Composition emits the blocks contiguously, so on well-formed input the span is
+ * byte-identical to eliding each block separately.
+ *
+ * The trade is the same one stated for the memory block alone: this only ever runs
+ * on SUPERSEDED user messages, so over-eliding costs already-stale context while
+ * under-eliding leaks exactly what the mechanism exists to remove. Prefer
+ * over-eliding, always.
+ *
+ * Returns the SAME string object when there is nothing of ours to remove — the
+ * identity the no-op path above depends on.
  */
-export function stripMemoryBlocks(text: string): string {
-  if (!text.includes(MEMORY_BLOCK_OPEN)) return text;
+export function stripContextBlocks(text: string): string {
   const lines = text.split("\n");
   let first = -1;
   let last = -1;
@@ -230,8 +292,11 @@ export function stripMemoryBlocks(text: string): string {
     // trimEnd only: composition never indents a delimiter, so a leading space
     // means the line is content, not ours.
     const line = lines[i].trimEnd();
-    if (line === MEMORY_BLOCK_OPEN && first === -1) first = i;
-    else if (line === MEMORY_BLOCK_CLOSE && first !== -1 && i > first) last = i;
+    if (first === -1) {
+      if (OPEN_MARKERS.has(line)) first = i;
+    } else if (CLOSE_MARKERS.has(line)) {
+      last = i;
+    }
   }
   if (first === -1) return text; // an inline mention or a stray close — nothing of ours
   const head = lines.slice(0, first);
@@ -251,14 +316,14 @@ interface ContextMessage {
 function stripMessage(message: ContextMessage): ContextMessage {
   const content = message.content;
   if (typeof content === "string") {
-    const stripped = stripMemoryBlocks(content);
+    const stripped = stripContextBlocks(content);
     return stripped === content ? message : { ...message, content: stripped };
   }
   if (!Array.isArray(content)) return message;
   let changed = false;
   const parts = content.map((part) => {
     if (part?.type !== "text" || typeof part.text !== "string") return part;
-    const stripped = stripMemoryBlocks(part.text);
+    const stripped = stripContextBlocks(part.text);
     if (stripped === part.text) return part;
     changed = true;
     return { ...part, text: stripped };
@@ -267,13 +332,20 @@ function stripMessage(message: ContextMessage): ContextMessage {
 }
 
 /**
- * The per-request view with every memory block except the newest one removed.
+ * The per-request view with every context block except the newest copy removed.
  *
- * The LAST user message keeps its block — that is this turn's memory, and it sits
- * ahead of the user's own words where it was measured to belong. Everything older
- * is superseded by it and is dropped.
+ * The LAST user message keeps ALL of its blocks — that is this turn's context, and
+ * the memory block sits ahead of the user's own words where it was measured to
+ * belong. Every older user message is superseded WHOLESALE and loses all four
+ * blocks, keeping only the words the user actually said.
+ *
+ * Superseded is decided by POSITION, not per block type: a block missing from this
+ * turn is missing because zoe-data chose not to supply it (no portrait for this
+ * user, no recall hit), and reviving an older copy would be exactly the stale-fact
+ * bug in a new place. So each block type survives at most once, in the newest user
+ * message, and never as a leftover from an earlier turn.
  */
-export function stripSupersededMemory<T extends ContextMessage>(messages: readonly T[]): T[] {
+export function stripSupersededContext<T extends ContextMessage>(messages: readonly T[]): T[] {
   let newestUser = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role === "user") {
@@ -298,11 +370,11 @@ export function stripSupersededMemory<T extends ContextMessage>(messages: readon
 export default function (pi: ExtensionAPI) {
   // Fired before EVERY LLM call, including each step of a tool loop — which is
   // correct: the newest user message is the same one throughout a turn, so its
-  // block is kept and only genuinely older ones are dropped.
+  // blocks are kept and only genuinely older ones are dropped.
   pi.on("context", async (event) => {
     const messages = (event as { messages?: ContextMessage[] })?.messages;
     if (!Array.isArray(messages)) return;
-    return { messages: stripSupersededMemory(messages) as never };
+    return { messages: stripSupersededContext(messages) as never };
   });
 
   pi.on("before_agent_start", async (event) => {
