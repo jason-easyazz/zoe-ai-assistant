@@ -317,3 +317,12 @@ def test_source_stores_must_be_regular_files():
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert 'sudo test -L "$SRC/$required"' in src, "must reject symlinked stores"
     assert "source database is a symlink, not a regular file" in src
+
+
+def test_emitted_restart_command_is_shell_quoted():
+    """The destination is printed for the operator to PASTE. An absolute path
+    with whitespace or metacharacters copies and verifies fine, then the
+    unquoted paste word-splits — Compose gets the wrong path (or evaluates the
+    metacharacters) while MA is still stopped (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert """ZOE_MA_DATA=$(printf '%q' "$DEST")""" in src

@@ -431,7 +431,12 @@ log "     It does NOT untrack the databases: auth.db, library.db and their WALs"
 log "     are still tracked at this commit, so the credentials remain in git"
 log "     history and CD will keep rolling those paths back. Untracking is a"
 log "     SEPARATE step B, still outstanding after this. (review: Codex)"
-log "  2. ZOE_MA_DATA=$DEST docker compose -f docker-compose.modules.yml up -d music-assistant"
+# The destination is emitted for the operator to PASTE, so it must be
+# shell-quoted (review: Codex). `/mnt/My Drive/music-assistant` copies and
+# verifies fine, then the unquoted paste word-splits — Compose gets the wrong
+# path (or evaluates metacharacters) while MA is still stopped. printf %q makes
+# the emitted command correct for any path we accepted.
+log "  2. ZOE_MA_DATA=$(printf '%q' "$DEST") docker compose -f docker-compose.modules.yml up -d music-assistant"
 log "     (the resolved destination is spelled out because a one-shot"
 log "      \`ZOE_MA_DATA=... ./migrate…\` does not survive this script exiting —"
 log "      Compose would otherwise fall back to its default and initialise an"
