@@ -333,7 +333,10 @@ Secondary / track-only:
 
 ## Sources
 
-llama.cpp source (cached, `~/.opensrc/repos/github.com/ggerganov/llama.cpp/master`):
+llama.cpp source. The `--cache-reuse` / prompt-cache citations below were read in the RUNNING
+build `~/llama.cpp` @ `f449e0553` (detached HEAD) and their line numbers are that build's; the rest are
+from the cached upstream mirror `~/.opensrc/repos/github.com/ggerganov/llama.cpp/master`, whose
+line numbers differ:
 - `src/llama-context.cpp:401-405` — quantized-V-requires-FA throw (K-quant allowed FA-off).
 - `tools/server/server-context.cpp:3149` — `get_common_prefix` exact-prefix reuse (not shift-gated).
 - `tools/server/server-context.cpp` — `can_cache_reuse = llama_memory_can_shift(...)`; warning when unsupported (our build f449e05: `:2846-2855`).

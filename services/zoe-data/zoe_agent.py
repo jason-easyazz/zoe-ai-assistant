@@ -3670,8 +3670,14 @@ async def _llm_call(
 # Stride 3 (~1 user turn in 3 is an anchor) measured over 40 synthetic sessions:
 # the head survives ~56% of turns versus 0% for the old newest-N walk, costing
 # ~2.5 messages of average depth (12.0 -> 9.5). Stride 1 makes every user turn
-# an anchor and reproduces the old sliding behaviour exactly — the negative
-# control.
+# an anchor, matching the old sliding behaviour whenever the affordable window
+# opens on a user turn — it does NOT disable the user-turn rule below, so an
+# assistant-led floor still advances.
+#
+# Verified against the running build, ~/llama.cpp @ f449e0553 (detached HEAD):
+#   src/llama-kv-cache-iswa.cpp:232-236     get_can_shift(), no Gemma exclusion
+#   tools/server/server-context.cpp:2846-2855   can_cache_reuse gate
+#   tools/server/server-task.cpp:1675-1700      server_prompt_cache::load
 _HISTORY_MAX_MSGS = 12
 _HISTORY_ANCHOR_STRIDE = 3
 

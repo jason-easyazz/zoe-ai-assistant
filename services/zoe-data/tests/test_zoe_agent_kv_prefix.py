@@ -1,11 +1,16 @@
 """KV-prefix stability tests for the Zoe Agent history window.
 
 ``zoe_agent`` keeps its system prompt byte-identical every turn so llama.cpp can
-reuse the cached KV for it. For this SWA model exact common-prefix matching is
-the ONLY reuse path (``--cache-reuse`` is dropped from ``llama-server.service``
-because KV shifting is unsupported for Gemma's shared-KV + SWA attention), so
-the message immediately after the system prompt has to be stable too: if the
-window HEAD moves, every token past the system prompt is re-prefilled.
+reuse the cached KV for it. Exact common-prefix matching is the only AFFORDABLE
+reuse path here — a RAM-budget tradeoff, not an upstream limitation.
+``--cache-reuse`` is omitted from ``llama-server.service`` BY CHOICE, not
+because it is unsupported: upstream #21468 was closed as fixed by #22288 and
+that fix is in our build, but shifting stays conditionally off until
+``--swa-full`` equalises the base and SWA cache sizes — and equalising them is
+~50× SWA cache growth (30 MiB → 1,536 MiB on Gemma E2B), which does not fit.
+``--cache-ram`` is itself a prefix cache. So the message immediately after the
+system prompt has to be stable too: if the window HEAD moves, every token past
+the system prompt is re-prefilled.
 
 The old selector walked newest → oldest and kept "the newest N that fit", which
 moves the head on every single turn. ``_compact_history`` pins the head to a
@@ -34,6 +39,18 @@ SYSTEM_PROMPT = "You are Zoe. " * 200
 BUDGET = 4000
 # Small enough that the token walk itself drops messages, not just the caller slide.
 TIGHT_BUDGET = 250
+
+# Four turns sized so a chosen budget lands the affordable floor on any index we
+# like — including the ASSISTANT-led floors, which is where stride-1 anchoring
+# legitimately diverges from the legacy walk. Estimated cost per message
+# (len//4 + 10) is 110 / 110 / 20 / 20, so the affordable suffixes cost
+# 260 / 150 / 40 / 20 tokens.
+PRESSURE_HISTORY = [
+    {"role": "user", "content": "u0 " + "x" * 400},
+    {"role": "assistant", "content": "a0 " + "y" * 400},
+    {"role": "user", "content": "u1 " + "x" * 40},
+    {"role": "assistant", "content": "a1 " + "y" * 40},
+]
 
 
 # ── Fixtures and helpers ──────────────────────────────────────────────────────
@@ -199,12 +216,56 @@ def test_legacy_newest_n_walk_is_the_negative_control(budget):
     )
 
 
-def test_stride_one_reproduces_the_legacy_selection_exactly():
-    """Stride 1 disables anchoring, so it must match the old algorithm message-for-message."""
+@pytest.mark.parametrize("budget", [BUDGET, TIGHT_BUDGET])
+def test_stride_one_matches_legacy_when_the_window_opens_on_a_user_turn(budget):
+    """Scoped equivalence: stride 1 disables the hash sampling, NOT the user-turn rule.
+
+    An earlier version of this test claimed stride 1 reproduces the legacy walk
+    universally. That is false — `_is_history_anchor` rejects assistant turns at
+    every stride, so when the affordable floor lands on an assistant message
+    stride 1 advances to the next user turn while the legacy walk opens on the
+    assistant. Production always runs stride 3, so this is a claim defect rather
+    than a behaviour bug, but the claim has to be scoped to be worth anything.
+
+    Note this is a CONVENIENCE equivalence, not the negative control: the real
+    control is `_legacy_trim` above, reimplemented verbatim from the pre-fix code.
+    """
     session = _session(40)
+    checked = 0
     for turn in range(6, 20):
         history = _as_caller_sees_it(session, turn)
-        assert zoe_agent._compact_history(history, BUDGET, stride=1) == _legacy_trim(history, BUDGET)
+        legacy = _legacy_trim(history, budget)
+        compact = zoe_agent._compact_history(history, budget, stride=1)
+        if legacy and legacy[0]["role"] == "user":
+            checked += 1
+            assert compact == legacy
+    assert checked, "no user-led floor in the fixture — test would be vacuous"
+
+
+@pytest.mark.parametrize("budget,expected", [
+    # budget          floor  role        stride-1 result vs legacy
+    (260, PRESSURE_HISTORY[0:]),   # floor 0, user      → identical
+    (150, PRESSURE_HISTORY[2:]),   # floor 1, ASSISTANT → advances past it
+    (40, PRESSURE_HISTORY[2:]),    # floor 2, user      → identical
+    (20, []),                      # floor 3, ASSISTANT, none after → empty
+    (0, []),                       # affords nothing
+])
+def test_stride_one_under_budget_pressure(budget, expected):
+    """Pins both sides of the scoped claim on hand-sized, budget-pressured windows.
+
+    The budget-150 row is the reviewer's traced counter-example to the old
+    universal claim: legacy opens on the assistant, stride 1 does not.
+    """
+    compact = zoe_agent._compact_history(PRESSURE_HISTORY, budget, stride=1)
+    legacy = _legacy_trim(PRESSURE_HISTORY, budget)
+
+    assert compact == expected
+    assert _est_tokens(compact) <= max(budget, 0)
+    if legacy and legacy[0]["role"] == "user":
+        assert compact == legacy, "user-led floor: equivalence holds"
+    else:
+        assert compact != legacy or not legacy, "assistant-led floor: must diverge"
+        assert not compact or compact[0]["role"] == "user"
 
 
 # ── (b) budget and cap contracts ──────────────────────────────────────────────
@@ -221,7 +282,7 @@ def test_message_cap_and_token_budget_respected():
         assert len(kept) <= zoe_agent._HISTORY_MAX_MSGS
         assert _est_tokens(kept) <= budget
         # Always a contiguous suffix — never a reordered or gapped window.
-        assert kept == history[len(history) - len(kept):] if kept else True
+        assert not kept or kept == history[len(history) - len(kept):]
 
 
 @pytest.mark.parametrize("budget", [BUDGET, TIGHT_BUDGET])
@@ -250,12 +311,7 @@ def test_fallback_without_anchors_still_opens_on_a_user_turn():
     anchor search is guaranteed to come up empty and the fallback runs. The
     budget is set so the affordable window opens mid-pair, on the assistant.
     """
-    history = [
-        {"role": "user", "content": "u0 " + "x" * 400},
-        {"role": "assistant", "content": "a0 " + "y" * 400},
-        {"role": "user", "content": "u1 " + "x" * 40},
-        {"role": "assistant", "content": "a1 " + "y" * 40},
-    ]
+    history = PRESSURE_HISTORY
     no_anchor_stride = 2 ** 64
     assert not any(zoe_agent._is_history_anchor(m, no_anchor_stride) for m in history)
 
