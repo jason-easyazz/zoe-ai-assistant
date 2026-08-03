@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime
 
 import pytest
+import pytest_asyncio
 
 # Load env from services/zoe-data/.env if POSTGRES_URL not set
 if not os.environ.get('POSTGRES_URL'):
@@ -31,7 +32,11 @@ if not os.environ.get('POSTGRES_URL'):
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../services/zoe-data'))
 
 
-@pytest.fixture(scope="module")
+# loop_scope must match the fixture's own scope under pytest-asyncio >=1.0:
+# a module-scoped async fixture needs a module-scoped event loop, else it raises
+# ScopeMismatch trying to reach the default function-scoped runner. The tests that
+# consume this fixture carry a matching @pytest.mark.asyncio(loop_scope="module").
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def db_conn():
     """Open an asyncpg connection for tests."""
     import asyncpg
@@ -171,7 +176,7 @@ async def test_cleanup_preserves_sql_linkage_when_mempalace_delete_fails():
     assert db.statements == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_create_person_has_crm_columns(db_conn):
     """New people table has circle, health_score, notification_count columns."""
     row = await db_conn.fetchrow(
@@ -181,7 +186,7 @@ async def test_create_person_has_crm_columns(db_conn):
     assert row is not None, "people.circle column missing — run alembic upgrade head"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_new_tables_exist(db_conn):
     """All CRM tables must exist."""
     for table in [
@@ -194,7 +199,7 @@ async def test_new_tables_exist(db_conn):
         assert row is not None, f"Table {table} is missing"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_new_columns_exist(db_conn):
     """0007 migration columns must exist on people table."""
     for col in ['context', 'is_partial', 'how_we_met', 'first_met_date', 'introduced_by_person_id']:
@@ -205,7 +210,7 @@ async def test_new_columns_exist(db_conn):
         assert row is not None, f"people.{col} column missing — run alembic upgrade head"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_person_extractor_dual_fanout(db_conn):
     """Create a person, run process_text → verify DB activity row AND MemPalace entry."""
     from person_extractor import process_text
@@ -283,7 +288,7 @@ async def test_person_extractor_dual_fanout(db_conn):
         await db_conn.execute("DELETE FROM users WHERE id=$1", test_user)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_health_score_recalc(db_conn):
     """recalc_and_save updates health_score in DB."""
     from person_health import recalc_and_save
