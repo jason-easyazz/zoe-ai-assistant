@@ -265,6 +265,21 @@ VOICE_PATH_PATTERNS = (
     # scope=non-voice, replay-evidence=SKIPPED. The coverage starts working for
     # the NEXT PR, once these are on main — so a change to a newly-gated file must
     # land in a SEPARATE, later PR to actually be gated.
+    #
+    # AND THE SAME IS TRUE AT DEPLOY, which is the half that actually blocks —
+    # merged-first is NOT sufficient, DEPLOYED-first is. deploy.yml runs
+    # `scripts/maintenance/voice_gate_check.py --diff prev..target` from the LIVE
+    # checkout at $prev, i.e. the currently DEPLOYED copy of this file, before the
+    # `git reset --hard $target` (deploy.yml:121-138; deliberate — same trust model
+    # as pull_request_target, and blocking before the reset is what lets a retry
+    # re-evaluate the same change). So new entries are not in force for the deploy
+    # that CARRIES them. If a change to a newly-gated file merges while this commit
+    # is still un-deployed — the deploy queue is serialized but each run fetches
+    # main at ITS start, and the memory-headroom gate can hold a run for ~9min —
+    # one run's prev..target spans BOTH commits and the OLD checker classifies it,
+    # taking the no-op pass. Codex P1 on #1621. The operational rule: land a tuple
+    # extension, WAIT FOR ITS DEPLOY TO GO GREEN (the live tree must be reset past
+    # it), and only then merge the change it is meant to gate.
     "scripts/setup/systemd/functiongemma-router.service",
     "services/zoe-data/router_two_stage.py",
     "services/zoe-data/semantic_router.py",

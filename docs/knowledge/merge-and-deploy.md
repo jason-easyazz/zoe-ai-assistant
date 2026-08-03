@@ -73,6 +73,14 @@ with the mandatory gate never running — a gate that can silently not-run is no
   Kokoro harness on the runner.
 - **Blocking happens before the reset**, so the live tree stays at `prev` — nothing is migrated or
   restarted, and a retry re-evaluates the *same* change instead of fast-forwarding past it.
+- **A new `VOICE_PATH_PATTERNS` entry is not in force for the deploy that carries it** — the checker
+  runs from the live checkout at `prev`, i.e. the currently **deployed** copy. So extending the tuple
+  is **deployed-first, not merged-first**: land the tuple change, wait for its deploy to go green (the
+  live tree is now reset past it), and only then merge the change it is meant to gate. Merging both
+  before the first has deployed lets one run's `prev..target` span both commits, where the old checker
+  classifies the pair and takes the no-op pass. The queue is serialized (`concurrency: production`,
+  `cancel-in-progress: false`) but each run fetches `main` at its own start and the memory-headroom
+  gate can hold a run for ~9 minutes, so the window is real.
 - **Fail-closed has a cost, and it is intended.** Once a voice-path change is on `main`, *every*
   subsequent push carries that diff in `prev..target`, so **all deploys stay blocked** until someone
   produces a fresh passing artifact. Unwedge on the Jetson as user `zoe`:
