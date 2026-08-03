@@ -406,6 +406,12 @@ try:
     d=json.load(sys.stdin)
     for v in d["services"]["music-assistant"]["volumes"]:
         if isinstance(v,dict) and v.get("target")=="/data":
+            # /data must be a BIND mount (review: Codex): a named volume also
+            # matches by target, and its source is a volume NAME that later
+            # code would treat as a filesystem path — the future invocation
+            # would mount the unrelated named volume, not the verified store.
+            if v.get("type")!="bind":
+                print("NON-BIND:"+str(v.get("type"))+":"+str(v.get("source"))); break
             print(v.get("source","")); break
         if isinstance(v,str) and v.endswith(":/data"):
             print(v.rsplit(":",1)[0]); break
@@ -413,6 +419,11 @@ except Exception as e:
     print("PARSE-ERROR:"+str(e))
 ')"
     case "$future_src" in
+        NON-BIND:*)
+            log "FATAL: a future plain 'docker compose up' would mount /data as a"
+            log "NAMED VOLUME, not a bind of the verified store: ${future_src#NON-BIND:}"
+            log "ZOE_MA_DATA must resolve to a host path. Fix the .env value."
+            exit 1 ;;
         PARSE-ERROR:*|"")
             log "FATAL: could not extract music-assistant /data source from compose config: $future_src"
             exit 1 ;;

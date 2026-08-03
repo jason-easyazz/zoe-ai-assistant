@@ -535,3 +535,13 @@ def test_missing_pending_compose_file_is_fatal():
     assert "pending compose file not found" in src
     code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
     assert 'if [[ -f "$COMPOSE_FILE" ]]; then' not in code, "the fail-open wrapper must not return"
+
+
+def test_future_data_mount_must_be_a_bind():
+    """A named volume also matches by target, and its source is a volume NAME
+    that path-handling code would misread — the future invocation mounts the
+    unrelated volume, not the verified store, with success declared and the
+    marker blocking the rerun (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert 'v.get("type")!="bind"' in src
+    assert "NAMED VOLUME, not a bind" in src
