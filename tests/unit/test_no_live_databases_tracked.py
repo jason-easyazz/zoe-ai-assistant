@@ -344,7 +344,10 @@ def test_destination_inspection_runs_with_copy_privileges():
     link's target. Checks must see the same filesystem as the actions
     (review: Codex, reproduced)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert 'sudo test -L "$DEST"' in src
+    # (Literal updated round 23: branch-deciding probes moved from raw
+    # `sudo test` to the fail-closed sudo_probe helper — the privileged
+    # property this test pins is unchanged.)
+    assert 'sudo_probe -L "$DEST"' in src
     assert 'DEST_ABS="$(sudo readlink -m -- "$DEST")"' in src
     # no unprivileged inspection of DEST may remain in non-comment code
     code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
@@ -459,3 +462,28 @@ def test_all_store_access_uses_copy_time_privileges():
     assert '[[ ! -e "$DEST/$rel" ]]' not in code
     assert 'sudo test -e "$DEST/$rel"' in src
     assert 'sudo test -d "$SRC"' in src
+
+
+def test_filesystem_probes_yield_explicit_yes_no():
+    """`sudo test -e` exits 1 for both 'absent' and 'probe failed', so a
+    transient sudo error took the absent branch — mkdir/cp ran against an
+    EXISTING destination without --mirror, overwrote matching live files, and
+    reported DONE with the marker written (review: Codex, reproduced). Probes
+    now emit yes/no with anything else fatal."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "sudo_probe()" in src
+    assert "indeterminate probe must not be treated as 'absent'" in src
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    # every branch-deciding probe goes through the helper; the four remaining
+    # raw `sudo test` sites all FATAL on failure (audited), and no NEW raw
+    # branch-deciding probe may appear on DEST/marker paths
+    assert 'if sudo test -e "$DEST"' not in code
+    assert 'if sudo test -f "$DEST/$MARKER"' not in code
+
+
+def test_env_parser_accepts_compose_dotenv_syntax():
+    """Compose dotenv supports `export KEY=...`, leading whitespace, and single
+    or double quotes; a column-zero-only match skipped the export form, so the
+    unvalidated value still reached interpolation (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "(export[[:space:]]+)?ZOE_MA_DATA=" in src

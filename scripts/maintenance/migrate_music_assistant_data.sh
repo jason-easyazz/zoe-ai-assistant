@@ -94,6 +94,24 @@ done
 
 log() { printf 'ma-migrate: %s\n' "$*"; }
 
+# Fail-closed filesystem probe (review: Codex, reproduced): `sudo test -e` exits
+# 1 both for "absent" and for a sudo/filesystem error, so a transient probe
+# failure silently took the "absent" branch — mkdir/cp then ran against an
+# EXISTING destination without --mirror, overwrote matching live files, and the
+# script wrote the marker and reported DONE. The probe must yield an explicit
+# yes/no, with anything else fatal.
+sudo_probe() {  # sudo_probe -e|-f|-d|-L PATH  -> 0=yes 1=no, exits on indeterminate
+    local out
+    out="$(sudo sh -c 'if test "$1" "$2"; then echo yes; else echo no; fi' _ "$1" "$2" 2>&1)"
+    case "$out" in
+        yes) return 0 ;;
+        no)  return 1 ;;
+        *)   log "FATAL: cannot probe $2 (test $1) — probe returned: $out"
+             log "Refusing: an indeterminate probe must not be treated as 'absent'."
+             exit 1 ;;
+    esac
+}
+
 # The whole point is that the data leaves the checkout, so an override that
 # points back inside it silently re-creates the hazard — and worse than before,
 # because the files would now be gitignored, so nothing would look dirty
@@ -110,7 +128,7 @@ log() { printf 'ma-migrate: %s\n' "$*"; }
 # "not a link" and canonicalised to itself — while the later `sudo mkdir/cp`
 # happily followed it, copying the store as root into the link's target.
 # Checks and actions must see the same filesystem.
-if sudo test -L "$DEST"; then
+if sudo_probe -L "$DEST"; then
     log "FATAL: destination path is a symlink: $DEST -> $(sudo readlink -- "$DEST")"
     log "Refusing: clearing or copying would act on the link's target."
     exit 1
@@ -178,7 +196,7 @@ SRC="$SRC_ABS"
 # --mirror ever being consulted). Sets _dest_nonempty=1/0.
 dest_nonempty() {
     _dest_nonempty=0
-    sudo test -d "$DEST" || return 0
+    sudo_probe -d "$DEST" || return 0
     local out
     if ! out="$(sudo find "$DEST" -mindepth 1 -print -quit 2>&1)"; then
         log "FATAL: cannot probe the destination: "
@@ -216,7 +234,7 @@ done
 # already contains it gets copied and counted by the checksum loop, then our
 # marker write replaces the destination copy — "verified N/N" with differing
 # hashes, exit 0, and the stray marker then blocks the corrective rerun.
-if sudo test -e "$SRC/$MARKER"; then
+if sudo_probe -e "$SRC/$MARKER"; then
     log "FATAL: source contains the reserved marker name: $SRC/$MARKER"
     log "It would be counted as verified and then overwritten by this script's"
     log "own completion marker. Remove it from the source first:"
@@ -318,7 +336,12 @@ ENV_FILE="$REPO_ROOT/.env"
 # check must see exactly what Compose will see — a root-only-readable .env that
 # Compose cannot read cannot influence interpolation either.
 if [[ -f "$ENV_FILE" ]]; then
-    env_val="$(sed -n 's/^ZOE_MA_DATA=//p' "$ENV_FILE" | tail -1 | sed 's/^"\(.*\)"$/\1/')"
+    # Compose dotenv accepts `export KEY=...`, leading whitespace and single or
+    # double quotes (review: Codex — a column-zero-only match skipped the
+    # `export` form, so the unvalidated value still reached interpolation).
+    env_val="$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?ZOE_MA_DATA=//p' "$ENV_FILE" | tail -1)"
+    env_val="${env_val%\"}"; env_val="${env_val#\"}"
+    env_val="${env_val%\'}"; env_val="${env_val#\'}"
     if [[ -n "$env_val" ]]; then
         env_abs="$(sudo readlink -m -- "$env_val")"
         if [[ "$env_abs" != "$DEST" ]]; then
@@ -334,7 +357,7 @@ if [[ -f "$ENV_FILE" ]]; then
     fi
 fi
 
-if sudo test -f "$DEST/$MARKER"; then
+if sudo_probe -f "$DEST/$MARKER"; then
     log "FATAL: destination carries a completion marker — the migration already ran:"
     sudo cat "$DEST/$MARKER" 2>/dev/null | sed 's/^/ma-migrate:   /'
     log "Copying again would overwrite the migrated store (after step A deploys,"
@@ -378,7 +401,7 @@ fi
 # status, so a transient sudo/traversal failure looked like "destination empty",
 # skipped this entire direction check, and --mirror could then clear the LIVE
 # destination and replace it with the stale source.
-if sudo test -d "$DEST"; then
+if sudo_probe -d "$DEST"; then
     if ! _probe="$(sudo find "$DEST" -type f -print -quit 2>&1)"; then
         log "FATAL: cannot probe the destination for the direction check:"
         printf '%s\n' "$_probe" | sed 's/^/ma-migrate:   /' >&2
@@ -424,13 +447,13 @@ fi
 # absent/empty, or --mirror clears it first, and the copy then lands in a
 # freshly-created empty directory. --remove-destination is belt-and-braces for
 # any path this reasoning missed.
-if sudo test -e "$DEST"; then
-    if sudo test -L "$DEST"; then
+if sudo_probe -e "$DEST"; then
+    if sudo_probe -L "$DEST"; then
         log "FATAL: destination is itself a symlink: $DEST"
         log "Refusing — the copy would write through it as root."
         exit 1
     fi
-    if ! sudo test -d "$DEST"; then
+    if ! sudo_probe -d "$DEST"; then
         log "FATAL: destination exists and is not a directory: $DEST"; exit 1
     fi
     dest_nonempty
