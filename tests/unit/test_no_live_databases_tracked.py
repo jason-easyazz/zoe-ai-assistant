@@ -50,25 +50,15 @@ def _tracked() -> list[str]:
     return out.stdout.splitlines()
 
 
-def test_no_NEW_live_database_is_tracked():
-    """Step A of the migration deliberately leaves the four Music Assistant
-    databases tracked — deleting them here would be applied by CD's
-    `git reset --hard` before anyone could run the migration (review: Codex).
-    They stop being rewritten once the bind mount moves, and are untracked in
-    step B once nothing writes to that path.
-
-    What must hold NOW: no OTHER live store creeps in.
-    """
-    known = {
-        "data/music-assistant/auth.db",
-        "data/music-assistant/auth.db-wal",
-        "data/music-assistant/library.db",
-        "data/music-assistant/library.db-wal",
-    }
+def test_no_live_database_is_tracked():
+    """Step B complete: the four Music Assistant databases are untracked, so NO
+    live store may be tracked anywhere. (Step A deliberately allowlisted them —
+    deleting tracked files is applied by CD's `git reset --hard`, so untracking
+    had to wait until MA moved to ~/.zoe and the path went static. It has.)"""
     offenders = [f for f in _tracked()
-                 if DB_RE.search(f) and not f.startswith(ALLOWED) and f not in known]
+                 if DB_RE.search(f) and not f.startswith(ALLOWED)]
     assert not offenders, (
-        "new live databases/sidecars are tracked; they make the live checkout "
+        "live databases/sidecars are tracked; they make the live checkout "
         "permanently dirty and block every deploy:\n  " + "\n  ".join(offenders)
     )
 

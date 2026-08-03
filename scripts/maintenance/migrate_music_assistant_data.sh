@@ -47,7 +47,11 @@
 #   * COPIES, never moves — the original is left untouched as the rollback
 #   * refuses to run while the container is up (a live writer would tear the DBs)
 #   * verifies every file by checksum before declaring success
-#   * idempotent: re-running re-verifies and re-syncs rather than duplicating
+#   * ONE-SHOT, not idempotent (review: Codex round 32): after step A deploys,
+#     SRC holds rolled-back tracked data while DEST may hold newer live state —
+#     a rerun would replace the migrated store with stale checkout data. The
+#     completion marker refuses reruns for exactly this reason; do not remove
+#     it to retry unless you have verified DEST is disposable.
 set -euo pipefail
 
 SRC="${ZOE_MA_SRC:-/home/zoe/assistant/data/music-assistant}"
