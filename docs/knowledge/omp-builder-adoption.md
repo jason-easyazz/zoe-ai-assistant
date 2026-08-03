@@ -76,6 +76,15 @@ is the recorded scan outcome required by the root AGENTS.md skill-safety rule.
   arm64 binaries get ~30 downloads/release vs 331 x64 — expect to be an early finder of arm64
   bugs. Upstream pi itself moved to `earendil-works/pi` (v0.83.0, ~500 commits/month).
 
+## Trial staging findings (2026-08-03, measured — staging dir `omp-trial/` in the session scratchpad, entry point APPLY.md)
+
+- **Binary v17.2.5 installed** at `/home/zoe/.local/bin/omp`, full sha256 `5404bb60…5435d2` re-verified against the recorded fingerprint; that path is bind-mounted read-only into the container and on its PATH — no container change needed.
+- **Omnigent's acp harness has NO per-agent env** (`acp_agents()` silently drops an `env:` key) and `acp_executor.py` copies the full runner env — an unwrapped omp inherits the SHARED OpenRouter key and bills it on first token. The fence is therefore a **wrapper script** (command = script path) that scrubs inherited credentials and promotes the dedicated key from `/home/zoe/.config/zoe/openrouter-omp.env` (0400; bind-mounted; `rm` = instant kill switch), verified at point of use via `/proc/<pid>/environ` of a live child.
+- **`omp config set` fencing is defeatable by the agent itself**: a `<cwd>/.omp/config.yml` written by a misbehaving agent re-enabled web_search/autoqa/autoUpdate in a measured test. The authoritative fence is a **`PI_CONFIG_FILES` overlay** (highest-precedence merge layer, fail-closed on missing file) — all six fence values held against the hostile cwd config.
+- **TRAP: an unpinned dispatch runs omp INSIDE THE LIVE CHECKOUT with auto-approved exec.** Default cwd falls back to `/workspace` = read-write bind of `/home/zoe/assistant`, and `tools.approvalMode` defaults to `yolo`. Every dispatch must pin a working folder (trial protocol does).
+- **#2227's user-level half**: the container's `/root/.claude.json`, `/root/.cursor`, `/root/.codex` are live MCP/credential surfaces omp would scan; fenced by pointing `HOME` at a clean dir in the wrapper.
+- No omnigent restart needed for apply/rollback — config is re-read per dispatch.
+
 ## Status
 
 Evaluation only — nothing installed into the live container, no config applied, no dispatch run.
