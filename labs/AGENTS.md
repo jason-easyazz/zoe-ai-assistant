@@ -253,7 +253,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   Hand-run only; nothing prod-wired, no systemd unit, no CI. `eval/results/*.json`
   are gitignored run artifacts; `eval/results/EXAMPLE-smoke-run.md` is a
   committed 4-query sample of the instrument's output. Regression net:
-  `python3 -m pytest tests -q` (45 offline tests, no network, the `ddgs` tier
+  `python3 -m pytest tests -q` (48 offline tests, no network, the `ddgs` tier
   driven by an injected fake searcher, **no `ci_safe` marker** — `labs/` is
   outside every CI lane). README/DESIGN are records, not contracts.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →

@@ -43,7 +43,7 @@ Full design record + evidence: **[DESIGN.md](DESIGN.md)**.
 | `websearch/claim.py` | Claim-backing query shaping — neutral + contradiction queries. Evidence, never a verdict. |
 | `eval/` | **The instrument.** Fixed 26-query corpus + combination runner + operator scoring sheet. Full-run report: `eval/results/20260803T112640Z.md`. |
 | `demo.py`, `probe_engines.py` | Live demo; engine reachability matrix. |
-| `tests/` | 45 offline tests. No network. |
+| `tests/` | 48 offline tests. No network. |
 
 ## How to run
 
@@ -52,7 +52,7 @@ Needs only `httpx` and `ddgs`, both already zoe-data dependencies — no venv.
 ```bash
 cd labs/web-search-spike
 
-python3 -m pytest tests -q          # 45 offline tests, ~0.7s, no network
+python3 -m pytest tests -q          # 48 offline tests, ~0.3s, no network
 python3 demo.py                     # live demo across the free tiers
 python3 demo.py --claim "Bali is in Thailand"
 python3 probe_engines.py            # which raw engines answer from this box
@@ -147,8 +147,8 @@ engines are reachable.
 | Tavily free ceiling | 1,000 credits/mo ≈ **33/day**, enforced client-side |
 | New runtime dependencies | **0** (`httpx` + `ddgs` already shipped) |
 | Resident RAM added | **0** (in-process; box had 216–293 MB free of 15.6 GB) |
-| Offline test suite | 45 tests, 0.69 s, no network |
+| Offline test suite | 48 tests, 0.32 s, no network |
 
-Negative controls run: disabling block detection, the consensus sort, and the
-packet budget cap each turned the relevant tests **red**; restoring them
-returned the suite to green.
+Negative controls run: disabling block detection, the consensus sort, the
+packet budget cap, and the eval harness's `blocked_tiers` verdict each turned
+the relevant tests **red**; restoring them returned the suite to green.

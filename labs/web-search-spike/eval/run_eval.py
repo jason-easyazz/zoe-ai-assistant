@@ -136,12 +136,22 @@ def combo_tavily_plus_scrapers(query: str) -> dict:
 
 
 def combo_all_free(query: str) -> dict:
-    """Every configured free tier, consensus-merged across tiers."""
+    """Every configured free tier, consensus-merged across tiers.
+
+    `blocked_tiers` is the ONLY input to a `blocked` status, and only an actual
+    `EnginesBlocked` raise populates it. `notes` stays informational: it always
+    carries "tavily unconfigured" on this box, so deciding status from `notes`
+    labelled a genuinely empty result as a block (measured: `local-05` in the
+    20260803T112640Z run) — inverting the harness's own headline rule that a
+    blocked tier must report BLOCKED, and only a block may.
+    """
     batches = []
-    notes = []
+    notes: list[str] = []
+    blocked_tiers: list[str] = []
     try:
         batches.append(ddgs_search(query, limit=6))
     except EnginesBlocked as exc:
+        blocked_tiers.append("ddgs")
         notes.append(f"ddgs blocked: {exc}")
     if tavily.configured():
         try:
@@ -152,7 +162,13 @@ def combo_all_free(query: str) -> dict:
         notes.append("tavily unconfigured")
     batches = [b for b in batches if b]
     if not batches:
-        return {"status": "blocked" if notes else "empty", "results": [], "packet": "", "notes": notes}
+        return {
+            "status": "blocked" if blocked_tiers else "empty",
+            "results": [],
+            "packet": "",
+            "notes": notes,
+            "blocked_tiers": blocked_tiers,
+        }
     merged = consensus_merge(batches, limit=6)
     extract = scrape(merged[0].url)
     return {
@@ -160,6 +176,7 @@ def combo_all_free(query: str) -> dict:
         "results": [{"title": r.title, "url": r.url, "tiers": r.engines} for r in merged],
         "packet": format_packet(merged, extract=extract),
         "notes": notes,
+        "blocked_tiers": blocked_tiers,
     }
 
 
