@@ -129,7 +129,20 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
 
 - **Deploy-path checker — `scripts/maintenance/voice_gate_check.py`:** the cheap counterpart the
   blessed deploy (`deploy_live.sh`) invokes. If the incoming git diff touches the **voice runtime
-  path** (`voice_tts.py` / `zoe_core_client.py` / `fast_tiers.py` / `*kokoro*` / `*moonshine*`;
+  path** (`voice_tts.py` / `zoe_core_client.py` / `fast_tiers.py` / `*kokoro*` / `*moonshine*`, plus
+  the **live** brain lane — `labs/flue-zoe-brain/` deployed source, `zoe_flue_client.py`,
+  `brain_dispatch.py`, `flue-zoe-brain.service` — the dormant zoe-core fallback's manifest, and the
+  live router's model directory `services/zoe-data/models/*`, which holds the stage-1 checkpoint that
+  decides which tool a voice turn fires (swapping that file re-routes every turn with **no code diff
+  at all**; it is a directory glob so the next head added there gates by default, and the offline
+  training copies in `labs/setfit-router/artifacts/` stay ungated) — plus the rest of that router:
+  its `functiongemma-router.service` serving unit and its `router_two_stage.py` +
+  `semantic_router.py` decision modules, gated for different reasons (serving config vs. the logic
+  that picks the tool) because any one leg alone leaves a hole. Their regression class is silent by
+  construction too: `decide()` returns `None` on any failure and the caller keeps the weaker
+  similarity route, while a plain logic edit just returns a different tool without erroring. The
+  routers' tests, the `labs/` harnesses and the offline `scripts/maintenance/router_*.py` tooling
+  stay ungated, which is what the literal paths (rather than a `*router*` wildcard) buy;
   override `ZOE_VOICE_GATE_PATHS`), it asserts a **fresh** (`< ZOE_VOICE_GATE_MAX_AGE_H`, default 24h)
   **passing** artifact **matching the current baseline** before the restart — else it fails loudly
   (non-zero exit) and the deploy is refused. Non-voice deploys are a no-op pass. **It never runs the

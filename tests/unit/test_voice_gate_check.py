@@ -536,6 +536,49 @@ def test_zoe_core_lockfile_is_voice_path():
     assert needs is True and hits == ["services/zoe-core/package-lock.json"]
 
 
+# --- the LIVE brain lane (ZOE_BRAIN_BACKEND=flue) ---------------------------
+# The gate matched services/zoe-core (the DORMANT fallback) but not the Flue
+# sidecar that has actually answered voice turns since 2026-07-03. Because
+# deploy.yml calls this same module, the post-merge deploy gate inherited the
+# identical blind spot: a change to the speaking brain took the no-op pass at
+# BOTH ends.
+@pytest.mark.parametrize("path", [
+    "labs/flue-zoe-brain/src/app.ts",
+    "labs/flue-zoe-brain/src/agents/zoe.ts",       # nested, via the src/* glob
+    "labs/flue-zoe-brain/package.json",
+    "labs/flue-zoe-brain/package-lock.json",
+    "labs/flue-zoe-brain/flue.config.ts",
+    "labs/flue-zoe-brain/tsconfig.json",
+    "scripts/setup/systemd/flue-zoe-brain.service",
+    "services/zoe-data/zoe_flue_client.py",
+    "services/zoe-data/brain_dispatch.py",
+])
+def test_live_flue_brain_lane_is_voice_path(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    # end to end through the classifier both the deploy and PR paths call
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    # An unmerged parallel port nothing deploys — gating it would charge every
+    # experimental commit a 20-sample Kokoro replay. Its prefix is one character
+    # from the gated lane, so this also pins that the globs are prefix-exact.
+    "labs/flue-zoe-brain-2x/src/app.ts",
+    "labs/flue-zoe-brain-2x/package.json",
+    # Not deployed: never compiled into dist/server.mjs, never served.
+    "labs/flue-zoe-brain/test/route_identity.test.ts",
+    "labs/flue-zoe-brain/parity/hard_gate.py",
+    "labs/flue-zoe-brain/README.md",
+])
+def test_flue_non_deployed_paths_do_not_gate(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path], pats) == []
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is False and hits == []
+
+
 # --- FIX: scope must fail CLOSED when it cannot publish its verdict ---------
 # `_emit_github_output` used to swallow an OSError and let `_scope_only` return
 # 0 anyway — the scope job then "succeeded" with no `voice` output at all, and
@@ -661,3 +704,200 @@ def test_ordinary_non_rename_diff_is_unaffected(tmp_path):
 
     changed = vgc.git_changed_files(repo, f"{base}...HEAD")
     assert sorted(changed) == ["README.md", "docs.md"]
+
+
+# --- the LIVE ROUTER'S MODEL ARTIFACTS (ZOE_ROUTER_HEAD=active) -------------
+# The stage-1 checkpoint decides which tool a voice turn fires, and swapping the
+# file re-routes every turn with NO code diff — quieter than any logic edit.
+#
+# It was excluded on the belief that router_selftrain.py's `replay_gate_passed`
+# ratchet already covered it. Verified false: that script has no reference to a
+# head/MLP/.joblib anywhere; it promotes the stage-2 FunctionGemma GGUF to
+# ~/models/functiongemma-router/, outside the repo. Nothing automated ever
+# commits a stage-1 head, so every commit here is a hand-commit and the ratchet
+# was covering none of them.
+@pytest.mark.parametrize("path", [
+    # Stage 1 of the live two-stage decision (docs/CANONICAL.md stage1_artifact).
+    "services/zoe-data/models/router_head_mlp.joblib",
+    # Loaded into the live zoe-data process on every non-`off` mode, and one
+    # flag value from being the head whose predictions feed the ratchet's miner.
+    "services/zoe-data/models/router_head_logreg.joblib",
+])
+def test_live_router_head_artifacts_are_voice_path(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    # end to end through the classifier both the deploy and PR paths call
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    "services/zoe-data/models/router_head_v3.joblib",
+    "services/zoe-data/models/router_head.onnx",
+    "services/zoe-data/models/nested/head.joblib",
+])
+def test_new_router_head_artifacts_gate_by_default(path):
+    """The glob is a DIRECTORY glob, and that is the point.
+
+    Two literal paths would close today's hole and leave the next head added to
+    the live service's model directory in exactly the same ungated state this
+    test exists to prevent. Anything dropped in there is model material."""
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path], pats) == [path]
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    # The OFFLINE training copies. Same filenames, same bytes at promotion time,
+    # but they are never loaded at runtime — the runtime path is
+    # services/zoe-data/models/. A `*.joblib` or `*head*` wildcard would sweep
+    # these in and charge a 20-sample Kokoro replay for a training-only diff.
+    "labs/setfit-router/artifacts/head_mlp.joblib",
+    "labs/setfit-router/artifacts/head_logreg.joblib",
+    "labs/setfit-router/train.py",
+    # Mechanism tests + offline tooling: never run inside a voice turn. Note
+    # router_selftrain.py in particular — its promotion target is the stage-2
+    # GGUF outside the repo, so it cannot change a tracked artifact at all.
+    "services/zoe-data/tests/test_router_head_shadow.py",
+    "scripts/maintenance/router_selftrain.py",
+    "scripts/maintenance/router_shadow_report.py",
+])
+def test_offline_router_artifacts_and_tooling_do_not_gate(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path], pats) == []
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is False and hits == []
+
+
+@pytest.mark.parametrize("near_miss", [
+    # `services/zoe-data/models*` (no slash) would sweep this in — pin that the
+    # glob is anchored on the directory, not on its name as a prefix.
+    "services/zoe-data/models_old/head.joblib",
+    "services/zoe-ui/models/head.joblib",
+    "labs/models/head.joblib",
+])
+def test_router_head_glob_is_the_live_service_model_dir_only(near_miss):
+    """Prefix-exactness: a sibling directory must not inherit the glob."""
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([near_miss], pats) == []
+    needs, hits, _ = vgc.scope_verdict([near_miss], pats)
+    assert needs is False and hits == []
+
+
+def test_router_head_pattern_is_the_directory_glob():
+    """The literal the three tests above are all reasoning about."""
+    assert "services/zoe-data/models/*" in vgc.voice_path_patterns()
+
+
+# --- the two-stage router: SERVING CONFIG + ROUTING DECISION ----------------
+# The third and fourth legs of the same router. Its model artifacts are gated
+# above; these are the serving unit and the decision code. docs/CANONICAL.md
+# puts the two-stage router ON the voice path (ZOE_ROUTER_HEAD=active), but
+# neither matched a glob, so a change to either took the no-op pass at PR time
+# AND at deploy. Both are pinned separately because they are gated for DIFFERENT
+# reasons — the unit is serving config (which GGUF, --ctx-size, --parallel,
+# memory caps), the modules are the logic that picks the tool — and either alone
+# leaves a real hole.
+#
+# This is the worst class to leave ungated because it is SILENT by construction:
+# router_two_stage.decide() returns None from a blanket `except Exception`
+# (router_two_stage.py:291-294) and semantic_router keeps the weaker similarity
+# route on None (:546-566, "brain-safe"), while a plain logic edit just returns a
+# different tool without erroring at all. Nothing goes red anywhere; only a
+# said-vs-did replay sees it.
+def test_router_sidecar_unit_is_voice_path():
+    path = "scripts/setup/systemd/functiongemma-router.service"
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    "services/zoe-data/router_two_stage.py",
+    "services/zoe-data/semantic_router.py",
+])
+def test_router_decision_modules_are_voice_path(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    # end to end through the classifier both the deploy and PR paths call
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    # Prefix-exactness, same discipline as the flue-zoe-brain-2x case: the glob
+    # is one literal unit file, not a systemd-directory wildcard. Unrelated
+    # units must NOT start charging a 20-sample Kokoro replay.
+    "scripts/setup/systemd/serena-mcp.service",
+    "scripts/setup/systemd/zoe-memory-export.service",
+    "scripts/setup/systemd/functiongemma-router.service.d/override.conf",
+])
+def test_unrelated_systemd_units_do_not_gate(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path], pats) == []
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is False and hits == []
+
+
+@pytest.mark.parametrize("path", [
+    # Co-located tests: mechanism-only, never run inside a voice turn. Gating
+    # them would charge a 20-sample Kokoro replay for a test-only diff.
+    "services/zoe-data/tests/test_router_two_stage.py",
+    "services/zoe-data/tests/test_router_head_shadow.py",
+    # Lab eval + training harnesses — offline, not deployed.
+    "labs/router-90-campaign/prod_path_eval.py",
+    "labs/two-stage-router-eval/run_two_stage.py",
+    # Offline scoring / self-train tooling, outside the request path. Note that
+    # router_selftrain.py's promotion target is the stage-2 GGUF OUTSIDE the
+    # repo, so it cannot change a tracked artifact at all.
+    "scripts/maintenance/router_shadow_report.py",
+    "scripts/maintenance/router_selftrain.py",
+])
+def test_router_offline_paths_do_not_gate(path):
+    """The globs are LITERAL module paths, not a `*router*` wildcard.
+
+    A wildcard would sweep in every one of these — and the two it would sweep
+    in most often (the co-located tests and the self-train scripts) are the
+    ones that change most, which is how a gate stops being worth having.
+
+    NOTE: services/zoe-data/models/router_head_mlp.joblib is deliberately NOT in
+    this list. An earlier draft excluded it on the belief that the self-train
+    ratchet already replay-gated its promotion; that was falsified (the ratchet
+    never touches stage 1), and it is now GATED by the models/* directory glob —
+    see test_live_router_head_artifacts_are_voice_path above, which asserts the
+    opposite of what that draft asserted."""
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path], pats) == []
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is False and hits == []
+
+
+def test_a_new_pattern_cannot_gate_the_pr_that_adds_it():
+    """Pins the base-ref property that #1620 got wrong, twice.
+
+    voice-gate.yml triggers on `pull_request_target` and pins `base.sha` on
+    every checkout, so the classifier that runs against a PR is always the BASE
+    ref's copy of this module — a pattern added by the PR does not exist for the
+    run that classifies it. #1620 asserted the opposite in a commit message and
+    in its PR body; run 30804036970 then reported scope=non-voice /
+    replay-evidence=SKIPPED while the PR's own head added three patterns.
+
+    This is asserted against a SIMULATED base tuple rather than by reading the
+    workflow, because the property being pinned is behavioural: classification
+    uses whatever tuple it was given, so a file newly listed in the HEAD tuple
+    still classifies CLEAR under the base one."""
+    head_tuple = vgc.VOICE_PATH_PATTERNS
+    newly_added = "scripts/setup/systemd/functiongemma-router.service"
+    assert newly_added in head_tuple, "precondition: the pattern is in HEAD"
+
+    base_tuple = tuple(p for p in head_tuple if p != newly_added)
+    assert vgc.touched_voice_files([newly_added], base_tuple) == [], (
+        "under the BASE tuple the newly-gated file must classify CLEAR — that "
+        "is exactly why a gate-extending PR cannot gate itself"
+    )
+    needs, hits, _ = vgc.scope_verdict([newly_added], base_tuple)
+    assert needs is False and hits == []
+    # ...and it DOES gate once the pattern is on main (the next PR's base).
+    assert vgc.touched_voice_files([newly_added], head_tuple) == [newly_added]
