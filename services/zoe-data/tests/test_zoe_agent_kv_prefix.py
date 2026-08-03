@@ -61,10 +61,30 @@ def _as_caller_sees_it(session: list[dict], turn: int) -> list[dict]:
 
 
 def _serialize(messages: list[dict]) -> str:
-    """Chat-template-shaped serialization — what the model actually tokenizes."""
-    return "".join(
-        f"<start_of_turn>{m.get('role')}\n{m.get('content')}<end_of_turn>\n" for m in messages
-    )
+    """Render like Gemma's chat template — what llama.cpp actually tokenizes.
+
+    Gemma has NO system role: `first_user_prefix` folds the system content into
+    the FIRST user turn separated by a blank line, and `assistant` renders as
+    `model`. That shape matters here — folding puts the system prompt and the
+    window head inside the SAME turn block, so the head is what the reusable
+    prefix runs into, with no `<end_of_turn>` boundary in between.
+    """
+    system = ""
+    turns: list[dict] = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            system = str(msg.get("content") or "")
+            continue
+        turns.append(msg)
+
+    out = []
+    for i, msg in enumerate(turns):
+        role = "model" if msg.get("role") == "assistant" else "user"
+        content = str(msg.get("content") or "")
+        if i == 0 and system:
+            content = f"{system}\n\n{content}"
+        out.append(f"<start_of_turn>{role}\n{content}<end_of_turn>\n")
+    return "<bos>" + "".join(out)
 
 
 def _prompt_prefix(kept: list[dict]) -> str:
@@ -213,12 +233,40 @@ def test_never_keeps_more_than_the_legacy_selector(budget):
         assert len(zoe_agent._compact_history(history, budget)) <= len(_legacy_trim(history, budget))
 
 
-def test_window_opens_on_a_user_turn_when_an_anchor_exists():
+@pytest.mark.parametrize("budget", [BUDGET, TIGHT_BUDGET])
+def test_window_always_opens_on_a_user_turn(budget):
+    """Gemma folds the system prompt into the FIRST turn — it must be a user turn."""
     session = _session(40)
     for turn in range(6, 20):
-        kept = zoe_agent._compact_history(_as_caller_sees_it(session, turn), BUDGET)
-        if kept and any(zoe_agent._is_history_anchor(m, zoe_agent._HISTORY_ANCHOR_STRIDE) for m in kept):
+        kept = zoe_agent._compact_history(_as_caller_sees_it(session, turn), budget)
+        if kept:
             assert kept[0]["role"] == "user"
+
+
+def test_fallback_without_anchors_still_opens_on_a_user_turn():
+    """Exercises the no-anchor fallback: it must skip an assistant head, not keep it.
+
+    A stride this large means no content hash can land on a boundary, so the
+    anchor search is guaranteed to come up empty and the fallback runs. The
+    budget is set so the affordable window opens mid-pair, on the assistant.
+    """
+    history = [
+        {"role": "user", "content": "u0 " + "x" * 400},
+        {"role": "assistant", "content": "a0 " + "y" * 400},
+        {"role": "user", "content": "u1 " + "x" * 40},
+        {"role": "assistant", "content": "a1 " + "y" * 40},
+    ]
+    no_anchor_stride = 2 ** 64
+    assert not any(zoe_agent._is_history_anchor(m, no_anchor_stride) for m in history)
+
+    budget = _est_tokens(history[1:])  # affords the assistant at index 1, not the user at 0
+    assert _est_tokens(history) > budget
+
+    kept = zoe_agent._compact_history(history, budget, stride=no_anchor_stride)
+    assert _legacy_trim(history, budget)[0]["role"] == "assistant", "control: old walk kept the assistant head"
+    assert kept[0]["role"] == "user", "fallback must advance past the assistant head"
+    assert kept == history[2:]
+    assert _est_tokens(kept) <= budget
 
 
 @pytest.mark.parametrize("history,budget", [
@@ -233,7 +281,7 @@ def test_degenerate_inputs_do_not_raise(history, budget):
     assert _est_tokens(kept) <= max(budget, 0)
 
 
-def test_anchorless_history_falls_back_to_the_budget_window():
-    """No user turns → no anchors → the old affordable window, not an empty one."""
+def test_history_with_no_user_turn_at_all_is_dropped():
+    """Nothing to open the window on — better no history than a model-led fold."""
     history = [{"role": "assistant", "content": f"a{i}"} for i in range(5)]
-    assert zoe_agent._compact_history(history, BUDGET) == history
+    assert zoe_agent._compact_history(history, BUDGET) == []

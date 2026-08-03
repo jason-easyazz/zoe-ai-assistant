@@ -3633,14 +3633,26 @@ async def _llm_call(
 # ── History window selection ──────────────────────────────────────────────────
 # INVARIANT: mutate the tail, never the head.
 #
-# llama.cpp reuses cached KV only up to the FIRST token that differs — and for
-# this SWA model exact common-prefix matching is the ONLY reuse path there is
-# (`--cache-reuse` is dropped from llama-server.service because KV shifting is
-# unsupported for Gemma's shared-KV + SWA attention). That is why the system
-# prompt is kept byte-identical every turn. The message right after it has to be
-# stable for exactly the same reason: selecting the window as "the newest N that
-# fit the budget" moves the window HEAD forward on every turn, so the whole
-# prefix past the system prompt is discarded and re-prefilled each turn.
+# llama.cpp reuses cached KV only up to the FIRST token that differs, and BOTH
+# caches in front of this model are prefix caches, so both depend on that:
+#   - the slot's own KV. `--cache-reuse` is dropped from llama-server.service
+#     because KV shifting cannot reuse past the 512-token sliding window on SWA
+#     models, so partial-divergence recovery is a no-op here.
+#   - `--cache-ram 2048`, which the unit calls its "working replacement" — and
+#     it is, but NOT as a mitigation for a moving head. It retains several whole
+#     prompt states and picks between them by `get_common_prefix`
+#     (`server_prompt_cache::load`, llama.cpp tools/server/server-task.cpp),
+#     skipping any candidate matching under 25% of its cached prompt. That
+#     widens the set of candidate prefixes; it never makes a divergence cheap,
+#     and older states have older heads, so they match a slid head no better.
+# A stable prefix is therefore the precondition for both — prefix stability is
+# what lets --cache-ram hit past the system prompt at all, rather than something
+# --cache-ram spares us from needing.
+#
+# That is why the system prompt is kept byte-identical every turn. The message
+# right after it has to be stable for exactly the same reason: selecting the
+# window as "the newest N that fit the budget" moves the window HEAD forward on
+# every turn, so the whole prefix past the system prompt is re-prefilled.
 #
 # The head is pinned to a content-defined anchor instead: a message is an anchor
 # when a hash of its own content lands on a stride boundary, so the SAME message
@@ -3648,9 +3660,10 @@ async def _llm_call(
 # occasional jumps rather than sliding on every turn.
 #
 # Stride 3 (~1 user turn in 3 is an anchor) measured over 40 synthetic sessions:
-# the head survives ~59% of turns versus 0% for the old newest-N walk, costing
-# ~2.6 messages of average depth. Stride 1 makes every user turn an anchor and
-# reproduces the old sliding behaviour exactly — it is the negative control.
+# the head survives ~56% of turns versus 0% for the old newest-N walk, costing
+# ~2.5 messages of average depth (12.0 -> 9.5). Stride 1 makes every user turn
+# an anchor and reproduces the old sliding behaviour exactly — the negative
+# control.
 _HISTORY_MAX_MSGS = 12
 _HISTORY_ANCHOR_STRIDE = 3
 
@@ -3684,6 +3697,7 @@ def _compact_history(
     Returns a contiguous suffix of `history` holding at most `max_msgs` messages
     and at most `budget_tokens` of estimated content — the same caps the previous
     newest-first walk enforced — but opened at an anchor so the prefix survives.
+    Always opens on a user turn; empty when the affordable window holds none.
     """
     window = history[-max_msgs:]
     # Budget floor: the oldest index that still fits, walking newest → oldest.
@@ -3697,11 +3711,16 @@ def _compact_history(
         floor = i
     # Open at the OLDEST anchor that still fits. Dropping more than the budget
     # demands is safe (the result stays a suffix of the affordable window);
-    # dropping less is not.
-    for i in range(floor, len(window)):
-        if _is_history_anchor(window[i], stride):
-            return window[i:]
-    return window[floor:]
+    # dropping less is not. With no anchor in range, fall back to the oldest
+    # affordable USER turn (stride 1) rather than to `window[floor:]`, which can
+    # open on an assistant message: Gemma's template has no system role and
+    # folds the system prompt into the FIRST turn, so an assistant-led window
+    # folds it into a `model` turn and strands a reply with no question.
+    for candidate_stride in (stride, 1):
+        for i in range(floor, len(window)):
+            if _is_history_anchor(window[i], candidate_stride):
+                return window[i:]
+    return []
 
 
 # ── Main Zoe Agent entry point ────────────────────────────────────────────────
