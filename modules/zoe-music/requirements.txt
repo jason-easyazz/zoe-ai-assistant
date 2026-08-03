@@ -9,6 +9,12 @@ httpx==0.25.0
 # YouTube Music integration
 ytmusicapi==1.5.0
 yt-dlp==2026.7.4
+# EJS challenge solver for yt-dlp: the Deno runtime in the Dockerfile is only the
+# JS *engine* — it still needs the solver scripts to answer YouTube's EJS nsig/sig
+# challenge. yt-dlp 2026.7.4 pins exactly this in its own `default` extra; adding
+# just this package (pure-Python, no deps, arch-agnostic) keeps the image lean
+# instead of pulling the whole yt-dlp[default] set.
+yt-dlp-ejs==0.8.0
 
 # Spotify integration (optional)
 spotipy==2.25.2
