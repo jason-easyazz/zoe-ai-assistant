@@ -180,8 +180,11 @@ def test_migration_manifest_covers_non_regular_entries():
     script printed DONE — and Music Assistant would follow it when opening its
     store. Codex reproduced this with a `stale.db-wal` symlink."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert "find . -mindepth 1 | sort" in src, "manifest must cover all entry types"
-    assert "find . -type f | sort" not in src, "the -type f manifest must not come back"
+    # (Literal updated when the walk moved to privileged `-printf %P`; the
+    # PROPERTY is: manifests enumerate ALL entry types via -mindepth 1, never
+    # filtered to -type f.)
+    assert r"-mindepth 1 -printf '%P\n'" in src, "manifest must cover all entry types"
+    assert "-type f -printf '%P" not in src, "the -type f manifest must not come back"
     assert "rm -rf" in src, "--mirror must be able to remove dirs/symlinks, not just files"
 
 
@@ -439,3 +442,20 @@ def test_config_preflight_precedes_the_container_stop():
     stop_at = src.index('docker stop "$CONTAINER"')
     assert src.index("Compose interpolates ${ZOE_MA_DATA}") < stop_at
     assert src.index("destination carries a completion marker") < stop_at
+
+
+def test_all_store_access_uses_copy_time_privileges():
+    """Round 16 fixed the destination inspection; round 22 found the manifest
+    walk still did an unprivileged `cd` and the checksum loop an unprivileged
+    `-e` — both failing under a root-owned 0700 ancestor AFTER MA was stopped
+    and the data copied: unmarked destination, service down (review: Codex).
+    The .env read is the one deliberate exception: Compose reads it as the
+    invoking user, so the check must see what Compose sees."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert '(cd "$SRC"' not in code and '(cd "$DEST"' not in code, (
+        "no unprivileged cd into the stores")
+    assert "-printf '%P\\n'" in src, "manifests must traverse under sudo via -printf %P"
+    assert '[[ ! -e "$DEST/$rel" ]]' not in code
+    assert 'sudo test -e "$DEST/$rel"' in src
+    assert 'sudo test -d "$SRC"' in src

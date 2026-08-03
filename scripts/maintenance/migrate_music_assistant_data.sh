@@ -190,7 +190,7 @@ dest_nonempty() {
     return 0
 }
 
-[[ -d "$SRC" ]] || { log "FATAL: source does not exist: $SRC"; exit 1; }
+sudo test -d "$SRC" || { log "FATAL: source does not exist: $SRC"; exit 1; }
 
 # The directory alone is NOT evidence the stores are there (review: Codex). Run
 # this AFTER step B (the untracking commit) has deployed — the ordering failure it
@@ -314,6 +314,9 @@ fi
 # store past every containment check. The effective Compose value must agree
 # with what was validated here.
 ENV_FILE="$REPO_ROOT/.env"
+# Deliberately UNPRIVILEGED: Compose reads .env as the invoking user, so this
+# check must see exactly what Compose will see — a root-only-readable .env that
+# Compose cannot read cannot influence interpolation either.
 if [[ -f "$ENV_FILE" ]]; then
     env_val="$(sed -n 's/^ZOE_MA_DATA=//p' "$ENV_FILE" | tail -1 | sed 's/^"\(.*\)"$/\1/')"
     if [[ -n "$env_val" ]]; then
@@ -475,10 +478,16 @@ sudo cp -a --remove-destination "$SRC/." "$DEST/"
 # failed. (review: Codex)
 _man_src="$(mktemp)"; _man_dst="$(mktemp)"
 trap 'rm -f "$_man_src" "$_man_dst"' EXIT
-if ! (cd "$SRC" && sudo find . -mindepth 1 | sort) > "$_man_src"; then
+# No unprivileged `cd` (review: Codex — the subshell cd ran as the invoking
+# user, so a root-owned non-searchable ancestor that the PRIVILEGED checks and
+# copy handled fine failed HERE, after MA was stopped and the data copied:
+# unmarked destination, service down. `find -printf '%P\n'` yields paths
+# relative to the starting point with the whole traversal under sudo, so no
+# process ever needs to enter the directory unprivileged.)
+if ! sudo find "$SRC" -mindepth 1 -printf '%P\n' | sort > "$_man_src"; then
     log "FATAL: could not enumerate the source at $SRC"; exit 1
 fi
-if ! (cd "$DEST" && sudo find . -mindepth 1 | sort) > "$_man_dst"; then
+if ! sudo find "$DEST" -mindepth 1 -printf '%P\n' | sort > "$_man_dst"; then
     log "FATAL: could not enumerate the destination at $DEST"; exit 1
 fi
 if [[ ! -s "$_man_src" ]]; then
@@ -524,7 +533,10 @@ fi
 fail=0; checked=0
 while IFS= read -r -d '' f; do
     rel="${f#$SRC/}"
-    if [[ ! -e "$DEST/$rel" ]]; then
+    # sudo test, not [[ -e ]]: an unprivileged existence probe under a
+    # root-owned 0700 ancestor reports MISSING for every correctly-copied file
+    # (same privilege class as the manifest walk fixed alongside).
+    if ! sudo test -e "$DEST/$rel"; then
         log "  MISSING at destination: $rel"; fail=1; continue
     fi
     a=$(sudo sha256sum "$f" | awk '{print $1}')
