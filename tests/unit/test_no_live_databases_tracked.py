@@ -165,7 +165,11 @@ def test_migration_prints_restart_command_with_resolved_destination():
     restart command without it makes Compose fall back to the default and
     initialise an EMPTY store (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert 'ZOE_MA_DATA=$DEST docker compose' in src
+    # The literal changed when the destination became shell-quoted; assert the
+    # PROPERTY (the resolved dest is carried into the restart command), not the
+    # exact spelling, so the two tests cannot contradict each other again.
+    assert "ZOE_MA_DATA=$(printf '%q' \"$DEST\")" in src
+    assert "docker compose -f docker-compose.modules.yml up -d music-assistant" in src
 
 
 def test_migration_manifest_covers_non_regular_entries():
