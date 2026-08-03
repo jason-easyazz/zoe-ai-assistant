@@ -137,17 +137,36 @@ There are **two different reuse mechanisms** in the server, and only one works f
    This is the mechanism Zoe needs, and it only requires the prompt to *fit* (§1) and the
    slot to stay resident.
 
-2. **`--cache-reuse N` (KV-shift reuse) — DOES NOT WORK for Gemma.**
+2. **`--cache-reuse N` (KV-shift reuse) — AVAILABLE, but unaffordable here.**
    ```
-   tools/server/server-context.cpp:3159
+   tools/server/server-context.cpp:2846        (our build, f449e05)
      const bool can_cache_reuse =
          llama_memory_can_shift(llama_get_memory(ctx_tgt)) && !slot.prompt.tokens.has_mtmd;
-     if (!can_cache_reuse && n_cache_reuse > 0)
-         SLT_WRN(slot, "cache reuse is not supported - ignoring n_cache_reuse = %d\n", ...);
+
+   src/llama-kv-cache-iswa.cpp:232
+     bool llama_kv_cache_iswa::get_can_shift() const {
+         return kv_base->get_can_shift() &&
+                kv_swa->get_can_shift() &&
+                kv_base->get_size() == kv_swa->get_size();
+     }
    ```
-   Gemma 3/4's **shared-KV + SWA** architecture makes `llama_memory_can_shift()` false, so
-   `--cache-reuse` is silently ignored and logs the warning (upstream issue #21468). **Do
-   not bother setting `--cache-reuse`** for this model — it's a no-op here.
+   **Corrected 2026-08-03.** The previous claim here — "silently ignored for Gemma, do
+   not bother" — is **false today**. Upstream issue #21468 was CLOSED as fixed by PR
+   #22288 (2026-04-24), and that fix is in our build; there is **no architecture
+   exclusion** for Gemma in `get_can_shift()`. Shifting is *conditionally* disabled: the
+   SWA layers are sized by the 512-token window while the base cache is sized by ctx, so
+   the two `get_size()` values differ and `can_shift()` returns false.
+
+   **`--swa-full` equalises them and re-enables `--cache-reuse`** — but equalising them
+   IS the cost: ~50× SWA cache growth (30 MiB → 1,536 MiB measured on Gemma E2B),
+   unaffordable on this 15.6G unified-memory box. The re-enablement and the RAM bill are
+   the same knob, so this is a budget tradeoff, not an upstream limitation.
+
+   Consequence: `--cache-reuse` is omitted **by choice**, and exact common-prefix reuse
+   (§1) plus `--cache-ram` is the strategy — which makes **prompt-prefix stability**
+   load-bearing. A prompt whose head moves gets no reuse from either cache. See
+   `services/zoe-data/AGENTS.md` ("mutate the tail, never the head") and
+   [brain-kv-cache-tuning.md](../knowledge/brain-kv-cache-tuning.md).
 
 ### Recommended flags (single-user, one slot)
 
@@ -305,7 +324,7 @@ Secondary / track-only:
 3. **Confirm caching lands:** run `/slots` or `--verbose` and confirm subsequent turns log
    a large `n_past` (prefix reused) and TTFT collapses; confirm **no**
    `exceed_context_size` and **no** `cache reuse is not supported` spam (the latter only if
-   you wrongly set `--cache-reuse`).
+   you set `--cache-reuse` without `--swa-full` — see §2).
 4. **MTP still works:** confirm `--spec-type mtp` loads and acceptance stats appear; diff
    gen tok/s before/after.
 5. **Behavioural regression:** replay Jason's `~/.zoe-voice-samples` corpus
@@ -314,10 +333,15 @@ Secondary / track-only:
 
 ## Sources
 
-llama.cpp source (cached, `~/.opensrc/repos/github.com/ggerganov/llama.cpp/master`):
+llama.cpp source. The `--cache-reuse` / prompt-cache citations below were read in the RUNNING
+build `~/llama.cpp` @ `f449e0553` (detached HEAD) and their line numbers are that build's; the rest are
+from the cached upstream mirror `~/.opensrc/repos/github.com/ggerganov/llama.cpp/master`, whose
+line numbers differ:
 - `src/llama-context.cpp:401-405` — quantized-V-requires-FA throw (K-quant allowed FA-off).
 - `tools/server/server-context.cpp:3149` — `get_common_prefix` exact-prefix reuse (not shift-gated).
-- `tools/server/server-context.cpp:3157-3165` — `can_cache_reuse = llama_memory_can_shift(...)`; warning when unsupported.
+- `tools/server/server-context.cpp` — `can_cache_reuse = llama_memory_can_shift(...)`; warning when unsupported (our build f449e05: `:2846-2855`).
+- `src/llama-kv-cache-iswa.cpp:232-236` — `get_can_shift()` = base shiftable AND swa shiftable AND `kv_base->get_size() == kv_swa->get_size()`. No Gemma exclusion (#21468 fixed by #22288); the size equality is why `--swa-full` re-enables `--cache-reuse` and why it costs ~50× the SWA cache.
+- `tools/server/server-task.cpp:1677-1700` — `server_prompt_cache::load` picks cached states by `get_common_prefix`, skipping candidates matching under 25% of their cached prompt: `--cache-ram` is itself a PREFIX cache.
 - `tools/server/server-context.cpp` (slot path) — `ERROR_TYPE_EXCEED_CONTEXT_SIZE` release before caching.
 - `common/arg.cpp` — `--flash-attn` (1384), `--cache-prompt`/`--cache-reuse` (3024-3041), `--cache-ram`/`--cache-idle-slots` (1346-1368), `--keep` (1313), `--slot-save-path` (3064), `--swa-full` (1320), `--spec-*` (3554-3636); `--spec-type mtp` MTP-head fallback (451-458).
 - `common/common.h` — `common_params_speculative_draft` defaults (n_max 3, n_min 0, p_split 0.1, p_min 0.0).

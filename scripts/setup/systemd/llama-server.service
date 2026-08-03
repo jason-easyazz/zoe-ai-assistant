@@ -75,9 +75,17 @@ Environment=LD_LIBRARY_PATH=%h/llama.cpp/build-jetson-new/bin
 #    this build (proven; see #810 sync note), and q8 V-cache requires FA — so
 #    V-quant is off the table while MTP is in use. K stays q8 (works without
 #    FA). V at f16 costs only the ~4 global layers: ~64MB at 16384 — acceptable.
-#  --cache-reuse REMOVED: KV shifting cannot reuse past the 512-token sliding
-#    window on SWA models (reuse threshold = pos_next - n_swa), so it was a
-#    no-op here; the host prompt cache above is the working replacement.
+#  --cache-reuse OMITTED BY CHOICE — not because it would be ignored (corrected
+#    2026-08-03). Upstream #21468 was closed as fixed by #22288 (2026-04-24) and
+#    that fix is in this build; get_can_shift() has no Gemma exclusion. It is
+#    CONDITIONALLY off: llama_kv_cache_iswa::get_can_shift() requires
+#    kv_base->get_size() == kv_swa->get_size(), and SWA layers are sized by the
+#    512-token window. --swa-full equalises them and re-enables --cache-reuse,
+#    but that IS ~50x SWA cache growth (30MiB -> 1536MiB measured on Gemma E2B)
+#    — unaffordable on 15.6G unified memory. So exact common-prefix reuse + the
+#    host prompt cache above is the strategy, which makes prompt-prefix
+#    stability load-bearing: see services/zoe-data/AGENTS.md ("mutate the tail,
+#    never the head"). Do NOT add --cache-reuse without also budgeting --swa-full.
 ExecStart=%h/llama.cpp/build-jetson-new/bin/llama-server \
   --model %h/models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf \
   --model-draft %h/models/gemma4-e4b-qat/mtp-gemma-4-E4B-it.gguf \
