@@ -1,0 +1,69 @@
+{
+ "_fixture_note": "REAL GET .../StoreLocator/Store?Division=bws&StoreNo=4328, 2026-08-04 AWST",
+ "Manager": null,
+ "GmtZone": "8:0",
+ "Country": "Australia",
+ "Extra5": "4943",
+ "DaysToFulfillBackOrder": 4,
+ "Radius": 10,
+ "IsClickAndCollectEnabled": true,
+ "IsDeliveryEnabled": true,
+ "CanDeliverToLocation": false,
+ "IsBackorderEnabled": true,
+ "IsOpeningHoursOverridden": false,
+ "TradingHours": [
+  {
+   "Day": "Today",
+   "OpenHour": "10:00 AM - 8:00 PM"
+  },
+  {
+   "Day": "Tomorrow",
+   "OpenHour": "10:00 AM - 8:00 PM"
+  },
+  {
+   "Day": "Thursday",
+   "OpenHour": "10:00 AM - 8:00 PM"
+  },
+  {
+   "Day": "Friday",
+   "OpenHour": "10:00 AM - 8:00 PM"
+  },
+  {
+   "Day": "Saturday",
+   "OpenHour": "10:00 AM - 5:00 PM"
+  },
+  {
+   "Day": "Sunday",
+   "OpenHour": "Closed"
+  },
+  {
+   "Day": "Monday",
+   "OpenHour": "10:00 AM - 8:00 PM"
+  }
+ ],
+ "Facilities": [
+  "SYS- Express Delivery",
+  "SYS- BWS Collect",
+  "SYS- Chilled BWS Collect",
+  "In Shopping Centre",
+  "SYS-Book regardless Pack"
+ ],
+ "Extra10": "6030013169",
+ "Extra11": null,
+ "Division": "BWS",
+ "StoreNo": "4083",
+ "Name": "Geraldton",
+ "AddressLine1": "Centro Stirling, 54 Sanford Street",
+ "Suburb": "Geraldton",
+ "State": "WA",
+ "Postcode": "6530",
+ "Latitude": "-28.77499404",
+ "Longitude": "114.6123092",
+ "GeoLevel": "0",
+ "Distance": null,
+ "Phone": "(08) 9960 8208",
+ "TotalItemsInCart": null,
+ "AvailableItems": null,
+ "UnavailableItems": null,
+ "StoreType": "Partner Store"
+}
