@@ -168,6 +168,25 @@ fi
 DEST="$DEST_ABS"
 SRC="$SRC_ABS"
 
+# Probe whether DEST has any entry, FAILING CLOSED on probe error (review:
+# Codex — the copy-time probe had the same masked status as the direction
+# probe fixed one round earlier; a transient failure read as "empty", and
+# `cp --remove-destination` would then overwrite matching entries without
+# --mirror ever being consulted). Sets _dest_nonempty=1/0.
+dest_nonempty() {
+    _dest_nonempty=0
+    sudo test -d "$DEST" || return 0
+    local out
+    if ! out="$(sudo find "$DEST" -mindepth 1 -print -quit 2>&1)"; then
+        log "FATAL: cannot probe the destination: "
+        printf '%s\n' "$out" | sed 's/^/ma-migrate:   /' >&2
+        log "Refusing: an unreadable destination must not be treated as empty."
+        exit 1
+    fi
+    [[ -n "$out" ]] && _dest_nonempty=1
+    return 0
+}
+
 [[ -d "$SRC" ]] || { log "FATAL: source does not exist: $SRC"; exit 1; }
 
 # The directory alone is NOT evidence the stores are there (review: Codex). Run
@@ -190,6 +209,21 @@ for required in auth.db library.db; do
         missing+=("$required")
     fi
 done
+# No symlink anywhere in the source (review: Codex). `cp -a` preserves links,
+# the `-type f` checksum walk omits them, and the manifests compare pathnames
+# not targets — so a linked settings.json or playlist would ship unverified: an
+# absolute link still pointing into the checkout, or a relative one resolving
+# differently after relocation. The REAL store has zero symlinks (measured), so
+# refusing costs nothing and closes the class for every entry, not just the DBs.
+_links="$(sudo find "$SRC" -type l 2>&1)" || {
+    log "FATAL: cannot scan the source for symlinks"; exit 1; }
+if [[ -n "$_links" ]]; then
+    log "FATAL: source contains symlinks, which would be copied as LINKS and"
+    log "skipped by verification:"
+    printf '%s\n' "$_links" | awk 'NR<=10' | sed 's/^/ma-migrate:   /'
+    log "Resolve them to real files before migrating."
+    exit 1
+fi
 if [[ ${#notregular[@]} -gt 0 ]]; then
     log "FATAL: source database is a symlink, not a regular file:"
     printf '  %s\n' "${notregular[@]}" | sed 's/^/ma-migrate: /'
@@ -231,7 +265,8 @@ log "files      : $(sudo find "$SRC" -type f 2>/dev/null | wc -l)"
 if [[ "$EXECUTE" -eq 0 ]]; then
     log ""
     log "DRY RUN — nothing changed. Would:"
-    if sudo test -d "$DEST" && [[ -n "$(sudo find "$DEST" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+    dest_nonempty
+if [[ "$_dest_nonempty" -eq 1 ]]; then
         if [[ "$MIRROR" -eq 1 ]]; then
             log "  0. DELETE these existing destination entries (--mirror):"
             sudo find "$DEST" -mindepth 1 -maxdepth 1 -printf '  %y %p\n' 2>/dev/null \
@@ -330,7 +365,8 @@ if sudo test -e "$DEST"; then
     if ! sudo test -d "$DEST"; then
         log "FATAL: destination exists and is not a directory: $DEST"; exit 1
     fi
-    if [[ -n "$(sudo find "$DEST" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+    dest_nonempty
+    if [[ "$_dest_nonempty" -eq 1 ]]; then
         if [[ "$MIRROR" -eq 1 ]]; then
             # Destructive maintenance must print the candidate list BEFORE acting
             # (scripts/AGENTS.md; review: Codex — a generic message then silent

@@ -365,3 +365,25 @@ def test_header_does_not_claim_order_independence():
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert "independently safe in any order" not in src
     assert "ONLY SAFE ORDER" in src
+
+
+def test_copy_time_emptiness_probe_fails_closed():
+    """The direction probe was hardened one round earlier; the copy-time probe
+    kept the identical masked-status shape, so a transient failure read as
+    "destination empty" and `cp --remove-destination` proceeded without --mirror
+    ever being consulted (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "dest_nonempty()" in src, "probes must go through the fail-closed helper"
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert '-mindepth 1 -print -quit 2>/dev/null' not in code, (
+        "no unchecked emptiness probe may remain")
+
+
+def test_all_source_symlinks_are_rejected_not_just_databases():
+    """`cp -a` preserves links, the -type f walk omits them, and manifests
+    compare pathnames not targets — so a linked settings.json or playlist ships
+    unverified. The real store has zero symlinks (measured), so refusing the
+    whole class costs nothing (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "source contains symlinks" in src
+    assert 'sudo find "$SRC" -type l' in src
