@@ -285,3 +285,13 @@ def test_closing_instructions_do_not_overstate_step_a():
     assert "RE-POINTS THE BIND MOUNT ONLY" in src
     assert "SEPARATE step B, still outstanding" in src
     assert "deploy the commit that untracks the DBs" not in src
+
+
+def test_source_stores_must_be_regular_files():
+    """`test -f` follows symlinks, `cp -a` preserves the link rather than the
+    data, and the `find -type f` checksum walk skips links — so a symlinked
+    auth.db could yield 'verified 1/1 files' and DONE having verified nothing
+    (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert 'sudo test -L "$SRC/$required"' in src, "must reject symlinked stores"
+    assert "source database is a symlink, not a regular file" in src

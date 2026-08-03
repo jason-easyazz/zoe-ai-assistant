@@ -160,10 +160,29 @@ SRC="$SRC_ABS"
 # guards — and the databases are gone while ignored settings/playlists/sidecars
 # remain, so a directory check passes, remnants get copied, and it prints DONE.
 # The operator then restarts MA against an incomplete store. Require the stores.
-missing=()
+# `test -f` FOLLOWS symlinks, so a symlinked store would be accepted here — then
+# `cp -a` preserves the link rather than the data, and the `find -type f`
+# checksum walk skips it entirely, so the script could report "verified 1/1" and
+# DONE without ever verifying auth.db. A relative link may also resolve to a
+# different file once copied, and an absolute link into the checkout would leave
+# the live data behind the very path this migration retires. Require REGULAR,
+# non-symlink files. (review: Codex)
+missing=(); notregular=()
 for required in auth.db library.db; do
-    sudo test -f "$SRC/$required" || missing+=("$required")
+    if sudo test -L "$SRC/$required"; then
+        notregular+=("$required -> $(sudo readlink -- "$SRC/$required")")
+    elif ! sudo test -f "$SRC/$required"; then
+        missing+=("$required")
+    fi
 done
+if [[ ${#notregular[@]} -gt 0 ]]; then
+    log "FATAL: source database is a symlink, not a regular file:"
+    printf '  %s\n' "${notregular[@]}" | sed 's/^/ma-migrate: /'
+    log "cp -a would copy the LINK, and the checksum walk skips links — the run"
+    log "could report success having verified nothing. Resolve it to a real file"
+    log "(or point ZOE_MA_SRC at the directory that actually holds the stores)."
+    exit 1
+fi
 if [[ ${#missing[@]} -gt 0 ]]; then
     log "FATAL: source is missing live databases: ${missing[*]}"
     log "$SRC exists but has no stores — this is what it looks like AFTER the"
