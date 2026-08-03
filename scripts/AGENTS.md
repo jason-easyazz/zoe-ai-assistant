@@ -92,5 +92,34 @@ so operators must still avoid overlapping those manually; advisory
 only (never wired into greptile-gate); exit 2 = alarm (silent kick death,
 error-status session, or unreachable server) and must never be read as a clean
 review. Protocol + validation record: `docs/knowledge/omnigent-cross-review.md`.
-Verification: `bash -n`, plus the dogfood pattern — review changes to this
-script with the script itself.
+
+**Never parse an HTTP body in the shell.** Every response — session create,
+poll, report — goes through `scripts/maintenance/cross_review_poll.py`, which
+checks HTTP status, emptiness and content-type BEFORE parsing, retries
+transient faults (empty body / non-JSON / 5xx / connection refused) with
+bounded backoff, and treats a 404 `not_found` as a vanished session rather than
+a blip.
+
+**Detection speed and restart tolerance trade directly against each other — do
+not retune one without the other.** The poller sleeps EXACTLY ONCE per
+iteration (the interval on the healthy path, the backoff on a retry); sleeping
+both is a silent 211s-instead-of-121s regression that a loosely-bounded timing
+test will not catch. At the wrapper's defaults a mid-poll dead endpoint is
+declared poll-lost after at most **121s** (`30 + 1+2+4+8+16+30+30`) and a
+vanished session after ~33s, while a **~60s server restart is still ridden
+out** — `--max-transient` is 8 rather than 6 solely to keep that tolerance once
+the padding interval is gone. Both numbers are pinned by
+`tests/unit/test_cross_review_poll.py`.
+
+Its exit codes are diagnostic — 3 never-registered, 4 poll-lost,
+5 timeout, 6 never-running, 7 dispatch-failed — and the wrapper collapses all of
+them to its public `exit 2`. Every failure prints exactly one terminal line
+carrying the session id and `re-dispatch required`; grep for that string.
+
+The wrapper also confirms the session is READABLE before spending a worker on
+it (`await-registration`, budget via `CROSS_REVIEW_REGISTER_TIMEOUT_S`, default
+60s): a POST that returned an id is not proof a GET resolves it.
+
+Verification: `bash -n`, `pytest tests/unit/test_cross_review_poll.py` (offline,
+`ci_safe`, canned fixtures + a fake clock — no network, no live Omnigent), plus
+the dogfood pattern — review changes to this script with the script itself.
