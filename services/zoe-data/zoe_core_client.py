@@ -781,9 +781,61 @@ _MEMORY_BLOCK_OPEN = "[MEMORY CONTEXT]"
 _MEMORY_BLOCK_CLOSE = "[END MEMORY CONTEXT]"
 
 
+# ── Delimiter-collision guard ────────────────────────────────────────────────
+#
+# The three markers above are COMPOSITION-OWNED: this module emits them, and
+# `memory.ts` / `abilities.ts` parse them back out of Pi's retained conversation.
+# Everything ELSE folded into a composed message is user content —
+# `routers/memories.py` splices stored `ref.text[:200]` straight into the packet,
+# the caller's recall context is recalled user text, and the replayed history is
+# literally what was said. A stored memory whose text is the line
+# `[END MEMORY CONTEXT]` therefore closed the block early: the elision regex
+# stopped at the user-controlled delimiter, and the REMAINDER of a superseded
+# packet — stale facts, a resolved "would you like me to add Sam as a contact?"
+# offer — survived the strip and stayed readable for the life of the session.
+# That is the whole corrected-fact/resolved-offer guarantee, defeated by content.
+#
+# So every marker occurrence in content gets a U+200B ZERO WIDTH SPACE wedged in
+# after its opening bracket: `[END MEMORY CONTEXT]` becomes
+# `[<ZWSP>END MEMORY CONTEXT]`, which renders identically and reads identically to
+# the brain, but is no longer equal to any delimiter any consumer looks for.
+#
+# Escape rather than reject: dropping a colliding memory would let one poisoned
+# fact silence itself, which is a worse failure than showing it inertly.
+#
+# Two properties this relies on:
+#   * It runs on CONTENT ONLY, before the delimiters are added, so composition
+#     keeps sole ownership of them.
+#   * It is idempotent (a wedged marker no longer matches) and byte-for-byte a
+#     no-op on text containing no marker — so ordinary packets, and the
+#     voice-replay corpus, are unchanged by construction.
+_MARKER_BREAK = "\u200b"  # written as an ESCAPE on purpose: the char is invisible in source
+
+# Mirrored (OPEN/CLOSE only) by `CONTROL_MARKERS` in memory.ts; the utterance
+# marker has no TS counterpart to guard because standalone `pi` runs never emit
+# one — it exists only in a seam-composed message, which this module builds.
+_CONTROL_MARKERS = (_MEMORY_BLOCK_OPEN, _MEMORY_BLOCK_CLOSE, _UTTERANCE_MARKER)
+
+
+def _neutralize_markers(text: str) -> str:
+    """User content with every composition-owned marker rendered inert.
+
+    See the note above. No-op — and returns the SAME object — when nothing
+    collides, which is every real turn.
+    """
+    if not text:
+        return text
+    for marker in _CONTROL_MARKERS:
+        if marker in text:
+            text = text.replace(marker, f"{marker[:1]}{_MARKER_BREAK}{marker[1:]}")
+    return text
+
+
 def _memory_block(packet: str) -> str:
     """Directive + packet, delimited, or "" — the directive NEVER appears alone."""
-    packet = (packet or "").strip()
+    # Neutralize BEFORE delimiting: the packet is user content (stored memory
+    # text), the delimiters are ours. See `_neutralize_markers`.
+    packet = _neutralize_markers((packet or "").strip())
     if not packet:
         return ""
     return (
@@ -856,10 +908,24 @@ def _compose_message(
     parts: list[str] = []
     if voice_mode:
         parts.append(_VOICE_BREVITY)
+    # Every block below folds USER CONTENT in behind a composition-owned label, so
+    # each one is neutralized (see `_neutralize_markers`). The packet is where a
+    # collision actually LEAKED — it sits between the block delimiters — but the
+    # portrait, the recall context and the replayed history are user text too, and
+    # a marker in any of them makes the strip over-elide a superseded turn. Sweep
+    # the class rather than the one instance.
+    #
+    # `message` is deliberately NOT neutralized: it is LAST, so a marker the user
+    # types can only make the strip drop MORE of their own superseded turn, never
+    # leak one; and `latestUtterance` already splits on the LAST occurrence, so it
+    # can only narrow their own text. Rewriting the user's literal words has a real
+    # cost and buys no safety here.
     if portrait:
-        parts.append(f"[About you]\n{portrait.strip()}")
+        parts.append(f"[About you]\n{_neutralize_markers(portrait.strip())}")
     if db_memory_context:
-        parts.append(f"[What you remember]\n{db_memory_context.strip()}")
+        parts.append(
+            f"[What you remember]\n{_neutralize_markers(db_memory_context.strip())}"
+        )
     # INDEPENDENT of db_memory_context, never an elif — the voice path always
     # supplies one, and the for-prompt packet carries additions (pending-contact
     # offers) that the voice recall block does not. See the header.
@@ -875,7 +941,7 @@ def _compose_message(
             role = turn.get("role") or turn.get("speaker") or "user"
             content = (turn.get("content") or turn.get("text") or "").strip()
             if content:
-                lines.append(f"{role}: {content}")
+                lines.append(f"{role}: {_neutralize_markers(content)}")
         if lines:
             parts.append("[Recent conversation]\n" + "\n".join(lines))
     if not parts:

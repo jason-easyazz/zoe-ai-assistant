@@ -110,7 +110,10 @@ export function seamOwnsPacket(): boolean {
  * chatting instead of calling its tools.
  */
 export function memoryBlock(packet: string): string {
-  const trimmed = (packet ?? "").trim();
+  // Neutralize BEFORE delimiting: the packet is user content (stored memory text
+  // spliced in by routers/memories.py), the delimiters are ours. See
+  // `neutralizeMarkers`.
+  const trimmed = neutralizeMarkers((packet ?? "").trim());
   if (!trimmed) return "";
   // Delimited identically to the seam's `_memory_block`, so one strip rule covers
   // both. (Standalone puts this on the SYSTEM prompt, which Pi replaces each turn,
@@ -165,19 +168,78 @@ export async function fetchMemoryPacket(message: string): Promise<string> {
 export const MEMORY_BLOCK_OPEN = "[MEMORY CONTEXT]";
 export const MEMORY_BLOCK_CLOSE = "[END MEMORY CONTEXT]";
 
-function escapeForRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// ── Delimiter-collision guard (mirrors `_neutralize_markers` in zoe_core_client) ─
+//
+// The delimiters are COMPOSITION-OWNED; the packet is user content —
+// routers/memories.py splices stored `ref.text[:200]` straight into it. A stored
+// memory whose text is the line `[END MEMORY CONTEXT]` used to close the block
+// early, so the REMAINDER of a superseded packet (stale facts, a resolved
+// "add Sam as a contact?" offer) survived the strip below and stayed readable for
+// the life of the session.
+//
+// Fix: wedge a U+200B ZERO WIDTH SPACE in after the marker's opening bracket.
+// `[END MEMORY CONTEXT]` becomes `[<ZWSP>END MEMORY CONTEXT]` — identical on
+// screen and to the model, no longer equal to anything a consumer parses.
+// Escaping beats rejecting: dropping the memory would let one poisoned fact
+// silence itself. Idempotent, and byte-for-byte a no-op when nothing collides.
+//
+// Only the two BLOCK delimiters are guarded here. The seam's third marker
+// (`_UTTERANCE_MARKER`) has no counterpart in this runtime: it exists only in a
+// seam-composed message, and the seam neutralizes it on its own side.
+export const MARKER_BREAK = "\u200b"; // an ESCAPE on purpose: the char is invisible in source
+export const CONTROL_MARKERS = [MEMORY_BLOCK_OPEN, MEMORY_BLOCK_CLOSE] as const;
+
+/** User content with every composition-owned delimiter rendered inert. */
+export function neutralizeMarkers(text: string): string {
+  if (!text) return text;
+  let out = text;
+  for (const marker of CONTROL_MARKERS) {
+    if (!out.includes(marker)) continue;
+    out = out.split(marker).join(`${marker.slice(0, 1)}${MARKER_BREAK}${marker.slice(1)}`);
+  }
+  return out;
 }
 
-const MEMORY_BLOCK_RE = new RegExp(
-  `\\n*${escapeForRegExp(MEMORY_BLOCK_OPEN)}\\n[\\s\\S]*?\\n${escapeForRegExp(MEMORY_BLOCK_CLOSE)}\\n*`,
-  "g",
-);
-
-/** Every delimited memory block removed, with the surrounding blank line healed. */
+/**
+ * Every delimited memory block removed, with the surrounding blank line healed.
+ *
+ * DEFENSIVE BY CONSTRUCTION, independent of the guard above — the guard is the
+ * fix, this is the backstop for content that reached the conversation before it,
+ * or by a path that skipped it.
+ *
+ *   * A delimiter counts only as a WHOLE LINE. Composition always emits it that
+ *     way, so an inline mention ("the [MEMORY CONTEXT] marker") is not ours and
+ *     the text is returned untouched.
+ *   * Elision runs from the FIRST open line to the LAST close line — greedy, not
+ *     the non-greedy regex this replaces. On well-formed input (exactly one block
+ *     per composed message) the two are identical; on hostile input the greedy
+ *     span swallows the injected delimiter instead of stopping at it.
+ *   * An open line with NO close after it elides to the END of the message.
+ *
+ * Both choices are the same deliberate trade: this only ever runs on SUPERSEDED
+ * user messages, so over-eliding costs some already-stale context, while
+ * under-eliding leaks exactly the stale facts and resolved offers the whole
+ * mechanism exists to remove. Prefer over-eliding, always.
+ */
 export function stripMemoryBlocks(text: string): string {
   if (!text.includes(MEMORY_BLOCK_OPEN)) return text;
-  return text.replace(MEMORY_BLOCK_RE, "\n\n").trim();
+  const lines = text.split("\n");
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < lines.length; i++) {
+    // trimEnd only: composition never indents a delimiter, so a leading space
+    // means the line is content, not ours.
+    const line = lines[i].trimEnd();
+    if (line === MEMORY_BLOCK_OPEN && first === -1) first = i;
+    else if (line === MEMORY_BLOCK_CLOSE && first !== -1 && i > first) last = i;
+  }
+  if (first === -1) return text; // an inline mention or a stray close — nothing of ours
+  const head = lines.slice(0, first);
+  const tail = last === -1 ? [] : lines.slice(last + 1); // unbalanced → elide to the end
+  while (head.length && head[head.length - 1].trim() === "") head.pop();
+  while (tail.length && tail[0].trim() === "") tail.shift();
+  const healed = head.length && tail.length ? [...head, "", ...tail] : [...head, ...tail];
+  return healed.join("\n").trim();
 }
 
 /** Minimal structural view of a Pi conversation message. */
