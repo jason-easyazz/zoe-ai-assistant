@@ -96,6 +96,39 @@ VOICE_PATH_PATTERNS = (
     # PR that committed the lockfile for exactly this determinism).
     "services/zoe-core/package.json",
     "services/zoe-core/package-lock.json",
+    # THE LIVE BRAIN LANE. zoe-core above is the DORMANT fallback; since
+    # 2026-07-03 the brain that actually answers voice turns is the Flue sidecar
+    # (ZOE_BRAIN_BACKEND=flue), supervised by flue-zoe-brain.service and reached
+    # from zoe-data through zoe_flue_client.py. The gate matched the fallback and
+    # not the live lane, so a change to the brain that is ACTUALLY SPEAKING took
+    # the no-op pass at PR time AND at deploy — the deploy gate calls this same
+    # module, so it inherited the identical blind spot.
+    #
+    # Only the DEPLOYED inputs are listed: src/ (compiled into dist/server.mjs by
+    # `flue build`), the manifest + lockfile `npm ci` installs, and the two build
+    # configs that decide what gets emitted. test/ and parity/ are NOT gated on
+    # purpose — they never reach the running sidecar, and gating them would force
+    # a 20-sample Kokoro replay for a test-only or docs-only diff. Same for
+    # README/LANDING/.env.example.
+    "labs/flue-zoe-brain/src/*",
+    "labs/flue-zoe-brain/package.json",
+    "labs/flue-zoe-brain/package-lock.json",
+    "labs/flue-zoe-brain/flue.config.ts",
+    "labs/flue-zoe-brain/tsconfig.json",
+    # DELIBERATELY ABSENT: labs/flue-zoe-brain-2x/. It is an unmerged parallel
+    # port that nothing deploys or serves, so it is outside the voice runtime
+    # path. If it ever becomes the served lane, gate it THEN — do not add it
+    # pre-emptively, or every experimental commit pays a replay run.
+    #
+    # The unit is the sidecar's serving config (ExecStart, EnvironmentFile, port)
+    # exactly as llama-server.service is for the model server, gated above for
+    # the same reason.
+    "scripts/setup/systemd/flue-zoe-brain.service",
+    # The prod client for that lane (streaming, seam recall, timeouts) and the
+    # dispatcher that CHOOSES the lane — a change to either alters what a voice
+    # turn gets answered by, and neither matched any glob above.
+    "services/zoe-data/zoe_flue_client.py",
+    "services/zoe-data/brain_dispatch.py",
 )
 DEFAULT_MAX_AGE_H = float(os.environ.get("ZOE_VOICE_GATE_MAX_AGE_H", "24"))
 
