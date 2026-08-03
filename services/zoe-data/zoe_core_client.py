@@ -811,10 +811,28 @@ _MEMORY_BLOCK_CLOSE = "[END MEMORY CONTEXT]"
 #     voice-replay corpus, are unchanged by construction.
 _MARKER_BREAK = "\u200b"  # written as an ESCAPE on purpose: the char is invisible in source
 
-# Mirrored (OPEN/CLOSE only) by `CONTROL_MARKERS` in memory.ts; the utterance
-# marker has no TS counterpart to guard because standalone `pi` runs never emit
-# one — it exists only in a seam-composed message, which this module builds.
-_CONTROL_MARKERS = (_MEMORY_BLOCK_OPEN, _MEMORY_BLOCK_CLOSE, _UTTERANCE_MARKER)
+# The labels `_compose_message` puts on each context block. They are STRUCTURE,
+# not text: `abilities.ts` anchors on `_HISTORY_LABEL` to find the replayed turns
+# it seeds disclosure from, so a stored memory containing that line could
+# otherwise forge a history block and arm a domain the user never mentioned —
+# the round-two bug by another route. `_HISTORY_LABEL` is kept byte-for-byte in
+# sync with `HISTORY_MARKER` in services/zoe-core/extensions/abilities.ts (pinned
+# by a test).
+_PORTRAIT_LABEL = "[About you]"
+_RECALL_LABEL = "[What you remember]"
+_HISTORY_LABEL = "[Recent conversation]"
+
+# Mirrored (block OPEN/CLOSE only) by `CONTROL_MARKERS` in memory.ts. The other
+# four have no TS counterpart to guard: a standalone `pi` run has no composed
+# message at all, so those markers exist only in what THIS module builds.
+_CONTROL_MARKERS = (
+    _MEMORY_BLOCK_OPEN,
+    _MEMORY_BLOCK_CLOSE,
+    _UTTERANCE_MARKER,
+    _PORTRAIT_LABEL,
+    _RECALL_LABEL,
+    _HISTORY_LABEL,
+)
 
 
 def _neutralize_markers(text: str) -> str:
@@ -921,10 +939,10 @@ def _compose_message(
     # can only narrow their own text. Rewriting the user's literal words has a real
     # cost and buys no safety here.
     if portrait:
-        parts.append(f"[About you]\n{_neutralize_markers(portrait.strip())}")
+        parts.append(f"{_PORTRAIT_LABEL}\n{_neutralize_markers(portrait.strip())}")
     if db_memory_context:
         parts.append(
-            f"[What you remember]\n{_neutralize_markers(db_memory_context.strip())}"
+            f"{_RECALL_LABEL}\n{_neutralize_markers(db_memory_context.strip())}"
         )
     # INDEPENDENT of db_memory_context, never an elif — the voice path always
     # supplies one, and the for-prompt packet carries additions (pending-contact
@@ -943,7 +961,10 @@ def _compose_message(
             if content:
                 lines.append(f"{role}: {_neutralize_markers(content)}")
         if lines:
-            parts.append("[Recent conversation]\n" + "\n".join(lines))
+            # `role: text` per line — the shape `abilities.ts` parses to seed
+            # disclosure on a restarted worker. Roles stay unprefixed and
+            # unescaped; only the CONTENT is neutralized (above).
+            parts.append(f"{_HISTORY_LABEL}\n" + "\n".join(lines))
     if not parts:
         return message  # no context at all → the bare utterance, unchanged
     parts.append(f"{_UTTERANCE_MARKER}\n{message}")

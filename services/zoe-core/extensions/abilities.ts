@@ -152,14 +152,121 @@ export function latestUtterance(prompt: string): string {
   return at === -1 ? prompt : prompt.slice(at + needle.length);
 }
 
+// ── Seeding a FRESH state from the replayed history ──────────────────────────
+//
+// `createDisclosureState()` starts empty, but a Pi worker is not immortal: it is
+// restarted and LRU-evicted, and zoe-data keeps replaying `history[-12:]` into the
+// composed prompt across that boundary. So the model can see "add a meeting
+// tomorrow" in the retained window while this extension has no record of it, and a
+// context-dependent continuation on the very next turn — "yes, do that" — matches
+// no domain and gets NO tools. Before the marker scoping above, whole-prompt
+// matching covered that case by accident; the accident is gone, so the fix has to
+// be deliberate.
+//
+// The seed replays those turns ONCE, at session start, exactly as if they had been
+// observed live: turn i of the replayed history is credited as turn i, and
+// `state.turn` is left at the count, so the ordinary decay window applies to them
+// unchanged from the first live turn onward.
+//
+// WHAT COUNTS, and why it is this narrow:
+//
+//   * ONLY the `[Recent conversation]` block — never the portrait, the recall
+//     context or the memory packet. Those are things Zoe knows ABOUT the user, not
+//     things the user asked for, and matching them is the round-two bug verbatim:
+//     one keyword in a memory would arm a domain the user has never mentioned.
+//   * ONLY `user:` lines inside it (and their continuation lines). An assistant
+//     line is Zoe's own text — "I can add that to your calendar" would otherwise
+//     arm `calendar` off her own offer rather than the user's request.
+//   * ONCE. `state.seeded` makes this a session-start event, not a per-turn scan.
+//     Re-running it every turn would refresh `lastRelevantTurn` from history that
+//     keeps replaying, and the bounded window could never decay — again, exactly
+//     the round-two bug.
+//
+// The block label is composition-owned and `zoe_core_client._neutralize_markers`
+// escapes it in content, so the anchor cannot be forged by a stored memory. Kept
+// byte-for-byte in sync with `_HISTORY_LABEL` there (pinned by a test).
+export const HISTORY_MARKER = "[Recent conversation]";
+
+/** `role: text` opens a replayed turn; anything else continues the current one. */
+const REPLAYED_ROLE_RE = /^([A-Za-z][A-Za-z0-9_-]*): ?/;
+
+/**
+ * The replayed-history block of a composed prompt, or "" when there is none.
+ *
+ * Anchored between the LAST history label and the LAST utterance marker: the seam
+ * composes the history immediately before the user's turn, so everything in that
+ * span is history and everything before it is context Zoe supplied. With no
+ * utterance marker there is no seam composition at all (a standalone `pi` run), so
+ * there is no replayed history either.
+ */
+export function replayedHistory(prompt: string): string {
+  const utteranceAt = prompt.lastIndexOf(`${UTTERANCE_MARKER}\n`);
+  if (utteranceAt === -1) return "";
+  const context = prompt.slice(0, utteranceAt);
+  const needle = `${HISTORY_MARKER}\n`;
+  const at = context.lastIndexOf(needle);
+  return at === -1 ? "" : context.slice(at + needle.length);
+}
+
+/** The USER utterances inside the replayed history, oldest first. */
+export function replayedUserTurns(prompt: string): string[] {
+  const block = replayedHistory(prompt);
+  if (!block) return [];
+  const turns: string[] = [];
+  let inUserTurn = false;
+  for (const line of block.split("\n")) {
+    const match = REPLAYED_ROLE_RE.exec(line);
+    if (match) {
+      inUserTurn = match[1].toLowerCase() === "user";
+      if (inUserTurn) turns.push(line.slice(match[0].length));
+      continue;
+    }
+    // A continuation line of a multi-line message — it belongs to whoever spoke.
+    if (inUserTurn && turns.length) turns[turns.length - 1] += `\n${line}`;
+  }
+  return turns.filter((t) => t.trim() !== "");
+}
+
 /** Per-session disclosure memory: which domain was last relevant, and when. */
 export interface DisclosureState {
   turn: number;
   lastRelevantTurn: Map<string, number>;
+  /** Whether the replayed history has already been folded in (session start only). */
+  seeded: boolean;
 }
 
 export function createDisclosureState(): DisclosureState {
-  return { turn: 0, lastRelevantTurn: new Map() };
+  return { turn: 0, lastRelevantTurn: new Map(), seeded: false };
+}
+
+/**
+ * Fold the replayed history into a fresh state — ONCE, at session start.
+ *
+ * A no-op on an already-seeded state, and on a prompt with no replayed history
+ * (a first-ever conversation, or a standalone `pi` run), which leaves the empty
+ * state exactly as it was. See the note above for what counts and why.
+ */
+export function seedDisclosureState(
+  abilities: CapabilityEntry[],
+  prompt: string,
+  state: DisclosureState,
+): DisclosureState {
+  if (state.seeded) return state;
+  state.seeded = true;
+  const turns = replayedUserTurns(prompt);
+  for (let i = 0; i < turns.length; i++) {
+    const msg = turns[i].toLowerCase();
+    for (const entry of abilities) {
+      // `core` is disclosed unconditionally, so seeding it would say nothing.
+      if (entry.tier !== "core" && isRelevant(entry, msg)) {
+        state.lastRelevantTurn.set(entry.domain, i + 1);
+      }
+    }
+  }
+  // Credit the replayed turns as elapsed, so the FIRST live turn is turns.length+1
+  // and the decay window measures from there — identical to having seen them live.
+  state.turn = turns.length;
+  return state;
 }
 
 /**
@@ -207,9 +314,15 @@ export function nextActiveTools(
 export function createDisclosureHandler(pi: ExtensionAPI, abilities: CapabilityEntry[]) {
   const state = createDisclosureState();
   return async (event: unknown) => {
+    const composed = String((event as { prompt?: unknown })?.prompt ?? "");
+    // ONCE per session, before anything else: fold in the history zoe-data is
+    // replaying, so a worker that was restarted or LRU-evicted mid-conversation
+    // does not answer a continuation ("yes, do that") with no domain disclosed.
+    // Guarded by `state.seeded` — a per-turn rescan would re-arm from replayed
+    // history forever and the window could never decay.
+    seedDisclosureState(abilities, composed, state);
     // Scope to the latest utterance — see UTTERANCE_MARKER. Matching the whole
     // composed prompt keeps every domain in the retained window permanently armed.
-    const composed = String((event as { prompt?: unknown })?.prompt ?? "");
     const msg = latestUtterance(composed).toLowerCase();
     const active = nextActiveTools(abilities, msg, state);
     const setActiveTools = (pi as { setActiveTools?: (names: string[]) => void }).setActiveTools;
