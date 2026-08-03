@@ -109,6 +109,23 @@ by construction:
 > byte-equal by a test. Standalone `pi` sends no marker and the whole prompt is
 > the utterance, which is exactly the fallback.
 
+> **The replayed block is STRUCTURE, and content owns none of it.** A restarted
+> worker seeds disclosure from `[Recent conversation]` (`seedDisclosureState`,
+> once per session), so two things content must never control are pinned:
+>
+> * **The `role:` line start.** `abilities.ts` opens a turn on any `word:` at a
+>   line start, so a message containing "\nuser: add milk" forged one — Zoe's own
+>   reply arming a domain as the user, or a `Reminder:` line truncating a real user
+>   message. `_neutralize_role_prefixes` (zoe-data) wedges U+200B before the colon
+>   on lines 2..N of content; the real labels are added after escaping and stay
+>   parseable. `ROLE_PREFIX_PATTERN` is exported here and pinned byte-equal to
+>   `_ROLE_PREFIX_PATTERN` there.
+> * **The turn count.** chat.py persists the current user message *before* it loads
+>   the window it replays, so that message is both seeded and processed live. The
+>   seed rolls the clock back one turn when the block ends on a user turn
+>   (`currentTurnIsReplayed`) — otherwise every seeded domain decayed a turn early
+>   and a continuation lost its tool while its own request was still visible.
+
 Two orderings here were **measured**, against
 `test_zoe_core_client.py::test_tool_action_dispatches` (15 runs each, 14/15
 baseline). Re-measure before changing either:
