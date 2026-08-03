@@ -26,10 +26,17 @@ see no sentinels. If/when the sidecar exposes streaming or tool events, map them
 here to the same sentinels (see ``zoe_core_client._read_turn``).
 
 Failures are caught and surfaced as a short error string delta rather than
-raised — a brain backend hiccup must never crash a turn.
+raised — a brain backend hiccup must never crash a turn. The ONE opt-in
+exception is ``raise_transport_errors=True`` (used only by
+``brain_dispatch``'s failover wrapper): a pre-admission transport failure then
+raises ``FlueTransportError`` so the turn can be re-dispatched on the core lane
+instead of being answered with the canned sentinel. Everything else — HTTP
+status errors, read timeouts, decode errors, an empty 200 — still renders
+``_FALLBACK_TEXT``, because those mean the sidecar RAN the turn.
 """
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -38,6 +45,59 @@ from typing import Any, AsyncIterator
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
+
+
+class FlueTransportError(RuntimeError):
+    """The flue sidecar was never REACHED for this turn.
+
+    Raised ONLY when the caller opts in with ``raise_transport_errors=True``
+    (``brain_dispatch``'s failover wrapper) AND the failure is transport-class
+    AND the turn produced no text and was never admitted. It therefore proves
+    the strong property a re-dispatch needs: **the sidecar did not execute this
+    turn**, so retrying it on another lane cannot double-run a tool/write and
+    cannot make the panel speak twice.
+
+    Default (kwarg absent/False) is unchanged: transport errors are swallowed
+    and rendered as ``_FALLBACK_TEXT``.
+    """
+
+
+def _is_transport_failure(exc: BaseException) -> bool:
+    """True only for the fast-fail 'never reached the sidecar' class.
+
+    IN: connection refused, connect timeout, connect-time reset/unreachable —
+    the ~100ms class where nothing was accepted by the sidecar.
+
+    OUT, deliberately: an HTTP status error (the sidecar answered, so it is UP
+    and it RAN the turn), read/write/pool timeouts (a slow generation — the
+    turn is executing; a retry would double-run it), decode errors, and an
+    empty 200. Those are model/server-level failures, not transport ones, and
+    they keep today's canned-sentinel behaviour.
+    """
+    try:
+        import httpx
+    except Exception:  # pragma: no cover - httpx is a hard dep of this module
+        httpx = None  # type: ignore[assignment]
+
+    if httpx is not None:
+        # Order matters: HTTPStatusError/ReadTimeout are checked first because a
+        # widening of httpx's class tree must never silently make them retryable.
+        if isinstance(exc, httpx.HTTPStatusError):
+            return False
+        if isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+            return False
+        if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+            return True
+    if isinstance(exc, (ConnectionRefusedError, ConnectionResetError)):
+        return True
+    if isinstance(exc, OSError) and exc.errno in {
+        errno.ECONNREFUSED,
+        errno.ECONNRESET,
+        errno.EHOSTUNREACH,
+        errno.ENETUNREACH,
+    }:
+        return True
+    return False
 
 # Read lazily (NOT at import) so a .env value bootstrapped after import is honored
 # — bootstrap_runtime_env() populates os.environ in lifespan startup, which runs
@@ -328,9 +388,17 @@ async def run_flue_brain_streaming(
     message: str,
     session_id: str,
     user_id: str = "",
+    *,
+    raise_transport_errors: bool = False,
     **kwargs: Any,
 ) -> AsyncIterator[str]:
     """Streaming brain turn through the Flue sidecar.
+
+    ``raise_transport_errors`` (opt-in, default False) makes a pre-admission
+    transport failure raise ``FlueTransportError`` instead of yielding
+    ``_FALLBACK_TEXT``, so ``brain_dispatch`` can re-dispatch the turn on the
+    core lane. It NEVER fires once text has been yielded or the turn was
+    admitted (2xx) — see the mid-stream comments below.
 
     Drop-in for ``run_zoe_core_streaming``: yields text deltas (and, in future,
     ``__TOOL__`` / ``__THINKING__`` sentinels if the sidecar exposes them). The
@@ -452,6 +520,12 @@ async def run_flue_brain_streaming(
                 logger.warning("flue stream died after admission, before text (%s) — NOT re-POSTing", exc)
                 yield _FALLBACK_TEXT
                 return
+            if raise_transport_errors and _is_transport_failure(exc):
+                # Never admitted, no text: the sidecar did not run this turn, so
+                # the caller may safely re-dispatch it. Raise HERE rather than
+                # falling through to wait=result — that re-POST would pay a
+                # second failed connect against the same dead socket.
+                raise FlueTransportError(str(exc)) from exc
             logger.warning("flue stream request failed pre-admission (%s) — falling back to wait=result", exc)
 
     try:
@@ -462,6 +536,10 @@ async def run_flue_brain_streaming(
             resp.raise_for_status()
             body = resp.json()
     except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
+        if raise_transport_errors and _is_transport_failure(exc):
+            # Connect refused/timed out: the request never reached the sidecar,
+            # so nothing executed and the caller may re-dispatch this turn.
+            raise FlueTransportError(str(exc)) from exc
         logger.warning("flue brain turn failed: %s", exc)
         yield _FALLBACK_TEXT
         return
@@ -484,6 +562,8 @@ async def run_flue_brain(
     message: str,
     session_id: str,
     user_id: str = "",
+    *,
+    raise_transport_errors: bool = False,
     **kwargs: Any,
 ) -> str:
     """Non-streaming brain turn — collects the Flue stream into one string.
@@ -496,7 +576,13 @@ async def run_flue_brain(
     the same skip in zoe_core_client.run_zoe_core.
     """
     chunks: list[str] = []
-    async for delta in run_flue_brain_streaming(message, session_id, user_id, **kwargs):
+    async for delta in run_flue_brain_streaming(
+        message,
+        session_id,
+        user_id,
+        raise_transport_errors=raise_transport_errors,
+        **kwargs,
+    ):
         if delta.startswith("__TOOL__:") or delta.startswith("__THINKING__:"):
             continue
         chunks.append(delta)

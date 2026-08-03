@@ -14,13 +14,64 @@ is ADDITIVE and default-OFF — with the env unset/``'core'`` dispatch is
 byte-identical to today, so the live voice path is unaffected. The flip is
 operator-gated on voice-corpus parity; reversible by env toggle (no migration).
 
+Lane selection vs. failover
+---------------------------
+``flue > core > legacy`` is **configured lane selection**, evaluated once per
+turn from the env — it is NOT, by itself, runtime failover. With
+``ZOE_BRAIN_BACKEND=flue`` and a down sidecar, EVERY turn is answered by the
+flue client's canned sentinel even though the core lane is healthy (#1613).
+
+``ZOE_BRAIN_FAILOVER`` (default **OFF**) adds bounded runtime failover on top,
+and only on top of the strongest possible evidence that a retry is safe:
+
+* **Trigger — transport only.** ``zoe_flue_client.FlueTransportError``, raised
+  exclusively for a pre-admission connect failure (refused / connect timeout /
+  connect-time reset — the fast-fail ~100 ms class) with no text yielded and no
+  2xx admission. That proves the sidecar never executed the turn. Model errors,
+  HTTP status errors, slow generations and read timeouts do NOT trigger it —
+  the sidecar is running that turn, and re-dispatching would double-run its
+  tools/writes (the #1137 duplicate-write class).
+* **Never after the first token.** A turn that already streamed output is never
+  re-dispatched under any condition — the voice replay invariant: the panel
+  would speak the reply twice. A failure after the first delta ends the turn and
+  is surfaced in the log; it is never retried.
+* **Exactly once.** One retry, on the next configured lane (core, or legacy when
+  ``ZOE_USE_CORE_BRAIN`` is off). No loop, no second lane hop.
+* **Short-TTL circuit breaker.** After a transport failure the flue lane is
+  skipped outright for ``ZOE_BRAIN_FAILOVER_COOLDOWN_S`` (default 45 s), so
+  subsequent turns don't pay the failed-connect tax; the first turn after the
+  TTL lapses is the probe that re-checks flue (and re-opens the breaker if it is
+  still down, or closes it on success). In-process and per-worker by design —
+  a restart clears it, which is the correct fail-toward-probing default.
+
+Every turn emits ONE greppable ``BRAIN_LANE`` line naming the lane attempted and
+the lane that served it, so an operator can assert which brain answered
+(``grep BRAIN_LANE ~/.zoe-logs/*`` — zoe-data logs to ``~/.zoe-logs/``, not
+journald). That line is emitted in BOTH flag states: it is observability, not
+dispatch. With the flag off, the lane SELECTION is byte-identical to today.
+
 Imports are lazy inside each function to avoid import-time cycles
 (main.py → routers.chat → ... ).
 """
 from __future__ import annotations
 
+import logging
 import os
+import time
 from typing import Any, AsyncIterator
+
+logger = logging.getLogger(__name__)
+
+# Indirected so tests can drive the circuit breaker with a fake clock instead of
+# sleeping. Monotonic: wall-clock jumps must not extend or cancel a cooldown.
+_monotonic = time.monotonic
+
+_DEFAULT_COOLDOWN_S = 45.0
+
+# In-process breaker state: the monotonic deadline until which the flue lane is
+# skipped. 0.0 == closed. One float, written only from the failover path; the
+# GIL makes the read/write atomic, so no lock is needed for a hint like this.
+_flue_circuit_open_until: float = 0.0
 
 
 def use_core_brain() -> bool:
@@ -46,12 +97,99 @@ def use_flue_brain() -> bool:
     return (os.environ.get("ZOE_BRAIN_BACKEND", "core") or "").strip().lower() == "flue"
 
 
-def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> AsyncIterator[str]:
-    """Streaming brain turn — Flue (opt-in) > zoe-core (default) > legacy."""
-    if use_flue_brain():
-        from zoe_flue_client import run_flue_brain_streaming
+def failover_enabled() -> bool:
+    """True when ``ZOE_BRAIN_FAILOVER`` opts into runtime lane failover.
 
-        return run_flue_brain_streaming(message, session_id, user_id, **kwargs)
+    DEFAULT OFF (lab-prove-before-prod, `docs/VISION.md` principle 3): brain
+    dispatch is a gated voice path, so the operator flips this only after the
+    voice replay gate passes on real corpus. Read per call so `.env` + restart
+    flips and rolls back with no code change.
+    """
+    return (os.environ.get("ZOE_BRAIN_FAILOVER", "0") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _cooldown_s() -> float:
+    """Circuit-breaker TTL. Default 45 s — long enough that a dead sidecar costs
+    one failed connect per cooldown rather than one per turn, short enough that a
+    restarted sidecar is picked up within a normal conversational pause."""
+    # Literal default inline (not the constant) so the generated flag inventory
+    # shows the real value; `_DEFAULT_COOLDOWN_S` pins it, and
+    # test_flag_default_is_off_and_cooldown_default_is_documented asserts they agree.
+    raw = os.environ.get("ZOE_BRAIN_FAILOVER_COOLDOWN_S", "45")
+    if not str(raw or "").strip():
+        return _DEFAULT_COOLDOWN_S
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "ZOE_BRAIN_FAILOVER_COOLDOWN_S=%r is not a number — using %ss",
+            raw,
+            _DEFAULT_COOLDOWN_S,
+        )
+        return _DEFAULT_COOLDOWN_S
+    return value if value > 0 else 0.0
+
+
+def _circuit_open() -> bool:
+    """True while the flue lane is being skipped. Reading it does not reset it —
+    expiry is implicit, so the next turn after the TTL is the half-open probe."""
+    return _flue_circuit_open_until > _monotonic()
+
+
+def _open_circuit() -> None:
+    global _flue_circuit_open_until
+    ttl = _cooldown_s()
+    _flue_circuit_open_until = (_monotonic() + ttl) if ttl > 0 else 0.0
+
+
+def _close_circuit() -> None:
+    global _flue_circuit_open_until
+    if _flue_circuit_open_until:
+        _flue_circuit_open_until = 0.0
+
+
+def reset_failover_state() -> None:
+    """Clear the breaker (tests + an operator-facing reset seam)."""
+    global _flue_circuit_open_until
+    _flue_circuit_open_until = 0.0
+
+
+def _log_lane(
+    *,
+    attempted: str,
+    served: str,
+    outcome: str,
+    session_id: str = "",
+    reason: str = "",
+) -> None:
+    """ONE greppable line per turn: which lane was tried, which one answered.
+
+    Ids only — never the message text. Deliberately unconditional (both flag
+    states): "which brain answered that turn" is the question the #1613 runbook
+    has to answer, and a log line that only exists when failover is enabled
+    cannot answer it for the lane that is live today.
+    """
+    logger.info(
+        "BRAIN_LANE lane_attempted=%s lane_served=%s outcome=%s reason=%s session=%s",
+        attempted,
+        served,
+        outcome,
+        reason or "-",
+        (session_id or "-")[:64],
+    )
+
+
+def _fallback_lane() -> str:
+    """The configured lane BELOW flue — the one a failover retries on."""
+    return "core" if use_core_brain() else "legacy"
+
+
+def _fallback_streaming(message: str, session_id: str, user_id: str, **kwargs: Any) -> AsyncIterator[str]:
     if use_core_brain():
         from zoe_core_client import run_zoe_core_streaming
 
@@ -61,12 +199,7 @@ def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: 
     return run_zoe_agent_streaming(message, session_id, user_id, **kwargs)
 
 
-async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> str:
-    """Non-streaming brain turn — Flue (opt-in) > zoe-core (default) > legacy."""
-    if use_flue_brain():
-        from zoe_flue_client import run_flue_brain
-
-        return await run_flue_brain(message, session_id, user_id, **kwargs)
+async def _fallback_oneshot(message: str, session_id: str, user_id: str, **kwargs: Any) -> str:
     if use_core_brain():
         from zoe_core_client import run_zoe_core
 
@@ -74,3 +207,131 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
     from zoe_agent import run_zoe_agent
 
     return await run_zoe_agent(message, session_id, user_id, **kwargs)
+
+
+async def _flue_streaming_with_failover(
+    message: str, session_id: str, user_id: str, **kwargs: Any
+) -> AsyncIterator[str]:
+    """Flue streaming turn with ONE bounded retry on the lane below it."""
+    from zoe_flue_client import FlueTransportError, run_flue_brain_streaming
+
+    other = _fallback_lane()
+
+    if _circuit_open():
+        _log_lane(
+            attempted=other,
+            served=other,
+            outcome="dispatched",
+            session_id=session_id,
+            reason="flue_circuit_open",
+        )
+        async for delta in _fallback_streaming(message, session_id, user_id, **kwargs):
+            yield delta
+        return
+
+    served_any = False
+    try:
+        async for delta in run_flue_brain_streaming(
+            message, session_id, user_id, raise_transport_errors=True, **kwargs
+        ):
+            served_any = True
+            yield delta
+    except FlueTransportError as exc:
+        if served_any:
+            # Defence in depth: the client contract already forbids raising once
+            # text has gone out. If it ever did, the turn STILL must not be
+            # replayed — the panel would speak twice. Surface, end, never retry.
+            _log_lane(
+                attempted="flue",
+                served="flue",
+                outcome="mid_stream_error",
+                session_id=session_id,
+                reason=f"transport_after_first_token:{exc}"[:160],
+            )
+            return
+        _open_circuit()
+        _log_lane(
+            attempted="flue",
+            served=other,
+            outcome="failover",
+            session_id=session_id,
+            reason=f"flue_transport_error:{exc}"[:160],
+        )
+        async for delta in _fallback_streaming(message, session_id, user_id, **kwargs):
+            yield delta
+        return
+
+    _close_circuit()
+    _log_lane(attempted="flue", served="flue", outcome="ok", session_id=session_id)
+
+
+async def _flue_oneshot_with_failover(
+    message: str, session_id: str, user_id: str, **kwargs: Any
+) -> str:
+    """Flue one-shot turn with ONE bounded retry on the lane below it."""
+    from zoe_flue_client import FlueTransportError, run_flue_brain
+
+    other = _fallback_lane()
+
+    if _circuit_open():
+        _log_lane(
+            attempted=other,
+            served=other,
+            outcome="dispatched",
+            session_id=session_id,
+            reason="flue_circuit_open",
+        )
+        return await _fallback_oneshot(message, session_id, user_id, **kwargs)
+
+    try:
+        text = await run_flue_brain(
+            message, session_id, user_id, raise_transport_errors=True, **kwargs
+        )
+    except FlueTransportError as exc:
+        _open_circuit()
+        _log_lane(
+            attempted="flue",
+            served=other,
+            outcome="failover",
+            session_id=session_id,
+            reason=f"flue_transport_error:{exc}"[:160],
+        )
+        return await _fallback_oneshot(message, session_id, user_id, **kwargs)
+
+    _close_circuit()
+    _log_lane(attempted="flue", served="flue", outcome="ok", session_id=session_id)
+    return text
+
+
+def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> AsyncIterator[str]:
+    """Streaming brain turn — Flue (opt-in) > zoe-core (default) > legacy.
+
+    Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
+    """
+    if use_flue_brain():
+        if failover_enabled():
+            return _flue_streaming_with_failover(message, session_id, user_id, **kwargs)
+        from zoe_flue_client import run_flue_brain_streaming
+
+        _log_lane(attempted="flue", served="flue", outcome="dispatched", session_id=session_id)
+        return run_flue_brain_streaming(message, session_id, user_id, **kwargs)
+    lane = _fallback_lane()
+    _log_lane(attempted=lane, served=lane, outcome="dispatched", session_id=session_id)
+    return _fallback_streaming(message, session_id, user_id, **kwargs)
+
+
+async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> str:
+    """Non-streaming brain turn — Flue (opt-in) > zoe-core (default) > legacy.
+
+    Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
+    """
+    if use_flue_brain():
+        if failover_enabled():
+            return await _flue_oneshot_with_failover(message, session_id, user_id, **kwargs)
+        from zoe_flue_client import run_flue_brain
+
+        _log_lane(attempted="flue", served="flue", outcome="dispatched", session_id=session_id)
+        return await run_flue_brain(message, session_id, user_id, **kwargs)
+    lane = _fallback_lane()
+    _log_lane(attempted=lane, served=lane, outcome="dispatched", session_id=session_id)
+    return await _fallback_oneshot(message, session_id, user_id, **kwargs)

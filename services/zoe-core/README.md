@@ -17,14 +17,22 @@ via Pi's extension hooks.
 > (extensions/tools). The retired Docker monolith that once held this name was
 > removed from the working tree and remains in git history only — do not revive it.
 
-> **Status: wired default `core` brain fallback.** zoe-core (Pi on Gemma 4 E4B-QAT)
+> **Status: wired default `core` brain lane.** zoe-core (Pi on Gemma 4 E4B-QAT)
 > is the code default in `services/zoe-data/brain_dispatch.py` (`pi --mode rpc` via
-> `zoe_core_client.py`) — the fallback lane below the live `flue` sidecar
+> `zoe_core_client.py`) — the lane below the live `flue` sidecar
 > (`labs/flue-zoe-brain`, reached via `ZOE_BRAIN_BACKEND=flue`, live on this
-> deployment since 2026-07-03). `zoe_agent.py` is the *legacy* last-resort fallback,
-> not the brain. Dispatch priority: **flue > core > legacy**. Extend zoe-core; do
-> not retire it. Only the OLD Docker monolith that once held this name is retired
-> (git history only).
+> deployment since 2026-07-03). `zoe_agent.py` is the *legacy* last-resort lane,
+> not the brain. Extend zoe-core; do not retire it. Only the OLD Docker monolith
+> that once held this name is retired (git history only).
+>
+> **`flue > core > legacy` is CONFIGURED LANE SELECTION, not runtime failover**
+> (failover behind `ZOE_BRAIN_FAILOVER`, default off). The order is resolved once
+> per turn from the env: with `ZOE_BRAIN_BACKEND=flue` and the sidecar down, every
+> turn is answered by the flue client's canned "trouble reaching my brain"
+> sentinel — this lane is *not* tried, however healthy it is (#1613). Setting
+> `ZOE_BRAIN_FAILOVER=1` adds a bounded runtime retry on this lane, but ONLY for a
+> pre-admission transport failure (connect refused/timeout) and never once a turn
+> has streamed its first token. See the module docstring in `brain_dispatch.py`.
 
 ## Architecture (target)
 
