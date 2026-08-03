@@ -178,6 +178,10 @@ credentials/
 # router-90-campaign lab: committed measurement artifacts (labs/router-90-campaign/README.md)
 !labs/router-90-campaign/results/*.json
 !labs/router-90-campaign/run_definitive_training.sh
+# web-search-spike lab: recorded API responses used as OFFLINE test fixtures
+# (labs/web-search-spike/README.md). Public data only — Wikipedia + HN Algolia
+# responses, no credentials; regenerate with capture_fixtures.py.
+!labs/web-search-spike/tests/fixtures/*.json
 
 # API Keys and Secrets
 *.env

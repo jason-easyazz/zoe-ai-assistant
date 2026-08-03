@@ -216,6 +216,31 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+- `web-search-spike/` — design + spike for live web lookups ("tickets to Bali
+  atm") and claim-backing ("are you sure?"), mining **oh-my-pi** (MIT)
+  `packages/coding-agent/src/web/`. **Dependency verdict: that layer is NOT
+  liftable** — it imports `@oh-my-pi/pi-utils` 78× and that package hard-depends
+  on `@oh-my-pi/pi-natives` (Rust); every key-free engine value-imports the
+  puppeteer browser registry; `Bun.sleep`/`Bun.Encoding` pin it to Bun. So the
+  spike **ports the algorithms to Python** (recommendation: in-process in
+  zoe-data, NOT a Bun sidecar — the box measured 216–293 MB free of 15.6 GB
+  with 3.7–5.3 GB already swapped): key-free DuckDuckGo `html/`+`lite/` parsing
+  with bot-challenge detection, oh-my-pi's cross-engine dedup + consensus
+  ranking + soft/hard deadline fan-out, URL-matched structured scrapers
+  (Wikipedia, HN — pure JSON, no DOM library), a **token-budgeted result
+  packet** built for the 8k Gemma brain (oh-my-pi has no equivalent; it renders
+  for large-context models), and claim-backing query shaping (neutral +
+  contradiction queries; evidence, never a verdict). **Zero new dependencies** —
+  `httpx` is already a zoe-data dep. Key measured finding: **key-free search is
+  a fallback tier, not a foundation** — only DDG answers from this box
+  (Startpage/Mojeek captcha, Ecosia 403, Brave 429, searx.be challenge) and DDG
+  itself blocked after ~12 requests (HTTP **202** + `anomaly-modal`, >20 min),
+  so Tavily should stay primary and structured scrapers — never blocked, ~2×
+  faster — should lead claim checks. Hand-run only; nothing prod-wired, no
+  systemd unit, no CI. Regression net: `python3 -m pytest tests -q` (44 offline
+  fixture tests, no network, **no `ci_safe` marker** — `labs/` is outside every
+  CI lane) plus `python3 demo.py --replay`. README/DESIGN are records, not
+  contracts.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%

@@ -1,0 +1,28 @@
+{
+ "hits": [
+  {
+   "title": "Nvidia to Share New Details on Grace CPU, Hopper GPU, NVLink Switch, Jetson Orin",
+   "url": "https://blogs.nvidia.com/blog/2022/08/19/grace-hopper-nvswitch-hot-chips/",
+   "points": 100,
+   "num_comments": 20,
+   "objectID": "32527318",
+   "created_at": "2022-08-19T23:24:31Z"
+  },
+  {
+   "title": "Nvidia Jetson Orin Nano Super [video]",
+   "url": "https://www.youtube.com/watch?v=S9L2WGf1KrM",
+   "points": 65,
+   "num_comments": 51,
+   "objectID": "42442107",
+   "created_at": "2024-12-17T15:27:10Z"
+  },
+  {
+   "title": "Solving Entry-Level Edge AI Challenges with Nvidia Jetson Orin Nano",
+   "url": "https://developer.nvidia.com/blog/solving-entry-level-edge-ai-challenges-with-nvidia-jetson-orin-nano/",
+   "points": 65,
+   "num_comments": 24,
+   "objectID": "32921145",
+   "created_at": "2022-09-21T05:33:47Z"
+  }
+ ]
+}
