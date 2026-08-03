@@ -194,11 +194,24 @@ check_gates() {
         fi
 
         git -C "$LIVE" update-index -q --refresh 2>/dev/null || true
-        status="$(git -C "$LIVE" status --porcelain 2>/dev/null || true)"
+        # TRACKED changes only — `--untracked-files=no` is load-bearing and must
+        # match deploy_live.sh's require_clean_tree (see its comment + the
+        # scripts/AGENTS.md contract). The gate exists because a fast-forward or
+        # `git reset --hard` would clobber uncommitted TRACKED edits; untracked
+        # runtime artifacts are in no such danger.
+        #
+        # This wrapper kept a plain `status --porcelain` after deploy_live.sh was
+        # fixed, so it re-created the exact failure that fix removed: the live
+        # checkout always carries untracked agent/build cruft (.polly-work/,
+        # modules/omnigent/wheels/, polly-verify-t1/, wt-zauth/), so the
+        # readiness check refused EVERY deploy — and the documented consequence
+        # of that (tests/unit/test_deploy_live_clean_tree.py) is that "operators
+        # bypassed it", which is worse than the gate not existing.
+        status="$(git -C "$LIVE" status --porcelain --untracked-files=no 2>/dev/null || true)"
         if [[ -z "$status" ]]; then
-            gate_pass "clean-tree" "working tree clean"
+            gate_pass "clean-tree" "no uncommitted tracked changes"
         else
-            gate_fail "clean-tree" "working tree has uncommitted changes"
+            gate_fail "clean-tree" "working tree has uncommitted TRACKED changes"
             printf '%s\n' "$status" | sed 's/^/deploy-ready:   /'
             failed=1
         fi

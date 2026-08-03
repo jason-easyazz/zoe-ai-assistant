@@ -78,6 +78,7 @@
 - `user_portrait_get`
 - `weather_current`
 - `weather_forecast`
+- `web_browse`
 - `web_search`
 - `zoe_get_status`
 - `zoe_get_time`

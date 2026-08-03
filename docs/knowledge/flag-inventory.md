@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-449 flags; 448 not documented in `.env.example`.
+450 flags; 449 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -272,6 +272,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MULTICA_POLL_REF_TIMEOUT_S` | `20.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_POOL_MAX` | `'4'` | no | NO | `services/zoe-data/executors/executor_queue_backend.py` |
 | `ZOE_MULTICA_STALE_IN_PROGRESS_HOURS` | `6.0` | yes | NO | `services/zoe-data/main.py` |
+| `ZOE_MULTICA_TRIAGE_JUDGE` | `False` | yes | NO | `services/zoe-data/multica_triage_judge.py` |
 | `ZOE_MULTICA_WORKSPACE_ID` | `''` | no | NO | `services/zoe-data/executors/executor_queue_backend.py` |
 | `ZOE_MUSIC_BIND_HOST` | `'0.0.0.0'` | no | NO | `modules/zoe-music/main.py` |
 | `ZOE_MUSIC_DISCOVERY` | `'off'` | no | NO | `services/zoe-data/main.py` |
