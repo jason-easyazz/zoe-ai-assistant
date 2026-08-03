@@ -171,3 +171,42 @@ at checkpoint time.
 6. Quote `services/zoe-data/requirements.txt` lines 42–52 verbatim into this note.
 
 Nothing in this prep compiled anything, stopped any service, or changed any pin.
+
+## Bump matrix (from the repo-inventory pass — completed after this note's first commit)
+
+**The flip is ATOMIC across the host-native surface**: no venvs exist — zoe-data, the Kokoro
+sidecar, and every maintenance script share `/usr/bin/python3` + `~/.local` site-packages and
+therefore ONE numpy. Staging per-service requires introducing venvs first (a separate decision).
+
+**Must change together:** `services/zoe-data/requirements.txt:52` (`numpy<2` — the only ceiling in
+the repo), `.github/workflows/validate.yml:145` (CI mirror — must match or CI lies), and
+`labs/setfit-router/requirements.txt` (`numpy==1.26.4` — artifact-training pin; the committed
+`router_head_logreg.joblib` needs re-validation under numpy 2, not necessarily retraining).
+
+**Hard-hold through the bump (data-loss, not ABI):** `chromadb==0.6.3` + `mempalace==3.3.1`
+(moving chromadb risks the documented silent drawer-write drops), `scikit-learn==1.7.2` /
+`joblib==1.5.3` (artifact lock).
+
+**Binaries needing numpy-2 aarch64 provenance:** `torch 2.8.0` — **the real blocker: no wheel
+index or install provenance is recorded anywhere in the repo or on the host** (empirical comfort:
+ADR-ambient-voice-framework.md:124-131 records numpy 2.2.6 + this torch coexisting with only a
+warning; the Kokoro sidecar was already made numpy-agnostic via tolist()+struct.pack). Also:
+`chroma-hnswlib 0.7.6`, `moonshine-voice 0.0.62`, `scipy`, `numba/llvmlite`, `av`, `soundfile`,
+`soxr`, `Resemblyzer`. Live CPU `onnxruntime 1.23.2` is ALREADY numpy-2-header-built (scanner-verified).
+
+**Add explicit pins BEFORE the bump (currently invisible to the resolver):** `onnxruntime`,
+`transformers`, `soxr`, plus versions on `moonshine-voice` and `fastembed`.
+
+**Delete first — shrinks the problem:** requirements pins `pyannote.audio>=3.3.2` and
+`silero-vad>=5.1` (neither installed NOR imported — VAD loads a raw .onnx; pyannote is the
+heaviest aspirational transitive); host `pip uninstall ctranslate2 faster-whisper kokoro-onnx
+useful-moonshine-onnx` (four numpy-1 binaries, zero code references; ctranslate2's presence in the
+numpy<2 comment is stale — a deploy-preflight guard already fails any whisper resurrection).
+
+**Latent leak to fix:** `scripts/setup/jetson/install-jetson-agent.sh:48` installs
+`mempalace chromadb` UNPINNED into a side venv — pulls chromadb 1.5.x + numpy 2 regardless of the
+requirements file, tripping the chromadb data-loss hazard.
+
+**CPU-only confirmation:** every ONNX consumer in the live stack (Moonshine, Silero VAD, Smart
+Turn, fastembed) uses CPUExecutionProvider only — no CUDA/TensorRT provider anywhere in the repo,
+so the gpu-wheel question above is insurance, not the critical path.
