@@ -28,5 +28,70 @@ Environment=MEMPALACE_DATA_DIR=%h/.mempalace
 # Jetson/CUDA library paths -- adjust for your platform (see HARDWARE_COMPATIBILITY.md).
 Environment=LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda-12.6/lib64:/usr/lib/aarch64-linux-gnu
 
+# ── Keep the in-process STT working set out of swap ──────────────────────────
+# zoe-data is on the VOICE path, not just the API path: Moonshine STT runs as an
+# in-process singleton (routers/voice_tts.py, warmed at startup), so a swapped
+# zoe-data means the first utterance after idle faults ~1 GB back off the NVMe
+# swapfile before transcription even begins. That is the #1409 product bug
+# ("voice in pieces", a long first reply) wearing a different hat.
+#
+# The protection existed ONLY as an untracked local drop-in on one box
+# (~/.config/systemd/user/zoe-data.service.d/{memory,priority}.conf, plus
+# `systemctl set-property` copies under user.control/) — exactly the failure
+# #1409 was about: real protection that a rebuild or a second host silently
+# loses. The values below are the ones already live, so the template converges
+# with the box instead of fighting its own drop-in.
+#
+# Measured read-only on the live Orin 2026-08-03 15:04 AWST (PID 18936, up
+# 3h21m; box at 346 MB available, 10.4 GB swap in use), with MemoryLow=2G
+# ALREADY applied and in force since process start:
+#   VmRSS 40 MB / VmSwap 1056 MB / VmHWM 1474 MB  → 96% of it paged out
+#   cgroup memory.current 56.9 MB, memory.swap.current 1.25 GB
+#
+# So the floor alone demonstrably did nothing. Same box, same instant:
+#   llama-server  (MemoryLow=6G + MemorySwapMax=0) 6053 MB resident, 0 swap
+#   kokoro-tts    (MemoryLow=3G + MemorySwapMax=0) 2198 MB resident, 0 swap
+#   zoe-data      (MemoryLow=2G, swap uncapped)      40 MB resident, 1056 MB out
+# Every unit that denies swap holds 0 swap; every unit that does not is 96-98%
+# out REGARDLESS of its floor. MemoryLow is reclaim ordering, not swap immunity.
+# The mechanism is in the hierarchy: every ancestor cgroup (user.slice →
+# user-1000.slice → user@1000.service → app.slice) has memory.low=0, and an
+# effective floor is capped by its ancestors' — so a leaf floor here computes to
+# 0 no matter what value is written. MemorySwapMax is a per-cgroup hard limit
+# with no such propagation, which is why it is the directive that holds.
+#
+# MemoryLow=2G is kept anyway (it is free, it matches live, and it orders
+# reclaim correctly if the ancestor slices are ever given protection). It sits
+# at ~1.8x the ~1.1 GB steady anonymous footprint — which is CORRECT, not bloat:
+# it is in-process Moonshine + fastembed + Chroma's ONNX MiniLM, not glibc arena
+# growth (MALLOC_ARENA_MAX=2 already fixed that; see the knowledge note).
+#
+# NO MemoryMax — deliberately, and NOT for llama-server's reason. Accounting
+# here is complete (verified 0 CUDA/NvMap mappings in /proc/<pid>/maps; STT is
+# ONNX Runtime on CPU — libmoonshine.so + libonnxruntime with only the shared
+# provider, no CUDA provider), so a ceiling WOULD genuinely bound this cgroup.
+# It is declined on blast radius: zoe-data is the whole product surface (chat,
+# voice, panel, Multica poll loop) and it is spiky — ~1.1 GB steady against a
+# 3.16 GB VmHWM recorded 2026-07-06, a 3x idle-to-peak spread from startup
+# warmups and first turns. A hard ceiling plus denied swap converts one of those
+# normal transients into a cgroup OOM kill, i.e. a total outage, where
+# llama-server would only lose a lane to fallback. Swap denial alone has a
+# release valve (the kernel reclaims file pages); denial plus a ceiling has
+# none. The exemption is recorded with this rationale in
+# tests/unit/test_systemd_memory_protection.py (MEMORY_MAX_EXEMPT).
+#
+# CPUWeight/IOWeight 300 (default 100) came from the same untracked drop-in:
+# under agent-fleet load the voice path must win the CPU and the disk, and these
+# are the only two knobs a --user unit can actually use. Do NOT add Nice=-N or
+# OOMScoreAdjust=-N — a --user unit cannot raise priority on this box and
+# systemd SILENTLY DROPS the value while reporting success.
+#
+# Apply runbook (write a DROP-IN; never copy this template over an installed
+# unit): docs/knowledge/memory-pressure-profile.md.
+MemorySwapMax=0
+MemoryLow=2G
+CPUWeight=300
+IOWeight=300
+
 [Install]
 WantedBy=default.target

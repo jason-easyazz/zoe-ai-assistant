@@ -11,9 +11,21 @@ did. Measured on the live Orin 2026-08-03, both `infinity`/`infinity`:
   despite a MemoryLow=512M drop-in that had been live since 2026-07-09.
 * `flue-zoe-telegram` — no memory directives at all, cgroup `memory.low` 0,
   VmRSS 6.1 MB against VmSwap 65.2 MB.
+* `zoe-data` — the same day, the same finding a third time: `MemoryLow=2G` +
+  `CPUWeight`/`IOWeight` 300 were real and live, and existed ONLY as untracked
+  local drop-ins, so any rebuild or second host lost them silently. VmRSS 40 MB
+  against VmSwap 1056 MB — 96% paged out *with the floor in force*. It hosts
+  in-process Moonshine STT, so "just the backend API" is also the voice path.
 
 That is the gap this test closes. It pins the DOCTRINE, not the numbers:
 retuning a cap is fine, dropping one is not.
+
+Why the floors keep failing on this box, in one line: every ancestor cgroup
+(`user.slice` -> `user-1000.slice` -> `user@1000.service` -> `app.slice`) has
+`memory.low=0`, and an effective floor is capped by its ancestors', so a leaf
+`MemoryLow` computes to 0 whatever it says. `MemorySwapMax` has no such
+propagation — measured across six live units, every one that denies swap holds
+0 swap and every one that does not is 96-98% out, regardless of its floor.
 """
 
 from __future__ import annotations
@@ -33,16 +45,40 @@ UNIT_DIR = ROOT / "scripts" / "setup" / "systemd"
 NO_SWAP_UNITS = (
     "llama-server.service",
     "kokoro-tts.service",
+    "zoe-data.service",
     "flue-zoe-brain.service",
     "flue-zoe-telegram.service",
 )
 
-# llama-server is the ONE documented exemption from needing a ceiling: it is a
-# ~5.6 GB unified-memory process, and a hard ceiling *plus* no swap turns a
-# transient spike into an OOM kill of the brain rock. Every other no-swap unit
-# is bounded userspace, so it must carry a ceiling — denying swap without one
-# leaves the cgroup free to grow into the box.
-MEMORY_MAX_EXEMPT = {"llama-server.service"}
+# Exemptions from "swap denied implies a ceiling", each with the reason it is
+# safe to skip. A bare name would let the next reader assume it was an
+# oversight, so the rationale is DATA here, not a comment: `MemoryMax` is the
+# directive that converts a transient spike into an OOM kill, and every
+# exemption is a deliberate decision to trade unbounded growth for uptime.
+# Every other no-swap unit is bounded userspace and must carry a ceiling —
+# denying swap without one leaves the cgroup free to grow into the box.
+MEMORY_MAX_EXEMPT = {
+    "llama-server.service": (
+        "~5.6 GB unified-memory process whose GPU/NvMap pages are not fully "
+        "accounted to the cgroup, so a ceiling is both unreliable and lethal: "
+        "hard limit + no swap OOM-kills the brain rock on a transient spike."
+    ),
+    "zoe-data.service": (
+        "The whole product surface (chat, voice, panel, Multica poll loop) and "
+        "spiky with it: ~1.1 GB steady anon against a 3.16 GB VmHWM measured "
+        "2026-07-06, a 3x idle-to-peak spread. Accounting IS complete here (0 "
+        "CUDA/NvMap mappings; STT is ONNX Runtime on CPU), so unlike "
+        "llama-server a ceiling would genuinely bound it — it is declined on "
+        "blast radius, not measurability. A cgroup OOM kill here is a total "
+        "outage, where llama-server only loses a lane to fallback."
+    ),
+}
+
+# Units that must win CPU and disk against the agent fleet. Weights are the only
+# priority knob a --user unit actually gets: Nice=-N/OOMScoreAdjust=-N are
+# silently dropped (see the elevated-priority test below), so if these go
+# missing there is no fallback mechanism keeping the voice path ahead.
+PRIORITY_WEIGHTED_UNITS = ("zoe-data.service",)
 
 _SIZE = re.compile(r"^(\d+)([KMGT]?)$")
 _SCALE = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
@@ -100,7 +136,7 @@ def test_denying_swap_is_paired_with_a_ceiling(unit):
     """Swap denied + no ceiling = a cgroup free to grow into the box, with no
     release valve. Bounded userspace units must carry MemoryMax."""
     if unit in MEMORY_MAX_EXEMPT:
-        pytest.skip(f"{unit} is the documented MemoryMax exemption (see module docstring)")
+        pytest.skip(f"{unit} is a documented MemoryMax exemption: {MEMORY_MAX_EXEMPT[unit]}")
     directives = _directives(unit)
     assert "MemoryMax" in directives, (
         f"{unit} sets MemorySwapMax=0, so it must also set MemoryMax; without a "
@@ -129,6 +165,52 @@ def test_the_flue_sidecars_are_actually_covered():
     for unit in ("flue-zoe-brain.service", "flue-zoe-telegram.service"):
         assert unit in NO_SWAP_UNITS, (
             f"{unit} is on the live brain/alerting path and must stay covered"
+        )
+
+
+def test_zoe_data_is_actually_covered():
+    """Same guard for the API. zoe-data reads as 'just the backend', which is
+    why its protection sat in an untracked drop-in for a month — but Moonshine
+    STT is an IN-PROCESS singleton, so a swapped zoe-data is a swapped voice
+    path. Measured 2026-08-03 under a live MemoryLow=2G: VmRSS 40 MB against
+    VmSwap 1056 MB, 96% paged out."""
+    assert "zoe-data.service" in NO_SWAP_UNITS, (
+        "zoe-data hosts in-process Moonshine STT — it is on the voice path and "
+        "must stay covered, not just the API path"
+    )
+
+
+def test_every_memory_max_exemption_states_a_reason():
+    """An exemption is a decision to accept unbounded growth for uptime. It only
+    stays reviewable if the reason travels with it — an entry added as a bare
+    name to make a red test green is the failure this guards."""
+    for unit, reason in MEMORY_MAX_EXEMPT.items():
+        assert unit in NO_SWAP_UNITS, (
+            f"{unit} is exempt from MemoryMax but is not a no-swap unit; the "
+            f"exemption only means anything for a unit that denies swap"
+        )
+        assert reason and len(reason) > 40, (
+            f"{unit} is exempt from MemoryMax with no substantive rationale; "
+            f"state WHY a ceiling is unsafe or unreliable for it"
+        )
+
+
+@pytest.mark.parametrize("unit", PRIORITY_WEIGHTED_UNITS)
+def test_scheduling_weights_are_tracked(unit):
+    """The other half of what lived only in zoe-data's untracked drop-in. Memory
+    guards keep it resident; the weights keep it SCHEDULED once resident, and a
+    rebuild that restored one without the other would look protected and still
+    lose the voice path to whatever the agent fleet is doing."""
+    directives = _directives(unit)
+    for key in ("CPUWeight", "IOWeight"):
+        value = directives.get(key)
+        assert value is not None, (
+            f"{unit} must set {key}; it competes with the agent fleet and "
+            f"weights are the only priority knob a --user unit can use"
+        )
+        assert int(value) > 100, (
+            f"{unit} sets {key}={value}, at or below the default of 100 — that "
+            f"is not a priority, it is a no-op"
         )
 
 

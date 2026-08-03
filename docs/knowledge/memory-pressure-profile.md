@@ -41,6 +41,16 @@ timestamp: 2026-07-06T21:15:00Z
 > Pinned by `tests/unit/test_systemd_memory_protection.py` so the gap cannot
 > silently reopen for the next unit.
 
+> **STATUS 2026-08-03 (later) — `zoe-data` was the same gap a third time, and the
+> purest form of it.** Its `MemoryLow=2G` + `CPUWeight`/`IOWeight` `300` were real
+> and live but existed ONLY as untracked local drop-ins, so the tracked template
+> carried no protection at all. Measured with that floor in force: **96% paged
+> out** (`VmRSS` 40 MB vs `VmSwap` 1,056 MB). It hosts **in-process Moonshine
+> STT**, so "primary backend API" is also the voice path.
+> [Section below](#2026-08-03-later--zoe-data-the-protection-was-real-live-and-tracked-nowhere)
+> — including the six-unit natural experiment showing that only `MemorySwapMax=0`
+> works on this box, and why the leaf `MemoryLow` values never could.
+
 Read-only profile of the live host taken 2026-07-06 ~21:10 (host uptime 3d 6h). Numbers are a
 point-in-time snapshot — calmer than the reviewed spike (1.1–2.6 GB free, swap 23 GB deep) but the
 ownership shape is the durable fact. Context: the 2026-07-04 architecture review flagged memory as
@@ -362,3 +372,202 @@ been installed on this host, the caps live there too — check
 `systemctl --user cat flue-zoe-brain` and remove the block from
 `~/.config/systemd/user/flue-zoe-brain.service` as well, or the rollback is
 incomplete.
+
+---
+
+## 2026-08-03 (later) — zoe-data: the protection was real, live, and tracked nowhere
+
+Same day, same finding, third unit — and the cleanest example of the class.
+`zoe-data.service` had **no memory directives in its tracked template at all**,
+while the live box ran with genuine protection assembled entirely from untracked
+local drop-ins:
+
+| file | contents |
+|---|---|
+| `~/.config/systemd/user/zoe-data.service.d/memory.conf` | `MemoryLow=2G` ("Protect STT (Moonshine) + TTS (Kokoro) working set…") |
+| `~/.config/systemd/user/zoe-data.service.d/priority.conf` | `CPUWeight=300`, `IOWeight=300` |
+| `~/.config/systemd/user.control/zoe-data.service.d/50-{CPUWeight,IOWeight,MemoryLow}.conf` | the same values again, from an old `systemctl set-property` |
+
+All of it dated 2026-07-09 and none of it in git. A rebuild, a reimage, or a
+second host silently drops the lot — the #1409 finding restated exactly.
+
+**zoe-data is on the voice path, not merely the API path.** Moonshine STT is an
+in-process singleton (`routers/voice_tts.py`, warmed at startup), so a swapped
+zoe-data is a swapped STT: the first utterance after idle waits on ~1 GB faulting
+back off the NVMe swapfile before transcription begins.
+
+### Measured, read-only, on the live Orin
+
+2026-08-03 15:04 AWST. zoe-data PID 18936, up 3h21m, `NRestarts=0` — so the
+drop-ins (July) were in force for this process's entire life. Box: 15.3 GB total,
+**346 MB available**, 10.4 GB of 57.6 GB swap in use.
+
+| | value |
+|---|---|
+| `VmRSS` | **40 MB** |
+| `VmSwap` | **1,056 MB** |
+| `VmHWM` (peak RSS this boot) | 1,474 MB |
+| threads | 73 |
+| cgroup `memory.current` / `memory.swap.current` | 56.9 MB / **1.25 GB** |
+| effective `MemoryLow` | `2G` *(untracked drop-in)* |
+| `MemoryMax` / `MemorySwapMax` | `infinity` / `infinity` |
+| `CPUWeight` / `IOWeight` | 300 / 300 |
+
+**96% paged out, with the 2 GB floor in force the whole time.**
+
+### The natural experiment — six units, one instant
+
+This is the strongest evidence on the box for the doctrine, because all six were
+sampled in the same second under the same pressure:
+
+| unit | `MemoryLow` | `MemorySwapMax` | VmRSS | VmSwap |
+|---|---|---|---|---|
+| `llama-server` | 6G | **0** | 6,053 MB | **0** |
+| `kokoro-tts` | 3G | **0** | 2,198 MB | **0** |
+| `zoe-data` | 2G | *infinity* | 40 MB | **1,056 MB** |
+| `flue-zoe-brain` | 512M | *infinity* | 1 MB | 71 MB |
+| `flue-zoe-telegram` | 0 | *infinity* | 11 MB | 63 MB |
+| `serena-mcp` | 0 | 2G | 127 MB | 0 |
+
+Every unit that denies swap holds **0** swap. Every unit that does not is
+**96–98%** out — and the floor makes no difference across 6G, 2G, 512M and 0.
+
+**The mechanism, which explains why the floors never worked here:** a cgroup's
+*effective* `memory.low` is capped by its ancestors', and every ancestor on this
+box is `0` — `user.slice`, `user-1000.slice`, `user@1000.service` and `app.slice`
+all read `memory.low=0`. So a leaf floor computes to 0 whatever it says.
+`memory.swap.max` carries no such propagation; it is enforced per-cgroup. That is
+the concrete reason `MemorySwapMax=0` is the line that holds. (Fixing the
+ancestors — protection on `app.slice` — would make the floors mean something and
+is the obvious follow-up, but it is a host-wide change with a blast radius well
+beyond this branch. Not done here.)
+
+### Decision
+
+| directive | value | why |
+|---|---|---|
+| `MemorySwapMax` | **`0`** | The only directive measured to work on this hierarchy. zoe-data hosts in-process STT; 96% paged out is the voice-latency bug in a different costume. |
+| `MemoryLow` | **`2G`** | Matches live, so the template converges with the box. ~1.8× the ~1.1 GB steady anon footprint. Kept for reclaim ordering and for the day the ancestor slices get protection — honest about being soft, not load-bearing on its own. |
+| `CPUWeight` / `IOWeight` | **`300`** | The other half of the untracked drop-in. Memory guards keep zoe-data resident; weights keep it *scheduled* once resident. Restoring one without the other looks protected and still loses to the agent fleet. |
+| `MemoryMax` | **none — documented exemption** | See below. |
+
+**Why no ceiling, and why that is not llama-server's reason.** zoe-data's cgroup
+accounting is *complete* — verified **0** CUDA/NvMap mappings in
+`/proc/18936/maps`; STT is ONNX Runtime on CPU (`libmoonshine.so` +
+`libonnxruntime` with only the shared provider, no CUDA provider loaded). So
+unlike llama-server, a `MemoryMax` here would genuinely bound the cgroup. It is
+declined on **blast radius**: zoe-data is the entire product surface (chat,
+voice, panel, the Multica poll loop) and it is spiky — ~1.1 GB steady against a
+**3.16 GB `VmHWM`** recorded 2026-07-06, a 3× idle-to-peak spread driven by
+startup warmups and first turns. A hard ceiling *plus* denied swap converts one
+of those ordinary transients into a cgroup OOM kill, i.e. a total outage; today
+the same transient merely gets slow. Swap denial alone still has a release valve
+(the kernel reclaims file pages); denial plus a ceiling has none. llama-server's
+exemption is about a ceiling being *unreliable*; zoe-data's is about a ceiling
+being *unsafe*. Both are recorded with their rationale in
+`MEMORY_MAX_EXEMPT` (`tests/unit/test_systemd_memory_protection.py`), which now
+fails on an exemption that states no reason.
+
+Headroom is unchanged in practice: the 2G floor was already counted in the budget
+above while living only in a drop-in. Tracking it changes what a rebuild
+reproduces, not what the box allocates.
+
+### Apply — operator steps (delta from the flue runbook above)
+
+Same shape as the flue apply, with one materially different risk. **The standing
+operator authorisation to restart zoe-data does not make this an agent step** —
+the sizing is agent work, the apply is the operator's.
+
+**1. Pick the window deliberately.** zoe-data is the product; a restart is a
+visible outage of chat, voice and the panel, not a lane failover. There is no
+fallback to verify here because there is nothing to fall back to.
+
+```bash
+free -h                    # want >1 GB available — NOT the 346 MB of the sample
+systemctl --user is-active llama-server kokoro-tts
+curl -sf http://localhost:8000/health
+```
+
+`MemorySwapMax=0` means the restarted process must fault its ~1.1 GB working set
+into RAM that can no longer be pushed back out. That is **~7× the flue sidecars'
+combined ~150 MB**, on a box that was at 346 MB available when sampled, and it
+competes directly with the brain and TTS. This is the one step where waiting for
+a genuinely quiet moment is load-bearing rather than polite.
+
+**2. Write the drop-in** (never `cp` the template over the installed unit — the
+installed copy carries host-specific `Environment=` lines this template does not
+have). This *replaces* the existing `memory.conf` and folds in `priority.conf`:
+
+```bash
+mkdir -p ~/.config/systemd/user/zoe-data.service.d
+cat > ~/.config/systemd/user/zoe-data.service.d/memory.conf <<'CONF'
+# Protect STT (Moonshine) + TTS working set so audio synthesis doesn't stutter
+# when the box is under agent load. Measured 2026-08-03: VmRSS 40 MB vs VmSwap
+# 1056 MB (96% swapped) under MemoryLow=2G alone — only MemorySwapMax=0 holds.
+# No MemoryMax on purpose (spiky production surface; a ceiling + no swap = OOM
+# kill = total outage). Tracked in scripts/setup/systemd/zoe-data.service.
+[Service]
+MemorySwapMax=0
+MemoryLow=2G
+CPUWeight=300
+IOWeight=300
+CONF
+
+rm -f ~/.config/systemd/user/zoe-data.service.d/priority.conf   # folded in above
+systemctl --user daemon-reload
+```
+
+The stale `~/.config/systemd/user.control/zoe-data.service.d/50-*.conf` files
+(`CPUWeight`, `IOWeight`, `MemoryLow`, from an old `systemctl set-property`) hold
+the *same* values, so they stay consistent and can be left alone. They do **not**
+carry `MemorySwapMax`, so they cannot override the line that matters — but if you
+ever retune `MemoryLow`, retune it there too or the two disagree.
+
+**3. Restart and verify.**
+
+```bash
+systemctl --user restart zoe-data
+curl -sf http://localhost:8000/health
+systemctl --user show zoe-data \
+  -p MemorySwapMax -p MemoryLow -p MemoryMax -p CPUWeight -p IOWeight
+#   expect MemorySwapMax=0, MemoryLow=2147483648, MemoryMax=infinity, 300/300
+```
+
+Then drive **one real voice turn** — the point of the change is STT latency, and
+a green `/health` does not exercise Moonshine.
+
+**4. Confirm ~an hour later.** The success signal is swap that stays at zero:
+
+```bash
+grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value zoe-data)/status
+# VmSwap should be 0 and stay 0; VmRSS should now sit near the ~1.1 GB real
+# working set instead of the 40 MB that meant "almost entirely on disk".
+```
+
+A rising `VmRSS` is the *expected* outcome, not a regression — the memory was
+always in use, it was just on the swapfile.
+
+### Rollback
+
+```bash
+rm -f ~/.config/systemd/user/zoe-data.service.d/memory.conf
+systemctl --user daemon-reload
+systemctl --user restart zoe-data
+```
+
+This drops `CPUWeight`/`IOWeight` too (they were folded into the same file);
+the `user.control/50-*.conf` copies restore both weights and the 2G floor, so the
+rollback lands on the pre-change live state rather than on nothing. As with the
+flue units, if the *template* has also been installed on this host the block
+lives there as well — check `systemctl --user cat zoe-data`.
+
+### `hermes-agent` — checked, and moot
+
+Checked in the same pass for the same template/live drift:
+`~/.config/systemd/user/hermes-agent.service.d/kanban-worker-lean.conf` exists
+(2026-06-11) against a tracked template carrying no memory directives. **It is
+`disabled` and `inactive`** — consistent with the unit being paused since
+2026-06-21 — so there is no live protection to lose and no swapped process to
+rescue. Left untouched deliberately: writing caps for a unit nobody runs is
+speculative sizing with no measurement behind it. If hermes-agent is ever
+re-enabled, size it from a fresh `VmHWM` and add it to `NO_SWAP_UNITS` then.

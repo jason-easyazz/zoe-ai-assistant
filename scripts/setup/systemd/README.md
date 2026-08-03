@@ -335,6 +335,7 @@ reply after idle) rather than a resource one.
 |------|-----------------|-------------|-------------|
 | `llama-server` | `0` | `6G` | *(none — see below)* |
 | `kokoro-tts`   | `0` | `3G` | `4G` |
+| `zoe-data`     | `0` | `2G` | *(none — see below)* — also `CPUWeight`/`IOWeight` `300` |
 | `flue-zoe-brain` | `0` | `512M` | `1G` |
 | `flue-zoe-telegram` | `0` | `256M` | `768M` |
 | `serena-mcp`   | `2G` | — | `2G` (dev tooling, deliberately yields) |
@@ -359,6 +360,26 @@ sizing rationale and the operator apply/rollback sequence:
 — the installed units carry host-specific edits (llama-server's binary and model
 paths), so `cp`-ing a template over one clobbers them.
 
+`zoe-data` was the same finding a third time, the same day, and the purest form
+of it: its `MemoryLow=2G` + `CPUWeight`/`IOWeight` `300` were **real, live, and
+tracked nowhere** — untracked drop-ins under
+`~/.config/systemd/user/zoe-data.service.d/` plus `systemctl set-property` copies
+under `user.control/`. A rebuild or a second host lost all of it silently. Do not
+read "primary backend API" as off the voice path: **Moonshine STT runs in-process
+inside zoe-data**, so a swapped zoe-data is a swapped STT and the first utterance
+after idle waits on ~1 GB faulting off the NVMe swapfile. Measured 2026-08-03
+with that 2G floor already in force: `VmRSS` **40 MB** against `VmSwap`
+**1,056 MB** — **96% paged out**.
+
+- **A leaf `MemoryLow` is capped by its ancestors, and every ancestor here is
+  `0`.** `user.slice` → `user-1000.slice` → `user@1000.service` → `app.slice` all
+  have `memory.low=0`, so an effective floor computes to 0 no matter what a unit
+  writes. That is the mechanism behind "`MemoryLow` is not swap immunity", and it
+  is why the floors are kept for ordering while `MemorySwapMax=0` does the work.
+  Across six live units on 2026-08-03 the split was total: every unit denying
+  swap held **0** swap (llama-server 6,053 MB resident, kokoro-tts 2,198 MB),
+  every unit not denying it was **96–98%** out regardless of its floor.
+
 Two things worth knowing before changing these:
 
 - **`--mlock` is not sufficient on Tegra.** llama-server sets `--mlock` with
@@ -374,6 +395,15 @@ Two things worth knowing before changing these:
 - **llama-server has no `MemoryMax` on purpose.** A hard ceiling *plus* no swap
   turns a transient spike into an OOM kill. Kokoro can take one because it is
   bounded (~2.3 GB CUDA-resident, does not grow with load).
+- **`zoe-data` has no `MemoryMax` either — for a different reason, and the
+  distinction matters.** Its accounting IS complete (0 CUDA/NvMap mappings; STT
+  is ONNX Runtime on CPU), so unlike llama-server a ceiling would genuinely bound
+  it. It is declined on **blast radius**, not measurability: zoe-data is spiky
+  (~1.1 GB steady anon against a 3.16 GB `VmHWM`, a 3× idle-to-peak spread) and a
+  cgroup OOM kill there takes down chat, voice and the panel at once, where
+  llama-server only loses a lane to fallback. Both exemptions are recorded **with
+  their rationale** in `MEMORY_MAX_EXEMPT`, which the test requires to be
+  non-empty — an exemption without a stated reason fails.
 
 - **A ceiling is only meaningful where cgroup accounting is complete.** Both
   `flue-*` sidecars are pure userspace Node (verified 0 CUDA/NvMap mappings in
@@ -382,9 +412,13 @@ Two things worth knowing before changing these:
   to the cgroup — which is the other half of why llama-server gets no ceiling.
 
 Headroom check (why this fits): brain + kokoro fully resident ≈ **9.6 GB** of
-15.6 GB, plus the flue floors (768 MB combined) ≈ **10.4 GB**, leaving ~5 GB for
-zoe-data (~0.9 GB) and everything else. `MemoryLow` is a protection *ceiling*,
-not a reservation — an unused floor costs nothing.
+15.6 GB, plus the flue floors (768 MB combined) and zoe-data's 2G ≈ **12.4 GB**
+of soft-protected total, leaving ~3 GB for everything else. `MemoryLow` is a
+protection *ceiling*, not a reservation — an unused floor costs nothing, and
+zoe-data's steady anon footprint is ~1.1 GB against that 2G floor. Nothing new is
+claimed here: zoe-data's 2G was already counted in this budget while living only
+in an untracked drop-in — tracking it changes what a rebuild reproduces, not what
+the box allocates.
 
 **Do not add `Nice=-N` or `OOMScoreAdjust=-N` to user units.** A `--user` unit
 cannot raise priority (`ulimit -e` is 0 here). systemd accepts the directive, the
