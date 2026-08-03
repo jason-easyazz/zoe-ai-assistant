@@ -3,8 +3,14 @@
  *
  * Auto-discovers `abilities/*.ts` (each default-exports CapabilityEntry[]),
  * registers them as Pi tools wrapped with permission-envelope enforcement, and
- * does PROGRESSIVE DISCLOSURE — only the always-on core plus relevance-matched
+ * does PROGRESSIVE DISCLOSURE — only the always-on core plus recently-relevant
  * tools are active each turn, so a ~2B local model isn't drowned in 56 tools.
+ *
+ * Disclosure is MONOTONE over the retained window (see `nextActiveTools`): a
+ * domain stays disclosed for `ZOE_CORE_DISCLOSURE_WINDOW_TURNS` turns after it
+ * was last relevant, rather than being recomputed from the last message alone.
+ * That keeps the rendered tool block byte-stable turn-to-turn, which is what
+ * makes llama.cpp's exact-prefix KV reuse possible at all.
  *
  * Relevance is keyword/example based for now (deterministic, no embedder);
  * vector Tool-RAG is the documented upgrade. Domain tools are independent files
@@ -77,7 +83,7 @@ async function loadAbilities(): Promise<CapabilityEntry[]> {
   return entries;
 }
 
-function isRelevant(entry: CapabilityEntry, msg: string): boolean {
+export function isRelevant(entry: CapabilityEntry, msg: string): boolean {
   if (entry.tier === "core") return true;
   if ((entry.triggers ?? []).some((re) => re.test(msg))) return true;
   const normalizedMsg = msg.replace(/[^a-z0-9 ]/g, "");
@@ -85,6 +91,115 @@ function isRelevant(entry: CapabilityEntry, msg: string): boolean {
     const key = ex.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
     return key.length >= 4 && normalizedMsg.includes(key.slice(0, Math.min(key.length, 16)));
   });
+}
+
+// ── Monotone disclosure (KV-prefix stability) ────────────────────────────────
+//
+// Pi's setActiveToolsByName rebuilds the tool set handed to the provider, and the
+// tool definitions are rendered into the front of the request by the chat
+// template. llama.cpp reuses cached KV only for an EXACT common prefix (Gemma's
+// shared-KV + SWA attention has no `--cache-reuse`), so a tool block that
+// oscillates turn-to-turn re-prefills the entire conversation every turn.
+//
+// Matching on the LAST MESSAGE ONLY oscillated maximally: no ability currently
+// declares `tier: "core"`, so an off-topic turn ("thanks!") disclosed ZERO tools
+// and the next on-topic turn disclosed them again. The fix keeps a domain
+// disclosed for a bounded window after it was last relevant, so the set is
+// non-decreasing across the window and only ever changes in rare, bounded jumps
+// — the same "anchor, don't slide" shape as the legacy lane's history pruning.
+//
+// Grouping is by `domain`, not by tool name: a domain is what the user's message
+// is actually about, and disclosing a domain's tools together keeps the set
+// stable when a domain later grows a second entry.
+
+// Default 6 turns = zoe-data's retained window. `_compose_message` replays
+// `history[-12:]` — 12 messages, i.e. ~6 user turns — so a domain stays disclosed
+// for exactly as long as the turn that raised it is still visible to the model.
+const DEFAULT_DISCLOSURE_WINDOW_TURNS = 6;
+
+export function disclosureWindowTurns(): number {
+  const raw = Number(process.env.ZOE_CORE_DISCLOSURE_WINDOW_TURNS);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_DISCLOSURE_WINDOW_TURNS;
+}
+
+/** Per-session disclosure memory: which domain was last relevant, and when. */
+export interface DisclosureState {
+  turn: number;
+  lastRelevantTurn: Map<string, number>;
+}
+
+export function createDisclosureState(): DisclosureState {
+  return { turn: 0, lastRelevantTurn: new Map() };
+}
+
+/**
+ * The tools to disclose this turn: every `core` ability, plus every ability whose
+ * DOMAIN was relevant within the last `windowTurns` turns (this one included).
+ *
+ * Order follows the ability load order, so an unchanged set always renders the
+ * same bytes. Mutates `state` — one state object per Pi session.
+ */
+export function nextActiveTools(
+  abilities: CapabilityEntry[],
+  msg: string,
+  state: DisclosureState,
+  windowTurns: number = disclosureWindowTurns(),
+): string[] {
+  state.turn += 1;
+  for (const entry of abilities) {
+    if (isRelevant(entry, msg)) state.lastRelevantTurn.set(entry.domain, state.turn);
+  }
+  const cutoff = state.turn - windowTurns;
+  const names: string[] = [];
+  for (const entry of abilities) {
+    if (entry.tier === "core") {
+      names.push(entry.name);
+      continue;
+    }
+    const last = state.lastRelevantTurn.get(entry.domain);
+    if (last !== undefined && last > cutoff) names.push(entry.name);
+  }
+  return names;
+}
+
+/**
+ * The per-turn disclosure handler.
+ *
+ * Split out from the extension entrypoint so it is testable without loading the
+ * ability modules (which pull typebox at runtime).
+ *
+ * SAFETY FLOOR: this calls setActiveTools on EVERY turn, unconditionally, even
+ * when the set is unchanged. That call is what strips Pi's coding builtins
+ * (bash/read/edit) — the active set is only ever Zoe's own abilities. Never
+ * short-circuit it as a "nothing changed" optimisation; skipping it is how the
+ * builtins would come back.
+ */
+export function createDisclosureHandler(pi: ExtensionAPI, abilities: CapabilityEntry[]) {
+  const state = createDisclosureState();
+  return async (event: unknown) => {
+    const msg = String((event as { prompt?: unknown })?.prompt ?? "").toLowerCase();
+    const active = nextActiveTools(abilities, msg, state);
+    const setActiveTools = (pi as { setActiveTools?: (names: string[]) => void }).setActiveTools;
+    if (typeof setActiveTools !== "function") {
+      // Observability: if the Pi build lacks setActiveTools, progressive
+      // disclosure is a no-op (ALL tools stay active) — surface it once so a
+      // 2B model getting drowned in tools is diagnosable, not silent.
+      if (!(globalThis as Record<string, unknown>).__zoeAbilitiesDisclosureWarned) {
+        (globalThis as Record<string, unknown>).__zoeAbilitiesDisclosureWarned = true;
+        console.warn(
+          "[zoe-core/abilities] setActiveTools unavailable — progressive disclosure disabled; all tools stay active.",
+        );
+      }
+      return;
+    }
+    try {
+      setActiveTools(active);
+    } catch (err) {
+      console.warn(
+        `[zoe-core/abilities] setActiveTools failed (${active.length} tools intended): ${(err as Error)?.message ?? err}`,
+      );
+    }
+  };
 }
 
 export default async function (pi: ExtensionAPI) {
@@ -122,29 +237,7 @@ export default async function (pi: ExtensionAPI) {
     });
   }
 
-  // Progressive disclosure — surface core + relevance-matched tools each turn.
-  pi.on("before_agent_start", async (event) => {
-    const msg = String((event as { prompt?: unknown })?.prompt ?? "").toLowerCase();
-    const active = abilities.filter((a) => isRelevant(a, msg)).map((a) => a.name);
-    const setActiveTools = (pi as { setActiveTools?: (names: string[]) => void }).setActiveTools;
-    if (typeof setActiveTools !== "function") {
-      // Observability: if the Pi build lacks setActiveTools, progressive
-      // disclosure is a no-op (ALL tools stay active) — surface it once so a
-      // 2B model getting drowned in tools is diagnosable, not silent.
-      if (!(globalThis as Record<string, unknown>).__zoeAbilitiesDisclosureWarned) {
-        (globalThis as Record<string, unknown>).__zoeAbilitiesDisclosureWarned = true;
-        console.warn(
-          "[zoe-core/abilities] setActiveTools unavailable — progressive disclosure disabled; all tools stay active.",
-        );
-      }
-      return;
-    }
-    try {
-      setActiveTools(active);
-    } catch (err) {
-      console.warn(
-        `[zoe-core/abilities] setActiveTools failed (${active.length} tools intended): ${(err as Error)?.message ?? err}`,
-      );
-    }
-  });
+  // Progressive disclosure — core + every domain relevant within the retained
+  // window (monotone, so the rendered tool block stays KV-prefix stable).
+  pi.on("before_agent_start", createDisclosureHandler(pi, abilities));
 }

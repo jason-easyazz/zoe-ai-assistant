@@ -1,0 +1,72 @@
+"""Pytest wrapper for zoe-core's KV-prefix stability suite (a node harness).
+
+The assertions live in TypeScript because the things under test ARE TypeScript —
+`services/zoe-core/extensions/memory.ts` (the system prompt must not move) and
+`extensions/abilities.ts` (tool disclosure must be monotone). This wrapper exists
+so that suite reaches a CI lane at all: `services/zoe-core/` is in no workflow,
+while `services/zoe-data/tests` runs full-directory on the Jetson
+(`.github/workflows/self-hosted-tests.yml`).
+
+Deliberately NOT `ci_safe`: the GitHub lane is a slim python venv with no
+guarantee of a Node new enough to execute `.ts` directly (type stripping is only
+on by default from Node 22.18). It runs on the Jetson, which has 22.22.
+
+Run it directly with either of:
+
+    node --test services/zoe-core/test/prefix_stability.test.ts
+    npm --prefix services/zoe-core test
+"""
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+_REPO = Path(__file__).resolve().parents[3]
+_SUITE = _REPO / "services" / "zoe-core" / "test" / "prefix_stability.test.ts"
+
+# Node's built-in TypeScript type stripping is unflagged from 22.18.0.
+_MIN_NODE = (22, 18)
+
+
+def _node_version() -> "tuple[int, int] | None":
+    node = shutil.which("node")
+    if node is None:
+        return None
+    try:
+        out = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    parts = out.stdout.strip().lstrip("v").split(".")
+    try:
+        return int(parts[0]), int(parts[1])
+    except (IndexError, ValueError):
+        return None
+
+
+def test_zoe_core_prefix_stability_suite():
+    version = _node_version()
+    if version is None:
+        pytest.skip("node not on PATH")
+    if version < _MIN_NODE:
+        pytest.skip(f"node {version} < {_MIN_NODE} — no built-in TypeScript type stripping")
+    assert _SUITE.is_file(), f"missing zoe-core prefix suite at {_SUITE}"
+
+    result = subprocess.run(
+        ["node", "--test", str(_SUITE)],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        cwd=str(_SUITE.parent),
+    )
+    assert result.returncode == 0, (
+        "zoe-core KV-prefix stability suite failed:\n"
+        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+    # A node --test run that collects nothing exits 0. Pin that it actually ran.
+    assert "# fail 0" in result.stdout, f"unexpected node --test summary:\n{result.stdout}"
+    assert "# pass 0" not in result.stdout, "the node suite collected no tests — vacuous pass"
