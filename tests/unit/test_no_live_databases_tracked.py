@@ -292,8 +292,8 @@ def test_agents_contract_describes_step_a_as_mount_only():
     commit' — three instances of one error (review: Codex)."""
     doc = (ROOT / "scripts" / "AGENTS.md").read_text()
     assert "deploy the untracking commit" not in doc
-    assert "step A is mount-only" in doc.lower() or "STEP A** re-points" in doc
-    assert "STEP B is still outstanding" in doc
+    assert "Both steps are COMPLETE" in doc
+    assert "still outstanding" not in doc
 
 
 def test_no_operator_instruction_claims_the_next_deploy_untracks():
@@ -303,8 +303,10 @@ def test_no_operator_instruction_claims_the_next_deploy_untracks():
     done and leave credentials in git indefinitely (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert "deploy the untracking commit" not in src
-    # both the --help path and the success path must name step A as mount-only
-    assert src.count("RE-POINTS THE BIND MOUNT ONLY") >= 2
+    # step B merged: BOTH operator-facing paths must describe the migration as
+    # historical/complete, and neither may claim a step is outstanding.
+    assert src.count("HISTORICAL") >= 2
+    assert "still outstanding" not in src
 
 
 def test_closing_instructions_do_not_overstate_step_a():
@@ -313,8 +315,10 @@ def test_closing_instructions_do_not_overstate_step_a():
     believe credential removal is done and skip step B — the databases are still
     tracked at this commit (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert "RE-POINTS THE BIND MOUNT ONLY" in src
-    assert "SEPARATE step B, still outstanding" in src
+    # step B is merged: the script must now describe the migration as COMPLETE
+    # and must not claim any step is still outstanding.
+    assert "migration is complete" in src.lower() or "migration\n#     are complete" in src.lower() or "steps of the 2026-08 migration" in src
+    assert "still outstanding" not in src
     assert "deploy the commit that untracks the DBs" not in src
 
 

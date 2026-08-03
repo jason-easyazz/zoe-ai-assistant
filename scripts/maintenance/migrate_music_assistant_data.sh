@@ -78,10 +78,11 @@ it, so the mount can be re-pointed without a deploy destroying live data.
   dest: $DEST   (override with ZOE_MA_DATA)
 
 After --execute succeeds:
-  1. deploy STEP A — it RE-POINTS THE BIND MOUNT ONLY. It does NOT untrack the
-     databases; auth.db/library.db and their WALs stay tracked at that commit,
-     so the credentials remain in git history and CD keeps rolling those paths
-     back. Untracking is a separate STEP B, still outstanding.
+  1. deploy the mount re-point (HISTORICAL: both steps of the 2026-08 migration
+     are complete and merged — step A re-pointed the mount, step B untracked
+     the databases. On a fresh host the compose default already binds
+     ~/.zoe/music-assistant and no migration is ever needed; this script is
+     retained for reference and for future store relocations.)
   2. ZOE_MA_DATA=<dest> docker compose -f /home/zoe/assistant/docker-compose.modules.yml up -d music-assistant
   3. confirm: curl -s http://localhost:8095/info
 EOF
@@ -682,11 +683,9 @@ log "verified $checked/$checked files"
 log ""
 log "DONE. Original left in place as rollback."
 log "Next, IN THIS ORDER:"
-log "  1. deploy STEP A — it RE-POINTS THE BIND MOUNT ONLY."
-log "     It does NOT untrack the databases: auth.db, library.db and their WALs"
-log "     are still tracked at this commit, so the credentials remain in git"
-log "     history and CD will keep rolling those paths back. Untracking is a"
-log "     SEPARATE step B, still outstanding after this. (review: Codex)"
+log "  1. deploy the mount re-point. (HISTORICAL: the 2026-08 two-step"
+log "     migration is complete — step A re-pointed the mount, step B untracked"
+log "     the databases. Fresh hosts never need this script.)"
 # The destination is emitted for the operator to PASTE, so it must be
 # shell-quoted (review: Codex). `/mnt/My Drive/music-assistant` copies and
 # verifies fine, then the unquoted paste word-splits — Compose gets the wrong
