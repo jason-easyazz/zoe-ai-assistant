@@ -521,6 +521,21 @@ def test_w11_delivery_modules_are_voice_path():
                        "services/zoe-data/tts_waterfall.py"], touched
 
 
+def test_zoe_core_lockfile_is_voice_path():
+    """A Pi/transitive-dep bump can be regenerated into package-lock.json WITHOUT
+    touching package.json, so a diff touching ONLY the lockfile must still require
+    the replay gate — otherwise `npm ci` could change the brain's dependency graph
+    while bypassing the gate (Codex P1, #1602)."""
+    from voice_gate_check import scope_verdict, touched_voice_files, voice_path_patterns
+    pats = voice_path_patterns()
+    assert touched_voice_files(
+        ["services/zoe-core/package-lock.json", "docs/PLANS.md"], pats
+    ) == ["services/zoe-core/package-lock.json"]
+    # end to end through the classifier the deploy/PR path calls
+    needs, hits, _ = scope_verdict(["services/zoe-core/package-lock.json"], pats)
+    assert needs is True and hits == ["services/zoe-core/package-lock.json"]
+
+
 # --- FIX: scope must fail CLOSED when it cannot publish its verdict ---------
 # `_emit_github_output` used to swallow an OSError and let `_scope_only` return
 # 0 anyway — the scope job then "succeeded" with no `voice` output at all, and
