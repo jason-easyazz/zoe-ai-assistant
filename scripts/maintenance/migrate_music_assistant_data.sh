@@ -366,9 +366,18 @@ fi
 # one-shot assignment. Whatever that future invocation would mount must be
 # exactly the destination validated here; otherwise MA later restarts against
 # an unvalidated path (or an empty default) no guard ever saw.
-COMPOSE_FILE="$REPO_ROOT/docker-compose.modules.yml"
+# THE PENDING COMPOSE FILE, not the live one (review: Codex — in the mandated
+# order this script runs BEFORE step A deploys, when the live checkout's compose
+# file still carries the OLD `./data/music-assistant` mount; validating that
+# file resolves future_src to SRC and refuses every legitimate pre-deploy run.
+# The step-A compose file ships in the SAME revision as this script, so default
+# to the script's own repo for the FILE while keeping the LIVE repo as the
+# project directory — Compose then loads the live .env and resolves relative
+# paths against the live root, i.e. exactly the future post-deploy invocation.)
+SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+COMPOSE_FILE="${ZOE_MA_COMPOSE_FILE:-$SCRIPT_REPO/docker-compose.modules.yml}"
 if [[ -f "$COMPOSE_FILE" ]]; then
-    if ! compose_json="$(cd "$REPO_ROOT" && env -u ZOE_MA_DATA docker compose -f "$COMPOSE_FILE" config --format json 2>&1)"; then
+    if ! compose_json="$(cd "$REPO_ROOT" && env -u ZOE_MA_DATA docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" config --format json 2>&1)"; then
         log "FATAL: cannot resolve the effective Compose configuration:"
         printf '%s\n' "$compose_json" | awk 'NR<=4' | sed 's/^/ma-migrate:   /' >&2
         log "Refusing: the future mount source cannot be validated."

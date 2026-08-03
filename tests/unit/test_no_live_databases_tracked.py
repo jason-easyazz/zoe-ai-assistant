@@ -508,3 +508,16 @@ def test_post_stop_container_polls_fail_closed():
     assert "cannot query container state mid-run" in src
     code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
     assert "grep -qx \"$CONTAINER\" || break" not in code
+
+
+def test_compose_guard_validates_the_pending_file_not_the_live_one():
+    """In the mandated order the script runs BEFORE step A deploys, when the
+    live checkout's compose file still carries the OLD in-checkout mount —
+    validating that file refuses every legitimate pre-deploy run (review:
+    Codex). The step-A file ships with the script, so the guard uses the
+    script's own repo for the FILE and the live repo as --project-directory,
+    which is exactly the future post-deploy invocation."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert 'SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"' in src
+    assert '--project-directory "$REPO_ROOT"' in src
+    assert 'ZOE_MA_COMPOSE_FILE:-$SCRIPT_REPO' in src
