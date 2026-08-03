@@ -121,14 +121,36 @@ def test_check_fails_on_feature_branch(tmp_path):
 
 
 def test_check_fails_on_dirty_tree(tmp_path):
+    """A TRACKED modification must block: a fast-forward / `reset --hard` would
+    clobber it. This test previously wrote an UNTRACKED file and asserted a
+    refusal, which pinned the bug rather than the contract — the live checkout
+    permanently carries untracked agent/build dirs, so the gate refused every
+    deploy (2026-08-02) and the documented consequence of a gate that always
+    says no is that operators bypass it."""
     live = _seed_live_tree(tmp_path)
-    (live / "DIRTY.txt").write_text("uncommitted\n")
+    (live / "README.md").write_text("locally modified, not committed\n")
 
     proc = _run([str(SCRIPT), "--check"], env=_env(live))
 
     assert proc.returncode != 0
     assert "FAIL clean-tree" in proc.stdout
     assert "NOT-READY" in proc.stdout
+
+
+def test_check_passes_with_only_untracked_files(tmp_path):
+    """Untracked runtime artifacts are in no danger from a fast-forward and must
+    not block. Mirrors the live tree's .polly-work/, modules/omnigent/wheels/,
+    polly-verify-*/ and wt-*/ — and the same contract deploy_live.sh's
+    require_clean_tree already honours."""
+    live = _seed_live_tree(tmp_path)
+    (live / "DIRTY.txt").write_text("untracked runtime artifact\n")
+    (live / ".polly-work").mkdir()
+    (live / ".polly-work" / "state.json").write_text("{}\n")
+
+    proc = _run([str(SCRIPT), "--check"], env=_env(live))
+
+    assert "PASS clean-tree" in proc.stdout, proc.stdout + proc.stderr
+    assert "FAIL clean-tree" not in proc.stdout
 
 
 def test_check_passes_on_clean_main_with_low_memory_gate_disabled(tmp_path):
