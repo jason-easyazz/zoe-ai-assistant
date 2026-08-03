@@ -85,13 +85,23 @@ def test_music_assistant_data_is_mounted_outside_the_checkout():
     repo-relative path, untracked data lands where `reset --hard` runs and the
     original hazard returns — this time silently, since the files would be
     gitignored rather than tracked."""
+    # Parse the ACTUAL volume source and resolve its default the way Compose
+    # does (relative paths resolve against the compose file's directory) —
+    # asserting the absence of one literal spelling misses every other
+    # in-checkout spelling, e.g. ${ZOE_MA_DATA:-./data/music-assistant}
+    # (review: Codex).
+    import re as _re
     compose = COMPOSE.read_text()
-    assert "- ./data/music-assistant:/data" not in compose, (
-        "music-assistant is bind-mounted from inside the git checkout again; "
-        "runtime data there is destroyed by deploy_live.sh's `git reset --hard`"
-    )
-    assert "ZOE_MA_DATA" in compose, (
-        "expected the mount to use ${ZOE_MA_DATA:-...} pointing outside the repo"
+    m = _re.search(r"\$\{ZOE_MA_DATA:-([^}]*)\}:/data", compose)
+    assert m, "music-assistant /data mount must be ${ZOE_MA_DATA:-<default>}:/data"
+    default = m.group(1)
+    resolved = (COMPOSE.parent / default).resolve() if not default.startswith("/") \
+        else Path(default).resolve()
+    root = ROOT.resolve()
+    assert not str(resolved).startswith(str(root) + "/") and resolved != root, (
+        f"compose default {default!r} resolves to {resolved}, INSIDE the checkout — "
+        "runtime data there is destroyed by deploy_live.sh's `git reset --hard`, "
+        "and silently, since it is gitignored"
     )
 
 

@@ -117,15 +117,31 @@ container_running() {  # -> 0=running 1=stopped, exits on unknowable state
 }
 
 sudo_probe() {  # sudo_probe -e|-f|-d|-L PATH  -> 0=yes 1=no, exits on indeterminate
-    local out
-    out="$(sudo sh -c 'if test "$1" "$2"; then echo yes; else echo no; fi' _ "$1" "$2" 2>&1)"
-    case "$out" in
-        yes) return 0 ;;
-        no)  return 1 ;;
-        *)   log "FATAL: cannot probe $2 (test $1) — probe returned: $out"
-             log "Refusing: an indeterminate probe must not be treated as 'absent'."
-             exit 1 ;;
-    esac
+    # Built on stat(1), not test(1) (review: Codex): `test` collapses a stat(2)
+    # I/O error into plain false, so the previous wrapper answered a confident
+    # "no" for a path it could not actually examine — and an existing nonempty
+    # destination could skip the mirror/emptiness checks. stat distinguishes:
+    # exit 0 = the path exists (file type on stdout, via lstat, so symlinks
+    # report themselves); ENOENT on stderr = genuinely absent; anything else
+    # (EIO, EACCES, a dead sudo) = indeterminate = fatal.
+    local flag="$1" path="$2" out rc
+    out="$(sudo stat -c%F -- "$path" 2>&1)"; rc=$?
+    if [[ $rc -eq 0 ]]; then
+        case "$flag" in
+            -e) return 0 ;;
+            -f) [[ "$out" == "regular file" ]] ;;
+            -d) [[ "$out" == "directory" ]] ;;
+            -L) [[ "$out" == "symbolic link" ]] ;;
+            *)  log "FATAL: sudo_probe: unsupported flag $flag"; exit 1 ;;
+        esac
+        return $?
+    fi
+    if printf '%s' "$out" | grep -q "No such file or directory"; then
+        return 1
+    fi
+    log "FATAL: cannot probe $path (stat) — probe returned: $out"
+    log "Refusing: an indeterminate probe must not be treated as 'absent'."
+    exit 1
 }
 
 # The whole point is that the data leaves the checkout, so an override that
