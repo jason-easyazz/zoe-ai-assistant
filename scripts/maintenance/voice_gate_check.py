@@ -240,6 +240,21 @@ VOICE_PATH_PATTERNS = (
     # charge a 20-sample Kokoro replay for a diff that cannot change what Zoe
     # says.
     #
+    # RESIDUAL on the UNIT entry, stated so nobody reads more into a green gate
+    # than it says — and identical for every serving unit already gated here.
+    # The probe measures the LIVE stack (voice_regression_probe.py ->
+    # scripts/perf/measure_voice.py against the running services); it never runs
+    # `systemctl`, so a unit-only diff yields an artifact whose turns were served
+    # by the OLD ExecStart, and router_two_stage.sidecar_url() still reaches the
+    # already-running sidecar on 127.0.0.1:11436. This tuple is a FORCING
+    # FUNCTION, not an isolation harness: it makes a unit change carry a fresh,
+    # head-bound said-vs-did run instead of taking the no-op pass, exactly the
+    # bargain already accepted for llama-server.service (Greptile P1 on #1494)
+    # and flue-zoe-brain.service. Dropping the entry because that evidence is
+    # indirect would restore the blind spot those two closed, which is strictly
+    # worse; the unit's own ExecStart/caps are verified at DEPLOY, when it is
+    # actually installed and the sidecar restarted. Codex P1 on #1621.
+    #
     # A PATTERN CANNOT GATE THE PR THAT ADDS IT — do not claim otherwise when
     # extending this tuple. voice-gate.yml triggers on `pull_request_target` and
     # every checkout pins `base.sha` (deliberately: the PR is untrusted data and
