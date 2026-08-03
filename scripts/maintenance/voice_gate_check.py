@@ -79,6 +79,58 @@ VOICE_PATH_PATTERNS = (
     "services/zoe-data/tts_waterfall.py",
     "*kokoro*",
     "*moonshine*",
+    # THE LIVE ROUTER'S MODEL ARTIFACTS — the stage-1 checkpoint of the two-stage
+    # router (docs/CANONICAL.md `stage1_artifact`, live behind ZOE_ROUTER_HEAD=
+    # active). `router_head_mlp.joblib` produces the top-3 domain shortlist and
+    # the chat gate that decide which tool a voice turn fires; swapping the file
+    # silently re-routes every turn with no code diff at all, which is quieter
+    # than any logic edit — nothing raises, nothing logs, every health check
+    # stays green.
+    #
+    # RESOLVES the gap this comment used to record as open. That note claimed
+    # the checkpoint was already covered by router_selftrain.py's
+    # `replay_gate_passed` ratchet. It is NOT, and the claim was never true:
+    # router_selftrain.py contains no reference to a head, an MLP, or a .joblib
+    # anywhere in its 1095 lines. It retrains and promotes the STAGE-2
+    # FunctionGemma GGUF only, writing it to SERVED_GGUF under
+    # ~/models/functiongemma-router/ with its provenance.json beside it — both
+    # OUTSIDE the repo (its docstring: "The loop's ONLY production mutation is
+    # swapping the sidecar's model file and restarting that one unit"). No
+    # automated path exists by which a stage-1 head reaches git, so EVERY commit
+    # to this directory is a hand-commit, and the ratchet was covering none of
+    # them. `git log -- services/zoe-data/models/` = 2 commits ever (#1318,
+    # #1322), both hand-committed feature PRs.
+    #
+    # That also disposes of the cost objection. There are no ratchet promotion
+    # commits here to double-gate; the marginal cost is one replay per
+    # hand-commit at a historical rate of two in the repo's lifetime — cheaper
+    # than any other entry in this tuple. And if stage-1 promotion is ever
+    # automated, it stays cheap: the ratchet's own replay_gate() already runs
+    # voice_regression_probe.py and reads the SAME
+    # ~/.cache/zoe/voice_regression_last.json this checker reads, so one run
+    # satisfies both gates.
+    #
+    # A provenance-manifest CI check was the alternative and was rejected on the
+    # evidence: there is no repo-visible promotion provenance to key on, and any
+    # manifest a hand-commit writes beside the model is written by the same hand
+    # — a claim that can be forged without running anything. This gates on the
+    # revision-bound probe artifact instead, which cannot be produced without
+    # actually replaying Jason's corpus on the Jetson.
+    #
+    # A DIRECTORY glob, not two literal paths, and deliberately so: the failure
+    # being fixed is "a tracked artifact on the live router path was never in
+    # this list", which two literals would simply repeat for the next head added
+    # here. This is the live service's model directory — it holds runtime heads
+    # and nothing else (the offline TRAINING copies live in
+    # labs/setfit-router/artifacts/ and stay ungated). Anything dropped in here
+    # is model material and gates by default. router_head_logreg.joblib is
+    # covered by the same glob on purpose: it is joblib.load()-ed into the live
+    # zoe-data process on every non-`off` mode (semantic_router.py:317-341) and
+    # is one flag value (ZOE_ROUTER_HEAD=shadow) from being the head whose
+    # predictions are logged and then mined into the ratchet's training
+    # candidates — preventive for the same reason services/zoe-core/package.json
+    # below is, at one commit's worth of historical cost.
+    "services/zoe-data/models/*",
     # The brain's serving config IS the voice path: flash-attn, KV format and
     # slot layout all change generation behaviour. Greptile P1 on #1494 — a
     # deploy touching this unit previously bypassed the gate entirely.
@@ -129,6 +181,78 @@ VOICE_PATH_PATTERNS = (
     # turn gets answered by, and neither matched any glob above.
     "services/zoe-data/zoe_flue_client.py",
     "services/zoe-data/brain_dispatch.py",
+    # THE TWO-STAGE ROUTER — its serving UNIT *and* the code that makes the
+    # routing decision. docs/CANONICAL.md lists the two-stage router as a LIVE
+    # tool-router FRONT on the voice path (ZOE_ROUTER_HEAD=active), and
+    # semantic_router.route() is Tier-1 for every voice turn — called straight
+    # from routers/voice_tts.py and fast_tiers.py, both gated above. Three files,
+    # two distinct reasons, and BOTH are needed: the unit is the serving config
+    # (which GGUF is loaded, --ctx-size, --parallel, and its memory caps),
+    # exactly the llama-server.service / flue-zoe-brain.service case; the two
+    # modules are the logic that decides WHICH TOOL a voice turn fires. Gating
+    # either alone leaves the other able to change routing behaviour and take the
+    # no-op pass. (The stage-1 CHECKPOINT those modules load is the third leg,
+    # gated by the services/zoe-data/models/* glob above.)
+    #
+    # Gated because the regression is SILENT BY CONSTRUCTION at both ends,
+    # verified in code rather than assumed:
+    #   - router_two_stage.decide() wraps its whole body in `except Exception`
+    #     and returns None (router_two_stage.py:291-294) — a logger.warning is
+    #     the only trace.
+    #   - the caller keeps the WEAKER similarity route on None:
+    #     semantic_router._two_stage_active() swallows to None (:465-472) and
+    #     route() applies the decision only `if decision is not None` (:546-566,
+    #     whose own comment reads "decision None -> similarity behavior
+    #     unchanged (brain-safe)").
+    # That covers the ERROR path, which is what a swapped-out or slow sidecar
+    # produces: the 1.5s timeout elapses, decide() returns None, and the turn is
+    # routed by the weaker path having burned the whole budget. A non-error logic
+    # edit is quieter still: remap DOMAIN_TOOLS, move the chat gate, or reword a
+    # ROUTES example and the router simply returns a DIFFERENT tool. Nothing
+    # raises, nothing logs a regression, every health check stays green. Only a
+    # said-vs-did replay against the real-voice corpus sees any of it.
+    #
+    # The cost objection does not survive the log: these are the LOWEST-churn
+    # files in the gated set (measured on main 2026-08-03 — router_two_stage.py
+    # 2 commits ever, semantic_router.py 5, against 110 for the already-gated
+    # routers/voice_tts.py), so this buys the coverage for a handful of replay
+    # runs a year.
+    #
+    # Their ci_safe suites do NOT substitute. test_router_two_stage.py (24) and
+    # test_router_head_shadow.py (19) are MECHANISM tests against monkeypatched
+    # heads and sidecars — parse, gate arithmetic, fallback plumbing, log shape.
+    # They pin that the wiring works and are blind to routing QUALITY, which is
+    # exactly what a DOMAIN_TOOLS / ROUTES / threshold edit changes.
+    # Nor does the corpus eval, and least of all for semantic_router:
+    # labs/router-90-campaign/prod_path_eval.py drives the frozen 81-case corpus
+    # through route_two_stage(), which embeds and calls router_two_stage.decide()
+    # DIRECTLY — it never executes route()'s similarity matrix, its threshold, or
+    # the two-stage/similarity merge. Its pytest wrapper
+    # (tests/integration/test_router_prod_path.py) is opt-in behind
+    # ZOE_ROUTER_PROD_PATH_EVAL=1 and integration-marked, so it runs in no default
+    # lane. Neither module has a cheaper check that would catch this class.
+    #
+    # NOT gated, and kept out by using literal module paths rather than a
+    # `*router*` wildcard (and one literal unit path rather than
+    # `scripts/setup/systemd/*`): the co-located tests, the labs/ eval + training
+    # harnesses, and the offline scoring/self-train scripts under
+    # scripts/maintenance/. None runs inside a voice turn, so gating them would
+    # charge a 20-sample Kokoro replay for a diff that cannot change what Zoe
+    # says.
+    #
+    # A PATTERN CANNOT GATE THE PR THAT ADDS IT — do not claim otherwise when
+    # extending this tuple. voice-gate.yml triggers on `pull_request_target` and
+    # every checkout pins `base.sha` (deliberately: the PR is untrusted data and
+    # must not author its own verdict), so the classifier running against a PR is
+    # ALWAYS the BASE ref's copy of this file. New entries here do not exist for
+    # that run and the PR is classified without them. Measured on PR #1620, whose
+    # own head added the three patterns below: run 30804036970 reported
+    # scope=non-voice, replay-evidence=SKIPPED. The coverage starts working for
+    # the NEXT PR, once these are on main — so a change to a newly-gated file must
+    # land in a SEPARATE, later PR to actually be gated.
+    "scripts/setup/systemd/functiongemma-router.service",
+    "services/zoe-data/router_two_stage.py",
+    "services/zoe-data/semantic_router.py",
 )
 DEFAULT_MAX_AGE_H = float(os.environ.get("ZOE_VOICE_GATE_MAX_AGE_H", "24"))
 

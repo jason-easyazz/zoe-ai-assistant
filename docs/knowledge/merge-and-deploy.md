@@ -61,8 +61,12 @@ inside the same `flock /tmp/zoe-deploy.lock`. (Before this, merging a voice-path
 with the mandatory gate never running — a gate that can silently not-run is not a gate.)
 
 - **What blocks:** an incoming diff that touches the voice runtime path (STT/brain/TTS — see
-  `VOICE_PATH_PATTERNS` in `voice_gate_check.py`, incl. `*kokoro*`/`*moonshine*` and the LIVE
-  `ZOE_BRAIN_BACKEND=flue` lane, but not the unmerged `-2x` port) **without** a fresh
+  `VOICE_PATH_PATTERNS` in `voice_gate_check.py`, incl. `*kokoro*`/`*moonshine*`, the LIVE
+  `ZOE_BRAIN_BACKEND=flue` lane, and the whole two-stage router — its model directory
+  `services/zoe-data/models/*`, its `functiongemma-router.service` serving unit, and its
+  `router_two_stage.py` + `semantic_router.py` decision modules — but not the unmerged `-2x`
+  port, the offline training copies under `labs/setfit-router/artifacts/`, the routers' tests,
+  or their offline eval/self-train tooling) **without** a fresh
   (<24h), passing, current-baseline artifact at `~/.cache/zoe/voice_regression_last.json`. Missing,
   stale, skipped or failed all block — a skip is not a pass. **Non-voice diffs are a no-op pass**, so
   ordinary deploys are frictionless. The check only *reads* the artifact; it never runs the ~2.3 GB
