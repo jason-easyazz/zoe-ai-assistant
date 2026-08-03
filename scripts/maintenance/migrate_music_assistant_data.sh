@@ -37,7 +37,10 @@
 #   STEP B (separate PR, later): untrack the now-static files. By then nothing
 #     writes there, so `reset --hard` deleting them is harmless.
 #
-# Each step is independently safe in any order CD chooses to apply it.
+# The ORDER ABOVE IS THE ONLY SAFE ORDER (an earlier revision claimed the steps
+# were order-independent — false, review: Codex): step A before --execute rolls
+# the tracked live databases back and switches the mount before they are copied;
+# step B before step A deletes stores the old mount still serves.
 #
 # SAFE BY CONSTRUCTION:
 #   * dry-run by default (scripts/AGENTS.md contract); --execute to act
@@ -267,7 +270,22 @@ fi
 # with the retained pre-migration copies in SRC and silently lose auth, library,
 # settings and playlist changes. A re-run is only safe while SRC is still the
 # live store. Compare newest mtimes and refuse to go backwards.
-if sudo test -d "$DEST" && [[ -n "$(sudo find "$DEST" -type f -print -quit 2>/dev/null)" ]]; then
+# The probe itself must FAIL CLOSED (review: Codex — same masked-producer class
+# as the manifests): command substitution inside [[ -n ]] discards find's exit
+# status, so a transient sudo/traversal failure looked like "destination empty",
+# skipped this entire direction check, and --mirror could then clear the LIVE
+# destination and replace it with the stale source.
+if sudo test -d "$DEST"; then
+    if ! _probe="$(sudo find "$DEST" -type f -print -quit 2>&1)"; then
+        log "FATAL: cannot probe the destination for the direction check:"
+        printf '%s\n' "$_probe" | sed 's/^/ma-migrate:   /' >&2
+        log "Refusing: an unreadable destination must not be treated as empty."
+        exit 1
+    fi
+else
+    _probe=""
+fi
+if [[ -n "$_probe" ]]; then
     # `sort -rn | head -1` gives sort a SIGPIPE once head exits; with
     # `set -euo pipefail` that is exit 141 and the script dies — AFTER Music
     # Assistant has been stopped, leaving the service down and no diagnostic.

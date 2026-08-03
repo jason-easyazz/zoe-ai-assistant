@@ -345,3 +345,23 @@ def test_destination_inspection_runs_with_copy_privileges():
     code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
     assert '[[ -L "$DEST" ]]' not in code
     assert '[[ -e "$DEST" ]]' not in code
+
+
+def test_direction_check_probe_fails_closed():
+    """Command substitution inside [[ -n ]] discards find's exit status, so a
+    transient sudo/traversal failure read as 'destination empty', skipped the
+    newer-destination check entirely, and --mirror could clear the LIVE
+    destination and replace it with the stale source (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "cannot probe the destination for the direction check" in src
+    assert "unreadable destination must not be treated as empty" in src
+
+
+def test_header_does_not_claim_order_independence():
+    """An earlier revision said 'each step is independently safe in any order' —
+    directly contradicting the required sequence above it. Step A before
+    --execute rolls the live databases back; step B before step A deletes stores
+    the old mount still serves (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "independently safe in any order" not in src
+    assert "ONLY SAFE ORDER" in src
