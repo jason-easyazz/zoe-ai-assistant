@@ -403,3 +403,25 @@ def test_completion_marker_is_the_primary_direction_defence():
     assert src.index("destination carries a completion marker") < src.index("cp -a --remove-destination")
     # and success must write it
     assert 'sudo tee "$DEST/$MARKER"' in src
+
+
+def test_compose_env_file_value_must_match_the_validated_destination():
+    """Compose interpolates ${ZOE_MA_DATA} from the PROJECT .env as well as the
+    process environment, and the script read only the latter — so a value in
+    the repo .env (including ./data/music-assistant) would be mounted
+    UNVALIDATED by an ordinary `docker compose up`, bypassing every containment
+    check here (review: Codex)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert 'ENV_FILE="$REPO_ROOT/.env"' in src
+    assert "Compose auto-loads .env for interpolation" in src
+
+
+def test_marker_pathname_is_reserved_in_the_source():
+    """A source already containing the marker gets copied and counted by the
+    checksum loop, then the marker write replaces the destination copy —
+    'verified N/N' with differing hashes, exit 0, and the stray marker then
+    blocks the corrective rerun (review: Codex, reproduced)."""
+    src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
+    assert "source contains the reserved marker name" in src
+    # MARKER must be defined before the source-reservation check uses it
+    assert src.index('MARKER=".ma-migration-complete"') < src.index("reserved marker name")

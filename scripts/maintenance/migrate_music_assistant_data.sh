@@ -54,6 +54,9 @@ SRC="${ZOE_MA_SRC:-/home/zoe/assistant/data/music-assistant}"
 DEST="${ZOE_MA_DATA:-/home/zoe/.zoe/music-assistant}"
 CONTAINER="${ZOE_MA_CONTAINER:-zoe-music-assistant}"
 REPO_ROOT="${ZOE_REPO_ROOT:-/home/zoe/assistant}"
+# Reserved completion-marker name; referenced by both the source-reservation
+# check and the destination gate, so defined before either.
+MARKER=".ma-migration-complete"
 EXECUTE=0
 MIRROR=0
 
@@ -209,6 +212,18 @@ for required in auth.db library.db; do
         missing+=("$required")
     fi
 done
+# The marker pathname is RESERVED (review: Codex, reproduced): a source that
+# already contains it gets copied and counted by the checksum loop, then our
+# marker write replaces the destination copy — "verified N/N" with differing
+# hashes, exit 0, and the stray marker then blocks the corrective rerun.
+if sudo test -e "$SRC/$MARKER"; then
+    log "FATAL: source contains the reserved marker name: $SRC/$MARKER"
+    log "It would be counted as verified and then overwritten by this script's"
+    log "own completion marker. Remove it from the source first:"
+    log "  sudo rm $(printf '%q' "$SRC/$MARKER")"
+    exit 1
+fi
+
 # No symlink anywhere in the source (review: Codex). `cp -a` preserves links,
 # the `-type f` checksum walk omits them, and the manifests compare pathnames
 # not targets — so a linked settings.json or playlist would ship unverified: an
@@ -314,7 +329,31 @@ fi
 # cannot decide direction, so a successful migration writes a persistent marker
 # into the destination, and its presence refuses ALL further copies — --mirror
 # included — until an operator deliberately removes it.)
-MARKER=".ma-migration-complete"
+# Compose interpolates ${ZOE_MA_DATA} from the PROJECT .env as well as the
+# process environment — and the script only reads the latter (review: Codex).
+# With ZOE_MA_DATA in the repo .env, this script would validate and copy to the
+# DEFAULT while a later ordinary `docker compose up` mounts the UNVALIDATED
+# .env value — including ./data/music-assistant, restoring the in-checkout
+# store past every containment check. The effective Compose value must agree
+# with what was validated here.
+ENV_FILE="$REPO_ROOT/.env"
+if [[ -f "$ENV_FILE" ]]; then
+    env_val="$(sed -n 's/^ZOE_MA_DATA=//p' "$ENV_FILE" | tail -1 | sed 's/^"\(.*\)"$/\1/')"
+    if [[ -n "$env_val" ]]; then
+        env_abs="$(sudo readlink -m -- "$env_val")"
+        if [[ "$env_abs" != "$DEST" ]]; then
+            log "FATAL: $ENV_FILE sets ZOE_MA_DATA=$env_val"
+            log "which resolves to: $env_abs"
+            log "but this run is validating/copying to: $DEST"
+            log "Compose auto-loads .env for interpolation, so an ordinary"
+            log "'docker compose up' would mount the UNVALIDATED .env value,"
+            log "bypassing every check here. Align them: either remove the"
+            log ".env entry or run with ZOE_MA_DATA=$env_abs (so it is validated)."
+            exit 1
+        fi
+    fi
+fi
+
 if sudo test -f "$DEST/$MARKER"; then
     log "FATAL: destination carries a completion marker — the migration already ran:"
     sudo cat "$DEST/$MARKER" 2>/dev/null | sed 's/^/ma-migrate:   /'
