@@ -1227,6 +1227,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_FLUE_WIRE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_FRUSTRATION_MAX_SESSIONS": {
         "defaults": [
           "'2000'"

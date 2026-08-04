@@ -171,6 +171,10 @@ credentials/
 !services/zoe-ui/dist/js/widgets/widget-manifest.json
 # generated flag inventory (tools/audit/flag_inventory.py) — no secrets, names+defaults only
 !docs/knowledge/flag-inventory.json
+# zoe-data test fixtures: golden recordings replayed by ci_safe tests. Contract
+# data only, no secrets. Without this, a new .json fixture is silently ignored
+# and CI fails on a file the author can see locally.
+!services/zoe-data/tests/fixtures/*.json
 !services/zoe-litellm/minimal_config.yaml
 # needle-benchmark lab: committed measurement artifacts (labs/needle-benchmark/README.md)
 !labs/needle-benchmark/zoe_tools.json
