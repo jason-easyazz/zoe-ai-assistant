@@ -3853,6 +3853,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/curate_voice_corpus.py",
           "services/zoe-data/voice_vad.py"
         ],
         "typed_env": false
@@ -4407,6 +4408,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/curate_voice_corpus.py",
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": false
