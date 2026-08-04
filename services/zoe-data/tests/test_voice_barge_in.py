@@ -414,27 +414,74 @@ def real_voice_vad(monkeypatch):
     yield _fresh_voice_vad(monkeypatch)
 
 
+# The sample corpus is a LIVE, GROWING, UNCURATED capture — every saved wake,
+# including false ones. Do NOT bind this test to one arbitrary member of it.
+# It used to assert on ``sorted(...)[0]``, i.e. "whichever recording sorts first
+# today". Filenames are HHMMSS_millis, so they sort by TIME OF DAY, not date,
+# and any later recording made earlier in the day silently becomes the subject.
+# That happened on 2026-07-19: a TV false-wake captured at 00:04:38
+# (000438_185.wav, RMS 603 but only 0.366 speech prob) displaced the previous
+# subject 000552_764.wav (0.862) and the test went red on a corpus change, with
+# the model, voice_vad.py and onnxruntime all untouched.
+#
+# The corpus is untrusted input, measured 2026-08-04 over all 1151 files:
+#   - 100 are unusable here — 24kHz resamples, and one file that is not RIFF;
+#   - of the 1051 usable, 89.4% score >0.5 (median 0.829) — so ~11% genuinely
+#     are not speech (false wakes, near-silence, background TV).
+# So the real contract is a corpus-level property, not a single-file one: the
+# model must detect speech in the LARGE MAJORITY of real recordings. That also
+# makes this a stronger regression lock — one sample proves nothing about the
+# model, while a broken model or preprocessing collapses the whole distribution.
+_SPEECH_SAMPLE_COUNT = 48        # evenly strided across the sorted corpus
+_SPEECH_MIN_USABLE = 20          # below this the corpus isn't a real signal
+_SPEECH_MIN_PASS_FRAC = 0.60     # measured 0.894 corpus-wide; 0.795 worst stride phase
+
+
 @_needs_model
-def test_silero_real_model_speech_sample_detected(real_voice_vad):
+def test_silero_real_model_detects_speech_across_corpus(real_voice_vad):
+    """The real model, driven through voice_vad's real streaming path, must
+    clear the 0.5 speech threshold on the large majority of real recordings."""
     import wave
 
-    wavs = sorted(
-        os.path.join(_SAMPLES_DIR, f)
-        for f in os.listdir(_SAMPLES_DIR)
-        if f.endswith(".wav")
-    ) if os.path.isdir(_SAMPLES_DIR) else []
+    names = sorted(f for f in os.listdir(_SAMPLES_DIR)) if os.path.isdir(_SAMPLES_DIR) else []
+    wavs = [os.path.join(_SAMPLES_DIR, f) for f in names if f.endswith(".wav")]
     if not wavs:
         pytest.skip("no voice samples available")
+    # Deterministic even stride — a stable, representative slice of the corpus
+    # rather than one end of it (recordings cluster by time of day).
+    step = max(1, len(wavs) // _SPEECH_SAMPLE_COUNT)
+    selected = wavs[::step][:_SPEECH_SAMPLE_COUNT]
 
-    vad = real_voice_vad.create_vad()
-    assert vad is not None
-    with wave.open(wavs[0], "rb") as w:
-        assert w.getframerate() == 16000 and w.getnchannels() == 1
-        raw = w.readframes(w.getnframes())
-    max_prob = 0.0
-    for i in range(0, len(raw), 640):  # feed as 20ms frames
-        max_prob = max(max_prob, vad.process(raw[i:i + 640]))
-    assert max_prob > 0.5, f"real speech should exceed the 0.5 threshold (got {max_prob:.3f})"
+    scores = []
+    for path in selected:
+        try:
+            with wave.open(path, "rb") as w:
+                # Skip, don't fail: off-format members are a known corpus fact,
+                # not a bug in the VAD under test.
+                if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (16000, 1, 2):
+                    continue
+                raw = w.readframes(w.getnframes())
+        except Exception:  # not a readable RIFF file — corpus hygiene, not our bug
+            continue
+        vad = real_voice_vad.create_vad()   # fresh recurrent state per recording
+        assert vad is not None
+        max_prob = 0.0
+        for i in range(0, len(raw), 640):   # feed as 20ms frames, streaming state
+            max_prob = max(max_prob, vad.process(raw[i:i + 640]))
+        scores.append((os.path.basename(path), max_prob))
+
+    if len(scores) < _SPEECH_MIN_USABLE:
+        pytest.skip(f"only {len(scores)} usable 16k mono samples — corpus too thin")
+
+    detected = [s for s in scores if s[1] > 0.5]
+    frac = len(detected) / len(scores)
+    worst = sorted(scores, key=lambda s: s[1])[:5]
+    assert frac >= _SPEECH_MIN_PASS_FRAC, (
+        f"real speech should clear the 0.5 threshold in at least "
+        f"{_SPEECH_MIN_PASS_FRAC:.0%} of samples (got {frac:.1%}, "
+        f"{len(detected)}/{len(scores)}); lowest: "
+        + ", ".join(f"{n}={p:.3f}" for n, p in worst)
+    )
 
 
 @_needs_model
