@@ -289,6 +289,85 @@ VOICE_PATH_PATTERNS = (
     "scripts/setup/systemd/functiongemma-router.service",
     "services/zoe-data/router_two_stage.py",
     "services/zoe-data/semantic_router.py",
+    # THE LIVEKIT / WebRTC INGEST LANE — and the ONLY entries in this tuple the
+    # replay corpus cannot exercise AT ALL. Read the evidence statement below
+    # before you read a green gate on one of these as verification.
+    #
+    # Why they are voice-path, verified live rather than assumed:
+    #   - ZOE_LK_USE_AIORTC=1 is set in the live zoe-data process env (and in
+    #     services/zoe-data/.env). The code default is 0, so this is a deliberate
+    #     override: livekit_aiortc.py is the SELECTED production WebRTC backend on
+    #     this box, not a fallback.
+    #   - routers/voice_livekit.py is registered UNCONDITIONALLY (main.py:2213-2219,
+    #     guarded only against import failure) and owns the whole WebRTC turn: the
+    #     energy VAD, Silero barge-in, Smart Turn endpointing, PCM->WAV assembly and
+    #     the STT/brain/TTS pipeline call.
+    #   - The lane is on-demand (ZOE_LIVEKIT_ONDEMAND=true): the container starts on
+    #     /api/voice/livekit-token — the panel's "Talk" button, touch/home.html:4152 —
+    #     and is reaped after 300s idle. Real session 2026-07-30 (docker inspect).
+    #   - services/livekit/config.yaml is that container's serving config (port 7880,
+    #     the 50000-50200 RTC range, keys), mounted read-only by docker-compose.yml:154.
+    #     Same class as llama-server.service / flue-zoe-brain.service / the
+    #     functiongemma-router unit, all gated above for the same reason.
+    # PR #1636 is the demonstration: ~25-33% of EVERY frame on this path was
+    # FFmpeg plane padding carrying stale PCM from earlier frames (silent input
+    # emitted near-full-scale audio), feeding garbage to the VAD and to Moonshine.
+    # It tripped no gate whatsoever, at PR time or at deploy.
+    #
+    # ===================== WHAT THE ARTIFACT DOES *NOT* PROVE ==================
+    # THE REPLAY CORPUS DOES NOT TRAVERSE THIS CODE. ~/.zoe-voice-samples is
+    # replayed through POST /api/voice/transcribe (the HTTP lane); the probe chain
+    # voice_regression_probe.py -> scripts/perf/measure_voice.py ->
+    # services/zoe-data/tests/replay_samples.py contains ZERO references to
+    # livekit/webrtc/aiortc, and the always-on Pi daemon never touches this lane
+    # either. So for a diff touching ONLY the files in this block, a fresh passing
+    # artifact certifies HTTP-corpus-path non-regression and the live service's
+    # import health — and says NOTHING about the code that changed.
+    #
+    # That is a WEAKER residual than the serving-unit entries above (where the
+    # probe at least drives the same brain the unit configures), and it is stated
+    # in full rather than papered over: a check nobody can trust is worse than no
+    # check, because a green one gets believed.
+    #
+    # WHAT ACTUALLY VERIFIES THESE FILES: their deterministic ci_safe suites, which
+    # run in `validate` — the REQUIRED, locally-runnable, blocking gate — not this
+    # advisory/deploy one. test_livekit_aiortc_tasks.py, test_livekit_failure_paths.py,
+    # test_livekit_stream_tts.py, test_voice_livekit_{fast_tier,health,lifecycle,
+    # ondemand}.py, and (in #1636) test_livekit_audio_frame_bytes.py, whose
+    # negative control is what actually caught the padding bug. When you change a
+    # file in this block, the test you add there is the verification; the replay
+    # run is the forcing function that makes you look.
+    #
+    # Why gate them anyway, rather than leave the hole: this tuple is a FORCING
+    # FUNCTION, not an isolation harness — the bargain already accepted for every
+    # serving unit here. Ungated, a change to the selected WebRTC backend reaches
+    # the box with nobody looking at all, which is how #1636's bug lived from
+    # 2026-05-18 to 2026-08-04. Gated, it cannot deploy without a human producing
+    # fresh head-bound evidence and reading this paragraph about what that evidence
+    # covers. The cost is measured, not guessed: livekit_aiortc.py has 3 commits
+    # EVER (last 2026-06-28) and routers/voice_livekit.py 15 (last 2026-07-21),
+    # against 111 for the already-gated routers/voice_tts.py — a handful of replay
+    # runs a year, on the same order as the router modules added in #1621 (2 and 5).
+    #
+    # THE REAL FIX IS A LIVEKIT-LANE PROBE, and it is DEFERRED because it is a
+    # project, not an omission. End-to-end it needs the LiveKit server container up
+    # (7880 + the UDP range), a synthetic WebRTC PUBLISHER pushing corpus WAVs as an
+    # Opus track, token minting, the agent loop attached, and the whole
+    # Moonshine+brain+Kokoro stack — a second ~2.3 GB load under
+    # flock /tmp/zoe-voice-harness.lock on a box where two Kokoro loads OOM. The
+    # SMALL piece of it (feed corpus WAVs straight into _AudioStream and assert the
+    # emitted PCM) needs no server, no GPU and no flock — which means its right home
+    # is a deterministic ci_safe unit test in `validate`, STRONGER than any
+    # advisory artifact, and NOT a probe stage. Follow-up is tracked as that.
+    #
+    # DELIBERATELY ABSENT: services/zoe-ui/dist/lib/livekit/livekit-client.umd.min.js.
+    # It is the vendored browser-side PUBLISHER — it runs in the panel's browser, not
+    # on the Jetson, so a deploy gate on the box governs nothing about it and no probe
+    # on the box could exercise a vendor bump. Also absent, same rule as everywhere
+    # else in this tuple: the co-located tests.
+    "services/zoe-data/livekit_aiortc.py",
+    "services/zoe-data/routers/voice_livekit.py",
+    "services/livekit/config.yaml",
 )
 DEFAULT_MAX_AGE_H = float(os.environ.get("ZOE_VOICE_GATE_MAX_AGE_H", "24"))
 
