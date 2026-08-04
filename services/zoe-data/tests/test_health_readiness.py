@@ -179,8 +179,6 @@ def test_tts_hybrid_requires_a_real_provider(monkeypatch):
 
     monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
     monkeypatch.setattr(main.httpx, "AsyncClient", FailingClient)
-    monkeypatch.setattr(voice_tts, "kokoro_ready", lambda: False)
-    monkeypatch.setattr(voice_tts, "kokoro_configured", lambda: False)
     monkeypatch.setattr(voice_tts, "_has_espeak_ng", lambda: False)
     monkeypatch.setattr(voice_tts, "edge_tts_available", lambda: False)
 
@@ -209,8 +207,6 @@ def test_tts_hybrid_edge_package_counts_ready(monkeypatch):
 
     monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
     monkeypatch.setattr(main.httpx, "AsyncClient", FailingClient)
-    monkeypatch.setattr(voice_tts, "kokoro_ready", lambda: False)
-    monkeypatch.setattr(voice_tts, "kokoro_configured", lambda: False)
     monkeypatch.setattr(voice_tts, "_has_espeak_ng", lambda: False)
     monkeypatch.setattr(voice_tts, "edge_tts_available", lambda: True)
 
@@ -220,7 +216,10 @@ def test_tts_hybrid_edge_package_counts_ready(monkeypatch):
     assert report["provider"] == "edge-tts"
 
 
-def test_tts_local_kokoro_config_counts_ready_before_load(monkeypatch):
+def test_tts_sidecar_down_falls_to_espeak(monkeypatch):
+    """With the sidecar unreachable, hybrid readiness must fall to the next real
+    provider (espeak). The in-process ONNX readiness path was retired — TTS is the
+    out-of-process PyTorch sidecar, so there is no local_onnx_* provider anymore."""
     import main
     from routers import voice_tts
 
@@ -239,15 +238,14 @@ def test_tts_local_kokoro_config_counts_ready_before_load(monkeypatch):
 
     monkeypatch.setenv("ZOE_TTS_MODE", "hybrid")
     monkeypatch.setattr(main.httpx, "AsyncClient", FailingClient)
-    monkeypatch.setattr(voice_tts, "kokoro_ready", lambda: False)
-    monkeypatch.setattr(voice_tts, "kokoro_configured", lambda: True)
+    monkeypatch.setattr(voice_tts, "_has_espeak_ng", lambda: True)
 
     report = asyncio.run(main._check_tts_ready())
 
     assert report["ok"] is True
-    assert report["provider"] == "kokoro-onnx"
-    assert report["local_onnx_loaded"] is False
-    assert report["local_onnx_configured"] is True
+    assert report["provider"] == "espeak-ng"
+    assert "local_onnx_loaded" not in report
+    assert "local_onnx_configured" not in report
 
 
 def test_stt_ready_does_not_race_moonshine_warmup(monkeypatch):

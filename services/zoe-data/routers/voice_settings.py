@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import voice_settings
 from auth import get_current_user, require_signed_in
-from tts_waterfall import _synthesize_kokoro, _synthesize_kokoro_sidecar
+from tts_waterfall import _synthesize_kokoro_sidecar
 
 router = APIRouter(prefix="/api/voice", tags=["voice-settings"])
 
@@ -88,8 +88,6 @@ async def preview_voice(payload: dict, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail=f"unknown voice {requested!r}")
 
     audio = await _synthesize_kokoro_sidecar(PREVIEW_TEXT, voice=voice)
-    if audio is None:
-        audio = await _synthesize_kokoro(PREVIEW_TEXT, voice=voice)
     if audio is None:
         raise HTTPException(status_code=503, detail="Kokoro is not available for preview")
     return {
