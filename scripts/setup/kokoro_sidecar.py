@@ -3,8 +3,9 @@
 Kokoro TTS sidecar — FastAPI server on port 10201.
 
 Keeps the Kokoro PyTorch model warm in GPU memory and exposes a simple
-HTTP endpoint that voice_tts.py calls instead of kokoro-onnx on CPU.
-This gives the natural af_sky voice at GPU speed (~150-400ms warm).
+HTTP endpoint that voice_tts.py calls over the network (zoe-data holds no
+in-process TTS model). This gives the natural af_sky voice at GPU speed
+(~150-400ms warm).
 
 Usage:
     python3 kokoro_sidecar.py
@@ -61,17 +62,10 @@ _PORT = int(os.environ.get("KOKORO_SIDECAR_PORT", "10201"))
 _VOICE = os.environ.get("KOKORO_VOICE", "af_sky").strip() or "af_sky"
 _SAMPLE_RATE = 24000  # Kokoro outputs 24 kHz
 
-# Backend: "onnx" (kokoro-onnx on CPU, ~600MB, frees the ~2.3GB GPU the PyTorch
-# build held — SAME af_sky weights, identical voice) or "pytorch" (KPipeline on
-# CUDA, ~2.3GB, ~150ms). ONNX is the default; set ZOE_KOKORO_BACKEND=pytorch to
-# fall back instantly with no other change.
-_BACKEND = (os.environ.get("ZOE_KOKORO_BACKEND") or "onnx").strip().lower()
-# True when the backend was NOT explicitly chosen (env unset) — i.e. we fell through
-# to the onnx/CPU default. Drives the loud footgun warning in _load_pipeline; kept a
-# module-level flag so the check is consistent and patchable in tests.
-_BACKEND_IS_DEFAULT = not (os.environ.get("ZOE_KOKORO_BACKEND") or "").strip()
-_ONNX_MODEL = os.environ.get("ZOE_KOKORO_MODEL", "/home/zoe/models/kokoro-v1.0.onnx")
-_ONNX_VOICES = os.environ.get("ZOE_KOKORO_VOICES", "/home/zoe/models/voices-v1.0.bin")
+# Backend: KPipeline on CUDA (~2.3GB, ~150ms), falling back to CPU on its own if
+# CUDA cannot load. PyTorch is the sole backend — the in-process ONNX/CPU path was
+# retired (it synthesized slower than real time and needed a separately-provisioned
+# model that no host actually installed).
 
 # ─── Global state ─────────────────────────────────────────────────────────────
 
@@ -494,30 +488,7 @@ def _load_pipeline():
     """Load and return the Kokoro pipeline (blocking; run once in thread pool)."""
     global _device
 
-    if _BACKEND == "onnx":
-        from kokoro_onnx import Kokoro  # type: ignore
-        logger.info("Loading Kokoro ONNX (model=%s voices=%s voice=%s)…",
-                    _ONNX_MODEL, _ONNX_VOICES, _VOICE)
-        pipeline = Kokoro(_ONNX_MODEL, _ONNX_VOICES)
-        _device = "cpu (onnx)"
-        logger.info("Kokoro ONNX pipeline ready (CPU) — same af_sky weights, ~600MB, no GPU.")
-        # Loud footgun guard: onnx/CPU is the default, but CPU synthesis is SLOWER
-        # THAN REAL TIME (RTF ~1.0–1.8x), so the sentence-streamed voice pipe starves
-        # and replies play back in pieces. Production runs ZOE_KOKORO_BACKEND=pytorch
-        # (CUDA, ~150ms, RTF ~0.08) via the kokoro-tts.service override; anyone running
-        # this script directly (fresh install, debugging, worktree test) gets the slow
-        # path with no other signal — so say it loudly. See docs/knowledge/voice-pipeline.md.
-        if _BACKEND_IS_DEFAULT:
-            logger.warning(
-                "⚠ Kokoro is on the ONNX/CPU backend by DEFAULT — synthesis is slower "
-                "than real time (RTF ~1.0–1.8x) and streamed replies will play in pieces. "
-                "Production sets ZOE_KOKORO_BACKEND=pytorch (CUDA, ~150ms) via the "
-                "kokoro-tts.service unit. Set ZOE_KOKORO_BACKEND=pytorch for real-time TTS "
-                "(needs the CUDA torch build + ~2.3GB GPU). See docs/knowledge/voice-pipeline.md."
-            )
-        return pipeline
-
-    # ── PyTorch / CUDA (ZOE_KOKORO_BACKEND=pytorch) ───────────────────────────
+    # ── PyTorch / CUDA (the sole backend) ─────────────────────────────────────
     global _degraded_reason
     import torch
     from kokoro import KPipeline  # type: ignore
@@ -736,32 +707,10 @@ def _pcm_to_wav(audio_tensor, sample_rate: int = _SAMPLE_RATE) -> bytes:
     return buf.getvalue()
 
 
-def _samples_to_wav(samples, sample_rate: int = _SAMPLE_RATE) -> bytes:
-    """Convert kokoro-onnx float32 PCM samples (numpy array) to WAV bytes."""
-    import numpy as np
-    arr = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
-    pcm_bytes = (arr * 32767.0).astype("<i2").tobytes()
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm_bytes)
-    return buf.getvalue()
-
-
 _MAX_OOM_RETRIES = 2  # 2 retries × 500ms sleep = max ~1.5s extra; HTTP conn stays open
 
 
 def _blocking_synthesize(text: str, voice: str, speed: float) -> bytes:
-    if _BACKEND == "onnx":
-        # kokoro-onnx: same af_sky weights, CPU, returns (float32 samples, sample_rate)
-        samples, sr = _pipeline.create(text, voice=voice, speed=speed, lang="en-us")
-        return _samples_to_wav(samples, sr)
-    return _blocking_synthesize_pytorch(text, voice, speed)
-
-
-def _blocking_synthesize_pytorch(text: str, voice: str, speed: float) -> bytes:
     """Run Kokoro inference synchronously (called inside run_in_executor).
 
     Calls torch.cuda.empty_cache() before every attempt to release any
@@ -875,13 +824,6 @@ async def synthesize(req: SynthRequest):
 _STREAM_MEDIA_TYPE = "audio/L16; rate=24000; channels=1"
 
 
-def _float32_to_pcm16_le(samples) -> bytes:
-    """Convert a float32 numpy array of PCM samples to signed 16-bit LE bytes."""
-    import numpy as np
-    arr = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
-    return (arr * 32767.0).astype("<i2").tobytes()
-
-
 def _wav_to_pcm16_le(wav_bytes: bytes) -> bytes:
     """Strip the WAV container, returning raw S16_LE mono 24kHz PCM frames."""
     with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
@@ -898,7 +840,7 @@ async def synthesize_stream(req: SynthRequest):
     only for the duration of the model inference, feeding an unbounded queue; the
     response yields from the queue WITHOUT the lock. So a slow-reading client can
     never keep the pipeline locked — only the inference itself serialises against
-    other /synthesize calls (the kokoro_onnx pipeline is not concurrency-safe).
+    other /synthesize calls (the Kokoro pipeline is not concurrency-safe).
     """
     text = (req.text or "").strip()
     if not text:
@@ -914,19 +856,7 @@ async def synthesize_stream(req: SynthRequest):
 
         async def _produce():
             try:
-                if _BACKEND == "onnx":
-                    produced = False
-                    async with _pipeline_lock:
-                        async for samples, _sr in _pipeline.create_stream(
-                            text, voice=voice, speed=speed, lang="en-us"
-                        ):
-                            if samples is not None and len(samples):
-                                produced = True
-                                queue.put_nowait(_float32_to_pcm16_le(samples))
-                    if not produced:
-                        queue.put_nowait(RuntimeError("Kokoro stream produced no audio"))
-                else:
-                    queue.put_nowait(_wav_to_pcm16_le(await _run_synthesis(text, voice, speed)))
+                queue.put_nowait(_wav_to_pcm16_le(await _run_synthesis(text, voice, speed)))
             except Exception as exc:  # logged here, surfaced to the client generator below
                 logger.warning("Kokoro stream synthesis failed voice=%s: %s", voice, exc)
                 queue.put_nowait(exc)

@@ -77,6 +77,12 @@ VOICE_PATH_PATTERNS = (
     # PR was itself such a deploy.
     "services/zoe-data/voice_delivery.py",
     "services/zoe-data/tts_waterfall.py",
+    # zoe-data's dependency manifest pins the STT/TTS/router stack (moonshine-voice,
+    # edge-tts, fastembed, numpy) the voice path loads. A dep bump — even a pin change
+    # with no code diff — can change what the voice path RUNS, so gate the manifest too.
+    # (Retiring the in-process ONNX TTS dep from it should have been replay-gated by
+    # the manifest itself, not only by the *kokoro* code globs.)
+    "services/zoe-data/requirements.txt",
     "*kokoro*",
     "*moonshine*",
     # THE LIVE ROUTER'S MODEL ARTIFACTS — the stage-1 checkpoint of the two-stage

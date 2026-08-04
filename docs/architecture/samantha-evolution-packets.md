@@ -84,11 +84,13 @@ buildplan's open question (its §6/§7) — everything else trusts this.
   `services/zoe-data/routers/voice_livekit.py` (search `from routers.voice_tts import
   synthesize as _synth`, ~:533 and ~:592), then sends ONE data message containing
   `audio_base64` + `content_type` via `_send_data(local_participant, payload)` (:465).
-- The per-sentence machinery already exists and is importable:
-  `tts_waterfall._stream_kokoro_sentence_wavs` (re-exported by `routers/voice_tts.py`,
-  import block ~:32) — working usage example at `routers/voice_tts.py:3457` (the WS
-  lane); sentence splitting: `_split_sentences` / `_extract_complete_sentences`
-  (`voice_tts.py` ~:523/:537).
+- Per-sentence streaming is served by the Kokoro sidecar's `/synthesize_stream`
+  endpoint (`scripts/setup/kokoro_sidecar.py`), which streams S16_LE PCM as it
+  synthesises; the WS lane's `_emit_sentence` (`routers/voice_tts.py`) drives it
+  per sentence via `_synthesize_kokoro_sidecar`. (The old in-process
+  `_stream_kokoro_sentence_wavs` helper was retired with the in-process ONNX
+  fallback — zoe-data no longer synthesises locally.) Sentence splitting:
+  `_split_sentences` / `_extract_complete_sentences` (`voice_tts.py`).
 
 **Change:**
 1. In both `_synth` sites: when the flag is ON, split the reply with `_split_sentences`
