@@ -170,6 +170,24 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
   their id and refused (never reach the brain as a real user). Ships the opt-in unit
   template above. Hand-started, demo-only; README is a record, not a contract.
+- `flue-zoe-telegram-2x/` — the **PARALLEL Flue 2.0.1 port** of
+  `flue-zoe-telegram/`, which stays on `@flue/*@1.0.0-beta.6` and remains the
+  deployed `flue-zoe-telegram.service` on `:3582`. **Nothing here is wired to a
+  unit, a port, or CI**, and the sibling directory is the whole point: `deploy.yml`
+  rebuilds + restarts that unit on any diff under `labs/flue-zoe-telegram/`, so an
+  in-place bump would deploy itself into a runtime whose store the live process
+  cannot read (2.x persists schema **v8** against the beta's **v5**, reset-only, and
+  the rejection happens before any application code runs — in BOTH directions).
+  Verify before committing with `git diff origin/main -- labs/flue-zoe-telegram/`:
+  it must print nothing. A `-2x` sibling does not match that pathspec (git treats
+  the trailing slash as an exact directory component), which is what makes the
+  pattern safe. Cutover is a deliberate operator step; runbook + rollback in its
+  README. Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
+  API and a mock zoe-data on loopback, so no bot token, no real sends, and no
+  metered model call) plus `npm run typecheck`, `npm run build`, and
+  `./smoke-built.sh` (the only check that exercises the built artifact, because
+  `start()` bypasses the `'use agent'` build scan the suite relies on).
+  README is a record, not a contract.
 - `functiongemma-finetune/` — fine-tune FunctionGemma-270M as the complete-call
   fast-tier router (follow-up to the feasibility spike, PR #1283): committed
   training set (2,950 examples; templates + setfit-seed chat negatives + brain
