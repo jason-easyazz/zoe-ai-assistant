@@ -124,7 +124,12 @@ by construction:
 >   the window it replays, so that message is both seeded and processed live. The
 >   seed rolls the clock back one turn when the block ends on a user turn
 >   (`currentTurnIsReplayed`) — otherwise every seeded domain decayed a turn early
->   and a continuation lost its tool while its own request was still visible.
+>   and a continuation lost its tool while its own request was still visible. That
+>   the current turn is at the TAIL is guaranteed by the PER-SESSION LOCK, not by the
+>   ordering alone: a concurrent turn on the same session writes its rows between the
+>   persist and the load. Every history-bearing caller therefore enters through
+>   `locked_chat_stream` (zoe-data `routers/chat.py`) — the chat route and the A2A
+>   stream endpoint both do.
 
 Two orderings here were **measured**, against
 `test_zoe_core_client.py::test_tool_action_dispatches` (15 runs each, 14/15

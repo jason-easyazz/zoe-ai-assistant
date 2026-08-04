@@ -1104,6 +1104,46 @@ test("a window that does NOT end on a user turn is credited exactly as before", 
   assert.equal(state.turn, 2);
 });
 
+test("the interleaved shape a concurrent turn would produce is what the session lock excludes", async () => {
+  // The roll-back is positional, so it can only see the tail. A SECOND turn running
+  // on the same session slips its rows between this turn's persist (chat.py:1617)
+  // and its load (chat.py:2303): persist(this) → persist(other) → the other replies
+  // and persists its assistant row → this turn loads a window whose last entry is
+  // that ASSISTANT row, with its own user row no longer at the tail.
+  //
+  // Nothing in the seam can distinguish that from a legitimate history ending on a
+  // reply, so the roll-back correctly does not fire and the turn IS counted twice —
+  // the early-decay bug, on that path. What prevents the shape is the per-session
+  // lock: every history-bearing caller enters through `locked_chat_stream`
+  // (routers/chat.py), which spans persist→load→persist-assistant. This test pins
+  // the consequence of losing it.
+  const window = windowEndingOnCurrentTurn("yes, do that", "what's on my calendar tomorrow");
+
+  // Serialised (locked): this turn's own row is the tail. Counted once.
+  const locked = createDisclosureState();
+  seedDisclosureState(ABILITIES as never, composedWithHistory("yes, do that", window), locked);
+  assert.equal(locked.turn, 5, "the serialised window lost its shape");
+  assert.deepEqual(
+    nextActiveTools(ABILITIES as never, "yes, do that", locked, 6),
+    ["calendar"],
+    "the serialised turn should keep the tool its own request armed",
+  );
+
+  // Interleaved (unlocked): a concurrent turn's assistant row landed after it.
+  const raced = createDisclosureState();
+  const racedWindow: readonly (readonly [string, string])[] = [
+    ...window,
+    ["assistant", "here you go."] as const,
+  ];
+  seedDisclosureState(ABILITIES as never, composedWithHistory("yes, do that", racedWindow), raced);
+  assert.equal(raced.turn, 6, "the roll-back cannot see past an interleaved row — and must not try");
+  assert.deepEqual(
+    nextActiveTools(ABILITIES as never, "yes, do that", raced, 6),
+    [],
+    "the interleaved window no longer demonstrates the mis-count",
+  );
+});
+
 // ── (6b) content cannot forge a turn boundary ────────────────────────────────
 //
 // The replayed block is `role: text` per line and the ROLE is composition-owned —

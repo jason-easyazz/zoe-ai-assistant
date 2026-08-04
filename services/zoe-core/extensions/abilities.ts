@@ -288,6 +288,16 @@ export function createDisclosureState(): DisclosureState {
  * marker. Truncation cannot break that: `LIMIT 12` over a DESC sort drops the
  * OLDEST rows, never the newest.
  *
+ * "ALWAYS" is guaranteed by the PER-SESSION LOCK, not by the ordering alone. The
+ * persist and the load sit inside one generator, and a concurrent turn on the same
+ * session would slot its own rows between them: persist(A) → persist(B) → A replies
+ * and persists its assistant row → load(B) leaves B's window ending on an ASSISTANT
+ * row, so the roll-back below does not fire and B's turn is counted twice. Every
+ * caller therefore enters through `locked_chat_stream`
+ * (routers/chat.py) — the /api/chat/ route and the A2A stream endpoint
+ * (routers/system.py, whose `session_id` is caller-supplied) both do. Adding a
+ * caller that reaches `chat_stream_generator` directly reopens this.
+ *
  * The test is POSITIONAL, not textual, and deliberately so. Between the persist
  * and the brain call, chat.py strips an approval token (chat.py:1655) and may
  * expand or wholly REPLACE the utterance via `openclaw_user_message` plus an
