@@ -236,6 +236,12 @@ jobs:
           # a manifest the box cannot install.
           python-version: '3.10'
 
+      # `packaging` is vendored INSIDE pip, not importable as a top-level module on
+      # a bare runner — the assertion script below needs it as a real import. A dev
+      # box usually has it already, which is exactly why this has to be explicit.
+      - name: Install the guard's own dependency
+        run: python3 -m pip install --quiet packaging
+
       - name: Resolve every requirements manifest
         run: |
           set -euo pipefail
