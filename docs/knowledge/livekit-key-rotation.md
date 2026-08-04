@@ -1,0 +1,221 @@
+---
+type: Reference
+title: LiveKit API key pair — where it lives, how to rotate it, and the 2026-08-04 plaintext exposure
+description: The LiveKit key/secret was committed in plaintext in services/livekit/config.yaml on a PUBLIC repo for 86 days. This is the runbook for the mechanism (LIVEKIT_KEYS env, verified against the pinned v1.9.3 image), the rotation procedure, the verification steps, and the history-scrub decision analysis.
+tags: [secrets, livekit, voice, rotation, security, incident]
+timestamp: 2026-08-04T00:00:00Z
+---
+
+# LiveKit API key pair — topology, rotation, exposure
+
+## Where the credential lives (after 2026-08-04)
+
+| location | tracked? | role |
+|---|---|---|
+| `/home/zoe/assistant/.env` — `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | **no** (gitignored) | authoritative. Compose interpolates it into `LIVEKIT_KEYS` for the container. |
+| `/home/zoe/assistant/services/zoe-data/.env` — same two names | **no** (gitignored) | read by the zoe-data process (`voice_livekit.py`, `voice_tts.py`, `skybridge.py`) to mint room tokens. Must hold the **same** pair. |
+| `services/livekit/config.yaml` | yes | rtc/ports/logging **only**. Carries no credential and must never carry one again — pinned by `tests/unit/test_livekit_config_no_secrets.py`. |
+
+`LIVEKIT_URL` is not a secret and does not change on rotation.
+
+## The mechanism, verified — not assumed
+
+Against the image the box actually runs (`livekit/livekit-server:latest` →
+**v1.9.3**, digest `sha256:75484e31…`):
+
+```
+--key-file string   path to file that contains API keys/secrets
+--keys string       api keys (key: secret\n) [$LIVEKIT_KEYS]
+```
+
+Precedence, from `pkg/config/config.go` `NewConfig()`: **defaults → YAML config
+file → CLI/env**. `updateFromCLI` runs *after* the config file is decoded and
+calls `unmarshalKeys`, which **replaces** `conf.Keys` wholesale. So `LIVEKIT_KEYS`
+overrides anything in `config.yaml` rather than merging with it.
+
+Confirmed empirically on v1.9.3, both directions:
+
+- keyless `config.yaml` + `LIVEKIT_KEYS` → server starts, `GET :7880/` returns
+  `OK` (`starting LiveKit server … "version": "1.9.3"`).
+- **negative control** — same keyless config, no env → hard fail:
+  `one of key-file or keys must be provided`. The config **cannot** silently
+  fall back to an embedded credential; a missing env is a loud failure.
+
+Format is exact: `<key>: <secret>`, **including the space** — the server
+yaml-unmarshals that string. In `docker-compose.yml` the entry must be
+**quoted**: unquoted, `- LIVEKIT_KEYS=a: b` parses as a YAML *mapping*, not the
+env string you meant.
+
+`key_file` was rejected as the mechanism: it needs a second on-disk file with
+`others` permission bits at 0 (`ErrKeyFileIncorrectPermission`), which is more
+moving parts than the `.env` this repo already treats as authoritative.
+
+## Generating a new pair
+
+```bash
+docker run --rm --entrypoint /livekit-server \
+  livekit/livekit-server:latest generate-keys
+```
+
+Prints `API Key:` (an `API`-prefixed id) and `API Secret:` (43 chars, base64url).
+A custom key id is legal — the retired pair used a `zoe-` prefix — but the
+generated one is fine and is what the upstream docs assume.
+
+## Rotation procedure (operator)
+
+Run on the box, in `/home/zoe/assistant`. **Never** paste either value into a
+chat, a commit, a log, or an agent transcript.
+
+1. Generate a pair (above). Keep the terminal scrollback private.
+2. Update **both** env files, keeping them identical:
+   - `/home/zoe/assistant/.env`
+   - `/home/zoe/assistant/services/zoe-data/.env`
+
+   Edit `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` in each. Verify they match
+   without printing them:
+   ```bash
+   for f in .env services/zoe-data/.env; do
+     printf '%s %s\n' "$f" \
+       "$(grep -m1 '^LIVEKIT_API_SECRET=' "$f" | cut -d= -f2- | sha256sum | cut -c1-12)"
+   done
+   ```
+   The two hashes must be equal.
+3. Recreate the LiveKit container so it picks up the new `LIVEKIT_KEYS`:
+   ```bash
+   docker compose up -d --force-recreate livekit
+   ```
+   (`restart` alone re-uses the old environment — the container's env is fixed at
+   create time. `--force-recreate` is required.)
+4. Restart zoe-data so the token minter reloads its env:
+   ```bash
+   systemctl --user restart zoe-data
+   ```
+5. Verify (below), then confirm the old pair is dead everywhere:
+   ```bash
+   grep -rl "$OLD_KEY_ID" /home/zoe/assistant/.env /home/zoe/assistant/services/zoe-data/.env
+   ```
+   should return nothing.
+
+`ZOE_LIVEKIT_ONDEMAND=true`, so the container is idle-reaped and started on
+demand — recreating it is low-risk and there is normally no live session to drop.
+
+## Verification
+
+**API level — headless, end-to-end, and it really does prove signature
+acceptance.** Run these in order. The expected results below were captured
+against the OLD pair on 2026-08-04, so this is a baseline to reproduce, not a
+guess.
+
+```bash
+# 1. baseline: agent not yet connected
+curl -sS localhost:8000/api/voice/livekit-health | python3 -c \
+  'import sys,json;d=json.load(sys.stdin);print({k:d.get(k) for k in ("status","connected","last_error")})'
+#    => {'status': 'stopped', 'connected': False, 'last_error': None}
+
+# 2. mint a join token. GET, not POST. This ALSO starts the on-demand container.
+curl -sS localhost:8000/api/voice/livekit-token | python3 -c \
+  'import sys,json;d=json.load(sys.stdin);t=d.get("token","");print("token:",bool(t),"segments:",t.count(".")+1,"len:",len(t))'
+#    => token: True  segments: 3  len: ~357        (never print the token itself)
+
+# 3. the container came up
+docker ps --filter name=livekit --format '{{.Names}} {{.Status}}'
+#    => livekit  Up N seconds
+
+# 4. THE REAL CHECK — wait ~3s, then re-read health
+curl -sS localhost:8000/api/voice/livekit-health | python3 -c \
+  'import sys,json;d=json.load(sys.stdin);print({k:d.get(k) for k in ("status","connected","last_error")})'
+#    => {'status': 'connected', 'connected': True, 'last_error': None}
+```
+
+Step 2 only proves zoe-data can *sign* — it would pass even if the two `.env`
+files drifted apart. **Step 4 is the proof that matters**: `connected: True`
+means the agent's `_mint_agent_token()` JWT was presented to the LiveKit server
+and the server **validated the HS256 signature against its own copy of the
+secret**. That is exactly the zoe-data-`.env` ↔ container-`LIVEKIT_KEYS` match
+the rotation has to preserve. A mismatch leaves `connected: False` with an auth
+error in `last_error` / `docker logs livekit`.
+
+Note: `/api/voice/livekit-token` answers **200 without credentials** (its
+`get_current_user` dependency falls back to a guest identity), so this probe
+needs no auth — convenient here, but see "Out of scope" below.
+
+**Operator check (the real one):** press **Talk** on the panel and confirm a
+session establishes and Zoe responds. The replay corpus does **not** traverse the
+LiveKit lane (see [voice-pipeline.md](voice-pipeline.md)), so no automated gate
+covers browser→WebRTC→brain→TTS end to end — a human session is the only
+evidence for that.
+
+## Out of scope, noticed while verifying
+
+`GET /api/voice/livekit-token` returns **HTTP 200 and a valid join token to an
+unauthenticated caller** on the LAN. Rotating the key does not change that:
+anyone who can reach `:8000` can mint a room token regardless of which pair is
+installed. Worth a separate look; not addressed by this change.
+
+**Operator check (the real one):** press **Talk** on the panel and confirm a
+session establishes and Zoe responds. The replay corpus does **not** traverse the
+LiveKit lane (see [voice-pipeline.md](voice-pipeline.md)), so no automated gate
+covers this end to end — a human session is the only real evidence.
+
+## The 2026-08-04 exposure — facts
+
+- The key id + base64 secret were committed in plaintext to
+  `services/livekit/config.yaml` in **`363abde9`** ("Strategic overhaul: 7 batches
+  of fixes and features"), **2026-05-10**.
+- `363abde9` is an **ancestor of `origin/main`** — the credential is in the
+  permanent history of the default branch.
+- **The repository is PUBLIC** (`jason-easyazz/zoe-ai-assistant`, created
+  2025-08-07, 3 stars, **1 public fork** — `rohan-tessl/zoe-ai-assistant`, last
+  pushed 2026-04-06, i.e. *before* the leak, so the fork's own branches do not
+  contain it).
+- **1230 of 1234** local refs and 93 remote branches carry the value in their
+  trees — everything descending from `363abde9`.
+- **86 days** of public exposure before removal.
+- ggshield and GitHub secret scanning both missed it: LiveKit keys have no
+  vendor pattern to match. Absence of a scanner alert is not evidence of absence.
+
+## History scrub — analysis, decision is the operator's
+
+**Rotation is not optional and is not a judgement call.** A public repo means the
+value should be treated as compromised: assume it is in someone's clone, in
+GitHub's fork network, and in whatever LLM/code-search corpora scraped the repo
+over 86 days. Rotation is the only action that actually revokes it.
+
+**The case that rotation alone suffices:**
+
+- The credential only has value against a reachable LiveKit server. This one
+  binds `7880/tcp` and `50000-50200/udp` on a LAN box behind a Cloudflare tunnel
+  that does not expose LiveKit. An attacker needs LAN presence to use it at all.
+- Once rotated, the historical value authenticates nothing. Scrubbing history
+  removes a *dead* string.
+- A rewrite of 4,696 commits invalidates every clone, every open PR, and every
+  worktree on the box, and `main` is protected against force-push by design.
+  That is a large, disruptive, error-prone operation to delete a string that no
+  longer works.
+
+**The case for scrubbing anyway:**
+
+- Public + 86 days means the exposure is not hypothetical; leaving it advertises
+  a working-looking credential and invites probing of the LAN surface.
+- It is a durable, indexable example in a public repo that a future agent or
+  contributor may copy the *pattern* from.
+- GitHub's fork network keeps unreachable objects alive: even after a rewrite,
+  the blob stays fetchable by SHA via the fork unless GitHub Support is asked to
+  purge the network. A scrub that skips that step buys less than it appears to.
+
+**Recommendation: rotate now; do NOT rewrite history.** The cost is concrete and
+high (4,696 commits, protected branch, every clone and open PR broken), the
+benefit after rotation is cosmetic, and the fork network means the scrub is not
+even fully effective without a GitHub Support request. If the goal is "the
+secret is not in the public repo", the honest version of that is: rotate, then
+ask GitHub Support to purge the fork network's unreachable objects — and only
+then decide whether the rewrite is worth it. **The decision is Jason's.**
+
+Whichever way it goes, the recurrence guard is the same and is already in place:
+`tests/unit/test_livekit_config_no_secrets.py` fails the deterministic gate if a
+`keys:` block or any secret-shaped token returns to the tracked config.
+
+## Related
+
+- [voice-pipeline.md](voice-pipeline.md) — the LiveKit lane's evidence boundary.
+- [merge-and-deploy.md](merge-and-deploy.md) — why `secret-scan` is first-party.

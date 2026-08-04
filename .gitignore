@@ -34,8 +34,30 @@ data/wyoming/
 *.pfx
 *.crt
 *.cert
-*secret*
-*password*
+# Secrets/passwords/API keys by ARTIFACT shape, for the SAME reason the *token*
+# blanket below was narrowed on 2026-07-07: blanket `*secret*` silently dropped
+# tests/unit/test_livekit_config_no_secrets.py — the guard test written to stop
+# a credential returning to services/livekit/config.yaml — and `git add` only
+# warns, so the commit looked fine and the guard simply was not there. Source,
+# tests and docs with these words in the NAME are trackable; credential-shaped
+# files are not.
+*.secret
+*.secrets
+*secret*.json
+*secret*.yaml
+*secret*.yml
+*secret*.toml
+*secret*.txt
+*secret*.env
+*password*.json
+*password*.yaml
+*password*.yml
+*password*.toml
+*password*.txt
+*password*.env
+# NOTE: `*api_key*` below is still a blanket of the same kind and will drop a
+# legitimately-named source/test file if one is ever added. Left as-is
+# deliberately — nothing in the tree hits it today. Narrow it when it bites.
 # Token secrets by ARTIFACT shape, not blanket *token* — the blanket silently
 # dropped a legitimate test file (test_intent_dispatch_token_gate.py,
 # 2026-07-07) and had already needed a tokens.py exception. Source/tests/docs
