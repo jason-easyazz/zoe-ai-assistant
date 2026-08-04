@@ -11,15 +11,13 @@ services:
     container_name: zoe-music-assistant
     network_mode: host
     volumes:
-    # OUTSIDE the git checkout, deliberately. This was `./data/music-assistant`,
-    # whose auth.db/library.db (+WALs) were TRACKED — so MA's continuous writes
-    # left the live checkout permanently dirty with tracked changes and blocked
-    # every deploy, and auth.db's provider credentials sat in git history.
-    # Untracking them in place is NOT safe: `git rm --cached` records a deletion
-    # and deploy_live.sh runs `git reset --hard`, which would apply it to disk
-    # and wipe a running service's stores. Runtime data inside a directory that
-    # gets reset --hard is the defect; migrate with
-    # scripts/maintenance/migrate_music_assistant_data.sh BEFORE deploying this.
+    # OUTSIDE the git checkout, deliberately: runtime data inside a directory
+    # that deploy_live.sh `git reset --hard`s gets silently rolled back on every
+    # deploy (measured 2026-08: days of MA writes lost, recovered from deleted
+    # inodes). The 2026-08 two-step migration (#1606 step A, #1631 step B) is
+    # COMPLETE: fresh hosts just get this default — no migration step exists.
+    # Never point ZOE_MA_DATA back inside the repo; CI pins this
+    # (tests/unit/test_no_live_databases_tracked.py).
     - ${ZOE_MA_DATA:-/home/zoe/.zoe/music-assistant}:/data
     restart: unless-stopped
     healthcheck:

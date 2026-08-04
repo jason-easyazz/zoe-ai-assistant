@@ -336,8 +336,9 @@ data/router_selftrain/
 # the blessed deploy. None are load-bearing; all are regenerated at run time.
 # ChromaDB vector store (memory embeddings)
 data/chroma/
-# Music Assistant runtime state (auth.db/library.db are already tracked; these
-# are the runtime sidecars/backups/generated playlists that must never be)
+# Music Assistant runtime state — fully untracked since #1631; MA's live store
+# is ~/.zoe/music-assistant (outside the checkout), and nothing under
+# data/music-assistant/ may ever be tracked again.
 # LIVE SQLite stores, by GENERIC sidecar suffix rather than only the `.db`
 # variants (review: Codex, PR #1604). SQLite also creates `-journal` in rollback
 # mode, and a `runtime.sqlite` yields `runtime.sqlite-wal` / `-shm` — none of
