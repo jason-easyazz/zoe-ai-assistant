@@ -984,6 +984,64 @@ def test_a_producer_supplied_recall_label_is_adopted_not_escaped():
     )
 
 
+def test_the_real_voice_producer_path_composes_one_clean_recall_header(monkeypatch):
+    """The same regression, driven through the ACTUAL producer instead of a fixture.
+
+    The test above hand-shapes the recall text, so it proves composition adopts *a*
+    leading label — not that it adopts the one the voice lane actually emits. This
+    runs the real chain a flue voice turn uses:
+
+        routers.voice_tts._voice_recall_packet
+            -> routers.voice_tts._merge_brain_context
+            -> zoe_core_client._compose_message
+
+    so a drift between `_voice_recall_packet`'s hard-coded header and the seam's
+    `_RECALL_LABEL` fails HERE, where the hand-shaped fixture would keep passing
+    while every live voice recall turn carried a doubled ZWSP-wedged header again.
+
+    Fully offline: `MemoryService.search` is faked (no embeddings, no DB) and the 2c
+    relational compose is flag-OFF, which returns before any DB read.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    import memory_service
+    import routers.voice_tts as v
+    import zoe_core_client as zc
+
+    monkeypatch.delenv("ZOE_MEMORY_COMPOSE_ENABLED", raising=False)
+
+    class _FakeSvc:
+        async def search(self, query, *, user_id, limit=10, timeout_s=2.0):
+            return [SimpleNamespace(text="My dad's name is Neil", id="m1", metadata={}, score=0.9)]
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _FakeSvc())
+    monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda user_id: False)
+
+    packet = asyncio.run(v._voice_recall_packet("who is my dad", "jason"))
+    assert packet is not None, "the producer returned nothing — the test would be vacuous"
+    assert packet.startswith(f"{zc._RECALL_LABEL}\n"), (
+        "the producer's header drifted from the seam's label"
+    )
+
+    # The voice lane merges the domain context in before composing.
+    merged = v._merge_brain_context(packet, "[Calendar]\n- dentist at 3")
+    composed = zc._compose_message(
+        "who is my dad",
+        history=None,
+        db_memory_context=merged,
+        portrait=None,
+        memory_packet="",
+    )
+
+    assert zc._MARKER_BREAK not in composed, "a zero-width space reached the prompt"
+    assert _delimiter_lines(composed, zc._RECALL_LABEL) == 1, "the label is doubled"
+    assert _delimiter_lines(composed, zc._RECALL_CLOSE) == 1
+    assert composed.startswith(f"{zc._RECALL_LABEL}\n- My dad's name is Neil")
+    assert "dentist at 3" in composed, "the merged domain context was dropped"
+    assert composed.rstrip().endswith("who is my dad")
+
+
 def test_a_recall_label_that_is_not_the_header_is_still_neutralized():
     """Only a LEADING whole-line match is adopted. Anything deeper is content, so
     adopting it would hand a forgery route to whatever produced the recall text."""

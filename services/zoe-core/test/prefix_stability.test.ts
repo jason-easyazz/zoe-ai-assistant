@@ -849,6 +849,144 @@ test("an unbalanced block over-elides to the end of the message rather than leak
   assert.ok(!stripped.includes("Rex"));
 });
 
+// ── (3c) EVERY open must be matched, or the span runs to EOF ─────────────────
+//
+// "An open line with no close after it elides to the END of the message" was the
+// stated contract, but the scan only ever recorded the FIRST open and then took
+// ANY later close as the end of the span — so a block that never closed could be
+// covered for by some OTHER block's close. Two under-elides fall out of that, and
+// both leak exactly what this mechanism exists to remove. `stripPreFixSpan` below
+// is that scan verbatim; every test here asserts it leaks the fact the shipped
+// strip removes, so none of them can pass vacuously.
+
+/** The pre-fix span scan, verbatim: first ANY open → last ANY close, unmatched. */
+function stripPreFixSpan(text: string): string {
+  const opens = new Set(CONTEXT_BLOCKS.map(([open]) => open));
+  const closes = new Set(CONTEXT_BLOCKS.map(([, close]) => close));
+  const lines = text.split("\n");
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trimEnd();
+    if (first === -1) {
+      if (opens.has(line)) first = i;
+    } else if (closes.has(line)) {
+      last = i;
+    }
+  }
+  if (first === -1) return text;
+  const head = lines.slice(0, first);
+  const tail = last === -1 ? [] : lines.slice(last + 1);
+  while (head.length && head[head.length - 1].trim() === "") head.pop();
+  while (tail.length && tail[0].trim() === "") tail.shift();
+  const healed = head.length && tail.length ? [...head, "", ...tail] : [...head, ...tail];
+  return healed.join("\n").trim();
+}
+
+test("a well-formed block does not close the span for an UNTERMINATED one after it", async () => {
+  // Leak mode (a): the portrait closes cleanly, so the span ended at ITS close and
+  // the unterminated recall block after it — stale recall, superseded — survived.
+  const malformed = [
+    PREAMBLE,
+    PORTRAIT,
+    `${RECALL_BLOCK_OPEN}\n- the dog is named Rex [mem:stale]`, // never closed
+    `${UTTERANCE_MARKER}\nmorning`,
+  ].join("\n\n");
+  const stripped = stripContextBlocks(malformed);
+  assert.equal(stripped, PREAMBLE);
+  assert.ok(!stripped.includes("Rex"), "an unterminated block survived the elision");
+  assert.ok(!stripped.includes(RECALL_BLOCK_OPEN), "a delimiter survived the strip");
+
+  // NEGATIVE CONTROL: the pre-fix scan stops at the portrait's close and leaks it.
+  const leaked = stripPreFixSpan(malformed);
+  assert.ok(leaked.includes("Rex [mem:stale]"), "the control is no longer controlling");
+  assert.ok(leaked.includes(RECALL_BLOCK_OPEN), "the control is no longer controlling");
+});
+
+test("a MISMATCHED close does not end the span for a still-open block", async () => {
+  // Leak mode (b): the portrait never closes, but a close belonging to a DIFFERENT
+  // block type terminated the span, and everything behind it stayed readable.
+  const malformed = [
+    PREAMBLE,
+    `${PORTRAIT_BLOCK_OPEN}\nJason, lives in Geraldton`, // never closed
+    RECALL_BLOCK_CLOSE, // a close for a block that was never opened
+    "- the dog is named Rex [mem:stale]",
+    `${UTTERANCE_MARKER}\nmorning`,
+  ].join("\n\n");
+  const stripped = stripContextBlocks(malformed);
+  assert.equal(stripped, PREAMBLE);
+  assert.ok(!stripped.includes("Rex"), "content behind a mismatched close leaked");
+
+  // NEGATIVE CONTROL: the pre-fix scan ends the span on the mismatched close.
+  const leaked = stripPreFixSpan(malformed);
+  assert.ok(leaked.includes("Rex [mem:stale]"), "the control is no longer controlling");
+});
+
+test("an injected close with every open balanced does not over-elide the message", async () => {
+  // The other side of the trade, and the reason a stray close alone does NOT force
+  // elision to EOF: with every open matched the structure is intact, so the text
+  // after the last close is the user's own words and must survive.
+  const text = [
+    PORTRAIT,
+    [
+      MEMORY_BLOCK_OPEN,
+      MEMORY_USAGE_DIRECTIVE,
+      "",
+      PORTRAIT_BLOCK_CLOSE, // injected: the portrait is already closed above
+      "- the dog is named Rex [mem:stale]",
+      MEMORY_BLOCK_CLOSE,
+    ].join("\n"),
+    `${UTTERANCE_MARKER}\nthanks`,
+  ].join("\n\n");
+  const stripped = stripContextBlocks(text);
+  assert.equal(stripped, `${UTTERANCE_MARKER}\nthanks`);
+  assert.ok(!stripped.includes("Rex"), "a superseded fact leaked");
+});
+
+test("on WELL-FORMED input the matched span is byte-identical to the pre-fix span", async () => {
+  // The fix is a change to malformed input only. Contiguous, duplicated, nested and
+  // interleaved well-formed blocks all elide exactly as they did before.
+  const contiguous = [
+    PREAMBLE,
+    PORTRAIT,
+    delimited(RECALL_BLOCK_OPEN, RECALL_BLOCK_CLOSE, "- the dog is named Pixel [mem:1]"),
+    delimited(MEMORY_BLOCK_OPEN, MEMORY_BLOCK_CLOSE, `${MEMORY_USAGE_DIRECTIVE}\n\n## What I know about you\n- a fact`),
+    delimited(HISTORY_MARKER, HISTORY_CLOSE, "user: add milk to my shopping list"),
+    `${UTTERANCE_MARKER}\nthanks`,
+  ].join("\n\n");
+  const duplicated = [PORTRAIT, PORTRAIT, `${UTTERANCE_MARKER}\nhi`].join("\n\n");
+  const nested = [
+    delimited(
+      MEMORY_BLOCK_OPEN,
+      MEMORY_BLOCK_CLOSE,
+      delimited(RECALL_BLOCK_OPEN, RECALL_BLOCK_CLOSE, "- a fact"),
+    ),
+    `${UTTERANCE_MARKER}\nhi`,
+  ].join("\n\n");
+  const interleaved = [
+    PORTRAIT_BLOCK_OPEN,
+    "Jason, lives in Geraldton",
+    RECALL_BLOCK_OPEN,
+    "- a fact",
+    PORTRAIT_BLOCK_CLOSE,
+    RECALL_BLOCK_CLOSE,
+    "",
+    `${UTTERANCE_MARKER}\nhi`,
+  ].join("\n");
+  for (const [name, text] of [
+    ["contiguous", contiguous],
+    ["duplicated", duplicated],
+    ["nested", nested],
+    ["interleaved", interleaved],
+  ] as const) {
+    assert.equal(stripContextBlocks(text), stripPreFixSpan(text), `${name} changed behaviour`);
+  }
+  assert.equal(stripContextBlocks(contiguous), `${PREAMBLE}\n\n${UTTERANCE_MARKER}\nthanks`);
+  assert.equal(stripContextBlocks(duplicated), `${UTTERANCE_MARKER}\nhi`);
+  assert.equal(stripContextBlocks(nested), `${UTTERANCE_MARKER}\nhi`);
+  assert.equal(stripContextBlocks(interleaved), `${UTTERANCE_MARKER}\nhi`);
+});
+
 test("an inline delimiter mention is not a block, and is left alone", async () => {
   const text = `${PREAMBLE}\n\nwe discussed the ${MEMORY_BLOCK_OPEN} marker\n\n${UTTERANCE_MARKER}\nwhat did I say`;
   // Identity, not just equality: an incidental mention must be a true no-op.

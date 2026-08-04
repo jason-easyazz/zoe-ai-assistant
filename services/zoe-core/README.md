@@ -97,7 +97,10 @@ by construction:
 > composed turn, so an N-turn session carried N overlapping copies of the running
 > conversation on top of the conversation Pi already retains. The strip is ONE
 > contiguous span over all four block types — per-pair passes let one block's
-> over-elide destroy another block's open delimiter and leak its content.
+> over-elide destroy another block's open delimiter and leak its content. The span
+> ends at the last close only when every open has been matched by a close of its
+> OWN type; anything still outstanding when the scan ends elides through the end of
+> the message instead.
 >
 > **Accepted cost:** eliding bytes already in the KV cache ends prefix reuse at the
 > previous turn's blocks, so about one exchange is re-prefilled per turn — bounded,

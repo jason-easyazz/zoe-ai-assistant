@@ -248,7 +248,7 @@ export function neutralizeMarkers(text: string): string {
 }
 
 const OPEN_MARKERS = new Set(CONTEXT_BLOCKS.map(([open]) => open));
-const CLOSE_MARKERS = new Set(CONTEXT_BLOCKS.map(([, close]) => close));
+const OPEN_BY_CLOSE = new Map(CONTEXT_BLOCKS.map(([open, close]) => [close, open]));
 
 /**
  * Every seam-composed context block removed, with the surrounding blank line healed.
@@ -262,7 +262,9 @@ const CLOSE_MARKERS = new Set(CONTEXT_BLOCKS.map(([, close]) => close));
  *     the text is returned untouched.
  *   * ONE CONTIGUOUS SPAN, from the first line that is ANY open delimiter to the
  *     last line that is ANY close delimiter — not one pass per pair.
- *   * An open line with NO close after it elides to the END of the message.
+ *   * Every open must be MATCHED by a later close OF ITS OWN TYPE. If any open is
+ *     still outstanding when the scan ends, the span runs to the END of the
+ *     message instead of stopping at some other block's close.
  *
  * WHY ONE SPAN AND NOT FOUR PASSES. Per-pair passes were tried and are UNSAFE, and
  * the negative control in test/prefix_stability.test.ts reproduces it: a memory
@@ -273,8 +275,31 @@ const CLOSE_MARKERS = new Set(CONTEXT_BLOCKS.map(([, close]) => close));
  * resolved contact offer) LEAKS. Over-eliding one block must never under-elide
  * another; a single span cannot destroy an anchor it has not already passed.
  *
- * Composition emits the blocks contiguously, so on well-formed input the span is
- * byte-identical to eliding each block separately.
+ * WHY THE SPAN END IS NOT SIMPLY "THE LAST CLOSE". Recording one open and then
+ * accepting ANY later close as the end of the span was a second under-elide, found
+ * by review rather than by the controls above, and it defeated the "unmatched open
+ * elides through EOF" rule stated one bullet up:
+ *
+ *   (a) a WELL-FORMED `[About you]` block followed by an UNTERMINATED
+ *       `[What you remember]` ended the span at the portrait's own close, and the
+ *       unterminated block — stale recall, the exact thing this removes — survived;
+ *   (b) an unterminated `[About you]` followed by a stray `[END What you remember]`
+ *       ended the span on a MISMATCHED close, leaking everything after it.
+ *
+ * Both are answered by counting, per block type, the opens still awaiting a close.
+ * A close only balances an open of ITS OWN type that is actually outstanding; a
+ * close with nothing outstanding is a stray (an injected line, or a delimiter that
+ * reached the conversation by a path that skipped the guard) and cannot be trusted
+ * to end the span on its own. If anything is still outstanding at the end of the
+ * scan, elide through EOF — the same safe direction the rest of this function takes.
+ *
+ * A stray close does NOT by itself force elision to EOF: with every open balanced,
+ * the structure is intact and the text after the last close is genuinely outside
+ * the blocks (the user's own words). Over-eliding is preferred to leaking, but only
+ * where something is actually unbalanced.
+ *
+ * Composition emits the blocks contiguously and balanced, so on well-formed input
+ * the span is byte-identical to eliding each block separately.
  *
  * The trade is the same one stated for the memory block alone: this only ever runs
  * on SUPERSEDED user messages, so over-eliding costs already-stale context while
@@ -286,21 +311,38 @@ const CLOSE_MARKERS = new Set(CONTEXT_BLOCKS.map(([, close]) => close));
  */
 export function stripContextBlocks(text: string): string {
   const lines = text.split("\n");
+  /** Per block type, how many opens are still waiting for a close of that type. */
+  const outstanding = new Map<string, number>();
   let first = -1;
   let last = -1;
   for (let i = 0; i < lines.length; i++) {
     // trimEnd only: composition never indents a delimiter, so a leading space
     // means the line is content, not ours.
     const line = lines[i].trimEnd();
-    if (first === -1) {
-      if (OPEN_MARKERS.has(line)) first = i;
-    } else if (CLOSE_MARKERS.has(line)) {
-      last = i;
+    if (OPEN_MARKERS.has(line)) {
+      if (first === -1) first = i;
+      outstanding.set(line, (outstanding.get(line) ?? 0) + 1);
+      continue;
     }
+    if (first === -1) continue; // a stray close ahead of every open — not our span
+    const open = OPEN_BY_CLOSE.get(line);
+    if (open === undefined) continue; // ordinary content
+    last = i;
+    const pending = outstanding.get(open) ?? 0;
+    // pending === 0 → a close for a block that is not open: it balances nothing.
+    if (pending > 0) outstanding.set(open, pending - 1);
   }
   if (first === -1) return text; // an inline mention or a stray close — nothing of ours
+  let unbalanced = false;
+  for (const pending of outstanding.values()) {
+    if (pending > 0) {
+      unbalanced = true;
+      break;
+    }
+  }
   const head = lines.slice(0, first);
-  const tail = last === -1 ? [] : lines.slice(last + 1); // unbalanced → elide to the end
+  // unbalanced (or no close at all) → elide to the end rather than leak
+  const tail = unbalanced || last === -1 ? [] : lines.slice(last + 1);
   while (head.length && head[head.length - 1].trim() === "") head.pop();
   while (tail.length && tail[0].trim() === "") tail.shift();
   const healed = head.length && tail.length ? [...head, "", ...tail] : [...head, ...tail];
