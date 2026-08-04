@@ -1,0 +1,508 @@
+#!/usr/bin/env python3
+"""Audit + quarantine the replay-gate voice corpus (``~/.zoe-voice-samples``).
+
+The corpus is the permanent replay-gate evidence base (root ``AGENTS.md``): every
+voice change is replayed against it, and the probe replays a *slice* of it
+(``replay_samples.py --last N``). So corpus hygiene is gate stability — an
+off-format or non-speech capture inside the replayed slice moves the gate's
+numbers without any code changing. #1642 is the worked example: a single
+non-speech capture landing at the front of the sort order turned a green test
+red for weeks.
+
+This tool classifies every TOP-LEVEL WAV into three buckets and MOVES the
+failures into dated quarantine subdirectories with a JSON manifest:
+
+  keep                 valid 16 kHz mono s16 RIFF whose audio the real Silero
+                       VAD believes contains speech
+  quarantine-format    unreadable RIFF, wrong sample rate/channels/width, or
+                       zero audio frames — the STT/replay path expects 16k mono
+  quarantine-nonspeech CLEAR non-speech: the real VAD's PEAK speech probability
+                       over the whole recording is below --speech-threshold
+
+It **never deletes**: quarantine is a move into a sibling directory, and every
+corpus consumer globs the top level only (see "Why subdirectories are safe"),
+so a quarantined file leaves the replay set while staying on disk forever.
+
+Why the default threshold is 0.20 and not the runtime 0.50
+----------------------------------------------------------
+``voice_vad.speech_threshold()`` is 0.5 — that is the LIVE barge-in decision, a
+per-hop call made under time pressure. It is deliberately NOT reused here.
+#1642 measured the corpus distribution: median peak 0.829, ~89% above 0.5, so
+~11% sit below the runtime threshold. Quarantining that whole 11% would evict
+quiet, distant or clipped-but-real speech — exactly the hard samples the gate
+most needs. A peak below 0.20 means the model never once, in any 32 ms hop of
+the entire recording, thought it was hearing speech. That is the conservative
+"clear non-speech" line; anything between 0.20 and 0.50 is reported as
+BORDERLINE and deliberately left in the corpus.
+
+Why subdirectories are safe (verified, not assumed)
+---------------------------------------------------
+Every corpus reader globs ``<corpus>/*.wav`` — non-recursive:
+  * ``services/zoe-data/tests/replay_samples.py::_select`` (the SSOT the
+    voice_regression_probe and scripts/perf/measure_voice.py both drive), and
+  * ``services/zoe-data/tests/test_voice_barge_in.py`` real-voice replay.
+``tests/unit/test_curate_voice_corpus.py`` proves the ``_select`` behaviour by
+executing that function's real source against a fixture tree, so a change to
+recursive globbing reddens rather than silently re-admitting quarantined audio.
+
+Usage:
+    python3 scripts/maintenance/curate_voice_corpus.py                 # DRY-RUN
+    python3 scripts/maintenance/curate_voice_corpus.py --json rep.json # + census
+    flock /tmp/zoe-voice-harness.lock \\
+        python3 scripts/maintenance/curate_voice_corpus.py --execute   # move
+
+ALWAYS take ``flock /tmp/zoe-voice-harness.lock`` around ``--execute`` so the
+replay harness cannot enumerate the corpus mid-move.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import hashlib
+import json
+import os
+import shutil
+import sys
+import time
+import wave
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+# The corpus contract: what the STT/replay path expects of every member.
+EXPECTED_RATE = 16000
+EXPECTED_CHANNELS = 1
+EXPECTED_SAMPWIDTH = 2  # bytes → 16-bit signed PCM
+
+# 20 ms @ 16 kHz mono s16 — the frame size the live voice path feeds the VAD.
+FRAME_BYTES = 640
+
+# Conservative "clear non-speech" line; see the module docstring for why this is
+# NOT voice_vad.speech_threshold() (0.5).
+DEFAULT_SPEECH_THRESHOLD = 0.20
+# Reported-only band: below the live runtime threshold but above the quarantine
+# line. These stay in the corpus.
+RUNTIME_SPEECH_THRESHOLD = 0.50
+
+CLASS_KEEP = "keep"
+CLASS_FORMAT = "quarantine-format"
+CLASS_NONSPEECH = "quarantine-nonspeech"
+
+DEFAULT_CORPUS = "/home/zoe/.zoe-voice-samples"
+
+
+# ── format probe ──────────────────────────────────────────────────────────────
+
+def probe_format(path: str | os.PathLike) -> dict[str, Any]:
+    """Read a WAV header and judge it against the corpus contract.
+
+    Pure stdlib and offline — the half of the classifier that needs no model.
+    Returns ``ok`` plus the observed parameters and a human reason on failure.
+    """
+    info: dict[str, Any] = {
+        "ok": False, "reason": None,
+        "rate": None, "channels": None, "sampwidth": None, "frames": None,
+    }
+    try:
+        with wave.open(str(path), "rb") as w:
+            info["rate"] = w.getframerate()
+            info["channels"] = w.getnchannels()
+            info["sampwidth"] = w.getsampwidth()
+            info["frames"] = w.getnframes()
+    except Exception as exc:  # wave.Error, EOFError, OSError …
+        info["reason"] = f"unreadable WAV ({exc.__class__.__name__}: {exc})"
+        return info
+
+    problems = []
+    if info["rate"] != EXPECTED_RATE:
+        problems.append(f"rate={info['rate']} (want {EXPECTED_RATE})")
+    if info["channels"] != EXPECTED_CHANNELS:
+        problems.append(f"channels={info['channels']} (want {EXPECTED_CHANNELS})")
+    if info["sampwidth"] != EXPECTED_SAMPWIDTH:
+        problems.append(f"sampwidth={info['sampwidth']}B (want {EXPECTED_SAMPWIDTH}B)")
+    if not info["frames"]:
+        problems.append("zero audio frames")
+    if problems:
+        info["reason"] = "; ".join(problems)
+        return info
+
+    info["ok"] = True
+    return info
+
+
+# ── speech scoring (the REAL voice_vad path) ──────────────────────────────────
+
+class VadUnavailable(RuntimeError):
+    """``voice_vad.create_vad()`` returned None — model missing or unloadable."""
+
+
+def load_vad_factory(service_dir: str) -> Callable[[], Any]:
+    """Import the LIVE ``voice_vad`` and return its ``create_vad``.
+
+    Deliberately the production module, not a re-implementation: #1642 ruled out
+    "preprocessing" as a cause precisely because the test drove the real path.
+    A curation tool that scored audio its own way could quarantine files the
+    live VAD hears perfectly well.
+    """
+    if service_dir not in sys.path:
+        sys.path.insert(0, service_dir)
+    import voice_vad  # noqa: E402  (path set up above)
+
+    return voice_vad.create_vad
+
+
+def score_speech(path: str | os.PathLike, vad_factory: Callable[[], Any]) -> dict[str, Any]:
+    """Stream a 16k mono s16 WAV through a FRESH VAD and summarise the hops.
+
+    One VAD per file (fresh recurrent state), 20 ms frames, state carried across
+    the whole recording — the same streaming shape as a live turn.
+    """
+    import numpy as np  # only reached when voice_vad imported fine → numpy present
+
+    vad = vad_factory()
+    if vad is None:
+        raise VadUnavailable("voice_vad.create_vad() returned None")
+
+    with wave.open(str(path), "rb") as w:
+        raw = w.readframes(w.getnframes())
+        rate = w.getframerate()
+
+    probs: list[float] = []
+    for i in range(0, len(raw), FRAME_BYTES):
+        probs.extend(vad.process_hops(raw[i:i + FRAME_BYTES]))
+
+    samples = np.frombuffer(raw[: len(raw) // 2 * 2], dtype=np.int16).astype(np.float32)
+    rms = float(np.sqrt(np.mean(np.square(samples)))) if samples.size else 0.0
+
+    return {
+        "peak": max(probs) if probs else 0.0,
+        "mean": (sum(probs) / len(probs)) if probs else 0.0,
+        "hops": len(probs),
+        # Fraction of hops the LIVE threshold would call speech — context only.
+        "frac_speech_hops": (
+            sum(1 for p in probs if p >= RUNTIME_SPEECH_THRESHOLD) / len(probs)
+            if probs else 0.0
+        ),
+        "rms": round(rms, 1),
+        "duration_s": round(len(raw) / 2 / rate, 2) if rate else 0.0,
+    }
+
+
+# ── classification ────────────────────────────────────────────────────────────
+
+def classify(fmt: dict[str, Any], peak: Optional[float],
+             threshold: float = DEFAULT_SPEECH_THRESHOLD) -> tuple[str, str]:
+    """(class, reason) for one file. Pure — the offline-testable core.
+
+    Format failure wins over any speech score: an off-format file is unusable to
+    the replay path regardless of what it contains. ``peak is None`` means "not
+    scored" (VAD skipped) and always keeps — this tool never quarantines on
+    absent evidence.
+    """
+    if not fmt.get("ok"):
+        return CLASS_FORMAT, str(fmt.get("reason") or "format check failed")
+    if peak is None:
+        return CLASS_KEEP, "format ok; speech not scored"
+    if peak < threshold:
+        return CLASS_NONSPEECH, f"peak speech probability {peak:.3f} < {threshold:.2f}"
+    band = "" if peak >= RUNTIME_SPEECH_THRESHOLD else " (BORDERLINE, kept)"
+    return CLASS_KEEP, f"peak speech probability {peak:.3f}{band}"
+
+
+def is_borderline(klass: str, peak: Optional[float]) -> bool:
+    """Kept, but under the LIVE runtime threshold — reported, never moved."""
+    return klass == CLASS_KEEP and peak is not None and peak < RUNTIME_SPEECH_THRESHOLD
+
+
+# ── scan / plan / apply ───────────────────────────────────────────────────────
+
+def list_corpus(corpus: str | os.PathLike) -> list[str]:
+    """Top-level WAVs only — the exact selection every corpus consumer makes.
+
+    Non-recursive by contract: quarantine subdirectories must stay invisible to
+    this tool for the same reason they are invisible to the replay probe.
+    """
+    return sorted(glob.glob(os.path.join(str(corpus), "*.wav")))
+
+
+def quarantine_dirname(klass: str, day: str) -> str:
+    """``quarantine-nonspeech`` + ``20260804`` → ``quarantine-nonspeech-20260804``.
+
+    Mirrors the existing precedent dir ``quarantine-tv-falsewakes-20260719``.
+    """
+    return f"{klass}-{day}"
+
+
+def scan(corpus: str, threshold: float, vad_factory: Optional[Callable[[], Any]],
+         limit: int = 0, progress: bool = False) -> list[dict[str, Any]]:
+    """Classify every top-level WAV. No filesystem mutation happens here."""
+    files = list_corpus(corpus)
+    if limit:
+        files = files[:limit]
+    rows: list[dict[str, Any]] = []
+    for n, path in enumerate(files, 1):
+        st = os.stat(path)
+        fmt = probe_format(path)
+        scores: Optional[dict[str, Any]] = None
+        score_error = None
+        if fmt["ok"] and vad_factory is not None:
+            try:
+                scores = score_speech(path, vad_factory)
+            except VadUnavailable:
+                raise
+            except Exception as exc:
+                score_error = f"{exc.__class__.__name__}: {exc}"
+        peak = scores["peak"] if scores else None
+        klass, reason = classify(fmt, peak, threshold)
+        rows.append({
+            "file": os.path.basename(path),
+            "class": klass,
+            "reason": reason,
+            "borderline": is_borderline(klass, peak),
+            "format": fmt,
+            "scores": scores,
+            "score_error": score_error,
+            "mtime": st.st_mtime,
+            "mtime_iso": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+            "size": st.st_size,
+        })
+        if progress and n % 100 == 0:
+            print(f"  … scanned {n}/{len(files)}", file=sys.stderr, flush=True)
+    return rows
+
+
+def plan_moves(rows: list[dict[str, Any]], corpus: str, day: str) -> list[dict[str, Any]]:
+    """Attach a destination to every quarantine row; keeps are untouched.
+
+    A destination that already exists is flagged ``conflict`` and skipped — this
+    tool never overwrites, because an overwrite is a delete in disguise.
+    """
+    plan: list[dict[str, Any]] = []
+    for row in rows:
+        if row["class"] == CLASS_KEEP:
+            continue
+        dest_dir = os.path.join(corpus, quarantine_dirname(row["class"], day))
+        dest = os.path.join(dest_dir, row["file"])
+        item = dict(row)
+        item["source"] = os.path.join(corpus, row["file"])
+        item["dest_dir"] = dest_dir
+        item["dest"] = dest
+        item["conflict"] = os.path.exists(dest)
+        plan.append(item)
+    return plan
+
+
+def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
+                model_sha: Optional[str], execute: bool) -> dict[str, Any]:
+    """Move quarantined files and write/merge a manifest per quarantine dir.
+
+    Moves only (``shutil.move``). There is no delete path in this module, and
+    ``tests/unit/test_curate_voice_corpus.py`` fails if one ever appears.
+    """
+    result: dict[str, Any] = {"moved": 0, "conflicts": 0, "errors": [], "manifests": []}
+    if not execute:
+        result["conflicts"] = sum(1 for p in plan if p["conflict"])
+        return result
+
+    by_dir: dict[str, list[dict[str, Any]]] = {}
+    for item in plan:
+        if item["conflict"]:
+            result["conflicts"] += 1
+            result["errors"].append(f"{item['file']}: destination exists, left in place")
+            continue
+        os.makedirs(item["dest_dir"], exist_ok=True)
+        try:
+            shutil.move(item["source"], item["dest"])
+        except Exception as exc:
+            result["errors"].append(f"{item['file']}: move failed ({exc})")
+            continue
+        result["moved"] += 1
+        by_dir.setdefault(item["dest_dir"], []).append(item)
+
+    for dest_dir, items in by_dir.items():
+        manifest_path = os.path.join(dest_dir, "manifest.json")
+        entries: list[dict[str, Any]] = []
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path) as fh:
+                    entries = json.load(fh).get("entries", [])
+            except Exception:
+                entries = []
+        for item in items:
+            entries.append({
+                "file": item["file"],
+                "reason": item["reason"],
+                "class": item["class"],
+                "scores": item["scores"],
+                "format": item["format"],
+                "mtime": item["mtime"],
+                "mtime_iso": item["mtime_iso"],
+                "size": item["size"],
+            })
+        payload = {
+            "tool": "scripts/maintenance/curate_voice_corpus.py",
+            "corpus": corpus,
+            "quarantined_at": datetime.now(timezone.utc).isoformat(),
+            "speech_threshold": threshold,
+            "runtime_speech_threshold": RUNTIME_SPEECH_THRESHOLD,
+            "vad_model_sha256": model_sha,
+            "note": ("Quarantine is a MOVE, never a delete. Corpus consumers glob "
+                     "<corpus>/*.wav (top level only), so these files are out of the "
+                     "replay set but preserved on disk."),
+            "entries": entries,
+        }
+        with open(manifest_path, "w") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+        result["manifests"].append(manifest_path)
+    return result
+
+
+# ── reporting ─────────────────────────────────────────────────────────────────
+
+def _percentile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
+    return s[idx]
+
+
+def summarise(rows: list[dict[str, Any]], threshold: float) -> dict[str, Any]:
+    peaks = [r["scores"]["peak"] for r in rows if r["scores"]]
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["class"]] = counts.get(r["class"], 0) + 1
+    return {
+        "total": len(rows),
+        "counts": counts,
+        "borderline": sum(1 for r in rows if r["borderline"]),
+        "scored": len(peaks),
+        "speech_threshold": threshold,
+        "peak_median": round(_percentile(peaks, 0.5), 3),
+        "peak_p10": round(_percentile(peaks, 0.10), 3),
+        "peak_p90": round(_percentile(peaks, 0.90), 3),
+        "frac_above_runtime": round(
+            sum(1 for p in peaks if p >= RUNTIME_SPEECH_THRESHOLD) / len(peaks), 4
+        ) if peaks else 0.0,
+    }
+
+
+def _sha256(path: str) -> Optional[str]:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return None
+
+
+def _print_candidates(plan: list[dict[str, Any]], klass: str, limit: int = 40) -> None:
+    items = [p for p in plan if p["class"] == klass]
+    if not items:
+        return
+    print(f"\n{klass} — {len(items)} file(s):")
+    for item in items[:limit]:
+        peak = item["scores"]["peak"] if item["scores"] else None
+        extra = f"  peak={peak:.3f} rms={item['scores']['rms']}" if item["scores"] else ""
+        print(f"  {item['file']}  [{item['mtime_iso'][:16]}]  {item['reason']}{extra}")
+    if len(items) > limit:
+        print(f"  … and {len(items) - limit} more (see --json report)")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--corpus", default=os.environ.get("ZOE_VOICE_SAMPLE_DIR") or DEFAULT_CORPUS)
+    ap.add_argument("--service-dir", default=None,
+                    help="dir holding voice_vad.py (default: this repo's services/zoe-data)")
+    ap.add_argument("--speech-threshold", type=float, default=DEFAULT_SPEECH_THRESHOLD,
+                    help=f"peak-probability quarantine line (default {DEFAULT_SPEECH_THRESHOLD}; "
+                         f"the LIVE runtime threshold is {RUNTIME_SPEECH_THRESHOLD} and is "
+                         "deliberately NOT reused — see the module docstring)")
+    ap.add_argument("--skip-vad", action="store_true",
+                    help="format audit only (no speech scoring, nothing quarantined as non-speech)")
+    ap.add_argument("--limit", type=int, default=0, help="scan only the first N files (debug)")
+    ap.add_argument("--json", help="write the full census here")
+    ap.add_argument("--execute", action="store_true",
+                    help="actually MOVE the failures into dated quarantine dirs "
+                         "(default is a dry run; take flock /tmp/zoe-voice-harness.lock)")
+    args = ap.parse_args()
+
+    corpus = os.path.abspath(os.path.expanduser(args.corpus))
+    if not os.path.isdir(corpus):
+        print(f"corpus not found: {corpus}", file=sys.stderr)
+        return 2
+
+    repo = Path(__file__).resolve().parents[2]
+    service_dir = args.service_dir or str(repo / "services" / "zoe-data")
+
+    vad_factory = None
+    model_sha = None
+    if not args.skip_vad:
+        try:
+            vad_factory = load_vad_factory(service_dir)
+        except Exception as exc:
+            print(f"cannot import voice_vad from {service_dir}: {exc}", file=sys.stderr)
+            return 2
+        if vad_factory() is None:
+            print("Silero VAD unavailable (model missing / failed to load). "
+                  "Re-run with --skip-vad for a format-only audit, or fix the model — "
+                  "this tool refuses to classify speech it cannot measure.", file=sys.stderr)
+            return 2
+        model_sha = _sha256(os.environ.get("ZOE_SILERO_VAD_MODEL", "").strip()
+                            or "/home/zoe/models/silero_vad.onnx")
+
+    day = time.strftime("%Y%m%d")
+    mode = "EXECUTE" if args.execute else "DRY-RUN"
+    print(f"curate_voice_corpus [{mode}] corpus={corpus} "
+          f"threshold={args.speech_threshold} vad={'off' if args.skip_vad else 'on'}")
+
+    t0 = time.monotonic()
+    rows = scan(corpus, args.speech_threshold, vad_factory, args.limit, progress=True)
+    plan = plan_moves(rows, corpus, day)
+    summary = summarise(rows, args.speech_threshold)
+
+    print(f"\nscanned {summary['total']} top-level WAV(s) in {time.monotonic() - t0:.1f}s")
+    for klass in (CLASS_KEEP, CLASS_FORMAT, CLASS_NONSPEECH):
+        print(f"  {klass:22s} {summary['counts'].get(klass, 0)}")
+    print(f"  {'(of keeps: BORDERLINE)':22s} {summary['borderline']}"
+          f"   [{args.speech_threshold} <= peak < {RUNTIME_SPEECH_THRESHOLD}, left in corpus]")
+    if summary["scored"]:
+        print(f"  peak speech prob: median={summary['peak_median']} "
+              f"p10={summary['peak_p10']} p90={summary['peak_p90']} "
+              f"frac>= {RUNTIME_SPEECH_THRESHOLD}: {summary['frac_above_runtime']}")
+
+    _print_candidates(plan, CLASS_FORMAT)
+    _print_candidates(plan, CLASS_NONSPEECH)
+
+    applied = apply_moves(plan, corpus, args.speech_threshold, model_sha, args.execute)
+    print()
+    if args.execute:
+        print(f"MOVED {applied['moved']} file(s); manifests: "
+              + (", ".join(applied["manifests"]) or "none"))
+    else:
+        print(f"DRY-RUN — nothing moved. {len(plan)} file(s) would move into "
+              f"{corpus}/quarantine-*-{day}/. Re-run with --execute under "
+              f"flock /tmp/zoe-voice-harness.lock.")
+    if applied["conflicts"]:
+        print(f"⚠ {applied['conflicts']} destination(s) already exist and were left in place")
+    for err in applied["errors"]:
+        print(f"  ! {err}")
+
+    if args.json:
+        with open(args.json, "w") as fh:
+            json.dump({
+                "mode": mode, "corpus": corpus, "day": day,
+                "vad_model_sha256": model_sha,
+                "summary": summary, "rows": rows,
+                "plan": [{k: v for k, v in p.items() if k != "format"} for p in plan],
+                "applied": applied,
+            }, fh, indent=2)
+        print(f"wrote {args.json}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
