@@ -113,8 +113,18 @@ A dead reviewer looks like silence, and silence reads as "clean". The known
 failure signature is a session that ends `idle` almost immediately with zero
 messages (observed 2026-07-27: a silently-failed comment POST). The script
 exits 2 and prints an ALARM for that case — treat exit 2 as an incident, not a
-pass. Standing risk: the container's Claude OAuth expires **2026-08-22**; when
-it does, every kick will die this way.
+pass. Standing risk: the container's Claude OAuth **refresh token expires
+2026-08-18T13:16Z**; when it does, every kick will die this way.
+
+**Corrected 2026-08-04** — this line previously said 2026-08-22, which was wrong
+by four days. Read from the credential itself (metadata only):
+`claudeAiOauth.refreshTokenExpiresAt = 1787058982705` → **2026-08-18T13:16:22Z**.
+The *access* token (`expiresAt`) is short-lived and auto-refreshes; the refresh
+token is the hard deadline, and renewing it is an **interactive browser login
+inside the container** (`docker exec -it zoe-omnigent claude` → `/login`) — no
+automation can do it. Put the reminder at **~2026-08-14** for four days of slack.
+Credits deplete independently of the token, with the same silent signature.
+Runbook: [`../architecture/multica-autonomy-program.md`](../architecture/multica-autonomy-program.md) §8.
 
 ## Known limitation — reviewer-only is enforced by PROMPT, not permissions
 
