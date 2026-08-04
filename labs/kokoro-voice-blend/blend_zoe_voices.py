@@ -4,27 +4,26 @@
 Kokoro voice identity is a (510, 1, 256) float32 style tensor. New voices are
 made by weighted linear blends or slerp (spherical interpolation) of existing
 voice tensors — no model needed to *compute* a blend (pure numpy on the
-voices bin), so this never loads a second Kokoro next to the live sidecar.
+voices bin), so this never loads a Kokoro model at all.
 
 Reproducible: candidate recipes are pinned in CANDIDATES below; running this
 script always regenerates byte-identical tensors from /home/zoe/models/voices-v1.0.bin.
 
 Usage (from repo root):
-    # 1) (Re)generate the candidate tensors (pure numpy, instant, no lock needed)
+    # 1) (Re)generate the candidate tensors (pure numpy, instant)
     python3 labs/kokoro-voice-blend/blend_zoe_voices.py
 
-    # 2) Also synthesize audition WAVs (loads kokoro-onnx on CPU ~600MB,
-    #    unloads on exit). The script acquires /tmp/zoe-voice-harness.lock
-    #    ITSELF (bounded wait) — do not wrap it in an outer `flock`:
-    python3 labs/kokoro-voice-blend/blend_zoe_voices.py --audio
-
-    # 3) Build an augmented voices bin for deployment (after Jason picks one):
+    # 2) Build an augmented voices bin for deployment (after Jason picks one):
     python3 labs/kokoro-voice-blend/blend_zoe_voices.py \
         --emit-bin /home/zoe/models/voices-v1.0-zoe.bin
 
+Auditioning: deploy an augmented bin (step 2) by pointing the live Kokoro sidecar
+at it via ZOE_KOKORO_VOICES and restarting kokoro-tts.service, then use the touch
+panel's "Zoe's voice" Preview. (The old in-process ONNX audition renderer was
+retired with the in-process ONNX dependency — the sidecar is the only synthesiser now.)
+
 Outputs:
     labs/kokoro-voice-blend/voices/<name>.npy   float16 tensors (small, committed)
-    /tmp/zoe-voice-blend-samples/<name>.wav     audition WAVs (NOT committed)
 """
 from __future__ import annotations
 
@@ -36,20 +35,8 @@ from pathlib import Path
 import numpy as np
 
 VOICES_BIN = os.environ.get("ZOE_KOKORO_VOICES", "/home/zoe/models/voices-v1.0.bin")
-ONNX_MODEL = os.environ.get("ZOE_KOKORO_MODEL", "/home/zoe/models/kokoro-v1.0.onnx")
 LAB_DIR = Path(__file__).resolve().parent
 TENSOR_DIR = LAB_DIR / "voices"
-SAMPLE_DIR = Path("/tmp/zoe-voice-blend-samples")
-SAMPLE_RATE = 24000
-
-# Fixed audition paragraph — same text for every candidate so Jason compares
-# voices, not content. Mixes statement, question, numbers, and warmth.
-TEST_PARAGRAPH = (
-    "Hi Jason, it's Zoe. It's a lovely afternoon — twenty four degrees and "
-    "clear skies. You have two things on the calendar today: coffee with Sam "
-    "at three, and the market run before six. Want me to set a reminder, or "
-    "shall we just see how the day goes?"
-)
 
 
 def slerp(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
@@ -115,128 +102,6 @@ def write_tensors(cands: dict[str, np.ndarray]) -> None:
         print(f"wrote {TENSOR_DIR / (name + '.npy')}  shape={tensor.shape}")
 
 
-HARNESS_LOCK = "/tmp/zoe-voice-harness.lock"
-LOCK_TIMEOUT_S = 300.0
-
-
-def _acquire_harness_lock() -> int:
-    """Acquire the shared voice-harness flock (bounded wait, fail loudly).
-
-    Mandatory, not advisory: the script takes the lock itself before loading
-    kokoro-onnx, so a bare `python3 blend_zoe_voices.py --audio` can never race
-    the replay/perf harnesses. Do NOT wrap the script in an outer
-    `flock /tmp/zoe-voice-harness.lock …` — the wrapper's lock lives on a
-    different open file description, so the inner acquire would wait behind it
-    until the timeout. Bounded retry + a clear error instead of a silent hang.
-    Returns the fd, held until process exit.
-    """
-    import fcntl
-    import time
-
-    fd = os.open(HARNESS_LOCK, os.O_CREAT | os.O_RDWR, 0o666)
-    deadline = time.monotonic() + LOCK_TIMEOUT_S
-    while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return fd
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                os.close(fd)
-                raise SystemExit(
-                    f"Could not acquire {HARNESS_LOCK} within {LOCK_TIMEOUT_S:.0f}s "
-                    "— another voice harness holds it; retry later."
-                )
-            time.sleep(1.0)
-
-
-def _sidecar_is_live() -> bool:
-    """True when the live Kokoro sidecar is running (unit active or :10201 up)."""
-    import socket
-    import subprocess
-
-    try:
-        r = subprocess.run(
-            ["systemctl", "--user", "is-active", "--quiet", "kokoro-tts.service"],
-            timeout=5,
-        )
-        if r.returncode == 0:
-            return True
-    except Exception:
-        pass  # no systemd user session — fall through to the port probe
-    try:
-        with socket.create_connection(("127.0.0.1", 10201), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
-def _mem_available_gb() -> float:
-    with open("/proc/meminfo") as f:
-        for line in f:
-            if line.startswith("MemAvailable:"):
-                return int(line.split()[1]) / (1024 * 1024)
-    return 0.0
-
-
-_MIN_FREE_GB = 3.0
-
-
-def _guard_against_live_sidecar(force: bool) -> None:
-    """The harness flock only excludes other harness runs — the live sidecar
-    does NOT hold it. Loading a second kokoro-onnx (~600MB CPU) beside a
-    running sidecar needs an explicit flag AND enough free RAM."""
-    if not _sidecar_is_live():
-        return
-    if not force:
-        raise SystemExit(
-            "Live kokoro-tts sidecar detected (unit active / :10201 up). "
-            "Re-run with --force-alongside-sidecar to load a second CPU "
-            "kokoro-onnx (~600MB) beside it, or stop the sidecar first."
-        )
-    free = _mem_available_gb()
-    if free < _MIN_FREE_GB:
-        raise SystemExit(
-            f"MemAvailable {free:.1f} GB < {_MIN_FREE_GB:.0f} GB required to load a "
-            "second kokoro-onnx beside the live sidecar — aborting to protect the "
-            "box. Free memory or stop kokoro-tts.service and retry."
-        )
-    print(
-        f"[warn] proceeding alongside the live sidecar "
-        f"(MemAvailable {free:.1f} GB >= {_MIN_FREE_GB:.0f} GB)."
-    )
-
-
-def synthesize_samples(
-    cands: dict[str, np.ndarray],
-    voices: dict[str, np.ndarray],
-    force_alongside_sidecar: bool = False,
-) -> None:
-    """CPU kokoro-onnx (~600MB), one-shot; acquires the harness flock itself
-    and refuses to double-load beside the live sidecar unless forced + RAM ok."""
-    import wave
-
-    _lock_fd = _acquire_harness_lock()  # noqa: F841 — held until process exit
-    _guard_against_live_sidecar(force_alongside_sidecar)
-
-    from kokoro_onnx import Kokoro  # local CPU pipeline, unloaded at process exit
-
-    SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
-    kokoro = Kokoro(ONNX_MODEL, VOICES_BIN)
-    to_render = {"baseline_af_sky": voices["af_sky"], **cands}
-    for name, tensor in to_render.items():
-        samples, sr = kokoro.create(
-            TEST_PARAGRAPH, voice=tensor.astype(np.float32), speed=1.0, lang="en-us"
-        )
-        pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
-        out = SAMPLE_DIR / f"{name}.wav"
-        with wave.open(str(out), "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sr)
-            wf.writeframes(pcm)
-        print(f"wrote {out}  ({len(pcm) // 2 / sr:.1f}s)")
-
-
 def emit_bin(cands: dict[str, np.ndarray], voices: dict[str, np.ndarray], path: str) -> None:
     """Write an augmented voices bin (all stock voices + zoe_* candidates) that
     the live sidecar can point at via ZOE_KOKORO_VOICES — deploy step only."""
@@ -248,14 +113,7 @@ def emit_bin(cands: dict[str, np.ndarray], voices: dict[str, np.ndarray], path: 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--audio", action="store_true", help="also synthesize audition WAVs (script acquires the harness flock itself)")
     ap.add_argument("--emit-bin", metavar="PATH", help="write an augmented voices .bin including the candidates")
-    ap.add_argument(
-        "--force-alongside-sidecar",
-        action="store_true",
-        help="allow --audio while the live kokoro-tts sidecar is running "
-        f"(requires MemAvailable >= {_MIN_FREE_GB:.0f} GB)",
-    )
     args = ap.parse_args()
 
     voices = load_voices()
@@ -263,8 +121,6 @@ def main() -> int:
     write_tensors(cands)
     if args.emit_bin:
         emit_bin(cands, voices, args.emit_bin)
-    if args.audio:
-        synthesize_samples(cands, voices, args.force_alongside_sidecar)
     return 0
 
 
