@@ -338,6 +338,7 @@ reply after idle) rather than a resource one.
 | `zoe-data`     | `0` | `2G` | *(none — see below)* — also `CPUWeight`/`IOWeight` `300` |
 | `flue-zoe-brain` | `0` | `512M` | `2G` |
 | `flue-zoe-telegram` | `0` | `256M` | `1G` |
+| `functiongemma-router` | `0` | `768M` | `1G` |
 | `serena-mcp`   | `2G` | — | `2G` (dev tooling, deliberately yields) |
 
 The set above is pinned by `tests/unit/test_systemd_memory_protection.py`. It
@@ -370,6 +371,21 @@ inside zoe-data**, so a swapped zoe-data is a swapped STT and the first utteranc
 after idle waits on ~1 GB faulting off the NVMe swapfile. Measured 2026-08-03
 with that 2G floor already in force: `VmRSS` **40 MB** against `VmSwap`
 **1,056 MB** — **96% paged out**.
+
+`functiongemma-router` was the same finding a **fourth** time, and the one whose
+degradation is hardest to see. It is not an optional accelerator:
+[`docs/CANONICAL.md`](../../../docs/CANONICAL.md) lists the two-stage router as a
+tool-router **front on the voice path** (LIVE, `ZOE_ROUTER_HEAD=active`).
+`router_two_stage.py` holds it to a strict **1.5 s** client timeout against a
+424 ms p50, so faulting ~600 MB back off the swapfile blows the budget — and the
+caller's fallback is **real**, which is exactly what makes this one dangerous.
+`decide()` returns `None` (`router_two_stage.py:291`) and `semantic_router.py:547`
+silently keeps the similarity decision: nothing errors, nothing logs a regression,
+every health check stays green, and the turn is simply routed **worse** after
+paying the full 1.5 s. Measured 2026-08-03 with no directives and no drop-in at
+all: `VmRSS` **411.7 MB** against `VmSwap` **156.9 MB** (27.6% out), `VmHWM`
+**598.8 MB** — and that `VmHWM` is only **1.05×** `VmRSS+VmSwap`, so unlike the
+`flue-*` units it is a settled working set that a floor *can* be sized from.
 
 - **A leaf `MemoryLow` is capped by its ancestors — and on THIS host every
   ancestor is `0`.** `user.slice` → `user-1000.slice` → `user@1000.service` →
@@ -415,6 +431,15 @@ Two things worth knowing before changing these:
   `/proc/<pid>/maps`), so `MemoryMax` genuinely bounds them. On Tegra, a process
   allocating through NvMap does *not* have its GPU/unified pages fully accounted
   to the cgroup — which is the other half of why llama-server gets no ceiling.
+- **`--n-gpu-layers`, not the binary, decides whether a ceiling is trustworthy.**
+  `functiongemma-router` runs the *same* `llama-server` binary as the exempt brain
+  on `:11434` and still carries `MemoryMax=1G`, because this instance runs
+  `-ngl 0`. Verified in `/proc/<pid>/maps`: exactly one 4 KB
+  `/dev/nvgpu/igpu0/ctrl` control page and **zero** `/dev/nvmap` allocations (the
+  nvidia `.so` files are mapped — Jetson CUDA build — but those are ordinary
+  file-backed pages). No weights and no KV cache on device ⇒ accounting is
+  complete ⇒ the ceiling genuinely bounds the cgroup. Read the maps before
+  reusing either decision.
 - **Size a ceiling from the RUNTIME's behaviour under it, never as a multiple of
   a `VmHWM` you sampled on a starved box.** That method sized both `flue-*`
   ceilings on 2026-08-03 and was corrected the same day: a starved `VmHWM` is a
