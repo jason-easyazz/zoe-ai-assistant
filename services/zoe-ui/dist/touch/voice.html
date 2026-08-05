@@ -345,8 +345,14 @@ function getSessionId() {
 // upload runs the full STT → brain → TTS pipeline, so it must not be free to
 // any LAN device. The panel boots as a GUEST and that session lives 30 minutes
 // with no sliding refresh, while the kiosk itself runs for days — so mint a
-// fresh one on demand instead of failing the mic silently. /js/auth.js only
-// ATTACHES a session header, it never strips one this page set explicitly.
+// fresh one on demand instead of failing the mic silently.
+//
+// This page loads /js/auth.js, so `fetch` here is the WRAPPED one. It attaches a
+// session header but never strips one this page set explicitly — and, critically,
+// its default 401 policy is to `Promise.reject`, which would throw before the
+// retry below ever ran. The three LiveKit paths are listed in that wrapper's
+// CALLER_HANDLES_401 set so the 401 Response reaches this function instead.
+// Adding a fourth voice endpoint here means adding it there too.
 function isStoredSessionGuest() {
   try {
     const s = JSON.parse(localStorage.getItem('zoe_session')) || {};
