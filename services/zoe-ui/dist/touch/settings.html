@@ -4883,7 +4883,7 @@
 
         async function changePassword(currentPassword, newPassword) {
             try {
-                const response = await fetch('/api/auth/change-password', {
+                const response = await fetch('/api/auth/password/change', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
