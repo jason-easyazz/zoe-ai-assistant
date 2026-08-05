@@ -52,9 +52,9 @@ chromadb==0.6.3
 numpy<2
 # Cloud TTS fallback (fast, AU Neural voice)
 edge-tts>=6.1.12
-# Primary offline TTS: ~82M ONNX model, sub-100ms on Jetson CUDA
-# Install model: https://github.com/thewh1teagle/kokoro-onnx/releases
-kokoro-onnx>=0.4.0
+# Primary offline TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py,
+# port 10201) — NOT an in-process dep here. zoe-data reaches it over HTTP and falls
+# back to edge/espeak if it is down (see ZOE_TTS_MODE in .env.example).
 # STT primary: Moonshine v2 (MEDIUM_STREAMING) — accurate on real room audio, CPU/ONNX
 moonshine-voice
 # Tier-1 semantic router: bge-small ONNX embeddings (~7-30ms/query, CPU) for

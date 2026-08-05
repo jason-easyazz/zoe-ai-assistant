@@ -29,11 +29,11 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    gate-abstain, shortlist miss, sidecar failure, timeout, or malformed decode — never an error to
    the user (~14.8% of turns fall through to the brain; router decision p50 ~393 ms). This front is
    the biggest single contributor to the post-2026-07-02 median drop (see *Latency wins* below).
-3. **TTS — Kokoro on CUDA** (`ZOE_KOKORO_BACKEND=pytorch`, set by `kokoro-tts.service`; RTF ~0.08,
-   live-verified `device":"cuda"` on `:10201/health`), sidecar on `127.0.0.1:10201`, via a waterfall
-   in `routers/voice_tts.py`: **Kokoro → Edge TTS → espeak-ng** (each falls back to the next). NB the
-   *code* default in `scripts/setup/kokoro_sidecar.py` is still `onnx`/CPU — the live speedup comes
-   from the systemd unit forcing `pytorch`, not from the code default.
+3. **TTS — Kokoro on CUDA** (PyTorch, RTF ~0.08, live-verified `device":"cuda"` on
+   `:10201/health`), out-of-process sidecar on `127.0.0.1:10201`, via a waterfall in
+   `routers/voice_tts.py`: **Kokoro → Edge TTS → espeak-ng** (each falls back to the next).
+   PyTorch/CUDA is the sidecar's sole backend; it falls back to CPU on its own only if CUDA
+   cannot load, reporting `degraded=true` on `/health`. zoe-data holds no in-process TTS model.
 
 Per-stage timings are exported to Prometheus as `zoe_voice_stage_seconds`
 (`services/zoe-data/voice_metrics.py`), scraped at `:8000/metrics`.
@@ -199,6 +199,40 @@ can't attribute per-commit, but the landed work that drove it:
 July-2 bar the gate compared against an easy, ~1.75× slower target, so a silent brain slowdown could
 regress most of the July wins and still "pass". The new bar holds the gains.
 
+### Which samples the gate replays — capture time, not filename (fixed 2026-08-05)
+
+`--last N` decides what every gate verdict MEANS, and until 2026-08-05 it did not mean what it
+said. `replay_samples.py::_select` sorted by FILENAME, and corpus names are `HHMMSS_millis.wav` — a
+**time of day with no date**. So `--last 20` returned the twenty highest times-of-day in the entire
+corpus, with every capture date interleaved, while `voice_regression_probe.py --samples`,
+`scripts/perf/measure_voice.py --last` and this document all called it "newest N". Same class as
+#1642, where `sorted()[0]` picked "whichever sorts first today" and left a test red for weeks.
+
+**Measured over the live 1003-file corpus: the name-sorted last 20 and the capture-time-sorted last
+20 shared ZERO files**, and ten of the twenty name-sorted samples were from 2026-06-20 — the oldest
+capture day in the corpus. The gate had been scoring a fixed, arbitrary, mostly-ancient slice.
+
+Selection is now `(mtime, basename)`, newest last. **mtime is trustworthy here, verified not
+assumed:** 998 of 1003 files have an mtime whose HH:MM:SS equals their filename's exactly (the other
+5 differ by one second — the name carries milliseconds, so `083032.938` is written at `083033`), and
+`ctime` equals `mtime` to the nanosecond on every file, so nothing has ever copied, rsynced or
+restored the corpus. The WAVs are bare 44-byte canonical RIFF with no BWF `bext`/`LIST` chunk and
+there are no sidecar metadata files, so **mtime is the only true timestamp the corpus carries**. If
+it is ever bulk re-timestamped, the fix is to put the date in the capture filename — not to trust
+the name again.
+
+`--since` is unchanged and **still filename-based on purpose**: it is a time-of-day filter spanning
+every date, not a recency filter. It was always honest about that, and silently redefining it would
+be the same bug pointed the other way. It now says so loudly in `--help` and prints a note to stderr
+when used. **`--since-date YYYY-MM-DD`** is the capture-time counterpart, consistent with `--last`.
+
+**Consequence for the baseline — this needs an operator decision, once.** The
+2026-07-16 baseline (brain 1868 ms, e2e 1896 ms, STT 579.5 ms, OK 19/20) was measured over the
+name-sorted slice, and it stores only aggregates — no file list — so nothing detects the swap. With
+zero overlap the next probe scores twenty entirely different recordings and any movement is the
+sample change, not a regression. **Run a fresh probe, read the diff as informational, then
+`--update-baseline` deliberately.** Do not treat the first post-change run as a regression signal.
+
 ## Stopping the brain does NOT guarantee it restarts (2026-07-26)
 
 Freeing RAM by stopping `llama-server` — the documented move for a build or training window —
@@ -274,11 +308,12 @@ widened to ~1.6 s. Pinned by `tests/unit/test_voice_wake_no_dead_air.py`.
 
 **2. TTS slower than real time (reply plays back chopped).**
 `turn_stream` synthesizes the reply sentence-by-sentence and feeds a single persistent `aplay` pipe.
-That only works if synthesis outruns playback. On the ONNX/**CPU** backend Kokoro ran at **RTF
+That only works if synthesis outruns playback. On a **CPU** backend Kokoro ran at **RTF
 ~1.0–1.8x** — slower than real time — so the pipe *had* to run dry at every chunk boundary (ALSA
 underrun -> gap). Short chunks made it worse: per-call overhead pushed a 10-char stub to RTF 1.8x,
-so the very chunking that bought fast first-audio was what starved the pipe. Fix: Kokoro on CUDA
-(`ZOE_KOKORO_BACKEND=pytorch`), RTF **0.08x**. **Diagnostic: if replies ever sound chopped again,
+so the very chunking that bought fast first-audio was what starved the pipe. Fix: the Kokoro
+PyTorch sidecar on CUDA, RTF **0.08x** (it falls back to CPU only if CUDA cannot load, and reports
+`degraded=true` on `/health` when it does). **Diagnostic: if replies ever sound chopped again,
 check `curl localhost:10201/health` for `device` and `degraded` first** — a busy box can OOM the
 CUDA init and silently drop back to CPU.
 

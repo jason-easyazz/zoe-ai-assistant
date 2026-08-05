@@ -203,12 +203,6 @@ async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
         detail["error"] = f"http_{response.status_code}"
     except Exception as exc:
         detail["error"] = exc.__class__.__name__
-    detail["local_onnx_loaded"] = bool(voice_tts.kokoro_ready())
-    detail["local_onnx_configured"] = bool(voice_tts.kokoro_configured())
-    if detail["local_onnx_loaded"] or detail["local_onnx_configured"]:
-        detail["ok"] = True
-        detail["provider"] = "kokoro-onnx"
-        return detail
     detail["espeak_available"] = bool(voice_tts._has_espeak_ng())
     if mode in {"hybrid", "local", "offline"} and detail["espeak_available"]:
         detail["ok"] = True
