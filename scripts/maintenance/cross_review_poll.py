@@ -184,7 +184,34 @@ def has_assistant_message(doc) -> bool:
 
 
 def _backoff(attempt: int, cap: float) -> float:
-    return min(2.0**attempt, cap)
+    """Exponential backoff, TOTAL over its inputs.
+
+    `cap` is clamped non-negative and the exponent is bounded: an unclamped
+    `2.0**attempt` raises OverflowError once `attempt` passes ~1024, which a
+    non-positive cap makes reachable (every wait becomes 0, so the attempt
+    counter runs away). Both are defence in depth behind `_positive()` below,
+    which rejects such a value at the CLI boundary before it ever gets here.
+    """
+    return min(2.0 ** min(attempt, 60), max(0.0, cap))
+
+
+def _nap(sleep, seconds: float) -> None:
+    """Sleep for `seconds`, never for a negative one.
+
+    Every retry loop in this module derives its wait from CLI-supplied numbers,
+    and `time.sleep(-1)` raises `ValueError` — which would escape as a traceback
+    and a raw exit 1, colliding with the wrapper's public alarm codes and
+    bypassing the single-terminal-line contract (Greptile P2, #1625). A
+    nonsensical interval is not a reason to lose a review, so it degrades to
+    "retry immediately" and the WALL BUDGET remains the real bound: every caller
+    checks its own elapsed time before the next fetch, so a zero wait cannot
+    become an unbounded loop, only a fast one.
+
+    Clamped HERE rather than at each call site so no future retry loop can
+    reintroduce it, and clamped rather than validated at argparse so the
+    directly-callable functions (which the offline tests drive) are safe too.
+    """
+    sleep(max(0.0, seconds))
 
 
 def _alarm(msg: str) -> None:
@@ -216,7 +243,7 @@ def await_registration(server, sid, budget_s, interval_s, http_timeout, sleep=ti
                 "dispatch was lost before the review started; re-dispatch required"
             )
             return EXIT_NEVER_REGISTERED
-        sleep(min(_backoff(attempt, interval_s), max(0.0, budget_s - elapsed)))
+        _nap(sleep, min(_backoff(attempt, interval_s), max(0.0, budget_s - elapsed)))
         attempt += 1
 
 
@@ -285,7 +312,7 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
             )
             return EXIT_TIMEOUT
 
-        sleep(min(next_sleep, remaining))
+        _nap(sleep, min(next_sleep, remaining))
         next_sleep = interval_s  # healthy default; a retry branch overrides it
 
         kind, doc, detail = fetch_session(server, sid, http_timeout)
@@ -511,7 +538,7 @@ def fetch_report(server, sid, budget_s, interval_s, max_gone, http_timeout,
             )
             return EXIT_POLL_LOST
 
-        sleep(min(_backoff(attempt, interval_s), remaining))
+        _nap(sleep, min(_backoff(attempt, interval_s), remaining))
         attempt += 1
 
 
@@ -607,8 +634,35 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _positive(args, *names) -> str | None:
+    """Return an alarm message for the first non-positive duration, else None.
+
+    argparse types these as floats but happily accepts `-30`. A negative wait
+    reaches `time.sleep` and raises ValueError -- a TRACEBACK plus a raw exit 1,
+    which collides with the wrapper's public alarm code and breaks this module's
+    one-terminal-line contract; a zero one turns a bounded retry loop into a
+    busy spin (Greptile P2, #1625). Both are usage errors, so they are refused
+    HERE with the module's own EXIT_USAGE rather than absorbed silently.
+    """
+    for name in names:
+        value = getattr(args, name, None)
+        if value is not None and value <= 0:
+            flag = "--" + name.replace("_", "-").removesuffix("-s") + "-s"
+            return (
+                f"ALARM: {flag} must be a positive number of seconds, got {value:g} — "
+                "no report retrieved; fix the invocation and re-dispatch"
+            )
+    return None
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    bad = _positive(
+        args, "budget_s", "interval_s", "timeout_s", "running_grace_s", "http_timeout_s"
+    )
+    if bad:
+        _alarm(bad)
+        return EXIT_USAGE
     if args.cmd == "await-registration":
         return await_registration(
             args.server, args.session_id, args.budget_s, args.interval_s, args.http_timeout_s

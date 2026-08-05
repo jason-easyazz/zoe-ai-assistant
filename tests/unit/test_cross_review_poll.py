@@ -1188,3 +1188,87 @@ def test_agents_md_publishes_the_corrected_bounds():
     assert f"**{worst}s against the caller's {caller}s**" in doc, (
         "the shipped worst case must be published, and it moved"
     )
+
+
+
+# ------------------------------ a nonsensical duration is a USAGE error -----
+#
+# argparse types these as floats but happily accepts `-30`. A negative wait
+# reaches `time.sleep` and raises ValueError — a TRACEBACK plus a raw exit 1,
+# which collides with the wrapper's public `exit 2` alarm code and breaks this
+# module's one-terminal-line contract (Greptile P2, #1625). A zero one is worse
+# in a different way: every backoff becomes 0 and the bounded retry loop turns
+# into a busy spin (and, unbounded, `2.0**attempt` eventually OverflowErrors).
+#
+# Both are refused at the CLI boundary with this module's own EXIT_USAGE, and
+# the arithmetic helpers are made TOTAL behind it so no direct caller can raise
+# either error.
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["report", "--server", SERVER, "--session-id", SID, "--interval-s", "-30"],
+        ["report", "--server", SERVER, "--session-id", SID, "--budget-s", "0"],
+        ["report", "--server", SERVER, "--session-id", SID, "--http-timeout-s", "-1"],
+        ["poll", "--server", SERVER, "--session-id", SID, "--timeout-s", "60",
+         "--interval-s", "-5"],
+        ["poll", "--server", SERVER, "--session-id", SID, "--timeout-s", "-60"],
+        ["poll", "--server", SERVER, "--session-id", SID, "--timeout-s", "60",
+         "--running-grace-s", "0"],
+        ["await-registration", "--server", SERVER, "--session-id", SID, "--interval-s", "-2"],
+    ],
+)
+def test_a_non_positive_duration_is_refused_before_any_request(argv, monkeypatch, capsys):
+    """EXIT_USAGE and ONE alarm line — never a traceback, never a request."""
+    def _never(*_a, **_k):
+        raise AssertionError("a usage error must not reach the network")
+
+    monkeypatch.setattr(crp, "_http_get", _never)
+
+    rc = crp.main(argv)
+
+    err = capsys.readouterr().err.strip().splitlines()
+    assert rc == crp.EXIT_USAGE
+    assert len(err) == 1, err
+    assert err[0].startswith("ALARM: --")
+    assert "must be a positive number of seconds" in err[0]
+
+
+def test_the_shipped_defaults_are_all_accepted(monkeypatch, capsys):
+    """Negative control: the guard must not reject the real invocations."""
+    calls = []
+    monkeypatch.setattr(crp, "fetch_report", lambda *a, **k: calls.append(a) or crp.EXIT_OK)
+    assert crp.main(["report", "--server", SERVER, "--session-id", SID]) == crp.EXIT_OK
+    assert calls, "the guard swallowed a valid invocation"
+    assert capsys.readouterr().err == ""
+
+
+def test_nap_never_sleeps_negative():
+    """Defence in depth for direct callers: the clamp lives at ONE seam."""
+    calls = []
+    crp._nap(calls.append, -30.0)
+    crp._nap(calls.append, 0.0)
+    crp._nap(calls.append, 2.5)
+    assert calls == [0.0, 0.0, 2.5]
+
+
+def test_backoff_is_total_over_its_inputs():
+    """No OverflowError, no negative, whatever the attempt count or cap."""
+    assert crp._backoff(0, 30.0) == 1.0
+    assert crp._backoff(5, 30.0) == 30.0
+    assert crp._backoff(100_000, 30.0) == 30.0   # exponent bounded
+    assert crp._backoff(3, -10.0) == 0.0         # cap clamped
+    assert crp._backoff(100_000, -10.0) == 0.0
+
+
+def test_every_retry_loop_sleeps_through_the_clamped_seam():
+    """Structural: a new retry loop must not reintroduce a raw sleep() call."""
+    code = _MODULE_PATH.read_text()
+    body = code.split("def _nap(", 1)[1].split("\n\n\n", 1)[1]
+    raw = [
+        ln for ln in body.splitlines()
+        if re.search(r"(?<![_\w])sleep\(", ln) and "_nap(sleep" not in ln
+        and "sleep=time.sleep" not in ln
+    ]
+    assert not raw, f"these sleeps bypass the negative-wait clamp: {raw}"

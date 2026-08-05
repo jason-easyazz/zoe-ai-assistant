@@ -138,6 +138,19 @@ worker — and forced a full re-dispatch. Fetches land at t = 0, 1, 3, 7, 15, 31
 (non-list `items`, zero assistant messages) alarms on the FIRST response rather
 than burning the budget re-reading it.
 
+**A non-positive duration is a USAGE error, refused before the first request.**
+`--budget-s`/`--interval-s`/`--timeout-s`/`--running-grace-s`/`--http-timeout-s`
+are argparse floats, so `-30` parses happily — and a negative wait then reaches
+`time.sleep`, which raises `ValueError`: a traceback and a raw exit 1, colliding
+with the wrapper's public `exit 2` and breaking the one-terminal-line contract
+(Greptile P2, #1625). Zero is the same class of bug wearing a different face —
+every backoff becomes 0 and a bounded retry loop turns into a busy spin. Both
+now exit `EXIT_USAGE` with one alarm line naming the flag. The arithmetic behind
+that guard is TOTAL as defence in depth (`_nap` clamps the wait, `_backoff`
+clamps its cap and bounds its exponent), and **every retry loop sleeps through
+`_nap`** — a structural test fails on a raw `sleep(` anywhere below it, so a new
+loop cannot reintroduce the hole.
+
 **The wrapper's worst-case wall must stay BELOW its caller's timeout.**
 `services/zoe-data/pipeline_cross_review.py` runs the script under
 `subprocess.run(timeout=2500)`, which kills only the shell — the EXIT trap never
