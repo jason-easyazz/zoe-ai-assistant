@@ -12,12 +12,36 @@ red for weeks.
 This tool classifies every TOP-LEVEL WAV into three buckets and MOVES the
 failures into dated quarantine subdirectories with a JSON manifest:
 
-  keep                 valid 16 kHz mono s16 RIFF whose audio the real Silero
-                       VAD believes contains speech
-  quarantine-format    unreadable RIFF, wrong sample rate/channels/width, or
-                       zero audio frames — the STT/replay path expects 16k mono
+  keep                 readable RIFF whose audio the real Silero VAD believes
+                       contains speech — INCLUDING off-contract-but-usable
+                       captures (see below), which are reported as DRIFT
+  quarantine-format    UNUSABLE audio only: unparseable RIFF, zero audio frames,
+                       or a rate the pipeline cannot honestly resample (<= 0)
   quarantine-nonspeech CLEAR non-speech: the real VAD's PEAK speech probability
                        over the whole recording is below --speech-threshold
+
+Why "off-format" is NOT "unusable" (Codex P2, #1643)
+----------------------------------------------------
+An earlier version quarantined anything that missed the 16 kHz / mono / s16
+capture contract. That was measurably wrong, and it cost the gate 95 real-voice
+samples on its first executed run. The replay path is
+``replay_samples.py`` → ``routers.voice_tts._transcribe_audio_impl`` →
+``_run_moonshine`` → ``_prepare_audio_for_moonshine`` (``voice_tts.py:2071``),
+and that helper RESAMPLES off-rate audio to 16 kHz (and downmixes multi-channel)
+before transcription — a 24 kHz mono s16 capture transcribes fine. The only
+input it refuses is one whose native rate is unknown/invalid (``sr <= 0``),
+which it explicitly declines to pretend is 16 kHz.
+
+So the quarantine class is now exactly the set the STT path itself cannot use.
+Missing the capture contract is a real signal and is still surfaced — as a
+``drift`` attribute on a KEPT file, the same way a 0.20–0.50 peak is surfaced as
+BORDERLINE and kept. Two different layers: corpus hygiene must not silently
+shrink the gate's evidence base. The right fix for capture drift is a rate
+assertion at the SAVE path, not retroactive eviction of the evidence.
+
+Drifted files are still speech-scored — ``score_speech`` normalises them to
+16 kHz mono s16 first, mirroring ``_prepare_audio_for_moonshine``, so the VAD
+hears what the replay path hears rather than a mis-rated byte stream.
 
 It **never deletes**: quarantine is a move into a sibling directory, and every
 corpus consumer globs the top level only (see "Why subdirectories are safe"),
@@ -94,13 +118,23 @@ DEFAULT_CORPUS = "/home/zoe/.zoe-voice-samples"
 # ── format probe ──────────────────────────────────────────────────────────────
 
 def probe_format(path: str | os.PathLike) -> dict[str, Any]:
-    """Read a WAV header and judge it against the corpus contract.
+    """Read a WAV header and split USABILITY from CONTRACT CONFORMANCE.
 
     Pure stdlib and offline — the half of the classifier that needs no model.
-    Returns ``ok`` plus the observed parameters and a human reason on failure.
+
+    Two independent verdicts, and conflating them is the bug this function was
+    rewritten to fix (Codex P2, #1643):
+
+    ``ok``        the replay path can actually transcribe this file. False ONLY
+                  for unparseable RIFF, zero audio frames, or a rate <= 0 —
+                  precisely what ``_prepare_audio_for_moonshine`` refuses. This
+                  is the quarantine decision.
+    ``conforms``  the file matches the 16 kHz / mono / s16 CAPTURE contract.
+                  False sets ``drift`` to a human description and is REPORTED,
+                  never quarantined: the file is still usable evidence.
     """
     info: dict[str, Any] = {
-        "ok": False, "reason": None,
+        "ok": False, "conforms": False, "reason": None, "drift": None,
         "rate": None, "channels": None, "sampwidth": None, "frames": None,
     }
     try:
@@ -113,20 +147,32 @@ def probe_format(path: str | os.PathLike) -> dict[str, Any]:
         info["reason"] = f"unreadable WAV ({exc.__class__.__name__}: {exc})"
         return info
 
-    problems = []
-    if info["rate"] != EXPECTED_RATE:
-        problems.append(f"rate={info['rate']} (want {EXPECTED_RATE})")
-    if info["channels"] != EXPECTED_CHANNELS:
-        problems.append(f"channels={info['channels']} (want {EXPECTED_CHANNELS})")
-    if info["sampwidth"] != EXPECTED_SAMPWIDTH:
-        problems.append(f"sampwidth={info['sampwidth']}B (want {EXPECTED_SAMPWIDTH}B)")
+    # ── UNUSABLE: the STT path itself cannot consume these. ──
     if not info["frames"]:
-        problems.append("zero audio frames")
-    if problems:
-        info["reason"] = "; ".join(problems)
+        info["reason"] = "zero audio frames"
+        return info
+    try:
+        rate = int(info["rate"])
+    except (TypeError, ValueError):
+        rate = 0
+    if rate <= 0:
+        # _prepare_audio_for_moonshine deliberately will NOT pretend an
+        # unknown rate is 16 kHz, so neither do we.
+        info["reason"] = f"invalid sample rate ({info['rate']!r}) — cannot be resampled"
         return info
 
     info["ok"] = True
+
+    # ── USABLE but off the capture contract: reported, kept. ──
+    drift = []
+    if rate != EXPECTED_RATE:
+        drift.append(f"rate={rate} (contract {EXPECTED_RATE}; resampled by the replay path)")
+    if info["channels"] != EXPECTED_CHANNELS:
+        drift.append(f"channels={info['channels']} (contract {EXPECTED_CHANNELS}; downmixed)")
+    if info["sampwidth"] != EXPECTED_SAMPWIDTH:
+        drift.append(f"sampwidth={info['sampwidth']}B (contract {EXPECTED_SAMPWIDTH}B)")
+    info["drift"] = "; ".join(drift) or None
+    info["conforms"] = not drift
     return info
 
 
@@ -151,11 +197,57 @@ def load_vad_factory(service_dir: str) -> Callable[[], Any]:
     return voice_vad.create_vad
 
 
+class UnscorableAudio(RuntimeError):
+    """Readable, but this tool cannot normalise it to 16 kHz mono s16 for the VAD.
+
+    NOT a quarantine reason — the caller treats it as "not scored", which keeps
+    the file (this tool never quarantines on absent evidence).
+    """
+
+
+def _to_vad_pcm(raw: bytes, rate: int, channels: int, sampwidth: int) -> bytes:
+    """Normalise decoded WAV bytes to 16 kHz MONO s16 — the VAD's input contract.
+
+    Mirrors ``_prepare_audio_for_moonshine`` (downmix, then linear-interpolation
+    resample, numpy only) so a drifted capture is scored on the audio the replay
+    path would actually transcribe, not on a byte stream the VAD mis-reads as
+    16 kHz. A conforming 16 kHz mono s16 file returns its bytes UNCHANGED —
+    identity by construction, so this cannot perturb the 2026-08-04 census.
+
+    Sample widths other than 2 bytes raise ``UnscorableAudio`` rather than being
+    guessed at: none exist in the corpus, and inventing a decode would be the
+    same class of error this rewrite is fixing.
+    """
+    if sampwidth != EXPECTED_SAMPWIDTH:
+        raise UnscorableAudio(f"sampwidth={sampwidth}B — no s16 decode for this width")
+    if rate == EXPECTED_RATE and channels == EXPECTED_CHANNELS:
+        return raw
+
+    import numpy as np
+
+    a = np.frombuffer(raw[: len(raw) // 2 * 2], dtype=np.int16).astype(np.float32)
+    if channels > 1:
+        usable = a.size - (a.size % channels)
+        a = a[:usable].reshape(-1, channels).mean(axis=1)
+    if a.size == 0:
+        return b""
+    if rate != EXPECTED_RATE:
+        n_out = max(1, int(round(a.shape[0] * EXPECTED_RATE / rate)))
+        a = np.interp(
+            np.linspace(0.0, a.shape[0] - 1, n_out),
+            np.arange(a.shape[0], dtype=np.float64),
+            a,
+        )
+    return np.clip(np.rint(a), -32768, 32767).astype(np.int16).tobytes()
+
+
 def score_speech(path: str | os.PathLike, vad_factory: Callable[[], Any]) -> dict[str, Any]:
-    """Stream a 16k mono s16 WAV through a FRESH VAD and summarise the hops.
+    """Stream a WAV through a FRESH VAD (16k mono s16) and summarise the hops.
 
     One VAD per file (fresh recurrent state), 20 ms frames, state carried across
-    the whole recording — the same streaming shape as a live turn.
+    the whole recording — the same streaming shape as a live turn. Off-contract
+    captures are normalised first (``_to_vad_pcm``); conforming ones are byte-
+    identical to what this function always fed the VAD.
     """
     import numpy as np  # only reached when voice_vad imported fine → numpy present
 
@@ -166,6 +258,8 @@ def score_speech(path: str | os.PathLike, vad_factory: Callable[[], Any]) -> dic
     with wave.open(str(path), "rb") as w:
         raw = w.readframes(w.getnframes())
         rate = w.getframerate()
+        raw = _to_vad_pcm(raw, rate, w.getnchannels(), w.getsampwidth())
+        rate = EXPECTED_RATE
 
     probs: list[float] = []
     for i in range(0, len(raw), FRAME_BYTES):
@@ -194,19 +288,24 @@ def classify(fmt: dict[str, Any], peak: Optional[float],
              threshold: float = DEFAULT_SPEECH_THRESHOLD) -> tuple[str, str]:
     """(class, reason) for one file. Pure — the offline-testable core.
 
-    Format failure wins over any speech score: an off-format file is unusable to
-    the replay path regardless of what it contains. ``peak is None`` means "not
-    scored" (VAD skipped) and always keeps — this tool never quarantines on
-    absent evidence.
+    UNUSABILITY wins over any speech score: a file the STT path cannot read is
+    unusable regardless of what it contains. Contract DRIFT does not — a
+    resampleable capture is kept and its drift annotated (Codex P2, #1643).
+    ``peak is None`` means "not scored" (VAD skipped, or audio this tool cannot
+    normalise) and always keeps — this tool never quarantines on absent evidence.
     """
     if not fmt.get("ok"):
         return CLASS_FORMAT, str(fmt.get("reason") or "format check failed")
+    drift = fmt.get("drift")
+    suffix = f" [DRIFT: {drift}]" if drift else ""
     if peak is None:
-        return CLASS_KEEP, "format ok; speech not scored"
+        return CLASS_KEEP, f"readable; speech not scored{suffix}"
     if peak < threshold:
-        return CLASS_NONSPEECH, f"peak speech probability {peak:.3f} < {threshold:.2f}"
+        return CLASS_NONSPEECH, (
+            f"peak speech probability {peak:.3f} < {threshold:.2f}{suffix}"
+        )
     band = "" if peak >= RUNTIME_SPEECH_THRESHOLD else " (BORDERLINE, kept)"
-    return CLASS_KEEP, f"peak speech probability {peak:.3f}{band}"
+    return CLASS_KEEP, f"peak speech probability {peak:.3f}{band}{suffix}"
 
 
 def is_borderline(klass: str, peak: Optional[float]) -> bool:
@@ -259,6 +358,8 @@ def scan(corpus: str, threshold: float, vad_factory: Optional[Callable[[], Any]]
             "class": klass,
             "reason": reason,
             "borderline": is_borderline(klass, peak),
+            # Off the capture contract but USABLE — reported, never quarantined.
+            "drift": bool(fmt.get("drift")) and klass != CLASS_FORMAT,
             "format": fmt,
             "scores": scores,
             "score_error": score_error,
@@ -390,6 +491,8 @@ def summarise(rows: list[dict[str, Any]], threshold: float) -> dict[str, Any]:
         "total": len(rows),
         "counts": counts,
         "borderline": sum(1 for r in rows if r["borderline"]),
+        # Off the 16k/mono/s16 capture contract but usable — REPORTED, kept.
+        "drift": sum(1 for r in rows if r.get("drift")),
         "scored": len(peaks),
         "speech_threshold": threshold,
         "peak_median": round(_percentile(peaks, 0.5), 3),
@@ -483,6 +586,9 @@ def main() -> int:
         print(f"  {klass:22s} {summary['counts'].get(klass, 0)}")
     print(f"  {'(of keeps: BORDERLINE)':22s} {summary['borderline']}"
           f"   [{args.speech_threshold} <= peak < {RUNTIME_SPEECH_THRESHOLD}, left in corpus]")
+    print(f"  {'(of keeps: DRIFT)':22s} {summary['drift']}"
+          f"   [off the {EXPECTED_RATE}Hz/mono/s16 capture contract but resampleable — "
+          "REPORTED, left in corpus; fix at the SAVE path]")
     if summary["scored"]:
         print(f"  peak speech prob: median={summary['peak_median']} "
               f"p10={summary['peak_p10']} p90={summary['peak_p90']} "

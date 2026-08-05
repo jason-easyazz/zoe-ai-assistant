@@ -75,28 +75,63 @@ def _write_wav(path: Path, *, rate: int = 16000, channels: int = 1,
 def test_probe_format_accepts_the_corpus_contract(tmp_path):
     info = cvc.probe_format(_write_wav(tmp_path / "good.wav"))
     assert info["ok"] is True and info["reason"] is None
+    assert info["conforms"] is True and info["drift"] is None
     assert (info["rate"], info["channels"], info["sampwidth"]) == (16000, 1, 2)
 
 
 @pytest.mark.parametrize("kwargs,needle", [
-    ({"rate": 24000}, "rate=24000"),           # the measured 100-file class
+    ({"rate": 24000}, "rate=24000"),           # the measured 95-file class
     ({"rate": 8000}, "rate=8000"),
     ({"channels": 2}, "channels=2"),
     ({"sampwidth": 1}, "sampwidth=1B"),
-    ({"frames": 0}, "zero audio frames"),
 ])
-def test_probe_format_rejects_off_contract_files(tmp_path, kwargs, needle):
-    info = cvc.probe_format(_write_wav(tmp_path / "bad.wav", **kwargs))
+def test_off_contract_but_readable_files_stay_usable(tmp_path, kwargs, needle):
+    """DRIFT, not failure — the replay path resamples/downmixes these.
+
+    The Codex P2 on #1643: ``_prepare_audio_for_moonshine`` (voice_tts.py:2071)
+    resamples off-rate audio to 16 kHz before transcription, so a 24 kHz mono
+    s16 capture is a perfectly good regression sample. Quarantining it would
+    shrink the gate's evidence base for a capture-time defect. The mismatch is
+    reported as ``drift`` and the file is KEPT.
+    """
+    info = cvc.probe_format(_write_wav(tmp_path / "drifted.wav", **kwargs))
+    assert info["ok"] is True, "readable audio must remain usable"
+    assert info["reason"] is None
+    assert info["conforms"] is False
+    assert needle in info["drift"]
+
+
+@pytest.mark.parametrize("write,needle", [
+    (lambda p: _write_wav(p, frames=0), "zero audio frames"),
+    (lambda p: p.write_bytes(b"this is not a RIFF header at all"), "unreadable WAV"),
+    (lambda p: p.write_bytes(b""), "unreadable WAV"),
+])
+def test_probe_format_rejects_only_genuinely_unusable_audio(tmp_path, write, needle):
+    """The quarantine class is exactly what the STT path itself refuses."""
+    p = tmp_path / "bad.wav"
+    write(p)
+    info = cvc.probe_format(p)
     assert info["ok"] is False
     assert needle in info["reason"]
 
 
-def test_probe_format_rejects_invalid_riff(tmp_path):
-    p = tmp_path / "notriff.wav"
-    p.write_bytes(b"this is not a RIFF header at all, not even close")
+def test_probe_format_rejects_an_unresampleable_rate(tmp_path):
+    """rate <= 0 is the one rate ``_prepare_audio_for_moonshine`` will not fake.
+
+    It returns the samples with the bad rate rather than pretending 16 kHz, so
+    the audio cannot honestly be replayed — this IS a quarantine reason, and it
+    is the boundary that separates the two classes above.
+    """
+    p = _write_wav(tmp_path / "zerorate.wav")
+    raw = bytearray(p.read_bytes())
+    # Zero the sample-rate field in the canonical 44-byte RIFF/WAVE header.
+    raw[24:28] = (0).to_bytes(4, "little")
+    p.write_bytes(bytes(raw))
+
     info = cvc.probe_format(p)
+
     assert info["ok"] is False
-    assert "unreadable WAV" in info["reason"]
+    assert "invalid sample rate" in info["reason"]
 
 
 # ── classifier ────────────────────────────────────────────────────────────────
@@ -133,11 +168,35 @@ def test_threshold_is_load_bearing_negative_control():
     assert cvc.classify({"ok": True}, 0.30, 0.50)[0] == cvc.CLASS_NONSPEECH
 
 
-def test_format_failure_beats_a_perfect_speech_score():
-    """An off-format file is unusable to the replay path whatever it contains."""
-    klass, reason = cvc.classify({"ok": False, "reason": "rate=24000 (want 16000)"}, 0.99, 0.20)
+def test_unusable_audio_beats_a_perfect_speech_score():
+    """A file the STT path cannot READ is unusable whatever it contains."""
+    klass, reason = cvc.classify({"ok": False, "reason": "unreadable WAV (Error: …)"}, 0.99, 0.20)
     assert klass == cvc.CLASS_FORMAT
-    assert "24000" in reason
+    assert "unreadable" in reason
+
+
+def test_contract_drift_does_not_quarantine_a_speech_file():
+    """The #1643 fix, at the classifier: drift annotates, it does not evict."""
+    fmt = {"ok": True, "conforms": False, "drift": "rate=24000 (contract 16000)"}
+
+    klass, reason = cvc.classify(fmt, 0.99, 0.20)
+
+    assert klass == cvc.CLASS_KEEP
+    assert "DRIFT" in reason and "24000" in reason
+
+
+def test_drift_does_not_rescue_a_nonspeech_file():
+    """Negative control on the annotation: it must not become an escape hatch.
+
+    VAD scoring still applies to drifted files — a drifted capture below the
+    threshold is still quarantined as non-speech, on the non-speech class.
+    """
+    fmt = {"ok": True, "conforms": False, "drift": "rate=24000 (contract 16000)"}
+
+    klass, reason = cvc.classify(fmt, 0.05, 0.20)
+
+    assert klass == cvc.CLASS_NONSPEECH
+    assert "DRIFT" in reason
 
 
 def test_unscored_files_are_never_quarantined():
@@ -151,8 +210,9 @@ def _fixture_corpus(tmp_path: Path) -> Path:
     corpus = tmp_path / "corpus"
     _write_wav(corpus / "100000_001.wav")                 # good
     _write_wav(corpus / "100001_002.wav")                 # good
-    _write_wav(corpus / "100002_003.wav", rate=24000)     # format
+    _write_wav(corpus / "100002_003.wav", rate=24000)     # DRIFT — kept, not moved
     (corpus / "100003_004.wav").write_bytes(b"nope")      # format (bad RIFF)
+    _write_wav(corpus / "100005_006.wav", frames=0)       # format (empty)
     _write_wav(corpus / "quarantine-old-20260719" / "100004_005.wav")  # already out
     return corpus
 
@@ -160,7 +220,8 @@ def _fixture_corpus(tmp_path: Path) -> Path:
 def test_list_corpus_is_top_level_only(tmp_path):
     corpus = _fixture_corpus(tmp_path)
     names = [os.path.basename(p) for p in cvc.list_corpus(corpus)]
-    assert names == ["100000_001.wav", "100001_002.wav", "100002_003.wav", "100003_004.wav"]
+    assert names == ["100000_001.wav", "100001_002.wav", "100002_003.wav",
+                     "100003_004.wav", "100005_006.wav"]
     assert "100004_005.wav" not in names, "quarantined audio must not be re-scanned"
 
 
@@ -168,12 +229,19 @@ def test_scan_and_plan_without_vad(tmp_path):
     corpus = _fixture_corpus(tmp_path)
     rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
     by_class = {r["file"]: r["class"] for r in rows}
+    by_drift = {r["file"]: r["drift"] for r in rows}
     assert by_class["100000_001.wav"] == cvc.CLASS_KEEP
-    assert by_class["100002_003.wav"] == cvc.CLASS_FORMAT
+    # The #1643 fix: a 24 kHz capture is REPORTED, not quarantined.
+    assert by_class["100002_003.wav"] == cvc.CLASS_KEEP
+    assert by_drift["100002_003.wav"] is True
+    assert by_drift["100000_001.wav"] is False
     assert by_class["100003_004.wav"] == cvc.CLASS_FORMAT
+    assert by_class["100005_006.wav"] == cvc.CLASS_FORMAT
+
+    assert cvc.summarise(rows, 0.20)["drift"] == 1
 
     plan = cvc.plan_moves(rows, str(corpus), "20260804")
-    assert {p["file"] for p in plan} == {"100002_003.wav", "100003_004.wav"}
+    assert {p["file"] for p in plan} == {"100003_004.wav", "100005_006.wav"}
     for item in plan:
         assert item["dest_dir"].endswith("quarantine-format-20260804")
         assert item["conflict"] is False
@@ -201,6 +269,62 @@ def test_scan_scores_speech_through_the_injected_vad(tmp_path):
     assert by_class["noise.wav"] == cvc.CLASS_NONSPEECH
 
 
+# ── VAD input normalisation (the other half of the #1643 fix) ─────────────────
+
+def test_conforming_audio_reaches_the_vad_byte_identical():
+    """Identity by construction for 16 kHz mono s16 — no census can shift.
+
+    Keeping drifted files only helps if scoring them cannot perturb the files
+    that were already being scored. A conforming buffer must come back as the
+    SAME object/bytes, not a round-tripped copy.
+    """
+    raw = struct.pack("<1600h", *([1000] * 1600))
+
+    assert cvc._to_vad_pcm(raw, 16000, 1, 2) == raw
+
+
+def test_a_drifted_capture_is_resampled_before_the_vad_hears_it():
+    """The VAD's contract is 16 kHz. Feeding it 24 kHz bytes as if they were
+    16 kHz would mis-score exactly the files this PR now keeps — mirror what
+    ``_prepare_audio_for_moonshine`` does instead."""
+    raw = struct.pack("<2400h", *([1000] * 2400))  # 0.1 s @ 24 kHz
+
+    out = cvc._to_vad_pcm(raw, 24000, 1, 2)
+
+    assert len(out) // 2 == 1600, "0.1 s @ 24 kHz must become 0.1 s @ 16 kHz"
+    assert out != raw
+    assert set(struct.unpack(f"<{len(out) // 2}h", out)) == {1000}, "constant in, constant out"
+
+
+def test_a_stereo_capture_is_downmixed_before_the_vad_hears_it():
+    raw = struct.pack("<1600h", *([1000, 2000] * 800))  # 800 stereo frames
+
+    out = cvc._to_vad_pcm(raw, 16000, 2, 2)
+
+    assert len(out) // 2 == 800
+    assert set(struct.unpack("<800h", out)) == {1500}, "L/R mean, not interleaved bytes"
+
+
+def test_a_width_this_tool_cannot_decode_is_unscorable_not_quarantined(tmp_path):
+    """Absent evidence never moves a file — the rule the whole tool rests on.
+
+    An 8-bit capture is readable (so not a format quarantine) but this tool
+    declines to invent an s16 decode for it. That must surface as "not scored"
+    and KEEP, never as a quarantine.
+    """
+    with pytest.raises(cvc.UnscorableAudio):
+        cvc._to_vad_pcm(b"\x80" * 1600, 16000, 1, 1)
+
+    corpus = tmp_path / "corpus"
+    _write_wav(corpus / "eightbit.wav", sampwidth=1)
+
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=lambda: object())
+
+    assert rows[0]["class"] == cvc.CLASS_KEEP
+    assert rows[0]["scores"] is None
+    assert "UnscorableAudio" in rows[0]["score_error"]
+
+
 def test_dry_run_moves_nothing(tmp_path):
     corpus = _fixture_corpus(tmp_path)
     before = sorted(os.listdir(corpus))
@@ -219,16 +343,17 @@ def test_execute_moves_and_writes_a_manifest(tmp_path):
 
     assert result["moved"] == 2 and not result["errors"]
     top = set(os.listdir(corpus))
-    assert "100002_003.wav" not in top and "100003_004.wav" not in top
+    assert "100003_004.wav" not in top and "100005_006.wav" not in top
+    assert "100002_003.wav" in top, "a resampleable 24 kHz capture STAYS in the corpus"
     qdir = corpus / "quarantine-format-20260804"
     # MOVED, never deleted — the bytes are still on disk.
-    assert (qdir / "100002_003.wav").exists() and (qdir / "100003_004.wav").exists()
+    assert (qdir / "100003_004.wav").exists() and (qdir / "100005_006.wav").exists()
 
     manifest = json.loads((qdir / "manifest.json").read_text())
     assert manifest["speech_threshold"] == 0.20
     assert manifest["vad_model_sha256"] == "deadbeef"
     entries = {e["file"]: e for e in manifest["entries"]}
-    assert set(entries) == {"100002_003.wav", "100003_004.wav"}
+    assert set(entries) == {"100003_004.wav", "100005_006.wav"}
     for entry in entries.values():
         assert entry["reason"] and entry["mtime"] and entry["mtime_iso"]
         assert "class" in entry and "scores" in entry
@@ -239,14 +364,14 @@ def test_rerun_merges_into_the_existing_manifest(tmp_path):
     rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
     cvc.apply_moves(cvc.plan_moves(rows, str(corpus), "20260804"),
                     str(corpus), 0.20, None, execute=True)
-    _write_wav(corpus / "110000_009.wav", rate=24000)
+    _write_wav(corpus / "110000_009.wav", frames=0)
     rows2 = cvc.scan(str(corpus), 0.20, vad_factory=None)
     cvc.apply_moves(cvc.plan_moves(rows2, str(corpus), "20260804"),
                     str(corpus), 0.20, None, execute=True)
 
     manifest = json.loads((corpus / "quarantine-format-20260804" / "manifest.json").read_text())
     assert {e["file"] for e in manifest["entries"]} == {
-        "100002_003.wav", "100003_004.wav", "110000_009.wav"}
+        "100003_004.wav", "100005_006.wav", "110000_009.wav"}
 
 
 def test_a_name_collision_never_overwrites(tmp_path):
@@ -254,15 +379,15 @@ def test_a_name_collision_never_overwrites(tmp_path):
     corpus = _fixture_corpus(tmp_path)
     qdir = corpus / "quarantine-format-20260804"
     qdir.mkdir()
-    (qdir / "100002_003.wav").write_bytes(b"PRIOR QUARANTINE CONTENT")
+    (qdir / "100003_004.wav").write_bytes(b"PRIOR QUARANTINE CONTENT")
 
     rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
     plan = cvc.plan_moves(rows, str(corpus), "20260804")
     result = cvc.apply_moves(plan, str(corpus), 0.20, None, execute=True)
 
     assert result["conflicts"] == 1
-    assert (qdir / "100002_003.wav").read_bytes() == b"PRIOR QUARANTINE CONTENT"
-    assert (corpus / "100002_003.wav").exists(), "collided file stays in the corpus"
+    assert (qdir / "100003_004.wav").read_bytes() == b"PRIOR QUARANTINE CONTENT"
+    assert (corpus / "100003_004.wav").exists(), "collided file stays in the corpus"
     assert result["moved"] == 1  # the other format failure still moved
 
 

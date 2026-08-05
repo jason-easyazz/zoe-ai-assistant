@@ -61,12 +61,25 @@ not an excuse.
 The corpus is **untrusted input**: it grows by itself from whatever the wake word fired on, including
 TV false-wakes and captures written by a resampling-era pipeline. Two rules make it gate-safe.
 
-**1. Every member is 16 kHz mono 16-bit PCM.** That is what STT/replay expect; anything else is
-unusable to the harness. Measured 2026-08-04 over 1151 files: **100 off-format** (95 × 24 kHz
-resamples from a 2026-06-21..07-13 window, 5 not valid RIFF at all) and **50 clear non-speech**.
-Five of those 150 sat inside the probe's replayed `--last 20` slice — **a quarter of the gate's
-actual sample set**, drifting the numbers with no code change. #1642 is the same class of failure
-one file wide.
+**1. Every member SHOULD be 16 kHz mono 16-bit PCM — but off-contract is not the same as unusable.**
+16 kHz mono s16 is the capture contract. Missing it is a real signal about the capture path, and it
+is REPORTED as drift; it is not grounds for eviction. The replay path
+(`replay_samples.py` → `routers.voice_tts._run_moonshine` → `_prepare_audio_for_moonshine`,
+`voice_tts.py:2071`) **resamples off-rate audio to 16 kHz and downmixes multi-channel** before
+transcription, so a 24 kHz mono s16 capture is a perfectly good regression sample. The only input it
+refuses is a rate it cannot honestly resample (`sr <= 0`), which it explicitly declines to pretend is
+16 kHz. So the quarantine class is exactly the audio STT itself cannot consume: unparseable RIFF,
+zero frames, or `rate <= 0`.
+
+Measured 2026-08-04 over 1151 files: **5 unusable** (not valid RIFF at all), **95 × 24 kHz drifted
+but transcribable** (a 2026-06-21..07-13 resampling-era window — these STAY in the corpus and are
+reported), and **50 clear non-speech**. The first executed run predated this distinction and moved
+all 150; the 95 were restored, leaving the live top-level corpus at **1099 WAVs**. #1642 is the
+non-speech class one file wide.
+
+The right fix for capture drift is a **rate assertion at the SAVE path** — catching it when the file
+is written, not deleting the evidence afterwards. Curating a shrunken corpus and re-baselining
+against it makes the gate agree with itself while measuring less.
 
 **2. Quarantine is a MOVE into a dated subdirectory, never a delete.**
 `scripts/maintenance/curate_voice_corpus.py` audits every top-level WAV (stdlib format probe + the
