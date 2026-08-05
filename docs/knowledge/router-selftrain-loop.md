@@ -17,6 +17,16 @@ worse model is a loop that will eventually do so.
 - **Subject:** the FunctionGemma-270M sidecar (`functiongemma-router.service`, :11436),
   stage 2 of the two-stage router. The Gemma 4 brain and Moonshine STT — the
   rocks — are never touched.
+- **NOT the subject — stage 1.** The loop never reads, retrains, or promotes the SetFit
+  head `services/zoe-data/models/router_head_mlp.joblib`. The driver has **no reference
+  to a head, an MLP, or a `.joblib`** anywhere in its 1095 lines; its only production
+  mutation is swapping `SERVED_GGUF` (`router_selftrain.py:98`, written at `:880-882`)
+  under `~/models/functiongemma-router/` — **outside the repo** — so no ratchet verdict
+  ever reaches git. Stage-1 heads are **hand-committed** (`git log -- services/zoe-data/
+  models/` is two commits ever, both hand-committed feature PRs), and the thing that
+  covers them is the PR/deploy voice gate — `services/zoe-data/models/*` is a directory
+  glob in `VOICE_PATH_PATTERNS`. Assuming the ratchet covered stage 1 left that
+  checkpoint ungated for two releases.
 - **Related:** [Two-stage router rollout](two-stage-router-rollout.md) ·
   [Voice pipeline](voice-pipeline.md) · [Merge & deploy discipline](merge-and-deploy.md)
 
