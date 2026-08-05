@@ -96,8 +96,8 @@ starting anything here; remaining = step 3 (streamed TTS) + the M3/M4 measuremen
 
 - **Grounding:** `voice_livekit.py` drops incoming frames during PROCESSING/COOLDOWN (ADR gap 1);
   endpointing is energy-RMS `_rms()` (gap 2); LiveKit TTS is one whole-utterance `synthesize`
-  call while `/ws/voice/` streams per-sentence (`_stream_kokoro_sentence_wavs`,
-  `_extract_complete_sentences` already exist in `voice_tts.py`).
+  call while `/ws/voice/` streams per-sentence via the Kokoro sidecar (`_emit_sentence` +
+  `_synthesize_kokoro_sidecar`; `_extract_complete_sentences` already exists in `voice_tts.py`).
 - **Smart Turn v3 facts (researched):** standalone open model ([repo](https://github.com/pipecat-ai/smart-turn),
   [weights](https://huggingface.co/pipecat-ai/smart-turn-v3)), ~8M params on a Whisper-Tiny
   trunk, int8 ONNX, **12–60 ms CPU inference** ([Daily announcement](https://www.daily.co/blog/announcing-smart-turn-v3-with-cpu-inference-in-just-12ms/)) —
@@ -108,8 +108,9 @@ starting anything here; remaining = step 3 (streamed TTS) + the M3/M4 measuremen
      (the Pi daemon's Silero barge-in is the in-house reference implementation).
   2. Smart Turn v3 ONNX as the endpointer (replacing raw RMS-silence timeout) — score
      "has the speaker finished?" at candidate end-of-speech; fall back to RMS on model failure.
-  3. Sentence-streamed TTS in the LiveKit lane: reuse `_stream_kokoro_sentence_wavs` so
-     conversation mode gets first-audio at first-sentence, like `/ws/voice/` already does.
+  3. Sentence-streamed TTS in the LiveKit lane: drive the Kokoro sidecar per sentence
+     (`_synthesize_kokoro_sidecar`, as `_emit_sentence` does) so conversation mode gets
+     first-audio at first-sentence, like `/ws/voice/` already does.
   4. The ADR's deferred live measurements (barge-in quality M1, latency M3, RAM M4) run as
      the lab-proof session — same script serves either path.
 - **Gates:** replay-gate (mandatory, voice path); a live barge-in session with a human at a
