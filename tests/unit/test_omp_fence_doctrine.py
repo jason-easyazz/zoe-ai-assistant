@@ -127,14 +127,20 @@ def test_wrapper_execs_the_supervisor_never_omp_directly():
 def test_wrapper_preconditions_are_fail_closed_with_exit_78():
     """A missing piece of the fence must fail the dispatch, never fall through
     to an unfenced omp running on the SHARED review-lane key."""
+    # SAME-LINE match, deliberately. An earlier revision let the pattern cross
+    # one newline (`[^\n]*\n?[^\n]*`); because these guards sit on consecutive
+    # lines, each one then borrowed the NEXT guard's `exit 78` and the per-guard
+    # property was not pinned at all. Measured (cross-review, #1650): mutating
+    # the `$OMP_BIN` guard to `exit 77` left this test GREEN. Every guard must
+    # carry its own `exit 78` on its own line.
     text = _text(WRAPPER)
     for var in ("$OMP_BIN", "$OVERLAY_FILE", "$KEY_FILE", "$SUPERVISOR"):
         guard = re.search(
-            r"\[\s*-[rx]\s*\"" + re.escape(var) + r"\"\s*\][^\n]*\n?[^\n]*exit 78",
+            r"\[\s*-[rx]\s*\"" + re.escape(var) + r"\"\s*\][^\n]*exit 78",
             text,
         )
         assert guard, f"no fail-closed (exit 78) precondition guarding {var}"
-    assert re.search(r"SUPERVISOR_PY[^\n]*\n?[^\n]*exit 78", text), (
+    assert re.search(r"SUPERVISOR_PY[^\n]*exit 78", text), (
         "a missing python3 must fail closed too — the supervisor cannot run without it"
     )
     assert "exit 0" not in _code_lines(text), "the wrapper must never exit success early"
