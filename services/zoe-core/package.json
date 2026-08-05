@@ -4,6 +4,9 @@
   "private": true,
   "description": "Zoe's reasoning/orchestration core — Pi-agent extensions (provider, soul, memory, abilities).",
   "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.82.1",
     "@sinclair/typebox": "^0.34.0"

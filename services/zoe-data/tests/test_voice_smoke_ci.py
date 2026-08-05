@@ -7,8 +7,9 @@ the slim CI runner:
 
 - It imports the REAL ``routers.voice_tts`` and ``intent_router`` modules. Both only
   pull slim deps at import time (fastapi / httpx / asyncpg); every heavy engine
-  (moonshine_voice, kokoro_onnx, edge_tts, espeak-ng) is imported lazily *inside* a
-  function, so we fake those without ever installing or loading a model.
+  (moonshine_voice, edge_tts, espeak-ng) is imported lazily *inside* a function, and
+  the Kokoro rock is the out-of-process PyTorch sidecar reached over HTTP, so we fake
+  those without ever installing or loading a model.
 - No DB pool, no network, no real sleeps. STT and every TTS provider are monkeypatched
   to canned values; the brain is never called (we drive the deterministic intent
   classifier directly).
@@ -60,10 +61,9 @@ def _patch_all_tts_providers(monkeypatch, order, *, succeed="espeak"):
         return _fake
 
     # Names mirror the live waterfall in synthesize() (Kokoro-first since PR #872):
-    #   Kokoro sidecar (GPU) -> Kokoro ONNX -> local override -> Edge (cloud) -> espeak
+    #   Kokoro sidecar (GPU) -> local override -> Edge (cloud) -> espeak
     monkeypatch.setattr(vt, "_synthesize_local_service", recorder("local_service"))
     monkeypatch.setattr(vt, "_synthesize_kokoro_sidecar", recorder("kokoro_sidecar"))
-    monkeypatch.setattr(vt, "_synthesize_kokoro", recorder("kokoro_onnx"))
     monkeypatch.setattr(vt, "_synthesize_edge_tts", recorder("edge"))
     monkeypatch.setattr(vt, "_synthesize_espeak", recorder("espeak"))
     return CANNED
@@ -73,7 +73,7 @@ def _patch_all_tts_providers(monkeypatch, order, *, succeed="espeak"):
 def test_tts_waterfall_order_kokoro_before_edge_before_espeak(monkeypatch):
     """The live /synthesize waterfall must attempt providers in the canonical order.
 
-    Kokoro is the primary rock and is tried FIRST (sidecar then ONNX, since PR #872);
+    Kokoro (the out-of-process PyTorch sidecar) is the primary rock and is tried FIRST;
     the optional ``ZOE_LOCAL_TTS_URL`` override sits after it, Edge TTS is the cloud
     fallback, and espeak-ng is the last resort. We let every provider miss so the route
     walks the entire chain, then assert the recorded order. (We clear ``ZOE_LOCAL_TTS_URL``
@@ -91,11 +91,10 @@ def test_tts_waterfall_order_kokoro_before_edge_before_espeak(monkeypatch):
     assert resp.headers.get("X-Zoe-TTS-Provider") == "espeak-ng"
     # Kokoro is the primary rock and runs FIRST — ahead of the optional local sidecar
     # override (PR #872). espeak-ng stays the last resort.
-    assert order == ["kokoro_sidecar", "kokoro_onnx", "local_service", "edge", "espeak"], order
+    assert order == ["kokoro_sidecar", "local_service", "edge", "espeak"], order
 
     # The load-bearing sub-orderings (what actually keeps the rock the rock):
-    assert order.index("kokoro_sidecar") < order.index("kokoro_onnx"), "GPU sidecar must precede ONNX fallback"
-    assert max(order.index("kokoro_sidecar"), order.index("kokoro_onnx")) < order.index("edge"), "Kokoro before Edge"
+    assert order.index("kokoro_sidecar") < order.index("edge"), "Kokoro before Edge"
     assert order.index("edge") < order.index("espeak"), "Edge before espeak"
     assert order[-1] == "espeak", "espeak-ng must be the final last-resort provider"
 

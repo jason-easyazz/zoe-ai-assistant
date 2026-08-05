@@ -335,12 +335,71 @@ reply after idle) rather than a resource one.
 |------|-----------------|-------------|-------------|
 | `llama-server` | `0` | `6G` | *(none — see below)* |
 | `kokoro-tts`   | `0` | `3G` | `4G` |
+| `zoe-data`     | `0` | `2G` | *(none — see below)* — also `CPUWeight`/`IOWeight` `300` |
+| `flue-zoe-brain` | `0` | `512M` | `2G` |
+| `flue-zoe-telegram` | `0` | `256M` | `1G` |
+| `functiongemma-router` | `0` | `768M` | `1G` |
 | `serena-mcp`   | `2G` | — | `2G` (dev tooling, deliberately yields) |
+
+The set above is pinned by `tests/unit/test_systemd_memory_protection.py`. It
+enforces the *doctrine* (swap denied, a floor set, and a ceiling paired with the
+denial) rather than the exact numbers, so retuning a cap is fine and dropping one
+is not. Add a new latency-critical user unit to `NO_SWAP_UNITS` there.
 
 Measured on the live box 2026-07-18, **before** these directives existed:
 llama-server had **1,457 MB** and kokoro-tts **1,489 MB** paged out — ~3 GB of the
 voice path on disk. `kokoro-tts` had no memory directives at all (cgroup
 `memory.low` was `0`), so the kernel reclaimed it first.
+
+The same thing was true of both `flue-*` sidecars until 2026-08-03 — that pass
+fixed the units it knew about and nothing enforced the class. `flue-zoe-brain` is
+the **top** brain lane under `ZOE_BRAIN_BACKEND=flue` (flue > core > legacy) and
+was 87% paged out; `flue-zoe-telegram` had no directives at all. Measurements,
+sizing rationale and the operator apply/rollback sequence:
+[`docs/knowledge/memory-pressure-profile.md`](../../../docs/knowledge/memory-pressure-profile.md)
+(2026-08-03 section). **Applying these live means a drop-in, not a template copy**
+— the installed units carry host-specific edits (llama-server's binary and model
+paths), so `cp`-ing a template over one clobbers them.
+
+`zoe-data` was the same finding a third time, the same day, and the purest form
+of it: its `MemoryLow=2G` + `CPUWeight`/`IOWeight` `300` were **real, live, and
+tracked nowhere** — untracked drop-ins under
+`~/.config/systemd/user/zoe-data.service.d/` plus `systemctl set-property` copies
+under `user.control/`. A rebuild or a second host lost all of it silently. Do not
+read "primary backend API" as off the voice path: **Moonshine STT runs in-process
+inside zoe-data**, so a swapped zoe-data is a swapped STT and the first utterance
+after idle waits on ~1 GB faulting off the NVMe swapfile. Measured 2026-08-03
+with that 2G floor already in force: `VmRSS` **40 MB** against `VmSwap`
+**1,056 MB** — **96% paged out**.
+
+`functiongemma-router` was the same finding a **fourth** time, and the one whose
+degradation is hardest to see. It is not an optional accelerator:
+[`docs/CANONICAL.md`](../../../docs/CANONICAL.md) lists the two-stage router as a
+tool-router **front on the voice path** (LIVE, `ZOE_ROUTER_HEAD=active`).
+`router_two_stage.py` holds it to a strict **1.5 s** client timeout against a
+424 ms p50, so faulting ~600 MB back off the swapfile blows the budget — and the
+caller's fallback is **real**, which is exactly what makes this one dangerous.
+`decide()` returns `None` (`router_two_stage.py:291`) and `semantic_router.py:547`
+silently keeps the similarity decision: nothing errors, nothing logs a regression,
+every health check stays green, and the turn is simply routed **worse** after
+paying the full 1.5 s. Measured 2026-08-03 with no directives and no drop-in at
+all: `VmRSS` **411.7 MB** against `VmSwap` **156.9 MB** (27.6% out), `VmHWM`
+**598.8 MB** — and that `VmHWM` is only **1.05×** `VmRSS+VmSwap`, so unlike the
+`flue-*` units it is a settled working set that a floor *can* be sized from.
+
+- **A leaf `MemoryLow` is capped by its ancestors — and on THIS host every
+  ancestor is `0`.** `user.slice` → `user-1000.slice` → `user@1000.service` →
+  `app.slice` all read `memory.low=0`, so an effective floor computes to 0 no
+  matter what a unit writes. **This is a property of the host's slice
+  configuration, not a kernel law and not a fact about the units**: give the
+  ancestor slices protection and the leaf floors start meaning something. It has
+  not been done here — it is a host-wide change with a blast radius beyond any
+  one unit — which is why the floors are kept for ordering while
+  `MemorySwapMax=0` does the actual work. Re-measure before assuming it still
+  holds on a rebuilt or differently-provisioned box.
+  Across six live units on 2026-08-03 the split was total: every unit denying
+  swap held **0** swap (llama-server 6,053 MB resident, kokoro-tts 2,198 MB),
+  every unit not denying it was **96–98%** out regardless of its floor.
 
 Two things worth knowing before changing these:
 
@@ -357,9 +416,71 @@ Two things worth knowing before changing these:
 - **llama-server has no `MemoryMax` on purpose.** A hard ceiling *plus* no swap
   turns a transient spike into an OOM kill. Kokoro can take one because it is
   bounded (~2.3 GB CUDA-resident, does not grow with load).
+- **`zoe-data` has no `MemoryMax` either — for a different reason, and the
+  distinction matters.** Its accounting IS complete (0 CUDA/NvMap mappings; STT
+  is ONNX Runtime on CPU), so unlike llama-server a ceiling would genuinely bound
+  it. It is declined on **blast radius**, not measurability: zoe-data is spiky
+  (~1.1 GB steady anon against a 3.16 GB `VmHWM`, a 3× idle-to-peak spread) and a
+  cgroup OOM kill there takes down chat, voice and the panel at once, where
+  llama-server only loses a lane to fallback. Both exemptions are recorded **with
+  their rationale** in `MEMORY_MAX_EXEMPT`, which the test requires to be
+  non-empty — an exemption without a stated reason fails.
+
+- **A ceiling is only meaningful where cgroup accounting is complete.** Both
+  `flue-*` sidecars are pure userspace Node (verified 0 CUDA/NvMap mappings in
+  `/proc/<pid>/maps`), so `MemoryMax` genuinely bounds them. On Tegra, a process
+  allocating through NvMap does *not* have its GPU/unified pages fully accounted
+  to the cgroup — which is the other half of why llama-server gets no ceiling.
+- **`--n-gpu-layers`, not the binary, decides whether a ceiling is trustworthy.**
+  `functiongemma-router` runs the *same* `llama-server` binary as the exempt brain
+  on `:11434` and still carries `MemoryMax=1G`, because this instance runs
+  `-ngl 0`. Verified in `/proc/<pid>/maps`: exactly one 4 KB
+  `/dev/nvgpu/igpu0/ctrl` control page and **zero** `/dev/nvmap` allocations (the
+  nvidia `.so` files are mapped — Jetson CUDA build — but those are ordinary
+  file-backed pages). No weights and no KV cache on device ⇒ accounting is
+  complete ⇒ the ceiling genuinely bounds the cgroup. Read the maps before
+  reusing either decision.
+- **Size a ceiling from the RUNTIME's behaviour under it, never as a multiple of
+  a `VmHWM` you sampled on a starved box.** That method sized both `flue-*`
+  ceilings on 2026-08-03 and was corrected the same day: a starved `VmHWM` is a
+  *lower* bound on the unstressed peak, so every multiple of it inherits the
+  error. What actually decides throttle-vs-kill on a Node unit, measured here:
+  V8 reads the cgroup limit and sizes its JS heap to **~51%** of it (`MemoryMax`
+  512M/768M/1G/2G → `heap_size_limit` 259/396/524/1048 MB; **4144 MB uncapped**),
+  so a JS-heap runaway hits V8's own limit first — which still usually
+  *terminates* the process (`FATAL ERROR: JavaScript heap out of memory`); the
+  gain is a logged, attributable failure rather than an opaque SIGKILL, not
+  survival. **External memory (Buffers, ArrayBuffers, stream chunks) sits
+  outside that budget and can reach the ceiling unmediated**: a Buffer loop
+  under `MemoryMax=1G` + `MemorySwapMax=0` was **SIGKILLed (exit 137)**. Treat
+  that as a demonstrated *risk* justifying headroom — it shows external buffers
+  *can* hit the ceiling, not that streamed responses are the principal path
+  here, which has not been measured. Ceilings are backstops against a leak, not
+  working limits: `tests/unit/test_systemd_memory_protection.py` requires
+  `MemoryMax` ≥ **3×** `MemoryLow` (bounded, non-growing workloads like kokoro
+  are a documented exception in `TIGHT_CEILING_OK`).
+- **Why the `flue-*` units keep a ceiling when llama-server and zoe-data do
+  not — and NOT because a kill there is harmless.** There is **no core-lane
+  failover**: `brain_dispatch.use_flue_brain()` picks the lane from
+  `ZOE_BRAIN_BACKEND` alone, so with that set to `flue` (as it is live) a dead
+  sidecar makes every brain turn return a canned "trouble reaching my brain"
+  string until systemd restarts it. The actual reasons are narrower: the blast
+  radius is still strictly smaller than zoe-data's (panel, HA, TTS and the rest
+  of the API keep serving), recovery is automatic and cheap (`Restart=always`,
+  `RestartSec=5`, small Node process, versus zoe-data's cold reload of Moonshine
+  + fastembed + Chroma), and uncapped V8 would size its heap to 4144 MB — on a
+  15.6 GB box where llama-server holds ~6.4 GB, an unbounded unswappable sidecar
+  threatens the brain **rock**, a worse outage than its own death. A trade, not
+  a free win.
 
 Headroom check (why this fits): brain + kokoro fully resident ≈ **9.6 GB** of
-15.6 GB, leaving ~6 GB for zoe-data (~0.9 GB) and everything else.
+15.6 GB, plus the flue floors (768 MB combined) and zoe-data's 2G ≈ **12.4 GB**
+of soft-protected total, leaving ~3 GB for everything else. `MemoryLow` is a
+protection *ceiling*, not a reservation — an unused floor costs nothing, and
+zoe-data's steady anon footprint is ~1.1 GB against that 2G floor. Nothing new is
+claimed here: zoe-data's 2G was already counted in this budget while living only
+in an untracked drop-in — tracking it changes what a rebuild reproduces, not what
+the box allocates.
 
 **Do not add `Nice=-N` or `OOMScoreAdjust=-N` to user units.** A `--user` unit
 cannot raise priority (`ulimit -e` is 0 here). systemd accepts the directive, the

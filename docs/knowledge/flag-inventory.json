@@ -1,16 +1,6 @@
 {
   "flags": {
     "lab": {
-      "ZOE_KOKORO_MODEL": {
-        "defaults": [
-          "'/home/zoe/models/kokoro-v1.0.onnx'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "labs/kokoro-voice-blend/blend_zoe_voices.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_KOKORO_VOICES": {
         "defaults": [
           "'/home/zoe/models/voices-v1.0.bin'"
@@ -743,6 +733,16 @@
       "ZOE_CORE_MAX_WORKERS": {
         "defaults": [
           "'4'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CORE_MEMORY_TIMEOUT_MS": {
+        "defaults": [
+          "'2000'"
         ],
         "in_env_example": false,
         "readers": [
@@ -1705,16 +1705,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_KOKORO_BACKEND": {
-        "defaults": [
-          "-"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/setup/kokoro_sidecar.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_KOKORO_BRAIN_HEALTH_URL": {
         "defaults": [
           "'http://127.0.0.1:11434/health'"
@@ -1815,18 +1805,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_KOKORO_MODEL": {
-        "defaults": [
-          "''",
-          "'/home/zoe/models/kokoro-v1.0.onnx'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/setup/kokoro_sidecar.py",
-          "services/zoe-data/tts_waterfall.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_KOKORO_SIDECAR_URL": {
         "defaults": [
           "'http://127.0.0.1:10201'"
@@ -1835,16 +1813,6 @@
         "readers": [
           "scripts/perf/measure_tts.py",
           "services/zoe-data/main.py",
-          "services/zoe-data/tts_waterfall.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_KOKORO_SPEED": {
-        "defaults": [
-          "'1.15'"
-        ],
-        "in_env_example": false,
-        "readers": [
           "services/zoe-data/tts_waterfall.py"
         ],
         "typed_env": false
@@ -1863,13 +1831,10 @@
       },
       "ZOE_KOKORO_VOICES": {
         "defaults": [
-          "''",
-          "'/home/zoe/models/voices-v1.0.bin'"
+          "''"
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/setup/kokoro_sidecar.py",
-          "services/zoe-data/tts_waterfall.py",
           "services/zoe-data/voice_settings.py"
         ],
         "typed_env": false
