@@ -174,6 +174,39 @@ def test_device_token_is_accepted(_no_pipeline):
     assert resp.json() == {"ok": True, "transcript": "", "audio_base64": None}
 
 
+def test_device_token_plus_invalid_session_is_refused_documents_precedence():
+    """PINS CURRENT BEHAVIOUR, and it is deliberately not the "OR" the docstring
+    of the gate reads like — surfaced by cross-review on #1652.
+
+    `_validate_device_token` and `get_current_user` are declared as SIBLING
+    `Depends`, so FastAPI resolves BOTH before the gate body runs. A caller with
+    a VALID device token but a present-and-invalid `X-Session-ID` therefore gets
+    `get_current_user`'s 401 before `if device:` is ever reached — the device
+    token does not rescue it.
+
+    Why that is acceptable today rather than a bug to fix here:
+      * no real client sends both — the Pi daemon sends `X-Device-Token` only
+        (and does not call these endpoints at all), browsers send session only;
+      * it is the exact idiom already shipping in `voice_tts._require_voice_auth`
+        for every other voice endpoint, which this gate deliberately mirrors;
+      * the OLD code mis-served this combination as `guest`, so nothing that
+        worked regresses.
+
+    This test exists so the consolidation recorded in `routers/AGENTS.md` (fold
+    the two gates into one shared helper) CHANGES this on purpose and not by
+    accident: if that work resolves the session lazily only when there is no
+    valid device token, this assertion flips to 200 and must be updated with it.
+    """
+    app = _app(device={"panel_id": "zoe-touch-pi", "user_id": "jason"}, user_raises=True)
+    client = TestClient(app)
+    assert _post_audio(
+        client, headers={"X-Device-Token": "raw", "X-Session-ID": "stale-or-bogus"}
+    ).status_code == 401
+    assert _post_cancel(
+        client, headers={"X-Device-Token": "raw", "X-Session-ID": "stale-or-bogus"}
+    ).status_code == 401
+
+
 def test_signed_in_user_is_accepted(_no_pipeline):
     app = _app(user={"user_id": "jason", "role": "admin"})
     resp = _post_audio(TestClient(app), headers={"X-Session-ID": "sess-real"})
