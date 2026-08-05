@@ -647,10 +647,14 @@ async def run_flue_brain_streaming(
                     # wait=result re-POST would execute it a second time. This
                     # is an operator misconfig (client flag on, sidecar off):
                     # flip ZOE_FLUE_STREAM_ENABLED off or ZOE_BRAIN_STREAM on.
+                    # A wire-1 whole-result envelope means the flag points at a
+                    # 1.x sidecar — name that too, same as the wire-2 turn path.
+                    hint = _wire1_envelope_hint(await resp.aread())
                     logger.error(
                         "flue stream misconfig: client streaming ON but sidecar replied %r "
-                        "(turn admitted async; reply unavailable — NOT re-POSTing)",
+                        "(turn admitted async; reply unavailable — NOT re-POSTing)%s",
                         resp.headers.get("content-type"),
+                        f" — {hint}" if hint else "",
                     )
                     yield _FALLBACK_TEXT
                     return
