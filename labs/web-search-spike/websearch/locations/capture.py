@@ -49,14 +49,21 @@ GERALDTON = {"suburb": "Geraldton", "postcode": "6530", "state": "WA"}
 
 
 async def script_bws(s: StoreSession) -> str:
-    """BWS via `/storelocator` — the page whose ONLY job is store selection.
+    """BWS via `/storelocator` — SUPERSEDED, kept as a fallback and a warning.
 
-    The first pass at this drove the header control on the home page and ended
-    up typing `6530` into the SITE SEARCH box (`/search?searchTerm=6530`,
-    "No results for 6530"). That is worth recording rather than quietly fixing:
-    an input that accepts your text and returns a plausible page is exactly the
-    "refusal wearing a success's clothes" this spike keeps meeting, and the
-    capture is what exposed it — the network log had no store call at all.
+    **BWS no longer needs a picker.** `/apis/ui/Search/products` takes a
+    `fulfilmentStoreId` query parameter and answers plain httpx; see the
+    `bws.com.au` recipe in `registry.py`. Running this script costs a Chromium
+    launch to learn nothing new.
+
+    Kept for two reasons. First, if BWS ever closes the query parameter this is
+    the fallback path. Second, the failure it recorded is the one this package
+    exists to prevent: the first pass drove the header control on the home page
+    and ended up typing `6530` into the SITE SEARCH box
+    (`/search?searchTerm=6530`, "No results for 6530"). An input that accepts
+    your text and returns a plausible page is a refusal wearing a success's
+    clothes, and only the **network capture** exposed it — the log had no store
+    call at all. Drive the `/storelocator` map/result card, never a text input.
     """
     notes = []
     read = await s.goto("https://bws.com.au/storelocator")

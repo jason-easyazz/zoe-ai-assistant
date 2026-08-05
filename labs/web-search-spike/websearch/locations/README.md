@@ -1,7 +1,7 @@
 ---
 type: lab-record
-status: WIP — BWS discovery DONE (api-kind confirmed); 5 retailers not yet captured
-date: 2026-08-04
+status: 7 of 7 retailers measured — 2 api recipes, 5 kind=none; browser tier still unrun
+date: 2026-08-05
 ---
 
 # `websearch/locations/` — per-retailer store-location recipes
@@ -17,46 +17,74 @@ somewhere in Australia"* rather than *"what does the Geraldton shop charge"*.
 For an EDLP operator on Marine Terrace those are different questions, and the
 second is the only one worth money.
 
-## Status — WIP, checkpointed mid-discovery
+## Status — all 7 retailers measured
 
-Committed under a reboot checkpoint order. What is **done and measured** vs
-what is **not yet run** is split explicitly below; nothing in the "not yet"
-column is guessed at in code, because `Recipe` refuses an entry without a
-`verified` string.
+Every retailer now has a `verified` recipe. Two are `api`; five are `none`, each
+naming what was tried. The money result is
+[`eval/results/geraldton-store-scoped-2026-08-05.md`](../../eval/results/geraldton-store-scoped-2026-08-05.md).
 
-### DONE — measured 2026-08-04 AWST
+| retailer | kind | how |
+|---|---|---|
+| **BWS** | `api` | `/apis/ui/Search/products?searchTerm=…&fulfilmentStoreId=…`, plain httpx ~1.9 s. Stores 4083 Geraldton, 4143 Wonthella, 4242 Seacrest, 4996 Bluff Point |
+| **Cellarbrations Rigters Geraldton** | `api` | `/lines/<slug>.json` → schema.org JSON-LD price, plain httpx **0.46 s**. Single-store domain, so store-accurate by construction |
+| Thirsty Camel | `none` | **no WA stores exist** — all 257 enumerated from the site's own backend |
+| Dan Murphy's | `none` | Cloudflare 403 on all 4 API paths its BWS sibling serves openly |
+| Liquorland | `none` | ShieldSquare captcha served with **HTTP 200** on 11/11 paths |
+| First Choice Liquor | `none` | byte-identical wall to Liquorland (one Coles platform, two banners) |
+| Bottlemart | `none` | Cloudflare 403 on 6/6 paths |
 
-| thing | result |
-|---|---|
-| **BWS is `api`-kind** | `GET https://api.bws.com.au/apis/ui/Product/<stockcode>` answers **plain httpx**, no cookies, no browser, ~0.4 s, typed JSON with `Price`/`WasPrice`/`IsOnSpecial`/`PackageSize` per pack size |
-| **Geraldton BWS store ids DISCOVERED** | `GET /apis/ui/Search/Suggestion?Key=Geraldton` → **4328** "Geraldton" (Centro Stirling, 54 Sanford St), **4083** "Geraldton" (same address), **4560** "Geraldton South (Seacrest)", Wandina WA. All plain httpx. |
-| **Full WA store list endpoint** | `GET /apis/ui/StoreLocator/Stores/bws?state=WA&type=allstores&Max=500` (captured from the real `/storelocator` page) |
-| **Single store detail** | `GET /apis/ui/StoreLocator/Store?Division=bws&StoreNo=4328` → name/address/trading hours, plain httpx |
-| **Dan Murphy's API is Cloudflare-walled to httpx** | `api.danmurphys.com.au/apis/ui/Product/38879` → **HTTP 403** interstitial, unlike its BWS sibling on the identical path. Same corporate stack, different edge policy — that asymmetry is itself a finding. |
-| **The store knob is NOT a query/header/cookie parameter** | Measured, not assumed: 7 query names × 5 header names × 5 cookie names against `Product/38879`, comparing the 30-block price (stockcode 59747). **Every one returned `$69`** — identical to the no-context baseline. The scoping is server-side session state, so it must be established, not passed. |
+### THE FINDING: the store knob IS a query parameter — on the other endpoint
+
+The 2026-08-04 session concluded the opposite ("7 query × 5 header × 5 cookie
+candidates, all returning the same price; scoping is server-side session
+state"). That was right about `/apis/ui/Product/<stockcode>`, which ignores a
+store id entirely, and wrong about BWS. Two things had to be corrected together,
+and getting either one wrong reproduces the original negative:
+
+1. **The endpoint.** `/Search/products` honours `fulfilmentStoreId`;
+   `/Product/<stockcode>` ignores it — a garbage id there returns the normal
+   price.
+2. **The id space.** BWS runs **two ids per shop**.
+   `/Search/Suggestion?Key=Geraldton` offers **4328**; the fulfilment id is
+   **4083**. Passing 4328 returns zero products — identical to a garbage id.
+
+4328 is not a typo and not a dead id: `/StoreLocator/Store?StoreNo=4328` answers
+with the correct Geraldton store, address and all, which is exactly why it
+survived a session of scrutiny. The resolution is in that same response —
+**its own `StoreNo` field reads `4083`**. Locator id in, fulfilment id out.
+
+> A store id that validates on one endpoint and silently returns an empty set on
+> another is the same failure family as a picker that lands in the search box.
+> The **negative control** is what separates them: a garbage store id must
+> return *nothing*. If it returns a price, the parameter is being ignored.
+
+### The other correction: "store-less" was never national
+
+`/apis/ui/Bootstrap` hands an anonymous client a session already pinned to
+`FulfilmentStoreID` **4031, "Wembley"** (252 Cambridge St, Wembley WA 6014), and
+store 4031 reproduces the "store-less" prices digit for digit. Not selecting a
+store does not get a neutral price — it gets one the retailer picked silently.
 
 ### NOT YET RUN — the honest gap
 
-- The BWS **set-store** call is still uncaptured. Two picker attempts both fell
-  into the **site search** box instead (`/search?searchTerm=6530`, then
-  `/search?searchTerm=Geraldton` — "No results for 6530"). Recorded rather than
-  quietly retried: an input that accepts your text and returns a plausible page
-  is the same "refusal wearing a success's clothes" this spike keeps meeting,
-  and only the **network capture** exposed it — there was no store call at all
-  in either log. Next attempt should drive the `/storelocator` **map/result
-  card**, not a text input.
-- **Liquorland, First Choice, Thirsty Camel, Bottlemart, Dan Murphy's**: capture
-  scripts are written (`capture.py`) but **not yet run**. No recipes registered.
-- **Cellarbrations/Rigters** store-accuracy: not yet verified.
-- `registry.RECIPES` is therefore **empty**, and two registry tests fail by
-  design saying exactly that ("the registry is empty — no retailer was
-  measured"). That is the instrument working, not a broken build.
+- **No browser session ran this round.** The box sat at load1 3.2–3.4 with
+  **301 MB MemAvailable** against Chromium's ~553 MB. The four walled banners
+  (Liquorland, First Choice, Bottlemart, Dan Murphy's) are `none` because the
+  browser tier is unmeasured, **not** because it was tried and failed — each
+  `reason` says so.
+- That refusal produced a real fix: `preflight()` read **MemFree 532 MB** while
+  **MemAvailable was 301 MB**, so the old single floor would have launched. Both
+  floors are now checked (`DEFAULT_MIN_AVAILABLE_MB`).
+- The BWS **picker** is still uncaptured, and is now much less interesting: the
+  query parameter makes a picker session unnecessary for BWS.
+- **Rigters has no 30-can block online.** The 2026-08-03 $63.00 came off a
+  specials block; re-confirm before quoting it.
 
 ## What is here
 
 | file | what |
 |---|---|
-| `session.py` | `StoreSession` — a **held-open** CloakBrowser context that clicks, types, and **captures every response**. Borrows the broker's extractor, `SettlePolicy` and SSRF guards; vendors nothing. Refuses to launch under 380 MB MemFree or over load1 3.0, and hard-caps page loads. |
+| `session.py` | `StoreSession` — a **held-open** CloakBrowser context that clicks, types, and **captures every response**. Borrows the broker's extractor, `SettlePolicy` and SSRF guards; vendors nothing. Refuses to launch under 380 MB MemFree **or 700 MB MemAvailable** or over load1 3.0, and hard-caps page loads. |
 | `capture.py` | Operator-run **discovery** harness. One picker dance per retailer, prints every JSON call + cookies + localStorage. Output is read by a human; it never writes a recipe. |
 | `registry.py` | The recipe registry, keyed by registrable domain, matched on a **label boundary**. `Recipe` refuses an entry without `verified`, and a `kind=none` entry must say *why*. |
 | `fetch.py` | `fetch_with_location(url, store_ctx)` — the one entry a caller uses. |
@@ -76,6 +104,17 @@ A weekly run over ~40 products × 7 retailers is 280 fetches. At the browser
 tier that is hours of Chromium beside the mlocked voice brain; at the API tier
 it is under a minute with no Chromium at all. **Finding the API is the entire
 economic argument**, which is why `capture.py` comes before any recipe.
+
+Measured against that argument, the current registry costs **zero Chromium
+launches**: both `api` retailers answer plain httpx, and the five `none`
+retailers do not get a picker session at all. A weekly Geraldton run over the
+two measured retailers is a couple of seconds.
+
+**A caveat that is easy to get wrong:** for the BWS recipe the `{sku}` slot is a
+**search term**, not a stockcode — `searchTerm=59747` returns zero products. A
+caller that passes a stockcode gets a **FAILED** read ("api responded but the
+parser found no products"), never a wrong number. Pass `sku="emu export"` and
+select the pack you want from the returned rows by stockcode.
 
 ## Safety properties, each pinned by a test
 

@@ -57,6 +57,16 @@ from typing import Any, Callable
 #: Refuse to launch below this many MB of MemFree. See the module docstring.
 DEFAULT_MIN_FREE_MB = 380
 
+#: Refuse to launch below this many MB of MemAvailable.
+#:
+#: MEASURED 2026-08-05, and the reason this second floor exists: the box read
+#: MemFree 532 MB / MemAvailable 301 MB. MemFree ALONE would have cleared the
+#: 380 MB floor and launched a ~553 MB Chromium into 301 MB of actual headroom,
+#: beside the mlocked voice brain. On this box MemFree can exceed MemAvailable
+#: (unreclaimable pages and watermarks), so MemFree is not a conservative
+#: instrument — it is the optimistic one. Both floors must pass.
+DEFAULT_MIN_AVAILABLE_MB = 700
+
 #: Hard ceiling on navigations in ONE session. Decency, not just cost.
 DEFAULT_MAX_PAGE_LOADS = 25
 
@@ -71,13 +81,27 @@ CAPTURE_CONTENT_TYPES = ("application/json", "text/json", "application/graphql")
 _PRICE_RE = re.compile(r"\$\s?\d{1,4}(?:\.\d{2})?")
 
 
-def mem_free_mb() -> int:
-    """MemFree in MB, read fresh from /proc. Never cached — that is the point."""
+def _meminfo_mb(key: str) -> int:
+    """One /proc/meminfo field in MB, read fresh. Never cached — that is the point."""
+    prefix = key + ":"
     with open("/proc/meminfo", "r", encoding="utf-8") as fh:
         for line in fh:
-            if line.startswith("MemFree:"):
+            if line.startswith(prefix):
                 return int(line.split()[1]) // 1024
-    raise RuntimeError("/proc/meminfo has no MemFree line")
+    raise RuntimeError(f"/proc/meminfo has no {key} line")
+
+
+def mem_free_mb() -> int:
+    return _meminfo_mb("MemFree")
+
+
+def mem_available_mb() -> int:
+    """MemAvailable — the kernel's own estimate of what a new process can get.
+
+    The honest instrument. See `DEFAULT_MIN_AVAILABLE_MB` for the measurement
+    that made this necessary.
+    """
+    return _meminfo_mb("MemAvailable")
 
 
 def load1() -> float:
@@ -179,20 +203,24 @@ class StoreSession:
         *,
         label: str,
         min_free_mb: int = DEFAULT_MIN_FREE_MB,
+        min_available_mb: int = DEFAULT_MIN_AVAILABLE_MB,
         max_page_loads: int = DEFAULT_MAX_PAGE_LOADS,
         max_load1: float = 3.0,
         headless: bool = True,
         capture: bool = True,
         mem_reader: Callable[[], int] = mem_free_mb,
+        avail_reader: Callable[[], int] = mem_available_mb,
         load_reader: Callable[[], float] = load1,
     ) -> None:
         self.label = label
         self.min_free_mb = min_free_mb
+        self.min_available_mb = min_available_mb
         self.max_page_loads = max_page_loads
         self.max_load1 = max_load1
         self.headless = headless
         self.capture = capture
         self._mem_reader = mem_reader
+        self._avail_reader = avail_reader
         self._load_reader = load_reader
 
         self.page_loads = 0
@@ -207,15 +235,23 @@ class StoreSession:
     def preflight(self) -> None:
         """Refuse to launch on a box that cannot afford it. Raises `SessionRefused`.
 
-        Both conditions are the operator's stated discipline, encoded once here
-        rather than repeated at every call site: free memory below the floor, or
-        a box already busy enough that adding a Chromium is antisocial.
+        All three conditions are the operator's stated discipline, encoded once
+        here rather than repeated at every call site: free memory below the
+        floor, AVAILABLE memory below its (higher) floor, or a box already busy
+        enough that adding a Chromium is antisocial.
         """
         free = self._mem_reader()
         if free < self.min_free_mb:
             raise SessionRefused(
                 f"MemFree {free} MB < floor {self.min_free_mb} MB — refusing to launch "
                 f"Chromium beside the voice brain"
+            )
+        avail = self._avail_reader()
+        if avail < self.min_available_mb:
+            raise SessionRefused(
+                f"MemAvailable {avail} MB < floor {self.min_available_mb} MB (MemFree said "
+                f"{free} MB, which is the optimistic number) — refusing to launch Chromium "
+                f"beside the voice brain"
             )
         load = self._load_reader()
         if load > self.max_load1:

@@ -1,0 +1,79 @@
+{
+ "_fixture_note": "REAL GET https://api.bws.com.au/apis/ui/Search/products captured 2026-08-05 AWST. The GROUP NESTING and every value are verbatim; each product object is trimmed to the 11 fields the parser reads (the live objects carry ~40 more, mostly null tag structs). Store 4083 = BWS Geraldton, Centro Stirling, 54 Sanford St.",
+ "SearchResultsCount": 4,
+ "Products": [
+  {
+   "Products": [
+    {
+     "Stockcode": 8620,
+     "Name": "Emu Original Bitter Ale Cans 375ml ",
+     "Price": 23,
+     "WasPrice": 23,
+     "IsOnSpecial": false,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 24,
+     "IsAvailable": true
+    },
+    {
+     "Stockcode": 38880,
+     "Name": "Emu Original Bitter Ale Cans 375ml ",
+     "Price": 6,
+     "WasPrice": 6,
+     "IsOnSpecial": false,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 149,
+     "IsAvailable": true
+    }
+   ]
+  },
+  {
+   "Products": [
+    {
+     "Stockcode": 59747,
+     "Name": "Emu Export Lager Cans 375ml ",
+     "Price": 67,
+     "WasPrice": 0,
+     "IsOnSpecial": true,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 2339,
+     "IsAvailable": true
+    },
+    {
+     "Stockcode": 69222,
+     "Name": "Emu Export Lager Cans 375ml ",
+     "Price": 23,
+     "WasPrice": 23,
+     "IsOnSpecial": false,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 389,
+     "IsAvailable": true
+    },
+    {
+     "Stockcode": 38879,
+     "Name": "Emu Export Lager Cans 375ml ",
+     "Price": 6,
+     "WasPrice": 6,
+     "IsOnSpecial": false,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 2339,
+     "IsAvailable": true
+    }
+   ]
+  }
+ ]
+}
