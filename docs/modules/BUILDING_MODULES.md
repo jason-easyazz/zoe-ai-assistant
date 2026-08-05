@@ -32,13 +32,14 @@ from the structure and examples in the sections below:
 
 ```bash
 mkdir -p modules/your-module-name/{services,intents}
-cd modules/your-module-name
 ```
 
-Validate as you go; the tool names every missing piece:
+Validate as you go — from the **repository root**, passing the module NAME (the
+validator prepends `modules/` itself, so a path would become
+`modules/modules/…`). It names every missing piece:
 
 ```bash
-python3 tools/validate_module.py modules/your-module-name
+python3 tools/validate_module.py your-module-name
 ```
 
 ### 2. Module Structure

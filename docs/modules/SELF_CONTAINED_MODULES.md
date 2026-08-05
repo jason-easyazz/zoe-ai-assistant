@@ -339,12 +339,18 @@ if (typeof window !== 'undefined') {
 
 ## 🚀 Creating a New Module with Widgets
 
-### Step 1: Copy Template
+### Step 1: Create the Module
+
+There is no copyable scaffold: `modules/omnigent` is container-only (no `main.py`,
+`requirements.txt`, `services/` or `intents/`), its compose file still declares the
+`omnigent` service and the `zoe-omnigent` container, and the widget steps below never
+correct those — so a copy fails `tools/validate_module.py` and can collide with the
+live Omnigent deployment. Build the five required files from the templates in
+[BUILDING_MODULES.md](BUILDING_MODULES.md), then continue here for the widget half.
 
 ```bash
-cd modules/
-cp -r omnigent zoe-your-feature
-cd zoe-your-feature
+mkdir -p modules/zoe-your-feature/{services,intents}
+cd modules/zoe-your-feature
 ```
 
 ### Step 2: Create Static Directory
