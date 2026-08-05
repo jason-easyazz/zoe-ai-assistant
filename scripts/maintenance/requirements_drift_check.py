@@ -35,6 +35,14 @@ Exit codes: 0 = no drift, 1 = drift found, 2 = bad invocation.
 Run it with the SAME interpreter that runs the service — the report is only
 about the environment it is executed in.
 
+**Only meaningful for a HOST-NATIVE service.** zoe-data qualifies; `zoe-auth`
+does NOT — it is a container (`docker-compose.yml`: `build: ./services/zoe-auth`),
+so its `requirements.txt` really is installed, by the image build, into an
+environment this process cannot see. Pointing this script at a containerised
+service's file from the host compares two unrelated environments and reports
+loud, meaningless "drift" (measured: 7 spurious findings for zoe-auth). For a
+container, run it INSIDE the container or not at all.
+
 Marker convention
 -----------------
 A requirement line may carry a trailing ``# drift-optional: <reason>`` comment.
