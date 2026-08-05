@@ -16,6 +16,13 @@ did. Measured on the live Orin 2026-08-03, both `infinity`/`infinity`:
   local drop-ins, so any rebuild or second host lost them silently. VmRSS 40 MB
   against VmSwap 1056 MB — 96% paged out *with the floor in force*. It hosts
   in-process Moonshine STT, so "just the backend API" is also the voice path.
+* `functiongemma-router` — the live two-stage router FRONT (:11436,
+  ZOE_ROUTER_HEAD=active) — same finding a fourth time, 2026-08-03: no
+  directives at all and no drop-in, VmRSS 411.7 MB against VmSwap 156.9 MB.
+  It is the subtlest of the set, because it is the only one whose degradation
+  is invisible: the caller has a REAL 1.5 s-timeout fallback, so a swapped
+  router does not error or even look slow downstream — the turn is just routed
+  worse.
 
 That is the gap this test closes. It pins the DOCTRINE, not the numbers:
 retuning a cap is fine, dropping one is not.
@@ -49,6 +56,7 @@ NO_SWAP_UNITS = (
     "zoe-data.service",
     "flue-zoe-brain.service",
     "flue-zoe-telegram.service",
+    "functiongemma-router.service",
 )
 
 # Exemptions from "swap denied implies a ceiling", each with the reason it is
@@ -85,6 +93,16 @@ TIGHT_CEILING_OK = {
         "Bounded ~2.3 GB CUDA-resident model that does not grow with load — the "
         "floor is sized to hold the whole working set and the ceiling only has "
         "to sit above it, so 3G/4G is deliberate rather than tight."
+    ),
+    "functiongemma-router.service": (
+        "Same bounded-model-server class as kokoro-tts: llama.cpp serving a "
+        "fixed 270M Q8_0 GGUF with a fixed --ctx-size 4096 KV cache and "
+        "--parallel 1, so everything large is allocated at startup and does not "
+        "grow with load (VmHWM 598.8 MB, only 1.05x VmRSS+VmSwap — a settled "
+        "working set, not a starved lower bound). The 3x rule targets runtimes "
+        "whose UNCOVERED allocation scales with load (V8 external buffers); "
+        "here the only allocation outside the 768M floor is grammar/jinja/HTTP "
+        "scratch for one in-flight request, so 768M/1G is deliberate."
     ),
 }
 
@@ -290,6 +308,22 @@ def test_zoe_data_is_actually_covered():
     assert "zoe-data.service" in NO_SWAP_UNITS, (
         "zoe-data hosts in-process Moonshine STT — it is on the voice path and "
         "must stay covered, not just the API path"
+    )
+
+
+def test_the_router_sidecar_is_actually_covered():
+    """The fourth instance of the same gap, found by cross-review on #1613.
+    `functiongemma-router` reads as an optional accelerator, so it was left out
+    of the matrix — but docs/CANONICAL.md lists it as a tool-router FRONT on the
+    voice path (ZOE_ROUTER_HEAD=active, confirmed live), and it is the unit where
+    swapping is hardest to notice. router_two_stage.py gives it a 1.5 s timeout
+    against a 424 ms p50; a page-in blows that budget, `decide()` returns None,
+    and semantic_router.py silently falls back to the similarity route. Routing
+    quality drops with nothing red anywhere. Measured 2026-08-03 uncapped: VmRSS
+    411.7 MB against VmSwap 156.9 MB, 27.6% paged out."""
+    assert "functiongemma-router.service" in NO_SWAP_UNITS, (
+        "functiongemma-router is the live two-stage router front on the voice "
+        "path — a swapped router silently degrades routing, it does not fail"
     )
 
 
