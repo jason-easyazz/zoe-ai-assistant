@@ -1,6 +1,16 @@
 {
   "flags": {
     "lab": {
+      "ZOE_BROWSER_BROKER_PATH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/web-search-spike/websearch/cloak.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_KOKORO_MODEL": {
         "defaults": [
           "'/home/zoe/models/kokoro-v1.0.onnx'"
@@ -58,6 +68,36 @@
         "in_env_example": false,
         "readers": [
           "labs/router-90-campaign/prod_path_eval.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_STORE_COOKIE_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/web-search-spike/websearch/locations/cookies.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TAVILY_CAPTURE_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/web-search-spike/websearch/tavily.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TAVILY_DAILY_BUDGET": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/web-search-spike/websearch/tavily.py"
         ],
         "typed_env": false
       }

@@ -1,0 +1,13 @@
+{
+ "_fixture_note": "Region tally over ALL 257 stores from https://production-core-onnsxgivka-ts.a.run.app/stores (paginated 10/page, 26 pages), captured 2026-08-05 AWST. The endpoint is the backendRoot declared in the site's own __NEXT_DATA__.runtimeConfig. WA is absent \u2014 that is the whole finding, and it is why the thirstycamel recipe is kind=none.",
+ "total": 257,
+ "regions": {
+  "VIC": 124,
+  "SA": 36,
+  "TAS": 19,
+  "QLD": 45,
+  "NSW": 18,
+  "NSWBR": 11,
+  "NT": 4
+ }
+}

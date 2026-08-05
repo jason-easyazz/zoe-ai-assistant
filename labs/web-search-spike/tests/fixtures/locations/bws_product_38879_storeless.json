@@ -1,0 +1,55 @@
+{
+ "_fixture_note": "REAL response from GET https://api.bws.com.au/apis/ui/Product/38879 captured 2026-08-04 AWST with NO store context. Trimmed to the fields parse_endeavour reads; RecommendedProducts/ImageVariants/Categories dropped. Prices are verbatim.",
+ "PackDefaultStockCode": 59747,
+ "PackParentStockCode": 38879,
+ "Products": [
+  {
+   "Stockcode": 38879,
+   "Price": 6,
+   "Name": "Emu Export Lager Cans 375ml ",
+   "UrlFriendlyName": "emu-export-lager-cans-375ml",
+   "Description": " Emu Export Lager Cans 375ml  375ML",
+   "IsOnSpecial": false,
+   "IsEdrSpecial": false,
+   "SavingsAmount": 0,
+   "WasPrice": 6,
+   "Unit": "Each",
+   "PackageSize": "375ML",
+   "PromotionType": "None",
+   "IsAvailable": true,
+   "StockOnHand": 329
+  },
+  {
+   "Stockcode": 69222,
+   "Price": 23,
+   "Name": "Emu Export Lager Cans 375ml ",
+   "UrlFriendlyName": "emu-export-lager-cans-375ml",
+   "Description": " Emu Export Lager Cans 375ml  375ML",
+   "IsOnSpecial": false,
+   "IsEdrSpecial": false,
+   "SavingsAmount": 0,
+   "WasPrice": 23,
+   "Unit": "Each",
+   "PackageSize": "375ML",
+   "PromotionType": "None",
+   "IsAvailable": true,
+   "StockOnHand": 54
+  },
+  {
+   "Stockcode": 59747,
+   "Price": 69,
+   "Name": "Emu Export Lager Cans 375ml ",
+   "UrlFriendlyName": "emu-export-lager-cans-375ml",
+   "Description": " Emu Export Lager Cans 375ml  375ML",
+   "IsOnSpecial": true,
+   "IsEdrSpecial": false,
+   "SavingsAmount": 0,
+   "WasPrice": 69,
+   "Unit": "Each",
+   "PackageSize": "375ML",
+   "PromotionType": "None",
+   "IsAvailable": true,
+   "StockOnHand": 329
+  }
+ ]
+}

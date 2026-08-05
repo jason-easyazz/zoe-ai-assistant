@@ -1,0 +1,79 @@
+{
+ "_fixture_note": "REAL GET https://api.bws.com.au/apis/ui/Search/products captured 2026-08-05 AWST. The GROUP NESTING and every value are verbatim; each product object is trimmed to the 11 fields the parser reads (the live objects carry ~40 more, mostly null tag structs). NO fulfilmentStoreId \u2014 the anonymous default, which Bootstrap shows is store 4031 Wembley WA, NOT a national price. 8620 and 38880 differ from the 4083 fixture; the 59747 30-block does NOT. That split is the finding.",
+ "SearchResultsCount": 4,
+ "Products": [
+  {
+   "Products": [
+    {
+     "Stockcode": 8620,
+     "Name": "Emu Original Bitter Ale Cans 375ml ",
+     "Price": 22.5,
+     "WasPrice": 23,
+     "IsOnSpecial": true,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0.5,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 4,
+     "IsAvailable": true
+    },
+    {
+     "Stockcode": 38880,
+     "Name": "Emu Original Bitter Ale Cans 375ml ",
+     "Price": 5.5,
+     "WasPrice": 6,
+     "IsOnSpecial": true,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0.5,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 29,
+     "IsAvailable": true
+    }
+   ]
+  },
+  {
+   "Products": [
+    {
+     "Stockcode": 59747,
+     "Name": "Emu Export Lager Cans 375ml ",
+     "Price": 67,
+     "WasPrice": 0,
+     "IsOnSpecial": true,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 329,
+     "IsAvailable": true
+    },
+    {
+     "Stockcode": 69222,
+     "Name": "Emu Export Lager Cans 375ml ",
+     "Price": 23,
+     "WasPrice": 23,
+     "IsOnSpecial": false,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 54,
+     "IsAvailable": true
+    },
+    {
+     "Stockcode": 38879,
+     "Name": "Emu Export Lager Cans 375ml ",
+     "Price": 6,
+     "WasPrice": 6,
+     "IsOnSpecial": false,
+     "IsEdrSpecial": false,
+     "SavingsAmount": 0,
+     "PackageSize": "375ML",
+     "Unit": "Each",
+     "StockOnHand": 329,
+     "IsAvailable": true
+    }
+   ]
+  }
+ ]
+}

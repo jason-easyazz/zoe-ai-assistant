@@ -1,0 +1,43 @@
+{
+ "_fixture_note": "REAL response from GET https://api.bws.com.au/apis/ui/Search/Suggestion?Key=Geraldton captured 2026-08-04 AWST. This is how the Geraldton BWS store ids were DISCOVERED rather than guessed. Empty facets kept: an empty Products facet is part of the shape.",
+ "Stores": {
+  "Order": 4,
+  "Suggestions": [
+   {
+    "StoreName": "Geraldton South (Seacrest)",
+    "StoreId": "4560",
+    "AddressLine1": "781 Barrett Drive",
+    "AddressLine2": "",
+    "SuburbName": "Wandina",
+    "State": "WA",
+    "OpeningHours": "10:00 AM - 8:00 PM",
+    "IsOpenToday": true
+   },
+   {
+    "StoreName": "Geraldton",
+    "StoreId": "4328",
+    "AddressLine1": "Centro Stirling, 54 Sanford Street",
+    "AddressLine2": "",
+    "SuburbName": "Geraldton",
+    "State": "WA",
+    "OpeningHours": "10:00 AM - 6:00 PM",
+    "IsOpenToday": true
+   },
+   {
+    "StoreName": "Geraldton",
+    "StoreId": "4083",
+    "AddressLine1": "Centro Stirling, 54 Sanford Street",
+    "AddressLine2": "",
+    "SuburbName": "Geraldton",
+    "State": "WA",
+    "OpeningHours": "10:00 AM - 8:00 PM",
+    "IsOpenToday": true
+   }
+  ]
+ },
+ "Terms": {
+  "Order": 2,
+  "Suggestions": []
+ },
+ "SearchProvider": "EdxSearchService"
+}
