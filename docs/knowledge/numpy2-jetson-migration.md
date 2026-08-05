@@ -7,9 +7,11 @@ created: 2026-08-04
 
 # numpy-2 Jetson migration — prep notes (WIP)
 
-**Status: WIP.** Deliverables 1 (premise check) and the box survey are COMPLETE and
-verified. Deliverables 2 (bump matrix), 3 (build plan), 4 (window runbook) are
-INCOMPLETE — checkpointed at a forced reboot. Resume from "Open items" at the bottom.
+**Status: WIP.** Deliverables 1 (premise check), the box survey, and **2 (bump matrix)**
+are COMPLETE and verified — the bump matrix landed after this note's first commit and is
+at the bottom under "Bump matrix". Deliverables 3 (build plan) and 4 (window runbook) are
+still INCOMPLETE — checkpointed at a forced reboot. Resume from "Open items" at the bottom,
+which records which items the completed inventory has already closed.
 
 ## Verdict (deliverable 1) — PREBUILT numpy-2-COMPATIBLE WHEELS EXIST
 
@@ -131,8 +133,15 @@ Two consequences to chase on resume:
    numpy-1 wheel is **not in the dependency set at all**, and the stated reason
    for `numpy<2` is doubly stale. The real blocker is then whatever
    `services/zoe-data/requirements.txt` lines 42–52 describe.
-2. Conversely there may be a **service venv** distinct from `~/.local` that does
-   carry `onnxruntime-gpu`. Not yet enumerated. **Resolve this first on resume.**
+2. ~~Conversely there may be a **service venv** distinct from `~/.local` that does
+   carry `onnxruntime-gpu`.~~ **RESOLVED by the completed inventory (see "Bump
+   matrix" below): there is no service venv.** Re-verified on the box: `zoe-data`
+   runs `/usr/bin/python3 -m uvicorn`, the Kokoro sidecar runs `/usr/bin/python3`,
+   and the FunctionGemma router is a llama.cpp C++ binary with no Python at all —
+   so the host-native service surface shares ONE interpreter and one numpy. Venvs
+   do exist elsewhere on the box (`~/.hermes/*`, `~/.spikes/pipecat-voice`, uv
+   caches), but nothing in the service surface runs from them, so they neither
+   carry the services' `onnxruntime-gpu` nor participate in the flip.
 
 ### ctranslate2
 
@@ -155,13 +164,16 @@ at checkpoint time.
 
 ## Open items (resume brief)
 
-1. **Repo inventory / bump matrix (deliverable 2)** — a background inventory agent
-   was dispatched over all `requirements*.txt` / `pyproject.toml`, compiled-vs-pure
-   numpy dependents, ctranslate2 liveness, Moonshine/Kokoro/silero/pyannote
-   packaging, and service venv layout. It had **not reported** at checkpoint. Re-run it.
-2. **Resolve the onnxruntime-gpu question** — enumerate every venv the services
-   actually run from and `abi_scan.sh` each. Determines whether onnxruntime-gpu is
-   in scope at all.
+1. ~~**Repo inventory / bump matrix (deliverable 2)**~~ — **DONE.** The inventory
+   agent reported after this note's first commit; its output is the "Bump matrix"
+   section below (atomic host-native flip, torch provenance gap, delete-first list).
+   Nothing to re-run.
+2. **Resolve the onnxruntime-gpu question** — the venv half is **closed** (no
+   service venv exists; see the correction above and the bump matrix). What remains
+   open is narrower: `abi_scan.sh` the single shared `~/.local` site-packages before
+   and after, and confirm whether anything imports `onnxruntime` at all — which
+   decides whether `onnxruntime-gpu` is in scope, and therefore whether the original
+   `numpy<2` rationale survives.
 3. **ctranslate2 dead-or-alive** — grep for `ctranslate2` / `faster_whisper` /
    `WhisperModel` in live `services/` code.
 4. **Deliverable 3** — likely reduces to "not needed"; keep only a stub rationale
@@ -174,9 +186,16 @@ Nothing in this prep compiled anything, stopped any service, or changed any pin.
 
 ## Bump matrix (from the repo-inventory pass — completed after this note's first commit)
 
-**The flip is ATOMIC across the host-native surface**: no venvs exist — zoe-data, the Kokoro
-sidecar, and every maintenance script share `/usr/bin/python3` + `~/.local` site-packages and
-therefore ONE numpy. Staging per-service requires introducing venvs first (a separate decision).
+**The flip is ATOMIC across the host-native surface**: no *service* venv exists — zoe-data
+(`ExecStart=/usr/bin/python3 -m uvicorn`), the Kokoro sidecar (`ExecStart=/usr/bin/python3`)
+and every maintenance script share `/usr/bin/python3` + `~/.local` site-packages and therefore
+ONE numpy; the FunctionGemma router is a llama.cpp C++ binary with no Python at all. Staging
+per-service requires introducing venvs first (a separate decision).
+
+Scope note, because a `pyvenv.cfg` sweep does find venvs on this box: `~/.hermes/self-evolution`,
+`~/.hermes/hermes-agent`, `~/.spikes/pipecat-voice` and the uv archive cache each have one. None
+is on the service surface, so none participates in the flip — but that also means they will **not**
+be carried by it, and any of them that later needs numpy 2 must be handled separately.
 
 **Must change together:** `services/zoe-data/requirements.txt:52` (`numpy<2` — the only ceiling in
 the repo), `.github/workflows/validate.yml:145` (CI mirror — must match or CI lies), and
