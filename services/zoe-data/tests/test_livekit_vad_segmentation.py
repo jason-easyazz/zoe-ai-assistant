@@ -716,7 +716,11 @@ def test_real_utterance_segments_into_one_turn(monkeypatch, utterance_frames):
 
     _run(_body())
 
-    assert calls, f"[{label}] real speech must reach the pipeline"
+    assert len(calls) == 1, (
+        f"[{label}] real speech must reach the pipeline as EXACTLY one utterance, "
+        f"got {len(calls)} — zero means it never endpointed, more than one means "
+        f"the segmenter cut the speaker off mid-sentence"
+    )
     assert {"type": "state", "state": "listening"} in local.sent, \
         f"[{label}] speech-start must be broadcast to the browser"
     utterance = calls[0]["frames"]
