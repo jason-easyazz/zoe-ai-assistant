@@ -419,6 +419,11 @@ let maxRecordedRms   = 0;   // peak RMS during current recording (silence filter
 let convMode         = true;   // always on in touch/phone-call mode
 let speaking         = false;
 let serverBusy       = false;  // true while server is processing a turn
+// The `session_id` the in-flight /livekit-audio upload was keyed by — what
+// /livekit-cancel must address. NOT necessarily the current auth session: a 401
+// re-provision mid-turn moves the header, and the cancellation target must not
+// move with it. Null until the first upload of this page load.
+let currentTurnOpId  = null;
 let _silentCycles    = 0;      // consecutive silent-discarded recordings
 
 // ── Audio queue ───────────────────────────────────────────────────────────
@@ -655,10 +660,16 @@ async function sendCancelSignal() {
   try {
     if (MODE === 'livekit' && liveKitRoom) {
       const identity = liveKitRoom.localParticipant?.identity || '';
+      // Address the turn the server actually accepted. `currentTurnOpId` is the
+      // session_id the in-flight upload was keyed by; the auth header is free to
+      // carry a freshly provisioned session, but the TARGET must not move with
+      // it or the cancel misses and then cancels the next upload instead.
+      const opId = currentTurnOpId;
+      if (!opId) return;                       // nothing in flight to cancel
       await voiceFetchWithSession('/api/voice/livekit-cancel', (sid) => ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid },
-        body: JSON.stringify({ participant_identity: identity, session_id: sid }),
+        body: JSON.stringify({ participant_identity: identity, session_id: opId }),
       }));
     } else if (localWS && localWS.readyState === WebSocket.OPEN) {
       localWS.send(JSON.stringify({ type: 'cancel' }));
@@ -817,6 +828,14 @@ async function sendLiveKitAudio() {
       fd.append('audio', blob, 'ptt.webm');
       fd.append('participant_identity', identity);
       fd.append('session_id', sid);
+      // The server keys the in-flight turn by `<user_id>:<session_id>`, so this
+      // field is the CANCELLATION TARGET, not just an echo of the header. Record
+      // the value the attempt actually sent — if the 401 retry re-provisions,
+      // the accepted upload is keyed by the NEW id and barge-in must address
+      // that one. Sending the header's current sid instead would register a
+      // cancel for a turn that does not exist, and leave it lying in wait for
+      // the next upload.
+      currentTurnOpId = sid;
       return { method: 'POST', headers: { 'X-Session-ID': sid }, body: fd };
     };
     const resp = await voiceFetchWithSession('/api/voice/livekit-audio', buildInit);

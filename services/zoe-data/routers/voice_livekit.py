@@ -1547,10 +1547,22 @@ async def _require_livekit_media_auth(
     for once both have landed.
     """
     if device:
+        # ATTRIBUTION, not authorisation. The token authenticates the DEVICE; the
+        # acting person is the user bound to that panel. `_validate_device_token`
+        # hardcodes `user_id="voice-daemon"`, while `get_current_user` has already
+        # resolved the same token through `panel_user_bindings` to the bound user
+        # (guest for an unbound panel — fail-closed, ZOE-4321). Taking the device
+        # dict's id would run the brain turn as `voice-daemon`, losing the
+        # speaker's personal context and writing memory into the wrong scope —
+        # something the `_get_current_user_soft` path this gate replaced did not
+        # do. Fall back to the device id only when there is no bound principal.
+        bound_user_id = user.get("user_id")
+        if not bound_user_id or user.get("role") == "guest" or user.get("auth_degraded"):
+            bound_user_id = device.get("user_id") or "voice-daemon"
         return {
             "source": "device",
             "panel_id": device.get("panel_id"),
-            "user_id": device.get("user_id", "voice-daemon"),
+            "user_id": bound_user_id,
             "role": device.get("role") or "voice-daemon",
         }
     if user.get("role") not in (None, "guest"):

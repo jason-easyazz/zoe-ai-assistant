@@ -347,6 +347,100 @@ def test_brain_turn_is_attributed_to_the_authenticated_principal(monkeypatch):
     assert resp.json()["transcript"] == "what is the weather"
 
 
+def test_device_token_turn_runs_as_the_PANEL_BOUND_user(monkeypatch):
+    """A device token authenticates the DEVICE; the acting person is the bound user.
+
+    `_validate_device_token` hardcodes `user_id="voice-daemon"`, while
+    `get_current_user` resolves the SAME token through `panel_user_bindings` to
+    the panel's bound user. Taking the device dict's id runs the Pi daemon's
+    brain turns as `voice-daemon` — no personal context, and any memory written
+    into the wrong scope.
+    """
+    seen: dict = {}
+
+    async def _transcribe(_path):
+        return "what is on my calendar"
+
+    async def _brain(text, session_id, user_id, **kwargs):
+        seen["user_id"] = user_id
+        return "Nothing today."
+
+    monkeypatch.setattr(voice_tts, "_transcribe_audio", _transcribe)
+    monkeypatch.setitem(
+        sys.modules, "brain_dispatch", types.SimpleNamespace(brain_oneshot=_brain)
+    )
+
+    async def _synth(_payload, caller=None):
+        raise RuntimeError("TTS deliberately skipped in this test")
+
+    monkeypatch.setattr(voice_tts, "synthesize", _synth)
+
+    app = _app(
+        device={"panel_id": "zoe-touch-pi", "user_id": "voice-daemon", "role": "kiosk"},
+        # what get_current_user returns for this token via _resolve_device_token_user
+        user={"user_id": "jason", "role": "user"},
+    )
+    resp = TestClient(app).post(
+        "/api/voice/livekit-audio",
+        files={"audio": ("ptt.webm", b"\x00\x01", "audio/webm")},
+        data={"session_id": "sess-lk"},
+        headers={"X-Device-Token": "raw"},
+    )
+    assert resp.status_code == 200
+    assert seen["user_id"] == "jason", (
+        "the device-token turn ran as the raw device identity instead of the "
+        "panel's bound user — personal context lost, memory in the wrong scope"
+    )
+
+
+@pytest.mark.parametrize(
+    "resolved_user",
+    [
+        {"user_id": "guest", "role": "guest"},                      # unbound panel
+        {"user_id": "guest", "role": "guest", "auth_degraded": True},  # + auth outage
+        {},                                                          # nothing resolved
+    ],
+)
+def test_unbound_panel_device_token_stays_the_device_identity(monkeypatch, resolved_user):
+    """CONTROL for the above: an UNBOUND panel resolves to guest (fail-closed,
+    ZOE-4321), and that must fall back to the DEVICE identity — never attribute
+    the turn to a `guest` principal whose scope other callers also share."""
+    seen: dict = {}
+
+    async def _transcribe(_path):
+        return "hello"
+
+    async def _brain(text, session_id, user_id, **kwargs):
+        seen["user_id"] = user_id
+        return "Hi."
+
+    monkeypatch.setattr(voice_tts, "_transcribe_audio", _transcribe)
+    monkeypatch.setitem(
+        sys.modules, "brain_dispatch", types.SimpleNamespace(brain_oneshot=_brain)
+    )
+
+    async def _synth(_payload, caller=None):
+        raise RuntimeError("TTS deliberately skipped in this test")
+
+    monkeypatch.setattr(voice_tts, "synthesize", _synth)
+
+    app = _app(
+        device={"panel_id": "unbound-panel", "user_id": "voice-daemon", "role": "kiosk"},
+        user=resolved_user,
+    )
+    resp = TestClient(app).post(
+        "/api/voice/livekit-audio",
+        files={"audio": ("ptt.webm", b"\x00\x01", "audio/webm")},
+        data={"session_id": "sess-lk"},
+        headers={"X-Device-Token": "raw"},
+    )
+    assert resp.status_code == 200
+    assert seen["user_id"] == "voice-daemon", (
+        "an unbound (or unresolvable) panel must keep the device identity, not "
+        "borrow the shared guest scope"
+    )
+
+
 # ── wiring pins ─────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("endpoint", ["livekit_audio", "livekit_cancel"])

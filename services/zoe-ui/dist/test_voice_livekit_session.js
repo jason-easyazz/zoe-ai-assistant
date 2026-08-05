@@ -329,6 +329,36 @@ await check('touch (wrapped): a valid guest session still sends exactly one requ
   assert.strictEqual(stubs.calls[0].init.headers['X-Session-ID'], 'good-guest');
 });
 
+// ── The cancellation TARGET must not move when the auth session does ──────
+// The server keys an in-flight turn by `<user_id>:<session_id>`, and the page
+// sends that session_id in the /livekit-cancel body. If a 401 re-provision
+// during the cancel rewrote the body too, the cancel would address a turn that
+// never existed AND sit waiting to kill the next upload. So: read the two call
+// sites from the shipped page and require the target to be pinned to the upload.
+await check('touch: the cancel body targets the upload\'s op id, not the current session', () => {
+  const opDecl = /let\s+currentTurnOpId\s*=/.test(TOUCH_HTML);
+  assert(opDecl, 'touch/voice.html: currentTurnOpId is not declared — the cancel target is unpinned');
+
+  const audioIdx = TOUCH_HTML.indexOf("fd.append('session_id', sid)");
+  assert(audioIdx > 0, 'touch/voice.html: the livekit-audio session_id field was not found');
+  assert(
+    TOUCH_HTML.slice(audioIdx, audioIdx + 600).includes('currentTurnOpId = sid'),
+    'the upload must RECORD the session_id it was keyed by — a retry changes it'
+  );
+
+  const cancelIdx = TOUCH_HTML.indexOf("'/api/voice/livekit-cancel'");
+  assert(cancelIdx > 0, 'touch/voice.html: the livekit-cancel call site was not found');
+  const cancelBlock = TOUCH_HTML.slice(cancelIdx, cancelIdx + 600);
+  assert(
+    /session_id:\s*opId/.test(cancelBlock),
+    'the cancel body must send the recorded op id; sending the retry\'s `sid` cancels the wrong turn'
+  );
+  assert(
+    /'X-Session-ID':\s*sid/.test(cancelBlock),
+    'the cancel HEADER must still carry the current session — only the target is pinned'
+  );
+});
+
 // ── The wrapper's normal 401 policy is untouched for everything else ──────
 await check('touch (wrapped): a non-voice path still rejects on 401 (policy not widened)', async () => {
   const stubs = makeStubs({ session_id: 'sess-jason', role: 'admin' }, () => unauthorized());
