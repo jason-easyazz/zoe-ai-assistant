@@ -68,20 +68,27 @@ rocks:
 The Pi-as-brain path and the services it depends on. These are real and load-bearing.
 
 - **Brain dispatch** — `services/zoe-data/brain_dispatch.py` picks the brain 3 ways,
-  priority **flue > core > legacy** (all share the Gemma 4 E4B-QAT + MTP rock on
-  host-native `llama-server :11434`):
+  configured lane selection **flue > core > legacy** (all share the Gemma 4 E4B-QAT +
+  MTP rock on host-native `llama-server :11434`). **That order is CONFIGURATION
+  PRECEDENCE, resolved once per turn from the env — not runtime failover**
+  (failover behind `ZOE_BRAIN_FAILOVER`, default off). With `flue` selected and
+  `:3578` down, every brain turn is answered by the flue client's canned sentinel;
+  the healthy `core` lane is not tried (#1613). `ZOE_BRAIN_FAILOVER=1` adds a
+  bounded retry (transport-level connect failures only, never after a turn's first
+  token, one hop, short-TTL circuit breaker) — operator-flipped after the voice
+  replay gate:
   - **`flue`** (LIVE on this deployment) — the Flue Pi-Agent sidecar
     `labs/flue-zoe-brain` on `:3578` (systemd user unit, token auth), reached via
     `ZOE_BRAIN_BACKEND=flue`. It reimplements Zoe's persona + ability slot-shapes
     and calls back into zoe-data via `POST /api/system/intent-dispatch`
     (`services/zoe-data/zoe_flue_client.py`). See
     [`architecture/zoe-flue-integration.md`](architecture/zoe-flue-integration.md).
-  - **`core`** (shipped default, currently the dormant fallback) —
+  - **`core`** (shipped default, currently the dormant lane) —
     **`services/zoe-core`**, the **Pi agent** (TypeScript coding-agent +
     `extensions/*`, `pi --mode rpc` via `services/zoe-data/zoe_core_client.py`).
     Wired + tested — **not retired**; extend it, don't archive it.
-  - **`legacy`** — `services/zoe-data/zoe_agent.py`, the last fallback (only when
-    `ZOE_BRAIN_BACKEND` is not `flue` AND `ZOE_USE_CORE_BRAIN` is off).
+  - **`legacy`** — `services/zoe-data/zoe_agent.py`, the last lane (selected only
+    when `ZOE_BRAIN_BACKEND` is not `flue` AND `ZOE_USE_CORE_BRAIN` is off).
 - **`services/zoe-data`** — FastAPI app (`:8000`): voice/chat path, memory router, Skybridge.
 - **Two-stage router** (LIVE, `ZOE_ROUTER_HEAD=active`) — a fast tool-router *front* on the voice
   path: SetFit MLP shortlist → `functiongemma-router.service` GBNF decoder (host-native, `:11436`).
