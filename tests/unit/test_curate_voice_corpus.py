@@ -388,3 +388,26 @@ def test_a_destination_appearing_after_planning_is_still_refused(tmp_path):
     assert res["conflicts"] == 1 and res["moved"] == len(plan) - 1
     assert Path(plan[0]["dest"]).read_bytes() == b"pre-existing, must survive"
     assert (corpus / plan[0]["file"]).exists(), "the source moved despite the conflict"
+
+
+def test_an_unreadable_manifest_is_preserved_not_overwritten(tmp_path):
+    """The manifest is the record of WHY. Unparseable is not permission to destroy."""
+    corpus = _fixture_corpus(tmp_path)
+    qdir = corpus / "quarantine-format-20260806"
+    qdir.mkdir()
+    corrupt = b"{ this is not json"
+    (qdir / "manifest.json").write_bytes(corrupt)
+
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    plan = cvc.plan_moves(rows, str(corpus), "20260806")
+    result = cvc.apply_moves(plan, str(corpus), 0.20, None, execute=True)
+
+    backups = sorted(qdir.glob("manifest.json.corrupt-*"))
+    assert len(backups) == 1, f"expected exactly one preserved copy, got {backups}"
+    assert backups[0].read_bytes() == corrupt, "the corrupt manifest was not preserved verbatim"
+
+    manifest = json.loads((qdir / "manifest.json").read_text())
+    assert {e["file"] for e in manifest["entries"]} == {"100002_003.wav", "100003_004.wav"}
+
+    assert any(backups[0].name in err for err in result["errors"]), \
+        f"the backup path must be reported: {result['errors']}"

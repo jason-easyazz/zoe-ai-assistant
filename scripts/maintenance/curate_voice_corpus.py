@@ -332,12 +332,37 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
         manifest_path = os.path.join(dest_dir, "manifest.json")
         entries: list[dict[str, Any]] = []
         if os.path.exists(manifest_path):
+            prior_doc: Any = None
             try:
                 with open(manifest_path) as fh:
-                    prior = json.load(fh).get("entries")
-                entries = prior if isinstance(prior, list) else []
+                    prior_doc = json.load(fh)
             except Exception:
-                entries = []
+                prior_doc = None
+            if isinstance(prior_doc, dict):
+                prior = prior_doc.get("entries")
+                entries = prior if isinstance(prior, list) else []
+            else:
+                # Unreadable manifest: still the ONLY record of why an earlier
+                # run quarantined those files. Overwriting it is a delete in
+                # disguise, so preserve it under a dated name first.
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                backup = f"{manifest_path}.corrupt-{stamp}"
+                seq = 1
+                while os.path.exists(backup):  # never clobber an earlier backup
+                    backup = f"{manifest_path}.corrupt-{stamp}-{seq}"
+                    seq += 1
+                try:
+                    os.rename(manifest_path, backup)
+                except Exception as exc:
+                    # Could not preserve it -> do not write over it either.
+                    result["errors"].append(
+                        f"{manifest_path}: unreadable and could not be preserved "
+                        f"({exc}); manifest NOT rewritten, {len(items)} move(s) unrecorded"
+                    )
+                    continue
+                result["errors"].append(
+                    f"{manifest_path}: unreadable, preserved as {backup}"
+                )
         for item in items:
             entries.append({
                 "file": item["file"],
