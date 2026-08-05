@@ -621,7 +621,14 @@ async def settle_and_extract(
         deadline = now() + policy.max_wait_ms / 1000.0
         polls = 0
         while extracted.chars < policy.min_chars and now() < deadline:
-            await page.wait_for_timeout(policy.poll_ms)
+            # CLAMPED to the residual budget. `poll_ms` and `max_wait_ms` both
+            # arrive from untrusted plan JSON, so `poll_ms=10000` against
+            # `max_wait_ms=1` would otherwise sleep a full poll interval before
+            # rechecking the deadline — turning the advertised bounded settle
+            # into an arbitrarily long broker stall a caller controls (Codex
+            # P2, #1626). `max_wait_ms` is the ceiling it says it is.
+            remaining_ms = max(0, int((deadline - now()) * 1000))
+            await page.wait_for_timeout(min(policy.poll_ms, remaining_ms))
             polls += 1
             extracted = extract_main_text(await page.content(), text_limit=text_limit)
         log.append(
@@ -841,7 +848,23 @@ def build_cloak_executor() -> BrowserExecutor | None:
                 )
                 return {"ok": True, "image_base64": image_b64, "evidence": asdict(evidence)}
             finally:
-                await context.close()
+                # Same guard as fetch_page_text, and for the same reason: this
+                # close sits in a `finally` INSIDE the outer try, so a crashed
+                # context does not merely leak — its exception replaces the
+                # successful return and the outer handler converts a completed
+                # extraction (or screenshot) into
+                # `{"ok": False, "error": "CloakBrowser executor failed: ..."}`.
+                # Teardown must never destroy a payload that was already
+                # produced (Codex P2, #1626).
+                try:
+                    await context.close()
+                except Exception:  # noqa: BLE001 - teardown must not mask the result
+                    import logging
+
+                    logging.getLogger(__name__).debug(
+                        "CloakBrowser context close failed after %s", plan.action,
+                        exc_info=True,
+                    )
         except Exception as exc:
             return {"ok": False, "error": f"CloakBrowser executor failed: {exc}"}
 

@@ -26,6 +26,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from browser_broker import (  # noqa: E402
     SETTLE_SPA,
     BrowserBroker,
+    build_cloak_executor,
     ExtractedText,
     SettlePolicy,
     execute_text_extraction,
@@ -381,6 +382,24 @@ def test_content_floor_stops_polling_the_moment_the_floor_is_cleared():
     assert page.clock == pytest.approx(0.5)
 
 
+def test_a_poll_longer_than_the_ceiling_cannot_stretch_the_wait():
+    """`max_wait_ms` is the ceiling it advertises, whatever `poll_ms` says.
+
+    Both values arrive from untrusted plan JSON, so an unclamped sleep let a
+    caller turn the bounded settle into an arbitrarily long broker stall
+    (Codex P2, #1626). Here the poll is 10s against a 1ms ceiling: the wait
+    must end at the ceiling, not 10s later.
+    """
+    page = _FakePage([SHELL])
+    policy = SettlePolicy(min_chars=1_000, poll_ms=10_000, max_wait_ms=1)
+    _, log = _settle(page, policy)
+
+    assert page.clock <= 0.001 + 1e-9, f"slept past the ceiling: {page.clock}s"
+    assert [ms for c, ms in page.calls if c == "wait_for_timeout"] == [1]
+    floor = [e for e in log if e["stage"] == "content-floor"][0]
+    assert floor["outcome"] == "gave-up"
+
+
 def test_content_floor_is_inert_without_a_ceiling():
     """min_chars with no max_wait_ms must not become an unbounded loop."""
     page = _FakePage([SHELL])
@@ -448,6 +467,9 @@ class _ClosingPage:
 
     async def wait_for_timeout(self, *_a, **_k):
         return None
+
+    async def screenshot(self, **_k):
+        return b"\x89PNG-not-a-real-image"
 
 
 class _FakeContext:
@@ -545,3 +567,54 @@ def test_fetch_page_text_refuses_a_private_target_without_launching(monkeypatch)
     assert out["ok"] is False
     assert "refused" in out["error"]
     assert launched == []
+
+
+def _executor_with(monkeypatch, context):
+    """`build_cloak_executor()` over a fake browser — no Chromium, no network."""
+    _install_fake_browser(monkeypatch, context)
+    ex = build_cloak_executor()
+    assert ex is not None, "the fake cloakbrowser module was not picked up"
+    return ex
+
+
+def _plan(action):
+    return BrowserBroker(default_surface="zoeCloak").plan_action(
+        action=action,
+        params={"url": "https://example.test/article"},
+        user_id="u", session_id="s",
+        action_class="read_only_research",
+    )
+
+
+@pytest.mark.parametrize("action,key", [("extract_text", "text"), ("screenshot", "image_base64")])
+def test_executor_teardown_failure_does_not_destroy_the_payload(action, key, monkeypatch):
+    """The close sits in a `finally` INSIDE the outer try.
+
+    So an unguarded failure there does not merely leak — its exception replaces
+    the successful return and the outer handler converts a COMPLETED extraction
+    (or screenshot) into `{"ok": False, "error": "CloakBrowser executor failed"}`
+    (Codex P2, #1626). Both plan branches must survive it.
+    """
+    ctx = _FakeContext(close_raises=True)
+    executor = _executor_with(monkeypatch, ctx)
+
+    out = asyncio.run(executor(_plan(action)))
+
+    assert ctx.closed is True, "the close was never attempted"
+    assert out["ok"] is True, out.get("error")
+    assert out[key]
+
+
+def test_executor_still_reports_a_real_failure(monkeypatch):
+    """Negative control: the guard must not swallow a genuine executor error."""
+
+    class _Boom(_FakeContext):
+        async def new_page(self):
+            raise RuntimeError("target page crashed")
+
+    executor = _executor_with(monkeypatch, _Boom(close_raises=True))
+
+    out = asyncio.run(executor(_plan("extract_text")))
+
+    assert out["ok"] is False
+    assert "target page crashed" in out["error"], out["error"]
