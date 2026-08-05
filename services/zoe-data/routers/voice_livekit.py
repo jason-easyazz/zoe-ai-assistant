@@ -1527,7 +1527,13 @@ async def _require_livekit_media_auth(
 
     The distinguisher for (3) is the presence of the header, because a
     credential-less request and a real guest session both come back as
-    ``role="guest"`` from ``get_current_user``.
+    ``role="guest"`` from ``get_current_user``. That substitution is only sound
+    while the header was actually VALIDATED, so the degraded case is refused
+    explicitly: under ``ZOE_AUTH_FAIL_CLOSED=false`` an auth-service outage
+    resolves ANY nonblank header to a guest, which would hand the pipeline back
+    to anonymous callers for the length of the outage. ``get_current_user`` marks
+    that principal ``auth_degraded``; this gate answers 503, the same as the
+    fail-closed default would have.
 
     Deliberately WEAKER than `voice_tts._require_voice_auth` (which rejects
     guests outright): the estate panel has no device token and boots as a guest
@@ -1550,6 +1556,11 @@ async def _require_livekit_media_auth(
     if user.get("role") not in (None, "guest"):
         return {"source": "session", "user_id": user.get("user_id"), "role": user.get("role")}
     if request.headers.get("X-Session-ID", "").strip():
+        if user.get("auth_degraded"):
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service unavailable",
+            )
         return {
             "source": "guest-session",
             "user_id": user.get("user_id") or "guest",

@@ -234,6 +234,76 @@ def test_validated_guest_session_is_accepted_cancel():
     assert resp.json() == {"ok": True}
 
 
+# ── the degraded-auth hole in the validated-guest branch ────────────────────
+#
+# The guest branch above substitutes HEADER PRESENCE for "the server validated
+# this session", which is sound only while the server really did validate it.
+# Under `ZOE_AUTH_FAIL_CLOSED=false` (an explicit operator opt-out) an
+# auth-service outage makes `get_current_user` resolve ANY nonblank header to a
+# plain guest, so that substitution would hand the GPU pipeline back to
+# anonymous LAN callers for the length of the outage — the same hole this PR
+# exists to close, reachable through a config flag instead of a bug.
+
+def test_degraded_auth_guest_is_refused_audio():
+    """Auth service down + fail-OPEN: a made-up header must NOT buy the pipeline."""
+    app = _app(user={"user_id": "guest", "role": "guest", "auth_degraded": True})
+    resp = _post_audio(TestClient(app), headers={"X-Session-ID": "anything-at-all"})
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Authentication service unavailable"
+
+
+def test_degraded_auth_guest_is_refused_cancel():
+    app = _app(user={"user_id": "guest", "role": "guest", "auth_degraded": True})
+    resp = _post_cancel(TestClient(app), headers={"X-Session-ID": "anything-at-all"})
+    assert resp.status_code == 503
+
+
+def test_degraded_marker_survives_get_current_user(monkeypatch):
+    """CONTROL for the gate above: the marker has to REACH it.
+
+    `get_current_user` used to strip every trace of the degraded state, leaving a
+    degraded guest byte-identical to a validated one — with that stripping back,
+    the two tests above pass a plain guest and go green while the hole is open.
+    This asserts the real resolver still labels the principal.
+    """
+    import asyncio
+    import auth as auth_mod
+
+    monkeypatch.setattr(auth_mod, "_AUTH_FAIL_CLOSED", False)
+
+    async def _degraded(_sid):
+        return auth_mod._degraded_user()
+
+    monkeypatch.setattr(auth_mod, "_validate_with_auth_service", _degraded)
+    monkeypatch.setattr(auth_mod, "_session_cache", {})
+
+    class _Req:
+        headers = {"X-Session-ID": "anything-at-all"}
+        class url:  # noqa: D106
+            path = "/api/voice/livekit-audio"
+        method = "POST"
+
+    resolved = asyncio.run(auth_mod.get_current_user(_Req()))
+    assert resolved["auth_degraded"] is True, (
+        "get_current_user no longer marks a degraded principal — the LiveKit media "
+        "gate cannot tell an auth outage from a validated guest session"
+    )
+    assert resolved["role"] == "guest"
+    # The private wire flag must NOT leak out with it.
+    assert auth_mod._DEGRADED_MARK not in resolved
+
+
+def test_degraded_auth_does_not_block_a_device_token(_no_pipeline):
+    """A provisioned panel never depended on zoe-auth, so an outage must not
+    take the Pi voice daemon down with it — only the header-presence branch."""
+    app = _app(
+        device={"panel_id": "zoe-touch-pi", "user_id": "jason", "role": "kiosk"},
+        user={"user_id": "guest", "role": "guest", "auth_degraded": True},
+    )
+    resp = _post_audio(TestClient(app), headers={"X-Device-Token": "raw"})
+    assert resp.status_code == 200
+
+
 # ── attribution ─────────────────────────────────────────────────────────────
 
 def test_brain_turn_is_attributed_to_the_authenticated_principal(monkeypatch):
