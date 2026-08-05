@@ -12,9 +12,11 @@ services:
     network_mode: host
     volumes:
     # MUST stay OUTSIDE the git checkout. deploy_live.sh runs `git reset --hard`,
-    # which rolls the tree back to its committed state — no live runtime store can
-    # survive inside it. Never point ZOE_MA_DATA back into the repo; CI pins this
-    # (tests/unit/test_no_live_databases_tracked.py).
+    # which rolls every TRACKED file back to its committed state — so a tracked
+    # runtime store is silently reverted on each deploy. Ignored files survive it,
+    # but that is one `git add` away from being false, and a live store must not
+    # depend on staying untracked. Never point ZOE_MA_DATA back into the repo;
+    # CI pins this (tests/unit/test_no_live_databases_tracked.py).
     - ${ZOE_MA_DATA:-/home/zoe/.zoe/music-assistant}:/data
     restart: unless-stopped
     healthcheck:
