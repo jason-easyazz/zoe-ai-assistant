@@ -400,7 +400,9 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
     Moves only (``shutil.move``). There is no delete path in this module, and
     ``tests/unit/test_curate_voice_corpus.py`` fails if one ever appears.
     """
-    result: dict[str, Any] = {"moved": 0, "conflicts": 0, "errors": [], "manifests": []}
+    result: dict[str, Any] = {
+        "moved": 0, "conflicts": 0, "stale": 0, "errors": [], "manifests": [],
+    }
     if not execute:
         result["conflicts"] = sum(1 for p in plan if p["conflict"])
         return result
@@ -419,6 +421,33 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
             result["conflicts"] += 1
             result["errors"].append(
                 f"{item['file']}: destination appeared after planning, left in place"
+            )
+            continue
+        # The SOURCE is re-checked too. The corpus is auto-captured
+        # (`ZOE_VOICE_SAVE_AUDIO=1`) and `_maybe_capture_stt` writes with a plain
+        # `shutil.copyfile` to the final name without taking the harness lock —
+        # so `flock` does NOT serialise capture writes, and a turn finishing
+        # mid-scan can be classified while half-written (truncated header →
+        # "unreadable", partial audio → "non-speech") and then moved on that
+        # stale verdict, with the writer completing through its open descriptor
+        # afterwards. A valid real-voice sample would be quarantined on evidence
+        # that no longer describes the file (Codex + Greptile P1, #1643).
+        #
+        # So: only move a file whose (size, mtime) still match what the scan
+        # measured. Anything that changed is left in place for the next run,
+        # when it will be classified on its final contents. Cheap, and it fails
+        # in the safe direction — the cost of a miss is one extra pass, the cost
+        # of a wrong move is evidence quarantined on a lie.
+        try:
+            st = os.stat(item["source"])
+        except OSError as exc:
+            result["errors"].append(f"{item['file']}: vanished before the move ({exc})")
+            continue
+        if (st.st_size, st.st_mtime) != (item["size"], item["mtime"]):
+            result["stale"] += 1
+            result["errors"].append(
+                f"{item['file']}: changed on disk after classification "
+                "(capture still in flight?), left in place"
             )
             continue
         try:
@@ -546,6 +575,17 @@ def main() -> int:
                     help="actually MOVE the failures into dated quarantine dirs "
                          "(default is a dry run; take flock /tmp/zoe-voice-harness.lock)")
     args = ap.parse_args()
+
+    # A probability, validated BEFORE anything is scanned or moved. `type=float`
+    # happily accepts `20` (a mistyped `0.20`), under which EVERY scored WAV
+    # satisfies `peak < 20` and the entire active corpus is quarantined in one
+    # `--execute` — the exact opposite of this tool's purpose. `nan` is worse
+    # than useless: every comparison against it is False, so nothing would be
+    # quarantined and the run would report a clean corpus (Codex P2, #1643).
+    if not (0.0 <= args.speech_threshold <= 1.0):  # NaN fails this too
+        print(f"--speech-threshold must be a probability in [0, 1], got: "
+              f"{args.speech_threshold}", file=sys.stderr)
+        return 2
 
     corpus = os.path.abspath(os.path.expanduser(args.corpus))
     if not os.path.isdir(corpus):

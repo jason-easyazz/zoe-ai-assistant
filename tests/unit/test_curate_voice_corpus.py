@@ -70,6 +70,16 @@ def _write_wav(path: Path, *, rate: int = 16000, channels: int = 1,
     return path
 
 
+def _run_main(argv: list[str]) -> int:
+    """Drive the real CLI entrypoint and return its exit code."""
+    saved = sys.argv
+    sys.argv = ["curate_voice_corpus.py", *argv]
+    try:
+        return cvc.main()
+    finally:
+        sys.argv = saved
+
+
 # ── format probe ──────────────────────────────────────────────────────────────
 
 def test_probe_format_accepts_the_corpus_contract(tmp_path):
@@ -496,6 +506,80 @@ def test_the_real_vad_test_stays_inert_in_the_ci_safe_lane():
     # whole-file search would happily match itself.
     body = src.split(name, 1)[1].split("\ndef ", 1)[0]
     assert "importorskip(" + chr(34) + "onnxruntime" + chr(34) + ")" in body, "guard lost"
+
+
+def test_a_capture_that_changed_after_classification_is_not_moved(tmp_path):
+    """A live capture finishing mid-scan must not be quarantined on stale evidence.
+
+    The corpus is auto-captured and ``_maybe_capture_stt`` writes with a plain
+    ``shutil.copyfile`` to the final filename WITHOUT the harness lock, so the
+    documented ``flock`` does not serialise capture writes against curation. A
+    half-written WAV can therefore be classified (truncated header →
+    "unreadable", partial audio → "non-speech") and then moved on a verdict that
+    no longer describes the file (Codex + Greptile P1, #1643).
+    """
+    corpus = _fixture_corpus(tmp_path)
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    plan = cvc.plan_moves(rows, str(corpus), "20260805")
+    assert plan, "fixture must plan at least one move"
+
+    # The writer completes: the file is now a VALID capture, not the fragment
+    # that was classified.
+    victim = Path(plan[0]["source"])
+    _write_wav(victim)
+
+    res = cvc.apply_moves(plan, str(corpus), 0.20, None, execute=True)
+
+    assert res["stale"] == 1
+    assert res["moved"] == len(plan) - 1
+    assert victim.exists(), "a file that changed after classification must stay put"
+    assert not Path(plan[0]["dest"]).exists()
+    assert any("changed on disk" in e for e in res["errors"])
+
+
+def test_an_unchanged_capture_still_moves(tmp_path):
+    """NEGATIVE CONTROL for the freshness check: it must not block normal moves.
+
+    If the stat comparison were wrong in the other direction (say it compared
+    something that always differs) the whole tool would silently stop working
+    while every other test stayed green.
+    """
+    corpus = _fixture_corpus(tmp_path)
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    plan = cvc.plan_moves(rows, str(corpus), "20260805")
+
+    res = cvc.apply_moves(plan, str(corpus), 0.20, None, execute=True)
+
+    assert res["stale"] == 0
+    assert res["moved"] == len(plan)
+
+
+@pytest.mark.parametrize("bad", ["20", "-0.1", "1.5", "nan"])
+def test_an_out_of_range_speech_threshold_is_refused_before_anything_moves(tmp_path, bad):
+    """`--speech-threshold 20` (a mistyped 0.20) would quarantine the WHOLE corpus.
+
+    Every scored WAV satisfies `peak < 20`. `nan` fails the other way — every
+    comparison against it is False, so nothing is quarantined and the run
+    reports a clean corpus. Both are validated away before any scan or move
+    (Codex P2, #1643).
+    """
+    corpus = _fixture_corpus(tmp_path)
+    before = sorted(os.listdir(corpus))
+
+    rc = _run_main(["--corpus", str(corpus), "--speech-threshold", bad,
+                    "--skip-vad", "--execute"])
+
+    assert rc == 2
+    assert sorted(os.listdir(corpus)) == before, "the corpus was touched despite the refusal"
+
+
+def test_a_valid_threshold_is_still_accepted(tmp_path):
+    """NEGATIVE CONTROL for the range check: the in-range path must survive."""
+    corpus = _fixture_corpus(tmp_path)
+
+    rc = _run_main(["--corpus", str(corpus), "--speech-threshold", "0.20", "--skip-vad"])
+
+    assert rc == 0
 
 
 def test_a_destination_appearing_after_planning_is_still_refused(tmp_path):
