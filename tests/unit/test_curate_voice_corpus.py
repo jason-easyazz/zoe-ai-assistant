@@ -27,6 +27,7 @@ import json
 import os
 import struct
 import sys
+import time
 import types
 import wave
 from pathlib import Path
@@ -224,7 +225,21 @@ def _fixture_corpus(tmp_path: Path) -> Path:
     (corpus / "100003_004.wav").write_bytes(b"nope")      # format (bad RIFF)
     _write_wav(corpus / "100005_006.wav", frames=0)       # format (empty)
     _write_wav(corpus / "quarantine-old-20260719" / "100004_005.wav")  # already out
+    _age(corpus)
     return corpus
+
+
+def _age(corpus: Path, seconds: float = 3600.0) -> None:
+    """Backdate every top-level WAV past the quiescence window.
+
+    ``apply_moves`` refuses to move a file touched within ``MIN_QUIESCENT_S``,
+    because a paused writer can leave size+mtime identical across both stats.
+    Fixture files are written milliseconds before the test runs, so without this
+    every move test would exercise the in-flight guard instead of the move.
+    """
+    old = time.time() - seconds
+    for p in corpus.glob("*.wav"):
+        os.utime(p, (old, old))
 
 
 def test_list_corpus_is_top_level_only(tmp_path):
@@ -375,6 +390,7 @@ def test_rerun_merges_into_the_existing_manifest(tmp_path):
     cvc.apply_moves(cvc.plan_moves(rows, str(corpus), "20260804"),
                     str(corpus), 0.20, None, execute=True)
     _write_wav(corpus / "110000_009.wav", frames=0)
+    _age(corpus)
     rows2 = cvc.scan(str(corpus), 0.20, vad_factory=None)
     cvc.apply_moves(cvc.plan_moves(rows2, str(corpus), "20260804"),
                     str(corpus), 0.20, None, execute=True)
@@ -535,6 +551,86 @@ def test_a_capture_that_changed_after_classification_is_not_moved(tmp_path):
     assert victim.exists(), "a file that changed after classification must stay put"
     assert not Path(plan[0]["dest"]).exists()
     assert any("changed on disk" in e for e in res["errors"])
+
+
+def test_a_capture_written_moments_ago_is_not_moved(tmp_path):
+    """Two stat snapshots cannot see a writer that made NO progress between them.
+
+    A paused ``shutil.copyfile`` leaves size and mtime identical across both the
+    scan and the pre-move re-check, so the freshness comparison passes and the
+    still-open file is relocated for the writer to finish inside quarantine
+    (Codex P2, #1643). A quiescence window narrows that: a capture untouched for
+    a full minute is not one being written. Stated honestly, this is a
+    narrowing, not a proof — the proof belongs at the capture side.
+    """
+    corpus = _fixture_corpus(tmp_path)
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    plan = cvc.plan_moves(rows, str(corpus), "20260805")
+    assert plan, "fixture must plan at least one move"
+
+    # Touch it forward WITHOUT changing content: the snapshot check alone sees
+    # nothing wrong once the plan is rebuilt against the new mtime.
+    victim = Path(plan[0]["source"])
+    os.utime(victim, None)
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    plan = cvc.plan_moves(rows, str(corpus), "20260805")
+
+    res = cvc.apply_moves(plan, str(corpus), 0.20, None, execute=True)
+
+    assert res["stale"] == 1
+    assert victim.exists(), "a file touched seconds ago must not be moved"
+    assert any("quiescence" in e for e in res["errors"])
+
+
+def test_a_vad_that_produces_no_hops_is_unscored_not_silent(tmp_path):
+    """ABSENT EVIDENCE, not measured silence — the corpus-wipe path.
+
+    ``voice_vad.SileroVAD.process_hops`` is documented "never raises" and
+    ``break``s out on an inference failure, logging at DEBUG. A model that loads
+    but cannot infer therefore returns an EMPTY list for EVERY file. Reporting
+    ``peak=0.0`` would put every readable WAV below any threshold, and one
+    ``--execute`` would move the whole replay corpus into non-speech quarantine
+    on a broken model, silently (Codex P1, #1643).
+    """
+    class _DeadVad:
+        def process_hops(self, _frame):
+            return []                      # exactly what a failing session yields
+
+    corpus = tmp_path / "corpus"
+    _write_wav(corpus / "speech.wav")
+    _age(corpus)
+
+    with pytest.raises(cvc.UnscorableAudio):
+        cvc.score_speech(corpus / "speech.wav", lambda: _DeadVad())
+
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=lambda: _DeadVad())
+    plan = cvc.plan_moves(rows, str(corpus), "20260805")
+
+    assert rows[0]["class"] == cvc.CLASS_KEEP
+    assert rows[0]["scores"] is None
+    assert "UnscorableAudio" in rows[0]["score_error"]
+    assert plan == [], "a broken VAD must move NOTHING"
+
+
+def test_a_working_vad_still_scores_and_quarantines(tmp_path):
+    """NEGATIVE CONTROL for the no-hops guard: a REAL zero must still count.
+
+    The guard must distinguish "the VAD produced nothing" from "the VAD
+    measured silence". If it swallowed genuine low scores too, the non-speech
+    class would quietly stop working while every other test stayed green.
+    """
+    class _SilentVad:
+        def process_hops(self, frame):
+            return [0.01] * (len(frame) // 640) or [0.01]
+
+    corpus = tmp_path / "corpus"
+    _write_wav(corpus / "noise.wav")
+    _age(corpus)
+
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=lambda: _SilentVad())
+
+    assert rows[0]["class"] == cvc.CLASS_NONSPEECH
+    assert rows[0]["scores"]["peak"] == pytest.approx(0.01)
 
 
 def test_an_unchanged_capture_still_moves(tmp_path):

@@ -114,6 +114,10 @@ CLASS_NONSPEECH = "quarantine-nonspeech"
 
 DEFAULT_CORPUS = "/home/zoe/.zoe-voice-samples"
 
+# A file untouched for this long is not one a capture is still writing. Real
+# captures are seconds long and written in a single `shutil.copyfile` pass.
+MIN_QUIESCENT_S = 60.0
+
 
 # ── format probe ──────────────────────────────────────────────────────────────
 
@@ -265,17 +269,32 @@ def score_speech(path: str | os.PathLike, vad_factory: Callable[[], Any]) -> dic
     for i in range(0, len(raw), FRAME_BYTES):
         probs.extend(vad.process_hops(raw[i:i + FRAME_BYTES]))
 
+    # ZERO HOPS IS ABSENT EVIDENCE, NOT MEASURED SILENCE. `process_hops` is
+    # documented "never raises" and `break`s out of its loop on an inference
+    # failure, logging at DEBUG — so a model that loads but cannot infer returns
+    # an EMPTY list for every file. Reporting peak=0.0 there would put every
+    # readable WAV below any threshold and one `--execute` would move the entire
+    # replay corpus into non-speech quarantine, silently, on a broken model
+    # (Codex P1, #1643). Raising instead routes it to score_error → peak=None →
+    # KEEP, the same never-quarantine-on-absent-evidence rule the rest of the
+    # tool follows. Audio too short for one 512-sample hop lands here too, and
+    # keeping it is equally correct.
+    if not probs:
+        raise UnscorableAudio(
+            "the VAD produced no hops — inference failure or audio shorter than "
+            "one 512-sample hop; refusing to report this as silence"
+        )
+
     samples = np.frombuffer(raw[: len(raw) // 2 * 2], dtype=np.int16).astype(np.float32)
     rms = float(np.sqrt(np.mean(np.square(samples)))) if samples.size else 0.0
 
     return {
-        "peak": max(probs) if probs else 0.0,
-        "mean": (sum(probs) / len(probs)) if probs else 0.0,
+        "peak": max(probs),
+        "mean": sum(probs) / len(probs),
         "hops": len(probs),
         # Fraction of hops the LIVE threshold would call speech — context only.
         "frac_speech_hops": (
             sum(1 for p in probs if p >= RUNTIME_SPEECH_THRESHOLD) / len(probs)
-            if probs else 0.0
         ),
         "rms": round(rms, 1),
         "duration_s": round(len(raw) / 2 / rate, 2) if rate else 0.0,
@@ -407,6 +426,7 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
         result["conflicts"] = sum(1 for p in plan if p["conflict"])
         return result
 
+    now = time.time()
     by_dir: dict[str, list[dict[str, Any]]] = {}
     for item in plan:
         if item["conflict"]:
@@ -448,6 +468,24 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
             result["errors"].append(
                 f"{item['file']}: changed on disk after classification "
                 "(capture still in flight?), left in place"
+            )
+            continue
+        # ...and a QUIESCENCE window on top, because two snapshots cannot see a
+        # writer that made no progress between them: a paused `copyfile` leaves
+        # size and mtime identical across both stats, and the move would then
+        # relocate a still-open file for the writer to finish inside quarantine
+        # (Codex P2, #1643). A capture that has not been touched for a full
+        # minute is not one that is mid-write — real captures are seconds long
+        # and written in one pass. This is a NARROWING, not a proof: a writer
+        # stalled for longer than the window still defeats it. The proof lives
+        # at the capture side (temp file + atomic rename in `_maybe_capture_stt`,
+        # a voice-path file and therefore a separate replay-gated change); this
+        # is what the curator can honestly guarantee against today's writer.
+        if now - st.st_mtime < MIN_QUIESCENT_S:
+            result["stale"] += 1
+            result["errors"].append(
+                f"{item['file']}: modified {now - st.st_mtime:.0f}s ago "
+                f"(< {MIN_QUIESCENT_S}s quiescence), left in place"
             )
             continue
         try:
