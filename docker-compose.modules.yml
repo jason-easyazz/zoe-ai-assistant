@@ -11,15 +11,10 @@ services:
     container_name: zoe-music-assistant
     network_mode: host
     volumes:
-    # OUTSIDE the git checkout, deliberately. `git reset --hard` (deploy_live.sh)
-    # rolls back TRACKED files to their committed state — so while these DBs were
-    # tracked, every deploy silently reverted MA's live writes (measured 2026-08:
-    # days of writes lost, recovered from deleted inodes). Untracking them (now
-    # gitignored) stops the rollback, but the durable fix is keeping the store
-    # out of the checkout entirely: nothing under a reset-hard'd tree can be
-    # trusted for runtime state. The 2026-08 two-step migration (#1606 A, #1631
-    # B) is COMPLETE — fresh hosts just get this default. Never point ZOE_MA_DATA
-    # back inside the repo; CI pins it (tests/unit/test_no_live_databases_tracked.py).
+    # MUST stay OUTSIDE the git checkout. deploy_live.sh runs `git reset --hard`,
+    # which rolls the tree back to its committed state — no live runtime store can
+    # survive inside it. Never point ZOE_MA_DATA back into the repo; CI pins this
+    # (tests/unit/test_no_live_databases_tracked.py).
     - ${ZOE_MA_DATA:-/home/zoe/.zoe/music-assistant}:/data
     restart: unless-stopped
     healthcheck:
