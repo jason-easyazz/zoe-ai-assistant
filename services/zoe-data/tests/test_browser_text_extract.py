@@ -13,6 +13,7 @@ rather than passing vacuously against an empty string.
 from __future__ import annotations
 
 import asyncio
+import importlib.machinery
 import pathlib
 import sys
 
@@ -49,26 +50,65 @@ def test_negative_control_boilerplate_is_actually_in_the_fixture():
     """
     for needle in (
         "Cookie preferences",
+        "Sign in",
         "should-never-appear",
         "All rights reserved",
         "buy cheap hosting",
         "Please enable JavaScript",
         "font-family",
+        "Related article seven",
     ):
         assert needle in ARTICLE, f"fixture no longer contains {needle!r}"
+    # The divsoup exclusions need the same control, and did not have one.
+    for needle in ("Create account", "Mobile view", "Clausius Clapeyron"):
+        assert needle in DIVSOUP, f"divsoup fixture no longer contains {needle!r}"
 
 
 def test_negative_control_extractor_can_fail():
-    """A whole-document dump WOULD contain the boilerplate.
+    """The fallback strategy is reachable and returns real text.
 
-    The fallback strategy keeps nav/footer text, so this pins that the
-    exclusions in `test_article_*` come from main-content SELECTION and not
-    from the drop-list alone.
+    Deliberately claims nothing about boilerplate: a fallback dump does NOT
+    keep nav/header/footer/aside/noscript, because `_DROP_TAGS` discards those
+    before any scoring runs. (The earlier docstring here said the opposite —
+    cross-review, #1626.) Which exclusions are genuinely SELECTION is pinned by
+    the test below.
     """
     fragment = "<p>" + ("only one short paragraph here. " * 3) + "</p>"
     out = extract_main_text(fragment)
     assert out.strategy == "fallback:whole-document"
     assert "only one short paragraph" in out.text
+
+
+def _fixture_slice(html: str, start_marker: str, end_marker: str) -> str:
+    """Cut a real block out of a fixture — never hand-written HTML."""
+    start = html.index(start_marker)
+    end = html.index(end_marker, start) + len(end_marker)
+    return html[start:end]
+
+
+def test_negative_control_the_drop_list_alone_does_not_explain_the_exclusions():
+    """Separate "the drop-list removed it" from "selection rejected it".
+
+    Most strings in `test_article_excludes_boilerplate` sit inside
+    `nav`/`header`/`footer`/`aside`/`noscript`/`script`/`style`, which
+    `_DROP_TAGS` discards wholesale — so their absence proves the drop-list
+    works, not that main-content selection does.
+
+    The link-dense sidebar `<div>` is the one that carries the selection claim:
+    it is NOT in the drop-list, so fed on its own it survives extraction
+    intact. Its absence from the whole-page extraction is therefore link-density
+    SELECTION rejecting it. This also goes red if the sidebar ever becomes a
+    dropped tag, which would quietly make that assertion vacuous.
+    """
+    sidebar = _fixture_slice(ARTICLE, '<div id="sidebar-links">', "</div>")
+    assert "Related article seven" in sidebar
+
+    survives = extract_main_text(sidebar)
+    assert "Related article seven" in survives.text, (
+        "the sidebar is being removed by the drop-list, so excluding it from the "
+        "full-page extraction proves nothing about main-content selection"
+    )
+    assert "Related article seven" not in extract_main_text(ARTICLE).text
 
 
 # --- main-content selection ------------------------------------------------
@@ -373,3 +413,135 @@ def test_policy_from_plan_params_is_total(params, expected):
 def test_fetch_page_text_still_refuses_bad_schemes_with_a_settle_policy():
     out = asyncio.run(fetch_page_text("file:///etc/passwd", settle=SETTLE_SPA))
     assert out["ok"] is False
+
+
+# --- the failure envelope holds through TEARDOWN ---------------------------
+#
+# `fetch_page_text` promises never to raise for an ordinary failure. An
+# exception raised in a `finally` block REPLACES the return value, so an
+# unguarded `await context.close()` broke that promise for exactly the case
+# where it matters most: a browser that has already crashed (cross-review,
+# #1626). Driven with a fake `cloakbrowser` module — no Chromium, no network.
+#
+# `assert_public_url` is stubbed for these three ONLY, because a real DNS
+# lookup is not available offline (an unresolvable host is refused before the
+# browser is ever launched, which is what the SSRF tests above pin). The guard
+# itself stays covered by `test_fetch_page_text_rejects_non_http_scheme`,
+# `test_fetch_page_text_refuses_a_private_target_without_launching`, and
+# `test_fetch_page_text_still_refuses_bad_schemes_with_a_settle_policy`.
+
+
+class _ClosingPage:
+    url = "https://example.test/article"
+
+    async def goto(self, *_a, **_k):
+        return None
+
+    async def content(self):
+        return ARTICLE
+
+    async def title(self):
+        return "fixture"
+
+    async def wait_for_load_state(self, *_a, **_k):
+        return None
+
+    async def wait_for_timeout(self, *_a, **_k):
+        return None
+
+
+class _FakeContext:
+    def __init__(self, close_raises: bool):
+        self._close_raises = close_raises
+        self.closed = False
+
+    async def new_page(self):
+        return _ClosingPage()
+
+    async def close(self):
+        self.closed = True
+        if self._close_raises:
+            raise RuntimeError("browser has crashed; context already gone")
+
+
+def _install_fake_browser(monkeypatch, context):
+    import types
+
+    import agent_safety
+
+    mod = types.ModuleType("cloakbrowser")
+    mod.__spec__ = importlib.machinery.ModuleSpec("cloakbrowser", loader=None)
+
+    async def launch_context_async(**_kwargs):
+        return context
+
+    mod.launch_context_async = launch_context_async
+    monkeypatch.setitem(sys.modules, "cloakbrowser", mod)
+    monkeypatch.setattr(agent_safety, "assert_public_url", lambda url: url)
+
+    async def _noop_guard(_page):
+        return None
+
+    monkeypatch.setattr(agent_safety, "guard_browser_page", _noop_guard)
+
+
+def test_fetch_page_text_returns_the_envelope_even_when_close_raises(monkeypatch):
+    """A raising teardown must not escape as an exception."""
+    ctx = _FakeContext(close_raises=True)
+    _install_fake_browser(monkeypatch, ctx)
+
+    out = asyncio.run(fetch_page_text("https://example.test/article"))
+
+    assert ctx.closed is True, "the close was never attempted"
+    assert out["ok"] is True
+    assert "compact open-weight text-to-speech model" in out["text"]
+
+
+def test_fetch_page_text_close_failure_does_not_mask_a_page_failure(monkeypatch):
+    """Both halves failing still yields {"ok": False}, never a raise."""
+
+    class _Boom(_FakeContext):
+        async def new_page(self):
+            raise RuntimeError("target page crashed")
+
+    ctx = _Boom(close_raises=True)
+    _install_fake_browser(monkeypatch, ctx)
+
+    out = asyncio.run(fetch_page_text("https://example.test/article"))
+
+    assert ctx.closed is True
+    assert out["ok"] is False
+    assert "target page crashed" in out["error"], out["error"]
+
+
+def test_fetch_page_text_closes_the_context_on_the_happy_path(monkeypatch):
+    ctx = _FakeContext(close_raises=False)
+    _install_fake_browser(monkeypatch, ctx)
+
+    out = asyncio.run(fetch_page_text("https://example.test/article"))
+
+    assert out["ok"] is True
+    assert out["strategy"] == "semantic:<article>"
+    assert ctx.closed is True
+
+
+def test_fetch_page_text_refuses_a_private_target_without_launching(monkeypatch):
+    """The SSRF refusal returns the envelope and never reaches a browser."""
+    import types
+
+    mod = types.ModuleType("cloakbrowser")
+    mod.__spec__ = importlib.machinery.ModuleSpec("cloakbrowser", loader=None)
+    launched = []
+
+    async def launch_context_async(**_kwargs):
+        launched.append(1)
+        raise AssertionError("a refused url must never launch a browser")
+
+    mod.launch_context_async = launch_context_async
+    monkeypatch.setitem(sys.modules, "cloakbrowser", mod)
+
+    out = asyncio.run(fetch_page_text("http://127.0.0.1:8000/admin"))
+
+    assert out["ok"] is False
+    assert "refused" in out["error"]
+    assert launched == []

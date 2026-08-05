@@ -710,7 +710,21 @@ async def fetch_page_text(
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"CloakBrowser text extraction failed: {exc}"}
     finally:
-        await context.close()
+        # GUARDED, and that is the whole point of the failure envelope: an
+        # exception raised in `finally` REPLACES the return value and escapes
+        # to the caller, so an unguarded close would let a crashed browser turn
+        # a `{"ok": False, ...}` degrade into a raised exception — exactly what
+        # this function promises never to do (cross-review, #1626). The broker
+        # executor path already closes inside its own guarded try; this makes
+        # the two live paths consistent.
+        try:
+            await context.close()
+        except Exception:  # noqa: BLE001 - teardown must never mask the result
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "CloakBrowser context close failed after text extraction", exc_info=True
+            )
 
 
 async def execute_text_extraction(
