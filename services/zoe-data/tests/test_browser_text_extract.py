@@ -400,6 +400,56 @@ def test_a_poll_longer_than_the_ceiling_cannot_stretch_the_wait():
     assert floor["outcome"] == "gave-up"
 
 
+def test_a_floor_above_the_text_limit_cannot_burn_the_whole_ceiling():
+    """`extracted.chars` is measured AFTER truncation, so an unclamped floor is
+    arithmetically unreachable when `text_limit < min_chars` — every such
+    request polled to the full ceiling however much the page rendered
+    (Codex P2, #1626). The floor asks "did the page render enough?", and
+    `text_limit` chars IS enough when that is all the caller asked for.
+    """
+    page = _FakePage([RENDERED])          # fully rendered on the FIRST read
+    policy = SettlePolicy(min_chars=1_000, poll_ms=500, max_wait_ms=12_000)
+
+    extracted, log = _settle(page, policy, text_limit=500)
+
+    assert page.clock == 0.0, f"polled for an unreachable floor: {page.clock}s"
+    assert extracted.chars == 500
+    assert [e for e in log if e["stage"] == "content-floor"] == [], \
+        "a floor already satisfied must not open a poll loop at all"
+
+
+def test_the_clamp_is_recorded_when_it_bites():
+    """A clamped floor must be visible, not silent — an operator has to be able
+    to see that the floor they configured was above the text they asked for."""
+    page = _FakePage([SHELL])             # never renders: forces the loop
+    policy = SettlePolicy(min_chars=1_000, poll_ms=500, max_wait_ms=1_000)
+
+    _, log = _settle(page, policy, text_limit=300)
+
+    floor = [e for e in log if e["stage"] == "content-floor"][0]
+    assert floor["floor"] == 300, "the EFFECTIVE floor is the clamped one"
+    assert floor["floor_requested"] == 1_000
+
+
+def test_an_unclamped_floor_is_still_honoured_when_it_fits():
+    """NEGATIVE CONTROL for the clamp: it must not weaken the normal case.
+
+    With `text_limit` above `min_chars` the floor is untouched, so the SPA
+    shell still polls and is still rescued — otherwise the clamp would have
+    quietly disabled the feature it is guarding.
+    """
+    page = _FakePage([SHELL, RENDERED])
+    policy = SettlePolicy(min_chars=1_000, poll_ms=500, max_wait_ms=30_000)
+
+    extracted, log = _settle(page, policy, text_limit=20_000)
+
+    floor = [e for e in log if e["stage"] == "content-floor"][0]
+    assert floor["floor"] == 1_000
+    assert "floor_requested" not in floor
+    assert floor["outcome"] == "reached"
+    assert extracted.chars >= 1_000
+
+
 def test_content_floor_is_inert_without_a_ceiling():
     """min_chars with no max_wait_ms must not become an unbounded loop."""
     page = _FakePage([SHELL])
@@ -672,6 +722,35 @@ def test_a_main_wrapping_the_article_does_not_beat_the_article():
     assert out.strategy == "semantic:<article>", out.strategy
     assert "Paragraph 3 of the actual article body" in out.text
     assert "Related card" not in out.text
+
+
+def test_comment_articles_never_evict_the_post_they_belong_to():
+    """The drop is WRAPPER-SHAPED, and this is why it has to be.
+
+    `<article>` nested inside `<article>` is the HTML spec's own idiom for
+    COMMENTS on a post. An "any ancestor containing a qualifying candidate is
+    dropped" rule would return a single comment and throw away the article's
+    headline and body — a worse failure than the one it fixes (Codex P2,
+    #1626). Only a `<main>` wrapping a qualifying `<article>` is demoted.
+    """
+    post = " ".join(
+        f"Paragraph {i} of the post itself, the content a caller actually wants."
+        for i in range(12)
+    )
+    comment = " ".join(
+        f"Comment sentence {i}, long enough on its own to clear the 200-char floor."
+        for i in range(30)
+    )
+    html = (
+        "<html><body><article><h1>The post</h1><p>" + post + "</p>"
+        "<article class='comment'><p>" + comment + "</p></article>"
+        "</article></body></html>"
+    )
+
+    out = extract_main_text(html)
+
+    assert out.strategy == "semantic:<article>", out.strategy
+    assert "Paragraph 3 of the post itself" in out.text, "the post must not be discarded"
 
 
 def test_a_main_whose_inner_article_is_too_short_still_wins():

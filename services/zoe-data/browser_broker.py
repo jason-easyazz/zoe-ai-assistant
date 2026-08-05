@@ -476,17 +476,27 @@ def extract_main_text(html: str, *, text_limit: int = 20_000) -> ExtractedText:
     #   <main> wrapping the real <article> plus a related-card module ALWAYS has
     #   more text than the <article> it contains, so length would hand back the
     #   wrapper (article + cards) every time, and the tighter node could never win.
-    #   So a candidate that CONTAINS another qualifying candidate is dropped first:
-    #   the shortcut only ever chooses among disjoint bodies, and length decides
-    #   between those. A <main> whose inner <article> is below the floor is not
-    #   dropped (nothing qualifying is nested in it), so short-article pages still
-    #   fall back to the wrapper rather than to whole-document.
+    #   So a <main> that CONTAINS a qualifying <article> is dropped first, and
+    #   length decides among the survivors.
+    #
+    # The drop is deliberately WRAPPER-SHAPED (<main> around <article>) rather
+    # than "any ancestor": <article> nested inside <article> is the HTML spec's
+    # own idiom for COMMENTS on a post, and dropping the parent there would
+    # return a single comment and discard the article's headline and body
+    # (Codex P2, #1626). <main> is a page REGION and <article> a self-contained
+    # composition, so a <main> is never the tighter node — an <article> often is.
+    # A <main> whose inner <article> is below the floor is not dropped either
+    # (nothing qualifying is nested in it), so short-article pages still fall
+    # back to the wrapper rather than to whole-document.
     scored = [(_tidy(_node_text(n)), n) for n in semantic]
     qualifying = [(b, n) for b, n in scored if len(b) >= _MIN_MAIN_CHARS]
     if qualifying:
-        inner_ids = {id(n) for _, n in qualifying}
-        disjoint = [(b, n) for b, n in qualifying if not _contains_any(n, inner_ids - {id(n)})]
-        body, node = max(disjoint or qualifying, key=lambda bn: len(bn[0]))
+        article_ids = {id(n) for _, n in qualifying if n.tag == "article"}
+        survivors = [
+            (b, n) for b, n in qualifying
+            if not (n.tag == "main" and _contains_any(n, article_ids))
+        ]
+        body, node = max(survivors or qualifying, key=lambda bn: len(bn[0]))
         return _finish(body, title, text_limit, f"semantic:<{node.tag}>")
 
     # 2. Score candidate containers.
@@ -657,10 +667,19 @@ async def settle_and_extract(
 
     extracted = extract_main_text(await page.content(), text_limit=text_limit)
 
-    if policy.min_chars and policy.max_wait_ms and extracted.chars < policy.min_chars:
+    # CLAMPED to `text_limit`, because `extracted.chars` is measured AFTER
+    # truncation. A plan with `text_limit=500` against the 1000-char SPA floor
+    # could never satisfy the floor no matter how much the page rendered, so
+    # every such request burned the full 12 s ceiling polling for a number that
+    # is arithmetically unreachable (Codex P2, #1626). The floor asks "did the
+    # page render enough content?" and `text_limit` chars IS enough when that is
+    # all the caller asked for.
+    floor = min(policy.min_chars, text_limit) if policy.min_chars else 0
+
+    if floor and policy.max_wait_ms and extracted.chars < floor:
         deadline = now() + policy.max_wait_ms / 1000.0
         polls = 0
-        while extracted.chars < policy.min_chars and now() < deadline:
+        while extracted.chars < floor and now() < deadline:
             # CLAMPED to the residual budget. `poll_ms` and `max_wait_ms` both
             # arrive from untrusted plan JSON, so `poll_ms=10000` against
             # `max_wait_ms=1` would otherwise sleep a full poll interval before
@@ -674,10 +693,13 @@ async def settle_and_extract(
         log.append(
             {
                 "stage": "content-floor",
-                "outcome": "reached" if extracted.chars >= policy.min_chars else "gave-up",
+                "outcome": "reached" if extracted.chars >= floor else "gave-up",
                 "polls": polls,
                 "chars": extracted.chars,
-                "floor": policy.min_chars,
+                "floor": floor,
+                # Surfaced only when the clamp actually bit, so an operator can
+                # see the floor they configured was above the text they asked for.
+                **({"floor_requested": policy.min_chars} if floor != policy.min_chars else {}),
             }
         )
 
