@@ -392,21 +392,24 @@ armed, not after.
 
 ### Option 3 — Keep both, made disjoint by ADMISSION *(RECOMMENDED, as a transition to Option 1)*
 
-The lane is **decided once, at promotion time, by the warden's gate**, written
-onto the ticket (label or ticket-block field), and **both lanes filter on it**.
-Neither lane ever again selects a ticket the other could select. Lane B is
-demoted from "claims any `todo`" to "claims tickets labelled for it", which is a
-small, testable change to `claim_next_issue` (`:127-137`).
+*(Mechanism sketch — describes what Option 3 WOULD do if D1 selects it. Nothing
+below is settled; §9 D1 is open and no wave may assume this option.)*
+
+Under this option the lane **would be decided once**, at promotion time, by the
+warden's gate, written onto the ticket (label or ticket-block field), with **both
+lanes filtering on it** — so neither lane could again select a ticket the other
+could select. Lane B would be demoted from "claims any `todo`" to "claims tickets
+labelled for it", a small, testable change to `claim_next_issue` (`:127-137`).
 
 - **For:** it removes the collision *today* without betting the program on
   either lane's record. It keeps the shipping lane shipping while Lane A earns
   the ≥3-real-tickets bar the migration doc already demands. It is reversible.
 - **Against:** two lanes is two maintenance surfaces, and "temporary" dual
-  lanes have a way of becoming permanent. Mitigation: **Option 3 carries an
+  lanes have a way of becoming permanent. Mitigation: **Option 3 would carry an
   explicit expiry** — once Lane A has landed ≥3 real tickets end-to-end (≥1
-  heavy) *and* Wave 5's real local phase workers exist, Lane B is **deleted**
-  (retire by removing; git keeps history). Write the expiry into the wave exit
-  gate, not into a promise.
+  heavy) *and* Wave 5's real local phase workers exist, Lane B would be
+  **deleted** (retire by removing; git keeps history). If D1 selects Option 3,
+  write that expiry into the wave exit gate, not into a promise.
 
 **Recommendation: Option 3 now, converging on Option 1 at Wave 5 exit.** But
 Option 2 is a legitimate operator choice if Jason's priority is shipping volume
@@ -586,8 +589,10 @@ against the real board is a separate decision and the hold's spirit reapplies to
   tier (Omnigent) is the follow-on unlock. **Do this before the rebuild.**
 - **There is no green baseline right now.** The number is stale three times over:
   "33/33" was 2026-07-22; `FINDINGS.md` says 35; **the code today has 40** (the
-  extra 5 are scenario 4d, work_dir-defer). And the three live-Omnigent asserts
-  were last recorded **RED** on exhausted container credits. *"No regression"* is
+  extra 5 are scenario 4d, work_dir-defer). And **three asserts were RED in the
+  last recorded live-Omnigent run**, on exhausted container credits — that is a
+  historical failure count from that run, not the current shape of the live tier
+  (the live scenario in `e2e.ts:368-389` carries 6 assertions). *"No regression"* is
   unmeasurable until 40/40 is re-established. The e2e is deliberately **not**
   hermetic — an unreachable Omnigent is *"an honest test failure, not a skip"* —
   which is correct discipline and precisely why it is not already in CI.
@@ -879,26 +884,45 @@ done by hand in June (358 tickets cancelled at once) is reproducible by the gate
 
 `labs/flue-executor-2x/` per §5. Plain-TS orchestration, `@flue/*@2.0.1` pinned
 exactly, `start({agents})` explicit registration, no vite build, `labdb.ts` never
-`db.ts`, `:3581` health + status. Then: install the unit, run `dry`, then `full`.
+`db.ts`, `:3581` health + status. Then: install the unit, run `dry`, then `full`
+**against the lab scratch DB only**.
+
+**`full` here means the lab scratch DB, never the real board.** This wave is
+lab-tier by its own heading, and `ZOE_EXECUTOR_DISPATCH=full` pointed at the real
+board is **D6 — a Jason decision that this plan does not take** (§9). Wave 4
+proves the 2x executor dispatches correctly against a throwaway database; it does
+not authorise, schedule, or imply the production flip.
 
 **Entry:** Wave 0 (baseline) **and** Wave 1 (a board that can be unwedged).
 **Exit:** 40/40 against the 2x build on the same scratch DB; an A/B against the
 1.x executor on claim semantics under concurrency; `GET /health` answers with the
-DB state as a *field*; the unit starts with no build step; **the 1.x directory is
-deleted** only after Wave 5's ≥3 real tickets.
+DB state as a *field*; the unit starts with no build step.
+
+**Deleting the 1.x directory is NOT part of this wave's exit** — it is gated on
+Wave 5's ≥3 real tickets, and a step cannot be inside the exit gate of the wave
+that must complete before it. It is listed as a Wave 5 step below.
 
 ### Wave 5 — Real local phase workers + lane unification *(prod-reachable)*
 
 Closes migration open-gap (a): the synthetic proof worker becomes a real phase
 agent. The template is `labs/flue-harness-spike` on 2.x (`harness: true` tool +
 `harness.prompt()` + `useSubagent`; `local()` survives but sandboxes are no
-longer implicit). Apply the §4 lane decision.
+longer implicit). Apply whichever lane option §9 D1 selects.
+
+Also in this wave, once the ≥3-real-ticket bar below is met: **delete the
+`labs/flue-executor` 1.x directory** (retire by removing; git keeps history).
 
 **Entry:** Wave 4 exit. **Exit:** ≥1 light phase completed by the local lane
 **with Omnigent down** (the non-negotiable "Omnigent down → the local lane still
-runs" property); the lane arbiter writes the lane at promotion time and both
-lanes filter on it, **or** the retired lane is deleted; ≥3 real tickets landed
-end-to-end through Lane A, ≥1 heavy.
+runs" property); **the §9 D1 decision is applied** — under Option 1 or 2 the
+retired lane is deleted, under Option 3 the lane arbiter writes the lane at
+promotion time and both lanes filter on it; and **≥3 real tickets landed
+end-to-end through the lane D1 selected as the survivor**, ≥1 heavy.
+
+*(This gate is deliberately phrased against "the surviving lane" rather than Lane
+A. An earlier draft said Lane A, which would have quietly foreclosed Option 2 —
+retire Lane A — by making a gate impossible to satisfy under a decision Jason has
+not yet made. The gate must be satisfiable under all three options.)*
 
 ### Wave 6 — AUTHOR mode, the merge button, and the flip *(prod — the actual autonomy)*
 
@@ -909,7 +933,10 @@ end-to-end through Lane A, ≥1 heavy.
   `ZOE_MULTICA_POLL_REF_TIMEOUT_S=300` band-aid reverted to the 60 s default (the
   2 m 07 s → 0.17 s fix landed in #1585; nothing depends on the raised value).
 - **The kill switch is removed here and only here**, as an explicit exit gate,
-  and re-arming stays one command.
+  and re-arming stays one command. **Ordering within the wave is load-bearing:
+  the switch comes out AFTER the ≥N-consecutive-chains proof below has been met,
+  never before it.** Removing the brake is the thing the proof authorises, so
+  doing it first would be pulling the brake to see whether the brake was needed.
 
 **Entry:** Waves 3 and 5 exit; OAuth renewed with the deadline moved forward;
 digest pin in effect.
@@ -917,6 +944,13 @@ digest pin in effect.
 other than the tier-defined merge clicks; every transition carrying a reason
 visible in `multica-web`; `zoe_ground_truth.sh` reporting the autonomy state
 honestly (armed / paused / dead letters outstanding).
+
+**`N` is deliberately unset — Jason fixes it at Wave 6 entry.** A gate whose
+threshold is a letter cannot be counted, and this is the gate that authorises
+removing the kill switch, so it is the last one that should be left soft. It is
+left open rather than guessed because the right number is a risk-appetite call,
+not a technical one. Whatever `N` becomes, it must be countable from the board
+without interpretation.
 
 ### Feeds and dependencies
 
