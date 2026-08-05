@@ -231,9 +231,53 @@ def test_wrapper_key_parse_fail_closes_on_anything_but_the_dedicated_key():
     )
 
 
+def test_the_key_line_case_has_exactly_two_arms_in_the_right_order():
+    """Arm PRESENCE is not arm REACHABILITY — and `case` is first-match-wins.
+
+    The assertions above check that both arms exist. They stay green if a
+    permissive arm is inserted BEFORE the rejecting one: a leading `*) : ;;`
+    makes every hostile line fall through and turns the `exit 78` arm into dead
+    code, with the whole test still passing. That was demonstrated as a live
+    mutation during the cross-review of #1655. So pin the arm LIST: exactly two
+    arms, accept first, catch-all reject second, nothing in between.
+    """
+    lines = _code_lines(_text(WRAPPER))
+    # `$_line` is cased several times (blank/comment skip, `export ` strip).
+    # The ACCEPTANCE block is the one carrying the permitted assignment — found
+    # by its content, so reordering the earlier blocks cannot misdirect this.
+    blocks = []
+    for i, ln in enumerate(lines):
+        if ln != 'case "$_line" in':
+            continue
+        end = next(j for j in range(i + 1, len(lines)) if lines[j] == "esac")
+        arms = [a for a in lines[i + 1:end] if re.match(r"^[^\s(]+\)", a)]
+        if any(a.startswith("OPENROUTER_API_KEY_OMP=*)") for a in arms):
+            blocks.append(arms)
+
+    assert len(blocks) == 1, (
+        f"expected exactly one acceptance case for the key line, found {len(blocks)}"
+    )
+    arms = blocks[0]
+
+    assert len(arms) == 2, f"the key-line case must have exactly two arms, got: {arms}"
+    assert arms[0].startswith("OPENROUTER_API_KEY_OMP=*)"), (
+        "the FIRST arm must be the one permitted assignment"
+    )
+    assert arms[1].startswith("*)") and "exit 78" in arms[1], (
+        "the SECOND and last arm must be the catch-all that exits 78; anything "
+        "matching earlier leaves the reject arm unreachable"
+    )
+
+
 def test_wrapper_diagnostics_never_carry_key_material():
     """A rejected line may BE the key, and stderr goes to omnigent's logs. Every
-    fail-closed message names the file and a line NUMBER, never line text."""
+    fail-closed message names the file and a line NUMBER, never line text.
+
+    Matched in BRACE as well as bare form (`${_line}`, not only `$_line`). The
+    brace form is the natural thing to reach for when appending text to a
+    variable, it defeated the bare-only pattern in a live mutation during the
+    cross-review of #1655, and the leak it permits is the whole key.
+    """
     for ln in _code_lines(_text(WRAPPER)):
         # Only the emitted TEXT — the guard's own condition may of course name
         # the variable it is testing. Matched within one line; `.` never spans a
@@ -241,9 +285,9 @@ def test_wrapper_diagnostics_never_carry_key_material():
         emitted = re.search(r"\b(?:echo|printf)\b(.*?)>&2", ln)
         if not emitted:
             continue
-        for var in ("$_key_value", "$_line", "$OPENROUTER_API_KEY"):
-            assert var not in emitted.group(1), (
-                f"diagnostic prints key material via {var}: {ln!r}"
+        for var in ("_key_value", "_line", "OPENROUTER_API_KEY"):
+            assert not re.search(rf"\$\{{?{var}\b", emitted.group(1)), (
+                f"diagnostic prints key material via ${var}: {ln!r}"
             )
 
 
