@@ -645,6 +645,61 @@ def test_a_related_card_list_does_not_beat_the_real_article():
     assert "Related card" not in out.text
 
 
+def test_a_main_wrapping_the_article_does_not_beat_the_article():
+    """Nesting, not visit order: longest-wins alone hands back the WRAPPER.
+
+    `<main>` wrapping the real `<article>` plus a related-card module always
+    holds more text than the `<article>` inside it, so pure length could never
+    choose the tighter node — the shortcut would return article + cards on the
+    single most common article layout on the web (Codex P2, #1626). A candidate
+    containing another qualifying candidate is dropped before length decides.
+    """
+    real = " ".join(
+        f"Paragraph {i} of the actual article body, the text a caller asked for."
+        for i in range(12)
+    )
+    cards = " ".join(
+        f"Related card {i} teaser, part of a module deliberately longer than the article."
+        for i in range(20)
+    )
+    html = (
+        "<html><body><main><article><p>" + real + "</p></article>"
+        "<div class='related'><p>" + cards + "</p></div></main></body></html>"
+    )
+
+    out = extract_main_text(html)
+
+    assert out.strategy == "semantic:<article>", out.strategy
+    assert "Paragraph 3 of the actual article body" in out.text
+    assert "Related card" not in out.text
+
+
+def test_a_main_whose_inner_article_is_too_short_still_wins():
+    """Negative control for the drop rule: only QUALIFYING nesting demotes.
+
+    If the inner `<article>` is below the 200-char floor there is nothing
+    qualifying nested inside `<main>`, so `<main>` must still be chosen —
+    otherwise the rule would push short-article pages down to the container
+    scorer or to whole-document.
+    """
+    stub = "A teaser too short to qualify."
+    body = " ".join(
+        f"Sentence {i} of the surrounding main region, which is the real content here."
+        for i in range(12)
+    )
+    html = (
+        "<html><body><main><article><p>" + stub + "</p></article>"
+        "<p>" + body + "</p></main></body></html>"
+    )
+
+    assert len(stub) < 200, "the stub must sit below _MIN_MAIN_CHARS for this control"
+
+    out = extract_main_text(html)
+
+    assert out.strategy == "semantic:<main>", out.strategy
+    assert "Sentence 3 of the surrounding main region" in out.text
+
+
 def test_a_late_title_failure_does_not_discard_the_text(monkeypatch):
     """`page.title()` is a separate RPC; the title is optional, the text is not."""
 

@@ -392,6 +392,25 @@ def _count_tag(node: _Node, tag: str) -> int:
     return total
 
 
+def _contains_any(node: _Node, node_ids: set[int]) -> bool:
+    """True when any node in ``node_ids`` is a strict DESCENDANT of ``node``.
+
+    Identity-based (``id()``), not equality: two distinct ``<article>`` elements
+    with byte-identical text are different candidates and must not collapse.
+    """
+    if not node_ids:
+        return False
+    stack: list[_Node] = [node]
+    while stack:
+        n = stack.pop()
+        for child in n.children:
+            if isinstance(child, _Node):
+                if id(child) in node_ids:
+                    return True
+                stack.append(child)
+    return False
+
+
 def _tidy(text: str) -> str:
     """Boilerplate trim: drop junk lines, dedupe repeats, collapse blank runs."""
     out: list[str] = []
@@ -444,16 +463,30 @@ def extract_main_text(html: str, *, text_limit: int = 20_000) -> ExtractedText:
                 if child.tag in ("article", "main"):
                     semantic.append(child)
                 stack.append(child)
-    # SCORED, not first-found. The traversal above is a stack DFS, so a later
-    # sibling <article> is recorded before an earlier <section><article>…</article>
-    # is descended into — on the very common "primary content + related-article
-    # cards" layout a card list that clears the 200-char floor would otherwise win
-    # purely by visit order (Codex P2, #1626). Longest tidied body wins; ties keep
-    # document order, so a single-container page is unaffected.
+    # SCORED, not first-found, and INNERMOST-first. Two independent failures live
+    # here (both Codex P2, #1626):
+    #
+    #   siblings — the traversal above is a stack DFS, so a later sibling <article>
+    #   is recorded before an earlier <section><article>…</article> is descended
+    #   into. On the "primary content + related-article cards" layout a card list
+    #   that clears the 200-char floor would win purely by visit order. Longest
+    #   tidied body wins instead; ties keep document order.
+    #
+    #   nesting — but longest-wins alone is wrong the moment the containers nest.
+    #   <main> wrapping the real <article> plus a related-card module ALWAYS has
+    #   more text than the <article> it contains, so length would hand back the
+    #   wrapper (article + cards) every time, and the tighter node could never win.
+    #   So a candidate that CONTAINS another qualifying candidate is dropped first:
+    #   the shortcut only ever chooses among disjoint bodies, and length decides
+    #   between those. A <main> whose inner <article> is below the floor is not
+    #   dropped (nothing qualifying is nested in it), so short-article pages still
+    #   fall back to the wrapper rather than to whole-document.
     scored = [(_tidy(_node_text(n)), n) for n in semantic]
     qualifying = [(b, n) for b, n in scored if len(b) >= _MIN_MAIN_CHARS]
     if qualifying:
-        body, node = max(qualifying, key=lambda bn: len(bn[0]))
+        inner_ids = {id(n) for _, n in qualifying}
+        disjoint = [(b, n) for b, n in qualifying if not _contains_any(n, inner_ids - {id(n)})]
+        body, node = max(disjoint or qualifying, key=lambda bn: len(bn[0]))
         return _finish(body, title, text_limit, f"semantic:<{node.tag}>")
 
     # 2. Score candidate containers.
