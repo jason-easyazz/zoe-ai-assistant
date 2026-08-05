@@ -173,7 +173,11 @@ the broken wrapper look fine.
 
 ## Status
 
-Evaluation only — nothing installed into the live container, no config applied, no dispatch run.
+Evaluation only — **no production/builder-lane dispatch, no config applied to the live container.**
+Not "nothing ran": the trial staging above is real and temporary — the v17.2.5 binary is staged at
+`/home/zoe/.local/bin/omp` and bind-mounted read-only into the container, and **one measured trial
+dispatch (trial-002) was run** under the wrapper fence, which is where the $0.065 orphan-turn
+evidence and the lifetime-containment addendum come from. That is trial staging, not adoption.
 Next steps: operator creates the capped key; then a supervised session applies the config block +
 binary + fence (with `config get` read-backs), and trials omp head-to-head against the claude-sdk
 lane on real Multica tickets before any builder-of-record change.
