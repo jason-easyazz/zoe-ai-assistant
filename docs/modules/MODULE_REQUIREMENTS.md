@@ -424,8 +424,7 @@ python tools/validate_module.py your-module
 ## 📚 See Also
 
 - [Building Modules Guide](BUILDING_MODULES.md) - Full development guide
-- [Music Module Example](../../modules/zoe-music/README.md) - Reference implementation
-- [Module Intent System](MODULE_INTENT_SYSTEM_COMPLETE.md) - Adding intents
+- [Omnigent Module](../../modules/omnigent/README.md) - Reference implementation
 
 ---
 

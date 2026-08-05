@@ -21,10 +21,10 @@ Zoe modules are self-contained services that extend Zoe's capabilities. They fol
 
 ### 1. Copy the Template
 
-Use the music module as a reference template:
+Use the omnigent module as a reference template:
 
 ```bash
-cp -r modules/zoe-music modules/your-module-name
+cp -r modules/omnigent modules/your-module-name
 cd modules/your-module-name
 ```
 
@@ -376,7 +376,6 @@ else:
 - 8003: zoe-mcp-server
 - 8007: homeassistant-mcp-bridge
 - 8010: zoe-code-execution
-- 8100: zoe-music
 - 9001: zoe-whisper
 - 9002: zoe-tts
 - 9003: zoe-voice-agent
@@ -403,9 +402,14 @@ else:
 
 ---
 
-## Example: Music Module
+## Example: the retired music module
 
-**Reference implementation**: [`modules/zoe-music/`](../../modules/zoe-music/)
+> `modules/zoe-music` was **deleted** 2026-08-05 — it is not a reference implementation
+> any more, and it is **not** the live music system (that is `zoe-music-assistant`, the
+> upstream Music Assistant container). Recover the code for study with
+> `git log --all -- modules/zoe-music`. See [docs/CANONICAL.md](../CANONICAL.md).
+
+It remains a useful illustration of the module shape:
 
 **What it demonstrates:**
 - 12 MCP tools (search, play, pause, volume, queue, etc.)
@@ -466,8 +470,8 @@ module:
 
 ## Getting Help
 
-- **Reference**: Study [`modules/zoe-music/`](../../modules/zoe-music/)
-- **Template**: Copy music module structure
+- **Reference**: Study [`modules/omnigent/`](../../modules/omnigent/)
+- **Template**: Copy the omnigent module structure
 - **Documentation**: See other guides in `docs/modules/`
 - **Issues**: Report problems on GitHub (after public release)
 

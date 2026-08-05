@@ -859,7 +859,6 @@
         ],
         "in_env_example": false,
         "readers": [
-          "modules/zoe-music/main.py",
           "services/zoe-data/intent_router.py"
         ],
         "typed_env": false
@@ -1281,12 +1280,10 @@
       "ZOE_HA_BRIDGE_URL": {
         "defaults": [
           "''",
-          "'http://127.0.0.1:8007'",
-          "'http://localhost:8007'"
+          "'http://127.0.0.1:8007'"
         ],
         "in_env_example": false,
         "readers": [
-          "modules/zoe-music/main.py",
           "services/zoe-data/intent_router.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/routers/ha_control.py",
@@ -2567,16 +2564,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_MUSIC_BIND_HOST": {
-        "defaults": [
-          "'0.0.0.0'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "modules/zoe-music/main.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_MUSIC_DISCOVERY": {
         "defaults": [
           "'off'"
@@ -2637,16 +2624,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_MUSIC_MODULE_URL": {
-        "defaults": [
-          "'http://zoe-music:8100'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "modules/zoe-music/intents/handlers.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_MUSIC_OAUTH_TTL_S": {
         "defaults": [
           "'150'"
@@ -2674,17 +2651,6 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/music_history.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_MUSIC_SERVICE_TOKEN": {
-        "defaults": [
-          "''"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "modules/zoe-music/intents/handlers.py",
-          "modules/zoe-music/main.py"
         ],
         "typed_env": false
       },

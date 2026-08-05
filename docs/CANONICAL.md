@@ -90,16 +90,26 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
 ## 🧩 Live modules (don't mistake these for dead)
 
 Running as containers today — **keep**:
-- `modules/zoe-music` → `zoe-music-assistant` — **being replaced** (see below); keep
-  running until Zoe can drive Music Assistant.
 - `modules/omnigent` → `zoe-omnigent` (remote-coding agent).
 
-## 🟠 Being replaced — keep until the replacement is proven
+`modules/` now holds exactly one module. Everything else under it was retired; see below.
 
-- **`modules/zoe-music`** → migrating to **Music Assistant** (host service on `:8095`,
-  proxied at `/modules/music-assistant/`). The goal is *Zoe intelligently controls
-  Music Assistant*. Don't pull `zoe-music` until that's built and lab-proven (no music
-  gap). Tracked in [`PLANS.md`](PLANS.md) / [`IDEAS.md`](IDEAS.md).
+## 🎵 Music — the name collision, stated plainly
+
+**The live music system is `zoe-music-assistant`: the UPSTREAM Music Assistant server
+container (`ghcr.io/music-assistant/server:stable`), defined in `docker-compose.modules.yml`,
+on host port `:8095`, proxied at `/modules/music-assistant/`.** Zoe drives it from
+`services/zoe-data/music_service.py` + `routers/music_setup.py`.
+
+**There is no in-repo `zoe-music` module.** `modules/zoe-music/` was a separate,
+first-party FastAPI bridge on `:8100` — an entirely different thing that merely shared a
+name prefix. It was deleted 2026-08-05 (see *Retired* below). `zoe-music-assistant` is
+**not** a renamed or evolved `zoe-music`; it never was. If you are reading a doc that
+implies one became the other, that doc is wrong — the two systems shared nothing but the
+first two words of their names, and that confusion is exactly why the dead module survived
+five months after it stopped running.
+
+Do not grep for `zoe-music` and treat a `zoe-music-assistant` hit as a module reference.
 
 ## 🔴 Retired — do not resurrect
 
@@ -107,6 +117,14 @@ Running as containers today — **keep**:
   git history — recover with `git log -- docs/archive` if ever needed. Do **not** re-add
   it, and do not re-introduce a `docs/archive/` graveyard. Enforced by
   `test_no_docs_archive_graveyard` in `services/zoe-data/tests/test_canonical_invariants.py`.
+- **`modules/zoe-music`** — the first-party music bridge module (`:8100`). Retired
+  2026-08-05 by deletion. It had been dead in practice since 2026-02-16, when it was
+  dropped from `enabled_modules` and its nginx route removed: no workflow ever built it,
+  and **no `zoe-music` container was ever created on this host** (its four stale local
+  images predate the module's own first commit). It is **not** the live music system —
+  see *Music — the name collision* above. In git history →
+  `git log --all -- modules/zoe-music`. Enforced by `test_no_zoe_music_module` in
+  `services/zoe-data/tests/test_canonical_invariants.py`.
 - **`modules/orbit`** (social-interaction platform) — retired 2026-06-24. Was wired in
   `docker-compose.modules.yml` (not running). Tracked in git → `git log --all -- modules/orbit`.
 - **`modules/agent-zero`** — retired 2026-06-24, no longer used. In git history.

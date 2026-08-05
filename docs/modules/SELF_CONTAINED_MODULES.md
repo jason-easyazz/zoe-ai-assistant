@@ -22,7 +22,7 @@
 ## 🏗️ Module Structure
 
 ```
-modules/zoe-music/              # Module root
+modules/{module-name}/          # Module root
 ├── main.py                     # FastAPI app + MCP tools
 ├── services/                   # Backend logic
 │   ├── __init__.py
@@ -64,7 +64,7 @@ The manifest defines what widgets your module provides:
 
 ```json
 {
-  "module": "zoe-music",
+  "module": "zoe-example-music",
   "version": "1.0.0",
   "name": "Music Module",
   "description": "Complete music system with multiple providers",
@@ -343,7 +343,7 @@ if (typeof window !== 'undefined') {
 
 ```bash
 cd modules/
-cp -r zoe-music zoe-your-feature
+cp -r omnigent zoe-your-feature
 cd zoe-your-feature
 ```
 
@@ -637,7 +637,7 @@ See `docs/modules/examples/CALENDAR_MODULE_EXAMPLE.md` for a complete working ex
 - **MCP Client API**: `docs/modules/MCP_CLIENT_API.md`
 - **Widget Registry API**: `docs/modules/WIDGET_REGISTRY_API.md`
 - **Module Template**: `modules/module-template/`
-- **Music Module Source**: `modules/zoe-music/` (reference implementation)
+- **Module Source**: `modules/omnigent/` (the only live module; `modules/zoe-music` was deleted 2026-08-05 — `git log --all -- modules/zoe-music`)
 
 ---
 

@@ -15,7 +15,11 @@ descriptions.
 Modules are add-on services served under `/modules/`. They ship actual code —
 Docker services, intents, widgets, MCP tools. See [modules/AGENTS.md](../../modules/AGENTS.md).
 
-Live modules today: `omnigent`, `zoe-music`.
+Live modules today: `omnigent` (the only one).
+
+> `modules/zoe-music` was retired 2026-08-05. The live music system is the upstream
+> Music Assistant container `zoe-music-assistant`, which is **not** a module — see
+> [docs/CANONICAL.md](../CANONICAL.md).
 
 **Directory structure (as actually used):**
 ```

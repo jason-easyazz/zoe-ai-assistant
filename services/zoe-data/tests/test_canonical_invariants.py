@@ -257,6 +257,23 @@ def test_no_docs_archive_graveyard():
     )
 
 
+# ── The dead music module stays dead (name-collision guard) ──────────────────
+def test_no_zoe_music_module():
+    """modules/zoe-music was deleted 2026-08-05. It was NOT the live music system.
+
+    The live one is `zoe-music-assistant` — the upstream Music Assistant container
+    in docker-compose.modules.yml. The two only shared a name prefix, and that
+    collision is what kept a module nobody ran looking alive for five months. This
+    guard exists so a resurrection has to be deliberate rather than accidental.
+    """
+    assert not os.path.isdir(os.path.join(REPO, "modules", "zoe-music")), (
+        "modules/zoe-music reappeared. It is retired (git log --all -- modules/zoe-music). "
+        "If you meant the LIVE music system, that is the upstream Music Assistant "
+        "container `zoe-music-assistant` in docker-compose.modules.yml — a different "
+        "thing with a confusingly similar name. See docs/CANONICAL.md"
+    )
+
+
 # ── Two-stage router: a rock that is ALLOWED TO IMPROVE ──────────────────────
 #
 # The brain/STT/TTS rocks are locked because they must not change. The router is

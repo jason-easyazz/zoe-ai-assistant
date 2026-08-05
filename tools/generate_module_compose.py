@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import click
 
-# Module directory names are simple slugs (e.g. "zoe-music"). Anything outside
+# Module directory names are simple slugs (e.g. "omnigent"). Anything outside
 # this charset — slashes, "..", absolute paths, NUL — is rejected before it is
 # ever used to build a filesystem path.
 _MODULE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")

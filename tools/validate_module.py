@@ -6,7 +6,7 @@ Module Validator
 Validates module structure and safety before enabling.
 
 Usage:
-  python tools/validate_module.py zoe-music
+  python tools/validate_module.py omnigent
   python tools/validate_module.py --all
 """
 
