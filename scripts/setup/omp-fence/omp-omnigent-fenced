@@ -2,9 +2,11 @@
 # =============================================================================
 # omp-omnigent-fenced — the environment fence for the oh-my-pi builder lane.
 #
-# STAGED, NOT INSTALLED. APPLY.md copies this to:
-#     /home/zoe/.local/bin/omp-omnigent-fenced   (chmod 0755)
-# which the zoe-omnigent container sees READ-ONLY at the identical path
+# TRACKED TEMPLATE. The LIVE file is authoritative; an operator installs this to
+#     /home/zoe/.local/bin/omp-omnigent-fenced   (install -Dm0755)
+# per docs/knowledge/omp-builder-fence-install.md — change and re-install in the
+# SAME pass, because byte-parity with live is this fence's only drift detector.
+# The container sees that path READ-ONLY
 # (docker-compose.module.yml: `- /home/zoe/.local/bin:/home/zoe/.local/bin:ro`)
 # and which is FIRST on the container's PATH.
 #
@@ -86,13 +88,78 @@ unset ANTHROPIC_MODEL 2>/dev/null || :
 # The key file defines OPENROUTER_API_KEY_OMP (and nothing else). We promote it
 # to OPENROUTER_API_KEY *for this process only*, so omp's native OpenRouter
 # provider resolves, while the shared review-lane key never reaches it.
-# shellcheck disable=SC1090
-. "$KEY_FILE"
-[ -n "${OPENROUTER_API_KEY_OMP:-}" ] || {
-  echo "omp-fence: $KEY_FILE did not define OPENROUTER_API_KEY_OMP" >&2; exit 78; }
-OPENROUTER_API_KEY="$OPENROUTER_API_KEY_OMP"
+#
+# PARSED, NEVER SOURCED. Until 2026-08-06 this was `. "$KEY_FILE"` — the file was
+# EXECUTED as shell, AFTER the credential scrub of section 2 and AFTER every
+# precondition in section 1. So any extra assignment in it landed INSIDE the
+# fence with nothing left to catch it: a pasted `export ANTHROPIC_API_KEY=…`
+# re-armed a spendable credential the scrub had just removed, and an `OMP_BIN=`
+# or `SUPERVISOR=` line re-pointed the final `exec` of section (g). This reader
+# extracts exactly OPENROUTER_API_KEY_OMP and fail-closes on anything else;
+# nothing in the file is ever executed. (Cross-review #1650, P2.)
+#
+# Defence in depth, not a live hole: the key file is host-owned under
+# /home/zoe/.config/zoe, which the container sees `:ro`, so no fenced process can
+# append to it. The exposure it removes is a mistake by whoever edits the file on
+# the HOST — which is exactly the class the rest of this script already assumes.
+#
+# DIAGNOSTICS CARRY LINE NUMBERS, NEVER LINE TEXT: a rejected line may itself be
+# the key, and stderr goes to omnigent's logs.
+_OMP_TAB=$(printf '\t')
+_key_value=""
+_key_seen=0
+_key_lineno=0
+_line=""
+# `read -r` with a SINGLE variable strips leading/trailing IFS whitespace, so the
+# line arrives trimmed with no subprocess and no temp copy of the key. The
+# `|| [ -n "$_line" ]` tail handles a final line with no trailing newline.
+# The redirect is scoped to the loop: the script's own fd 0 is the ACP channel
+# and must stay untouched.
+while read -r _line || [ -n "$_line" ]; do
+  _key_lineno=$((_key_lineno + 1))
+  # Blank lines and comments are content-free; skip before classifying.
+  case "$_line" in
+    ""|"#"*) continue ;;
+  esac
+  # Tolerate an `export ` (or `export<TAB>`) prefix, then re-trim what it left.
+  case "$_line" in
+    "export "*|"export$_OMP_TAB"*)
+      _line=${_line#export}
+      while :; do
+        case "$_line" in
+          " "*) _line=${_line# } ;;
+          "$_OMP_TAB"*) _line=${_line#"$_OMP_TAB"} ;;
+          *) break ;;
+        esac
+      done
+      ;;
+  esac
+  # THE FENCE: exactly one variable may be assigned. Anything else — another
+  # credential, an OMP_BIN/SUPERVISOR re-point, a stray command — fails closed.
+  case "$_line" in
+    OPENROUTER_API_KEY_OMP=*) : ;;
+    *) echo "omp-fence: $KEY_FILE line $_key_lineno is not an OPENROUTER_API_KEY_OMP assignment; that file must define that variable and nothing else" >&2; exit 78 ;;
+  esac
+  [ "$_key_seen" -eq 0 ] || { echo "omp-fence: $KEY_FILE line $_key_lineno re-assigns OPENROUTER_API_KEY_OMP; refusing an ambiguous key file" >&2; exit 78; }
+  _key_value=${_line#OPENROUTER_API_KEY_OMP=}
+  # Unwrap one layer of matching quotes, the way sourcing would have.
+  case "$_key_value" in
+    '"'*'"') _key_value=${_key_value#\"}; _key_value=${_key_value%\"} ;;
+    "'"*"'") _key_value=${_key_value#\'}; _key_value=${_key_value%\'} ;;
+  esac
+  _key_seen=1
+done < "$KEY_FILE"
+[ "$_key_seen" -eq 1 ] || { echo "omp-fence: $KEY_FILE did not define OPENROUTER_API_KEY_OMP" >&2; exit 78; }
+[ -n "$_key_value" ] || { echo "omp-fence: $KEY_FILE defines an EMPTY OPENROUTER_API_KEY_OMP" >&2; exit 78; }
+# A key is opaque, but it is not arbitrary: anything outside this alphabet means
+# the line was never a plain assignment (e.g. `KEY=x; export OTHER=y`, which a
+# parser must not silently accept as a 24-character key).
+case "$_key_value" in
+  *[!A-Za-z0-9_.:/+=-]*) echo "omp-fence: OPENROUTER_API_KEY_OMP in $KEY_FILE contains characters outside the expected key alphabet; refusing" >&2; exit 78 ;;
+esac
+OPENROUTER_API_KEY="$_key_value"
 export OPENROUTER_API_KEY
-unset OPENROUTER_API_KEY_OMP
+unset _key_value _key_seen _key_lineno _line _OMP_TAB
 
 # --- 4. The fence proper ------------------------------------------------------
 # (a) AutoQA off via the env flag, which has HIGHEST precedence in omp

@@ -167,6 +167,86 @@ def test_wrapper_arms_stdin_watching_only_for_the_acp_subcommand():
     )
 
 
+def test_wrapper_parses_the_key_file_and_never_sources_it():
+    """``. "$KEY_FILE"`` executed the key file as SHELL, after the section-2
+    credential scrub and after every section-1 precondition — so an extra line in
+    it landed inside the fence with nothing left to catch it. Measured on the
+    pre-fix wrapper with a crafted file: ``export ANTHROPIC_API_KEY=…`` reached
+    the child, and ``SUPERVISOR=/tmp/evil`` re-pointed the final exec.
+
+    Per-LINE matching throughout, deliberately (same rule as the exit-78 guards):
+    every assertion is evaluated against ONE code line, so no pattern can borrow
+    a neighbour's text."""
+    lines = _code_lines(_text(WRAPPER))
+    for ln in lines:
+        assert not re.match(r"^(\.|source)\s", ln), (
+            f"the wrapper sources a file ({ln!r}); the key file must be PARSED — "
+            "sourcing runs arbitrary shell inside the fence, after the scrub"
+        )
+    assert any(re.search(r"^while\s+read\s+-r\s+_line\b", ln) for ln in lines), (
+        "the key file must be consumed by a read loop, not executed"
+    )
+    assert any(re.search(r'^done\s*<\s*"\$KEY_FILE"', ln) for ln in lines), (
+        "the read loop must take its input from $KEY_FILE by redirection (scoped "
+        "to the loop — the script's own fd 0 is the ACP channel)"
+    )
+
+
+def test_wrapper_key_parse_fail_closes_on_anything_but_the_dedicated_key():
+    """Exactly one variable may come out of the key file. Another credential, an
+    ``OMP_BIN=``/``SUPERVISOR=`` re-point, a stray command, a duplicate, an empty
+    value or an absent one must all exit 78 rather than run a half-fenced omp.
+
+    Every match below is against a SINGLE code line, so an assertion can never
+    satisfy itself with an ``exit 78`` that belongs to an adjacent guard — the
+    #1650 failure, where a pattern crossing one newline let each precondition
+    borrow the next one's exit code."""
+    lines = _code_lines(_text(WRAPPER))
+
+    assert any(ln.startswith("OPENROUTER_API_KEY_OMP=*)") for ln in lines), (
+        "no case arm accepting the one permitted assignment"
+    )
+    assert any(
+        ln.startswith("*)") and "$KEY_FILE" in ln and "exit 78" in ln for ln in lines
+    ), (
+        "the catch-all arm of the key-file parse must exit 78 ON ITS OWN LINE; "
+        "any line that is not an OPENROUTER_API_KEY_OMP assignment is a fence breach"
+    )
+    assert any('"$_key_seen" -eq 1' in ln and "exit 78" in ln for ln in lines), (
+        "an absent OPENROUTER_API_KEY_OMP must exit 78"
+    )
+    assert any('"$_key_seen" -eq 0' in ln and "exit 78" in ln for ln in lines), (
+        "a duplicate OPENROUTER_API_KEY_OMP assignment must exit 78 — an ambiguous "
+        "key file is not a fenced one"
+    )
+    assert any(
+        re.search(r'\[\s*-n\s*"\$_key_value"\s*\]', ln) and "exit 78" in ln
+        for ln in lines
+    ), "an empty OPENROUTER_API_KEY_OMP must exit 78"
+    assert any(
+        ln.startswith("*[!") and "exit 78" in ln for ln in lines
+    ), (
+        "the parsed value must be charset-checked — `KEY=x; export OTHER=y` is a "
+        "single assignment to a naive parser and must not be accepted as a key"
+    )
+
+
+def test_wrapper_diagnostics_never_carry_key_material():
+    """A rejected line may BE the key, and stderr goes to omnigent's logs. Every
+    fail-closed message names the file and a line NUMBER, never line text."""
+    for ln in _code_lines(_text(WRAPPER)):
+        # Only the emitted TEXT — the guard's own condition may of course name
+        # the variable it is testing. Matched within one line; `.` never spans a
+        # newline, so this cannot reach into a neighbouring statement.
+        emitted = re.search(r"\b(?:echo|printf)\b(.*?)>&2", ln)
+        if not emitted:
+            continue
+        for var in ("$_key_value", "$_line", "$OPENROUTER_API_KEY"):
+            assert var not in emitted.group(1), (
+                f"diagnostic prints key material via {var}: {ln!r}"
+            )
+
+
 def test_wrapper_pins_home_and_the_settings_overlay():
     lines = _code_lines(_text(WRAPPER))
     assert any(ln.startswith("PI_CONFIG_FILES=") for ln in lines), (
@@ -186,6 +266,26 @@ def test_wrapper_pins_home_and_the_settings_overlay():
 
 def _supervisor_tree() -> ast.Module:
     return ast.parse(_text(SUPERVISOR), filename=str(SUPERVISOR))
+
+
+def _supervisor_main() -> ast.FunctionDef:
+    for node in _supervisor_tree().body:
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            return node
+    raise AssertionError("the supervisor no longer defines main()")
+
+
+def _linenos(scope: ast.AST, pred) -> list[int]:
+    return sorted(node.lineno for node in ast.walk(scope) if pred(node))
+
+
+def _is_call_to(node: ast.AST, name: str) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr == name
+    return isinstance(func, ast.Name) and func.id == name
 
 
 def test_supervisor_starts_the_child_in_a_new_session():
@@ -259,6 +359,86 @@ def test_supervisor_arms_parent_death_detection_two_ways():
     assert "getppid" in text, (
         "the getppid poll is the belt for PDEATHSIG's corner cases (it keys on the "
         "CREATING thread and is Linux-only)"
+    )
+
+
+def test_supervisor_captures_the_expected_parent_before_arming_pdeathsig():
+    """ORDER, not presence — and it is the one case where BOTH parent-death
+    detectors fail together.
+
+    Armed-then-captured (shipped until 2026-08-06): if the runner dies inside
+    that window we are reparented to init, ``original_ppid`` records **1**, and
+    the getppid poll then compares 1 against 1 forever — nothing reparents an
+    already-init-owned process again — while ``Popen`` still launches the METERED
+    child. Reproduced against the pre-fix copy by double-forking to ppid 1: the
+    child launched, silently.
+
+    AST node positions, so nothing here can borrow an adjacent line."""
+    main = _supervisor_main()
+    capture = _linenos(
+        main,
+        lambda n: isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "original_ppid" for t in n.targets)
+        and _is_call_to(n.value, "getppid"),
+    )
+    assert capture, "main() no longer captures original_ppid from os.getppid()"
+    assert any(
+        isinstance(stmt, ast.Assign) and stmt.lineno == capture[0] for stmt in main.body
+    ), "the parent capture must be an unconditional statement of main(), not branch-local"
+
+    arm = _linenos(main, lambda n: _is_call_to(n, "_set_pdeathsig"))
+    assert arm, "main() no longer arms PR_SET_PDEATHSIG"
+    popen = _linenos(main, lambda n: _is_call_to(n, "Popen"))
+    assert popen, "main() no longer spawns the metered child"
+
+    assert capture[0] < arm[0], (
+        "original_ppid must be captured BEFORE PR_SET_PDEATHSIG is armed; the "
+        "reverse order records ppid 1 when the runner dies in the window and the "
+        "getppid watcher then waits on init forever"
+    )
+    assert arm[0] < popen[0], (
+        "parent-death detection must be armed before the metered child is spawned"
+    )
+
+
+def test_supervisor_refuses_to_spawn_when_the_parent_has_already_gone():
+    """Detecting the race is not enough — it must REFUSE. A failed dispatch is a
+    harness error; a launched child with no working kill switch is unbounded
+    spend (trial-002: 49s of work past the kill, 8 minutes orphaned)."""
+    main = _supervisor_main()
+    popen_line = _linenos(main, lambda n: _is_call_to(n, "Popen"))[0]
+
+    guards = []
+    for node in ast.walk(main):
+        if not isinstance(node, ast.If) or node.lineno >= popen_line:
+            continue
+        test_src = ast.dump(node.test)
+        if "original_ppid" not in test_src:
+            continue
+        returns = [r for r in ast.walk(node) if isinstance(r, ast.Return)]
+        if any(
+            isinstance(r.value, ast.Constant) and r.value.value not in (0, None)
+            for r in returns
+        ):
+            guards.append(node)
+
+    orphaned = [g for g in guards if not any(_is_call_to(n, "getppid") for n in ast.walk(g.test))]
+    changed = [g for g in guards if any(_is_call_to(n, "getppid") for n in ast.walk(g.test))]
+
+    assert orphaned, (
+        "no pre-spawn guard returning non-zero when original_ppid is already init; "
+        "an orphan at startup must not launch a metered child at all"
+    )
+    assert any(
+        isinstance(n, ast.Constant) and n.value == 1
+        for g in orphaned
+        for n in ast.walk(g.test)
+    ), "the orphan guard must compare the captured parent against PID 1"
+
+    arm_line = _linenos(main, lambda n: _is_call_to(n, "_set_pdeathsig"))[0]
+    assert any(g.lineno > arm_line for g in changed), (
+        "getppid() must be re-checked AFTER arming PR_SET_PDEATHSIG and BEFORE "
+        "Popen; arming cannot cover a parent that was already dead when armed"
     )
 
 
