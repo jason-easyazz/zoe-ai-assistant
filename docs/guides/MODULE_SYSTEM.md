@@ -344,23 +344,15 @@ All following same pattern:
 
 ## 📚 Documentation Index
 
-**Start Here**:
+Everything under `docs/modules/`:
+
 1. `BUILDING_MODULES.md` - How to build a module
 2. `SELF_CONTAINED_MODULES.md` - How to add widgets
 3. `MODULE_REQUIREMENTS.md` - What's mandatory
+4. `MCP_ONLY_ARCHITECTURE.md` - MCP-only module shape
 
-**Reference**:
-4. `MODULE_INTENT_SYSTEM_COMPLETE.md` - Intent system
-5. `MODULE_SYSTEM_COMPLETE.md` - Architecture details
-6. `MIGRATION_MUSIC.md` - Real-world example
-
-**Advanced**:
-7. `MUSIC_DEPENDENCY_AUDIT.md` - Technical deep-dive
-8. `MUSIC_ROUTING_OPTIONS.md` - Design decisions
-9. `TEST_RESULTS.md` - Validation results
-
-**Summary**:
-10. `MODULE_SYSTEM_COMPLETE_FINAL.md` - This document
+The zoe-music case-study docs that used to be listed here were deleted with the
+module on 2026-08-05 (`git log --all -- docs/modules`).
 
 ---
 
