@@ -425,13 +425,16 @@ def real_voice_vad(monkeypatch):
 # the model, voice_vad.py and onnxruntime all untouched.
 #
 # The corpus is untrusted input, measured 2026-08-04 over all 1151 files:
-#   - 100 are unusable here — 24kHz resamples, and one file that is not RIFF;
+#   - 100 are unusable here — 95 are 24kHz resamples and 5 are not valid RIFF
+#     (counted directly, not estimated);
 #   - of the 1051 usable, 89.4% score >0.5 (median 0.829) — so ~11% genuinely
 #     are not speech (false wakes, near-silence, background TV).
 # So the real contract is a corpus-level property, not a single-file one: the
-# model must detect speech in the LARGE MAJORITY of real recordings. That also
-# makes this a stronger regression lock — one sample proves nothing about the
-# model, while a broken model or preprocessing collapses the whole distribution.
+# model must detect speech in most real recordings. The measured rate is 0.894
+# and the floor enforced below is 0.60 — deliberately well under the worst
+# stride phase (0.795) so corpus churn alone cannot redden it. That also makes
+# this a stronger regression lock — one sample proves nothing about the model,
+# while a broken model or preprocessing collapses the whole distribution.
 _SPEECH_SAMPLE_COUNT = 48        # evenly strided across the sorted corpus
 _SPEECH_MIN_USABLE = 20          # below this the corpus isn't a real signal
 _SPEECH_MIN_PASS_FRAC = 0.60     # measured 0.894 corpus-wide; 0.795 worst stride phase
@@ -440,7 +443,13 @@ _SPEECH_MIN_PASS_FRAC = 0.60     # measured 0.894 corpus-wide; 0.795 worst strid
 @_needs_model
 def test_silero_real_model_detects_speech_across_corpus(real_voice_vad):
     """The real model, driven through voice_vad's real streaming path, must
-    clear the 0.5 speech threshold on the large majority of real recordings."""
+    clear the 0.5 speech threshold on most real recordings.
+
+    "Most" is the enforced claim (>= 60%), not the measured one (89.4%): the
+    floor is set below the worst stride phase so a corpus change cannot redden
+    a healthy model. A BROKEN one collapses the whole distribution — breaking
+    voice_vad's int16 scaling drops the pass fraction to 0.044.
+    """
     import wave
 
     names = sorted(f for f in os.listdir(_SAMPLES_DIR)) if os.path.isdir(_SAMPLES_DIR) else []
@@ -461,7 +470,10 @@ def test_silero_real_model_detects_speech_across_corpus(real_voice_vad):
                 if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (16000, 1, 2):
                     continue
                 raw = w.readframes(w.getnframes())
-        except Exception:  # not a readable RIFF file — corpus hygiene, not our bug
+        except (wave.Error, OSError, EOFError):
+            # Not a readable RIFF file — corpus hygiene, not our bug. NARROW on
+            # purpose: a bare `except Exception` here would also swallow a real
+            # failure and quietly shrink the sample set instead of surfacing it.
             continue
         vad = real_voice_vad.create_vad()   # fresh recurrent state per recording
         assert vad is not None
