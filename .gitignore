@@ -55,6 +55,17 @@ data/wyoming/
 *password*.toml
 *password*.txt
 *password*.env
+# EXTENSIONLESS credential names, restored after cross-review: the shapes above
+# are all extension-anchored, so `livekit-secret`, `api_secret`, `my_password`
+# and bare `secret` became trackable when the blanket went. These bare-suffix
+# globs re-cover them WITHOUT the blanket's damage — `*secret` matches only a
+# name ENDING in "secret", so every source/test/doc file (which has a suffix,
+# e.g. test_livekit_config_no_secrets.py) stays trackable. That is the whole
+# difference from `*secret*`.
+*secret
+*secrets
+*password
+*passwords
 # NOTE: `*api_key*` below is still a blanket of the same kind and will drop a
 # legitimately-named source/test file if one is ever added. Left as-is
 # deliberately — nothing in the tree hits it today. Narrow it when it bites.

@@ -46,16 +46,32 @@ def test_livekit_config_has_no_keys_block():
     )
 
 
+def _scalars(node):
+    """Every scalar VALUE in the parsed document, keys excluded."""
+    if isinstance(node, dict):
+        for value in node.values():
+            yield from _scalars(value)
+    elif isinstance(node, (list, tuple)):
+        for item in node:
+            yield from _scalars(item)
+    elif node is not None:
+        yield str(node)
+
+
 def test_livekit_config_contains_no_secret_shaped_values():
     """Catches a credential re-added under any key name, not just `keys:`.
 
-    Comments are stripped first: the file's own prose mentions LIVEKIT_API_KEY
-    and friends, and those are names, not values.
+    Scans the PARSED scalar values, not the raw text. The file's own prose
+    mentions LIVEKIT_API_KEY and friends, but those live in comments, which the
+    YAML parser drops for us — so no comment stripping is needed, and none is
+    done. An earlier line-based `split("#", 1)[0]` was unsound in the other
+    direction: it also truncated quoted scalars, so a credential embedded after
+    a `#` inside a quoted value (`field: "x#<43 base64url chars>"`) was silently
+    removed before the regex ever saw it and the check passed. Parsing is what
+    makes "comment" and "value" distinguishable at all.
     """
-    body = "\n".join(
-        line.split("#", 1)[0] for line in LIVEKIT_CONFIG.read_text().splitlines()
-    )
-    found = SECRET_SHAPED.findall(body)
+    parsed = yaml.safe_load(LIVEKIT_CONFIG.read_text()) or {}
+    found = [t for value in _scalars(parsed) for t in SECRET_SHAPED.findall(value)]
     assert not found, (
         f"secret-shaped token(s) in services/livekit/config.yaml: "
         f"{[t[:4] + '...' for t in found]} — do not commit credentials here."
