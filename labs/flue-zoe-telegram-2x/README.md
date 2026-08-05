@@ -202,6 +202,18 @@ at the wrong port.
    cp ~/assistant/labs/flue-zoe-telegram/data/session_epochs.json \
       ~/assistant/labs/flue-zoe-telegram-2x/data/session_epochs.json
    ```
+   **Then set the port explicitly — the copy does not carry one.** The 1.x
+   `.env` has no `PORT` key at all (its template defines only the token and the
+   Zoe settings; 1.x got 3582 from elsewhere). Flue 2's own default is **3000**,
+   so a copied env starts the replacement on the wrong port while the watchdog
+   and the deploy health check both curl `:3582` — the old bot is already
+   stopped, nothing answers, and the unit restarts forever (cross-review, #1639):
+   ```sh
+   echo 'PORT=3582' >> ~/assistant/labs/flue-zoe-telegram-2x/.env
+   grep '^PORT=' ~/assistant/labs/flue-zoe-telegram-2x/.env   # must print PORT=3582
+   ```
+   (This is the one place 3582 is correct. `.env.example` ships 33582 for the
+   parallel trial; here the 1.x unit is about to be stopped, so 3582 is free.)
    Do **NOT** copy `data/zoe.db` — 2.x stores schema v8, the beta stored v5, and
    the runtime rejects an older database *before any application code runs*.
    Leave the new store to be created fresh.
