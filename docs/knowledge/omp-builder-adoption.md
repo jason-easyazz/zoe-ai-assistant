@@ -18,7 +18,9 @@ harness inside Omnigent — never as Zoe's brain (that stays Flue + pi-ai on the
   result (`oh-my-pi 17.2.5`; streaming, interrupt, permission-mirroring). Adoption = one `acp:`
   block in `~/.omnigent/config.yaml` → harness id `acp:oh-my-pi`. Zero code either side.
 - **Binary**: use the standalone `omp-linux-arm64` release binary (runs + speaks ACP on aarch64;
-  sha256 prefix `5404bb60…35d2` at evaluation). The npm package is **Bun-only** (negative-control
+  sha256 `5404bb609e3c634acd91a19c0c7bbac76c43d80ef157362a7c5430f5595435d2` for `omp/17.2.5` —
+  the audited pin; the release assets are unsigned, so this digest IS the supply-chain control and
+  is recorded in full deliberately, not elided). The npm package is **Bun-only** (negative-control
   proven: Node 22 dies on `using` declarations) and the Omnigent container has Node only.
   `@oh-my-pi/pi-natives-linux-arm64` exists and installs cleanly — arm64 is a non-issue.
 - **Trap**: Omnigent computes `acp` availability as `bool(acp_agents())` with **no binary check** —
@@ -78,7 +80,7 @@ is the recorded scan outcome required by the root AGENTS.md skill-safety rule.
 
 ## Trial staging findings (2026-08-03, measured — staging dir `omp-trial/` in the session scratchpad, entry point APPLY.md)
 
-- **Binary v17.2.5 installed** at `/home/zoe/.local/bin/omp`, full sha256 `5404bb60…5435d2` re-verified against the recorded fingerprint; that path is bind-mounted read-only into the container and on its PATH — no container change needed.
+- **Binary v17.2.5 installed** at `/home/zoe/.local/bin/omp`, sha256 `5404bb609e3c634acd91a19c0c7bbac76c43d80ef157362a7c5430f5595435d2` re-verified against the recorded fingerprint (`sha256sum /home/zoe/.local/bin/omp`, re-confirmed 2026-08-05 against the running `omp/17.2.5`); that path is bind-mounted read-only into the container and on its PATH — no container change needed.
 - **Omnigent's acp harness has NO per-agent env** (`acp_agents()` silently drops an `env:` key) and `acp_executor.py` copies the full runner env — an unwrapped omp inherits the SHARED OpenRouter key and bills it on first token. The fence is therefore a **wrapper script** (command = script path) that scrubs inherited credentials and promotes the dedicated key from `/home/zoe/.config/zoe/openrouter-omp.env` (0400; bind-mounted; `rm` = instant kill switch), verified at point of use via `/proc/<pid>/environ` of a live child.
 - **`omp config set` fencing is defeatable by the agent itself**: a `<cwd>/.omp/config.yml` written by a misbehaving agent re-enabled web_search/autoqa/autoUpdate in a measured test. The authoritative fence is a **`PI_CONFIG_FILES` overlay** (highest-precedence merge layer, fail-closed on missing file) — all six fence values held against the hostile cwd config.
 - **TRAP: an unpinned dispatch runs omp INSIDE THE LIVE CHECKOUT with auto-approved exec.** Default cwd falls back to `/workspace` = read-write bind of `/home/zoe/assistant`, and `tools.approvalMode` defaults to `yolo`. Every dispatch must pin a working folder (trial protocol does).
