@@ -69,7 +69,11 @@ def test_music_assistant_image_is_digest_pinned():
         "them). Pin as ghcr.io/music-assistant/server@sha256:<64 hex> and see "
         "the bump procedure in the compose comment."
     )
-    assert match.group("name").startswith("ghcr.io/music-assistant/server"), (
+    # EXACT equality, not startswith: the prefix form would also accept
+    # `ghcr.io/music-assistant/server-evil@sha256:...`, which is a different
+    # repository entirely and carries none of the guarantees this pin asserts
+    # (cross-review, #1635). The digest binds the CONTENT; this binds the SOURCE.
+    assert match.group("name") == "ghcr.io/music-assistant/server", (
         f"unexpected music-assistant image source {match.group('name')!r} -- "
         "the JS-runtime guarantee is a property of the upstream MA image"
     )

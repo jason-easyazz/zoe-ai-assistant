@@ -103,7 +103,14 @@ fi
 solver=$(grep -m1 'Solving JS challenges using' <<<"$out")
 ok "EJS solver executed -- ${solver#*] }"
 
-if ! grep -qE '^https://[^ ]*googlevideo\.com/videoplayback' <<<"$out"; then
+# The URL must carry the SIGNATURE PARAMETERS, not merely be a googlevideo URL.
+# `n=` is the nsig challenge output and `sig=`/`signature=` the cipher output —
+# they are the actual product of the JS solve, so requiring them makes this a
+# check on the ENGINE rather than on YouTube having returned some URL
+# (cross-review, #1635). The solver-ran assertion above and the forced `tv`
+# client already made this operationally sound; this makes it say what it means.
+if ! grep -qE '^https://[^ ]*googlevideo\.com/videoplayback[^ ]*[?&]n=' <<<"$out" \
+   || ! grep -qE '^https://[^ ]*googlevideo\.com/videoplayback[^ ]*[?&](sig|signature)=' <<<"$out"; then
     # Distinguish "YouTube changed" from "our engine broke" -- SABR enforcement
     # withholds URLs from a whole client family and is NOT a JS fault.
     if grep -q 'forcing SABR streaming' <<<"$out"; then
