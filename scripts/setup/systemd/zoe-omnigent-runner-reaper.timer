@@ -1,0 +1,15 @@
+# Hourly trigger for zoe-omnigent-runner-reaper.service — see that unit for
+# install steps. Hourly (not tighter) is deliberate: the synchronous teardown in
+# cross_review.sh is the primary fix, so this only has to catch the residue, and
+# the 20-minute grace window already keeps it clear of live dispatches.
+
+[Unit]
+Description=Hourly leaked-Omnigent-runner reap (memory-exhaustion guard)
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target
