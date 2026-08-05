@@ -444,10 +444,17 @@ def extract_main_text(html: str, *, text_limit: int = 20_000) -> ExtractedText:
                 if child.tag in ("article", "main"):
                     semantic.append(child)
                 stack.append(child)
-    for node in semantic:
-        body = _tidy(_node_text(node))
-        if len(body) >= _MIN_MAIN_CHARS:
-            return _finish(body, title, text_limit, f"semantic:<{node.tag}>")
+    # SCORED, not first-found. The traversal above is a stack DFS, so a later
+    # sibling <article> is recorded before an earlier <section><article>…</article>
+    # is descended into — on the very common "primary content + related-article
+    # cards" layout a card list that clears the 200-char floor would otherwise win
+    # purely by visit order (Codex P2, #1626). Longest tidied body wins; ties keep
+    # document order, so a single-container page is unaffected.
+    scored = [(_tidy(_node_text(n)), n) for n in semantic]
+    qualifying = [(b, n) for b, n in scored if len(b) >= _MIN_MAIN_CHARS]
+    if qualifying:
+        body, node = max(qualifying, key=lambda bn: len(bn[0]))
+        return _finish(body, title, text_limit, f"semantic:<{node.tag}>")
 
     # 2. Score candidate containers.
     #
@@ -648,6 +655,19 @@ def _ms(seconds: float) -> int:
     return int(round(seconds * 1000))
 
 
+async def _safe_title(page: Any) -> str:
+    """`page.title()` is a separate RPC and the title is optional.
+
+    A late failure there must never discard text that has already been
+    extracted, so it degrades to "" and the caller falls back to the title the
+    parser read out of the document (Codex P2, #1626).
+    """
+    try:
+        return await page.title()
+    except Exception:  # noqa: BLE001 - an optional field must not fail the fetch
+        return ""
+
+
 async def fetch_page_text(
     url: str,
     *,
@@ -701,7 +721,11 @@ async def fetch_page_text(
         extracted, settle_log = await settle_and_extract(
             page, policy=settle or SettlePolicy(), text_limit=text_limit
         )
-        page_title = await page.title()
+        # The title is OPTIONAL and the parser already extracted one, but this is
+        # a separate RPC: a target that closes after `content()` returned would
+        # otherwise send successfully-extracted text through the broad `except`
+        # and return `ok: False` (Codex P2, #1626).
+        page_title = await _safe_title(page)
         return {
             "ok": True,
             "url": url,
@@ -808,7 +832,7 @@ def build_cloak_executor() -> BrowserExecutor | None:
                         policy=SettlePolicy.from_params(plan.params),
                         text_limit=limit,
                     )
-                    page_title = await page.title()
+                    page_title = await _safe_title(page)
                     action_log.extend(
                         {"action": "settle", **entry} for entry in settle_log
                     )

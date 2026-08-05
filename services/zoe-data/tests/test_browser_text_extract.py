@@ -618,3 +618,48 @@ def test_executor_still_reports_a_real_failure(monkeypatch):
 
     assert out["ok"] is False
     assert "target page crashed" in out["error"], out["error"]
+
+
+def test_a_related_card_list_does_not_beat_the_real_article():
+    """Semantic candidates are SCORED, not taken in traversal order.
+
+    The tree walk is a stack DFS, so a later sibling `<article>` is recorded
+    before an earlier `<section><article>` is descended into. A related-card
+    list that clears the 200-char floor would win on visit order alone
+    (Codex P2, #1626).
+    """
+    real = " ".join(
+        f"Paragraph {i} of the actual article body, which is substantially longer "
+        f"than the card list beside it." for i in range(12)
+    )
+    cards = " ".join(f"Related card {i} teaser sentence about something else." for i in range(6))
+    html = (
+        "<html><body><section><article><p>" + real + "</p></article></section>"
+        "<article><p>" + cards + "</p></article></body></html>"
+    )
+
+    out = extract_main_text(html)
+
+    assert out.strategy.startswith("semantic:")
+    assert "Paragraph 3 of the actual article body" in out.text
+    assert "Related card" not in out.text
+
+
+def test_a_late_title_failure_does_not_discard_the_text(monkeypatch):
+    """`page.title()` is a separate RPC; the title is optional, the text is not."""
+
+    class _NoTitle(_ClosingPage):
+        async def title(self):
+            raise RuntimeError("target closed after content()")
+
+    class _Ctx(_FakeContext):
+        async def new_page(self):
+            return _NoTitle()
+
+    _install_fake_browser(monkeypatch, _Ctx(close_raises=False))
+
+    out = asyncio.run(fetch_page_text("https://example.test/article"))
+
+    assert out["ok"] is True, out.get("error")
+    assert "compact open-weight text-to-speech model" in out["text"]
+    assert out["title"] == "Kokoro TTS — a compact neural voice model"
