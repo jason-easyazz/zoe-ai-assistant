@@ -34,20 +34,25 @@
 #       3. start MA against $DEST with the verified copy.
 #     Leaving MA STOPPED between 1 and 3 is deliberate: it cannot write to the
 #     doomed path, nor serve rolled-back data.
-#   STEP B (separate PR, later): untrack the now-static files. By then nothing
-#     writes there, so `reset --hard` deleting them is harmless.
+#   STEP B (#1631, MERGED): untracked the by-then-static files — nothing wrote
+#     there any more, so `reset --hard` deleting them was harmless.
 #
 # The ORDER ABOVE IS THE ONLY SAFE ORDER (an earlier revision claimed the steps
 # were order-independent — false, review: Codex): step A before --execute rolls
 # the tracked live databases back and switches the mount before they are copied;
-# step B before step A deletes stores the old mount still serves.
+# step B before step A would have deleted stores the old mount still served.
+# BOTH STEPS ARE NOW COMPLETE; this header is the historical design record.
 #
 # SAFE BY CONSTRUCTION:
 #   * dry-run by default (scripts/AGENTS.md contract); --execute to act
 #   * COPIES, never moves — the original is left untouched as the rollback
 #   * refuses to run while the container is up (a live writer would tear the DBs)
 #   * verifies every file by checksum before declaring success
-#   * idempotent: re-running re-verifies and re-syncs rather than duplicating
+#   * ONE-SHOT, not idempotent (review: Codex round 32): after step A deploys,
+#     SRC holds rolled-back tracked data while DEST may hold newer live state —
+#     a rerun would replace the migrated store with stale checkout data. The
+#     completion marker refuses reruns for exactly this reason; do not remove
+#     it to retry unless you have verified DEST is disposable.
 set -euo pipefail
 
 SRC="${ZOE_MA_SRC:-/home/zoe/assistant/data/music-assistant}"
@@ -74,10 +79,11 @@ it, so the mount can be re-pointed without a deploy destroying live data.
   dest: $DEST   (override with ZOE_MA_DATA)
 
 After --execute succeeds:
-  1. deploy STEP A — it RE-POINTS THE BIND MOUNT ONLY. It does NOT untrack the
-     databases; auth.db/library.db and their WALs stay tracked at that commit,
-     so the credentials remain in git history and CD keeps rolling those paths
-     back. Untracking is a separate STEP B, still outstanding.
+  1. deploy the mount re-point (HISTORICAL: both steps of the 2026-08 migration
+     are complete and merged — step A re-pointed the mount, step B untracked
+     the databases. On a fresh host the compose default already binds
+     ~/.zoe/music-assistant and no migration is ever needed; this script is
+     retained for reference and for future store relocations.)
   2. ZOE_MA_DATA=<dest> docker compose -f /home/zoe/assistant/docker-compose.modules.yml up -d music-assistant
   3. confirm: curl -s http://localhost:8095/info
 EOF
@@ -243,7 +249,7 @@ dest_nonempty() {
 sudo test -d "$SRC" || { log "FATAL: source does not exist: $SRC"; exit 1; }
 
 # The directory alone is NOT evidence the stores are there (review: Codex). Run
-# this AFTER step B (the untracking commit) has deployed — the ordering failure it
+# this after step B (the untracking commit, now merged) deployed — the ordering failure it
 # guards — and the databases are gone while ignored settings/playlists/sidecars
 # remain, so a directory check passes, remnants get copied, and it prints DONE.
 # The operator then restarts MA against an incomplete store. Require the stores.
@@ -678,11 +684,9 @@ log "verified $checked/$checked files"
 log ""
 log "DONE. Original left in place as rollback."
 log "Next, IN THIS ORDER:"
-log "  1. deploy STEP A — it RE-POINTS THE BIND MOUNT ONLY."
-log "     It does NOT untrack the databases: auth.db, library.db and their WALs"
-log "     are still tracked at this commit, so the credentials remain in git"
-log "     history and CD will keep rolling those paths back. Untracking is a"
-log "     SEPARATE step B, still outstanding after this. (review: Codex)"
+log "  1. deploy the mount re-point. (HISTORICAL: the 2026-08 two-step"
+log "     migration is complete — step A re-pointed the mount, step B untracked"
+log "     the databases. Fresh hosts never need this script.)"
 # The destination is emitted for the operator to PASTE, so it must be
 # shell-quoted (review: Codex). `/mnt/My Drive/music-assistant` copies and
 # verifies fine, then the unquoted paste word-splits — Compose gets the wrong

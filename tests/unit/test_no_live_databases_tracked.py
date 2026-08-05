@@ -50,25 +50,15 @@ def _tracked() -> list[str]:
     return out.stdout.splitlines()
 
 
-def test_no_NEW_live_database_is_tracked():
-    """Step A of the migration deliberately leaves the four Music Assistant
-    databases tracked — deleting them here would be applied by CD's
-    `git reset --hard` before anyone could run the migration (review: Codex).
-    They stop being rewritten once the bind mount moves, and are untracked in
-    step B once nothing writes to that path.
-
-    What must hold NOW: no OTHER live store creeps in.
-    """
-    known = {
-        "data/music-assistant/auth.db",
-        "data/music-assistant/auth.db-wal",
-        "data/music-assistant/library.db",
-        "data/music-assistant/library.db-wal",
-    }
+def test_no_live_database_is_tracked():
+    """Step B complete: the four Music Assistant databases are untracked, so NO
+    live store may be tracked anywhere. (Step A deliberately allowlisted them —
+    deleting tracked files is applied by CD's `git reset --hard`, so untracking
+    had to wait until MA moved to ~/.zoe and the path went static. It has.)"""
     offenders = [f for f in _tracked()
-                 if DB_RE.search(f) and not f.startswith(ALLOWED) and f not in known]
+                 if DB_RE.search(f) and not f.startswith(ALLOWED)]
     assert not offenders, (
-        "new live databases/sidecars are tracked; they make the live checkout "
+        "live databases/sidecars are tracked; they make the live checkout "
         "permanently dirty and block every deploy:\n  " + "\n  ".join(offenders)
     )
 
@@ -302,29 +292,38 @@ def test_agents_contract_describes_step_a_as_mount_only():
     commit' — three instances of one error (review: Codex)."""
     doc = (ROOT / "scripts" / "AGENTS.md").read_text()
     assert "deploy the untracking commit" not in doc
-    assert "step A is mount-only" in doc.lower() or "STEP A** re-points" in doc
-    assert "STEP B is still outstanding" in doc
+    assert "Both steps are COMPLETE" in doc
+    assert "still outstanding" not in doc
 
 
 def test_no_operator_instruction_claims_the_next_deploy_untracks():
     """EVERY operator-facing exit must say the same thing. I corrected the
     success message and left the identical false wording in --help, so an
-    operator who never reaches the terminal text would still believe step B was
-    done and leave credentials in git indefinitely (review: Codex)."""
+    operator who never reaches the terminal text got the wrong status
+    (review: Codex; historical — both steps now merged)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert "deploy the untracking commit" not in src
-    # both the --help path and the success path must name step A as mount-only
-    assert src.count("RE-POINTS THE BIND MOUNT ONLY") >= 2
+    # step B merged: BOTH operator-facing paths must describe the migration as
+    # historical/complete, and neither may claim a step is outstanding.
+    assert src.count("HISTORICAL") >= 2
+    assert "still outstanding" not in src
+    # future-tense forms, not just one phrase (review: Codex — the header kept
+    # "STEP B (separate PR, later)" after the first "all-sites" fix)
+    assert "separate PR, later" not in src
+    assert "STEP B (separate PR" not in src
 
 
 def test_closing_instructions_do_not_overstate_step_a():
     """The success message is the terminal instruction of the pre-deploy
     procedure. Saying the next deploy 'untracks the DBs' would let the operator
-    believe credential removal is done and skip step B — the databases are still
-    tracked at this commit (review: Codex)."""
+    receive the wrong status. Historical: step B (#1631) has merged and the
+    databases are untracked; the pin now enforces completed-state wording
+    (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
-    assert "RE-POINTS THE BIND MOUNT ONLY" in src
-    assert "SEPARATE step B, still outstanding" in src
+    # step B is merged: the script must now describe the migration as COMPLETE
+    # and must not claim any step is still outstanding.
+    assert "migration is complete" in src.lower() or "migration\n#     are complete" in src.lower() or "steps of the 2026-08 migration" in src
+    assert "still outstanding" not in src
     assert "deploy the commit that untracks the DBs" not in src
 
 
@@ -378,7 +377,7 @@ def test_direction_check_probe_fails_closed():
 def test_header_does_not_claim_order_independence():
     """An earlier revision said 'each step is independently safe in any order' —
     directly contradicting the required sequence above it. Step A before
-    --execute rolls the live databases back; step B before step A deletes stores
+    --execute rolled the live databases back; step B before step A would delete stores
     the old mount still serves (review: Codex)."""
     src = (ROOT / "scripts" / "maintenance" / "migrate_music_assistant_data.sh").read_text()
     assert "independently safe in any order" not in src
