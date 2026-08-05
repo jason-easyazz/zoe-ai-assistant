@@ -145,17 +145,20 @@ jobs:
       #
       # Six of these are deliberately unpinned and therefore float to the newest
       # PyPI release on every deploy. That is a live-runtime change arriving
-      # without a code review — visible via
-      # `scripts/maintenance/requirements_drift_check.py` on the Jetson lane.
-      # Pinning them is an operator decision (it trades silent drift for
-      # deliberate upgrades), not a drive-by edit: pin them here and in
-      # requirements.txt in the same pass, or neither.
+      # Every package here is PINNED to the version verified working on the
+      # box (operator decision 2026-08-06, after the drift audit found the
+      # executing manifest was the least pinned one). New versions arrive
+      # through a reviewed bump — apscheduler is pinned because 3.11 silently
+      # DELETES persisted jobs; the DB layer (alembic/asyncpg/psycopg2) runs
+      # migrations on the live box and gets no floating upgrades either.
+      # Bump here and in requirements.txt in the same pass, or neither
+      # (`scripts/maintenance/requirements_drift_check.py` reports divergence).
       - name: Install / refresh Python deps
         run: |
           pip3 install --quiet --user \
             "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
-            alembic asyncpg psycopg2-binary pywebpush py-vapid \
-            segno
+            "alembic==1.18.5" "asyncpg==0.31.0" "psycopg2-binary==2.9.12" \
+            "pywebpush==2.3.0" "py-vapid==1.9.4" "segno==1.6.6"
 
       - name: Apply database migrations
         run: |
