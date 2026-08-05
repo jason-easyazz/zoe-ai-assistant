@@ -1,19 +1,57 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# THIS FILE IS A DECLARED SPEC. NOTHING INSTALLS IT AUTOMATICALLY.
+#
+# Read that literally before treating a version here as deployed. zoe-data runs
+# HOST-NATIVE — `/usr/bin/python3 -m uvicorn main:app --port 8000`
+# (`scripts/setup/systemd/zoe-data.service`) against packages in
+# `~/.local/lib/python3.10/site-packages` that were installed out-of-band. Audited
+# 2026-08-06 across every workflow, script, systemd unit, compose file and doc:
+#
+#   * `.github/workflows/deploy.yml` does NOT install this file. It has its own
+#     "Install / refresh Python deps" step with a HARDCODED 9-package list, most
+#     of it unpinned. That list — not this file — is what a deploy puts on the
+#     box, so the two must be reconciled by hand when either moves.
+#   * `scripts/maintenance/sync_zoe_self.sh` runs no pip at all.
+#   * `services/zoe-data/Dockerfile` is the ONLY thing that `pip install -r`s
+#     this file, and it is dead: no compose service builds it (docker-compose.yml
+#     says so in its own header — "zoe-data: host-native uvicorn on :8000 (NOT in
+#     Docker)").
+#   * `scripts/maintenance/voice_gate_check.py` reads this path as a voice-path
+#     FILE for replay gating. That is a change-detector, not an installer.
+#
+# CONSEQUENCE, and it is the point: bumping a version here changes no executed
+# byte. A green voice-gate on a dependency PR proves nothing about the bumped
+# packages, because they are never loaded. Upgrade order is therefore
+# BOX FIRST, FILE SECOND — install on the host, verify, then record it here.
+# A pin edited ahead of the box is a wish, not an upgrade.
+#
+# Drift is detected, not assumed:
+#   /usr/bin/python3 scripts/maintenance/requirements_drift_check.py \
+#       services/zoe-data/requirements.txt
+# It runs per-push on the Jetson lane (`.github/workflows/self-hosted-tests.yml`,
+# reporting-only) — the only host where the answer means anything. Exact pins
+# below were reconciled to the live Orin on 2026-08-06.
+# ═══════════════════════════════════════════════════════════════════════════
 fastapi==0.141.1
-uvicorn[standard]==0.32.0
+uvicorn[standard]==0.34.0
 pydantic==2.13.4
 aiosqlite==0.22.1
 asyncpg>=0.29.0
 alembic>=1.13.0
 psycopg2-binary>=2.9.0
 python-multipart==0.0.32
-httpx==0.28.0
+httpx==0.28.1
 aiohttp==3.14.3
-websockets==14.0
+websockets==14.1
 python-jose[cryptography]==3.5.0
 PyJWT==2.13.0
 passlib[bcrypt]==1.7.4
 ag-ui-protocol==0.1.14
-python-json-logger>=4.1.0
+# Not installed on the live Orin, and that is tolerable: middleware/logging.py
+# imports the formatter in a try/except and degrades to stdlib logging when it is
+# absent (so zoe-data's logs are currently PLAIN, not JSON — install it if you
+# want structured logs, don't assume you have them).
+python-json-logger>=4.1.0  # drift-optional: middleware/logging.py degrades without it
 
 # ── Vector memory store ───────────────────────────────────────────────────
 # BOTH pins are exact, and the chromadb one is the load-bearing half.
@@ -50,6 +88,12 @@ chromadb==0.6.3
 # canonical rocks plus the vector index. On aarch64 the realistic failure is
 # "no matching wheel" and a dead voice path.
 numpy<2
+# ONNX Runtime is a DIRECT dependency, not merely a transitive one: `voice_vad.py`
+# and `voice_turn.py` both `import onnxruntime` to run the Silero v5 VAD .onnx
+# (there is deliberately no `silero-vad` PyPI pin — the model file is the
+# dependency, not the wrapper). It was undeclared here until 2026-08-06 while
+# being load-bearing on the voice path; pinned to the live Orin's version.
+onnxruntime==1.23.2
 # Cloud TTS fallback (fast, AU Neural voice)
 edge-tts>=6.1.12
 # Primary offline TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py,

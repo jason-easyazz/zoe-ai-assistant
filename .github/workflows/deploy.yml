@@ -137,6 +137,19 @@ jobs:
           # pushed after the gate ran (a silent bypass of the gate above).
           git reset --hard "$target"
 
+      # THIS LIST — not services/zoe-data/requirements.txt — is what a deploy
+      # actually installs on the box. Nothing in this workflow reads that file
+      # (audited 2026-08-06), so the two are independent manifests that must be
+      # reconciled BY HAND whenever either moves; a version bumped there changes
+      # nothing here.
+      #
+      # Six of these are deliberately unpinned and therefore float to the newest
+      # PyPI release on every deploy. That is a live-runtime change arriving
+      # without a code review — visible via
+      # `scripts/maintenance/requirements_drift_check.py` on the Jetson lane.
+      # Pinning them is an operator decision (it trades silent drift for
+      # deliberate upgrades), not a drive-by edit: pin them here and in
+      # requirements.txt in the same pass, or neither.
       - name: Install / refresh Python deps
         run: |
           pip3 install --quiet --user \
