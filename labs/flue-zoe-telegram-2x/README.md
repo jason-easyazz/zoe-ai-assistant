@@ -131,10 +131,58 @@ systemd-run --user --scope -q --collect -p MemoryHigh=700M -p MemoryMax=1200M np
 
 ---
 
+## Parallel trial (do this FIRST — no cutover, nothing stopped)
+
+The point of a pathfinder is to observe it running **beside** the live 1.x bot,
+not to replace it and find out. This sequence keeps the live bot untouched.
+
+**One poller per bot token.** Telegram gives the second `getUpdates` caller a 409
+Conflict, so a parallel trial cannot share the live token. Either use a second
+BotFather token, or run with the mock Bot API (`TELEGRAM_API_ROOT`) as
+`smoke-built.sh` does. Everything else can run concurrently.
+
+1. **Build, and take the shipped config as-is:**
+   ```sh
+   cd ~/assistant/labs/flue-zoe-telegram-2x && npm ci && npm run build
+   cp .env.example .env
+   ```
+   `.env.example` ships `PORT=33582`, **not** 3582 — it is deliberately
+   collision-free so the copy above starts beside the live bot rather than
+   fighting it for the port. Leave it alone for the whole trial.
+2. **Give it its own token and store** (never the live bot's):
+   ```sh
+   # in .env: TELEGRAM_BOT_TOKEN=<a SECOND BotFather token>
+   ```
+   The store path and epoch file already default inside this directory, so the
+   1.x `data/` is not touched. Do **not** copy `data/zoe.db` — 2.x stores schema
+   v8 and the runtime rejects the beta's v5 before any application code runs.
+3. **Run it in the foreground and watch:**
+   ```sh
+   node dist/server.mjs
+   curl -s http://127.0.0.1:33582/health   # {"ok":true,...,"polling":true}
+   ```
+   The live bot on `:3582` keeps polling its own token throughout; the watchdog
+   timer and the deploy health check both read the 1.x directory and are
+   unaffected.
+4. **Offline sanity without any Telegram traffic at all:**
+   ```sh
+   ./smoke-built.sh    # exits non-zero on any failure
+   ```
+
+Only once the trial is satisfying does the cutover below apply — and that is the
+step that stops the live unit and moves the port to 3582.
+
+---
+
 ## Cutover runbook (OPERATOR, not an agent)
 
 Prerequisite: this is the *pathfinder*, so do it only when the operator wants
-Flue 2 on the Telegram channel. Nothing below is automated and nothing merges it.
+Flue 2 on the Telegram channel — and only after the parallel trial above.
+Nothing below is automated and nothing merges it.
+
+**This is where `PORT` changes to 3582.** `.env.example` ships 33582 for the
+parallel trial; at cutover the 1.x unit is stopped first, so 3582 is free and the
+watchdog/deploy health check (which curl `:3582` literally) keep working.
 
 **What is at risk, honestly:** nothing user-visible. Replies come from zoe-data
 keyed by `sessionFor(chatId)` — a string, not a Flue conversation — so Flue's own
