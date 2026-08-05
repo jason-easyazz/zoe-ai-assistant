@@ -87,6 +87,10 @@ POLL_HTTP_TIMEOUT_S=60      # poll() returns within --timeout-s + one request
 REPORT_BUDGET_S=90          # fetch_report() sleep/retry budget; rides out a ~60s restart
 REPORT_HTTP_TIMEOUT_S=60    # fetch_report() returns within --budget-s + one request
 CLEANUP_MAX_S=20            # timeout(1) around stop_worker's docker exec
+# Session teardown (`stop`). This is what actually reaps the host-launched
+# runner (see stop_session below); it returns within --budget-s + one request.
+STOP_BUDGET_S=20            # poller `stop` sleep/retry budget
+STOP_HTTP_TIMEOUT_S=10      # stop_session() returns within --budget-s + one request
 # `timeout N cmd` is NOT a hard bound: it sends TERM and then waits forever if
 # the command ignores it, so a wedged docker CLI would run past the advertised
 # budget and be killed by the caller instead — trap skipped, worker orphaned
@@ -95,6 +99,7 @@ CLEANUP_MAX_S=20            # timeout(1) around stop_worker's docker exec
 TIMEOUT_KILL_AFTER_S=5      # timeout -k: the KILL escalation after TERM is ignored
 OVERHEAD_S=$(( LOCK_WAIT_MAX_S + CREATE_MAX_S + REGISTER_TIMEOUT_S + REGISTER_HTTP_TIMEOUT_S + KICK_MAX_S ))
 OVERHEAD_S=$(( OVERHEAD_S + POLL_HTTP_TIMEOUT_S + REPORT_BUDGET_S + REPORT_HTTP_TIMEOUT_S + CLEANUP_MAX_S ))
+OVERHEAD_S=$(( OVERHEAD_S + STOP_BUDGET_S + STOP_HTTP_TIMEOUT_S ))
 OVERHEAD_S=$(( OVERHEAD_S + 2 * TIMEOUT_KILL_AFTER_S ))
 WORST_CASE_S=$(( TIMEOUT_S + OVERHEAD_S ))
 [ "$WORST_CASE_S" -lt "$CALLER_TIMEOUT_S" ] || {
@@ -217,11 +222,54 @@ stop_worker() {
      [ "$alive" -eq 0 ] && echo killed-escalated || echo "STILL-ALIVE after KILL"' \
     2>/dev/null || echo "unreachable (docker exec failed or exceeded ${CLEANUP_MAX_S}s)"
 }
+
+# Session teardown — THE RUNNER-LEAK FIX (2026-08-04).
+#
+# stop_worker() above signals container processes whose /proc cmdline CONTAINS
+# $SID. That covers the `omnigent run` CLI kick and the harness subprocess
+# (`omnigent.runtime.harnesses._runner --conversation-id <sid>`) and NOTHING
+# ELSE. The process that actually holds the memory is the one `omnigent host`
+# spawns per session as literally `python -m omnigent.runner._entry` — the
+# session id reaches it in its ENVIRONMENT, never its argv, so no cmdline scan
+# can see it, and its parent is the live host daemon, so it is not an orphan
+# either. Nothing collected them: MEASURED 2026-08-04, 19 resident (one per
+# dispatch) with the box at 0-245 MB available, and Omnigent's host daemon then
+# refused to come online under load and killed two reviews mid-flight.
+#
+# Worse, the leak was WORST on the HAPPY path: a completed review sets
+# REVIEW_DONE=1, which correctly suppresses stop_worker, so a successful
+# cross-review used to tear down nothing at all.
+#
+# `stop_session` is Omnigent's own lifecycle verb. The server resolves the
+# runner from the OWNER-GATED session row and sends the host a
+# `host.stop_runner` frame, so this can only ever stop the runner bound to THIS
+# session id — attribution by construction, no /proc heuristics. Stop is
+# non-sticky in Omnigent, so it destroys no transcript.
+#
+# ORDER IS LOAD-BEARING: stop_session runs BEFORE stop_worker. The route
+# forwards the stop to the runner first and RAISES on a non-2xx from it, and a
+# harness this script has already killed is exactly such a non-2xx — the route
+# would then never reach the host-runner teardown and the runner would survive
+# the very cleanup meant to collect it.
+stop_session() {
+  python3 "$POLLER" stop --server "$SERVER" --session-id "$SID" \
+    --budget-s "$STOP_BUDGET_S" --http-timeout-s "$STOP_HTTP_TIMEOUT_S" 2>&1 \
+    || echo "FAILED (see the ALARM line above; the runner is leaking)"
+}
 REVIEW_DONE=0
 CLEANED=0
 cleanup() {
   [ "$CLEANED" -eq 1 ] && return
   CLEANED=1
+  # Unconditional, unlike stop_worker: the runner leaks on EVERY dispatch, so
+  # the completed-review path needs it MORE than the failure path, not less. It
+  # runs after the report has already been printed, and a failed stop is a
+  # WARNING — never a lost review. The review is paid for by then, and
+  # reap_stale_omnigent_runners.py is the safety net for the stop that did not
+  # land (and for the SIGKILL from the caller's timeout, which skips this trap
+  # entirely).
+  s=$(stop_session)
+  echo "cleanup: session stop: $s (session $SID)" >&2
   if [ "$REVIEW_DONE" -ne 1 ]; then
     r=$(stop_worker)
     echo "cleanup: worker signal result: $r (session $SID)" >&2

@@ -1044,6 +1044,10 @@ def _wrapper_budget():
         "report-budget": _sh_const("REPORT_BUDGET_S"),
         "report-http": _sh_const("REPORT_HTTP_TIMEOUT_S"),
         "cleanup": _sh_const("CLEANUP_MAX_S"),
+        # The session teardown that actually reaps the host-launched runner. It
+        # is a retry budget plus one request, like the report fetch.
+        "stop-budget": _sh_const("STOP_BUDGET_S"),
+        "stop-http": _sh_const("STOP_HTTP_TIMEOUT_S"),
         # `timeout -k` escalation, once per timeout-wrapped phase (kick, cleanup).
         "kill-after": 2 * _sh_const("TIMEOUT_KILL_AFTER_S"),
     }
@@ -1062,6 +1066,11 @@ def test_wrapper_worst_case_wall_fits_inside_the_caller_timeout():
     request timeout (it was a single 60s curl), so the shipped worst case moved
     2250 -> 2340 against the same 2500s cap: 160s of margin, deliberately spent
     on not throwing away a finished review.
+
+    The runner-leak fix (2026-08-04) spends 30 more of that margin on the
+    `stop` teardown -- 2370 against 2500, 130s of margin -- because a review
+    that leaves a 50 MB runner resident is how the box reached 0 MB available
+    and started refusing dispatches outright.
     """
     worst, caller, phases = _wrapper_budget()
 
@@ -1081,7 +1090,9 @@ def test_wrapper_worst_case_wall_fits_inside_the_caller_timeout():
     # fetch_report()'s documented bound -- counting only one of the two would
     # under-count the wall by exactly the amount that used to invert this sum.
     assert phases["report-budget"] + phases["report-http"] == 150
-    assert (worst, caller - worst) == (2340, 160), (
+    # Same rule for the teardown: budget AND request, or the sum under-counts.
+    assert phases["stop-budget"] + phases["stop-http"] == 30
+    assert (worst, caller - worst) == (2370, 130), (
         f"shipped budget moved: {worst}s worst case, {caller - worst}s margin ({phases})"
     )
 
@@ -1272,3 +1283,194 @@ def test_every_retry_loop_sleeps_through_the_clamped_seam():
         and "sleep=time.sleep" not in ln
     ]
     assert not raw, f"these sleeps bypass the negative-wait clamp: {raw}"
+
+
+# ------------------------------------------------ session teardown (`stop`) ---
+# The runner-leak fix, 2026-08-04. `stop_worker` in the wrapper signals
+# container processes whose /proc cmdline CONTAINS the session id; the
+# host-launched `python -m omnigent.runner._entry` carries the session id in its
+# ENVIRONMENT only, so no cmdline scan can ever reach it, and it is parented to
+# the live host daemon rather than to init. Nineteen accumulated on 2026-08-04
+# and the box fell to 0-245 MB available. `stop` posts Omnigent's own
+# `stop_session` event, which is the one teardown that reaches it.
+
+
+class FakePost:
+    """Records every POST and replays a scripted sequence of outcomes."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = []
+
+    def __call__(self, url, payload, timeout):
+        self.calls.append((url, payload, timeout))
+        item = self.script[min(len(self.calls) - 1, len(self.script) - 1)]
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+def _patch_post(monkeypatch, script):
+    fake = FakePost(script)
+    monkeypatch.setattr(crp, "_http_post", fake)
+    return fake
+
+
+def test_stop_posts_the_stop_session_event_and_reports_success(monkeypatch, capsys, clock):
+    fake = _patch_post(monkeypatch, [(200, "application/json", b'{"queued":false}')])
+
+    rc = crp.stop_session(SERVER, SID, 20.0, 5.0, 10.0, sleep=clock.sleep, now=clock.now)
+
+    out = capsys.readouterr()
+    assert rc == crp.EXIT_OK
+    assert out.out.strip() == "stopped"
+    assert out.err == ""
+    url, payload, _timeout = fake.calls[0]
+    # The verb Omnigent's own route dispatches on. Anything else is silently
+    # persisted as a conversation item and stops nothing.
+    assert payload == {"type": "stop_session"}
+    assert url == f"{SERVER}/v1/sessions/{SID}/events"
+
+
+def test_stop_is_scoped_to_its_own_session_and_can_reach_no_other(monkeypatch, clock):
+    """ATTRIBUTION CONTROL — this cleanup must not be able to touch a sibling.
+
+    Two cross-reviews can run back to back, and the whole reason the teardown
+    moved off /proc cmdline scanning is that a scan has no way to prove WHICH
+    session a process belongs to. The API call does: the session id is in the
+    path and the server resolves the runner from that session's owner-gated
+    row, so a wrong-session teardown is not merely unlikely, it is unreachable.
+    """
+    other = "ffffffffffffffffffffffffffffffff"
+    assert other != SID
+
+    fake = _patch_post(monkeypatch, [(200, "application/json", b"{}")])
+    crp.stop_session(SERVER, SID, 20.0, 5.0, 10.0, sleep=clock.sleep, now=clock.now)
+    crp.stop_session(SERVER, other, 20.0, 5.0, 10.0, sleep=clock.sleep, now=clock.now)
+
+    urls = [c[0] for c in fake.calls]
+    assert urls == [
+        f"{SERVER}/v1/sessions/{SID}/events",
+        f"{SERVER}/v1/sessions/{other}/events",
+    ]
+    # No call ever addresses a collection endpoint or a bare session path --
+    # either would be a teardown with no single session bound to it.
+    for url in urls:
+        assert url.endswith("/events")
+        assert url.count("/v1/sessions/") == 1
+    assert urls[0] != urls[1], "one session's stop must not address another's"
+
+
+@pytest.mark.parametrize("status", [404, 410])
+def test_stop_treats_a_vanished_session_as_already_torn_down(monkeypatch, capsys, clock, status):
+    """Nothing left to stop IS the state we asked for -- not an alarm."""
+    _patch_post(monkeypatch, [(status, "application/json", NOT_FOUND_BODY)])
+
+    rc = crp.stop_session(SERVER, SID, 20.0, 5.0, 10.0, sleep=clock.sleep, now=clock.now)
+
+    out = capsys.readouterr()
+    assert rc == crp.EXIT_OK
+    assert out.out.strip() == "already-gone"
+    assert out.err == ""
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        (502, "text/html", HTML_ERROR_PAGE),
+        (500, "application/json", b'{"error":"boom"}'),
+        urllib.error.URLError(ConnectionRefusedError(111, "refused")),
+        http.client.IncompleteRead(b"partial"),
+    ],
+)
+def test_stop_retries_a_transient_fault_then_alarms_exactly_once(
+    monkeypatch, capsys, clock, broken
+):
+    fake = _patch_post(monkeypatch, [broken])
+
+    rc = crp.stop_session(SERVER, SID, 20.0, 5.0, 10.0, sleep=clock.sleep, now=clock.now)
+
+    err = capsys.readouterr().err.strip().splitlines()
+    assert rc == crp.EXIT_STOP_FAILED
+    assert len(fake.calls) > 1, "a transient fault must be retried, not accepted"
+    assert len(err) == 1, err
+    # A failed teardown must name the leak and the remedy -- this is the exact
+    # failure whose silence let 19 runners accumulate unnoticed.
+    assert "still resident and LEAKING" in err[0]
+    assert "reap_stale_omnigent_runners.py" in err[0]
+    assert SID in err[0]
+
+
+def test_stop_recovers_when_omnigent_comes_back_mid_restart(monkeypatch, capsys, clock):
+    """Negative control for the retry: a blip must not be reported as a leak."""
+    _patch_post(monkeypatch, [
+        urllib.error.URLError(ConnectionRefusedError(111, "refused")),
+        (502, "text/html", HTML_ERROR_PAGE),
+        (200, "application/json", b"{}"),
+    ])
+
+    rc = crp.stop_session(SERVER, SID, 20.0, 5.0, 10.0, sleep=clock.sleep, now=clock.now)
+
+    out = capsys.readouterr()
+    assert rc == crp.EXIT_OK
+    assert out.out.strip() == "stopped"
+    assert out.err == ""
+
+
+def test_stop_stays_inside_its_budget(monkeypatch, capsys, clock):
+    """The teardown runs inside the wrapper's margin; it may not overrun it."""
+    _patch_post(monkeypatch, [(500, "application/json", b"{}")])
+
+    crp.stop_session(SERVER, SID, 20.0, 5.0, 10.0, sleep=clock.sleep, now=clock.now)
+
+    assert sum(clock.slept) <= 20.0, clock.slept
+    capsys.readouterr()
+
+
+def test_stop_cli_wires_the_module_function(monkeypatch, capsys):
+    seen = {}
+
+    def fake_stop(server, sid, budget, interval, http_timeout):
+        seen.update(server=server, sid=sid, budget=budget, http_timeout=http_timeout)
+        return crp.EXIT_OK
+
+    monkeypatch.setattr(crp, "stop_session", fake_stop)
+    rc = crp.main(["stop", "--server", SERVER, "--session-id", SID,
+                   "--budget-s", "20", "--http-timeout-s", "10"])
+
+    assert rc == crp.EXIT_OK
+    assert seen == {"server": SERVER, "sid": SID, "budget": 20.0, "http_timeout": 10.0}
+    capsys.readouterr()
+
+
+def test_wrapper_tears_down_its_session_on_every_path_including_success():
+    """Structural: the leak was WORST on the happy path.
+
+    A completed review sets REVIEW_DONE=1, which correctly suppresses
+    `stop_worker` -- so before this fix a SUCCESSFUL cross-review tore down
+    nothing at all and leaked one runner per dispatch. The session stop must
+    therefore sit OUTSIDE that conditional.
+    """
+    code = "\n".join(
+        l for l in _WRAPPER_PATH.read_text().splitlines() if not l.lstrip().startswith("#")
+    )
+    assert 'stop --server "$SERVER" --session-id "$SID"' in code
+    assert '--budget-s "$STOP_BUDGET_S"' in code
+    assert '--http-timeout-s "$STOP_HTTP_TIMEOUT_S"' in code
+
+    body = code.split("cleanup() {", 1)[1].split("\n}", 1)[0]
+    assert "stop_session" in body, "cleanup must tear the session down"
+    guarded = body.split('[ "$REVIEW_DONE" -ne 1 ]', 1)
+    assert len(guarded) == 2, "the REVIEW_DONE guard vanished from cleanup"
+    assert "stop_session" in guarded[0], (
+        "the session stop is inside the REVIEW_DONE guard -- a successful review "
+        "would leak its runner, which is exactly the 2026-08-04 failure"
+    )
+    # ORDER: the route forwards the stop to the runner and RAISES on a non-2xx
+    # from it, so killing the harness first makes the route abort before it ever
+    # reaches the host-runner teardown.
+    assert body.index("stop_session") < body.index("stop_worker")
+    # Still no shell-side HTTP parsing: the teardown goes through the poller.
+    curls = re.findall(r"^\s*curl\b[^\n]*", code, re.MULTILINE)
+    assert len(curls) == 1, f"the teardown must not add a raw curl: {curls}"
+    assert "STOP_BUDGET_S + STOP_HTTP_TIMEOUT_S" in code, "both terms must be in OVERHEAD_S"
