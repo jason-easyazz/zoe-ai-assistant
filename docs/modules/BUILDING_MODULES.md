@@ -19,16 +19,29 @@ Zoe modules are self-contained services that extend Zoe's capabilities. They fol
 
 ## Quick Start
 
-### 1. Copy the Template
+### 1. Create the Module From Scratch
 
-Use the omnigent module as a reference template:
+There is **no copyable scaffold in the tree**, and `modules/omnigent` is not a substitute:
+it is a specialised container-only module with no `main.py`, `requirements.txt`,
+`services/` or `intents/`, so a copy fails `tools/validate_module.py` immediately and its
+compose file would collide with the real `zoe-omnigent` deployment.
+
+Create the directory, then write the five files `tools/validate_module.py` requires —
+`main.py`, `Dockerfile`, `requirements.txt`, `docker-compose.module.yml`, `README.md` —
+from the structure and examples in the sections below:
 
 ```bash
-cp -r modules/omnigent modules/your-module-name
+mkdir -p modules/your-module-name/{services,intents}
 cd modules/your-module-name
 ```
 
-### 2. Update Module Structure
+Validate as you go; the tool names every missing piece:
+
+```bash
+python3 tools/validate_module.py modules/your-module-name
+```
+
+### 2. Module Structure
 
 ```
 modules/your-module-name/
@@ -470,8 +483,8 @@ module:
 
 ## Getting Help
 
-- **Reference**: Study [`modules/omnigent/`](../../modules/omnigent/)
-- **Template**: Copy the omnigent module structure
+- **Reference**: Study [`modules/omnigent/`](../../modules/omnigent/) for compose/Dockerfile
+  shape — but it is container-only, NOT a copyable FastAPI scaffold (see Quick Start)
 - **Documentation**: See other guides in `docs/modules/`
 - **Issues**: Report problems on GitHub (after public release)
 

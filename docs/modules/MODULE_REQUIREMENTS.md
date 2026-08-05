@@ -424,7 +424,7 @@ python tools/validate_module.py your-module
 ## 📚 See Also
 
 - [Building Modules Guide](BUILDING_MODULES.md) - Full development guide
-- [Omnigent Module](../../modules/omnigent/README.md) - Reference implementation
+- [Omnigent Module](../../modules/omnigent/README.md) - the only live module; container-only, so a reference for compose/Dockerfile shape rather than a copyable FastAPI scaffold
 
 ---
 

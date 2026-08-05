@@ -154,8 +154,10 @@ python tools/validate_module.py omnigent
 ### Building a New Module
 
 ```bash
-# 1. Copy template
-cp -r modules/omnigent modules/zoe-your-feature
+# 1. Create the module dir (there is NO copyable scaffold — modules/omnigent is
+#    a container-only module with no main.py/requirements.txt and would fail
+#    tools/validate_module.py; see docs/modules/BUILDING_MODULES.md)
+mkdir -p modules/zoe-your-feature/{services,intents}
 
 # 2. Update backend (main.py, services/)
 
