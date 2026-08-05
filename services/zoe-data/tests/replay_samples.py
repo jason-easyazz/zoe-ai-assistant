@@ -29,8 +29,9 @@ recall end-to-end). Default user is 'jason' so memory recall has facts.
 Usage:
     python3 tests/replay_samples.py                  # all samples, dry, no brain
     python3 tests/replay_samples.py --brain          # run the brain on fall-through
-    python3 tests/replay_samples.py --last 30        # newest N
-    python3 tests/replay_samples.py --since 0928     # files named >= 0928xx
+    python3 tests/replay_samples.py --last 30        # newest N BY CAPTURE TIME (mtime)
+    python3 tests/replay_samples.py --since-date 2026-08-01   # captured on/after that date
+    python3 tests/replay_samples.py --since 0928     # NAME filter: named >= 0928xx, ANY date
     python3 tests/replay_samples.py --execute        # really run writes
     python3 tests/replay_samples.py --json out.json  # machine-readable dump
 """
@@ -80,9 +81,62 @@ def _load_env() -> None:
 
 
 def _select(sample_dir: str, args) -> list[str]:
-    files = sorted(glob.glob(os.path.join(sample_dir, "*.wav")))
+    """Pick which saved WAVs to replay — ordered NEWEST-LAST BY CAPTURE TIME.
+
+    Corpus filenames are ``HHMMSS_millis.wav``: a TIME OF DAY carrying no date.
+    So a NAME sort orders the whole corpus by wall-clock hour with every date
+    interleaved, and ``--last N`` under it returned "the N highest times of day
+    across all time", not the newest N — while every caller
+    (``voice_regression_probe.py --samples``, ``scripts/perf/measure_voice.py
+    --last``) and every doc says "newest N". Measured 2026-08-04 over the live
+    1003-file corpus: the name-sorted last 20 and the capture-time-sorted last
+    20 shared **zero** files, and half the name-sorted slice was 2026-06-20 —
+    the OLDEST capture day in the corpus. Same class as #1642, where
+    ``sorted()[0]`` picked "whichever sorts first today" and left a test red for
+    weeks.
+
+    **mtime is the capture time, and that is verified rather than assumed.**
+    Over all 1003 top-level WAVs, 998 have an mtime whose HH:MM:SS equals the
+    filename's exactly; the remaining 5 differ by exactly one second (the name
+    carries milliseconds, so a capture at ``083032.938`` is written at
+    ``083033``). ``ctime`` equals ``mtime`` to the nanosecond on every file, so
+    nothing has ever copied, rsynced or restored the corpus — a copy leaves
+    ctime later than mtime, and ctime cannot be set from userspace at all. The
+    files are bare 44-byte canonical RIFF with no BWF ``bext`` and no
+    ``LIST``/``INFO`` chunk, and there are no sidecar metadata files, so mtime
+    is the ONLY true timestamp the corpus carries. If the corpus is ever bulk
+    re-timestamped this reasoning dies with it and the fix is to write the date
+    into the capture filename, not to trust the name again.
+
+    Ties break on basename so the order is total and reproducible even when two
+    captures land in the same mtime tick.
+
+    The glob is TOP-LEVEL ON PURPOSE — ``quarantine-*/`` subdirectories hold
+    withdrawn captures and must never re-enter the gate's slice. Making this
+    recursive would silently re-admit them.
+
+    Deliberately depends on nothing but ``glob`` and ``os``, and reads only
+    ``args.since``/``args.last`` directly (``args.since_mtime`` via ``getattr``
+    with a default), so the corpus-curation test suite can keep extracting this
+    function with ``ast`` and exec'ing it in an isolated namespace.
+    """
+    paths = glob.glob(os.path.join(sample_dir, "*.wav"))
+    # (capture time, name) — one stat per file, total order, newest last.
+    rows = sorted((os.stat(p).st_mtime, os.path.basename(p), p) for p in paths)
+
+    # --since-date: capture-time filter, consistent with --last. Resolved to an
+    # epoch in main(); absent on callers that predate it, hence the getattr.
+    since_mtime = getattr(args, "since_mtime", None)
+    if since_mtime is not None:
+        rows = [r for r in rows if r[0] >= since_mtime]
+
+    # --since stays NAME-based on purpose (see its help): it is a time-of-day
+    # filter spanning every date, not a recency filter. Changing its meaning
+    # silently would be the same bug in the other direction.
     if args.since:
-        files = [f for f in files if os.path.basename(f) >= args.since]
+        rows = [r for r in rows if r[1] >= args.since]
+
+    files = [r[2] for r in rows]
     if args.last:
         files = files[-args.last:]
     return files
@@ -323,8 +377,15 @@ async def _run(args) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--since", help="only files whose name sorts >= this (e.g. 0928)")
-    ap.add_argument("--last", type=int, help="only the newest N samples")
+    ap.add_argument("--since", help=(
+        "NAME filter, NOT a recency filter: keep files whose NAME sorts >= this. "
+        "Corpus names are HHMMSS_millis — a time of day with no date — so "
+        "'--since 0928' means 'captured after 09:28 on ANY day', spanning the "
+        "whole corpus. Use --since-date (or --last) to select by recency."))
+    ap.add_argument("--since-date", help=(
+        "recency filter: only samples CAPTURED at or after this local date/time "
+        "(YYYY-MM-DD or YYYY-MM-DDTHH:MM). Uses file mtime, consistent with --last."))
+    ap.add_argument("--last", type=int, help="only the newest N samples by capture time (mtime)")
     ap.add_argument("--user", default="jason", help="user_id to replay as (memory recall)")
     ap.add_argument("--brain", action="store_true", help="run the Gemma brain on fall-through")
     ap.add_argument("--execute", action="store_true", help="actually fulfil writes (mutates DB)")
@@ -336,6 +397,29 @@ def main() -> None:
                     help="live service base URL for --stt remote (default: ZOE_BASE_URL "
                          "resolved AFTER the service .env is loaded, else localhost:8000)")
     args = ap.parse_args()
+
+    # Resolve --since-date to an epoch HERE, not in _select: that keeps _select
+    # dependent on nothing but glob+os so it stays extractable/exec-able by the
+    # corpus-curation tests, and it puts the parse error in front of the user
+    # before the harness spends a minute warming the router.
+    args.since_mtime = None
+    if args.since_date:
+        for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                args.since_mtime = time.mktime(time.strptime(args.since_date, fmt))
+                break
+            except ValueError:
+                continue
+        if args.since_mtime is None:
+            ap.error(f"--since-date {args.since_date!r}: expected YYYY-MM-DD "
+                     "or YYYY-MM-DDTHH:MM")
+    if args.since:
+        # Loud, because the flag's honest meaning is a trap: it reads like
+        # "recent" and is not. Kept rather than silently redefined.
+        print("note: --since is a FILENAME filter (time of day, no date), NOT a "
+              "recency filter — it spans every capture date. Use --since-date "
+              "or --last to select recent samples.", file=sys.stderr)
+
     sys.exit(asyncio.run(_run(args)))
 
 

@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+# =============================================================================
+# omp-acp-supervisor — bound a METERED ACP child's lifetime to its parent.
+#
+# Installed beside omp-omnigent-fenced at /home/zoe/.local/bin/, which the
+# zoe-omnigent container sees READ-ONLY at the identical path. The fence execs
+# this instead of exec'ing omp directly.
+#
+# WHY THIS EXISTS
+# ---------------
+# Measured 2026-08-03 (omp trial-002): omnigent's 240s per-turn idle watchdog
+# marked a turn failed, but the omp child KEPT WORKING — it resumed 49s after
+# the "kill", burned two more turns / $0.065, then sat orphaned for 8 minutes
+# on a dead ACP channel until it was killed by hand.
+#
+# Reading the installed omnigent 0.7.0 explains all of it:
+#
+#   omnigent/runtime/harnesses/_scaffold.py:1483-1513
+#       The idle watchdog is an ``asyncio.timeout``. On expiry it CANCELS the
+#       ``run_turn`` coroutine and re-raises as RuntimeError -> response.failed.
+#       That is a coroutine cancellation, not a process kill.
+#
+#   omnigent/runtime/harnesses/_executor_adapter.py:483-489, 490-519
+#       The cancellation path is ``except BaseException: ... raise`` plus a
+#       ``finally:`` that only cancels the injection watcher and flushes OTel.
+#       Neither ``interrupt_session`` (the cooperative ACP ``session/cancel``)
+#       nor ``executor.close()`` is called. So on turn-fail the ACP child is
+#       sent NOTHING AT ALL — not a signal, not even a protocol message.
+#
+#   omnigent/inner/acp_executor.py:323-332
+#       ``asyncio.create_subprocess_exec(...)`` with no ``start_new_session``
+#       and no ``preexec_fn`` — the child stays in the harness runner's own
+#       process group, so it is not in any group anyone ever signals.
+#
+#   omnigent/inner/acp_executor.py:1129-1158 (``close()``)
+#       The ONLY kill path, and it is reachable only from
+#       ``_executor_adapter.on_shutdown`` (:1104-1118) on ASGI lifespan
+#       teardown. It does ``proc.terminate()`` — SIGTERM to the single child
+#       PID, never ``killpg`` — so the child's own subprocesses survive even
+#       when it does run.
+#
+#   omnigent/runtime/harnesses/_runner.py:193-202
+#       And it often does NOT run: the runner arms a hard-exit timer that calls
+#       ``os._exit()`` ~7s after SIGTERM, and process_manager escalates to
+#       SIGKILL (process_manager.py:1433). Both skip lifespan teardown
+#       entirely, which is how the child ends up orphaned with ppid 1.
+#
+# Nothing in the package uses ``killpg``. Every kill is per-PID.
+#
+# WHAT THIS DOES
+# --------------
+# Runs omp in its OWN process group (setsid) and kills that WHOLE GROUP when
+# the parent goes away. Three independent triggers, because a metered child
+# outliving its kill switch is an unbounded-spend hole and one detector is not
+# enough:
+#
+#   1. PARENT DEATH via ``prctl(PR_SET_PDEATHSIG, SIGTERM)`` — instant, fires
+#      even if this process is wedged in a syscall. This is the trigger that
+#      closes the orphan hole: the harness runner is our direct parent (the
+#      fence is exec'd by ``create_subprocess_exec``, and exec preserves the
+#      PID), so runner death -> our SIGTERM -> group kill.
+#   2. PARENT DEATH via ``getppid()`` poll (1s) — belt for the PDEATHSIG
+#      corner cases (it keys on the CREATING THREAD, and it is Linux-only).
+#   3. ACP CHANNEL EOF on stdin — covers omnigent's own ``close()`` path,
+#      which closes the child's stdin before terminating. Enabled ONLY when
+#      the fence sets ``OMP_SUPERVISOR_WATCH_STDIN=1``, which it does for the
+#      ``acp`` subcommand and nothing else. This gate is load-bearing and was
+#      MEASURED, not theorised: watching stdin whenever it merely looks like a
+#      pipe broke the fence read-back, because ``omp-settings-commands.sh``
+#      drives its key list through ``echo "$FENCE" | while read``, so each
+#      one-shot ``omp config get`` inherits that pipeline as stdin. The relay
+#      swallowed the remaining keys and the EOF killed the command mid-flight:
+#      6/6 PASS became 1 FAIL and an aborted loop. A one-shot invocation must
+#      be byte-transparent.
+#
+# Plus TERM/INT/HUP forwarded from anywhere, and a hard-exit backstop so a
+# wedged teardown cannot itself become the leak.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+# --------------------------------
+# It cannot see a TURN failure. Per the diagnosis above, omnigent emits no
+# signal on the ACP channel when the idle watchdog trips, so there is nothing
+# for a wrapper to observe: the harness stays up and the socket stays open.
+# Closing that window needs an upstream change (call ``interrupt_session`` on
+# the watchdog cancel path). This supervisor bounds the UNBOUNDED half — the
+# orphan that outlives the harness entirely — and turns the residual exposure
+# from "forever" into "until the harness runner exits".
+# =============================================================================
+
+from __future__ import annotations
+
+import errno
+import os
+import signal
+import stat
+import subprocess
+import sys
+import threading
+import time
+
+# Seconds between SIGTERM and SIGKILL of the child's process group.
+GRACE_S = float(os.environ.get("OMP_SUPERVISOR_GRACE_S", "5"))
+# Interval of the getppid() liveness poll.
+POLL_S = float(os.environ.get("OMP_SUPERVISOR_POLL_S", "1"))
+# Extra margin after the grace period before this process force-exits. Mirrors
+# omnigent's own _arm_hard_exit backstop: the failure mode being fixed is a
+# teardown that stalls, so teardown itself gets a deadline.
+HARD_EXIT_MARGIN_S = float(os.environ.get("OMP_SUPERVISOR_HARD_EXIT_MARGIN_S", "3"))
+
+_shutdown = threading.Event()
+_reason_lock = threading.Lock()
+_reason: str = ""
+
+
+def _log(msg: str) -> None:
+    """Best-effort stderr note. The parent may already be gone (EPIPE)."""
+    try:
+        sys.stderr.write("omp-supervisor: %s\n" % msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def _request_shutdown(reason: str) -> None:
+    """Latch the first shutdown reason and wake the main loop. Idempotent."""
+    global _reason
+    with _reason_lock:
+        if _shutdown.is_set():
+            return
+        _reason = reason
+    _shutdown.set()
+
+
+def _set_pdeathsig() -> None:
+    """prctl(PR_SET_PDEATHSIG, SIGTERM) on self. Linux-only; no-op elsewhere.
+
+    SIGTERM rather than SIGKILL on purpose: we want our own handler to run so
+    the child's whole process GROUP is killed. The hard-exit backstop covers
+    the case where that handler cannot make progress.
+    """
+    if sys.platform != "linux":
+        return
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        PR_SET_PDEATHSIG = 1
+        libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+    except Exception:
+        pass
+
+
+def _watch_stdin_enabled() -> bool:
+    """Whether to relay fd 0 and treat its EOF as a kill signal.
+
+    Requires BOTH an explicit opt-in from the fence (set only for the ``acp``
+    subcommand) AND fd 0 being a real pipe. Two conditions, not one, because
+    "looks like a pipe" is NOT sufficient: a one-shot ``omp config get`` driven
+    from a ``echo ... | while read`` loop also has a pipe on fd 0, and relaying
+    it consumes the caller's data and kills the command on EOF. Measured — it
+    broke the fence read-back.
+    """
+    if os.environ.get("OMP_SUPERVISOR_WATCH_STDIN") != "1":
+        return False
+    try:
+        return stat.S_ISFIFO(os.fstat(0).st_mode)
+    except OSError:
+        return False
+
+
+def _relay_stdin(dst_fd: int) -> None:
+    """Byte-transparent fd0 -> child-stdin relay; EOF requests shutdown.
+
+    We relay rather than hand the child fd 0 directly because EOF on a pipe
+    cannot be observed without consuming it. Only stdin is relayed — stdout and
+    stderr are inherited untouched, so the executor's 16 MiB line limit and the
+    streaming throughput are unaffected.
+    """
+    try:
+        while True:
+            try:
+                chunk = os.read(0, 65536)
+            except OSError as exc:
+                if exc.errno == errno.EINTR:
+                    continue
+                raise
+            if not chunk:
+                break  # EOF: the ACP channel is closed.
+            view = memoryview(chunk)
+            while view:
+                try:
+                    written = os.write(dst_fd, view)
+                except OSError as exc:
+                    if exc.errno == errno.EINTR:
+                        continue
+                    raise  # child stdin gone (EPIPE/EBADF) -> treat as EOF
+                view = view[written:]
+    except Exception:
+        pass
+    finally:
+        try:
+            os.close(dst_fd)
+        except OSError:
+            pass
+        _request_shutdown("acp stdin EOF")
+
+
+def _watch_parent(original_ppid: int) -> None:
+    """Poll getppid(); reparenting (usually to 1) means the parent died."""
+    while not _shutdown.wait(POLL_S):
+        if os.getppid() != original_ppid:
+            _request_shutdown("parent pid %d exited" % original_ppid)
+            return
+
+
+def _arm_hard_exit(pgid: int) -> None:
+    """Force the group down and this process out if teardown stalls."""
+
+    def _run() -> None:
+        time.sleep(GRACE_S + HARD_EXIT_MARGIN_S)
+        _log("teardown stalled; forcing SIGKILL on pgid %d and exiting" % pgid)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+        os._exit(137)
+
+    threading.Thread(target=_run, name="omp-supervisor-hard-exit", daemon=True).start()
+
+
+def _kill_group(pgid: int, proc: "subprocess.Popen[bytes]") -> None:
+    """SIGTERM the group, wait GRACE_S for it to empty, then SIGKILL.
+
+    ``proc.poll()`` is called on every iteration and that is load-bearing, not
+    hygiene: a killed-but-unreaped child is a ZOMBIE, a zombie is still a
+    member of its process group, and ``killpg(pgid, 0)`` therefore keeps
+    succeeding until we reap it. Without the poll the loop burns the whole
+    grace period on an already-dead group and then SIGKILLs a corpse.
+    """
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        proc.poll()
+        return
+    except OSError as exc:
+        _log("killpg(TERM, %d) failed: %s" % (pgid, exc))
+        return
+    deadline = time.monotonic() + GRACE_S
+    while time.monotonic() < deadline:
+        proc.poll()  # reap, so the leader stops counting as a group member
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return  # group is empty
+        except OSError:
+            return
+        time.sleep(0.05)
+    _log("pgid %d survived SIGTERM after %.1fs; escalating to SIGKILL" % (pgid, GRACE_S))
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        _log("usage: omp-acp-supervisor <command> [args...]")
+        return 78
+
+    _set_pdeathsig()
+    original_ppid = os.getppid()
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, lambda s, _f: _request_shutdown("signal %d" % s))
+        except (OSError, ValueError):
+            pass
+
+    watch_stdin = _watch_stdin_enabled()
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE if watch_stdin else None,
+            # stdout/stderr inherited: no relay, no added latency, no line cap.
+            start_new_session=True,  # setsid -> child leads its OWN process group
+        )
+    except OSError as exc:
+        _log("cannot exec %s: %s" % (argv[0], exc))
+        return 78
+
+    pgid = proc.pid  # session leader: pgid == pid
+
+    if watch_stdin and proc.stdin is not None:
+        fd = os.dup(proc.stdin.fileno())
+        proc.stdin.close()
+        threading.Thread(
+            target=_relay_stdin, args=(fd,), name="omp-supervisor-stdin", daemon=True
+        ).start()
+
+    threading.Thread(
+        target=_watch_parent, args=(original_ppid,), name="omp-supervisor-parent", daemon=True
+    ).start()
+
+    # Poll rather than block in wait(): signal handlers only run in the main
+    # thread, and a blocking wait() would swallow the wakeup.
+    while not _shutdown.is_set():
+        if proc.poll() is not None:
+            return proc.returncode if proc.returncode is not None else 0
+        _shutdown.wait(0.1)
+
+    with _reason_lock:
+        reason = _reason or "unknown"
+    if proc.poll() is not None:
+        return proc.returncode if proc.returncode is not None else 0
+
+    _log("%s; killing omp process group %d" % (reason, pgid))
+    _arm_hard_exit(pgid)
+    _kill_group(pgid, proc)
+    try:
+        proc.wait(timeout=GRACE_S + 1)
+    except Exception:
+        pass
+    return 143  # 128 + SIGTERM
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
