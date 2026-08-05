@@ -8,6 +8,38 @@ timestamp: 2026-08-04T00:00:00Z
 
 # LiveKit API key pair — topology, rotation, exposure
 
+> ## ⚠️ MERGING THIS BREAKS TALK UNTIL THE CONTAINER IS RECREATED
+>
+> The `livekit` container on the box was **created 2026-05-14**, before
+> `LIVEKIT_KEYS` existed in `docker-compose.yml`. A container's environment is
+> **fixed at create time**, and the on-demand path is `docker start livekit`,
+> which reuses it. So the moment the live checkout syncs the keyless
+> `services/livekit/config.yaml`, the next on-demand start reads a config with no
+> `keys:` **and** an environment with no `LIVEKIT_KEYS`, and the server refuses to
+> boot with `one of key-file or keys must be provided`. Panel/desktop Talk is
+> down from that moment until an operator runs, in `/home/zoe/assistant`:
+>
+> ```bash
+> docker compose up -d --force-recreate livekit
+> ```
+>
+> `restart` does **not** work — it reuses the old environment.
+>
+> **This is the same command as step 3 of the rotation procedure below, so merge
+> and rotation are ONE operator action:** rotate the pair in both `.env` files
+> first (steps 1–2), then run the recreate once, and it satisfies both.
+>
+> Nothing in CI can do this for you: `deploy.yml` only runs
+> `docker compose up -d zoe-auth` for docker-compose changes, and it never
+> touches `livekit`.
+>
+> Verified before merge, without printing either value: the repo-root `.env`
+> already carries `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`, and
+> `docker compose config` resolves `LIVEKIT_KEYS` to a value whose SHA-256 equals
+> that of the pair being deleted from the tracked config. **The recreate alone
+> restores service even before any rotation** — but the pair has been public for
+> 86 days, so do the rotation in the same action.
+
 ## Where the credential lives (after 2026-08-04)
 
 | location | tracked? | role |
@@ -86,6 +118,11 @@ chat, a commit, a log, or an agent transcript.
    ```
    (`restart` alone re-uses the old environment — the container's env is fixed at
    create time. `--force-recreate` is required.)
+
+   **This step is also mandatory the first time the keyless config lands on the
+   box, rotation or not** — see the callout at the top. Until it runs, Talk is
+   down. Doing steps 1–2 first means this single recreate both restores service
+   and completes the rotation.
 4. Restart zoe-data so the token minter reloads its env:
    ```bash
    systemctl --user restart zoe-data

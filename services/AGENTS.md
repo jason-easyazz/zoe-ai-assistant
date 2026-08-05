@@ -58,5 +58,9 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 untracked `.env` and reaches the container as `LIVEKIT_KEYS` (compose interpolation); the tracked
 file carries rtc/ports/logging only. It shipped the live key in plaintext for 86 days on this
 public repo, and no secret scanner caught it — LiveKit keys have no vendor pattern. Pinned by
-`tests/unit/test_livekit_config_no_secrets.py`; rotation runbook and exposure record in
+`tests/unit/test_livekit_config_no_secrets.py`.
+**A container's environment is fixed at CREATE time and the on-demand path is `docker start`, so any
+change to LiveKit's compose `environment:` needs `docker compose up -d --force-recreate livekit` —
+`restart` silently reuses the old env, and `deploy.yml` never touches this service.** Rotation
+runbook and exposure record in
 [docs/knowledge/livekit-key-rotation.md](../docs/knowledge/livekit-key-rotation.md).
