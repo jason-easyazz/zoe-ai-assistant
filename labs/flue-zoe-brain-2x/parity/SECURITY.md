@@ -23,7 +23,7 @@ secret. `pgu.sid` and `*results.json` are git-ignored and never committed.
 
 Run (on the Zoe host, brain live on `:8000`):
 
-    python3 labs/flue-zoe-brain/parity/security_gate.py
+    python3 labs/flue-zoe-brain-2x/parity/security_gate.py
 
 ## Vectors & verdicts (auto-scored)
 

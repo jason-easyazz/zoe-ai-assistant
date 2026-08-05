@@ -55,6 +55,11 @@ NO_SWAP_UNITS = (
     "kokoro-tts.service",
     "zoe-data.service",
     "flue-zoe-brain.service",
+    # The Flue 2.x parallel port. Covered from the moment the template exists,
+    # not from the moment it is cut over: the gap this file closes is a unit
+    # shipping uncapped and only being noticed once it is live, and a template
+    # is exactly where that is cheap to prevent.
+    "flue-zoe-brain-2x.service",
     "flue-zoe-telegram.service",
     "functiongemma-router.service",
 )
@@ -293,7 +298,11 @@ def test_the_flue_sidecars_are_actually_covered():
     """Guards the guard: the 2026-08-03 gap was a latency-critical unit simply
     not being in anyone's list. Removing one from NO_SWAP_UNITS must fail here
     rather than silently shrinking the test matrix."""
-    for unit in ("flue-zoe-brain.service", "flue-zoe-telegram.service"):
+    for unit in (
+        "flue-zoe-brain.service",
+        "flue-zoe-brain-2x.service",
+        "flue-zoe-telegram.service",
+    ):
         assert unit in NO_SWAP_UNITS, (
             f"{unit} is on the live brain/alerting path and must stay covered"
         )

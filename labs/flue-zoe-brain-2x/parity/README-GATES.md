@@ -1,5 +1,19 @@
 # Flue-brain quality gates
 
+> **These gates measure whatever zoe-data's brain lane currently is — so for this
+> port they are a POST-CUTOVER gate, not a pre-merge one.** `gatelib.py` drives
+> `POST http://127.0.0.1:8000/api/chat/` (the live zoe-data), so it exercises
+> whichever sidecar `ZOE_BRAIN_BACKEND` + `ZOE_FLUE_BRAIN_URL` point at. Run from
+> this directory *before* the flip and you have measured the **1.x** sidecar. They
+> prove 2.x equivalence only on the flipped config — which is exactly where the
+> cutover runbook (`../README.md`) puts them, beside the voice replay gate. The
+> pre-merge evidence for this port is `npm test` / `npm run typecheck` /
+> `./smoke-built.sh`, which run offline against a mock model.
+>
+> `flue_wire.py` is the exception: it addresses a sidecar directly
+> (`ZOE_BRAIN_URL`, default `:3578`) and is the reference implementation of the
+> 2.x wire. Point it at `:3579` to exercise this port without touching zoe-data.
+
 A committed, reusable testing system for the live Flue Zoe-brain (the production
 brain via `ZOE_BRAIN_BACKEND=flue`). It grew out of the ad-hoc 2026-07-07
 quality-to-100% campaign; this is that campaign's harness, promoted from
@@ -10,10 +24,10 @@ being re-copied per gate.
 
 ```bash
 # from the live checkout (/home/zoe/assistant):
-python3 labs/flue-zoe-brain/parity/run_gates.py            # all gates, fresh user, full guards
-python3 labs/flue-zoe-brain/parity/run_gates.py --gates hard,corpus
-python3 labs/flue-zoe-brain/parity/run_gates.py --list     # show discovered gates
-python3 labs/flue-zoe-brain/parity/run_gates.py --skip-guards   # dev: ignore memory/quiet-window
+python3 labs/flue-zoe-brain-2x/parity/run_gates.py            # all gates, fresh user, full guards
+python3 labs/flue-zoe-brain-2x/parity/run_gates.py --gates hard,corpus
+python3 labs/flue-zoe-brain-2x/parity/run_gates.py --list     # show discovered gates
+python3 labs/flue-zoe-brain-2x/parity/run_gates.py --skip-guards   # dev: ignore memory/quiet-window
 ```
 
 The runner provisions ONE fresh empty-store test user (`test-gate-<nonce>`),

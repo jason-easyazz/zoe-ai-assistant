@@ -158,11 +158,18 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   (see Forbidden above); (b) Flue 2.x's persisted schema is **v8 against the
   beta's v5, reset-only** — the runtime rejects an older database *before any
   application code runs*, and a 2.x process that has written a v8 store cannot be
-  rolled back to the beta either. Cutover is therefore a deliberate operator step
-  (point the unit + `ZOE_BRAIN_DB` at this directory, having decided explicitly
-  what happens to live session history), never an auto-deploy.
-  **Nothing here is wired to a unit, a port, or CI.** Not cut over; the live
-  brain lane is untouched.
+  rolled back to the beta either. Cutover is therefore a deliberate operator step,
+  never an auto-deploy.
+  **Not wired to CI, and not cut over — the live brain lane is untouched.** It
+  does now ship an INERT unit template, `scripts/setup/systemd/flue-zoe-brain-2x.service`
+  on **`:3579`**, sized to run BESIDE the live `:3578` sidecar so a cutover is an
+  env flip with a warm fallback rather than a rebuild. Installing it enables
+  nothing; zoe-data cannot reach `:3579` until an operator sets
+  `ZOE_FLUE_BRAIN_URL`. Its memory caps mirror the live sidecar's exactly
+  (`MemorySwapMax=0` / `MemoryLow=512M` / `MemoryMax=2G`) and are pinned by
+  `tests/unit/test_systemd_memory_protection.py`. Leave `ZOE_BRAIN_DB` at its
+  default — a shared store would make the rollback impossible in both directions.
+  Cutover + rollback runbook: `flue-zoe-brain-2x/README.md`.
   What differs from the beta sibling, all forced by deleted 2.x APIs:
   `flue build` → **Vite** (`vite.config.ts` + `@flue/vite`; the `'use agent'`
   build scan is what REGISTERS agents — mounting registers nothing);

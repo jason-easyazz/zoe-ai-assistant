@@ -44,7 +44,7 @@ called) and should become its own fix ticket:
 3. note_search triggers the research-stall instead of searching;
 4. people_create misroutes to list_add.
 
-Run: `python3 labs/flue-zoe-brain/parity/tool_breadth_gate.py` (full) or `--dry`
+Run: `python3 labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py` (full) or `--dry`
 (2-tool smoke, for a merge-train window). Latest results:
 `parity/tool_breadth_gate_results.json`.
 

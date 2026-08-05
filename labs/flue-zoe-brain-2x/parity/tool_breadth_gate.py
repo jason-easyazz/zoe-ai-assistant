@@ -30,8 +30,8 @@ Cleanup: every nonce'd test row this gate writes is HARD-deleted from Postgres
 at the end (best-effort). Nonce markers make the rows unambiguously ours.
 
 Run ON the Zoe host, quiet window (no merge-train deploy restart mid-run):
-    python3 labs/flue-zoe-brain/parity/tool_breadth_gate.py           # full run
-    python3 labs/flue-zoe-brain/parity/tool_breadth_gate.py --dry     # 2-tool smoke
+    python3 labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py           # full run
+    python3 labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py --dry     # 2-tool smoke
 """
 from __future__ import annotations
 

@@ -5,8 +5,10 @@
 > **This directory is not live and must not become live by accident.** The
 > deployed sidecar on `:3578` is the sibling `labs/flue-zoe-brain/`, still on
 > `@flue/*@1.0.0-beta.6`. This is a parallel port to `@flue/*@2.0.1`, proven by
-> tests against a mock model. Nothing here has a systemd unit, a port, or a CI
-> hook.
+> tests against a mock model. It has **no CI hook**, and its systemd template
+> (`flue-zoe-brain-2x.service`, `:3579`) **ships inert** — not enabled, not
+> started, and unreachable from zoe-data until an operator sets
+> `ZOE_FLUE_BRAIN_URL`. See "Cutover runbook" below for the deliberate flip.
 >
 > **Why it is a separate directory rather than a version bump in place** — two
 > independent reasons, either one sufficient:
@@ -265,39 +267,153 @@ The agent route **fails closed**: with neither `ZOE_BRAIN_TOKEN` nor
 
 ## Run as a service (systemd, operator opt-in)
 
-A user-unit template ships at `scripts/setup/systemd/flue-zoe-brain.service`.
-It is **optional and not enabled by default** — production only reaches the
-sidecar through zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam.
+A user-unit template ships at `scripts/setup/systemd/flue-zoe-brain-2x.service`
+— **port 3579, deliberately NOT 3578.** It is designed to run *beside* the live
+`flue-zoe-brain.service`, which stays up and warm: that is what makes the cutover
+an env flip with an instant rollback rather than a rebuild. It **ships inert** —
+installing it enables nothing, and zoe-data does not address `:3579` until an
+operator sets `ZOE_FLUE_BRAIN_URL`.
 
 ```sh
 # 1. Build the sidecar (the unit runs dist/server.mjs, it does not build)
-cd ~/assistant/labs/flue-zoe-brain
-npm install && npm run build
+cd ~/assistant/labs/flue-zoe-brain-2x
+npm ci && npm run build
 
 # 2. Configure env (secrets live here, never in the unit)
 cp .env.example .env
 ${EDITOR:-nano} .env        # set ZOE_BRAIN_TOKEN + ZOE_BRAIN_USER_ID at minimum
+                            # leave ZOE_BRAIN_DB unset — see "storage" below
 
 # 3. Install + enable the unit
-cp ~/assistant/scripts/setup/systemd/flue-zoe-brain.service ~/.config/systemd/user/
+cp ~/assistant/scripts/setup/systemd/flue-zoe-brain-2x.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now flue-zoe-brain
+systemctl --user enable --now flue-zoe-brain-2x
 
 # 4. Verify
-curl -f http://127.0.0.1:3578/health
-journalctl --user -u flue-zoe-brain -f
+curl -f http://127.0.0.1:3579/health
+journalctl --user -u flue-zoe-brain-2x -f
 ```
 
-For hand runs (no unit): `PORT=3578 npm start` with the same env exported.
+**Memory protections are identical to the live sidecar's** (`MemorySwapMax=0`,
+`MemoryLow=512M`, `MemoryMax=2G`), because after cutover this unit inherits the
+same latency contract. `tests/unit/test_systemd_memory_protection.py` pins them.
+Apply changes as a drop-in in `~/.config/systemd/user/flue-zoe-brain-2x.service.d/`;
+never copy the template over a running unit.
+
+**Storage stays separate, and must.** `ZOE_BRAIN_DB` defaults to
+`labs/flue-zoe-brain-2x/data/zoe-brain.db`, already a different file from the
+live sidecar's. Flue 2.x writes schema v8 and the beta writes v5; the runtime
+rejects an older store before any application code runs, so a shared file makes
+the rollback half of the runbook impossible.
+
+For hand runs (no unit): `PORT=3579 npm start` with the same env exported — but
+once the unit is installed, `:3579` is taken, so pick another scratch port or
+stop the unit first. Both `LANDING.md` recipes still say `3579`.
 
 **Stopping a hand-started sidecar — kill by port ONLY:**
 
 ```sh
-lsof -ti tcp:3578 | xargs -r kill
+lsof -ti tcp:3579 | xargs -r kill
 ```
 
 Never `pkill -f` (it can take out unrelated node processes), and never restart
 zoe-data (`:8000`) or llama-server (`:11434`) as part of a lab run.
+
+## Cutover runbook (operator)
+
+The operator lifted the merge hold on 2026-08-06. Merging this directory changes
+nothing on the box; the flip below is the separate, deliberate step.
+
+### Prerequisite — the Phase-2 client change (NOT YET LANDED)
+
+**The flip is not env-only today.** `services/zoe-data/zoe_flue_client.py` posts
+the beta body shape, which 2.x rejects. Measured against the built 2.x server on
+2026-08-06 (throwaway port, throwaway store):
+
+| POST body | 2.x response |
+|---|---|
+| `{"message":"hi"}` — what `zoe_flue_client.py` sends today | **HTTP 400** `invalid_request` — *"Delivered messages must be `{ kind: "user", body: string, … }`"* |
+| `{"kind":"user","body":"hi"}` | **HTTP 202** admitted |
+
+2.x also rejects `?wait=result`. So the client needs a wire selector — the
+`ZOE_FLUE_WIRE` flag tracked on the ideas board, **which does not exist in the
+code yet** (`grep ZOE_FLUE_WIRE services/` returns only `docs/IDEAS.md`).
+`parity/flue_wire.py` is the reference implementation of the 2.x wire
+(fire-and-forget admission + NDJSON stream read) and the model for that change.
+Until it lands, flipping `ZOE_FLUE_BRAIN_URL` alone breaks **every** brain turn.
+
+That client change touches a voice-path file, so it is replay-gated in its own
+right and belongs in its own PR.
+
+### The flip (once the client change has landed)
+
+`ZOE_BRAIN_BACKEND=flue` already lives in `services/zoe-data/.env`, and that is
+the file the **live** `zoe-data.service` actually loads (`systemctl --user cat
+zoe-data` — the installed unit reads `services/zoe-data/.env` and `~/.hermes/.env`;
+it does *not* read the repo-root `.env` the tracked template lists). Both new
+vars go in the same file. One copy-paste block:
+
+```sh
+# ── FLIP: zoe-data 1.x sidecar (:3578) -> Flue 2.x sidecar (:3579) ───────────
+set -euo pipefail
+ENVF=/home/zoe/assistant/services/zoe-data/.env
+
+# 1. Start the 2.x sidecar (built + configured per "Run as a service" above).
+systemctl --user start flue-zoe-brain-2x
+curl -fsS http://127.0.0.1:3579/health   # must print {"ok":true,...}
+
+# 2. Point zoe-data at it. The 1.x sidecar stays UP and warm — do not stop it.
+printf '\n# Flue 2.x cutover %s\nZOE_FLUE_WIRE=2\nZOE_FLUE_BRAIN_URL=http://127.0.0.1:3579\n' \
+  "$(date -Is)" >> "$ENVF"
+
+# 3. Restart zoe-data and wait for it to actually serve (is-active lies).
+systemctl --user restart zoe-data
+for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8000/health >/dev/null && break; sleep 2; done
+curl -fsS http://127.0.0.1:8000/health
+
+# 4. THE GATE. Must pass on the FLIPPED config, not before it.
+cd /home/zoe/assistant
+flock /tmp/zoe-voice-harness.lock \
+  python3 scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote
+# said-vs-did must not regress and per-stage medians must not regress.
+# Non-zero exit or WARN => ROLL BACK.
+```
+
+```sh
+# ── ROLLBACK: back to the 1.x sidecar (:3578) ────────────────────────────────
+set -euo pipefail
+ENVF=/home/zoe/assistant/services/zoe-data/.env
+
+# Drop the two cutover lines and the comment that introduced them.
+sed -i '/^# Flue 2.x cutover /d;/^ZOE_FLUE_WIRE=/d;/^ZOE_FLUE_BRAIN_URL=/d' "$ENVF"
+
+systemctl --user restart zoe-data
+for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8000/health >/dev/null && break; sleep 2; done
+curl -fsS http://127.0.0.1:8000/health
+
+systemctl --user stop flue-zoe-brain-2x   # optional; leaving it running is harmless
+```
+
+Rollback works because the 1.x sidecar was never stopped and its v5 store was
+never touched. That is the reason step 2 says *do not stop it*.
+
+### Guards
+
+- **Do not run the gate on a busy box.** The probe self-skips under low memory,
+  and a skip is not a pass. Give it a quiet window with real headroom.
+- **`systemctl is-active` lies** — poll `/health`, which is why the block does.
+- **Do not run two Kokoro loads at once**; always take the flock, as above.
+
+### `deploy.yml` cannot auto-restart this unit — verified, not assumed
+
+`.github/workflows/deploy.yml` gates its sidecar rebuild on
+`git diff --quiet "$OLD_SHA" HEAD -- labs/flue-zoe-brain/`, a **path prefix that
+matches the directory `labs/flue-zoe-brain/` only** — `labs/flue-zoe-brain-2x/`
+is a sibling, not a child, so it never matches. The job also short-circuits on
+`systemctl --user list-unit-files flue-zoe-brain.service`, naming the 1.x unit
+explicitly. Nothing in the workflow references `flue-zoe-brain-2x`. The sibling
+directory was chosen for exactly this property; re-check it if the workflow's
+path filter is ever loosened to a glob.
 
 ## Operator measurement (pending)
 

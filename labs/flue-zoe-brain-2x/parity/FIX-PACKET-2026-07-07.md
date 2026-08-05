@@ -61,7 +61,7 @@ measurements mid-merge-train.
 "What's your name again?" → *"My name is Gemma 4. I'm a large language model
 developed by Google DeepMind."* One instance in 30, but it is the
 worst-in-class failure for a companion. The soul (verbatim SOUL.md) plus the
-doctrines in `labs/flue-zoe-brain/src/agents/zoe.ts` (ACTIVATOR_DOCTRINE,
+doctrines in `labs/flue-zoe-brain-2x/src/agents/zoe.ts` (ACTIVATOR_DOCTRINE,
 VOICE_DELIVERY_DOCTRINE, IN_SESSION_CONTEXT_DOCTRINE) never state the
 identity rule imperatively.
 

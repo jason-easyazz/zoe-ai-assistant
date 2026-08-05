@@ -61,7 +61,7 @@ sentinels + deltas against the real Gemma brain.
    ```bash
    curl -N -sS -X POST \
      -H 'Accept: application/x-ndjson' -H 'Content-Type: application/json' \
-     -d '{"message":"whats the weather looking like right now?"}' \
+     -d '{"kind":"user","body":"whats the weather looking like right now?"}' \
      'http://127.0.0.1:3579/agents/zoe/sentinel-check-1'
    ```
 
@@ -72,12 +72,15 @@ sentinels + deltas against the real Gemma brain.
    - then plain-string text deltas arriving incrementally (not one blob);
    - a final `{"done": true}` line.
 
-4. Confirm the whole-result mode still answers identically (regression guard):
+4. Confirm the non-streaming mode still admits the turn (regression guard).
+   **`?wait=result` is GONE on 2.x** — it returns HTTP 400 *"Agent prompts are
+   fire-and-forget"* (measured 2026-08-06). Admit, then read the stream back:
 
    ```bash
    curl -sS -X POST -H 'Content-Type: application/json' \
-     -d '{"message":"whats the weather looking like right now?"}' \
-     'http://127.0.0.1:3579/agents/zoe/sentinel-check-2?wait=result'
+     -d '{"kind":"user","body":"whats the weather looking like right now?"}' \
+     'http://127.0.0.1:3579/agents/zoe/sentinel-check-2'      # -> 202 + streamUrl
+   curl -sS 'http://127.0.0.1:3579/agents/zoe/sentinel-check-2'   # read it back
    ```
 
 5. Kill the sidecar by PORT ONLY when done — **NEVER `pkill -f`**, and
