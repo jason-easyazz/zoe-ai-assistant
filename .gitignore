@@ -178,6 +178,16 @@ credentials/
 # router-90-campaign lab: committed measurement artifacts (labs/router-90-campaign/README.md)
 !labs/router-90-campaign/results/*.json
 !labs/router-90-campaign/run_definitive_training.sh
+# web-search-spike lab: recorded API responses used as OFFLINE test fixtures
+# (labs/web-search-spike/README.md). Public data only — Wikipedia + HN Algolia
+# responses, no credentials.
+!labs/web-search-spike/tests/fixtures/*.json
+# ...and the FIXED eval corpus, which is source, not an artifact: changing it
+# invalidates comparison across runs, so it must be tracked and reviewed.
+# `eval/results/*.json` are deliberately NOT negated — those are run artifacts
+# (~41 KB for a 4-query smoke run) and would accumulate; the committed record
+# is the markdown sheet `eval/results/EXAMPLE-smoke-run.md`.
+!labs/web-search-spike/eval/corpus.json
 
 # API Keys and Secrets
 *.env

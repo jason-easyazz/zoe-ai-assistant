@@ -215,6 +215,83 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+- `web-search-spike/` — design + spike for live web lookups ("tickets to Bali
+  atm") and claim-backing ("are you sure?"), mining **oh-my-pi** (MIT)
+  `packages/coding-agent/src/web/`. **Operator decisions 2026-08-03: FREE-ONLY**
+  (no Tavily PAYGO, no Brave, no paid tiers) and **choose by MEASUREMENT, not
+  paper reasoning** — so the headline deliverable is `eval/`, an
+  operator-triggered comparison harness, not a recommendation.
+  **Dependency verdict: oh-my-pi's layer is NOT liftable** — it imports
+  `@oh-my-pi/pi-utils` 78× and that package hard-depends on
+  `@oh-my-pi/pi-natives` (Rust); every key-free engine value-imports the
+  puppeteer browser registry; `Bun.sleep`/`Bun.Encoding` pin it to Bun. So the
+  spike ports the ALGORITHMS to Python, in-process in zoe-data, **NOT** a Bun
+  sidecar (box measured 216–293 MB free of 15.6 GB with 3.7–5.3 GB swapped).
+  **Engine tier settled by measurement (Option C): `ddgs` won and the custom
+  DuckDuckGo parser was DELETED** — `ddgs>=6.0` is already in
+  `requirements.txt` (installed 9.14.4) and is a **metasearch aggregator over 18
+  engines** with its own dedup + ranker, not a DDG scraper; measured while DDG
+  was actively blocking us, `backend="duckduckgo"` raised but `backend="auto"`
+  returned 5 real results in 1.77 s. **There is exactly one DDG parser in the
+  chain and it is the shipped one.** What survives is a ~40-line wrapper over
+  two verified `ddgs` gaps: (a) `ddgs/ddgs.py:454` raises the SAME exception for
+  "every engine blocked" and "no hits", so `search()` disambiguates with a
+  control query and raises `EnginesBlocked` — otherwise Zoe reports "there's
+  nothing" when the lookup never happened; (b) results carry no engine
+  attribution, so `search_by_backend()` supplies harness provenance.
+  Tier order: **0** structured scrapers (Wikipedia/HN JSON APIs, never blocked,
+  lead claim checks) → **1** Tavily FREE (≈33/day, client-side budget via
+  `ZOE_TAVILY_DAILY_BUDGET`) → **2** `ddgs` opportunistic → keyless extract as
+  **enrichment only**: Jina Reader (16.97 s median, 133 KB/page, 403 on some
+  domains) or local CloakBrowser.
+  **CORRECTION 2026-08-03 — Tavily is CONFIGURED and now MEASURED.** An earlier
+  note here said "unconfigured"; the key is in `services/zoe-data/.env` and the
+  harness had simply not sourced it. `tavily-free` 26/26 ok / mean 0.910 /
+  median 2.22 s; `tavily+scrapers` mean 0.810 over a **7-query sub-sample**
+  (n≠26, not like-for-like). Budget spent **33/33 exactly**. The recorded
+  fixture `tests/fixtures/tavily_response.json` is now a REAL response — the
+  synthetic one had 3 results where production returns 6 and omitted
+  `answer`/`raw_content`/`images` entirely. Source the key, never commit it.
+  **CloakBrowser extract tier added 2026-08-03**, enabled by PR #1626 (broker
+  text extraction — the broker previously returned a PNG only).
+  `websearch/cloak.py` imports that function **by path**, never a vendored copy,
+  and reports UNAVAILABLE against a checkout without the PR — a lab→prod READ,
+  not lab code wired into zoe-data. Measured: 24/26 ok, 2 blocked, mean 0.771;
+  **4.57 s and ~553 MB peak RSS over 12 Chromium processes** for one page. Run
+  browsers capped (`systemd-run --user --scope -p MemoryMax=1024M`).
+  **Stealth is now MEASURED (2026-08-03) and it is real** — the earlier
+  "unmeasured" note is superseded. `eval/botwall-corpus.json` (12 URLs chosen
+  *because* they resist a plain client, all discovered by live `ddgs` search
+  rather than hand-guessed) + `eval/run_botwall.py`: plain `httpx` got the
+  target on **4/12**, CloakBrowser rendered **12/12**, and it was the only tier
+  to read BWS/Dan Murphy's/Bottlemart (HTTP 403, Akamai) and Liquorland/First
+  Choice (Cloudflare challenge served at HTTP **200**). A settle A/B on the same
+  corpus — `SettlePolicy` the only variable — moved **6/12** from `thin`/`error`
+  to `ok`, so PR #1626's post-load settle is load-bearing for this tier, not a
+  refinement. Reports: `eval/results/botwall-20260803T141253Z.md` and
+  `eval/results/emu-export-geraldton-2026-08-03.md` (a live commercial query
+  end to end, with per-source tier attribution).
+  **`websearch/chain.py` is the fallback policy**: httpx -> jina -> CloakBrowser,
+  falling through on BLOCKED (status or challenge body) or THIN (below a
+  documented, overridable content floor), with **every hop recorded** in
+  `FetchResult.provenance`. It is strictly lazy and strictly sequential — the
+  browser is never called, constructed or *imported* when a cheaper tier
+  answered, and `fetch_urls` is sequential by design: two concurrent Chromiums
+  (~1.1 GB) do not fit beside the mlocked voice brain. `run_botwall.py` re-reads
+  `MemFree` before **every** launch and aborts under `--min-free-mb`.
+  Also carries a **token-budgeted result packet** for the 8k Gemma brain
+  (oh-my-pi has no equivalent) and claim-backing query shaping (neutral +
+  contradiction queries; evidence, never a verdict). **Zero new dependencies** —
+  `httpx` + `ddgs` already ship.
+  Hand-run only; nothing prod-wired, no systemd unit, no CI. `eval/results/*.json`
+  and `eval/results/botwall-text/` are gitignored/uncommitted run artifacts —
+  scraped third-party page text is neither reviewable in a PR nor ours to
+  vendor; `eval/botwall-corpus.json` (an INPUT) is force-added past the `*.json`
+  ignore, as `eval/corpus.json` already is. Regression net:
+  `python3 -m pytest tests -q` (**99** offline tests, no network and no
+  Chromium, the `ddgs` tier driven by an injected fake searcher and the browser
+  tier by canned tier responses, **no `ci_safe` marker** — `labs/` is outside
+  every CI lane). README/DESIGN are records, not contracts.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%

@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "date": "2026-08-03",
+  "purpose": "Score CloakBrowser at ITS ACTUAL JOB: pages that REFUSE a plain client.",
+  "why_this_corpus_exists": [
+    "The 26-query free-tier run (eval/results/20260803T134932Z.md) recorded its own",
+    "biggest gap in plain words: 'ddgs did not block once across either run, so",
+    "there was nothing to bypass. On this corpus CloakBrowser is scored purely as",
+    "an extractor; its stealth value is UNMEASURED, not disproven.'",
+    "",
+    "That corpus asked general-knowledge questions and landed on Wikipedia, which",
+    "no one bot-walls. This one is built the opposite way: every URL is chosen",
+    "BECAUSE it is expected to resist a plain fetch. If CloakBrowser cannot beat",
+    "these, the fallback tier does not earn its ~553 MB.",
+    "",
+    "URLS ARE DISCOVERED, NOT INVENTED. Every one came out of a live ddgs search",
+    "on 2026-08-03 (see run_botwall.py --discovery). A hand-guessed product URL",
+    "that 404s would be scored as a wall, which would be a fabricated finding."
+  ],
+  "expectation_is_a_hypothesis_not_a_label": [
+    "`expect` records what we PREDICT before running, so the table can show where",
+    "the prediction was wrong. A corpus that only ever confirms itself measures",
+    "nothing. Several of these are expected to be READABLE by plain httpx \u2014",
+    "they are the controls. A run where every single URL is walled cannot tell a",
+    "working bot-wall detector from one that returns True."
+  ],
+  "urls": [
+    {
+      "id": "bws-product",
+      "url": "https://bws.com.au/product/38879/emu-export-lager-cans-375ml",
+      "group": "au-bottleshop",
+      "chain": "Endeavour Group",
+      "note": "BWS product page for the Emu Export 375mL can. Endeavour runs Akamai + a store-scoped price, so the number is geo/store dependent even when the page reads.",
+      "expect": "blocked",
+      "target": "emu export"
+    },
+    {
+      "id": "danmurphys-product",
+      "url": "https://www.danmurphys.com.au/product/DM_38879/emu-export-30-block-cans-375ml",
+      "group": "au-bottleshop",
+      "chain": "Endeavour Group",
+      "note": "Same SKU, same corporate stack as BWS. Included as the PAIR CONTROL: two sites behind one bot-wall vendor should behave alike, and if they do not, the finding is about the page, not the wall.",
+      "expect": "blocked",
+      "target": "emu export"
+    },
+    {
+      "id": "liquorland-product",
+      "url": "https://www.liquorland.com.au/beer-and-cider/emu-export-block-can-375ml_6517858",
+      "group": "au-bottleshop",
+      "chain": "Coles Liquor",
+      "note": "Liquorland product page, 30-can block. Coles Group front end.",
+      "expect": "blocked",
+      "target": "emu export"
+    },
+    {
+      "id": "firstchoice-product",
+      "url": "https://www.firstchoiceliquor.com.au/beer-and-cider/emu-export-block-can-375ml_6517858",
+      "group": "au-bottleshop",
+      "chain": "Coles Liquor",
+      "note": "First Choice carries the same Coles SKU id (6517858) on the same URL shape. If this 404s, that is itself the finding \u2014 the two banners do not actually share a catalogue path.",
+      "expect": "blocked",
+      "target": "emu export"
+    },
+    {
+      "id": "coles-product",
+      "url": "https://www.coles.com.au/product/emu-export-block-can-375ml-30-pack-6517858",
+      "group": "au-retail",
+      "chain": "Coles",
+      "note": "Coles supermarket listing of the same block. Historically one of the hardest Australian walls (Imperva/Incapsula).",
+      "expect": "blocked",
+      "target": "emu export"
+    },
+    {
+      "id": "thirstycamel-product",
+      "url": "https://www.thirstycamel.com.au/product/emu-export-can-block/c4911a11ea",
+      "group": "au-bottleshop",
+      "chain": "Thirsty Camel",
+      "note": "Independent-banner group. Lighter stack than the majors \u2014 a genuine test of whether the corpus can distinguish 'walled' from 'merely dynamic'.",
+      "expect": "unknown",
+      "target": "emu export"
+    },
+    {
+      "id": "bottlemart-home",
+      "url": "https://bottlemart.com.au/",
+      "group": "au-bottleshop",
+      "chain": "ALM / Bottlemart",
+      "note": "Bottlemart has no per-product URL in search results \u2014 its specials live in a store-scoped catalogue behind a locator. The landing page is the honest entry point, and 'you cannot get a price without picking a store' is a real result.",
+      "expect": "readable-but-priceless",
+      "target": null
+    },
+    {
+      "id": "consliquor-geraldton",
+      "url": "https://consliquor.com/buy/emu-export-block-30/",
+      "group": "geraldton-competitor",
+      "chain": "Con's Liquor (independent)",
+      "note": "A DIRECT Geraldton competitor with a real per-product page. Small independent site \u2014 expected READABLE, and included as the positive control: if the chain reports this as walled, the wall detector is broken.",
+      "expect": "readable",
+      "target": "emu export"
+    },
+    {
+      "id": "cellarbrations-geraldton",
+      "url": "https://cellarbrations.rsgwa.com.au/",
+      "group": "geraldton-competitor",
+      "chain": "Cellarbrations (Rigters, Geraldton)",
+      "note": "Another direct Geraldton competitor. Store-scoped SPA storefront. Its front page carries a live beer-specials block that DOES list the Emu Export 30-block, so it is a price test after all.",
+      "expect": "unknown",
+      "target": "emu export"
+    },
+    {
+      "id": "reddit-spa",
+      "url": "https://www.reddit.com/r/perth/",
+      "group": "spa",
+      "chain": "Reddit",
+      "note": "KNOWN REGRESSION. The 2026-08-03 run recorded 'Page.content failed because the SPA was still navigating (fixable with a settle wait)'. This URL exists to prove or disprove that fix.",
+      "expect": "blocked",
+      "target": null
+    },
+    {
+      "id": "spruceeats-spa",
+      "url": "https://www.thespruceeats.com/",
+      "group": "spa",
+      "chain": "Dotdash Meredith",
+      "note": "KNOWN REGRESSION. The same run recorded 'thespruceeats.com returned no text at all'. Second settle-wait test case.",
+      "expect": "blocked",
+      "target": null
+    },
+    {
+      "id": "news-spa",
+      "url": "https://www.watoday.com.au/",
+      "group": "spa",
+      "chain": "Nine",
+      "note": "WA news front page \u2014 client-rendered, metered paywall, heavy consent gating. The news-SPA slot.",
+      "expect": "unknown",
+      "target": null
+    }
+  ],
+  "target_note": [
+    "`target` is the string that must appear \u2014 WITH a price within 600 characters",
+    "of it \u2014 for a read to count as having got THE page rather than A page.",
+    "",
+    "This column was added mid-run because the generic meaningful-content",
+    "heuristic was measured OVERSTATING: Jina's read of the BWS product page",
+    "scored 20,000 chars and 278 price tokens while containing neither the",
+    "product nor its price. The entire extract was navigation chrome and filter",
+    "facets ($10/$20/$50... are price-range filters). Length is not evidence.",
+    "",
+    "`null` means the entry is a rendering test rather than a price test \u2014 the",
+    "question there is whether a browser can see the page at all."
+  ]
+}

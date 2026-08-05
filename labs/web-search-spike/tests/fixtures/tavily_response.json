@@ -1,0 +1,52 @@
+{
+  "_fixture_note": "REAL, RECORDED 2026-08-03 from api.tavily.com/search (free tier, search_depth=basic) for query 'Canberra is the capital of Australia', captured via ZOE_TAVILY_CAPTURE_DIR during the budgeted eval run. Replaces the earlier SYNTHETIC fixture, which was written by hand when no key was configured and which got the shape WRONG in ways that mattered: it had 3 results (real: 6) and omitted 'answer', 'raw_content', 'images' and 'follow_up_questions' entirely. Response body only \u2014 the request (which carries api_key) is never captured, and a test asserts this file contains no key-shaped string.",
+  "query": "Canberra is the capital of Australia",
+  "follow_up_questions": null,
+  "answer": null,
+  "images": [],
+  "results": [
+    {
+      "url": "https://en.wikipedia.org/wiki/Canberra",
+      "title": "Canberra",
+      "content": "Canberra (/\u02c8k\u00e6nbr\u0259/ \u24d8 KAN-br\u0259; Ngunawal: Kanbarra) is the capital city of Australia and the largest population centre in the Australian Capital Territory. With an estimated population of 484,630 as of 2025, Canberra is Australia's largest inland city and the eighth-largest Australian city by population. The city occupies most of the northern quadrant of the Australian Capital Territory, and its urban sprawl borders the state of New South Wales to the northwest, northeast and southeast. The [...] Appearance\n\nCoordinates: 35\u00b017\u203235\u2033S 149\u00b007\u203237\u2033E\ufeff / \ufeff35.29306\u00b0S 149.12694\u00b0E\ufeff / -35.29306; 149.12694\n\nFeatured article\n\nPage semi-protected\n\nFrom Wikipedia, the free encyclopedia\n\nCapital city of Australia\n\nThis article is about the capital of Australia. For other uses, see Canberra (disambiguation) \"Canberra (disambiguation)\").\n\nCity in Australian Capital Territory, Australia\n\n| Canberra  Kanbarra (Ngunawal) | [...] Australian Bureau of Statistics (25 January 1963). \"The Australian Capital Territory, Canberra the National Capital: Fifty Years of Development\". Year Book Australia. Australian Bureau of Statistics. Archived from the original on 4 June 2011.\n Lake Burley Griffin, Canberra: Policy Plan. Canberra: National Capital Development Commission. 1988. ISBN \"ISBN (identifier)\") 0-642-13957-1.",
+      "score": 0.9393874,
+      "raw_content": null
+    },
+    {
+      "url": "https://www.ebsco.com/research-starters/geography-and-cartography/canberra-australia",
+      "title": "Canberra, Australia | Geography and Cartography | Research Starters | EBSCO Research",
+      "content": "Canberra, the capital of Australia and the Australian Capital Territory (ACT), is a uniquely planned city established to serve as the nation's administrative center. Developed after the ACT's formation in 1908, Canberra spans approximately 805.6 square kilometers (311 square miles) and is located between Sydney and Melbourne, surrounded by natural landscapes, including bushlands and the Brindabella mountain range. The city features a continental climate with distinct seasons, and its population [...] ## Full Article\n\nCanberra is the capital of Australia and the Australian Capital Territory (ACT). Medium-sized and modern, with a strong government-industry-based economy, Canberra was a completely planned city. It was created after the formation of the ACT in 1908 to house the nation's government, and the city's entire layout was designed by architects.\n\n### Landscape [...] ## Full Article\n\nCanberra is the capital of Australia and the Australian Capital Territory (ACT). Medium-sized and modern, with a strong government-industry-based economy, Canberra was a completely planned city. It was created after the formation of the ACT in 1908 to house the nation's government, and the city's entire layout was designed by architects.\n\n### Landscape",
+      "score": 0.9073207,
+      "raw_content": null
+    },
+    {
+      "url": "https://www.britannica.com/place/Canberra",
+      "title": "Canberra | History, Map, Population, Climate, & Facts",
+      "content": "Canberra, federal capital of the Commonwealth of Australia. It occupies part of the Australian Capital Territory (ACT), in southeastern Australia.",
+      "score": 0.8190992,
+      "raw_content": null
+    },
+    {
+      "url": "https://ovolohotels.com/ovolo/blog/sydney-isnt-the-capital-of-australia",
+      "title": "What's the Capital of Australia? Not Sydney or Melbourne! | Ovolo Blog",
+      "content": "The endearing word on the Canberra ACT streets is that the movers and shakers of the day wanted the Australian capital to be so far inland that it was safely out of reach from harm. The real reason, however, for choosing Canberra, ACT to sit as the Australian capital, is surprisingly, however not shockingly, much more philosophical and climatical. [...] Australia is one of those countries with a capital city that isn\u2019t very well known or densely populated. Other examples of countries like this include Brazil with its capital Brasilia, Turkey with Ankara, and Switzerland with its capital city Bern. Foreigners often debate between Sydney and Melbourne when asked what the capital of Australia is, but the correct answer is actually Canberra, ACT. [...] that led to the creation of the humble Australian capital of Canberra, ACT.",
+      "score": 0.79484755,
+      "raw_content": null
+    },
+    {
+      "url": "https://www.australia.com/en-us/places/canberra-and-surrounds/guide-to-canberra.html",
+      "title": "Travel Guide to Canberra, ACT - Tourism Australia",
+      "content": "The small-yet-mighty capital of Canberra is a city that punches far above its weight. Well-known museums and historical sites are just the beginning. Dig a little deeper to find bustling brewpubs, hidden gems, quiet nature and family-friendly attractions. Head just outside the city to relax and unwind in a scenic cool-climate wine region that produces some stellar drops. [...] Share\n\n  Share on Facebook \n\n  --- Share on Messenger \n\n  --- Share on WhatsApp \n\n  --- Copy Link \n\n1. Welcome\n2. Getting to Canberra\n3. When to visit\n4. Accessibility\n\nFind a mix of history, art and the outdoors in Australia's capital city. [...] ## Top things to do in Canberra\n\n## Canberra restaurants\n\nWalking through the middle of the sunflowers is a person dressed in shorts and a t-shirt, soaking in her vibrant floral surrounds, Majura Valley Farm, Canberra, Australian Capital Territory \u00a9 Tourism Australia\n\n#### Canberra Districts' farm and food experiences\n\nBeltana Farm, Canberra, Australian Capital Territory  \u00a9 VisitCanberra\n\n#### Must-try restaurants",
+      "score": 0.74961954,
+      "raw_content": null
+    },
+    {
+      "url": "https://canberra.com.au",
+      "title": "Welcome to Canberra",
+      "content": "work\n\nWhen you work in Canberra, you work among some of the country\u2019s most prominent leaders, as well as innovative thinkers, entrepreneurs, Nobel Prize winners, artists and researchers.\n\nRead more\n\n## Study in Canberra\n\n study\n\nCanberra is Australia\u2019s education capital, and home to our nation\u2019s best globally ranked university. Our city is placed in the top 25 student cities in the world.\n\nRead more\n\n## Do Business in Canberra\n\n business [...] business\n\nStarting and growing a business here in Canberra makes sound business sense. You\u2019re close to everything, with strong support and connections to help your business thrive.\n\nRead more\n\n## Find more than you came for\n\n visit\n\nIconic national attractions; riding Mount Stromlo\u2019s bike trails; sipping our cool-climate Shiraz. Canberra offers the peak experience. It\u2019s the best of Australia, brought together for you.\n\nRead more\n\n## CBR STORIES\n\n## Ben Alexander [...] Find services and information for local residents and businesses.\n\nGet started\n\nWhere is CanberraBeing CanberranCanberra ToolkitPrivacy PolicyDisclaimerGet in touch\n\n\u00a9 2026All rights reserved. This website is managed by Chief Minister, Treasury and Economic Development Directorate.",
+      "score": 0.7163977,
+      "raw_content": null
+    }
+  ],
+  "response_time": 0.0
+}
