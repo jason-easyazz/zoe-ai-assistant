@@ -52,9 +52,12 @@ rocks:
     stage1_artifact: "services/zoe-data/models/router_head_mlp.joblib"
     stage2_artifact_dir: "~/models/functiongemma-router"
     # Stage 2 ONLY. The ratchet never touches stage1_artifact: router_selftrain.py
-    # has zero references to a head/MLP/.joblib in its 1095 lines, and its only
-    # production mutation is swapping SERVED_GGUF under stage2_artifact_dir
-    # (:98, :880-882) — outside the repo, so no ratchet verdict ever reaches git.
+    # has no reference to a router/SetFit head, an MLP, or a .joblib in its 1095
+    # lines, and the only model ARTIFACT it promotes in production is the stage-2
+    # SERVED_GGUF under stage2_artifact_dir (:98, :880-882). Everything else it
+    # writes (rollback restores, deployment markers, provenance, last-known-good
+    # archives) lives there too — outside the repo, so no ratchet verdict ever
+    # reaches git.
     # Stage-1 heads are HAND-COMMITTED; what covers them is the voice replay gate
     # (services/zoe-data/models/* is in VOICE_PATH_PATTERNS), not this ratchet.
     checkpoint_pinned: "no — stage-2 checkpoint owned by the ZOE_ROUTER_SELFTRAIN ratchet; stage-1 head hand-committed, replay-gated"
