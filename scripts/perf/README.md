@@ -119,11 +119,10 @@ af_sky, first speakable clause):
 
 The sidecar phrase-caches af_sky/speed-1.0/<=240-char text, so a recurring opener
 is instant but a fresh clause pays full synth. **The numbers above are the old
-CPU/onnx cost and no longer reflect the live sidecar:** the shipped
-`kokoro-tts.service` sets `ZOE_KOKORO_BACKEND=pytorch` (CUDA, ~2.3 GB), which runs
-at **RTF ~0.08** — a fresh full-sentence synth is ~0.3 s with zero internal gaps.
-The *code* default in `scripts/setup/kokoro_sidecar.py` is still `onnx`/CPU, so the
-CUDA win comes from the systemd unit forcing `pytorch`, not the code default. See
+CPU cost and no longer reflect the live sidecar:** the Kokoro PyTorch sidecar runs
+on CUDA (~2.3 GB) at **RTF ~0.08** — a fresh full-sentence synth is ~0.3 s with zero
+internal gaps. PyTorch/CUDA is the sidecar's sole backend; it falls back to CPU only
+if CUDA cannot load (`/health` reports `degraded=true`). See
 `docs/knowledge/voice-pipeline.md` (current path) and
 `docs/architecture/tts-first-chunk-latency.md` for the analysis and safe
 optimization seams (warm the openers, not just whole phrases).

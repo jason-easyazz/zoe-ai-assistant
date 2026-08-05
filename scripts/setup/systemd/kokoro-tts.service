@@ -17,11 +17,10 @@ WorkingDirectory=%h/assistant/scripts/setup
 ExecStart=/usr/bin/python3 %h/assistant/scripts/setup/kokoro_sidecar.py
 Environment=KOKORO_VOICE=af_sky
 Environment=KOKORO_SIDECAR_PORT=10201
-# CUDA backend: the ONNX/CPU path synthesizes SLOWER than real time (RTF ~1.0-1.8x),
-# so the sentence-streamed voice pipe starves and the reply plays back in pieces.
-# KPipeline on CUDA runs at RTF ~0.1. Costs ~2.3GB unified memory; the sidecar falls
-# back to CPU on its own if CUDA cannot load.
-Environment=ZOE_KOKORO_BACKEND=pytorch
+# The sidecar runs KPipeline on CUDA (RTF ~0.1, ~2.3GB unified memory) and falls back
+# to CPU on its own if CUDA cannot load. CPU synthesis is slower than real time (RTF
+# ~1.0-1.8x), so the sentence-streamed voice pipe starves and the reply plays back in
+# pieces — /health reports degraded=true when that fallback happens.
 Environment=LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda-12.6/lib64:/usr/lib/aarch64-linux-gnu
 
 # ── Keep the TTS engine OUT OF SWAP ──────────────────────────────────────────
@@ -29,8 +28,8 @@ Environment=LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda-12.6/lib64:/usr/lib/aa
 # so its cgroup `memory.low` was 0 — zero reclaim protection — and 1,489 MB of
 # the engine had been paged to disk. That is a mechanism for "voice in pieces":
 # the first synth after idle faults ~1.5 GB back from disk while the
-# sentence-streamed pipe starves, which presents exactly like the CPU-backend
-# starvation the ZOE_KOKORO_BACKEND note above already guards against.
+# sentence-streamed pipe starves, which presents exactly like the CPU-fallback
+# starvation the CUDA note above already guards against.
 #
 # MemorySwapMax=0 is the load-bearing line: the voice path must never be paged
 # out. It is safe here because this sidecar is BOUNDED (it does not grow with
