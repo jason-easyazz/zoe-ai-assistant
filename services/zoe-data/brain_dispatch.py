@@ -43,6 +43,14 @@ and only on top of the strongest possible evidence that a retry is safe:
   TTL lapses is the probe that re-checks flue (and re-opens the breaker if it is
   still down, or closes it on success). In-process and per-worker by design —
   a restart clears it, which is the correct fail-toward-probing default.
+  **Concurrency-safe:** turns overlap, so the breaker is a (deadline,
+  generation) pair mutated only by compare-and-set against the generation the
+  turn observed, and the half-open probe is claimed by exactly one turn. A
+  stale outcome can neither erase a newer open nor re-arm a breaker a newer
+  probe just closed. This only ever affects WHETHER flue is attempted — the
+  replay, exactly-one-retry and flag-off invariants above are independent of
+  it, so the cost of getting it wrong was an extra failed connect, not a
+  double-spoken turn.
 
 Every turn emits ONE greppable ``BRAIN_LANE`` line naming the lane attempted and
 the lane that served it, so an operator can assert which brain answered
@@ -57,6 +65,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from typing import Any, AsyncIterator
 
@@ -68,10 +77,31 @@ _monotonic = time.monotonic
 
 _DEFAULT_COOLDOWN_S = 45.0
 
-# In-process breaker state: the monotonic deadline until which the flue lane is
-# skipped. 0.0 == closed. One float, written only from the failover path; the
-# GIL makes the read/write atomic, so no lock is needed for a hint like this.
+# In-process breaker state.
+#
+# ``_flue_circuit_open_until`` is the monotonic deadline until which the flue
+# lane is skipped (0.0 == closed). ``_flue_circuit_generation`` is a counter
+# bumped on every state transition, and it is what makes the breaker correct
+# under CONCURRENT turns: a turn may only act on the state it OBSERVED.
+#
+# Without it, two in-flight turns clobber each other. Turns A and B both enter
+# with the breaker closed; B's connect fails and arms a fresh deadline; A's
+# reply then lands and an unconditional close ERASES B's newer open, so the
+# next turn pays another failed connect. That is real even single-threaded:
+# both mutations run after their own ``await``, in either order. So every
+# mutation is a compare-and-set against the observed generation — a stale
+# outcome (from a turn that started before the current state) is dropped,
+# because a newer turn has fresher evidence about whether flue is reachable.
+#
+# The lock is ``threading.Lock``, not ``asyncio.Lock``: the critical sections
+# are a few statements with no ``await`` inside, so this never blocks the event
+# loop, it has no loop affinity (an ``asyncio.Lock`` binds to the loop that
+# created it, which breaks across the per-test loops and across any worker
+# thread), and it stays correct if a turn is ever driven from a thread pool.
+# Uncontended acquisition is nanoseconds — nothing measurable next to a turn.
+_breaker_lock = threading.Lock()
 _flue_circuit_open_until: float = 0.0
+_flue_circuit_generation: int = 0
 
 
 def use_core_brain() -> bool:
@@ -136,27 +166,82 @@ def _cooldown_s() -> float:
 
 
 def _circuit_open() -> bool:
-    """True while the flue lane is being skipped. Reading it does not reset it —
-    expiry is implicit, so the next turn after the TTL is the half-open probe."""
-    return _flue_circuit_open_until > _monotonic()
+    """True while the flue lane is being skipped — a read-only probe of the
+    state (tests + diagnostics). Turns use ``_observe_circuit`` instead, which
+    also claims the half-open probe."""
+    with _breaker_lock:
+        return _flue_circuit_open_until > _monotonic()
 
 
-def _open_circuit() -> None:
-    global _flue_circuit_open_until
-    ttl = _cooldown_s()
-    _flue_circuit_open_until = (_monotonic() + ttl) if ttl > 0 else 0.0
+def _observe_circuit() -> tuple[bool, int]:
+    """Take this turn's view of the breaker: ``(skip_flue, generation)``.
+
+    The generation is the token the turn hands back to ``_open_circuit`` /
+    ``_close_circuit``; a mutation is applied only while it is still current.
+
+    This is also where the half-open probe is CLAIMED. When the deadline has
+    lapsed, the first turn to see it re-arms the deadline (bumping the
+    generation) and is the only turn that dials flue; other turns crossing the
+    same lapse see an armed breaker and take the fallback lane rather than
+    piling a second failed connect onto a sidecar that is probably still down.
+    The probe's own outcome supersedes: success closes the breaker for
+    everyone, another transport failure re-arms it.
+    """
+    global _flue_circuit_open_until, _flue_circuit_generation
+    with _breaker_lock:
+        now = _monotonic()
+        deadline = _flue_circuit_open_until
+        if deadline > now:
+            return True, _flue_circuit_generation
+        if deadline:
+            # Lapsed: claim the single half-open probe.
+            ttl = _cooldown_s()
+            _flue_circuit_generation += 1
+            _flue_circuit_open_until = (now + ttl) if ttl > 0 else 0.0
+        return False, _flue_circuit_generation
 
 
-def _close_circuit() -> None:
-    global _flue_circuit_open_until
-    if _flue_circuit_open_until:
-        _flue_circuit_open_until = 0.0
+def _open_circuit(observed_generation: int) -> None:
+    """Arm the breaker for a fresh TTL — only if nothing changed underneath.
+
+    A stale failure (a turn that started before the current state was written)
+    is dropped: whatever produced the current generation looked at flue more
+    recently than this turn did.
+    """
+    global _flue_circuit_open_until, _flue_circuit_generation
+    with _breaker_lock:
+        if _flue_circuit_generation != observed_generation:
+            return
+        ttl = _cooldown_s()
+        _flue_circuit_generation += 1
+        _flue_circuit_open_until = (_monotonic() + ttl) if ttl > 0 else 0.0
+
+
+def _close_circuit(observed_generation: int) -> None:
+    """Clear ONLY the state this turn observed (compare-and-set).
+
+    The load-bearing half of the fix: an unconditional close lets a turn that
+    started earlier erase an open armed by a turn that failed later.
+    """
+    global _flue_circuit_open_until, _flue_circuit_generation
+    with _breaker_lock:
+        if _flue_circuit_generation != observed_generation:
+            return
+        if _flue_circuit_open_until:
+            _flue_circuit_generation += 1
+            _flue_circuit_open_until = 0.0
 
 
 def reset_failover_state() -> None:
-    """Clear the breaker (tests + an operator-facing reset seam)."""
-    global _flue_circuit_open_until
-    _flue_circuit_open_until = 0.0
+    """Clear the breaker (tests + an operator-facing reset seam).
+
+    Bumps the generation, so any turn still in flight cannot re-apply its
+    outcome on top of the reset.
+    """
+    global _flue_circuit_open_until, _flue_circuit_generation
+    with _breaker_lock:
+        _flue_circuit_generation += 1
+        _flue_circuit_open_until = 0.0
 
 
 def _log_lane(
@@ -189,6 +274,30 @@ def _fallback_lane() -> str:
     return "core" if use_core_brain() else "legacy"
 
 
+# Kwargs this module OWNS and never accepts from a caller.
+_INTERNAL_KWARGS = ("raise_transport_errors",)
+
+
+def _sanitize_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop dispatch-internal kwargs a caller may have forwarded blindly.
+
+    ``raise_transport_errors`` belongs to the failover wrapper: it passes the
+    value explicitly, so a caller-supplied copy riding in ``**kwargs`` is a
+    ``TypeError: got multiple values for keyword argument`` — a turn that dies
+    before reaching any brain. Worse on the flag-OFF path, where it would be
+    forwarded verbatim and let ``FlueTransportError`` escape into a route that
+    has nothing to catch it. No caller passes it today; this makes that a
+    contract instead of a coincidence.
+    """
+    if not any(key in kwargs for key in _INTERNAL_KWARGS):
+        return kwargs
+    logger.warning(
+        "brain dispatch: ignoring caller-supplied internal kwarg(s) %s",
+        [k for k in _INTERNAL_KWARGS if k in kwargs],
+    )
+    return {k: v for k, v in kwargs.items() if k not in _INTERNAL_KWARGS}
+
+
 def _fallback_streaming(message: str, session_id: str, user_id: str, **kwargs: Any) -> AsyncIterator[str]:
     if use_core_brain():
         from zoe_core_client import run_zoe_core_streaming
@@ -216,8 +325,10 @@ async def _flue_streaming_with_failover(
     from zoe_flue_client import FlueTransportError, run_flue_brain_streaming
 
     other = _fallback_lane()
+    kwargs = _sanitize_kwargs(kwargs)
 
-    if _circuit_open():
+    skip_flue, generation = _observe_circuit()
+    if skip_flue:
         _log_lane(
             attempted=other,
             served=other,
@@ -249,7 +360,7 @@ async def _flue_streaming_with_failover(
                 reason=f"transport_after_first_token:{exc}"[:160],
             )
             return
-        _open_circuit()
+        _open_circuit(generation)
         _log_lane(
             attempted="flue",
             served=other,
@@ -261,7 +372,7 @@ async def _flue_streaming_with_failover(
             yield delta
         return
 
-    _close_circuit()
+    _close_circuit(generation)
     _log_lane(attempted="flue", served="flue", outcome="ok", session_id=session_id)
 
 
@@ -272,8 +383,10 @@ async def _flue_oneshot_with_failover(
     from zoe_flue_client import FlueTransportError, run_flue_brain
 
     other = _fallback_lane()
+    kwargs = _sanitize_kwargs(kwargs)
 
-    if _circuit_open():
+    skip_flue, generation = _observe_circuit()
+    if skip_flue:
         _log_lane(
             attempted=other,
             served=other,
@@ -288,7 +401,7 @@ async def _flue_oneshot_with_failover(
             message, session_id, user_id, raise_transport_errors=True, **kwargs
         )
     except FlueTransportError as exc:
-        _open_circuit()
+        _open_circuit(generation)
         _log_lane(
             attempted="flue",
             served=other,
@@ -298,7 +411,7 @@ async def _flue_oneshot_with_failover(
         )
         return await _fallback_oneshot(message, session_id, user_id, **kwargs)
 
-    _close_circuit()
+    _close_circuit(generation)
     _log_lane(attempted="flue", served="flue", outcome="ok", session_id=session_id)
     return text
 
@@ -308,6 +421,7 @@ def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: 
 
     Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
     """
+    kwargs = _sanitize_kwargs(kwargs)
     if use_flue_brain():
         if failover_enabled():
             return _flue_streaming_with_failover(message, session_id, user_id, **kwargs)
@@ -325,6 +439,7 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
 
     Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
     """
+    kwargs = _sanitize_kwargs(kwargs)
     if use_flue_brain():
         if failover_enabled():
             return await _flue_oneshot_with_failover(message, session_id, user_id, **kwargs)
