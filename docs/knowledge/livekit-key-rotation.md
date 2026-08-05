@@ -78,6 +78,20 @@ yaml-unmarshals that string. In `docker-compose.yml` the entry must be
 **quoted**: unquoted, `- LIVEKIT_KEYS=a: b` parses as a YAML *mapping*, not the
 env string you meant.
 
+**The compose entry uses `${LIVEKIT_API_KEY:-}`, deliberately NOT `:?`.** Compose
+interpolates the entire model before it selects services, so a required-value
+marker on this one optional service aborts *every* compose command on a box
+without the pair — measured: `docker compose config zoe-auth` with no LiveKit
+vars exits **15** with `required variable LIVEKIT_API_KEY is missing a value`.
+That would break `scripts/setup/install-jetson.sh` on a fresh box (it copies
+`.env.example`, then brings up the non-LiveKit spine) and `deploy.yml`'s
+`docker compose up -d zoe-auth`. An empty pair is still a loud failure, just
+scoped correctly: livekit-server refuses to serve with
+`Could not parse keys, it needs to be exactly, "key: secret", including the space`
+— the same class of refusal as no keys at all. Both `.env.example` files carry
+the (blank) names and point here, and
+`tests/unit/test_livekit_config_no_secrets.py` pins all of it.
+
 `key_file` was rejected as the mechanism: it needs a second on-disk file with
 `others` permission bits at 0 (`ErrKeyFileIncorrectPermission`), which is more
 moving parts than the `.env` this repo already treats as authoritative.

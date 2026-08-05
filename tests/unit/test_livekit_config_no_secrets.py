@@ -26,6 +26,21 @@ pytestmark = pytest.mark.ci_safe
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIVEKIT_CONFIG = REPO_ROOT / "services" / "livekit" / "config.yaml"
 COMPOSE = REPO_ROOT / "docker-compose.yml"
+ENV_EXAMPLES = (
+    REPO_ROOT / ".env.example",
+    REPO_ROOT / "services" / "zoe-data" / ".env.example",
+)
+
+# A credential COMMENTED OUT rather than deleted — the usual way to "disable"
+# a config block — is invisible to yaml.safe_load, so the parsed-value scan
+# below cannot see it. Match the shape a LiveKit `keys:` entry actually has: an
+# opaque id, a colon and whitespace, then a base64url secret running to end of
+# line. Deliberately excludes `/` and `.`, so documentation paths
+# (`docs/knowledge/livekit-key-rotation.md`) and URLs never match.
+COMMENTED_CREDENTIAL = re.compile(
+    r"^[ \t]*#.*?\b[A-Za-z0-9][A-Za-z0-9_-]{6,}:[ \t]+[A-Za-z0-9_-]{32,}[ \t]*$",
+    re.MULTILINE,
+)
 
 # A LiveKit secret is 43 base64url chars; a key id is shorter but still opaque.
 # Anything this long and this alphabet-y in a serving config is a credential.
@@ -105,4 +120,101 @@ def test_compose_supplies_livekit_keys_by_interpolation():
     assert re.search(r"\}: \$\{", value), (
         "LIVEKIT_KEYS must be exactly '<key>: <secret>' including the space; "
         "livekit-server rejects it otherwise."
+    )
+
+
+def test_commented_out_credentials_are_caught_too():
+    """A credential commented out is still a credential in a public repo.
+
+    `yaml.safe_load` drops comments, so the parsed-scalar scan above is blind to
+    `#   zoe-abc: <secret>` — and commenting a block out instead of deleting it
+    is the ordinary way people disable config. The file's own prose survives
+    this matcher because it requires a `<id>: <32+ base64url>` pair running to
+    end of line, with `/` and `.` excluded so doc paths cannot match.
+    """
+    raw = LIVEKIT_CONFIG.read_text()
+    hits = COMMENTED_CREDENTIAL.findall(raw)
+    assert not hits, (
+        f"credential-shaped text inside a comment in services/livekit/config.yaml: "
+        f"{[h.strip()[:12] + '...' for h in hits]} — delete it, do not comment it "
+        f"out; git history on a public repo keeps it either way."
+    )
+
+
+def test_commented_credential_matcher_actually_matches():
+    """NEGATIVE CONTROL for the scan above — and for its false-positive edges.
+
+    A comment scanner that matches nothing is indistinguishable from a clean
+    file. Feed it the exact line this repo shipped (with the secret replaced by
+    a same-shape stand-in) and require a hit, then feed it the prose that must
+    NOT trip it.
+    """
+    disabled = "keys:\n#  zoe-k5Sq6QANfemQ1ash: " + "A" * 43 + "\n"
+    assert COMMENTED_CREDENTIAL.search(disabled), (
+        "the commented-credential matcher no longer matches a commented-out "
+        "`keys:` entry — the scan above is guarding nothing"
+    )
+    for benign in (
+        "# Rotation runbook: docs/knowledge/livekit-key-rotation.md\n",
+        "# sourced from the untracked repo-root .env (LIVEKIT_API_KEY / LIVEKIT_API_SECRET).\n",
+        "# livekit-server v1.9.3: `--keys` / $LIVEKIT_KEYS is applied AFTER this file\n",
+        "# see https://docs.livekit.io/realtime/server/configuration/for/details\n",
+    ):
+        assert not COMMENTED_CREDENTIAL.search(benign), (
+            f"false positive on documentation prose: {benign.strip()!r}"
+        )
+
+
+def test_livekit_keys_is_not_a_required_value_expression():
+    """One optional service's credential must never abort compose for ALL services.
+
+    Compose interpolates the whole model before it selects services, so
+    `${LIVEKIT_API_KEY:?...}` in the livekit block aborts EVERY compose command
+    on a box without the pair. Measured on this repo's file: `docker compose
+    config zoe-auth` with no LiveKit vars exits 15 with "required variable
+    LIVEKIT_API_KEY is missing a value". That breaks `scripts/setup/
+    install-jetson.sh` on a fresh box (it copies .env.example, then brings up the
+    non-LiveKit spine) and deploy.yml's `docker compose up -d zoe-auth`.
+
+    Empty is still a loud failure, just correctly scoped: livekit-server refuses
+    to serve (`Could not parse keys, it needs to be exactly, "key: secret"`),
+    the same class of refusal as supplying no keys at all.
+    """
+    raw = COMPOSE.read_text()
+    parsed = yaml.safe_load(raw)
+    env = parsed["services"]["livekit"]["environment"]
+    entries = env if isinstance(env, list) else [f"{k}={v}" for k, v in env.items()]
+    value = [e for e in entries if str(e).startswith("LIVEKIT_KEYS=")][0].split("=", 1)[1]
+
+    assert ":?" not in value and not re.search(r"\$\{[A-Za-z_][A-Za-z0-9_]*\?", value), (
+        "LIVEKIT_KEYS uses a required-value interpolation (`${VAR:?...}` or "
+        "`${VAR?...}`). Compose evaluates it for every command regardless of the "
+        "services selected, so a box without the pair cannot start ANY service. "
+        "Use `${VAR:-}` and let livekit-server refuse on its own."
+    )
+
+
+@pytest.mark.parametrize("path", ENV_EXAMPLES)
+def test_env_examples_document_the_livekit_pair(path):
+    """A fresh install must be TOLD the pair exists, in both files that need it.
+
+    The compose interpolation no longer fails loudly when they are missing (see
+    above), so the example files are what stops a missing pair from being a
+    silent mystery. They must also stay blank — an example file with a working
+    default credential is how default credentials reach production.
+    """
+    text = path.read_text()
+    for name in ("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
+        match = re.search(rf"^{name}=(.*)$", text, re.MULTILINE)
+        assert match, (
+            f"{path.relative_to(REPO_ROOT)} does not document {name}; a fresh "
+            f"install has no way to know LiveKit needs it. See "
+            f"docs/knowledge/livekit-key-rotation.md."
+        )
+        assert match.group(1).strip() == "", (
+            f"{path.relative_to(REPO_ROOT)} ships a non-empty {name} — an example "
+            f"file must never carry a usable credential."
+        )
+    assert "livekit-key-rotation.md" in text, (
+        f"{path.relative_to(REPO_ROOT)} should point at the rotation runbook"
     )
