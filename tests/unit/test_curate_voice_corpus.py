@@ -633,6 +633,95 @@ def test_a_working_vad_still_scores_and_quarantines(tmp_path):
     assert rows[0]["scores"]["peak"] == pytest.approx(0.01)
 
 
+def test_a_partially_failed_vad_run_is_unscored_not_silent(tmp_path):
+    """PARTIAL failure is the dangerous shape — nothing about it looks wrong.
+
+    ``process_hops`` breaks out of its hop loop on an inference failure and
+    returns whatever it already computed. A non-empty but TRUNCATED list covers
+    only the START of the recording, so a clip with quiet leading silence and
+    speech after the failure point yields a low peak drawn entirely from the
+    silence — and real evidence gets quarantined on a measurement of a fraction
+    of the file (Codex P1, #1643). The hop count is verified against what the
+    audio owes.
+    """
+    class _HalfDeadVad:
+        def __init__(self):
+            self.calls = 0
+
+        def process_hops(self, frame):
+            self.calls += 1
+            # Succeeds on the first frame, then "fails" exactly as the real one
+            # does: it returns what it had, it does not raise.
+            return [0.01] if self.calls == 1 else []
+
+    corpus = tmp_path / "corpus"
+    _write_wav(corpus / "speech.wav", frames=16000)     # 1s → owes 31 hops
+    _age(corpus)
+
+    with pytest.raises(cvc.UnscorableAudio):
+        cvc.score_speech(corpus / "speech.wav", lambda: _HalfDeadVad())
+
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=lambda: _HalfDeadVad())
+    plan = cvc.plan_moves(rows, str(corpus), "20260805")
+
+    assert rows[0]["class"] == cvc.CLASS_KEEP, "a truncated measurement must not quarantine"
+    assert rows[0]["scores"] is None
+    assert plan == []
+
+
+def test_the_hop_count_expected_matches_the_real_streaming_shape():
+    """The guard is only safe if a COMPLETE run always clears it.
+
+    ``process_hops`` carries a remainder between calls, so a full run returns
+    exactly ``len(samples) // HOP_SAMPLES``. If this drifted, every healthy file
+    would raise and the tool would quarantine nothing — silently useless in the
+    other direction. Modelled against the real accumulation, not asserted.
+    """
+    for total_bytes in (1022, 1024, 2046, 3200, 3201, 100_000):
+        pending = hops = 0
+        for i in range(0, total_bytes, cvc.FRAME_BYTES):
+            chunk = min(cvc.FRAME_BYTES, total_bytes - i)
+            pending += (chunk // 2 * 2) // 2
+            while pending >= cvc.HOP_SAMPLES:
+                pending -= cvc.HOP_SAMPLES
+                hops += 1
+        assert hops == (total_bytes // 2) // cvc.HOP_SAMPLES, total_bytes
+
+
+def test_manifest_entries_carry_their_own_run_provenance(tmp_path):
+    """Merged entries must not be re-attributed to a later run's parameters.
+
+    ``entries`` accumulates across runs but the top-level threshold/model fields
+    are overwritten every time, so a second same-day pass at a different
+    ``--speech-threshold`` silently relabelled the first pass's verdicts —
+    making the manifest unusable for auditing or reversing a classification
+    (Codex P2, #1643).
+    """
+    corpus = _fixture_corpus(tmp_path)
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    cvc.apply_moves(cvc.plan_moves(rows, str(corpus), "20260805"),
+                    str(corpus), 0.20, "sha-FIRST", execute=True)
+
+    _write_wav(corpus / "110000_009.wav", frames=0)
+    _age(corpus)
+    rows2 = cvc.scan(str(corpus), 0.40, vad_factory=None)
+    cvc.apply_moves(cvc.plan_moves(rows2, str(corpus), "20260805"),
+                    str(corpus), 0.40, "sha-SECOND", execute=True)
+
+    manifest = json.loads(
+        (corpus / "quarantine-format-20260805" / "manifest.json").read_text()
+    )
+    by_file = {e["file"]: e for e in manifest["entries"]}
+
+    assert by_file["100003_004.wav"]["speech_threshold"] == 0.20
+    assert by_file["100003_004.wav"]["vad_model_sha256"] == "sha-FIRST"
+    assert by_file["110000_009.wav"]["speech_threshold"] == 0.40
+    assert by_file["110000_009.wav"]["vad_model_sha256"] == "sha-SECOND"
+    # The top-level fields still describe the latest run — documented, not a bug.
+    assert manifest["latest_speech_threshold"] == 0.40
+    assert manifest["latest_vad_model_sha256"] == "sha-SECOND"
+
+
 def test_an_unchanged_capture_still_moves(tmp_path):
     """NEGATIVE CONTROL for the freshness check: it must not block normal moves.
 

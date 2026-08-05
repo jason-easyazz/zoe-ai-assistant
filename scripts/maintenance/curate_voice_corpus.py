@@ -100,6 +100,9 @@ EXPECTED_SAMPWIDTH = 2  # bytes → 16-bit signed PCM
 
 # 20 ms @ 16 kHz mono s16 — the frame size the live voice path feeds the VAD.
 FRAME_BYTES = 640
+# Silero's hop, mirrored from voice_vad.HOP_SAMPLES. Used to compute how many
+# hops a recording OWES, so a partial inference failure is detectable.
+HOP_SAMPLES = 512
 
 # Conservative "clear non-speech" line; see the module docstring for why this is
 # NOT voice_vad.speech_threshold() (0.5).
@@ -269,20 +272,37 @@ def score_speech(path: str | os.PathLike, vad_factory: Callable[[], Any]) -> dic
     for i in range(0, len(raw), FRAME_BYTES):
         probs.extend(vad.process_hops(raw[i:i + FRAME_BYTES]))
 
-    # ZERO HOPS IS ABSENT EVIDENCE, NOT MEASURED SILENCE. `process_hops` is
-    # documented "never raises" and `break`s out of its loop on an inference
-    # failure, logging at DEBUG — so a model that loads but cannot infer returns
-    # an EMPTY list for every file. Reporting peak=0.0 there would put every
-    # readable WAV below any threshold and one `--execute` would move the entire
-    # replay corpus into non-speech quarantine, silently, on a broken model
-    # (Codex P1, #1643). Raising instead routes it to score_error → peak=None →
-    # KEEP, the same never-quarantine-on-absent-evidence rule the rest of the
-    # tool follows. Audio too short for one 512-sample hop lands here too, and
-    # keeping it is equally correct.
-    if not probs:
+    # A SHORT HOP COUNT IS ABSENT EVIDENCE, NOT MEASURED SILENCE.
+    #
+    # `process_hops` is documented "never raises": on an ONNX inference failure
+    # it `break`s out of its hop loop with a DEBUG log and returns whatever it
+    # had already computed. That has two shapes and BOTH are unsafe to score:
+    #
+    #   none at all — a model that loads but cannot infer returns [] for every
+    #   file. peak=0.0 would put every readable WAV below any threshold and one
+    #   `--execute` would move the entire replay corpus into non-speech
+    #   quarantine, silently (Codex P1, #1643).
+    #
+    #   PARTIAL — inference succeeds for the leading hops and then starts
+    #   failing. The list is non-empty, so a zero-length check passes it, but it
+    #   covers only the START of the recording. A clip with quiet leading
+    #   silence and speech AFTER the failure point yields a low peak drawn
+    #   entirely from the silence, and real evidence gets quarantined on a
+    #   truncated measurement. This is the more dangerous of the two, because
+    #   nothing about the result looks wrong (Codex P1, #1643 round 4).
+    #
+    # So the count is verified against what the audio OWES. `process_hops`
+    # consumes a hop per HOP_SAMPLES of the normalised stream and carries the
+    # remainder internally, so a complete run returns exactly
+    # `len(samples) // HOP_SAMPLES` probabilities. Anything short means the loop
+    # broke early. Raising routes it to score_error → peak=None → KEEP, the
+    # never-quarantine-on-absent-evidence rule the rest of the tool follows.
+    expected_hops = (len(raw) // 2) // HOP_SAMPLES
+    if not probs or len(probs) < expected_hops:
         raise UnscorableAudio(
-            "the VAD produced no hops — inference failure or audio shorter than "
-            "one 512-sample hop; refusing to report this as silence"
+            f"the VAD returned {len(probs)} hop(s) for audio owing {expected_hops} "
+            "— inference failed part-way (or the clip is shorter than one hop); "
+            "refusing to score a truncated measurement as silence"
         )
 
     samples = np.frombuffer(raw[: len(raw) // 2 * 2], dtype=np.int16).astype(np.float32)
@@ -427,6 +447,7 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
         return result
 
     now = time.time()
+    run_at = datetime.now(timezone.utc).isoformat()
     by_dir: dict[str, list[dict[str, Any]]] = {}
     for item in plan:
         if item["conflict"]:
@@ -509,6 +530,17 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
         for item in items:
             entries.append({
                 "file": item["file"],
+                # PER-ENTRY PROVENANCE. The top-level fields below describe the
+                # LATEST run, but `entries` is merged across runs — so on a
+                # second same-day pass with a different --speech-threshold or
+                # ZOE_SILERO_VAD_MODEL the older rows were being re-attributed
+                # to parameters they were never classified under, which makes
+                # the manifest useless for auditing or reversing a
+                # classification (Codex P2, #1643). Stamped here, at the moment
+                # the verdict is recorded, so a merge can never rewrite it.
+                "quarantined_at": run_at,
+                "speech_threshold": threshold,
+                "vad_model_sha256": model_sha,
                 "reason": item["reason"],
                 "class": item["class"],
                 "scores": item["scores"],
@@ -520,13 +552,22 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
         payload = {
             "tool": "scripts/maintenance/curate_voice_corpus.py",
             "corpus": corpus,
-            "quarantined_at": datetime.now(timezone.utc).isoformat(),
+            # LATEST-RUN metadata. Kept for at-a-glance reading, but every
+            # entry carries its OWN quarantined_at / speech_threshold /
+            # vad_model_sha256 — read those when auditing, because these are
+            # overwritten on every merge and describe only the last pass.
+            "latest_run_at": run_at,
+            "latest_speech_threshold": threshold,
+            "latest_vad_model_sha256": model_sha,
+            "quarantined_at": run_at,
             "speech_threshold": threshold,
             "runtime_speech_threshold": RUNTIME_SPEECH_THRESHOLD,
             "vad_model_sha256": model_sha,
             "note": ("Quarantine is a MOVE, never a delete. Corpus consumers glob "
                      "<corpus>/*.wav (top level only), so these files are out of the "
-                     "replay set but preserved on disk."),
+                     "replay set but preserved on disk. The top-level "
+                     "speech_threshold/vad_model_sha256 describe the LATEST run "
+                     "only; per-entry copies are authoritative."),
             "entries": entries,
         }
         # tmp + rename: a half-written manifest is not a manifest, and the files
