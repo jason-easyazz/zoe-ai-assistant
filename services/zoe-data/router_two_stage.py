@@ -166,11 +166,19 @@ def build_grammar(names: list[str]) -> str:
         ('call ::= prefix? "<start_function_call>call:" name '
          '"{" inner "}" "<end_function_call>"'),
         f"name ::= {name_alt}",
+        # INVARIANT: inner stays brace-free. _CALL_RE below extracts it with a
+        # greedy `(.*)` that only survives because no nested `{}` can reach it.
+        # Widening this rule means fixing that regex too — change together.
         "inner ::= [^{}]*",
     ])
 
 
+# Greedy `(.*)` is safe ONLY under build_grammar's `inner ::= [^{}]*`: the
+# grammar guarantees a brace-free payload, so the final `}` is the call's own.
+# Nested braces would over-match (pinned in tests). Change the two together.
 _CALL_RE = re.compile(r"call:([a-zA-Z0-9_]+)\{(.*)\}", re.DOTALL)
+# Same coupling: `[^,{}]*` leans on that brace-free inner too, so its `{}`
+# exclusion never fires in production. Change it with the grammar as well.
 _ARG_RE = re.compile(
     r"([a-zA-Z0-9_]+):(<escape>.*?<escape>|[^,{}]*)", re.DOTALL)
 

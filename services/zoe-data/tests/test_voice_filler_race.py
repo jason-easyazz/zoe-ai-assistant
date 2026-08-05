@@ -124,14 +124,13 @@ def test_failed_filler_synthesis_not_retried_late(monkeypatch):
     calls = {"n": 0}
     async def _broken_tts(_text):
         calls["n"] += 1
-        return None  # synthesis fails for filler AND fallback
+        return None  # filler synthesis fails
     import routers.voice_tts as _vt
     monkeypatch.setattr(_vt, "_synthesize_kokoro_sidecar", _broken_tts)
-    monkeypatch.setattr(_vt, "_synthesize_kokoro", _broken_tts)
 
     frames = _post(app)
     assert not any(f.get("provider") == "filler" for f in frames), frames
-    assert calls["n"] == 2, f"one attempt (sidecar+fallback), no late retry: {calls}"
+    assert calls["n"] == 1, f"one filler attempt (sidecar only), no late retry: {calls}"
     assert any(f.get("done") for f in frames)
 
 

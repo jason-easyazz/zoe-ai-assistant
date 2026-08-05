@@ -23,7 +23,7 @@ Changing one means editing this file **and** the lock-in test, in a PR, on purpo
 |---|---|---|
 | **Brain (LLM)** | **Gemma 4 E4B-QAT + MTP drafter** | host-native `llama-server` on `:11434` → `~/models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf` (+ `mtp-gemma-4-E4B-it.gguf`) |
 | **STT** | **Moonshine v2 Medium** | `services/zoe-data` (`warm_moonshine` warmup on startup) |
-| **TTS** | **Kokoro** (PyTorch on CUDA, `ZOE_KOKORO_BACKEND=pytorch`) | `/api/voice/synthesize` waterfall: Kokoro → Edge TTS → espeak-ng. CUDA is load-bearing, not a nicety: the ONNX/CPU backend synthesizes **slower than real time** (RTF ~1.0–1.8x), which starves the sentence-streamed voice pipe and makes replies play back in pieces. CUDA runs at RTF ~0.08x. Costs ~2.3 GB unified memory; `/health` reports `degraded=true` if it ever falls back to CPU. |
+| **TTS** | **Kokoro** (PyTorch on CUDA, out-of-process sidecar) | `/api/voice/synthesize` waterfall: Kokoro → Edge TTS → espeak-ng. Kokoro runs in the `kokoro-tts.service` PyTorch sidecar (port 10201); zoe-data holds no in-process TTS model. CUDA is load-bearing, not a nicety: on CPU the sidecar synthesizes **slower than real time** (RTF ~1.0–1.8x), which starves the sentence-streamed voice pipe and makes replies play back in pieces. CUDA runs at RTF ~0.08x. Costs ~2.3 GB unified memory; the sidecar falls back to CPU on its own if CUDA cannot load and `/health` reports `degraded=true` when it does. |
 
 <!-- LOCKED-ROCKS: machine-readable; the CI test parses this block. Do not edit casually. -->
 ```yaml
@@ -51,7 +51,16 @@ rocks:
     flag: "ZOE_ROUTER_HEAD"
     stage1_artifact: "services/zoe-data/models/router_head_mlp.joblib"
     stage2_artifact_dir: "~/models/functiongemma-router"
-    checkpoint_pinned: "no — owned by the ZOE_ROUTER_SELFTRAIN ratchet"
+    # Stage 2 ONLY. The ratchet never touches stage1_artifact: router_selftrain.py
+    # has no reference to a router/SetFit head, an MLP, or a .joblib in its 1095
+    # lines, and the only model ARTIFACT it promotes in production is the stage-2
+    # SERVED_GGUF under stage2_artifact_dir (:98, :880-882). Everything else it
+    # writes (rollback restores, deployment markers, provenance, last-known-good
+    # archives) lives there too — outside the repo, so no ratchet verdict ever
+    # reaches git.
+    # Stage-1 heads are HAND-COMMITTED; what covers them is the voice replay gate
+    # (services/zoe-data/models/* is in VOICE_PATH_PATTERNS), not this ratchet.
+    checkpoint_pinned: "no — stage-2 checkpoint owned by the ZOE_ROUTER_SELFTRAIN ratchet; stage-1 head hand-committed, replay-gated"
 ```
 
 ## 🟢 Canonical live systems — the spine

@@ -86,9 +86,8 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
 - `kokoro-voice-blend/` — custom "Zoe" persona voice spike: pure-numpy blends
   (linear + slerp) of Kokoro style tensors from the stock voices bin, committed
   candidate tensors (`voices/*.npy`, float16) + reproducible generator
-  (`blend_zoe_voices.py`) + audition WAVs under `/tmp/zoe-voice-blend-samples/`.
-  Audio synthesis runs a one-shot CPU kokoro-onnx (~600MB) and MUST hold
-  `flock /tmp/zoe-voice-harness.lock`; never loads a second full Kokoro. Not
+  (`blend_zoe_voices.py`). Loads no model — tensor math only; auditioning is done
+  through the live Kokoro sidecar after deploying an augmented voices bin. Not
   wired anywhere; deployment (augmented voices bin + env flip) is a documented
   operator step gated on the voice replay harness — see its README.
 - `flue-harness-spike/` — Flue autonomous-harness substrate spike (scout → implement

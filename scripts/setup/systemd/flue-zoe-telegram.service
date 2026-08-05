@@ -30,6 +30,51 @@ RestartSec=5
 # a missing TELEGRAM_BOT_TOKEN anyway.
 EnvironmentFile=%h/assistant/labs/flue-zoe-telegram/.env
 
+# ── Keep the channel bridge out of swap ──────────────────────────────────────
+# Same gap as flue-zoe-brain.service, and worse: measured on the live Orin
+# 2026-08-03 this unit had NO memory directives at all, so its cgroup
+# `memory.low` was 0 — zero reclaim protection, the exact state kokoro-tts was
+# in before #1409. It held VmRSS 6.1 MB against VmSwap 65.2 MB (78% paged out),
+# with MemoryMax and MemorySwapMax both `infinity`.
+#
+# Consequence is a product bug, not just a number: the first Telegram reply
+# after an idle period faults the bridge back from disk before it can even
+# reach zoe-data. This unit is also what `zoe_crash_loop_watch.py` sends its
+# alerts through, so it must not be cold exactly when the box is in trouble.
+#
+# Pure userspace Node (0 CUDA/NvMap mappings verified in /proc/<pid>/maps), so
+# cgroup accounting is complete and MemoryMax genuinely bounds it.
+#
+# Sizing. Corrected alongside flue-zoe-brain — the original 768M was a multiple
+# of VmHWM (145.9 MB), and VmHWM was sampled on an already-starved box, so it is
+# a LOWER bound on the unstressed peak. See flue-zoe-brain.service for the full
+# measurement; the load-bearing part applies here identically: V8 sizes its JS
+# heap to ~51% of the cgroup ceiling, so a JS-heap runaway hits V8's limit first
+# (a logged, attributable heap-OOM — which still usually terminates the process,
+# it is just not an opaque SIGKILL). EXTERNAL memory (Buffers, stream chunks) is
+# outside that budget and CAN reach the ceiling unmediated (verified: exit 137
+# under MemoryMax=1G + MemorySwapMax=0).
+#
+#   MemoryLow=256M  — carried over unchanged from 5c06fe8a, which introduced
+#                     this unit's first-ever memory directives; before that the
+#                     unit had none at all and its cgroup memory.low was 0.
+#                     A lower floor than the brain's 512M on purpose: a cold
+#                     Telegram reply is a slow message, not a voice fault.
+#   MemoryMax=1G    — ~7x the (understated) measured peak, and half the brain's
+#                     backstop. Deliberately tighter than the brain because this
+#                     bridge long-polls small JSON rather than streaming model
+#                     output, so it has far less external-buffer exposure, and
+#                     Restart=always makes a kill genuinely cheap here.
+#
+# It keeps a ceiling for the same reason the brain does: uncapped, V8 would size
+# its heap to 4144 MB on this 15.6 GB box. A bounded bridge is the safe default.
+#
+# Apply runbook: docs/knowledge/memory-pressure-profile.md.
+# No Nice=-N / OOMScoreAdjust=-N — silently dropped on a --user unit.
+MemorySwapMax=0
+MemoryLow=256M
+MemoryMax=1G
+
 # Light hardening (user-service compatible).
 NoNewPrivileges=true
 RestrictRealtime=true

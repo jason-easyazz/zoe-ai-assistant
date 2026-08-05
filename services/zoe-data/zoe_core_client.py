@@ -28,13 +28,14 @@ import concurrent.futures
 import contextlib
 import json
 import logging
+import math
 import os
 import subprocess
 import time
 import uuid
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, AsyncIterator, Mapping
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping
 
 from pi_intent_classifier import (
     _assistant_text_from_rpc_event,
@@ -139,6 +140,12 @@ def _worker_env(user_id: str, *, voice_mode: bool = False) -> dict[str, str]:
     if token:
         env["ZOE_INTERNAL_TOKEN"] = token
     env.setdefault("ZOE_CORE_ALLOW_WRITES", "true")
+    # Claim the memory block for this seam (see _memory_block / _memory_packet_block).
+    # With this set, extensions/memory.ts contributes NOTHING to the system prompt,
+    # so the prompt stays byte-identical across a session's turns and llama.cpp can
+    # reuse the cached KV prefix. Unset (standalone `pi`, bench/, zoe-core/test) the
+    # extension keeps composing the block itself, exactly as it always did.
+    env["ZOE_CORE_MEMORY_SEAM"] = "1"
     if voice_mode and _VOICE_MODEL_MAXTOKENS > 0:
         env["ZOE_CORE_MODEL_MAXTOKENS"] = str(_VOICE_MODEL_MAXTOKENS)
     return env
@@ -363,10 +370,28 @@ class _ZoeCoreWorker:
                 proc.kill()
                 await proc.wait()
 
-    async def stream(self, message: str, *, timeout_s: float) -> AsyncIterator[str]:
-        """Send one turn; yield assistant text deltas (suffixes) as they arrive."""
+    async def stream(
+        self,
+        message: "str | Callable[[], Awaitable[str]]",
+        *,
+        timeout_s: float,
+    ) -> AsyncIterator[str]:
+        """Send one turn; yield assistant text deltas (suffixes) as they arrive.
+
+        `message` may be a coroutine FACTORY instead of a string, in which case it
+        is awaited INSIDE the per-session lock. That placement is the ordering
+        contract, not a style choice: the memory recall fetch that composes the
+        prompt is the only slow step before the turn, and awaiting it in the caller
+        (outside this lock) let a later same-session request overtake an earlier one
+        whose recall was stalled. Before the seam owned recall, the fetch happened
+        inside the memory.ts extension — i.e. after the prompt was written, with
+        this lock already held — so arrival order was preserved. Composing here
+        restores exactly that.
+        """
         async with self._lock:
             self.last_used = time.monotonic()
+            if not isinstance(message, str):
+                message = await message()
             try:
                 await self._ensure_started()
                 assert self.proc and self.proc.stdin and self.proc.stdout
@@ -637,6 +662,241 @@ _VOICE_BREVITY = (
 )
 
 
+# ── The memory block rides HERE, not on the system prompt ────────────────────
+#
+# extensions/memory.ts used to compose the /api/memories/for-prompt packet onto
+# the SYSTEM PROMPT every turn. The packet is keyed on the user's message, so it
+# changed on essentially every turn — and llama.cpp reuses cached KV only for an
+# EXACT common prefix (`--cache-reuse` is off for Gemma's shared-KV + SWA
+# attention, where KV shifting is unsupported). The reusable prefix therefore
+# ended at the last byte of SOUL.md and the whole conversation was re-prefilled
+# every single turn. Folding it in here instead puts the volatile bytes in the
+# TAIL, past everything cacheable, and leaves the system prompt as pure SOUL.md.
+#
+# Two ordering rules, both established by measurement against
+# test_zoe_core_client.py::test_tool_action_dispatches (15 runs, 14/15 baseline):
+#
+#   * The directive rides WITH the packet and never without it. Keeping the
+#     directive unconditional — the obvious way to make it static and therefore
+#     cacheable — scored 6/15: told to lead with what it remembers when it
+#     remembers nothing, the 4B brain chats instead of calling its tools. Dropping
+#     the directive from that same build restored 15/15.
+#   * `message` stays LAST. Pi's own tail slot (a `custom` message, appended
+#     AFTER the user message) scored 9/15 and costs the request its recency
+#     position for nothing the seam does not already provide.
+#
+# ONE FETCH SITE, not one block. `_worker_env` sets ZOE_CORE_MEMORY_SEAM=1, which
+# makes memory.ts contribute nothing, so /api/memories/for-prompt is requested
+# exactly once per turn — here. It is NOT mutually exclusive with a caller-supplied
+# `db_memory_context`, and making it so was a REGRESSION (caught in review on
+# #1615):
+#
+#   * The VOICE path always passes a nonempty db_memory_context
+#     (`_voice_brain_memory` → `_voice_recall_packet`, routers/voice_tts.py), and
+#     that packet is built from MemoryService.search / zoe_memory_compose —
+#     it never calls memory_for_prompt. But `_fold_pending_contact_offers`
+#     (routers/memories.py:725, flag `ZOE_PERSON_SUGGEST_ENABLED`) runs ONLY
+#     inside memory_for_prompt. Suppressing the fetch therefore dropped every
+#     pending "Would you like me to add <name> as a contact?" offer from voice —
+#     the endpoint carries additions the voice recall block does not.
+#   * It also inverted ZOE_CHAT_INJECT_DB_MEMORY, whose documented meaning
+#     (routers/chat.py) is "ON restores the old DOUBLE injection".
+#
+# So both blocks are emitted independently, exactly as they were before this
+# change: on chat db_memory_context is None by default and only the packet
+# appears; on voice both do, which is what the replay corpus was gated against.
+
+# Matches extensions/memory.ts's own slice, so both sides key recall identically.
+_PACKET_MESSAGE_CHARS = 500
+_DEFAULT_PACKET_TIMEOUT_MS = 2000.0
+
+
+def _packet_timeout_s() -> float:
+    """The memory budget in seconds, falling back on an unparseable setting.
+
+    Read at call time and never at import: a module-level `float(os.environ[...])`
+    raised ValueError during import on an operator typo, which took out the whole
+    core brain lane — strictly worse than the fail-open behaviour the rest of this
+    path is built on. A bad or non-positive value degrades to the default instead.
+    """
+    # The literal default is kept in the getenv call so tools/audit/flag_inventory.py
+    # can extract it statically; _DEFAULT_PACKET_TIMEOUT_MS covers the invalid-value
+    # path. The parametrized timeout test exercises both, so they cannot drift apart.
+    raw = (os.environ.get("ZOE_CORE_MEMORY_TIMEOUT_MS", "2000") or "").strip()
+    ms = _DEFAULT_PACKET_TIMEOUT_MS
+    if raw:
+        try:
+            parsed = float(raw)
+            # isfinite is load-bearing, not belt-and-braces: float("inf") and
+            # float("1e10000") both parse cleanly and both pass `> 0`, and
+            # asyncio.wait_for(timeout=inf) waits FOREVER — a typo would hang the
+            # core lane on a memory fetch instead of degrading past it. (NaN fails
+            # `> 0` already; isfinite covers it too.)
+            if parsed > 0 and math.isfinite(parsed):
+                ms = parsed
+            else:
+                logger.warning(
+                    "ZOE_CORE_MEMORY_TIMEOUT_MS=%r is not a positive finite number; using %.0fms",
+                    raw, _DEFAULT_PACKET_TIMEOUT_MS,
+                )
+        except ValueError:
+            logger.warning(
+                "ZOE_CORE_MEMORY_TIMEOUT_MS=%r is not a number; using %.0fms",
+                raw, _DEFAULT_PACKET_TIMEOUT_MS,
+            )
+    return ms / 1000.0
+
+# How the brain should USE the packet. Byte-for-byte the same string as
+# MEMORY_USAGE_DIRECTIVE in services/zoe-core/extensions/memory.ts — the two run
+# in different processes so the constant cannot be shared, and the copies are
+# pinned equal by tests/test_zoe_core_memory_packet_placement.py. Change both or
+# neither.
+_MEMORY_USAGE_DIRECTIVE = (
+    "Use what you know about the user (below) naturally, the way a close friend would. "
+    "When they greet you or open a conversation, and you know of something timely — a "
+    "date in the next day or two, or a worry they've been carrying — LEAD with it warmly "
+    "(e.g. \"Morning! Don't forget the dentist at 3 today.\"), then ask how they are. "
+    "If something is clearly relevant to what they just said, bring it up even unasked. "
+    "Don't recite the whole list, don't force a fact when none fits, never mention citation ids."
+)
+
+
+# Introduces the user's own turn at the end of a composed prompt. Byte-for-byte
+# the same string as UTTERANCE_MARKER in services/zoe-core/extensions/abilities.ts,
+# which splits on it to scope progressive disclosure to the latest utterance; the
+# two run in different processes so the constant cannot be shared, and the copies
+# are pinned equal by tests/test_zoe_core_memory_packet_placement.py.
+_UTTERANCE_MARKER = "[The user just said]"
+
+
+# The memory block is DELIMITED so `extensions/memory.ts` can strip superseded
+# copies out of Pi's retained conversation before each LLM call (see its `context`
+# handler). Pi retains every user message it is sent, so an undelimited block
+# accumulated one full memory snapshot per turn — burning the 32k window and
+# leaving corrected facts, and resolved "add this contact?" offers, permanently
+# readable in older turns. Same vocabulary as the flue lane's `_RECALL_BLOCK_OPEN`.
+# Kept byte-for-byte in sync with MEMORY_BLOCK_OPEN/CLOSE in memory.ts (pinned by
+# a test).
+_MEMORY_BLOCK_OPEN = "[MEMORY CONTEXT]"
+_MEMORY_BLOCK_CLOSE = "[END MEMORY CONTEXT]"
+
+
+# ── Delimiter-collision guard ────────────────────────────────────────────────
+#
+# The three markers above are COMPOSITION-OWNED: this module emits them, and
+# `memory.ts` / `abilities.ts` parse them back out of Pi's retained conversation.
+# Everything ELSE folded into a composed message is user content —
+# `routers/memories.py` splices stored `ref.text[:200]` straight into the packet,
+# the caller's recall context is recalled user text, and the replayed history is
+# literally what was said. A stored memory whose text is the line
+# `[END MEMORY CONTEXT]` therefore closed the block early: the elision regex
+# stopped at the user-controlled delimiter, and the REMAINDER of a superseded
+# packet — stale facts, a resolved "would you like me to add Sam as a contact?"
+# offer — survived the strip and stayed readable for the life of the session.
+# That is the whole corrected-fact/resolved-offer guarantee, defeated by content.
+#
+# So every marker occurrence in content gets a U+200B ZERO WIDTH SPACE wedged in
+# after its opening bracket: `[END MEMORY CONTEXT]` becomes
+# `[<ZWSP>END MEMORY CONTEXT]`, which renders identically and reads identically to
+# the brain, but is no longer equal to any delimiter any consumer looks for.
+#
+# Escape rather than reject: dropping a colliding memory would let one poisoned
+# fact silence itself, which is a worse failure than showing it inertly.
+#
+# Two properties this relies on:
+#   * It runs on CONTENT ONLY, before the delimiters are added, so composition
+#     keeps sole ownership of them.
+#   * It is idempotent (a wedged marker no longer matches) and byte-for-byte a
+#     no-op on text containing no marker — so ordinary packets, and the
+#     voice-replay corpus, are unchanged by construction.
+_MARKER_BREAK = "\u200b"  # written as an ESCAPE on purpose: the char is invisible in source
+
+# The labels `_compose_message` puts on each context block. They are STRUCTURE,
+# not text: `abilities.ts` anchors on `_HISTORY_LABEL` to find the replayed turns
+# it seeds disclosure from, so a stored memory containing that line could
+# otherwise forge a history block and arm a domain the user never mentioned —
+# the round-two bug by another route. `_HISTORY_LABEL` is kept byte-for-byte in
+# sync with `HISTORY_MARKER` in services/zoe-core/extensions/abilities.ts (pinned
+# by a test).
+_PORTRAIT_LABEL = "[About you]"
+_RECALL_LABEL = "[What you remember]"
+_HISTORY_LABEL = "[Recent conversation]"
+
+# Mirrored (block OPEN/CLOSE only) by `CONTROL_MARKERS` in memory.ts. The other
+# four have no TS counterpart to guard: a standalone `pi` run has no composed
+# message at all, so those markers exist only in what THIS module builds.
+_CONTROL_MARKERS = (
+    _MEMORY_BLOCK_OPEN,
+    _MEMORY_BLOCK_CLOSE,
+    _UTTERANCE_MARKER,
+    _PORTRAIT_LABEL,
+    _RECALL_LABEL,
+    _HISTORY_LABEL,
+)
+
+
+def _neutralize_markers(text: str) -> str:
+    """User content with every composition-owned marker rendered inert.
+
+    See the note above. No-op — and returns the SAME object — when nothing
+    collides, which is every real turn.
+    """
+    if not text:
+        return text
+    for marker in _CONTROL_MARKERS:
+        if marker in text:
+            text = text.replace(marker, f"{marker[:1]}{_MARKER_BREAK}{marker[1:]}")
+    return text
+
+
+def _memory_block(packet: str) -> str:
+    """Directive + packet, delimited, or "" — the directive NEVER appears alone."""
+    # Neutralize BEFORE delimiting: the packet is user content (stored memory
+    # text), the delimiters are ours. See `_neutralize_markers`.
+    packet = _neutralize_markers((packet or "").strip())
+    if not packet:
+        return ""
+    return (
+        f"{_MEMORY_BLOCK_OPEN}\n{_MEMORY_USAGE_DIRECTIVE}\n\n{packet}\n{_MEMORY_BLOCK_CLOSE}"
+    )
+
+
+async def _memory_packet_block(message: str, user_id: str) -> str:
+    """The /api/memories/for-prompt packet for this turn, or "" — NEVER raises.
+
+    Calls the composer function directly (routers.memories.memory_for_prompt)
+    rather than an HTTP self-call: same event loop, no socket round-trip. `_=None`
+    skips the FastAPI internal-token dependency, which guards the HTTP surface and
+    not in-process callers; the endpoint itself fails closed for guest/unknown
+    users. Same shape as zoe_flue_client._fetch_for_prompt_packet.
+
+    Fail-open and time-boxed on the same budget the extension used: memory must
+    never block or break a turn.
+    """
+    if not (user_id or "").strip():
+        return ""  # fail closed: unknown user → never another user's memories
+    try:
+        # `limit` MUST be passed explicitly: called directly (not through FastAPI)
+        # its default is the Query() descriptor object, not an int. This is the
+        # same value the endpoint would have resolved for the extension's HTTP
+        # call, so the packet is identical to the one memory.ts used to fetch.
+        from routers.memories import _PROMPT_PACKET_MAX_FACTS, memory_for_prompt
+
+        result = await asyncio.wait_for(
+            memory_for_prompt(
+                user_id=user_id,
+                message=(message or "")[:_PACKET_MESSAGE_CHARS],
+                limit=_PROMPT_PACKET_MAX_FACTS,
+                _=None,
+            ),
+            timeout=_packet_timeout_s(),
+        )
+        return str((result or {}).get("packet") or "").strip()
+    except Exception as exc:  # noqa: BLE001 - memory is best-effort, never a turn breaker
+        logger.debug("zoe-core: memory packet unavailable (non-fatal): %s", exc)
+        return ""
+
+
 def _compose_message(
     message: str,
     *,
@@ -644,30 +904,70 @@ def _compose_message(
     db_memory_context: str | None,
     portrait: str | None,
     voice_mode: bool = False,
+    memory_packet: str | None = None,
 ) -> str:
-    """Prepend any caller-supplied context the extensions don't already inject.
+    """Prepend the per-turn context the brain needs ahead of the user's words.
 
-    Soul + per-turn memory packet come from the extensions; we only fold in the
-    extras chat.py passes (recent history, portrait, precomputed memory context),
-    and — for voice turns — a brevity directive so spoken replies stay short.
+    Soul + the static memory-usage directive come from the extensions; we fold in
+    the memory packet (see above), the extras chat.py passes (recent history,
+    portrait, precomputed memory context), and — for voice turns — a brevity
+    directive so spoken replies stay short.
+
+    `message` is always LAST. Nothing may be appended after it.
+
+    When any context block is present the user's turn is introduced by
+    `_UTTERANCE_MARKER`. That label is the boundary `extensions/abilities.ts`
+    uses to scope progressive disclosure to the LATEST utterance — without it
+    `event.prompt` is this whole composed string, so a domain keyword sitting in
+    the replayed history or the memory packet re-armed that domain on every turn
+    and the disclosure window could never decay. With no context blocks the
+    composed message is the bare `message`, byte-for-byte as before.
     """
     parts: list[str] = []
     if voice_mode:
         parts.append(_VOICE_BREVITY)
+    # Every block below folds USER CONTENT in behind a composition-owned label, so
+    # each one is neutralized (see `_neutralize_markers`). The packet is where a
+    # collision actually LEAKED — it sits between the block delimiters — but the
+    # portrait, the recall context and the replayed history are user text too, and
+    # a marker in any of them makes the strip over-elide a superseded turn. Sweep
+    # the class rather than the one instance.
+    #
+    # `message` is deliberately NOT neutralized: it is LAST, so a marker the user
+    # types can only make the strip drop MORE of their own superseded turn, never
+    # leak one; and `latestUtterance` already splits on the LAST occurrence, so it
+    # can only narrow their own text. Rewriting the user's literal words has a real
+    # cost and buys no safety here.
     if portrait:
-        parts.append(f"[About you]\n{portrait.strip()}")
+        parts.append(f"{_PORTRAIT_LABEL}\n{_neutralize_markers(portrait.strip())}")
     if db_memory_context:
-        parts.append(f"[What you remember]\n{db_memory_context.strip()}")
+        parts.append(
+            f"{_RECALL_LABEL}\n{_neutralize_markers(db_memory_context.strip())}"
+        )
+    # INDEPENDENT of db_memory_context, never an elif — the voice path always
+    # supplies one, and the for-prompt packet carries additions (pending-contact
+    # offers) that the voice recall block does not. See the header.
+    #
+    # Not labelled like the block above: these are the exact bytes the memory
+    # extension used to put on the system prompt, moved verbatim.
+    block = _memory_block(memory_packet or "")
+    if block:
+        parts.append(block)
     if history:
         lines = []
         for turn in history[-12:]:
             role = turn.get("role") or turn.get("speaker") or "user"
             content = (turn.get("content") or turn.get("text") or "").strip()
             if content:
-                lines.append(f"{role}: {content}")
+                lines.append(f"{role}: {_neutralize_markers(content)}")
         if lines:
-            parts.append("[Recent conversation]\n" + "\n".join(lines))
-    parts.append(message)
+            # `role: text` per line — the shape `abilities.ts` parses to seed
+            # disclosure on a restarted worker. Roles stay unprefixed and
+            # unescaped; only the CONTENT is neutralized (above).
+            parts.append(f"{_HISTORY_LABEL}\n" + "\n".join(lines))
+    if not parts:
+        return message  # no context at all → the bare utterance, unchanged
+    parts.append(f"{_UTTERANCE_MARKER}\n{message}")
     return "\n\n".join(parts)
 
 
@@ -689,10 +989,20 @@ async def run_zoe_core_streaming(
     Yields assistant text deltas. On any failure, raises so the caller's existing
     fallback handling applies (we never silently swallow a brain failure).
     """
-    composed = _compose_message(
-        message, history=history, db_memory_context=db_memory_context,
-        portrait=portrait, voice_mode=voice_mode,
-    )
+    # Composition is DEFERRED into the worker's per-session lock (see
+    # _ZoeCoreWorker.stream): awaiting the recall fetch out here let a later
+    # same-session request overtake an earlier one whose recall was stalled.
+    #
+    # The fetch itself is unconditional: this is the ONLY /api/memories/for-prompt
+    # call in the lane (memory.ts stands down via ZOE_CORE_MEMORY_SEAM), and it
+    # must NOT be skipped when the caller supplied db_memory_context — the endpoint
+    # folds in pending-contact offers that no other path produces. See the header.
+    async def _compose() -> str:
+        packet = await _memory_packet_block(message, user_id)
+        return _compose_message(
+            message, history=history, db_memory_context=db_memory_context,
+            portrait=portrait, voice_mode=voice_mode, memory_packet=packet,
+        )
     # Bound concurrent brain turns (see _MAX_CONCURRENCY), but only for the
     # duration of actual generation — NOT for however long the consumer takes to
     # process each delta. A naive `async with _brain_sem(): async for delta in
@@ -716,7 +1026,7 @@ async def run_zoe_core_streaming(
         try:
             async with _brain_sem():
                 worker = await _worker_for(user_id, session_id, voice_mode=voice_mode)
-                async for delta in worker.stream(composed, timeout_s=_TIMEOUT_S):
+                async for delta in worker.stream(_compose, timeout_s=_TIMEOUT_S):
                     await queue.put(delta)
         except BaseException as exc:  # noqa: BLE001 - re-raised to the consumer below
             errors.append(exc)

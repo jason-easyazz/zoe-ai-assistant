@@ -9,9 +9,23 @@
 # findings are ADVISORY — they never become PR threads, and polly never
 # pushes/resolves/merges.
 #
-# Exit codes: 0 = report retrieved (printed to stdout), 1 = usage,
+# Exit codes: 0 = report retrieved (printed to stdout), 1 = usage or a budget
+# that does not fit inside the caller's subprocess timeout (see BUDGET below),
 # 2 = kick/poll failure or silent-death alarm (session ended with no report).
+#
+# Every HTTP body is parsed by scripts/maintenance/cross_review_poll.py, never
+# by an inline `json.load` — and every RESPONSE in the lane (create, poll,
+# report) is fetched AND classified there, none of them one-shot. That module
+# checks HTTP status / emptiness / content-type before parsing, retries
+# transient faults with bounded backoff, and on exhaustion prints ONE terminal
+# line naming the session and
+# "re-dispatch required". Its distinct exit codes (3 never-registered,
+# 4 poll-lost, 5 timeout, 6 never-running, 7 dispatch-failed) are diagnostic;
+# this wrapper collapses them all to its long-standing public `exit 2`.
 set -euo pipefail
+
+POLLER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cross_review_poll.py"
+[ -f "$POLLER" ] || { echo "ALARM: poller module missing: $POLLER" >&2; exit 2; }
 
 SERVER="${OMNIGENT_SERVER:-http://127.0.0.1:6767}"
 # polly's id in the BARE hex form 0.7.0 returns (`GET /v1/agents`); <=0.4.0
@@ -20,9 +34,73 @@ SERVER="${OMNIGENT_SERVER:-http://127.0.0.1:6767}"
 # binds too) — it validates nothing. See omnigent_issue_executor._omnigent_agent_id.
 POLLY_ID="${OMNIGENT_POLLY_ID:-057995d1517418e6839f51d340785dd6}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
-TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-2400}"
+# 1800, not 2400: the poll budget is the only large term in the BUDGET
+# arithmetic below, and 2400 put the wrapper's worst-case wall ABOVE the
+# caller's 2500s subprocess timeout (Codex, #1618). It came down again once the
+# bounded flock wait joined the sum (Codex P1, #1624). 30 minutes remains far
+# more than a polly cross-review has ever needed.
+TIMEOUT_S="${CROSS_REVIEW_TIMEOUT_S:-1800}"
 case "$TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be a positive integer (seconds), got: $TIMEOUT_S" >&2; exit 1;; esac
 [ "$TIMEOUT_S" -gt 0 ] || { echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be > 0" >&2; exit 1; }
+# Validated HERE, not left to argparse: an unvalidated value reaches the poller
+# as a usage error and prints a traceback instead of this script's single
+# session-scoped alarm line (codex cross-review, #1618).
+REGISTER_TIMEOUT_S="${CROSS_REVIEW_REGISTER_TIMEOUT_S:-60}"
+case "$REGISTER_TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_REGISTER_TIMEOUT_S must be a positive integer (seconds), got: $REGISTER_TIMEOUT_S" >&2; exit 1;; esac
+[ "$REGISTER_TIMEOUT_S" -gt 0 ] || { echo "ALARM: CROSS_REVIEW_REGISTER_TIMEOUT_S must be > 0" >&2; exit 1; }
+
+# ------------------------------------------------------------------- BUDGET ---
+# The wrapper's WORST-CASE WALL MUST STAY BELOW THE CALLER'S TIMEOUT.
+# services/zoe-data/pipeline_cross_review.py runs this script under
+# `subprocess.run(..., timeout=2500)`. That timeout kills only THIS shell: the
+# EXIT trap never fires, so the detached polly worker survives while the flock
+# releases — the next invocation then runs a SECOND polly beside the orphan,
+# which is precisely the failure the cleanup trap exists to prevent. The old
+# defaults summed to 2580s and were therefore already inverted (Codex, #1618).
+#
+# Every phase is explicitly bounded, and the sum is checked HERE rather than
+# left as a comment, so raising CROSS_REVIEW_TIMEOUT_S cannot silently
+# reintroduce the inversion — it fails loudly at startup instead.
+#
+# THE `flock` WAIT COUNTS TOO, and an earlier revision of this block wrongly
+# excluded it on the grounds that nothing exists to orphan while merely waiting
+# (Codex P1, #1624). That misses which clock is running: the caller's timer
+# starts at `subprocess.run`, BEFORE the lock is acquired. So a lock wait longer
+# than the margin leaves less than the post-lock worst case, and the script then
+# proceeds to create a session and kick a worker with a deadline it can no
+# longer meet — reproducing exactly the orphan this block exists to prevent.
+# The wait is therefore BOUNDED, and failing loudly at the lock is strictly
+# better than being killed mid-review: a queued invocation would in any case
+# wait most of a full review, so `LOCK_WAIT_MAX_S` is a cap on futility, not on
+# legitimate serialization.
+CALLER_TIMEOUT_S=2500       # mirrors _CROSS_REVIEW_TIMEOUT_S; pinned by tests/unit/test_cross_review_poll.py
+LOCK_WAIT_MAX_S=120         # flock -w: the caller's clock runs during this too
+CREATE_MAX_S=60             # curl --max-time on POST /v1/sessions
+REGISTER_HTTP_TIMEOUT_S=30  # await-registration overshoots its budget by at most one request
+KICK_MAX_S=30               # timeout(1) around the detached docker-exec kick
+POLL_HTTP_TIMEOUT_S=60      # poll() returns within --timeout-s + one request
+# The report GET was the last one-shot HTTP call in the lane: a single
+# `curl -sf` whose failure discarded a COMPLETED review and forced a full
+# re-dispatch (Codex, #1618 — closed without a fix at the time). It now runs
+# through the poller's classify-and-retry path like everything else, so it
+# costs a retry budget plus one request instead of one --max-time.
+REPORT_BUDGET_S=90          # fetch_report() sleep/retry budget; rides out a ~60s restart
+REPORT_HTTP_TIMEOUT_S=60    # fetch_report() returns within --budget-s + one request
+CLEANUP_MAX_S=20            # timeout(1) around stop_worker's docker exec
+# `timeout N cmd` is NOT a hard bound: it sends TERM and then waits forever if
+# the command ignores it, so a wedged docker CLI would run past the advertised
+# budget and be killed by the caller instead — trap skipped, worker orphaned
+# (Codex P1 + Greptile P1, #1624). `-k` is what escalates to KILL. It applies to
+# BOTH timeout-wrapped phases, so it is counted twice.
+TIMEOUT_KILL_AFTER_S=5      # timeout -k: the KILL escalation after TERM is ignored
+OVERHEAD_S=$(( LOCK_WAIT_MAX_S + CREATE_MAX_S + REGISTER_TIMEOUT_S + REGISTER_HTTP_TIMEOUT_S + KICK_MAX_S ))
+OVERHEAD_S=$(( OVERHEAD_S + POLL_HTTP_TIMEOUT_S + REPORT_BUDGET_S + REPORT_HTTP_TIMEOUT_S + CLEANUP_MAX_S ))
+OVERHEAD_S=$(( OVERHEAD_S + 2 * TIMEOUT_KILL_AFTER_S ))
+WORST_CASE_S=$(( TIMEOUT_S + OVERHEAD_S ))
+[ "$WORST_CASE_S" -lt "$CALLER_TIMEOUT_S" ] || {
+  echo "ALARM: budget inversion — worst-case wall ${WORST_CASE_S}s (poll ${TIMEOUT_S}s + ${OVERHEAD_S}s of bounded phases) is not below the caller's ${CALLER_TIMEOUT_S}s subprocess timeout; a kill there orphans the detached worker. Lower CROSS_REVIEW_TIMEOUT_S (max $(( CALLER_TIMEOUT_S - OVERHEAD_S - 1 ))) or CROSS_REVIEW_REGISTER_TIMEOUT_S." >&2
+  exit 1
+}
 
 [ $# -ge 2 ] || { echo "usage: $0 <PR-number> \"<contract>\"" >&2; exit 1; }
 
@@ -30,18 +108,31 @@ case "$TIMEOUT_S" in (*[!0-9]*|'') echo "ALARM: CROSS_REVIEW_TIMEOUT_S must be a
 # polly launch paths (omnigent_issue_executor, the Flue heavy lane) do not take
 # this lock — a shared lease across all launchers is future cross-subsystem
 # work (Codex, #1578); this bounds what THIS wrapper can add to the load.
+# BOUNDED (`-w`), because the caller's subprocess timer is already running while
+# we block here — see BUDGET above. An unbounded wait silently eats the margin
+# and the run gets killed AFTER it has spawned a worker (Codex P1, #1624).
 exec 9>/tmp/zoe-cross-review.lock
-flock 9
+flock -w "$LOCK_WAIT_MAX_S" 9 || {
+  echo "ALARM: another cross-review still holds /tmp/zoe-cross-review.lock after ${LOCK_WAIT_MAX_S}s — refusing to start with too little of the caller's ${CALLER_TIMEOUT_S}s budget left to finish; retry once it releases" >&2
+  exit 2
+}
 PR="$1"; shift
 # Join ALL remaining words — an unquoted multiword contract must not silently
 # truncate to its first word (Codex, #1578).
 CONTRACT="$*"
 case "$PR" in (*[!0-9]*|'') echo "ALARM: PR must be numeric, got: $PR" >&2; exit 1;; esac
 
-SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -H 'Content-Type: application/json' \
-  -d "{\"agent_id\":\"$POLLY_ID\",\"title\":\"cross-review PR #$PR\"}" \
-  | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])") \
-  || { echo "ALARM: session create failed against $SERVER" >&2; exit 2; }
+# The create response goes through a FILE, then a validating parser. Piping it
+# into `json.load(sys.stdin)['id']` conflated "the server refused" with "the
+# server accepted and answered with an empty body" — and the second case leaves
+# an ORPHANED session whose id nobody holds, which is exactly how the 2026-08-03
+# review on #1614 came back `not_found` with no poller attached.
+TMPC=$(mktemp)
+curl -sf --connect-timeout 5 --max-time "$CREATE_MAX_S" -X POST "$SERVER/v1/sessions" -H 'Content-Type: application/json' \
+  -d "{\"agent_id\":\"$POLLY_ID\",\"title\":\"cross-review PR #$PR\"}" -o "$TMPC" \
+  || { rm -f "$TMPC"; echo "ALARM: session create failed against $SERVER" >&2; exit 2; }
+SID=$(python3 "$POLLER" session-id --payload "$TMPC") || { rm -f "$TMPC"; exit 2; }
+rm -f "$TMPC"
 # The ID is interpolated into an sh -c below — reject anything that isn't a
 # plain alnum token, optionally conv_-prefixed (same rule as
 # omnigent_issue_executor; Codex, #1578).
@@ -64,6 +155,14 @@ SID=$(curl -sf --connect-timeout 5 --max-time 60 -X POST "$SERVER/v1/sessions" -
 # do not control.
 [[ "$SID" =~ ^(conv_)?[A-Za-z0-9]{16,}$ ]] || { echo "ALARM: malformed session id: $SID" >&2; exit 2; }
 echo "session: $SID" >&2
+
+# Dispatch-race guard. A POST that returned an id is NOT proof that a
+# subsequent GET resolves it: the crashed 2026-08-03 run's session was
+# `not_found` afterwards. Confirm the session is readable BEFORE spending a
+# worker on it — bailing here costs nothing, whereas an unreadable session
+# after the kick means a detached polly with no poller. Bounded and short.
+python3 "$POLLER" await-registration --server "$SERVER" --session-id "$SID" \
+  --budget-s "$REGISTER_TIMEOUT_S" --http-timeout-s "$REGISTER_HTTP_TIMEOUT_S" || exit 2
 
 # Brief goes INLINE via -p. Do not stage it as a session comment: comment
 # staging fails silently and polly wakes to an empty session (2026-07-27).
@@ -94,7 +193,16 @@ stop_worker() {
   # escalate to KILL — otherwise the flock releases while a TERM-trapping
   # worker is still shutting down and the next invocation overlaps it
   # (Codex, #1578). KILL is the terminal rung; nothing to escalate past it.
-  docker exec "$CONTAINER" sh -c \
+  # Bounded by timeout(1): an unresponsive docker daemon must not stretch the
+  # cleanup past the budget the BUDGET block promised (Codex, #1618).
+  #
+  # SC2016 is deliberate and load-bearing: everything inside the single quotes
+  # runs INSIDE the container, so `$pids`, `$$`, `$p` and `$n` must reach it
+  # unexpanded. Only `$SID` is host-side, and it is spliced in via the
+  # '"$SID"' quote dance below. (The directive is needed only because the
+  # timeout(1) prefix stops shellcheck recognising the `sh -c` payload as code.)
+  # shellcheck disable=SC2016
+  timeout -k "$TIMEOUT_KILL_AFTER_S" "$CLEANUP_MAX_S" docker exec "$CONTAINER" sh -c \
     'pids=$(grep -la "'"$SID"'" /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3 | grep -vx "$$"); n=0
      for p in $pids; do kill "$p" 2>/dev/null && n=$((n+1)); done
      [ "$n" -gt 0 ] || { echo none; exit 0; }
@@ -107,14 +215,13 @@ stop_worker() {
      sleep 1
      alive=0; for p in $pids; do [ -d "/proc/$p" ] && alive=1; done
      [ "$alive" -eq 0 ] && echo killed-escalated || echo "STILL-ALIVE after KILL"' \
-    2>/dev/null || echo unreachable
+    2>/dev/null || echo "unreachable (docker exec failed or exceeded ${CLEANUP_MAX_S}s)"
 }
 REVIEW_DONE=0
 CLEANED=0
 cleanup() {
   [ "$CLEANED" -eq 1 ] && return
   CLEANED=1
-  rm -f "${TMPJ:-}"
   if [ "$REVIEW_DONE" -ne 1 ]; then
     r=$(stop_worker)
     echo "cleanup: worker signal result: $r (session $SID)" >&2
@@ -126,92 +233,58 @@ trap cleanup EXIT
 trap 'cleanup; exit 130' INT TERM
 
 BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)
-docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
+# `docker exec -d` returns as soon as the container accepts the exec, but that
+# is still an unbounded RPC to the daemon — bound it so the BUDGET arithmetic
+# above holds end to end (Codex, #1618).
+timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" docker exec -d "$CONTAINER" sh -c "cd /workspace && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
   || { echo "ALARM: docker-exec kick failed" >&2; exit 2; }
 
-# Poll. `docker exec -d` returns before the run registers, so an early `idle`
-# is a slow START, not completion — require having SEEN `running` once before
-# treating a non-running status as terminal (polly finding #2 on #1578).
-start=$(date +%s)
-saw_running=0
-status=""
-while :; do
-  sleep 30
-  status=$(curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" \
-    | python3 -c "import json,sys;print(json.load(sys.stdin).get('status','?'))" || echo poll-fail)
-  # `waiting` is a NONTERMINAL Omnigent state (awaiting external work) — it
-  # both proves the run started and must keep the loop polling (Greptile P1).
-  case "$status" in (running|waiting) saw_running=1;; esac
-  if [ "$status" != "running" ] && [ "$status" != "waiting" ] && [ "$status" != "poll-fail" ] && [ "$saw_running" = 1 ]; then
-    break
-  fi
-  now=$(date +%s)
-  if [ "$saw_running" = 0 ] && [ "$status" != "running" ] && [ "$status" != "waiting" ] && [ "$status" != "poll-fail" ]; then
-    # The run may have started AND finished between two polls — evidence of an
-    # assistant reply means completion, not a dead kick (Codex P2, #1578).
-    if curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" \
-        | python3 -c "import json,sys;d=json.load(sys.stdin);sys.exit(0 if any(i.get('type')=='message' and (i.get('data',{}).get('role') or i.get('role'))=='assistant' for i in d.get('items',[])) else 1)" 2>/dev/null; then
-      saw_running=1; continue
-    fi
-  fi
-  if [ "$saw_running" = 0 ] && [ $((now - start)) -gt 300 ]; then
-    echo "ALARM: session never reached 'running' within 300s (status: $status) — kick died silently; diagnose: docker exec $CONTAINER tail -40 $KICK_LOG" >&2
-    exit 2
-  fi
-  if [ $((now - start)) -gt "$TIMEOUT_S" ]; then
-    # Stop the detached worker before releasing the flock, or the next
-    # invocation would run a SECOND polly beside the stuck one (Codex, #1578).
-    r=$(stop_worker)
-    echo "ALARM: review still '$status' after ${TIMEOUT_S}s — worker signal result: $r; inspect session $SID and docker exec $CONTAINER tail -40 $KICK_LOG" >&2
-    exit 2
-  fi
-done
+# Poll. The loop lives in cross_review_poll.py so that every response body is
+# status/emptiness/content-type checked before parsing. On success it prints the
+# terminal status; on any failure it prints its own single terminal ALARM line
+# and exits non-zero — the EXIT trap then stops the detached worker before the
+# flock releases, so the next invocation cannot run a SECOND polly beside a
+# stuck one (Codex, #1578).
+#
+# The old inline loop's real defect was that a bad body degraded to the sentinel
+# `poll-fail`, which was neither terminal nor alarming — a vanished session
+# (404, which `curl -sf` renders as an empty body) spun in silence for the full
+# ${TIMEOUT_S}s and then blamed the timeout. A fast-failing endpoint is now
+# declared poll-lost after 121s of sleeps at these defaults (a vanished session
+# ~33s); a STALLING one adds up to --http-timeout-s per attempt on top, i.e.
+# 121 + 8*60 = 601s, and the whole call still returns within
+# --timeout-s + --http-timeout-s. A ~60s server restart is ridden out. All of
+# these numbers are pinned by tests/unit/test_cross_review_poll.py.
+set +e
+status=$(python3 "$POLLER" poll --server "$SERVER" --session-id "$SID" --timeout-s "$TIMEOUT_S" \
+  --http-timeout-s "$POLL_HTTP_TIMEOUT_S")
+poll_rc=$?
+set -e
+if [ "$poll_rc" -ne 0 ]; then
+  echo "diagnose: docker exec $CONTAINER tail -40 $KICK_LOG" >&2
+  exit 2
+fi
 
 case "$status" in
   idle) : ;;  # normal completion — sessions end idle, never 'completed'
   *) echo "ALARM: session ended in error status '$status' — inspect session $SID" >&2; exit 2 ;;
 esac
 
-# Report extraction. The session JSON goes through a temp FILE — piping curl
-# into `python3 - <<'PY'` makes the heredoc win the fight for stdin and the
-# JSON is never read (SC2259; polly finding #1 on #1578, reproduced live).
+# Report extraction. The FETCH lives in the poller too (`report --server`), so
+# the transcript GET gets the same classification + bounded backoff as every
+# other response in this lane. It used to be a one-shot
+# `curl -sf … -o "$TMPJ"`: a 502, a truncated body or an Omnigent restarting in
+# the second between "poll saw idle" and this line threw away a review that had
+# already cost ~20 minutes of worker, and the only remedy was a full
+# re-dispatch — the one response in the lane still exempt from the
+# bounded-classification contract (Codex, #1618).
+#
 # An idle session with NO messages is the silent-launch-failure signature —
-# alarm, never report it as a clean review.
+# alarm, never report it as a clean review. The poller prints its own ALARM for
+# every unusable payload shape (unreachable, empty, non-JSON, non-object,
+# non-list `items`, zero assistant messages) and for an exhausted fetch budget;
+# this wrapper only maps the outcome onto its public `exit 2`, never set -e's
+# raw 1 (Codex, #1578).
 REVIEW_DONE=1  # normal completion — the cleanup trap must not kill a finished session's remnants
-TMPJ=$(mktemp)
-curl -sf --connect-timeout 5 --max-time 60 "$SERVER/v1/sessions/$SID" -o "$TMPJ" \
-  || { echo "ALARM: could not fetch session $SID for the report" >&2; exit 2; }
-rc=0
-python3 - "$SID" "$TMPJ" <<'PY' || rc=$?
-import json, sys
-d = json.load(open(sys.argv[2]))
-texts = []
-for it in d.get("items", []):
-    if it.get("type") != "message":
-        continue
-    role = it.get("data", {}).get("role") or it.get("role") or ""
-    if role != "assistant":
-        continue  # the inline kick prompt is a message item too (Codex P2)
-    c = it.get("data", {}).get("content") or it.get("content") or ""
-    if isinstance(c, list):
-        c = " ".join(str(x.get("text", "")) for x in c if isinstance(x, dict))
-    c = str(c).strip()
-    if c:  # tool_use-only assistant items reduce to "" — a blank is not a report (Codex, #1578)
-        texts.append(c)
-if not texts:
-    print(f"ALARM: session {sys.argv[1]} ended idle with zero ASSISTANT messages — "
-          "the kick died silently (check container auth: claude OAuth expires 2026-08-22).",
-          file=sys.stderr)
-    sys.exit(2)
-# Reports can span messages — print the tail of the conversation, not just
-# the last message (polly non-blocking on #1578).
-print("\n\n---\n\n".join(texts[-3:]))
-PY
-if [ "$rc" -ne 0 ]; then
-  # rc=2 is the zero-assistant-messages ALARM (already printed its own message).
-  # Anything else is a parse/schema crash — still a report-stage incident, not
-  # a usage error: exit 2 like every other alarm (Codex, #1578), never set -e's
-  # raw 1.
-  [ "$rc" -ne 2 ] && echo "ALARM: report extraction failed (exit $rc) for session $SID — inspect the payload shape" >&2
-  exit 2
-fi
+python3 "$POLLER" report --server "$SERVER" --session-id "$SID" \
+  --budget-s "$REPORT_BUDGET_S" --http-timeout-s "$REPORT_HTTP_TIMEOUT_S" || exit 2

@@ -33,6 +33,58 @@ ExecStart=/home/zoe/llama.cpp/build-jetson-new/bin/llama-server \
 # Startup gate: healthy AND serving exactly the r2 GGUF (identity check —
 # a wrong model here would silently change routing quality).
 ExecStartPost=/bin/bash -c 'for i in $(seq 1 60); do curl -sf http://127.0.0.1:11436/health >/dev/null 2>&1 && break; sleep 1; done; curl -sf http://127.0.0.1:11436/props | grep -q "functiongemma-270m-zoe-functok-r2-Q8_0.gguf"'
+# ── Memory protection ───────────────────────────────────────────────────────
+# A PAGED-OUT ROUTER IS THE EXACT SILENT-DEGRADATION CLASS THIS GUARD EXISTS
+# FOR. router_two_stage.py gives the sidecar a strict 1.5 s client timeout
+# (ZOE_ROUTER_TWO_STAGE_TIMEOUT_S) against a 424 ms p50, so the whole budget is
+# ~3.5x the normal decode. Faulting ~600 MB back off the NVMe swapfile does not
+# fit in what is left: the call times out, `decide()` returns None
+# (router_two_stage.py:291), and semantic_router.py:547 silently keeps the
+# SIMILARITY decision instead. Nothing errors and nothing is logged as a
+# regression — the turn just gets routed by the weaker stage-1-less path AND
+# pays the full 1.5 s before doing so. Routing quality quietly drops off the
+# 90.1%/0%-chat-FP config while every health check stays green.
+#
+# Measured read-only on the live Orin 2026-08-03 (PID 1564, up 6h05m, box at
+# 1,168 MB available / 2.3 GB swap in use), with MemoryLow=0, MemoryMax and
+# MemorySwapMax both `infinity` and NO local drop-in anywhere:
+#
+#   VmRSS 411.7 MB / VmSwap 156.9 MB / VmHWM 598.8 MB   -> 27.6% paged out
+#   cgroup memory.current 372.0 MB / memory.swap.current 155.8 MB
+#
+# VmHWM 598.8 MB confirms the "~600 MB" figure in the header comment above, and
+# it is a TRUSTWORTHY peak rather than a starved lower bound: VmHWM is only
+# 1.05x VmRSS+VmSwap here, so the process has actually reached its natural
+# working set. (On the flue sidecars that same ratio was 1.8-2.1x, which is why
+# their ceilings could not be sized from it.)
+#
+# MemoryLow=768M is sized to hold the whole 598.8 MB working set with headroom
+# (1.28x the peak — the same margin kokoro-tts uses over its 2,465 MB VmHWM),
+# so the protected zone covers the model rather than part of it.
+#
+# MemoryMax=1G is a leak BACKSTOP, and a ceiling is safe here for a reason that
+# does NOT generalise from the binary: this is the same llama-server binary that
+# is MemoryMax-EXEMPT on :11434, but that exemption is about unaccounted
+# GPU/NvMap pages, and this instance runs `--n-gpu-layers 0`. Verified in
+# /proc/1564/maps: exactly ONE /dev/nv mapping, a single 4 KB
+# /dev/nvgpu/igpu0/ctrl control page, and ZERO /dev/nvmap allocations — the
+# nvidia .so files are mapped (Jetson CUDA build) but are ordinary file-backed
+# pages. No weights and no KV cache on device, so cgroup accounting is COMPLETE
+# and the ceiling genuinely bounds this cgroup.
+#
+# The 1.33x ceiling-to-floor ratio is below the usual 3x rule and is a
+# documented TIGHT_CEILING_OK exception, for kokoro-tts's reason: the 3x rule
+# exists for runtimes whose UNCOVERED allocation grows with load (V8 external
+# buffers). llama.cpp here is bounded at startup — fixed Q8_0 GGUF, fixed
+# --ctx-size 4096 KV cache, --parallel 1 — so the only allocation outside the
+# floor is per-request grammar/jinja/HTTP scratch for ONE in-flight request.
+# The trade is stated rather than assumed: an OOM kill here is a DEGRADATION,
+# not an outage (Restart=always + the fallback above), so the tighter backstop
+# is preferred over leaving 2.5 GB of unswappable headroom on a 15.6 GB box
+# where llama-server holds ~6.4 GB.
+MemorySwapMax=0
+MemoryLow=768M
+MemoryMax=1G
 Restart=always
 RestartSec=5
 TimeoutStartSec=120
