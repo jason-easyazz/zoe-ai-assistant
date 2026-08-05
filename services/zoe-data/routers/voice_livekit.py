@@ -51,8 +51,15 @@ from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
+
+# Auth inputs for `_require_livekit_media_auth` (below). Both are imported at
+# module level so they are the SAME callables FastAPI keys `dependency_overrides`
+# on. `routers.voice_tts` never imports this module at module level (only lazily,
+# inside a function), so there is no cycle; `main.py` imports voice_tts first.
+from auth import get_current_user
+from routers.voice_tts import _validate_device_token
 
 logger = logging.getLogger(__name__)
 
@@ -1490,25 +1497,75 @@ async def livekit_health() -> dict:
 _pending_cancel: set[str] = set()
 
 
-async def _get_current_user_soft(request: Request) -> dict:
-    """Resolve user from request without hard-failing (returns guest on error)."""
-    try:
-        from auth import get_current_user
-        from fastapi.security.utils import get_authorization_scheme_param
-        async def _gen():
-            yield request
-        gen = _gen()
-        db_gen = None
-        return await get_current_user(request)
-    except Exception:
-        return {"user_id": "guest", "role": "guest"}
+async def _require_livekit_media_auth(
+    request: Request,
+    device: Optional[dict] = Depends(_validate_device_token),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Gate for the LiveKit HTTP media endpoints — never anonymous.
+
+    `POST /livekit-audio` accepts an audio upload and runs the FULL
+    STT → brain → TTS pipeline on the Jetson, returning the transcript and a
+    synthesised reply; `POST /livekit-cancel` addresses an in-flight one. Both
+    previously went through a `_get_current_user_soft()` helper that resolved
+    the caller inside a bare `try/except Exception` and returned guest on ANY
+    failure. Two distinct holes, both confirmed against the live box:
+
+      * an unauthenticated LAN caller got the whole speech-to-brain pipeline —
+        free GPU compute, and a brain turn attributed to `guest`;
+      * the bare `except` SWALLOWED the 401 `get_current_user` raises for an
+        INVALID or EXPIRED session, so a bad credential was treated identically
+        to no credential — strictly worse than a deliberate guest default.
+
+    Accepted, in order of strength:
+      1. a valid ``X-Device-Token`` (the Pi voice daemon / provisioned kiosk),
+      2. a signed-in, non-guest session,
+      3. a VALIDATED session that resolves to guest — the estate kiosk's own
+         principal (`/api/auth/guest` at boot). An expired or unknown session id
+         never reaches this branch: ``get_current_user`` raises 401 first, and
+         that exception now PROPAGATES instead of being swallowed.
+
+    The distinguisher for (3) is the presence of the header, because a
+    credential-less request and a real guest session both come back as
+    ``role="guest"`` from ``get_current_user``.
+
+    Deliberately WEAKER than `voice_tts._require_voice_auth` (which rejects
+    guests outright): the estate panel has no device token and boots as a guest
+    with a 30-minute session and no sliding refresh, so rejecting guests breaks
+    the panel's voice turn. This closes the anonymous path; it does not make the
+    pipeline private while `/api/auth/guest` is open on the LAN.
+
+    Mirrors `voice_tts._require_livekit_auth` (PR #1649) branch for branch. The
+    two live in different modules and #1649 is unmerged, so the idiom is
+    duplicated today; consolidating them into one shared helper is a follow-up
+    for once both have landed.
+    """
+    if device:
+        return {
+            "source": "device",
+            "panel_id": device.get("panel_id"),
+            "user_id": device.get("user_id", "voice-daemon"),
+            "role": device.get("role") or "voice-daemon",
+        }
+    if user.get("role") not in (None, "guest"):
+        return {"source": "session", "user_id": user.get("user_id"), "role": user.get("role")}
+    if request.headers.get("X-Session-ID", "").strip():
+        return {
+            "source": "guest-session",
+            "user_id": user.get("user_id") or "guest",
+            "role": user.get("role") or "guest",
+        }
+    raise HTTPException(
+        status_code=401,
+        detail="The LiveKit voice pipeline requires a session or a device token",
+    )
 
 
 @router.post("/livekit-audio")
 async def livekit_audio(
-    request: Request,
     audio: UploadFile = File(...),
     session_id: str = Form(""),
+    caller: dict = Depends(_require_livekit_media_auth),
 ) -> JSONResponse:
     """Browser-side VAD HTTP upload endpoint.
 
@@ -1516,8 +1573,7 @@ async def livekit_audio(
     full STT → LLM → TTS pipeline, and returns the result as JSON.
     Also used by touch/voice.html.
     """
-    user = await _get_current_user_soft(request)
-    user_id = user.get("user_id", "guest")
+    user_id = caller.get("user_id") or "guest"
     sid = session_id or f"lk-http-{user_id}"
     cancel_key = f"{user_id}:{sid}"
 
@@ -1584,10 +1640,12 @@ async def livekit_audio(
 
 
 @router.post("/livekit-cancel")
-async def livekit_cancel(request: Request) -> JSONResponse:
+async def livekit_cancel(
+    request: Request,
+    caller: dict = Depends(_require_livekit_media_auth),
+) -> JSONResponse:
     """Cancel a pending livekit-audio pipeline request."""
-    user = await _get_current_user_soft(request)
-    user_id = user.get("user_id", "guest")
+    user_id = caller.get("user_id") or "guest"
     try:
         body = await request.json()
         sid = body.get("session_id", f"lk-http-{user_id}")
