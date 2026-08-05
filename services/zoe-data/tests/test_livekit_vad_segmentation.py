@@ -651,20 +651,31 @@ def test_cooldown_watchdog_respects_a_live_deadline(monkeypatch):
 
 # ── 6. Real recordings — corpus when present, synthetic always ─────────────
 
-def _corpus_utterance_frames():
-    """160-sample frames from a real 16 kHz mono recording, or None off-box.
+_CORPUS_STRIDE = 37              # a stable spread, not one end of the corpus
+_CORPUS_SLICE = 7                # members evaluated — a population, not a pick
 
-    Per test_voice_barge_in.py: the corpus is live, growing and uncurated, so
-    stride it and reject off-format / near-silent members rather than binding to
-    one arbitrary file.
+
+def _corpus_utterance_slice(limit=_CORPUS_SLICE):
+    """Up to `limit` (name, frames) pairs from real 16 kHz mono recordings.
+
+    `~/.zoe-voice-samples` is a live, growing, UNCURATED save-everything capture,
+    so this returns a deterministic SLICE, not a chosen file. Off-format members
+    (24 kHz resamples, one non-RIFF file) and near-silent false wakes are skipped
+    as known corpus facts rather than failed on — see
+    services/zoe-data/tests/AGENTS.md. The caller then asserts a corpus-LEVEL
+    property over the slice; binding to `[0]` is what left test_voice_barge_in.py
+    red for weeks with the code and the model untouched.
     """
     if not os.path.isdir(_SAMPLES_DIR):
-        return None, None
+        return []
     try:
         names = sorted(f for f in os.listdir(_SAMPLES_DIR) if f.endswith(".wav"))
     except OSError:
-        return None, None
-    for name in names[::37]:
+        return []
+    picked = []
+    for name in names[::_CORPUS_STRIDE]:
+        if len(picked) >= limit:
+            break
         try:
             with wave.open(os.path.join(_SAMPLES_DIR, name), "rb") as handle:
                 if (handle.getframerate(), handle.getnchannels(),
@@ -678,29 +689,28 @@ def _corpus_utterance_frames():
         frames = _framed(raw)
         loud = sum(1 for f in frames if v._rms(f) >= v._VAD_ENERGY_THRESHOLD)
         if loud >= v._VAD_MIN_SPEECH_FRAMES * 4:     # a real utterance, not a false wake
-            return name, frames
-    return None, None
+            picked.append((name, frames))
+    return picked
 
 
 @pytest.fixture(params=["synthetic", "corpus"])
-def utterance_frames(request):
-    if request.param == "corpus":
-        name, frames = _corpus_utterance_frames()
-        if frames is None:
-            pytest.skip(f"no usable 16k mono recording in {_SAMPLES_DIR} (CI has no corpus)")
-        return name, frames
-    return "synthetic", _speech_frames(60)
+def utterance_population(request):
+    """The audio under test, as a POPULATION in both arms.
 
-
-def test_real_utterance_segments_into_one_turn(monkeypatch, utterance_frames):
-    """End to end on actual audio: a recording followed by the silence window
-    must produce exactly one utterance, and it must contain the speech.
-
-    A corpus-level property, not a per-file one — real recordings carry leading
-    room tone and internal pauses, so assert the SHAPE of the segmentation
-    rather than an exact frame count.
+    Synthetic is a population of one — deterministic, so "strict majority" means
+    it must hold exactly. Corpus is the strided slice. Identical assertions run
+    over both, which is what makes keeping a CI arm worth anything.
     """
-    label, frames = utterance_frames
+    if request.param == "corpus":
+        members = _corpus_utterance_slice()
+        if not members:
+            pytest.skip(f"no usable 16k mono recording in {_SAMPLES_DIR} (CI has no corpus)")
+        return members
+    return [("synthetic", _speech_frames(60))]
+
+
+def _segment_one(monkeypatch, frames):
+    """Drive `frames` + the silence window through _collect_audio_stream once."""
     _clean_env(monkeypatch)
     mod = _install_fake_aiortc(monkeypatch)
     calls = _capture_pipeline(monkeypatch)
@@ -715,18 +725,78 @@ def test_real_utterance_segments_into_one_turn(monkeypatch, utterance_frames):
         await asyncio.sleep(0)
 
     _run(_body())
+    return calls, local, ps_map[sid]
 
-    assert len(calls) == 1, (
-        f"[{label}] real speech must reach the pipeline as EXACTLY one utterance, "
-        f"got {len(calls)} — zero means it never endpointed, more than one means "
-        f"the segmenter cut the speaker off mid-sentence"
+
+def test_real_utterance_segments_into_one_turn(monkeypatch, utterance_population):
+    """End to end on actual audio: a recording plus the silence window must
+    produce exactly one utterance, and it must still contain the speech.
+
+    Asserted as a CORPUS-LEVEL property. The corpus is uncurated and growing, so
+    an individual member can legitimately be a multi-utterance clip, background
+    TV, or a recording holding a pause longer than the silence window; requiring
+    one arbitrary file to segment into exactly one turn reddens unrelated builds
+    while segmentation behaviour is unchanged. So: a strict MAJORITY must yield
+    exactly one turn, while every member that endpoints at all must keep its
+    speech and clear its buffer — those stay per-member and falsifiable.
+    """
+    verdicts = []
+    for label, frames in utterance_population:
+        calls, local, state = _segment_one(monkeypatch, frames)
+        verdicts.append((label, len(calls)))
+
+        if calls:
+            assert {"type": "state", "state": "listening"} in local.sent, \
+                f"[{label}] speech-start must be broadcast to the browser"
+            loud = sum(1 for f in calls[0]["frames"] if v._rms(f) >= v._VAD_ENERGY_THRESHOLD)
+            assert loud >= v._VAD_MIN_SPEECH_FRAMES, (
+                f"[{label}] the utterance handed to STT holds only {loud} speech "
+                f"frames — the segmentation clipped the speech"
+            )
+            assert state["frames"] == [], f"[{label}] buffer must be cleared after the turn"
+
+    singles = sum(1 for _, n in verdicts if n == 1)
+    assert singles * 2 > len(verdicts), (
+        f"only {singles}/{len(verdicts)} recordings segmented into exactly one "
+        f"utterance — zero means it never endpointed, more than one means the "
+        f"segmenter cut the speaker off mid-sentence. Per-member counts: {verdicts}"
     )
-    assert {"type": "state", "state": "listening"} in local.sent, \
-        f"[{label}] speech-start must be broadcast to the browser"
-    utterance = calls[0]["frames"]
-    loud = sum(1 for f in utterance if v._rms(f) >= v._VAD_ENERGY_THRESHOLD)
-    assert loud >= v._VAD_MIN_SPEECH_FRAMES, (
-        f"[{label}] the utterance handed to STT holds only {loud} speech frames — "
-        f"the segmentation clipped the speech"
+
+
+def test_majority_assertion_can_actually_fail(monkeypatch, utterance_population):
+    """NEGATIVE CONTROL for the majority: a broken segmenter must break it.
+
+    A "a majority passed" assertion is exactly the shape that quietly stops
+    proving anything — loosen a threshold and it stays green forever. So run the
+    same population through a segmenter that can never endpoint (nothing clears
+    the energy gate) and require the majority to be LOST. The population itself
+    is selected with the real threshold first, so this breaks the code under
+    test, not the fixture.
+    """
+    monkeypatch.setattr(v, "_VAD_ENERGY_THRESHOLD", 10 ** 9)
+    counts = [len(_segment_one(monkeypatch, frames)[0]) for _, frames in utterance_population]
+    singles = sum(1 for n in counts if n == 1)
+    assert singles * 2 <= len(counts), (
+        f"a segmenter that can never detect speech still produced {singles}/"
+        f"{len(counts)} single-turn results — the majority assertion above is "
+        f"not measuring segmentation at all"
     )
-    assert ps_map[sid]["frames"] == [], f"[{label}] buffer must be cleared after the turn"
+
+
+def test_corpus_slice_is_a_population_not_a_pick():
+    """CONTROL for the test above: it must be reading more than one recording.
+
+    If the slice ever collapses to a single member on the box, the majority
+    assertion silently degenerates back into the per-file binding it replaced —
+    still green, and just as fragile. Off-box there is no corpus and nothing to
+    check, so this skips rather than failing CI.
+    """
+    members = _corpus_utterance_slice()
+    if not members:
+        pytest.skip(f"no corpus at {_SAMPLES_DIR} (CI has none) — nothing to sample")
+    assert len({name for name, _ in members}) == len(members), "duplicate members sampled"
+    assert len(members) >= 3, (
+        f"only {len(members)} usable recording(s) found by a stride-{_CORPUS_STRIDE} "
+        f"walk — the majority assertion needs a population. Either the corpus "
+        f"shrank or the format filter now rejects too much."
+    )
