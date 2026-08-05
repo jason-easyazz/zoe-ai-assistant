@@ -65,10 +65,9 @@ fastembed
 # was trained with (labs/setfit-router/requirements.txt).
 scikit-learn==1.7.2
 joblib==1.5.3
-# Speaker diarization for ambient memory (Jetson CUDA only)
-pyannote.audio>=3.3.2
-# VAD for barge-in and ambient capture (server-side copy; Pi uses same package)
-silero-vad>=5.1
+# NOTE: no `silero-vad` package pin here on purpose — voice_vad.py loads the raw
+# Silero v5 .onnx (ZOE_SILERO_VAD_MODEL, default /home/zoe/models/silero_vad.onnx)
+# through onnxruntime directly, so the PyPI wrapper is not a dependency.
 # Proactive engine scheduler
 APScheduler==3.10.4
 SQLAlchemy>=2.0,<3.0
