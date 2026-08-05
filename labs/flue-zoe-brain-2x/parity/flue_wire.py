@@ -48,8 +48,15 @@ THINKING_SENTINEL_PREFIX = "__THINKING__:"
 
 
 def base_url() -> str:
-    """Sidecar base URL. Override for a throwaway instance — NEVER default to :3578 in a test."""
-    return os.environ.get("ZOE_BRAIN_URL", "http://127.0.0.1:3578")
+    """Sidecar base URL. Override with ``ZOE_BRAIN_URL`` for a throwaway instance.
+
+    Defaults to :3579 — this directory's OWN sidecar (`flue-zoe-brain-2x.service`),
+    NOT the live :3578 one. The copy this file was ported from defaulted to :3578
+    while its own docstring said never to do that, which is precisely how a lab
+    probe ends up aimed at the live brain. Here the correct default is also the
+    safe one: :3578 speaks the beta wire and would reject these requests anyway.
+    """
+    return os.environ.get("ZOE_BRAIN_URL", "http://127.0.0.1:3579")
 
 
 def _headers(stream: bool) -> dict[str, str]:

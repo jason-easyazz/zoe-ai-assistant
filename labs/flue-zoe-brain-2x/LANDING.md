@@ -11,7 +11,7 @@ recalls against the real Gemma brain + zoe-data (scratch port only; do NOT touch
 the live `:3578` sidecar):
 
 ```bash
-npm install && npm run build
+npm ci && npm run build
 ZOE_BRAIN_OPEN=1 ZOE_BRAIN_ALLOW_WRITES=false \
   ZOE_DATA_URL=http://127.0.0.1:8000 PORT=3579 node dist/server.mjs
 ```
@@ -50,7 +50,7 @@ sentinels + deltas against the real Gemma brain.
    discipline — do NOT touch the live services):
 
    ```bash
-   npm install && npm run build
+   npm ci && npm run build
    ZOE_BRAIN_OPEN=1 ZOE_BRAIN_USER_ID=family-admin ZOE_BRAIN_ALLOW_WRITES=false \
      ZOE_DATA_URL=http://127.0.0.1:8000 PORT=3579 node dist/server.mjs
    ```
@@ -114,7 +114,7 @@ yet.
    discipline — do NOT touch the live services):
 
    ```bash
-   npm install && npm run build
+   npm ci && npm run build
    ZOE_BRAIN_OPEN=1 ZOE_BRAIN_USER_ID=family-admin ZOE_BRAIN_ALLOW_WRITES=false \
      ZOE_DATA_URL=http://127.0.0.1:8000 PORT=3579 node dist/server.mjs
    ```
@@ -172,7 +172,7 @@ cannot reach zoe-data `:8000` or llama-server `:11434`.
 2. Build and start the sidecar from `labs/flue-zoe-brain/`:
 
    ```bash
-   npm install && npm run build
+   npm ci && npm run build
    DEMO_USER_ID=<non-admin-demo-user>
    ZOE_BRAIN_OPEN=1 ZOE_BRAIN_USER_ID="$DEMO_USER_ID" ZOE_BRAIN_ALLOW_WRITES=true \
      ZOE_DATA_URL=http://127.0.0.1:8000 PORT=3579 node dist/server.mjs

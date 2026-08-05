@@ -31,9 +31,11 @@
 > Cutover is therefore a coordinated change on both sides — see
 > `parity/flue_wire.py` for the reference implementation of the new wire.
 >
-> **Cutover is a deliberate operator step:** point the unit and `ZOE_BRAIN_DB` at
-> this directory, having decided explicitly what happens to live session history.
-> Never via the auto-deploy path.
+> **Cutover is a deliberate operator step:** start this directory's own unit on
+> `:3579` and point zoe-data at it, having decided explicitly what happens to live
+> session history. Never via the auto-deploy path. Leave `ZOE_BRAIN_DB` at its
+> default — the two sidecars must not share a store, or neither direction of the
+> rollback works. Full sequence: "Cutover runbook" below.
 
 A Flue-hosted Pi `Agent` on Zoe's local Gemma brain — replaces the per-turn
 `pi --mode rpc` subprocess behind the `run_zoe_core` seam
@@ -218,9 +220,11 @@ emits that exact contract via **content negotiation** on the existing route:
   `services/zoe-data/zoe_core_client.py` yields — Python `json.dumps` default
   separators, `ensure_ascii`), terminated by `{"done": true}` on success or
   `{"error": "..."}` on failure.
-- `POST ... ?wait=result` (today's whole-result mode) and the plain 202
-  admission are **untouched** — `?wait=result` wins even if the Accept header
-  is also present.
+- `POST ... ?wait=result` is **GONE on 2.x** — the runtime rejects it with HTTP
+  400 (*"Agent prompts are fire-and-forget"*), measured 2026-08-06. The beta's
+  special case where that query outranked the Accept header went with it (see
+  `src/streaming.ts`). The plain 202 admission is unchanged; to get a whole
+  result, admit and then `GET` the same URL.
 
 Auth is unchanged (the streaming path upgrades the response only after the
 fail-closed route + admission succeed); identity binding and the write gate
@@ -233,7 +237,7 @@ byte-pinned tests: `test/sentinel_stream.test.ts`. Kill switch:
 ## Build / typecheck / test
 
 ```sh
-npm install
+npm ci
 npm run typecheck          # tsc --noEmit
 npm run build              # flue build --target node → dist/server.mjs
 npm test                   # offline unit tests (node --test, type-stripping)
@@ -258,8 +262,8 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_STREAM_TIMEOUT_S` | `180` | streamed-turn deadline (mirrors prod `ZOE_CORE_TIMEOUT_S`) |
 | `ZOE_BRAIN_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible brain endpoint |
 | `ZOE_BRAIN_API_KEY` | `local-no-key` | placeholder key for the completions client |
-| `ZOE_BRAIN_DB` | `<package>/data/zoe-brain.db` | Flue durability sqlite path |
-| `PORT` | `3000` | HTTP port (the systemd unit sets `3578`) |
+| `ZOE_BRAIN_DB` | `<package>/data/zoe-brain.db` | Flue durability sqlite path — **leave unset**, see the storage note under "Run as a service" |
+| `PORT` | `3000` | HTTP port (`flue-zoe-brain-2x.service` sets **`3579`**, not 3578) |
 
 The agent route **fails closed**: with neither `ZOE_BRAIN_TOKEN` nor
 `ZOE_BRAIN_OPEN=1` set, every `POST /agents/zoe/:id` request is rejected with
@@ -357,35 +361,55 @@ vars go in the same file. One copy-paste block:
 # ── FLIP: zoe-data 1.x sidecar (:3578) -> Flue 2.x sidecar (:3579) ───────────
 set -euo pipefail
 ENVF=/home/zoe/assistant/services/zoe-data/.env
+BAK="${ENVF}.pre-flue2x"
 
 # 1. Start the 2.x sidecar (built + configured per "Run as a service" above).
 systemctl --user start flue-zoe-brain-2x
 curl -fsS http://127.0.0.1:3579/health   # must print {"ok":true,...}
 
-# 2. Point zoe-data at it. The 1.x sidecar stays UP and warm — do not stop it.
-printf '\n# Flue 2.x cutover %s\nZOE_FLUE_WIRE=2\nZOE_FLUE_BRAIN_URL=http://127.0.0.1:3579\n' \
-  "$(date -Is)" >> "$ENVF"
+# 2. Snapshot the env file FIRST. Rollback restores this exact file, so it
+#    survives a pre-existing ZOE_FLUE_BRAIN_URL that a blind delete would lose.
+#    Refuse to overwrite an existing snapshot — that means a flip is already in
+#    progress and the pre-flip state is the one worth keeping.
+[ -e "$BAK" ] && { echo "FAIL: $BAK exists — already flipped? roll back first."; exit 1; }
+cp -p "$ENVF" "$BAK"
 
-# 3. Restart zoe-data and wait for it to actually serve (is-active lies).
+# 3. Point zoe-data at the 2.x sidecar. The 1.x sidecar stays UP and warm —
+#    DO NOT stop it; it is the rollback target. Replace-or-append, so a rerun
+#    does not accumulate duplicate keys (last value would win, silently).
+for kv in "ZOE_FLUE_WIRE=2" "ZOE_FLUE_BRAIN_URL=http://127.0.0.1:3579"; do
+  k=${kv%%=*}
+  if grep -q "^${k}=" "$ENVF"; then
+    sed -i "s|^${k}=.*|${kv}|" "$ENVF"
+  else
+    printf '%s\n' "$kv" >> "$ENVF"
+  fi
+done
+grep -E '^(ZOE_BRAIN_BACKEND|ZOE_FLUE_WIRE|ZOE_FLUE_BRAIN_URL)=' "$ENVF"   # eyeball it
+
+# 4. Restart zoe-data and wait for it to actually SERVE (is-active lies).
 systemctl --user restart zoe-data
 for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8000/health >/dev/null && break; sleep 2; done
 curl -fsS http://127.0.0.1:8000/health
 
-# 4. THE GATE. Must pass on the FLIPPED config, not before it.
+# 5. THE GATE. Must pass on the FLIPPED config, not before it.
 cd /home/zoe/assistant
 flock /tmp/zoe-voice-harness.lock \
   python3 scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote
 # said-vs-did must not regress and per-stage medians must not regress.
-# Non-zero exit or WARN => ROLL BACK.
+# Non-zero exit, WARN, or a SKIP (low memory — a skip is NOT a pass) => ROLL BACK.
 ```
 
 ```sh
 # ── ROLLBACK: back to the 1.x sidecar (:3578) ────────────────────────────────
 set -euo pipefail
 ENVF=/home/zoe/assistant/services/zoe-data/.env
+BAK="${ENVF}.pre-flue2x"
 
-# Drop the two cutover lines and the comment that introduced them.
-sed -i '/^# Flue 2.x cutover /d;/^ZOE_FLUE_WIRE=/d;/^ZOE_FLUE_BRAIN_URL=/d' "$ENVF"
+# Restore the exact pre-flip file rather than deleting keys, so anything that
+# was already set (including a prior ZOE_FLUE_BRAIN_URL) comes back as it was.
+[ -e "$BAK" ] || { echo "FAIL: no $BAK — do not guess; inspect $ENVF by hand."; exit 1; }
+cp -p "$BAK" "$ENVF" && rm -f "$BAK"
 
 systemctl --user restart zoe-data
 for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8000/health >/dev/null && break; sleep 2; done
@@ -395,7 +419,12 @@ systemctl --user stop flue-zoe-brain-2x   # optional; leaving it running is harm
 ```
 
 Rollback works because the 1.x sidecar was never stopped and its v5 store was
-never touched. That is the reason step 2 says *do not stop it*.
+never touched. That is why step 3 says *do not stop it* — and why the two units
+must never share `ZOE_BRAIN_DB`.
+
+Once the flip is accepted and you no longer want the escape hatch, delete the
+snapshot (`rm services/zoe-data/.env.pre-flue2x`) — it is a copy of a secret-
+bearing file and should not linger.
 
 ### Guards
 

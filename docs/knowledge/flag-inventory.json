@@ -13,7 +13,7 @@
       },
       "ZOE_BRAIN_URL": {
         "defaults": [
-          "'http://127.0.0.1:3578'"
+          "'http://127.0.0.1:3579'"
         ],
         "in_env_example": false,
         "readers": [
