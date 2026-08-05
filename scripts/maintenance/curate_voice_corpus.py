@@ -311,6 +311,15 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
             result["errors"].append(f"{item['file']}: destination exists, left in place")
             continue
         os.makedirs(item["dest_dir"], exist_ok=True)
+        # Re-checked at MOVE time, not trusted from plan time: `shutil.move`
+        # clobbers an existing destination, so anything appearing in that window
+        # is silently destroyed (cross-review, #1643).
+        if os.path.exists(item["dest"]):
+            result["conflicts"] += 1
+            result["errors"].append(
+                f"{item['file']}: destination appeared after planning, left in place"
+            )
+            continue
         try:
             shutil.move(item["source"], item["dest"])
         except Exception as exc:
@@ -325,7 +334,8 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
         if os.path.exists(manifest_path):
             try:
                 with open(manifest_path) as fh:
-                    entries = json.load(fh).get("entries", [])
+                    prior = json.load(fh).get("entries")
+                entries = prior if isinstance(prior, list) else []
             except Exception:
                 entries = []
         for item in items:
@@ -351,8 +361,12 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
                      "replay set but preserved on disk."),
             "entries": entries,
         }
-        with open(manifest_path, "w") as fh:
+        # tmp + rename: a half-written manifest is not a manifest, and the files
+        # it describes have already moved.
+        tmp_path = manifest_path + ".tmp"
+        with open(tmp_path, "w") as fh:
             json.dump(payload, fh, indent=2, sort_keys=True)
+        os.replace(tmp_path, manifest_path)
         result["manifests"].append(manifest_path)
     return result
 
@@ -424,7 +438,7 @@ def main() -> int:
     ap.add_argument("--skip-vad", action="store_true",
                     help="format audit only (no speech scoring, nothing quarantined as non-speech)")
     ap.add_argument("--limit", type=int, default=0, help="scan only the first N files (debug)")
-    ap.add_argument("--json", help="write the full census here")
+    ap.add_argument("--json", help="write the full census here (a REPORT path: it is\n                    written on a dry run too, since it mutates nothing in the corpus)")
     ap.add_argument("--execute", action="store_true",
                     help="actually MOVE the failures into dated quarantine dirs "
                          "(default is a dry run; take flock /tmp/zoe-voice-harness.lock)")

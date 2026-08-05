@@ -4,9 +4,12 @@ Two things are pinned here:
 
 1. ``scripts/maintenance/curate_voice_corpus.py`` — the classifier (format probe
    + threshold decision), the move planner, and the "never deletes" property.
-   All synthetic WAVs, no model, no live corpus: runs in the fast ``ci_safe``
-   lane. The VAD-dependent half is a separate host-only test at the bottom
-   (``importorskip`` + model-present skip, matching test_voice_barge_in.py).
+   All synthetic WAVs, no model, no live corpus. The module-level ``ci_safe``
+   marker covers EVERY test here including the real-VAD one at the bottom — it
+   is inert rather than excluded, kept synthetic by a model-file ``skipif`` plus
+   ``importorskip``, and a test below pins both guards so the slim lane can
+   never actually load a model (cross-review, #1643: the earlier wording here
+   called it "a separate host-only test", which was false in marker terms).
 
 2. **Quarantine subdirectories must stay invisible to the replay probe.** The
    curator moves failures into ``<corpus>/quarantine-*-<date>/`` rather than
@@ -356,3 +359,32 @@ def test_score_speech_runs_the_real_vad(tmp_path):
     assert scores["peak"] < cvc.DEFAULT_SPEECH_THRESHOLD
     assert cvc.classify({"ok": True}, scores["peak"], cvc.DEFAULT_SPEECH_THRESHOLD)[0] == \
         cvc.CLASS_NONSPEECH
+
+
+def test_the_real_vad_test_stays_inert_in_the_ci_safe_lane():
+    """The module marker covers it, so its guards are what keep CI synthetic."""
+    name = "def test_score_speech_runs_the_real_vad"
+    src = Path(__file__).read_text()
+    decorators = src.split(name, 1)[0].rsplit("@pytest.mark", 1)[1]
+    assert "skipif(not os.path.isfile(_MODEL_PATH)" in decorators, "model guard lost"
+    # ONLY that test's own body — this test quotes the same literal, and a
+    # whole-file search would happily match itself.
+    body = src.split(name, 1)[1].split("\ndef ", 1)[0]
+    assert "importorskip(" + chr(34) + "onnxruntime" + chr(34) + ")" in body, "guard lost"
+
+
+def test_a_destination_appearing_after_planning_is_still_refused(tmp_path):
+    """TOCTOU: shutil.move clobbers, so the check must be at MOVE time."""
+    corpus = _fixture_corpus(tmp_path)
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    plan = cvc.plan_moves(rows, str(corpus), "20260805")
+    assert plan and not any(p["conflict"] for p in plan), "fixture must plan clean moves"
+
+    os.makedirs(plan[0]["dest_dir"], exist_ok=True)
+    Path(plan[0]["dest"]).write_bytes(b"pre-existing, must survive")
+
+    res = cvc.apply_moves(plan, str(corpus), 0.20, None, execute=True)
+
+    assert res["conflicts"] == 1 and res["moved"] == len(plan) - 1
+    assert Path(plan[0]["dest"]).read_bytes() == b"pre-existing, must survive"
+    assert (corpus / plan[0]["file"]).exists(), "the source moved despite the conflict"
