@@ -1,20 +1,56 @@
+# fastapi/pydantic are HELD at these versions on purpose — see the note at the
+# bottom of this file before bumping either.
 fastapi==0.125.0
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic[email]==2.5.0
-python-multipart==0.0.31
-bcrypt==4.1.2
-argon2-cffi==23.1.0
+python-multipart==0.0.32
+# bcrypt is CAPPED BELOW 5.0 DELIBERATELY. 5.0.0 turned bcrypt's 72-byte limit
+# from silent truncation into a `ValueError` on BOTH hashpw and checkpw, and
+# core/auth.py's password policy allows up to 128 characters — so any user whose
+# password exceeds 72 bytes would get a 500 on login instead of authenticating.
+# (It also breaks passlib 1.7.4, whose backend self-test probes with a 255-byte
+# secret; passlib is currently imported nowhere, but it is still installed here.)
+# 4.3.0 is the newest release without that behaviour change.
+bcrypt==4.3.0
+argon2-cffi==25.1.0
 pyjwt==2.13.0
-aiohttp==3.14.1
+aiohttp==3.14.3
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
 cryptography>=42.0.0
-typing-extensions==4.12.2
-email-validator==2.1.0
-redis==5.0.1
+typing-extensions==4.16.0
+email-validator==2.3.0
+# redis is HELD IN THE 5.x LINE. 6.0.0 made retries default (3, then 10 in 8.0.0,
+# with exponential backoff) where 5.x did none, and 8.0.0 also defaults
+# socket_timeout/socket_connect_timeout to 5s. api/dependencies.py builds a
+# client against REDIS_HOST (default `zoe-redis`) — a host that was RETIRED in
+# March 2026 and no longer exists — so every connection attempt fails. Under 5.x
+# that fails fast and drops to the in-memory limiter; under 8.x it would retry
+# ten times with backoff first.
+redis==5.3.1
 psycopg2-binary>=2.9.9
+# httpx <0.28 is deliberate — see commit 74120547 (auth test compatibility).
 httpx>=0.27.0,<0.28
-pytest==9.0.3
-pytest-asyncio==1.3.0
-pytest-cov==7.0.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+
+# ── DEFERRED: fastapi 0.125.0 -> 0.141.1 + pydantic 2.5.0 -> 2.13.4 ───────────
+# These two must move together (fastapi 0.141.1 requires pydantic>=2.9.0, and
+# pydantic 2.13.4 requires typing-extensions>=4.14.1 — already bumped above), but
+# the pair was held back out of this currency sweep because it is a behavioural
+# change to a LIVE auth service, not a routine bump:
+#   * FastAPI 0.132.0 made `strict_content_type` default TRUE — JSON requests
+#     without a valid `Content-Type` header are now REJECTED. The browser UI does
+#     send it (services/zoe-ui/dist/js/auth.js), but the Pi daemon, panel and
+#     internal service callers have not been audited.
+#   * fastapi 0.141.1 drops its `starlette<0.51` ceiling, so it resolves Starlette
+#     1.x — a major jump that removes `@app.route`, `@app.on_event`,
+#     `add_event_handler` and the old Jinja2Templates signatures. FastAPI shims
+#     the ones it owns; direct Starlette imports are not shielded.
+#   * pydantic 2.9.0 switched `Field(pattern=...)` from `re.match` to `re.search`,
+#     silently loosening any unanchored pattern (this file's callers use several),
+#     and 2.8.0 changed smart-union matching.
+# Do it as its own PR: audit every non-browser client for Content-Type, grep for
+# direct `starlette` imports, and anchor the `pattern=` constraints first.
