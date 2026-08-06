@@ -372,10 +372,19 @@ def test_read_only_add_api_route_is_not_flagged(tmp_path):
 
     `add_api_route` defaults to GET, and an explicit `methods=["GET"]` is a read.
     Neither is state-changing, so neither needs the gate.
+
+    The third case is what makes the CONSTANT RESOLUTION load-bearing rather
+    than merely nice: without it `methods=READ_ONLY` is unresolved, the
+    fail-closed rule treats it as state-changing, and a read-only route gets
+    reported as an ungated security hole. Failing closed is right for the
+    genuinely unknowable case; resolving what IS knowable is what keeps that
+    from becoming noise.
     """
     for suffix in (
         '\n\napp.add_api_route("/tools/status", tool_status)\n',
         '\n\napp.add_api_route("/tools/status", tool_status, methods=["GET"])\n',
+        '\n\nREAD_ONLY = ["GET"]\n'
+        'app.add_api_route("/tools/status", tool_status, methods=READ_ONLY)\n',
     ):
         read_only = TEMPLATE_MAIN_PY + "\n\nasync def tool_status():\n    return {}\n" + suffix
         _, errors, _ = run_validator(build_module(tmp_path, main_py=read_only))
