@@ -60,8 +60,12 @@ modules/your-module-name/
 
 In `main.py`, define tools that Zoe AI can call:
 
+State-changing routes are **token-gated and fail closed** — see
+`require_service_token` in the full `main.py` template below. This is the module
+contract (`modules/AGENTS.md`), not optional hardening.
+
 ```python
-@app.post("/tools/your_action")
+@app.post("/tools/your_action", dependencies=[Depends(require_service_token)])
 async def tool_your_action(request: YourRequest):
     """
     Tool: your_module.your_action
@@ -118,9 +122,11 @@ docker compose -f docker-compose.module.yml up -d
 # Test health
 curl http://localhost:YOUR_PORT/health
 
-# Test a tool
+# Test a tool. The token header is REQUIRED: without it the gate returns 401,
+# and if ZOE_YOURMODULE_SERVICE_TOKEN is unset the module fails closed with 503.
 curl -X POST http://localhost:YOUR_PORT/tools/your_action \
   -H "Content-Type: application/json" \
+  -H "X-Zoe-Service-Token: ${ZOE_YOURMODULE_SERVICE_TOKEN}" \
   -d '{"parameter": "value"}'
 ```
 
