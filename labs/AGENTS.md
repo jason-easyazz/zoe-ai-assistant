@@ -36,6 +36,19 @@ with its own README/RUNBOOK and is self-contained.
   `~/.zoe/multica_dispatch_paused` exists, `ZOE_EXECUTOR_DISPATCH` defaults to
   `dry` (poll + log, mutate nothing), and it claims at most one task at a time.
   No other lab may ship a unit without amending this contract.)
+- ⚠ **`labs/flue-zoe-brain/` AND `labs/flue-zoe-telegram/` ARE AUTO-DEPLOYED.** They
+  are the two labs where "it's only a lab directory" is false. `.github/workflows/deploy.yml`
+  gates on `git diff --quiet "$OLD_SHA" HEAD -- labs/flue-zoe-brain/` and, on ANY
+  diff, runs `npm ci && npm run build && systemctl --user restart
+  flue-zoe-brain.service` on the Jetson — the live voice brain. A merged commit
+  touching one line under that path reaches production without any further
+  decision. So: **breaking or version-bumping work goes in a SIBLING directory**
+  (see `flue-zoe-brain-2x/`), never in place, and the deployed path stays
+  byte-identical to `main` on such a branch. Verify before committing with
+  `git diff origin/main --stat -- labs/flue-zoe-brain/` — it must print nothing.
+  A sibling name does NOT match that pathspec (git treats the trailing slash as an
+  exact directory component), which is what makes the pattern safe; re-verify if a
+  future path is chosen differently.
 - Do **not** let lab **harness/agent** work point at the local voice brain on
   `:11434` (Gemma-4-E4B) for *its own* engineering work — harnesses must use a
   separate harness model so the live GPU slot is never contended. (Exception: a
@@ -138,6 +151,52 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   discovers `*_gate.py` modules; corpus + adversarial gates today). LAB-only,
   hand-run against the live host, never CI-wired. See
   `flue-zoe-brain/parity/README-GATES.md`.
+- `flue-zoe-brain-2x/` — the **PARALLEL Flue 2.0.1 port** of `flue-zoe-brain/`,
+  which stays on `@flue/*@1.0.0-beta.6` and remains the deployed sidecar on
+  `:3578`. A separate directory is the whole point, for two reasons that both
+  make an in-place bump unsafe: (a) the deployed path auto-deploys on any diff
+  (see Forbidden above); (b) Flue 2.x's persisted schema is **v8 against the
+  beta's v5, reset-only** — the runtime rejects an older database *before any
+  application code runs*, and a 2.x process that has written a v8 store cannot be
+  rolled back to the beta either. Cutover is therefore a deliberate operator step,
+  never an auto-deploy.
+  **Not wired to CI, and not cut over — the live brain lane is untouched.** It
+  does now ship an INERT unit template, `scripts/setup/systemd/flue-zoe-brain-2x.service`
+  on **`:3579`**, sized to run BESIDE the live `:3578` sidecar so a cutover is an
+  env flip with a warm fallback rather than a rebuild. Installing it enables
+  nothing; zoe-data cannot reach `:3579` until an operator sets
+  `ZOE_FLUE_BRAIN_URL`. Its memory caps mirror the live sidecar's exactly
+  (`MemorySwapMax=0` / `MemoryLow=512M` / `MemoryMax=2G`) and are pinned by
+  `tests/unit/test_systemd_memory_protection.py`. Leave `ZOE_BRAIN_DB` at its
+  default — a shared store would make the rollback impossible in both directions.
+  Cutover + rollback runbook: `flue-zoe-brain-2x/README.md`.
+  What differs from the beta sibling, all forced by deleted 2.x APIs:
+  `flue build` → **Vite** (`vite.config.ts` + `@flue/vite`; the `'use agent'`
+  build scan is what REGISTERS agents — mounting registers nothing);
+  `defineAgent` → the `'use agent'` directive + `export function Zoe()` with
+  `useModel`/`useTool` hooks (a module missing the directive is *silently* not an
+  agent — `test/agent_registration.test.ts` guards it); `registerProvider` /
+  `registerApiProvider` → `setProvider(createProvider({ api }))`, which is where
+  the per-turn tool-iteration cap re-seats (still OUR code — pi-agent-core 0.83's
+  loop is still `while (true)` with no first-party ceiling); the agent module's
+  `export const route` auth convention → Hono middleware in `src/auth.ts`;
+  `run({ input })` → `run({ data })` across all 21 tools.
+  **The wire contract changed and is NOT backward-compatible**: `?wait=result` is
+  actively rejected, and the POST body is a top-level DeliveredMessage
+  (`{"kind":"user","body":"…"}`) — so the live `services/zoe-data/zoe_flue_client.py`
+  cannot talk to a 2.x sidecar. `parity/flue_wire.py` is the reference
+  implementation of the new wire (fire-and-forget admission + NDJSON stream read)
+  and the model for that Phase-2 client change.
+  Also carries a prompt-prefix stability fix absent from the beta sibling: the
+  windowing anchor is quantised and derived from a mid-turn-stable basis, the
+  tool-cap wrap-up note moved off the system prompt, and tool disclosure derives
+  from the pre-window basis — see `src/context-window.ts` and
+  `test/context_window_anchor.test.ts`.
+  Regression net (hand-run, not CI-wired): `npm test` — 20 `test/*.test.ts` files
+  driven against an in-process mock OpenAI-compatible model, so no llama-server
+  and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
+  a throwaway port + data dir. Security- and cap-critical tests each carry a
+  negative control.
 - `needle-benchmark/` — LAB benchmark of Cactus Needle (26M single-shot
   function-calling model, MIT) as a CPU-only tool/intent router in front of the
   Gemma brain: routing accuracy vs the current Tier-0 regex + Tier-1 embedding
