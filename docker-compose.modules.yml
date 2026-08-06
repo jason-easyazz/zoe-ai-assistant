@@ -7,7 +7,42 @@
 
 services:
   music-assistant:
-    image: ghcr.io/music-assistant/server:stable
+    # Pinned by DIGEST (was the floating `:stable` tag). This image supplies the
+    # JavaScript engine the YouTube path depends on, and a floating tag can take
+    # it away without a single line changing in this repo.
+    #
+    # Why the JS engine matters: YouTube signs stream URLs with an obfuscated
+    # `n`/`sig` parameter recoverable only by EXECUTING YouTube's player JS.
+    # yt-dlp does that via the yt_dlp_ejs solver, which needs a JS runtime. MA
+    # supplies one itself -- its ytmusic provider manifest declares `deno==2.7.4`
+    # and the image bakes the binary at /app/venv/bin/deno (verified present and
+    # solving nsig challenges on the live box, 2026-08-04). We add nothing; we
+    # only stop the thing we depend on from changing unobserved.
+    #
+    # Without a runtime yt-dlp does NOT error -- it quietly falls back to player
+    # clients that serve PRE-SIGNED URLs (ANDROID_VR today). That keeps working
+    # until YouTube withdraws it, then playback dies with "no formats" and no
+    # dependency error to point at. Exactly the silent regression a digest pin
+    # is for. Note MA installs yt-dlp itself DYNAMICALLY at provider load
+    # (uv pip install yt-dlp[default]) -- that part is deliberately unpinned
+    # upstream and is not ours to control; the ENGINE is what the pin protects.
+    #
+    # TO BUMP: `docker pull ghcr.io/music-assistant/server:stable`, read the new
+    # digest from `docker image inspect --format '{{index .RepoDigests 0}}'`,
+    # update the line below, then prove it in TWO stages -- the unqualified probe
+    # defaults to the LIVE container, which is still on the OLD image at that
+    # point, so running it bare proves nothing about the bump:
+    #   1. before merging, against a volume-less candidate on the NEW image:
+    #      scripts/maintenance/music_jsruntime_probe.sh --engine-only <candidate>
+    #   2. after recreating the live container, the FULL probe:
+    #      scripts/maintenance/music_jsruntime_probe.sh
+    # Require both GREEN. Runbook (incl. the YouTube Music
+    # re-auth risk on restart): docs/knowledge/music-ytdlp-js-runtime.md
+    #
+    # Digest of ghcr.io/music-assistant/server:stable as of 2026-08-04, which is
+    # the image already running on the box -- so this pin changes nothing that
+    # is live and needs no restart to adopt.
+    image: ghcr.io/music-assistant/server@sha256:eef3ee7810d0e4702afa4a0ff55b10bbbfcaa16c98a277fe1b7f4cb6d5d426b4
     container_name: zoe-music-assistant
     network_mode: host
     volumes:
