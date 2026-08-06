@@ -2,9 +2,12 @@
 # =============================================================================
 # omp-acp-supervisor — bound a METERED ACP child's lifetime to its parent.
 #
-# Installed beside omp-omnigent-fenced at /home/zoe/.local/bin/, which the
-# zoe-omnigent container sees READ-ONLY at the identical path. The fence execs
-# this instead of exec'ing omp directly.
+# TRACKED TEMPLATE. The LIVE file is authoritative; an operator installs this
+# beside omp-omnigent-fenced at /home/zoe/.local/bin/ (install -Dm0755), which
+# the zoe-omnigent container sees READ-ONLY at the identical path. Change and
+# re-install in the SAME pass — byte-parity with live is this fence's only drift
+# detector (docs/knowledge/omp-builder-fence-install.md). The fence execs this
+# instead of exec'ing omp directly.
 #
 # WHY THIS EXISTS
 # ---------------
@@ -267,8 +270,38 @@ def main(argv: list[str]) -> int:
         _log("usage: omp-acp-supervisor <command> [args...]")
         return 78
 
-    _set_pdeathsig()
+    # ORDER IS LOAD-BEARING, and it is the whole point of this block.
+    #
+    # Until 2026-08-06 this armed PR_SET_PDEATHSIG and THEN read getppid(). If
+    # the runner died inside that window we were reparented to init, so
+    # ``original_ppid`` recorded **1**, and the getppid poll below then compared
+    # 1 against 1 forever — it can never fire, because nothing reparents an
+    # already-init-owned process again. Meanwhile Popen still launched the
+    # METERED child. Both parent-death detectors defeated at once, in the one
+    # case with no backstop: exactly the orphan-spend hole this supervisor
+    # exists to close, reopened by a startup ordering bug (cross-review #1650,
+    # P2; measured precedent, trial-002 — 49s of work past the "kill", then 8
+    # minutes orphaned on a dead ACP channel).
+    #
+    # So: capture the parent FIRST, refuse outright if we are already orphaned,
+    # arm, then re-check. A refused dispatch costs one harness error; an
+    # unkillable metered child costs money for as long as nobody notices.
     original_ppid = os.getppid()
+    if original_ppid <= 1:
+        _log(
+            "already orphaned at startup (ppid %d); refusing to launch %s"
+            % (original_ppid, argv[0])
+        )
+        return 78
+
+    _set_pdeathsig()
+
+    if os.getppid() != original_ppid:
+        _log(
+            "parent %d exited while arming parent-death detection; refusing to launch %s"
+            % (original_ppid, argv[0])
+        )
+        return 78
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         try:
@@ -300,6 +333,14 @@ def main(argv: list[str]) -> int:
     threading.Thread(
         target=_watch_parent, args=(original_ppid,), name="omp-supervisor-parent", daemon=True
     ).start()
+
+    # The pre-spawn checks above leave one narrow window — between the last
+    # getppid() and Popen returning — and PR_SET_PDEATHSIG cannot cover it,
+    # since it only fires on a death that happens AFTER it was armed. Re-check
+    # now that the child exists: the loop below turns this into an immediate
+    # group kill instead of waiting up to POLL_S for the watcher thread.
+    if os.getppid() != original_ppid:
+        _request_shutdown("parent pid %d exited during startup" % original_ppid)
 
     # Poll rather than block in wait(): signal handlers only run in the main
     # thread, and a blocking wait() would swallow the wakeup.

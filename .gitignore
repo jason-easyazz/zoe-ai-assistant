@@ -34,8 +34,37 @@ data/wyoming/
 *.pfx
 *.crt
 *.cert
+# Secrets/passwords by NAME, default-deny with an explicit SOURCE allowlist.
+# History, both directions:
+#   - A blanket `*secret*` silently dropped tests/unit/test_livekit_config_no_secrets.py
+#     — the guard test written to stop a credential returning to
+#     services/livekit/config.yaml — and `git add` only WARNS, so the commit
+#     looked fine and the guard simply was not there.
+#   - Replacing it with an extension allowlist (`*secret*.json`, `*secret*.yaml`, ...)
+#     fixed that but re-opened the other side: `client_secret.ini`,
+#     `db-password.csv` and `secret.properties` all became trackable, and LiveKit
+#     keys have no vendor pattern for a content scanner to catch.
+# So: keep the blanket (it covers ANY extension, and none), and unignore the
+# SOURCE/TEST/DOC extensions by name. Adding a credential file with a new
+# extension stays blocked by default; adding a legitimately-named source file
+# needs one line here rather than a silent skip.
 *secret*
 *password*
+!*secret*.py
+!*password*.py
+!*secret*.md
+!*password*.md
+!*secret*.js
+!*password*.js
+!*secret*.ts
+!*password*.ts
+!*secret*.sh
+!*password*.sh
+!*secret*.html
+!*password*.html
+# NOTE: `*api_key*` below is still a blanket of the same kind and will drop a
+# legitimately-named source/test file if one is ever added. Left as-is
+# deliberately — nothing in the tree hits it today. Narrow it when it bites.
 # Token secrets by ARTIFACT shape, not blanket *token* — the blanket silently
 # dropped a legitimate test file (test_intent_dispatch_token_gate.py,
 # 2026-07-07) and had already needed a tokens.py exception. Source/tests/docs
