@@ -18,7 +18,7 @@ validator, which is precisely the state this file exists to end.
 
 import pytest
 
-from .conftest import load_module_validator
+from conftest import load_module_validator
 
 pytestmark = pytest.mark.ci_safe
 
@@ -121,7 +121,7 @@ def build_module(tmp_path, main_py=TEMPLATE_MAIN_PY, compose=TEMPLATE_COMPOSE):
     """Write the reference module to disk, optionally with a mutated file."""
     modules_dir = tmp_path / "modules"
     module = modules_dir / MODULE_NAME
-    module.mkdir(parents=True)
+    module.mkdir(parents=True, exist_ok=True)  # a test may rebuild in one tmp_path
     (module / "main.py").write_text(main_py)
     (module / "docker-compose.module.yml").write_text(compose)
     (module / "Dockerfile").write_text(TEMPLATE_DOCKERFILE)
@@ -196,6 +196,42 @@ def test_every_state_changing_verb_is_covered(tmp_path, method):
     ok, errors, _ = run_validator(build_module(tmp_path, main_py=mutated))
     assert not ok, f"an ungated {method.upper()} /tools/ route validated clean"
     assert any(method.upper() in e for e in errors), errors
+
+
+def test_keyword_path_argument_is_not_a_bypass(tmp_path):
+    """`@app.post(path="/tools/x")` is the same route as `@app.post("/tools/x")`.
+
+    Reading only the first POSITIONAL argument would skip it entirely — silently,
+    which is the failure mode this whole check exists to remove.
+    """
+    keyword_form = TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])',
+        '@app.post(path="/tools/action1")',
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=keyword_form))
+    assert not ok, "an ungated route declared with path= validated clean"
+    assert any("/tools/action1" in e for e in errors), errors
+
+
+def test_router_prefix_is_resolved(tmp_path):
+    """A router mounted at `/tools` must not hide its routes from the check.
+
+    `@router.post("/wipe")` on `APIRouter(prefix="/tools")` serves `/tools/wipe`.
+    Matching the decorator's literal alone sees `/wipe`, decides it is not a
+    tool route, and passes an unauthenticated state-changing endpoint.
+    """
+    router_form = TEMPLATE_MAIN_PY.replace(
+        "from pydantic import BaseModel",
+        "from fastapi import APIRouter\nfrom pydantic import BaseModel",
+    ).replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        'router = APIRouter(prefix="/tools")\n\n\n'
+        '@router.post("/wipe")\nasync def tool_wipe(request: YourRequest):',
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=router_form))
+    assert not ok, "an ungated route behind an APIRouter prefix validated clean"
+    assert any("/tools/wipe" in e for e in errors), errors
 
 
 def test_read_only_tool_routes_are_not_required_to_be_gated(tmp_path):

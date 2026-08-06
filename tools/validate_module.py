@@ -73,19 +73,51 @@ def _dependency_names(node) -> List[str]:
     return [n for n in names if n]
 
 
-def _route_decorators(func: ast.AST):
+def _router_prefixes(tree: ast.AST) -> Dict[str, str]:
+    """Map router variable -> path prefix for `X = APIRouter(prefix="/tools")`.
+
+    Without this, `@router.post("/wipe")` on a router mounted at `/tools` reads
+    as the path `/wipe`, never starts with `/tools/`, and is silently skipped —
+    a bypass of exactly the kind this whole check exists to remove.
+    """
+    prefixes = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        if "APIRouter" not in _dotted_name(node.value.func):
+            continue
+        prefix = ""
+        for kw in node.value.keywords:
+            if kw.arg == "prefix" and isinstance(kw.value, ast.Constant):
+                prefix = kw.value.value or ""
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                prefixes[target.id] = prefix
+    return prefixes
+
+
+def _route_decorators(func: ast.AST, prefixes: Dict[str, str] = None):
     """Yield (decorator, method, path) for each state-changing route decorator."""
+    prefixes = prefixes or {}
     for dec in getattr(func, "decorator_list", []):
         if not isinstance(dec, ast.Call) or not isinstance(dec.func, ast.Attribute):
             continue
         method = dec.func.attr.lower()
         if method not in STATE_CHANGING_METHODS:
             continue
-        if not dec.args or not isinstance(dec.args[0], ast.Constant):
+        # The path is positional in every documented form, but `path=` is legal
+        # and must not be a way to skip the check.
+        path = None
+        if dec.args and isinstance(dec.args[0], ast.Constant):
+            path = dec.args[0].value
+        else:
+            for kw in dec.keywords:
+                if kw.arg == "path" and isinstance(kw.value, ast.Constant):
+                    path = kw.value.value
+        if not isinstance(path, str):
             continue
-        path = dec.args[0].value
-        if isinstance(path, str):
-            yield dec, method, path
+        prefix = prefixes.get(_dotted_name(dec.func.value), "")
+        yield dec, method, f"{prefix}{path}"
 
 
 def _raises_http_503(node: ast.AST) -> bool:
@@ -375,9 +407,10 @@ class ModuleValidator:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         ]
 
+        prefixes = _router_prefixes(tree)
         ungated, gated = [], []
         for func in functions:
-            for dec, method, path in _route_decorators(func):
+            for dec, method, path in _route_decorators(func, prefixes):
                 if not path.startswith("/tools/"):
                     continue
                 # A gate counts from the decorator's `dependencies=[...]` or from
@@ -439,9 +472,24 @@ class ModuleValidator:
             return
         
         content = main_file.read_text()
-        
-        # Check for FastAPI
-        if "from fastapi import FastAPI" in content or "import fastapi" in content:
+
+        # Check for FastAPI. Resolved through the AST, not matched as a literal:
+        # the exact string "from fastapi import FastAPI" rejected the template in
+        # docs/modules/BUILDING_MODULES.md, which imports the symbol alongside
+        # others (`from fastapi import Depends, FastAPI, Header, HTTPException`)
+        # — so the documented starting point failed this check on its first run.
+        try:
+            imports_fastapi = any(
+                (isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "fastapi")
+                or (
+                    isinstance(node, ast.Import)
+                    and any(a.name.split(".")[0] == "fastapi" for a in node.names)
+                )
+                for node in ast.walk(ast.parse(content))
+            )
+        except SyntaxError:
+            imports_fastapi = "fastapi" in content
+        if imports_fastapi:
             self._pass_check("Uses FastAPI")
         else:
             self._fail_check("No FastAPI import found")
