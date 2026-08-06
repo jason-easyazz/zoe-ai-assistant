@@ -222,7 +222,17 @@ at the wrong port.
    ```sh
    cd ~/assistant/labs/flue-zoe-telegram-2x && npm ci && npm run build
    ```
-2. **Copy the config, plus the epoch history:**
+2. **Stop the old unit FIRST — before copying anything.** One poller per token
+   (starting the new one beside the old gets a 409 Conflict and a bot that
+   answers nobody), and the epoch copy below is only a consistent snapshot once
+   the beta has stopped writing: a `/new` arriving after the copy but before the
+   stop advances the beta's map and that increment is lost, so the user's `/new`
+   silently un-happens at cutover (cross-review, #1639).
+   ```sh
+   systemctl --user stop flue-zoe-telegram.service
+   ```
+
+3. **Copy the config, plus the epoch history:**
    ```sh
    cp ~/assistant/labs/flue-zoe-telegram/.env ~/assistant/labs/flue-zoe-telegram-2x/.env
    cp ~/assistant/labs/flue-zoe-telegram/data/session_epochs.json \
@@ -243,11 +253,6 @@ at the wrong port.
    Do **NOT** copy `data/zoe.db` — 2.x stores schema v8, the beta stored v5, and
    the runtime rejects an older database *before any application code runs*.
    Leave the new store to be created fresh.
-3. **Stop the old unit first — one poller per token.** Starting the new one
-   beside the old gets a 409 Conflict and a bot that answers nobody:
-   ```sh
-   systemctl --user stop flue-zoe-telegram.service
-   ```
 4. **Point the unit at the port and restart.** Add a drop-in rather than editing
    the tracked template:
    ```sh
@@ -293,7 +298,13 @@ at the wrong port.
    *your* memory (not a guest answer), and that `/new` still answers "fresh
    conversation". Watch `journalctl --user -u flue-zoe-telegram -f` for
    `polling (took the bot over)` and the absence of a 409.
-7. **Rollback = repoint the unit — but carry the EPOCH FILE back first:**
+7. **Rollback = repoint the unit — carry the EPOCH FILE back, and REVERT THE
+   DEPLOY RETARGET.** If step 5 landed, `deploy.yml` now builds and restarts
+   `-2x`; leaving it that way after rolling the unit back to 1.x means the next
+   merge rebuilds a directory nothing runs while the live 1.x `dist/` goes
+   stale — the same green-deploy-old-code failure step 5 exists to prevent,
+   pointing the other way (cross-review, #1639). Revert that commit as part of
+   the rollback, not after it.
    ```sh
    systemctl --user stop flue-zoe-telegram.service
    # /new epochs advanced under 2.x live in the -2x directory. Without this copy
