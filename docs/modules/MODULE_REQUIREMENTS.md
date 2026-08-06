@@ -156,7 +156,7 @@ cursor.execute("SELECT * FROM data")
 **ALL endpoints MUST handle errors gracefully:**
 
 ```python
-@app.post("/tools/your_action")
+@app.post("/tools/your_action", dependencies=[Depends(require_service_token)])
 async def tool_your_action(request: YourRequest):
     try:
         result = await do_something(request.param)
