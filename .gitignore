@@ -211,6 +211,18 @@ credentials/
 # router-90-campaign lab: committed measurement artifacts (labs/router-90-campaign/README.md)
 !labs/router-90-campaign/results/*.json
 !labs/router-90-campaign/run_definitive_training.sh
+# flue-zoe-brain-2x lab: the committed lockfile, matching its deployed sibling
+# labs/flue-zoe-brain/ (whose lockfile predates the blanket *.json rule above).
+# It is load-bearing, not incidental: a Flue app pins @flue/runtime, @flue/cli,
+# @flue/vite AND @earendil-works/pi-ai in lockstep — a floating transitive pi-ai
+# would give the tree two copies across the createProvider boundary. Negated
+# rather than `git add -f`, per the note on the desktop manifests above.
+!labs/flue-zoe-brain-2x/package-lock.json
+# ...and its built-server smoke script. It is the only check that exercises the
+# `'use agent'` BUILD scan (the test suite registers agents via `start()`, which
+# bypasses it), so losing it to the blanket *.sh rule would silently drop the
+# coverage for Flue 2.x's quietest failure mode.
+!labs/flue-zoe-brain-2x/smoke-built.sh
 
 # API Keys and Secrets
 *.env
@@ -369,8 +381,8 @@ data/router_selftrain/
 # the blessed deploy. None are load-bearing; all are regenerated at run time.
 # ChromaDB vector store (memory embeddings)
 data/chroma/
-# Music Assistant runtime state (auth.db/library.db are already tracked; these
-# are the runtime sidecars/backups/generated playlists that must never be)
+# Music Assistant runtime state. MA's live store is ~/.zoe/music-assistant
+# (outside the checkout); nothing under data/music-assistant/ is ever tracked.
 # LIVE SQLite stores, by GENERIC sidecar suffix rather than only the `.db`
 # variants (review: Codex, PR #1604). SQLite also creates `-journal` in rollback
 # mode, and a `runtime.sqlite` yields `runtime.sqlite-wal` / `-shm` — none of
