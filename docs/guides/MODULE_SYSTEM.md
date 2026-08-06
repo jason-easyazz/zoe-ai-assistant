@@ -52,16 +52,21 @@ unaffected by any of the above.
    `README.md`. There is no scaffold to copy: `omnigent` is container-only, and
    copying it collides with the live `zoe-omnigent` deployment.
 
-2. **Join the shared network** so in-cluster callers reach the module by service name:
+2. **Join the shared network** so in-cluster callers reach the module by service name.
+   Note the two `networks:` keys are at *different* levels — one under the service,
+   one at the top of the file:
 
    ```yaml
-   networks:
-     - zoe-network
+   services:
+     your-module:
+       # ...
+       networks:
+         - zoe-network        # service-level: attach this service
 
-   networks:
+   networks:                  # top-level: declare the network itself
      zoe-network:
-       name: zoe-network   # prevents Docker's project-name prefix
-       external: true      # join the existing network, don't create one
+       name: zoe-network      # prevents Docker's project-name prefix
+       external: true         # join the existing network, don't create one
    ```
 
 3. **Publish on loopback only.** A bare `"PORT:PORT"` binds `0.0.0.0` and `[::]`,
