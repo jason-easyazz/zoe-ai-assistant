@@ -1028,7 +1028,13 @@ def test_an_unreadable_manifest_is_preserved_not_overwritten(tmp_path):
     assert backups[0].read_bytes() == corrupt, "the corrupt manifest was not preserved verbatim"
 
     manifest = json.loads((qdir / "manifest.json").read_text())
-    assert {e["file"] for e in manifest["entries"]} == {"100002_003.wav", "100003_004.wav"}
+    # The format quarantine is the NARROWED one (96dfa371): unreadable + empty.
+    # `100002_003.wav` is 24 kHz DRIFT — reported and kept, never moved — so it
+    # must NOT appear here. Cross-checked against the same expectation in
+    # `test_scan_and_plan_without_vad`.
+    assert {e["file"] for e in manifest["entries"]} == {"100003_004.wav", "100005_006.wav"}
+    assert "100002_003.wav" not in {e["file"] for e in manifest["entries"]}, \
+        "a 24 kHz drift capture is kept, not quarantined"
 
     assert any(backups[0].name in err for err in result["errors"]), \
         f"the backup path must be reported: {result['errors']}"
