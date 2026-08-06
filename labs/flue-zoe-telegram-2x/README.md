@@ -266,7 +266,25 @@ at the wrong port.
    `labs/flue-zoe-telegram/.env` and the deploy health check curls `:3582`
    literally. (Both still read the OLD directory's `.env` for the port — fix
    those two references in the same change, or leave `PORT=3582` in both files.)
-5. **Verify — one real Telegram round-trip. This is the operator step an agent
+5. **Retarget the DEPLOY JOB in the same change — or the live bot silently
+   stops tracking `main`.** `.github/workflows/deploy.yml` (the *Rebuild /
+   restart Flue Telegram bot* step) hardcodes `labs/flue-zoe-telegram/` in three
+   places: the `git diff` change-detection pathspec, the `dist/server.mjs`
+   existence check, and the `cd`. After the drop-in above, the unit runs the
+   `-2x` directory while deploy still builds and restarts the 1.x one — so a
+   merge that changes 2.x source leaves the live `dist/server.mjs` **stale**, and
+   the post-deploy health check still gets a 200 from `:3582` because the 2.x
+   process is answering it. Green deploy, old code, no signal (cross-review,
+   #1639).
+
+   This PR deliberately does **not** touch `deploy.yml` — it is labs-only, and
+   editing a workflow for a cutover that has not happened would break the live
+   1.x bot's deploy today. Retarget it as part of the cutover commit: replace
+   the three `labs/flue-zoe-telegram/` occurrences with
+   `labs/flue-zoe-telegram-2x/`. Same for the watchdog timer, which reads `PORT`
+   out of the 1.x `.env`.
+
+6. **Verify — one real Telegram round-trip. This is the operator step an agent
    cannot do:**
    ```sh
    curl -s http://127.0.0.1:3582/health   # {"ok":true,...,"polling":true}
@@ -275,7 +293,7 @@ at the wrong port.
    *your* memory (not a guest answer), and that `/new` still answers "fresh
    conversation". Watch `journalctl --user -u flue-zoe-telegram -f` for
    `polling (took the bot over)` and the absence of a 409.
-6. **Rollback = repoint the unit — but carry the EPOCH FILE back first:**
+7. **Rollback = repoint the unit — but carry the EPOCH FILE back first:**
    ```sh
    systemctl --user stop flue-zoe-telegram.service
    # /new epochs advanced under 2.x live in the -2x directory. Without this copy
