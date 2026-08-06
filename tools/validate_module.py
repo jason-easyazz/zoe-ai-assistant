@@ -49,7 +49,7 @@ SERVICE_TOKEN_NAME = re.compile(r"service_token", re.IGNORECASE)
 
 # FastAPI's two dependency wrappers. A name only counts as a gate if it is
 # PASSED to one of these — a bare mention (or a comment) is not a dependency.
-DEPENDENCY_WRAPPERS = {"Depends", "Security", "fastapi.Depends", "fastapi.Security"}
+DEPENDENCY_WRAPPERS = {"Depends", "Security"}
 
 
 def _dotted_name(node) -> str:
@@ -64,21 +64,60 @@ def _dotted_name(node) -> str:
     return ""
 
 
-def _dependency_names(node) -> List[str]:
+def _import_aliases(tree: ast.AST) -> Dict[str, str]:
+    """Local name -> real fastapi symbol, for `from fastapi import Depends as D`.
+
+    Without this an aliased import reads as an unknown callable and a properly
+    gated route is reported UNGATED — a false positive that rejects a legitimate
+    module, which is as bad as missing a real one.
+    """
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "fastapi":
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = alias.name
+    return aliases
+
+
+def _resolves_to(name: str, aliases: Dict[str, str], targets) -> bool:
+    """Does `name` (possibly aliased or dotted) refer to one of `targets`?"""
+    if not name:
+        return False
+    base = name.rsplit(".", 1)[-1]
+    return aliases.get(name, aliases.get(base, base)) in targets
+
+
+def _dependency_names(node, aliases: Dict[str, str] = None) -> List[str]:
     """Names handed to `Depends(...)`/`Security(...)` anywhere under `node`."""
+    aliases = aliases or {}
     names = []
     for sub in ast.walk(node):
-        if isinstance(sub, ast.Call) and _dotted_name(sub.func) in DEPENDENCY_WRAPPERS:
+        if isinstance(sub, ast.Call) and _resolves_to(
+            _dotted_name(sub.func), aliases, DEPENDENCY_WRAPPERS
+        ):
             names.extend(_dotted_name(arg) for arg in sub.args)
     return [n for n in names if n]
 
 
+def _constant_kwarg(call: ast.Call, name: str):
+    for kw in call.keywords:
+        if kw.arg == name and isinstance(kw.value, ast.Constant):
+            return kw.value.value
+    return None
+
+
 def _router_prefixes(tree: ast.AST) -> Dict[str, str]:
-    """Map router variable -> path prefix for `X = APIRouter(prefix="/tools")`.
+    """Map router variable -> the path prefix its routes are actually served at.
+
+    Two independent places set it, and BOTH must be resolved or a route hides:
+
+      router = APIRouter(prefix="/tools")      # prefix on construction
+      app.include_router(router, prefix="/tools")   # prefix on inclusion
 
     Without this, `@router.post("/wipe")` on a router mounted at `/tools` reads
     as the path `/wipe`, never starts with `/tools/`, and is silently skipped —
-    a bypass of exactly the kind this whole check exists to remove.
+    a bypass of exactly the kind this whole check exists to remove. The two
+    compose: FastAPI concatenates the include prefix ahead of the router's own.
     """
     prefixes = {}
     for node in ast.walk(tree):
@@ -86,14 +125,56 @@ def _router_prefixes(tree: ast.AST) -> Dict[str, str]:
             continue
         if "APIRouter" not in _dotted_name(node.value.func):
             continue
-        prefix = ""
-        for kw in node.value.keywords:
-            if kw.arg == "prefix" and isinstance(kw.value, ast.Constant):
-                prefix = kw.value.value or ""
+        prefix = _constant_kwarg(node.value, "prefix") or ""
         for target in node.targets:
             if isinstance(target, ast.Name):
                 prefixes[target.id] = prefix
+
+    # `app.include_router(router, prefix="/tools")` — prepended to the router's own.
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "include_router" or not node.args:
+            continue
+        target = _dotted_name(node.args[0])
+        if not target:
+            continue
+        outer = _constant_kwarg(node, "prefix") or ""
+        prefixes[target] = f"{outer}{prefixes.get(target, '')}"
     return prefixes
+
+
+def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, str]):
+    """Yield (call, method, path) for `app.add_api_route(...)` registrations.
+
+    The imperative sibling of the decorator form. Walking only `decorator_list`
+    misses it entirely, so an ungated `add_api_route("/tools/wipe", …,
+    methods=["POST"])` validated clean.
+    """
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "add_api_route":
+            continue
+        path = None
+        if node.args and isinstance(node.args[0], ast.Constant):
+            path = node.args[0].value
+        if path is None:
+            path = _constant_kwarg(node, "path")
+        if not isinstance(path, str):
+            continue
+        methods = []
+        for kw in node.keywords:
+            if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple, ast.Set)):
+                methods = [
+                    str(e.value).lower()
+                    for e in kw.value.elts
+                    if isinstance(e, ast.Constant)
+                ]
+        prefix = prefixes.get(_dotted_name(node.func.value), "")
+        for method in methods:
+            if method in STATE_CHANGING_METHODS:
+                yield node, method, f"{prefix}{path}"
 
 
 def _route_decorators(func: ast.AST, prefixes: Dict[str, str] = None):
@@ -121,7 +202,11 @@ def _route_decorators(func: ast.AST, prefixes: Dict[str, str] = None):
 
 
 def _raises_http_503(node: ast.AST) -> bool:
-    """Does `node` raise HTTPException with status 503?"""
+    """Does `node` raise HTTPException with status 503?
+
+    Accepts both spellings the repo's own docs use: `HTTPException(503, ...)`
+    positionally and `HTTPException(status_code=503, ...)` by keyword.
+    """
     for sub in ast.walk(node):
         if not isinstance(sub, ast.Raise) or not isinstance(sub.exc, ast.Call):
             continue
@@ -132,6 +217,39 @@ def _raises_http_503(node: ast.AST) -> bool:
                 return True
         if sub.exc.args and getattr(sub.exc.args[0], "value", None) == 503:
             return True
+    return False
+
+
+def _fails_closed(node: ast.AST, by_name: Dict[str, ast.AST], depth: int = 2) -> bool:
+    """Is a 503 reachable from a CONDITIONAL branch in `node`?
+
+    Follows calls into module-level helpers, bounded by `depth`, because
+    factoring the refusal out is ordinary style and must not be reported as a
+    fail-open gate:
+
+        if not SERVICE_TOKEN:
+            _reject_unconfigured()      # the 503 lives one level down
+
+    Boundary, stated plainly: this is branch-INSENSITIVE. It proves a 503 sits
+    on some conditional path, not that the path taken when the token is unset is
+    that one. Proving the latter needs evaluation, not inspection. It is still
+    strictly more than "the digits 503 appear in the file".
+    """
+    for branch in ast.walk(node):
+        if not isinstance(branch, ast.If):
+            continue
+        if _raises_http_503(branch):
+            return True
+        if depth <= 0:
+            continue
+        for sub in ast.walk(branch):
+            if not isinstance(sub, ast.Call):
+                continue
+            callee = by_name.get(_dotted_name(sub.func).rsplit(".", 1)[-1])
+            if callee is None or callee is node:
+                continue
+            if _raises_http_503(callee) or _fails_closed(callee, by_name, depth - 1):
+                return True
     return False
 
 
@@ -408,6 +526,7 @@ class ModuleValidator:
         ]
 
         prefixes = _router_prefixes(tree)
+        aliases = _import_aliases(tree)
         ungated, gated = [], []
         for func in functions:
             for dec, method, path in _route_decorators(func, prefixes):
@@ -416,11 +535,21 @@ class ModuleValidator:
                 # A gate counts from the decorator's `dependencies=[...]` or from
                 # the handler's own signature defaults — both are real FastAPI
                 # dependencies; neither can be spelled in a comment.
-                names = _dependency_names(dec) + _dependency_names(func.args)
+                names = _dependency_names(dec, aliases) + _dependency_names(func.args, aliases)
                 if any(SERVICE_TOKEN_NAME.search(n) for n in names):
                     gated.append(path)
                 else:
                     ungated.append(f"{method.upper()} {path}")
+
+        # The imperative registration form, which has no decorator to inspect.
+        for call, method, path in _add_api_route_calls(tree, prefixes):
+            if not path.startswith("/tools/"):
+                continue
+            names = _dependency_names(call, aliases)
+            if any(SERVICE_TOKEN_NAME.search(n) for n in names):
+                gated.append(path)
+            else:
+                ungated.append(f"{method.upper()} {path}")
 
         if not (gated or ungated):
             self._warn("No state-changing /tools/* routes found - MCP-compatible?")
@@ -448,12 +577,9 @@ class ModuleValidator:
                 )
             return
 
+        by_name = {f.name: f for f in functions}
         for gate in gate_funcs:
-            conditional_503 = any(
-                _raises_http_503(node)
-                for node in ast.walk(gate)
-                if isinstance(node, ast.If)
-            )
+            conditional_503 = _fails_closed(gate, by_name)
             if conditional_503:
                 self._pass_check(f"Gate '{gate.name}' fails closed (503) when unset")
             else:
@@ -475,7 +601,7 @@ class ModuleValidator:
 
         # Check for FastAPI. Resolved through the AST, not matched as a literal:
         # the exact string "from fastapi import FastAPI" rejected the template in
-        # docs/modules/BUILDING_MODULES.md, which imports the symbol alongside
+        # docs/guides/MODULE_SYSTEM.md, which imports the symbol alongside
         # others (`from fastapi import Depends, FastAPI, Header, HTTPException`)
         # — so the documented starting point failed this check on its first run.
         try:

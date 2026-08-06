@@ -234,6 +234,102 @@ def test_router_prefix_is_resolved(tmp_path):
     assert any("/tools/wipe" in e for e in errors), errors
 
 
+def test_include_router_prefix_is_resolved(tmp_path):
+    """The prefix can be set on INCLUSION, not just on construction.
+
+    `app.include_router(router, prefix="/tools")` with a bare `APIRouter()`
+    serves `/tools/wipe`. Resolving only `APIRouter(prefix=...)` leaves this
+    sibling form skipped — found by cross-review, and the asymmetry was the bug.
+    """
+    include_form = TEMPLATE_MAIN_PY.replace(
+        "from pydantic import BaseModel",
+        "from fastapi import APIRouter\nfrom pydantic import BaseModel",
+    ).replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        "router = APIRouter()\n\n\n"
+        '@router.post("/wipe")\nasync def tool_wipe(request: YourRequest):',
+    ) + '\n\napp.include_router(router, prefix="/tools")\n'
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=include_form))
+    assert not ok, "an ungated route behind an include_router prefix validated clean"
+    assert any("/tools/wipe" in e for e in errors), errors
+
+
+def test_add_api_route_registration_is_discovered(tmp_path):
+    """The imperative form has no decorator to inspect, and must still be checked.
+
+    `app.add_api_route("/tools/wipe", handler, methods=["POST"])` registers a
+    state-changing route just as much as the decorator does. Walking only
+    `decorator_list` missed it entirely — found by cross-review.
+    """
+    imperative = TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        "async def tool_wipe(request: YourRequest):",
+    ) + '\n\napp.add_api_route("/tools/wipe", tool_wipe, methods=["POST"])\n'
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=imperative))
+    assert not ok, "an ungated add_api_route registration validated clean"
+    assert any("/tools/wipe" in e for e in errors), errors
+
+    # …and the gated version of the same form must be ACCEPTED.
+    gated = imperative.replace(
+        'app.add_api_route("/tools/wipe", tool_wipe, methods=["POST"])',
+        'app.add_api_route("/tools/wipe", tool_wipe, methods=["POST"], '
+        "dependencies=[Depends(require_service_token)])",
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=gated))
+    assert ok, f"a GATED add_api_route registration was rejected: {errors}"
+
+
+def test_aliased_depends_import_is_not_a_false_positive(tmp_path):
+    """FALSE-POSITIVE CONTROL: `from fastapi import Depends as D` is still Depends.
+
+    Matching four exact spellings meant an aliased import read as an unknown
+    callable and a properly gated route was reported UNGATED — rejecting a
+    legitimate module, which is as damaging as missing a real hole. Found by
+    cross-review.
+    """
+    aliased = TEMPLATE_MAIN_PY.replace(
+        "from fastapi import Depends, FastAPI, Header, HTTPException",
+        "from fastapi import Depends as D, FastAPI, Header, HTTPException",
+    ).replace("dependencies=[Depends(require_service_token)]",
+              "dependencies=[D(require_service_token)]")
+    assert "Depends(" not in aliased, "the mutation did not take"
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=aliased))
+    assert ok, f"an aliased Depends import was reported ungated: {errors}"
+
+
+def test_helper_raised_fail_closed_is_accepted(tmp_path):
+    """FALSE-POSITIVE CONTROL: the 503 may live one call level down.
+
+    Factoring the refusal into a helper is ordinary style:
+
+        if not SERVICE_TOKEN:
+            _reject_unconfigured()
+
+    Requiring the raise to sit textually inside the gate's own `if` flagged this
+    correct module as fail-open. Found by cross-review.
+    """
+    helper_form = TEMPLATE_MAIN_PY.replace(
+        "def require_service_token(x_zoe_service_token: str = Header(default=\"\")) -> None:\n"
+        "    if not SERVICE_TOKEN:\n"
+        '        raise HTTPException(status_code=503, detail="module service token not configured")\n',
+        "def _reject_unconfigured() -> None:\n"
+        '    raise HTTPException(status_code=503, detail="module service token not configured")\n'
+        "\n\n"
+        "def require_service_token(x_zoe_service_token: str = Header(default=\"\")) -> None:\n"
+        "    if not SERVICE_TOKEN:\n"
+        "        _reject_unconfigured()\n",
+    )
+    assert "_reject_unconfigured()" in helper_form, "the mutation did not take"
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=helper_form))
+    assert ok, f"a helper-raised fail-closed gate was flagged fail-open: {errors}"
+
+
 def test_read_only_tool_routes_are_not_required_to_be_gated(tmp_path):
     """FALSE-POSITIVE CONTROL: GET must not be forced through the gate.
 
@@ -437,7 +533,7 @@ def test_container_only_module_gains_no_new_errors(tmp_path):
     check and is documented as doing so. The security checks added here must not
     pile on: with no `main.py` there is no route or gate to resolve, and its one
     published port is already loopback-bound. Measured against the real module,
-    the verdict is unchanged (2 errors, 8 warnings) and it gains one PASS.
+    the verdict is unchanged (2 errors, 6 warnings) and it gains one PASS.
     """
     modules_dir = build_module(tmp_path)
     module = modules_dir / MODULE_NAME
