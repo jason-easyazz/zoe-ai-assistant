@@ -165,8 +165,10 @@ mkdir -p modules/zoe-your-feature/{services,intents}
 
 # 2. Update backend (main.py, services/)
 
-# 3. Create MCP tools
-@app.post("/tools/your_action")
+# 3. Create MCP tools. State-changing routes are TOKEN-GATED and fail closed —
+#    see require_service_token in docs/modules/BUILDING_MODULES.md. Required by
+#    modules/AGENTS.md, not optional hardening.
+@app.post("/tools/your_action", dependencies=[Depends(require_service_token)])
 async def your_action():
     return {"success": True}
 
