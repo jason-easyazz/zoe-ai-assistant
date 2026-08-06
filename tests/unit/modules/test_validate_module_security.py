@@ -1,0 +1,400 @@
+"""`tools/validate_module.py` must verify the module SECURITY contract, not spell it.
+
+The contract (`modules/AGENTS.md`): a module's state-changing `/tools/*` routes
+are gated by a shared service token and fail closed (503) until it is set, and
+module ports publish on loopback only.
+
+What the validator used to do about that: `_check_main_py` searched for the
+string `"/tools/"` and PASSED, `_check_docker_compose` never looked at `ports:`
+at all, and `_check_security` covered only `.env`/private keys/`.gitignore`. So a
+module with `@app.post("/tools/wipe")` and no auth, published on `"8101:8101"`
+(i.e. 0.0.0.0 AND [::], reachable from every host on the LAN), validated clean.
+
+Every check here is paired with a negative control: the reference implementation
+from `docs/guides/MODULE_SYSTEM.md` must go GREEN, and each violation must go
+RED. A validator that only ever says "pass" is indistinguishable from no
+validator, which is precisely the state this file exists to end.
+"""
+
+import pytest
+
+from .conftest import load_module_validator
+
+pytestmark = pytest.mark.ci_safe
+
+validate_module = load_module_validator()
+
+
+# ── the reference implementation, transcribed from MODULE_SYSTEM.md ───────────
+# These are the templates a module author is told to copy. The validator must
+# accept exactly what they produce — a guard that rejects the documented form
+# just teaches people to skip the guard.
+
+TEMPLATE_MAIN_PY = '''\
+from fastapi import Depends, FastAPI, Header, HTTPException
+from pydantic import BaseModel
+import os
+import secrets
+
+app = FastAPI(title="Zoe Your-Feature Module")
+
+SERVICE_TOKEN = os.getenv("ZOE_YOURMODULE_SERVICE_TOKEN", "")
+
+
+def require_service_token(x_zoe_service_token: str = Header(default="")) -> None:
+    if not SERVICE_TOKEN:
+        raise HTTPException(status_code=503, detail="module service token not configured")
+    if not secrets.compare_digest(x_zoe_service_token, SERVICE_TOKEN):
+        raise HTTPException(status_code=401, detail="bad or missing X-Zoe-Service-Token")
+
+
+class YourRequest(BaseModel):
+    parameter: str
+
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+
+@app.post("/tools/action1", dependencies=[Depends(require_service_token)])
+async def tool_action1(request: YourRequest):
+    """Tool: your_module.action1"""
+    return {"success": True, "result": "..."}
+'''
+
+TEMPLATE_COMPOSE = '''\
+services:
+  zoe-test-module:
+    build: .
+    container_name: zoe-test-module
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8101:8101"
+    environment:
+      - ZOE_YOURMODULE_SERVICE_TOKEN=${ZOE_YOURMODULE_SERVICE_TOKEN:-}
+    networks:
+      - zoe-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8101/health"]
+      interval: 30s
+
+networks:
+  zoe-network:
+    name: zoe-network
+    external: true
+'''
+
+TEMPLATE_DOCKERFILE = '''\
+FROM python:3.11-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8101
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \\
+    CMD curl -f http://localhost:8101/health || exit 1
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8101"]
+'''
+
+TEMPLATE_README = """\
+# Zoe Test Module
+
+## Features
+Does the thing the module is for, and does it over MCP.
+
+## Installation
+`python tools/zoe_module.py enable zoe-test-module`
+
+## Usage
+POST /tools/action1 with the X-Zoe-Service-Token header.
+
+## Tools
+- your_module.action1
+"""
+
+MODULE_NAME = "zoe-test-module"
+
+
+def build_module(tmp_path, main_py=TEMPLATE_MAIN_PY, compose=TEMPLATE_COMPOSE):
+    """Write the reference module to disk, optionally with a mutated file."""
+    modules_dir = tmp_path / "modules"
+    module = modules_dir / MODULE_NAME
+    module.mkdir(parents=True)
+    (module / "main.py").write_text(main_py)
+    (module / "docker-compose.module.yml").write_text(compose)
+    (module / "Dockerfile").write_text(TEMPLATE_DOCKERFILE)
+    (module / "requirements.txt").write_text("fastapi==0.115.0\npydantic==2.9.0\n")
+    (module / "README.md").write_text(TEMPLATE_README)
+    (module / ".gitignore").write_text(".env\n*.key\n")
+    return modules_dir
+
+
+def run_validator(modules_dir):
+    """Validate the fixture module. Returns (ok, errors, warnings)."""
+    validator = validate_module.ModuleValidator(modules_dir=modules_dir)
+    ok = validator.validate_module(MODULE_NAME)
+    return ok, validator.errors, validator.warnings
+
+
+# ── the GREEN control ─────────────────────────────────────────────────────────
+
+
+def test_documented_template_module_validates_clean(tmp_path):
+    """POSITIVE CONTROL: the form MODULE_SYSTEM.md tells authors to copy passes.
+
+    Without this, every RED below could be produced by a validator that fails
+    everything — which detects nothing and blocks everyone.
+    """
+    ok, errors, _ = run_validator(build_module(tmp_path))
+    assert ok, f"the documented template module does not validate: {errors}"
+
+
+# ── (a) state-changing /tools/* routes must carry the token gate ──────────────
+
+
+def test_ungated_tool_route_is_an_error(tmp_path):
+    """NEGATIVE CONTROL: drop the dependency and the validator must go RED."""
+    ungated = TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])',
+        '@app.post("/tools/action1")',
+    )
+    assert "dependencies=" not in ungated, "the mutation did not take"
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=ungated))
+    assert not ok, "an UNGATED state-changing /tools/ route validated clean"
+    assert any("ungated" in e.lower() and "/tools/action1" in e for e in errors), errors
+
+
+def test_a_comment_does_not_satisfy_the_gate_check(tmp_path):
+    """The whole reason this is AST-level and not a grep.
+
+    The previous check searched main.py for the literal `"/tools/"`. Mentioning
+    the gate in a comment — or even naming `require_service_token` in prose —
+    satisfies any text search while leaving the route wide open.
+    """
+    commented = TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])',
+        "# dependencies=[Depends(require_service_token)]  # TODO: wire this up\n"
+        '@app.post("/tools/action1")',
+    )
+    assert "require_service_token" in commented, "the mutation removed the string too"
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=commented))
+    assert not ok, "a COMMENTED-OUT dependency satisfied the gate check"
+    assert any("ungated" in e.lower() for e in errors), errors
+
+
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+def test_every_state_changing_verb_is_covered(tmp_path, method):
+    """A gate on POST only is not a gate — DELETE changes state just as much."""
+    mutated = TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])',
+        f'@app.{method}("/tools/action1")',
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=mutated))
+    assert not ok, f"an ungated {method.upper()} /tools/ route validated clean"
+    assert any(method.upper() in e for e in errors), errors
+
+
+def test_read_only_tool_routes_are_not_required_to_be_gated(tmp_path):
+    """FALSE-POSITIVE CONTROL: GET must not be forced through the gate.
+
+    `/health` and `/` have to stay open or the container healthcheck cannot pass,
+    and the contract is scoped to STATE-CHANGING routes. A validator that also
+    demanded a token on reads would be wrong about the contract it enforces.
+    """
+    read_only = TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        '@app.get("/tools/status")\nasync def tool_status():',
+    ).replace("    return {\"success\": True, \"result\": \"...\"}", "    return {\"ok\": True}")
+
+    _, errors, _ = run_validator(build_module(tmp_path, main_py=read_only))
+    assert not any("ungated" in e.lower() for e in errors), (
+        f"a read-only GET /tools/ route was flagged as ungated: {errors}"
+    )
+
+
+def test_signature_level_dependency_is_accepted(tmp_path):
+    """FALSE-POSITIVE CONTROL: `token = Depends(...)` in the signature is a real gate.
+
+    FastAPI treats a signature default and a decorator `dependencies=[...]` the
+    same. Accepting only the decorator form would reject working code.
+    """
+    signature_form = TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        '@app.post("/tools/action1")\n'
+        "async def tool_action1(request: YourRequest, _=Depends(require_service_token)):",
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=signature_form))
+    assert ok, f"a signature-level Depends() gate was rejected: {errors}"
+
+
+# ── (c) the gate must fail CLOSED when the token is unset ─────────────────────
+
+
+def test_gate_that_does_not_fail_closed_is_an_error(tmp_path):
+    """NEGATIVE CONTROL: an unset token must 503, never fall open.
+
+    This is the subtle one. The route is gated, the helper exists, the name is
+    right — but with no token configured it returns None, FastAPI treats the
+    dependency as satisfied, and every state-changing route is anonymous. The
+    module looks hardened and is not.
+    """
+    fail_open = TEMPLATE_MAIN_PY.replace(
+        "    if not SERVICE_TOKEN:\n"
+        '        raise HTTPException(status_code=503, detail="module service token not configured")\n',
+        "    if not SERVICE_TOKEN:\n"
+        "        return  # no token configured, allow through\n",
+    )
+    assert "503" not in fail_open, "the mutation did not take"
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=fail_open))
+    assert not ok, "a gate that falls OPEN on an unset token validated clean"
+    assert any("503" in e and "closed" in e.lower() for e in errors), errors
+
+
+def test_a_mentioned_503_does_not_satisfy_fail_closed(tmp_path):
+    """CONSTRUCTING an HTTPException(503) is not RAISING one.
+
+    This is the fail-closed check's own anti-grep control. A text search for
+    `503` — or for `HTTPException(status_code=503)` — is satisfied by an
+    exception object that is built and thrown away, by a docstring, or by a
+    comment. The check resolves an `ast.Raise` inside a conditional instead, so
+    only a 503 that can actually be reached on the unset-token branch counts.
+    """
+    stray = TEMPLATE_MAIN_PY.replace(
+        "    if not SERVICE_TOKEN:\n"
+        '        raise HTTPException(status_code=503, detail="module service token not configured")\n'
+        "    if not secrets.compare_digest(x_zoe_service_token, SERVICE_TOKEN):\n"
+        '        raise HTTPException(status_code=401, detail="bad or missing X-Zoe-Service-Token")\n',
+        "    _unused = HTTPException(status_code=503, detail='module service token not configured')\n"
+        "    return\n",
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=stray))
+    assert not ok, "a 503 outside any conditional satisfied the fail-closed check"
+    assert any("503" in e for e in errors), errors
+
+
+# ── (b) published ports must be loopback-only ────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        '"8101:8101"',      # binds 0.0.0.0 AND [::] — the documented mistake
+        '"8101"',           # container port only; host side is a random 0.0.0.0 port
+        '"0.0.0.0:8101:8101"',
+        '"192.168.1.50:8101:8101"',
+        '"[::]:8101:8101"',
+    ],
+)
+def test_non_loopback_published_port_is_an_error(tmp_path, entry):
+    """NEGATIVE CONTROL: every host-wide publish shape must go RED."""
+    compose = TEMPLATE_COMPOSE.replace('"127.0.0.1:8101:8101"', entry)
+    assert "127.0.0.1" not in compose, "the mutation did not take"
+
+    ok, errors, _ = run_validator(build_module(tmp_path, compose=compose))
+    assert not ok, f"a module publishing {entry} on all interfaces validated clean"
+    assert any("loopback" in e.lower() for e in errors), errors
+
+
+@pytest.mark.parametrize(
+    "entry",
+    ['"127.0.0.1:8101:8101"', '"127.0.0.1::8101"', '"[::1]:8101:8101"'],
+)
+def test_loopback_published_ports_are_accepted(tmp_path, entry):
+    """FALSE-POSITIVE CONTROL: the documented form and its IPv6 twin must pass."""
+    compose = TEMPLATE_COMPOSE.replace('"127.0.0.1:8101:8101"', entry)
+    ok, errors, _ = run_validator(build_module(tmp_path, compose=compose))
+    assert ok, f"loopback publish {entry} was rejected: {errors}"
+
+
+def test_long_syntax_ports_are_checked_too(tmp_path):
+    """The long form is not a way around the check.
+
+    `host_ip` defaults to every interface when omitted, exactly like the short
+    form — so an entry with no `host_ip` must go RED, and one naming loopback
+    must go GREEN.
+    """
+    wide = TEMPLATE_COMPOSE.replace(
+        '      - "127.0.0.1:8101:8101"\n',
+        "      - target: 8101\n        published: 8101\n        protocol: tcp\n",
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, compose=wide))
+    assert not ok, "long-syntax ports without host_ip validated clean"
+    assert any("loopback" in e.lower() for e in errors), errors
+
+    narrow = TEMPLATE_COMPOSE.replace(
+        '      - "127.0.0.1:8101:8101"\n',
+        '      - target: 8101\n        published: 8101\n        host_ip: "127.0.0.1"\n',
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, compose=narrow))
+    assert ok, f"long-syntax loopback publish was rejected: {errors}"
+
+
+def test_every_service_is_checked_not_just_the_first(tmp_path):
+    """A sidecar in the same file publishes to the LAN just as effectively.
+
+    The surrounding checks only ever examined `services[0]`; the ports check must
+    not inherit that blind spot.
+    """
+    two_services = TEMPLATE_COMPOSE.replace(
+        "\nnetworks:\n  zoe-network:\n    name: zoe-network\n    external: true\n",
+        "\n  zoe-test-module-sidecar:\n"
+        "    image: redis:7\n"
+        "    ports:\n"
+        '      - "6379:6379"\n'
+        "    networks:\n"
+        "      - zoe-network\n"
+        "\nnetworks:\n  zoe-network:\n    name: zoe-network\n    external: true\n",
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, compose=two_services))
+    assert not ok, "a SECOND service publishing on all interfaces validated clean"
+    assert any("sidecar" in e for e in errors), errors
+
+
+def test_no_published_ports_is_fine(tmp_path):
+    """FALSE-POSITIVE CONTROL: publishing nothing is the safest shape of all.
+
+    In-cluster callers reach a module by service name over `zoe-network`, so a
+    module with no `ports:` at all is correct, not suspicious.
+    """
+    no_ports = TEMPLATE_COMPOSE.replace(
+        '    ports:\n      - "127.0.0.1:8101:8101"\n', ""
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, compose=no_ports))
+    assert ok, f"a module with no published ports was rejected: {errors}"
+
+
+# ── the live module's verdict must not change ────────────────────────────────
+
+
+def test_container_only_module_gains_no_new_errors(tmp_path):
+    """`modules/omnigent` is container-only BY DESIGN and must not get noisier.
+
+    It has no `main.py`, so it already fails this validator on the required-files
+    check and is documented as doing so. The security checks added here must not
+    pile on: with no `main.py` there is no route or gate to resolve, and its one
+    published port is already loopback-bound. Measured against the real module,
+    the verdict is unchanged (2 errors, 8 warnings) and it gains one PASS.
+    """
+    modules_dir = build_module(tmp_path)
+    module = modules_dir / MODULE_NAME
+    (module / "main.py").unlink()
+    (module / "requirements.txt").unlink()
+
+    _, errors, warnings = run_validator(modules_dir)
+
+    assert sorted(errors) == sorted(
+        [
+            "Missing main.py - FastAPI application",
+            "Missing requirements.txt - Python dependencies",
+        ]
+    ), f"the security checks added errors to a container-only module: {errors}"
+    assert not any("ungated" in w.lower() or "loopback" in w.lower() for w in warnings), (
+        f"the security checks added warnings to a container-only module: {warnings}"
+    )

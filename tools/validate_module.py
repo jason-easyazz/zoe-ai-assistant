@@ -7,21 +7,129 @@ Validates module structure and safety before enabling.
 
 Takes a module NAME, not a path — `modules/` is prepended internally.
 
+The security checks enforce the contract in `modules/AGENTS.md`: state-changing
+`/tools/*` routes are gated by a shared service token and fail closed (503)
+until it is set, and module ports publish on loopback only. Those two are
+checked STRUCTURALLY — the route gate through the AST, the ports through the
+parsed compose — because a string search for `/tools/` or `127.0.0.1` is
+satisfied by a comment. The normative reference the checks accept is the
+contract section of `docs/guides/MODULE_SYSTEM.md`.
+
 NOTE: `modules/omnigent` does NOT satisfy this validator and is not meant to.
 It is a container-only module with no `main.py` or `requirements.txt`, so it
 deterministically reports failure here; it is not the example to reach for and
-it is not a scaffold to copy (see docs/guides/MODULE_SYSTEM.md).
+it is not a scaffold to copy (see docs/guides/MODULE_SYSTEM.md). The security
+checks above do not add to that: with no `main.py` the route/gate checks have
+nothing to resolve and skip, and omnigent's single published port is already
+loopback-bound, so it PASSES the ports check.
 
 Usage:
   python tools/validate_module.py your-module-name
   python tools/validate_module.py --all
 """
 
+import ast
 import click
+import ipaddress
+import re
 import sys
 import yaml
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+# HTTP verbs that change state. GET/HEAD/OPTIONS are excluded: `/health` and `/`
+# must stay reachable or the container healthcheck cannot pass.
+STATE_CHANGING_METHODS = {"post", "put", "patch", "delete"}
+
+# The gate's identity is its NAME, not an exact symbol: `require_service_token`
+# (docs/guides/MODULE_SYSTEM.md), `verify_service_token`, and
+# `service_token_dependency` are all the same contract. Matching on the concept
+# keeps this from breaking every time a module spells the helper differently.
+SERVICE_TOKEN_NAME = re.compile(r"service_token", re.IGNORECASE)
+
+# FastAPI's two dependency wrappers. A name only counts as a gate if it is
+# PASSED to one of these — a bare mention (or a comment) is not a dependency.
+DEPENDENCY_WRAPPERS = {"Depends", "Security", "fastapi.Depends", "fastapi.Security"}
+
+
+def _dotted_name(node) -> str:
+    """Best-effort dotted name for an AST expression (`app.post`, `Depends`)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted_name(node.value)
+        return f"{base}.{node.attr}" if base else node.attr
+    if isinstance(node, ast.Call):
+        return _dotted_name(node.func)
+    return ""
+
+
+def _dependency_names(node) -> List[str]:
+    """Names handed to `Depends(...)`/`Security(...)` anywhere under `node`."""
+    names = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call) and _dotted_name(sub.func) in DEPENDENCY_WRAPPERS:
+            names.extend(_dotted_name(arg) for arg in sub.args)
+    return [n for n in names if n]
+
+
+def _route_decorators(func: ast.AST):
+    """Yield (decorator, method, path) for each state-changing route decorator."""
+    for dec in getattr(func, "decorator_list", []):
+        if not isinstance(dec, ast.Call) or not isinstance(dec.func, ast.Attribute):
+            continue
+        method = dec.func.attr.lower()
+        if method not in STATE_CHANGING_METHODS:
+            continue
+        if not dec.args or not isinstance(dec.args[0], ast.Constant):
+            continue
+        path = dec.args[0].value
+        if isinstance(path, str):
+            yield dec, method, path
+
+
+def _raises_http_503(node: ast.AST) -> bool:
+    """Does `node` raise HTTPException with status 503?"""
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Raise) or not isinstance(sub.exc, ast.Call):
+            continue
+        if "HTTPException" not in _dotted_name(sub.exc.func):
+            continue
+        for kw in sub.exc.keywords:
+            if kw.arg == "status_code" and getattr(kw.value, "value", None) == 503:
+                return True
+        if sub.exc.args and getattr(sub.exc.args[0], "value", None) == 503:
+            return True
+    return False
+
+
+def _published_host_ip(entry) -> Optional[str]:
+    """Host IP a compose `ports:` entry binds to, or None when unspecified.
+
+    None means "every interface". Compose's short syntax only names a host IP
+    when there are three colon-separated fields, so `"8101:8101"` and a bare
+    `"8101"` both bind 0.0.0.0 AND [::] — the exact LAN exposure the module
+    contract forbids.
+    """
+    if isinstance(entry, dict):  # long syntax
+        host_ip = entry.get("host_ip")
+        return str(host_ip) if host_ip else None
+    text = str(entry).strip()
+    if text.startswith("["):  # bracketed IPv6, e.g. "[::1]:8101:8101"
+        closing = text.find("]")
+        if closing != -1:
+            return text[1:closing]
+    parts = text.split(":")
+    return parts[0] if len(parts) >= 3 else None
+
+
+def _is_loopback(host_ip: Optional[str]) -> bool:
+    if not host_ip:
+        return False
+    try:
+        return ipaddress.ip_address(host_ip).is_loopback
+    except ValueError:
+        return False
 
 
 class ModuleValidator:
@@ -55,6 +163,7 @@ class ModuleValidator:
         self._check_dockerfile(module_path)
         self._check_docker_compose(module_path, module_name)
         self._check_main_py(module_path)
+        self._check_tool_route_auth(module_path)
         self._check_requirements_txt(module_path)
         self._check_readme(module_path)
         self._check_intents(module_path)
@@ -156,9 +265,11 @@ class ModuleValidator:
                 self._fail_check("No services defined")
                 return
             
+            self._check_published_ports(services)
+
             service_name = list(services.keys())[0]
             service = services[service_name]
-            
+
             # Check container name matches
             container_name = service.get("container_name", "")
             if container_name == module_name or container_name == module_name.replace("_", "-"):
@@ -197,6 +308,128 @@ class ModuleValidator:
         except Exception as e:
             self._fail_check(f"Invalid YAML: {e}")
     
+    def _check_published_ports(self, services: Dict):
+        """Every published port must bind loopback only (modules/AGENTS.md).
+
+        Checked across ALL services, not just the first: a second service in the
+        same file publishes to the LAN just as effectively as the first. In-cluster
+        callers reach a module by service name over `zoe-network`, so nothing
+        legitimate needs a wider bind. The template form is
+        `"127.0.0.1:PORT:PORT"` (docs/guides/MODULE_SYSTEM.md).
+        """
+        published = [
+            (name, entry)
+            for name, svc in services.items()
+            if isinstance(svc, dict)
+            for entry in (svc.get("ports") or [])
+        ]
+        if not published:
+            click.echo("  ℹ  No published ports - reachable only on zoe-network")
+            return
+
+        exposed = [
+            (name, entry)
+            for name, entry in published
+            if not _is_loopback(_published_host_ip(entry))
+        ]
+        if exposed:
+            for name, entry in exposed:
+                self._fail_check(
+                    f"SECURITY: service '{name}' publishes {entry!r} on ALL interfaces - "
+                    f"module ports must be loopback-only "
+                    f'(use "127.0.0.1:PORT:PORT"; see modules/AGENTS.md)'
+                )
+        else:
+            self._pass_check(
+                f"All {len(published)} published port(s) bound to loopback"
+            )
+
+    def _check_tool_route_auth(self, module_path: Path):
+        """State-changing `/tools/*` routes must carry the service-token gate.
+
+        AST-level on purpose. The older `"/tools/" in content` grep was satisfied
+        by a comment, a docstring, or a URL in a log line — it proved a string was
+        present, never that a route was protected. This resolves decorators and
+        dependencies instead, so only a real `dependencies=[Depends(...)]` (or the
+        equivalent signature-level `Depends`) counts.
+
+        Boundary, stated honestly: this proves the gate is WIRED to each route and
+        that the gate fails closed. It cannot prove the gate's comparison is
+        correct — that is what `secrets.compare_digest` in the template is for.
+        """
+        click.echo("\n🔑 Tool route auth:")
+
+        main_file = module_path / "main.py"
+        if not main_file.exists():
+            click.echo("  ℹ  No main.py - container-only module, nothing to check")
+            return
+
+        try:
+            tree = ast.parse(main_file.read_text())
+        except SyntaxError as exc:
+            self._fail_check(f"main.py does not parse, cannot verify tool auth: {exc}")
+            return
+
+        functions = [
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+
+        ungated, gated = [], []
+        for func in functions:
+            for dec, method, path in _route_decorators(func):
+                if not path.startswith("/tools/"):
+                    continue
+                # A gate counts from the decorator's `dependencies=[...]` or from
+                # the handler's own signature defaults — both are real FastAPI
+                # dependencies; neither can be spelled in a comment.
+                names = _dependency_names(dec) + _dependency_names(func.args)
+                if any(SERVICE_TOKEN_NAME.search(n) for n in names):
+                    gated.append(path)
+                else:
+                    ungated.append(f"{method.upper()} {path}")
+
+        if not (gated or ungated):
+            self._warn("No state-changing /tools/* routes found - MCP-compatible?")
+            return
+
+        if ungated:
+            self._fail_check(
+                f"SECURITY: ungated state-changing /tools/* route(s): {ungated} - "
+                f"each needs dependencies=[Depends(require_service_token)] "
+                f"(modules/AGENTS.md)"
+            )
+        else:
+            self._pass_check(
+                f"All {len(gated)} state-changing /tools/* route(s) token-gated"
+            )
+
+        # …and the gate itself must FAIL CLOSED: an unset token is an
+        # unconfigured gate, never an open one.
+        gate_funcs = [f for f in functions if SERVICE_TOKEN_NAME.search(f.name)]
+        if not gate_funcs:
+            if gated:
+                self._warn(
+                    "Service-token gate is not defined in main.py - cannot verify "
+                    "it fails closed with 503 when the token is unset"
+                )
+            return
+
+        for gate in gate_funcs:
+            conditional_503 = any(
+                _raises_http_503(node)
+                for node in ast.walk(gate)
+                if isinstance(node, ast.If)
+            )
+            if conditional_503:
+                self._pass_check(f"Gate '{gate.name}' fails closed (503) when unset")
+            else:
+                self._fail_check(
+                    f"SECURITY: gate '{gate.name}' never raises HTTPException(503) "
+                    f"on an unset token - an unconfigured gate must fail CLOSED, "
+                    f"not allow the request through (modules/AGENTS.md)"
+                )
+
     def _check_main_py(self, module_path: Path):
         """Check main.py structure."""
         click.echo("\n🐍 main.py:")
