@@ -543,21 +543,13 @@ class ZoeCapabilityTest:
             print(f"{Colors.YELLOW}⚠ Memory search empty{Colors.RESET}")
             self.results["warnings"].append("Advanced - Memory Search")
         
-        # Test 4: MCP Server health
-        print(f"\n{Colors.BLUE}Test 10.4: MCP Server status{Colors.RESET}")
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get("http://localhost:8003/")
-                if response.status_code in [200, 404]:  # 404 is OK (no root endpoint)
-                    print(f"{Colors.GREEN}✓ MCP Server running{Colors.RESET}")
-                    self.results["passed"].append("Advanced - MCP Server")
-                else:
-                    print(f"{Colors.YELLOW}⚠ MCP Server status: {response.status_code}{Colors.RESET}")
-                    self.results["warnings"].append("Advanced - MCP Server")
-        except Exception as e:
-            print(f"{Colors.RED}✗ MCP Server error: {e}{Colors.RESET}")
-            self.results["failed"].append(("Advanced - MCP Server", str(e)))
-    
+        # (Removed) Test 10.4 probed http://localhost:8003/ for "MCP Server health".
+        # zoe-mcp-server is RETIRED (docker-compose.yml, "RETIRED SERVICES" block):
+        # services/zoe-mcp-server/ does not exist, nothing listens on :8003, and the
+        # connection is refused. The probe could only ever record a failure, so it
+        # measured the absence of a service we deliberately removed. Retired by
+        # removing rather than by asserting the failure.
+
     # ========================================================================
     # HELPER METHODS
     # ========================================================================
