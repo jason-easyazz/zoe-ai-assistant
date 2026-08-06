@@ -19,16 +19,30 @@ Zoe modules are self-contained services that extend Zoe's capabilities. They fol
 
 ## Quick Start
 
-### 1. Copy the Template
+### 1. Create the Module From Scratch
 
-Use the music module as a reference template:
+There is **no copyable scaffold in the tree**, and `modules/omnigent` is not a substitute:
+it is a specialised container-only module with no `main.py`, `requirements.txt`,
+`services/` or `intents/`, so a copy fails `tools/validate_module.py` immediately and its
+compose file would collide with the real `zoe-omnigent` deployment.
+
+Create the directory, then write the five files `tools/validate_module.py` requires —
+`main.py`, `Dockerfile`, `requirements.txt`, `docker-compose.module.yml`, `README.md` —
+from the structure and examples in the sections below:
 
 ```bash
-cp -r modules/zoe-music modules/your-module-name
-cd modules/your-module-name
+mkdir -p modules/your-module-name/{services,intents}
 ```
 
-### 2. Update Module Structure
+Validate as you go — from the **repository root**, passing the module NAME (the
+validator prepends `modules/` itself, so a path would become
+`modules/modules/…`). It names every missing piece:
+
+```bash
+python3 tools/validate_module.py your-module-name
+```
+
+### 2. Module Structure
 
 ```
 modules/your-module-name/
@@ -46,8 +60,12 @@ modules/your-module-name/
 
 In `main.py`, define tools that Zoe AI can call:
 
+State-changing routes are **token-gated and fail closed** — see
+`require_service_token` in the full `main.py` template below. This is the module
+contract (`modules/AGENTS.md`), not optional hardening.
+
 ```python
-@app.post("/tools/your_action")
+@app.post("/tools/your_action", dependencies=[Depends(require_service_token)])
 async def tool_your_action(request: YourRequest):
     """
     Tool: your_module.your_action
@@ -76,7 +94,12 @@ Add your tools to [`services/zoe-mcp-server/http_mcp_server.py`](../../services/
 # In list_tools() function, add:
 {"name": "your_module_action", "description": "What your tool does"},
 
-# Add endpoint handler:
+# Add endpoint handler. It MUST forward the service token: the module's
+# state-changing routes are gated, so a proxy that posts only the JSON body gets
+# 401 on every MCP-mediated call even though a direct authenticated curl works.
+# Provision the SAME secret here as in the module's compose environment.
+YOUR_MODULE_TOKEN = os.getenv("ZOE_YOURMODULE_SERVICE_TOKEN", "")
+
 @app.post("/tools/your_module_action")
 async def your_module_action(request: YourRequest):
     try:
@@ -84,6 +107,7 @@ async def your_module_action(request: YourRequest):
             response = await client.post(
                 f"{YOUR_MODULE_URL}/tools/your_action",
                 json=request.dict(),
+                headers={"X-Zoe-Service-Token": YOUR_MODULE_TOKEN},
                 timeout=10.0
             )
             return response.json()
@@ -104,9 +128,11 @@ docker compose -f docker-compose.module.yml up -d
 # Test health
 curl http://localhost:YOUR_PORT/health
 
-# Test a tool
+# Test a tool. The token header is REQUIRED: without it the gate returns 401,
+# and if ZOE_YOURMODULE_SERVICE_TOKEN is unset the module fails closed with 503.
 curl -X POST http://localhost:YOUR_PORT/tools/your_action \
   -H "Content-Type: application/json" \
+  -H "X-Zoe-Service-Token: ${ZOE_YOURMODULE_SERVICE_TOKEN}" \
   -d '{"parameter": "value"}'
 ```
 
@@ -141,11 +167,12 @@ Zoe Your-Feature Module
 Brief description of what your module does.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 import logging
 import os
+import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +185,23 @@ app = FastAPI(
 # Configuration
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://zoe-mcp-server:8003")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
+
+# --- REQUIRED: the shared-service-token gate (modules/AGENTS.md) --------------
+# Every state-changing /tools/* route must be gated by this token and FAIL
+# CLOSED (503) until it is set. The in-cluster caller sends the same value as
+# X-Zoe-Service-Token. This is not optional hardening — it is the module
+# contract, and the from-scratch flow must carry it just as the old copyable
+# template did (cross-review, #1653).
+SERVICE_TOKEN = os.getenv("ZOE_YOURMODULE_SERVICE_TOKEN", "")
+
+
+def require_service_token(x_zoe_service_token: str = Header(default="")) -> None:
+    if not SERVICE_TOKEN:
+        # Fail CLOSED: an unset token means the gate is unconfigured, never open.
+        raise HTTPException(status_code=503, detail="module service token not configured")
+    if not secrets.compare_digest(x_zoe_service_token, SERVICE_TOKEN):
+        raise HTTPException(status_code=401, detail="bad or missing X-Zoe-Service-Token")
+
 
 # Pydantic models
 class YourRequest(BaseModel):
@@ -178,8 +222,9 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
-# Tool endpoints
-@app.post("/tools/action1")
+# Tool endpoints — state-changing routes are TOKEN-GATED.
+# /health and / stay open so the container healthcheck works.
+@app.post("/tools/action1", dependencies=[Depends(require_service_token)])
 async def tool_action1(request: YourRequest):
     """Tool: your_module.action1"""
     try:
@@ -227,7 +272,11 @@ services:
     container_name: your-module-name
     restart: unless-stopped
     ports:
-      - "YOUR_PORT:YOUR_PORT"
+      # LOOPBACK ONLY (modules/AGENTS.md). A bare "YOUR_PORT:YOUR_PORT" publishes
+      # on 0.0.0.0 and [::], exposing the module's tools to every host on the LAN.
+      # In-cluster callers reach it by service name over zoe-network, so nothing
+      # legitimate needs the wider bind.
+      - "127.0.0.1:YOUR_PORT:YOUR_PORT"
     volumes:
       - .:/app
       - ../../data:/app/data
@@ -235,6 +284,8 @@ services:
       - PYTHONUNBUFFERED=1
       - DATABASE_PATH=/app/data/zoe.db
       - MCP_SERVER_URL=http://zoe-mcp-server:8003
+      # The gate's shared secret. Unset => the module fails closed with 503.
+      - ZOE_YOURMODULE_SERVICE_TOKEN=${ZOE_YOURMODULE_SERVICE_TOKEN:-}
       - YOUR_API_KEY=${YOUR_API_KEY:-}
     networks:
       - zoe-network
@@ -376,7 +427,6 @@ else:
 - 8003: zoe-mcp-server
 - 8007: homeassistant-mcp-bridge
 - 8010: zoe-code-execution
-- 8100: zoe-music
 - 9001: zoe-whisper
 - 9002: zoe-tts
 - 9003: zoe-voice-agent
@@ -403,9 +453,14 @@ else:
 
 ---
 
-## Example: Music Module
+## Example: the retired music module
 
-**Reference implementation**: [`modules/zoe-music/`](../../modules/zoe-music/)
+> `modules/zoe-music` was **deleted** 2026-08-05 — it is not a reference implementation
+> any more, and it is **not** the live music system (that is `zoe-music-assistant`, the
+> upstream Music Assistant container). Recover the code for study with
+> `git log --all -- modules/zoe-music`. See [docs/CANONICAL.md](../CANONICAL.md).
+
+It remains a useful illustration of the module shape:
 
 **What it demonstrates:**
 - 12 MCP tools (search, play, pause, volume, queue, etc.)
@@ -414,7 +469,9 @@ else:
 - Database integration (music history, affinity, zones)
 - Complex business logic (recommendation engine, zone management)
 
-**Study the music module** to understand the complete pattern.
+**To study the complete pattern**, recover the deleted code:
+`git log --all -- modules/zoe-music`. Do not reconstruct it as a starting point —
+build from the templates above; they are current, and it is not.
 
 ---
 
@@ -466,8 +523,8 @@ module:
 
 ## Getting Help
 
-- **Reference**: Study [`modules/zoe-music/`](../../modules/zoe-music/)
-- **Template**: Copy music module structure
+- **Reference**: Study [`modules/omnigent/`](../../modules/omnigent/) for compose/Dockerfile
+  shape — but it is container-only, NOT a copyable FastAPI scaffold (see Quick Start)
 - **Documentation**: See other guides in `docs/modules/`
 - **Issues**: Report problems on GitHub (after public release)
 
@@ -494,8 +551,8 @@ module:
 
 ## Next Steps
 
-1. Copy music module as template
-2. Modify for your use case
+1. Create the module from scratch (Quick Start above) — there is no scaffold to copy
+2. Write the five required files from the templates in this guide
 3. Test standalone
 4. Register with MCP server
 5. Enable and test integrated
