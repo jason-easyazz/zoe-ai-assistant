@@ -803,6 +803,69 @@ def test_provenance_survives_a_manifest_write_that_never_happens(tmp_path):
         assert e["vad_model_sha256"] == "sha-X"
 
 
+def test_a_truncated_payload_is_unusable_even_with_a_valid_header(tmp_path):
+    """A WAV header is a CLAIM, not a measurement.
+
+    ``getnframes()`` returns the count declared in the header, so an interrupted
+    copy — a complete header followed by no payload or half of one — reads as a
+    perfectly good file. It would then be scored on whatever bytes exist and
+    could be quarantined as non-speech on a fraction of the recording: the
+    truncated-measurement bug arriving through the FILE rather than the model
+    (Codex P2, #1643).
+    """
+    good = _write_wav(tmp_path / "whole.wav")
+    raw = good.read_bytes()
+    truncated = tmp_path / "cut.wav"
+    truncated.write_bytes(raw[: 44 + (len(raw) - 44) // 3])   # header + 1/3 audio
+
+    assert cvc.probe_format(good)["ok"] is True, "the control must stay usable"
+
+    info = cvc.probe_format(truncated)
+
+    assert info["ok"] is False
+    assert "truncated payload" in info["reason"]
+
+
+def test_a_whole_file_is_never_called_truncated(tmp_path):
+    """NEGATIVE CONTROL: the size check must not false-fire.
+
+    It compares against a fixed 44-byte header, so a file with EXTRA chunks has
+    a larger real header and fewer payload bytes than this arithmetic assumes.
+    That direction is safe (it under-counts the header, over-counts the payload,
+    so it can miss but never false-fire) — this pins that it stays that way.
+    """
+    for kwargs in ({}, {"rate": 24000}, {"channels": 2}, {"frames": 4000}):
+        p = _write_wav(tmp_path / "ok.wav", **kwargs)
+        info = cvc.probe_format(p)
+        assert info["ok"] is True, f"{kwargs} wrongly rejected: {info['reason']}"
+
+
+def test_a_file_whose_provenance_cannot_be_written_is_not_moved(tmp_path):
+    """A full disk fails for EVERY file, so 'keep going' orphans the batch.
+
+    The sidecar write used to swallow all errors, which meant the one failure it
+    was built to survive — no space left — moved every file with no durable
+    record at all (Codex P2, #1643). It now raises, and the caller skips the
+    move: the file has not moved yet, so refusing is free.
+    """
+    corpus = _fixture_corpus(tmp_path)
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    plan = cvc.plan_moves(rows, str(corpus), "20260805")
+
+    real = cvc._append_pending
+    cvc._append_pending = lambda *_a, **_k: (_ for _ in ()).throw(OSError("No space left on device"))
+    try:
+        res = cvc.apply_moves(plan, str(corpus), 0.20, None, execute=True)
+    finally:
+        cvc._append_pending = real
+
+    assert res["moved"] == 0, "nothing may move without a durable record"
+    for item in plan:
+        assert Path(item["source"]).exists(), f"{item['file']} was orphaned"
+        assert not Path(item["dest"]).exists()
+    assert all("NOT moved" in e for e in res["errors"])
+
+
 def test_the_sidecar_and_the_manifest_agree(tmp_path):
     """NEGATIVE CONTROL: the two records are built by ONE function.
 

@@ -98,6 +98,12 @@ EXPECTED_RATE = 16000
 EXPECTED_CHANNELS = 1
 EXPECTED_SAMPWIDTH = 2  # bytes → 16-bit signed PCM
 
+# Canonical RIFF/WAVE header. Used only as a LOWER bound when checking that a
+# declared payload is actually present — a file with extra chunks has a larger
+# header, so this under-counts the header and therefore over-counts the payload,
+# which keeps the truncation check conservative (it can miss, never false-fire).
+_WAV_HEADER_BYTES = 44
+
 # 20 ms @ 16 kHz mono s16 — the frame size the live voice path feeds the VAD.
 FRAME_BYTES = 640
 # Silero's hop, mirrored from voice_vad.HOP_SAMPLES. Used to compute how many
@@ -166,6 +172,27 @@ def probe_format(path: str | os.PathLike) -> dict[str, Any]:
         # _prepare_audio_for_moonshine deliberately will NOT pretend an
         # unknown rate is 16 kHz, so neither do we.
         info["reason"] = f"invalid sample rate ({info['rate']!r}) — cannot be resampled"
+        return info
+
+    # THE HEADER IS A CLAIM, NOT A MEASUREMENT. `getnframes()` returns the count
+    # DECLARED in the header, so an interrupted copy — a complete 44-byte header
+    # followed by no payload or half of one — reads as a perfectly good file
+    # (Codex P2, #1643). The truncated audio would then be scored on whatever
+    # bytes exist and could be quarantined as non-speech on a fraction of the
+    # recording, which is the truncated-measurement bug from the VAD hop count
+    # arriving through the file rather than the model. Verify the payload is
+    # actually there.
+    declared = info["frames"] * info["channels"] * info["sampwidth"]
+    try:
+        present = max(0, os.path.getsize(path) - _WAV_HEADER_BYTES)
+    except OSError as exc:
+        info["reason"] = f"cannot stat ({exc})"
+        return info
+    if present < declared:
+        info["reason"] = (
+            f"truncated payload: header declares {declared} audio byte(s), "
+            f"at most {present} present (interrupted copy?)"
+        )
         return info
 
     info["ok"] = True
@@ -466,17 +493,20 @@ def _append_pending(dest_dir: str, entry: dict[str, Any]) -> None:
     line per quarantined file, flushed and fsync'd so it survives an interrupted
     run. ``manifest.json`` is still the readable artifact, written at the end;
     if that write never happens, this file is what tells the operator why a
-    directory full of audio is there. Best-effort by design — a sidecar failure
-    must not stop the move, because a moved file with no record beats an
-    unmovable corpus.
+    directory full of audio is there.
+
+    NOT best-effort — it RAISES. An earlier version swallowed every failure so a
+    move could proceed regardless, but the failure that actually matters here is
+    a FULL DISK, and that fails for every file: "keep going" meant moving the
+    entire batch with no durable record at all, which is precisely what this
+    function exists to prevent (Codex P2, #1643). Raising is free, because the
+    caller invokes it BEFORE the move — a refusal leaves the corpus exactly as
+    it was, and the file is simply picked up by the next run.
     """
-    try:
-        with open(os.path.join(dest_dir, "manifest.jsonl"), "a") as fh:
-            fh.write(json.dumps(entry) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-    except Exception:
-        pass
+    with open(os.path.join(dest_dir, "manifest.jsonl"), "a") as fh:
+        fh.write(json.dumps(entry) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
@@ -564,7 +594,16 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
         # nothing to reverse the classification from (Codex P2, #1643). A
         # sidecar line is appended and fsync'd for each file at the moment it
         # moves, so the worst case is now one file's record, not 150.
-        _append_pending(item["dest_dir"], _entry_for(item, run_at, threshold, model_sha))
+        try:
+            _append_pending(item["dest_dir"], _entry_for(item, run_at, threshold, model_sha))
+        except Exception as exc:
+            # The file has NOT moved yet, so refusing costs nothing: it stays in
+            # the corpus and the next run picks it up. Moving it here would
+            # orphan it — audio in quarantine with no recorded reason.
+            result["errors"].append(
+                f"{item['file']}: could not record provenance ({exc}); NOT moved"
+            )
+            continue
         try:
             shutil.move(item["source"], item["dest"])
         except Exception as exc:
