@@ -231,6 +231,41 @@ def test_wrapper_key_parse_fail_closes_on_anything_but_the_dedicated_key():
     )
 
 
+def test_the_dedicated_key_name_is_itself_scrubbed():
+    """The scrubber's globs do not catch our OWN variable name.
+
+    ``OPENROUTER_API_KEY_OMP`` ends in ``_OMP``, so ``*_API_KEY``/``*_TOKEN``/…
+    all miss it. An ambient copy exported by the runner would survive section
+    2's scrub and reach the child ALONGSIDE the key parsed from the file —
+    handing omp a second, possibly stale secret under a name it might read
+    (cross-review, #1655).
+
+    Pinned in BOTH places it is unset: section 2 (before the parse, which reads
+    the FILE and is unaffected) and again after promotion, so exactly one
+    OpenRouter credential leaves this script under exactly one name.
+    """
+    lines = _code_lines(_text(WRAPPER))
+    unsets = [ln for ln in lines if ln.startswith("unset ") and "OPENROUTER_API_KEY_OMP" in ln]
+
+    assert len(unsets) >= 2, (
+        "OPENROUTER_API_KEY_OMP must be unset in section 2 AND after promotion; "
+        f"found {len(unsets)}: {unsets}"
+    )
+
+    # And the premise is DERIVED FROM THE SCRIPT, not restated here: pull the
+    # scrub globs out of the section-2 case arm and confirm none of them match.
+    # If a glob is ever broadened to cover the name, this test says so instead of
+    # silently asserting a redundant unset.
+    import fnmatch
+    arm = next(ln for ln in lines if ln.startswith("*_API_KEY|"))
+    scrub_globs = arm.split(")")[0].split("|")
+    assert len(scrub_globs) >= 5, f"could not parse the scrub globs from: {arm!r}"
+    assert not any(fnmatch.fnmatch("OPENROUTER_API_KEY_OMP", g) for g in scrub_globs), (
+        "a credential glob now catches OPENROUTER_API_KEY_OMP — this test's "
+        "premise is stale, re-derive it rather than deleting it"
+    )
+
+
 def test_the_key_line_case_has_exactly_two_arms_in_the_right_order():
     """Arm PRESENCE is not arm REACHABILITY — and `case` is first-match-wins.
 

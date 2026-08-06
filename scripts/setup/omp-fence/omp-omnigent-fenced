@@ -80,6 +80,13 @@ for _v in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); do
 done
 # Explicit belt-and-braces for names the patterns above do not catch.
 unset ANTHROPIC_AUTH_TOKEN AWS_SESSION_TOKEN GH_TOKEN GITHUB_TOKEN 2>/dev/null || :
+# INCLUDING OUR OWN DEDICATED-KEY NAME. It ends in _OMP, not _API_KEY, so none
+# of the credential globs above match it — an ambient OPENROUTER_API_KEY_OMP
+# exported by the runner would survive the scrub and reach the child ALONGSIDE
+# the key we parse from the file, handing omp a second, possibly stale secret
+# under a name it might read (cross-review, #1655). The parse in section 3 reads
+# the FILE, never the environment, so scrubbing it here cannot affect it.
+unset OPENROUTER_API_KEY_OMP 2>/dev/null || :
 # ANTHROPIC_MODEL is not a credential but it is a container-wide passthrough
 # aimed at the claude_code worker; omp must not inherit a model pin from it.
 unset ANTHROPIC_MODEL 2>/dev/null || :
@@ -159,7 +166,9 @@ case "$_key_value" in
 esac
 OPENROUTER_API_KEY="$_key_value"
 export OPENROUTER_API_KEY
-unset _key_value _key_seen _key_lineno _line _OMP_TAB
+# The dedicated name is scrubbed in section 2 and again here: exactly ONE
+# OpenRouter credential leaves this script, under exactly one name.
+unset _key_value _key_seen _key_lineno _line _OMP_TAB OPENROUTER_API_KEY_OMP
 
 # --- 4. The fence proper ------------------------------------------------------
 # (a) AutoQA off via the env flag, which has HIGHEST precedence in omp
