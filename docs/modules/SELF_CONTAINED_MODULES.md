@@ -22,7 +22,7 @@
 ## 🏗️ Module Structure
 
 ```
-modules/zoe-music/              # Module root
+modules/{module-name}/          # Module root
 ├── main.py                     # FastAPI app + MCP tools
 ├── services/                   # Backend logic
 │   ├── __init__.py
@@ -64,7 +64,7 @@ The manifest defines what widgets your module provides:
 
 ```json
 {
-  "module": "zoe-music",
+  "module": "zoe-example-music",
   "version": "1.0.0",
   "name": "Music Module",
   "description": "Complete music system with multiple providers",
@@ -339,12 +339,18 @@ if (typeof window !== 'undefined') {
 
 ## 🚀 Creating a New Module with Widgets
 
-### Step 1: Copy Template
+### Step 1: Create the Module
+
+There is no copyable scaffold: `modules/omnigent` is container-only (no `main.py`,
+`requirements.txt`, `services/` or `intents/`), its compose file still declares the
+`omnigent` service and the `zoe-omnigent` container, and the widget steps below never
+correct those — so a copy fails `tools/validate_module.py` and can collide with the
+live Omnigent deployment. Build the five required files from the templates in
+[BUILDING_MODULES.md](BUILDING_MODULES.md), then continue here for the widget half.
 
 ```bash
-cd modules/
-cp -r zoe-music zoe-your-feature
-cd zoe-your-feature
+mkdir -p modules/zoe-your-feature/{services,intents}
+cd modules/zoe-your-feature
 ```
 
 ### Step 2: Create Static Directory
@@ -637,7 +643,7 @@ See `docs/modules/examples/CALENDAR_MODULE_EXAMPLE.md` for a complete working ex
 - **MCP Client API**: `docs/modules/MCP_CLIENT_API.md`
 - **Widget Registry API**: `docs/modules/WIDGET_REGISTRY_API.md`
 - **Module Template**: `modules/module-template/`
-- **Music Module Source**: `modules/zoe-music/` (reference implementation)
+- **Module Source**: `modules/omnigent/` (the only live module; `modules/zoe-music` was deleted 2026-08-05 — `git log --all -- modules/zoe-music`)
 
 ---
 
@@ -646,8 +652,9 @@ See `docs/modules/examples/CALENDAR_MODULE_EXAMPLE.md` for a complete working ex
 You now have everything you need to build self-contained modules with beautiful, functional widgets that integrate seamlessly with Zoe!
 
 **Next Steps**:
-1. Copy the music module as a template
-2. Modify for your feature
+1. Create the module from scratch — there is no template to copy
+   (see [BUILDING_MODULES.md](BUILDING_MODULES.md))
+2. Add the widget files for your feature
 3. Test the manifest and static files
 4. Submit as a community module!
 

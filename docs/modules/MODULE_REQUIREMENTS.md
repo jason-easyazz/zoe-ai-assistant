@@ -156,7 +156,7 @@ cursor.execute("SELECT * FROM data")
 **ALL endpoints MUST handle errors gracefully:**
 
 ```python
-@app.post("/tools/your_action")
+@app.post("/tools/your_action", dependencies=[Depends(require_service_token)])
 async def tool_your_action(request: YourRequest):
     try:
         result = await do_something(request.param)
@@ -424,8 +424,7 @@ python tools/validate_module.py your-module
 ## 📚 See Also
 
 - [Building Modules Guide](BUILDING_MODULES.md) - Full development guide
-- [Music Module Example](../../modules/zoe-music/README.md) - Reference implementation
-- [Module Intent System](MODULE_INTENT_SYSTEM_COMPLETE.md) - Adding intents
+- [Omnigent Module](../../modules/omnigent/README.md) - the only live module; container-only, so a reference for compose/Dockerfile shape rather than a copyable FastAPI scaffold
 
 ---
 
@@ -442,4 +441,6 @@ python tools/validate_module.py your-module
 
 **Before you build**: Read this document  
 **Before you enable**: Run the validator  
-**When in doubt**: Look at the music module
+**When in doubt**: Read [BUILDING_MODULES.md](BUILDING_MODULES.md) — it carries the
+`main.py`, `Dockerfile` and compose templates. There is no module in the tree to copy:
+`zoe-music` was deleted 2026-08-05 and `omnigent` is container-only.
