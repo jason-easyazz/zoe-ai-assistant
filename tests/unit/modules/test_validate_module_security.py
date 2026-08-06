@@ -334,65 +334,6 @@ def test_router_mounted_twice_keeps_every_path(tmp_path):
     assert any("/tools/wipe" in e for e in errors), errors
 
 
-def test_unresolved_add_api_route_methods_fails_closed(tmp_path):
-    """`methods=MUTATING` must not read as "no methods".
-
-    A module-level constant is not an inline list, so the route yielded nothing
-    and an ungated POST validated clean behind entirely ordinary code. The safe
-    direction is a false alarm, never a false pass. Found in cross-review round 2.
-    """
-    via_constant = TEMPLATE_MAIN_PY.replace(
-        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
-        "async def tool_action1(request: YourRequest):",
-        "async def tool_wipe(request: YourRequest):",
-    ) + (
-        '\n\nMUTATING = ["POST", "DELETE"]\n'
-        'app.add_api_route("/tools/wipe", tool_wipe, methods=MUTATING)\n'
-    )
-    ok, errors, _ = run_validator(build_module(tmp_path, main_py=via_constant))
-    assert not ok, "an ungated route with methods=<module constant> validated clean"
-    assert any("/tools/wipe" in e for e in errors), errors
-
-    # A constant we CANNOT resolve at all must still fail closed, not vanish.
-    opaque = TEMPLATE_MAIN_PY.replace(
-        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
-        "async def tool_action1(request: YourRequest):",
-        "async def tool_wipe(request: YourRequest):",
-    ) + (
-        "\n\nimport os\n"
-        'app.add_api_route("/tools/wipe", tool_wipe, methods=os.environ["M"].split(","))\n'
-    )
-    ok, errors, _ = run_validator(build_module(tmp_path, main_py=opaque))
-    assert not ok, "an unresolvable methods= expression let the route vanish"
-    assert any("/tools/wipe" in e for e in errors), errors
-
-
-def test_read_only_add_api_route_is_not_flagged(tmp_path):
-    """FALSE-POSITIVE CONTROL: failing closed must not flag a plain GET.
-
-    `add_api_route` defaults to GET, and an explicit `methods=["GET"]` is a read.
-    Neither is state-changing, so neither needs the gate.
-
-    The third case is what makes the CONSTANT RESOLUTION load-bearing rather
-    than merely nice: without it `methods=READ_ONLY` is unresolved, the
-    fail-closed rule treats it as state-changing, and a read-only route gets
-    reported as an ungated security hole. Failing closed is right for the
-    genuinely unknowable case; resolving what IS knowable is what keeps that
-    from becoming noise.
-    """
-    for suffix in (
-        '\n\napp.add_api_route("/tools/status", tool_status)\n',
-        '\n\napp.add_api_route("/tools/status", tool_status, methods=["GET"])\n',
-        '\n\nREAD_ONLY = ["GET"]\n'
-        'app.add_api_route("/tools/status", tool_status, methods=READ_ONLY)\n',
-    ):
-        read_only = TEMPLATE_MAIN_PY + "\n\nasync def tool_status():\n    return {}\n" + suffix
-        _, errors, _ = run_validator(build_module(tmp_path, main_py=read_only))
-        assert not any("/tools/status" in e for e in errors), (
-            f"a read-only add_api_route was flagged: {errors}"
-        )
-
-
 def _with_tail(tail):
     """The template with its gated route removed and `tail` appended."""
     return TEMPLATE_MAIN_PY.replace(
@@ -402,63 +343,112 @@ def _with_tail(tail):
     ) + tail
 
 
-def test_methods_constant_resolves_to_the_binding_in_effect(tmp_path):
-    """Resolving `methods=NAME` last-write-wins over the file is wrong BOTH ways.
+# ── `methods=` is read ONLY as an inline literal ─────────────────────────────
+# Three cross-review rounds tried to make name resolution correct and each one
+# found another binding form that failed OPEN. The resolution machinery was
+# deleted; these pin the fail-closed rule that replaced it.
 
-    Found in cross-review round 3, all three reproduced against the previous
-    head. The map was built by walking every `Assign` in the tree and keeping
-    the last, with no source order and no scope filter.
+_NON_LITERAL_METHODS = {
+    "module-level constant": '\n\nMUTATING = ["POST", "DELETE"]\n'
+    'app.add_api_route("/tools/wipe", tool_wipe, methods=MUTATING)\n',
+    # round 3: last-write-wins over the whole file hid this POST
+    "constant reassigned later": '\n\nM = ["POST"]\n'
+    'app.add_api_route("/tools/wipe", tool_wipe, methods=M)\n'
+    'M = ["GET"]\n',
+    # round 3: a same-named local in an UNRELATED function rewrote resolution
+    "shadowed by an unrelated local": '\n\nM = ["POST"]\n\n\n'
+    "def unrelated():\n"
+    '    M = ["GET"]\n'
+    "    return M\n\n\n"
+    'app.add_api_route("/tools/wipe", tool_wipe, methods=M)\n',
+    # round 4: the `def register(app)` factory pattern — the local binding is
+    # invisible to module-scope collection, so resolution fell back to a stale
+    # module-level ["GET"] and dropped the POST
+    "bound locally in a factory function": '\n\nM = ["GET"]\n\n\n'
+    "def register(app):\n"
+    '    M = ["POST"]\n'
+    '    app.add_api_route("/tools/wipe", tool_wipe, methods=M)\n',
+    # round 4: source order takes the textually-last branch regardless of which
+    # one actually runs
+    "conditional binding": "\n\nimport os\n"
+    'if os.environ.get("X"):\n'
+    '    M = ["POST"]\n'
+    "else:\n"
+    '    M = ["GET"]\n'
+    'app.add_api_route("/tools/wipe", tool_wipe, methods=M)\n',
+    # round 4: neither AugAssign nor AnnAssign is an ast.Assign, so the stale
+    # literal survived
+    "augmented assignment": '\n\nM = ["GET"]\n'
+    'M += ["POST"]\n'
+    'app.add_api_route("/tools/wipe", tool_wipe, methods=M)\n',
+    "annotated reassignment": '\n\nM = ["GET"]\n'
+    'M: list = ["POST"]\n'
+    'app.add_api_route("/tools/wipe", tool_wipe, methods=M)\n',
+    "opaque expression": "\n\nimport os\n"
+    'app.add_api_route("/tools/wipe", tool_wipe, methods=os.environ["M"].split(","))\n',
+    "partially dynamic list": "\n\nimport os\n"
+    'app.add_api_route("/tools/wipe", tool_wipe, methods=["POST", os.environ["M"]])\n',
+}
+
+
+@pytest.mark.parametrize("label", sorted(_NON_LITERAL_METHODS))
+def test_non_literal_methods_always_fails_closed(tmp_path, label):
+    """Every non-literal `methods=` is treated as state-changing, no exceptions.
+
+    This single rule replaces the name-resolution machinery that cross-review
+    dismantled over three rounds. Each case below is a binding form that a
+    previous revision resolved WRONGLY and in the fail-OPEN direction: an
+    ungated state-changing route validating clean. Resolving them correctly
+    means implementing Python scoping and dataflow, which does not belong in a
+    structure checker; refusing to resolve them at all closes the whole class by
+    construction.
     """
-    # (1) FAILS OPEN: a LATER reassignment made the earlier POST read as GET.
-    later_rebind = _with_tail(
-        '\n\nMETHODS = ["POST"]\n'
-        'app.add_api_route("/tools/wipe", tool_wipe, methods=METHODS)\n'
-        'METHODS = ["GET"]\n'
-    )
-    ok, errors, _ = run_validator(build_module(tmp_path, main_py=later_rebind))
-    assert not ok, "a later reassignment of methods= hid an ungated POST"
+    source = _with_tail(_NON_LITERAL_METHODS[label])
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=source))
+    assert not ok, f"an ungated route with methods=<{label}> validated clean"
     assert any("/tools/wipe" in e for e in errors), errors
 
-    # (2) FAILS OPEN, and needs no sabotage: a same-named local in an UNRELATED
-    # function rewrote module-scope resolution. The honest-author case.
-    local_collision = _with_tail(
-        '\n\nMETHODS = ["POST"]\n\n\n'
-        "def unrelated():\n"
-        '    METHODS = ["GET"]\n'
-        "    return METHODS\n\n\n"
-        'app.add_api_route("/tools/wipe", tool_wipe, methods=METHODS)\n'
-    )
-    ok, errors, _ = run_validator(build_module(tmp_path, main_py=local_collision))
-    assert not ok, "a function-local name collision hid an ungated POST"
-    assert any("/tools/wipe" in e for e in errors), errors
 
-    # (3) FALSE POSITIVE the other way: a legitimate GET reported as a hole.
-    earlier_read = _with_tail(
-        '\n\nMETHODS = ["GET"]\n'
-        'app.add_api_route("/tools/status", tool_wipe, methods=METHODS)\n'
-        'METHODS = ["POST"]\n'
-    )
-    _, errors, _ = run_validator(build_module(tmp_path, main_py=earlier_read))
-    assert not any("/tools/status" in e for e in errors), (
-        f"a read-only route was flagged because of a LATER rebinding: {errors}"
-    )
+def test_unresolved_methods_error_says_how_to_resolve_it(tmp_path):
+    """The false-alarm cost is only acceptable if the fix is obvious.
 
-
-def test_methods_constant_rebound_to_something_opaque_fails_closed(tmp_path):
-    """A name rebound to an unreadable value must INVALIDATE the earlier literal.
-
-    Keeping the stale literal would let `METHODS = os.environ[...]` inherit the
-    earlier `["GET"]` and drop a route that may well be state-changing.
+    Failing closed on a read-only route is a deliberate trade, so the message
+    has to name the remedy rather than leave the author guessing.
     """
-    opaque_rebind = _with_tail(
-        "\n\nimport os\n"
-        'METHODS = ["GET"]\n'
-        "METHODS = os.environ[\"M\"].split(\",\")\n"
-        'app.add_api_route("/tools/wipe", tool_wipe, methods=METHODS)\n'
+    source = _with_tail(
+        '\n\nREAD_ONLY = ["GET"]\n'
+        'app.add_api_route("/tools/status", tool_wipe, methods=READ_ONLY)\n'
     )
-    ok, errors, _ = run_validator(build_module(tmp_path, main_py=opaque_rebind))
-    assert not ok, "an opaque rebinding inherited the earlier literal and fell open"
-    assert any("/tools/wipe" in e for e in errors), errors
+    _, errors, _ = run_validator(build_module(tmp_path, main_py=source))
+    assert any("/tools/status" in e for e in errors), (
+        "a non-literal methods= must fail closed even when it is really a GET"
+    )
+    assert any("Inline the list" in e for e in errors), (
+        f"the error does not tell the author how to resolve it: {errors}"
+    )
+
+
+def test_literal_methods_are_read_exactly(tmp_path):
+    """FALSE-POSITIVE CONTROL: an inline literal is still read precisely.
+
+    Failing closed on the unknown must not degrade into flagging everything —
+    a checker that reports every route is as useless as one that reports none.
+    """
+    flagged = {
+        '\n\napp.add_api_route("/tools/wipe", tool_wipe, methods=["POST"])\n': True,
+        '\n\napp.add_api_route("/tools/wipe", tool_wipe, methods=("DELETE",))\n': True,
+        # reads, and the FastAPI default, must not be flagged
+        '\n\napp.add_api_route("/tools/wipe", tool_wipe, methods=["GET"])\n': False,
+        '\n\napp.add_api_route("/tools/wipe", tool_wipe)\n': False,
+        '\n\napp.add_api_route("/tools/wipe", tool_wipe, methods=["GET", "HEAD"])\n': False,
+    }
+    for tail, should_flag in flagged.items():
+        _, errors, _ = run_validator(build_module(tmp_path, main_py=_with_tail(tail)))
+        hit = any("/tools/wipe" in e for e in errors)
+        assert hit == should_flag, (
+            f"{'expected' if should_flag else 'did not expect'} a finding for "
+            f"{tail.strip()!r}; got {errors}"
+        )
 
 
 def test_aliased_depends_import_is_not_a_false_positive(tmp_path):

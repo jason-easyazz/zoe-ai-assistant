@@ -188,60 +188,27 @@ def _string_list_literal(node) -> Optional[List[str]]:
     return None
 
 
-def _module_scope_nodes(node: ast.AST):
-    """Every node in MODULE scope — not descending into a function or class.
-
-    A name bound inside a function body is a different variable that happens to
-    share a spelling. Treating it as the module constant let an unrelated local
-    silently rewrite the resolution of a route registration elsewhere in the
-    file — and it rewrote it toward "no state-changing methods", i.e. it failed
-    OPEN on an ordinary pattern with no sabotage involved.
-    """
-    for child in ast.iter_child_nodes(node):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            continue
-        yield child
-        yield from _module_scope_nodes(child)
-
-
-def _string_list_bindings(tree: ast.AST) -> List[Tuple[int, str, Optional[List[str]]]]:
-    """Module-scope `NAME = [...]` bindings as (lineno, name, values-or-None).
-
-    A list in SOURCE ORDER rather than a name->value map, because last-write-wins
-    over the whole file is wrong in both directions: a later reassignment made an
-    earlier state-changing registration read as read-only (failing OPEN), and an
-    earlier read-only one read as state-changing (a false positive on a valid
-    module). Resolution is per use-site, against the binding actually in effect.
-
-    Non-list bindings are recorded with `None` on purpose — a name rebound to
-    something we cannot read must invalidate the earlier literal, not leave it
-    standing.
-    """
-    bindings = []
-    for node in _module_scope_nodes(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        values = _string_list_literal(node.value)
-        for target in node.targets:
-            if isinstance(target, ast.Name):
-                bindings.append((node.lineno, target.id, values))
-    return bindings
-
-
-def _resolve_string_list(
-    node, bindings: List[Tuple[int, str, Optional[List[str]]]], lineno: int
-) -> Optional[List[str]]:
-    """Resolve a `methods=` expression at a use site. None => unresolved."""
-    literal = _string_list_literal(node)
-    if literal is not None:
-        return literal
-    if not isinstance(node, ast.Name):
-        return None
-    resolved = None
-    for bind_line, name, values in bindings:
-        if name == node.id and bind_line < lineno:
-            resolved = values  # last binding BEFORE the use site wins
-    return resolved
+# NOTE — why there is NO name resolution for `methods=`.
+#
+# An earlier revision tried to resolve `methods=MUTATING` back to its binding.
+# Cross-review took it apart across three rounds, and every round found another
+# Python binding form the model did not cover: last-write-wins ignored source
+# order; source order ignored function scope; module scope ignored the local in
+# a `def register(app)` factory; and none of them handled a conditional
+# binding, `AugAssign`, or `AnnAssign`. Each miss failed OPEN — an ungated
+# state-changing route validating clean, the exact defect this file exists to
+# remove.
+#
+# The lesson is that the feature was the bug. Resolving names correctly means
+# implementing Python's scoping and dataflow rules, which is not something a
+# pre-deploy structure checker should contain and cannot be got right by
+# patching one binding form at a time.
+#
+# So: only an INLINE LITERAL is read. Anything else is UNRESOLVED and gate-
+# checked. The cost is a false alarm on `methods=READ_ONLY` for a genuinely
+# read-only route, whose fix is to inline the list — small, obvious, and
+# reported with that instruction. The benefit is that the entire class is
+# closed by construction rather than by enumeration.
 
 
 def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, set]):
@@ -251,13 +218,11 @@ def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, set]):
     misses it entirely, so an ungated `add_api_route("/tools/wipe", …,
     methods=["POST"])` validated clean.
 
-    FAILS CLOSED on an unresolved `methods=`. `methods=MUTATING` is not a literal
-    list; reading it as "no methods" silently dropped the route, so an ungated
-    POST validated clean behind an ordinary module-level constant. Constants are
-    resolved when they can be, and anything still unresolved is treated as
-    state-changing — the safe direction is a false alarm, never a false pass.
+    FAILS CLOSED on any `methods=` that is not an inline literal — see the note
+    above on why no name resolution is attempted. Reading a non-literal as "no
+    methods" silently dropped the route, so an ungated POST validated clean.
+    The safe direction is a false alarm, never a false pass.
     """
-    bindings = _string_list_bindings(tree)
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             continue
@@ -277,7 +242,7 @@ def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, set]):
         if methods_node is None:
             methods = ["get"]  # FastAPI's default for add_api_route
         else:
-            methods = _resolve_string_list(methods_node, bindings, node.lineno)
+            methods = _string_list_literal(methods_node)
             if methods is None:
                 methods = [UNRESOLVED_METHODS]
 
@@ -287,7 +252,7 @@ def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, set]):
                     yield node, method, f"{prefix}{path}"
 
 
-def _route_decorators(func: ast.AST, prefixes: Dict[str, str] = None):
+def _route_decorators(func: ast.AST, prefixes: Dict[str, set] = None):
     """Yield (decorator, method, path) for each state-changing route decorator."""
     prefixes = prefixes or {}
     for dec in getattr(func, "decorator_list", []):
@@ -660,17 +625,27 @@ class ModuleValidator:
             if any(SERVICE_TOKEN_NAME.search(n) for n in names):
                 gated.append(path)
             else:
-                ungated.append(f"{method.upper()} {path}")
+                # Keep the sentinel verbatim; upper-casing it breaks the hint below.
+                label = method if method == UNRESOLVED_METHODS else method.upper()
+                ungated.append(f"{label} {path}")
 
         if not (gated or ungated):
             self._warn("No state-changing /tools/* routes found - MCP-compatible?")
             return
 
         if ungated:
+            hint = ""
+            if any(UNRESOLVED_METHODS in entry for entry in ungated):
+                hint = (
+                    " NOTE: a route above shows "
+                    f"'{UNRESOLVED_METHODS}' — its methods= is not an inline list, "
+                    "so it is treated as state-changing rather than assumed safe. "
+                    "Inline the list (methods=[\"GET\"]) if the route is read-only."
+                )
             self._fail_check(
                 f"SECURITY: ungated state-changing /tools/* route(s): {ungated} - "
                 f"each needs dependencies=[Depends(require_service_token)] "
-                f"(modules/AGENTS.md)"
+                f"(modules/AGENTS.md).{hint}"
             )
         else:
             self._pass_check(
