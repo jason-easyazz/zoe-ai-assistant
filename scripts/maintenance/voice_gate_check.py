@@ -306,11 +306,15 @@ VOICE_PATH_PATTERNS = (
     #     /api/voice/livekit-token — the panel's "Talk" button, touch/home.html:4152 —
     #     and is reaped after 300s idle. Real session 2026-07-30 (docker inspect).
     #   - services/livekit/config.yaml is that container's serving config (port 7880,
-    #     the 50000-50200 RTC range, keys), mounted read-only by docker-compose.yml:154.
+    #     the 50000-50200 RTC range, rtc/logging), mounted read-only by
+    #     docker-compose.yml. It carries NO credential since #1644 — the key pair
+    #     arrives as LIVEKIT_KEYS, interpolated by compose from the untracked
+    #     repo-root .env, and tests/unit/test_livekit_config_no_secrets.py keeps it
+    #     that way. Still voice-path: it is what the serving container reads.
     #     Same class as llama-server.service / flue-zoe-brain.service / the
     #     functiongemma-router unit, all gated above for the same reason.
-    # PR #1636 is the demonstration: ~25-33% of EVERY frame on this path was
-    # FFmpeg plane padding carrying stale PCM from earlier frames (silent input
+    # PR #1636 (MERGED) is the demonstration: ~25-33% of EVERY frame on this path
+    # was FFmpeg plane padding carrying stale PCM from earlier frames (silent input
     # emitted near-full-scale audio), feeding garbage to the VAD and to Moonshine.
     # It tripped no gate whatsoever, at PR time or at deploy.
     #
@@ -331,12 +335,24 @@ VOICE_PATH_PATTERNS = (
     #
     # WHAT ACTUALLY VERIFIES THESE FILES: their deterministic ci_safe suites, which
     # run in `validate` — the REQUIRED, locally-runnable, blocking gate — not this
-    # advisory/deploy one. test_livekit_aiortc_tasks.py, test_livekit_failure_paths.py,
+    # advisory/deploy one. As of #1636/#1652 that is, all `ci_safe` and all in the
+    # required lane: test_livekit_audio_frame_bytes.py (ingest FIDELITY — a whole
+    # utterance through _AudioStream; its negative control is what caught the
+    # padding bug), test_livekit_vad_segmentation.py (what the agent DOES with the
+    # stream), test_livekit_media_authz.py + test_voice_livekit_session_harness.py
+    # (the HTTP media endpoints, both sides), test_livekit_failure_paths.py,
     # test_livekit_stream_tts.py, test_voice_livekit_{fast_tier,health,lifecycle,
-    # ondemand}.py, and (in #1636) test_livekit_audio_frame_bytes.py, whose
-    # negative control is what actually caught the padding bug. When you change a
-    # file in this block, the test you add there is the verification; the replay
-    # run is the forcing function that makes you look.
+    # ondemand}.py.
+    #   ACCURACY NOTE, because this list is exactly the kind that rots into a lie:
+    #   test_livekit_aiortc_tasks.py is NOT in that set. It carries no `ci_safe`
+    #   marker, so it runs only in the Jetson full-directory lane, never in
+    #   `validate`. Verified by grep on this commit, not assumed.
+    #   Related trap, fixed in #1636 and worth knowing here: the fidelity suite
+    #   `importorskip`s av/aiortc at module scope, so before that PR installed those
+    #   wheels it SKIPPED in the required lane and read green while proving nothing.
+    #   test_livekit_ci_dep_guard.py now fails the lane if they go missing again.
+    # When you change a file in this block, the test you add there is the
+    # verification; the replay run is the forcing function that makes you look.
     #
     # Why gate them anyway, rather than leave the hole: this tuple is a FORCING
     # FUNCTION, not an isolation harness — the bargain already accepted for every
@@ -354,17 +370,29 @@ VOICE_PATH_PATTERNS = (
     # (7880 + the UDP range), a synthetic WebRTC PUBLISHER pushing corpus WAVs as an
     # Opus track, token minting, the agent loop attached, and the whole
     # Moonshine+brain+Kokoro stack — a second ~2.3 GB load under
-    # flock /tmp/zoe-voice-harness.lock on a box where two Kokoro loads OOM. The
-    # SMALL piece of it (feed corpus WAVs straight into _AudioStream and assert the
-    # emitted PCM) needs no server, no GPU and no flock — which means its right home
-    # is a deterministic ci_safe unit test in `validate`, STRONGER than any
-    # advisory artifact, and NOT a probe stage. Follow-up is tracked as that.
+    # flock /tmp/zoe-voice-harness.lock on a box where two Kokoro loads OOM.
+    #   UPDATE: the SMALL piece of it has SHIPPED, and not as a probe stage. #1636's
+    #   test_livekit_audio_frame_bytes.py feeds corpus WAVs (plus a deterministic
+    #   speech-shaped synthetic, so CI runs it too) straight into _AudioStream and
+    #   asserts the emitted PCM — envelope correlation, duration, and a silent tail
+    #   — with `_drain_padded` reproducing the pre-fix read as a permanent negative
+    #   control. It needs no server, no GPU and no flock, so it lives in `validate`
+    #   where it BLOCKS, which is stronger than any advisory artifact. What remains
+    #   deferred is only the end-to-end WebRTC leg (publisher + container + live
+    #   stack); the ingest arithmetic is now covered deterministically.
     #
-    # DELIBERATELY ABSENT: services/zoe-ui/dist/lib/livekit/livekit-client.umd.min.js.
-    # It is the vendored browser-side PUBLISHER — it runs in the panel's browser, not
-    # on the Jetson, so a deploy gate on the box governs nothing about it and no probe
-    # on the box could exercise a vendor bump. Also absent, same rule as everywhere
-    # else in this tuple: the co-located tests.
+    # DELIBERATELY ABSENT — the browser side, all of it. The vendored publisher
+    # services/zoe-ui/dist/lib/livekit/livekit-client.umd.min.js, and equally the
+    # pages that drive it: services/zoe-ui/dist/voice.html,
+    # services/zoe-ui/dist/touch/voice.html, services/zoe-ui/dist/js/auth.js
+    # (#1652 changed all three). They run in the PANEL'S BROWSER, not on the Jetson,
+    # so a deploy gate on the box governs nothing about them and no probe on the box
+    # could exercise them. Their verification is the node harness
+    # services/zoe-ui/dist/test_voice_livekit_session.js, run in `validate` by
+    # test_voice_livekit_session_harness.py — which since #1652 composes the REAL
+    # js/auth.js fetch interceptor under the real page helper, because a harness
+    # that stubs the innermost layer is blind to every wrapper above it. Also
+    # absent, same rule as everywhere else in this tuple: the co-located tests.
     "services/zoe-data/livekit_aiortc.py",
     "services/zoe-data/routers/voice_livekit.py",
     "services/livekit/config.yaml",

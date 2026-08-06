@@ -172,11 +172,22 @@ LiveKit stage to the probe, the test goes red and this section must be rewritten
 becoming an understatement.
 
 - **What actually verifies these files:** their deterministic `ci_safe` suites, which run in
-  **`validate` — the REQUIRED, locally-runnable, blocking gate** — not this advisory/deploy one.
-  `test_livekit_aiortc_tasks.py`, `test_livekit_failure_paths.py`, `test_livekit_stream_tts.py`,
+  **`validate` — the REQUIRED, locally-runnable, blocking gate** — not this advisory/deploy one. As of
+  #1636/#1652: `test_livekit_audio_frame_bytes.py` (ingest **fidelity** — a whole utterance through
+  `_AudioStream`), `test_livekit_vad_segmentation.py` (what the agent *does* with that stream),
+  `test_livekit_media_authz.py` + `test_voice_livekit_session_harness.py` (the HTTP media endpoints,
+  server and browser side), `test_livekit_failure_paths.py`, `test_livekit_stream_tts.py`,
   `test_voice_livekit_{fast_tier,health,lifecycle,ondemand}.py`. When you change a file in this lane,
   **the test you add there is the verification**; the replay run is the forcing function that makes
   you look.
+  - **Accuracy note, because a list like this rots into a lie:** `test_livekit_aiortc_tasks.py` is
+    **not** in that set — it carries no `ci_safe` marker, so it runs only in the Jetson
+    full-directory lane, never in `validate`. Checked by grep on this commit, not assumed.
+  - **And the trap one layer up, fixed in #1636:** the fidelity suite `importorskip`s `av`/`aiortc` at
+    module scope, so until that PR installed those wheels in the slim lane it **skipped** in
+    `validate` and read green while proving nothing. `test_livekit_ci_dep_guard.py` now fails the lane
+    if they go missing again — a module-scope `importorskip` inside a gating suite must always be
+    paired with a guard that makes its absence loud.
 - **Why gate them anyway:** the tuple is a **forcing function, not an isolation harness** — the same
   bargain already accepted for every serving unit in it. Ungated, a change to the *selected* WebRTC
   backend reaches the box with nobody looking, which is how a bug that made ~25–33% of every frame on
@@ -189,12 +200,22 @@ becoming an understatement.
   the LiveKit container up (7880 + the 50000–50200 UDP range), a synthetic WebRTC *publisher* pushing
   corpus WAVs as an Opus track, token minting, the agent loop attached, and a second ~2.3 GB
   Moonshine+brain+Kokoro load under `flock /tmp/zoe-voice-harness.lock` on a box where two Kokoro
-  loads OOM. The **small** piece of it — feed corpus WAVs straight into `_AudioStream` and assert the
-  emitted PCM — needs no server, no GPU and no flock, so its right home is a deterministic `ci_safe`
-  test in `validate` (stronger than any advisory artifact), **not** a probe stage.
-- **Deliberately ungated:** `services/zoe-ui/dist/lib/livekit/livekit-client.umd.min.js`. It is the
-  vendored browser-side *publisher* — it runs in the panel's browser, not on the Jetson, so a deploy
-  gate on the box governs nothing about it and no probe on the box could exercise a vendor bump.
+  loads OOM. **The small piece of it has since SHIPPED, and not as a probe stage:**
+  `test_livekit_audio_frame_bytes.py` (#1636) feeds corpus WAVs — plus a deterministic speech-shaped
+  synthetic, so CI runs it too — straight into `_AudioStream` and asserts the emitted PCM (envelope
+  correlation, duration, silent tail), with `_drain_padded` reproducing the pre-fix read as a
+  permanent negative control. No server, no GPU, no flock, and it lives in `validate` where it
+  **blocks** — stronger than any advisory artifact. What remains deferred is only the end-to-end
+  WebRTC leg (publisher + container + live stack); the ingest arithmetic is now covered
+  deterministically.
+- **Deliberately ungated — the browser side, all of it.** The vendored publisher
+  `services/zoe-ui/dist/lib/livekit/livekit-client.umd.min.js`, and equally the pages that drive it:
+  `dist/voice.html`, `dist/touch/voice.html`, `dist/js/auth.js` (#1652 changed all three). They run in
+  the panel's browser, not on the Jetson, so a deploy gate on the box governs nothing about them and
+  no probe on the box could exercise them. Their verification is the node harness
+  `dist/test_voice_livekit_session.js`, run in `validate` by `test_voice_livekit_session_harness.py` —
+  which since #1652 composes the **real** `js/auth.js` fetch interceptor under the real page helper,
+  because a harness that stubs the innermost layer is structurally blind to every wrapper above it.
 
 ## The caveat that bites (read this)
 
@@ -243,6 +264,40 @@ can't attribute per-commit, but the landed work that drove it:
 579.5 ms**, OK 19/20) via `voice_regression_probe.py --samples 20 --update-baseline`. Why: left on the
 July-2 bar the gate compared against an easy, ~1.75× slower target, so a silent brain slowdown could
 regress most of the July wins and still "pass". The new bar holds the gains.
+
+### Which samples the gate replays — capture time, not filename (fixed 2026-08-05)
+
+`--last N` decides what every gate verdict MEANS, and until 2026-08-05 it did not mean what it
+said. `replay_samples.py::_select` sorted by FILENAME, and corpus names are `HHMMSS_millis.wav` — a
+**time of day with no date**. So `--last 20` returned the twenty highest times-of-day in the entire
+corpus, with every capture date interleaved, while `voice_regression_probe.py --samples`,
+`scripts/perf/measure_voice.py --last` and this document all called it "newest N". Same class as
+#1642, where `sorted()[0]` picked "whichever sorts first today" and left a test red for weeks.
+
+**Measured over the live 1003-file corpus: the name-sorted last 20 and the capture-time-sorted last
+20 shared ZERO files**, and ten of the twenty name-sorted samples were from 2026-06-20 — the oldest
+capture day in the corpus. The gate had been scoring a fixed, arbitrary, mostly-ancient slice.
+
+Selection is now `(mtime, basename)`, newest last. **mtime is trustworthy here, verified not
+assumed:** 998 of 1003 files have an mtime whose HH:MM:SS equals their filename's exactly (the other
+5 differ by one second — the name carries milliseconds, so `083032.938` is written at `083033`), and
+`ctime` equals `mtime` to the nanosecond on every file, so nothing has ever copied, rsynced or
+restored the corpus. The WAVs are bare 44-byte canonical RIFF with no BWF `bext`/`LIST` chunk and
+there are no sidecar metadata files, so **mtime is the only true timestamp the corpus carries**. If
+it is ever bulk re-timestamped, the fix is to put the date in the capture filename — not to trust
+the name again.
+
+`--since` is unchanged and **still filename-based on purpose**: it is a time-of-day filter spanning
+every date, not a recency filter. It was always honest about that, and silently redefining it would
+be the same bug pointed the other way. It now says so loudly in `--help` and prints a note to stderr
+when used. **`--since-date YYYY-MM-DD`** is the capture-time counterpart, consistent with `--last`.
+
+**Consequence for the baseline — this needs an operator decision, once.** The
+2026-07-16 baseline (brain 1868 ms, e2e 1896 ms, STT 579.5 ms, OK 19/20) was measured over the
+name-sorted slice, and it stores only aggregates — no file list — so nothing detects the swap. With
+zero overlap the next probe scores twenty entirely different recordings and any movement is the
+sample change, not a regression. **Run a fresh probe, read the diff as informational, then
+`--update-baseline` deliberately.** Do not treat the first post-change run as a regression signal.
 
 ## Stopping the brain does NOT guarantee it restarts (2026-07-26)
 
