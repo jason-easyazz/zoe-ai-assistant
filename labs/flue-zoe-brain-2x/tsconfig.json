@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true
+  },
+  // Shipped code plus the build config. `test/` is deliberately OUT of scope, as
+  // it was on the beta: the suite runs under `node --experimental-strip-types`,
+  // which erases types rather than checking them, and several legacy test files
+  // build deliberately-partial `Context`/`Message` literals and cast tool
+  // definitions to wire `Tool`s. Pulling them in would leave `npm run typecheck`
+  // permanently red on pre-existing looseness that has nothing to do with the 2.x
+  // port — a gate nobody can get green stops being read. The new test files were
+  // written to typecheck cleanly regardless.
+  "include": ["src/**/*.ts", "vite.config.ts", "flue.config.ts"]
+}
