@@ -186,8 +186,17 @@ time the container is recreated for any other reason. The pin's job is to govern
 the **next pull**, not to change what is running now.
 
 ```bash
-# 0. Confirm the pin matches what is actually running (expect identical digests)
-docker inspect zoe-music-assistant --format '{{.Config.Image}}'
+# 0. Confirm the pin matches what is actually RUNNING.
+#    Compare IMAGE IDs, not a tag against a digest: the live container was
+#    created from the old `:stable` compose entry, so `.Config.Image` reports
+#    that original TAG string while RepoDigests reports `repo@sha256:...`. Those
+#    two can never be equal, so the old form could not pass (cross-review,
+#    #1635). The image ID is the thing both sides genuinely share.
+docker inspect zoe-music-assistant --format '{{.Image}}'          # running image ID
+docker image inspect ghcr.io/music-assistant/server:stable \
+  --format '{{.Id}}'                                              # must be IDENTICAL
+
+# ...and confirm the digest in docker-compose.modules.yml is that image's:
 docker image inspect ghcr.io/music-assistant/server:stable \
   --format '{{index .RepoDigests 0}}'
 

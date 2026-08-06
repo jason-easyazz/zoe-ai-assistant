@@ -112,6 +112,25 @@ out=$(docker exec "$CONTAINER" "$PY" -m yt_dlp \
         -f "bestaudio/best" --simulate -v \
         --extractor-args "youtube:player_client=${PROBE_CLIENT}" \
         -g "$PROBE_URL" 2>&1)
+rc=$?
+
+# A TRANSPORT failure is CANNOT CHECK, not UNHEALTHY. A DNS blip, a YouTube
+# hiccup, or a container that stopped mid-`docker exec` all make yt-dlp exit
+# nonzero WITHOUT the solver ever running -- and the missing-solver check below
+# would then declare the JS engine broken. That is a false alarm on the one
+# signal this probe exists to make trustworthy, and it would be raised against
+# a digest bump that is actually fine (cross-review, #1635). Exit 2 says "ask
+# again", exit 1 says "the engine is gone"; they must not be confused.
+if [ "$rc" -ne 0 ] && ! grep -q 'Solving JS challenges using' <<<"$out"; then
+    case "$out" in
+        *"Solving JS challenges"*) : ;;
+        *)
+            skip "yt-dlp exited ${rc} before the solver ran -- this looks like a
+  transport/network failure or a container that went away, NOT a JS-engine
+  fault. Re-run when the network and container are stable. Tail:
+$(tail -5 <<<"$out")" ;;
+    esac
+fi
 
 if ! grep -q 'Solving JS challenges using' <<<"$out"; then
     fail "the EJS solver never ran for the '${PROBE_CLIENT}' client.
