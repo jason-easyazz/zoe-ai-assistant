@@ -127,15 +127,19 @@ chat, a commit, a log, or an agent transcript.
    - `/home/zoe/assistant/.env`
    - `/home/zoe/assistant/services/zoe-data/.env`
 
-   Edit `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` in each. Verify they match
-   without printing them:
+   Edit `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` in each. Verify **both halves**
+   match, without printing them — a matching secret under a mistyped key id
+   produces a server that recognises a different issuer from the one zoe-data
+   signs its tokens with, and the symptom is simply "Talk does not work":
    ```bash
    for f in .env services/zoe-data/.env; do
-     printf '%s %s\n' "$f" \
+     printf '%s key=%s secret=%s\n' "$f" \
+       "$(grep -m1 '^LIVEKIT_API_KEY='    "$f" | cut -d= -f2- | sha256sum | cut -c1-12)" \
        "$(grep -m1 '^LIVEKIT_API_SECRET=' "$f" | cut -d= -f2- | sha256sum | cut -c1-12)"
    done
    ```
-   The two hashes must be equal.
+   **Both** columns must be equal across the two rows. (The key id is not itself
+   a secret, but hashing both keeps one rule instead of two.)
 3. Recreate the LiveKit container so it picks up the new `LIVEKIT_KEYS`:
    ```bash
    docker compose up -d --force-recreate livekit
@@ -155,12 +159,20 @@ chat, a commit, a log, or an agent transcript.
    captured in **step 0**, and refusing to run if it is empty (an empty pattern
    matches every line, so an unset variable would report a false remnant):
    ```bash
-   [ -n "$OLD_KEY_ID" ] \
-     && grep -rlF -- "$OLD_KEY_ID" /home/zoe/assistant/.env /home/zoe/assistant/services/zoe-data/.env \
-     || echo "OLD_KEY_ID unset — re-read step 0; this check did NOT run"
+   if [ -z "$OLD_KEY_ID" ]; then
+     echo "OLD_KEY_ID unset — re-read step 0; this check did NOT run"
+   elif grep -rlF -- "$OLD_KEY_ID" \
+        /home/zoe/assistant/.env /home/zoe/assistant/services/zoe-data/.env; then
+     echo "OLD KEY STILL PRESENT in the file(s) above — rotation incomplete"
+   else
+     echo "old key id absent from both env files — rotation complete"
+   fi
    ```
-   The `grep` should return nothing (exit 1). If you lost the shell, recover the
-   old id from `git log -p -- services/livekit/config.yaml` rather than guessing.
+   Three distinct outcomes on purpose. `grep` exits **1** when it finds nothing,
+   which is the SUCCESS case here — folding that into a `||` branch would report
+   a successful rotation as "the check did not run". If you lost the shell,
+   recover the old id from `git log -p -- services/livekit/config.yaml` rather
+   than guessing.
 
 `ZOE_LIVEKIT_ONDEMAND=true`, so the container is idle-reaped and started on
 demand — recreating it is low-risk and there is normally no live session to drop.
