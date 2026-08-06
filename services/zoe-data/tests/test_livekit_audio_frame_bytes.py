@@ -219,19 +219,32 @@ def _synth_voice_16k(seconds=3.0):
     return (sig * env * 18000.0).astype(np.int16)
 
 
-def _corpus_mono16k():
-    """(name, pcm) for a deterministic real recording, or (None, None) off-box."""
+_CORPUS_SLICE = 4                # members evaluated — a population, not a pick
+
+
+def _corpus_mono16k_slice(limit=_CORPUS_SLICE):
+    """Up to `limit` (name, pcm) pairs of real 16 kHz mono audio; [] off-box.
+
+    A deterministic SLICE, never a single chosen file. Striding and then taking
+    the first qualifying member is still a per-file assertion: the corpus grows,
+    filenames sort by TIME OF DAY rather than date, and a newly captured clip can
+    silently become that member — which is how `test_voice_barge_in.py` stayed
+    red for weeks with the code and the model untouched. Off-format members
+    (24 kHz resamples, one non-RIFF file) and near-silent false wakes are known
+    corpus facts and are skipped, not failed on. See ../tests/AGENTS.md.
+    """
     if not os.path.isdir(_SAMPLES_DIR):
-        return None, None
+        return []
     try:
         names = sorted(f for f in os.listdir(_SAMPLES_DIR) if f.endswith(".wav"))
     except OSError:
-        return None, None
+        return []
+    picked = []
     for name in names[::_CORPUS_STRIDE]:
+        if len(picked) >= limit:
+            break
         try:
             with wave.open(os.path.join(_SAMPLES_DIR, name), "rb") as handle:
-                # Off-format members (24 kHz resamples, one non-RIFF file) are a
-                # known corpus fact, not a bug in the code under test — skip them.
                 if (handle.getframerate(), handle.getnchannels(),
                         handle.getsampwidth()) != (OUT_RATE, 1, 2):
                     continue
@@ -241,20 +254,50 @@ def _corpus_mono16k():
         except Exception:
             continue
         if pcm.size and int(np.abs(pcm).max()) >= _CORPUS_MIN_PEAK:
-            return name, pcm
-    return None, None
+            picked.append((name, pcm))
+    return picked
 
 
-@pytest.fixture(params=["synthetic", "corpus"])
+# Resolved once at collection: on the Jetson EVERY sampled member becomes its own
+# test case, so the suite reports a corpus-level result rather than one clip's
+# score. In CI the list is empty and only the synthetic arm exists — no skip
+# noise, and no arm that silently never ran.
+_CORPUS_MEMBERS = _corpus_mono16k_slice()
+
+
+@pytest.fixture(params=["synthetic"] + [name for name, _ in _CORPUS_MEMBERS])
 def source_mono16k(request):
-    """The reference signal, both ways: always synthetic, plus real audio on the
-    Jetson. Same assertions for both — that is the point of the fallback."""
-    if request.param == "corpus":
-        name, pcm = _corpus_mono16k()
-        if pcm is None:
-            pytest.skip(f"no usable 16k mono recording in {_SAMPLES_DIR} (CI has no corpus)")
-        return name, pcm
-    return "synthetic", _synth_voice_16k()
+    """The reference signal: always synthetic, plus every sampled real recording.
+
+    Identical assertions run for each — that is the point of keeping a CI arm.
+    These are structural signal properties (envelope, duration, silent tail), so
+    EVERY member must hold rather than a majority; a noisy or background-TV clip
+    still round-trips 48k→16k exactly, which is all that is being measured.
+    """
+    if request.param == "synthetic":
+        return "synthetic", _synth_voice_16k()
+    for name, pcm in _CORPUS_MEMBERS:
+        if name == request.param:
+            return name, pcm
+    pytest.skip(f"{request.param} vanished from {_SAMPLES_DIR} between collection and run")
+
+
+def test_corpus_slice_is_a_population_not_a_pick():
+    """CONTROL: on the box the fidelity arms must cover more than one recording.
+
+    If the slice collapses to a single member, every corpus assertion above
+    quietly degenerates into the per-file binding this replaced — still green,
+    just as fragile. CI has no corpus, so there is nothing to check there.
+    """
+    if not _CORPUS_MEMBERS:
+        pytest.skip(f"no corpus at {_SAMPLES_DIR} (CI has none) — nothing to sample")
+    assert len({name for name, _ in _CORPUS_MEMBERS}) == len(_CORPUS_MEMBERS), \
+        "duplicate members sampled"
+    assert len(_CORPUS_MEMBERS) >= 3, (
+        f"only {len(_CORPUS_MEMBERS)} usable recording(s) found by a "
+        f"stride-{_CORPUS_STRIDE} walk — the corpus arms need a population. "
+        f"Either the corpus shrank or the format filter now rejects too much."
+    )
 
 
 def _to_48k_stereo(mono16k):
