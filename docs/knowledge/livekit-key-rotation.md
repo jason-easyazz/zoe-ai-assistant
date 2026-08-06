@@ -115,9 +115,21 @@ chat, a commit, a log, or an agent transcript.
 0. **Capture the OUTGOING key id first** — step 5 checks for its remnants, and
    after step 2 it is gone from the files, so it cannot be recovered then:
    ```bash
-   OLD_KEY_ID="$(grep -m1 '^LIVEKIT_API_KEY=' .env | cut -d= -f2-)"
-   [ -n "$OLD_KEY_ID" ] || { echo "no LIVEKIT_API_KEY in .env — stop"; }
+   capture_old_key_id() {
+     OLD_KEY_ID="$(grep -m1 '^LIVEKIT_API_KEY=' .env | cut -d= -f2-)"
+     if [ -z "$OLD_KEY_ID" ]; then
+       echo "STOP: no LIVEKIT_API_KEY in .env. Recover the outgoing id from" >&2
+       echo "      git log -p -- services/livekit/config.yaml, then re-run." >&2
+       return 1
+     fi
+     echo "captured outgoing key id (${#OLD_KEY_ID} chars)"
+   }
+   capture_old_key_id || echo "STEP 0 FAILED — do not continue to step 1"
    ```
+   A shell function, so the failure genuinely **returns non-zero** while
+   `OLD_KEY_ID` still lands in your current shell — `exit 1` pasted into an
+   interactive terminal would close it. Do not proceed unless it printed
+   `captured outgoing key id`.
    The key **id** is not the secret; it is already public in this repo's history.
    Keep the same shell for the whole procedure — an unset `OLD_KEY_ID` in step 5
    would expand to an empty pattern and `grep -rl ""` matches every line of both

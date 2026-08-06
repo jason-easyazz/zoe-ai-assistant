@@ -121,12 +121,16 @@ def test_compose_supplies_livekit_keys_by_interpolation():
         "LIVEKIT_KEYS must be exactly '<key>: <secret>' including the space; "
         "livekit-server rejects it otherwise."
     )
-    # …and "interpolated" is not the same as "not baked in". A DEFAULT is a
-    # literal: `${LIVEKIT_API_SECRET:-<43 chars>}` references the variable, so the
-    # check above passes, while compose substitutes that literal whenever the
-    # variable is blank or unset — a committed credential with no vendor pattern
-    # for any scanner to catch. Every default here must be EMPTY.
-    for var, default in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?][^}]*)?\}", value):
+    # …and "interpolated" is not the same as "not baked in". Compose's default AND
+    # replacement operators both put a LITERAL in the tracked file while still
+    # referencing the variable, so the check above passes either way:
+    #   ${VAR:-lit} / ${VAR-lit}   substitute `lit` when VAR is blank/unset
+    #   ${VAR:+lit} / ${VAR+lit}   substitute `lit` when VAR IS set — i.e. on the
+    #                              normal path, which is worse
+    #   ${VAR:?msg} / ${VAR?msg}   msg is not a credential, but the rule is uniform
+    # A LiveKit key has no vendor pattern for any scanner to catch, so all six
+    # forms must carry an EMPTY body here.
+    for var, default in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+][^}]*)?\}", value):
         body = (default or "")[2:] if default[:2] in (":-", ":?", ":+") else (default or "")[1:]
         assert not body.strip(), (
             f"LIVEKIT_KEYS gives ${{{var}}} a non-empty interpolation default "
@@ -243,18 +247,27 @@ def test_interpolation_default_check_rejects_a_baked_literal():
 
     def _bad_defaults(value):
         found = []
-        for var, default in _re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?][^}]*)?\}", value):
+        for var, default in _re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+][^}]*)?\}", value):
             body = (default or "")[2:] if default[:2] in (":-", ":?", ":+") else (default or "")[1:]
             if body.strip():
                 found.append(var)
         return found
 
-    baked = "${LIVEKIT_API_KEY:-zoe-abc123}: ${LIVEKIT_API_SECRET:-" + "A" * 43 + "}"
-    assert _bad_defaults(baked) == ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"], (
-        "the interpolation-default check no longer sees a baked-in literal"
-    )
-    assert _bad_defaults("${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}") == []
-    assert _bad_defaults("${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}") == []
+    secret = "A" * 43
+    # Every operator Compose supports, not just the default ones. `:+`/`+` are the
+    # nastiest: they substitute the literal when the variable IS set, i.e. on the
+    # normal path, so a miss there ships the baked credential in production.
+    for op in (":-", "-", ":+", "+", ":?", "?"):
+        baked = "${LIVEKIT_API_KEY%szoe-abc123}: ${LIVEKIT_API_SECRET%s%s}" % (op, op, secret)
+        assert _bad_defaults(baked) == ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"], (
+            f"the interpolation check does not see a literal behind `{op}` — "
+            f"docker compose supports it, so it is a live bypass"
+        )
+    for clean in (
+        "${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}",
+        "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}",
+    ):
+        assert _bad_defaults(clean) == [], f"false positive on {clean!r}"
 
 
 # ── .gitignore: credential SHAPES stay ignored, source stays trackable ──────
