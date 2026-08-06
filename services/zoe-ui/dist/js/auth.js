@@ -28,6 +28,28 @@
         '/touch/updates.html': 'updates',
         '/touch/skybridge.html': 'skybridge',
     };
+    // Endpoints whose CALLER owns the 401, so the interceptor must hand back the
+    // Response instead of rejecting.
+    //
+    // The default 401 policy below is right for pages that let auth.js own the
+    // session: clear a stale one for a known-safe path, otherwise reject. But the
+    // LiveKit voice endpoints are now authenticated (they run the full
+    // STT → brain → TTS pipeline), and the panel is a GUEST whose session expires
+    // in 30 minutes while the kiosk itself runs for days. touch/voice.html
+    // therefore mints its own guest session and does a single BOUNDED re-provision
+    // retry on 401 — logic that never ran, because `Promise.reject` fired first
+    // and the mic just died. Note the default clear-and-retry path could not have
+    // rescued it either: `getSession()` deliberately returns '' for a guest
+    // session, so `sidBefore` is empty and the reject is reached regardless.
+    //
+    // Pass-through only: no session is cleared and no request is re-sent here —
+    // the page decides. Keep this list exact-match and short; every entry is a
+    // promise that the caller handles 401 itself.
+    const CALLER_HANDLES_401 = new Set([
+        '/api/voice/livekit-token',
+        '/api/voice/livekit-audio',
+        '/api/voice/livekit-cancel',
+    ]);
     let _capabilityMatrix = null;
 
     function isExpiredSessionObject(session) {
@@ -461,6 +483,13 @@
                     const u = typeof urlString === 'string' ? urlString : '';
                     if (u) pathname = new URL(u, window.location.origin).pathname;
                 } catch (_e) {}
+                if (CALLER_HANDLES_401.has(pathname)) {
+                    // The caller re-provisions and retries once itself; rejecting
+                    // here would throw before that can run. Hand back the Response
+                    // untouched — do not clear the session, do not re-send.
+                    console.warn('⚠️ 401 — passing Response to the caller that owns this retry:', url);
+                    return response;
+                }
                 const skipClear = /\/api\/auth\/(login|register|password|refresh|guest)/i.test(pathname);
                 const allowSessionClear = /\/api\/auth\/(profile|me|session|logout)/i.test(pathname) ||
                     pathname === '/api/skybridge/resolve' ||

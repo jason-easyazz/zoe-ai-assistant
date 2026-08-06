@@ -12,23 +12,39 @@ descriptions.
 
 ## Layer 1: Modules (real infrastructure)
 
-Modules are add-on services served under `/modules/`. They ship actual code —
-Docker services, intents, widgets, MCP tools. See [modules/AGENTS.md](../../modules/AGENTS.md).
+Modules are add-on services served under `/modules/`. The only thing a module
+*must* ship is a Docker service; intents, widgets and MCP tools are capabilities
+it **may** ship. See [modules/AGENTS.md](../../modules/AGENTS.md).
 
-Live modules today: `omnigent`, `zoe-music`.
+Live modules today: `omnigent` (the only one) — and it is **container-only**. It
+has no `main.py`, no `requirements.txt`, no `intents/` and no `widget/`; it is a
+compose file, a Dockerfile, an entrypoint, an MCP config and a README. So the
+full-capability shape below is the *maximal* module, not the one that exists.
 
-**Directory structure (as actually used):**
+> `modules/zoe-music` was retired 2026-08-05. It was the module that carried the
+> FastAPI/intents/widget shape, so nothing in the tree demonstrates it today —
+> the tree below is a specification, not a description of `modules/omnigent`
+> (cross-review, #1653). The live music system is the upstream Music Assistant
+> container `zoe-music-assistant`, which is **not** a module — see
+> [docs/CANONICAL.md](../CANONICAL.md).
+
+**Directory structure — the full shape. Only the first and last are required by
+every module; `tools/validate_module.py` additionally requires the FastAPI three
+(`main.py`, `requirements.txt`, `Dockerfile`), which is why `omnigent` fails that
+legacy validator and is expected to:**
 ```
 modules/{module-name}/
-├── docker-compose.module.yml   # Docker services
-├── main.py                     # Module entry point / bridge
-├── intents/                    # HassIL intent YAML + handlers
+├── docker-compose.module.yml   # Docker services            REQUIRED
+├── README.md                   # Documentation              REQUIRED
+├── Dockerfile                  # Container build            FastAPI modules
+├── main.py                     # Module entry point/bridge  FastAPI modules
+├── requirements.txt            # Python dependencies        FastAPI modules
+├── intents/                    # HassIL intent YAML + handlers   OPTIONAL
 │   ├── {name}.yaml
 │   └── handlers.py
-├── widget/                     # Optional dashboard widgets
-│   ├── manifest.json
-│   └── index.html
-└── README.md
+└── widget/                     # Dashboard widgets               OPTIONAL
+    ├── manifest.json
+    └── index.html
 ```
 
 There is **no `modules/{name}/skills/` convention**. No module ships skills, and

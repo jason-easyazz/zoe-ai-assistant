@@ -147,6 +147,26 @@ services:
     container_name: livekit
     restart: unless-stopped
     command: --config /config.yaml
+    environment:
+    # The API key pair is NOT in the tracked config.yaml — it comes from the
+    # untracked repo-root .env, the authoritative home for Zoe's secrets.
+    # Format is exact: "<key>: <secret>", including the space (livekit-server
+    # yaml-unmarshals this string; without the space it errors out).
+    # QUOTING IS LOAD-BEARING: unquoted, `- FOO=a: b` is a YAML *mapping*, not
+    # the env string we want.
+    # NOT `:?` (required-value). Compose interpolates the WHOLE model before it
+    # selects services, so a required marker here aborts every compose command
+    # on a box without the pair — measured: `docker compose config zoe-auth`
+    # with no LiveKit vars exits 15 with "required variable LIVEKIT_API_KEY is
+    # missing a value". That would break `install-jetson.sh` on a fresh box (it
+    # copies .env.example, then brings up the non-LiveKit spine) and deploy.yml's
+    # `docker compose up -d zoe-auth`. An optional service's credential must not
+    # be able to take down the whole file. Empty is still LOUD, just correctly
+    # scoped: livekit-server refuses to serve — "Could not parse keys, it needs
+    # to be exactly, \"key: secret\"" — verified against v1.9.3, the same class
+    # of refusal as supplying no keys at all. Provisioning lives in .env.example
+    # + docs/knowledge/livekit-key-rotation.md.
+    - "LIVEKIT_KEYS=${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}"
     ports:
     - "7880:7880"
     - "50000-50200:50000-50200/udp"

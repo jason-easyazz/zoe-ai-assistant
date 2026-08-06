@@ -1,0 +1,106 @@
+# Flue 2.x Zoe-brain sidecar (parallel port) — labs/flue-zoe-brain-2x/, port 3579.
+#
+# SHIPS INERT. Installing this file does nothing on its own: it is not enabled,
+# nothing starts it, and zoe-data does not address :3579 until an operator sets
+# ZOE_FLUE_BRAIN_URL. The sibling `flue-zoe-brain.service` (:3578) remains the
+# live brain lane under ZOE_BRAIN_BACKEND=flue. Both units are designed to run
+# SIDE BY SIDE — that is the whole point of the parallel directory: the cutover
+# is an env flip on zoe-data with the old sidecar still up and warm, so rollback
+# is another env flip rather than a rebuild.
+#
+# The full cutover + rollback sequence lives in labs/flue-zoe-brain-2x/README.md
+# ("Cutover runbook"). Read it before starting this unit — there is a client-side
+# prerequisite (below) without which a flip returns HTTP 400 on every turn.
+#
+# PREREQUISITE — the wire contract is NOT backward-compatible. Flue 2.x rejects
+# the beta's POST body. Measured against the built 2.x server 2026-08-06:
+#   {"message":"hi"}                -> HTTP 400 invalid_request
+#   {"kind":"user","body":"hi"}     -> HTTP 202
+# `services/zoe-data/zoe_flue_client.py` sends the first shape today, so pointing
+# it at this unit before the Phase-2 client change lands breaks every brain turn.
+# `labs/flue-zoe-brain-2x/parity/flue_wire.py` is the reference implementation of
+# the 2.x wire (fire-and-forget admission + NDJSON stream read).
+#
+# Build first (the unit runs the built output, it does not build):
+#   cd ~/assistant/labs/flue-zoe-brain-2x && npm ci && npm run build
+# Then create the env file from the template:
+#   cp ~/assistant/labs/flue-zoe-brain-2x/.env.example ~/assistant/labs/flue-zoe-brain-2x/.env
+#
+# STORAGE IS SEPARATE AND MUST STAY SEPARATE. Flue 2.x persists schema v8; the
+# beta persists v5, and the runtime REJECTS an older store before any application
+# code runs. A 2.x process that has written a v8 database cannot be rolled back to
+# the beta on that file. Leave ZOE_BRAIN_DB unset: it defaults to
+# labs/flue-zoe-brain-2x/data/zoe-brain.db, which is already a different file from
+# the live sidecar's. Never point the two units at one store — it makes the
+# rollback half of the runbook impossible.
+#
+# PORT NOTE: :3579 is also the scratch port used by both LANDING.md hand-run
+# recipes (1.x and 2.x). Once this unit is installed, use a different scratch port
+# for hand runs, or `systemctl --user stop flue-zoe-brain-2x` first.
+[Unit]
+Description=Flue 2.x Zoe-brain sidecar (parallel port, port 3579)
+# Talks to llama-server (:11434) and zoe-data (:8000). A user unit cannot order
+# itself after those reliably on boot; Restart=always recovers start-order races
+# (same pattern as flue-zoe-brain.service / zoe-data.service).
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/assistant/labs/flue-zoe-brain-2x
+# Adjust the node path if you are not using nvm (same convention as the sibling).
+ExecStart=%h/.nvm/current/bin/node dist/server.mjs
+Restart=always
+RestartSec=5
+# 3579, NOT 3578: this unit is designed to run beside the live sidecar so the
+# cutover can be an env flip with a warm fallback still listening.
+Environment=PORT=3579
+# Secrets and identity (ZOE_BRAIN_TOKEN or ZOE_BRAIN_OPEN, ZOE_BRAIN_USER_ID,
+# ZOE_INTERNAL_TOKEN, ZOE_BRAIN_ALLOW_WRITES, ...) live in the lab-local .env —
+# copy .env.example and fill it in. NEVER inline values here. The file is
+# required (no '-' prefix): the unit fails loudly if the operator hasn't
+# configured it, and the agent route itself fails closed (401) without
+# ZOE_BRAIN_TOKEN/ZOE_BRAIN_OPEN anyway.
+EnvironmentFile=%h/assistant/labs/flue-zoe-brain-2x/.env
+
+# ── Keep the brain lane out of swap ──────────────────────────────────────────
+# IDENTICAL to flue-zoe-brain.service, deliberately: after cutover this unit IS
+# the top brain lane, so it inherits the same latency contract and the same
+# measured rationale. Do not re-derive these numbers here — the full working is
+# in scripts/setup/systemd/flue-zoe-brain.service and
+# docs/knowledge/memory-pressure-profile.md. In summary:
+#
+#   MemorySwapMax=0 — the only directive that actually holds. Measured on the
+#                     live Orin 2026-08-03, the 1.x sidecar sat 87% in swap
+#                     (VmRSS 2.0 MB / VmSwap 70.4 MB) under MemoryLow alone;
+#                     MemoryLow is reclaim resistance, never swap immunity.
+#   MemoryLow=512M  — reclaim floor. Without it the cgroup's memory.low is 0 and
+#                     the kernel reclaims this unit FIRST.
+#   MemoryMax=2G    — a BACKSTOP against a genuine leak, not a working limit.
+#                     A ceiling is safe here because this is pure userspace Node
+#                     (no CUDA/NvMap mappings, so cgroup accounting is complete),
+#                     and it keeps V8's self-sized JS heap near 1 GB so normal
+#                     operation never runs at the kill threshold. External
+#                     memory — Buffers, stream chunks — is outside V8's budget
+#                     and IS killed by the cgroup (exit 137, measured at 1G),
+#                     which is why the ceiling is 4x the floor and not 2x.
+#
+# There is no core-lane failover: brain_dispatch.use_flue_brain() picks the lane
+# from ZOE_BRAIN_BACKEND alone, with no health check and no re-dispatch, so a
+# dead sidecar means the canned "trouble reaching my brain" reply on every turn
+# until systemd restarts it. Restart=always + RestartSec=5 is the recovery.
+#
+# Apply as a DROP-IN on a host that already has the unit installed; never copy
+# this file over a running unit. Runbook: docs/knowledge/memory-pressure-profile.md.
+#
+# No Nice=-N / OOMScoreAdjust=-N: a --user unit cannot raise priority on this
+# box and systemd SILENTLY DROPS the value while reporting success.
+MemorySwapMax=0
+MemoryLow=512M
+MemoryMax=2G
+
+# Light hardening (user-service compatible).
+NoNewPrivileges=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=default.target

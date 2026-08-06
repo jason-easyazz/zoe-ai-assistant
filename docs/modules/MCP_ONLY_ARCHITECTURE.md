@@ -20,7 +20,7 @@ The Zoe module system now follows a **pure MCP architecture** with no REST fallb
 └─────────────────┘
        ↓
 ┌─────────────┐
-│ zoe-music   │  ← Module exposes MCP tools
+│ a module    │  ← Module exposes MCP tools
 └─────────────┘
 ```
 
@@ -207,4 +207,4 @@ See: `docs/modules/BUILDING_MODULES.md` for full guide.
 
 **Last Updated**: January 22, 2026  
 **Status**: ✅ Implemented and enforced  
-**Related**: `docs/modules/MUSIC_MODULE_EXECUTION_PLAN.md`, `docs/modules/BUILDING_MODULES.md`
+**Related**: `docs/modules/BUILDING_MODULES.md`

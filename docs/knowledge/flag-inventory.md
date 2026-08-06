@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-08-03T00:00:00Z
+timestamp: 2026-08-06T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-08-03T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-08-03. The table body is deterministic (sorted, no
+Last generated: 2026-08-06. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-448 flags; 447 not documented in `.env.example`.
+445 flags; 444 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -104,7 +104,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DATA_URL` | `'http://127.0.0.1:8000'`, `-` | no | NO | `scripts/maintenance/check_emotional_thread.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_DB_ACQUIRE_TIMEOUT_S` | `''` | no | NO | `services/zoe-data/db_pool.py` |
 | `ZOE_DB_CONTAINER` | `'zoe-database'` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
-| `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `modules/zoe-music/main.py`<br>`services/zoe-data/intent_router.py` |
+| `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DEVICE_TOKEN` | `-` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_DIGARR_AI_BASE_URL` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DIGARR_AI_MODEL` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
@@ -146,7 +146,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_GITHUB_REPO` | `'jason-easyazz/zoe-ai-assistant'` | no | NO | `services/zoe-data/greploop_guard.py`<br>`services/zoe-data/greptile_client.py` |
 | `ZOE_GRAPH_RECALL_BOOST` | `''` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_GRAPH_RECALL_WEIGHT` | `dynamic` | no | NO | `services/zoe-data/memory_service.py` |
-| `ZOE_HA_BRIDGE_URL` | `''`, `'http://127.0.0.1:8007'`, `'http://localhost:8007'` | no | NO | `modules/zoe-music/main.py`<br>`services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_HA_BRIDGE_URL` | `''`, `'http://127.0.0.1:8007'` | no | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HA_URL` | `dynamic` | no | NO | `services/zoe-data/routers/stubs.py` |
 | `ZOE_HA_VOICE_INGRESS_URL` | `'http://host.docker.internal:8000'` | no | NO | `services/homeassistant-mcp-bridge/main.py` |
 | `ZOE_HA_VOICE_TOKEN` | `''` | no | NO | `services/homeassistant-mcp-bridge/main.py` |
@@ -272,18 +272,15 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MULTICA_STALE_IN_PROGRESS_HOURS` | `6.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_TRIAGE_JUDGE` | `False` | yes | NO | `services/zoe-data/multica_triage_judge.py` |
 | `ZOE_MULTICA_WORKSPACE_ID` | `''` | no | NO | `services/zoe-data/executors/executor_queue_backend.py` |
-| `ZOE_MUSIC_BIND_HOST` | `'0.0.0.0'` | no | NO | `modules/zoe-music/main.py` |
 | `ZOE_MUSIC_DISCOVERY` | `'off'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MUSIC_DISCOVERY_DOW` | `'sun'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MUSIC_DISCOVERY_HOUR` | `'3'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MUSIC_DISCOVERY_JSON` | `dynamic` | no | NO | `services/zoe-data/music_discovery.py` |
 | `ZOE_MUSIC_HISTORY` | `'on'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MUSIC_HISTORY_INTERVAL_S` | `'300'` | no | NO | `services/zoe-data/main.py` |
-| `ZOE_MUSIC_MODULE_URL` | `'http://zoe-music:8100'` | no | NO | `modules/zoe-music/intents/handlers.py` |
 | `ZOE_MUSIC_OAUTH_TTL_S` | `'150'` | no | NO | `services/zoe-data/music_oauth.py` |
 | `ZOE_MUSIC_OBSERVE_ATTRIB_MIN` | `'30'` | no | NO | `services/zoe-data/music_history.py` |
 | `ZOE_MUSIC_OBSERVE_DEDUP_H` | `'12'` | no | NO | `services/zoe-data/music_history.py` |
-| `ZOE_MUSIC_SERVICE_TOKEN` | `''` | no | NO | `modules/zoe-music/intents/handlers.py`<br>`modules/zoe-music/main.py` |
 | `ZOE_MUSIC_SETUP_SECRET` | `-` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_MUSIC_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_NVM_NODE_BIN` | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
@@ -477,12 +474,14 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Lab flags (`labs/` — not prod)
 
-5 flags; 5 not documented in `.env.example`.
+7 flags; 7 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
+| `ZOE_BRAIN_TOKEN` | `''` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py` |
+| `ZOE_BRAIN_URL` | `'http://127.0.0.1:3579'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py` |
 | `ZOE_KOKORO_VOICES` | `'/home/zoe/models/voices-v1.0.bin'` | no | NO | `labs/kokoro-voice-blend/blend_zoe_voices.py` |
-| `ZOE_LIVE_ROOT` | `-` | no | NO | `labs/flue-zoe-brain/parity/gatelib.py` |
-| `ZOE_PGU_SID` | `-` | no | NO | `labs/flue-zoe-brain/parity/tool_breadth_gate.py` |
+| `ZOE_LIVE_ROOT` | `-` | no | NO | `labs/flue-zoe-brain-2x/parity/gatelib.py`<br>`labs/flue-zoe-brain/parity/gatelib.py` |
+| `ZOE_PGU_SID` | `-` | no | NO | `labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py`<br>`labs/flue-zoe-brain/parity/tool_breadth_gate.py` |
 | `ZOE_ROUTER_HEAD_LOG` | `dynamic` | no | NO | `labs/router-selftrain/mine_candidates.py` |
 | `ZOE_ROUTER_SIDECAR_PORT` | `'11436'` | no | NO | `labs/router-90-campaign/prod_path_eval.py` |

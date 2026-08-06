@@ -16,16 +16,18 @@ def gen(tmp_path):
     mod = load_compose_generator()
     g = mod.ComposeGenerator(project_root=tmp_path)
     # Create a legitimate module so the happy path has something to load.
-    mdir = tmp_path / "modules" / "zoe-music"
+    # Synthetic fixture name on purpose: this test must not depend on which
+    # modules actually exist in the repo.
+    mdir = tmp_path / "modules" / "zoe-example"
     mdir.mkdir(parents=True)
     (mdir / "docker-compose.module.yml").write_text(
-        "services:\n  zoe-music:\n    image: x\n"
+        "services:\n  zoe-example:\n    image: x\n"
     )
     return g
 
 
 def test_valid_module_loads(gen):
-    result = gen.load_module_compose("zoe-music")
+    result = gen.load_module_compose("zoe-example")
     assert result is not None
     assert "services" in result
 
@@ -36,7 +38,7 @@ def test_valid_module_loads(gen):
     "../secrets",
     "foo/bar",
     "/etc/passwd",
-    "zoe-music/../../../etc",
+    "zoe-example/../../../etc",
     "a b",            # space
     "UPPER",          # uppercase not allowed by slug
     "with.dot",       # dot not allowed
@@ -58,8 +60,8 @@ def test_traversal_cannot_read_outside_modules(gen, tmp_path):
 
 def test_generate_skips_bad_names(gen, monkeypatch):
     # An attacker-controlled config can't crash generation or escape modules/.
-    monkeypatch.setattr(gen, "get_enabled_modules", lambda: ["../../etc", "zoe-music"])
+    monkeypatch.setattr(gen, "get_enabled_modules", lambda: ["../../etc", "zoe-example"])
     combined = gen.generate()
-    assert "zoe-music" in combined["services"]
+    assert "zoe-example" in combined["services"]
     # The malicious entry contributed nothing.
     assert len(combined["services"]) == 1

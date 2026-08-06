@@ -97,8 +97,20 @@ ok "yt-dlp $ytdlp_version"
 
 # 3. Does yt-dlp REGISTER the runtime? Presence on disk is not the same as
 #    yt-dlp finding it -- a version below its minimum is reported unsupported.
-runtimes=$(docker exec "$CONTAINER" "$PY" -m yt_dlp --simulate -v --skip-download "$PROBE_URL" 2>&1 \
-    | grep -m1 'JS runtimes:' || true)
+# Capture the TRANSPORT status separately from the grep. The pipe made $? the
+# grep's, so a container that stopped between the `docker ps` check above and
+# this exec -- or a network fault -- produced an empty $runtimes and the "no JS
+# runtimes line at all" branch declared the build broken. Same
+# transport-vs-engine confusion as the solver stage below, and equally a false
+# alarm against a digest bump that is fine (cross-review, #1635).
+reg_out=$(docker exec "$CONTAINER" "$PY" -m yt_dlp --simulate -v --skip-download "$PROBE_URL" 2>&1)
+reg_rc=$?
+runtimes=$(grep -m1 'JS runtimes:' <<<"$reg_out" || true)
+if [ "$reg_rc" -ne 0 ] && [ -z "$runtimes" ]; then
+    skip "yt-dlp exited ${reg_rc} without reporting its runtimes -- transport or
+  container fault, NOT a missing JS engine. Re-run when stable. Tail:
+$(tail -5 <<<"$reg_out")"
+fi
 case "$runtimes" in
     *deno*|*node*|*bun*|*quickjs*) ok "yt-dlp registers a runtime -- ${runtimes#*] }" ;;
     "") fail "yt-dlp reported no 'JS runtimes:' line at all (unexpected build?)" ;;

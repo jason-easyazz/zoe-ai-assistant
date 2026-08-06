@@ -1,5 +1,8 @@
-"""Shared loaders for the zoe-music module (its dir name is hyphenated, so it
-is not importable as a normal package — load the files by path)."""
+"""Shared loaders for module-system tooling tests.
+
+Module directory names are hyphenated, so they are not importable as normal
+packages — load the files by path.
+"""
 import importlib.util
 import pathlib
 
@@ -11,14 +14,6 @@ def _load(name: str, rel: str):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-
-def load_music_main():
-    return _load("zoe_music_main", "modules/zoe-music/main.py")
-
-
-def load_music_handlers():
-    return _load("zoe_music_handlers", "modules/zoe-music/intents/handlers.py")
 
 
 def load_compose_generator():
