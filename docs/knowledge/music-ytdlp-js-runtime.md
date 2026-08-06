@@ -296,8 +296,16 @@ Three mechanisms were weighed for getting a JS engine to the live path:
   MA already declares and ships deno; the correct production-care action on a
   healthy container is to leave it alone and make its guarantee observable.
 
-Also settled: `modules/zoe-music/` is **retired in practice** (removed from
-`enabled_modules` on 2026-02-16, nginx route deleted, never built by any workflow,
-no container ever created on this host). It is a different thing from
-`zoe-music-assistant` despite the similar name — the live music path does not go
-through it. Removal is tracked separately on issue #1607, per retire-by-removing.
+Also settled, and the only reason it appears in a JS-runtime runbook at all: the
+similar names caused the #1607 misdiagnosis. `modules/zoe-music/` was a **first-party
+FastAPI bridge on :8100** and is a *different thing* from `zoe-music-assistant`, the
+upstream Music Assistant container on :8095 that this document is about. **The live
+music path does not go through it**, so nothing here — the digest pin, the JS engine,
+the probe — concerns it either way.
+
+> **Scope note.** Whether that module is deleted is **not decided by this document**,
+> and this PR neither removes it nor authorises removing it. `docs/CANONICAL.md` is the
+> locked-in truth for what is live; read it, not this runbook, before touching the
+> module. Its actual removal is a separate operator decision tracked on #1607 and
+> carried by its own PR (#1653) — which updates CANONICAL in the same change, as the
+> lock-in mechanism requires.
