@@ -36,7 +36,7 @@ measured, not assumed:
 | `/api/mcp/tools/*` HTTP surface | **404.** `services/zoe-ui/nginx.conf` has no `location /api/mcp/`. `dist/js/lib/mcp-client.js` is still script-included by two dashboards, and every call it makes dead-ends here |
 | module widget auto-discovery (`/modules/<name>/widget/manifest`) | **no loader runs.** `module-widget-loader.js` and `widget-registry.js` are script-included by zero pages (negative control: `js/auth.js` and `js/common.js` *are* found by the same grep, so the search works) |
 | intent auto-discovery from `modules/*/intents/` | **no consumer.** Nothing under `services/` or `tools/` scans that path |
-| `tools/zoe_module.py enable` → `docker-compose.generated-modules.yml` | **no consumer.** `config/modules.yaml` has `enabled_modules: []`, the generated file has `services: {}`, and no CI job, deploy script, systemd unit or compose invocation reads it |
+| `tools/zoe_module.py enable` → `docker-compose.generated-modules.yml` | **no consumer.** `config/modules.yaml` has `enabled_modules: []` and the generated file has `services: {}`. No CI job, deploy script or systemd unit reads it. Both CLIs still *print* a manual `docker compose -f docker-compose.yml -f docker-compose.generated-modules.yml up -d` hint (`zoe_module.py:252`, `generate_module_compose.py:239`) — but with `services: {}` that command deploys nothing |
 | `zoe-core` as the service modules talk to | **not running.** `:8000` is host-native zoe-data; the `zoe-core` container is RETIRED in `docker-compose.yml` |
 | modules "served under `/modules/` by nginx" | the only such route is `/modules/music-assistant/`, proxying the upstream Music Assistant container — which is **not** a `modules/` tree module. `omnigent` has no nginx route |
 
