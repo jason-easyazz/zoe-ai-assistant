@@ -98,10 +98,9 @@ EXPECTED_RATE = 16000
 EXPECTED_CHANNELS = 1
 EXPECTED_SAMPWIDTH = 2  # bytes → 16-bit signed PCM
 
-# Canonical RIFF/WAVE header. Used only as a LOWER bound when checking that a
-# declared payload is actually present — a file with extra chunks has a larger
-# header, so this under-counts the header and therefore over-counts the payload,
-# which keeps the truncation check conservative (it can miss, never false-fire).
+# Canonical RIFF/WAVE header size. Only a FALLBACK — `_data_offset` walks the
+# real chunk list, because a file carrying JUNK/LIST chunks has a larger header
+# and assuming 44 over-counts its payload (Codex P2, #1643).
 _WAV_HEADER_BYTES = 44
 
 # 20 ms @ 16 kHz mono s16 — the frame size the live voice path feeds the VAD.
@@ -129,6 +128,33 @@ MIN_QUIESCENT_S = 60.0
 
 
 # ── format probe ──────────────────────────────────────────────────────────────
+
+def _data_offset(path: str | os.PathLike) -> int:
+    """Byte offset of the ``data`` chunk's payload — the REAL header size.
+
+    A PCM WAV may carry ancillary ``JUNK``/``LIST``/``fact`` chunks before
+    ``data``, so the canonical 44 bytes is a floor, not the header size. Walking
+    the chunk list is what makes the truncation check exact rather than merely
+    conservative (Codex P2, #1643). Falls back to 44 if the list cannot be
+    walked, which keeps the old over-counts-the-payload behaviour — the safe
+    direction, since it can only make the check miss, never false-fire.
+    """
+    try:
+        with open(path, "rb") as fh:
+            if fh.read(4) != b"RIFF":
+                return _WAV_HEADER_BYTES
+            fh.seek(12)  # past RIFF size + "WAVE"
+            while True:
+                head = fh.read(8)
+                if len(head) < 8:
+                    return _WAV_HEADER_BYTES
+                cid, size = head[:4], int.from_bytes(head[4:8], "little")
+                if cid == b"data":
+                    return fh.tell()
+                fh.seek(size + (size & 1), 1)  # chunks are word-aligned
+    except Exception:
+        return _WAV_HEADER_BYTES
+
 
 def probe_format(path: str | os.PathLike) -> dict[str, Any]:
     """Read a WAV header and split USABILITY from CONTRACT CONFORMANCE.
@@ -184,7 +210,7 @@ def probe_format(path: str | os.PathLike) -> dict[str, Any]:
     # actually there.
     declared = info["frames"] * info["channels"] * info["sampwidth"]
     try:
-        present = max(0, os.path.getsize(path) - _WAV_HEADER_BYTES)
+        present = max(0, os.path.getsize(path) - _data_offset(path))
     except OSError as exc:
         info["reason"] = f"cannot stat ({exc})"
         return info
@@ -795,9 +821,14 @@ def main() -> int:
     # format-only audit that found no candidates and exits 0. That is the same
     # silent-success shape this whole tool exists to prevent, one level up
     # (Codex P2, #1643). Refuse before anything moves.
-    if vad_factory is not None and summary["total"] and not summary["scored"]:
+    # `eligible` not `total`: a corpus (or a --limit slice) that is entirely
+    # unreadable has nothing the VAD could have scored, so zero scores is the
+    # CORRECT result and those files must still be quarantined. The guard is
+    # about a VAD that failed on files it should have handled (Codex P2, #1643).
+    eligible = sum(1 for r in rows if r["format"].get("ok"))
+    if vad_factory is not None and eligible and not summary["scored"]:
         errs = sorted({r["score_error"] for r in rows if r["score_error"]})
-        print(f"\nSPEECH SCORING PRODUCED NOTHING: 0 of {summary['total']} file(s) "
+        print(f"\nSPEECH SCORING PRODUCED NOTHING: 0 of {eligible} readable file(s) "
               "were scored, so no non-speech verdict in this run is supported by "
               "evidence. Refusing to continue -- this is a broken VAD, not a clean "
               "corpus.", file=sys.stderr)

@@ -840,6 +840,67 @@ def test_a_whole_file_is_never_called_truncated(tmp_path):
         assert info["ok"] is True, f"{kwargs} wrongly rejected: {info['reason']}"
 
 
+def test_a_wav_with_extra_chunks_is_not_called_truncated(tmp_path):
+    """The header size is PARSED, not assumed to be 44 bytes.
+
+    A PCM WAV may carry JUNK/LIST/fact chunks before `data`, so 44 is a floor.
+    Assuming it over-counts the payload — safe, but it makes the truncation
+    check miss exactly the files whose headers are unusual (Codex P2, #1643).
+    """
+    src = _write_wav(tmp_path / "plain.wav").read_bytes()
+    junk = b"JUNK" + (64).to_bytes(4, "little") + b"\x00" * 64
+    padded = tmp_path / "padded.wav"
+    padded.write_bytes(src[:12] + junk + src[12:])
+
+    info = cvc.probe_format(padded)
+
+    assert info["ok"] is True, f"a valid padded WAV was rejected: {info['reason']}"
+    assert cvc._data_offset(padded) == cvc._data_offset(tmp_path / "plain.wav") + len(junk)
+
+    # ...and it catches a truncation the 44-byte ASSUMPTION would miss. The
+    # discriminating window is exactly the extra header bytes: drop fewer than
+    # len(junk) payload bytes and `size - 44` still exceeds the declared
+    # payload, so the old arithmetic calls a truncated file whole.
+    missing = len(junk) // 2                      # inside the window
+    cut = tmp_path / "padded_cut.wav"
+    cut.write_bytes(padded.read_bytes()[:-missing])
+
+    assert os.path.getsize(cut) - 44 >= _declared(info), (
+        "fixture is not discriminating: the 44-byte assumption would also catch this"
+    )
+    assert cvc.probe_format(cut)["ok"] is False, "a truncated padded WAV slipped through"
+
+
+def _declared(info) -> int:
+    return info["frames"] * info["channels"] * info["sampwidth"]
+
+
+def test_an_all_unreadable_corpus_still_quarantines(tmp_path):
+    """Zero scores is CORRECT when nothing was eligible to be scored.
+
+    The scored-nothing guard is about a VAD failing on files it should have
+    handled. A corpus (or a --limit slice) that is entirely unreadable has
+    nothing for it to score, so refusing there would block the format
+    quarantine from ever running on exactly the files that need it most
+    (Codex P2, #1643).
+    """
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.wav").write_bytes(b"not a riff")
+    (corpus / "b.wav").write_bytes(b"")
+    _age(corpus)
+
+    monkey = cvc.load_vad_factory
+    cvc.load_vad_factory = lambda _sd: (lambda: object())
+    try:
+        rc = _run_main(["--corpus", str(corpus), "--execute"])
+    finally:
+        cvc.load_vad_factory = monkey
+
+    assert rc == 0, "an all-unreadable corpus must still be curated"
+    assert sorted(os.listdir(corpus)) == [f"quarantine-format-{time.strftime('%Y%m%d')}"]
+
+
 def test_a_file_whose_provenance_cannot_be_written_is_not_moved(tmp_path):
     """A full disk fails for EVERY file, so 'keep going' orphans the batch.
 
