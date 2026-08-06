@@ -1,5 +1,15 @@
 # 🎉 Zoe Modular Architecture - Complete!
 
+> **STATUS (2026-08-05) — read this before believing anything below.** This document is a
+> historical design writeup, not a description of what runs. `modules/` contains exactly
+> **one** module today: `omnigent`. `modules/zoe-music` was **deleted** (see
+> [docs/CANONICAL.md](../CANONICAL.md)); `zoe-core` and `zoe-mcp-server` are not live
+> services. **Music is not a module** — the live music system is `zoe-music-assistant`,
+> the upstream Music Assistant container in `docker-compose.modules.yml`. The mechanics
+> below (`tools/zoe_module.py`, `tools/generate_module_compose.py`,
+> `tools/validate_module.py`, the compose generation flow) are still accurate; the
+> inventory, status blocks, and marketplace sections are aspirational.
+
 **Your vision of a modular, extensible AI assistant is now reality.**
 
 ---
@@ -51,8 +61,8 @@
           ┌──────────────┼──────────────┐
           │              │              │
 ┌─────────▼────────┐ ┌──▼─────────┐ ┌─▼──────────┐
-│  zoe-music       │ │ zoe-       │ │ zoe-       │
-│  ✅ Complete     │ │ calendar   │ │ tasks      │
+│  omnigent        │ │ (example)  │ │ (example)  │
+│  ✅ Live         │ │ calendar   │ │ tasks      │
 │                  │ │ (future)   │ │ (future)   │
 │ Backend:         │ └────────────┘ └────────────┘
 │  • 12 MCP tools  │
@@ -78,11 +88,11 @@ Each module is COMPLETELY INDEPENDENT!
 
 ### 1. Module Structure (Self-Contained)
 ```
-modules/zoe-music/
+modules/{module-name}/
 ├── main.py                  # FastAPI + MCP tools + static serving
-├── services/music/          # Business logic (28 Python files)
+├── services/               # Business logic
 ├── intents/                 # Voice/text commands
-│   ├── music.yaml           # 16 intent definitions
+│   ├── intents.yaml         # intent definitions
 │   └── handlers.py          # MCP-based handlers
 ├── static/                  # Frontend assets ⭐ NEW
 │   ├── manifest.json        # Widget metadata
@@ -115,13 +125,7 @@ docs/modules/
 ├── BUILDING_MODULES.md              # How to build modules
 ├── SELF_CONTAINED_MODULES.md        # Widget system guide ⭐ NEW
 ├── MODULE_REQUIREMENTS.md           # Mandatory rules
-├── MODULE_INTENT_SYSTEM_COMPLETE.md # Intent auto-discovery
-├── MODULE_SYSTEM_COMPLETE.md        # Technical details
-├── MIGRATION_MUSIC.md               # Migration case study
-├── MUSIC_DEPENDENCY_AUDIT.md        # Analysis
-├── MUSIC_ROUTING_OPTIONS.md         # Architecture decisions
-├── TEST_RESULTS.md                  # Validation
-└── MUSIC_MODULE_EXECUTION_PLAN.md   # Planning docs
+└── MCP_ONLY_ARCHITECTURE.md         # MCP-only module shape
 ```
 
 ---
@@ -135,28 +139,36 @@ docs/modules/
 python tools/zoe_module.py list
 
 # Enable a module
-python tools/zoe_module.py enable zoe-music
+python tools/zoe_module.py enable omnigent
 
 # Disable a module
-python tools/zoe_module.py disable zoe-music
+python tools/zoe_module.py disable omnigent
 
 # Check status
 python tools/zoe_module.py status
 
-# Validate before enabling
-python tools/validate_module.py zoe-music
+# Validate before enabling (takes a module NAME; modules/ is prepended)
+python tools/validate_module.py your-module-name
 ```
+
+> Do **not** run the validator against `omnigent`. It is container-only and has no
+> `main.py`/`requirements.txt`, so it deterministically reports FAILED — see
+> [BUILDING_MODULES.md](../modules/BUILDING_MODULES.md).
 
 ### Building a New Module
 
 ```bash
-# 1. Copy template
-cp -r modules/zoe-music modules/zoe-your-feature
+# 1. Create the module dir (there is NO copyable scaffold — modules/omnigent is
+#    a container-only module with no main.py/requirements.txt and would fail
+#    tools/validate_module.py; see docs/modules/BUILDING_MODULES.md)
+mkdir -p modules/zoe-your-feature/{services,intents}
 
 # 2. Update backend (main.py, services/)
 
-# 3. Create MCP tools
-@app.post("/tools/your_action")
+# 3. Create MCP tools. State-changing routes are TOKEN-GATED and fail closed —
+#    see require_service_token in docs/modules/BUILDING_MODULES.md. Required by
+#    modules/AGENTS.md, not optional hardening.
+@app.post("/tools/your_action", dependencies=[Depends(require_service_token)])
 async def your_action():
     return {"success": True}
 
@@ -209,19 +221,7 @@ python tools/zoe_module.py enable zoe-your-feature
 ```
 ✅ zoe-core         (orchestration, intents)
 ✅ zoe-mcp-server   (tool routing)
-✅ zoe-music        (complete music module with widgets)
 ✅ zoe-ui           (dynamic shell)
-```
-
-### Music Module
-```
-✅ Backend: 28 Python files
-✅ MCP Tools: 12 tools registered
-✅ Intents: 16 commands auto-discovered
-✅ Widgets: 4 widgets in static/js/
-✅ Manifest: Working at /widget/manifest
-✅ Static Files: Serving from /static/*
-✅ Status: Healthy and functional
 ```
 
 ### Discovery Systems
@@ -287,7 +287,7 @@ python tools/zoe_module.py enable zoe-your-feature
 ### Community Marketplace
 ```
 Browse modules:
-- zoe-music (official)
+- omnigent (official)
 - zoe-calendar-google (community)
 - zoe-spotify-premium (community)
 - zoe-home-automation (community)
@@ -352,23 +352,15 @@ All following same pattern:
 
 ## 📚 Documentation Index
 
-**Start Here**:
+Everything under `docs/modules/`:
+
 1. `BUILDING_MODULES.md` - How to build a module
 2. `SELF_CONTAINED_MODULES.md` - How to add widgets
 3. `MODULE_REQUIREMENTS.md` - What's mandatory
+4. `MCP_ONLY_ARCHITECTURE.md` - MCP-only module shape
 
-**Reference**:
-4. `MODULE_INTENT_SYSTEM_COMPLETE.md` - Intent system
-5. `MODULE_SYSTEM_COMPLETE.md` - Architecture details
-6. `MIGRATION_MUSIC.md` - Real-world example
-
-**Advanced**:
-7. `MUSIC_DEPENDENCY_AUDIT.md` - Technical deep-dive
-8. `MUSIC_ROUTING_OPTIONS.md` - Design decisions
-9. `TEST_RESULTS.md` - Validation results
-
-**Summary**:
-10. `MODULE_SYSTEM_COMPLETE_FINAL.md` - This document
+The zoe-music case-study docs that used to be listed here were deleted with the
+module on 2026-08-05 (`git log --all -- docs/modules`).
 
 ---
 
