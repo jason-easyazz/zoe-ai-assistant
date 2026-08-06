@@ -28,10 +28,22 @@
 # artifact is what produced the false "no JS runtime" diagnosis in issue #1607.
 # Always exec the interpreter directly, as below.
 #
-# Usage:  music_jsruntime_probe.sh [container]     (default zoe-music-assistant)
+# Usage:  music_jsruntime_probe.sh [--engine-only] [container]
+#           default container: zoe-music-assistant
 # Exit:   0 healthy, 1 unhealthy, 2 could not run the check at all.
+#
+# --engine-only stops after the deno check. It exists for the DIGEST-BUMP
+# candidate, which is deliberately started with NO volumes from live and
+# therefore has no configured ytmusic provider -- so MA never runs its dynamic
+# `uv pip install yt-dlp[default]` and the full probe correctly exits 2 CANNOT
+# CHECK, which can never be the green the bump procedure asks for (cross-review,
+# #1635). Engine-only is the RIGHT scope for that stage anyway: the digest pin
+# protects the image-baked deno, and yt-dlp is explicitly not ours to control.
+# Run the full probe against the live container after recreating it.
 set -uo pipefail
 
+ENGINE_ONLY=0
+if [ "${1:-}" = "--engine-only" ]; then ENGINE_ONLY=1; shift; fi
 CONTAINER="${1:-zoe-music-assistant}"
 PY=/app/venv/bin/python
 # A Creative Commons video (Big Buck Bunny) -- public, no auth, not DRM-gated.
@@ -64,6 +76,13 @@ if ! deno_version=$(docker exec "$CONTAINER" deno --version 2>&1 | head -1); the
   Runbook: docs/knowledge/music-ytdlp-js-runtime.md"
 fi
 ok "JS runtime present -- $deno_version"
+
+if [ "$ENGINE_ONLY" -eq 1 ]; then
+    echo "HEALTHY (engine-only): ${CONTAINER} ships a working JS runtime."
+    echo "  NOT checked: the nsig solve itself. Run the FULL probe against the"
+    echo "  live container once it is recreated on this image."
+    exit 0
+fi
 
 # 2. Is yt-dlp importable? MA installs it DYNAMICALLY at ytmusic provider setup
 #    (uv pip install yt-dlp[default]) into the container's writable layer -- it

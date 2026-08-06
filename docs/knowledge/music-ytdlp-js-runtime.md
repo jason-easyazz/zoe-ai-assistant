@@ -230,11 +230,40 @@ docker image inspect ghcr.io/music-assistant/server:stable \
   --format '{{index .RepoDigests 0}}'     # <- new digest into docker-compose.modules.yml
 ```
 
-Then **require `music_jsruntime_probe.sh` green before merging** the bump — that
-is the whole point of the pin. Prove it against a candidate container (same new
-image, separate name, **no volumes from live**) before recreating the live one.
-The probe is auth-independent, so a candidate with no auth state still gives a
-valid verdict.
+Then prove the new image, in **two stages**. One stage cannot cover both, and
+running the wrong one on the candidate is why this used to be unsatisfiable:
+
+**Stage 1 — the candidate, BEFORE merging. `--engine-only`.**
+
+```bash
+docker run -d --name ma-bump-candidate --entrypoint sleep \
+  ghcr.io/music-assistant/server@sha256:<NEW> infinity
+scripts/maintenance/music_jsruntime_probe.sh --engine-only ma-bump-candidate
+docker rm -f ma-bump-candidate
+```
+
+Same new image, separate name, **no volumes from live** — so nothing can touch
+MA's `/data` or auth state. That isolation is exactly why the FULL probe cannot
+be used here: with no volumes there is no configured ytmusic provider, so MA
+never runs its dynamic `uv pip install yt-dlp[default]`, the yt-dlp import
+fails, and the probe correctly exits **2 CANNOT CHECK** — never the green this
+step asks for (cross-review, #1635).
+
+`--engine-only` is also the *right scope* for this stage: the digest pin
+protects the **image-baked deno**, and yt-dlp is installed dynamically and is
+explicitly not what the pin controls. Green here means the new image still ships
+the engine, which is the whole claim the pin makes.
+
+**Stage 2 — the live container, AFTER recreating it on the new digest.**
+
+```bash
+docker compose -f docker-compose.modules.yml up -d music-assistant
+scripts/maintenance/music_jsruntime_probe.sh          # FULL probe, must be green
+```
+
+Only the live container has the configured provider, hence yt-dlp, hence a real
+nsig solve to observe. The probe is auth-independent, so a failure here means the
+engine, never an expired YouTube login.
 
 ## Rollback
 
