@@ -441,4 +441,6 @@ python tools/validate_module.py your-module
 
 **Before you build**: Read this document  
 **Before you enable**: Run the validator  
-**When in doubt**: Look at the music module
+**When in doubt**: Read [BUILDING_MODULES.md](BUILDING_MODULES.md) — it carries the
+`main.py`, `Dockerfile` and compose templates. There is no module in the tree to copy:
+`zoe-music` was deleted 2026-08-05 and `omnigent` is container-only.

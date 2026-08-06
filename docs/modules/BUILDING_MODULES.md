@@ -155,11 +155,12 @@ Zoe Your-Feature Module
 Brief description of what your module does.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 import logging
 import os
+import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,23 @@ app = FastAPI(
 # Configuration
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://zoe-mcp-server:8003")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
+
+# --- REQUIRED: the shared-service-token gate (modules/AGENTS.md) --------------
+# Every state-changing /tools/* route must be gated by this token and FAIL
+# CLOSED (503) until it is set. The in-cluster caller sends the same value as
+# X-Zoe-Service-Token. This is not optional hardening — it is the module
+# contract, and the from-scratch flow must carry it just as the old copyable
+# template did (cross-review, #1653).
+SERVICE_TOKEN = os.getenv("ZOE_YOURMODULE_SERVICE_TOKEN", "")
+
+
+def require_service_token(x_zoe_service_token: str = Header(default="")) -> None:
+    if not SERVICE_TOKEN:
+        # Fail CLOSED: an unset token means the gate is unconfigured, never open.
+        raise HTTPException(status_code=503, detail="module service token not configured")
+    if not secrets.compare_digest(x_zoe_service_token, SERVICE_TOKEN):
+        raise HTTPException(status_code=401, detail="bad or missing X-Zoe-Service-Token")
+
 
 # Pydantic models
 class YourRequest(BaseModel):
@@ -192,8 +210,9 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
-# Tool endpoints
-@app.post("/tools/action1")
+# Tool endpoints — state-changing routes are TOKEN-GATED.
+# /health and / stay open so the container healthcheck works.
+@app.post("/tools/action1", dependencies=[Depends(require_service_token)])
 async def tool_action1(request: YourRequest):
     """Tool: your_module.action1"""
     try:
@@ -241,7 +260,11 @@ services:
     container_name: your-module-name
     restart: unless-stopped
     ports:
-      - "YOUR_PORT:YOUR_PORT"
+      # LOOPBACK ONLY (modules/AGENTS.md). A bare "YOUR_PORT:YOUR_PORT" publishes
+      # on 0.0.0.0 and [::], exposing the module's tools to every host on the LAN.
+      # In-cluster callers reach it by service name over zoe-network, so nothing
+      # legitimate needs the wider bind.
+      - "127.0.0.1:YOUR_PORT:YOUR_PORT"
     volumes:
       - .:/app
       - ../../data:/app/data
@@ -249,6 +272,8 @@ services:
       - PYTHONUNBUFFERED=1
       - DATABASE_PATH=/app/data/zoe.db
       - MCP_SERVER_URL=http://zoe-mcp-server:8003
+      # The gate's shared secret. Unset => the module fails closed with 503.
+      - ZOE_YOURMODULE_SERVICE_TOKEN=${ZOE_YOURMODULE_SERVICE_TOKEN:-}
       - YOUR_API_KEY=${YOUR_API_KEY:-}
     networks:
       - zoe-network
@@ -432,7 +457,9 @@ It remains a useful illustration of the module shape:
 - Database integration (music history, affinity, zones)
 - Complex business logic (recommendation engine, zone management)
 
-**Study the music module** to understand the complete pattern.
+**To study the complete pattern**, recover the deleted code:
+`git log --all -- modules/zoe-music`. Do not reconstruct it as a starting point —
+build from the templates above; they are current, and it is not.
 
 ---
 
@@ -512,8 +539,8 @@ module:
 
 ## Next Steps
 
-1. Copy music module as template
-2. Modify for your use case
+1. Create the module from scratch (Quick Start above) — there is no scaffold to copy
+2. Write the five required files from the templates in this guide
 3. Test standalone
 4. Register with MCP server
 5. Enable and test integrated

@@ -147,9 +147,13 @@ python tools/zoe_module.py disable omnigent
 # Check status
 python tools/zoe_module.py status
 
-# Validate before enabling
-python tools/validate_module.py omnigent
+# Validate before enabling (takes a module NAME; modules/ is prepended)
+python tools/validate_module.py your-module-name
 ```
+
+> Do **not** run the validator against `omnigent`. It is container-only and has no
+> `main.py`/`requirements.txt`, so it deterministically reports FAILED — see
+> [BUILDING_MODULES.md](../modules/BUILDING_MODULES.md).
 
 ### Building a New Module
 

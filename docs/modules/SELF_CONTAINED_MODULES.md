@@ -652,8 +652,9 @@ See `docs/modules/examples/CALENDAR_MODULE_EXAMPLE.md` for a complete working ex
 You now have everything you need to build self-contained modules with beautiful, functional widgets that integrate seamlessly with Zoe!
 
 **Next Steps**:
-1. Copy the music module as a template
-2. Modify for your feature
+1. Create the module from scratch — there is no template to copy
+   (see [BUILDING_MODULES.md](BUILDING_MODULES.md))
+2. Add the widget files for your feature
 3. Test the manifest and static files
 4. Submit as a community module!
 
