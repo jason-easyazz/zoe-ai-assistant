@@ -393,6 +393,74 @@ def test_read_only_add_api_route_is_not_flagged(tmp_path):
         )
 
 
+def _with_tail(tail):
+    """The template with its gated route removed and `tail` appended."""
+    return TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        "async def tool_wipe(request: YourRequest):",
+    ) + tail
+
+
+def test_methods_constant_resolves_to_the_binding_in_effect(tmp_path):
+    """Resolving `methods=NAME` last-write-wins over the file is wrong BOTH ways.
+
+    Found in cross-review round 3, all three reproduced against the previous
+    head. The map was built by walking every `Assign` in the tree and keeping
+    the last, with no source order and no scope filter.
+    """
+    # (1) FAILS OPEN: a LATER reassignment made the earlier POST read as GET.
+    later_rebind = _with_tail(
+        '\n\nMETHODS = ["POST"]\n'
+        'app.add_api_route("/tools/wipe", tool_wipe, methods=METHODS)\n'
+        'METHODS = ["GET"]\n'
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=later_rebind))
+    assert not ok, "a later reassignment of methods= hid an ungated POST"
+    assert any("/tools/wipe" in e for e in errors), errors
+
+    # (2) FAILS OPEN, and needs no sabotage: a same-named local in an UNRELATED
+    # function rewrote module-scope resolution. The honest-author case.
+    local_collision = _with_tail(
+        '\n\nMETHODS = ["POST"]\n\n\n'
+        "def unrelated():\n"
+        '    METHODS = ["GET"]\n'
+        "    return METHODS\n\n\n"
+        'app.add_api_route("/tools/wipe", tool_wipe, methods=METHODS)\n'
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=local_collision))
+    assert not ok, "a function-local name collision hid an ungated POST"
+    assert any("/tools/wipe" in e for e in errors), errors
+
+    # (3) FALSE POSITIVE the other way: a legitimate GET reported as a hole.
+    earlier_read = _with_tail(
+        '\n\nMETHODS = ["GET"]\n'
+        'app.add_api_route("/tools/status", tool_wipe, methods=METHODS)\n'
+        'METHODS = ["POST"]\n'
+    )
+    _, errors, _ = run_validator(build_module(tmp_path, main_py=earlier_read))
+    assert not any("/tools/status" in e for e in errors), (
+        f"a read-only route was flagged because of a LATER rebinding: {errors}"
+    )
+
+
+def test_methods_constant_rebound_to_something_opaque_fails_closed(tmp_path):
+    """A name rebound to an unreadable value must INVALIDATE the earlier literal.
+
+    Keeping the stale literal would let `METHODS = os.environ[...]` inherit the
+    earlier `["GET"]` and drop a route that may well be state-changing.
+    """
+    opaque_rebind = _with_tail(
+        "\n\nimport os\n"
+        'METHODS = ["GET"]\n'
+        "METHODS = os.environ[\"M\"].split(\",\")\n"
+        'app.add_api_route("/tools/wipe", tool_wipe, methods=METHODS)\n'
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=opaque_rebind))
+    assert not ok, "an opaque rebinding inherited the earlier literal and fell open"
+    assert any("/tools/wipe" in e for e in errors), errors
+
+
 def test_aliased_depends_import_is_not_a_false_positive(tmp_path):
     """FALSE-POSITIVE CONTROL: `from fastapi import Depends as D` is still Depends.
 

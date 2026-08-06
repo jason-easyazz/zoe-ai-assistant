@@ -174,35 +174,74 @@ def _router_prefixes(tree: ast.AST) -> Dict[str, set]:
     return {name: resolve(name, frozenset()) for name in set(own) | set(mounts)}
 
 
-def _string_list(node, constants: Dict[str, List[str]]) -> Optional[List[str]]:
-    """Lower-cased strings from a literal sequence or a module-level constant.
+def _string_list_literal(node) -> Optional[List[str]]:
+    """Lower-cased strings from a LITERAL sequence, else None (unresolved).
 
-    None means UNRESOLVED — deliberately distinct from an empty list, because
-    the caller must fail closed on it rather than conclude "no methods".
+    None is deliberately distinct from an empty list: the caller must fail
+    closed on it rather than conclude "no methods".
     """
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         values = [e.value for e in node.elts if isinstance(e, ast.Constant)]
         if len(values) != len(node.elts):
             return None  # partially dynamic
         return [str(v).lower() for v in values]
-    if isinstance(node, ast.Name):
-        return constants.get(node.id)
     return None
 
 
-def _string_list_constants(tree: ast.AST) -> Dict[str, List[str]]:
-    """Module-level `MUTATING = ["POST", "DELETE"]` bindings."""
-    constants = {}
-    for node in ast.walk(tree):
+def _module_scope_nodes(node: ast.AST):
+    """Every node in MODULE scope — not descending into a function or class.
+
+    A name bound inside a function body is a different variable that happens to
+    share a spelling. Treating it as the module constant let an unrelated local
+    silently rewrite the resolution of a route registration elsewhere in the
+    file — and it rewrote it toward "no state-changing methods", i.e. it failed
+    OPEN on an ordinary pattern with no sabotage involved.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        yield child
+        yield from _module_scope_nodes(child)
+
+
+def _string_list_bindings(tree: ast.AST) -> List[Tuple[int, str, Optional[List[str]]]]:
+    """Module-scope `NAME = [...]` bindings as (lineno, name, values-or-None).
+
+    A list in SOURCE ORDER rather than a name->value map, because last-write-wins
+    over the whole file is wrong in both directions: a later reassignment made an
+    earlier state-changing registration read as read-only (failing OPEN), and an
+    earlier read-only one read as state-changing (a false positive on a valid
+    module). Resolution is per use-site, against the binding actually in effect.
+
+    Non-list bindings are recorded with `None` on purpose — a name rebound to
+    something we cannot read must invalidate the earlier literal, not leave it
+    standing.
+    """
+    bindings = []
+    for node in _module_scope_nodes(tree):
         if not isinstance(node, ast.Assign):
             continue
-        values = _string_list(node.value, {})
-        if values is None:
-            continue
+        values = _string_list_literal(node.value)
         for target in node.targets:
             if isinstance(target, ast.Name):
-                constants[target.id] = values
-    return constants
+                bindings.append((node.lineno, target.id, values))
+    return bindings
+
+
+def _resolve_string_list(
+    node, bindings: List[Tuple[int, str, Optional[List[str]]]], lineno: int
+) -> Optional[List[str]]:
+    """Resolve a `methods=` expression at a use site. None => unresolved."""
+    literal = _string_list_literal(node)
+    if literal is not None:
+        return literal
+    if not isinstance(node, ast.Name):
+        return None
+    resolved = None
+    for bind_line, name, values in bindings:
+        if name == node.id and bind_line < lineno:
+            resolved = values  # last binding BEFORE the use site wins
+    return resolved
 
 
 def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, set]):
@@ -218,7 +257,7 @@ def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, set]):
     resolved when they can be, and anything still unresolved is treated as
     state-changing — the safe direction is a false alarm, never a false pass.
     """
-    constants = _string_list_constants(tree)
+    bindings = _string_list_bindings(tree)
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             continue
@@ -238,7 +277,7 @@ def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, set]):
         if methods_node is None:
             methods = ["get"]  # FastAPI's default for add_api_route
         else:
-            methods = _string_list(methods_node, constants)
+            methods = _resolve_string_list(methods_node, bindings, node.lineno)
             if methods is None:
                 methods = [UNRESOLVED_METHODS]
 
