@@ -49,7 +49,16 @@ SERVICE_TOKEN_NAME = re.compile(r"service_token", re.IGNORECASE)
 
 # FastAPI's two dependency wrappers. A name only counts as a gate if it is
 # PASSED to one of these — a bare mention (or a comment) is not a dependency.
+# Resolution is by NAME (through import aliases), deliberately not binding-aware:
+# a module that shadows `Depends` with its own function could report a route as
+# gated when it is not. That is an author sabotaging their own gate, which is
+# outside what a pre-deploy helper defends against; the threat model here is an
+# honest author shipping a mistake, not a hostile one hiding it.
 DEPENDENCY_WRAPPERS = {"Depends", "Security"}
+
+# Sentinel for an `add_api_route(methods=...)` we could not resolve to literals.
+# Treated as state-changing so the route is still gate-checked — failing closed.
+UNRESOLVED_METHODS = "methods=<unresolved>"
 
 
 def _dotted_name(node) -> str:
@@ -106,20 +115,26 @@ def _constant_kwarg(call: ast.Call, name: str):
     return None
 
 
-def _router_prefixes(tree: ast.AST) -> Dict[str, str]:
-    """Map router variable -> the path prefix its routes are actually served at.
+def _router_prefixes(tree: ast.AST) -> Dict[str, set]:
+    """Map router variable -> the SET of path prefixes its routes are served at.
 
-    Two independent places set it, and BOTH must be resolved or a route hides:
+    A set, not a string, because a router can be mounted more than once and a
+    mount can be nested. Three things contribute, and all must compose or a
+    route hides behind arithmetic the validator got wrong:
 
-      router = APIRouter(prefix="/tools")      # prefix on construction
-      app.include_router(router, prefix="/tools")   # prefix on inclusion
+      child  = APIRouter(prefix="/admin")        # own prefix, at construction
+      parent.include_router(child, prefix="/x")  # nested mount
+      app.include_router(parent, prefix="/tools")# outer mount
 
-    Without this, `@router.post("/wipe")` on a router mounted at `/tools` reads
-    as the path `/wipe`, never starts with `/tools/`, and is silently skipped —
-    a bypass of exactly the kind this whole check exists to remove. The two
-    compose: FastAPI concatenates the include prefix ahead of the router's own.
+    …serves `@child.post("/wipe")` at `/tools/x/admin/wipe`. Accumulating a
+    single string per router (the first version of this) both MISSED that path
+    and, when one router was included twice, corrupted the accumulator into a
+    concatenation of two unrelated prefixes — so the real `/tools/...` path
+    disappeared and an ungated route validated clean. Found in cross-review.
     """
-    prefixes = {}
+    own: Dict[str, str] = {}
+    mounts: Dict[str, List[Tuple[str, str]]] = {}
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
             continue
@@ -128,29 +143,82 @@ def _router_prefixes(tree: ast.AST) -> Dict[str, str]:
         prefix = _constant_kwarg(node.value, "prefix") or ""
         for target in node.targets:
             if isinstance(target, ast.Name):
-                prefixes[target.id] = prefix
+                own[target.id] = prefix
 
-    # `app.include_router(router, prefix="/tools")` — prepended to the router's own.
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             continue
         if node.func.attr != "include_router" or not node.args:
             continue
-        target = _dotted_name(node.args[0])
-        if not target:
+        child = _dotted_name(node.args[0])
+        if not child:
             continue
-        outer = _constant_kwarg(node, "prefix") or ""
-        prefixes[target] = f"{outer}{prefixes.get(target, '')}"
-    return prefixes
+        parent = _dotted_name(node.func.value)
+        mounts.setdefault(child, []).append((parent, _constant_kwarg(node, "prefix") or ""))
+
+    def resolve(name: str, seen: frozenset) -> set:
+        """Every full prefix `name`'s own routes are reachable under."""
+        base = own.get(name, "")
+        if name in seen:  # cyclic include; stop rather than recurse forever
+            return {base}
+        parents = mounts.get(name)
+        if not parents:
+            return {base}
+        seen = seen | {name}
+        return {
+            f"{outer}{include}{base}"
+            for parent, include in parents
+            for outer in resolve(parent, seen)
+        } or {base}
+
+    return {name: resolve(name, frozenset()) for name in set(own) | set(mounts)}
 
 
-def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, str]):
+def _string_list(node, constants: Dict[str, List[str]]) -> Optional[List[str]]:
+    """Lower-cased strings from a literal sequence or a module-level constant.
+
+    None means UNRESOLVED — deliberately distinct from an empty list, because
+    the caller must fail closed on it rather than conclude "no methods".
+    """
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        values = [e.value for e in node.elts if isinstance(e, ast.Constant)]
+        if len(values) != len(node.elts):
+            return None  # partially dynamic
+        return [str(v).lower() for v in values]
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    return None
+
+
+def _string_list_constants(tree: ast.AST) -> Dict[str, List[str]]:
+    """Module-level `MUTATING = ["POST", "DELETE"]` bindings."""
+    constants = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        values = _string_list(node.value, {})
+        if values is None:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = values
+    return constants
+
+
+def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, set]):
     """Yield (call, method, path) for `app.add_api_route(...)` registrations.
 
     The imperative sibling of the decorator form. Walking only `decorator_list`
     misses it entirely, so an ungated `add_api_route("/tools/wipe", …,
     methods=["POST"])` validated clean.
+
+    FAILS CLOSED on an unresolved `methods=`. `methods=MUTATING` is not a literal
+    list; reading it as "no methods" silently dropped the route, so an ungated
+    POST validated clean behind an ordinary module-level constant. Constants are
+    resolved when they can be, and anything still unresolved is treated as
+    state-changing — the safe direction is a false alarm, never a false pass.
     """
+    constants = _string_list_constants(tree)
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             continue
@@ -163,18 +231,21 @@ def _add_api_route_calls(tree: ast.AST, prefixes: Dict[str, str]):
             path = _constant_kwarg(node, "path")
         if not isinstance(path, str):
             continue
-        methods = []
-        for kw in node.keywords:
-            if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple, ast.Set)):
-                methods = [
-                    str(e.value).lower()
-                    for e in kw.value.elts
-                    if isinstance(e, ast.Constant)
-                ]
-        prefix = prefixes.get(_dotted_name(node.func.value), "")
-        for method in methods:
-            if method in STATE_CHANGING_METHODS:
-                yield node, method, f"{prefix}{path}"
+
+        methods_node = next(
+            (kw.value for kw in node.keywords if kw.arg == "methods"), None
+        )
+        if methods_node is None:
+            methods = ["get"]  # FastAPI's default for add_api_route
+        else:
+            methods = _string_list(methods_node, constants)
+            if methods is None:
+                methods = [UNRESOLVED_METHODS]
+
+        for prefix in prefixes.get(_dotted_name(node.func.value)) or {""}:
+            for method in methods:
+                if method in STATE_CHANGING_METHODS or method == UNRESOLVED_METHODS:
+                    yield node, method, f"{prefix}{path}"
 
 
 def _route_decorators(func: ast.AST, prefixes: Dict[str, str] = None):
@@ -197,8 +268,9 @@ def _route_decorators(func: ast.AST, prefixes: Dict[str, str] = None):
                     path = kw.value.value
         if not isinstance(path, str):
             continue
-        prefix = prefixes.get(_dotted_name(dec.func.value), "")
-        yield dec, method, f"{prefix}{path}"
+        # A router can be mounted more than once; every mount is a real path.
+        for prefix in prefixes.get(_dotted_name(dec.func.value)) or {""}:
+            yield dec, method, f"{prefix}{path}"
 
 
 def _raises_http_503(node: ast.AST) -> bool:

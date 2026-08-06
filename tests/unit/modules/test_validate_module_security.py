@@ -283,6 +283,107 @@ def test_add_api_route_registration_is_discovered(tmp_path):
     assert ok, f"a GATED add_api_route registration was rejected: {errors}"
 
 
+def test_nested_router_composition_is_resolved(tmp_path):
+    """A router mounted THROUGH another router still serves under /tools.
+
+    `parent.include_router(child, prefix="/admin")` then
+    `app.include_router(parent, prefix="/tools")` serves `/tools/admin/wipe`.
+    Storing one prefix per router saw only `child -> "/admin"` and skipped it.
+    Found in cross-review round 2.
+    """
+    nested = TEMPLATE_MAIN_PY.replace(
+        "from pydantic import BaseModel",
+        "from fastapi import APIRouter\nfrom pydantic import BaseModel",
+    ).replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        "parent = APIRouter()\nchild = APIRouter()\n\n\n"
+        '@child.post("/wipe")\nasync def tool_wipe(request: YourRequest):',
+    ) + (
+        '\n\nparent.include_router(child, prefix="/admin")\n'
+        'app.include_router(parent, prefix="/tools")\n'
+    )
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=nested))
+    assert not ok, "an ungated route behind a NESTED include_router validated clean"
+    assert any("/tools/admin/wipe" in e for e in errors), errors
+
+
+def test_router_mounted_twice_keeps_every_path(tmp_path):
+    """Including one router at two prefixes must not corrupt the accumulator.
+
+    Accumulating a single string turned `/public` + `/tools` into the fictional
+    `/public/tools`, so the REAL `/tools/wipe` path vanished and the ungated
+    route validated clean. Found in cross-review round 2.
+    """
+    double = TEMPLATE_MAIN_PY.replace(
+        "from pydantic import BaseModel",
+        "from fastapi import APIRouter\nfrom pydantic import BaseModel",
+    ).replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        "router = APIRouter()\n\n\n"
+        '@router.post("/wipe")\nasync def tool_wipe(request: YourRequest):',
+    ) + (
+        '\n\napp.include_router(router, prefix="/tools")\n'
+        'app.include_router(router, prefix="/public")\n'
+    )
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=double))
+    assert not ok, "a doubly-mounted ungated /tools route validated clean"
+    assert any("/tools/wipe" in e for e in errors), errors
+
+
+def test_unresolved_add_api_route_methods_fails_closed(tmp_path):
+    """`methods=MUTATING` must not read as "no methods".
+
+    A module-level constant is not an inline list, so the route yielded nothing
+    and an ungated POST validated clean behind entirely ordinary code. The safe
+    direction is a false alarm, never a false pass. Found in cross-review round 2.
+    """
+    via_constant = TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        "async def tool_wipe(request: YourRequest):",
+    ) + (
+        '\n\nMUTATING = ["POST", "DELETE"]\n'
+        'app.add_api_route("/tools/wipe", tool_wipe, methods=MUTATING)\n'
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=via_constant))
+    assert not ok, "an ungated route with methods=<module constant> validated clean"
+    assert any("/tools/wipe" in e for e in errors), errors
+
+    # A constant we CANNOT resolve at all must still fail closed, not vanish.
+    opaque = TEMPLATE_MAIN_PY.replace(
+        '@app.post("/tools/action1", dependencies=[Depends(require_service_token)])\n'
+        "async def tool_action1(request: YourRequest):",
+        "async def tool_wipe(request: YourRequest):",
+    ) + (
+        "\n\nimport os\n"
+        'app.add_api_route("/tools/wipe", tool_wipe, methods=os.environ["M"].split(","))\n'
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=opaque))
+    assert not ok, "an unresolvable methods= expression let the route vanish"
+    assert any("/tools/wipe" in e for e in errors), errors
+
+
+def test_read_only_add_api_route_is_not_flagged(tmp_path):
+    """FALSE-POSITIVE CONTROL: failing closed must not flag a plain GET.
+
+    `add_api_route` defaults to GET, and an explicit `methods=["GET"]` is a read.
+    Neither is state-changing, so neither needs the gate.
+    """
+    for suffix in (
+        '\n\napp.add_api_route("/tools/status", tool_status)\n',
+        '\n\napp.add_api_route("/tools/status", tool_status, methods=["GET"])\n',
+    ):
+        read_only = TEMPLATE_MAIN_PY + "\n\nasync def tool_status():\n    return {}\n" + suffix
+        _, errors, _ = run_validator(build_module(tmp_path, main_py=read_only))
+        assert not any("/tools/status" in e for e in errors), (
+            f"a read-only add_api_route was flagged: {errors}"
+        )
+
+
 def test_aliased_depends_import_is_not_a_false_positive(tmp_path):
     """FALSE-POSITIVE CONTROL: `from fastapi import Depends as D` is still Depends.
 
