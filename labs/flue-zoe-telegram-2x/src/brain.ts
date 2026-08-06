@@ -165,7 +165,28 @@ export async function consumeLinkToken(
  * `https://t.me/<bot>?start=<token>` deep links. Best-effort — logs and swallows
  * failures so a transient zoe-data hiccup never blocks the bot from polling.
  */
+/**
+ * Tell zoe-data our @username so Settings can build Telegram deep links.
+ *
+ * SUPPRESSED DURING A PARALLEL TRIAL. `telegram_link.set_bot_username` in
+ * zoe-data holds ONE in-memory username, and `build_deep_link` uses it for every
+ * Settings QR / deep link. So a -2x trial pointed at the normal zoe-data would
+ * silently repoint PRODUCTION deep links at the temporary trial bot — and leave
+ * them there after the trial stops, until the live bot or zoe-data restarts
+ * (cross-review, #1639). A pathfinder must not be able to break the thing it is
+ * running beside.
+ *
+ * `ZOE_TELEGRAM_TRIAL=1` makes this a no-op. Everything else about the trial
+ * still exercises the real path; only the global side effect is withheld.
+ */
 export async function registerBotUsername(username: string): Promise<void> {
+  if (process.env.ZOE_TELEGRAM_TRIAL === '1') {
+    console.log(
+      `ZOE_TELEGRAM_TRIAL=1 — NOT registering @${username} with zoe-data; ` +
+        'production deep links keep pointing at the live bot.',
+    );
+    return;
+  }
   try {
     const res = await fetch(`${DATA_URL}/api/system/telegram/register-bot`, {
       method: 'POST',

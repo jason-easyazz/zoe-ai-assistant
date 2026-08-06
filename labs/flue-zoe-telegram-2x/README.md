@@ -156,11 +156,19 @@ BotFather token, or run with the mock Bot API (`TELEGRAM_API_ROOT`) as
    The store path and epoch file already default inside this directory, so the
    1.x `data/` is not touched. Do **not** copy `data/zoe.db` — 2.x stores schema
    v8 and the runtime rejects the beta's v5 before any application code runs.
-3. **Run it in the foreground and watch:**
+3. **Run it in the foreground with the trial flag set, and watch:**
    ```sh
-   node dist/server.mjs
+   ZOE_TELEGRAM_TRIAL=1 node dist/server.mjs
    curl -s http://127.0.0.1:33582/health   # {"ok":true,...,"polling":true}
    ```
+   **`ZOE_TELEGRAM_TRIAL=1` is not optional for a parallel trial.** Without it the
+   trial bot registers its own `@username` with zoe-data, and
+   `telegram_link.set_bot_username` keeps only ONE — so every Settings QR / deep
+   link in production would start pointing at the temporary bot, and would stay
+   pointed there after the trial stops until the live bot or zoe-data restarts.
+   With the flag the registration is a logged no-op; everything else still
+   exercises the real path. Leave it UNSET at cutover, where registering the new
+   bot is the correct behaviour.
    The live bot on `:3582` keeps polling its own token throughout; the watchdog
    timer and the deploy health check both read the 1.x directory and are
    unaffected.
@@ -249,16 +257,24 @@ at the wrong port.
    *your* memory (not a guest answer), and that `/new` still answers "fresh
    conversation". Watch `journalctl --user -u flue-zoe-telegram -f` for
    `polling (took the bot over)` and the absence of a 409.
-6. **Rollback = repoint the unit. The old store is untouched:**
+6. **Rollback = repoint the unit — but carry the EPOCH FILE back first:**
    ```sh
    systemctl --user stop flue-zoe-telegram.service
+   # /new epochs advanced under 2.x live in the -2x directory. Without this copy
+   # the beta reloads its stale map and resumes a conversation the user already
+   # ended (cross-review, #1639) — the one piece of state that genuinely crosses
+   # the boundary, because it is OUR json, not Flue's store.
+   cp ~/assistant/labs/flue-zoe-telegram-2x/data/session_epochs.json \
+      ~/assistant/labs/flue-zoe-telegram/data/session_epochs.json
    rm ~/.config/systemd/user/flue-zoe-telegram.service.d/flue2.conf
    systemctl --user daemon-reload
    systemctl --user start flue-zoe-telegram.service
    ```
    `labs/flue-zoe-telegram/data/zoe.db` was never opened by the 2.x process, so
    the beta runtime reads it exactly as it left it. (This is the property the
-   brain sidecar does **not** get for free — see below.)
+   brain sidecar does **not** get for free — see below.) The epoch map is the
+   exception in both directions: it is copied FORWARD at cutover (step 2) and
+   must be copied BACK here, or `/new` silently un-happens.
 
 ---
 

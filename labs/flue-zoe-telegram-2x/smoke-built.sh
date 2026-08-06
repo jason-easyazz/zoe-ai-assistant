@@ -49,12 +49,20 @@ trap cleanup EXIT
 
 fail() { echo "SMOKE FAILED: $*" >&2; exit 1; }
 
+# `-f` (fail on HTTP >= 400) plus a polling:true check, NOT a bare connection.
+# The HTTP server starts listening BEFORE grammY finishes getMe and runs onStart,
+# so /health returns 503 in that window. A plain `curl -s` succeeds on a 503 and
+# breaks the loop immediately, throwing away the remaining warm-up and failing
+# the assertion below on a server that was merely still starting (cross-review,
+# #1639). Wait for the state we are actually going to assert.
 ready=0
 for _ in $(seq 1 40); do
-  if curl -s -o /dev/null "http://127.0.0.1:${PORT}/health"; then ready=1; break; fi
+  if curl -sf "http://127.0.0.1:${PORT}/health" 2>/dev/null | grep -q '"polling":true'; then
+    ready=1; break
+  fi
   sleep 0.25
 done
-[ "${ready}" -eq 1 ] || fail "dist/server.mjs never answered /health on ${PORT} within 10s"
+[ "${ready}" -eq 1 ] || fail "dist/server.mjs never reported a healthy /health (200 + polling:true) on ${PORT} within 10s"
 
 echo "--- /health (200 + polling:true = the bot took the mock token over)"
 health_body="$(curl -s -w '\n%{http_code}' "http://127.0.0.1:${PORT}/health")"

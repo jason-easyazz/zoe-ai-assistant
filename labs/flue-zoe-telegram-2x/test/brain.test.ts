@@ -96,6 +96,34 @@ test('registerBotUsername: posts the @username so the settings UI can build deep
   assert.deepEqual(req.body, { username: 'zoe_test_bot' });
 });
 
+test('registerBotUsername: ZOE_TELEGRAM_TRIAL=1 suppresses the global registration', async () => {
+  // zoe-data's telegram_link.set_bot_username holds ONE username and every
+  // Settings QR / deep link is built from it. A parallel trial that registered
+  // would repoint PRODUCTION deep links at the temporary bot and leave them
+  // there after the trial stops (cross-review, #1639).
+  const prev = process.env.ZOE_TELEGRAM_TRIAL;
+  process.env.ZOE_TELEGRAM_TRIAL = '1';
+  try {
+    const before$ = zoeData.requests.length;
+    await brain.registerBotUsername('trial_bot');
+    assert.equal(zoeData.requests.length, before$, 'the trial bot must NOT reach zoe-data');
+  } finally {
+    if (prev === undefined) delete process.env.ZOE_TELEGRAM_TRIAL;
+    else process.env.ZOE_TELEGRAM_TRIAL = prev;
+  }
+});
+
+test('registerBotUsername: the flag is read per call, so cutover still registers', async () => {
+  // NEGATIVE CONTROL for the suppression. If the guard were evaluated once at
+  // import, or inverted, cutover would silently stop registering the new bot and
+  // every deep link would keep pointing at the retired one.
+  delete process.env.ZOE_TELEGRAM_TRIAL;
+  const before$ = zoeData.requests.length;
+  await brain.registerBotUsername('cutover_bot');
+  assert.equal(zoeData.requests.length, before$ + 1);
+  assert.deepEqual(zoeData.requests[before$]!.body, { username: 'cutover_bot' });
+});
+
 // ─── the brain call ──────────────────────────────────────────────────────────
 
 test('askZoeAs: forwards the acting user via X-Zoe-User-Id on the trusted path', async () => {
