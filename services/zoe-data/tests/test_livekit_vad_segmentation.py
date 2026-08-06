@@ -710,7 +710,12 @@ def utterance_population(request):
 
 
 def _segment_one(monkeypatch, frames):
-    """Drive `frames` + the silence window through _collect_audio_stream once."""
+    """Drive `frames` + the silence window through _collect_audio_stream once.
+
+    Returns the pipeline calls, the local participant, the participant state,
+    and the DRIVEN frame list — the last one so callers can ask where inside the
+    input an utterance was cut.
+    """
     _clean_env(monkeypatch)
     mod = _install_fake_aiortc(monkeypatch)
     calls = _capture_pipeline(monkeypatch)
@@ -725,7 +730,72 @@ def _segment_one(monkeypatch, frames):
         await asyncio.sleep(0)
 
     _run(_body())
-    return calls, local, ps_map[sid]
+    return calls, local, ps_map[sid], driven
+
+
+def _is_loud(frame):
+    return v._rms(frame) >= v._VAD_ENERGY_THRESHOLD
+
+
+def _trailing_silence(frames):
+    """How many frames at the END of `frames` are below the energy gate."""
+    count = 0
+    for frame in reversed(frames):
+        if _is_loud(frame):
+            break
+        count += 1
+    return count
+
+
+def _locate(driven, utterance):
+    """Index where `utterance` sits inside `driven` as a contiguous run, or -1."""
+    span = len(utterance)
+    for start in range(len(driven) - span + 1):
+        if driven[start:start + span] == utterance:
+            return start
+    return -1
+
+
+def _assert_turn_is_whole(label, utterance, driven):
+    """ONE TURN IS NOT THE SAME AS THE RIGHT TURN.
+
+    `_collect_audio_stream` moves to PROCESSING at the endpoint and ignores
+    frames until COOLDOWN expires, so a PREMATURE cut also yields exactly one
+    pipeline call — `len(calls) == 1` on its own cannot tell a clean turn from a
+    clipped one. Two properties can:
+
+      (a) the cut was caused by a real silence run — the utterance ends with at
+          least `_VAD_SILENCE_FRAMES` sub-threshold frames, which IS the endpoint
+          condition. Measured across the sampled corpus: exactly 20/20 every
+          time. An arbitrary cut would not land there.
+      (b) nothing spoken BEFORE the cut was dropped. Only the pre-roll ahead of
+          speech confirmation may be missing, so the tolerance is the
+          confirmation window itself rather than a magic number (measured 0-4
+          against a window of 5).
+
+    Deliberately NOT asserted: that speech AFTER the endpoint survives. The
+    segmenter is designed to endpoint on a pause and start a NEW turn once
+    cooldown expires; this single-shot harness feeds the whole recording in
+    microseconds, so the remainder legitimately lands in PROCESSING/COOLDOWN and
+    is ignored — exactly as it would be on the box. That is why a raw
+    captured/source coverage RATIO would be the wrong assertion: measured
+    0.02-1.00 across the corpus with segmentation behaving correctly.
+    """
+    tail = _trailing_silence(utterance)
+    assert tail >= v._VAD_SILENCE_FRAMES, (
+        f"[{label}] the utterance ends with only {tail} silent frames, fewer than "
+        f"the {v._VAD_SILENCE_FRAMES}-frame endpoint window — it was cut "
+        f"mid-speech, not endpointed"
+    )
+    at = _locate(driven, utterance)
+    assert at >= 0, f"[{label}] the utterance is not a contiguous run of the input"
+    kept = sum(1 for f in utterance if _is_loud(f))
+    dropped = sum(1 for f in driven[:at + len(utterance)] if _is_loud(f)) - kept
+    assert dropped <= v._VAD_MIN_SPEECH_FRAMES, (
+        f"[{label}] {dropped} speech frames before the endpoint never reached STT "
+        f"(only the {v._VAD_MIN_SPEECH_FRAMES}-frame speech-confirmation pre-roll "
+        f"may be lost) — the turn was clipped"
+    )
 
 
 def test_real_utterance_segments_into_one_turn(monkeypatch, utterance_population):
@@ -742,18 +812,21 @@ def test_real_utterance_segments_into_one_turn(monkeypatch, utterance_population
     """
     verdicts = []
     for label, frames in utterance_population:
-        calls, local, state = _segment_one(monkeypatch, frames)
+        calls, local, state, driven = _segment_one(monkeypatch, frames)
         verdicts.append((label, len(calls)))
 
         if calls:
+            utterance = calls[0]["frames"]
             assert {"type": "state", "state": "listening"} in local.sent, \
                 f"[{label}] speech-start must be broadcast to the browser"
-            loud = sum(1 for f in calls[0]["frames"] if v._rms(f) >= v._VAD_ENERGY_THRESHOLD)
+            loud = sum(1 for f in utterance if _is_loud(f))
             assert loud >= v._VAD_MIN_SPEECH_FRAMES, (
                 f"[{label}] the utterance handed to STT holds only {loud} speech "
                 f"frames — the segmentation clipped the speech"
             )
             assert state["frames"] == [], f"[{label}] buffer must be cleared after the turn"
+
+            _assert_turn_is_whole(label, utterance, driven)
 
     singles = sum(1 for _, n in verdicts if n == 1)
     assert singles * 2 > len(verdicts), (
@@ -780,6 +853,45 @@ def test_majority_assertion_can_actually_fail(monkeypatch, utterance_population)
         f"a segmenter that can never detect speech still produced {singles}/"
         f"{len(counts)} single-turn results — the majority assertion above is "
         f"not measuring segmentation at all"
+    )
+
+
+@pytest.mark.parametrize("regression", ["trim_the_trailing_silence", "drop_the_opening"])
+def test_clipping_is_actually_detected(monkeypatch, utterance_population, regression):
+    """NEGATIVE CONTROL for `_assert_turn_is_whole`: clipped turns must be caught.
+
+    Both variants leave `len(calls) == 1` — which is the whole point. They break
+    the real seam (`_schedule_pipeline`, where the buffered utterance is handed
+    to the pipeline) with the two plausible regressions: someone "tidying up"
+    the trailing silence before STT, and an off-by-a-lot in the snapshot start.
+    """
+    real_schedule = v._schedule_pipeline
+
+    def _clipping(sid, ps, local_participant, frames_snapshot):
+        if regression == "trim_the_trailing_silence":
+            clipped = frames_snapshot[:-v._VAD_SILENCE_FRAMES]
+        else:
+            clipped = frames_snapshot[len(frames_snapshot) // 2:]
+        return real_schedule(sid, ps, local_participant, clipped or frames_snapshot)
+
+    monkeypatch.setattr(v, "_schedule_pipeline", _clipping)
+
+    caught = 0
+    checked = 0
+    for label, frames in utterance_population:
+        calls, _local, _state, driven = _segment_one(monkeypatch, frames)
+        if len(calls) != 1:
+            continue
+        checked += 1
+        try:
+            _assert_turn_is_whole(label, calls[0]["frames"], driven)
+        except AssertionError:
+            caught += 1
+    assert checked, "the clipping control produced no single-turn results to check"
+    assert caught == checked, (
+        f"{regression}: only {caught}/{checked} clipped turns were detected — "
+        f"`len(calls) == 1` plus these properties is not distinguishing a clean "
+        f"turn from a truncated one"
     )
 
 

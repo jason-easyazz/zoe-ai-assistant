@@ -15,10 +15,15 @@ a laptop is not the merge gate.
 It also pins the *other* silent way the suite can leave the lane: the ``ci_safe``
 marker. Dropping that line removes the suite from ``-m ci_safe`` with no other signal.
 
-Stdlib only, no imports of the guarded packages — this file must stay collectable
-in the very environment whose gaps it is reporting.
+The check is a real IMPORT, not `importlib.util.find_spec`. `av` and `aiortc` ship
+compiled extensions, so a wheel with an ABI or shared-library problem is present on
+disk (spec found) yet raises on import — which `pytest.importorskip` turns into a
+skip. A spec-only guard would pass in exactly that case.
+
+Stdlib only at module scope, and every guarded import happens inside a function —
+this file must stay collectable in the very environment whose gaps it reports.
 """
-import importlib.util
+import importlib
 import os
 import pathlib
 
@@ -38,14 +43,23 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 
 def _missing(modules):
-    """Names in `modules` that cannot be imported in this interpreter."""
+    """Names in `modules` that cannot be IMPORTED in this interpreter.
+
+    A real import, not `find_spec`. `av` and `aiortc` are native-extension
+    packages: a wheel with an ABI or shared-library problem is present on disk,
+    so `find_spec` happily returns a spec, while the actual import raises — and
+    `pytest.importorskip` in the fidelity suite catches exactly that and skips.
+    A spec-only check would therefore pass in precisely the broken-install case
+    this guard exists to make loud. Import it or it does not count.
+    """
     absent = []
     for name in modules:
         try:
-            if importlib.util.find_spec(name) is None:
-                absent.append(name)
-        except (ImportError, ValueError):
-            # Parent package absent (find_spec imports it), or a broken spec.
+            importlib.import_module(name)
+        except Exception:
+            # ImportError, but also anything a broken native module raises on
+            # first import (OSError from a missing .so, RuntimeError from a
+            # version check). None of it means "usable".
             absent.append(name)
     return absent
 
@@ -68,6 +82,32 @@ def test_missing_helper_detects_an_absent_module():
     )
     # And it must not cry wolf on a module that certainly does exist.
     assert _missing(["os", "pathlib"]) == []
+
+
+def test_installed_but_unimportable_counts_as_missing(tmp_path, monkeypatch):
+    """The broken-native-wheel case, which a spec-only check cannot see.
+
+    `av` and `aiortc` ship compiled extensions. A wheel with an ABI mismatch or a
+    missing shared library is PRESENT — `importlib.util.find_spec` returns a spec
+    — but importing it raises, and `pytest.importorskip` in the fidelity suite
+    then skips the module. A guard built on `find_spec` would pass in exactly
+    that scenario and the required lane would stay green with nothing tested.
+    Stand in a module that imports cleanly on disk but explodes on execution.
+    """
+    import importlib.util as _util
+
+    broken = tmp_path / "zoe_broken_native_stub.py"
+    broken.write_text('raise ImportError("libavcodec.so.61: cannot open shared object file")\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    assert _util.find_spec("zoe_broken_native_stub") is not None, (
+        "fixture is wrong — the stand-in must LOOK installed for this to be a control"
+    )
+    assert _missing(["zoe_broken_native_stub"]) == ["zoe_broken_native_stub"], (
+        "_missing() accepted a module that cannot actually be imported — it has "
+        "regressed to a spec-only check, which is green in the broken-wheel case"
+    )
 
 
 def test_fidelity_suite_still_opts_into_the_ci_safe_lane():
