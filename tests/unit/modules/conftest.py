@@ -18,3 +18,7 @@ def _load(name: str, rel: str):
 
 def load_compose_generator():
     return _load("zoe_gen_module_compose", "tools/generate_module_compose.py")
+
+
+def load_module_validator():
+    return _load("zoe_validate_module", "tools/validate_module.py")
