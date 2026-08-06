@@ -2,7 +2,12 @@
 
 ## Purpose
 
-Self-contained optional modules that extend Zoe beyond the core assistant, served under `/modules/` by nginx.
+Self-contained optional add-on **containers** that extend Zoe beyond the core assistant.
+
+A module is a container on `zoe-network` that something calls by URL. It is **not**
+auto-discovered: there is no MCP tool router, no intent scanner, and no widget loader
+reading this tree. The practical "how do I add one", and the measured list of dead
+mechanisms not to build against, is [docs/guides/MODULE_SYSTEM.md](../docs/guides/MODULE_SYSTEM.md).
 
 ## Ownership
 
@@ -20,10 +25,10 @@ Self-contained optional modules that extend Zoe beyond the core assistant, serve
 
 ## Local Contracts
 
-- Modules are optional: core Zoe must run with any module absent.
-- Module compose files are generated via `tools/generate_module_compose.py` into `docker-compose.generated-modules.yml`; do not hand-edit generated compose output. The generator rejects non-slug module names (no path traversal).
-- Module routes are declared in `services/zoe-ui/nginx.conf`; adding a module route touches that critical file (see `services/AGENTS.md`).
-- A module's state-changing `/tools/*` routes must be gated by a shared service token and fail closed (503) until it is set; the in-cluster caller sends the same value as `X-Zoe-Service-Token`. Publish module ports on loopback only; in-cluster reach is via the `zoe-network` service name.
+- Modules are optional: core Zoe must run with any module absent. Wire the caller with an env-configured URL behind a flag; nothing discovers a module for you.
+- **A module deploys from its own `docker-compose.module.yml` under its own compose project** (`docker compose -p <name> -f modules/<name>/docker-compose.module.yml up -d`), as `omnigent` does. `tools/generate_module_compose.py` writes `docker-compose.generated-modules.yml`, but nothing consumes that file today and the generator cannot represent `omnigent` (it hardcodes `zoe-network` as the only top-level network). Do not hand-edit generated compose output; the generator rejects non-slug module names (no path traversal).
+- A module needs an nginx route only if it serves a browser surface — `omnigent` has none (it is reached over `zoe-network` by cloudflared and at `127.0.0.1:6767` locally). If you do add one, it is declared in `services/zoe-ui/nginx.conf`, a critical file (see `services/AGENTS.md`).
+- A module's state-changing `/tools/*` routes must be gated by a shared service token and fail closed (503) until it is set; compare it in constant time (`secrets.compare_digest`, never `==`). The in-cluster caller sends the same value as `X-Zoe-Service-Token`. Publish module ports on loopback only; in-cluster reach is via the `zoe-network` service name.
 - **`omnigent`'s MCP config (`omnigent/.mcp.json`, bind-mounted over `/workspace/.mcp.json`) must never spawn a stdio Serena again.** Each container-spawned server was ~900 MB RSS on a 15.6 GB box shared with llama-server + Kokoro. It uses the host's shared `serena-mcp.service` over `zoe-codeintel` — an `internal` network with exactly one member, pinned at `172.28.0.2` — fronted by `scripts/setup/systemd/system/serena-bridge.{socket,service}`. The bridge's `IPAddressAllow=`, not the network, is the access control (a bridge GATEWAY is reachable from every container on the host; only container-to-container across networks is blocked). Keep the pinned address, the subnet, the MCP url and the socket unit in agreement — `tests/unit/modules/test_omnigent_mcp_config.py` fails if they drift. Adding a second member to `zoe-codeintel` widens whole-repo read access and is out of scope for any module change.
 
 ## Work Guidance
@@ -36,7 +41,7 @@ Self-contained optional modules that extend Zoe beyond the core assistant, serve
 
 ## Verification
 
-After enabling a module, verify its nginx route serves and core `/health` still passes.
+After deploying a module, verify its own `/health` answers, that core Zoe `/health` still passes, and that core Zoe still works with the module **stopped** — the optionality rule is the one that regresses silently. If the module serves a browser surface, verify its nginx route too.
 
 ## Child DOX Index
 

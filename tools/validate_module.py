@@ -10,7 +10,7 @@ Takes a module NAME, not a path — `modules/` is prepended internally.
 NOTE: `modules/omnigent` does NOT satisfy this validator and is not meant to.
 It is a container-only module with no `main.py` or `requirements.txt`, so it
 deterministically reports failure here; it is not the example to reach for and
-it is not a scaffold to copy (see docs/modules/BUILDING_MODULES.md).
+it is not a scaffold to copy (see docs/guides/MODULE_SYSTEM.md).
 
 Usage:
   python tools/validate_module.py your-module-name

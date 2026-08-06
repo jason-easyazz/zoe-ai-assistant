@@ -12,9 +12,18 @@ descriptions.
 
 ## Layer 1: Modules (real infrastructure)
 
-Modules are add-on services served under `/modules/`. The only thing a module
-*must* ship is a Docker service; intents, widgets and MCP tools are capabilities
-it **may** ship. See [modules/AGENTS.md](../../modules/AGENTS.md).
+Modules are add-on containers on `zoe-network`, reached by URL. The only thing a
+module *must* ship is a Docker service.
+
+> **The intents, widgets and MCP tools below have no live loader** (measured
+> 2026-08-06): there is no MCP tool router, nothing scans `modules/*/intents/`, no
+> page loads the module-widget loader, and only `music-assistant` — which is not a
+> `modules/` tree module — has a `/modules/` nginx route. Treat the capability shape
+> below as a **specification of what a module could declare**, never as evidence
+> something will pick it up. The measured evidence table, and what to build instead,
+> is in [../guides/MODULE_SYSTEM.md](../guides/MODULE_SYSTEM.md).
+
+See [modules/AGENTS.md](../../modules/AGENTS.md) for the binding contract.
 
 Live modules today: `omnigent` (the only one) — and it is **container-only**. It
 has no `main.py`, no `requirements.txt`, no `intents/` and no `widget/`; it is a
