@@ -94,7 +94,12 @@ Add your tools to [`services/zoe-mcp-server/http_mcp_server.py`](../../services/
 # In list_tools() function, add:
 {"name": "your_module_action", "description": "What your tool does"},
 
-# Add endpoint handler:
+# Add endpoint handler. It MUST forward the service token: the module's
+# state-changing routes are gated, so a proxy that posts only the JSON body gets
+# 401 on every MCP-mediated call even though a direct authenticated curl works.
+# Provision the SAME secret here as in the module's compose environment.
+YOUR_MODULE_TOKEN = os.getenv("ZOE_YOURMODULE_SERVICE_TOKEN", "")
+
 @app.post("/tools/your_module_action")
 async def your_module_action(request: YourRequest):
     try:
@@ -102,6 +107,7 @@ async def your_module_action(request: YourRequest):
             response = await client.post(
                 f"{YOUR_MODULE_URL}/tools/your_action",
                 json=request.dict(),
+                headers={"X-Zoe-Service-Token": YOUR_MODULE_TOKEN},
                 timeout=10.0
             )
             return response.json()
