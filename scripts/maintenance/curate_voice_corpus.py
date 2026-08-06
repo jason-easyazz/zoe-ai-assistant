@@ -432,6 +432,53 @@ def plan_moves(rows: list[dict[str, Any]], corpus: str, day: str) -> list[dict[s
     return plan
 
 
+def _entry_for(item: dict[str, Any], run_at: str, threshold: float,
+               model_sha: Optional[str]) -> dict[str, Any]:
+    """One manifest row. SHARED by the crash-safe sidecar and the manifest.
+
+    PER-ENTRY PROVENANCE. The manifest's top-level fields describe the LATEST
+    run, but ``entries`` is merged across runs — so on a second same-day pass
+    with a different ``--speech-threshold`` or ``ZOE_SILERO_VAD_MODEL`` the older
+    rows were being re-attributed to parameters they were never classified
+    under, which makes the manifest useless for auditing or reversing a
+    classification (Codex P2, #1643). Stamped at the moment the verdict is
+    recorded, so a merge can never rewrite it.
+    """
+    return {
+        "file": item["file"],
+        "quarantined_at": run_at,
+        "speech_threshold": threshold,
+        "vad_model_sha256": model_sha,
+        "reason": item["reason"],
+        "class": item["class"],
+        "scores": item["scores"],
+        "format": item["format"],
+        "mtime": item["mtime"],
+        "mtime_iso": item["mtime_iso"],
+        "size": item["size"],
+    }
+
+
+def _append_pending(dest_dir: str, entry: dict[str, Any]) -> None:
+    """Append one JSONL row and FSYNC it, before the file it describes moves.
+
+    ``manifest.jsonl`` is the crash-safe half of the record: append-only, one
+    line per quarantined file, flushed and fsync'd so it survives an interrupted
+    run. ``manifest.json`` is still the readable artifact, written at the end;
+    if that write never happens, this file is what tells the operator why a
+    directory full of audio is there. Best-effort by design — a sidecar failure
+    must not stop the move, because a moved file with no record beats an
+    unmovable corpus.
+    """
+    try:
+        with open(os.path.join(dest_dir, "manifest.jsonl"), "a") as fh:
+            fh.write(json.dumps(entry) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+    except Exception:
+        pass
+
+
 def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
                 model_sha: Optional[str], execute: bool) -> dict[str, Any]:
     """Move quarantined files and write/merge a manifest per quarantine dir.
@@ -509,6 +556,15 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
                 f"(< {MIN_QUIESCENT_S}s quiescence), left in place"
             )
             continue
+        # PROVENANCE IS WRITTEN BEFORE THE FILE IS ORPHANED, NOT AFTER THE BATCH.
+        # Every move used to happen first and the manifests were written once at
+        # the end, so a single interruption, full disk, or raise in the JSON
+        # write left an ENTIRE batch of audio sitting in quarantine with no
+        # record of why — the reason, scores, threshold and model hash gone, and
+        # nothing to reverse the classification from (Codex P2, #1643). A
+        # sidecar line is appended and fsync'd for each file at the moment it
+        # moves, so the worst case is now one file's record, not 150.
+        _append_pending(item["dest_dir"], _entry_for(item, run_at, threshold, model_sha))
         try:
             shutil.move(item["source"], item["dest"])
         except Exception as exc:
@@ -528,27 +584,7 @@ def apply_moves(plan: list[dict[str, Any]], corpus: str, threshold: float,
             except Exception:
                 entries = []
         for item in items:
-            entries.append({
-                "file": item["file"],
-                # PER-ENTRY PROVENANCE. The top-level fields below describe the
-                # LATEST run, but `entries` is merged across runs — so on a
-                # second same-day pass with a different --speech-threshold or
-                # ZOE_SILERO_VAD_MODEL the older rows were being re-attributed
-                # to parameters they were never classified under, which makes
-                # the manifest useless for auditing or reversing a
-                # classification (Codex P2, #1643). Stamped here, at the moment
-                # the verdict is recorded, so a merge can never rewrite it.
-                "quarantined_at": run_at,
-                "speech_threshold": threshold,
-                "vad_model_sha256": model_sha,
-                "reason": item["reason"],
-                "class": item["class"],
-                "scores": item["scores"],
-                "format": item["format"],
-                "mtime": item["mtime"],
-                "mtime_iso": item["mtime_iso"],
-                "size": item["size"],
-            })
+            entries.append(_entry_for(item, run_at, threshold, model_sha))
         payload = {
             "tool": "scripts/maintenance/curate_voice_corpus.py",
             "corpus": corpus,
@@ -712,6 +748,24 @@ def main() -> int:
         print(f"  peak speech prob: median={summary['peak_median']} "
               f"p10={summary['peak_p10']} p90={summary['peak_p90']} "
               f"frac>= {RUNTIME_SPEECH_THRESHOLD}: {summary['frac_above_runtime']}")
+
+    # A SPEECH AUDIT THAT SCORED NOTHING IS A FAILED RUN, NOT A CLEAN CORPUS.
+    # score_speech's failures are caught per file and recorded as score_error, so
+    # a Silero that loads but cannot infer produces a run where EVERY file is
+    # correctly kept as unscored — and the output then looks like a tidy
+    # format-only audit that found no candidates and exits 0. That is the same
+    # silent-success shape this whole tool exists to prevent, one level up
+    # (Codex P2, #1643). Refuse before anything moves.
+    if vad_factory is not None and summary["total"] and not summary["scored"]:
+        errs = sorted({r["score_error"] for r in rows if r["score_error"]})
+        print(f"\nSPEECH SCORING PRODUCED NOTHING: 0 of {summary['total']} file(s) "
+              "were scored, so no non-speech verdict in this run is supported by "
+              "evidence. Refusing to continue -- this is a broken VAD, not a clean "
+              "corpus.", file=sys.stderr)
+        for e in errs[:5]:
+            print(f"  ! {e}", file=sys.stderr)
+        print("Re-run with --skip-vad for an explicit format-only audit.", file=sys.stderr)
+        return 2
 
     _print_candidates(plan, CLASS_FORMAT)
     _print_candidates(plan, CLASS_NONSPEECH)

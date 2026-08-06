@@ -722,6 +722,109 @@ def test_manifest_entries_carry_their_own_run_provenance(tmp_path):
     assert manifest["latest_vad_model_sha256"] == "sha-SECOND"
 
 
+def test_a_speech_audit_that_scored_nothing_refuses_to_exit_clean(tmp_path):
+    """A broken VAD must not look like a tidy corpus.
+
+    score_speech's failures are caught per file and recorded as score_error, so
+    a Silero that loads but cannot infer produces a run where every file is
+    correctly KEPT as unscored — and the report then reads as a clean
+    format-only audit with no candidates and exit 0. Same silent-success shape
+    the tool exists to prevent, one level up (Codex P2, #1643).
+    """
+    class _DeadVad:
+        def process_hops(self, _frame):
+            return []
+
+    corpus = tmp_path / "corpus"
+    _write_wav(corpus / "a.wav")
+    _write_wav(corpus / "b.wav")
+    _age(corpus)
+
+    monkey = cvc.load_vad_factory
+    cvc.load_vad_factory = lambda _sd: (lambda: _DeadVad())
+    try:
+        rc = _run_main(["--corpus", str(corpus), "--execute"])
+    finally:
+        cvc.load_vad_factory = monkey
+
+    assert rc == 2, "a run that scored nothing must not exit 0"
+    assert sorted(os.listdir(corpus)) == ["a.wav", "b.wav"], "nothing may move"
+
+
+def test_skip_vad_is_still_an_explicit_clean_exit(tmp_path):
+    """NEGATIVE CONTROL: --skip-vad is a DELIBERATE format-only audit.
+
+    The guard must fire on a broken VAD, not on the operator explicitly asking
+    for no speech scoring — otherwise it would break the documented
+    format-only mode instead of catching the failure it is aimed at.
+    """
+    corpus = tmp_path / "corpus"
+    _write_wav(corpus / "a.wav")
+    _age(corpus)
+
+    assert _run_main(["--corpus", str(corpus), "--skip-vad"]) == 0
+
+
+def test_provenance_survives_a_manifest_write_that_never_happens(tmp_path):
+    """The audio must never outlive the record of WHY it was quarantined.
+
+    Every move happened first and the manifests were written once at the end, so
+    one interruption or failed JSON write left a whole batch in quarantine with
+    no reason, scores, threshold or model hash — nothing to reverse the
+    classification from (Codex P2, #1643). A fsync'd JSONL line is now appended
+    per file at the moment it moves.
+    """
+    corpus = _fixture_corpus(tmp_path)
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    plan = cvc.plan_moves(rows, str(corpus), "20260805")
+
+    # Simulate the finalisation dying AFTER the moves — the exact window.
+    boom = json.dump
+
+    def _explode(*a, **kw):
+        raise OSError("No space left on device")
+
+    json.dump = _explode
+    try:
+        with pytest.raises(OSError):
+            cvc.apply_moves(plan, str(corpus), 0.20, "sha-X", execute=True)
+    finally:
+        json.dump = boom
+
+    qdir = corpus / "quarantine-format-20260805"
+    assert not (qdir / "manifest.json").exists(), "the readable manifest must be the thing that failed"
+    lines = [json.loads(x) for x in (qdir / "manifest.jsonl").read_text().splitlines() if x]
+
+    moved = {p["file"] for p in plan}
+    assert {e["file"] for e in lines} == moved, "every moved file must have a record"
+    for e in lines:
+        assert e["reason"] and e["class"]
+        assert e["speech_threshold"] == 0.20
+        assert e["vad_model_sha256"] == "sha-X"
+
+
+def test_the_sidecar_and_the_manifest_agree(tmp_path):
+    """NEGATIVE CONTROL: the two records are built by ONE function.
+
+    If the sidecar drifted from the manifest it would be worse than useless —
+    an operator reconciling them would not know which to believe.
+    """
+    corpus = _fixture_corpus(tmp_path)
+    rows = cvc.scan(str(corpus), 0.20, vad_factory=None)
+    cvc.apply_moves(cvc.plan_moves(rows, str(corpus), "20260805"),
+                    str(corpus), 0.20, "sha-X", execute=True)
+
+    qdir = corpus / "quarantine-format-20260805"
+    manifest = {e["file"]: e for e in json.loads((qdir / "manifest.json").read_text())["entries"]}
+    sidecar = {}
+    for line in (qdir / "manifest.jsonl").read_text().splitlines():
+        if line:
+            e = json.loads(line)
+            sidecar[e["file"]] = e
+
+    assert sidecar == manifest, "the crash-safe record must match the readable one exactly"
+
+
 def test_an_unchanged_capture_still_moves(tmp_path):
     """NEGATIVE CONTROL for the freshness check: it must not block normal moves.
 
