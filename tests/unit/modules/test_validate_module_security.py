@@ -293,6 +293,27 @@ def test_gate_that_does_not_fail_closed_is_an_error(tmp_path):
     assert any("503" in e and "closed" in e.lower() for e in errors), errors
 
 
+def test_positional_http_exception_status_is_accepted(tmp_path):
+    """FALSE-POSITIVE CONTROL: `HTTPException(503, "...")` is the same 503.
+
+    `status_code=` is a keyword in one documented template and POSITIONAL in the
+    other (`docs/guides/MODULE_SYSTEM.md` step 4). Reading only the keyword would
+    reject a correctly hardened module for a spelling difference — and a guard
+    that rejects the documented form just teaches people to skip the guard.
+    """
+    positional = TEMPLATE_MAIN_PY.replace(
+        'raise HTTPException(status_code=503, detail="module service token not configured")',
+        'raise HTTPException(503, "module service token not configured")',
+    ).replace(
+        'raise HTTPException(status_code=401, detail="bad or missing X-Zoe-Service-Token")',
+        'raise HTTPException(401, "bad or missing X-Zoe-Service-Token")',
+    )
+    assert "status_code=" not in positional, "the mutation did not take"
+
+    ok, errors, _ = run_validator(build_module(tmp_path, main_py=positional))
+    assert ok, f"the positional HTTPException(503, ...) form was rejected: {errors}"
+
+
 def test_a_mentioned_503_does_not_satisfy_fail_closed(tmp_path):
     """CONSTRUCTING an HTTPException(503) is not RAISING one.
 
