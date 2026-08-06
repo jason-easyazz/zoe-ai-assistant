@@ -797,3 +797,51 @@ def test_a_late_title_failure_does_not_discard_the_text(monkeypatch):
     assert out["ok"] is True, out.get("error")
     assert "compact open-weight text-to-speech model" in out["text"]
     assert out["title"] == "Kokoro TTS — a compact neural voice model"
+
+
+def _deeply_nested(depth: int, inner: str) -> str:
+    """A page whose only unusual property is DOM depth."""
+    return "<html><body>" + "<div>" * depth + inner + "</div>" * depth + "</body></html>"
+
+
+def test_a_deeply_nested_page_extracts_instead_of_raising():
+    """Depth is publisher-controlled, so it must not be able to fail the fetch.
+
+    NEGATIVE CONTROL for the iterative `_node_text`: the recursive version
+    raised `RecursionError` at ~1000 nested non-dropped elements, and nothing
+    on the text path catches it (only `parser.feed` is guarded), so a single
+    deep page turned both text-fetch entry points into an error. Depth 2000 is
+    comfortably past CPython's default 1000-frame limit; if `_node_text` ever
+    goes recursive again this goes RED with RecursionError, not with a weaker
+    assertion.
+    """
+    prose = " ".join(
+        f"Sentence {i} of a paragraph buried very deep inside a nested wrapper."
+        for i in range(12)
+    )
+    out = extract_main_text(_deeply_nested(2000, f"<p>{prose}</p>"))
+
+    assert "Sentence 3 of a paragraph buried very deep" in out.text
+    assert out.chars > 200, out.chars
+
+
+def test_depth_does_not_change_the_extracted_text():
+    """The iterative walk must be output-identical to the recursive one.
+
+    Same markup at a depth the old code survived (50) and one it did not
+    (1500): if the explicit stack ever mis-ordered children or dropped a block
+    newline, the two would diverge here. Deliberately NO `<article>`/`<main>`
+    wrapper — those take the semantic shortcut, which renders only the inner
+    container and so would never walk the deep spine this exists to exercise.
+    """
+    inner = (
+        "<div><h1>Heading</h1>"
+        "<p>" + " ".join(f"First paragraph sentence {i}." for i in range(10)) + "</p>"
+        "<p>" + " ".join(f"Second paragraph sentence {i}." for i in range(10)) + "</p>"
+        "</div>"
+    )
+    shallow = extract_main_text(_deeply_nested(50, inner))
+    deep = extract_main_text(_deeply_nested(1500, inner))
+
+    assert shallow.text == deep.text
+    assert "\n" in shallow.text, "block newlines must survive the iterative walk"

@@ -272,6 +272,11 @@ class _Node:
         self.children: list[Any] = []
 
 
+# Stack marker for `_node_text`: "the subtree of a block element ends here".
+# A unique object, so it can never collide with a text run or a `_Node`.
+_BLOCK_END = object()
+
+
 class _TreeParser(HTMLParser):
     """Build a minimal element tree, discarding boilerplate containers wholesale."""
 
@@ -346,22 +351,35 @@ def _collapse_ws(value: str) -> str:
 
 
 def _node_text(node: _Node) -> str:
-    """Render a node's text with block-level newlines."""
+    """Render a node's text with block-level newlines.
+
+    ITERATIVE, not recursive. The tree is built from an arbitrary fetched page,
+    so its depth is attacker-/publisher-controlled: a recursive walk hit
+    Python's default 1000-frame limit at roughly 1000 nested non-dropped
+    elements and raised ``RecursionError`` — which is NOT caught anywhere on
+    the text path (only ``parser.feed`` is guarded), so both text-fetch entry
+    points returned an error instead of extracted text for the whole page
+    (Codex P2, #1626). An explicit stack has no such ceiling: depth costs a
+    list slot, not a C frame.
+
+    The stack carries a ``_BLOCK_END`` sentinel to reproduce the recursive
+    version's post-order newline exactly — children are pushed ON TOP of the
+    sentinel, so they pop first and the closing "\\n" lands after the subtree.
+    """
     parts: list[str] = []
-
-    def walk(n: _Node) -> None:
-        for child in n.children:
-            if isinstance(child, str):
-                parts.append(_collapse_ws(child))
-            else:
-                block = child.tag in _BLOCK_TAGS
-                if block:
-                    parts.append("\n")
-                walk(child)
-                if block:
-                    parts.append("\n")
-
-    walk(node)
+    stack: list[Any] = list(reversed(node.children))
+    while stack:
+        item = stack.pop()
+        if item is _BLOCK_END:
+            parts.append("\n")
+            continue
+        if isinstance(item, str):
+            parts.append(_collapse_ws(item))
+            continue
+        if item.tag in _BLOCK_TAGS:
+            parts.append("\n")
+            stack.append(_BLOCK_END)
+        stack.extend(reversed(item.children))
     return " ".join(p for p in parts if p).replace(" \n ", "\n").replace(" \n", "\n").replace("\n ", "\n")
 
 
