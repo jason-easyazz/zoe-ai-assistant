@@ -189,7 +189,7 @@ beecd9977a40d6716285169a39b5a00feca29c070a69438e32ee7e98f62b2037  omp-acp-superv
 captures its expected parent before arming `PR_SET_PDEATHSIG`). New **tracked** hashes:
 
 ```
-f0b95dcc7f5e0d05aa18dac50cb26f5eb89b6c44197a4971588d80e0a402fbf9  omp-omnigent-fenced
+09e0b424ae10506b8e36d450c787a3993eb278c43071f6aedc9aba8392020761  omp-omnigent-fenced
 84dd02450c2ac2488b10de12de002326875b5ea7dfc5206b414df50c8393633a  omp-acp-supervisor
 2884620cdae2c8c040e0d84d19c237001edb9711d2f3e9770c32ab6c454a966a  omp-fence.yml   (unchanged)
 ```

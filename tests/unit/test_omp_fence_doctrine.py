@@ -97,6 +97,46 @@ def test_no_credential_value_in_any_tracked_fence_file():
     assert "openrouter-omp.env" not in _text(OVERLAY)
 
 
+def test_the_runbooks_tracked_hashes_match_the_tracked_files():
+    """A recorded hash that does not match is worse than no hash at all.
+
+    The runbook tells the operator to refuse to trust or dispatch through a
+    fence whose live file does not equal the recorded tracked hash. So a stale
+    entry does not merely mislead — it makes a byte-correct install
+    un-installable, and the operator's only options are to skip the check or
+    edit the runbook, both of which defeat it.
+
+    This has now gone stale twice by hand (once elided to a prefix, once left
+    behind by a follow-up commit), which is exactly the shape that wants a test
+    rather than more care. Every 64-hex literal in the runbook that sits beside
+    a fence filename must be the CURRENT hash of that file.
+    """
+    import hashlib
+
+    doc = _text(RUNBOOK)
+    current = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (WRAPPER, SUPERVISOR, OVERLAY)
+    }
+
+    # Historical baselines are deliberately kept, so only the block introduced by
+    # the LATEST hashes is checked: the last recorded hash per filename wins.
+    recorded: dict[str, str] = {}
+    for digest, name in re.findall(r"\b([0-9a-f]{64})\s+(\S+)", doc):
+        if name in current:
+            recorded[name] = digest
+
+    assert set(recorded) == set(current), (
+        f"the runbook must record a hash for every fence artifact; got {sorted(recorded)}"
+    )
+    for name, digest in recorded.items():
+        assert digest == current[name], (
+            f"runbook records {digest} for {name} but the tracked file hashes to "
+            f"{current[name]}. Update the runbook in the SAME commit that changes "
+            "the file — an operator following it would refuse a correct install."
+        )
+
+
 # --------------------------------------------------------------------------
 # Wrapper doctrine
 # --------------------------------------------------------------------------
