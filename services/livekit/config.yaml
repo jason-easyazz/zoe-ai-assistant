@@ -5,9 +5,13 @@ rtc:
   use_external_ip: false
   # For local network access, we need to announce the local IP
   # LiveKit will auto-detect it from the host
-keys:
-  # Credentials are also stored in services/zoe-data/.env as LIVEKIT_API_KEY / LIVEKIT_API_SECRET
-  zoe-k5Sq6QANfemQ1ash: VR2FnhtPlr_l6z7mHMc50w64MNkA2eyG9Bk-dKrp1PY
+# API keys are DELIBERATELY ABSENT from this tracked file.
+# They are supplied at runtime via the LIVEKIT_KEYS env var (see docker-compose.yml),
+# sourced from the untracked repo-root .env (LIVEKIT_API_KEY / LIVEKIT_API_SECRET).
+# livekit-server v1.9.3: `--keys` / $LIVEKIT_KEYS is applied AFTER this file and
+# replaces any `keys:` here; with neither, the server refuses to start
+# ("one of key-file or keys must be provided"). Rotation runbook:
+# docs/knowledge/livekit-key-rotation.md
 logging:
   level: info
   sample: false
