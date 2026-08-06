@@ -23,8 +23,30 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PORT=33582
-MOCK_TG_PORT=33583
+# EPHEMERAL, not fixed. .env.example now ships PORT=33582 for the parallel
+# trial, so a fixed 33582 here collides with a trial that is still running: the
+# child fails to bind, but every curl below then hits the ALREADY-RUNNING trial
+# process, and the child can create its throwaway SQLite file before the bind
+# failure — a false green that says nothing about the built artifact
+# (cross-review, #1639). Ask the kernel for free ports instead.
+_free_port() {
+  python3 - <<'PYEOF'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PYEOF
+}
+PORT=$(_free_port)
+MOCK_TG_PORT=$(_free_port)
+[ -n "${PORT}" ] && [ -n "${MOCK_TG_PORT}" ] || { echo "could not allocate ports" >&2; exit 1; }
+echo "--- smoke ports: server=${PORT} mock-telegram=${MOCK_TG_PORT}"
+# The server must be OURS. If anything is already listening the bind would fail
+# silently and the curls would interrogate a stranger.
+if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:${PORT}/health"; then
+  echo "SMOKE FAILED: something is already listening on ${PORT}" >&2; exit 1
+fi
 DATA_DIR="$(mktemp -d)"
 export PORT
 export ZOE_TELEGRAM_DB="${DATA_DIR}/throwaway.db"

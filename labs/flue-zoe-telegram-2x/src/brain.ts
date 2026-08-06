@@ -110,10 +110,24 @@ export function bumpSession(chatId: number): void {
 }
 
 /** Stable zoe-data session id per Telegram chat, so memory/context carries over.
- *  Epoch 0 keeps the legacy id (existing chats keep their context until they /new). */
+ *  Epoch 0 keeps the legacy id (existing chats keep their context until they /new).
+ *
+ *  NAMESPACED DURING A PARALLEL TRIAL. A private chat with the same user has the
+ *  SAME chatId in both bots, so an untrialled -2x run against the normal zoe-data
+ *  produces the SAME `telegram-<chatId>` session id as the live 1.x bot. zoe-data
+ *  keys its in-memory context and its persisted `chat_messages` by that id, so
+ *  every trial prompt and reply would be written into the user's PRODUCTION
+ *  conversation and would steer subsequent live turns (cross-review, #1639).
+ *  That is worse than the deep-link hijack from the same round: it is not a
+ *  setting to re-register, it is real messages in real history.
+ *
+ *  ZOE_TELEGRAM_TRIAL=1 prefixes the id, so trial turns land in their own
+ *  throwaway sessions and production history is untouched. Cutover leaves the
+ *  flag unset and keeps the legacy ids, which is what carries context across. */
 export function sessionFor(chatId: number): string {
   const epoch = readEpochs()[String(chatId)] ?? 0;
-  return epoch === 0 ? `telegram-${chatId}` : `telegram-${chatId}-e${epoch}`;
+  const base = epoch === 0 ? `telegram-${chatId}` : `telegram-${chatId}-e${epoch}`;
+  return process.env.ZOE_TELEGRAM_TRIAL === '1' ? `trial2x-${base}` : base;
 }
 
 /**

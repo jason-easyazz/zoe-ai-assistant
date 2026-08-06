@@ -86,6 +86,31 @@ test('consumeLinkToken: an invalid/expired token (HTTP 400) resolves to null, no
   assert.equal(await brain.consumeLinkToken('nope', 123), null);
 });
 
+test('sessionFor: ZOE_TELEGRAM_TRIAL=1 namespaces the session id', () => {
+  // The same user has the same chatId in both bots, and zoe-data keys its
+  // in-memory context AND persisted chat_messages by the session id — so an
+  // unflagged trial writes into the user's PRODUCTION conversation and steers
+  // subsequent live turns (cross-review, #1639).
+  const prev = process.env.ZOE_TELEGRAM_TRIAL;
+  process.env.ZOE_TELEGRAM_TRIAL = '1';
+  try {
+    const id = brain.sessionFor(4242);
+    assert.ok(id.startsWith('trial2x-'), `expected a namespaced id, got ${id}`);
+    assert.notEqual(id, 'telegram-4242', 'a trial must not share the live session id');
+  } finally {
+    if (prev === undefined) delete process.env.ZOE_TELEGRAM_TRIAL;
+    else process.env.ZOE_TELEGRAM_TRIAL = prev;
+  }
+});
+
+test('sessionFor: without the flag the LEGACY id is unchanged', () => {
+  // NEGATIVE CONTROL. The legacy id is what carries a user's existing context
+  // across cutover — namespacing it unconditionally would silently reset every
+  // conversation, which is the same data loss with the sign flipped.
+  delete process.env.ZOE_TELEGRAM_TRIAL;
+  assert.equal(brain.sessionFor(4242), 'telegram-4242');
+});
+
 // ─── bot registration ────────────────────────────────────────────────────────
 
 test('registerBotUsername: posts the @username so the settings UI can build deep links', async () => {

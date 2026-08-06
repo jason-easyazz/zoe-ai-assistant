@@ -156,9 +156,19 @@ BotFather token, or run with the mock Bot API (`TELEGRAM_API_ROOT`) as
    The store path and epoch file already default inside this directory, so the
    1.x `data/` is not touched. Do **not** copy `data/zoe.db` — 2.x stores schema
    v8 and the runtime rejects the beta's v5 before any application code runs.
-3. **Run it in the foreground with the trial flag set, and watch:**
+3. **Run it in the foreground with the env LOADED and the trial flag set:**
    ```sh
+   cd ~/assistant/labs/flue-zoe-telegram-2x
+   set -a; . ./.env; set +a          # node does NOT read .env by itself
    ZOE_TELEGRAM_TRIAL=1 node dist/server.mjs
+   ```
+   The `set -a; . ./.env` is not optional. Node loads no `.env` — under systemd
+   the unit's `EnvironmentFile=` does it, and there is no unit here. Without it
+   `TELEGRAM_BOT_TOKEN` is absent and startup throws before polling, while
+   `PORT` and `ZOE_DATA_URL` silently fall back to Flue's defaults.
+
+   Then, from another shell:
+   ```sh
    curl -s http://127.0.0.1:33582/health   # {"ok":true,...,"polling":true}
    ```
    **`ZOE_TELEGRAM_TRIAL=1` is not optional for a parallel trial.** Without it the
@@ -169,6 +179,14 @@ BotFather token, or run with the mock Bot API (`TELEGRAM_API_ROOT`) as
    With the flag the registration is a logged no-op; everything else still
    exercises the real path. Leave it UNSET at cutover, where registering the new
    bot is the correct behaviour.
+
+   **It also namespaces the zoe-data session ids.** A private chat with the same
+   user has the same `chatId` in both bots, so an unflagged trial would produce
+   the same `telegram-<chatId>` session id as the live bot — and zoe-data keys
+   its in-memory context and persisted `chat_messages` by that id, so every
+   trial prompt and reply would be written into the user's PRODUCTION
+   conversation and would steer subsequent live turns. With the flag, trial
+   turns go to `trial2x-telegram-<chatId>` and production history is untouched.
    The live bot on `:3582` keeps polling its own token throughout; the watchdog
    timer and the deploy health check both read the 1.x directory and are
    unaffected.
