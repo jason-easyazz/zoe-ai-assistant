@@ -34,38 +34,34 @@ data/wyoming/
 *.pfx
 *.crt
 *.cert
-# Secrets/passwords/API keys by ARTIFACT shape, for the SAME reason the *token*
-# blanket below was narrowed on 2026-07-07: blanket `*secret*` silently dropped
-# tests/unit/test_livekit_config_no_secrets.py — the guard test written to stop
-# a credential returning to services/livekit/config.yaml — and `git add` only
-# warns, so the commit looked fine and the guard simply was not there. Source,
-# tests and docs with these words in the NAME are trackable; credential-shaped
-# files are not.
-*.secret
-*.secrets
-*secret*.json
-*secret*.yaml
-*secret*.yml
-*secret*.toml
-*secret*.txt
-*secret*.env
-*password*.json
-*password*.yaml
-*password*.yml
-*password*.toml
-*password*.txt
-*password*.env
-# EXTENSIONLESS credential names, restored after cross-review: the shapes above
-# are all extension-anchored, so `livekit-secret`, `api_secret`, `my_password`
-# and bare `secret` became trackable when the blanket went. These bare-suffix
-# globs re-cover them WITHOUT the blanket's damage — `*secret` matches only a
-# name ENDING in "secret", so every source/test/doc file (which has a suffix,
-# e.g. test_livekit_config_no_secrets.py) stays trackable. That is the whole
-# difference from `*secret*`.
-*secret
-*secrets
-*password
-*passwords
+# Secrets/passwords by NAME, default-deny with an explicit SOURCE allowlist.
+# History, both directions:
+#   - A blanket `*secret*` silently dropped tests/unit/test_livekit_config_no_secrets.py
+#     — the guard test written to stop a credential returning to
+#     services/livekit/config.yaml — and `git add` only WARNS, so the commit
+#     looked fine and the guard simply was not there.
+#   - Replacing it with an extension allowlist (`*secret*.json`, `*secret*.yaml`, ...)
+#     fixed that but re-opened the other side: `client_secret.ini`,
+#     `db-password.csv` and `secret.properties` all became trackable, and LiveKit
+#     keys have no vendor pattern for a content scanner to catch.
+# So: keep the blanket (it covers ANY extension, and none), and unignore the
+# SOURCE/TEST/DOC extensions by name. Adding a credential file with a new
+# extension stays blocked by default; adding a legitimately-named source file
+# needs one line here rather than a silent skip.
+*secret*
+*password*
+!*secret*.py
+!*password*.py
+!*secret*.md
+!*password*.md
+!*secret*.js
+!*password*.js
+!*secret*.ts
+!*password*.ts
+!*secret*.sh
+!*password*.sh
+!*secret*.html
+!*password*.html
 # NOTE: `*api_key*` below is still a blanket of the same kind and will drop a
 # legitimately-named source/test file if one is ever added. Left as-is
 # deliberately — nothing in the tree hits it today. Narrow it when it bites.

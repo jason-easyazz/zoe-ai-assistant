@@ -112,6 +112,16 @@ generated one is fine and is what the upstream docs assume.
 Run on the box, in `/home/zoe/assistant`. **Never** paste either value into a
 chat, a commit, a log, or an agent transcript.
 
+0. **Capture the OUTGOING key id first** — step 5 checks for its remnants, and
+   after step 2 it is gone from the files, so it cannot be recovered then:
+   ```bash
+   OLD_KEY_ID="$(grep -m1 '^LIVEKIT_API_KEY=' .env | cut -d= -f2-)"
+   [ -n "$OLD_KEY_ID" ] || { echo "no LIVEKIT_API_KEY in .env — stop"; }
+   ```
+   The key **id** is not the secret; it is already public in this repo's history.
+   Keep the same shell for the whole procedure — an unset `OLD_KEY_ID` in step 5
+   would expand to an empty pattern and `grep -rl ""` matches every line of both
+   files, reporting a false remnant (or aborting under `set -u`).
 1. Generate a pair (above). Keep the terminal scrollback private.
 2. Update **both** env files, keeping them identical:
    - `/home/zoe/assistant/.env`
@@ -141,11 +151,16 @@ chat, a commit, a log, or an agent transcript.
    ```bash
    systemctl --user restart zoe-data
    ```
-5. Verify (below), then confirm the old pair is dead everywhere:
+5. Verify (below), then confirm the old pair is dead everywhere — using the id
+   captured in **step 0**, and refusing to run if it is empty (an empty pattern
+   matches every line, so an unset variable would report a false remnant):
    ```bash
-   grep -rl "$OLD_KEY_ID" /home/zoe/assistant/.env /home/zoe/assistant/services/zoe-data/.env
+   [ -n "$OLD_KEY_ID" ] \
+     && grep -rlF -- "$OLD_KEY_ID" /home/zoe/assistant/.env /home/zoe/assistant/services/zoe-data/.env \
+     || echo "OLD_KEY_ID unset — re-read step 0; this check did NOT run"
    ```
-   should return nothing.
+   The `grep` should return nothing (exit 1). If you lost the shell, recover the
+   old id from `git log -p -- services/livekit/config.yaml` rather than guessing.
 
 `ZOE_LIVEKIT_ONDEMAND=true`, so the container is idle-reaped and started on
 demand — recreating it is low-risk and there is normally no live session to drop.

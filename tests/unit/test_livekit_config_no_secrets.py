@@ -121,6 +121,19 @@ def test_compose_supplies_livekit_keys_by_interpolation():
         "LIVEKIT_KEYS must be exactly '<key>: <secret>' including the space; "
         "livekit-server rejects it otherwise."
     )
+    # …and "interpolated" is not the same as "not baked in". A DEFAULT is a
+    # literal: `${LIVEKIT_API_SECRET:-<43 chars>}` references the variable, so the
+    # check above passes, while compose substitutes that literal whenever the
+    # variable is blank or unset — a committed credential with no vendor pattern
+    # for any scanner to catch. Every default here must be EMPTY.
+    for var, default in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?][^}]*)?\}", value):
+        body = (default or "")[2:] if default[:2] in (":-", ":?", ":+") else (default or "")[1:]
+        assert not body.strip(), (
+            f"LIVEKIT_KEYS gives ${{{var}}} a non-empty interpolation default "
+            f"({default!r}). A default is a literal: compose substitutes it whenever "
+            f"the variable is unset, so this is a committed credential wearing an "
+            f"interpolation costume. Leave it empty and let livekit-server refuse."
+        )
 
 
 def test_commented_out_credentials_are_caught_too():
@@ -217,4 +230,92 @@ def test_env_examples_document_the_livekit_pair(path):
         )
     assert "livekit-key-rotation.md" in text, (
         f"{path.relative_to(REPO_ROOT)} should point at the rotation runbook"
+    )
+
+
+def test_interpolation_default_check_rejects_a_baked_literal():
+    """NEGATIVE CONTROL: the default-is-a-literal check must actually reject one.
+
+    `${VAR:-<secret>}` satisfies "the variable is referenced", so without this
+    control the guard above would pass on the exact bypass it exists to close.
+    """
+    import re as _re
+
+    def _bad_defaults(value):
+        found = []
+        for var, default in _re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?][^}]*)?\}", value):
+            body = (default or "")[2:] if default[:2] in (":-", ":?", ":+") else (default or "")[1:]
+            if body.strip():
+                found.append(var)
+        return found
+
+    baked = "${LIVEKIT_API_KEY:-zoe-abc123}: ${LIVEKIT_API_SECRET:-" + "A" * 43 + "}"
+    assert _bad_defaults(baked) == ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"], (
+        "the interpolation-default check no longer sees a baked-in literal"
+    )
+    assert _bad_defaults("${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}") == []
+    assert _bad_defaults("${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}") == []
+
+
+# ── .gitignore: credential SHAPES stay ignored, source stays trackable ──────
+# Both directions have burned this repo. A blanket `*secret*` silently dropped
+# THIS FILE (`git add` only warns), so the guard against a credential returning
+# to services/livekit/config.yaml simply was not committed. Narrowing it to an
+# extension allowlist fixed that and re-opened the other side: `client_secret.ini`,
+# `db-password.csv` and `secret.properties` became trackable, and LiveKit keys have
+# no vendor pattern for a content scanner to fall back on. The rule is now
+# default-deny plus an explicit source/test/doc allowlist; these pin both halves.
+
+_MUST_BE_IGNORED = (
+    "client_secret.ini", "db-password.csv", "secret.properties", "secrets.yaml",
+    "config.secret.json", "app-password.conf", "livekit-secret", "api_secret",
+    "my_password", "passwords.txt", ".secret", "creds.password", "secret.p12",
+)
+_MUST_BE_TRACKABLE = (
+    "tests/unit/test_livekit_config_no_secrets.py",
+    "docs/knowledge/secret-rotation.md",
+    "services/zoe-ui/dist/js/password-strength.js",
+    "scripts/maintenance/rotate_secrets.sh",
+)
+
+
+def _is_ignored(path):
+    """Does .gitignore match `path`? `--no-index` is LOAD-BEARING.
+
+    Plain `git check-ignore` skips paths that are already TRACKED and reports
+    them as not-ignored no matter what the patterns say. Without this flag the
+    trackable-side assertions below are vacuous for the one path in the list that
+    really exists in the repo — this file — i.e. the instrument would read green
+    in exactly the situation it exists to catch. Confirmed: with the `!` unignore
+    rules deleted, plain check-ignore still said "trackable" while `--no-index`
+    correctly reported `.gitignore:51:*secret*`.
+    """
+    import subprocess
+
+    return subprocess.run(
+        ["git", "check-ignore", "-q", "--no-index", "--", path],
+        cwd=REPO_ROOT, capture_output=True,
+    ).returncode == 0
+
+
+@pytest.mark.parametrize("path", _MUST_BE_IGNORED)
+def test_credential_shaped_names_are_ignored(path):
+    """Any extension, or none — a credential artifact must not be committable."""
+    assert _is_ignored(path), (
+        f"{path} is trackable. Credential-shaped names must stay ignored "
+        f"regardless of extension; see the .gitignore block above `*api_key*`."
+    )
+
+
+@pytest.mark.parametrize("path", _MUST_BE_TRACKABLE)
+def test_source_and_doc_names_stay_trackable(path):
+    """A guard test named after the thing it guards must still be committable.
+
+    This file is the case in point: `git add` only WARNS on an ignored path, so a
+    blanket rule removes the guard silently and nothing goes red.
+    """
+    assert not _is_ignored(path), (
+        f"{path} is ignored by .gitignore. `git add` only warns, so a file like "
+        f"this vanishes from a commit silently — add a `!` unignore for its "
+        f"extension rather than leaving the blanket to eat it."
     )
