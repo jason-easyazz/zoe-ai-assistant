@@ -288,6 +288,85 @@ export const cappedApi: ProviderStreams = {
 };
 
 /**
+ * pi-ai 0.83.0's own output-clamp safety margin — `CONTEXT_SAFETY_TOKENS` in
+ * node_modules/@earendil-works/pi-ai/dist/api/simple-options.js. It is a
+ * module-private `const` with no export and no env knob, so the only way to
+ * account for it is to mirror the number here. Re-check it on every pi-ai bump;
+ * `test/output_budget_clamp.test.ts` imports the REAL `clampMaxTokensToContext`
+ * from that dist file, so an upstream change to the FORMULA fails the suite —
+ * but a change to this CONSTANT alone would only shrink the margin silently, so
+ * the test also pins the value it observed.
+ */
+export const PI_AI_CONTEXT_SAFETY_TOKENS = 4096;
+
+/**
+ * The output budget every turn on this brain is meant to have, in tokens. This
+ * is `model.maxTokens` below, and it is the number the declared context window
+ * is sized to protect.
+ */
+export const ZOE_MAX_OUTPUT_TOKENS = 2048;
+
+/**
+ * The `contextWindow` this model DECLARES to pi-ai — deliberately NOT the real
+ * llama-server window, and deliberately DECOUPLED from the windowing budget.
+ *
+ * THE BUG THIS FIXES (reproduced 3×, PR #1616): pi-ai 0.83.0 added
+ * `clampMaxTokensToContext` (dist/api/simple-options.js), which every
+ * openai-completions request now flows through via `buildBaseOptions`:
+ *
+ *     available = model.contextWindow − estimateContextTokens(context) − 4096
+ *     maxTokens = min(maxTokens, max(1, available))
+ *
+ * That file does not exist in 0.79.10 (the 1.x lane), and the 1.x provider
+ * declared no `contextWindow` at all, so nothing clamped there. Declaring the
+ * REAL 8192 window here meant a ~4090-token prompt left `8192 − 4090 − 4096 ≈ 6`
+ * tokens of output — replies truncated to 1-8 tokens with `stopReason: "length"`
+ * (verbatim from the 2.x store: output 1, 3, 7, 8). Worse, pi-agent-core 0.83.0's
+ * `failToolCallsFromTruncatedMessage` refuses to execute tool calls off a
+ * length-stopped message and writes a `tool_outcome` with no
+ * `tool_results_committed`, so the very next reduce throws
+ * `ConversationRecordInvariantError` and kills the whole turn. Fixing the clamp
+ * makes that second failure unreachable: no `"length"` stop, no refusal path.
+ *
+ * WHY DECOUPLING IS SAFE, AND WHY IT IS THE RIGHT LEVER. The original rationale
+ * — "read from the SAME env knob the windowing budget uses so the two can never
+ * drift" — is exactly what caused the bug, because under 0.83.0 this field is no
+ * longer a description of the server's window; it is the INPUT to an output
+ * clamp. The real prompt budget is enforced independently and earlier, by
+ * `windowContextToBudget` in src/context-window.ts (budget =
+ * `contextWindowTokens()` − `replyReserveTokens()`), which runs inside
+ * `applyPolicies` on every model call. Flue's own threshold compaction is pinned
+ * off, so nothing else reads this field.
+ *
+ * THE ARITHMETIC, stated as the invariant the test pins. With
+ *
+ *     declared = W + PI_AI_CONTEXT_SAFETY_TOKENS + ZOE_MAX_OUTPUT_TOKENS
+ *
+ * where `W = contextWindowTokens()` is llama-server's `--ctx-size`, the clamp
+ * yields `available = W + ZOE_MAX_OUTPUT_TOKENS − prompt`, so for ANY prompt
+ * that would fit the server at all (`prompt ≤ W`) the clamp leaves at least the
+ * full intended output budget and `min(2048, available)` is 2048. The guarantee
+ * therefore holds for the real tokenizer count, not merely for our chars/4
+ * estimate — a prompt big enough to break it would already have been rejected
+ * by llama-server with a 400.
+ *
+ * WINDOWING OFF ⇒ CLAMP OFF. `ZOE_BRAIN_CONTEXT_WINDOW=0` explicitly disables
+ * our windowing (the documented A/B escape hatch), which removes the `prompt ≤ W`
+ * premise entirely. We then declare `0`, which pi-ai reads as "no clamp"
+ * (`if (model.contextWindow <= 0) return max(1, maxTokens)`) — restoring the
+ * clamp-free 1.x behaviour rather than silently strangling output by an unknown
+ * amount. The guard in that mode is llama-server's own loud 400, not a silent
+ * truncation. (The pre-fix code declared 8192 here instead, which is the one
+ * configuration where this fix changes behaviour by ADDING an overflow risk that
+ * was already the stated cost of turning windowing off.)
+ */
+export function declaredContextWindow(): number {
+  const windowTokens = contextWindowTokens();
+  if (windowTokens <= 0) return 0;
+  return windowTokens + PI_AI_CONTEXT_SAFETY_TOKENS + ZOE_MAX_OUTPUT_TOKENS;
+}
+
+/**
  * Seam M: the Gemma rock, as a Pi provider object.
  *
  * `baseUrl` defaults to the live llama-server on :11434 (the same
@@ -302,11 +381,18 @@ export const cappedApi: ProviderStreams = {
  *     true would forward a thinkingLevel the wire silently drops.
  *   - `input: ['text']` — Moonshine STT + text chat only. An image would be
  *     replaced with an "(image omitted)" placeholder rather than blowing up.
- *   - `contextWindow` — the llama-server `--ctx-size` rock (default 8192), read
- *     from the SAME env knob the windowing budget uses so the two can never drift.
- *   - `maxTokens` — metadata only on this path: the openai-completions handler
- *     sends `options.maxTokens`, never `model.maxTokens` (pi-ai dist/api/
- *     openai-completions.js), so this does not cap replies on the wire.
+ *   - `contextWindow` — NOT the llama-server window: on 0.83.0 this field feeds
+ *     only pi-ai's output clamp, so it is sized to protect the output budget.
+ *     See `declaredContextWindow` above; the real prompt budget is enforced by
+ *     src/context-window.ts.
+ *   - `maxTokens` — LOAD-BEARING on this path, and it is CLAMPED. (Corrected
+ *     2026-08-07; the previous comment claimed "metadata only … the
+ *     openai-completions handler sends `options.maxTokens`, never
+ *     `model.maxTokens`". That is FALSE for 0.83.0: `buildBaseOptions` computes
+ *     `clampMaxTokensToContext(model, context, options?.maxTokens ??
+ *     model.maxTokens)`, so `model.maxTokens` is the fallback the agent path
+ *     actually uses — pi-agent-core never sets `options.maxTokens` on this loop
+ *     — and passing one explicitly would not escape the clamp either.)
  *   - `cost` — all zeros; a local model bills nothing.
  * Threshold compaction is disabled at the agent (`useModel(..., { compaction:
  * false })`) — src/context-window.ts explains why this deployment windows at the
@@ -322,8 +408,8 @@ export function zoeLocalModel(): Model<'openai-completions'> {
     reasoning: false,
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: contextWindowTokens() || 8192,
-    maxTokens: 2048,
+    contextWindow: declaredContextWindow(),
+    maxTokens: ZOE_MAX_OUTPUT_TOKENS,
   };
 }
 

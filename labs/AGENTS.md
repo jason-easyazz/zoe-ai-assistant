@@ -192,7 +192,19 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   tool-cap wrap-up note moved off the system prompt, and tool disclosure derives
   from the pre-window basis — see `src/context-window.ts` and
   `test/context_window_anchor.test.ts`.
-  Regression net (hand-run, not CI-wired): `npm test` — 20 `test/*.test.ts` files
+  **The declared `contextWindow` is deliberately NOT llama-server's window** —
+  pi-ai 0.83 added an output clamp that reads that field, and declaring the real
+  8192 left ~6 output tokens on a full prompt, truncating replies and killing
+  tool turns (the 2026-08-06 flip's `CANT_DO`). It declares
+  `contextWindowTokens() + 4096 + 2048`; the real prompt budget stays enforced by
+  `src/context-window.ts`. Do not re-tie the two. See `test/output_budget_clamp.test.ts`
+  and the README's "output-budget clamp" section.
+  **Flip gate:** the runbook's post-flip step 6 asserts ZERO `stopReason:"length"`
+  records via `parity/count_length_stops.py` (read-only; pinned both directions by
+  `tests/unit/test_flue2x_length_stop_gate.py` — the one piece of this port that
+  IS CI-covered). Replay verdict counts cannot see truncation and scored a
+  mass-truncating lane 18/20.
+  Regression net (hand-run, not CI-wired): `npm test` — 21 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a

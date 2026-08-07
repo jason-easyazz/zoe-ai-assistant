@@ -206,6 +206,51 @@ through the same 8k model and stalls the voice path) — rationale + budget
 failure mode in the module header. Kill switch: `ZOE_BRAIN_CONTEXT_WINDOW=0`.
 Tests: `test/context_window.test.ts` (incl. an end-to-end fake llama-server).
 
+## The output-budget clamp (why `contextWindow` is not the real window)
+
+`zoeLocalModel()` declares `contextWindow: contextWindowTokens() + 4096 + 2048`
+— **deliberately larger than llama-server's actual 8192-token window.** That
+looks wrong and is not.
+
+pi-ai 0.83.0 added `clampMaxTokensToContext` (`dist/api/simple-options.js`),
+which every openai-completions request now passes through:
+
+```
+available = model.contextWindow − estimateContextTokens(context) − 4096
+maxTokens = min(maxTokens, max(1, available))
+```
+
+The file does not exist in 0.79.10 (the 1.x lane), and the 1.x provider declared
+no `contextWindow` at all — so nothing clamped there, and the port carried the
+1.x assumption forward. Declaring the real 8192 meant a ~4090-token prompt left
+`8192 − 4090 − 4096 ≈ 6` tokens of output. Measured on the failed flip: replies
+truncated to 1-8 tokens with `stopReason: "length"`, and one length-stopped
+**tool call** took a whole turn down with `ConversationRecordInvariantError`.
+That was the flip's `CANT_DO`.
+
+On 0.83 this field feeds *only* that clamp for this deployment (Flue's threshold
+compaction is pinned off at the agent), so it is sized to protect the output
+budget rather than to describe the server. The real prompt budget is enforced
+independently and earlier by `src/context-window.ts` — which is what makes the
+decoupling safe. The arithmetic: with `declared = W + 4096 + 2048`,
+`available = W + 2048 − prompt`, so **any prompt that llama-server would accept
+at all (`prompt ≤ W`) leaves the full 2048-token output budget.** The premise
+holds because the two estimators agree closely on the real path (measured 2937 vs
+2957 tokens on a live harness turn) and windowing keeps the prompt a further
+`ZOE_BRAIN_REPLY_RESERVE` below `W`.
+
+`ZOE_BRAIN_CONTEXT_WINDOW=0` (windowing off) declares `0`, which pi-ai reads as
+*no clamp* — that removes the `prompt ≤ W` premise, so the honest guard becomes
+llama-server's loud 400 rather than a silent truncation.
+
+**Do not re-tie this field to the windowing budget** "so they can never drift".
+That was the original rationale and it is precisely what caused the bug. Tests:
+`test/output_budget_clamp.test.ts` — it imports the real clamp from
+`node_modules` (so an upstream formula change turns it red), pins the 4096
+constant, and carries the pre-fix declaration as an explicit negative control
+that reproduces the recorded 8-token truncation. Operationally the guard is step
+6 of the flip runbook.
+
 ## Seam-A sentinel streaming
 
 The prod brain seam (`run_zoe_core_streaming`, docs/architecture/
@@ -255,7 +300,7 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_TOKEN` | *(unset)* | bearer token for the agent HTTP route |
 | `ZOE_BRAIN_OPEN` | *(unset)* | `1` opts into an open route (local smoke runs only) |
 | `ZOE_BRAIN_MAX_TOOL_ITERS` | `8` | hard per-turn tool-iteration ceiling |
-| `ZOE_BRAIN_CONTEXT_WINDOW` | `8192` | model context budget for prompt-fit history windowing (`src/context-window.ts`); `0` disables windowing |
+| `ZOE_BRAIN_CONTEXT_WINDOW` | `8192` | model context budget for prompt-fit history windowing (`src/context-window.ts`); `0` disables windowing **and, with it, pi-ai's output clamp** — see "the output-budget clamp" below |
 | `ZOE_BRAIN_REPLY_RESERVE` | `1536` | tokens held back from the window for the reply + estimator slack |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | `true` | `false` disables progressive tool disclosure |
 | `ZOE_BRAIN_STREAM` | `on` | `0`/`false` disables the NDJSON sentinel-stream mode |
@@ -397,6 +442,10 @@ flock /tmp/zoe-voice-harness.lock \
   python3 scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote
 # said-vs-did must not regress and per-stage medians must not regress.
 # Non-zero exit, WARN, or a SKIP (low memory — a skip is NOT a pass) => ROLL BACK.
+
+# 6. THE LENGTH-STOP ASSERTION — MANDATORY, and step 5 passing does NOT imply it.
+#    Run it against the 2.x store AFTER the replay run. Any hit => ROLL BACK.
+python3 labs/flue-zoe-brain-2x/parity/count_length_stops.py
 ```
 
 ```sh
@@ -431,6 +480,68 @@ bearing file and should not linger.
   and a skip is not a pass. Give it a quiet window with real headroom.
 - **`systemctl is-active` lies** — poll `/health`, which is why the block does.
 - **Do not run two Kokoro loads at once**; always take the flock, as above.
+- **Step 6 is not optional, and step 5 does not imply it** — see below.
+
+### Step 6: the length-stop assertion, and why verdict counts are not enough
+
+**A replay verdict of `OK` does not mean the reply was complete.** The 2026-08-06
+attempt scored `OK=18 CANT_DO=1 EMPTY=1` and was written up as a near-pass. It
+was not. pi-ai 0.83's output clamp had cut the reply budget to single digits, so
+the lane was truncating replies **mid-sentence** on turns the harness scored `OK`:
+
+| sample | 1.x | 2.x |
+|---|---|---|
+| `065921_799` "A. Zoe," | `"I'm Zoe."` | `"I"` |
+| `065122_389` "Turn on the light" | `"Which room needs the light turned on?"` | `"Which room are"` |
+
+Both non-empty; neither matches `_CANT_DO_RE`; both scored `OK`. The verdict
+counts are *structurally blind* to truncation, and the single real `CANT_DO` was
+the same defect in its fatal form (a length-stopped **tool call** leaves the
+canonical conversation stream without a committed result batch, and the next
+reduce throws `ConversationRecordInvariantError`, killing the turn).
+
+The store is not blind. `assistant_message_completed` records carry `stopReason`,
+so count them:
+
+```sh
+python3 labs/flue-zoe-brain-2x/parity/count_length_stops.py
+# PASS: 0 length-stopped replies in .../data/zoe-brain.db     -> proceed
+# FAIL: N length-stopped replies ...                          -> ROLL BACK
+```
+
+Read-only, stdlib Python (the box has no `sqlite3` CLI), exits 1 on any hit, and
+reassembles Flue's spilled >1MB batches so a truncation cannot hide in one.
+`--db` points it at another store, `--json` for machine consumption. Both
+directions are pinned by `tests/unit/test_flue2x_length_stop_gate.py`; the FAIL
+path was verified against the real 2026-08-06 store, where it finds all 8.
+
+**Any `"length"` stop on this deployment is a bug, not a tuning knob.**
+llama-server has an 8192-token slot and `src/context-window.ts` windows every
+prompt to fit inside it *with* a reply reserve, so a reply that runs out of room
+means the budget arithmetic is wrong. See "the output-budget clamp" below.
+
+### Two instrument corrections (from the 2026-08-06 post-mortem)
+
+Both of these made the failed flip look cleaner than it was. They cost a whole
+flip attempt; do not re-learn them.
+
+- **Grep the STREAMING error prefix, not `flue wire-2`.** The flip report said
+  "zero transport errors". The failure *was* logged — under a different prefix.
+  `ZOE_BRAIN_STREAM` is on, so turns take the streaming path, which logs
+  `flue stream reported error: …` (`services/zoe-data/zoe_flue_client.py`). The
+  `flue wire-2 …` diagnostics only cover `_run_turn_aggregated_wire2`, which runs
+  **only when streaming is disabled**. Grepping for `flue wire-2` could never have
+  found it. Grep for **both**:
+
+  ```sh
+  grep -E 'flue stream reported error|flue wire-2' ~/.zoe-logs/*.log
+  ```
+
+  (zoe-data logs to `~/.zoe-logs/`, **not** journald.)
+- **A speed ratio is meaningless while replies truncate.** The report's
+  "0.76–0.77× vs baseline" was reproduced exactly — and is substantially an
+  artifact: 2.x was generating far fewer tokens. Treat any speed comparison as
+  void until step 6 is green, then re-measure.
 
 ### `deploy.yml` cannot auto-restart this unit — verified, not assumed
 
