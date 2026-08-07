@@ -512,3 +512,57 @@ async def test_wire2_500_does_not_claim_wire_mismatch(wire_env, monkeypatch, cap
         out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
     assert out == [zoe_flue_client._FALLBACK_TEXT]
     assert not any("ZOE_FLUE_WIRE=1" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_wire2_aggregated_error_terminal_is_loud_not_silent(wire_env, monkeypatch, caplog):
+    """Text followed by {"error": ...}: partial text returns, at ERROR loudness.
+
+    The turn executed server-side and nothing was spoken yet, so the partial
+    reply beats a fallback — but it must never look like a clean success.
+    """
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "2")
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "0")
+    wire_env.stream_response = _FakeStreamResponse(lines=[
+        json.dumps("Partial "), json.dumps("reply"), json.dumps({"error": "model died"}),
+    ])
+    with caplog.at_level("ERROR"):
+        out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
+    assert out == ["Partial reply"]
+    assert any("error terminal" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_wire2_aggregated_truncated_eof_is_loud(wire_env, monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "2")
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "0")
+    wire_env.stream_response = _FakeStreamResponse(lines=[json.dumps("Half a rep")])
+    with caplog.at_level("ERROR"):
+        out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
+    assert out == ["Half a rep"]
+    assert any("TRUNCATED" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_wire2_aggregated_clean_done_is_quiet(wire_env, monkeypatch, caplog):
+    """Control: a {"done": true} terminal logs NO error — success stays quiet."""
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "2")
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "0")
+    wire_env.stream_response = _FakeStreamResponse(lines=[
+        json.dumps("Whole reply"), json.dumps({"done": True}),
+    ])
+    with caplog.at_level("ERROR"):
+        out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
+    assert out == ["Whole reply"]
+    assert not any(r.levelname == "ERROR" for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_wire2_aggregated_error_with_no_text_falls_back(wire_env, monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "2")
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "0")
+    wire_env.stream_response = _FakeStreamResponse(lines=[json.dumps({"error": "immediate"})])
+    with caplog.at_level("ERROR"):
+        out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
+    assert out == [zoe_flue_client._FALLBACK_TEXT]
+    assert any("error terminal" in r.message for r in caplog.records)

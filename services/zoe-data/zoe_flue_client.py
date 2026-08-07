@@ -475,6 +475,8 @@ async def _run_turn_aggregated_wire2(session_id: str, payload: bytes) -> AsyncIt
     headers = dict(_headers())
     headers["Accept"] = _NDJSON_CONTENT_TYPE
     parts: list[str] = []
+    done_seen = False
+    error_terminal = ""
     try:
         async with httpx.AsyncClient(timeout=_timeout_s()) as client:
             async with client.stream(
@@ -526,11 +528,10 @@ async def _run_turn_aggregated_wire2(session_id: str, payload: bytes) -> AsyncIt
                         continue
                     if isinstance(chunk, dict):
                         if chunk.get("done"):
+                            done_seen = True
                             break
                         if "error" in chunk:
-                            logger.warning(
-                                "flue wire-2 turn reported error: %s", str(chunk["error"])[:200]
-                            )
+                            error_terminal = str(chunk["error"])[:200]
                             break
     except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
         # No re-POST on either branch: a 2.x turn is fire-and-forget, so the
@@ -541,6 +542,22 @@ async def _run_turn_aggregated_wire2(session_id: str, payload: bytes) -> AsyncIt
             return
 
     text = "".join(parts)
+    # A success is ONLY a {"done": true} terminal. An {"error": ...} terminal or
+    # a truncated EOF still returns whatever text arrived — the turn already
+    # executed server-side (writes included) and nothing was spoken yet, so the
+    # partial reply is strictly better than a fallback that pretends the brain
+    # was unreachable — but it must be LOUD, never a silent success.
+    if error_terminal:
+        logger.error(
+            "flue wire-2 turn ended with an error terminal: %s%s",
+            error_terminal,
+            " (partial reply text returned)" if text else "",
+        )
+    elif not done_seen and text:
+        logger.error(
+            "flue wire-2 stream ended without {'done': true} — reply may be "
+            "TRUNCATED (%d chars returned)", len(text),
+        )
     if text:
         yield text
         return
