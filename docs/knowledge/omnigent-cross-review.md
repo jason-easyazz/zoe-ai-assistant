@@ -113,17 +113,20 @@ A dead reviewer looks like silence, and silence reads as "clean". The known
 failure signature is a session that ends `idle` almost immediately with zero
 messages (observed 2026-07-27: a silently-failed comment POST). The script
 exits 2 and prints an ALARM for that case — treat exit 2 as an incident, not a
-pass. Standing risk: the container's Claude OAuth hard deadline is **2026-08-18**
-(verified 2026-08-04 from live credentials metadata; an earlier note said 08-22 —
-that misread the ACCESS-token `expiresAt`, which is short-lived and auto-refreshes
-continuously; `refreshTokenExpiresAt` is the REAL cliff). When the refresh token
-lapses, every kick dies this way. Renewal is an INTERACTIVE browser login — not
-automatable: `docker exec -it zoe-omnigent claude` then `/login` (or `claude
-setup-token`), re-verify both timestamps via the credentials-metadata one-liner
-(see omnigent-deep-dive notes), then an end-to-end
+pass. Standing risk: the container's Claude OAuth hard deadline is the **refresh
+token, which expires 2026-08-18T13:16:22Z** (verified 2026-08-04 from live
+credentials metadata: `claudeAiOauth.refreshTokenExpiresAt = 1787058982705`). An
+earlier note said 08-22 — that misread the ACCESS-token `expiresAt`, which is
+short-lived and auto-refreshes continuously; `refreshTokenExpiresAt` is the REAL
+cliff. When the refresh token lapses, every kick dies this way. Renewal is an
+INTERACTIVE browser login — not automatable: `docker exec -it zoe-omnigent claude`
+then `/login` (or `claude setup-token`), re-verify both timestamps via the
+credentials-metadata one-liner (see omnigent-deep-dive notes), then an end-to-end
 `scripts/maintenance/cross_review.sh <draft PR#> "smoke test"`. The credential
 lives ONLY in docker volume `omnigent_omnigent-claude` (/root/.claude) — losing
 the volume means re-login. Reminder set for 2026-08-14 (4 days of slack).
+Credits deplete independently of the token, with the same silent signature.
+Runbook: [`../architecture/multica-autonomy-program.md`](../architecture/multica-autonomy-program.md) §8.
 
 ## Known limitation — reviewer-only is enforced by PROMPT, not permissions
 
