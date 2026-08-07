@@ -10,7 +10,7 @@ This file defines the active project layout so the repo stays easy to navigate.
 - `services/homeassistant-mcp-bridge` - Home Assistant bridge service
 - `services/zoe-core` - TypeScript brain service (abilities/, bench/, extensions/)
 - `services/livekit` - LiveKit voice transport
-- `modules/omnigent`, `modules/zoe-music` - active module services served under `/modules/`
+- `modules/omnigent` - the active module service served under `/modules/` (music is NOT a module: `zoe-music-assistant` is the upstream Music Assistant container, see `docs/CANONICAL.md`)
 
 ## Device/Deployment Setup
 

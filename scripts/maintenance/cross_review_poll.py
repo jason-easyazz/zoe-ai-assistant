@@ -29,6 +29,12 @@ What this module adds per failure mode:
       -> TRANSIENT (a schema surprise is not a terminal verdict).
   report payload whose `items` is not a list (schema drift)
       -> classified and alarmed, exit 4. Never iterated into a TypeError.
+  a transient fault while fetching the COMPLETED report
+      -> the same bounded-retry treatment as any other response. The report GET
+         used to be a one-shot `curl -sf` in the wrapper, so a blip in the
+         second between "poll saw idle" and "read the transcript" threw away a
+         review that had already been paid for. `report --server/--session-id`
+         classifies and retries it; `--payload` still reads a file.
   hard overall timeout while still running/waiting
       -> exit 5.
   never reaches running/waiting within the grace window
@@ -178,7 +184,34 @@ def has_assistant_message(doc) -> bool:
 
 
 def _backoff(attempt: int, cap: float) -> float:
-    return min(2.0**attempt, cap)
+    """Exponential backoff, TOTAL over its inputs.
+
+    `cap` is clamped non-negative and the exponent is bounded: an unclamped
+    `2.0**attempt` raises OverflowError once `attempt` passes ~1024, which a
+    non-positive cap makes reachable (every wait becomes 0, so the attempt
+    counter runs away). Both are defence in depth behind `_positive()` below,
+    which rejects such a value at the CLI boundary before it ever gets here.
+    """
+    return min(2.0 ** min(attempt, 60), max(0.0, cap))
+
+
+def _nap(sleep, seconds: float) -> None:
+    """Sleep for `seconds`, never for a negative one.
+
+    Every retry loop in this module derives its wait from CLI-supplied numbers,
+    and `time.sleep(-1)` raises `ValueError` — which would escape as a traceback
+    and a raw exit 1, colliding with the wrapper's public alarm codes and
+    bypassing the single-terminal-line contract (Greptile P2, #1625). A
+    nonsensical interval is not a reason to lose a review, so it degrades to
+    "retry immediately" and the WALL BUDGET remains the real bound: every caller
+    checks its own elapsed time before the next fetch, so a zero wait cannot
+    become an unbounded loop, only a fast one.
+
+    Clamped HERE rather than at each call site so no future retry loop can
+    reintroduce it, and clamped rather than validated at argparse so the
+    directly-callable functions (which the offline tests drive) are safe too.
+    """
+    sleep(max(0.0, seconds))
 
 
 def _alarm(msg: str) -> None:
@@ -210,7 +243,7 @@ def await_registration(server, sid, budget_s, interval_s, http_timeout, sleep=ti
                 "dispatch was lost before the review started; re-dispatch required"
             )
             return EXIT_NEVER_REGISTERED
-        sleep(min(_backoff(attempt, interval_s), max(0.0, budget_s - elapsed)))
+        _nap(sleep, min(_backoff(attempt, interval_s), max(0.0, budget_s - elapsed)))
         attempt += 1
 
 
@@ -279,7 +312,7 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
             )
             return EXIT_TIMEOUT
 
-        sleep(min(next_sleep, remaining))
+        _nap(sleep, min(next_sleep, remaining))
         next_sleep = interval_s  # healthy default; a retry branch overrides it
 
         kind, doc, detail = fetch_session(server, sid, http_timeout)
@@ -352,46 +385,12 @@ def poll(server, sid, timeout_s, interval_s, running_grace_s, max_transient, max
             return EXIT_NEVER_RUNNING
 
 
-def extract_report(path: str, sid: str) -> int:
+def report_from_doc(d, sid: str) -> int:
     """Print the tail of the assistant conversation. Returns an exit code.
 
     Reports can span messages, so print the tail of the conversation rather than
     only the last message (polly non-blocking on #1578).
     """
-    try:
-        with open(path, "rb") as fh:
-            body = fh.read()
-    except OSError as exc:
-        _alarm(
-            f"ALARM: could not read the session payload for {sid} ({exc}) — no report "
-            "retrieved; re-dispatch required"
-        )
-        return EXIT_POLL_LOST
-
-    if not body.strip():
-        _alarm(
-            f"ALARM: the session payload for {sid} was EMPTY — no report retrieved; "
-            "re-dispatch required"
-        )
-        return EXIT_POLL_LOST
-
-    try:
-        d = json.loads(body.decode("utf-8", "replace"))
-    except (ValueError, UnicodeDecodeError) as exc:
-        head = body.strip()[:80].decode("utf-8", "replace")
-        _alarm(
-            f"ALARM: the session payload for {sid} was not JSON ({exc}): {head!r} — no "
-            "report retrieved; re-dispatch required"
-        )
-        return EXIT_POLL_LOST
-
-    if not isinstance(d, dict):
-        _alarm(
-            f"ALARM: the session payload for {sid} was {type(d).__name__}, expected an "
-            "object — no report retrieved; re-dispatch required"
-        )
-        return EXIT_POLL_LOST
-
     # Classify the container shape BEFORE iterating it. `d.get("items") or []`
     # guarded only the missing/empty case; a schema-drifted scalar such as
     # `{"items": 1}` is truthy and non-iterable, so the loop raised TypeError and
@@ -434,6 +433,113 @@ def extract_report(path: str, sid: str) -> int:
 
     print("\n\n---\n\n".join(texts[-3:]))
     return EXIT_OK
+
+
+def extract_report(path: str, sid: str) -> int:
+    """Print the tail of the assistant conversation from a FILE.
+
+    Kept alongside `fetch_report` for callers that already hold the payload
+    (and for the offline tests, which drive every unusable-payload shape
+    through it without an HTTP seam).
+    """
+    try:
+        with open(path, "rb") as fh:
+            body = fh.read()
+    except OSError as exc:
+        _alarm(
+            f"ALARM: could not read the session payload for {sid} ({exc}) — no report "
+            "retrieved; re-dispatch required"
+        )
+        return EXIT_POLL_LOST
+
+    if not body.strip():
+        _alarm(
+            f"ALARM: the session payload for {sid} was EMPTY — no report retrieved; "
+            "re-dispatch required"
+        )
+        return EXIT_POLL_LOST
+
+    try:
+        d = json.loads(body.decode("utf-8", "replace"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        head = body.strip()[:80].decode("utf-8", "replace")
+        _alarm(
+            f"ALARM: the session payload for {sid} was not JSON ({exc}): {head!r} — no "
+            "report retrieved; re-dispatch required"
+        )
+        return EXIT_POLL_LOST
+
+    if not isinstance(d, dict):
+        _alarm(
+            f"ALARM: the session payload for {sid} was {type(d).__name__}, expected an "
+            "object — no report retrieved; re-dispatch required"
+        )
+        return EXIT_POLL_LOST
+
+    return report_from_doc(d, sid)
+
+
+def fetch_report(server, sid, budget_s, interval_s, max_gone, http_timeout,
+                 sleep=time.sleep, now=time.monotonic) -> int:
+    """Fetch a COMPLETED session and print its report. Returns an exit code.
+
+    The last one-shot HTTP call in the lane, and the last place a blip could
+    still throw a finished review away. `curl -sf … -o "$TMPJ"` gave the report
+    GET a single attempt with no classification: a 502 from the proxy, a
+    half-written body, or an Omnigent restarting in the second between "poll saw
+    idle" and "fetch the transcript" discarded a review that had ALREADY BEEN
+    PAID FOR (~20 minutes of worker) and forced a full re-dispatch. Every other
+    response in this module is classified and bounded-retried; this one was not
+    (Codex, #1618 — resolved without a fix at the time).
+
+    So the same contract applies here: `fetch_session` classifies, TRANSIENT is
+    retried with exponential backoff until `budget_s` of WALL is spent, and GONE
+    is confirmed `max_gone` times before it is believed. Anything terminal
+    prints exactly one alarm line naming the session and "re-dispatch required".
+
+    The budget is wall, not attempts, and it is checked BEFORE each new fetch, so
+    the call always returns within `budget_s + http_timeout` — one sleep (itself
+    capped by the residual budget) plus one request may land past the budget.
+    cross_review.sh's BUDGET block counts exactly that bound.
+
+    At the wrapper's defaults (budget 90s, cap 30s) the fetches land at
+    t = 0, 1, 3, 7, 15, 31, 61, 90 — 8 attempts, and the t=61 one recovers a
+    ~60s Omnigent restart with room to spare, the same tolerance poll() carries.
+    All pinned by tests.
+    """
+    start = now()
+    attempt = 0
+    gone_run = 0
+    while True:
+        kind, doc, detail = fetch_session(server, sid, http_timeout)
+        if kind == OK:
+            return report_from_doc(doc, sid)
+
+        if kind == GONE:
+            gone_run += 1
+            if gone_run >= max_gone:
+                _alarm(
+                    f"ALARM: session {sid} disappeared before its report could be read "
+                    f"({detail}, confirmed {gone_run}x) — the review COMPLETED but its "
+                    "transcript is gone; re-dispatch required"
+                )
+                return EXIT_POLL_LOST
+        else:
+            gone_run = 0
+
+        elapsed = now() - start
+        remaining = budget_s - elapsed
+        if remaining <= 0:
+            _alarm(
+                f"ALARM: the completed report for session {sid} was unreadable after "
+                f"{attempt + 1} attempts over {budget_s:.0f}s against {server} "
+                f"(last: {detail}) — the review finished but its report was lost; "
+                "re-dispatch required"
+            )
+            return EXIT_POLL_LOST
+
+        _nap(sleep, min(_backoff(attempt, interval_s), remaining))
+        attempt += 1
 
 
 def extract_session_id(path: str) -> int:
@@ -510,17 +616,53 @@ def build_parser() -> argparse.ArgumentParser:
     pol.add_argument("--max-gone", type=int, default=3)
     pol.add_argument("--http-timeout-s", type=float, default=60.0)
 
-    rep = sub.add_parser("report", help="extract the assistant report from a session JSON file")
+    # Two modes, exactly one of which must be chosen: FETCH (--server, with
+    # classification + bounded retries) or FILE (--payload, for a payload the
+    # caller already holds). The file mode stays because it is the only way to
+    # drive an unusable-payload shape without an HTTP seam.
+    rep = sub.add_parser("report", help="print the assistant report for a completed session")
     rep.add_argument("--session-id", required=True)
-    rep.add_argument("--payload", required=True)
+    rep.add_argument("--payload", help="read the session JSON from this file instead of fetching")
+    rep.add_argument("--server", help="fetch GET /v1/sessions/<id> from this Omnigent server")
+    rep.add_argument("--budget-s", type=float, default=90.0)
+    rep.add_argument("--interval-s", type=float, default=30.0)
+    rep.add_argument("--max-gone", type=int, default=3)
+    rep.add_argument("--http-timeout-s", type=float, default=60.0)
 
     sid = sub.add_parser("session-id", help="extract the id from a session-create response body")
     sid.add_argument("--payload", required=True)
     return p
 
 
+def _positive(args, *names) -> str | None:
+    """Return an alarm message for the first non-positive duration, else None.
+
+    argparse types these as floats but happily accepts `-30`. A negative wait
+    reaches `time.sleep` and raises ValueError -- a TRACEBACK plus a raw exit 1,
+    which collides with the wrapper's public alarm code and breaks this module's
+    one-terminal-line contract; a zero one turns a bounded retry loop into a
+    busy spin (Greptile P2, #1625). Both are usage errors, so they are refused
+    HERE with the module's own EXIT_USAGE rather than absorbed silently.
+    """
+    for name in names:
+        value = getattr(args, name, None)
+        if value is not None and value <= 0:
+            flag = "--" + name.replace("_", "-").removesuffix("-s") + "-s"
+            return (
+                f"ALARM: {flag} must be a positive number of seconds, got {value:g} — "
+                "no report retrieved; fix the invocation and re-dispatch"
+            )
+    return None
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    bad = _positive(
+        args, "budget_s", "interval_s", "timeout_s", "running_grace_s", "http_timeout_s"
+    )
+    if bad:
+        _alarm(bad)
+        return EXIT_USAGE
     if args.cmd == "await-registration":
         return await_registration(
             args.server, args.session_id, args.budget_s, args.interval_s, args.http_timeout_s
@@ -537,7 +679,26 @@ def main(argv=None) -> int:
             args.http_timeout_s,
         )
     if args.cmd == "report":
-        return extract_report(args.payload, args.session_id)
+        # Mode selection is checked here, not by argparse's mutually-exclusive
+        # group, so a misuse exits with this module's documented usage code and
+        # one alarm line rather than argparse's own exit 2 (which collides with
+        # the wrapper's public alarm code).
+        if bool(args.payload) == bool(args.server):
+            _alarm(
+                "ALARM: report needs EXACTLY ONE of --server (fetch, retried) or "
+                "--payload (read a file); no report retrieved"
+            )
+            return EXIT_USAGE
+        if args.payload:
+            return extract_report(args.payload, args.session_id)
+        return fetch_report(
+            args.server,
+            args.session_id,
+            args.budget_s,
+            args.interval_s,
+            args.max_gone,
+            args.http_timeout_s,
+        )
     if args.cmd == "session-id":
         return extract_session_id(args.payload)
     return EXIT_USAGE  # pragma: no cover - argparse rejects unknown subcommands
