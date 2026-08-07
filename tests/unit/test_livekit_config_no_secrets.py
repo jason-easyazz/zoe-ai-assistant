@@ -46,6 +46,45 @@ COMMENTED_CREDENTIAL = re.compile(
 # Anything this long and this alphabet-y in a serving config is a credential.
 SECRET_SHAPED = re.compile(r"[A-Za-z0-9_+/=-]{24,}")
 
+# One compose interpolation: `${NAME}` optionally followed by any of the six
+# operators and a body. Kept as a fragment so the whole-value grammar below is
+# built from the same definition the body check uses.
+_INTERPOLATION = r"\$\{([A-Za-z_][A-Za-z0-9_]*)((?::?[-?+])[^}]*)?\}"
+
+# The WHOLE value, anchored. `re.fullmatch` is the load-bearing part: a
+# substring check ("is ${LIVEKIT_API_KEY somewhere in here") accepts anything
+# around and between the two variables, including a literal credential appended
+# after the closing brace. livekit-server yaml-unmarshals this string, so
+# `<key>: <secret>` with that exact separator is the only valid shape anyway.
+LIVEKIT_KEYS_GRAMMAR = re.compile(f"{_INTERPOLATION}: {_INTERPOLATION}")
+
+# Exactly these two variables, in this order. Names matter: `${LIVEKIT_API_KEY_BACKUP:-}`
+# contains the string "${LIVEKIT_API_KEY" and satisfies every shape rule while
+# leaving the server keyless — Talk then dies silently at the next container start.
+EXPECTED_LIVEKIT_VARS = ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
+
+
+def _interpolation_body(default):
+    """The literal a compose operator would substitute, for any of the six forms."""
+    if not default:
+        return ""
+    return default[2:] if default[:2] in (":-", ":?", ":+") else default[1:]
+
+
+def parse_livekit_keys(value):
+    """Parse LIVEKIT_KEYS against the exact grammar.
+
+    Returns `[(var, default), ...]` for a conforming value, or None when the
+    value does not match the grammar END TO END. Module-level so the negative
+    controls below drive the same code the real assertion does — a control that
+    exercises a private copy of the logic proves nothing about the guard.
+    """
+    match = LIVEKIT_KEYS_GRAMMAR.fullmatch(value)
+    if match is None:
+        return None
+    var_1, default_1, var_2, default_2 = match.groups()
+    return [(var_1, default_1 or ""), (var_2, default_2 or "")]
+
 
 def test_livekit_config_has_no_keys_block():
     """No `keys:` mapping with entries — the whole point of the change."""
@@ -111,15 +150,33 @@ def test_compose_supplies_livekit_keys_by_interpolation():
         value = entries[0].split("=", 1)[1]
 
     assert value, "LIVEKIT_KEYS is empty"
-    # Must be built from variables, never baked in.
-    assert "${LIVEKIT_API_KEY" in value and "${LIVEKIT_API_SECRET" in value, (
-        "LIVEKIT_KEYS must interpolate ${LIVEKIT_API_KEY}/${LIVEKIT_API_SECRET} "
-        "from the untracked .env, not embed a literal credential."
+    # Nothing below is a relaxation of what this test used to assert. The old
+    # substring pair ("${LIVEKIT_API_KEY" in value) and separator search
+    # (`re.search(r"\}: \$\{")`) are both SUBSUMED: the grammar demands that exact
+    # separator between two interpolations and nothing else anywhere in the
+    # value, and the name check demands those two variables specifically. Every
+    # value the old assertions accepted and the new ones reject is a value that
+    # was wrong — see the negative controls at the bottom of this file.
+    #
+    # Must be built from variables, never baked in — and the WHOLE value must be
+    # nothing but those two variables. A substring check ("${LIVEKIT_API_KEY is
+    # in here somewhere") is satisfied while arbitrary text sits outside the
+    # braces, so a literal appended after the closing `}` would ship a committed
+    # credential that no scanner can recognise — the exact premise of #1644.
+    parsed_vars = parse_livekit_keys(value)
+    assert parsed_vars is not None, (
+        f"LIVEKIT_KEYS ({value!r}) is not exactly "
+        f"'${{LIVEKIT_API_KEY...}}: ${{LIVEKIT_API_SECRET...}}'. Any text outside "
+        f"the two interpolations is a literal in a tracked file, and livekit-server "
+        f"yaml-unmarshals this string so the ': ' separator is exact anyway."
     )
-    # livekit-server yaml-unmarshals this string: the ": " separator is exact.
-    assert re.search(r"\}: \$\{", value), (
-        "LIVEKIT_KEYS must be exactly '<key>: <secret>' including the space; "
-        "livekit-server rejects it otherwise."
+    # Referencing *a* variable is not the same as referencing the RIGHT one.
+    # `${LIVEKIT_API_KEY_BACKUP:-}` passes every shape rule and leaves the server
+    # with no keys at all; the failure surfaces as Talk dying at the next start.
+    assert [var for var, _ in parsed_vars] == EXPECTED_LIVEKIT_VARS, (
+        f"LIVEKIT_KEYS interpolates {[v for v, _ in parsed_vars]}, expected "
+        f"{EXPECTED_LIVEKIT_VARS}. A near-miss name leaves livekit-server keyless "
+        f"— see docs/knowledge/livekit-key-rotation.md."
     )
     # …and "interpolated" is not the same as "not baked in". Compose's default AND
     # replacement operators both put a LITERAL in the tracked file while still
@@ -130,8 +187,8 @@ def test_compose_supplies_livekit_keys_by_interpolation():
     #   ${VAR:?msg} / ${VAR?msg}   msg is not a credential, but the rule is uniform
     # A LiveKit key has no vendor pattern for any scanner to catch, so all six
     # forms must carry an EMPTY body here.
-    for var, default in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+][^}]*)?\}", value):
-        body = (default or "")[2:] if default[:2] in (":-", ":?", ":+") else (default or "")[1:]
+    for var, default in parsed_vars:
+        body = _interpolation_body(default)
         assert not body.strip(), (
             f"LIVEKIT_KEYS gives ${{{var}}} a non-empty interpolation default "
             f"({default!r}). A default is a literal: compose substitutes it whenever "
@@ -242,16 +299,16 @@ def test_interpolation_default_check_rejects_a_baked_literal():
 
     `${VAR:-<secret>}` satisfies "the variable is referenced", so without this
     control the guard above would pass on the exact bypass it exists to close.
+
+    Drives `parse_livekit_keys` — the same function the real assertion calls, not
+    a local re-implementation of it. A control that exercises a private copy of
+    the logic goes green while the shipped guard is broken.
     """
-    import re as _re
 
     def _bad_defaults(value):
-        found = []
-        for var, default in _re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+][^}]*)?\}", value):
-            body = (default or "")[2:] if default[:2] in (":-", ":?", ":+") else (default or "")[1:]
-            if body.strip():
-                found.append(var)
-        return found
+        parsed = parse_livekit_keys(value)
+        assert parsed is not None, f"grammar rejected {value!r} before the body check"
+        return [var for var, default in parsed if _interpolation_body(default).strip()]
 
     secret = "A" * 43
     # Every operator Compose supports, not just the default ones. `:+`/`+` are the
@@ -268,6 +325,69 @@ def test_interpolation_default_check_rejects_a_baked_literal():
         "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}",
     ):
         assert _bad_defaults(clean) == [], f"false positive on {clean!r}"
+
+
+def test_grammar_rejects_anything_outside_the_two_interpolations():
+    """NEGATIVE CONTROL: a literal OUTSIDE the braces must not parse.
+
+    The guard used to inspect only the text INSIDE `${...}`, so a credential
+    appended after the closing brace was never looked at — it sailed through
+    every shape rule while committing key material a scanner cannot recognise,
+    which is the entire premise of #1644. Measured against the pre-fix guard:
+    `${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}<43 base64url chars>` passed
+    all three of its assertions.
+    """
+    secret = "A" * 43
+    for bad in (
+        # trailing literal on the SECRET side — the dangerous one, and the shape
+        # the old `\}: \$\{` separator search could not see at all
+        "${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}" + secret,
+        # leading literal before the key
+        "zoe-abc123${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}",
+        # a literal wedged between them
+        "${LIVEKIT_API_KEY:-}: " + secret + " ${LIVEKIT_API_SECRET:-}",
+        # a third variable smuggled onto the end
+        "${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}, ${OTHER:-}",
+        # fully baked, no interpolation at all
+        f"zoe-abc123: {secret}",
+        # wrong separator — livekit-server rejects it, so it must not pass here
+        "${LIVEKIT_API_KEY:-}:${LIVEKIT_API_SECRET:-}",
+    ):
+        assert parse_livekit_keys(bad) is None, (
+            f"the LIVEKIT_KEYS grammar accepts {bad!r} — text outside the two "
+            f"interpolations is a literal in a tracked file"
+        )
+
+    assert parse_livekit_keys("${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}") == [
+        ("LIVEKIT_API_KEY", ":-"),
+        ("LIVEKIT_API_SECRET", ":-"),
+    ], "the grammar rejects the form this repo actually ships"
+    assert parse_livekit_keys("${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}") == [
+        ("LIVEKIT_API_KEY", ""),
+        ("LIVEKIT_API_SECRET", ""),
+    ], "the grammar rejects the bare (operator-free) form"
+
+
+def test_variable_names_must_be_exactly_the_livekit_pair():
+    """NEGATIVE CONTROL: a near-miss variable name must not satisfy the guard.
+
+    `${LIVEKIT_API_KEY_BACKUP:-}` CONTAINS the string `${LIVEKIT_API_KEY`, so the
+    old substring check passed while compose interpolated a variable nobody sets
+    — livekit-server then starts with no keys and Talk dies at the next container
+    start, silently, with the tracked file looking correct.
+    """
+    for wrong in (
+        "${LIVEKIT_API_KEY_BACKUP:-}: ${LIVEKIT_API_SECRET_BACKUP:-}",
+        "${LIVEKIT_API_KEY_OLD:-}: ${LIVEKIT_API_SECRET:-}",
+        "${LIVEKIT_API_SECRET:-}: ${LIVEKIT_API_KEY:-}",  # right names, swapped
+        "${SOME_OTHER_KEY:-}: ${SOME_OTHER_SECRET:-}",
+    ):
+        parsed = parse_livekit_keys(wrong)
+        assert parsed is not None, f"grammar rejected {wrong!r} before the name check"
+        assert [var for var, _ in parsed] != EXPECTED_LIVEKIT_VARS, (
+            f"{wrong!r} is accepted as the LiveKit key pair — a near-miss name "
+            f"leaves livekit-server keyless"
+        )
 
 
 # ── .gitignore: credential SHAPES stay ignored, source stays trackable ──────

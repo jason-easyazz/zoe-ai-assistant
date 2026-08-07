@@ -1,435 +1,144 @@
-# 🎉 Zoe Modular Architecture - Complete!
+# Zoe Modules
 
-> **STATUS (2026-08-05) — read this before believing anything below.** This document is a
-> historical design writeup, not a description of what runs. `modules/` contains exactly
-> **one** module today: `omnigent`. `modules/zoe-music` was **deleted** (see
-> [docs/CANONICAL.md](../CANONICAL.md)); `zoe-core` and `zoe-mcp-server` are not live
-> services. **Music is not a module** — the live music system is `zoe-music-assistant`,
-> the upstream Music Assistant container in `docker-compose.modules.yml`. The mechanics
-> below (`tools/zoe_module.py`, `tools/generate_module_compose.py`,
-> `tools/validate_module.py`, the compose generation flow) are still accurate; the
-> inventory, status blocks, and marketplace sections are aspirational.
-
-**Your vision of a modular, extensible AI assistant is now reality.**
+`modules/` holds optional add-on **containers**. This page is the practical answer to
+"how do I add one". The binding contract is
+[modules/AGENTS.md](../../modules/AGENTS.md); the architectural framing is
+[architecture/EXTENSIBILITY.md](../architecture/EXTENSIBILITY.md).
 
 ---
 
-## 🎯 What You Asked For vs What You Got
+## What a module actually is today
 
-### You Asked:
-- ✅ Modules for different features
-- ✅ Developers can work in isolation
-- ✅ Users can enable/disable features
-- ✅ Zoe AI has full control via tools
-- ✅ Community can build modules
+There is **exactly one**: `modules/omnigent`. It is a `Dockerfile`, an `entrypoint.sh`,
+an `.mcp.json`, a `docker-compose.module.yml` and a `README.md` — no `main.py`, no
+`/tools/*` routes, no `intents/`, no widgets.
 
-### You Got (Even Better):
-- ✅ **Self-contained modules** (backend + frontend + intents in one package)
-- ✅ **Dynamic discovery** (UI and AI auto-discover module capabilities)
-- ✅ **Zero-touch core** (add modules without changing zoe-core or zoe-ui)
-- ✅ **Automated validation** (27 quality checks)
-- ✅ **Complete documentation** (10 guides)
-- ✅ **Production ready** (tested and working)
+It deploys from its **own** compose file under its **own** compose project
+(`com.docker.compose.project=omnigent`), joins `zoe-network`, and zoe-data reaches it by
+URL (`ZOE_OMNIGENT_URL`, default `http://127.0.0.1:6767` —
+`services/zoe-data/omnigent_issue_executor.py`).
+
+That is the whole live integration. **A module is a container on `zoe-network` that
+something calls by URL.** Everything richer that used to be documented is dead.
 
 ---
 
-## 🏗️ Complete Architecture
+## What is NOT wired — do not build against it
 
-```
-┌─────────────────────────────────────────────────────┐
-│              User Interaction                        │
-│  Voice: "play music"                                │
-│  Chat: "show my calendar"                           │
-│  UI: Click widget button                            │
-└──────────────┬──────────────────────────────────────┘
-               │
-┌──────────────▼──────────────┐  ┌──────────────────┐
-│  zoe-core (orchestration)   │  │  zoe-ui (shell)  │
-│  ┌────────────────────────┐ │  │  ┌────────────┐  │
-│  │ Auto-discovers intents │ │  │  │ Discovers  │  │
-│  │ from modules           │ │  │  │ widgets    │  │
-│  └────────────────────────┘ │  │  └────────────┘  │
-└──────────────┬──────────────┘  └────────┬─────────┘
-               │                          │
-               └─────────┬────────────────┘
-                         │
-               ┌─────────▼──────────┐
-               │  zoe-mcp-server     │
-               │  (tool router)      │
-               └─────────┬──────────┘
-                         │
-          ┌──────────────┼──────────────┐
-          │              │              │
-┌─────────▼────────┐ ┌──▼─────────┐ ┌─▼──────────┐
-│  omnigent        │ │ (example)  │ │ (example)  │
-│  ✅ Live         │ │ calendar   │ │ tasks      │
-│                  │ │ (future)   │ │ (future)   │
-│ Backend:         │ └────────────┘ └────────────┘
-│  • 12 MCP tools  │
-│  • Services      │
-│  • Database      │
-│                  │
-│ Intents:         │
-│  • 16 commands   │
-│  • Handlers      │
-│                  │
-│ Frontend:        │  ← 🆕 NEW!
-│  • 4 widgets     │
-│  • Manifest      │
-│  • JS/CSS        │
-└──────────────────┘
+`docs/modules/` held four guides (~1,900 lines) describing an MCP-router / intent /
+widget module system. They were **deleted 2026-08-06** rather than repaired, because
+every integration seam they described has zero live consumers. Each row below was
+measured, not assumed:
 
-Each module is COMPLETELY INDEPENDENT!
-```
+| documented mechanism | status |
+|---|---|
+| `zoe-mcp-server` tool router on `:8003` | **gone.** `services/zoe-mcp-server/` does not exist; nothing listens on `:8003`; `docker-compose.yml` marks it RETIRED |
+| `/api/mcp/tools/*` HTTP surface | **404.** `services/zoe-ui/nginx.conf` has no `location /api/mcp/`. `dist/js/lib/mcp-client.js` is still script-included by two dashboards, and every call it makes dead-ends here |
+| module widget auto-discovery (`/modules/<name>/widget/manifest`) | **no loader runs.** `module-widget-loader.js` and `widget-registry.js` are script-included by zero pages (negative control: `js/auth.js` and `js/common.js` *are* found by the same grep, so the search works) |
+| intent auto-discovery from `modules/*/intents/` | **no consumer.** Nothing under `services/` or `tools/` scans that path |
+| `tools/zoe_module.py enable` → `docker-compose.generated-modules.yml` | **no consumer.** `config/modules.yaml` has `enabled_modules: []` and the generated file has `services: {}`. No CI job, deploy script or systemd unit reads it. Both CLIs still *print* a manual `docker compose -f docker-compose.yml -f docker-compose.generated-modules.yml up -d` hint (`zoe_module.py:252`, `generate_module_compose.py:239`) — but with `services: {}` that command deploys nothing |
+| `zoe-core` as the service modules talk to | **not running.** `:8000` is host-native zoe-data; the `zoe-core` container is RETIRED in `docker-compose.yml` |
+| modules "served under `/modules/` by nginx" | the only such route is `/modules/music-assistant/`, proxying the upstream Music Assistant container — which is **not** a `modules/` tree module. `omnigent` has no nginx route |
+
+The `js/widgets/core/` and `js/widgets/music/` trees in zoe-ui are a *different*,
+live system (the dashboard's own widgets). They are not module-provided and are
+unaffected by any of the above.
 
 ---
 
-## 📦 Module System Components
+## Adding a module
 
-### 1. Module Structure (Self-Contained)
-```
-modules/{module-name}/
-├── main.py                  # FastAPI + MCP tools + static serving
-├── services/               # Business logic
-├── intents/                 # Voice/text commands
-│   ├── intents.yaml         # intent definitions
-│   └── handlers.py          # MCP-based handlers
-├── static/                  # Frontend assets ⭐ NEW
-│   ├── manifest.json        # Widget metadata
-│   └── js/                  # 5 widget files (~130KB)
-├── docker-compose.module.yml
-├── Dockerfile
-├── requirements.txt
-└── README.md
-```
+1. **Create `modules/<name>/`** with `docker-compose.module.yml`, `Dockerfile` and
+   `README.md`. There is no scaffold to copy: `omnigent` is container-only, and
+   copying it collides with the live `zoe-omnigent` deployment.
 
-### 2. UI Components (Dynamic Loading)
-```
-services/zoe-ui/dist/js/lib/
-├── mcp-client.js            # MCP tool discovery + calling (260 lines)
-├── module-widget-loader.js  # Widget discovery + loading (300 lines)
-└── widget-registry.js       # Widget registration (260 lines)
-```
+2. **Join the shared network** so in-cluster callers reach the module by service name.
+   Note the two `networks:` keys are at *different* levels — one under the service,
+   one at the top of the file:
 
-### 3. Management Tools
-```
-tools/
-├── zoe_module.py            # CLI (list, enable, disable, status)
-├── generate_module_compose.py  # Auto-generate compose files
-└── validate_module.py       # 27 automated checks
-```
+   ```yaml
+   services:
+     your-module:
+       # ...
+       networks:
+         - zoe-network        # service-level: attach this service
 
-### 4. Documentation (10 Guides)
-```
-docs/modules/
-├── BUILDING_MODULES.md              # How to build modules
-├── SELF_CONTAINED_MODULES.md        # Widget system guide ⭐ NEW
-├── MODULE_REQUIREMENTS.md           # Mandatory rules
-└── MCP_ONLY_ARCHITECTURE.md         # MCP-only module shape
-```
+   networks:                  # top-level: declare the network itself
+     zoe-network:
+       name: zoe-network      # prevents Docker's project-name prefix
+       external: true         # join the existing network, don't create one
+   ```
+
+3. **Publish on loopback only.** A bare `"PORT:PORT"` binds `0.0.0.0` and `[::]`,
+   exposing the module to the whole LAN. In-cluster reach is by service name, so
+   nothing legitimate needs the wider bind:
+
+   ```yaml
+   ports:
+     - "127.0.0.1:PORT:PORT"
+   ```
+
+4. **Token-gate every state-changing route, failing closed.** This is the module
+   contract in `modules/AGENTS.md`, not optional hardening. Keep `/health` open so
+   the container healthcheck works:
+
+   ```python
+   SERVICE_TOKEN = os.getenv("ZOE_YOURMODULE_SERVICE_TOKEN", "")
+
+   def require_service_token(x_zoe_service_token: str = Header(default="")) -> None:
+       if not SERVICE_TOKEN:
+           # Fail CLOSED: unconfigured is never open.
+           raise HTTPException(503, "module service token not configured")
+       if not secrets.compare_digest(x_zoe_service_token, SERVICE_TOKEN):
+           raise HTTPException(401, "bad or missing X-Zoe-Service-Token")
+
+   @app.post("/tools/your_action", dependencies=[Depends(require_service_token)])
+   async def tool_your_action(request: YourRequest): ...
+   ```
+
+   The caller sends the same value as `X-Zoe-Service-Token`. Provision the secret via
+   the environment (`ZOE_YOURMODULE_SERVICE_TOKEN=${ZOE_YOURMODULE_SERVICE_TOKEN:-}`);
+   never commit it.
+
+5. **Deploy it under its own compose project**, as `omnigent` does:
+
+   ```bash
+   docker compose -p <name> -f modules/<name>/docker-compose.module.yml up -d
+   ```
+
+6. **Wire the caller explicitly.** Nothing discovers a module. Give zoe-data (or
+   whatever consumes it) an env-configured URL and put the call behind a flag, so core
+   Zoe still runs with the module absent — that is the one module rule that has never
+   stopped being true.
+
+7. **Check RAM before building.** A module image build alongside the ~6 GB
+   `llama-server` can OOM the live brain, and a finished build leaves GBs in page cache
+   that CUDA cannot use. See `modules/AGENTS.md` → *Work Guidance*.
 
 ---
 
-## 🎮 How to Use the System
+## Existing tooling — what it is, and what it is not
 
-### Managing Modules
+- **`tools/validate_module.py <name>`** — structure and safety checks (required files,
+  compose network config, no `eval`/`exec`, no committed secrets, `/health` present).
+  Takes a module *name*; `modules/` is prepended. It assumes a FastAPI-shaped module, so
+  `omnigent` deterministically **FAILS** it and is meant to.
+- **`tools/generate_module_compose.py` + `config/modules.yaml`** — generate
+  `docker-compose.generated-modules.yml`. Nothing consumes the output today, and the
+  generator hardcodes `zoe-network` as the only top-level network, so it cannot represent
+  `omnigent` (which also needs `zoe-codeintel`). Do not hand-edit the generated file.
+- **`tools/zoe_module.py`** — `list` / `enable` / `disable` / `status` over
+  `config/modules.yaml`. Enabling a module records it there; it does not deploy anything.
+
+`docker-compose.modules.yml` is a different, hand-maintained file: it holds host services
+(Music Assistant, ytmusic-potoken, Multica), not `modules/` tree modules.
+
+---
+
+## Recovering the deleted guides
 
 ```bash
-# List available modules
-python tools/zoe_module.py list
-
-# Enable a module
-python tools/zoe_module.py enable omnigent
-
-# Disable a module
-python tools/zoe_module.py disable omnigent
-
-# Check status
-python tools/zoe_module.py status
-
-# Validate before enabling (takes a module NAME; modules/ is prepended)
-python tools/validate_module.py your-module-name
+git log --all -- docs/modules
 ```
 
-> Do **not** run the validator against `omnigent`. It is container-only and has no
-> `main.py`/`requirements.txt`, so it deterministically reports FAILED — see
-> [BUILDING_MODULES.md](../modules/BUILDING_MODULES.md).
-
-### Building a New Module
-
-```bash
-# 1. Create the module dir (there is NO copyable scaffold — modules/omnigent is
-#    a container-only module with no main.py/requirements.txt and would fail
-#    tools/validate_module.py; see docs/modules/BUILDING_MODULES.md)
-mkdir -p modules/zoe-your-feature/{services,intents}
-
-# 2. Update backend (main.py, services/)
-
-# 3. Create MCP tools. State-changing routes are TOKEN-GATED and fail closed —
-#    see require_service_token in docs/modules/BUILDING_MODULES.md. Required by
-#    modules/AGENTS.md, not optional hardening.
-@app.post("/tools/your_action", dependencies=[Depends(require_service_token)])
-async def your_action():
-    return {"success": True}
-
-# 4. Create widget
-mkdir -p static/js
-cat > static/js/your-widget.js << 'EOF'
-class YourWidget {
-    async init(container) {
-        this.mcp = new MCPClient();
-        await this.mcp.init();
-        container.innerHTML = '<h1>Your Feature</h1>';
-    }
-}
-window.WidgetRegistry.register(YourWidget, {
-    id: 'your-widget',
-    name: 'Your Widget',
-    module: 'your-feature',
-    icon: '✨'
-});
-EOF
-
-# 5. Create manifest
-cat > static/manifest.json << 'EOF'
-{
-  "module": "zoe-your-feature",
-  "version": "1.0.0",
-  "widgets": [{
-    "id": "your-widget",
-    "name": "Your Widget",
-    "script": "/static/js/your-widget.js",
-    "icon": "✨"
-  }]
-}
-EOF
-
-# 6. Validate
-python tools/validate_module.py zoe-your-feature
-
-# 7. Enable
-python tools/zoe_module.py enable zoe-your-feature
-
-# 8. Done! Widget appears in UI
-```
-
----
-
-## 🎨 Current System Status
-
-### Services Running
-```
-✅ zoe-core         (orchestration, intents)
-✅ zoe-mcp-server   (tool routing)
-✅ zoe-ui           (dynamic shell)
-```
-
-### Discovery Systems
-```
-✅ Intent Auto-Discovery: Scans modules/*/intents/
-✅ Widget Auto-Discovery: Queries /widget/manifest
-✅ MCP Tool Discovery: Lists available tools
-✅ Module Detection: Checks config/modules.yaml
-```
-
----
-
-## 📊 Final Statistics
-
-### Files Created: 53 files
-- 29 Python files (music module backend)
-- 6 JavaScript files (widgets in module)
-- 3 JavaScript files (UI infrastructure)
-- 1 Manifest file
-- 10 Documentation files
-- 3 Management tools
-- 1 Configuration file
-
-### Lines of Code: ~145,000 lines
-- Backend: ~8,000 lines
-- Widgets: ~130,000 lines
-- Infrastructure: ~820 lines
-- Documentation: ~4,500 lines
-- Tools: ~1,000 lines
-- Config: ~100 lines
-
-### Time Investment: ~10 hours
-- Module extraction: 2 hours
-- MCP integration: 1 hour
-- Intent auto-discovery: 1.5 hours
-- Widget system: 4 hours
-- Documentation: 1 hour
-- Testing: 0.5 hours
-
-**Result**: Production-ready module system
-
----
-
-## 🎯 Comparison to Other Systems
-
-| Feature | VS Code | Figma | Chrome | **Zoe** |
-|---------|---------|-------|--------|---------|
-| Self-contained | ✅ | ✅ | ✅ | ✅ |
-| Dynamic discovery | ✅ | ✅ | ✅ | ✅ |
-| Backend + Frontend | ❌ | ❌ | ❌ | ✅ ⭐ |
-| AI-first design | ❌ | ❌ | ❌ | ✅ ⭐ |
-| Intent system | ❌ | ❌ | ❌ | ✅ ⭐ |
-| Auto-validation | ❌ | ❌ | ❌ | ✅ ⭐ |
-| Hot loading | ✅ | ❌ | ❌ | ✅ |
-| Marketplace ready | ✅ | ✅ | ✅ | ✅ |
-
-**Zoe's module system has unique advantages!**
-
----
-
-## 🚀 What's Possible in the Future
-
-### Community Marketplace
-```
-Browse modules:
-- omnigent (official)
-- zoe-calendar-google (community)
-- zoe-spotify-premium (community)
-- zoe-home-automation (community)
-- zoe-developer-tools (community)
-
-One-click install:
-$ zoe marketplace install zoe-spotify-premium
-→ Downloads module
-→ Validates automatically
-→ Enables module
-→ Widgets appear in UI
-→ Intents work immediately
-→ AI can use new capabilities
-
-Done in 30 seconds!
-```
-
-### Enterprise Integrations
-```
-Company builds internal modules:
-- zoe-salesforce
-- zoe-jira
-- zoe-slack
-- zoe-custom-erp
-
-Each module:
-- Integrates company systems
-- Provides custom widgets
-- Adds voice commands
-- Fully tested in isolation
-- Deployed as Docker container
-
-→ Company has custom Zoe with zero core changes
-→ Updates don't break customizations
-→ Can share modules across teams
-```
-
-### AI Capabilities Evolution
-```
-Today's Zoe:
-- Music control ✅
-- Calendar (soon)
-- Tasks (soon)
-
-Future Zoe (via modules):
-- Code editing (Aider module)
-- Image generation (DALL-E module)
-- Video creation (FFmpeg module)
-- 3D modeling (Blender module)
-- Data analysis (Pandas module)
-- Arduino/IoT (ESP32 module)
-- Unlimited possibilities!
-
-All following same pattern:
-1. Build module with backend + widgets
-2. Enable module
-3. Capabilities appear everywhere
-   (voice, chat, UI, API)
-```
-
----
-
-## 📚 Documentation Index
-
-Everything under `docs/modules/`:
-
-1. `BUILDING_MODULES.md` - How to build a module
-2. `SELF_CONTAINED_MODULES.md` - How to add widgets
-3. `MODULE_REQUIREMENTS.md` - What's mandatory
-4. `MCP_ONLY_ARCHITECTURE.md` - MCP-only module shape
-
-The zoe-music case-study docs that used to be listed here were deleted with the
-module on 2026-08-05 (`git log --all -- docs/modules`).
-
----
-
-## 🎓 Key Takeaways
-
-### For You (System Owner)
-- ✅ Zoe is now truly modular
-- ✅ Can scale indefinitely
-- ✅ Community-ready
-- ✅ Enterprise-ready
-- ✅ Future-proof
-
-### For Developers
-- ✅ Clear patterns to follow
-- ✅ Complete documentation
-- ✅ Working reference (music)
-- ✅ Automated validation
-- ✅ No guesswork
-
-### For Users
-- ✅ Choose features they want
-- ✅ Install with one command
-- ✅ No technical knowledge needed
-- ✅ Safe and validated
-- ✅ Always compatible
-
----
-
-## ✅ System Status: COMPLETE
-
-**All phases finished**:
-1. ✅ Module extraction (music)
-2. ✅ MCP integration
-3. ✅ Intent auto-discovery
-4. ✅ Management tools
-5. ✅ Automated validation
-6. ✅ Self-contained architecture
-7. ✅ Widget system
-8. ✅ Dynamic discovery
-9. ✅ Complete documentation
-10. ✅ Production testing
-
-**Result**: **World-class modular AI assistant!**
-
----
-
-## 🎉 Congratulations!
-
-From concept to production in 10 hours.
-
-**You now have**:
-- ✅ Modular architecture ✅
-- ✅ Plugin system ✅
-- ✅ Self-contained modules ✅
-- ✅ Dynamic discovery ✅
-- ✅ AI-first design ✅
-- ✅ Community-ready ✅
-
-**This is the foundation for an entire ecosystem of Zoe modules.**
-
----
-
-**Next**: Build your second module and prove the pattern again! 🚀
-
-**Suggested next modules**:
-- 📅 Calendar (Google Calendar, Outlook, iCal)
-- ✅ Tasks (Todo lists, reminders, projects)
-- 💬 Chat (Matrix, Discord, Slack integrations)
-- 🏠 Home (More Home Assistant features)
-- 👨‍💻 Developer (Aider, Git, Docker controls)
-
-**Each will be easier than the last!**
+They are history, not reference. Nothing in them describes a system that runs.
