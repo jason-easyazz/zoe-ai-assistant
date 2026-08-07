@@ -13,6 +13,13 @@ truncation shape recorded on 2026-08-06 (`assistant_message_completed`, `stopRea
 batch stored as chunk rows behind a `{"$flueChunkCount": N}` sentinel — is covered too,
 because a length stop that hid inside a spilled batch would be invisible to a naive
 `LIKE '%length%'` scan.
+
+The subtler case, and the one that actually happens: an EMPTY store must FAIL. The sidecar
+creates its database at boot, so a replay that never reached the 2.x lane (`ZOE_FLUE_WIRE`
+unset, zoe-data still pointed at :3578, the restart forgotten) leaves a valid database with
+zero replies in it. Counting zero length-stops there and reporting PASS would green-light
+the flip on no evidence at all — the exact shape of the failure the gate exists to catch.
+`--since` gets the same treatment, since a mis-typed timestamp silently examines nothing.
 """
 from __future__ import annotations
 
@@ -48,13 +55,15 @@ CREATE TABLE flue_conversation_stream_batch_chunks (
 _STREAM = "agents/zoe/replay-test"
 
 
-def _completed(stop_reason: str, output: int) -> dict:
+def _completed(
+    stop_reason: str, output: int, timestamp: str = "2026-08-07T02:26:40.743Z"
+) -> dict:
     """One `assistant_message_completed` record, in the store's real shape."""
     return {
         "v": 1,
         "id": f"record_{stop_reason}_{output}",
         "type": "assistant_message_completed",
-        "timestamp": "2026-08-07T02:26:40.743Z",
+        "timestamp": timestamp,
         "submissionId": "sub_01KZD19G7FYQDYJ2HTS329TGPB",
         "stopReason": stop_reason,
         "usage": {"input": 3901, "output": output, "cacheRead": 0, "cacheWrite": 0},
@@ -94,9 +103,9 @@ def _build_store(path: Path, records_per_batch: list[list[dict]], spill: bool = 
         conn.close()
 
 
-def _run(db: Path) -> subprocess.CompletedProcess:
+def _run(db: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(GATE), "--db", str(db)],
+        [sys.executable, str(GATE), "--db", str(db), *extra],
         capture_output=True,
         text=True,
         timeout=60,
@@ -113,6 +122,60 @@ def test_healthy_store_passes(tmp_path: Path) -> None:
     result = _run(db)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS: 0 length-stopped" in result.stdout
+    assert "2 examined" in result.stdout, "a pass must say how much it checked"
+
+
+def test_empty_store_fails_rather_than_passing_vacuously(tmp_path: Path) -> None:
+    """THE case that actually happens: the replay never reached the 2.x lane.
+
+    The sidecar creates its DB at boot, so "no length stops" in an empty store is
+    not evidence of anything. A PASS here would green-light a flip on nothing.
+    """
+    db = tmp_path / "empty.db"
+    _build_store(db, [])
+    result = _run(db)
+    assert result.returncode == 1, "an empty store must not pass"
+    assert "FAIL: 0 assistant replies" in result.stdout
+    assert "PASS" not in result.stdout
+
+
+def test_store_with_no_assistant_replies_fails(tmp_path: Path) -> None:
+    """Rows present, but none of them an assistant reply — still no evidence."""
+    db = tmp_path / "no-replies.db"
+    _build_store(db, [[{"v": 1, "type": "user_message", "timestamp": "2026-08-07T02:00:00Z"}]])
+    result = _run(db)
+    assert result.returncode == 1
+    assert "FAIL: 0 assistant replies" in result.stdout
+
+
+def test_since_scopes_to_this_run(tmp_path: Path) -> None:
+    """Stale hits from an earlier attempt must not fail a later, clean run.
+
+    Without this the operator's only way to get a green gate is to delete the
+    store — which destroys the very evidence the gate reads.
+    """
+    db = tmp_path / "mixed.db"
+    _build_store(
+        db,
+        [
+            [_completed("length", 8, timestamp="2026-08-06T01:00:00.000Z")],
+            [_completed("stop", 42, timestamp="2026-08-07T09:00:00.000Z")],
+        ],
+    )
+    assert _run(db).returncode == 1, "unscoped, the old hit still fails"
+
+    scoped = _run(db, "--since", "2026-08-07T00:00:00.000Z")
+    assert scoped.returncode == 0, scoped.stdout + scoped.stderr
+    assert "1 examined" in scoped.stdout
+
+
+def test_since_that_matches_nothing_fails(tmp_path: Path) -> None:
+    """A mis-typed or future --since examines nothing; that is not a pass."""
+    db = tmp_path / "future.db"
+    _build_store(db, [[_completed("stop", 42, timestamp="2026-08-07T09:00:00.000Z")]])
+    result = _run(db, "--since", "2027-01-01T00:00:00.000Z")
+    assert result.returncode == 1
+    assert "FAIL: 0 assistant replies" in result.stdout
 
 
 def test_truncated_reply_fails_the_gate(tmp_path: Path) -> None:
@@ -140,20 +203,57 @@ def test_missing_store_fails_rather_than_reporting_clean(tmp_path: Path) -> None
     assert "PASS" not in result.stdout
 
 
+def test_out_of_order_chunks_fail_instead_of_reassembling_wrongly(tmp_path: Path) -> None:
+    """Upstream validates chunk_index/chunk_count per row; so must this.
+
+    A laxer reassembly would silently concatenate chunks in the wrong order,
+    producing corrupt JSON or — worse — dropping a length-stop record.
+    """
+    db = tmp_path / "badchunks.db"
+    _build_store(db, [[_completed("length", 1)]], spill=True)
+    conn = sqlite3.connect(db)
+    try:
+        # Renumber the chunk indices to 1,2 while the sentinel still says 2.
+        # Read-delete-reinsert, because an in-place bump collides with the primary
+        # key of the row it is about to become.
+        rows = conn.execute(
+            "SELECT path, seq, chunk_index, chunk_count, data "
+            "FROM flue_conversation_stream_batch_chunks ORDER BY chunk_index"
+        ).fetchall()
+        conn.execute("DELETE FROM flue_conversation_stream_batch_chunks")
+        conn.executemany(
+            "INSERT INTO flue_conversation_stream_batch_chunks "
+            "(path, seq, chunk_index, chunk_count, data) VALUES (?, ?, ?, ?, ?)",
+            [(p, s, i + 1, c, d) for (p, s, i, c, d) in rows],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    result = _run(db)
+    assert result.returncode != 0
+    assert "PASS" not in result.stdout
+    assert "not contiguous" in result.stdout or "not contiguous" in result.stderr
+
+
 def test_json_mode_is_machine_readable(tmp_path: Path) -> None:
     db = tmp_path / "json.db"
     _build_store(db, [[_completed("length", 3)]])
-    result = _run_json(db)
+    proc = _run(db, "--json")
+    assert proc.returncode == 1, "JSON mode must keep the same exit contract"
+    result = json.loads(proc.stdout)
     assert result["count"] == 1
+    assert result["examined"] == 1
+    assert result["ok"] is False
     assert result["hits"][0]["output"] == 3
     assert result["hits"][0]["stream"] == _STREAM
 
 
-def _run_json(db: Path) -> dict:
-    proc = subprocess.run(
-        [sys.executable, str(GATE), "--db", str(db), "--json"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    return json.loads(proc.stdout)
+def test_json_mode_reports_a_clean_run(tmp_path: Path) -> None:
+    db = tmp_path / "json-clean.db"
+    _build_store(db, [[_completed("stop", 42)]])
+    proc = _run(db, "--json")
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["count"] == 0
+    assert result["examined"] == 1
+    assert result["ok"] is True

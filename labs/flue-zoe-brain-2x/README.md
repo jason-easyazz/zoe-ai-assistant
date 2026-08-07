@@ -206,77 +206,99 @@ through the same 8k model and stalls the voice path) — rationale + budget
 failure mode in the module header. Kill switch: `ZOE_BRAIN_CONTEXT_WINDOW=0`.
 Tests: `test/context_window.test.ts` (incl. an end-to-end fake llama-server).
 
-## The output-budget clamp (why `contextWindow` is not the real window)
+## The output-budget clamp (why `contextWindow` is 0)
 
-`zoeLocalModel()` declares
-`contextWindow: contextWindowTokens() + 4096 + outputBudgetTokens()` — **deliberately
-larger than llama-server's actual 8192-token slot.** That looks wrong and is not.
+`zoeLocalModel()` declares `contextWindow: 0`. That is **not** a missing value —
+it is how you tell pi-ai "do not clamp my output", and it is deliberate.
 
 pi-ai 0.83.0 added `clampMaxTokensToContext` (`dist/api/simple-options.js`),
 which every openai-completions request now passes through:
 
 ```
-available = model.contextWindow − estimateContextTokens(context) − 4096
+available = model.contextWindow − estimateContextTokens(context).tokens − 4096
 maxTokens = min(maxTokens, max(1, available))
 ```
 
-The file does not exist in 0.79.10 (the 1.x lane), and the 1.x provider declared
-no `contextWindow` at all — so nothing clamped there, and the port carried the
-1.x assumption forward. Declaring the real 8192 meant a ~4090-token prompt left
-`8192 − 4090 − 4096 ≈ 6` tokens of output. Measured on the failed flip: replies
-truncated to 1-8 tokens with `stopReason: "length"`, and one length-stopped
-**tool call** took a whole turn down with `ConversationRecordInvariantError`.
-That was the flip's `CANT_DO`.
+0.79.10 (the 1.x lane) has no clamp at all — its `buildBaseOptions` does not even
+receive the context — and the 1.x provider declared no `contextWindow`, so the
+port carried that assumption forward. Declaring the real 8192 meant a ~4090-token
+estimate left `8192 − 4090 − 4096 ≈ 6` tokens of output. Measured on the failed
+flip: replies truncated to 1-8 tokens with `stopReason: "length"`, and one
+length-stopped **tool call** took a whole turn down with
+`ConversationRecordInvariantError`. That was the flip's `CANT_DO`.
 
-On 0.83 this field feeds *only* that clamp for this deployment (Flue's threshold
-compaction is pinned off at the agent), so it is sized to protect the output
-budget rather than to describe the server. The real prompt budget is enforced
-independently and earlier by `src/context-window.ts` — which is what makes the
-decoupling safe. The arithmetic: with `declared = W + 4096 + reserve`,
-`available = W + reserve − prompt`, so **any prompt that llama-server would
-accept at all (`prompt ≤ W`) leaves the full output budget.** The premise holds
-because the two estimators agree closely on the real path (measured 2937 vs 2957
-tokens on a live harness turn) and windowing keeps the prompt a further
-`ZOE_BRAIN_REPLY_RESERVE` below `W`.
+**Why 0, and not a bigger number.** The obvious fix is to declare a window
+inflated past the clamp's own overheads (`W + 4096 + reserve`) so the subtraction
+can never bite. It does not work, and this PR shipped that version before
+measuring it properly. The clamp's second argument is *not the prompt*:
+`estimateContextTokens` is **usage-anchored**. Once any retained assistant message
+carries usage — always, after turn 1, because Flue rebuilds assistant messages
+with their recorded `usage` — it returns
 
-**`maxTokens` is the reply reserve, and that is the other half of the fix.**
-pi-ai's clamp exists to stop a caller asking for more output than the context can
-hold; defeating it means this deployment has to honour that constraint itself, or
-it has removed a guard and put nothing in its place. llama-server runs
+```
+lastAssistantUsage.totalTokens + Σ estimateMessageTokens(messages after it)
+```
+
+and ignores the system prompt and tools entirely. So the anchor alone can reach
+`W` (it includes the *previous* completion), the trailing term is unbounded (this
+turn's tool results, which windowing keeps unconditionally), and windowing never
+rebases the stale anchor — the overestimate *grows* precisely when windowing
+starts working. Measured against the real clamp with `declared = 13824`:
+
+| context | maxTokens |
+|---|---|
+| prompt at budget + reply 1536, new user msg 40 tok | 1496 |
+| prompt at budget + reply 600, tool result 1200 tok | 1272 |
+| prompt at budget + reply 200, recall packet 2400 tok | 472 |
+| prompt at budget + reply 1536, tool result 1600 tok | **1** ← the bug, back |
+
+No additive constant closes that, because the trailing term has no upper bound.
+The store confirms the branch directly: stream `replay-c86d12c148eb` seq 79 has
+`usage.totalTokens 4085`, and the next assistant was clamped to 7 output tokens —
+an estimate of `4089 = 4085 + 4`, the anchor plus a 4-token trailing message, not
+a measurement of the ~3901-token prompt.
+
+**What replaces the clamp.** Nothing is lost, because the constraint it enforces
+is already enforced better upstream of it — from the real budget rather than an
+estimate:
+
+```
+prompt ≤ W − reserve   (windowContextToBudget, src/context-window.ts)
+output ≤ reserve       (maxTokens = outputBudgetTokens())
+⇒ prompt + output ≤ W  — the request always fits llama-server's slot
+```
+
+That second line is the other half of the fix. llama-server runs
 `--ctx-size 16384 --parallel 2` — an **8192-token slot per lane** — with context
-shifting off on this build, so generation that reaches the end of the slot simply
-stops with `finish_reason: "length"`. A flat 2048-token cap against a prompt at
-the full 6656-token budget asks for 8704 tokens of slot and is silently cut at
-1536: the same truncation, re-created from the other direction, and it would make
-step 6's assertion unsound. Tying the cap to the reserve gives
+shifting off on this build, so generation that reaches the end of the slot stops
+with `finish_reason: "length"` regardless of what pi-ai did. A flat 2048-token cap
+against a full 6656-token prompt asks for 8704 tokens of slot and is silently cut
+at 1536. Tying the cap to the reserve removes that. Not a regression against 1.x,
+which declared no `maxTokens` and was bounded by the slot anyway.
 
-```
-prompt ≤ W − reserve   (windowing)      output ≤ reserve   (the cap)
-⇒ prompt + output ≤ W  — the request always fits the slot
-```
-
-That bounds what the *clamp* and the *slot* can do to a reply; it does not make a
-`"length"` stop impossible. A model that genuinely writes past the reserve still
-stops on it — which on a brain whose replies run to tens of tokens is itself an
-anomaly, which is why step 6 says *any* length stop is a bug rather than *cannot
+Stated honestly, this bounds what the *clamp* and the *slot* can do to a reply; it
+does not make a `"length"` stop impossible, and the prompt bound is in our chars/4
+estimate rather than tokenizer tokens (`src/context-window.ts` owns that caveat).
+Which is why step 6 says *any* length stop is a bug to investigate, not *cannot
 happen*.
 
-`ZOE_BRAIN_CONTEXT_WINDOW=0` (windowing off) declares `0`, which pi-ai reads as
-*no clamp* — that removes the `prompt ≤ W` premise, so the honest guard becomes
-llama-server's loud 400 rather than a silent truncation. The reply cap does *not*
-collapse with it (`replyReserveTokens(0)` would be 0, and a falsy `maxTokens` is
-dropped from the wire entirely), so it falls back to the reserve sized against the
-default slot.
+**What else reads this field** — checked, not assumed. Besides the clamp:
+`isAssistantContextOverflow` (in Flue's overflow-recovery loop) uses
+`contextWindow` only for silent-truncation detection (Cases 2-3 in pi-ai's
+`overflow.js`); llama-server instead answers with an explicit 400, caught by
+Case 1's error-pattern match with no `contextWindow` involved. Threshold
+compaction is inert — the agent pins `compaction: false`. Note this cost is not
+specific to 0: inflating the number to 13824 would have disabled Cases 2-3 just
+as thoroughly.
 
-**Do not re-tie the declared window to the windowing budget** "so they can never
-drift". That was the original rationale and it is precisely what caused the bug.
-Tests: `test/output_budget_clamp.test.ts` — it imports the real clamp from
+**Do not re-tie this field to `contextWindowTokens()`** "so they can never
+drift". That was the original rationale and it is exactly what caused the bug.
+Tests: `test/output_budget_clamp.test.ts` imports the real clamp from
 `node_modules` (so an upstream formula change turns it red), probes the 4096
-constant through that function rather than trusting the source, pins
-`prompt budget + output budget == slot` across several env configurations, and
-carries the pre-fix declaration as an explicit negative control that reproduces
-the recorded 8-token truncation (and `max_completion_tokens: 1` end-to-end on the
-wire). Operationally the guard is step 6 of the flip runbook.
+constant *through* that function rather than trusting the source, pins the budget
+across anchored and unanchored context shapes, and keeps **both** rejected
+declarations as executable negative controls — including the `maxTokens: 1`
+tool-result case above — so neither gets re-proposed from a comment alone.
 
 ## Seam-A sentinel streaming
 
@@ -327,8 +349,8 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_TOKEN` | *(unset)* | bearer token for the agent HTTP route |
 | `ZOE_BRAIN_OPEN` | *(unset)* | `1` opts into an open route (local smoke runs only) |
 | `ZOE_BRAIN_MAX_TOOL_ITERS` | `8` | hard per-turn tool-iteration ceiling |
-| `ZOE_BRAIN_CONTEXT_WINDOW` | `8192` | model context budget for prompt-fit history windowing (`src/context-window.ts`); `0` disables windowing **and, with it, pi-ai's output clamp** — see "the output-budget clamp" below |
-| `ZOE_BRAIN_REPLY_RESERVE` | `1536` | tokens held back from the window for the reply + estimator slack |
+| `ZOE_BRAIN_CONTEXT_WINDOW` | `8192` | llama-server's per-lane SLOT size — the budget for prompt-fit history windowing (`src/context-window.ts`); `0` disables windowing |
+| `ZOE_BRAIN_REPLY_RESERVE` | `1536` | tokens held back from the window for the reply + estimator slack. **Also the reply CAP** (`model.maxTokens`), so lowering it to buy prompt room shortens replies by the same amount — see "the output-budget clamp" |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | `true` | `false` disables progressive tool disclosure |
 | `ZOE_BRAIN_STREAM` | `on` | `0`/`false` disables the NDJSON sentinel-stream mode |
 | `ZOE_BRAIN_STREAM_TIMEOUT_S` | `180` | streamed-turn deadline (mirrors prod `ZOE_CORE_TIMEOUT_S`) |
@@ -465,6 +487,7 @@ curl -fsS http://127.0.0.1:8000/health
 
 # 5. THE GATE. Must pass on the FLIPPED config, not before it.
 cd /home/zoe/assistant
+REPLAY_STARTED=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)   # scopes step 6 to THIS run
 flock /tmp/zoe-voice-harness.lock \
   python3 scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote
 # said-vs-did must not regress and per-stage medians must not regress.
@@ -472,7 +495,11 @@ flock /tmp/zoe-voice-harness.lock \
 
 # 6. THE LENGTH-STOP ASSERTION — MANDATORY, and step 5 passing does NOT imply it.
 #    Run it against the 2.x store AFTER the replay run. Any hit => ROLL BACK.
-python3 labs/flue-zoe-brain-2x/parity/count_length_stops.py
+#    --since keeps a PREVIOUS attempt's hits from failing this one; without it the
+#    only way to a green gate is deleting the store, which destroys the evidence.
+#    "0 assistant replies" is a FAILURE, not a pass — it means the replay never
+#    reached the 2.x sidecar at all.
+python3 labs/flue-zoe-brain-2x/parity/count_length_stops.py --since "$REPLAY_STARTED"
 ```
 
 ```sh
@@ -538,9 +565,20 @@ python3 labs/flue-zoe-brain-2x/parity/count_length_stops.py
 
 Read-only, stdlib Python (the box has no `sqlite3` CLI), exits 1 on any hit, and
 reassembles Flue's spilled >1MB batches so a truncation cannot hide in one.
-`--db` points it at another store, `--json` for machine consumption. Both
-directions are pinned by `tests/unit/test_flue2x_length_stop_gate.py`; the FAIL
-path was verified against the real 2026-08-06 store, where it finds all 8.
+`--db` points it at another store, `--since` scopes to one run, `--json` for
+machine consumption.
+
+**"0 assistant replies" is a FAILURE.** The sidecar creates its store at boot, so
+a replay that never reached the 2.x lane (`ZOE_FLUE_WIRE` unset, zoe-data still on
+:3578, the restart forgotten) leaves a valid, empty database — and counting zero
+length-stops in it would green-light the flip on no evidence at all. The gate
+counts what it examined and fails when that is zero.
+
+Every direction is pinned by `tests/unit/test_flue2x_length_stop_gate.py`
+(12 tests, `ci_safe`): clean pass, direct hit, hit inside a spilled batch, empty
+store, no-assistant-replies store, `--since` scoping both ways, out-of-order
+chunks, and the JSON exit contract. The FAIL path was also verified against the
+real 2026-08-06 store, where it finds all 8.
 
 **Any `"length"` stop on this deployment is a bug, not a tuning knob.**
 llama-server has an 8192-token slot and `src/context-window.ts` windows every
