@@ -466,3 +466,49 @@ async def test_run_flue_brain_strips_sentinels_on_wire2(wire_env, monkeypatch):
 
     assert out == "Your locker code is beef42."
     assert "__TOOL__" not in out
+
+
+@pytest.mark.asyncio
+async def test_wire2_aggregated_400_names_the_wire_flag(wire_env, monkeypatch, caplog):
+    """A 1.x sidecar 400s the wire-2 body: the log must name ZOE_FLUE_WIRE=1.
+
+    The mirror of the wire-1-reply-on-wire-2 case: raise_for_status() alone
+    would bury the diagnosis in a bare HTTPStatusError. 4xx = never admitted.
+    """
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "2")
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "0")
+    wire_env.stream_response = _FakeStreamResponse(
+        status_code=400, content_type="application/json",
+        raw=b'{"error":"invalid_request","message":"Delivered messages must be { kind, body }"}',
+    )
+    with caplog.at_level("ERROR"):
+        out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
+    assert out == [zoe_flue_client._FALLBACK_TEXT]
+    assert any("ZOE_FLUE_WIRE=1" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_wire2_streaming_400_names_the_wire_flag(wire_env, monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "2")
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "1")
+    wire_env.stream_response = _FakeStreamResponse(
+        status_code=400, content_type="application/json", raw=b'{"error":"invalid_request"}',
+    )
+    with caplog.at_level("ERROR"):
+        out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
+    assert out == [zoe_flue_client._FALLBACK_TEXT]
+    assert any("ZOE_FLUE_WIRE=1" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_wire2_500_does_not_claim_wire_mismatch(wire_env, monkeypatch, caplog):
+    """Control: a 500 is NOT diagnosed as a wire mismatch (it isn't one)."""
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "2")
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "0")
+    wire_env.stream_response = _FakeStreamResponse(
+        status_code=500, content_type="application/json", raw=b'{"error":"boom"}',
+    )
+    with caplog.at_level("ERROR"):
+        out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
+    assert out == [zoe_flue_client._FALLBACK_TEXT]
+    assert not any("ZOE_FLUE_WIRE=1" in r.message for r in caplog.records)

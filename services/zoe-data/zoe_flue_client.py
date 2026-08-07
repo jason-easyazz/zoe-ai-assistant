@@ -480,6 +480,20 @@ async def _run_turn_aggregated_wire2(session_id: str, payload: bytes) -> AsyncIt
             async with client.stream(
                 "POST", _endpoint(session_id, stream=True), content=payload, headers=headers
             ) as resp:
+                if resp.status_code == 400:
+                    # The MIRROR misconfig of the wire-1-reply case below: a 1.x
+                    # sidecar rejects the wire-2 {kind, body} shape with 400
+                    # ("message" required), and raise_for_status() would bury
+                    # the diagnosis in a bare HTTPStatusError. 4xx = the turn
+                    # was NEVER admitted, so naming the wire flag is safe here.
+                    logger.error(
+                        "flue wire-2 turn: sidecar rejected the wire-2 body with "
+                        "HTTP 400 — if ZOE_FLUE_BRAIN_URL points at a Flue 1.x "
+                        "sidecar, set ZOE_FLUE_WIRE=1 or repoint at the 2.x one "
+                        "(body: %r)", (await resp.aread())[:200],
+                    )
+                    yield _FALLBACK_TEXT
+                    return
                 resp.raise_for_status()
                 if _NDJSON_CONTENT_TYPE not in (resp.headers.get("content-type") or ""):
                     # The turn WAS admitted (2xx) and is running; re-POSTing it
@@ -608,6 +622,20 @@ async def run_flue_brain_streaming(
                 async with client.stream(
                     "POST", _endpoint(session_id, stream=True), content=payload, headers=headers
                 ) as resp:
+                    if resp.status_code == 400 and _wire_version() >= _WIRE_2:
+                        # Same mirror-misconfig diagnosis as the aggregated
+                        # wire-2 path: a 1.x sidecar 400s the {kind, body}
+                        # shape, and raise_for_status() would bury the wire
+                        # diagnosis. 4xx = never admitted, safe to name it.
+                        logger.error(
+                            "flue wire-2 stream: sidecar rejected the wire-2 "
+                            "body with HTTP 400 — if ZOE_FLUE_BRAIN_URL points "
+                            "at a Flue 1.x sidecar, set ZOE_FLUE_WIRE=1 or "
+                            "repoint at the 2.x one (body: %r)",
+                            (await resp.aread())[:200],
+                        )
+                        yield _FALLBACK_TEXT
+                        return
                     resp.raise_for_status()
                     admitted = True
                     if "application/x-ndjson" in (resp.headers.get("content-type") or ""):

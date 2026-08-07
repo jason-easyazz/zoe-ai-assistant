@@ -328,26 +328,25 @@ zoe-data (`:8000`) or llama-server (`:11434`) as part of a lab run.
 The operator lifted the merge hold on 2026-08-06. Merging this directory changes
 nothing on the box; the flip below is the separate, deliberate step.
 
-### Prerequisite — the Phase-2 client change (NOT YET LANDED)
+### Prerequisite — the Phase-2 client change (✅ LANDED, this PR's sibling)
 
-**The flip is not env-only today.** `services/zoe-data/zoe_flue_client.py` posts
-the beta body shape, which 2.x rejects. Measured against the built 2.x server on
-2026-08-06 (throwaway port, throwaway store):
+**The wire selector exists**: `ZOE_FLUE_WIRE` in
+`services/zoe-data/zoe_flue_client.py` (PR #1637, replay-gated in its own
+right). Default `1` posts the wire-1 body byte-identically; `2` speaks the 2.x
+`{kind: "user", body}` shape with fire-and-forget admission + NDJSON stream
+read (modeled on `parity/flue_wire.py`). The historical measurement that
+motivated it, against the built 2.x server on 2026-08-06 (throwaway port,
+throwaway store):
 
 | POST body | 2.x response |
 |---|---|
-| `{"message":"hi"}` — what `zoe_flue_client.py` sends today | **HTTP 400** `invalid_request` — *"Delivered messages must be `{ kind: "user", body: string, … }`"* |
+| `{"message":"hi"}` — the wire-1 shape | **HTTP 400** `invalid_request` — *"Delivered messages must be `{ kind: "user", body: string, … }`"* |
 | `{"kind":"user","body":"hi"}` | **HTTP 202** admitted |
 
-2.x also rejects `?wait=result`. So the client needs a wire selector — the
-`ZOE_FLUE_WIRE` flag tracked on the ideas board, **which does not exist in the
-code yet** (`grep ZOE_FLUE_WIRE services/` returns only `docs/IDEAS.md`).
-`parity/flue_wire.py` is the reference implementation of the 2.x wire
-(fire-and-forget admission + NDJSON stream read) and the model for that change.
-Until it lands, flipping `ZOE_FLUE_BRAIN_URL` alone breaks **every** brain turn.
-
-That client change touches a voice-path file, so it is replay-gated in its own
-right and belongs in its own PR.
+2.x also rejects `?wait=result`. Both misconfig directions are diagnosed in the
+client's logs: a wire-2 reply arriving on wire 1 names the flag, and a 1.x
+sidecar 400-ing the wire-2 body names it too. The flip below is therefore
+env-only: `ZOE_FLUE_WIRE=2` + `ZOE_FLUE_BRAIN_URL` together, never one alone.
 
 ### The flip (once the client change has landed)
 
