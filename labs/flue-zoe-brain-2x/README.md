@@ -208,9 +208,9 @@ Tests: `test/context_window.test.ts` (incl. an end-to-end fake llama-server).
 
 ## The output-budget clamp (why `contextWindow` is not the real window)
 
-`zoeLocalModel()` declares `contextWindow: contextWindowTokens() + 4096 + 2048`
-— **deliberately larger than llama-server's actual 8192-token window.** That
-looks wrong and is not.
+`zoeLocalModel()` declares
+`contextWindow: contextWindowTokens() + 4096 + outputBudgetTokens()` — **deliberately
+larger than llama-server's actual 8192-token slot.** That looks wrong and is not.
 
 pi-ai 0.83.0 added `clampMaxTokensToContext` (`dist/api/simple-options.js`),
 which every openai-completions request now passes through:
@@ -232,24 +232,51 @@ On 0.83 this field feeds *only* that clamp for this deployment (Flue's threshold
 compaction is pinned off at the agent), so it is sized to protect the output
 budget rather than to describe the server. The real prompt budget is enforced
 independently and earlier by `src/context-window.ts` — which is what makes the
-decoupling safe. The arithmetic: with `declared = W + 4096 + 2048`,
-`available = W + 2048 − prompt`, so **any prompt that llama-server would accept
-at all (`prompt ≤ W`) leaves the full 2048-token output budget.** The premise
-holds because the two estimators agree closely on the real path (measured 2937 vs
-2957 tokens on a live harness turn) and windowing keeps the prompt a further
+decoupling safe. The arithmetic: with `declared = W + 4096 + reserve`,
+`available = W + reserve − prompt`, so **any prompt that llama-server would
+accept at all (`prompt ≤ W`) leaves the full output budget.** The premise holds
+because the two estimators agree closely on the real path (measured 2937 vs 2957
+tokens on a live harness turn) and windowing keeps the prompt a further
 `ZOE_BRAIN_REPLY_RESERVE` below `W`.
+
+**`maxTokens` is the reply reserve, and that is the other half of the fix.**
+pi-ai's clamp exists to stop a caller asking for more output than the context can
+hold; defeating it means this deployment has to honour that constraint itself, or
+it has removed a guard and put nothing in its place. llama-server runs
+`--ctx-size 16384 --parallel 2` — an **8192-token slot per lane** — with context
+shifting off on this build, so generation that reaches the end of the slot simply
+stops with `finish_reason: "length"`. A flat 2048-token cap against a prompt at
+the full 6656-token budget asks for 8704 tokens of slot and is silently cut at
+1536: the same truncation, re-created from the other direction, and it would make
+step 6's assertion unsound. Tying the cap to the reserve gives
+
+```
+prompt ≤ W − reserve   (windowing)      output ≤ reserve   (the cap)
+⇒ prompt + output ≤ W  — the request always fits the slot
+```
+
+That bounds what the *clamp* and the *slot* can do to a reply; it does not make a
+`"length"` stop impossible. A model that genuinely writes past the reserve still
+stops on it — which on a brain whose replies run to tens of tokens is itself an
+anomaly, which is why step 6 says *any* length stop is a bug rather than *cannot
+happen*.
 
 `ZOE_BRAIN_CONTEXT_WINDOW=0` (windowing off) declares `0`, which pi-ai reads as
 *no clamp* — that removes the `prompt ≤ W` premise, so the honest guard becomes
-llama-server's loud 400 rather than a silent truncation.
+llama-server's loud 400 rather than a silent truncation. The reply cap does *not*
+collapse with it (`replyReserveTokens(0)` would be 0, and a falsy `maxTokens` is
+dropped from the wire entirely), so it falls back to the reserve sized against the
+default slot.
 
-**Do not re-tie this field to the windowing budget** "so they can never drift".
-That was the original rationale and it is precisely what caused the bug. Tests:
-`test/output_budget_clamp.test.ts` — it imports the real clamp from
-`node_modules` (so an upstream formula change turns it red), pins the 4096
-constant, and carries the pre-fix declaration as an explicit negative control
-that reproduces the recorded 8-token truncation. Operationally the guard is step
-6 of the flip runbook.
+**Do not re-tie the declared window to the windowing budget** "so they can never
+drift". That was the original rationale and it is precisely what caused the bug.
+Tests: `test/output_budget_clamp.test.ts` — it imports the real clamp from
+`node_modules` (so an upstream formula change turns it red), probes the 4096
+constant through that function rather than trusting the source, pins
+`prompt budget + output budget == slot` across several env configurations, and
+carries the pre-fix declaration as an explicit negative control that reproduces
+the recorded 8-token truncation (and `max_completion_tokens: 1` end-to-end on the
+wire). Operationally the guard is step 6 of the flip runbook.
 
 ## Seam-A sentinel streaming
 

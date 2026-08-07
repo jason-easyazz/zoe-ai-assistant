@@ -80,7 +80,11 @@ import {
   progressiveToolsEnabled,
   stripCodingBuiltins,
 } from '../tools/tool-groups.ts';
-import { contextWindowTokens, windowContextToBudget } from '../context-window.ts';
+import {
+  contextWindowTokens,
+  replyReserveTokens,
+  windowContextToBudget,
+} from '../context-window.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -300,11 +304,49 @@ export const cappedApi: ProviderStreams = {
 export const PI_AI_CONTEXT_SAFETY_TOKENS = 4096;
 
 /**
- * The output budget every turn on this brain is meant to have, in tokens. This
- * is `model.maxTokens` below, and it is the number the declared context window
- * is sized to protect.
+ * The output budget every turn on this brain is meant to have — `model.maxTokens`
+ * below, and the number `declaredContextWindow()` is sized to protect.
+ *
+ * IT IS THE REPLY RESERVE, not a separate constant (changed 2026-08-07; the port
+ * declared a flat 2048). `src/context-window.ts` windows the prompt to
+ * `contextWindowTokens() − replyReserveTokens()`, so the reserve IS the room
+ * left inside llama-server's slot for the reply — asking for more than it is
+ * asking for tokens the server has nowhere to put.
+ *
+ * WHY THAT MATTERS HERE, and it is a direct consequence of the fix below.
+ * `clampMaxTokensToContext` exists upstream to stop a caller requesting more
+ * output than the context can hold. `declaredContextWindow()` deliberately
+ * defeats that clamp, so this deployment must honour the constraint itself or it
+ * has removed a guard and put nothing in its place. Concretely: llama-server
+ * runs `--ctx-size 16384 --parallel 2`, i.e. an 8192-token SLOT per lane, and
+ * context shifting is OFF on this build (`get_can_shift()` is false whenever the
+ * SWA and base caches differ in size, which they do without `--swa-full` — see
+ * scripts/setup/systemd/llama-server.service). So generation that reaches the
+ * end of the slot simply stops with `finish_reason: "length"`. A flat 2048
+ * against a prompt at the full 6656-token budget would ask for 8704 tokens of
+ * slot and be silently cut at 1536 — re-creating, from the other direction, the
+ * exact truncation this PR exists to remove, and making the flip runbook's
+ * zero-length-stop assertion unsound. Tying the cap to the reserve gives
+ * `prompt + output ≤ (W − reserve) + reserve = W`: the request always fits.
+ *
+ * Not a regression against 1.x, which declared no `maxTokens` at all and was
+ * bounded by the server's own slot: at a full prompt that bound is exactly this
+ * reserve, and at a short prompt this is merely the more conservative of the two
+ * (a 7000-token reply from a voice brain is a defect, not a feature).
+ *
+ * WINDOWING OFF is the one case that needs a fallback. `replyReserveTokens` is
+ * clamped to half its argument, so `replyReserveTokens(0)` is 0 — which would
+ * declare `maxTokens: 0` and, being falsy, drop the cap from the wire entirely.
+ * With `ZOE_BRAIN_CONTEXT_WINDOW=0` there is no prompt bound and therefore no
+ * `prompt + output ≤ W` to honour, so size the reserve against the default slot
+ * instead: the operator still gets a sane, configurable reply cap in the
+ * unguarded A/B mode rather than an accidental one.
  */
-export const ZOE_MAX_OUTPUT_TOKENS = 2048;
+const SLOT_TOKENS_WHEN_WINDOWING_OFF = 8192;
+
+export function outputBudgetTokens(): number {
+  return replyReserveTokens(contextWindowTokens() || SLOT_TOKENS_WHEN_WINDOWING_OFF);
+}
 
 /**
  * The `contextWindow` this model DECLARES to pi-ai — deliberately NOT the real
@@ -340,15 +382,28 @@ export const ZOE_MAX_OUTPUT_TOKENS = 2048;
  *
  * THE ARITHMETIC, stated as the invariant the test pins. With
  *
- *     declared = W + PI_AI_CONTEXT_SAFETY_TOKENS + ZOE_MAX_OUTPUT_TOKENS
+ *     declared = W + PI_AI_CONTEXT_SAFETY_TOKENS + outputBudgetTokens()
  *
- * where `W = contextWindowTokens()` is llama-server's `--ctx-size`, the clamp
- * yields `available = W + ZOE_MAX_OUTPUT_TOKENS − prompt`, so for ANY prompt
- * that would fit the server at all (`prompt ≤ W`) the clamp leaves at least the
- * full intended output budget and `min(2048, available)` is 2048. The guarantee
- * therefore holds for the real tokenizer count, not merely for our chars/4
- * estimate — a prompt big enough to break it would already have been rejected
- * by llama-server with a 400.
+ * where `W = contextWindowTokens()` is llama-server's slot size, the clamp
+ * yields `available = W + outputBudgetTokens() − prompt`, so for ANY prompt that
+ * would fit the server at all (`prompt ≤ W`) the clamp leaves at least the full
+ * intended output budget, and `min(budget, available)` is the budget. The
+ * guarantee therefore holds for the real tokenizer count, not merely for our
+ * chars/4 estimate — a prompt big enough to break it would already have been
+ * rejected by llama-server with a 400.
+ *
+ * The two halves fit together in one line, and this is the property the flip
+ * runbook's zero-length-stop assertion rests on:
+ *
+ *     prompt ≤ W − reserve   (our windowing)
+ *     output ≤ reserve       (outputBudgetTokens, protected by the declaration)
+ *     ⇒ prompt + output ≤ W  (the request always fits the slot)
+ *
+ * Stated honestly, that bounds what the CLAMP and the SLOT can do to a reply; it
+ * does not promise a `"length"` stop is impossible. A model that genuinely wants
+ * to write past the reserve still stops on it — which on a voice brain whose
+ * replies run to tens of tokens is itself an anomaly worth investigating, and is
+ * why the gate says "any length stop is a bug", not "cannot happen".
  *
  * WINDOWING OFF ⇒ CLAMP OFF. `ZOE_BRAIN_CONTEXT_WINDOW=0` explicitly disables
  * our windowing (the documented A/B escape hatch), which removes the `prompt ≤ W`
@@ -363,7 +418,7 @@ export const ZOE_MAX_OUTPUT_TOKENS = 2048;
 export function declaredContextWindow(): number {
   const windowTokens = contextWindowTokens();
   if (windowTokens <= 0) return 0;
-  return windowTokens + PI_AI_CONTEXT_SAFETY_TOKENS + ZOE_MAX_OUTPUT_TOKENS;
+  return windowTokens + PI_AI_CONTEXT_SAFETY_TOKENS + outputBudgetTokens();
 }
 
 /**
@@ -392,7 +447,9 @@ export function declaredContextWindow(): number {
  *     `clampMaxTokensToContext(model, context, options?.maxTokens ??
  *     model.maxTokens)`, so `model.maxTokens` is the fallback the agent path
  *     actually uses — pi-agent-core never sets `options.maxTokens` on this loop
- *     — and passing one explicitly would not escape the clamp either.)
+ *     — and passing one explicitly would not escape the clamp either.) It is the
+ *     reply reserve, so the request always fits llama-server's slot; see
+ *     `outputBudgetTokens`.
  *   - `cost` — all zeros; a local model bills nothing.
  * Threshold compaction is disabled at the agent (`useModel(..., { compaction:
  * false })`) — src/context-window.ts explains why this deployment windows at the
@@ -409,7 +466,7 @@ export function zoeLocalModel(): Model<'openai-completions'> {
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: declaredContextWindow(),
-    maxTokens: ZOE_MAX_OUTPUT_TOKENS,
+    maxTokens: outputBudgetTokens(),
   };
 }
 

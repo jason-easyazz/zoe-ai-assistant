@@ -20,24 +20,28 @@
  * `ConversationRecordInvariantError` — the CANT_DO that killed the flip.
  *
  * THE FIX: `declaredContextWindow()` decouples the DECLARED window from the
- * windowing budget — `contextWindowTokens() + 4096 + 2048` — so for any prompt
- * that would fit llama-server at all the clamp leaves the full intended output
- * budget. The real prompt budget stays enforced by src/context-window.ts.
+ * windowing budget — `contextWindowTokens() + 4096 + outputBudgetTokens()` — so
+ * for any prompt that would fit llama-server at all the clamp leaves the full
+ * intended output budget. The real prompt budget stays enforced by
+ * src/context-window.ts, and the output budget IS its reply reserve, so
+ * `prompt + output ≤ W` and the request always fits the server's slot.
  *
  * Proven here:
  *   - the upstream clamp still has the shape and the 4096 safety constant this
  *     fix is sized against (an instrument check — the REAL function is imported
  *     from node_modules, never re-implemented);
  *   - at the full prompt budget, at the hard server ceiling, and across a sweep
- *     in between, the real clamp leaves exactly ZOE_MAX_OUTPUT_TOKENS;
+ *     in between, the real clamp leaves exactly outputBudgetTokens();
  *   - NEGATIVE CONTROL: reverting to the pre-fix declaration on the identical
  *     context reproduces the store's recorded truncation (8 output tokens at the
  *     observed prompt size, 1 at budget) — so a regression cannot pass silently;
  *   - windowing disabled (ZOE_BRAIN_CONTEXT_WINDOW=0) disables the clamp rather
  *     than strangling output by an unbounded amount;
+ *   - the output budget equals the reply reserve, so prompt budget + output
+ *     budget is exactly the slot size across several env configurations;
  *   - END TO END through the real agent: a multi-turn session's request carries
- *     `max_completion_tokens: 2048` on the wire, at a prompt size where the
- *     pre-fix declaration would have left a handful of tokens.
+ *     the full output budget on the wire, at a prompt size where the pre-fix
+ *     declaration would have left a handful of tokens.
  *
  * INSTRUMENT CAVEAT, learned the hard way while building this. pi-ai's estimator
  * and ours agree closely on the REAL path (measured 2937 vs 2957 tokens on a
@@ -67,7 +71,7 @@ const {
   declaredContextWindow,
   zoeLocalModel,
   PI_AI_CONTEXT_SAFETY_TOKENS,
-  ZOE_MAX_OUTPUT_TOKENS,
+  outputBudgetTokens,
 } = await import('../src/providers/capped-completions.ts');
 const { contextWindowTokens, replyReserveTokens } = await import(
   '../src/context-window.ts'
@@ -150,14 +154,48 @@ test('declaredContextWindow is the real window plus the clamp overhead', () => {
   resetEnv();
   assert.equal(
     declaredContextWindow(),
-    8192 + PI_AI_CONTEXT_SAFETY_TOKENS + ZOE_MAX_OUTPUT_TOKENS,
+    8192 + PI_AI_CONTEXT_SAFETY_TOKENS + outputBudgetTokens(),
   );
-  assert.equal(declaredContextWindow(), 14336);
+  assert.equal(declaredContextWindow(), 8192 + 4096 + 1536);
   assert.equal(zoeLocalModel().contextWindow, declaredContextWindow());
-  assert.equal(zoeLocalModel().maxTokens, ZOE_MAX_OUTPUT_TOKENS);
+  assert.equal(zoeLocalModel().maxTokens, outputBudgetTokens());
 
   process.env.ZOE_BRAIN_CONTEXT_WINDOW = '4096';
-  assert.equal(declaredContextWindow(), 4096 + 4096 + 2048);
+  assert.equal(declaredContextWindow(), 4096 + 4096 + 1536);
+  resetEnv();
+});
+
+test('the output budget IS the reply reserve, so a request always fits the slot', () => {
+  resetEnv();
+  // The property the flip runbook's zero-length-stop assertion rests on:
+  // llama-server runs an 8192-token SLOT with context shifting OFF, so a request
+  // for prompt + output > W is cut mid-reply by the server no matter what pi-ai
+  // clamped to. Windowing bounds the prompt at W − reserve; the output cap is the
+  // reserve; the sum is exactly W.
+  for (const [window, reserve] of [
+    [undefined, undefined],
+    ['4096', undefined],
+    [undefined, '512'],
+    ['2048', '4096'], // reserve clamped to half the window
+  ] as [string | undefined, string | undefined][]) {
+    resetEnv();
+    if (window) process.env.ZOE_BRAIN_CONTEXT_WINDOW = window;
+    if (reserve) process.env.ZOE_BRAIN_REPLY_RESERVE = reserve;
+
+    const w = contextWindowTokens();
+    const promptBudget = w - replyReserveTokens(w);
+    assert.equal(outputBudgetTokens(), replyReserveTokens(w));
+    assert.equal(
+      promptBudget + outputBudgetTokens(),
+      w,
+      `prompt budget + output budget must equal the slot (window=${window}, reserve=${reserve})`,
+    );
+    // ...and the clamp still leaves that whole output budget at a full prompt.
+    assert.equal(
+      sentMaxTokens(zoeLocalModel(), contextOfExactly(promptBudget)),
+      outputBudgetTokens(),
+    );
+  }
   resetEnv();
 });
 
@@ -165,11 +203,21 @@ test('windowing off declares 0, which turns the clamp off rather than strangling
   process.env.ZOE_BRAIN_CONTEXT_WINDOW = '0';
   assert.equal(contextWindowTokens(), 0, 'precondition: windowing is disabled');
   assert.equal(declaredContextWindow(), 0);
+  // The reply cap must NOT collapse with the window: replyReserveTokens(0) is 0,
+  // and a falsy maxTokens is dropped from the wire entirely, so the fallback to
+  // the default slot is load-bearing rather than cosmetic.
+  assert.equal(outputBudgetTokens(), 1536, 'reply cap survives windowing being off');
+  assert.equal(zoeLocalModel().maxTokens, 1536);
+
   const model = zoeLocalModel();
   // An absurdly large prompt still gets the full output budget: with our
   // windowing off there is no `prompt ≤ W` premise to size a margin against, so
   // the honest guard is llama-server's loud 400, not a silent truncation.
-  assert.equal(sentMaxTokens(model, contextOfExactly(50_000)), ZOE_MAX_OUTPUT_TOKENS);
+  assert.equal(sentMaxTokens(model, contextOfExactly(50_000)), outputBudgetTokens());
+
+  // ...and the operator's own reserve still applies in that mode.
+  process.env.ZOE_BRAIN_REPLY_RESERVE = '768';
+  assert.equal(outputBudgetTokens(), 768);
   resetEnv();
 });
 
@@ -182,7 +230,7 @@ test('a prompt at the full real budget still gets the whole output budget', () =
   assert.equal(budget, 6656, 'precondition: the documented default prompt budget');
 
   const context = contextOfExactly(budget);
-  assert.equal(sentMaxTokens(zoeLocalModel(), context), ZOE_MAX_OUTPUT_TOKENS);
+  assert.equal(sentMaxTokens(zoeLocalModel(), context), outputBudgetTokens());
 
   // NEGATIVE CONTROL — revert the declared window to the pre-fix value and the
   // same prompt is strangled to a single token.
@@ -195,7 +243,7 @@ test('even a prompt at the hard llama-server ceiling keeps the full output budge
   // W is the largest prompt llama-server would accept at all; anything past it
   // is a 400 regardless of what we declare. So this is the worst admissible case.
   const context = contextOfExactly(window);
-  assert.equal(sentMaxTokens(zoeLocalModel(), context), ZOE_MAX_OUTPUT_TOKENS);
+  assert.equal(sentMaxTokens(zoeLocalModel(), context), outputBudgetTokens());
   assert.equal(sentMaxTokens(preFixModel(), context), 1);
 });
 
@@ -204,10 +252,10 @@ test('the pre-fix declaration reproduces the truncation recorded in the 2.x stor
   // The store's failing record: usage.input 3900, stopReason "length", output 8.
   // pi-ai's estimate of that prompt is 8192 − 4096 − 8 = 4088 tokens; at exactly
   // that size the pre-fix declaration yields the recorded 8-token budget, and
-  // the fix yields the full 2048.
+  // the fix yields the whole reserve.
   const context = contextOfExactly(4088);
   assert.equal(sentMaxTokens(preFixModel(), context), 8, 'the recorded failure');
-  assert.equal(sentMaxTokens(zoeLocalModel(), context), ZOE_MAX_OUTPUT_TOKENS);
+  assert.equal(sentMaxTokens(zoeLocalModel(), context), outputBudgetTokens());
 });
 
 test('across every admissible prompt size the fix never cuts the output budget', () => {
@@ -218,21 +266,21 @@ test('across every admissible prompt size the fix never cuts the output budget',
     const context = contextOfExactly(prompt);
     assert.equal(
       sentMaxTokens(zoeLocalModel(), context),
-      ZOE_MAX_OUTPUT_TOKENS,
+      outputBudgetTokens(),
       `output budget cut at a ${prompt}-token prompt`,
     );
     if (
       firstStrangledPreFix === null &&
-      sentMaxTokens(preFixModel(), context) < ZOE_MAX_OUTPUT_TOKENS
+      sentMaxTokens(preFixModel(), context) < outputBudgetTokens()
     ) {
       firstStrangledPreFix = prompt;
     }
   }
   // The control again: the pre-fix declaration starts cutting the output budget
-  // once the prompt passes 8192 − 4096 − 2048 = 2048 tokens — a quarter of the
-  // window, and well inside the 6656-token prompt budget windowing allows. The
-  // first sweep step past that is 2176.
-  assert.equal(firstStrangledPreFix, 2176);
+  // once the prompt passes 8192 − 4096 − 1536 = 2560 tokens — under a third of
+  // the window, and well inside the 6656-token prompt budget windowing allows.
+  // The first sweep step past that is 2688.
+  assert.equal(firstStrangledPreFix, 2688);
 });
 
 // ─── end to end: what the real agent actually puts on the wire ───────────────
@@ -263,7 +311,7 @@ test('a real multi-turn session sends the full output budget to llama-server', a
     const sent = raw.max_completion_tokens ?? raw.max_tokens;
     assert.equal(
       sent,
-      ZOE_MAX_OUTPUT_TOKENS,
+      outputBudgetTokens(),
       'the real wire request must carry the full output budget',
     );
 

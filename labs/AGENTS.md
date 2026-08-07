@@ -196,8 +196,11 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   pi-ai 0.83 added an output clamp that reads that field, and declaring the real
   8192 left ~6 output tokens on a full prompt, truncating replies and killing
   tool turns (the 2026-08-06 flip's `CANT_DO`). It declares
-  `contextWindowTokens() + 4096 + 2048`; the real prompt budget stays enforced by
-  `src/context-window.ts`. Do not re-tie the two. See `test/output_budget_clamp.test.ts`
+  `contextWindowTokens() + 4096 + outputBudgetTokens()`; the real prompt budget
+  stays enforced by `src/context-window.ts`. Do not re-tie the two. Defeating that
+  clamp means honouring its constraint ourselves, so `maxTokens` is the reply
+  reserve — `prompt + output ≤ W`, the request always fits llama-server's 8192-token
+  slot (context shifting is off on this build). See `test/output_budget_clamp.test.ts`
   and the README's "output-budget clamp" section.
   **Flip gate:** the runbook's post-flip step 6 asserts ZERO `stopReason:"length"`
   records via `parity/count_length_stops.py` (read-only; pinned both directions by
