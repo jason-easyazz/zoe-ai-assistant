@@ -414,6 +414,19 @@ export function outputBudgetTokens(): number {
  * truncation. (The pre-fix code declared 8192 here instead, which is the one
  * configuration where this fix changes behaviour by ADDING an overflow risk that
  * was already the stated cost of turning windowing off.)
+ *
+ * SNAPSHOT SEMANTICS, stated because the two sides are read at different times.
+ * `Model` is a plain object in a static `models: []` list, so this function runs
+ * ONCE, when `createZoeProvider()` builds the provider at module load — the same
+ * boot-time snapshot `baseUrl` already takes (see test/helpers/harness.ts).
+ * `contextWindowTokens()` inside `windowContextToBudget`, by contrast, is read
+ * fresh on every model call. The `prompt ≤ W` premise therefore assumes the env
+ * does not change after boot, which for a systemd unit it cannot. Mutating
+ * ZOE_BRAIN_CONTEXT_WINDOW mid-process (only tests do) moves the windowing
+ * budget without moving the declaration; that is the pre-existing behaviour of
+ * this field, not something the fix introduces, and it is safe in the direction
+ * that matters — a LOWERED window shrinks the prompt against an unchanged, now
+ * over-generous declaration.
  */
 export function declaredContextWindow(): number {
   const windowTokens = contextWindowTokens();
