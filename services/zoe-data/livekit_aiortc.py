@@ -124,11 +124,14 @@ class _AudioStream:
                 # measured on av 16.1.0 (48 kHz stereo -> 16 kHz mono s16),
                 # samples=160 gives a 448-byte plane for 320 valid bytes —
                 # 128 bytes (28.6%) of trailing junk appended to every frame.
-                # The padding is NOT zero-filled: the resampler recycles its
-                # buffer pool, so it carries stale PCM from earlier frames
-                # (measured peak |sample| 32638 in the padding of frames whose
-                # input was pure silence). That both corrupts and time-stretches
-                # the PCM handed to the VAD and to STT.
+                # The padding is UNINITIALISED HEAP, not recycled audio: the
+                # resampler ping-pongs between plane buffers whose pad region
+                # keeps whatever bytes av_malloc handed over at allocation time
+                # (measured: an all-silent source produced pad peaks ABOVE a
+                # loud source's own peak — stale PCM cannot explain that; it
+                # may equally come back all zero, which flaked a test control,
+                # PR #1662). Either way the junk both corrupts and
+                # time-stretches the PCM handed to the VAD and to STT.
                 # to_ndarray() returns shape (1, samples) for mono s16 and is
                 # bit-identical to the valid prefix on av 16.1.0 and 17.1.0.
                 raw = out_frame.to_ndarray().tobytes()

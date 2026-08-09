@@ -56,7 +56,9 @@ under `flock /tmp/zoe-voice-harness.lock`; new test files must be reachable by C
 ---
 
 ## Live brain topology (verified — the basis for PR A)
-3-way dispatch, `services/zoe-data/brain_dispatch.py`, priority **flue > core > legacy**.
+3-way dispatch, `services/zoe-data/brain_dispatch.py`, configured lane selection
+**flue > core > legacy** (evaluated once per turn from the env — NOT runtime
+failover; failover behind `ZOE_BRAIN_FAILOVER`, default off).
 Code default is `core`; **the live host `.env:262` sets `ZOE_BRAIN_BACKEND=flue`**, so:
 - **flue = LIVE.** `zoe_flue_client.py` → Flue Pi-`Agent` sidecar `labs/flue-zoe-brain` on
   `:3578` (systemd user unit `enabled+active`, token auth). Standalone reimpl: persona is a

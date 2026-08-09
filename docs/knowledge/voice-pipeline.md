@@ -135,6 +135,32 @@ commands for real. Flip back to `inprocess` only when the live service itself is
 under test. Expect ~5% single-turn brain flake on a busy box: one CANT_DO in 20 fails the gate
 by design (said-vs-did is zero-tolerance) — re-run before treating it as a real regression.
 
+**Write isolation takes TWO mechanisms, because a turn has two executors.** `allow_writes=False`
+governs `fast_tiers` only. On brain fall-through the turn reaches the flue sidecar, whose tools run
+with `ZOE_BRAIN_ALLOW_WRITES=true` (both lanes' `.env`), so a corpus command — "remember X", "add
+bread to the list", "turn on the kitchen light" — used to execute a REAL write into live zoe-data on
+every gate run. The probe's soft-delete swept only `events` and `list_items`; reminders, notes,
+journal entries, people, users, lists, MemPalace memories, Home Assistant device state and Music
+Assistant playback all leaked silently, and each NEW mutating tool leaked by default.
+
+`replay_samples.py` now sends a per-request **replay marker** — a ` zoe-replay:1` envelope line
+riding ahead of the ` zoe-uid:` identity line, bound to the turn's AbortSignal by the sidecar and
+read at the write gate (`zoe_flue_client._wrap_message_with_replay` → `src/replay-mode.ts` →
+`runWrite`). The tool reports the write as done and commits nothing. Three properties are
+load-bearing:
+
+- **It returns SUCCESS text, not a refusal** — which is why this is not simply
+  `ZOE_BRAIN_ALLOW_WRITES=false`. `_classify` scores a turn on the reply TEXT and never reads the
+  database, so success-shaped isolation leaves every verdict unchanged; the env-flip refusal text
+  matches `_CANT_DO_RE` and would redden the gate on every write command in the corpus. (It is also
+  a module-LOAD const, so flipping it needs a sidecar restart in both directions.)
+- **Reads are untouched** — the gate still needs real recall to score said-vs-did.
+- **Absent marker = today's bytes.** Live traffic is unaffected; the seam also strips any
+  user-typed marker line so a user cannot forge it and void their own writes.
+
+The soft-delete sweep stays as a safety net for the `fast_tiers` half and `--execute` runs. Do NOT
+grow it class-by-class — that race is unwinnable, which is the gap the marker closes.
+
 **Run it from a git worktree with no flags** — and that now holds for the lower-level
 `scripts/perf/measure_voice.py` and `measure_tts.py` run DIRECTLY, too. The voice path needs the LIVE
 `services/zoe-data/.env`, which is gitignored and therefore absent in a worktree. `--service-dir`

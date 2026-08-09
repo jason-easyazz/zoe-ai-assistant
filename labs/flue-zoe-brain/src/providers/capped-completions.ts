@@ -44,6 +44,11 @@ import {
   forwardedIdentityFromMessages,
   stripIdentityEnvelope,
 } from '../request-identity.ts';
+import {
+  bindTurnReplayMode,
+  forwardedReplayFromMessages,
+  stripReplayEnvelope,
+} from '../replay-mode.ts';
 // FLUE-API: built-in OpenAI-completions wire handlers, imported via pi-ai's public
 // subpath export and verified present (streamOpenAICompletions / streamSimpleOpenAICompletions).
 import {
@@ -139,9 +144,13 @@ function applyCap(context: Context): Context {
  * Exported for the offline unit tests only.
  */
 export function applyPolicies(context: Context): Context {
-  // Strip the acting-identity envelope BEFORE any other policy so the model — and
-  // every downstream transform — only ever sees the human-authored message text.
-  const clean = { ...context, messages: stripIdentityEnvelope(context.messages) };
+  // Strip the control envelopes BEFORE any other policy so the model — and every
+  // downstream transform — only ever sees the human-authored message text. The
+  // replay marker rides AHEAD of the identity line on the wire (both parsers are
+  // ^-anchored), so it must come off first or the identity line is never at the
+  // start of the message. See src/replay-mode.ts "WIRE ORDER".
+  const unwrapped = stripReplayEnvelope(context.messages);
+  const clean = { ...context, messages: stripIdentityEnvelope(unwrapped) };
   const windowed = windowContextToBudget(clean);
   const safe = stripCodingBuiltins(windowed);
   const disclosed = progressiveToolsEnabled() ? discloseTools(safe) : safe;
@@ -160,7 +169,13 @@ export function applyPolicies(context: Context): Context {
  * `applyPolicies` strips the envelope so the model never sees it.
  */
 export function bindIdentityForRound(context: Context, signal?: AbortSignal): void {
-  bindTurnUserId(signal, forwardedIdentityFromMessages(context.messages));
+  // Replay isolation binds from the SAME trusted envelope, on the same signal key,
+  // for the same reason (Flue drops every body field but the message). Read it
+  // first and hand the identity parser the replay-stripped messages: the replay
+  // line sits ahead of the identity line on the wire and both regexes are
+  // ^-anchored, so parsing identity off the raw messages would find nothing.
+  bindTurnReplayMode(signal, forwardedReplayFromMessages(context.messages));
+  bindTurnUserId(signal, forwardedIdentityFromMessages(stripReplayEnvelope(context.messages)));
 }
 
 /**
