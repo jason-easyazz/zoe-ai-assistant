@@ -192,7 +192,15 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   tool-cap wrap-up note moved off the system prompt, and tool disclosure derives
   from the pre-window basis — see `src/context-window.ts` and
   `test/context_window_anchor.test.ts`.
-  Regression net (hand-run, not CI-wired): `npm test` — 20 `test/*.test.ts` files
+  Carries the beta sibling's per-request **replay isolation** too, and must keep
+  it: this port's `.env` also sets `ZOE_BRAIN_ALLOW_WRITES=true`, so without it a
+  voice replay-gate run commits real writes into live zoe-data at cutover. The
+  seam-forwarded ` zoe-replay:1` marker rides AHEAD of the identity line on the
+  wire, is bound per-turn by the AbortSignal in the capped-completions provider,
+  and makes `runWrite` return its success text without dispatching
+  (`src/replay-mode.ts`, `test/replay_isolation.test.ts`). `set_timer` needs its
+  own check — it does not route through `runWrite`.
+  Regression net (hand-run, not CI-wired): `npm test` — 21 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a
