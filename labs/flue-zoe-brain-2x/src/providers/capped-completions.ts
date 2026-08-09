@@ -74,13 +74,23 @@ import {
   forwardedIdentityFromMessages,
   stripIdentityEnvelope,
 } from '../request-identity.ts';
+import {
+  bindTurnReplayMode,
+  forwardedReplayFromMessages,
+  stripReplayEnvelope,
+} from '../replay-mode.ts';
 // .ts extension so the offline strip-types tests can resolve it (see zoe-tools.ts).
 import {
   discloseTools,
   progressiveToolsEnabled,
   stripCodingBuiltins,
 } from '../tools/tool-groups.ts';
-import { contextWindowTokens, windowContextToBudget } from '../context-window.ts';
+import {
+  contextWindowTokens,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  replyReserveTokens,
+  windowContextToBudget,
+} from '../context-window.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -185,9 +195,13 @@ export function applyCap(context: Context): Context {
  * makes the tool block a stable prompt prefix.
  */
 export function applyPolicies(context: Context): Context {
-  // Strip the acting-identity envelope BEFORE any other policy so the model — and
-  // every downstream transform — only ever sees the human-authored message text.
-  const clean = { ...context, messages: stripIdentityEnvelope(context.messages) };
+  // Strip the control envelopes BEFORE any other policy so the model — and every
+  // downstream transform — only ever sees the human-authored message text. The
+  // replay marker rides AHEAD of the identity line on the wire (both parsers are
+  // ^-anchored), so it must come off first or the identity line is never at the
+  // start of the message. See src/replay-mode.ts "WIRE ORDER".
+  const unwrapped = stripReplayEnvelope(context.messages);
+  const clean = { ...context, messages: stripIdentityEnvelope(unwrapped) };
   const windowed = windowContextToBudget(clean);
   const safe = stripCodingBuiltins(windowed);
   const disclosed = progressiveToolsEnabled()
@@ -214,7 +228,13 @@ export function applyPolicies(context: Context): Context {
  * test/request_identity_concurrency.test.ts, not assumed.
  */
 export function bindIdentityForRound(context: Context, signal?: AbortSignal): void {
-  bindTurnUserId(signal, forwardedIdentityFromMessages(context.messages));
+  // Replay isolation binds from the SAME trusted envelope, on the same signal key,
+  // for the same reason (Flue drops every body field but the message). Read it
+  // first and hand the identity parser the replay-stripped messages: the replay
+  // line sits ahead of the identity line on the wire and both regexes are
+  // ^-anchored, so parsing identity off the raw messages would find nothing.
+  bindTurnReplayMode(signal, forwardedReplayFromMessages(context.messages));
+  bindTurnUserId(signal, forwardedIdentityFromMessages(stripReplayEnvelope(context.messages)));
 }
 
 const DEFAULT_TEMPERATURE = 0.5;
@@ -288,6 +308,180 @@ export const cappedApi: ProviderStreams = {
 };
 
 /**
+ * pi-ai 0.83.0's own output-clamp safety margin — `CONTEXT_SAFETY_TOKENS` in
+ * node_modules/@earendil-works/pi-ai/dist/api/simple-options.js, a module-private
+ * `const` with no export and no env knob.
+ *
+ * Nothing in this module's arithmetic depends on it any more (the clamp is off —
+ * see `declaredContextWindow`). It is kept, and exported, because
+ * `test/output_budget_clamp.test.ts` needs it to RECONSTRUCT the two rejected
+ * declarations and show them strangling output. That is what stops a future
+ * reader re-proposing them: the controls are executable, not anecdotal. The test
+ * probes the real value through `clampMaxTokensToContext` and asserts it equals
+ * this constant, so an upstream change to either the formula or the number is
+ * caught rather than silently shrinking the margin the controls assume.
+ */
+export const PI_AI_CONTEXT_SAFETY_TOKENS = 4096;
+
+/**
+ * The output budget every turn on this brain is meant to have — `model.maxTokens`
+ * below, and the number `declaredContextWindow()` is sized to protect.
+ *
+ * IT IS THE REPLY RESERVE, not a separate constant (changed 2026-08-07; the port
+ * declared a flat 2048). `src/context-window.ts` windows the prompt to
+ * `contextWindowTokens() − replyReserveTokens()`, so the reserve IS the room
+ * left inside llama-server's slot for the reply — asking for more than it is
+ * asking for tokens the server has nowhere to put.
+ *
+ * WHY THAT MATTERS HERE. `declaredContextWindow()` below turns pi-ai's output
+ * clamp OFF, and that clamp is the thing upstream uses to stop a caller
+ * requesting more output than the context can hold. Disabling it without
+ * replacing it would remove a guard and put nothing in its place. So THIS is the
+ * replacement, and it is a stronger one because it is computed from the same
+ * budget the prompt is windowed to rather than from an estimate.
+ *
+ * Concretely: llama-server runs `--ctx-size 16384 --parallel 2`, i.e. an
+ * 8192-token SLOT per lane, and context shifting is OFF on this build
+ * (`get_can_shift()` is false whenever the SWA and base caches differ in size,
+ * which they do without `--swa-full` — see
+ * scripts/setup/systemd/llama-server.service). Generation that reaches the end of
+ * the slot simply stops with `finish_reason: "length"`. A flat 2048 against a
+ * prompt at the full 6656-token budget would ask for 8704 tokens of slot and be
+ * silently cut at 1536 — re-creating, from the other direction, the exact
+ * truncation this PR exists to remove. Tying the cap to the reserve gives
+ * `prompt + output ≤ (W − reserve) + reserve = W`: the request always fits.
+ *
+ * Not a regression against 1.x, which declared no `maxTokens` at all and was
+ * bounded by the server's own slot: at a full prompt that bound is exactly this
+ * reserve, and at a short prompt this is merely the more conservative of the two
+ * (a 7000-token reply from a voice brain is a defect, not a feature).
+ *
+ * TWO HONEST LIMITS on `prompt + output ≤ W`, both inherited from the windowing
+ * side rather than introduced here (src/context-window.ts documents both):
+ * the prompt bound is in OUR chars/4 ESTIMATE, not tokenizer tokens; and
+ * `windowHeadIndex`'s safety valve never drops the newest block, so one enormous
+ * turn can exceed the budget by construction. Neither is silent — llama-server
+ * answers an over-long prompt with a loud 400.
+ *
+ * WINDOWING OFF needs a fallback. `replyReserveTokens` is clamped to half its
+ * argument, so `replyReserveTokens(0)` is 0 — which would declare `maxTokens: 0`
+ * and, being falsy, drop the cap from the wire entirely. With
+ * `ZOE_BRAIN_CONTEXT_WINDOW=0` there is no prompt bound and therefore no
+ * `prompt + output ≤ W` to honour, so size the reserve against the slot default
+ * instead: the operator still gets a sane, configurable reply cap in the
+ * unguarded A/B mode rather than an accidental absence of one.
+ */
+export function outputBudgetTokens(): number {
+  return replyReserveTokens(contextWindowTokens() || DEFAULT_CONTEXT_WINDOW_TOKENS);
+}
+
+/**
+ * The `contextWindow` this model DECLARES to pi-ai. It is **0 — deliberately**,
+ * which pi-ai reads as "do not clamp my output".
+ *
+ * THE BUG THIS FIXES (reproduced 3×, PR #1616): pi-ai 0.83.0 added
+ * `clampMaxTokensToContext` (dist/api/simple-options.js), which every
+ * openai-completions request now flows through via `buildBaseOptions`:
+ *
+ *     available = model.contextWindow − estimateContextTokens(context).tokens − 4096
+ *     maxTokens = min(maxTokens, max(1, available))
+ *
+ * 0.79.10 (the 1.x lane) ships `dist/providers/simple-options.js` with NO clamp
+ * at all — its `buildBaseOptions(_model, options, apiKey)` does not even receive
+ * the context and passes `options?.maxTokens` straight through — and the 1.x
+ * provider declared no `contextWindow`. So nothing clamped there, and the port
+ * carried that assumption forward. (Check the FUNCTION on a pi-ai bump, not the
+ * file: a `simple-options.js` exists in both versions, at different paths.)
+ *
+ * Declaring the REAL 8192 window meant a ~4090-token estimate left
+ * `8192 − 4090 − 4096 ≈ 6` tokens of output — replies truncated to 1-8 tokens
+ * with `stopReason: "length"` (verbatim from the 2.x store: output 1, 3, 7, 8).
+ * Worse, pi-agent-core 0.83.0's `failToolCallsFromTruncatedMessage` refuses to
+ * execute tool calls off a length-stopped message and writes a `tool_outcome`
+ * with no `tool_results_committed`, so the very next reduce throws
+ * `ConversationRecordInvariantError` and kills the whole turn.
+ *
+ * WHY 0, AND NOT A BIGGER NUMBER — the part that cost two review rounds, so it is
+ * written down rather than re-derived. The obvious fix is to declare a window
+ * inflated by the clamp's own overheads (`W + 4096 + reserve`) so the subtraction
+ * can never bite. THAT DOES NOT WORK, because the clamp's second argument is not
+ * the prompt. `estimateContextTokens` (pi-ai dist/utils/estimate.js) is
+ * USAGE-ANCHORED: when any retained assistant message carries usage with
+ * `calculateContextTokens(usage) > 0` — which, after turn 1, is always, since
+ * @flue/runtime rebuilds assistant messages with their recorded `usage` — it
+ * returns
+ *
+ *     lastAssistantUsage.totalTokens + Σ estimateMessageTokens(messages after it)
+ *
+ * and ignores `systemPrompt` and `tools` entirely on that branch. Three
+ * consequences, each measured rather than argued:
+ *
+ *   1. The anchor already includes the PREVIOUS turn's completion, so it can
+ *      reach `(W − reserve) + reserve = W` on its own, leaving the inflated
+ *      declaration exactly zero headroom for the trailing term.
+ *   2. The trailing term is UNBOUNDED — it is this turn's tool results, which
+ *      `windowHeadIndex` keeps unconditionally (the newest block is never
+ *      dropped). A `recall_memory` packet alone is thousands of tokens.
+ *   3. Windowing cannot rescue it. Dropping old blocks lowers the real prompt but
+ *      never rebases the stale anchor, so the overestimate GROWS precisely when
+ *      windowing starts working.
+ *
+ * Measured against the real installed clamp with `declared = W + 4096 + reserve`
+ * (= 13824) and a usage-anchored context — the shapes production actually takes:
+ *
+ *     prompt at budget + reply 1536, new user msg 40 tok   → maxTokens 1496
+ *     prompt at budget + reply  600, tool result 1200 tok  → maxTokens 1272
+ *     prompt at budget + reply  200, recall packet 2400    → maxTokens  472
+ *     prompt at budget + reply 1536, tool result 1600 tok  → maxTokens    1  ← the bug, back
+ *
+ * The last row is the original defect reproduced through the "fixed" sizing. No
+ * additive constant can close it, because term (2) has no upper bound. The clamp
+ * is therefore not sizeable for this deployment; it has to be off. The store's
+ * own record confirms the branch: stream `replay-c86d12c148eb` seq 79 has
+ * `usage.totalTokens 4085`, and the next assistant (seq 85) was clamped to 7 —
+ * i.e. the estimate was `4089 = 4085 + 4`, the anchor plus a 4-token trailing
+ * message, not a chars/4 measurement of the real prompt.
+ *
+ * WHAT REPLACES THE CLAMP. Nothing is lost, because the constraint the clamp
+ * enforces is already enforced better upstream of it, from the real budget rather
+ * than from an estimate:
+ *
+ *     prompt ≤ W − reserve   (windowContextToBudget, src/context-window.ts)
+ *     output ≤ reserve       (outputBudgetTokens, above)
+ *     ⇒ prompt + output ≤ W  (the request always fits llama-server's slot)
+ *
+ * Stated honestly, that bounds what the CLAMP and the SLOT can do to a reply; it
+ * does not promise a `"length"` stop is impossible. A model that genuinely writes
+ * past the reserve still stops on it — which on a brain whose replies run to tens
+ * of tokens is itself an anomaly worth investigating, and is why the flip gate
+ * says "any length stop is a bug", not "cannot happen".
+ *
+ * WHAT ELSE READS THIS FIELD — checked, not assumed, because "nothing else reads
+ * it" was written here once and was wrong. Besides the clamp there are two live
+ * readers, and NEITHER changes behaviour for this deployment:
+ *   - `isAssistantContextOverflow` (@flue/runtime, in the overflow-recovery loop
+ *     and in `classifyConversationSubmission`) → pi-ai `dist/utils/overflow.js`.
+ *     It uses `contextWindow` only in Case 2 (a `"stop"` whose input exceeds the
+ *     window) and Case 3 (a `"length"` with `output === 0` filling ≥99% of it).
+ *     Both describe servers that silently truncate an oversized prompt;
+ *     llama-server instead answers with an explicit 400, which Case 1 catches by
+ *     error-message pattern with no `contextWindow` involved. Note this is a real
+ *     cost of ANY non-truthful declaration: inflating the number to 13824 would
+ *     have disabled Cases 2-3 just as thoroughly as 0 does.
+ *   - threshold compaction — inert: the agent pins `compaction: false`, so
+ *     `resolveCompactionSettings` returns `enabled: false` and `checkCompaction`
+ *     returns before `shouldCompact` ever reads the window.
+ *
+ * DO NOT re-tie this field to `contextWindowTokens()`. The original rationale —
+ * "read from the SAME env knob the windowing budget uses so the two can never
+ * drift" — is precisely what caused the bug: under 0.83.0 this is not a
+ * description of the server, it is the input to an output clamp.
+ */
+export function declaredContextWindow(): number {
+  return 0;
+}
+
+/**
  * Seam M: the Gemma rock, as a Pi provider object.
  *
  * `baseUrl` defaults to the live llama-server on :11434 (the same
@@ -302,11 +496,21 @@ export const cappedApi: ProviderStreams = {
  *     true would forward a thinkingLevel the wire silently drops.
  *   - `input: ['text']` — Moonshine STT + text chat only. An image would be
  *     replaced with an "(image omitted)" placeholder rather than blowing up.
- *   - `contextWindow` — the llama-server `--ctx-size` rock (default 8192), read
- *     from the SAME env knob the windowing budget uses so the two can never drift.
- *   - `maxTokens` — metadata only on this path: the openai-completions handler
- *     sends `options.maxTokens`, never `model.maxTokens` (pi-ai dist/api/
- *     openai-completions.js), so this does not cap replies on the wire.
+ *   - `contextWindow` — **0, on purpose.** It is not a description of the server;
+ *     on 0.83.0 it is the input to an output clamp whose estimate this deployment
+ *     cannot bound, so the clamp is switched off and the constraint is enforced
+ *     from the real budget instead. Full argument + measurements in
+ *     `declaredContextWindow` above. It is NOT the llama-server window and must
+ *     not be "corrected" to 8192.
+ *   - `maxTokens` — LOAD-BEARING on this path. (Corrected 2026-08-07; the previous
+ *     comment claimed "metadata only … the openai-completions handler sends
+ *     `options.maxTokens`, never `model.maxTokens`". That was true of 0.79.10,
+ *     whose `buildBaseOptions` takes no model and no context — but it is FALSE for
+ *     0.83.0, which computes `clampMaxTokensToContext(model, context,
+ *     options?.maxTokens ?? model.maxTokens)`. `model.maxTokens` is the value the
+ *     agent path actually uses; pi-agent-core sets `options.maxTokens` only on its
+ *     proxy path, never on this loop.) It is the reply reserve, so the request
+ *     always fits llama-server's slot; see `outputBudgetTokens`.
  *   - `cost` — all zeros; a local model bills nothing.
  * Threshold compaction is disabled at the agent (`useModel(..., { compaction:
  * false })`) — src/context-window.ts explains why this deployment windows at the
@@ -322,8 +526,8 @@ export function zoeLocalModel(): Model<'openai-completions'> {
     reasoning: false,
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: contextWindowTokens() || 8192,
-    maxTokens: 2048,
+    contextWindow: declaredContextWindow(),
+    maxTokens: outputBudgetTokens(),
   };
 }
 

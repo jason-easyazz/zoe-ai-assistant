@@ -377,6 +377,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_BRAIN_FAILOVER": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_dispatch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_FAILOVER_COOLDOWN_S": {
+        "defaults": [
+          "'45'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_dispatch.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BRAIN_PREWARM_ON_WAKE": {
         "defaults": [
           "'1'",
@@ -1239,6 +1259,16 @@
         "typed_env": false
       },
       "ZOE_FLUE_STREAM_ENABLED": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FLUE_WIRE": {
         "defaults": [
           "-"
         ],

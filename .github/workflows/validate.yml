@@ -45,14 +45,22 @@ jobs:
 
       # Slim install — avoids Jetson-specific packages (torch/onnx/whisper stacks)
       # that would timeout or fail on x86_64 GitHub runners.
+      #
+      # KEEP THE PINNED ENTRIES IN LOCKSTEP WITH services/zoe-data/requirements.txt.
+      # Anything left unpinned here resolves to the newest release at CI time, so
+      # the lane silently tests a DIFFERENT version than production runs — which is
+      # exactly how uvicorn/websockets drifted (CI was exercising uvicorn 0.5x and
+      # websockets 16.x while the manifest pinned 0.32.0 and 14.0). The
+      # `deps-resolvable` job below proves the manifests themselves still resolve;
+      # this list only has to agree with them.
       - name: Install slim CI deps
         run: |
           pip install --quiet \
             aiosqlite asyncpg psycopg2-binary alembic \
             fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
-            "ag-ui-protocol==0.1.14" websockets python-jose passlib \
-            python-multipart uvicorn prometheus-client "python-json-logger>=4.1.0" \
+            "ag-ui-protocol==0.1.19" "websockets==16.1.1" python-jose passlib \
+            python-multipart "uvicorn[standard]==0.49.0" prometheus-client "python-json-logger>=4.1.0" \
             pyyaml
 
       - name: Validate project structure
@@ -207,6 +215,122 @@ jobs:
             --override-ini="asyncio_mode=auto"
         env:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
+
+  # Are the dependency manifests still SATISFIABLE, and do their load-bearing
+  # ceilings still hold?
+  #
+  # Nothing else checks this. The `validate` job installs a hand-written slim list,
+  # never the manifests themselves, so a requirements.txt could become
+  # unresolvable — or quietly resolve past `numpy<2` — and every check would stay
+  # green until a deploy tried to install it on the Jetson.
+  #
+  # This resolves with `--dry-run` (metadata only, nothing is installed or built
+  # into an environment) and then asserts the ceilings that exist for data-safety
+  # rather than taste. `numpy<2` is the one that matters most: chromadb 0.6.3
+  # declares a bare unbounded `numpy`, so without that ceiling a memory-store
+  # install pulls NumPy 2.x, which is a C-ABI break for every compiled package on
+  # this box (both canonical voice rocks plus the vector index).
+  #
+  # NOT branch-protected on purpose — it resolves against live PyPI, so an
+  # upstream yank or outage could redden it, and a required check that depends on
+  # a third party is how `main` freezes. Read it; promote it to required only once
+  # it has shown itself stable.
+  deps-resolvable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # MUST match the Jetson's interpreter — resolvability is
+          # Python-version-specific. websockets 17 and av 18 install fine on 3.11
+          # and not at all on 3.10, so resolving on the wrong version would bless
+          # a manifest the box cannot install.
+          python-version: '3.10'
+
+      # `packaging` is vendored INSIDE pip, not importable as a top-level module on
+      # a bare runner — the assertion script below needs it as a real import. A dev
+      # box usually has it already, which is exactly why this has to be explicit.
+      - name: Install the guard's own dependency
+        run: python3 -m pip install --quiet packaging
+
+      - name: Resolve every requirements manifest
+        run: |
+          set -euo pipefail
+          FILES="
+            services/zoe-data/requirements.txt
+            services/zoe-auth/requirements.txt
+            services/homeassistant-mcp-bridge/requirements.txt
+            labs/setfit-router/requirements.txt
+          "
+          for f in $FILES; do
+            echo "::group::pip resolve $f"
+            python3 -m pip install --dry-run --ignore-installed --quiet \
+              --report "report.json" -r "$f"
+            python3 - "$f" <<'PY'
+          import json, sys
+          from packaging.version import Version
+
+          path = sys.argv[1]
+          with open("report.json") as fh:
+              report = json.load(fh)
+          pkgs = {
+              item["metadata"]["name"].lower().replace("_", "-"): item["metadata"]["version"]
+              for item in report["install"]
+          }
+          print(f"{path}: resolved {len(pkgs)} packages")
+
+          # Ceilings that protect DATA or a canonical rock, not preference.
+          # Scoped PER FILE on purpose: zoe-data pulls bcrypt transitively through
+          # `passlib[bcrypt]` and lets it float to 5.x, which is harmless there
+          # (nothing in zoe-data hashes a password). The <5.0 ceiling is a zoe-auth
+          # constraint, so asserting it repo-wide would fail on an unrelated
+          # manifest and teach everyone to ignore this job.
+          CEILINGS_BY_FILE = {
+              "services/zoe-data/requirements.txt": {
+                  "numpy": "2.0",     # C-ABI break for every compiled pkg on the Jetson
+                  "chromadb": "0.7",  # on-disk palace format (see requirements comment)
+              },
+              "services/zoe-auth/requirements.txt": {
+                  "bcrypt": "5.0",    # 5.0 turns >72-byte passwords into a ValueError
+              },
+              "labs/setfit-router/requirements.txt": {
+                  "numpy": "2.0",     # must match the versions the router head was trained with
+              },
+          }
+          ceilings = CEILINGS_BY_FILE.get(path, {})
+          if not ceilings:
+              print("  (no ceilings declared for this manifest — resolvability only)")
+          failed = False
+          for name, ceiling in ceilings.items():
+              got = pkgs.get(name)
+              if got is None:
+                  continue
+              if Version(got) >= Version(ceiling):
+                  print(f"::error::{path}: {name}=={got} breaches the <{ceiling} ceiling")
+                  failed = True
+              else:
+                  print(f"  ok: {name}=={got} < {ceiling}")
+          sys.exit(1 if failed else 0)
+          PY
+            rm -f report.json
+            echo "::endgroup::"
+          done
+
+      - name: Negative control — the guard must still be able to fail
+        # A resolver check that cannot go red is not a check. Feed pip a genuinely
+        # unsatisfiable pair and require a non-zero exit, every run. Same rule the
+        # actionlint step follows above.
+        run: |
+          set -euo pipefail
+          printf 'numpy<2\nnumpy>=2.1\n' > /tmp/known-bad-requirements.txt
+          if python3 -m pip install --dry-run --ignore-installed --quiet \
+               -r /tmp/known-bad-requirements.txt; then
+            echo "::error::pip RESOLVED a contradictory manifest — this guard is not guarding"
+            exit 1
+          fi
+          echo "negative control OK: pip rejects the known-unsatisfiable fixture"
+          rm -f /tmp/known-bad-requirements.txt
 
   # Secret scanning as a MERGE-QUEUE-COMPATIBLE gate.
   #

@@ -35,6 +35,11 @@ What this module adds per failure mode:
          second between "poll saw idle" and "read the transcript" threw away a
          review that had already been paid for. `report --server/--session-id`
          classifies and retries it; `--payload` still reads a file.
+  a session teardown (`stop`) that never lands
+      -> exit 8, one alarm line naming the reaper. The `stop` mode is the
+         RUNNER-LEAK fix (2026-08-04): it POSTs Omnigent's own `stop_session`
+         lifecycle event, which is the only teardown that reaches the
+         host-launched `omnigent.runner._entry` process -- see stop_session().
   hard overall timeout while still running/waiting
       -> exit 5.
   never reaches running/waiting within the grace window
@@ -68,11 +73,18 @@ EXIT_POLL_LOST = 4  # transport/parse retries exhausted, or session vanished
 EXIT_TIMEOUT = 5  # hard overall budget exceeded while still non-terminal
 EXIT_NEVER_RUNNING = 6  # kick died silently: never reached running/waiting
 EXIT_DISPATCH_FAILED = 7  # the session-create response carried no usable id
+EXIT_STOP_FAILED = 8  # session teardown never landed -> a runner is leaking
 
 # Non-terminal Omnigent session states. `waiting` means "awaiting external work"
 # -- it both proves the run started and must keep the loop polling (Greptile P1
 # on #1578); treating it as terminal ends reviews early.
 NONTERMINAL = ("running", "waiting")
+
+# Omnigent's own lifecycle verb for "end this session but keep the transcript"
+# (`omnigent.server.routes._sessions.common._STOP_SESSION_TYPE`, verified in the
+# installed 0.7.0 package). Posting it is what makes the server tell the HOST to
+# stop the dedicated runner it launched -- see stop_session() below.
+_STOP_SESSION_TYPE = "stop_session"
 
 # Fetch outcome kinds.
 OK = "ok"
@@ -98,6 +110,114 @@ def _http_get(url: str, timeout: float):
         except Exception:  # pragma: no cover - defensive
             pass
         return exc.code, (exc.headers.get("Content-Type") if exc.headers else "") or "", body
+
+
+def _http_post(url: str, payload: dict, timeout: float):
+    """Return (http_status, content_type, body_bytes) for a JSON POST.
+
+    The second HTTP seam, and the only one that MUTATES. Same contract as
+    `_http_get`: an error status is data, not an exception, so the caller
+    classifies it; only genuine transport faults raise.
+    """
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, (resp.headers.get("Content-Type") or ""), resp.read()
+    except urllib.error.HTTPError as exc:
+        body = b""
+        try:
+            body = exc.read()
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return exc.code, (exc.headers.get("Content-Type") if exc.headers else "") or "", body
+
+
+def _classify_stop(status: int) -> tuple[str, str]:
+    """Classify a stop_session POST response status. Returns (kind, detail)."""
+    if 200 <= status < 300:
+        return OK, f"HTTP {status}"
+    if status in (404, 410):
+        # Nothing left to stop. The session (and with it the host's runner
+        # bookkeeping) is already gone, which is the state we were asking for.
+        return GONE, f"HTTP {status} not_found"
+    # 5xx is the interesting one and it is NOT terminal: the route raises when
+    # the runner cannot be reached, and an Omnigent mid-restart 502s. Retry.
+    # Other 4xx (403 not-owner, 400 unknown event type) are caller bugs that no
+    # amount of retrying fixes, but they are rare enough that spending the
+    # bounded budget on them is cheaper than a second classification rule that
+    # could mis-file a transient as fatal.
+    return TRANSIENT, f"HTTP {status}"
+
+
+def stop_session(server, sid, budget_s, interval_s, http_timeout,
+                 sleep=time.sleep, now=time.monotonic) -> int:
+    """Ask Omnigent to terminate a session, and with it its dedicated runner.
+
+    THIS is the teardown that reaps the leak. cross_review.sh's `stop_worker`
+    signals container processes whose /proc cmdline CONTAINS the session id --
+    which covers the `omnigent run` CLI kick and the harness subprocess
+    (`omnigent.runtime.harnesses._runner --conversation-id <sid>`), and covers
+    NOTHING ELSE. The host-launched runner is spawned by `omnigent host` as
+    literally `python -m omnigent.runner._entry`: the session id travels in its
+    ENVIRONMENT, never in its argv, so no cmdline scan can ever see it. Its
+    parent is the live host daemon, so it is not an orphan either. Measured
+    2026-08-04: 19 of them resident, one per dispatch, box down to ~0 MB free.
+
+    `POST /v1/sessions/<id>/events {"type":"stop_session"}` is Omnigent's own
+    lifecycle verb for this. The server reads host_id/runner_id from the
+    OWNER-GATED session row and sends the host a `host.stop_runner` frame, so
+    the teardown is attributed by construction -- it can only ever reach the
+    runner bound to THIS session id, and no /proc heuristic is involved.
+    Stopping is also non-destructive: stop is non-sticky in Omnigent, so a
+    later message simply relaunches the session on its still-online host.
+
+    Bounded and retried like every other response in this lane. Returns an exit
+    code; the caller decides how loud that is (cross_review.sh treats a failed
+    stop as a WARNING, never as a lost review -- the review is already paid for
+    and the sweeper is the safety net).
+    """
+    url = f"{server.rstrip('/')}/v1/sessions/{sid}/events"
+    start = now()
+    attempt = 0
+    detail = "no attempt made"
+    while True:
+        try:
+            status, _ctype, _body = _http_post(url, {"type": _STOP_SESSION_TYPE}, http_timeout)
+        except http.client.HTTPException as exc:
+            kind, detail = TRANSIENT, f"HTTP protocol error: {type(exc).__name__}: {exc}"
+        except urllib.error.URLError as exc:
+            kind, detail = TRANSIENT, f"connection error: {exc.reason}"
+        except OSError as exc:
+            kind, detail = TRANSIENT, f"connection error: {exc}"
+        else:
+            kind, detail = _classify_stop(status)
+
+        if kind == OK:
+            print("stopped")
+            return EXIT_OK
+        if kind == GONE:
+            print("already-gone")
+            return EXIT_OK
+
+        elapsed = now() - start
+        remaining = budget_s - elapsed
+        if remaining <= 0:
+            _alarm(
+                f"ALARM: session {sid} could not be stopped after {attempt + 1} attempts "
+                f"over {budget_s:.0f}s against {server} (last: {detail}) — its "
+                "host-launched runner is still resident and LEAKING memory; reap it with "
+                "scripts/maintenance/reap_stale_omnigent_runners.py --execute"
+            )
+            return EXIT_STOP_FAILED
+
+        _nap(sleep, min(_backoff(attempt, interval_s), remaining))
+        attempt += 1
 
 
 def fetch_session(server: str, sid: str, timeout: float):
@@ -631,6 +751,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     sid = sub.add_parser("session-id", help="extract the id from a session-create response body")
     sid.add_argument("--payload", required=True)
+
+    stop = sub.add_parser(
+        "stop", help="terminate a session AND its host-launched runner (the leak fix)"
+    )
+    stop.add_argument("--server", required=True)
+    stop.add_argument("--session-id", required=True)
+    # Short by design: this runs AFTER the report is in hand, inside the
+    # wrapper's already-tight margin against the caller's 2500s timeout. A stop
+    # that needs more than this is a wedged Omnigent, and the sweeper -- not a
+    # longer wait -- is the answer to that.
+    stop.add_argument("--budget-s", type=float, default=20.0)
+    stop.add_argument("--interval-s", type=float, default=5.0)
+    stop.add_argument("--http-timeout-s", type=float, default=10.0)
     return p
 
 
@@ -701,6 +834,14 @@ def main(argv=None) -> int:
         )
     if args.cmd == "session-id":
         return extract_session_id(args.payload)
+    if args.cmd == "stop":
+        return stop_session(
+            args.server,
+            args.session_id,
+            args.budget_s,
+            args.interval_s,
+            args.http_timeout_s,
+        )
     return EXIT_USAGE  # pragma: no cover - argparse rejects unknown subcommands
 
 

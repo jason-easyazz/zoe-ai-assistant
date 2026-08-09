@@ -22,7 +22,12 @@ with its own README/RUNBOOK and is self-contained.
   production reaches the sidecar only through zoe-data's `ZOE_BRAIN_BACKEND=flue`
   seam. The **shipped repo default is OFF** (`core` = `services/zoe-core`), but the
   seam is production-reachable and **this deployment flipped it live on 2026-07-03**
-  — so `flue-zoe-brain/` is lab-hosted yet production-reachable, not "never live";
+  — so `flue-zoe-brain/` is lab-hosted yet production-reachable, not "never live".
+  That seam is CONFIGURED LANE SELECTION, not runtime failover: while this sidecar
+  is down every brain turn fails with zoe-data's canned sentinel rather than
+  falling through to `core` (failover behind `ZOE_BRAIN_FAILOVER`, default off —
+  see `services/zoe-data/AGENTS.md`). Treat a stopped `flue-zoe-brain` as a live
+  outage, not a graceful degrade;
   `flue-zoe-telegram/` → `scripts/setup/systemd/flue-zoe-telegram.service` (the
   long-poll Telegram bot; the operator installs it with their own bot token) plus
   its supervisor `scripts/setup/systemd/flue-zoe-telegram-watchdog.{service,timer}`
@@ -192,7 +197,36 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   tool-cap wrap-up note moved off the system prompt, and tool disclosure derives
   from the pre-window basis — see `src/context-window.ts` and
   `test/context_window_anchor.test.ts`.
-  Regression net (hand-run, not CI-wired): `npm test` — 20 `test/*.test.ts` files
+  **The declared `contextWindow` is `0` ON PURPOSE — do not "fix" it to 8192.**
+  pi-ai 0.83 added an output clamp that reads that field; declaring the real 8192
+  left ~6 output tokens on a full prompt, truncating replies and killing tool turns
+  (the 2026-08-06 flip's `CANT_DO`). Sizing the declaration instead of disabling it
+  does NOT work: pi-ai's estimator is usage-anchored (previous turn's total plus an
+  unbounded trailing term, ignoring the system prompt and tools), so no additive
+  constant bounds it — measured, a 1600-token tool result puts an inflated
+  declaration straight back to `maxTokens: 1`. `0` means "no clamp", and the real
+  constraint is enforced from the real budget instead: `prompt ≤ W − reserve`
+  (`src/context-window.ts`) and `output ≤ reserve` (`maxTokens =
+  outputBudgetTokens()`), so the request always fits llama-server's 8192-token slot
+  (context shifting is off on this build). Both rejected declarations are kept as
+  executable negative controls in `test/output_budget_clamp.test.ts`; see also the
+  README's "output-budget clamp" section.
+  **Flip gate:** the runbook's post-flip step 6 asserts ZERO `stopReason:"length"`
+  records via `parity/count_length_stops.py` (read-only; pinned both directions by
+  `tests/unit/test_flue2x_length_stop_gate.py` — the one piece of this port that
+  IS CI-covered). Replay verdict counts cannot see truncation and scored a
+  mass-truncating lane 18/20. Run it with `--since <replay start>`, and note that
+  **"0 assistant replies" is a FAILURE**, not a pass — an empty store means the
+  replay never reached the 2.x sidecar.
+  Carries the beta sibling's per-request **replay isolation** too, and must keep
+  it: this port's `.env` also sets `ZOE_BRAIN_ALLOW_WRITES=true`, so without it a
+  voice replay-gate run commits real writes into live zoe-data at cutover. The
+  seam-forwarded ` zoe-replay:1` marker rides AHEAD of the identity line on the
+  wire, is bound per-turn by the AbortSignal in the capped-completions provider,
+  and makes `runWrite` return its success text without dispatching
+  (`src/replay-mode.ts`, `test/replay_isolation.test.ts`). `set_timer` needs its
+  own check — it does not route through `runWrite`.
+  Regression net (hand-run, not CI-wired): `npm test` — 21 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a
@@ -229,6 +263,24 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
   their id and refused (never reach the brain as a real user). Ships the opt-in unit
   template above. Hand-started, demo-only; README is a record, not a contract.
+- `flue-zoe-telegram-2x/` — the **PARALLEL Flue 2.0.1 port** of
+  `flue-zoe-telegram/`, which stays on `@flue/*@1.0.0-beta.6` and remains the
+  deployed `flue-zoe-telegram.service` on `:3582`. **Nothing here is wired to a
+  unit, a port, or CI**, and the sibling directory is the whole point: `deploy.yml`
+  rebuilds + restarts that unit on any diff under `labs/flue-zoe-telegram/`, so an
+  in-place bump would deploy itself into a runtime whose store the live process
+  cannot read (2.x persists schema **v8** against the beta's **v5**, reset-only, and
+  the rejection happens before any application code runs — in BOTH directions).
+  Verify before committing with `git diff origin/main -- labs/flue-zoe-telegram/`:
+  it must print nothing. A `-2x` sibling does not match that pathspec (git treats
+  the trailing slash as an exact directory component), which is what makes the
+  pattern safe. Cutover is a deliberate operator step; runbook + rollback in its
+  README. Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
+  API and a mock zoe-data on loopback, so no bot token, no real sends, and no
+  metered model call) plus `npm run typecheck`, `npm run build`, and
+  `./smoke-built.sh` (the only check that exercises the built artifact, because
+  `start()` bypasses the `'use agent'` build scan the suite relies on).
+  README is a record, not a contract.
 - `functiongemma-finetune/` — fine-tune FunctionGemma-270M as the complete-call
   fast-tier router (follow-up to the feasibility spike, PR #1283): committed
   training set (2,950 examples; templates + setfit-seed chat negatives + brain
