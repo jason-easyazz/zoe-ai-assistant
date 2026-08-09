@@ -13,7 +13,7 @@ import { defineConfig } from 'vite';
  * Node target and entry discovery live in `flue.config.ts` (the host-independent
  * project config), which this plugin auto-discovers.
  *
- * LAB ONLY — not a production unit.
+ * PRODUCTION (auto-deployed since 2026-08-09) — not a production unit.
  */
 export default defineConfig({
   plugins: [flue()],

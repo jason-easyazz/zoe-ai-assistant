@@ -19,7 +19,7 @@
  * wire contracts this channel depends on are runtime-independent, which is why
  * the Telegram surface is a far cheaper cutover than the brain sidecar's.
  *
- * LAB ONLY.
+ * PRODUCTION since the 2026-08-09 cutover (auto-deployed).
  */
 
 // zoe-data base URL. ZOE_DATA_URL is the documented name; ZOE_BRAIN_URL is kept

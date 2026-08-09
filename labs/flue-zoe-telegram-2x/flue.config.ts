@@ -12,7 +12,7 @@ import { defineConfig } from '@flue/runtime/config';
  *   - the `root` / `output` fields are retired; Vite owns both, and strict
  *     validation REJECTS them here.
  *
- * LAB ONLY — not a production unit.
+ * PRODUCTION (auto-deployed since 2026-08-09) — not a production unit.
  */
 export default defineConfig({
   target: 'node',

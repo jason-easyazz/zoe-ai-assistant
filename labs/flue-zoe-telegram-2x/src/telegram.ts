@@ -14,7 +14,7 @@
  * ENVELOPE `{ output?, terminate? }` — a bare object throws at runtime. Both are
  * applied below and pinned by test/tool_shape.test.ts.
  *
- * LAB ONLY. Nothing here touches the live voice path.
+ * PRODUCTION since the 2026-08-09 cutover (auto-deployed). Voice path untouched.
  */
 import { defineTool } from '@flue/runtime';
 import { Bot } from 'grammy';

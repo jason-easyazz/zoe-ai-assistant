@@ -41,7 +41,7 @@ with its own README/RUNBOOK and is self-contained.
   `~/.zoe/multica_dispatch_paused` exists, `ZOE_EXECUTOR_DISPATCH` defaults to
   `dry` (poll + log, mutate nothing), and it claims at most one task at a time.
   No other lab may ship a unit without amending this contract.)
-- ⚠ **`labs/flue-zoe-brain/` AND `labs/flue-zoe-telegram/` ARE AUTO-DEPLOYED.** They
+- ⚠ **`labs/flue-zoe-brain/` AND `labs/flue-zoe-telegram-2x/` ARE AUTO-DEPLOYED.** They
   are the two labs where "it's only a lab directory" is false. `.github/workflows/deploy.yml`
   gates on `git diff --quiet "$OLD_SHA" HEAD -- labs/flue-zoe-brain/` and, on ANY
   diff, runs `npm ci && npm run build && systemctl --user restart
@@ -263,19 +263,20 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
   their id and refused (never reach the brain as a real user). Ships the opt-in unit
   template above. Hand-started, demo-only; README is a record, not a contract.
-- `flue-zoe-telegram-2x/` — the **PARALLEL Flue 2.0.1 port** of
-  `flue-zoe-telegram/`, which stays on `@flue/*@1.0.0-beta.6` and remains the
-  deployed `flue-zoe-telegram.service` on `:3582`. **Nothing here is wired to a
-  unit, a port, or CI**, and the sibling directory is the whole point: `deploy.yml`
-  rebuilds + restarts that unit on any diff under `labs/flue-zoe-telegram/`, so an
-  in-place bump would deploy itself into a runtime whose store the live process
-  cannot read (2.x persists schema **v8** against the beta's **v5**, reset-only, and
-  the rejection happens before any application code runs — in BOTH directions).
-  Verify before committing with `git diff origin/main -- labs/flue-zoe-telegram/`:
-  it must print nothing. A `-2x` sibling does not match that pathspec (git treats
-  the trailing slash as an exact directory component), which is what makes the
-  pattern safe. Cutover is a deliberate operator step; runbook + rollback in its
-  README. Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
+- `flue-zoe-telegram-2x/` — the **LIVE Telegram bot since the 2026-08-09 cutover**
+  (Flue 2.0.1). `flue-zoe-telegram.service` runs THIS directory on `:3582` (via the
+  operator drop-in; the tracked template also points here), and `deploy.yml`
+  rebuilds + restarts the unit on any diff under `labs/flue-zoe-telegram-2x/` —
+  this subtree is production-deployed, treat changes accordingly. The retired
+  beta stays in `flue-zoe-telegram/` (`@flue/*@1.0.0-beta.6`) as the rollback
+  target ONLY: rolling back = repoint the unit + carry the epoch map back +
+  revert the deploy retarget together (its README, cutover step 7). The store
+  boundary is one-way in BOTH directions (2.x persists schema **v8** against the
+  beta's **v5**, reset-only, rejected before any application code runs) — never
+  point either process at the other's `data/`.
+  Since the cutover the AUTO-DEPLOYED pathspec is `labs/flue-zoe-telegram-2x/` —
+  breaking work on the LIVE bot now needs its own sibling (the same rule that
+  protected the beta), and the retired beta directory is safe to edit freely. Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
   API and a mock zoe-data on loopback, so no bot token, no real sends, and no
   metered model call) plus `npm run typecheck`, `npm run build`, and
   `./smoke-built.sh` (the only check that exercises the built artifact, because

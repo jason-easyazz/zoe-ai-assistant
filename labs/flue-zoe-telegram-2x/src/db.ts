@@ -30,7 +30,7 @@
  * `@flue/runtime/node` defaults to in-memory SQLite, so a test run touches no
  * file at all.
  *
- * LAB ONLY.
+ * PRODUCTION since the 2026-08-09 cutover (auto-deployed).
  */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

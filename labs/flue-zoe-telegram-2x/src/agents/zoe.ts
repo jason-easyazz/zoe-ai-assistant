@@ -36,7 +36,7 @@
  * initializer `ctx.id` is now the `{ id }` prop on the agent function, which is
  * how the per-chat reply tool still gets its chat id.
  *
- * LAB ONLY.
+ * PRODUCTION since the 2026-08-09 cutover (auto-deployed).
  */
 import { useModel, useTool } from '@flue/runtime';
 import { chatIdFromKey, postMessage } from '../telegram.ts';

@@ -32,7 +32,7 @@ import urllib.parse
 import urllib.request
 
 STATE_PATH = os.path.expanduser("~/.zoe/crash_loop_watch.json")
-TELEGRAM_ENV = os.path.expanduser("~/assistant/labs/flue-zoe-telegram/.env")
+TELEGRAM_ENV = os.path.expanduser("~/assistant/labs/flue-zoe-telegram-2x/.env")
 UNIT = "zoe-data.service"
 HEALTH_URL = "http://localhost:8000/health"
 # 13s per cycle observed in the incident, so 5 restarts ~= a minute of looping.
