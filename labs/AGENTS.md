@@ -213,6 +213,14 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   mass-truncating lane 18/20. Run it with `--since <replay start>`, and note that
   **"0 assistant replies" is a FAILURE**, not a pass — an empty store means the
   replay never reached the 2.x sidecar.
+  Carries the beta sibling's per-request **replay isolation** too, and must keep
+  it: this port's `.env` also sets `ZOE_BRAIN_ALLOW_WRITES=true`, so without it a
+  voice replay-gate run commits real writes into live zoe-data at cutover. The
+  seam-forwarded ` zoe-replay:1` marker rides AHEAD of the identity line on the
+  wire, is bound per-turn by the AbortSignal in the capped-completions provider,
+  and makes `runWrite` return its success text without dispatching
+  (`src/replay-mode.ts`, `test/replay_isolation.test.ts`). `set_timer` needs its
+  own check — it does not route through `runWrite`.
   Regression net (hand-run, not CI-wired): `npm test` — 21 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
