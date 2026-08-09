@@ -125,7 +125,6 @@ moonshine-voice
 # Pinned AT THE CURRENTLY-INSTALLED VERSIONS to record reality, NOT to upgrade;
 # these are deliberately not bumped here. (onnxruntime's own py3.10 ceiling is
 # 1.24.3, so there is headroom when someone wants it.)
-onnxruntime==1.23.2
 transformers==5.5.0
 # Tier-1 semantic router: bge-small ONNX embeddings (~7-30ms/query, CPU) for
 # fuzzy domain classification between the regex fast-path and the Pi brain.
