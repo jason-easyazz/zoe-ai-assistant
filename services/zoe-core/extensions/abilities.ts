@@ -187,6 +187,14 @@ export function latestUtterance(prompt: string): string {
 // byte-for-byte in sync with `_HISTORY_LABEL` there (pinned by a test).
 export const HISTORY_MARKER = "[Recent conversation]";
 
+// The block's CLOSE delimiter. Every context block the seam folds in is delimited
+// on both sides so `memory.ts` can elide the superseded copies Pi retains — the
+// history block is the most expensive of them, since `history[-12:]` is replayed
+// on EVERY turn. Kept byte-for-byte in sync with `_HISTORY_CLOSE` in
+// services/zoe-data/zoe_core_client.py (pinned by a test), and composition-owned:
+// `_neutralize_markers` escapes it in content, so it cannot be forged.
+export const HISTORY_CLOSE = "[END Recent conversation]";
+
 /**
  * `role: text` opens a replayed turn; anything else continues the current one.
  *
@@ -215,6 +223,11 @@ const REPLAYED_ROLE_RE = new RegExp(ROLE_PREFIX_PATTERN);
  * span is history and everything before it is context Zoe supplied. With no
  * utterance marker there is no seam composition at all (a standalone `pi` run), so
  * there is no replayed history either.
+ *
+ * The span then STOPS at the block's own close line. Without that the delimiter
+ * would be read as a continuation line of the last replayed turn and folded into
+ * the text disclosure seeds from — the seam's structure leaking into its content.
+ * A whole line only, as everywhere else: an inline mention is content.
  */
 export function replayedHistory(prompt: string): string {
   const utteranceAt = prompt.lastIndexOf(`${UTTERANCE_MARKER}\n`);
@@ -222,7 +235,10 @@ export function replayedHistory(prompt: string): string {
   const context = prompt.slice(0, utteranceAt);
   const needle = `${HISTORY_MARKER}\n`;
   const at = context.lastIndexOf(needle);
-  return at === -1 ? "" : context.slice(at + needle.length);
+  if (at === -1) return "";
+  const lines = context.slice(at + needle.length).split("\n");
+  const closeAt = lines.findIndex((line) => line.trimEnd() === HISTORY_CLOSE);
+  return (closeAt === -1 ? lines : lines.slice(0, closeAt)).join("\n");
 }
 
 /** One replayed record: the role composition labelled it with, and its text. */

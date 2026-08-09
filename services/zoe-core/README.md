@@ -92,21 +92,31 @@ by construction:
 
 > **Pi RETAINS every user message it is sent.** One long-lived process per
 > `(user_id, session_id)`, so anything folded into the user message accumulates a
-> copy per turn — unlike a system prompt, which is replaced. The memory block is
-> therefore delimited, and `memory.ts`'s **`context` handler** elides all but the
-> newest copy before each LLM call. That hook is a genuine ephemeral slot: the
-> runner hands handlers a `structuredClone` and `transformContext` feeds the
-> result to the provider only, so retained state is never rewritten. Without it a
-> long session fills the 32k window with duplicate snapshots and leaves corrected
-> facts — and resolved "add this contact?" instructions — readable in older turns.
+> copy per turn — unlike a system prompt, which is replaced. EVERY context block is
+> therefore delimited on both sides (`CONTEXT_BLOCKS`), and `memory.ts`'s
+> **`context` handler** elides all but the newest copy before each LLM call. That
+> hook is a genuine ephemeral slot: the runner hands handlers a `structuredClone`
+> and `transformContext` feeds the result to the provider only, so retained state
+> is never rewritten. Without it a long session fills the 32k window with duplicate
+> snapshots and leaves corrected facts — and resolved "add this contact?"
+> instructions — readable in older turns.
+>
+> `[Recent conversation]` is the costly one: `history[-12:]` is replayed into every
+> composed turn, so an N-turn session carried N overlapping copies of the running
+> conversation on top of the conversation Pi already retains. The strip is ONE
+> contiguous span over all four block types — per-pair passes let one block's
+> over-elide destroy another block's open delimiter and leak its content. The span
+> ends at the last close only when every open has been matched by a close of its
+> OWN type; anything still outstanding when the scan ends elides through the end of
+> the message instead.
 >
 > **Accepted cost:** eliding bytes already in the KV cache ends prefix reuse at the
-> previous turn's block, so about one exchange is re-prefilled per turn — bounded,
-> constant, and skipped entirely when a turn has no memory. Every alternative pays
-> the same (an ephemeral insert shifts positions just as an elision does), and it
-> is far cheaper than the pre-PR behaviour of re-prefilling the whole conversation
-> every turn. `[About you]` and `[Recent conversation]` still repeat per turn —
-> that predates this work and was deliberately left alone.
+> previous turn's blocks, so about one exchange is re-prefilled per turn — bounded,
+> constant, and skipped entirely when a turn has no context. Widening the strip
+> past the memory block does not raise it: the break point was already the previous
+> user message. Every alternative pays the same (an ephemeral insert shifts
+> positions just as an elision does), and it is far cheaper than the pre-PR
+> behaviour of re-prefilling the whole conversation every turn.
 
 > **`event.prompt` is the COMPOSED prompt, not the utterance.** Verified live by
 > instrumenting the handler: it arrives as portrait + memory directive + packet +

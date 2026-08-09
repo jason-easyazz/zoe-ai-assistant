@@ -823,16 +823,55 @@ _PORTRAIT_LABEL = "[About you]"
 _RECALL_LABEL = "[What you remember]"
 _HISTORY_LABEL = "[Recent conversation]"
 
-# Mirrored (block OPEN/CLOSE only) by `CONTROL_MARKERS` in memory.ts. The other
-# four have no TS counterpart to guard: a standalone `pi` run has no composed
-# message at all, so those markers exist only in what THIS module builds.
+
+# ── Every context block is CLOSED, for the same reason the memory block is ───
+#
+# Pi runs one long-lived process per (user_id, session_id) and RETAINS every user
+# message the seam sends it, so anything folded into that message accumulates one
+# copy per turn. #1615 fixed that for the memory packet; the other blocks have the
+# same shape and are worse. The portrait repeats a near-constant paragraph, and
+# `[Recent conversation]` replays `history[-12:]` — so turn N carried up to 12
+# replayed turns AND the N-1 earlier copies of the same replay, on top of the real
+# retained conversation. Quadratic, and every byte of it superseded.
+#
+# `memory.ts` elides them from the PROVIDER VIEW (Pi's `context` event; retained
+# state untouched) and that strip is line-anchored, so each block needs a close
+# delimiter — an open label alone has no end a line-anchored rule can find, and
+# "until the next blank line" is not a rule, because portrait/recall/history are
+# all multi-paragraph user content.
+#
+# The close is derived MECHANICALLY from the label — `"[END " + label[1:]` — which
+# is exactly the rule `[MEMORY CONTEXT]` / `[END MEMORY CONTEXT]` already follows.
+# One rule, so a new block cannot invent a third convention. Pinned across the two
+# runtimes by tests, like every other duplicated constant here.
+def _close_marker(label: str) -> str:
+    """The CLOSE delimiter for a block label: `[About you]` -> `[END About you]`."""
+    return f"[END {label[1:]}"
+
+
+_PORTRAIT_CLOSE = _close_marker(_PORTRAIT_LABEL)
+_RECALL_CLOSE = _close_marker(_RECALL_LABEL)
+_HISTORY_CLOSE = _close_marker(_HISTORY_LABEL)
+
+# (open, close) for every block `_compose_message` folds in, in composition order.
+# Mirrored by `CONTEXT_BLOCKS` in memory.ts, which strips them; a drift there is
+# silent (the strip matches nothing and every superseded copy stays in the
+# request), so a test pins the two tables equal.
+_CONTEXT_BLOCKS = (
+    (_PORTRAIT_LABEL, _PORTRAIT_CLOSE),
+    (_RECALL_LABEL, _RECALL_CLOSE),
+    (_MEMORY_BLOCK_OPEN, _MEMORY_BLOCK_CLOSE),
+    (_HISTORY_LABEL, _HISTORY_CLOSE),
+)
+
+# Every marker composition owns, and therefore every marker that must be rendered
+# inert when it turns up in CONTENT. Derived from the block table so adding a block
+# cannot forget to guard it — that omission is silent and is exactly the round-four
+# leak. `memory.ts`'s own `CONTROL_MARKERS` guards only the memory pair: it composes
+# nothing else, so the other markers exist only in what THIS module builds.
 _CONTROL_MARKERS = (
-    _MEMORY_BLOCK_OPEN,
-    _MEMORY_BLOCK_CLOSE,
+    *(marker for pair in _CONTEXT_BLOCKS for marker in pair),
     _UTTERANCE_MARKER,
-    _PORTRAIT_LABEL,
-    _RECALL_LABEL,
-    _HISTORY_LABEL,
 )
 
 
@@ -848,6 +887,38 @@ def _neutralize_markers(text: str) -> str:
         if marker in text:
             text = text.replace(marker, f"{marker[:1]}{_MARKER_BREAK}{marker[1:]}")
     return text
+
+
+def _strip_own_label(recall: str) -> str:
+    """A caller-supplied `[What you remember]` header removed — it is OURS to add.
+
+    `routers/voice_tts._voice_recall_packet` emits the label itself, because on the
+    FLUE lane (the live brain) nothing else adds one. On THIS lane the seam wraps
+    the block, so the producer's copy is a duplicate — and since #1615 made the
+    labels composition-owned, `_neutralize_markers` was escaping that duplicate to
+    `[<ZWSP>What you remember]`, putting a zero-width space into the prompt of every
+    voice recall turn. (#1615 checked the replay corpus for the memory delimiters
+    and the utterance marker, but not for this label, so its "no-op on ordinary
+    content" claim did not hold here.)
+
+    Adopting the header instead of escaping it fixes both: one clean label, no
+    ZWSP. Only a LEADING whole-line match is adopted — a label deeper in the text
+    is content and still gets neutralized, so this cannot become a forgery route.
+    """
+    head, sep, rest = recall.partition("\n")
+    if head.rstrip() == _RECALL_LABEL:
+        return rest.lstrip("\n") if sep else ""
+    return recall
+
+
+def _context_block(open_marker: str, close_marker: str, body: str) -> str:
+    """`body` wrapped in its composition-owned delimiters, on their own lines.
+
+    `body` MUST already be neutralized — the caller does that, because only the
+    caller knows which part of what it is assembling is content and which part
+    (a `user:` role prefix, the memory directive) is structure.
+    """
+    return f"{open_marker}\n{body}\n{close_marker}"
 
 
 # ── Role-prefix forging guard (the replayed-history block only) ──────────────
@@ -918,8 +989,10 @@ def _memory_block(packet: str) -> str:
     packet = _neutralize_markers((packet or "").strip())
     if not packet:
         return ""
-    return (
-        f"{_MEMORY_BLOCK_OPEN}\n{_MEMORY_USAGE_DIRECTIVE}\n\n{packet}\n{_MEMORY_BLOCK_CLOSE}"
+    return _context_block(
+        _MEMORY_BLOCK_OPEN,
+        _MEMORY_BLOCK_CLOSE,
+        f"{_MEMORY_USAGE_DIRECTIVE}\n\n{packet}",
     )
 
 
@@ -977,6 +1050,14 @@ def _compose_message(
 
     `message` is always LAST. Nothing may be appended after it.
 
+    EVERY context block is delimited (see `_CONTEXT_BLOCKS`), not just the memory
+    one. Pi retains every user message this composes, so each block accumulates one
+    copy per turn; `memory.ts`'s `context` handler elides all but the newest from
+    the provider view, and its strip is line-anchored, so it needs a close marker
+    to find. `[Recent conversation]` is the expensive one — it replays
+    `history[-12:]` on every turn, so an N-turn session carried N copies of an
+    overlapping 12-turn window on top of the real retained conversation.
+
     When any context block is present the user's turn is introduced by
     `_UTTERANCE_MARKER`. That label is the boundary `extensions/abilities.ts`
     uses to scope progressive disclosure to the LATEST utterance — without it
@@ -1001,10 +1082,20 @@ def _compose_message(
     # can only narrow their own text. Rewriting the user's literal words has a real
     # cost and buys no safety here.
     if portrait:
-        parts.append(f"{_PORTRAIT_LABEL}\n{_neutralize_markers(portrait.strip())}")
+        parts.append(
+            _context_block(
+                _PORTRAIT_LABEL,
+                _PORTRAIT_CLOSE,
+                _neutralize_markers(portrait.strip()),
+            )
+        )
     if db_memory_context:
         parts.append(
-            f"{_RECALL_LABEL}\n{_neutralize_markers(db_memory_context.strip())}"
+            _context_block(
+                _RECALL_LABEL,
+                _RECALL_CLOSE,
+                _neutralize_markers(_strip_own_label(db_memory_context.strip())),
+            )
         )
     # INDEPENDENT of db_memory_context, never an elif — the voice path always
     # supplies one, and the for-prompt packet carries additions (pending-contact
@@ -1026,8 +1117,12 @@ def _compose_message(
             # `role: text` per line — the shape `abilities.ts` parses to seed
             # disclosure on a restarted worker. Roles stay unprefixed and
             # unescaped; only the CONTENT is neutralized (above) — block labels
-            # AND role-shaped line starts, so content cannot forge a turn.
-            parts.append(f"{_HISTORY_LABEL}\n" + "\n".join(lines))
+            # AND role-shaped line starts, so content cannot forge a turn. The
+            # block carries its own close so `memory.ts` can elide superseded
+            # copies, and `abilities.ts` ends the replayed span on that line.
+            parts.append(
+                _context_block(_HISTORY_LABEL, _HISTORY_CLOSE, "\n".join(lines))
+            )
     if not parts:
         return message  # no context at all → the bare utterance, unchanged
     parts.append(f"{_UTTERANCE_MARKER}\n{message}")
