@@ -9,6 +9,10 @@
 #   cd ~/assistant/labs/flue-zoe-telegram-2x && npm install && npm run build
 # Then create the env file from the template and fill it in:
 #   cp ~/assistant/labs/flue-zoe-telegram-2x/.env.example ~/assistant/labs/flue-zoe-telegram-2x/.env
+#   IMPORTANT: .env.example ships PORT=33582 (the parallel-TRIAL port, chosen to
+#   run beside a live bot). For THIS unit set PORT=3582 — the watchdog and the
+#   deploy health check both probe :3582 literally:
+#   sed -i 's/^PORT=33582/PORT=3582/' ~/assistant/labs/flue-zoe-telegram-2x/.env
 [Unit]
 Description=Flue Zoe Telegram channel (lab)
 # Talks to zoe-data (:8000) for the resolver + /api/chat. A user unit cannot
