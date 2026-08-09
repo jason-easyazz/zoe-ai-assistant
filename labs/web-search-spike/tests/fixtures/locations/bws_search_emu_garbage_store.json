@@ -1,0 +1,14 @@
+{
+ "Products": null,
+ "SearchProvider": "EdxSearchService",
+ "Corrections": [
+  {
+   "Word": "emu",
+   "CorrectionList": []
+  }
+ ],
+ "SearchResultsCount": 0,
+ "Aggregations": [],
+ "Banners": [],
+ "_fixture_note": "REAL GET .../Search/products?searchTerm=emu&fulfilmentStoreId=9999999 captured 2026-08-05 AWST. THE NEGATIVE CONTROL that makes the scoping claim falsifiable: an unknown store returns ZERO products rather than the default price, so the parameter is validated, not ignored."
+}

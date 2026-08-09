@@ -289,10 +289,41 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   scraped third-party page text is neither reviewable in a PR nor ours to
   vendor; `eval/botwall-corpus.json` (an INPUT) is force-added past the `*.json`
   ignore, as `eval/corpus.json` already is. Regression net:
-  `python3 -m pytest tests -q` (**99** offline tests, no network and no
+  `python3 -m pytest tests -q` (**199** offline tests, no network and no
   Chromium, the `ddgs` tier driven by an injected fake searcher and the browser
   tier by canned tier responses, **no `ci_safe` marker** — `labs/` is outside
   every CI lane). README/DESIGN are records, not contracts.
+  **`websearch/locations/` — per-retailer STORE-LOCATION recipes** (2026-08-05).
+  A price is only worth money if it names the shop it belongs to, so every read
+  carries a `StoreAttribution` whose `confident` is **derived** from the method
+  and has no setter — a store-less price cannot self-certify. `registry.py`
+  keys recipes by registrable domain on a label boundary, and `Recipe` refuses
+  an entry without a `verified` string or a `kind=none` without a reason, so
+  the registry cannot hold a guess. All 7 Geraldton retailers are measured:
+  **BWS** and **Cellarbrations Rigters** are `api` (plain httpx, no Chromium);
+  Liquorland, First Choice, Bottlemart and Dan Murphy's are `none` (bot-walled,
+  browser tier not yet run); **Thirsty Camel is `none` because the banner has
+  no WA stores at all** — 257 enumerated from its own open backend, so it
+  should be dropped from the Geraldton run rather than given a picker.
+  **Two traps, both now pinned by tests.** (1) BWS honours `fulfilmentStoreId`
+  on `/apis/ui/Search/products` and IGNORES it on `/apis/ui/Product/<stockcode>`
+  — a garbage id on the latter returns the normal price, which is how the
+  2026-08-04 session recorded a firm "store scoping is not a query parameter".
+  (2) BWS runs **two id spaces per shop**: `/Search/Suggestion` offers 4328, the
+  fulfilment id is 4083, and `/StoreLocator/Store?StoreNo=4328` answers with the
+  correct store while its own `StoreNo` field reads 4083. An id that validates
+  on one endpoint and silently returns an empty set on another needs a
+  **negative control** to detect — a garbage store id must return *nothing*.
+  Money result: `eval/results/geraldton-store-scoped-2026-08-05.md`. The
+  "store-less" BWS price was never national — `/apis/ui/Bootstrap` pins an
+  anonymous session to store **4031 Wembley** — and the per-store delta lands on
+  **promotions, not the everyday block price**.
+  `StoreSession` (held-open CloakBrowser context, path-imports the broker like
+  `cloak.py`) refuses to launch under 380 MB MemFree, **700 MB MemAvailable** or
+  over load1 3.0: measured 2026-08-05 at MemFree 532 / MemAvailable 301, so
+  MemFree alone is the optimistic instrument and would have launched.
+  `ZOE_STORE_COOKIE_DIR` (default `~/.zoe-store-sessions`) holds live
+  third-party session cookies — outside the repo, never committable.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
