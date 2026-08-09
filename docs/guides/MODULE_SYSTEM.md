@@ -127,6 +127,13 @@ unaffected by any of the above.
   `docker-compose.generated-modules.yml`. Nothing consumes the output today, and the
   generator hardcodes `zoe-network` as the only top-level network, so it cannot represent
   `omnigent` (which also needs `zoe-codeintel`). Do not hand-edit the generated file.
+  The failure is **loud, not silent**: forcing `omnigent` through the generator emits a
+  project whose service still attaches `zoe-codeintel` while no top-level network defines
+  it, so the generator's own `validate()` (`docker compose config --quiet`) exits 15 with
+  `service "omnigent" refers to undefined network zoe-codeintel: invalid compose project`
+  (measured 2026-08-06; defining that one network makes the identical file validate).
+  Pinned by `tests/unit/modules/test_generate_module_compose.py::test_generator_cannot_represent_omnigent`
+  — if that test goes red, the generator gained the capability and this bullet is stale.
 - **`tools/zoe_module.py`** — `list` / `enable` / `disable` / `status` over
   `config/modules.yaml`. Enabling a module records it there; it does not deploy anything.
 
