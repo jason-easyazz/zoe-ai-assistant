@@ -3,7 +3,7 @@
 # that cleared this pair is at the bottom of this file; read it before touching
 # either pin, and re-run it if you add a route with a JSON body.
 fastapi==0.141.1
-uvicorn[standard]==0.24.0
+uvicorn[standard]==0.49.0
 pydantic==2.13.4
 pydantic[email]==2.13.4
 python-multipart==0.0.32
