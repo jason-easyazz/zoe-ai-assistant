@@ -916,3 +916,113 @@ def test_a_new_pattern_cannot_gate_the_pr_that_adds_it():
     assert needs is False and hits == []
     # ...and it DOES gate once the pattern is on main (the next PR's base).
     assert vgc.touched_voice_files([newly_added], head_tuple) == [newly_added]
+
+
+# --- the LIVEKIT / WebRTC INGEST LANE ---------------------------------------
+# The selected production WebRTC backend (ZOE_LK_USE_AIORTC=1 overrides a code
+# default of 0), its router (registered unconditionally, main.py:2213-2219), and
+# the media server's serving config. None of the three matched any glob, so PR
+# #1636 — which fixed ~25-33% of every frame on this path being FFmpeg plane
+# padding carrying stale PCM — tripped no gate at PR time or at deploy.
+#
+# READ THE EVIDENCE BOUNDARY. These are the only entries in the tuple the replay
+# corpus cannot exercise at all; test_replay_corpus_does_not_traverse_the_livekit_lane
+# below pins that premise, and the block comment beside the patterns in
+# voice_gate_check.py states exactly what a green artifact does and does not
+# certify for them. The gate here is a forcing function; the deterministic
+# ci_safe suites in `validate` are the verification.
+@pytest.mark.parametrize("path", [
+    "services/zoe-data/livekit_aiortc.py",
+    "services/zoe-data/routers/voice_livekit.py",
+    # The on-demand container's serving config (port 7880, the 50000-50200 RTC
+    # range, keys), mounted read-only by docker-compose.yml:154 — the same class
+    # as llama-server.service / flue-zoe-brain.service, gated for the same reason.
+    "services/livekit/config.yaml",
+])
+def test_livekit_lane_is_voice_path(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    # end to end through the classifier both the deploy and PR paths call
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    # The VENDORED BROWSER PUBLISHER. Genuinely on the voice path, and
+    # deliberately ungated: it runs in the panel's browser, not on the Jetson, so
+    # a deploy gate on the box governs nothing about it and no probe on the box
+    # could exercise a vendor bump. Gating it would charge a 20-sample Kokoro
+    # replay for a minified blob the probe cannot touch.
+    "services/zoe-ui/dist/lib/livekit/livekit-client.umd.min.js",
+    # Co-located tests: mechanism-only, never run inside a voice turn. Same rule
+    # as every other test exclusion in this tuple.
+    "services/zoe-data/tests/test_livekit_aiortc_tasks.py",
+    "services/zoe-data/tests/test_voice_livekit_lifecycle.py",
+    # Prefix-exactness: three LITERAL paths, not `*livekit*`. A wildcard would
+    # sweep in every line above plus the docs, which is how a gate stops being
+    # worth having.
+    "services/zoe-data/livekit_aiortc_old.py",
+    "services/zoe-data/routers/voice_livekit_v2.py",
+    "services/livekit/config.yaml.bak",
+    "services/livekit/README.md",
+    "docs/knowledge/livekit-notes.md",
+])
+def test_livekit_non_runtime_paths_do_not_gate(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path], pats) == []
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is False and hits == []
+
+
+def test_replay_corpus_does_not_traverse_the_livekit_lane():
+    """THE PREMISE of the LiveKit entries' evidence statement — pinned, not assumed.
+
+    The whole honest-but-partial framing beside those patterns rests on one
+    factual claim: ~/.zoe-voice-samples is replayed through POST
+    /api/voice/transcribe (the HTTP lane) and never reaches the WebRTC ingest
+    code. If that stops being true — someone adds a LiveKit stage to the probe —
+    the artifact starts certifying MORE than the comment says, and the comment
+    plus the three docs that enumerate the gated set become wrong in the
+    direction that overstates the evidence. Better to go red here and be told.
+
+    Asserted against the probe chain's SOURCE rather than by running it: the
+    harness needs the Jetson, ~2.3 GB of Kokoro, and the shared flock, none of
+    which exist in the ci_safe lane. This is the cheap structural counterpart —
+    the same reason voice_gate_check.py reads an artifact instead of producing
+    one.
+    """
+    chain = [
+        "scripts/maintenance/voice_regression_probe.py",
+        "scripts/perf/measure_voice.py",
+        "services/zoe-data/tests/replay_samples.py",
+    ]
+    offenders = {}
+    for rel in chain:
+        src = (REPO / rel)
+        assert src.exists(), f"probe chain moved: {rel} is gone — re-verify the claim"
+        lowered = src.read_text(encoding="utf-8").lower()
+        hits = [tok for tok in ("livekit", "webrtc", "aiortc") if tok in lowered]
+        if hits:
+            offenders[rel] = hits
+    assert not offenders, (
+        "the replay corpus now appears to touch the LiveKit/WebRTC lane "
+        f"({offenders}) — the evidence statement in "
+        "scripts/maintenance/voice_gate_check.py (and docs/knowledge/voice-pipeline.md, "
+        "docs/knowledge/merge-and-deploy.md, scripts/AGENTS.md) says it does NOT. "
+        "Update all four, or revert the probe change."
+    )
+
+
+def test_livekit_patterns_are_literal_paths_not_a_wildcard():
+    """The literals the exclusion test above is reasoning about.
+
+    Stated as an explicit assertion because the exclusion list is only
+    non-vacuous if the tuple really does carry literals: swap any of these for
+    `*livekit*` and test_livekit_non_runtime_paths_do_not_gate goes red, which
+    is the negative control this pins in place."""
+    pats = vgc.voice_path_patterns()
+    for literal in ("services/zoe-data/livekit_aiortc.py",
+                    "services/zoe-data/routers/voice_livekit.py",
+                    "services/livekit/config.yaml"):
+        assert literal in pats
+    assert not any("*livekit*" in p or p == "services/livekit/*" for p in pats)

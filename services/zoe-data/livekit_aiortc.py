@@ -118,7 +118,20 @@ class _AudioStream:
 
             resampled = self._resampler.resample(av_frame)
             for out_frame in resampled:
-                raw = bytes(out_frame.planes[0])
+                # NEVER read planes[0] directly. FFmpeg over-allocates each
+                # audio plane to its SIMD alignment, so `bytes(planes[0])`
+                # returns the whole padded buffer, not the valid samples:
+                # measured on av 16.1.0 (48 kHz stereo -> 16 kHz mono s16),
+                # samples=160 gives a 448-byte plane for 320 valid bytes —
+                # 128 bytes (28.6%) of trailing junk appended to every frame.
+                # The padding is NOT zero-filled: the resampler recycles its
+                # buffer pool, so it carries stale PCM from earlier frames
+                # (measured peak |sample| 32638 in the padding of frames whose
+                # input was pure silence). That both corrupts and time-stretches
+                # the PCM handed to the VAD and to STT.
+                # to_ndarray() returns shape (1, samples) for mono s16 and is
+                # bit-identical to the valid prefix on av 16.1.0 and 17.1.0.
+                raw = out_frame.to_ndarray().tobytes()
                 return _FrameEvent(frame=_Frame(data=raw))
 
 

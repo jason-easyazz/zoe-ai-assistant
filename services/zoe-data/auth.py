@@ -225,7 +225,17 @@ async def get_current_user(request: Request) -> dict:
                 status_code=503,
                 detail="Authentication service unavailable",
             )
-        return {k: v for k, v in validated.items() if k != _DEGRADED_MARK}
+        # Fail-OPEN: hand back the degraded guest, but keep the OUTAGE VISIBLE.
+        # Stripping every trace made a degraded guest byte-identical to a
+        # VALIDATED guest, so any gate that reads "a session header that resolved
+        # to guest" as proof the header was checked silently re-opens to
+        # unauthenticated callers for the duration of an auth outage — the header
+        # can be any string at all. `_DEGRADED_MARK` stays private (it is the
+        # internal flag from `_degraded_user`); `auth_degraded` is the public one
+        # a caller may branch on to refuse rather than trust. Do NOT cache this.
+        degraded = {k: v for k, v in validated.items() if k != _DEGRADED_MARK}
+        degraded["auth_degraded"] = True
+        return degraded
     _cache_set(session_id, validated)
     return validated
 

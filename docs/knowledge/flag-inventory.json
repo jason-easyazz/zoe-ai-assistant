@@ -1,6 +1,26 @@
 {
   "flags": {
     "lab": {
+      "ZOE_BRAIN_TOKEN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain-2x/parity/flue_wire.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_URL": {
+        "defaults": [
+          "'http://127.0.0.1:3579'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain-2x/parity/flue_wire.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_KOKORO_VOICES": {
         "defaults": [
           "'/home/zoe/models/voices-v1.0.bin'"
@@ -17,6 +37,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "labs/flue-zoe-brain-2x/parity/gatelib.py",
           "labs/flue-zoe-brain/parity/gatelib.py"
         ],
         "typed_env": false
@@ -27,6 +48,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py",
           "labs/flue-zoe-brain/parity/tool_breadth_gate.py"
         ],
         "typed_env": false
@@ -859,7 +881,6 @@
         ],
         "in_env_example": false,
         "readers": [
-          "modules/zoe-music/main.py",
           "services/zoe-data/intent_router.py"
         ],
         "typed_env": false
@@ -1227,6 +1248,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_FLUE_WIRE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_FRUSTRATION_MAX_SESSIONS": {
         "defaults": [
           "'2000'"
@@ -1281,12 +1312,10 @@
       "ZOE_HA_BRIDGE_URL": {
         "defaults": [
           "''",
-          "'http://127.0.0.1:8007'",
-          "'http://localhost:8007'"
+          "'http://127.0.0.1:8007'"
         ],
         "in_env_example": false,
         "readers": [
-          "modules/zoe-music/main.py",
           "services/zoe-data/intent_router.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/routers/ha_control.py",
@@ -2567,16 +2596,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_MUSIC_BIND_HOST": {
-        "defaults": [
-          "'0.0.0.0'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "modules/zoe-music/main.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_MUSIC_DISCOVERY": {
         "defaults": [
           "'off'"
@@ -2637,16 +2656,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_MUSIC_MODULE_URL": {
-        "defaults": [
-          "'http://zoe-music:8100'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "modules/zoe-music/intents/handlers.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_MUSIC_OAUTH_TTL_S": {
         "defaults": [
           "'150'"
@@ -2674,17 +2683,6 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/music_history.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_MUSIC_SERVICE_TOKEN": {
-        "defaults": [
-          "''"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "modules/zoe-music/intents/handlers.py",
-          "modules/zoe-music/main.py"
         ],
         "typed_env": false
       },
@@ -3853,6 +3851,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/curate_voice_corpus.py",
           "services/zoe-data/voice_vad.py"
         ],
         "typed_env": false
@@ -4407,6 +4406,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/curate_voice_corpus.py",
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": false

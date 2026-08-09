@@ -1,0 +1,847 @@
+"""Offline proofs for the browser broker's readability-lite text extraction.
+
+Everything here runs against FIXTURE HTML — no browser, no network, no
+cloakbrowser import — so the extraction algorithm is pinned independently of
+whether a Chromium is installed or reachable.
+
+The load-bearing test is `test_negative_control_*`: it asserts that the
+boilerplate really is present in the fixture, so that if `extract_main_text`
+ever degrades back to whole-body `inner_text()` the exclusion assertions go RED
+rather than passing vacuously against an empty string.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import importlib.machinery
+import pathlib
+import sys
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from browser_broker import (  # noqa: E402
+    SETTLE_SPA,
+    BrowserBroker,
+    build_cloak_executor,
+    ExtractedText,
+    SettlePolicy,
+    execute_text_extraction,
+    extract_main_text,
+    fetch_page_text,
+    settle_and_extract,
+)
+
+FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+ARTICLE = (FIXTURES / "browser_article_page.html").read_text(encoding="utf-8")
+DIVSOUP = (FIXTURES / "browser_divsoup_page.html").read_text(encoding="utf-8")
+
+
+# --- negative controls -----------------------------------------------------
+
+def test_negative_control_boilerplate_is_actually_in_the_fixture():
+    """If this fails the exclusion tests below are meaningless.
+
+    Proves the strings we assert are ABSENT from the extraction are genuinely
+    PRESENT in the source HTML — i.e. the extractor is removing them, rather
+    than the fixture never having contained them.
+    """
+    for needle in (
+        "Cookie preferences",
+        "Sign in",
+        "should-never-appear",
+        "All rights reserved",
+        "buy cheap hosting",
+        "Please enable JavaScript",
+        "font-family",
+        "Related article seven",
+    ):
+        assert needle in ARTICLE, f"fixture no longer contains {needle!r}"
+    # The divsoup exclusions need the same control, and did not have one.
+    for needle in ("Create account", "Mobile view", "Clausius Clapeyron"):
+        assert needle in DIVSOUP, f"divsoup fixture no longer contains {needle!r}"
+
+
+def test_negative_control_extractor_can_fail():
+    """The fallback strategy is reachable and returns real text.
+
+    Deliberately claims nothing about boilerplate: a fallback dump does NOT
+    keep nav/header/footer/aside/noscript, because `_DROP_TAGS` discards those
+    before any scoring runs. (The earlier docstring here said the opposite —
+    cross-review, #1626.) Which exclusions are genuinely SELECTION is pinned by
+    the test below.
+    """
+    fragment = "<p>" + ("only one short paragraph here. " * 3) + "</p>"
+    out = extract_main_text(fragment)
+    assert out.strategy == "fallback:whole-document"
+    assert "only one short paragraph" in out.text
+
+
+def _fixture_slice(html: str, start_marker: str, end_marker: str) -> str:
+    """Cut a real block out of a fixture — never hand-written HTML."""
+    start = html.index(start_marker)
+    end = html.index(end_marker, start) + len(end_marker)
+    return html[start:end]
+
+
+def test_negative_control_the_drop_list_alone_does_not_explain_the_exclusions():
+    """Separate "the drop-list removed it" from "selection rejected it".
+
+    Most strings in `test_article_excludes_boilerplate` sit inside
+    `nav`/`header`/`footer`/`aside`/`noscript`/`script`/`style`, which
+    `_DROP_TAGS` discards wholesale — so their absence proves the drop-list
+    works, not that main-content selection does.
+
+    The link-dense sidebar `<div>` is the one that carries the selection claim:
+    it is NOT in the drop-list, so fed on its own it survives extraction
+    intact. Its absence from the whole-page extraction is therefore link-density
+    SELECTION rejecting it. This also goes red if the sidebar ever becomes a
+    dropped tag, which would quietly make that assertion vacuous.
+    """
+    sidebar = _fixture_slice(ARTICLE, '<div id="sidebar-links">', "</div>")
+    assert "Related article seven" in sidebar
+
+    survives = extract_main_text(sidebar)
+    assert "Related article seven" in survives.text, (
+        "the sidebar is being removed by the drop-list, so excluding it from the "
+        "full-page extraction proves nothing about main-content selection"
+    )
+    assert "Related article seven" not in extract_main_text(ARTICLE).text
+
+
+# --- main-content selection ------------------------------------------------
+
+def test_article_extracts_main_content():
+    out = extract_main_text(ARTICLE)
+    assert isinstance(out, ExtractedText)
+    assert out.strategy == "semantic:<article>"
+    assert "compact open-weight text-to-speech model" in out.text
+    assert "removes the network round trip" in out.text
+    assert "streaming audio pipeline" in out.text
+
+
+@pytest.mark.parametrize(
+    "boilerplate",
+    [
+        "Cookie preferences",      # <nav>
+        "Sign in",                 # <header>
+        "should-never-appear",     # <script>
+        "font-family",             # <style>
+        "All rights reserved",     # <footer>
+        "buy cheap hosting",       # <aside>
+        "Please enable JavaScript",  # <noscript>
+        "Related article seven",   # link-dense sidebar div
+    ],
+)
+def test_article_excludes_boilerplate(boilerplate):
+    assert boilerplate not in extract_main_text(ARTICLE).text
+
+
+def test_title_is_extracted_and_entities_decoded():
+    assert extract_main_text(ARTICLE).title == "Kokoro TTS — a compact neural voice model"
+    assert extract_main_text(DIVSOUP).title == "Boiling point of water & altitude"
+
+
+def test_divsoup_scores_content_over_link_dense_navigation():
+    """No <article>/<main> tag: the winner must be chosen by link density."""
+    out = extract_main_text(DIVSOUP)
+    assert out.strategy == "scored-container"
+    assert "Clausius Clapeyron" in out.text
+    assert "Create account" not in out.text
+    assert "Mobile view" not in out.text
+
+
+def test_malformed_markup_does_not_raise():
+    """The divsoup fixture ends with unclosed tags inside a comment."""
+    assert extract_main_text(DIVSOUP).chars > 200
+
+
+@pytest.mark.parametrize("html", ["", "   ", "\n\t "])
+def test_empty_html_is_empty_not_an_error(html):
+    out = extract_main_text(html)
+    assert out.text == ""
+    assert out.chars == 0
+    assert out.strategy == "empty"
+
+
+def test_truncation_reports_itself():
+    out = extract_main_text(ARTICLE, text_limit=120)
+    assert out.truncated is True
+    assert out.chars == 120
+    assert len(out.text) == 120
+
+    full = extract_main_text(ARTICLE)
+    assert full.truncated is False
+    assert full.chars == len(full.text)
+
+
+def test_paragraph_breaks_survive_and_whitespace_is_collapsed():
+    text = extract_main_text(ARTICLE).text
+    assert "\n" in text
+    assert "  " not in text          # runs of spaces collapsed
+    assert "\n\n\n" not in text      # runs of blank lines collapsed
+    assert text == text.strip()
+
+
+# --- callable surfaces -----------------------------------------------------
+
+def test_fetch_page_text_rejects_non_http_scheme():
+    """SSRF/scheme guard must refuse BEFORE importing or launching a browser."""
+    for bad in ("file:///etc/passwd", "ftp://example.com", "javascript:alert(1)", ""):
+        out = asyncio.run(fetch_page_text(bad))
+        assert out["ok"] is False
+        assert "error" in out
+
+
+def test_broker_pipeline_reports_missing_executor_cleanly():
+    """A broker with no registered executor must not raise for text extraction."""
+    broker = BrowserBroker()
+    out = asyncio.run(
+        execute_text_extraction(broker, url="https://example.com", user_id="u", session_id="s")
+    )
+    assert out["ok"] is False
+    assert "no executor registered" in out["error"]
+    assert out["surface"] == "zoeCloak"
+
+
+def test_text_mode_plan_carries_the_action_and_limit():
+    broker = BrowserBroker()
+    plan = broker.plan_action(
+        action="extract_text",
+        params={"url": "https://example.com", "text_limit": 500},
+        user_id="u",
+        session_id="s",
+    )
+    assert plan.action == "extract_text"
+    assert plan.params["text_limit"] == 500
+    assert plan.action_class == "read_only_research"
+
+
+def test_screenshot_path_is_unchanged_by_default():
+    """Back-compat: a default plan must NOT be a text plan.
+
+    chat.py research screenshots and the MCP browser tool depend on the
+    executor still returning a PNG for any action other than extract_text.
+    """
+    broker = BrowserBroker()
+    plan = broker.plan_action(
+        action="screenshot", params={"navigate_to": "https://example.com"},
+        user_id="u", session_id="s",
+    )
+    assert plan.action not in ("extract_text", "fetch_text")
+
+
+# --- post-load settle policy ------------------------------------------------
+#
+# Offline throughout: a FAKE page (duck-typed content / wait_for_load_state /
+# wait_for_timeout) plus a FAKE clock that advances ONLY when the page is told
+# to wait. No Chromium, no network, no wall-clock sleeping — so these assert
+# exact waits and poll counts deterministically rather than approximately.
+
+
+class _FakePage:
+    """Stand-in for a Playwright Page, driving a fake clock.
+
+    ``bodies`` is what successive ``content()`` reads return, so an SPA is
+    modelled exactly as it behaves: an empty shell first, real markup once the
+    framework bundle has run. The last body repeats forever.
+    """
+
+    def __init__(self, bodies, *, idle_after_ms=None):
+        self._bodies = list(bodies)
+        self.clock = 0.0
+        self.calls = []
+        self._idle_after_ms = idle_after_ms
+
+    def now(self):
+        return self.clock
+
+    async def content(self):
+        self.calls.append(("content", None))
+        body = self._bodies[0]
+        if len(self._bodies) > 1:
+            self._bodies.pop(0)
+        return body
+
+    async def wait_for_load_state(self, state, timeout=0):
+        self.calls.append(("wait_for_load_state", state))
+        if self._idle_after_ms is None or self._idle_after_ms > timeout:
+            self.clock += timeout / 1000.0
+            raise TimeoutError(f"{state} not reached in {timeout}ms")
+        self.clock += self._idle_after_ms / 1000.0
+
+    async def wait_for_timeout(self, ms):
+        self.calls.append(("wait_for_timeout", ms))
+        self.clock += ms / 1000.0
+
+
+SHELL = "<html><head><title>r/perth</title></head><body><div id=root></div></body></html>"
+# NOTE: every paragraph must be DISTINCT. `_tidy` de-duplicates repeated lines,
+# so a fixture built by multiplying one paragraph collapses back under the
+# content floor and the settle looks broken when it is not.
+_PARAS = "".join(
+    f"<p>Emu Export block price discussion in Geraldton, comment {i}. "
+    f"Reply {i} quotes a carton figure from a local bottleshop catalogue.</p>"
+    for i in range(12)
+)
+RENDERED = (
+    "<html><head><title>r/perth</title></head><body><article>"
+    + _PARAS
+    + "</article></body></html>"
+)
+
+
+def _settle(page, policy, **kw):
+    return asyncio.run(settle_and_extract(page, policy=policy, now=page.now, **kw))
+
+
+def test_default_policy_waits_for_nothing():
+    """NEGATIVE CONTROL, cost direction: an unasked-for settle must cost ZERO.
+
+    Every existing caller (chat.py research screenshots, the MCP browser tool)
+    keeps its current timing only while the default policy performs no waits at
+    all. If a default ever creeps in, this goes red.
+    """
+    page = _FakePage([RENDERED])
+    extracted, log = _settle(page, SettlePolicy())
+
+    assert log == []
+    assert page.clock == 0.0
+    assert [c[0] for c in page.calls] == ["content"]
+    assert extracted.chars > 200
+    assert SettlePolicy().active is False
+
+
+def test_spa_shell_is_rescued_by_the_content_floor():
+    """The reddit / thespruceeats shape: shell first, real markup after."""
+    page = _FakePage([SHELL, RENDERED])
+    extracted, log = _settle(page, SETTLE_SPA)
+
+    assert "Emu Export block price discussion" in extracted.text
+    assert extracted.chars >= SETTLE_SPA.min_chars
+    floor = [e for e in log if e["stage"] == "content-floor"][0]
+    assert floor["outcome"] == "reached"
+    assert floor["polls"] == 1
+
+
+def test_negative_control_without_the_settle_the_same_page_yields_the_shell():
+    """LOAD-BEARING: proves the SETTLE is what rescues the SPA, not the fixture.
+
+    Same fake page, policy removed. If this ever passes with real content then
+    the test above is vacuous — the shell would have sufficed on its own.
+    """
+    page = _FakePage([SHELL, RENDERED])
+    extracted, log = _settle(page, SettlePolicy())
+
+    assert "Emu Export" not in extracted.text
+    assert extracted.chars < 1_000
+    assert log == []
+
+
+def test_networkidle_timeout_is_recorded_not_raised():
+    """Many live pages never go idle (beacons, sockets, polling). That is NORMAL."""
+    page = _FakePage([RENDERED], idle_after_ms=None)
+    extracted, log = _settle(page, SettlePolicy(network_idle_ms=8_000))
+
+    assert extracted.chars > 200          # extraction still happened
+    assert log[0]["stage"] == "networkidle"
+    assert log[0]["outcome"] == "timeout"
+    assert log[0]["waited_ms"] == 8_000
+
+
+def test_networkidle_success_is_recorded_with_the_real_wait():
+    page = _FakePage([RENDERED], idle_after_ms=1_200)
+    _, log = _settle(page, SettlePolicy(network_idle_ms=8_000))
+
+    assert log[0] == {"stage": "networkidle", "outcome": "idle", "waited_ms": 1_200}
+
+
+def test_content_floor_gives_up_at_the_ceiling_instead_of_hanging():
+    """A page that never renders must cost a BOUNDED amount."""
+    page = _FakePage([SHELL])
+    policy = SettlePolicy(min_chars=1_000, poll_ms=500, max_wait_ms=2_000)
+    extracted, log = _settle(page, policy)
+
+    floor = [e for e in log if e["stage"] == "content-floor"][0]
+    assert floor["outcome"] == "gave-up"
+    assert floor["polls"] == 4                    # 2000ms ceiling / 500ms poll
+    assert page.clock == pytest.approx(2.0)
+    assert extracted.chars < 1_000                # best effort is still RETURNED
+
+
+def test_content_floor_stops_polling_the_moment_the_floor_is_cleared():
+    """It must not burn the whole ceiling on a page that rendered quickly."""
+    page = _FakePage([SHELL, RENDERED])
+    policy = SettlePolicy(min_chars=1_000, poll_ms=500, max_wait_ms=30_000)
+    _, log = _settle(page, policy)
+
+    assert log[0]["polls"] == 1
+    assert page.clock == pytest.approx(0.5)
+
+
+def test_a_poll_longer_than_the_ceiling_cannot_stretch_the_wait():
+    """`max_wait_ms` is the ceiling it advertises, whatever `poll_ms` says.
+
+    Both values arrive from untrusted plan JSON, so an unclamped sleep let a
+    caller turn the bounded settle into an arbitrarily long broker stall
+    (Codex P2, #1626). Here the poll is 10s against a 1ms ceiling: the wait
+    must end at the ceiling, not 10s later.
+    """
+    page = _FakePage([SHELL])
+    policy = SettlePolicy(min_chars=1_000, poll_ms=10_000, max_wait_ms=1)
+    _, log = _settle(page, policy)
+
+    assert page.clock <= 0.001 + 1e-9, f"slept past the ceiling: {page.clock}s"
+    assert [ms for c, ms in page.calls if c == "wait_for_timeout"] == [1]
+    floor = [e for e in log if e["stage"] == "content-floor"][0]
+    assert floor["outcome"] == "gave-up"
+
+
+def test_a_floor_above_the_text_limit_cannot_burn_the_whole_ceiling():
+    """`extracted.chars` is measured AFTER truncation, so an unclamped floor is
+    arithmetically unreachable when `text_limit < min_chars` — every such
+    request polled to the full ceiling however much the page rendered
+    (Codex P2, #1626). The floor asks "did the page render enough?", and
+    `text_limit` chars IS enough when that is all the caller asked for.
+    """
+    page = _FakePage([RENDERED])          # fully rendered on the FIRST read
+    policy = SettlePolicy(min_chars=1_000, poll_ms=500, max_wait_ms=12_000)
+
+    extracted, log = _settle(page, policy, text_limit=500)
+
+    assert page.clock == 0.0, f"polled for an unreachable floor: {page.clock}s"
+    assert extracted.chars == 500
+    assert [e for e in log if e["stage"] == "content-floor"] == [], \
+        "a floor already satisfied must not open a poll loop at all"
+
+
+def test_the_clamp_is_recorded_when_it_bites():
+    """A clamped floor must be visible, not silent — an operator has to be able
+    to see that the floor they configured was above the text they asked for."""
+    page = _FakePage([SHELL])             # never renders: forces the loop
+    policy = SettlePolicy(min_chars=1_000, poll_ms=500, max_wait_ms=1_000)
+
+    _, log = _settle(page, policy, text_limit=300)
+
+    floor = [e for e in log if e["stage"] == "content-floor"][0]
+    assert floor["floor"] == 300, "the EFFECTIVE floor is the clamped one"
+    assert floor["floor_requested"] == 1_000
+
+
+def test_an_unclamped_floor_is_still_honoured_when_it_fits():
+    """NEGATIVE CONTROL for the clamp: it must not weaken the normal case.
+
+    With `text_limit` above `min_chars` the floor is untouched, so the SPA
+    shell still polls and is still rescued — otherwise the clamp would have
+    quietly disabled the feature it is guarding.
+    """
+    page = _FakePage([SHELL, RENDERED])
+    policy = SettlePolicy(min_chars=1_000, poll_ms=500, max_wait_ms=30_000)
+
+    extracted, log = _settle(page, policy, text_limit=20_000)
+
+    floor = [e for e in log if e["stage"] == "content-floor"][0]
+    assert floor["floor"] == 1_000
+    assert "floor_requested" not in floor
+    assert floor["outcome"] == "reached"
+    assert extracted.chars >= 1_000
+
+
+def test_content_floor_is_inert_without_a_ceiling():
+    """min_chars with no max_wait_ms must not become an unbounded loop."""
+    page = _FakePage([SHELL])
+    policy = SettlePolicy(min_chars=1_000, max_wait_ms=0)
+    _, log = _settle(page, policy)
+
+    assert log == []
+    assert policy.active is False
+
+
+@pytest.mark.parametrize(
+    "params,expected",
+    [
+        ({}, (0, 0, 0)),
+        ({"settle_ms": 500}, (0, 500, 0)),
+        ({"network_idle_ms": 8000, "settle_min_chars": 1000}, (8000, 0, 1000)),
+        ({"settle": {"network_idle_ms": 3000}}, (3000, 0, 0)),
+        ({"settle_ms": "not-a-number"}, (0, 0, 0)),
+        ({"settle_ms": -5}, (0, 0, 0)),
+        ({"settle_ms": None}, (0, 0, 0)),
+    ],
+)
+def test_policy_from_plan_params_is_total(params, expected):
+    """Plan params are untrusted JSON: bad values degrade to 0, never raise."""
+    p = SettlePolicy.from_params(params)
+    assert (p.network_idle_ms, p.settle_ms, p.min_chars) == expected
+    assert p.poll_ms > 0
+
+
+def test_fetch_page_text_still_refuses_bad_schemes_with_a_settle_policy():
+    out = asyncio.run(fetch_page_text("file:///etc/passwd", settle=SETTLE_SPA))
+    assert out["ok"] is False
+
+
+# --- the failure envelope holds through TEARDOWN ---------------------------
+#
+# `fetch_page_text` promises never to raise for an ordinary failure. An
+# exception raised in a `finally` block REPLACES the return value, so an
+# unguarded `await context.close()` broke that promise for exactly the case
+# where it matters most: a browser that has already crashed (cross-review,
+# #1626). Driven with a fake `cloakbrowser` module — no Chromium, no network.
+#
+# `assert_public_url` is stubbed for these three ONLY, because a real DNS
+# lookup is not available offline (an unresolvable host is refused before the
+# browser is ever launched, which is what the SSRF tests above pin). The guard
+# itself stays covered by `test_fetch_page_text_rejects_non_http_scheme`,
+# `test_fetch_page_text_refuses_a_private_target_without_launching`, and
+# `test_fetch_page_text_still_refuses_bad_schemes_with_a_settle_policy`.
+
+
+class _ClosingPage:
+    url = "https://example.test/article"
+
+    async def goto(self, *_a, **_k):
+        return None
+
+    async def content(self):
+        return ARTICLE
+
+    async def title(self):
+        return "fixture"
+
+    async def wait_for_load_state(self, *_a, **_k):
+        return None
+
+    async def wait_for_timeout(self, *_a, **_k):
+        return None
+
+    async def screenshot(self, **_k):
+        return b"\x89PNG-not-a-real-image"
+
+
+class _FakeContext:
+    def __init__(self, close_raises: bool):
+        self._close_raises = close_raises
+        self.closed = False
+
+    async def new_page(self):
+        return _ClosingPage()
+
+    async def close(self):
+        self.closed = True
+        if self._close_raises:
+            raise RuntimeError("browser has crashed; context already gone")
+
+
+def _install_fake_browser(monkeypatch, context):
+    import types
+
+    import agent_safety
+
+    mod = types.ModuleType("cloakbrowser")
+    mod.__spec__ = importlib.machinery.ModuleSpec("cloakbrowser", loader=None)
+
+    async def launch_context_async(**_kwargs):
+        return context
+
+    mod.launch_context_async = launch_context_async
+    monkeypatch.setitem(sys.modules, "cloakbrowser", mod)
+    monkeypatch.setattr(agent_safety, "assert_public_url", lambda url: url)
+
+    async def _noop_guard(_page):
+        return None
+
+    monkeypatch.setattr(agent_safety, "guard_browser_page", _noop_guard)
+
+
+def test_fetch_page_text_returns_the_envelope_even_when_close_raises(monkeypatch):
+    """A raising teardown must not escape as an exception."""
+    ctx = _FakeContext(close_raises=True)
+    _install_fake_browser(monkeypatch, ctx)
+
+    out = asyncio.run(fetch_page_text("https://example.test/article"))
+
+    assert ctx.closed is True, "the close was never attempted"
+    assert out["ok"] is True
+    assert "compact open-weight text-to-speech model" in out["text"]
+
+
+def test_fetch_page_text_close_failure_does_not_mask_a_page_failure(monkeypatch):
+    """Both halves failing still yields {"ok": False}, never a raise."""
+
+    class _Boom(_FakeContext):
+        async def new_page(self):
+            raise RuntimeError("target page crashed")
+
+    ctx = _Boom(close_raises=True)
+    _install_fake_browser(monkeypatch, ctx)
+
+    out = asyncio.run(fetch_page_text("https://example.test/article"))
+
+    assert ctx.closed is True
+    assert out["ok"] is False
+    assert "target page crashed" in out["error"], out["error"]
+
+
+def test_fetch_page_text_closes_the_context_on_the_happy_path(monkeypatch):
+    ctx = _FakeContext(close_raises=False)
+    _install_fake_browser(monkeypatch, ctx)
+
+    out = asyncio.run(fetch_page_text("https://example.test/article"))
+
+    assert out["ok"] is True
+    assert out["strategy"] == "semantic:<article>"
+    assert ctx.closed is True
+
+
+def test_fetch_page_text_refuses_a_private_target_without_launching(monkeypatch):
+    """The SSRF refusal returns the envelope and never reaches a browser."""
+    import types
+
+    mod = types.ModuleType("cloakbrowser")
+    mod.__spec__ = importlib.machinery.ModuleSpec("cloakbrowser", loader=None)
+    launched = []
+
+    async def launch_context_async(**_kwargs):
+        launched.append(1)
+        raise AssertionError("a refused url must never launch a browser")
+
+    mod.launch_context_async = launch_context_async
+    monkeypatch.setitem(sys.modules, "cloakbrowser", mod)
+
+    out = asyncio.run(fetch_page_text("http://127.0.0.1:8000/admin"))
+
+    assert out["ok"] is False
+    assert "refused" in out["error"]
+    assert launched == []
+
+
+def _executor_with(monkeypatch, context):
+    """`build_cloak_executor()` over a fake browser — no Chromium, no network."""
+    _install_fake_browser(monkeypatch, context)
+    ex = build_cloak_executor()
+    assert ex is not None, "the fake cloakbrowser module was not picked up"
+    return ex
+
+
+def _plan(action):
+    return BrowserBroker(default_surface="zoeCloak").plan_action(
+        action=action,
+        params={"url": "https://example.test/article"},
+        user_id="u", session_id="s",
+        action_class="read_only_research",
+    )
+
+
+@pytest.mark.parametrize("action,key", [("extract_text", "text"), ("screenshot", "image_base64")])
+def test_executor_teardown_failure_does_not_destroy_the_payload(action, key, monkeypatch):
+    """The close sits in a `finally` INSIDE the outer try.
+
+    So an unguarded failure there does not merely leak — its exception replaces
+    the successful return and the outer handler converts a COMPLETED extraction
+    (or screenshot) into `{"ok": False, "error": "CloakBrowser executor failed"}`
+    (Codex P2, #1626). Both plan branches must survive it.
+    """
+    ctx = _FakeContext(close_raises=True)
+    executor = _executor_with(monkeypatch, ctx)
+
+    out = asyncio.run(executor(_plan(action)))
+
+    assert ctx.closed is True, "the close was never attempted"
+    assert out["ok"] is True, out.get("error")
+    assert out[key]
+
+
+def test_executor_still_reports_a_real_failure(monkeypatch):
+    """Negative control: the guard must not swallow a genuine executor error."""
+
+    class _Boom(_FakeContext):
+        async def new_page(self):
+            raise RuntimeError("target page crashed")
+
+    executor = _executor_with(monkeypatch, _Boom(close_raises=True))
+
+    out = asyncio.run(executor(_plan("extract_text")))
+
+    assert out["ok"] is False
+    assert "target page crashed" in out["error"], out["error"]
+
+
+def test_a_related_card_list_does_not_beat_the_real_article():
+    """Semantic candidates are SCORED, not taken in traversal order.
+
+    The tree walk is a stack DFS, so a later sibling `<article>` is recorded
+    before an earlier `<section><article>` is descended into. A related-card
+    list that clears the 200-char floor would win on visit order alone
+    (Codex P2, #1626).
+    """
+    real = " ".join(
+        f"Paragraph {i} of the actual article body, which is substantially longer "
+        f"than the card list beside it." for i in range(12)
+    )
+    cards = " ".join(f"Related card {i} teaser sentence about something else." for i in range(6))
+    html = (
+        "<html><body><section><article><p>" + real + "</p></article></section>"
+        "<article><p>" + cards + "</p></article></body></html>"
+    )
+
+    out = extract_main_text(html)
+
+    assert out.strategy.startswith("semantic:")
+    assert "Paragraph 3 of the actual article body" in out.text
+    assert "Related card" not in out.text
+
+
+def test_a_main_wrapping_the_article_does_not_beat_the_article():
+    """Nesting, not visit order: longest-wins alone hands back the WRAPPER.
+
+    `<main>` wrapping the real `<article>` plus a related-card module always
+    holds more text than the `<article>` inside it, so pure length could never
+    choose the tighter node — the shortcut would return article + cards on the
+    single most common article layout on the web (Codex P2, #1626). A candidate
+    containing another qualifying candidate is dropped before length decides.
+    """
+    real = " ".join(
+        f"Paragraph {i} of the actual article body, the text a caller asked for."
+        for i in range(12)
+    )
+    cards = " ".join(
+        f"Related card {i} teaser, part of a module deliberately longer than the article."
+        for i in range(20)
+    )
+    html = (
+        "<html><body><main><article><p>" + real + "</p></article>"
+        "<div class='related'><p>" + cards + "</p></div></main></body></html>"
+    )
+
+    out = extract_main_text(html)
+
+    assert out.strategy == "semantic:<article>", out.strategy
+    assert "Paragraph 3 of the actual article body" in out.text
+    assert "Related card" not in out.text
+
+
+def test_comment_articles_never_evict_the_post_they_belong_to():
+    """The drop is WRAPPER-SHAPED, and this is why it has to be.
+
+    `<article>` nested inside `<article>` is the HTML spec's own idiom for
+    COMMENTS on a post. An "any ancestor containing a qualifying candidate is
+    dropped" rule would return a single comment and throw away the article's
+    headline and body — a worse failure than the one it fixes (Codex P2,
+    #1626). Only a `<main>` wrapping a qualifying `<article>` is demoted.
+    """
+    post = " ".join(
+        f"Paragraph {i} of the post itself, the content a caller actually wants."
+        for i in range(12)
+    )
+    comment = " ".join(
+        f"Comment sentence {i}, long enough on its own to clear the 200-char floor."
+        for i in range(30)
+    )
+    html = (
+        "<html><body><article><h1>The post</h1><p>" + post + "</p>"
+        "<article class='comment'><p>" + comment + "</p></article>"
+        "</article></body></html>"
+    )
+
+    out = extract_main_text(html)
+
+    assert out.strategy == "semantic:<article>", out.strategy
+    assert "Paragraph 3 of the post itself" in out.text, "the post must not be discarded"
+
+
+def test_a_main_whose_inner_article_is_too_short_still_wins():
+    """Negative control for the drop rule: only QUALIFYING nesting demotes.
+
+    If the inner `<article>` is below the 200-char floor there is nothing
+    qualifying nested inside `<main>`, so `<main>` must still be chosen —
+    otherwise the rule would push short-article pages down to the container
+    scorer or to whole-document.
+    """
+    stub = "A teaser too short to qualify."
+    body = " ".join(
+        f"Sentence {i} of the surrounding main region, which is the real content here."
+        for i in range(12)
+    )
+    html = (
+        "<html><body><main><article><p>" + stub + "</p></article>"
+        "<p>" + body + "</p></main></body></html>"
+    )
+
+    assert len(stub) < 200, "the stub must sit below _MIN_MAIN_CHARS for this control"
+
+    out = extract_main_text(html)
+
+    assert out.strategy == "semantic:<main>", out.strategy
+    assert "Sentence 3 of the surrounding main region" in out.text
+
+
+def test_a_late_title_failure_does_not_discard_the_text(monkeypatch):
+    """`page.title()` is a separate RPC; the title is optional, the text is not."""
+
+    class _NoTitle(_ClosingPage):
+        async def title(self):
+            raise RuntimeError("target closed after content()")
+
+    class _Ctx(_FakeContext):
+        async def new_page(self):
+            return _NoTitle()
+
+    _install_fake_browser(monkeypatch, _Ctx(close_raises=False))
+
+    out = asyncio.run(fetch_page_text("https://example.test/article"))
+
+    assert out["ok"] is True, out.get("error")
+    assert "compact open-weight text-to-speech model" in out["text"]
+    assert out["title"] == "Kokoro TTS — a compact neural voice model"
+
+
+def _deeply_nested(depth: int, inner: str) -> str:
+    """A page whose only unusual property is DOM depth."""
+    return "<html><body>" + "<div>" * depth + inner + "</div>" * depth + "</body></html>"
+
+
+def test_a_deeply_nested_page_extracts_instead_of_raising():
+    """Depth is publisher-controlled, so it must not be able to fail the fetch.
+
+    NEGATIVE CONTROL for the iterative `_node_text`: the recursive version
+    raised `RecursionError` at ~1000 nested non-dropped elements, and nothing
+    on the text path catches it (only `parser.feed` is guarded), so a single
+    deep page turned both text-fetch entry points into an error. Depth 2000 is
+    comfortably past CPython's default 1000-frame limit; if `_node_text` ever
+    goes recursive again this goes RED with RecursionError, not with a weaker
+    assertion.
+    """
+    prose = " ".join(
+        f"Sentence {i} of a paragraph buried very deep inside a nested wrapper."
+        for i in range(12)
+    )
+    out = extract_main_text(_deeply_nested(2000, f"<p>{prose}</p>"))
+
+    assert "Sentence 3 of a paragraph buried very deep" in out.text
+    assert out.chars > 200, out.chars
+
+
+def test_depth_does_not_change_the_extracted_text():
+    """The iterative walk must be output-identical to the recursive one.
+
+    Same markup at a depth the old code survived (50) and one it did not
+    (1500): if the explicit stack ever mis-ordered children or dropped a block
+    newline, the two would diverge here. Deliberately NO `<article>`/`<main>`
+    wrapper — those take the semantic shortcut, which renders only the inner
+    container and so would never walk the deep spine this exists to exercise.
+    """
+    inner = (
+        "<div><h1>Heading</h1>"
+        "<p>" + " ".join(f"First paragraph sentence {i}." for i in range(10)) + "</p>"
+        "<p>" + " ".join(f"Second paragraph sentence {i}." for i in range(10)) + "</p>"
+        "</div>"
+    )
+    shallow = extract_main_text(_deeply_nested(50, inner))
+    deep = extract_main_text(_deeply_nested(1500, inner))
+
+    assert shallow.text == deep.text
+    assert "\n" in shallow.text, "block newlines must survive the iterative walk"

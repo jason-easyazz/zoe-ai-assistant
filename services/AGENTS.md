@@ -56,4 +56,14 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 - [zoe-auth/AGENTS.md](zoe-auth/AGENTS.md) — authentication, OIDC/SSO, touch-panel pairing
 - [homeassistant-mcp-bridge/AGENTS.md](homeassistant-mcp-bridge/AGENTS.md) — Home Assistant MCP bridge
 
-`livekit/` is a single config file (`config.yaml`) with no local editing rules; it stays owned by this doc.
+`livekit/` is a single config file (`config.yaml`), owned by this doc. One local rule:
+**it must never contain a `keys:` block or any other credential.** The API pair lives in the
+untracked `.env` and reaches the container as `LIVEKIT_KEYS` (compose interpolation); the tracked
+file carries rtc/ports/logging only. It shipped the live key in plaintext for 86 days on this
+public repo, and no secret scanner caught it — LiveKit keys have no vendor pattern. Pinned by
+`tests/unit/test_livekit_config_no_secrets.py`.
+**A container's environment is fixed at CREATE time and the on-demand path is `docker start`, so any
+change to LiveKit's compose `environment:` needs `docker compose up -d --force-recreate livekit` —
+`restart` silently reuses the old env, and `deploy.yml` never touches this service.** Rotation
+runbook and exposure record in
+[docs/knowledge/livekit-key-rotation.md](../docs/knowledge/livekit-key-rotation.md).

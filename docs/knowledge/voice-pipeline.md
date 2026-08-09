@@ -40,10 +40,11 @@ Per-stage timings are exported to Prometheus as `zoe_voice_stage_seconds`
 
 ## Measuring it — the replay harness
 
-Jason's saved WAVs at **`~/.zoe-voice-samples`** (~790 clips and growing) are a **permanent
-regression corpus** — `ZOE_VOICE_SAVE_AUDIO=1` auto-captures real turns, so the corpus (and the bar)
-**evolves with real use**. Replay-gating **every** voice change is MANDATORY (root `AGENTS.md`); the
-said-vs-did mapping must not regress — "can't do it" on a sample is a bug, not an excuse.
+Jason's saved WAVs at **`~/.zoe-voice-samples`** (1001 curated clips as of 2026-08-04, and growing)
+are a **permanent regression corpus** — `ZOE_VOICE_SAVE_AUDIO=1` auto-captures real turns, so the
+corpus (and the bar) **evolves with real use**. Replay-gating **every** voice change is MANDATORY
+(root `AGENTS.md`); the said-vs-did mapping must not regress — "can't do it" on a sample is a bug,
+not an excuse.
 
 - Harness: `scripts/perf/measure_voice.py` + `scripts/perf/measure_tts.py` (set `ZOE_PERF=1`); they
   wrap `services/zoe-data/tests/replay_samples.py`.
@@ -54,6 +55,60 @@ said-vs-did mapping must not regress — "can't do it" on a sample is a bug, not
   context (8288 > 8192 tokens → HTTP 500 every turn, 2026-07-07). The flue client's
   brain-unreachable fallback text now classifies as **ERROR**, never OK — a dead brain lane can't
   silently pass the gate.
+
+### The corpus contract — auto-captured, so it needs curating
+
+The corpus is **untrusted input**: it grows by itself from whatever the wake word fired on, including
+TV false-wakes and captures written by a resampling-era pipeline. Two rules make it gate-safe.
+
+**1. Every member SHOULD be 16 kHz mono 16-bit PCM — but off-contract is not the same as unusable.**
+16 kHz mono s16 is the capture contract. Missing it is a real signal about the capture path, and it
+is REPORTED as drift; it is not grounds for eviction. The replay path
+(`replay_samples.py` → `routers.voice_tts._run_moonshine` → `_prepare_audio_for_moonshine`,
+`voice_tts.py:2071`) **resamples off-rate audio to 16 kHz and downmixes multi-channel** before
+transcription, so a 24 kHz mono s16 capture is a perfectly good regression sample. The only input it
+refuses is a rate it cannot honestly resample (`sr <= 0`), which it explicitly declines to pretend is
+16 kHz. So the quarantine class is exactly the audio STT itself cannot consume: unparseable RIFF,
+zero frames, or `rate <= 0`.
+
+Measured 2026-08-04 over 1151 files: **5 unusable** (not valid RIFF at all), **95 × 24 kHz drifted
+but transcribable** (a 2026-06-21..07-13 resampling-era window — these STAY in the corpus and are
+reported), and **50 clear non-speech**. The first executed run predated this distinction and moved
+all 150; the 95 were restored, leaving the live top-level corpus at **1099 WAVs**. #1642 is the
+non-speech class one file wide.
+
+The right fix for capture drift is a **rate assertion at the SAVE path** — catching it when the file
+is written, not deleting the evidence afterwards. Curating a shrunken corpus and re-baselining
+against it makes the gate agree with itself while measuring less.
+
+**2. Quarantine is a MOVE into a dated subdirectory, never a delete.**
+`scripts/maintenance/curate_voice_corpus.py` audits every top-level WAV (stdlib format probe + the
+**real** `voice_vad` Silero path) and moves failures into `quarantine-format-YYYYMMDD/` and
+`quarantine-nonspeech-YYYYMMDD/` beside a `manifest.json` recording file, reason, scores, mtime and
+the VAD model sha. Dry-run by default; `--execute` under `flock /tmp/zoe-voice-harness.lock` so no
+probe enumerates the corpus mid-move. It has no delete path at all (AST-pinned by
+`tests/unit/test_curate_voice_corpus.py`), so a wrong call is always reversible with `mv`.
+
+**Quarantine subdirectories are excluded from replay BY DESIGN, and that is a verified property, not
+a convention.** Every corpus consumer globs `<corpus>/*.wav` — non-recursive:
+`replay_samples.py::_select` (the SSOT behind `voice_regression_probe.py` and
+`scripts/perf/measure_voice.py`) and `test_voice_barge_in.py`'s real-voice replay. The unit test
+executes `_select`'s real source against a fixture tree containing a quarantine subdir, so making
+any of them recursive — which would silently re-admit quarantined audio to the gate — goes red.
+
+**The quarantine line is 0.20 peak speech probability, NOT the runtime 0.50.**
+`voice_vad.speech_threshold()` = 0.5 is the live barge-in decision and is deliberately not reused:
+the corpus median peak is 0.829 with ~11% under 0.5, and that 11% is quiet, distant or
+clipped-but-real speech — the hardest and most valuable gate samples. A peak under 0.20 means the
+model never once, in any 32 ms hop of the whole recording, thought it heard speech. Files in
+`0.20 ≤ peak < 0.50` are reported as **BORDERLINE and kept** (61 of them). Consequence, stated
+plainly: the specific TV false-wake that reddened #1642 scores 0.366 and is **kept** — the fixture
+fix is what handles that file; curation only removes what is unambiguous.
+
+**Curating changes the gate's input, so re-run the probe after a curation pass** and decide
+explicitly whether to `--update-baseline`. Post-curation the corpus is 93.9% above the runtime
+threshold (was 89.4%), so both the OK-rate and the per-stage medians move for a reason the
+baseline does not know about.
 
 ## Regression + speed gate — `voice_regression_probe.py` (fleet tool, evolving)
 
@@ -142,7 +197,12 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   construction too: `decide()` returns `None` on any failure and the caller keeps the weaker
   similarity route, while a plain logic edit just returns a different tool without erroring. The
   routers' tests, the `labs/` harnesses and the offline `scripts/maintenance/router_*.py` tooling
-  stay ungated, which is what the literal paths (rather than a `*router*` wildcard) buy;
+  stay ungated, which is what the literal paths (rather than a `*router*` wildcard) buy — **plus the
+  LiveKit/WebRTC ingest lane**: `livekit_aiortc.py` (the *selected* production backend —
+  `ZOE_LK_USE_AIORTC=1` overrides a code default of `0`), `routers/voice_livekit.py` (registered
+  unconditionally, owns the WebRTC turn's VAD/barge-in/endpointing/pipeline call) and
+  `services/livekit/config.yaml` (the on-demand container's serving config). **Read the next section
+  before treating a green gate on those three as verification;**
   override `ZOE_VOICE_GATE_PATHS`), it asserts a **fresh** (`< ZOE_VOICE_GATE_MAX_AGE_H`, default 24h)
   **passing** artifact **matching the current baseline** before the restart — else it fails loudly
   (non-zero exit) and the deploy is refused. Non-voice deploys are a no-op pass. **It never runs the
@@ -150,6 +210,67 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   produced. Standing rule: *any mandatory loop/gate/job must emit a heartbeat that something checks.*
   Pinned by `tests/unit/test_voice_gate_check.py` (missing → block, stale → block, fresh pass →
   allow; skip/error/baseline-drift all block).
+
+### The gated set is NOT all equally evidenced — the LiveKit/WebRTC lane (read before believing a green)
+
+**The replay corpus does not traverse the LiveKit lane.** `~/.zoe-voice-samples` is replayed through
+`POST /api/voice/transcribe` — the HTTP lane. The probe chain (`voice_regression_probe.py` →
+`scripts/perf/measure_voice.py` → `services/zoe-data/tests/replay_samples.py`) contains **zero**
+references to livekit/webrtc/aiortc, and the always-on Pi daemon posts HTTP too. So for a diff
+touching only `livekit_aiortc.py` / `routers/voice_livekit.py` / `services/livekit/config.yaml`:
+
+> **A fresh passing artifact certifies HTTP-corpus-path non-regression and the live service's import
+> health — and nothing about the code that changed.**
+
+That premise is pinned by `test_replay_corpus_does_not_traverse_the_livekit_lane`: if someone adds a
+LiveKit stage to the probe, the test goes red and this section must be rewritten rather than silently
+becoming an understatement.
+
+- **What actually verifies these files:** their deterministic `ci_safe` suites, which run in
+  **`validate` — the REQUIRED, locally-runnable, blocking gate** — not this advisory/deploy one. As of
+  #1636/#1652: `test_livekit_audio_frame_bytes.py` (ingest **fidelity** — a whole utterance through
+  `_AudioStream`), `test_livekit_vad_segmentation.py` (what the agent *does* with that stream),
+  `test_livekit_media_authz.py` + `test_voice_livekit_session_harness.py` (the HTTP media endpoints,
+  server and browser side), `test_livekit_failure_paths.py`, `test_livekit_stream_tts.py`,
+  `test_voice_livekit_{fast_tier,health,lifecycle,ondemand}.py`. When you change a file in this lane,
+  **the test you add there is the verification**; the replay run is the forcing function that makes
+  you look.
+  - **Accuracy note, because a list like this rots into a lie:** `test_livekit_aiortc_tasks.py` is
+    **not** in that set — it carries no `ci_safe` marker, so it runs only in the Jetson
+    full-directory lane, never in `validate`. Checked by grep on this commit, not assumed.
+  - **And the trap one layer up, fixed in #1636:** the fidelity suite `importorskip`s `av`/`aiortc` at
+    module scope, so until that PR installed those wheels in the slim lane it **skipped** in
+    `validate` and read green while proving nothing. `test_livekit_ci_dep_guard.py` now fails the lane
+    if they go missing again — a module-scope `importorskip` inside a gating suite must always be
+    paired with a guard that makes its absence loud.
+- **Why gate them anyway:** the tuple is a **forcing function, not an isolation harness** — the same
+  bargain already accepted for every serving unit in it. Ungated, a change to the *selected* WebRTC
+  backend reaches the box with nobody looking, which is how a bug that made ~25–33% of every frame on
+  that path FFmpeg plane padding carrying stale PCM (silent input emitting near-full-scale audio into
+  the VAD and Moonshine) survived from 2026-05-18 to 2026-08-04 and tripped no gate at either end.
+- **Cost, measured not guessed:** `livekit_aiortc.py` 3 commits ever (last 2026-06-28),
+  `routers/voice_livekit.py` 15 (last 2026-07-21), against 111 for the already-gated
+  `routers/voice_tts.py` — a handful of replay runs a year.
+- **The real fix is DEFERRED, and it is a project, not an omission.** A true LiveKit-lane probe needs
+  the LiveKit container up (7880 + the 50000–50200 UDP range), a synthetic WebRTC *publisher* pushing
+  corpus WAVs as an Opus track, token minting, the agent loop attached, and a second ~2.3 GB
+  Moonshine+brain+Kokoro load under `flock /tmp/zoe-voice-harness.lock` on a box where two Kokoro
+  loads OOM. **The small piece of it has since SHIPPED, and not as a probe stage:**
+  `test_livekit_audio_frame_bytes.py` (#1636) feeds corpus WAVs — plus a deterministic speech-shaped
+  synthetic, so CI runs it too — straight into `_AudioStream` and asserts the emitted PCM (envelope
+  correlation, duration, silent tail), with `_drain_padded` reproducing the pre-fix read as a
+  permanent negative control. No server, no GPU, no flock, and it lives in `validate` where it
+  **blocks** — stronger than any advisory artifact. What remains deferred is only the end-to-end
+  WebRTC leg (publisher + container + live stack); the ingest arithmetic is now covered
+  deterministically.
+- **Deliberately ungated — the browser side, all of it.** The vendored publisher
+  `services/zoe-ui/dist/lib/livekit/livekit-client.umd.min.js`, and equally the pages that drive it:
+  `dist/voice.html`, `dist/touch/voice.html`, `dist/js/auth.js` (#1652 changed all three). They run in
+  the panel's browser, not on the Jetson, so a deploy gate on the box governs nothing about them and
+  no probe on the box could exercise them. Their verification is the node harness
+  `dist/test_voice_livekit_session.js`, run in `validate` by `test_voice_livekit_session_harness.py` —
+  which since #1652 composes the **real** `js/auth.js` fetch interceptor under the real page helper,
+  because a harness that stubs the innermost layer is structurally blind to every wrapper above it.
 
 ## The caveat that bites (read this)
 
