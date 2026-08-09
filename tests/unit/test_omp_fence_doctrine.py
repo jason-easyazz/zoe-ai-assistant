@@ -97,6 +97,46 @@ def test_no_credential_value_in_any_tracked_fence_file():
     assert "openrouter-omp.env" not in _text(OVERLAY)
 
 
+def test_the_runbooks_tracked_hashes_match_the_tracked_files():
+    """A recorded hash that does not match is worse than no hash at all.
+
+    The runbook tells the operator to refuse to trust or dispatch through a
+    fence whose live file does not equal the recorded tracked hash. So a stale
+    entry does not merely mislead — it makes a byte-correct install
+    un-installable, and the operator's only options are to skip the check or
+    edit the runbook, both of which defeat it.
+
+    This has now gone stale twice by hand (once elided to a prefix, once left
+    behind by a follow-up commit), which is exactly the shape that wants a test
+    rather than more care. Every 64-hex literal in the runbook that sits beside
+    a fence filename must be the CURRENT hash of that file.
+    """
+    import hashlib
+
+    doc = _text(RUNBOOK)
+    current = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (WRAPPER, SUPERVISOR, OVERLAY)
+    }
+
+    # Historical baselines are deliberately kept, so only the block introduced by
+    # the LATEST hashes is checked: the last recorded hash per filename wins.
+    recorded: dict[str, str] = {}
+    for digest, name in re.findall(r"\b([0-9a-f]{64})\s+(\S+)", doc):
+        if name in current:
+            recorded[name] = digest
+
+    assert set(recorded) == set(current), (
+        f"the runbook must record a hash for every fence artifact; got {sorted(recorded)}"
+    )
+    for name, digest in recorded.items():
+        assert digest == current[name], (
+            f"runbook records {digest} for {name} but the tracked file hashes to "
+            f"{current[name]}. Update the runbook in the SAME commit that changes "
+            "the file — an operator following it would refuse a correct install."
+        )
+
+
 # --------------------------------------------------------------------------
 # Wrapper doctrine
 # --------------------------------------------------------------------------
@@ -167,6 +207,165 @@ def test_wrapper_arms_stdin_watching_only_for_the_acp_subcommand():
     )
 
 
+def test_wrapper_parses_the_key_file_and_never_sources_it():
+    """``. "$KEY_FILE"`` executed the key file as SHELL, after the section-2
+    credential scrub and after every section-1 precondition — so an extra line in
+    it landed inside the fence with nothing left to catch it. Measured on the
+    pre-fix wrapper with a crafted file: ``export ANTHROPIC_API_KEY=…`` reached
+    the child, and ``SUPERVISOR=/tmp/evil`` re-pointed the final exec.
+
+    Per-LINE matching throughout, deliberately (same rule as the exit-78 guards):
+    every assertion is evaluated against ONE code line, so no pattern can borrow
+    a neighbour's text."""
+    lines = _code_lines(_text(WRAPPER))
+    for ln in lines:
+        assert not re.match(r"^(\.|source)\s", ln), (
+            f"the wrapper sources a file ({ln!r}); the key file must be PARSED — "
+            "sourcing runs arbitrary shell inside the fence, after the scrub"
+        )
+    assert any(re.search(r"^while\s+read\s+-r\s+_line\b", ln) for ln in lines), (
+        "the key file must be consumed by a read loop, not executed"
+    )
+    assert any(re.search(r'^done\s*<\s*"\$KEY_FILE"', ln) for ln in lines), (
+        "the read loop must take its input from $KEY_FILE by redirection (scoped "
+        "to the loop — the script's own fd 0 is the ACP channel)"
+    )
+
+
+def test_wrapper_key_parse_fail_closes_on_anything_but_the_dedicated_key():
+    """Exactly one variable may come out of the key file. Another credential, an
+    ``OMP_BIN=``/``SUPERVISOR=`` re-point, a stray command, a duplicate, an empty
+    value or an absent one must all exit 78 rather than run a half-fenced omp.
+
+    Every match below is against a SINGLE code line, so an assertion can never
+    satisfy itself with an ``exit 78`` that belongs to an adjacent guard — the
+    #1650 failure, where a pattern crossing one newline let each precondition
+    borrow the next one's exit code."""
+    lines = _code_lines(_text(WRAPPER))
+
+    assert any(ln.startswith("OPENROUTER_API_KEY_OMP=*)") for ln in lines), (
+        "no case arm accepting the one permitted assignment"
+    )
+    assert any(
+        ln.startswith("*)") and "$KEY_FILE" in ln and "exit 78" in ln for ln in lines
+    ), (
+        "the catch-all arm of the key-file parse must exit 78 ON ITS OWN LINE; "
+        "any line that is not an OPENROUTER_API_KEY_OMP assignment is a fence breach"
+    )
+    assert any('"$_key_seen" -eq 1' in ln and "exit 78" in ln for ln in lines), (
+        "an absent OPENROUTER_API_KEY_OMP must exit 78"
+    )
+    assert any('"$_key_seen" -eq 0' in ln and "exit 78" in ln for ln in lines), (
+        "a duplicate OPENROUTER_API_KEY_OMP assignment must exit 78 — an ambiguous "
+        "key file is not a fenced one"
+    )
+    assert any(
+        re.search(r'\[\s*-n\s*"\$_key_value"\s*\]', ln) and "exit 78" in ln
+        for ln in lines
+    ), "an empty OPENROUTER_API_KEY_OMP must exit 78"
+    assert any(
+        ln.startswith("*[!") and "exit 78" in ln for ln in lines
+    ), (
+        "the parsed value must be charset-checked — `KEY=x; export OTHER=y` is a "
+        "single assignment to a naive parser and must not be accepted as a key"
+    )
+
+
+def test_the_dedicated_key_name_is_itself_scrubbed():
+    """The scrubber's globs do not catch our OWN variable name.
+
+    ``OPENROUTER_API_KEY_OMP`` ends in ``_OMP``, so ``*_API_KEY``/``*_TOKEN``/…
+    all miss it. An ambient copy exported by the runner would survive section
+    2's scrub and reach the child ALONGSIDE the key parsed from the file —
+    handing omp a second, possibly stale secret under a name it might read
+    (cross-review, #1655).
+
+    Pinned in BOTH places it is unset: section 2 (before the parse, which reads
+    the FILE and is unaffected) and again after promotion, so exactly one
+    OpenRouter credential leaves this script under exactly one name.
+    """
+    lines = _code_lines(_text(WRAPPER))
+    unsets = [ln for ln in lines if ln.startswith("unset ") and "OPENROUTER_API_KEY_OMP" in ln]
+
+    assert len(unsets) >= 2, (
+        "OPENROUTER_API_KEY_OMP must be unset in section 2 AND after promotion; "
+        f"found {len(unsets)}: {unsets}"
+    )
+
+    # And the premise is DERIVED FROM THE SCRIPT, not restated here: pull the
+    # scrub globs out of the section-2 case arm and confirm none of them match.
+    # If a glob is ever broadened to cover the name, this test says so instead of
+    # silently asserting a redundant unset.
+    import fnmatch
+    arm = next(ln for ln in lines if ln.startswith("*_API_KEY|"))
+    scrub_globs = arm.split(")")[0].split("|")
+    assert len(scrub_globs) >= 5, f"could not parse the scrub globs from: {arm!r}"
+    assert not any(fnmatch.fnmatch("OPENROUTER_API_KEY_OMP", g) for g in scrub_globs), (
+        "a credential glob now catches OPENROUTER_API_KEY_OMP — this test's "
+        "premise is stale, re-derive it rather than deleting it"
+    )
+
+
+def test_the_key_line_case_has_exactly_two_arms_in_the_right_order():
+    """Arm PRESENCE is not arm REACHABILITY — and `case` is first-match-wins.
+
+    The assertions above check that both arms exist. They stay green if a
+    permissive arm is inserted BEFORE the rejecting one: a leading `*) : ;;`
+    makes every hostile line fall through and turns the `exit 78` arm into dead
+    code, with the whole test still passing. That was demonstrated as a live
+    mutation during the cross-review of #1655. So pin the arm LIST: exactly two
+    arms, accept first, catch-all reject second, nothing in between.
+    """
+    lines = _code_lines(_text(WRAPPER))
+    # `$_line` is cased several times (blank/comment skip, `export ` strip).
+    # The ACCEPTANCE block is the one carrying the permitted assignment — found
+    # by its content, so reordering the earlier blocks cannot misdirect this.
+    blocks = []
+    for i, ln in enumerate(lines):
+        if ln != 'case "$_line" in':
+            continue
+        end = next(j for j in range(i + 1, len(lines)) if lines[j] == "esac")
+        arms = [a for a in lines[i + 1:end] if re.match(r"^[^\s(]+\)", a)]
+        if any(a.startswith("OPENROUTER_API_KEY_OMP=*)") for a in arms):
+            blocks.append(arms)
+
+    assert len(blocks) == 1, (
+        f"expected exactly one acceptance case for the key line, found {len(blocks)}"
+    )
+    arms = blocks[0]
+
+    assert len(arms) == 2, f"the key-line case must have exactly two arms, got: {arms}"
+    assert arms[0].startswith("OPENROUTER_API_KEY_OMP=*)"), (
+        "the FIRST arm must be the one permitted assignment"
+    )
+    assert arms[1].startswith("*)") and "exit 78" in arms[1], (
+        "the SECOND and last arm must be the catch-all that exits 78; anything "
+        "matching earlier leaves the reject arm unreachable"
+    )
+
+
+def test_wrapper_diagnostics_never_carry_key_material():
+    """A rejected line may BE the key, and stderr goes to omnigent's logs. Every
+    fail-closed message names the file and a line NUMBER, never line text.
+
+    Matched in BRACE as well as bare form (`${_line}`, not only `$_line`). The
+    brace form is the natural thing to reach for when appending text to a
+    variable, it defeated the bare-only pattern in a live mutation during the
+    cross-review of #1655, and the leak it permits is the whole key.
+    """
+    for ln in _code_lines(_text(WRAPPER)):
+        # Only the emitted TEXT — the guard's own condition may of course name
+        # the variable it is testing. Matched within one line; `.` never spans a
+        # newline, so this cannot reach into a neighbouring statement.
+        emitted = re.search(r"\b(?:echo|printf)\b(.*?)>&2", ln)
+        if not emitted:
+            continue
+        for var in ("_key_value", "_line", "OPENROUTER_API_KEY"):
+            assert not re.search(rf"\$\{{?{var}\b", emitted.group(1)), (
+                f"diagnostic prints key material via ${var}: {ln!r}"
+            )
+
+
 def test_wrapper_pins_home_and_the_settings_overlay():
     lines = _code_lines(_text(WRAPPER))
     assert any(ln.startswith("PI_CONFIG_FILES=") for ln in lines), (
@@ -186,6 +385,26 @@ def test_wrapper_pins_home_and_the_settings_overlay():
 
 def _supervisor_tree() -> ast.Module:
     return ast.parse(_text(SUPERVISOR), filename=str(SUPERVISOR))
+
+
+def _supervisor_main() -> ast.FunctionDef:
+    for node in _supervisor_tree().body:
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            return node
+    raise AssertionError("the supervisor no longer defines main()")
+
+
+def _linenos(scope: ast.AST, pred) -> list[int]:
+    return sorted(node.lineno for node in ast.walk(scope) if pred(node))
+
+
+def _is_call_to(node: ast.AST, name: str) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr == name
+    return isinstance(func, ast.Name) and func.id == name
 
 
 def test_supervisor_starts_the_child_in_a_new_session():
@@ -259,6 +478,86 @@ def test_supervisor_arms_parent_death_detection_two_ways():
     assert "getppid" in text, (
         "the getppid poll is the belt for PDEATHSIG's corner cases (it keys on the "
         "CREATING thread and is Linux-only)"
+    )
+
+
+def test_supervisor_captures_the_expected_parent_before_arming_pdeathsig():
+    """ORDER, not presence — and it is the one case where BOTH parent-death
+    detectors fail together.
+
+    Armed-then-captured (shipped until 2026-08-06): if the runner dies inside
+    that window we are reparented to init, ``original_ppid`` records **1**, and
+    the getppid poll then compares 1 against 1 forever — nothing reparents an
+    already-init-owned process again — while ``Popen`` still launches the METERED
+    child. Reproduced against the pre-fix copy by double-forking to ppid 1: the
+    child launched, silently.
+
+    AST node positions, so nothing here can borrow an adjacent line."""
+    main = _supervisor_main()
+    capture = _linenos(
+        main,
+        lambda n: isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "original_ppid" for t in n.targets)
+        and _is_call_to(n.value, "getppid"),
+    )
+    assert capture, "main() no longer captures original_ppid from os.getppid()"
+    assert any(
+        isinstance(stmt, ast.Assign) and stmt.lineno == capture[0] for stmt in main.body
+    ), "the parent capture must be an unconditional statement of main(), not branch-local"
+
+    arm = _linenos(main, lambda n: _is_call_to(n, "_set_pdeathsig"))
+    assert arm, "main() no longer arms PR_SET_PDEATHSIG"
+    popen = _linenos(main, lambda n: _is_call_to(n, "Popen"))
+    assert popen, "main() no longer spawns the metered child"
+
+    assert capture[0] < arm[0], (
+        "original_ppid must be captured BEFORE PR_SET_PDEATHSIG is armed; the "
+        "reverse order records ppid 1 when the runner dies in the window and the "
+        "getppid watcher then waits on init forever"
+    )
+    assert arm[0] < popen[0], (
+        "parent-death detection must be armed before the metered child is spawned"
+    )
+
+
+def test_supervisor_refuses_to_spawn_when_the_parent_has_already_gone():
+    """Detecting the race is not enough — it must REFUSE. A failed dispatch is a
+    harness error; a launched child with no working kill switch is unbounded
+    spend (trial-002: 49s of work past the kill, 8 minutes orphaned)."""
+    main = _supervisor_main()
+    popen_line = _linenos(main, lambda n: _is_call_to(n, "Popen"))[0]
+
+    guards = []
+    for node in ast.walk(main):
+        if not isinstance(node, ast.If) or node.lineno >= popen_line:
+            continue
+        test_src = ast.dump(node.test)
+        if "original_ppid" not in test_src:
+            continue
+        returns = [r for r in ast.walk(node) if isinstance(r, ast.Return)]
+        if any(
+            isinstance(r.value, ast.Constant) and r.value.value not in (0, None)
+            for r in returns
+        ):
+            guards.append(node)
+
+    orphaned = [g for g in guards if not any(_is_call_to(n, "getppid") for n in ast.walk(g.test))]
+    changed = [g for g in guards if any(_is_call_to(n, "getppid") for n in ast.walk(g.test))]
+
+    assert orphaned, (
+        "no pre-spawn guard returning non-zero when original_ppid is already init; "
+        "an orphan at startup must not launch a metered child at all"
+    )
+    assert any(
+        isinstance(n, ast.Constant) and n.value == 1
+        for g in orphaned
+        for n in ast.walk(g.test)
+    ), "the orphan guard must compare the captured parent against PID 1"
+
+    arm_line = _linenos(main, lambda n: _is_call_to(n, "_set_pdeathsig"))[0]
+    assert any(g.lineno > arm_line for g in changed), (
+        "getppid() must be re-checked AFTER arming PR_SET_PDEATHSIG and BEFORE "
+        "Popen; arming cannot cover a parent that was already dead when armed"
     )
 
 

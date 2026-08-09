@@ -465,6 +465,62 @@ async def _require_voice_auth(
         return {"source": "session", "user_id": user.get("user_id"), "role": user.get("role")}
     raise HTTPException(status_code=401, detail="Voice endpoints require authentication or a device token")
 
+
+async def _require_livekit_auth(
+    request: Request,
+    device: Optional[dict] = Depends(_validate_device_token),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Gate for the LiveKit join token — never anonymous.
+
+    A `/livekit-token` response is a signed room-join grant for ``zoe-voice``,
+    the house voice room: whoever holds it can publish a mic track, subscribe to
+    Zoe's replies to everyone else in the room, and publish data. So the caller
+    must present SOMETHING. ``Depends(get_current_user)`` alone does not achieve
+    that — it RESOLVES an identity (guest for a credential-less request) but
+    never enforces one, so the endpoint handed a valid token to any LAN client.
+
+    Accepted, in order of strength:
+      1. a valid ``X-Device-Token`` (the Pi voice daemon / provisioned kiosk),
+      2. a signed-in, non-guest session,
+      3. a VALIDATED session that resolves to guest — the estate kiosk's own
+         principal (`/api/auth/guest` at boot). ``get_current_user`` has already
+         raised 401 for an expired or unknown session id by the time we get
+         here, so reaching this branch with a session header means zoe-auth
+         validated it.
+
+    The distinguisher for (3) is the presence of the header, because a
+    credential-less request and a real guest session both come back as
+    ``role="guest"`` from ``get_current_user``.
+
+    Deliberately WEAKER than `_require_voice_auth` (which rejects guests
+    outright): the estate panel has no device token and boots as a guest, and
+    breaking the panel's Talk button is not an acceptable price. This closes the
+    anonymous path; it does not make the room private while `/api/auth/guest` is
+    open on the LAN. See the PR body for the follow-up (issue the kiosk a real
+    device token, then tighten this to `_require_voice_auth`).
+    """
+    if device:
+        return {
+            "source": "device",
+            "panel_id": device.get("panel_id"),
+            "user_id": device.get("user_id", "voice-daemon"),
+            "role": device.get("role") or "voice-daemon",
+        }
+    if user.get("role") not in (None, "guest"):
+        return {"source": "session", "user_id": user.get("user_id"), "role": user.get("role")}
+    if request.headers.get("X-Session-ID", "").strip():
+        return {
+            "source": "guest-session",
+            "user_id": user.get("user_id") or "guest",
+            "role": user.get("role") or "guest",
+        }
+    raise HTTPException(
+        status_code=401,
+        detail="A LiveKit join token requires a session or a device token",
+    )
+
+
 VOICE_PROFILES = {
     "zoe_au_natural_v1": {
         "edge_voice": "en-AU-NatashaNeural",
@@ -5404,8 +5460,12 @@ async def chatgpt_auth_status():
 
 
 @router.get("/livekit-token")
-async def get_livekit_token(request: Request, user: dict = Depends(get_current_user)):
+async def get_livekit_token(request: Request, caller: dict = Depends(_require_livekit_auth)):
     """Mint a LiveKit join token for the voice page.
+
+    Gated by `_require_livekit_auth`: a device token, a signed-in user, or a
+    validated (kiosk-guest) session. An anonymous caller gets 401 and no token —
+    the room-join grant below is not something a bare LAN client may mint.
 
     Returns {"token": "<jwt>", "url": "<ws url>"}.  The token is a standard
     HS256 JWT with LiveKit video-grant claims — no livekit-api package required.
@@ -5460,7 +5520,10 @@ async def get_livekit_token(request: Request, user: dict = Depends(get_current_u
             scheme = "wss" if request.url.scheme == "https" else "ws"
             livekit_url = f"{scheme}://{request.url.netloc}/livekit/"
 
-    user_id = user.get("user_id", "voice-guest")
+    # The participant identity is taken from the SERVER-RESOLVED principal only —
+    # never from a query/body argument — so a caller cannot mint a token that
+    # joins the room as somebody else.
+    user_id = caller.get("user_id") or "voice-guest"
     now = int(_time.time())
     payload = {
         "exp": now + 3600,
