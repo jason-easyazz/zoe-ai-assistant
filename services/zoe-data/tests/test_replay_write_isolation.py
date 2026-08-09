@@ -402,7 +402,8 @@ async def test_non_flue_lane_drops_the_kwarg_loudly(monkeypatch, caplog):
     """The other brain lanes take keyword-only params with no ``**kwargs``, so
     forwarding the marker would raise TypeError and turn every replay turn into an
     ERROR verdict. It is dropped — but WARNED about, because a caller that asked
-    for isolation and did not get it must not learn that from a dirty database."""
+    for isolation on a lane that cannot honour it gets a REFUSED turn (fail closed,
+    review P1) — never a committed write with a log line."""
     monkeypatch.setattr(brain_dispatch, "use_flue_brain", lambda: False)
     monkeypatch.setattr(brain_dispatch, "use_core_brain", lambda: True)
     seen: dict = {}
@@ -414,12 +415,10 @@ async def test_non_flue_lane_drops_the_kwarg_loudly(monkeypatch, caplog):
     import zoe_core_client
 
     monkeypatch.setattr(zoe_core_client, "run_zoe_core", _fake_core)
-    with caplog.at_level("WARNING"):
-        out = await brain_dispatch.brain_oneshot("hi", "s1", "jason", replay_isolation=True)
+    with pytest.raises(RuntimeError, match="replay_isolation"):
+        await brain_dispatch.brain_oneshot("hi", "s1", "jason", replay_isolation=True)
 
-    assert out == "core reply"
-    assert "replay_isolation" not in seen, "must not reach a lane that cannot honour it"
-    assert any("replay_isolation" in r.message for r in caplog.records)
+    assert not seen, "the lane must never be dispatched when isolation is refused"
 
 
 @pytest.mark.asyncio
@@ -442,13 +441,11 @@ async def test_non_flue_streaming_lane_drops_the_kwarg_too(monkeypatch, caplog):
     import zoe_core_client
 
     monkeypatch.setattr(zoe_core_client, "run_zoe_core_streaming", _fake_core_stream)
-    with caplog.at_level("WARNING"):
-        got = [d async for d in brain_dispatch.brain_streaming(
+    with pytest.raises(RuntimeError, match="replay_isolation"):
+        [d async for d in brain_dispatch.brain_streaming(
             "hi", "s1", "jason", replay_isolation=True)]
 
-    assert got == ["core delta"]
-    assert "replay_isolation" not in seen
-    assert any("replay_isolation" in r.message for r in caplog.records)
+    assert not seen, "the lane must never be dispatched when isolation is refused"
 
 
 @pytest.mark.asyncio

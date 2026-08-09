@@ -354,10 +354,15 @@ def _drop_flue_only_kwargs(kwargs: dict) -> None:
     it must not find that out from a dirty database.
     """
     if kwargs.pop("replay_isolation", False):
-        logger.warning(
-            "replay_isolation requested but this turn is NOT being served by the "
-            "flue lane — the sidecar write gate is NOT engaged; brain-tool writes "
-            "will COMMIT. Re-run the replay gate with the flue lane serving."
+        # FAIL CLOSED (review P1): a caller that asked for write isolation must
+        # get a refused turn, never a committed write with a log line. The only
+        # caller is the replay harness — an ERROR verdict on every turn is the
+        # loud, correct signal that the gate ran against a non-flue lane.
+        raise RuntimeError(
+            "replay_isolation requested but this turn is not served by the flue "
+            "lane — the sidecar write gate cannot engage, so the turn is refused "
+            "rather than allowed to COMMIT brain-tool writes. Re-run the replay "
+            "gate with the flue lane serving."
         )
 
 
