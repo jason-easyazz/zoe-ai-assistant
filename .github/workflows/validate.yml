@@ -261,7 +261,6 @@ jobs:
             services/zoe-data/requirements.txt
             services/zoe-auth/requirements.txt
             services/homeassistant-mcp-bridge/requirements.txt
-            modules/zoe-music/requirements.txt
             labs/setfit-router/requirements.txt
           "
           for f in $FILES; do

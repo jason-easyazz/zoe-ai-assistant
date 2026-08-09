@@ -39,13 +39,22 @@ fi
 echo "✅ zoe-data directory confirmed at $DATA_DIR"
 
 # ── 3. Install MemPalace + ChromaDB ─────────────────────────────────────────
+# BOTH pins are load-bearing and MUST match services/zoe-data/requirements.txt.
+# Unpinned, a resolver installs chromadb 1.5.x against a 0.6.x on-disk palace,
+# which makes mempalace's `_fix_blob_seq_ids` misread the sysdb-10 BLOB format as
+# legacy big-endian and SILENTLY DROP drawer writes (recovery:
+# `mempalace repair --mode max-seq-id`). chromadb 1.5.x also pulls numpy 2.x,
+# which the requirements file's `numpy<2` ceiling exists to prevent.
+# Full rationale: the "Vector memory store" block in services/zoe-data/requirements.txt.
+MEMPALACE_PIN="mempalace==3.3.1"
+CHROMADB_PIN="chromadb==0.6.3"
 echo ""
-echo "Installing MemPalace + ChromaDB …"
+echo "Installing MemPalace + ChromaDB ($MEMPALACE_PIN $CHROMADB_PIN) …"
 VENV="$DATA_DIR/venv"
 if [[ -d "$VENV" ]]; then
-  "$VENV/bin/pip" install --quiet mempalace chromadb
+  "$VENV/bin/pip" install --quiet "$MEMPALACE_PIN" "$CHROMADB_PIN"
 else
-  pip3 install --quiet mempalace chromadb
+  pip3 install --quiet "$MEMPALACE_PIN" "$CHROMADB_PIN"
 fi
 mkdir -p "$ZOE_HOME/.mempalace"
 echo "✅ MemPalace installed, data dir: $ZOE_HOME/.mempalace"

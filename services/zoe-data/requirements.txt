@@ -96,9 +96,7 @@ fastembed
 scikit-learn==1.7.2
 joblib==1.5.3
 # Speaker diarization for ambient memory (Jetson CUDA only)
-pyannote.audio>=3.3.2
 # VAD for barge-in and ambient capture (server-side copy; Pi uses same package)
-silero-vad>=5.1
 # Proactive engine scheduler.
 #
 # HELD AT 3.10.4 DELIBERATELY — 3.11.x is a DATA hazard, not just a bump.
