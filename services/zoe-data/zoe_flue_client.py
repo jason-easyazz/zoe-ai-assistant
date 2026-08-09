@@ -334,6 +334,60 @@ def _wrap_message_with_identity(message: str, user_id: str) -> str:
     return f"{_IDENTITY_ENVELOPE_PREFIX}{uid}\n{message}"
 
 
+# Machine-readable REPLAY-ISOLATION envelope. MUST match the sidecar's parser
+# (labs/flue-zoe-brain src/replay-mode.ts REPLAY_ENVELOPE_PREFIX / _RE).
+#
+# WHY: the replay gate replays Jason's corpus through the LIVE pipeline. The
+# harness's allow_writes=False governs only fast_tiers; on brain fall-through the
+# sidecar's tools run with ZOE_BRAIN_ALLOW_WRITES=true and execute REAL writes —
+# reminders, notes, journal, people, MemPalace memories, Home Assistant device
+# state, Music Assistant playback. The probe's cleanup swept only events and
+# list_items, so everything else leaked into live data silently, and every new
+# mutating tool leaked by default. This marker tells the sidecar to report those
+# writes as done without committing them.
+#
+# WIRE ORDER: applied OUTSIDE the identity wrap, so the replay line is FIRST:
+#   " zoe-replay:1\n zoe-uid:<id>\n<blocks>\n<user message>"
+# Both sidecar parsers are ^-anchored; it strips the replay line, then the
+# identity line. Absent marker = byte-identical to today's outbound message.
+_REPLAY_ENVELOPE_PREFIX = " zoe-replay:"
+
+# A user-typed leading " zoe-replay:…" line must never be mistaken for the
+# trusted marker. Anchored + multiline-free, matching the sidecar regex exactly.
+_REPLAY_ENVELOPE_RE = re.compile(r"^ zoe-replay:[^\n]*\n")
+
+
+def _strip_replay_envelope(message: str) -> str:
+    """Remove any leading replay-envelope line(s) from UNTRUSTED message text.
+
+    The marker is a trusted server-side signal, so the seam must be the only thing
+    that can set it. Without this, a user whose turn carries no identity envelope
+    (``user_id`` blank/guest → ``_wrap_message_with_identity`` returns the message
+    untouched) could type " zoe-replay:1" as their first line and land it at
+    position 0, where the sidecar's ^-anchored parser would honour it and silently
+    void their own writes. Loops so a stack of forged lines can't shield one.
+
+    Not a security boundary against a compromised seam — it closes the one path
+    where user-authored text reaches the start of the outbound message.
+    """
+    prev = None
+    while prev != message:
+        prev = message
+        message = _REPLAY_ENVELOPE_RE.sub("", message)
+    return message
+
+
+def _wrap_message_with_replay(message: str, replay: bool) -> str:
+    """Prefix ``message`` with the replay-isolation envelope when ``replay`` is set.
+
+    ``replay`` false → the message is returned unchanged, so the live lane's wire
+    bytes are exactly what they are today.
+    """
+    if not replay:
+        return message
+    return f"{_REPLAY_ENVELOPE_PREFIX}1\n{message}"
+
+
 # ── Deterministic recall floor (ZOE_SEAM_RECALL_INJECT, default OFF) ─────────
 #
 # BUG B (live hard-gate 2026-07-07): "my locker code is 31999" sat at the TOP
@@ -792,8 +846,18 @@ async def run_flue_brain_streaming(
     if "[pending-contact]" not in recall_block:
         offer_block = await _pending_offer_block(uid)
     _blocks = "\n".join(b for b in (recall_block, offer_block) if b)
-    brain_message = f"{_blocks}\n{message}" if _blocks else message
+    # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
+    # the start of the outbound message and forge the trusted marker. Only reachable
+    # when there is no identity line ahead of it — both blocks return "" for a blank
+    # uid — but strip unconditionally rather than depend on that coupling.
+    safe_message = _strip_replay_envelope(message)
+    brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     outbound_message = _wrap_message_with_identity(brain_message, uid)
+    # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
+    # wire. Only the replay harness ever passes this; absent → unchanged bytes.
+    outbound_message = _wrap_message_with_replay(
+        outbound_message, bool(kwargs.get("replay_isolation"))
+    )
     payload = _request_payload(outbound_message)
 
     if _wire_version() >= _WIRE_2 and not _stream_enabled():

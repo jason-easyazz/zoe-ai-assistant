@@ -21,8 +21,14 @@ Each turn is classified so capability gaps are obvious:
   EMPTY    STT heard nothing (silence / clipped capture)
   ERROR    a stage raised
 
-By default DRY: reads/recall run (side-effect free), writes are only PLANNED
-(allow_writes=False → deferred) so the DB isn't mutated. --execute fulfils writes.
+By default DRY on BOTH halves of the turn — two executors, so it takes two
+mechanisms, and for years it only had one:
+  * fast_tiers — allow_writes=False, so a fast-path write is only PLANNED.
+  * the flue brain sidecar — allow_writes does NOT reach it (its tools carry
+    ZOE_BRAIN_ALLOW_WRITES=true), so a corpus command that fell through to the
+    brain used to write for real. Now gated by the `replay_isolation` marker at
+    the brain call below.
+--execute fulfils writes on both halves.
 --brain actually runs the Gemma brain on fall-through (slower; needed to test
 recall end-to-end). Default user is 'jason' so memory recall has facts.
 
@@ -324,9 +330,18 @@ async def _run(args) -> int:
                     # have access". The harness must match the live brain turn exactly.
                     domain_ctx = await _voice_domain_context(rr, user)
                     db_mem = _merge_brain_context(db_mem, domain_ctx)
+                    # REPLAY ISOLATION — allow_writes above governs fast_tiers only.
+                    # On brain fall-through the turn reaches the flue sidecar, whose
+                    # tools hold ZOE_BRAIN_ALLOW_WRITES=true, so a corpus command
+                    # ("remember X", "add bread to the list") used to execute a REAL
+                    # write into live zoe-data on every gate run. This marker makes
+                    # the sidecar report those writes as done without committing
+                    # them. Tied to the SAME --execute switch as fast_tiers, so the
+                    # two halves of the harness can never disagree about dry vs live.
                     reply = (await brain_oneshot(
                         transcript, session_id, user_id=user, voice_mode=True,
                         db_memory_context=db_mem, portrait=portrait,
+                        replay_isolation=not args.execute,
                     ) or "").strip()
                     outcome = "brain"
                 except Exception as exc:

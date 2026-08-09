@@ -512,6 +512,17 @@ def cleanup_replay_artifacts(run_started_utc: str, args) -> bool:
     2026-07-13). Scope is deliberately narrow on BOTH axes: created_at within
     this run's window AND user_id in {probe user, 'guest'} — a family member's
     row written during the window under any other account is never touched.
+
+    THIS IS A SAFETY NET, NOT THE PRIMARY GUARD, and it never covered the whole
+    surface. It sweeps two classes; the brain sidecar's tools also write
+    reminders, notes, journal_entries, people, users, lists, MemPalace memories,
+    Home Assistant device state and Music Assistant playback — none of which are
+    reversible by an UPDATE here, and a NEW mutating tool would leak by default.
+    Brain-lane writes are now prevented at the seam instead: replay_samples.py
+    sends a per-request replay marker that makes the sidecar report writes as
+    done without committing them (zoe_flue_client._wrap_message_with_replay).
+    Keep this sweep for the fast_tiers half and for --execute runs; do NOT let it
+    grow class-by-class, because that race is unwinnable.
     Reversible soft-delete (deleted=1); counts printed for the run log.
 
     Returns True on success (or intentional skip), False on failure — the

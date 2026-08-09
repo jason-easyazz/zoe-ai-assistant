@@ -342,7 +342,32 @@ def _sanitize_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in kwargs.items() if k not in _INTERNAL_KWARGS}
 
 
+def _drop_flue_only_kwargs(kwargs: dict) -> None:
+    """Strip FLUE-ONLY controls before dispatching to another brain lane.
+
+    ``replay_isolation`` is honoured by the flue sidecar's tool executor, which is
+    what performs the writes (see zoe_flue_client._wrap_message_with_replay). The
+    other lanes take keyword-only params with no ``**kwargs``, so forwarding it
+    would raise TypeError and turn every replay turn into an ERROR verdict.
+
+    Dropped — but LOUDLY. A caller that asked for write isolation and did not get
+    it must not find that out from a dirty database.
+    """
+    if kwargs.pop("replay_isolation", False):
+        # FAIL CLOSED (review P1): a caller that asked for write isolation must
+        # get a refused turn, never a committed write with a log line. The only
+        # caller is the replay harness — an ERROR verdict on every turn is the
+        # loud, correct signal that the gate ran against a non-flue lane.
+        raise RuntimeError(
+            "replay_isolation requested but this turn is not served by the flue "
+            "lane — the sidecar write gate cannot engage, so the turn is refused "
+            "rather than allowed to COMMIT brain-tool writes. Re-run the replay "
+            "gate with the flue lane serving."
+        )
+
+
 def _fallback_streaming(message: str, session_id: str, user_id: str, **kwargs: Any) -> AsyncIterator[str]:
+    _drop_flue_only_kwargs(kwargs)
     if use_core_brain():
         from zoe_core_client import run_zoe_core_streaming
 
@@ -353,6 +378,7 @@ def _fallback_streaming(message: str, session_id: str, user_id: str, **kwargs: A
 
 
 async def _fallback_oneshot(message: str, session_id: str, user_id: str, **kwargs: Any) -> str:
+    _drop_flue_only_kwargs(kwargs)
     if use_core_brain():
         from zoe_core_client import run_zoe_core
 
