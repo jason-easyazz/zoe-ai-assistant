@@ -6,7 +6,7 @@
 # token is a secret the operator holds; nothing here is auto-installed.
 #
 # Build first (the unit runs the built output, it does not build):
-#   cd ~/assistant/labs/flue-zoe-telegram && npm install && npm run build
+#   cd ~/assistant/labs/flue-zoe-telegram-2x && npm install && npm run build
 # Then create the env file from the template and fill it in:
 #   cp ~/assistant/labs/flue-zoe-telegram-2x/.env.example ~/assistant/labs/flue-zoe-telegram-2x/.env
 [Unit]
@@ -18,7 +18,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/assistant/labs/flue-zoe-telegram
+WorkingDirectory=%h/assistant/labs/flue-zoe-telegram-2x
 # Adjust the node path if you are not using nvm (same convention as flue-zoe-brain).
 ExecStart=%h/.nvm/current/bin/node dist/server.mjs
 Restart=always
