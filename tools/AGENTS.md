@@ -8,6 +8,7 @@ Tooling that enforces repository structure and safety: validators, cleanup, gene
 
 - `audit/` — `validate_structure.py` (manifest/orphan check, root .md cap), `validate_critical_files.py`, `find_file_references.sh`.
 - `cleanup/` — `safe_cleanup.py` (dry-run first, `--execute` only after operator approval).
+- `validate_module.py` — module structure + the `modules/AGENTS.md` security contract (service-token gate on state-changing `/tools/*`, fail-closed 503, loopback-only ports). Security checks are AST/parsed-compose, never text search; keep them that way, and keep the documented templates passing.
 - `generators/`, `intent/`, `docker/`, `reports/`, `verification/`, `utilities/` — supporting tool groups.
 
 ## Local Contracts

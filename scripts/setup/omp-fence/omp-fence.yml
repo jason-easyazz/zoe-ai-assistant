@@ -1,0 +1,110 @@
+# =============================================================================
+# omp-fence.yml — the AUTHORITATIVE half of the oh-my-pi builder fence.
+#
+# STAGED, NOT APPLIED. APPLY.md installs this to:
+#     /home/zoe/.config/zoe/omp-fence.yml      (host, mode 0444)
+# which zoe-omnigent sees READ-ONLY at /root/.config/zoe/omp-fence.yml
+# (docker-compose.module.yml: `- /home/zoe/.config/zoe:/root/.config/zoe:ro`).
+#
+# Reached by omp via PI_CONFIG_FILES, exported by omp-omnigent-fenced.
+#
+# WHY AN OVERLAY RATHER THAN `omp config set`
+# -------------------------------------------
+# Merge order (packages/coding-agent/src/config/settings.ts::#rebuildMerged):
+#
+#     #global  ->  #project  ->  #configOverlay  ->  #overrides
+#      (later wins)
+#
+#   #global   = $HOME/.omp/agent/config.yml   <- what `omp config set` writes
+#   #project  = <cwd>/.omp/config.yml  and  <cwd>/.omp/settings.json
+#   #overlay  = THIS FILE, via PI_CONFIG_FILES
+#
+# `#project` is <cwd>, and cwd is the TASK WORKTREE — a directory the agent
+# under test can write. So a fence applied only with `omp config set` is
+# defeated by the agent writing `.omp/config.yml` into the repo it was asked to
+# edit. That is not a hypothetical: upstream #3293 is precisely "writes outside
+# the expected scope without approval". The overlay outranks #project, so it
+# cannot be defeated that way.
+#
+# Two further properties make this the right mechanism:
+#   * FAIL-CLOSED. #loadOverlayYaml is a STRICT loader — a missing or malformed
+#     overlay is a HARD ERROR, not a silent fallback to the unfenced defaults.
+#     Delete this file and omp refuses to start rather than starting open.
+#   * READ-ONLY AT SOURCE. It arrives through a :ro bind mount, so nothing
+#     inside the container — omp included — can rewrite it.
+#
+# NOTE ON KEY SHAPE: omp's dotted setting keys are NESTED YAML, because
+# Settings.set does path.split(".") + setByPath. `web_search.enabled` is
+# therefore written as a `web_search:` mapping containing `enabled:`, NOT as a
+# literal dotted key. A literal "web_search.enabled: false" line would parse
+# fine and do NOTHING.
+# =============================================================================
+
+# --- Fence condition 4: no web scraping from the builder lane ----------------
+# Gate site: packages/coding-agent/src/tools/index.ts:596
+#   if (name === "web_search") return session.settings.get("web_search.enabled");
+# Schema default is `true`, so this must be stated explicitly.
+web_search:
+  enabled: false
+
+# --- Fence condition 2: AutoQA off -------------------------------------------
+# dev.autoqa defaults TRUE and posts model-authored free text (which can carry
+# repo fragments) plus a persistent install UUID to the endpoint below.
+# The wrapper also sets PI_AUTO_QA=0, which has higher precedence
+# (report-tool-issue.ts::isAutoQaEnabled). Both, deliberately: the env flag
+# covers this process, the setting covers anything that re-reads settings.
+# `autoqaConsent: denied` is the third belt — it is what the fallback path
+# consults when `dev.autoqa` is not explicitly configured.
+dev:
+  autoqa: false
+  autoqaConsent: denied
+
+# --- Fence condition 3: no plugin auto-update --------------------------------
+# Schema default is "notify". The dangerous mode is "auto", which reaches
+# mgr.upgradeAllPlugins() and executes new Function() over fetched plugin
+# source; there is no global plugin kill switch. There is NO env-var override
+# for this setting (marketplace-auto-update.ts contains zero process.env reads),
+# so the overlay is the ONLY way to pin it.
+# Quoted deliberately: bare `off` is a boolean in YAML 1.1, and this key is an
+# enum of the STRINGS off|notify|auto.
+marketplace:
+  autoUpdate: "off"
+
+# --- Bounding upstream #2227 (MCP discovery) ---------------------------------
+# Drops every discovered MCP server whose _source.level == "project"
+# (mcp/config.ts:97,111-112) — across ALL 11 discovery providers, not just the
+# native one. This is what stops omp from auto-loading the repo's own
+# /workspace/.mcp.json (serena + codebase-memory) out of the task worktree.
+#
+# It does NOT cover the USER-level half of discovery ($HOME/.claude.json,
+# $HOME/.cursor/mcp.json, $HOME/.codex/config.toml, ...). Those are handled by
+# the wrapper pointing HOME at a clean directory — see omp-omnigent-fenced (f).
+# The two together are what bound #2227; neither is sufficient alone.
+mcp:
+  enableProjectConfig: false
+
+# --- Recorded, deliberate: tool approval mode --------------------------------
+# NOT a change — this is omp's schema DEFAULT ("yolo": auto-approve every tier,
+# including exec). Stated explicitly so it is a decision on the record rather
+# than an inherited default nobody looked at.
+#
+# Rationale for keeping it: it matches how this container already runs the
+# claude_code worker (--dangerously-skip-permissions); the CONTAINER is the
+# isolation boundary here, not the agent's own approval prompt. Flipping it to
+# "always-ask" or "write" would make omp emit ACP session/request_permission,
+# which Omnigent's policy + elicitation bridge would then have to answer — and
+# an unanswered elicitation stalls an autonomous dispatch. That is a change to
+# evaluate AFTER the first trial establishes a baseline, not during it.
+tools:
+  approvalMode: yolo
+
+# --- Cost pin (optional; see APPLY.md step 6) --------------------------------
+# Leave the model to omp's own resolution for the first trial so the comparison
+# is against omp's out-of-the-box behaviour. If the trial shows runaway spend,
+# pin the model here rather than in the Omnigent acp: block — the overlay
+# outranks the project scope, the acp: block's `model:` does not.
+
+# PINNED 2026-08-03 post-trial-001: omp resolved openai/gpt-5.5 unpinned and spent ~$2-4 on a kata.
+# Same cheap model as the pi review worker. Remove only with a per-key credit limit in place.
+enabledModels:
+  - z-ai/glm-5.2
