@@ -28,6 +28,17 @@ export interface MockTurn {
   text?: string;
   /** Stall before responding — used to force concurrent turns to interleave. */
   delayMs?: number;
+  /**
+   * Token usage to report on the final chunk. OMITTING IT IS NOT NEUTRAL: pi-ai
+   * asks for usage (`stream_options: {include_usage: true}`) and its context
+   * estimator is USAGE-ANCHORED — with any assistant message carrying non-zero
+   * usage it estimates `usage.totalTokens + messages after it`, and without one
+   * it falls back to a static chars/4 walk. Production is always on the anchored
+   * branch after turn 1 (@flue/runtime rebuilds assistant messages with their
+   * recorded usage), so a test that never sets this is exercising a branch the
+   * running system does not take. See test/output_budget_clamp.test.ts.
+   */
+  usage?: { prompt: number; completion: number };
 }
 
 /** What the mock saw, as parsed from the request body. */
@@ -141,6 +152,24 @@ async function writeTurn(res: ServerResponse, turn: MockTurn): Promise<void> {
   });
 
   res.write(chunk({}, calls.length > 0 ? 'tool_calls' : 'stop'));
+  if (turn.usage) {
+    // Usage rides a final chunk with an EMPTY choices array — the shape pi-ai's
+    // openai-completions handler reads when it set stream_options.include_usage.
+    res.write(
+      `data: ${JSON.stringify({
+        id: 'chatcmpl-mock',
+        object: 'chat.completion.chunk',
+        created: 0,
+        model: 'local',
+        choices: [],
+        usage: {
+          prompt_tokens: turn.usage.prompt,
+          completion_tokens: turn.usage.completion,
+          total_tokens: turn.usage.prompt + turn.usage.completion,
+        },
+      })}\n\n`,
+    );
+  }
   res.write('data: [DONE]\n\n');
   res.end();
 }

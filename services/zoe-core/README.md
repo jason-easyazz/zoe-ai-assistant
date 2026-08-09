@@ -17,14 +17,22 @@ via Pi's extension hooks.
 > (extensions/tools). The retired Docker monolith that once held this name was
 > removed from the working tree and remains in git history only — do not revive it.
 
-> **Status: wired default `core` brain fallback.** zoe-core (Pi on Gemma 4 E4B-QAT)
+> **Status: wired default `core` brain lane.** zoe-core (Pi on Gemma 4 E4B-QAT)
 > is the code default in `services/zoe-data/brain_dispatch.py` (`pi --mode rpc` via
-> `zoe_core_client.py`) — the fallback lane below the live `flue` sidecar
+> `zoe_core_client.py`) — the lane below the live `flue` sidecar
 > (`labs/flue-zoe-brain`, reached via `ZOE_BRAIN_BACKEND=flue`, live on this
-> deployment since 2026-07-03). `zoe_agent.py` is the *legacy* last-resort fallback,
-> not the brain. Dispatch priority: **flue > core > legacy**. Extend zoe-core; do
-> not retire it. Only the OLD Docker monolith that once held this name is retired
-> (git history only).
+> deployment since 2026-07-03). `zoe_agent.py` is the *legacy* last-resort lane,
+> not the brain. Extend zoe-core; do not retire it. Only the OLD Docker monolith
+> that once held this name is retired (git history only).
+>
+> **`flue > core > legacy` is CONFIGURED LANE SELECTION, not runtime failover**
+> (failover behind `ZOE_BRAIN_FAILOVER`, default off). The order is resolved once
+> per turn from the env: with `ZOE_BRAIN_BACKEND=flue` and the sidecar down, every
+> turn is answered by the flue client's canned "trouble reaching my brain"
+> sentinel — this lane is *not* tried, however healthy it is (#1613). Setting
+> `ZOE_BRAIN_FAILOVER=1` adds a bounded runtime retry on this lane, but ONLY for a
+> pre-admission transport failure (connect refused/timeout) and never once a turn
+> has streamed its first token. See the module docstring in `brain_dispatch.py`.
 
 ## Architecture (target)
 
@@ -84,21 +92,31 @@ by construction:
 
 > **Pi RETAINS every user message it is sent.** One long-lived process per
 > `(user_id, session_id)`, so anything folded into the user message accumulates a
-> copy per turn — unlike a system prompt, which is replaced. The memory block is
-> therefore delimited, and `memory.ts`'s **`context` handler** elides all but the
-> newest copy before each LLM call. That hook is a genuine ephemeral slot: the
-> runner hands handlers a `structuredClone` and `transformContext` feeds the
-> result to the provider only, so retained state is never rewritten. Without it a
-> long session fills the 32k window with duplicate snapshots and leaves corrected
-> facts — and resolved "add this contact?" instructions — readable in older turns.
+> copy per turn — unlike a system prompt, which is replaced. EVERY context block is
+> therefore delimited on both sides (`CONTEXT_BLOCKS`), and `memory.ts`'s
+> **`context` handler** elides all but the newest copy before each LLM call. That
+> hook is a genuine ephemeral slot: the runner hands handlers a `structuredClone`
+> and `transformContext` feeds the result to the provider only, so retained state
+> is never rewritten. Without it a long session fills the 32k window with duplicate
+> snapshots and leaves corrected facts — and resolved "add this contact?"
+> instructions — readable in older turns.
+>
+> `[Recent conversation]` is the costly one: `history[-12:]` is replayed into every
+> composed turn, so an N-turn session carried N overlapping copies of the running
+> conversation on top of the conversation Pi already retains. The strip is ONE
+> contiguous span over all four block types — per-pair passes let one block's
+> over-elide destroy another block's open delimiter and leak its content. The span
+> ends at the last close only when every open has been matched by a close of its
+> OWN type; anything still outstanding when the scan ends elides through the end of
+> the message instead.
 >
 > **Accepted cost:** eliding bytes already in the KV cache ends prefix reuse at the
-> previous turn's block, so about one exchange is re-prefilled per turn — bounded,
-> constant, and skipped entirely when a turn has no memory. Every alternative pays
-> the same (an ephemeral insert shifts positions just as an elision does), and it
-> is far cheaper than the pre-PR behaviour of re-prefilling the whole conversation
-> every turn. `[About you]` and `[Recent conversation]` still repeat per turn —
-> that predates this work and was deliberately left alone.
+> previous turn's blocks, so about one exchange is re-prefilled per turn — bounded,
+> constant, and skipped entirely when a turn has no context. Widening the strip
+> past the memory block does not raise it: the break point was already the previous
+> user message. Every alternative pays the same (an ephemeral insert shifts
+> positions just as an elision does), and it is far cheaper than the pre-PR
+> behaviour of re-prefilling the whole conversation every turn.
 
 > **`event.prompt` is the COMPOSED prompt, not the utterance.** Verified live by
 > instrumenting the handler: it arrives as portrait + memory directive + packet +
@@ -108,6 +126,28 @@ by construction:
 > `latestUtterance()` splits on it; the two copies of that string are pinned
 > byte-equal by a test. Standalone `pi` sends no marker and the whole prompt is
 > the utterance, which is exactly the fallback.
+
+> **The replayed block is STRUCTURE, and content owns none of it.** A restarted
+> worker seeds disclosure from `[Recent conversation]` (`seedDisclosureState`,
+> once per session), so two things content must never control are pinned:
+>
+> * **The `role:` line start.** `abilities.ts` opens a turn on any `word:` at a
+>   line start, so a message containing "\nuser: add milk" forged one — Zoe's own
+>   reply arming a domain as the user, or a `Reminder:` line truncating a real user
+>   message. `_neutralize_role_prefixes` (zoe-data) wedges U+200B before the colon
+>   on lines 2..N of content; the real labels are added after escaping and stay
+>   parseable. `ROLE_PREFIX_PATTERN` is exported here and pinned byte-equal to
+>   `_ROLE_PREFIX_PATTERN` there.
+> * **The turn count.** chat.py persists the current user message *before* it loads
+>   the window it replays, so that message is both seeded and processed live. The
+>   seed rolls the clock back one turn when the block ends on a user turn
+>   (`currentTurnIsReplayed`) — otherwise every seeded domain decayed a turn early
+>   and a continuation lost its tool while its own request was still visible. That
+>   the current turn is at the TAIL is guaranteed by the PER-SESSION LOCK, not by the
+>   ordering alone: a concurrent turn on the same session writes its rows between the
+>   persist and the load. Every history-bearing caller therefore enters through
+>   `locked_chat_stream` (zoe-data `routers/chat.py`) — the chat route and the A2A
+>   stream endpoint both do.
 
 Two orderings here were **measured**, against
 `test_zoe_core_client.py::test_tool_action_dispatches` (15 runs each, 14/15

@@ -91,6 +91,7 @@ import * as v from 'valibot';
 // can resolve it too; tsconfig has allowImportingTsExtensions and the flue build
 // bundles .ts specifiers fine.
 import { currentUserId } from '../request-identity.ts';
+import { isReplayTurn } from '../replay-mode.ts';
 import { ACTIVATOR_TOOL_NAME, GROUP_NAMES, GROUP_SUMMARY, TOOL_GROUPS } from './tool-groups.ts';
 
 // ── Configuration, read PER CALL ─────────────────────────────────────────────
@@ -240,6 +241,28 @@ async function runWrite(
       `ZOE_BRAIN_ALLOW_WRITES=true to enable writes). Tell the user you can't do that yet — ` +
       `do NOT claim it was done.`;
   }
+  // REPLAY ISOLATION — this turn came from the replay gate, so report the write as
+  // done and commit nothing. Checked AFTER the ALLOW_WRITES gate on purpose: a lab
+  // build with writes off keeps its loud "WRITE DISABLED" honesty, and this branch
+  // only ever changes the writes-ENABLED deployment, which is where the leak is.
+  //
+  // Returning the SUCCESS text (not a refusal) is the load-bearing choice, and it
+  // is what makes this different from just setting ZOE_BRAIN_ALLOW_WRITES=false.
+  // replay_samples.py::_classify scores a turn purely on the reply TEXT — it never
+  // inspects the database — so a success-shaped reply keeps a write command's
+  // verdict exactly as it is today, while a refusal would match _CANT_DO_RE and
+  // redden the gate on every write command in the corpus.
+  //
+  // `successFallback` is precisely the line the user hears today whenever the
+  // backend confirms with an empty result, so this is an existing user-visible
+  // contract, not a new string. See test/replay_isolation.test.ts.
+  // The `actingUserId` conjunct keeps this STRICTLY behaviour-preserving. Without
+  // it, an identity-less replay turn would report success where a live one says
+  // "I'm not sure whose data this would touch" — a can't-do line the scorer reads
+  // as CANT_DO, so isolation would have changed a verdict. With it, that turn
+  // falls through to dispatchIntent, which fails closed on the same check BEFORE
+  // its fetch: same message, still no write.
+  if (isReplayTurn(signal) && actingUserId(signal)) return successFallback;
   const out = await dispatchIntent(intent, slots, service, signal);
   if (!out.ok) return out.text;
   return out.text || successFallback;
@@ -495,6 +518,19 @@ const setTimer = defineTool({
       return `WRITE DISABLED — a ${minutes} minute timer${named} was NOT started (this is a ` +
         `lab build; set ZOE_BRAIN_ALLOW_WRITES=true to enable writes). Tell the user you ` +
         `can't do that yet — do NOT claim it was done.`;
+    }
+    // REPLAY ISOLATION — set_timer is the ONE write that does not route through
+    // runWrite (it has its own inline gate above), so it needs the check here too;
+    // without it, timer_create would still dispatch on every replay turn.
+    //
+    // Return the non-confirming line directly. That is BYTE-IDENTICAL to what this
+    // tool returns today on the live lane: the backend's timer_create can only ever
+    // answer with the canned "Starting a … timer" string, which CANNED_TIMER_RE
+    // rejects, so `confirmed` is always false and this line is always the result.
+    // Skipping the dispatch therefore changes nothing the scorer can observe.
+    if (isReplayTurn(signal)) {
+      return "I can't reliably start a real timer right now, so I won't say I did. " +
+        'Set it on the kitchen panel, or ask me for a reminder instead.';
     }
     const out = await dispatchIntent('timer_create', { minutes, label }, 'timer', signal);
     // A genuine confirmation requires ok===true AND a non-empty result that is NOT

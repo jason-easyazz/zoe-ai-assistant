@@ -39,7 +39,7 @@ Samantha is seven fused capabilities. The scorecard, strongest → weakest:
 | 4 | **Knows the thread of your life** (memory) | 🟢 delivered | Buildplan §6/§7: 4/4 criteria, 40/40 live eval; relationship graph merged (dark flags); emotional thread live |
 | 5 | **Initiates** (proactivity) | 🟡 built, wrong medium | 9 triggers + quiet hours + LLM composition (`proactive/engine.py`), but every path terminates in web-push — Zoe never *speaks* first |
 | 1+2 | **Always there + full-duplex conversation** | 🟡 walkie-talkie | 3 voice lanes; LiveKit lane drops incoming audio during PROCESSING/COOLDOWN (no barge-in exactly where it matters); energy-RMS endpointing; "let's talk" opener (#1049) opens into a half-duplex room |
-| 3 | **Hears *how* you say things** (mood from voice) | 🔴 absent | Zero prosody/affect analysis anywhere; `pyannote.audio` in requirements, unimported; everything emotional is inferred from text |
+| 3 | **Hears *how* you say things** (mood from voice) | 🔴 absent | Zero prosody/affect analysis anywhere (`pyannote.audio` was an unimported requirements pin, removed — re-add it deliberately if this lands); everything emotional is inferred from text |
 | — | **Knows *who* is speaking** (identity) | 🔴 built, dormant | Speaker ID end-to-end (enroll endpoint, resemblyzer 256-dim, cosine match, daemon integration) but default OFF, no enrolled profiles; fallback chain is badge-checking, not recognition |
 | 6 | **Everywhere** (presence surfaces) | 🔴 one wall of one room | Touch panel + web + lab Telegram bot; no satellites, no SIP, no surface that leaves the house |
 | 7 | **Grows** (self-evolution) | 🟡 gated, never closed | Proposal contract + weekly digest exist; the loop has never run end-to-end to a merged PR Zoe benefits from |
@@ -655,9 +655,10 @@ actually consulted.
   ONNX-exportable, light 512-channel variants for embedded).
 - Plan: keep the built resemblyzer path for enrollment + shadow mode (household-scale,
   few speakers, cooperative conditions); ECAPA behind the same seam is the named upgrade
-  if measured FA/FR disappoints. pyannote-audio (already in requirements, unimported;
-  source cached in opensrc) is the diarization-grade option if W6 ever needs
-  who-spoke-when segmentation, not just per-utterance ID.
+  if measured FA/FR disappoints. pyannote-audio (source cached in opensrc; its
+  unimported requirements pin was removed, so adopting it means adding the dep back
+  and budgeting its heavy transitive set) is the diarization-grade option if W6 ever
+  needs who-spoke-when segmentation, not just per-utterance ID.
 
 ### 8.6 W6 — ambient capture consent (the wearable-recorder generation)
 - **Limitless Pendant** ([privacy](https://www.limitless.ai/privacy)): the strongest

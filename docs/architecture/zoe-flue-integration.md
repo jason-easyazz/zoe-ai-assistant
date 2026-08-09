@@ -108,8 +108,15 @@ touch. A channel is *another doorway into the one core*, never a separate brain.
 - **Latency gate:** the [`#735` probe](../../scripts/maintenance/zoe_latency_probe.py)
   must show no voice regression for any shared-resource change (harness already
   passed at **+1.5 ms**).
-- **Graceful degradation:** Flue/brain-sidecar down ⇒ fall back to the deterministic
-  path (and the legacy local brain lane) — Zoe still answers.
+- **Graceful degradation — DESIGN INTENT, only partly built (corrected 2026-08-03).**
+  Sidecar down ⇒ the deterministic intent fast-path still answers (it never enters a
+  brain lane, so that half holds). But the *brain lane itself* had **no runtime
+  failover**: `brain_dispatch` resolves `flue > core > legacy` from the env once per
+  turn, so with `ZOE_BRAIN_BACKEND=flue` a down `:3578` failed every brain turn with
+  the client's canned sentinel even though the core lane was healthy (#1613). Bounded
+  failover now exists behind `ZOE_BRAIN_FAILOVER` (**default off** until the voice
+  replay gate passes): transport-level connect failures only, one retry, never after
+  a turn's first token, short-TTL circuit breaker.
 - **Lab-prove before prod (Samantha bar):** the Flue brain must reach parity with the
   current Pi-CLI brain on the voice-sample corpus before it serves real users;
   demo-users-only until then.

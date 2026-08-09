@@ -6,11 +6,15 @@ valid audio. Measured on av 16.1.0 with this module's exact resampler config
 (48 kHz stereo s16 -> 16 kHz mono s16): 160 samples yields a 448-byte plane for
 320 valid bytes — 128 bytes (28.6%) of trailing junk on every frame.
 
-The padding is not zero-filled. The resampler recycles its buffer pool, so it
-carries stale PCM from earlier frames; feeding pure silence after loud audio
-leaves near-full-scale samples sitting in the padding. Appending that to each
+The padding is not zero-filled: it is whatever uninitialised heap av_malloc
+handed the plane, so a silent input still emits near-full-scale samples in the
+tail (see ``_plant_pad_sentinel`` for the measurement). Appending that to each
 frame both corrupts the signal and time-stretches it (448 bytes claimed for
 320 bytes of real audio), degrading the energy VAD and STT on the LiveKit path.
+
+Because the pad content is an allocator detail rather than anything av
+guarantees, no assertion here may REQUIRE it to be non-zero — the negative
+control plants a known pattern instead of hoping for one.
 
 ``livekit_aiortc`` imports av / aiortc / livekit.protocol at module top, so
 these are Jetson-only (the slim GitHub runner lacks those wheels) — guarded
@@ -200,6 +204,11 @@ _MIN_ENVELOPE_CORR = 0.99
 _MAX_DURATION_SLACK = 64         # samples (4ms) — 4x the measured 16
 _ENVELOPE_WINDOW = 160           # 10ms at 16 kHz
 
+# A recognisable non-zero int16 planted into the plane's PAD region by the
+# negative control below. Any value works; a distinctive one makes a failure
+# message say plainly whether the junk that surfaced is ours.
+_PAD_SENTINEL = 32000
+
 
 def _synth_voice_16k(seconds=3.0):
     """Speech-SHAPED 16 kHz mono s16: a drifting harmonic stack under a ~4 Hz
@@ -370,6 +379,45 @@ def _drain_padded(frames):
     return np.concatenate(out) if out else np.zeros(0, dtype="<i2")
 
 
+def _plant_pad_sentinel(resampled, label):
+    """Fill the plane's PAD region with `_PAD_SENTINEL`; return its length.
+
+    The bug is that `bytes(planes[0])` returns the whole SIMD-aligned allocation
+    (448 bytes for 320 valid), so whatever sits past the valid samples is
+    appended to the emitted PCM. WHAT sits there is not something av specifies.
+    Measured on av 16.1.0, this module's config, 400 frames of speech-then-
+    silence: swr_convert never writes past the valid samples at all, the
+    resampler ping-pongs between two plane buffers, and each buffer's pad keeps
+    — unchanged for the resampler's whole life — the uninitialised heap bytes
+    av_malloc handed over at allocation time. So the pad content is glibc's
+    allocation history, not recycled audio: an ALL-SILENT source still produced
+    pad peaks of 30479/31127, ABOVE the loud source's own peak of 17999.
+
+    (That corrects #1636's "the resampler recycles its buffer pool, so it
+    carries stale PCM from earlier frames". The observable damage is identical —
+    junk appended to every frame — but the pad may equally come back all zero,
+    which is what made the old assertion flake.)
+
+    Planting makes the bug's precondition true by construction, so the control
+    tests OUR read strategy instead of the allocator's mood. The suite keeps
+    deterministic teeth against a real regression regardless of pad content:
+    `bad.size > good.size` and the duration/envelope checks are pure size
+    arithmetic, and were verified to still reject the padded read with the pad
+    forced to all zeros (envelope correlation 0.034, far under 0.99).
+    """
+    plane = resampled.planes[0]
+    valid = resampled.samples * 2
+    pad_len = plane.buffer_size - valid
+    assert pad_len > 0, (
+        f"[{label}] av allocated no padding ({plane.buffer_size} bytes for "
+        f"{valid} valid) — the over-allocation this whole suite guards against "
+        f"is not reproducible on this av build"
+    )
+    pad = (_PAD_SENTINEL.to_bytes(2, "little") * (pad_len // 2 + 1))[:pad_len]
+    plane.update(bytes(plane)[:valid] + pad)
+    return pad_len
+
+
 def _envelope(pcm, window=_ENVELOPE_WINDOW):
     """Per-window RMS — the amplitude contour the energy VAD and STT react to."""
     count = pcm.size // window
@@ -492,21 +540,42 @@ def test_padded_plane_read_fails_every_fidelity_check(source_mono16k):
         f"{_MIN_ENVELOPE_CORR} — the correlation check has no teeth"
     )
 
-    # 3. Stale tail: silence after speech is NOT silent on the buggy path.
+    # 3. Silent tail: the padded READ is not silent even when the AUDIO is.
+    #
+    # HERMETIC BY CONSTRUCTION — see `_plant_pad_sentinel`. This assertion used
+    # to read the pad bytes av happened to hand back and require them non-zero,
+    # which is a coin flip on the allocator rather than a property of our code;
+    # it flaked red on the required `validate` gate (PR #1661, 2026-08-07) with
+    # nothing regressed. Plant the junk instead, then prove the two read
+    # strategies disagree about it.
     silence = np.zeros(SRC_RATE * 2, dtype=np.int16)
     tail_frames = _frames_from_48k_stereo(np.concatenate([speech, silence]))
     resampler = av.AudioResampler(format="s16", layout="mono", rate=OUT_RATE)
-    tail_peak = 0
-    padded_tail = []
-    for frame in tail_frames:
+    silent_phase = len(tail_frames) - 50          # last 500ms — pure silence in
+    checked = 0
+    for index, frame in enumerate(tail_frames):
         for resampled in resampler.resample(frame):
-            valid = resampled.samples * 2
-            padded_tail.append(np.frombuffer(bytes(resampled.planes[0])[valid:], dtype="<i2"))
-            break
-    for chunk in padded_tail[-50:]:
-        if chunk.size:
-            tail_peak = max(tail_peak, int(np.abs(chunk).max()))
-    assert tail_peak > 0, (
-        f"[{label}] the padding after 500ms of silent input is all zero — the "
-        f"stale-pool leak this suite guards is no longer reproducible here"
+            if index >= silent_phase:
+                pad_len = _plant_pad_sentinel(resampled, label)
+                padded_read = np.frombuffer(bytes(resampled.planes[0]), dtype="<i2")
+                valid_read = resampled.to_ndarray()
+                # The fixed path ignores the pad entirely: silent in, silent out.
+                assert int(np.abs(valid_read).max()) == 0, (
+                    f"[{label}] to_ndarray() surfaced {int(np.abs(valid_read).max())} "
+                    f"on a silent frame whose PAD we planted — it is reading past "
+                    f"the valid samples, which is the #1636 bug itself"
+                )
+                # The buggy path drags the pad into the emitted PCM verbatim.
+                assert int(np.abs(padded_read).max()) == _PAD_SENTINEL, (
+                    f"[{label}] the padded read peaked at "
+                    f"{int(np.abs(padded_read).max())}, not the planted "
+                    f"{_PAD_SENTINEL} over {pad_len} pad bytes — `bytes(planes[0])` "
+                    f"no longer returns the padding, so this control is not "
+                    f"exercising the bug it exists to reproduce"
+                )
+                checked += 1
+            break                                 # _AudioStream returns the first
+    assert checked >= 20, (
+        f"[{label}] only {checked} silent-phase frames were checked — the "
+        f"silent tail did not survive to the resampler's output"
     )
