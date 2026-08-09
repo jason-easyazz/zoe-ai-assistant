@@ -105,6 +105,26 @@ jobs:
           python3 --version
           python3 -c "import sys; print('executable:', sys.executable)"
 
+      # "Drift is visible" above was aspirational: printing the interpreter says
+      # nothing about which PACKAGE VERSIONS it has. Nothing installs
+      # services/zoe-data/requirements.txt (deploy.yml has its own hardcoded
+      # list; the Dockerfile that does `pip install -r` it has no compose
+      # service), so the file and this box drift silently — measured 2026-08-06,
+      # three exact pins disagreed and three listed packages were absent.
+      #
+      # This is the ONLY lane that can answer the question: the packages exist
+      # here and nowhere else in CI. Reporting-only, matching the suites below —
+      # a legitimately-ahead box must not block a merge, it must be VISIBLE.
+      # Read-only: it imports metadata, never installs or touches the live env.
+      # Comparator logic is covered offline (with a negative control) by
+      # tests/unit/test_requirements_drift_check.py.
+      - name: Dependency drift — declared vs installed (reporting-only)
+        continue-on-error: true
+        run: |
+          cd "${{ github.workspace }}"
+          python3 scripts/maintenance/requirements_drift_check.py \
+            services/zoe-data/requirements.txt
+
       # Host-only integration + e2e suites. Reporting-only: allowed to fail so a
       # red suite is visible in the summary without failing the workflow or
       # touching deploy. Uses the repo pytest.ini (asyncio_mode=auto) and the
