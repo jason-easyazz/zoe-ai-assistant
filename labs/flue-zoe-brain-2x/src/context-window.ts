@@ -79,7 +79,13 @@
  */
 import type { Context, Message, Tool } from '@earendil-works/pi-ai';
 
-const DEFAULT_CONTEXT_WINDOW_TOKENS = 8192;
+/**
+ * llama-server's per-lane SLOT size — `--ctx-size 16384 --parallel 2`
+ * (scripts/setup/systemd/llama-server.service). Exported because the provider
+ * needs the same number as its reply-cap fallback when windowing is disabled;
+ * two private copies would drift silently if the slot ever changed.
+ */
+export const DEFAULT_CONTEXT_WINDOW_TOKENS = 8192;
 const DEFAULT_REPLY_RESERVE_TOKENS = 1536;
 
 /** ~4 chars/token — Flue's own compaction heuristic; slightly conservative for English. */

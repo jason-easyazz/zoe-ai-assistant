@@ -192,6 +192,27 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   tool-cap wrap-up note moved off the system prompt, and tool disclosure derives
   from the pre-window basis — see `src/context-window.ts` and
   `test/context_window_anchor.test.ts`.
+  **The declared `contextWindow` is `0` ON PURPOSE — do not "fix" it to 8192.**
+  pi-ai 0.83 added an output clamp that reads that field; declaring the real 8192
+  left ~6 output tokens on a full prompt, truncating replies and killing tool turns
+  (the 2026-08-06 flip's `CANT_DO`). Sizing the declaration instead of disabling it
+  does NOT work: pi-ai's estimator is usage-anchored (previous turn's total plus an
+  unbounded trailing term, ignoring the system prompt and tools), so no additive
+  constant bounds it — measured, a 1600-token tool result puts an inflated
+  declaration straight back to `maxTokens: 1`. `0` means "no clamp", and the real
+  constraint is enforced from the real budget instead: `prompt ≤ W − reserve`
+  (`src/context-window.ts`) and `output ≤ reserve` (`maxTokens =
+  outputBudgetTokens()`), so the request always fits llama-server's 8192-token slot
+  (context shifting is off on this build). Both rejected declarations are kept as
+  executable negative controls in `test/output_budget_clamp.test.ts`; see also the
+  README's "output-budget clamp" section.
+  **Flip gate:** the runbook's post-flip step 6 asserts ZERO `stopReason:"length"`
+  records via `parity/count_length_stops.py` (read-only; pinned both directions by
+  `tests/unit/test_flue2x_length_stop_gate.py` — the one piece of this port that
+  IS CI-covered). Replay verdict counts cannot see truncation and scored a
+  mass-truncating lane 18/20. Run it with `--since <replay start>`, and note that
+  **"0 assistant replies" is a FAILURE**, not a pass — an empty store means the
+  replay never reached the 2.x sidecar.
   Carries the beta sibling's per-request **replay isolation** too, and must keep
   it: this port's `.env` also sets `ZOE_BRAIN_ALLOW_WRITES=true`, so without it a
   voice replay-gate run commits real writes into live zoe-data at cutover. The
