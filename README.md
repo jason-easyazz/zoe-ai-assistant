@@ -43,9 +43,12 @@ The brain, STT, and TTS models above are **locked** — Gemma 4 E4B-QAT+MTP
 [docs/guides/OPERATOR_RUNBOOK.md](docs/guides/OPERATOR_RUNBOOK.md).
 
 **Brain dispatch.** `services/zoe-data/brain_dispatch.py` selects the brain,
-priority `flue > core` — both sharing the same Gemma 4 rock on `llama-server`.
-`services/zoe-core` (the Pi agent) is the wired default `core` lane; `flue` is
-the opt-in sidecar. The active layout is described in
+configured lane order `flue > core` — both sharing the same Gemma 4 rock on
+`llama-server`. `services/zoe-core` (the Pi agent) is the wired default `core`
+lane; `flue` is the opt-in sidecar. That order is **configured lane selection,
+not runtime failover** (failover behind `ZOE_BRAIN_FAILOVER`, default off): with
+`flue` selected and its sidecar down, turns fail on that lane rather than falling
+through to `core`. The active layout is described in
 [docs/guides/REPO_LAYOUT.md](docs/guides/REPO_LAYOUT.md).
 
 ## Prerequisites

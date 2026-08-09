@@ -1176,16 +1176,23 @@ async def a2a_task_stream(body: _A2ATaskRequest, user: dict = Depends(get_a2a_ca
     session_id = body.session_id or f"a2a-{body.caller}-{__import__('uuid').uuid4().hex[:8]}"
 
     async def _stream():
-        from routers.chat import chat_stream_generator  # type: ignore[import]
+        # locked_chat_stream, NOT chat_stream_generator: `session_id` here is
+        # CALLER-SUPPLIED (body.session_id, above), so two A2A agents — or one
+        # retrying agent — can drive the same session concurrently. The per-session
+        # lock is what keeps a turn's persist and its own replay-window load
+        # adjacent; interleaving them makes the seam count a turn twice and decay
+        # every seeded tool a turn early. Same acquisition, timeout and
+        # `session_busy` error path as /api/chat/. See routers/chat.py.
+        from routers.chat import locked_chat_stream  # type: ignore[import]
         _a2a_user = {
             "user_id": user_id,
             "role": user.get("role", "agent"),
             "username": user.get("username", f"a2a:{body.caller}"),
         }
-        async for chunk in chat_stream_generator(
-            message=body.task,
-            session_id=session_id,
-            user=_a2a_user,
+        async for chunk in locked_chat_stream(
+            body.task,
+            session_id,
+            _a2a_user,
         ):
             yield chunk
 

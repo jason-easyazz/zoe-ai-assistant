@@ -187,8 +187,33 @@ export function latestUtterance(prompt: string): string {
 // byte-for-byte in sync with `_HISTORY_LABEL` there (pinned by a test).
 export const HISTORY_MARKER = "[Recent conversation]";
 
-/** `role: text` opens a replayed turn; anything else continues the current one. */
-const REPLAYED_ROLE_RE = /^([A-Za-z][A-Za-z0-9_-]*): ?/;
+// The block's CLOSE delimiter. Every context block the seam folds in is delimited
+// on both sides so `memory.ts` can elide the superseded copies Pi retains — the
+// history block is the most expensive of them, since `history[-12:]` is replayed
+// on EVERY turn. Kept byte-for-byte in sync with `_HISTORY_CLOSE` in
+// services/zoe-data/zoe_core_client.py (pinned by a test), and composition-owned:
+// `_neutralize_markers` escapes it in content, so it cannot be forged.
+export const HISTORY_CLOSE = "[END Recent conversation]";
+
+/**
+ * `role: text` opens a replayed turn; anything else continues the current one.
+ *
+ * The role is COMPOSITION-OWNED — `_compose_message` emits it — but the text after
+ * it is not, so a content line that looks like `user: add milk` used to forge a
+ * turn boundary here (an assistant reply arming a domain as the user, or a
+ * `Reminder:` line inside a real user message opening a non-user turn that
+ * discarded the remainder). The seam now escapes this shape in CONTENT ONLY:
+ * `_neutralize_role_prefixes` in services/zoe-data/zoe_core_client.py wedges the
+ * same U+200B break used for the block delimiters in before the colon, which no
+ * longer matches the character class below. Composition adds the REAL role label
+ * after escaping, so real role lines stay parseable.
+ *
+ * The pattern SOURCE is kept byte-for-byte in sync with `_ROLE_PREFIX_PATTERN`
+ * there (pinned by a test) — the two runtimes must agree on exactly which line
+ * starts are turn boundaries, or one escapes a shape the other does not parse.
+ */
+export const ROLE_PREFIX_PATTERN = "^([A-Za-z][A-Za-z0-9_-]*): ?";
+const REPLAYED_ROLE_RE = new RegExp(ROLE_PREFIX_PATTERN);
 
 /**
  * The replayed-history block of a composed prompt, or "" when there is none.
@@ -198,6 +223,11 @@ const REPLAYED_ROLE_RE = /^([A-Za-z][A-Za-z0-9_-]*): ?/;
  * span is history and everything before it is context Zoe supplied. With no
  * utterance marker there is no seam composition at all (a standalone `pi` run), so
  * there is no replayed history either.
+ *
+ * The span then STOPS at the block's own close line. Without that the delimiter
+ * would be read as a continuation line of the last replayed turn and folded into
+ * the text disclosure seeds from — the seam's structure leaking into its content.
+ * A whole line only, as everywhere else: an inline mention is content.
  */
 export function replayedHistory(prompt: string): string {
   const utteranceAt = prompt.lastIndexOf(`${UTTERANCE_MARKER}\n`);
@@ -205,26 +235,47 @@ export function replayedHistory(prompt: string): string {
   const context = prompt.slice(0, utteranceAt);
   const needle = `${HISTORY_MARKER}\n`;
   const at = context.lastIndexOf(needle);
-  return at === -1 ? "" : context.slice(at + needle.length);
+  if (at === -1) return "";
+  const lines = context.slice(at + needle.length).split("\n");
+  const closeAt = lines.findIndex((line) => line.trimEnd() === HISTORY_CLOSE);
+  return (closeAt === -1 ? lines : lines.slice(0, closeAt)).join("\n");
+}
+
+/** One replayed record: the role composition labelled it with, and its text. */
+export interface ReplayedTurn {
+  role: string;
+  text: string;
+}
+
+/**
+ * Every replayed record, oldest first — roles included.
+ *
+ * The ROLE matters beyond "is it the user": the LAST record's role is what tells
+ * `seedDisclosureState` whether the final replayed turn is this very turn's own
+ * persisted copy (see there). Blank records are dropped, matching the composition
+ * side, which skips a turn whose content is empty.
+ */
+export function replayedTurns(prompt: string): ReplayedTurn[] {
+  const block = replayedHistory(prompt);
+  if (!block) return [];
+  const turns: ReplayedTurn[] = [];
+  for (const line of block.split("\n")) {
+    const match = REPLAYED_ROLE_RE.exec(line);
+    if (match) {
+      turns.push({ role: match[1].toLowerCase(), text: line.slice(match[0].length) });
+      continue;
+    }
+    // A continuation line of a multi-line message — it belongs to whoever spoke.
+    if (turns.length) turns[turns.length - 1].text += `\n${line}`;
+  }
+  return turns.filter((t) => t.text.trim() !== "");
 }
 
 /** The USER utterances inside the replayed history, oldest first. */
 export function replayedUserTurns(prompt: string): string[] {
-  const block = replayedHistory(prompt);
-  if (!block) return [];
-  const turns: string[] = [];
-  let inUserTurn = false;
-  for (const line of block.split("\n")) {
-    const match = REPLAYED_ROLE_RE.exec(line);
-    if (match) {
-      inUserTurn = match[1].toLowerCase() === "user";
-      if (inUserTurn) turns.push(line.slice(match[0].length));
-      continue;
-    }
-    // A continuation line of a multi-line message — it belongs to whoever spoke.
-    if (inUserTurn && turns.length) turns[turns.length - 1] += `\n${line}`;
-  }
-  return turns.filter((t) => t.trim() !== "");
+  return replayedTurns(prompt)
+    .filter((t) => t.role === "user")
+    .map((t) => t.text);
 }
 
 /** Per-session disclosure memory: which domain was last relevant, and when. */
@@ -237,6 +288,49 @@ export interface DisclosureState {
 
 export function createDisclosureState(): DisclosureState {
   return { turn: 0, lastRelevantTurn: new Map(), seeded: false };
+}
+
+/**
+ * Whether the replayed block's LAST record is a user turn — i.e. whether the
+ * current turn is already IN the replayed history.
+ *
+ * The seam's only history-bearing caller is `chat_stream_generator`, and it
+ * persists the current user message BEFORE it loads the window it replays:
+ * `_save_chat_message(session_id, "user", message)` at routers/chat.py:1617, then
+ * `SELECT role, content FROM chat_messages ... ORDER BY created_at DESC LIMIT 12`
+ * (reversed) at routers/chat.py:2303-2309. So the row that was just written is the
+ * newest, and the current turn is ALWAYS the last entry of `prior_history` — the
+ * model is shown it twice, once as replayed history and once after the utterance
+ * marker. Truncation cannot break that: `LIMIT 12` over a DESC sort drops the
+ * OLDEST rows, never the newest.
+ *
+ * "ALWAYS" is guaranteed by the PER-SESSION LOCK, not by the ordering alone. The
+ * persist and the load sit inside one generator, and a concurrent turn on the same
+ * session would slot its own rows between them: persist(A) → persist(B) → A replies
+ * and persists its assistant row → load(B) leaves B's window ending on an ASSISTANT
+ * row, so the roll-back below does not fire and B's turn is counted twice. Every
+ * caller therefore enters through `locked_chat_stream`
+ * (routers/chat.py) — the /api/chat/ route and the A2A stream endpoint
+ * (routers/system.py, whose `session_id` is caller-supplied) both do. Adding a
+ * caller that reaches `chat_stream_generator` directly reopens this.
+ *
+ * The test is POSITIONAL, not textual, and deliberately so. Between the persist
+ * and the brain call, chat.py strips an approval token (chat.py:1655) and may
+ * expand or wholly REPLACE the utterance via `openclaw_user_message` plus an
+ * `[Intent hint: …]` prefix (chat.py:2325-2330) — so the live utterance often does
+ * not equal its own persisted row, and a text-equality test would miss exactly
+ * those turns and decay them a turn early, which is the bug being fixed. Position
+ * is what the persist-then-load order actually guarantees.
+ *
+ * The residual case is a FUTURE caller that supplies history ending on a user turn
+ * that is NOT the current message. That runs the window one turn long — a domain
+ * stays disclosed slightly past its welcome, which costs a few tokens and keeps the
+ * rendered block stable. The opposite error drops a tool the user still needs, so
+ * the bias is deliberate. (Content cannot manufacture this: a forged `user:` line
+ * inside a message is escaped by `_neutralize_role_prefixes` before it is composed.)
+ */
+function currentTurnIsReplayed(turns: ReplayedTurn[]): boolean {
+  return turns.length > 0 && turns[turns.length - 1].role === "user";
 }
 
 /**
@@ -253,7 +347,8 @@ export function seedDisclosureState(
 ): DisclosureState {
   if (state.seeded) return state;
   state.seeded = true;
-  const turns = replayedUserTurns(prompt);
+  const replayed = replayedTurns(prompt);
+  const turns = replayed.filter((t) => t.role === "user").map((t) => t.text);
   for (let i = 0; i < turns.length; i++) {
     const msg = turns[i].toLowerCase();
     for (const entry of abilities) {
@@ -265,7 +360,19 @@ export function seedDisclosureState(
   }
   // Credit the replayed turns as elapsed, so the FIRST live turn is turns.length+1
   // and the decay window measures from there — identical to having seen them live.
-  state.turn = turns.length;
+  //
+  // EXCEPT the last one, when it is this turn's own persisted copy (above): that
+  // turn has not elapsed, it is about to happen. Counting it advanced the clock
+  // twice for one turn and expired every seeded domain one turn EARLY — so a
+  // continuation ("yes, do that") whose initiating request was still visible in the
+  // replayed window could arrive with the domain already decayed.
+  //
+  // Only the CLOCK is rolled back; the loop above still credits that turn, at
+  // index `turns.length`, which is precisely the number the live pass is about to
+  // reach. That is not merely harmless: when chat.py expanded or replaced the
+  // utterance, the raw words the user actually typed are seeded here and their
+  // domains survive the substitution.
+  state.turn = currentTurnIsReplayed(replayed) ? turns.length - 1 : turns.length;
   return state;
 }
 

@@ -5,8 +5,10 @@ A Flue-hosted Pi `Agent` on Zoe's local Gemma brain — replaces the per-turn
 (`docs/architecture/zoe-flue-integration.md` Phase 2).
 
 **Wiring status:** lab-hosted but production-reachable via zoe-data's
-`ZOE_BRAIN_BACKEND=flue` seam (`services/zoe-data/brain_dispatch.py`, priority
-flue > core > legacy). The **shipped repo default is OFF** (`core` =
+`ZOE_BRAIN_BACKEND=flue` seam (`services/zoe-data/brain_dispatch.py`, configured
+lane selection flue > core > legacy — **not** runtime failover; failover behind
+`ZOE_BRAIN_FAILOVER`, default off, so while this sidecar is down every turn is
+answered by the client's canned sentinel). The **shipped repo default is OFF** (`core` =
 `services/zoe-core`); **this deployment flipped it live on 2026-07-03** (host
 `ZOE_BRAIN_BACKEND=flue`, sidecar on `:3578` under a systemd user unit).
 

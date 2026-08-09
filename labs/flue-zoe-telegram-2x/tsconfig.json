@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true
+  },
+  // Shipped code, the build config, AND the tests. Unlike the brain port, this
+  // lab's suite was written from scratch against the 2.x shapes, so there is no
+  // pre-existing looseness to keep out of scope — `npm run typecheck` covers
+  // everything that ships and everything that proves it.
+  "include": ["src/**/*.ts", "test/**/*.ts", "vite.config.ts", "flue.config.ts"]
+}

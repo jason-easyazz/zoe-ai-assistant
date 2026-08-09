@@ -73,13 +73,17 @@ function makeEl(id) {
   return el;
 }
 
-function run({ tokenOk = true, bundleOk = true } = {}) {
+// tokenStatuses: optional queue of HTTP statuses for successive /livekit-token
+// calls (e.g. [401, 200] to exercise the stale-session re-provision retry).
+function run({ tokenOk = true, bundleOk = true, tokenStatuses = null, guestOk = true } = {}) {
   const els = {};
   const ids = ['orb', 'full', 'cardwrap', 'stage', 'glow', 'cv', 'pick', 'home', 'dock',
     'cmdbar', 'cmdin', 'cmdgo', 'estModal', 'talkBtn', 'askOut', 'authov', 'setVer'];
   ids.forEach((i) => { els[i] = makeEl(i); });
 
-  const trace = { scripts: [], fetches: [], mic: [], disconnects: [], timers: [] };
+  // reqs mirrors `fetches` but keeps the init (headers) — the token request must
+  // carry the panel's session, or the server now answers 401.
+  const trace = { scripts: [], fetches: [], reqs: [], mic: [], disconnects: [], timers: [] };
   const listeners = {};
 
   const document = {
@@ -114,17 +118,39 @@ function run({ tokenOk = true, bundleOk = true } = {}) {
     body: makeEl('body'),
   };
 
+  // A REAL (Map-backed) store: the guest re-provision path writes zoe_session
+  // and the next call must read it back, which a null-returning stub hides.
+  const store = new Map();
   const window = {
     addEventListener: (t, fn) => { (listeners[t] = listeners[t] || []).push(fn); },
     location: { search: '', pathname: '/touch/home.html' },
-    localStorage: { getItem: () => null, setItem: () => {} },
+    localStorage: {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    },
   };
 
-  const fetchImpl = (url) => {
+  let guestMints = 0;
+  const statuses = tokenStatuses ? tokenStatuses.slice() : null;
+  const fetchImpl = (url, init) => {
     trace.fetches.push(url);
+    trace.reqs.push({ url: String(url), init: init || {} });
+    if (String(url).indexOf('/api/auth/guest') === 0) {
+      guestMints += 1;
+      return Promise.resolve(guestOk
+        ? { ok: true, json: () => Promise.resolve({ session_id: 'guest-sid-' + guestMints }) }
+        : { ok: false, status: 503, json: () => Promise.resolve({}) });
+    }
     if (String(url).indexOf('/api/voice/livekit-token') === 0) {
+      if (statuses) {
+        const st = statuses.length > 1 ? statuses.shift() : statuses[0];
+        return Promise.resolve(st === 200
+          ? { ok: true, status: 200, json: () => Promise.resolve({ token: 'jwt', url: 'ws://lk' }) }
+          : { ok: false, status: st, json: () => Promise.resolve({}) });
+      }
       return tokenOk
-        ? Promise.resolve({ ok: true, json: () => Promise.resolve({ token: 'jwt', url: 'ws://lk' }) })
+        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: 'jwt', url: 'ws://lk' }) })
         : Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) });
     }
     // Everything else the estate boots (weather/today/prefs) — inert.
@@ -211,6 +237,56 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
     assert.ok(trace.fetches.some((u) => String(u).indexOf('/api/voice/livekit-token') === 0), 'entry requests a token');
     assert.deepStrictEqual(trace.mic, [true], 'entry publishes the mic track');
     assert.strictEqual(sandbox.window.__zoeConv.live(), true, 'session is live');
+  }
+
+  // ── 2b. The token request CARRIES a session ───────────────────────────────
+  // /api/voice/livekit-token is no longer anonymous-callable. A kiosk with no
+  // stored session must mint a guest one first and send it — drop the header
+  // and the panel's Talk button 401s in the room.
+  {
+    const { trace } = run();
+    await tick();
+    const guestFirst = trace.fetches.findIndex((u) => String(u).indexOf('/api/auth/guest') === 0);
+    const tokenReq = trace.reqs.find((r) => r.url.indexOf('/api/voice/livekit-token') === 0);
+    assert.ok(guestFirst === -1, 'no guest mint on boot');
+    assert.ok(!tokenReq, 'no token request on boot');
+  }
+  {
+    const { trace, sandbox } = run();
+    await sandbox.window.__zoeConv.start();
+    await tick();
+    const tokenReq = trace.reqs.find((r) => r.url.indexOf('/api/voice/livekit-token') === 0);
+    assert.ok(tokenReq, 'entry requests a token');
+    const hdr = (tokenReq.init.headers || {})['X-Session-ID'];
+    assert.strictEqual(hdr, 'guest-sid-1',
+      'the token request must carry the session the panel just provisioned');
+  }
+
+  // ── 2c. A stale session self-heals: 401 → re-provision → retry ONCE ───────
+  // The kiosk's guest session expires after 30 minutes while the kiosk runs for
+  // days. Without the bounded retry the Talk button would simply stop working.
+  {
+    const { trace, sandbox } = run({ tokenStatuses: [401, 200] });
+    await sandbox.window.__zoeConv.start();
+    await tick();
+    const tokenReqs = trace.reqs.filter((r) => r.url.indexOf('/api/voice/livekit-token') === 0);
+    const guestReqs = trace.reqs.filter((r) => r.url.indexOf('/api/auth/guest') === 0);
+    assert.strictEqual(tokenReqs.length, 2, 'exactly one retry after 401 — never a loop');
+    assert.strictEqual(guestReqs.length, 2, 'the retry re-provisions a fresh session');
+    assert.strictEqual((tokenReqs[1].init.headers || {})['X-Session-ID'], 'guest-sid-2',
+      'the retry must use the NEW session, not the rejected one');
+    assert.strictEqual(sandbox.window.__zoeConv.live(), true, 'the retry establishes the session');
+  }
+
+  // ── 2d. A persistent 401 fails cleanly (no hot mic, no retry loop) ────────
+  {
+    const { trace, sandbox } = run({ tokenStatuses: [401] });
+    await sandbox.window.__zoeConv.start();
+    await tick();
+    const tokenReqs = trace.reqs.filter((r) => r.url.indexOf('/api/voice/livekit-token') === 0);
+    assert.strictEqual(tokenReqs.length, 2, 'retry is bounded at one');
+    assert.deepStrictEqual(trace.mic, [], 'a refused token must never open the mic');
+    assert.strictEqual(sandbox.window.__zoeConv.live(), false, 'session is not live');
   }
 
   // ── 3. Explicit stop releases the mic and disconnects ─────────────────────
