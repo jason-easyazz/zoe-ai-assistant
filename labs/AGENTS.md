@@ -22,7 +22,12 @@ with its own README/RUNBOOK and is self-contained.
   production reaches the sidecar only through zoe-data's `ZOE_BRAIN_BACKEND=flue`
   seam. The **shipped repo default is OFF** (`core` = `services/zoe-core`), but the
   seam is production-reachable and **this deployment flipped it live on 2026-07-03**
-  — so `flue-zoe-brain/` is lab-hosted yet production-reachable, not "never live";
+  — so `flue-zoe-brain/` is lab-hosted yet production-reachable, not "never live".
+  That seam is CONFIGURED LANE SELECTION, not runtime failover: while this sidecar
+  is down every brain turn fails with zoe-data's canned sentinel rather than
+  falling through to `core` (failover behind `ZOE_BRAIN_FAILOVER`, default off —
+  see `services/zoe-data/AGENTS.md`). Treat a stopped `flue-zoe-brain` as a live
+  outage, not a graceful degrade;
   `flue-zoe-telegram/` → `scripts/setup/systemd/flue-zoe-telegram.service` (the
   long-poll Telegram bot; the operator installs it with their own bot token) plus
   its supervisor `scripts/setup/systemd/flue-zoe-telegram-watchdog.{service,timer}`
