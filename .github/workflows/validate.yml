@@ -151,6 +151,18 @@ jobs:
           # in this slim lane (they fake the embedding model + head; no fastembed
           # or sklearn needed). Without it they importorskip -> silently skip.
           pip install --quiet "numpy<2"
+          # LiveKit/WebRTC ingest deps. test_livekit_audio_frame_bytes.py
+          # importorskips av/aiortc at module scope and the module it exercises
+          # (livekit_aiortc) imports livekit.protocol at top level — without these
+          # the whole ingest-fidelity suite SKIPS, pytest reports green, and the
+          # required gate stops guarding the _AudioStream padding fix. All three
+          # resolve to manylinux x86_64 wheels for cp310 with no source build
+          # (verified: `pip download --only-binary=:all:
+          #  --platform manylinux_2_28_x86_64 --python-version 3.10 --abi cp310`).
+          # Versions are pinned to what the Jetson actually runs.
+          # test_livekit_ci_dep_guard.py FAILS this lane if they ever go missing,
+          # so deleting this line cannot silently re-open the hole.
+          pip install --quiet "av==16.1.0" "aiortc==1.14.0" "livekit-protocol==1.1.8"
           # zoe-data slim-dep-green tests are selected by the `ci_safe` marker
           # (registered in pytest.ini), not a hand-enumerated file list — so a new
           # slim-safe test runs here just by adding a co-located

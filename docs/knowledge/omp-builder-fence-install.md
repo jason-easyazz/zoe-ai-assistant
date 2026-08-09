@@ -106,6 +106,43 @@ Each failure is deliberately different, and only one of the three is loud on its
   reachable, project-scoped MCP config re-enabled, and `web_search` back on.
 - **Key file missing** — exit 78 as well ("dedicated key file missing"), before any scrub-and-run.
 
+## The key file is PARSED, never sourced (2026-08-06)
+
+`/home/zoe/.config/zoe/openrouter-omp.env` must define `OPENROUTER_API_KEY_OMP` and **nothing else**,
+and the wrapper now enforces that rather than trusting it. Until 2026-08-06 it did `. "$KEY_FILE"` —
+the file was *executed as shell*, **after** the credential scrub and **after** every precondition, so
+any extra line landed inside the fence with nothing left to catch it. Measured against the pre-fix
+wrapper with a crafted file: a pasted `export ANTHROPIC_API_KEY=…` reached the `omp` child, and a
+`SUPERVISOR=/tmp/evil` line re-pointed the wrapper's final `exec` at an arbitrary path. Both now exit
+78.
+
+The reader tolerates comments, blank lines, an `export ` prefix and quoted or unquoted values, and
+fail-closes on anything else: a second variable, a duplicate assignment, a command, an empty value, an
+absent one, or a value carrying characters outside the key alphabet (which is how `KEY=x; export
+OTHER=y` gets caught — one assignment to a naive parser). **Diagnostics name the file and a line
+NUMBER, never the line text**, because a rejected line may itself be the key and stderr goes to
+omnigent's logs.
+
+This is defence in depth, not a live hole: the key file is host-owned under `/home/zoe/.config/zoe`,
+which the container sees `:ro`, so nothing inside the fence can append to it. The exposure it closes
+is a mistake by whoever edits that file **on the host**.
+
+## The supervisor binds to its parent BEFORE arming (2026-08-06)
+
+`main()` used to call `_set_pdeathsig()` and *then* read `os.getppid()`. If the Omnigent runner died
+inside that window the supervisor was reparented to init, `original_ppid` recorded **1**, and the
+`getppid` poll then compared 1 against 1 forever — nothing reparents an already-init-owned process
+again — while `Popen` still launched the metered child. Both parent-death detectors defeated at once,
+in the one case with no backstop: the orphan-spend hole the supervisor exists to close, reopened by a
+startup ordering bug. Reproduced against the pre-fix copy by double-forking to ppid 1; the child
+launched, silently.
+
+Now: capture `original_ppid` first, **refuse outright (exit 78) if it is already `1`**, arm
+`PR_SET_PDEATHSIG`, re-check `getppid()` before `Popen`, and re-check once more immediately after so
+a loss in the last narrow window becomes an immediate group kill instead of a `POLL_S` wait. A
+refused dispatch costs one harness error; an unkillable metered child costs money until someone
+notices.
+
 ## Drift check (run this before trusting the tracked copies)
 
 The tracked copies were committed **byte-identical** to the live files, so the correct check is a
@@ -148,16 +185,33 @@ beecd9977a40d6716285169a39b5a00feca29c070a69438e32ee7e98f62b2037  omp-acp-superv
 2884620cdae2c8c040e0d84d19c237001edb9711d2f3e9770c32ab6c454a966a  omp-fence.yml
 ```
 
+**Superseded 2026-08-06 by the P2 hardening pass** (key file parsed instead of sourced; supervisor
+captures its expected parent before arming `PR_SET_PDEATHSIG`). New **tracked** hashes:
+
+```
+09e0b424ae10506b8e36d450c787a3993eb278c43071f6aedc9aba8392020761  omp-omnigent-fenced
+84dd02450c2ac2488b10de12de002326875b5ea7dfc5206b414df50c8393633a  omp-acp-supervisor
+2884620cdae2c8c040e0d84d19c237001edb9711d2f3e9770c32ab6c454a966a  omp-fence.yml   (unchanged)
+```
+
+**Between that merge and the operator re-install, tracked ≠ live is EXPECTED**: the drift check will
+correctly report a difference for the two `bin` files, and it means "the repo carries a fix the host
+has not taken yet" — not tampering. The `LIVE file wins by default` rule below is suspended for
+exactly that window; here the tracked copy is the newer one. Run the install block above, then
+re-run the drift check: all three must match, and the live hashes must equal the tracked ones
+recorded here. If they do not, do not guess — reconcile before the next builder-lane dispatch.
+
 **On drift, the LIVE file wins by default** — it is what actually fenced the last dispatch. Copy it
 back into `scripts/setup/omp-fence/` and open a PR, rather than overwriting the host from a tracked
 copy that may be older than the fix someone made in place.
 
 Two consequences of the byte-parity contract, both deliberate:
 
-- **The tracked copies keep their original "STAGED, NOT INSTALLED. APPLY.md copies this to …"
-  headers**, which are now stale prose — the files *are* installed. Do not "fix" the wording on its
-  own: any edit to a tracked copy breaks checksum parity with live until an operator re-installs.
-  Change the file and re-install in the same pass, or leave it.
+- **Any edit to a tracked copy breaks checksum parity with live until an operator re-installs — so
+  change the file and re-install in the same pass, or leave it.** That includes cosmetics: the two
+  `bin` files carried a stale "STAGED, NOT INSTALLED. APPLY.md copies this to …" header until
+  2026-08-06, and it was corrected only because that pass was already changing and re-installing
+  them. Never tidy wording on its own.
 - The tracked overlay is committed `0644`, not `0444`. Git records only the executable bit, so the
   read-only mode is a property of the **install command**, not of the tracked file.
 
@@ -168,10 +222,13 @@ files a fence rather than three scripts:
 
 - the wrapper **execs the supervisor, never `omp` directly**, and its preconditions are fail-closed
   (exit 78) for a missing supervisor, overlay, key file, or `python3`;
+- the wrapper **parses the key file, never sources it**, and exits 78 on anything that is not a
+  single `OPENROUTER_API_KEY_OMP` assignment (see below);
 - the wrapper arms `OMP_SUPERVISOR_WATCH_STDIN=1` **only** for the `acp` subcommand (a one-shot
   `omp config get` must stay byte-transparent on stdin — relaying it broke the fence read-back);
 - the supervisor puts the child in a **new session / process group** (`start_new_session=True`) and
-  kills the whole **group** (`killpg`), not the single PID;
+  kills the whole **group** (`killpg`), not the single PID, and it **captures its expected parent
+  before arming `PR_SET_PDEATHSIG`**, refusing to spawn at all if that parent is already gone;
 - the overlay pins `enabledModels` and disables `dev.autoqa` and `marketplace.autoUpdate`, with
   `autoUpdate: "off"` **quoted** (bare `off` is a YAML 1.1 boolean and the setting is a string enum).
 

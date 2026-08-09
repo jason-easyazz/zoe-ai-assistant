@@ -16,10 +16,14 @@ import zoe_flue_client
 
 
 class _FakeStreamResponse:
-    def __init__(self, status_code=200, lines=(), content_type="application/x-ndjson"):
+    def __init__(self, status_code=200, lines=(), content_type="application/x-ndjson", body=b""):
         self.status_code = status_code
         self._lines = list(lines)
         self.headers = {"content-type": content_type}
+        self._body = body
+
+    async def aread(self):
+        return self._body
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -171,6 +175,33 @@ async def test_stream_misconfig_non_ndjson_yields_fallback_no_repost(flue_env):
     out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
     assert out == [zoe_flue_client._FALLBACK_TEXT]
     assert [c[0] for c in flue_env.calls] == ["stream"]
+
+
+@pytest.mark.asyncio
+async def test_stream_misconfig_wire1_envelope_names_the_wire_flag(flue_env, caplog):
+    # Same misconfig branch, but the body is the Flue 1.x whole-result envelope:
+    # the log must carry the specific "set ZOE_FLUE_WIRE=1" diagnosis, matching
+    # the wire-2 aggregated path. Without the hint call this test goes red.
+    flue_env.stream_response = _FakeStreamResponse(
+        status_code=202, lines=[], content_type="application/json",
+        body=b'{"result": {"text": "classic"}}',
+    )
+    with caplog.at_level("ERROR"):
+        out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
+    assert out == [zoe_flue_client._FALLBACK_TEXT]
+    assert any("ZOE_FLUE_WIRE=1" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_stream_misconfig_non_envelope_body_has_no_wire_hint(flue_env, caplog):
+    # Control: a non-envelope body must NOT claim a 1.x sidecar was found.
+    flue_env.stream_response = _FakeStreamResponse(
+        status_code=202, lines=[], content_type="application/json", body=b'{"ok": true}',
+    )
+    with caplog.at_level("ERROR"):
+        out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
+    assert out == [zoe_flue_client._FALLBACK_TEXT]
+    assert not any("ZOE_FLUE_WIRE=1" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio

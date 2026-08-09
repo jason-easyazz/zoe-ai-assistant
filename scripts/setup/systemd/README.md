@@ -16,6 +16,7 @@ Secrets are never inlined — they are read from `.env` files.
 | `zoe-data.service`         | 8000  | Primary backend API |
 | `functiongemma-router.service` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M r2, CPU) — **platform-specific paths**; optional |
 | `flue-zoe-brain.service`   | 3578  | Flue Zoe-brain sidecar (optional, operator opt-in) |
+| `flue-zoe-brain-2x.service` | 3579 | Flue **2.x** Zoe-brain sidecar, the parallel port in `labs/flue-zoe-brain-2x/` — **ships inert; runs BESIDE :3578 so cutover is an env flip with a warm fallback.** Cutover + rollback runbook: `labs/flue-zoe-brain-2x/README.md` |
 | `flue-executor.service`    | —     | Multica queue consumer (executor migration Phase 2) — **optional, operator opt-in; ships inert (not enabled, dispatch defaults dry) — see below** |
 | `serena-mcp.service`       | 9121  | Shared Serena MCP code-intelligence server (dev tooling, one per HOST — see below) |
 
