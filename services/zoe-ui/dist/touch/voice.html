@@ -341,6 +341,62 @@ function getSessionId() {
   } catch(e) { return ''; }
 }
 
+// The LiveKit voice endpoints no longer answer anonymous callers: the audio
+// upload runs the full STT → brain → TTS pipeline, so it must not be free to
+// any LAN device. The panel boots as a GUEST and that session lives 30 minutes
+// with no sliding refresh, while the kiosk itself runs for days — so mint a
+// fresh one on demand instead of failing the mic silently.
+//
+// This page loads /js/auth.js, so `fetch` here is the WRAPPED one. It attaches a
+// session header but never strips one this page set explicitly — and, critically,
+// its default 401 policy is to `Promise.reject`, which would throw before the
+// retry below ever ran. The three LiveKit paths are listed in that wrapper's
+// CALLER_HANDLES_401 set so the 401 Response reaches this function instead.
+// Adding a fourth voice endpoint here means adding it there too.
+function isStoredSessionGuest() {
+  try {
+    const s = JSON.parse(localStorage.getItem('zoe_session')) || {};
+    const role = String(s.role || (s.user_info && s.user_info.role) || '').toLowerCase();
+    const uid  = String(s.user_id || (s.user_info && s.user_info.user_id) || '').toLowerCase();
+    return !s.session_id || role === 'guest' || uid === 'guest';
+  } catch(e) { return true; }
+}
+
+async function provisionGuestSession() {
+  try {
+    const r = await fetch('/api/auth/guest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_info: { source: 'panel-voice' } }),
+    });
+    if (!r.ok) return '';
+    const d = await r.json();
+    if (d && d.session_id) {
+      try { localStorage.setItem('zoe_session', JSON.stringify(d)); } catch(e) {}
+      return d.session_id;
+    }
+  } catch(e) {}
+  return '';
+}
+
+async function ensureSessionId() {
+  return getSessionId() || await provisionGuestSession();
+}
+
+// One request, with a single re-provision retry. A 401 means the stored session
+// expired server-side — exactly the state a long-lived kiosk sits in. Retry
+// ONCE (bounded — never a loop), and only when the stored session was a guest
+// one: silently downgrading a signed-in user to a guest would be worse.
+async function voiceFetchWithSession(url, buildInit) {
+  const sid = await ensureSessionId();
+  const resp = await fetch(url, buildInit(sid));
+  if (resp.status !== 401 || !isStoredSessionGuest()) return resp;
+  try { localStorage.removeItem('zoe_session'); } catch(e) {}
+  const fresh = await provisionGuestSession();
+  if (!fresh) return resp;
+  return await fetch(url, buildInit(fresh));
+}
+
 // ── State ─────────────────────────────────────────────────────────────────
 let localWS          = null;
 let wsReconnectTimer = null;
@@ -363,6 +419,11 @@ let maxRecordedRms   = 0;   // peak RMS during current recording (silence filter
 let convMode         = true;   // always on in touch/phone-call mode
 let speaking         = false;
 let serverBusy       = false;  // true while server is processing a turn
+// The `session_id` the in-flight /livekit-audio upload was keyed by — what
+// /livekit-cancel must address. NOT necessarily the current auth session: a 401
+// re-provision mid-turn moves the header, and the cancellation target must not
+// move with it. Null until the first upload of this page load.
+let currentTurnOpId  = null;
 let _silentCycles    = 0;      // consecutive silent-discarded recordings
 
 // ── Audio queue ───────────────────────────────────────────────────────────
@@ -598,14 +659,18 @@ function startBargeInWatch() {
 async function sendCancelSignal() {
   try {
     if (MODE === 'livekit' && liveKitRoom) {
-      await fetch('/api/voice/livekit-cancel', {
+      const identity = liveKitRoom.localParticipant?.identity || '';
+      // Address the turn the server actually accepted. `currentTurnOpId` is the
+      // session_id the in-flight upload was keyed by; the auth header is free to
+      // carry a freshly provisioned session, but the TARGET must not move with
+      // it or the cancel misses and then cancels the next upload instead.
+      const opId = currentTurnOpId;
+      if (!opId) return;                       // nothing in flight to cancel
+      await voiceFetchWithSession('/api/voice/livekit-cancel', (sid) => ({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': getSessionId() },
-        body: JSON.stringify({
-          participant_identity: liveKitRoom.localParticipant?.identity || '',
-          session_id: getSessionId(),
-        }),
-      });
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid },
+        body: JSON.stringify({ participant_identity: identity, session_id: opId }),
+      }));
     } else if (localWS && localWS.readyState === WebSocket.OPEN) {
       localWS.send(JSON.stringify({ type: 'cancel' }));
     }
@@ -755,15 +820,25 @@ async function sendLiveKitAudio() {
   audioChunks = [];
   serverBusy = true;
   try {
-    const fd = new FormData();
-    fd.append('audio', blob, 'ptt.webm');
-    fd.append('participant_identity', liveKitRoom.localParticipant.identity || '');
-    fd.append('session_id', getSessionId());
-    const resp = await fetch('/api/voice/livekit-audio', {
-      method: 'POST',
-      headers: { 'X-Session-ID': getSessionId() },
-      body: fd,
-    });
+    // Rebuilt per attempt: a FormData carrying the blob must not be reused
+    // across the retry, and the session_id field has to match the header.
+    const identity = liveKitRoom.localParticipant.identity || '';
+    const buildInit = (sid) => {
+      const fd = new FormData();
+      fd.append('audio', blob, 'ptt.webm');
+      fd.append('participant_identity', identity);
+      fd.append('session_id', sid);
+      // The server keys the in-flight turn by `<user_id>:<session_id>`, so this
+      // field is the CANCELLATION TARGET, not just an echo of the header. Record
+      // the value the attempt actually sent — if the 401 retry re-provisions,
+      // the accepted upload is keyed by the NEW id and barge-in must address
+      // that one. Sending the header's current sid instead would register a
+      // cancel for a turn that does not exist, and leave it lying in wait for
+      // the next upload.
+      currentTurnOpId = sid;
+      return { method: 'POST', headers: { 'X-Session-ID': sid }, body: fd };
+    };
+    const resp = await voiceFetchWithSession('/api/voice/livekit-audio', buildInit);
     if (!resp.ok) { serverBusy = false; setOrbState('ambient'); }
   } catch(e) {
     serverBusy = false;
@@ -781,9 +856,8 @@ function toggleConvMode() {
 async function connectLiveKitVoice() {
   if (typeof LivekitClient === 'undefined') { connectLocalVoice(); return; }
   try {
-    const resp = await fetch('/api/voice/livekit-token', {
-      headers: { 'X-Session-ID': getSessionId() },
-    });
+    const resp = await voiceFetchWithSession('/api/voice/livekit-token',
+      (sid) => ({ headers: { 'X-Session-ID': sid } }));
     if (!resp.ok) throw new Error(`Token fetch: ${resp.status}`);
     const { token, url, livekit_available } = await resp.json();
 

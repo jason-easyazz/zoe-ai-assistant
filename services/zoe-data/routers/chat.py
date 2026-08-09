@@ -2776,6 +2776,58 @@ async def chat_stream_generator(
         await _persist_ag_ui_run(session_id, run_id, recorder.events)
 
 
+async def locked_chat_stream(
+    message: str,
+    session_id: str,
+    user: dict,
+    **kwargs,
+):
+    """`chat_stream_generator` under the per-session lock — the ONLY supported entry.
+
+    The lock is not merely a duplicate-response guard. `chat_stream_generator`
+    persists the current user row (chat.py:1617) and then, later in the SAME
+    generator, loads the window it replays to the brain
+    (`ORDER BY created_at DESC LIMIT 12`, reversed). The seam's disclosure seeding
+    (`services/zoe-core/extensions/abilities.ts`, `currentTurnIsReplayed`) rests on
+    the POSITIONAL consequence of that ordering: the current turn is the last entry
+    of the replayed history, so the clock is rolled back by one and the turn is
+    counted once instead of twice.
+
+    That invariant holds only if no other turn on the same session can persist a row
+    BETWEEN this turn's persist and its load. Two overlapping requests interleaved as
+    persist(A) -> persist(B) -> load + reply + persist-assistant(A) -> load(B) leave
+    B's replayed window ending on an ASSISTANT row; the roll-back does not fire and
+    B's turn is counted twice, so every seeded domain decays a turn early. The lock
+    must therefore span the WHOLE generator — from before the persist to after the
+    last row it writes — which is why it is acquired here and released in a `finally`
+    around full consumption, never around the call site alone.
+
+    On contention the caller gets a `session_busy` RUN_ERROR after
+    `_SESSION_LOCK_TIMEOUT_S` instead of a second, interleaved run.
+    """
+    lock = _get_session_lock(session_id)
+    try:
+        acquired = await asyncio.wait_for(lock.acquire(), timeout=_SESSION_LOCK_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        acquired = False
+    if not acquired:
+        logger.warning("session %s concurrency timeout — rejecting duplicate request", session_id)
+        enc = EventEncoder()
+        yield enc.encode(
+            RunErrorEvent(
+                type=EventType.RUN_ERROR,
+                message="Another request is already in progress for this session. Please wait.",
+                code="session_busy",
+            )
+        )
+        return
+    try:
+        async for chunk in chat_stream_generator(message, session_id, user, **kwargs):
+            yield chunk
+    finally:
+        lock.release()
+
+
 async def _safe_load_portrait(user_id: str) -> str:
     """Load portrait for context injection; returns '' on any error or missing table."""
     try:
@@ -2835,35 +2887,18 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
 
     if stream:
         # Wrap the generator with a per-session lock so parallel SSE connections
-        # for the same session don't interleave long-running agent calls.
-        async def _locked_stream():
-            lock = _get_session_lock(session_id)
-            try:
-                acquired = await asyncio.wait_for(lock.acquire(), timeout=_SESSION_LOCK_TIMEOUT_S)
-            except asyncio.TimeoutError:
-                acquired = False
-            if not acquired:
-                logger.warning("session %s concurrency timeout — rejecting duplicate request", session_id)
-                enc = EventEncoder()
-                err_ev = enc.encode(RunErrorEvent(type=EventType.RUN_ERROR, message="Another request is already in progress for this session. Please wait.", code="session_busy"))
-                yield err_ev
-                return
-            try:
-                async for chunk in chat_stream_generator(
-                    message,
-                    session_id,
-                    user,
-                    force_openclaw=force_openclaw,
-                    force_agent=force_agent,
-                    req_panel_id=req_panel_id,
-                    channel=req_channel,
-                ):
-                    yield chunk
-            finally:
-                lock.release()
-
+        # for the same session don't interleave long-running agent calls — and so
+        # the persist-then-load turn-count invariant holds (see locked_chat_stream).
         return StreamingResponse(
-            _locked_stream(),
+            locked_chat_stream(
+                message,
+                session_id,
+                user,
+                force_openclaw=force_openclaw,
+                force_agent=force_agent,
+                req_panel_id=req_panel_id,
+                channel=req_channel,
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",

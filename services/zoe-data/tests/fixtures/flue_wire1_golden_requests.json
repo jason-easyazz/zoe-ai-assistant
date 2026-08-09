@@ -1,0 +1,55 @@
+{
+  "stream_off": {
+    "calls": [
+      {
+        "body": "{\"message\": \" zoe-uid:jason\\nwhat is the weather\"}",
+        "headers": {
+          "Authorization": "Bearer fixture-token",
+          "Content-Type": "application/json"
+        },
+        "kind": "post",
+        "method": "POST",
+        "url": "http://127.0.0.1:3578/agents/zoe/sess%2F1%20%3Fx?wait=result"
+      }
+    ],
+    "yields": [
+      "whole reply"
+    ]
+  },
+  "stream_off_no_uid": {
+    "calls": [
+      {
+        "body": "{\"message\": \"hi\"}",
+        "headers": {
+          "Authorization": "Bearer fixture-token",
+          "Content-Type": "application/json"
+        },
+        "kind": "post",
+        "method": "POST",
+        "url": "http://127.0.0.1:3578/agents/zoe/s2?wait=result"
+      }
+    ],
+    "yields": [
+      "whole reply"
+    ]
+  },
+  "stream_on": {
+    "calls": [
+      {
+        "body": "{\"message\": \" zoe-uid:jason\\nwhat is the weather\"}",
+        "headers": {
+          "Accept": "application/x-ndjson",
+          "Authorization": "Bearer fixture-token",
+          "Content-Type": "application/json"
+        },
+        "kind": "stream",
+        "method": "POST",
+        "url": "http://127.0.0.1:3578/agents/zoe/sess%2F1%20%3Fx"
+      }
+    ],
+    "yields": [
+      "hello ",
+      "world"
+    ]
+  }
+}

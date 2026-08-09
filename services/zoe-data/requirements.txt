@@ -1,18 +1,34 @@
 fastapi==0.141.1
-uvicorn[standard]==0.32.0
+# uvicorn is CAPPED AT 0.49.x ON PURPOSE — do not "bump to latest".
+# 0.50.0 flipped `--ws auto` from the legacy `websockets` protocol to
+# `websockets-sansio` whenever websockets is installed. main.py serves NINE
+# @app.websocket routes and one of them is `/ws/voice/`, so that flip swaps the
+# WebSocket implementation underneath the live voice path with no code diff.
+# Verified on-box (py3.10): 0.49.0 still resolves `auto` -> websockets_impl.
+# Moving to >=0.50 is a deliberate, replay-gated change, not a currency bump.
+uvicorn[standard]==0.49.0
 pydantic==2.13.4
 aiosqlite==0.22.1
 asyncpg>=0.29.0
 alembic>=1.13.0
 psycopg2-binary>=2.9.0
 python-multipart==0.0.32
-httpx==0.28.0
+httpx==0.28.1
 aiohttp==3.14.3
-websockets==14.0
+# websockets 16.1.1 is the LAST RELEASE THAT INSTALLS ON PYTHON 3.10 — 17.0
+# requires >=3.11 and this host is 3.10.12. Do not raise this pin without first
+# moving the host's Python. The client surface we use (`websockets.connect` with
+# open_timeout= / max_size=) is unchanged from 14.x, and uvicorn's legacy server
+# impl still finds `websockets.server.WebSocketServerProtocol` here (deprecated
+# alias, present through 16.x).
+# NOTE: since 15.0 a client `connect()` honours OS/env proxy settings
+# automatically. Nothing sets HTTP_PROXY/ALL_PROXY on this box today, but if that
+# ever changes, the local Music-Assistant and LiveKit sockets must pass proxy=None.
+websockets==16.1.1
 python-jose[cryptography]==3.5.0
 PyJWT==2.13.0
 passlib[bcrypt]==1.7.4
-ag-ui-protocol==0.1.14
+ag-ui-protocol==0.1.19
 python-json-logger>=4.1.0
 
 # ── Vector memory store ───────────────────────────────────────────────────
@@ -57,6 +73,20 @@ edge-tts>=6.1.12
 # back to edge/espeak if it is down (see ZOE_TTS_MODE in .env.example).
 # STT primary: Moonshine v2 (MEDIUM_STREAMING) — accurate on real room audio, CPU/ONNX
 moonshine-voice
+# ── Declared-but-previously-implicit runtime deps ─────────────────────────────
+# Both are imported DIRECTLY by live zoe-data code but were in no requirements
+# file, so they only ever arrived as somebody else's transitive dependency
+# (onnxruntime rode in on chromadb's `onnxruntime>=1.14.1`; transformers rode in
+# on the kokoro/faster-whisper stack). That makes every resolve dishonest: drop
+# the package that happened to carry them and the voice path breaks at runtime,
+# not at install time.
+#   onnxruntime — voice_turn.py (Smart Turn v3 endpointing), voice_vad.py
+#   transformers — voice_turn.py (WhisperFeatureExtractor)
+# Pinned AT THE CURRENTLY-INSTALLED VERSIONS to record reality, NOT to upgrade;
+# these are deliberately not bumped here. (onnxruntime's own py3.10 ceiling is
+# 1.24.3, so there is headroom when someone wants it.)
+onnxruntime==1.23.2
+transformers==5.5.0
 # Tier-1 semantic router: bge-small ONNX embeddings (~7-30ms/query, CPU) for
 # fuzzy domain classification between the regex fast-path and the Pi brain.
 fastembed
@@ -65,10 +95,26 @@ fastembed
 # was trained with (labs/setfit-router/requirements.txt).
 scikit-learn==1.7.2
 joblib==1.5.3
-# NOTE: no `silero-vad` package pin here on purpose — voice_vad.py loads the raw
-# Silero v5 .onnx (ZOE_SILERO_VAD_MODEL, default /home/zoe/models/silero_vad.onnx)
-# through onnxruntime directly, so the PyPI wrapper is not a dependency.
-# Proactive engine scheduler
+# Speaker diarization for ambient memory (Jetson CUDA only)
+# VAD for barge-in and ambient capture (server-side copy; Pi uses same package)
+# Proactive engine scheduler.
+#
+# HELD AT 3.10.4 DELIBERATELY — 3.11.x is a DATA hazard, not just a bump.
+# proactive/scheduler.py runs a SQLAlchemyJobStore (PostgreSQL), which PICKLES
+# each job's trigger. Under 3.10.4 (+ tzlocal 2.x) those triggers carry **pytz**
+# tzinfo objects. 3.11 deprecates pytz timezones and drops pytz from its
+# dependencies entirely (it also moves to `tzlocal>=3.0`, which is why
+# .github/workflows/validate.yml pins `tzlocal>=2,<3` alongside this line — the
+# two move together or CI installs an unsatisfiable pair).
+#
+# The failure is SILENT AND DESTRUCTIVE: jobstores/sqlalchemy.py `_get_jobs()`
+# wraps `_reconstitute_job()` in `except BaseException`, logs
+# "Unable to restore job -- removing it", and DELETES the row. So an
+# already-persisted reminder or Multica autopilot whose pytz trigger no longer
+# unpickles is not skipped — it is permanently erased.
+#
+# Upgrading means draining/re-registering the jobstore (or keeping pytz
+# installed explicitly) and re-pinning tzlocal in validate.yml. Not in place.
 APScheduler==3.10.4
 SQLAlchemy>=2.0,<3.0
 # Push notifications
@@ -78,8 +124,15 @@ py-vapid>=1.8
 resemblyzer>=0.1.3
 # LiveKit WebRTC server-side agent (joins room, STT+LLM+TTS, publishes audio)
 livekit>=0.14
-aiortc==1.14.0
-av==16.1.0
+# aiortc and av move TOGETHER: aiortc 1.14.0 caps `av<17`, so av cannot advance
+# without it (1.15.0 widens the cap to `av<18`).
+# av is held at 17.1.0 because 18.0.0 requires Python >=3.11 (host is 3.10.12).
+# av 17 bundles FFmpeg 8.1.1 and drives livekit_aiortc.py's AudioResampler, so it
+# was checked numerically rather than by changelog: resampling 48k stereo s16 ->
+# 16k mono s16 (the exact config that file uses) is BIT-IDENTICAL between 16.1.0
+# and 17.1.0, and deterministic across runs. Both ship cp310 aarch64 wheels.
+aiortc==1.15.0
+av==17.1.0
 # A2A federation + skill discovery + web search
 ddgs>=6.0
 cloakbrowser>=0.3.28
