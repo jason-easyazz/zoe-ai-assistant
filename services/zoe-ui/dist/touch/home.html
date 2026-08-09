@@ -4137,6 +4137,37 @@
     else if(t==='done'){if(!_convPlaying)orb.classList.remove('busy');}
   }
 
+  // /api/voice/livekit-token no longer answers anonymous callers (a room-join
+  // grant for the house voice room must not be mintable by any LAN device), so
+  // the panel has to present its session. The kiosk boots as a GUEST and that
+  // session lives 30 minutes, while the kiosk itself runs for days — so mint a
+  // fresh one on demand instead of failing the Talk button. Resolves to '' on
+  // failure; the caller still sends the header and the server decides.
+  function convEnsureSession(){
+    if(sid())return Promise.resolve(sid());
+    return fetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({device_info:{source:'estate-conversation'}})})
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(d){
+        if(d&&d.session_id){try{localStorage.setItem('zoe_session',JSON.stringify(d));}catch(e){}return d.session_id;}
+        return '';
+      }).catch(function(){return '';});
+  }
+
+  // One token fetch, with a single re-provision retry: a 401 here means the
+  // stored session expired server-side, which is exactly the state a long-lived
+  // kiosk sits in. Retry ONCE (bounded — never a loop) with a fresh session.
+  function convFetchToken(){
+    return convEnsureSession().then(function(s){
+      return fetch('/api/voice/livekit-token',{headers:{'X-Session-ID':s},credentials:'include'}).then(function(r){
+        if(r.status!==401)return r;
+        try{localStorage.removeItem('zoe_session');}catch(e){}
+        return convEnsureSession().then(function(s2){
+          return fetch('/api/voice/livekit-token',{headers:{'X-Session-ID':s2},credentials:'include'});
+        });
+      });
+    });
+  }
+
   function convStart(){
     if(_convLive)return Promise.resolve();
     if(_cur!=='ask')show('ask');   // navigate FIRST — show() tears a session down
@@ -4149,7 +4180,7 @@
     convPaint('Connecting…');convSyncBtn(true);
     var dec=new TextDecoder();
     return loadLiveKit().then(function(LK){
-      return fetch('/api/voice/livekit-token',{credentials:'include'}).then(function(r){
+      return convFetchToken().then(function(r){
         if(!r.ok)throw new Error('token http '+r.status);
         return r.json();
       }).then(function(d){

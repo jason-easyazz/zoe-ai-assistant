@@ -160,10 +160,20 @@ The Pi daemon POSTs base64 WAV with header **`X-Device-Token`**. After issuing a
 ```bash
 systemctl --user status zoe-data
 journalctl --user -u zoe-data --since "10 min ago"
-# Common: missing pip dependency → install/refresh host Python deps, then restart:
-pip3 install --user -r services/zoe-data/requirements.txt
+# Common: a missing pip dependency. FIND OUT WHICH ONE before installing anything:
+python3 scripts/maintenance/requirements_drift_check.py services/zoe-data/requirements.txt
+# then install ONLY the package the traceback and the drift report agree on:
+pip3 install --user "<package>==<version-from-the-file>"
 systemctl --user restart zoe-data
 ```
+
+> **Do NOT bulk-run `pip3 install --user -r services/zoe-data/requirements.txt` on the
+> live box.** That file is a declared spec that nothing installs (see its header), so the
+> box is legitimately allowed to be ahead of it — a bulk install can *downgrade* a working
+> runtime to satisfy a stale pin, and it will pull every heavy optional in the list
+> (`pyannote.audio` drags a multi-GB torch set onto a Jetson that runs the voice brain in
+> the same unified memory). Targeted installs only; then reconcile the file to the box,
+> never the reverse.
 
 ### Chat stays on "Zoe is typing…" indefinitely
 - OpenClaw timeout: check `OPENCLAW_AGENT_TIMEOUT_S` (default 120s).
