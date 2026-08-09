@@ -263,14 +263,17 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
   their id and refused (never reach the brain as a real user). Ships the opt-in unit
   template above. Hand-started, demo-only; README is a record, not a contract.
-- `flue-zoe-telegram-2x/` — the **PARALLEL Flue 2.0.1 port** of
-  `flue-zoe-telegram/`, which stays on `@flue/*@1.0.0-beta.6` and remains the
-  deployed `flue-zoe-telegram.service` on `:3582`. **Nothing here is wired to a
-  unit, a port, or CI**, and the sibling directory is the whole point: `deploy.yml`
-  rebuilds + restarts that unit on any diff under `labs/flue-zoe-telegram/`, so an
-  in-place bump would deploy itself into a runtime whose store the live process
-  cannot read (2.x persists schema **v8** against the beta's **v5**, reset-only, and
-  the rejection happens before any application code runs — in BOTH directions).
+- `flue-zoe-telegram-2x/` — the **LIVE Telegram bot since the 2026-08-09 cutover**
+  (Flue 2.0.1). `flue-zoe-telegram.service` runs THIS directory on `:3582` (via the
+  operator drop-in; the tracked template also points here), and `deploy.yml`
+  rebuilds + restarts the unit on any diff under `labs/flue-zoe-telegram-2x/` —
+  this subtree is production-deployed, treat changes accordingly. The retired
+  beta stays in `flue-zoe-telegram/` (`@flue/*@1.0.0-beta.6`) as the rollback
+  target ONLY: rolling back = repoint the unit + carry the epoch map back +
+  revert the deploy retarget together (its README, cutover step 7). The store
+  boundary is one-way in BOTH directions (2.x persists schema **v8** against the
+  beta's **v5**, reset-only, rejected before any application code runs) — never
+  point either process at the other's `data/`.
   Verify before committing with `git diff origin/main -- labs/flue-zoe-telegram/`:
   it must print nothing. A `-2x` sibling does not match that pathspec (git treats
   the trailing slash as an exact directory component), which is what makes the
