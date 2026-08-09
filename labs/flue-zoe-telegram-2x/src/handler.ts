@@ -16,7 +16,7 @@
  * identity gate on the channel now has a negative control. `app.ts` is reduced
  * to grammY wiring.
  *
- * LAB ONLY.
+ * PRODUCTION since the 2026-08-09 cutover (auto-deployed).
  */
 
 export interface IncomingDeps {
