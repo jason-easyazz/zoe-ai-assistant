@@ -221,7 +221,13 @@ async function runWrite(
   // backend confirms with an empty result, so this is an existing user-visible
   // contract, not a new string. See test/replay_isolation.test.ts and
   // tests/unit/test_replay_write_isolation.py.
-  if (isReplayTurn(signal)) return successFallback;
+  // The `actingUserId` conjunct keeps this STRICTLY behaviour-preserving. Without
+  // it, an identity-less replay turn would report success where a live one says
+  // "I'm not sure whose data this would touch" — a can't-do line the scorer reads
+  // as CANT_DO, so isolation would have changed a verdict. With it, that turn
+  // falls through to dispatchIntent, which fails closed on the same check BEFORE
+  // its fetch: same message, still no write.
+  if (isReplayTurn(signal) && actingUserId(signal)) return successFallback;
   const out = await dispatchIntent(intent, slots, service, signal);
   if (!out.ok) return out.text;
   return out.text || successFallback;

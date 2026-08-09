@@ -325,3 +325,83 @@ async def test_non_flue_lane_drops_the_kwarg_loudly(monkeypatch, caplog):
     assert out == "core reply"
     assert "replay_isolation" not in seen, "must not reach a lane that cannot honour it"
     assert any("replay_isolation" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_non_flue_streaming_lane_drops_the_kwarg_too(monkeypatch, caplog):
+    """Same class, other entry point. ``brain_streaming`` forwards **kwargs to the
+    same signature-strict lanes, so fixing only ``brain_oneshot`` would leave the
+    identical TypeError one call site away."""
+    monkeypatch.setattr(brain_dispatch, "use_flue_brain", lambda: False)
+    monkeypatch.setattr(brain_dispatch, "use_core_brain", lambda: True)
+    seen: dict = {}
+
+    def _fake_core_stream(message, session_id, user_id="", **kw):
+        seen.update(kw)
+
+        async def _gen():
+            yield "core delta"
+
+        return _gen()
+
+    import zoe_core_client
+
+    monkeypatch.setattr(zoe_core_client, "run_zoe_core_streaming", _fake_core_stream)
+    with caplog.at_level("WARNING"):
+        got = [d async for d in brain_dispatch.brain_streaming(
+            "hi", "s1", "jason", replay_isolation=True)]
+
+    assert got == ["core delta"]
+    assert "replay_isolation" not in seen
+    assert any("replay_isolation" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_flue_lane_still_receives_the_kwarg(monkeypatch):
+    """CONTROL for the two tests above, and it must be BEHAVIOURAL.
+
+    The drop has to be lane-SPECIFIC: hoisted above the `use_flue_brain()` branch
+    it would strip isolation on the one lane that implements it, and every replay
+    turn would go back to writing live data — silently, because the reply text
+    would look identical. A first cut of this control inspected the source text and
+    passed under exactly that mutation; asserting on the delivered kwargs is the
+    only version that fails."""
+    monkeypatch.setattr(brain_dispatch, "use_flue_brain", lambda: True)
+    seen: dict = {}
+
+    async def _fake_flue(message, session_id, user_id="", **kw):
+        seen.update(kw)
+        return "flue reply"
+
+    import zoe_flue_client
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain", _fake_flue)
+    out = await brain_dispatch.brain_oneshot("hi", "s1", "jason", replay_isolation=True)
+
+    assert out == "flue reply"
+    assert seen.get("replay_isolation") is True, \
+        "the flue lane MUST receive replay_isolation — dropping it re-opens the leak"
+
+
+@pytest.mark.asyncio
+async def test_flue_streaming_lane_still_receives_the_kwarg(monkeypatch):
+    """Same control for the streaming entry point."""
+    monkeypatch.setattr(brain_dispatch, "use_flue_brain", lambda: True)
+    seen: dict = {}
+
+    def _fake_flue_stream(message, session_id, user_id="", **kw):
+        seen.update(kw)
+
+        async def _gen():
+            yield "flue delta"
+
+        return _gen()
+
+    import zoe_flue_client
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", _fake_flue_stream)
+    got = [d async for d in brain_dispatch.brain_streaming(
+        "hi", "s1", "jason", replay_isolation=True)]
+
+    assert got == ["flue delta"]
+    assert seen.get("replay_isolation") is True

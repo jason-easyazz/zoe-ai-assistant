@@ -663,10 +663,12 @@ async def run_flue_brain_streaming(
     if "[pending-contact]" not in recall_block:
         offer_block = await _pending_offer_block(uid)
     _blocks = "\n".join(b for b in (recall_block, offer_block) if b)
-    # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never
-    # reach the start of the outbound message and forge the trusted marker.
-    brain_message = f"{_blocks}\n{_strip_replay_envelope(message)}" if _blocks \
-        else _strip_replay_envelope(message)
+    # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
+    # the start of the outbound message and forge the trusted marker. Only reachable
+    # when there is no identity line ahead of it — both blocks return "" for a blank
+    # uid — but strip unconditionally rather than depend on that coupling.
+    safe_message = _strip_replay_envelope(message)
+    brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     outbound_message = _wrap_message_with_identity(brain_message, uid)
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.

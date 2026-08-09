@@ -163,6 +163,29 @@ test('ISOLATED — replay marker bound: ZERO writes dispatched, success text pre
   }
 });
 
+test('an identity-less replay turn keeps the fail-closed line and still writes nothing', async () => {
+  // Isolation must not INVENT a success the live lane would not have given. With
+  // no acting identity, a live turn answers "I'm not sure whose data this would
+  // touch…" — a can't-do line the replay scorer reads as CANT_DO. If the marker
+  // short-circuited ahead of that check, isolation would have flipped a verdict.
+  const fake = await startFakeZoeData();
+  const prevUid = process.env.ZOE_BRAIN_USER_ID;
+  try {
+    await withWriteEnabledTools(fake.baseUrl, async (tools) => {
+      delete process.env.ZOE_BRAIN_USER_ID; // no env fallback, no bound identity
+      const signal = new AbortController().signal;
+      bindTurnReplayMode(signal, true);
+      const out = String(await byName(tools, 'add_reminder').run({ input: { title: 'x' }, signal }));
+      assert.match(out, /whose data this would touch/, 'must keep the live fail-closed line');
+      assert.deepEqual(fake.posts, [], 'and must still not write');
+    });
+  } finally {
+    if (prevUid === undefined) delete process.env.ZOE_BRAIN_USER_ID;
+    else process.env.ZOE_BRAIN_USER_ID = prevUid;
+    await fake.close();
+  }
+});
+
 test('reads are unaffected by the replay marker (the gate still scores said-vs-did)', async () => {
   const fake = await startFakeZoeData();
   try {
