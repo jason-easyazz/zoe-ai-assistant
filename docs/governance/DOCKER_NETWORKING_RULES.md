@@ -1,20 +1,29 @@
 # Docker Networking Rules - MANDATORY
 
-**Critical Rule**: All Zoe services MUST be on the SAME Docker network to communicate.
+**Critical Rule**: All containerised Zoe services MUST be on the SAME Docker network
+(`zoe-network`, with an explicit `name:`) to reach each other by service name.
+
+> **The rule is live; the old cast is not.** Every service this document originally used
+> as an example — `zoe-core` (the old Docker monolith), `zoe-llamacpp`, `zoe-mcp-server`,
+> `zoe-mem-agent` — is **RETIRED** (see the `RETIRED SERVICES` block in
+> `docker-compose.yml`). They were replaced by host-native processes, which do not join a
+> Docker network at all. Examples below use the containers that are actually running;
+> verify with `docker network inspect zoe-network` rather than trusting this list.
 
 ## 🚨 The Problem We Fixed
 
-**Date**: 2025-11-10
+**Date**: 2025-11-10 (historical — the services named here no longer exist)
 **Issue**: Services were on different Docker networks:
-- `zoe-core` → `assistant_zoe-network`
+- the old `zoe-core` monolith → `assistant_zoe-network`
 - LLM service → `zoe-network`
 
-**Result**: 100% test failure because zoe-core couldn't reach the LLM service
+**Result**: 100% test failure because the API container couldn't reach the LLM service
 - Error: `[Errno -2] Name or service not known`
 - All LLM requests failed → generic greetings returned
 - Tests showed 0% success rate
 
-> **Note**: As of Dec 2025, Zoe uses `zoe-llamacpp` (llama.cpp) instead of Ollama for LLM inference.
+The failure MODE is why this document exists and is still exactly right. Only the
+participants changed.
 
 ## ✅ The Solution
 
@@ -33,18 +42,23 @@ Every service MUST specify `zoe-network`:
 
 ```yaml
 services:
-  zoe-core:
+  zoe-auth:
     networks:
       - zoe-network
-  
-  zoe-llamacpp:
+
+  zoe-ui:
     networks:
       - zoe-network
-  
-  zoe-mcp-server:
+
+  homeassistant-mcp-bridge:
     networks:
       - zoe-network
 ```
+
+> `modules/omnigent` is the one deliberate exception to "one network": it joins
+> `zoe-network` **and** a second `internal` network, `zoe-codeintel`, whose only member is
+> pinned at `172.28.0.2` so the `serena-bridge.socket` allowlist can scope it. Adding a
+> second member to that network widens whole-repo read access — see `modules/AGENTS.md`.
 
 ## 📋 Validation Checklist
 
@@ -52,8 +66,11 @@ services:
 
 1. ✅ Network has explicit `name:` field
 2. ✅ All services specify `networks: [zoe-network]`
-3. ✅ Run validation script: `tools/docker/validate_networks.sh`
-4. ✅ Test connectivity: `docker exec zoe-core ping -c 2 zoe-llamacpp`
+3. ✅ Confirm every container actually joined it (command below)
+4. ✅ Test connectivity by service name between two LIVE containers
+
+> There is no `tools/docker/validate_networks.sh`. It is referenced in older docs but was
+> never committed; use the commands below.
 
 ## 🛠️ Validation Commands
 
@@ -65,8 +82,12 @@ docker network ls
 # Check which network each container is on
 docker ps --format "{{.Names}}: {{.Networks}}"
 
-# Verify zoe-core can reach zoe-llamacpp
-docker exec zoe-core ping -c 2 zoe-llamacpp
+# Authoritative: who is actually attached to zoe-network right now
+docker network inspect zoe-network --format '{{range .Containers}}{{.Name}} {{end}}'
+
+# Verify name resolution between two containers that are actually running
+# (pick names from the command above — do not copy a name from this doc)
+docker exec zoe-ui ping -c 2 zoe-auth
 ```
 
 ### Fix Mismatched Networks
@@ -86,13 +107,13 @@ docker compose up -d
 ```yaml
 # BAD - Different networks will break communication!
 services:
-  zoe-core:
+  zoe-auth:
     networks:
       - assistant_zoe-network  # ❌ WRONG
-  
-  zoe-llamacpp:
+
+  zoe-ui:
     networks:
-      - zoe-network  # ❌ DIFFERENT from zoe-core
+      - zoe-network  # ❌ DIFFERENT from zoe-auth
 ```
 
 ### ❌ DON'T forget explicit network name
@@ -106,11 +127,25 @@ networks:
 
 ## 🎯 Why This Matters
 
-**Inter-Service Communication**:
-- `zoe-core` → `zoe-llamacpp:11434` (LLM inference via llama.cpp)
-- `zoe-core` → `zoe-mcp-server:8003` (Tool calling)
-- `zoe-mcp-server` → `zoe-core:8000` (API calls)
-- `zoe-mem-agent` → `zoe-core:8000` (Expert coordination)
+**Inter-Service Communication** — live container-to-container paths, each verified
+2026-08-06 against the config that declares it:
+
+| path | declared in |
+|---|---|
+| `zoe-auth` → `zoe-database:5432` | `docker-compose.yml` (`POSTGRES_URL`) |
+| `homeassistant-mcp-bridge` → `homeassistant:8123` | `docker-compose.yml` (`HA_BASE_URL`) |
+| `zoe-cloudflared` → `zoe-ui:80` | `config/cloudflared-config.yml` ingress |
+| `zoe-cloudflared` → `zoe-omnigent:6767` | `config/cloudflared-config.yml` ingress |
+
+> **Not every co-resident container uses Docker DNS.** `zoe-multica-backend` sits on
+> `zoe-network` but reaches Postgres via `host.docker.internal:5432`, **not**
+> `zoe-database:5432` — so "on the same network" does not imply "talks over the network
+> name". Check the service's own env before assuming a path exists.
+
+> **Most of Zoe's hot path is NOT on this network at all.** The brain (`llama-server`),
+> zoe-data, Kokoro TTS and the router run **host-native** and are reached over
+> `localhost` / `host-gateway`, not Docker DNS. A change here cannot break them, and
+> conversely a broken voice path is almost never a Docker-network problem.
 
 **If networks don't match:**
 - ❌ DNS resolution fails
@@ -133,7 +168,12 @@ networks:
 
 ## 🔄 Pre-Commit Hook
 
-Add to `.git/hooks/pre-commit`:
+> This repo already has a tracked `.pre-commit-config.yaml` (arm it once per clone with
+> `pre-commit install`). Prefer adding a hook there over hand-editing `.git/hooks/`, which
+> is untracked and invisible to everyone else. The snippet below is illustrative only —
+> note it assumes an `assistant/` path prefix that does not apply inside the repo.
+
+Illustrative check:
 ```bash
 #!/bin/bash
 # Validate Docker network configuration
@@ -163,23 +203,31 @@ fi
 
 ## 📖 Related Documentation
 
-- **WiFi/Network Issues**: Same validation applies to host network connectivity
-- **Jetson/Pi Deployment**: Network config identical across platforms
-- **Docker Troubleshooting**: See `docs/guides/DOCKER_TROUBLESHOOTING.md`
+- **What is actually running**: `scripts/maintenance/zoe_ground_truth.sh` (read-only) —
+  the authority on live state, over any doc including this one.
+- **The one multi-network exception**: [`modules/AGENTS.md`](../../modules/AGENTS.md)
+  (`omnigent` + `zoe-codeintel`).
+- **Jetson/Pi Deployment**: Network config identical across platforms.
+
+(There is no `docs/guides/DOCKER_TROUBLESHOOTING.md`; it was referenced here but never
+committed.)
 
 ## 🆘 Troubleshooting
 
 ### Symptom: "Name or service not known"
-**Cause**: Containers on different Docker networks
-**Fix**: Run `tools/docker/validate_networks.sh` and fix configuration
+**Cause**: Containers on different Docker networks, **or** the target is host-native and
+was never on a Docker network to begin with (see the note above).
+**Fix**: `docker network inspect zoe-network` to see who is actually attached; if the
+target is host-native, use `host.docker.internal` / `host-gateway` instead of a service name.
 
 ### Symptom: Tests failing with 0% success
 **Cause**: Likely networking issue preventing service communication
-**Fix**: Check `docker logs zoe-core` for connection errors
+**Fix**: Check the logs of the container that is failing to connect (`docker logs <name>`)
 
 ### Symptom: Generic "Hi there!" responses
-**Cause**: LLM service unreachable, falling back to default
-**Fix**: Verify `docker exec zoe-core ping zoe-llamacpp` works
+**Cause**: The brain is unreachable, falling back to a default reply
+**Fix**: This is **not** a Docker-network symptom — `llama-server` is host-native.
+Check the brain directly (`scripts/maintenance/zoe_ground_truth.sh`).
 
 ## 📌 Summary
 
