@@ -136,6 +136,40 @@ workspace mount + an unauthenticated `gh` for review sessions. Until then,
 treat cross-review output on UNTRUSTED diffs with the same suspicion as any
 agent given write access.
 
+## Leaked per-session runners — the memory failure, and the escape hatch
+
+Every dispatch makes `omnigent host` spawn a dedicated runner, launched as
+literally `python -m omnigent.runner._entry`. Two properties made it invisible
+to every guard we had: **the session id is in its ENVIRONMENT, never its argv**
+(`OMNIGENT_PROCESS_LOG_FILE=…/runner-<sid>-<ts>.log`), so the wrapper's cmdline
+scan walked past it, and **its parent is the live host daemon**, so orphan
+reaping never saw it either. It also leaked worst on the SUCCESS path, where a
+completed review sets `REVIEW_DONE=1` and correctly suppresses `stop_worker`.
+
+MEASURED 2026-08-04 during a six-lane merge drive: 19 resident (one per
+dispatch), box down to 0–245 MB available, and Omnigent's host daemon then
+refused to come online under load (~20:08–21:00), killing two review dispatches
+mid-flight and recovering only when the load dropped.
+
+Fixed on both sides:
+
+- **Synchronously**, in `cross_review.sh`: `cleanup` now posts Omnigent's own
+  `stop_session` event (`POST /v1/sessions/<id>/events`) unconditionally and
+  BEFORE `stop_worker`. The server resolves the runner from the owner-gated
+  session row, so it can only ever stop THIS session's runner. Order matters —
+  the route forwards the stop to the runner first and raises on a non-2xx, so
+  killing the harness first aborts it before the host-runner teardown.
+- **As a safety net**, hourly:
+  `scripts/maintenance/reap_stale_omnigent_runners.py` (dry-run by default,
+  `--execute` to act). It catches the dispatches whose EXIT trap never ran — a
+  wrapper SIGKILLed by its caller's 2500s timeout, a wedged host daemon — and
+  the launch paths that never use this wrapper at all.
+
+**Operator escape hatch: `docker restart zoe-omnigent`.** It clears every leaked
+runner at once (verified: 20 → 1, ~956 MB recovered) but **kills any review in
+flight**, so use it only when nothing is dispatched. The reaper is the safe
+equivalent and can be run at any time.
+
 ## Constraints
 
 - ONE polly worker at a time repo-wide (RAM discipline). The wrapper flock

@@ -1,0 +1,29 @@
+# Zoe maintenance — reap leaked Omnigent per-session runners (user unit)
+#
+# Why: every cross-review dispatch leaves one `omnigent.runner._entry` process
+# resident. Nineteen had accumulated by 2026-08-04 and the box fell to 0-245 MB
+# available; Omnigent's own host daemon then refused to come online under load
+# and killed two reviews mid-flight. cross_review.sh now tears its own session
+# down synchronously — this timer is the safety net for the dispatches that die
+# before their EXIT trap runs (a caller-timeout SIGKILL) and for the other
+# polly launch paths that never take that wrapper at all.
+#
+# The runners live in the zoe-omnigent container but are visible in the host
+# /proc and owned by the host `zoe` uid, so this needs no docker access.
+#
+# Install (as the zoe user):
+#   cp scripts/setup/systemd/zoe-omnigent-runner-reaper.{service,timer} ~/.config/systemd/user/
+#   # ADJUST the ExecStart path below if your checkout is NOT ~/assistant —
+#   # systemd only records the resulting "No such file" failure in the journal.
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now zoe-omnigent-runner-reaper.timer
+
+[Unit]
+Description=Reap leaked Omnigent per-session runners (memory-exhaustion guard)
+
+[Service]
+Type=oneshot
+# %h = the invoking user's home. This assumes the repo is at ~/assistant (the
+# canonical Zoe checkout). If yours lives elsewhere, edit this absolute path.
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/reap_stale_omnigent_runners.py --execute
+Nice=10
