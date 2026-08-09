@@ -137,6 +137,18 @@ VOICE_PATH_PATTERNS = (
     # candidates — preventive for the same reason services/zoe-core/package.json
     # below is, at one commit's worth of historical cost.
     "services/zoe-data/models/*",
+    # The replay harness's sample SELECTION decides which corpus recordings
+    # every gate verdict is scored on — a change here changes what a green
+    # `status: pass` MEANS while every downstream check stays green, the same
+    # quieter-than-any-logic-edit argument as models/* above. Concrete incident
+    # (#1648): `_select` sorted by filename (HHMMSS, time-of-day, no date), so
+    # "--last 20" replayed a fixed mostly-2026-06-20 slice with ZERO overlap
+    # with the true newest 20, undetected for weeks. Honest counter-argument,
+    # recorded: gating the harness on its own artifact is circular — a broken
+    # _select cannot be caught by a probe that uses _select. What the gate buys
+    # is forced RE-MEASUREMENT whenever selection semantics change; correctness
+    # itself is guarded by tests/unit/test_replay_sample_selection.py.
+    "services/zoe-data/tests/replay_samples.py",
     # The brain's serving config IS the voice path: flash-attn, KV format and
     # slot layout all change generation behaviour. Greptile P1 on #1494 — a
     # deploy touching this unit previously bypassed the gate entirely.
