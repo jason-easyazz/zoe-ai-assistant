@@ -21,8 +21,18 @@ Each turn is classified so capability gaps are obvious:
   EMPTY    STT heard nothing (silence / clipped capture)
   ERROR    a stage raised
 
-By default DRY: reads/recall run (side-effect free), writes are only PLANNED
-(allow_writes=False → deferred) so the DB isn't mutated. --execute fulfils writes.
+By default DRY on BOTH halves of the turn — and it takes two mechanisms, because
+there are two executors:
+  * fast_tiers  — allow_writes=False, so a fast-path write is only PLANNED.
+  * the flue brain sidecar — allow_writes does NOT reach it. Its tools run with
+    ZOE_BRAIN_ALLOW_WRITES=true, so until the replay marker existed a corpus
+    command that fell through to the brain ("remember X", "add bread to the
+    list", "turn on the kitchen light") executed a REAL write into live
+    zoe-data. The `replay_isolation` marker below makes the sidecar report those
+    writes as done without committing them. Only `events` and `list_items` were
+    ever swept afterwards, so reminders/notes/journal/people/memories/device
+    state leaked silently — see zoe_flue_client._wrap_message_with_replay.
+--execute fulfils writes on both halves.
 --brain actually runs the Gemma brain on fall-through (slower; needed to test
 recall end-to-end). Default user is 'jason' so memory recall has facts.
 
@@ -324,9 +334,18 @@ async def _run(args) -> int:
                     # have access". The harness must match the live brain turn exactly.
                     domain_ctx = await _voice_domain_context(rr, user)
                     db_mem = _merge_brain_context(db_mem, domain_ctx)
+                    # REPLAY ISOLATION — allow_writes above governs fast_tiers only.
+                    # On brain fall-through the turn reaches the flue sidecar, whose
+                    # tools hold ZOE_BRAIN_ALLOW_WRITES=true, so a corpus command
+                    # ("remember X", "add bread to the list") used to execute a REAL
+                    # write into live zoe-data on every gate run. This marker makes
+                    # the sidecar report those writes as done without committing
+                    # them. Tied to the SAME --execute switch as fast_tiers, so the
+                    # two halves of the harness can never disagree about dry vs live.
                     reply = (await brain_oneshot(
                         transcript, session_id, user_id=user, voice_mode=True,
                         db_memory_context=db_mem, portrait=portrait,
+                        replay_isolation=not args.execute,
                     ) or "").strip()
                     outcome = "brain"
                 except Exception as exc:

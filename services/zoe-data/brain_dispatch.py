@@ -19,8 +19,11 @@ Imports are lazy inside each function to avoid import-time cycles
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 
 def use_core_brain() -> bool:
@@ -67,6 +70,18 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
         from zoe_flue_client import run_flue_brain
 
         return await run_flue_brain(message, session_id, user_id, **kwargs)
+    # `replay_isolation` is a FLUE-ONLY control (the flue sidecar owns the tool
+    # executor that performs the writes; see zoe_flue_client._wrap_message_with_replay).
+    # The other lanes take keyword-only params with no **kwargs, so forwarding it
+    # would raise TypeError and turn every replay turn into an ERROR verdict. Drop
+    # it — but LOUDLY: a caller that asked for write isolation and did not get it
+    # must not find that out from a dirty database.
+    if kwargs.pop("replay_isolation", False):
+        logger.warning(
+            "replay_isolation requested but the active brain backend is not flue — "
+            "the sidecar write gate is NOT engaged on this lane; brain-tool writes "
+            "will COMMIT. Re-run the replay gate with ZOE_BRAIN_BACKEND=flue."
+        )
     if use_core_brain():
         from zoe_core_client import run_zoe_core
 
