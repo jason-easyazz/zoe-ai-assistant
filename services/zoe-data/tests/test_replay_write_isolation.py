@@ -210,6 +210,21 @@ def _success_fallbacks() -> list[str]:
     return out
 
 
+def _span(src: str, header: str) -> tuple[int, int]:
+    """Byte range of the function body introduced by `header`, by brace matching."""
+    start = src.index(header)
+    i = src.index("{", start)
+    depth, j = 0, i
+    while True:
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return start, j
+        j += 1
+
+
 def _split_top_level(text: str) -> list[str]:
     """Split a TS argument list on top-level commas (ignoring nested (), {}, [],
     and quoted/backtick strings)."""
@@ -278,6 +293,73 @@ def test_the_env_flip_alternative_would_have_reddened_the_gate():
     assert classify("add bread to the list", write_disabled, "brain") == "CANT_DO"
 
 
+     # ── the escape hatch this PR must also close ────────────────────────────
+
+# Intents reached by a BARE dispatchIntent (not via runWrite). Every one must be
+# a READ, or carry its own replay gate. `timer_create` is the sole gated
+# exception: set_timer keeps an inline gate instead of routing through runWrite.
+_BARE_DISPATCH_READS = {
+    "weather", "reminder_list", "calendar_show", "list_show",
+    "note_search", "journal_prompt", "journal_streak", "people_search",
+}
+_BARE_DISPATCH_REPLAY_GATED = {"timer_create"}
+
+
+def test_no_write_can_reach_zoe_data_around_the_replay_gate():
+    """The completeness guard the runWrite-shaped tests cannot give.
+
+    `runWrite` is the chokepoint, but it is not the only way to reach
+    `dispatchIntent` — `set_timer` already proves a tool can call it directly, and
+    a tool added later could do the same with a WRITE intent and silently reopen
+    the leak while every other test here stayed green. So enumerate the bare call
+    sites from source and require each intent to be a known read or explicitly
+    replay-gated: a new one fails HERE until someone classifies it.
+    """
+    src = _TOOLS_TS.read_text()
+    lo, hi = _span(src, "async function runWrite(")  # the gated path — not "bare"
+
+    literal, dynamic = set(), 0
+    for m in re.finditer(r"\bdispatchIntent\(\s*([^,]+),", src):
+        if lo <= m.start() < hi:
+            continue
+        if src[: m.start()].rstrip().endswith("function"):
+            continue  # the declaration, not a call
+        arg = m.group(1).strip()
+        if arg[:1] in "\"'":
+            literal.add(arg.strip("\"'"))
+        else:
+            dynamic += 1
+
+    unclassified = literal - _BARE_DISPATCH_READS - _BARE_DISPATCH_REPLAY_GATED
+    assert not unclassified, (
+        f"bare dispatchIntent intents with no replay classification: {sorted(unclassified)} — "
+        "if any is a WRITE it bypasses the replay gate; gate it like set_timer, "
+        "or add it to _BARE_DISPATCH_READS if it is genuinely read-only"
+    )
+
+    # A COMPUTED intent cannot be classified by reading the call site, so it is
+    # pinned by count instead. Exactly one exists today: the journal tool's
+    # prompt/streak branch, whose `intent` is a ternary over two READ intents (its
+    # create branch goes through runWrite). A new dynamic site trips this and has
+    # to be reasoned about by hand — which is the point.
+    assert dynamic == 1, (
+        f"{dynamic} bare dispatchIntent call sites compute their intent (expected 1). "
+        "Verify the new one cannot resolve to a WRITE intent, then update this pin."
+    )
+    # Non-vacuity: the scan must actually be finding call sites.
+    assert len(literal) >= 7, f"the bare-dispatch scan found too little ({literal}) — regex is stale"
+
+
+def test_set_timer_keeps_its_own_replay_gate():
+    """The one bare-dispatch WRITE must stay gated. Pinned separately because the
+    classification above would happily pass if the gate were deleted."""
+    src = _TOOLS_TS.read_text()
+    timer = src[src.index("const setTimer = defineTool"):]
+    timer = timer[: timer.index("dispatchIntent('timer_create'")]
+    assert "isReplayTurn(signal)" in timer, \
+        "set_timer lost its inline replay gate — timer_create would dispatch on every replay turn"
+
+
 def test_scorer_never_reads_the_database():
     """Why success-shaped isolation is SAFE: the verdict is a pure function of
     (transcript, reply, outcome). If ``_classify`` ever grows a DB lookup, a
@@ -285,9 +367,22 @@ def test_scorer_never_reads_the_database():
     src = ast.parse(_REPLAY_SRC.read_text())
     fn = next(n for n in src.body if isinstance(n, ast.FunctionDef) and n.name == "_classify")
     assert [a.arg for a in fn.args.args] == ["transcript", "reply", "outcome"]
-    called = {n.func.attr for n in ast.walk(fn)
-              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
-    assert not ({"execute", "fetch", "fetchrow", "connect", "get", "post"} & called), called
+
+    # ALLOWLIST, not a deny-list: a deny-list of DB-ish names ("execute", "fetch",
+    # …) passes any future helper it failed to imagine — `lookup_db()` would slip
+    # straight through. Enumerate what the function may call instead, so ANY new
+    # call has to be justified here.
+    allowed = {"search", "startswith"}
+    called = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call):
+            f = n.func
+            called.add(f.attr if isinstance(f, ast.Attribute)
+                       else getattr(f, "id", "<computed>"))
+    assert called <= allowed, f"_classify gained calls beyond {sorted(allowed)}: {sorted(called - allowed)}"
+
+    # And it must stay synchronous — an await is how a DB read would arrive.
+    assert not any(isinstance(n, (ast.Await, ast.AsyncFor, ast.AsyncWith)) for n in ast.walk(fn))
 
 
 # ── 5. Cross-language envelope parity + non-flue lane safety ────────────────

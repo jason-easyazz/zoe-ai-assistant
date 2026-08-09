@@ -21,17 +21,13 @@ Each turn is classified so capability gaps are obvious:
   EMPTY    STT heard nothing (silence / clipped capture)
   ERROR    a stage raised
 
-By default DRY on BOTH halves of the turn — and it takes two mechanisms, because
-there are two executors:
-  * fast_tiers  — allow_writes=False, so a fast-path write is only PLANNED.
-  * the flue brain sidecar — allow_writes does NOT reach it. Its tools run with
-    ZOE_BRAIN_ALLOW_WRITES=true, so until the replay marker existed a corpus
-    command that fell through to the brain ("remember X", "add bread to the
-    list", "turn on the kitchen light") executed a REAL write into live
-    zoe-data. The `replay_isolation` marker below makes the sidecar report those
-    writes as done without committing them. Only `events` and `list_items` were
-    ever swept afterwards, so reminders/notes/journal/people/memories/device
-    state leaked silently — see zoe_flue_client._wrap_message_with_replay.
+By default DRY on BOTH halves of the turn — two executors, so it takes two
+mechanisms, and for years it only had one:
+  * fast_tiers — allow_writes=False, so a fast-path write is only PLANNED.
+  * the flue brain sidecar — allow_writes does NOT reach it (its tools carry
+    ZOE_BRAIN_ALLOW_WRITES=true), so a corpus command that fell through to the
+    brain used to write for real. Now gated by the `replay_isolation` marker at
+    the brain call below.
 --execute fulfils writes on both halves.
 --brain actually runs the Gemma brain on fall-through (slower; needed to test
 recall end-to-end). Default user is 'jason' so memory recall has facts.
