@@ -1,10 +1,12 @@
-# Flue Zoe Telegram — 2.x port (lab-only, PARALLEL, nothing deploys)
+# Flue Zoe Telegram — 2.x (LIVE since the 2026-08-09 cutover)
 
-> **This is a PARALLEL port, not a replacement.** `labs/flue-zoe-telegram/`
-> stays on `@flue/*@1.0.0-beta.6` and remains the deployed
-> `flue-zoe-telegram.service` on `:3582`. Nothing in this directory is built,
-> restarted, or reached by anything today. **Cutover is a deliberate, separate
-> operator step** — the runbook is at the bottom.
+> **This directory IS the deployed bot.** `flue-zoe-telegram.service` runs this
+> build on `:3582`, and `deploy.yml` rebuilds + restarts the unit on any merged
+> diff under this path — production, not a lab. The retired beta stays in
+> `labs/flue-zoe-telegram/` as the ROLLBACK TARGET only (runbook step 7 at the
+> bottom: repoint the unit + carry the epoch map back + revert the deploy
+> retarget together). The historical parallel-trial and cutover sections below
+> are kept as the record of how the cutover was executed.
 
 Phase 1 of the operator-declared "move to Flue 2" programme, taken on the
 **smallest Flue surface in the repo** deliberately: this channel is ~700 lines,

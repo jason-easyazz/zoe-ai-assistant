@@ -29,7 +29,8 @@
  * routes; what makes it an agent at all is the `'use agent'` directive scan run
  * by the `@flue/vite` plugin at build time. Both are required.
  *
- * LAB ONLY. Not wired into any production Zoe service; voice path untouched.
+ * PRODUCTION since the 2026-08-09 cutover: flue-zoe-telegram.service runs this
+ * build on :3582 and deploy.yml auto-deploys diffs here. Voice path untouched.
  */
 import { GrammyError } from 'grammy';
 import { Hono } from 'hono';

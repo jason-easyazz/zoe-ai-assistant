@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "PARALLEL Flue 2.0.1 port of labs/flue-zoe-telegram (which stays on @flue/*@1.0.0-beta.6 and remains the deployed long-poll bot on :3582). Separate directory ON PURPOSE: deploy.yml rebuilds and restarts flue-zoe-telegram.service on ANY diff under labs/flue-zoe-telegram/, and a 2.x process performs a one-way v5->v8 store migration. Nothing here deploys; cutover is a deliberate, separate operator step.",
+  "description": "The LIVE Flue 2.0.1 Telegram bot since the 2026-08-09 cutover: flue-zoe-telegram.service runs THIS directory on :3582, and deploy.yml rebuilds+restarts the unit on any diff here — production-deployed, treat changes accordingly. The retired beta stays in labs/flue-zoe-telegram as the rollback target only (one-way v5<->v8 store boundary, never share data/).",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.19.0"
