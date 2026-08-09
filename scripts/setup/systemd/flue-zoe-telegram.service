@@ -2,13 +2,13 @@
 # with per-sender account linking (telegram_id → real Zoe user + their memory).
 #
 # OPTIONAL and NOT enabled by default. Installing/enabling this unit is an
-# explicit operator action (runbook: labs/flue-zoe-telegram/README.md). The bot
+# explicit operator action (runbook: labs/flue-zoe-telegram-2x/README.md). The bot
 # token is a secret the operator holds; nothing here is auto-installed.
 #
 # Build first (the unit runs the built output, it does not build):
 #   cd ~/assistant/labs/flue-zoe-telegram && npm install && npm run build
 # Then create the env file from the template and fill it in:
-#   cp ~/assistant/labs/flue-zoe-telegram/.env.example ~/assistant/labs/flue-zoe-telegram/.env
+#   cp ~/assistant/labs/flue-zoe-telegram-2x/.env.example ~/assistant/labs/flue-zoe-telegram-2x/.env
 [Unit]
 Description=Flue Zoe Telegram channel (lab)
 # Talks to zoe-data (:8000) for the resolver + /api/chat. A user unit cannot
@@ -28,7 +28,7 @@ RestartSec=5
 # it in. NEVER inline values here. The file is required (no '-' prefix): the unit
 # fails loudly if the operator hasn't configured it, and the bot itself throws on
 # a missing TELEGRAM_BOT_TOKEN anyway.
-EnvironmentFile=%h/assistant/labs/flue-zoe-telegram/.env
+EnvironmentFile=%h/assistant/labs/flue-zoe-telegram-2x/.env
 
 # ── Keep the channel bridge out of swap ──────────────────────────────────────
 # Same gap as flue-zoe-brain.service, and worse: measured on the live Orin

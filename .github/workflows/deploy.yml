@@ -292,7 +292,7 @@ jobs:
           exit 1
 
       # The Telegram bot (flue-zoe-telegram) is a front-door channel that also runs
-      # a pre-built dist/, so a change to labs/flue-zoe-telegram/ on main does NOT
+      # a pre-built dist/, so a change to labs/flue-zoe-telegram-2x/ on main does NOT
       # reach the running bot until dist is rebuilt and the service restarted.
       # Rebuild it here on the same terms as the brain sidecar — ONLY when its
       # source changed, and only if the unit is installed (skips cleanly on hosts
@@ -307,8 +307,8 @@ jobs:
           fi
           cd /home/zoe/assistant
           if [ -n "${OLD_SHA:-}" ] \
-             && git diff --quiet "${OLD_SHA}" HEAD -- labs/flue-zoe-telegram/ \
-             && [ -f labs/flue-zoe-telegram/dist/server.mjs ]; then
+             && git diff --quiet "${OLD_SHA}" HEAD -- labs/flue-zoe-telegram-2x/ \
+             && [ -f labs/flue-zoe-telegram-2x/dist/server.mjs ]; then
             echo "bot source unchanged since ${OLD_SHA} and dist present — no rebuild needed."
             exit 0
           fi
@@ -326,7 +326,7 @@ jobs:
           # put its active-version bin on PATH for npm.
           export PATH="$HOME/.nvm/current/bin:$PATH"
           command -v npm >/dev/null || { echo "npm still not found on PATH: $PATH"; exit 1; }
-          cd labs/flue-zoe-telegram
+          cd labs/flue-zoe-telegram-2x
           if [ -f package-lock.json ]; then
             npm ci --no-audit --no-fund
           else

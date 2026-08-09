@@ -31,4 +31,4 @@ Environment=XDG_RUNTIME_DIR=%t
 # ExecStart parser doesn't choke. Port is read from the bot's .env (digits only),
 # defaulting to 3582. curl -sf fails on 503 (dead loop) OR connection refused
 # (process down) — both trigger a restart.
-ExecStart=/bin/bash -c 'PORT=$(sed -n "s/^PORT=//p" %h/assistant/labs/flue-zoe-telegram/.env 2>/dev/null | tr -dc "0-9"); curl -sf --max-time 8 "http://127.0.0.1:${PORT:-3582}/health" >/dev/null || { echo "flue-zoe-telegram /health unhealthy — restarting"; systemctl --user restart flue-zoe-telegram.service; }'
+ExecStart=/bin/bash -c 'PORT=$(sed -n "s/^PORT=//p" %h/assistant/labs/flue-zoe-telegram-2x/.env 2>/dev/null | tr -dc "0-9"); curl -sf --max-time 8 "http://127.0.0.1:${PORT:-3582}/health" >/dev/null || { echo "flue-zoe-telegram /health unhealthy — restarting"; systemctl --user restart flue-zoe-telegram.service; }'
