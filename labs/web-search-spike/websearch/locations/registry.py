@@ -442,10 +442,13 @@ register(
             "the same HTTP 200. Byte-for-byte the Liquorland wall — one platform, two banners."
         ),
         reason=(
-            "See the liquorland.com.au entry: identical Coles Liquor Group platform and "
-            "identical ShieldSquare-on-200 wall. Registered separately rather than aliased "
-            "because they are different shops with different shelf prices, and the day one of "
-            "them opens up, the recipes diverge."
+            "Radware/ShieldSquare bot wall answering HTTP **200** — identical Coles Liquor "
+            "Group platform and identical wall to the liquorland.com.au entry, which carries "
+            "the full description of why a refusal wearing a success's clothes is the most "
+            "dangerous shape here. Browser tier NOT RUN this session (box RAM), so this "
+            "`none` means UNMEASURED at that tier, not tried-and-failed. Registered "
+            "separately rather than aliased because they are different shops with different "
+            "shelf prices, and the day one of them opens up, the recipes diverge."
         ),
     )
 )

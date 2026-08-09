@@ -34,9 +34,16 @@ THIS IS LAB CODE AND IT LAUNCHES CHROMIUM
 -----------------------------------------
 ~553 MB per launch on a box that runs the mlocked voice brain. So:
 
-- `MemFree` is re-read immediately before the launch and the session REFUSES to
-  start under `min_free_mb` (default 380). That check is in the constructor path,
-  not in the caller, because a caller that forgets it is the failure mode.
+- TWO memory floors are re-read immediately before the launch, and the session
+  REFUSES to start under EITHER: `MemFree` under `min_free_mb` (default 380) and
+  `MemAvailable` under `min_available_mb` (default 700). Both, not one — on this
+  box `MemFree` can exceed `MemAvailable` (unreclaimable pages and watermarks),
+  so it is the OPTIMISTIC instrument, never a conservative proxy. Measured
+  2026-08-05: 532 MB free against 301 MB available, which a MemFree-only floor
+  waves straight through — it would have launched Chromium into a third of the
+  headroom it believed it had, beside the mlocked voice brain. The check is in
+  the constructor path, not in the caller, because a caller that forgets it is
+  the failure mode.
 - One session at a time. There is no pooling, no concurrency, and none is wanted.
 - `page_loads` is counted and `max_page_loads` is a hard stop (default 25). This
   is price-checking a handful of product pages, not crawling, and a runaway loop
