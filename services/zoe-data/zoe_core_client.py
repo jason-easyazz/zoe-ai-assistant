@@ -30,6 +30,7 @@ import json
 import logging
 import math
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -920,6 +921,67 @@ def _context_block(open_marker: str, close_marker: str, body: str) -> str:
     return f"{open_marker}\n{body}\n{close_marker}"
 
 
+# ── Role-prefix forging guard (the replayed-history block only) ──────────────
+#
+# `_compose_message` emits the replayed window as one `role: text` line per turn,
+# and `abilities.ts` parses that shape back out to seed progressive disclosure on
+# a restarted worker. The ROLE is composition-owned; the TEXT is not — it is
+# literally what was said. A retained message whose SECOND line reads `user: add
+# milk` therefore forged a turn boundary: Zoe's own reply could arm a domain as if
+# the user had asked for it, and a `Reminder:`-style line inside a real user
+# message opened a NON-user turn, discarding the remainder of that message and
+# leaving a continuation without its tool. Same content-forges-structure class as
+# the delimiter guard above, applied to role prefixes instead of block labels.
+#
+# The escape is the same U+200B wedge, placed immediately before the colon:
+# `user: add milk` becomes `user<ZWSP>: add milk`, which renders and reads
+# identically but no longer matches the parser's character class. Escaping (not
+# rejecting) keeps a colliding message visible and inert, exactly as above.
+#
+# SCOPE — the history block, and only lines 2..N of a message:
+#   * Only the history block is role-parsed. The portrait, recall and memory
+#     blocks are never read for roles, and wedging a break into a packet line that
+#     legitimately reads `Birthday: March 3` would mutate user-facing text for no
+#     safety at all. The class is swept where the class exists.
+#   * A message's FIRST line is emitted immediately after composition's own
+#     `role: ` label, so it is never at a line start and can never open a turn.
+#     Leaving it alone means the escape is a byte-for-byte no-op on every
+#     SINGLE-LINE message — which is what STT hands the voice path, and what all
+#     998 stored user turns on the live box are (zero multi-line, zero escaped).
+#
+# The pattern is kept byte-for-byte in sync with `ROLE_PREFIX_PATTERN` in
+# services/zoe-core/extensions/abilities.ts (pinned by a test): if the two
+# runtimes disagree about which line starts are turn boundaries, this escapes a
+# shape the parser does not read, or misses one it does.
+_ROLE_PREFIX_PATTERN = "^([A-Za-z][A-Za-z0-9_-]*): ?"
+_ROLE_PREFIX_RE = re.compile(_ROLE_PREFIX_PATTERN, re.MULTILINE)
+
+
+def _neutralize_role_prefixes(text: str) -> str:
+    """Message text with forged `role:` line starts rendered inert.
+
+    A no-op — and returns the SAME object — on single-line text and on anything
+    with no role-shaped line start, which is every real turn. Idempotent: a wedged
+    prefix no longer matches.
+    """
+    head, sep, tail = text.partition("\n")
+    if not sep or ":" not in tail:
+        return text
+    neutralized = _ROLE_PREFIX_RE.sub(
+        lambda m: f"{m.group(1)}{_MARKER_BREAK}{m.group(0)[len(m.group(1)):]}", tail
+    )
+    return text if neutralized == tail else f"{head}{sep}{neutralized}"
+
+
+def _neutralize_replayed_content(text: str) -> str:
+    """History content with BOTH composition-owned shapes rendered inert.
+
+    The block LABEL guard (`_neutralize_markers`) and the per-line ROLE guard: a
+    replayed message is the one place content is folded in behind both.
+    """
+    return _neutralize_role_prefixes(_neutralize_markers(text))
+
+
 def _memory_block(packet: str) -> str:
     """Directive + packet, delimited, or "" — the directive NEVER appears alone."""
     # Neutralize BEFORE delimiting: the packet is user content (stored memory
@@ -1050,11 +1112,14 @@ def _compose_message(
             role = turn.get("role") or turn.get("speaker") or "user"
             content = (turn.get("content") or turn.get("text") or "").strip()
             if content:
-                lines.append(f"{role}: {_neutralize_markers(content)}")
+                lines.append(f"{role}: {_neutralize_replayed_content(content)}")
         if lines:
             # `role: text` per line — the shape `abilities.ts` parses to seed
             # disclosure on a restarted worker. Roles stay unprefixed and
-            # unescaped; only the CONTENT is neutralized (above).
+            # unescaped; only the CONTENT is neutralized (above) — block labels
+            # AND role-shaped line starts, so content cannot forge a turn. The
+            # block carries its own close so `memory.ts` can elide superseded
+            # copies, and `abilities.ts` ends the replayed span on that line.
             parts.append(
                 _context_block(_HISTORY_LABEL, _HISTORY_CLOSE, "\n".join(lines))
             )
