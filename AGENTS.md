@@ -535,7 +535,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - [scripts/AGENTS.md](scripts/AGENTS.md) — setup, maintenance, deployment, and utility scripts, including systemd unit templates
 - [tests/AGENTS.md](tests/AGENTS.md) — unit, integration, performance, e2e, and voice test suites
 - [docs/AGENTS.md](docs/AGENTS.md) — categorized documentation; governance charter is normative
-- [modules/AGENTS.md](modules/AGENTS.md) — optional add-on modules served under /modules/
+- [modules/AGENTS.md](modules/AGENTS.md) — optional add-on containers on `zoe-network`, called by URL; nothing auto-discovers them (see [docs/guides/MODULE_SYSTEM.md](docs/guides/MODULE_SYSTEM.md))
 - [config/AGENTS.md](config/AGENTS.md) — deployment configuration and key material locations (values never documented)
 - [labs/AGENTS.md](labs/AGENTS.md) — lab-only experiments & spikes, isolated from the runtime (e.g. the Flue harness substrate spike)
 
