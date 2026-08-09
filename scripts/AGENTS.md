@@ -224,12 +224,37 @@ no review in flight** — it kills live dispatches. Prefer
   tracked from `Popen`, before it connects or spawns anything), its session id
   is recoverable from its environment (**unattributable ⇒ always kept**), it has
   no live harness subprocess for that session, and the server reports the
-  session terminal or gone (`running`/`waiting` are non-terminal, and an
-  unreachable server is UNKNOWN ⇒ kept — no answer is never permission).
-  Reaping prefers the same `stop_session` verb over a signal so the host records
-  an intentional exit rather than a crash; SIGTERM→SIGKILL is the fallback.
+  session terminal or gone. **Terminal is an ALLOWLIST — `idle`/`failed` — not
+  "anything that is not `running`/`waiting`"**: omnigent 0.7.0's own vocabulary
+  is `launching`/`running`/`waiting`/`idle`/`failed`, so a deny-list read
+  `launching` as permission to kill a session in the act of starting up. An
+  unreachable server is UNKNOWN ⇒ kept, and so is any unfamiliar status — no
+  answer is never permission, and neither is an answer we do not understand.
+  Adding a terminal state is a deliberate edit here, never a silent consequence
+  of the server's vocabulary growing.
+  **The classify verdict is a SNAPSHOT and is re-proved before any mutation.**
+  Two things can change in the scan→reap window (the graceful stop alone may
+  burn `--stop-budget-s`, 20s): the pid may no longer be this process, and the
+  session may have come back to life. `same_runner()` binds the pid to the
+  SCANNED IDENTITY — cmdline **plus** the environ session id **plus**
+  `starttime` — because every runner's argv is byte-identical, so a marker-only
+  recheck cannot tell this runner from ANOTHER SESSION'S and would signal a live
+  one; `starttime` additionally catches a pid recycled by a relaunch of the
+  *same* session (stops are non-sticky, so relaunch is the normal case). The
+  harness set and the session status are then re-read — through the UNCACHED
+  lookup, since the per-run cache would replay the very answer being
+  re-checked — and a session that has since gained a harness or gone
+  non-terminal is skipped, not stopped. Reaping prefers the same `stop_session`
+  verb over a signal so the host records an intentional exit rather than a
+  crash; SIGTERM→SIGKILL is the fallback, and identity is re-proved again
+  between the graceful attempt and the first signal so a slow stop cannot defeat
+  the check by simply taking long enough.
   Paired hourly user timer `zoe-omnigent-runner-reaper.timer` in
-  `setup/systemd/`. Pinned by `tests/unit/test_reap_stale_omnigent_runners.py`.
+  `setup/systemd/`. Pinned by `tests/unit/test_reap_stale_omnigent_runners.py`,
+  where every refusal has its own negative control and
+  `test_negative_control_a_matching_identity_is_still_reaped` holds all of them
+  true and requires the reap to PROCEED — so a guard cannot pass by the reaper
+  simply refusing everything.
 
 Verification: `bash -n`, `pytest tests/unit/test_cross_review_poll.py
 tests/unit/test_reap_stale_omnigent_runners.py` (offline, `ci_safe`, canned

@@ -114,6 +114,28 @@ _SESSION_FROM_LOG = re.compile(r"runner-([0-9A-Za-z_-]{16,32})-\d{8}-\d{6}-\d+\.
 # the same mistake that used to end cross-reviews early (Greptile P1 on #1578).
 NONTERMINAL_STATUSES = ("running", "waiting")
 
+# The ONLY statuses that authorise a reap. This is an ALLOWLIST, not the
+# complement of NONTERMINAL_STATUSES, and the difference is the whole point: an
+# unrecognised status is an answer we cannot interpret, and "no answer is never
+# permission" has to cover "an answer we do not understand" too, or the rule is
+# only a spelling check.
+#
+# Read off the installed omnigent 0.7.0 rather than assumed — the session
+# vocabulary is `launching` / `running` / `waiting` / `idle` / `failed`
+# (`omnigent/server/schemas.py::SessionStatusEvent`;
+# `server/routes/_sessions/orchestration.py:645` narrows the persisted set to the
+# last four). So this was not a hypothetical future-proofing: **`launching`
+# already exists**, and a deny-list read it as terminal — as permission to kill a
+# session in the act of starting up. Its docstring says it never rides as an
+# external `session.status` *today*, which is exactly the kind of load-bearing
+# "today" a reaper must not depend on.
+#
+# The asymmetry picks the default: an unrecognised status costs ~50 MB until an
+# operator reads the KEEP lines, while a wrong reap kills a live agent turn. So
+# anything unfamiliar KEEPS, and adding a terminal state here stays a deliberate
+# edit rather than a silent consequence of the server's vocabulary growing.
+TERMINAL_STATUSES = ("idle", "failed")
+
 # Status sentinels this module uses on top of whatever the server reports.
 STATUS_GONE = "__gone__"
 STATUS_UNKNOWN = "__unknown__"
@@ -130,6 +152,12 @@ class RunnerProc:
     rss_kb: int
     cmdline: str
     session_id: str | None
+    # Raw `starttime` (field 22 of /proc/<pid>/stat, in clock ticks since boot).
+    # Carried so a reap can prove the pid it is about to signal is still the
+    # SAME process it scanned — see `same_runner()`. `scan()` always populates
+    # it; the -1.0 default means "not captured", which makes the start-time leg
+    # of the identity check unavailable but never weakens the others.
+    start_ticks: float = -1.0
 
 
 def _load_poller():
@@ -207,7 +235,8 @@ def scan(proc_root: str = "/proc", now: float | None = None) -> list[RunnerProc]
             # exotic process name cannot shift the offsets.
             after = stat.rsplit(")", 1)[1].split()
             ppid = int(after[1])
-            age_s = now - (boot + float(after[19]) / ticks)
+            start_ticks = float(after[19])
+            age_s = now - (boot + start_ticks / ticks)
             rss_kb = 0
             uid = -1
             for line in _read_proc(proc_root, pid, "status").splitlines():
@@ -224,7 +253,8 @@ def scan(proc_root: str = "/proc", now: float | None = None) -> list[RunnerProc]
                 session_id = None
         except (FileNotFoundError, ProcessLookupError, PermissionError, IndexError, ValueError):
             continue  # raced a process exit or an unreadable entry — skip
-        found.append(RunnerProc(pid, ppid, uid, age_s, rss_kb, cmdline, session_id))
+        found.append(RunnerProc(pid, ppid, uid, age_s, rss_kb, cmdline, session_id,
+                                start_ticks))
     return found
 
 
@@ -277,9 +307,12 @@ def classify(p: RunnerProc, *, grace_min: int, busy_sessions: set[str],
         return None  # rule 4: no answer is not permission
     if status == STATUS_GONE:
         return f"session {p.session_id} no longer exists"
-    if status in NONTERMINAL_STATUSES:
-        return None  # rule 4: still working
-    return f"session {p.session_id} is terminal ({status})"
+    if status in TERMINAL_STATUSES:
+        return f"session {p.session_id} is terminal ({status})"
+    # rule 4, in its allowlist form: `running`/`waiting` are the states we know
+    # mean "still working", and anything ELSE we do not recognise is kept too.
+    # An unfamiliar answer is not a terminal one — see TERMINAL_STATUSES.
+    return None
 
 
 def make_status_of(poller, server: str, http_timeout: float):
@@ -299,11 +332,13 @@ def make_status_of(poller, server: str, http_timeout: float):
 
 
 def _still_runner(pid: int, proc_root: str = "/proc") -> bool:
-    """Re-confirm the pid is still an Omnigent runner, just before signalling.
+    """True if the pid is SOME Omnigent runner. Never sufficient to signal on.
 
-    Guards the scan()->reap() window: the target may have exited and had its pid
-    recycled by an unrelated same-uid process, which PermissionError does not
-    catch.
+    Kept as the cheap first test, but note what it cannot do: every runner's
+    argv is byte-identical (`python -m omnigent.runner._entry` — the session id
+    is in the ENVIRONMENT, which is the whole premise of this tool), so this
+    answers "is a runner here", never "is MY runner here". Use `same_runner()`
+    before anything that mutates.
     """
     try:
         blob = _read_proc(proc_root, pid, "cmdline", binary=True)
@@ -312,20 +347,98 @@ def _still_runner(pid: int, proc_root: str = "/proc") -> bool:
     return RUNNER_MARKER in blob.replace(b"\0", b" ").decode(errors="replace")
 
 
-def _wait_gone(pid: int, deadline_s: float, proc_root: str = "/proc") -> bool:
+def same_runner(p: RunnerProc, proc_root: str = "/proc") -> bool:
+    """True only if this pid is still the EXACT process `scan()` recorded.
+
+    The scan->reap window is not hypothetical: the graceful `stop_session`
+    attempt alone can burn `--stop-budget-s` (20s by default) before a signal is
+    considered. `_still_runner` covers a pid recycled by an unrelated process,
+    but NOT the case that matters here — a pid recycled by ANOTHER SESSION'S
+    runner, which is cmdline-identical and therefore indistinguishable to it.
+    Signalling that is exactly the forbidden "stop another session's runner",
+    and it would land on a LIVE one.
+
+    Three legs, all cheap, and each independently sufficient to refuse:
+
+    1. still a runner at all (`_still_runner`),
+    2. its environment still names the SAME session id — the only per-process
+       identity that exists, so this is the leg that separates two runners,
+    3. its `starttime` is unchanged — which additionally catches a pid recycled
+       by a *relaunch of the same session*, where leg 2 legitimately matches but
+       the process is a different, live one.
+
+    An unattributable process is refused rather than signalled: this mirrors
+    rule 2 of the KILL POLICY, so a runner whose environ became unreadable
+    between scan and reap is kept instead of guessed at.
+    """
+    if not _still_runner(p.pid, proc_root):
+        return False
+    if not p.session_id:
+        return False  # rule 2 again: never signal what we cannot name
+    try:
+        now_sid = session_id_from_environ(
+            _read_proc(proc_root, p.pid, "environ", binary=True)
+        )
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return False
+    if now_sid != p.session_id:
+        return False
+    if p.start_ticks >= 0:
+        try:
+            stat = _read_proc(proc_root, p.pid, "stat")
+            if float(stat.rsplit(")", 1)[1].split()[19]) != p.start_ticks:
+                return False
+        except (FileNotFoundError, ProcessLookupError, PermissionError,
+                IndexError, ValueError):
+            return False
+    return True
+
+
+def _wait_gone(p: RunnerProc, deadline_s: float, proc_root: str = "/proc") -> bool:
+    """Wait for THIS runner to disappear.
+
+    Identity-bound for the same reason `same_runner` is: if the pid is recycled
+    by another runner mid-wait, our target IS gone and reporting "survived"
+    would escalate a signal onto the newcomer.
+    """
     end = time.time() + deadline_s
     while time.time() < end:
-        if not _still_runner(pid, proc_root):
+        if not same_runner(p, proc_root):
             return True
         time.sleep(0.2)
-    return not _still_runner(pid, proc_root)
+    return not same_runner(p, proc_root)
 
 
 def reap(p: RunnerProc, *, poller, server: str, term_wait: float,
-         stop_budget_s: float, http_timeout: float, proc_root: str = "/proc") -> str:
-    """Stop one runner. Graceful `stop_session` first, signals as the fallback."""
-    if not _still_runner(p.pid, proc_root):
-        return "PID reused/exited (cmdline no longer a runner)"
+         stop_budget_s: float, http_timeout: float, proc_root: str = "/proc",
+         status_of=None, busy_sessions_fn=None) -> str:
+    """Stop one runner. Graceful `stop_session` first, signals as the fallback.
+
+    `classify()` produced its verdict from a SNAPSHOT taken at scan time, and
+    `main()` then walks the process list making one server lookup per session —
+    so by the time this runs, that verdict can be seconds old and simply wrong.
+    Two things can have changed under it: the pid may no longer be this process
+    (`same_runner`), and the session may have come back to life. Both are
+    re-read here, against fresh readings, before ANY mutation — including the
+    graceful stop, because stopping a live session is still stopping a live
+    session.
+
+    `status_of` / `busy_sessions_fn` are injected so the revalidation is
+    testable without a network, and so `main()` can pass its UNCACHED lookup:
+    re-asking through the per-run cache would just replay the stale answer this
+    check exists to catch.
+    """
+    if not same_runner(p, proc_root):
+        return "SKIPPED (PID reused or exited — no longer the scanned runner)"
+
+    # Re-validate the liveness verdict itself, not just the process identity.
+    busy = (busy_sessions_fn or live_conversations)(proc_root)
+    if p.session_id in busy:
+        return "SKIPPED (a harness appeared for this session since the scan)"
+    if status_of is not None:
+        status = status_of(p.session_id)
+        if status != STATUS_GONE and status not in TERMINAL_STATUSES:
+            return f"SKIPPED (session is {status} now, not terminal as scanned)"
 
     if p.session_id:
         # The graceful path: the server pops the host's runner entry BEFORE
@@ -336,18 +449,21 @@ def reap(p: RunnerProc, *, poller, server: str, term_wait: float,
         sink = io.StringIO()
         with contextlib.redirect_stdout(sink):
             rc = poller.stop_session(server, p.session_id, stop_budget_s, 2.0, http_timeout)
-        if rc == 0 and _wait_gone(p.pid, term_wait, proc_root):
+        if rc == 0 and _wait_gone(p, term_wait, proc_root):
             return "stopped via stop_session"
 
+    # The graceful attempt above can have burned `stop_budget_s`, so the pid is
+    # re-proved to be this runner before the first signal — otherwise the whole
+    # identity check would be defeated by simply taking long enough.
+    if not same_runner(p, proc_root):
+        return "SKIPPED (PID reused or exited during the graceful stop)"
     try:
         os.kill(p.pid, signal.SIGTERM)
     except ProcessLookupError:
         return "already gone"
     except PermissionError:
         return "SKIPPED (owned by another user)"
-    if _wait_gone(p.pid, term_wait, proc_root):
-        return "terminated"
-    if not _still_runner(p.pid, proc_root):
+    if _wait_gone(p, term_wait, proc_root):
         return "terminated"
     try:
         os.kill(p.pid, signal.SIGKILL)
@@ -407,9 +523,13 @@ def main(argv=None) -> int:
             reaped += 1
             print(f"WOULD-REAP  {ident} — {reason} (dry run; pass --execute)")
             continue
+        # `status_of`, NOT `cached_status`: the revalidation exists to catch a
+        # session that changed since the scan, and the cache would hand back the
+        # very answer being re-checked.
         outcome = reap(p, poller=poller, server=args.server, term_wait=args.term_wait,
                        stop_budget_s=args.stop_budget_s, http_timeout=args.http_timeout_s,
-                       proc_root=args.proc_root)
+                       proc_root=args.proc_root, status_of=status_of,
+                       busy_sessions_fn=live_conversations)
         print(f"REAP  {ident} — {reason} -> {outcome}")
         if "SKIPPED" in outcome:
             skipped += 1

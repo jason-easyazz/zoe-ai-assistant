@@ -16,6 +16,7 @@ the module's `proc_root` parameter. No live Omnigent, no signals, no network.
 """
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import os
 import pathlib
@@ -395,3 +396,165 @@ def test_a_foreign_uid_is_reported_and_skipped(fp, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "SKIP" in out and "owned by uid" in out
     assert "reaped 0, kept 0, skipped 1" in out
+
+
+# ------------------------------------------- identity binding at signal time ---
+#
+# The scan->reap window is where a conservative policy can still kill something
+# live. Two facts make it sharp here rather than theoretical:
+#
+#   * EVERY runner's argv is byte-identical (`python -m omnigent.runner._entry`),
+#     because the session id travels in the environment — the premise of this
+#     whole tool. So "is a runner still at this pid" cannot distinguish MY runner
+#     from ANOTHER SESSION'S.
+#   * the graceful `stop_session` attempt alone can burn `--stop-budget-s`
+#     (20s by default) before the first signal is considered.
+#
+# Each test below flips exactly one identity/liveness fact and requires the reap
+# to refuse; `test_negative_control_a_matching_identity_is_still_reaped` holds
+# every one of them true and requires it to PROCEED, so none of these can be
+# passing merely because the reaper stopped reaping.
+
+
+def _reap(p, fp, poller, **kw):
+    kw.setdefault("term_wait", 0.05)
+    return reaper.reap(p, poller=poller, server="http://x", stop_budget_s=1.0,
+                       http_timeout=1.0, proc_root=str(fp.root), **kw)
+
+
+def test_reap_refuses_a_pid_recycled_by_another_sessions_runner(fp, monkeypatch):
+    """THE finding: cmdline-identical, so only the environ tells them apart.
+
+    A pid-reuse check bound to the argv marker sees a runner, says "still
+    there", and signals it — but it is a DIFFERENT, LIVE session's runner. That
+    is the contract's forbidden case, reached without any /proc heuristic being
+    wrong about anything except identity.
+    """
+    other_log = f"/root/.omnigent/logs/runner/runner-{OTHER_SID}-20260804-001420-811333.log"
+    fp.add(700, RUNNER_ARGV, log_env=other_log)
+    poller = FakePoller()
+    monkeypatch.setattr(reaper.os, "kill", lambda *_a: pytest.fail("signalled another session's runner"))
+
+    p = reaper.RunnerProc(pid=700, ppid=1000, uid=os.getuid(), age_s=9999.0,
+                          rss_kb=1, cmdline=" ".join(RUNNER_ARGV), session_id=SID)
+
+    out = _reap(p, fp, poller)
+
+    assert "SKIPPED" in out and "PID reused" in out
+    assert poller.stops == [], "and it must not stop the other session either"
+
+
+def test_reap_refuses_a_pid_recycled_by_a_relaunch_of_the_same_session(fp, monkeypatch):
+    """Same session id, different process — the leg the environ check misses.
+
+    Omnigent stops are non-sticky: the next message relaunches the session on
+    its host. If that relaunch lands on the recycled pid, the environ matches
+    legitimately and only `starttime` shows it is a new, live process.
+    """
+    fp.add(701, RUNNER_ARGV, age_s=30.0)  # freshly started => different starttime
+    poller = FakePoller()
+    monkeypatch.setattr(reaper.os, "kill", lambda *_a: pytest.fail("signalled a relaunched runner"))
+
+    scanned = reaper.scan(str(fp.root), now=fp.now())[0]
+    stale = dataclasses.replace(scanned, age_s=9999.0,
+                                start_ticks=scanned.start_ticks - 5_000_000)
+
+    out = _reap(stale, fp, poller)
+
+    assert "SKIPPED" in out and "PID reused" in out
+    assert poller.stops == []
+
+
+def test_reap_refuses_when_a_harness_appeared_since_the_scan(fp, monkeypatch):
+    """classify() ruled on a snapshot; the session woke up in the meantime."""
+    fp.add(702, RUNNER_ARGV)
+    fp.add(703, harness_argv(SID), log_env=None)  # the harness that was not there before
+    poller = FakePoller()
+    monkeypatch.setattr(reaper.os, "kill", lambda *_a: pytest.fail("signalled a runner with a live harness"))
+
+    p = reaper.scan(str(fp.root), now=fp.now())[0]
+
+    out = _reap(p, fp, poller)
+
+    assert "SKIPPED" in out and "harness appeared" in out
+    assert poller.stops == []
+
+
+def test_reap_refuses_when_the_session_went_running_since_the_scan(fp, monkeypatch):
+    """The server's answer is re-read before mutating, not trusted from the scan."""
+    fp.add(704, RUNNER_ARGV)
+    poller = FakePoller()
+    monkeypatch.setattr(reaper.os, "kill", lambda *_a: pytest.fail("signalled a running session"))
+
+    p = reaper.scan(str(fp.root), now=fp.now())[0]
+
+    out = _reap(p, fp, poller, status_of=lambda _sid: "running")
+
+    assert "SKIPPED" in out and "running" in out
+    assert poller.stops == []
+
+
+def test_reap_refuses_when_the_revalidation_cannot_reach_the_server(fp, monkeypatch):
+    """UNKNOWN is not permission at reap time either, not just at classify time."""
+    fp.add(705, RUNNER_ARGV)
+    poller = FakePoller()
+    monkeypatch.setattr(reaper.os, "kill", lambda *_a: pytest.fail("signalled on an unknown status"))
+
+    p = reaper.scan(str(fp.root), now=fp.now())[0]
+
+    out = _reap(p, fp, poller, status_of=lambda _sid: reaper.STATUS_UNKNOWN)
+
+    assert "SKIPPED" in out
+    assert poller.stops == []
+
+
+def test_negative_control_a_matching_identity_is_still_reaped(fp, monkeypatch):
+    """Hold every fact above TRUE and the reap must go through.
+
+    Without this the five refusals are indistinguishable from a reaper that
+    refuses everything — which is the state the box was in before this tool
+    existed, and would silently restore the leak it was written to stop.
+    """
+    fp.add(706, RUNNER_ARGV)
+    poller = FakePoller(rc=0)
+    monkeypatch.setattr(reaper, "_wait_gone", lambda *a, **k: True)
+
+    p = reaper.scan(str(fp.root), now=fp.now())[0]
+
+    out = _reap(p, fp, poller, status_of=lambda _sid: "idle")
+
+    assert out == "stopped via stop_session"
+    assert poller.stops == [SID]
+
+
+def test_reap_will_not_signal_an_unattributable_process(fp, monkeypatch):
+    """Rule 2 holds at signal time too: unnamed is unkillable."""
+    fp.add(707, RUNNER_ARGV, log_env=None)
+    poller = FakePoller()
+    monkeypatch.setattr(reaper.os, "kill", lambda *_a: pytest.fail("signalled an unattributable runner"))
+
+    p = reaper.scan(str(fp.root), now=fp.now())[0]
+    assert p.session_id is None
+
+    assert "SKIPPED" in _reap(p, fp, poller)
+
+
+# ------------------------------------------------ status vocabulary allowlist ---
+
+
+@pytest.mark.parametrize("status", ["launching", "queued", "starting", "paused", ""])
+def test_an_unrecognised_status_keeps_the_runner(status):
+    """An answer we cannot interpret is not a terminal one.
+
+    `launching` is not hypothetical — it is in omnigent 0.7.0's own
+    SessionStatusEvent vocabulary (`launching`/`running`/`waiting`/`idle`/
+    `failed`), and a deny-list read it as permission to kill a session that is
+    starting up.
+    """
+    assert reaper.classify(runner(), **policy(status=status)) is None
+
+
+@pytest.mark.parametrize("status", list(reaper.TERMINAL_STATUSES))
+def test_negative_control_the_known_terminal_statuses_still_reap(status):
+    """The allowlist must not have turned the reaper off."""
+    assert reaper.classify(runner(), **policy(status=status)) is not None
