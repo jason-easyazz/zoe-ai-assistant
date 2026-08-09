@@ -58,6 +58,22 @@ the lane that served it, so an operator can assert which brain answered
 journald). That line is emitted in BOTH flag states: it is observability, not
 dispatch. With the flag off, the lane SELECTION is byte-identical to today.
 
+Two properties make that line trustworthy rather than merely present:
+
+* **Exactly one, on every path a turn can leave by.** The streaming wrapper is
+  an async generator, so a consumer that disconnects after the first delta
+  throws ``GeneratorExit`` at the yield and skips everything after it. The
+  record is therefore emitted through a once-only helper wrapped in
+  ``try/finally``: an interrupted turn logs ``outcome=interrupted`` from
+  cleanup instead of logging nothing at all.
+* **The outcome is the client's verdict, not "the generator finished".**
+  ``zoe_flue_client`` renders an HTTP error, a read timeout, an empty 200, a
+  rejected wire-2 body and a post-admission stream death alike as its canned
+  sentinel and ends the stream normally, so an inferred label called every one
+  of them ``ok``. The client reports its terminal verdict through an opt-in
+  outcome sink and the line carries it (``ok`` / ``fallback`` / ``error``).
+  Labels only — the retry decision remains ``FlueTransportError`` alone.
+
 Imports are lazy inside each function to avoid import-time cycles
 (main.py → routers.chat → ... ).
 """
@@ -274,8 +290,32 @@ def _fallback_lane() -> str:
     return "core" if use_core_brain() else "legacy"
 
 
+def _flue_outcome(sink: dict[str, str], *, served_any: bool) -> dict[str, str]:
+    """The BRAIN_LANE outcome for a flue turn that RETURNED (no transport error).
+
+    Read from the client's outcome sink rather than inferred, because "the
+    generator finished" is indistinguishable from success: ``zoe_flue_client``
+    renders an HTTP error, a read timeout, an empty 200, a rejected wire-2 body
+    and a post-admission stream death all as its canned sentinel and ends the
+    stream normally. Logging those as ``outcome=ok`` reported success for
+    precisely the failed brain turns an operator greps this line to diagnose.
+
+    LABELS ONLY. Nothing here is consulted before a dispatch decision — whether
+    to fail over is still decided solely by ``FlueTransportError``, so a wrong
+    label can misinform an operator but can never re-run a turn.
+
+    A sink with no verdict means a client that does not report (a test double, an
+    older module): fall back to the pre-existing label rather than inventing a
+    failure.
+    """
+    outcome = (sink.get("outcome") or "").strip()
+    if not outcome:
+        return {"outcome": "ok" if served_any else "unknown", "reason": ""}
+    return {"outcome": outcome, "reason": (sink.get("reason") or "").strip()[:160]}
+
+
 # Kwargs this module OWNS and never accepts from a caller.
-_INTERNAL_KWARGS = ("raise_transport_errors",)
+_INTERNAL_KWARGS = ("raise_transport_errors", "outcome_sink")
 
 
 def _sanitize_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -288,6 +328,10 @@ def _sanitize_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     forwarded verbatim and let ``FlueTransportError`` escape into a route that
     has nothing to catch it. No caller passes it today; this makes that a
     contract instead of a coincidence.
+
+    ``outcome_sink`` is the same shape of hazard for the same reason: the
+    wrapper passes its own dict explicitly, and a caller-supplied one would both
+    collide and let an unrelated caller read/forge this turn's operator label.
     """
     if not any(key in kwargs for key in _INTERNAL_KWARGS):
         return kwargs
@@ -327,53 +371,85 @@ async def _flue_streaming_with_failover(
     other = _fallback_lane()
     kwargs = _sanitize_kwargs(kwargs)
 
-    skip_flue, generation = _observe_circuit()
-    if skip_flue:
-        _log_lane(
-            attempted=other,
-            served=other,
-            outcome="dispatched",
-            session_id=session_id,
-            reason="flue_circuit_open",
-        )
-        async for delta in _fallback_streaming(message, session_id, user_id, **kwargs):
-            yield delta
-        return
-
+    # EXACTLY ONE lane line per turn, however this generator unwinds. A streaming
+    # consumer can vanish after any delta — a closed tab, a cancelled voice turn,
+    # a route that stops iterating — which throws GeneratorExit at the `yield`
+    # below and skips every statement after it. The success line used to live
+    # there, so an interrupted turn produced NO BRAIN_LANE record at all, and
+    # interrupted turns are ordinary runtime turns. BRAIN_LANE is the only
+    # lane-attribution instrument the #1613 runbook has; a turn that leaves no
+    # trace is an outage you cannot reconstruct.
+    logged = False
     served_any = False
-    try:
-        async for delta in run_flue_brain_streaming(
-            message, session_id, user_id, raise_transport_errors=True, **kwargs
-        ):
-            served_any = True
-            yield delta
-    except FlueTransportError as exc:
-        if served_any:
-            # Defence in depth: the client contract already forbids raising once
-            # text has gone out. If it ever did, the turn STILL must not be
-            # replayed — the panel would speak twice. Surface, end, never retry.
-            _log_lane(
-                attempted="flue",
-                served="flue",
-                outcome="mid_stream_error",
-                session_id=session_id,
-                reason=f"transport_after_first_token:{exc}"[:160],
-            )
-            return
-        _open_circuit(generation)
-        _log_lane(
-            attempted="flue",
-            served=other,
-            outcome="failover",
-            session_id=session_id,
-            reason=f"flue_transport_error:{exc}"[:160],
-        )
-        async for delta in _fallback_streaming(message, session_id, user_id, **kwargs):
-            yield delta
-        return
 
-    _close_circuit(generation)
-    _log_lane(attempted="flue", served="flue", outcome="ok", session_id=session_id)
+    def _emit(**fields: Any) -> None:
+        nonlocal logged
+        if logged:
+            return
+        logged = True
+        _log_lane(session_id=session_id, **fields)
+
+    try:
+        skip_flue, generation = _observe_circuit()
+        if skip_flue:
+            _emit(
+                attempted=other,
+                served=other,
+                outcome="dispatched",
+                reason="flue_circuit_open",
+            )
+            async for delta in _fallback_streaming(message, session_id, user_id, **kwargs):
+                yield delta
+            return
+
+        outcome_sink: dict[str, str] = {}
+        try:
+            async for delta in run_flue_brain_streaming(
+                message,
+                session_id,
+                user_id,
+                raise_transport_errors=True,
+                outcome_sink=outcome_sink,
+                **kwargs,
+            ):
+                served_any = True
+                yield delta
+        except FlueTransportError as exc:
+            if served_any:
+                # Defence in depth: the client contract already forbids raising
+                # once text has gone out. If it ever did, the turn STILL must not
+                # be replayed — the panel would speak twice. Surface, end, never
+                # retry.
+                _emit(
+                    attempted="flue",
+                    served="flue",
+                    outcome="mid_stream_error",
+                    reason=f"transport_after_first_token:{exc}"[:160],
+                )
+                return
+            _open_circuit(generation)
+            _emit(
+                attempted="flue",
+                served=other,
+                outcome="failover",
+                reason=f"flue_transport_error:{exc}"[:160],
+            )
+            async for delta in _fallback_streaming(message, session_id, user_id, **kwargs):
+                yield delta
+            return
+
+        _close_circuit(generation)
+        _emit(attempted="flue", served="flue", **_flue_outcome(outcome_sink, served_any=served_any))
+    finally:
+        # Cleanup pays the record the turn owes if no branch above emitted one —
+        # i.e. the consumer walked away mid-stream. Only ever a log call: yielding
+        # during GeneratorExit is illegal, and nothing here may alter dispatch.
+        _emit(
+            attempted="flue",
+            served="flue" if served_any else "-",
+            outcome="interrupted",
+            reason="consumer_disconnected",
+        )
 
 
 async def _flue_oneshot_with_failover(
@@ -396,9 +472,15 @@ async def _flue_oneshot_with_failover(
         )
         return await _fallback_oneshot(message, session_id, user_id, **kwargs)
 
+    outcome_sink: dict[str, str] = {}
     try:
         text = await run_flue_brain(
-            message, session_id, user_id, raise_transport_errors=True, **kwargs
+            message,
+            session_id,
+            user_id,
+            raise_transport_errors=True,
+            outcome_sink=outcome_sink,
+            **kwargs,
         )
     except FlueTransportError as exc:
         _open_circuit(generation)
@@ -412,7 +494,12 @@ async def _flue_oneshot_with_failover(
         return await _fallback_oneshot(message, session_id, user_id, **kwargs)
 
     _close_circuit(generation)
-    _log_lane(attempted="flue", served="flue", outcome="ok", session_id=session_id)
+    _log_lane(
+        attempted="flue",
+        served="flue",
+        session_id=session_id,
+        **_flue_outcome(outcome_sink, served_any=bool(text)),
+    )
     return text
 
 

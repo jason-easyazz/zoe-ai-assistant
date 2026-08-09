@@ -1,20 +1,66 @@
-fastapi==0.125.0
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic[email]==2.5.0
-python-multipart==0.0.31
-bcrypt==4.1.2
-argon2-cffi==23.1.0
+# fastapi + pydantic move TOGETHER — 0.141.1 requires pydantic>=2.9.0, and
+# pydantic 2.13.4 requires typing-extensions>=4.14.1 (pinned below). The audit
+# that cleared this pair is at the bottom of this file; read it before touching
+# either pin, and re-run it if you add a route with a JSON body.
+fastapi==0.141.1
+uvicorn[standard]==0.49.0
+pydantic==2.13.4
+pydantic[email]==2.13.4
+python-multipart==0.0.32
+# bcrypt is CAPPED BELOW 5.0 DELIBERATELY. 5.0.0 turned bcrypt's 72-byte limit
+# from silent truncation into a `ValueError` on BOTH hashpw and checkpw, and
+# core/auth.py's password policy allows up to 128 characters — so any user whose
+# password exceeds 72 bytes would get a 500 on login instead of authenticating.
+# (It also breaks passlib 1.7.4, whose backend self-test probes with a 255-byte
+# secret; passlib is currently imported nowhere, but it is still installed here.)
+# 4.3.0 is the newest release without that behaviour change.
+bcrypt==4.3.0
+argon2-cffi==25.1.0
 pyjwt==2.13.0
-aiohttp==3.14.1
+aiohttp==3.14.3
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
 cryptography>=42.0.0
-typing-extensions==4.12.2
-email-validator==2.1.0
-redis==5.0.1
+typing-extensions==4.16.0
+email-validator==2.3.0
+# redis is HELD IN THE 5.x LINE. 6.0.0 made retries default (3, then 10 in 8.0.0,
+# with exponential backoff) where 5.x did none, and 8.0.0 also defaults
+# socket_timeout/socket_connect_timeout to 5s. api/dependencies.py builds a
+# client against REDIS_HOST (default `zoe-redis`) — a host that was RETIRED in
+# March 2026 and no longer exists — so every connection attempt fails. Under 5.x
+# that fails fast and drops to the in-memory limiter; under 8.x it would retry
+# ten times with backoff first.
+redis==5.3.1
 psycopg2-binary>=2.9.9
+# httpx <0.28 is deliberate — see commit 74120547 (auth test compatibility).
 httpx>=0.27.0,<0.28
-pytest==9.0.3
-pytest-asyncio==1.3.0
-pytest-cov==7.0.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+
+# ── DONE: fastapi 0.125.0 -> 0.141.1 + pydantic 2.5.0 -> 2.13.4 ──────────────
+# The three risks the previous currency sweep deferred, and what the audit found.
+# Keep this note current — it is the reason the pins are safe to hold here.
+#
+#   * `strict_content_type` (FastAPI 0.132.0, default TRUE). A request is only
+#     affected if the route declares a NON-FORM body AND the request carries a
+#     non-empty body; the header is then required to be `application/*json`
+#     (fastapi/routing.py:428-450). Every zoe-auth caller in the repo was
+#     enumerated: all server-side Python uses httpx/aiohttp `json=` (which sets
+#     the header), all browser JS sets it explicitly or goes through a wrapper
+#     that does, and nginx never rewrites Content-Type. Bodyless POSTs (logout,
+#     logout/all, reset-password) are unaffected either way. The OIDC endpoints
+#     — the only ones EXTERNAL clients (Home Assistant, n8n, Matrix) call — are
+#     all `Form(...)`, which takes the form branch and is not subject to the
+#     check at all. So the default stays TRUE; we did NOT weaken it.
+#   * Starlette 1.x. zoe-auth has ZERO direct `starlette` imports and already
+#     uses `lifespan=` (not `@app.on_event`), so nothing removed in 1.x is
+#     reachable. Verified by grep over the whole service.
+#   * pydantic re.match -> re.search for `Field(pattern=)` (2.9.0). All five
+#     `pattern=` constraints in this service are the passcode `^\d+$`, already
+#     anchored at both ends, so the switch is a no-op for them.
+#     tests/test_passcode_pattern_anchoring.py pins that: it asserts an
+#     embedded-match passcode is REJECTED, which is exactly what an unanchored
+#     pattern would start allowing. There are no multi-type Unions (only
+#     `Optional[X]`), so 2.8.0 smart-union is not engaged, and no
+#     `@model_validator` anywhere, so the 2.12 instance-method change is moot.

@@ -15,6 +15,47 @@ Its route fails closed unless ``ZOE_BRAIN_OPEN=1`` or a matching
 ``Authorization: Bearer <ZOE_BRAIN_TOKEN>`` is presented, so this client sends
 the bearer token from ``ZOE_BRAIN_TOKEN`` when set.
 
+Wire versions — ``ZOE_FLUE_WIRE`` (default ``1``)
+-------------------------------------------------
+The block above is the **Flue 1.x (beta.6)** wire, which is what the deployed
+sidecar on :3578 speaks and what this client sends unless told otherwise.
+``ZOE_FLUE_WIRE=2`` switches to the **Flue 2.x** wire served by the parallel
+port in ``labs/flue-zoe-brain-2x`` (PR #1616). Three things change, and only
+these three::
+
+    wire 1                                  wire 2
+    ─────────────────────────────────────   ─────────────────────────────────────
+    POST …/<session>?wait=result            POST …/<session>       (NO wait param)
+    body {"message": "<text>"}              body {"kind": "user", "body": "<text>"}
+    non-stream reply {"result":{"text"}}    non-stream = read the NDJSON stream
+
+**Why the query param had to go, and why it is not merely optional:** Flue 2.x
+does not drop ``?wait=result``, it REJECTS it — the request handler throws
+``InvalidRequestError`` for ANY ``wait`` param, any value ("Agent prompts are
+fire-and-forget and do not support ``?wait=result``. Await completion with the
+SDK client's ``wait()``, or read the conversation stream"). So there is no
+synchronous ask-and-get-the-answer call left on 2.x at all.
+
+**Why the body shape is what it is:** the 2.x payload is a DeliveredMessage at
+the TOP LEVEL. Upstream's own migration guide documents it NESTED under a
+``message`` key; that shape is refused with HTTP 400. The top-level shape here
+is the measured one (labs/flue-zoe-brain-2x/parity/flue_wire.py, PR #1616).
+
+**The non-streaming mechanism on wire 2** is "read the turn's own Seam-A NDJSON
+stream to completion and join the text" — the sidecar's streaming middleware
+upgrades the 202 admission in place, so it is still ONE request/response and it
+exercises the same path voice already uses. That is exactly what the port's
+parity suite adopted as its reference implementation (``flue_wire.ask``).
+
+**The stream itself is wire-version-independent.** ``labs/flue-zoe-brain-2x``'s
+``src/streaming.ts`` differs from the deployed 1.x copy by exactly one deleted
+branch (the ``?wait=result`` short-circuit); the NDJSON framing and the
+``__TOOL__``/``__THINKING__`` sentinel bytes are identical. The runtime envelope
+version moved ``v:2`` → ``v:3`` INSIDE the sidecar (an ``observe()`` event field
+that never reaches this client), and the sentinel vocabulary survived it. So
+downstream sentinel parsing (``routers/chat.py``, ``routers/voice_tts.py``) is
+untouched by the wire switch — asserted by test, not assumed.
+
 Stream shape parity
 -------------------
 ``run_zoe_core_streaming`` is an async generator that yields plain text deltas
@@ -31,8 +72,16 @@ exception is ``raise_transport_errors=True`` (used only by
 ``brain_dispatch``'s failover wrapper): a pre-admission transport failure then
 raises ``FlueTransportError`` so the turn can be re-dispatched on the core lane
 instead of being answered with the canned sentinel. Everything else — HTTP
-status errors, read timeouts, decode errors, an empty 200 — still renders
-``_FALLBACK_TEXT``, because those mean the sidecar RAN the turn.
+status errors, read timeouts, decode errors, an empty 200, and an HTTP 400 from
+a wire-mismatched sidecar (a REFUSAL, not an unreachable host) — still renders
+``_FALLBACK_TEXT``, because those mean the sidecar answered or RAN the turn.
+That contract holds identically on wire 1 and wire 2: every wire-2 route has its
+own pre-admission check, so ``ZOE_FLUE_WIRE=2`` does not silently disable
+failover.
+
+A second opt-in, ``outcome_sink``, lets the caller learn WHICH of those a turn
+was (``ok`` / ``fallback`` / ``error``) for its operator log. It is labels only
+and never changes what is yielded or retried.
 """
 from __future__ import annotations
 
@@ -111,6 +160,51 @@ _DEFAULT_TIMEOUT_S = 180.0
 _FALLBACK_TEXT = "Sorry, I had trouble reaching my brain just now. Could you try again?"
 
 
+# ── Turn-outcome reporting (opt-in, labels only) ─────────────────────────────
+#
+# ``brain_dispatch``'s failover wrapper emits ONE greppable ``BRAIN_LANE`` line
+# per turn. Without this channel it could only observe "the generator finished",
+# so every failure this module RENDERS AS ``_FALLBACK_TEXT`` — an HTTP status
+# error, a read timeout, an empty 200, a post-admission stream death — was
+# logged ``outcome=ok``: success reported for exactly the failed brain turns an
+# operator greps that line to diagnose.
+#
+# The channel is an OPTIONAL mutable dict rather than a return value, an
+# exception, or a sentinel-string comparison, because:
+#   * the yielded stream shape is the pinned prod contract and must not change;
+#   * a label must NEVER influence dispatch — the retry/replay invariants are
+#     decided by ``FlueTransportError`` alone, and nothing here is read before a
+#     dispatch decision;
+#   * matching the reply against ``_FALLBACK_TEXT`` would be a guess (it cannot
+#     tell a fallback from a brain that happened to say the same sentence, and
+#     it cannot see a truncation that served real text at all).
+#
+# Absent (the default, and every flag-off call) nothing is recorded and the
+# module behaves byte-identically.
+FLUE_OUTCOME_OK = "ok"              # the sidecar answered, terminated cleanly
+FLUE_OUTCOME_FALLBACK = "fallback"  # _FALLBACK_TEXT served; the brain did not answer
+FLUE_OUTCOME_ERROR = "error"        # real text served, but the turn failed/truncated
+
+
+def _record_outcome(
+    sink: dict[str, str] | None, outcome: str, reason: str = ""
+) -> None:
+    """Record this turn's outcome for the caller, if one asked for it.
+
+    Each exit path of a turn calls this exactly once, at the point the outcome
+    is finally decided, so the sink holds the terminal verdict rather than an
+    intermediate guess. Never raises: an observability label must not be able to
+    fail a turn.
+    """
+    if sink is None:
+        return
+    try:
+        sink["outcome"] = outcome
+        sink["reason"] = reason[:160]
+    except Exception:  # noqa: BLE001 - a label must never break a turn
+        logger.debug("flue outcome sink rejected a write; continuing")
+
+
 def _base_url() -> str:
     return (os.environ.get("ZOE_FLUE_BRAIN_URL") or _DEFAULT_BASE_URL).rstrip("/")
 
@@ -126,15 +220,76 @@ def _timeout_s() -> float:
         return _DEFAULT_TIMEOUT_S
 
 
+# ── Wire version (ZOE_FLUE_WIRE, default 1) ──────────────────────────────────
+#
+# 1 = the deployed Flue 1.x beta wire (?wait=result + {"message": …}).
+# 2 = the Flue 2.x wire served by labs/flue-zoe-brain-2x (no wait param,
+#     top-level DeliveredMessage body, stream-read for the non-streaming turn).
+#
+# DEFAULT 1 IS LOAD-BEARING: this module is on the live voice path, so an
+# unset/garbage flag must produce byte-identical requests to the pre-change
+# client. Pinned by tests/test_flue_client_wire.py::test_wire1_* (golden
+# request fixtures) — do not "simplify" the default away.
+_WIRE_ENV = "ZOE_FLUE_WIRE"
+_WIRE_1 = 1
+_WIRE_2 = 2
+_NDJSON_CONTENT_TYPE = "application/x-ndjson"
+_TOOL_SENTINEL_PREFIX = "__TOOL__:"
+_THINKING_SENTINEL_PREFIX = "__THINKING__:"
+
+
+def _wire_version() -> int:
+    """The Flue wire this client speaks. Per-call env read; 1 unless '2'.
+
+    Anything other than '1'/'2' (including a typo like 'v2') logs loudly and
+    falls back to 1 — a mis-set flag must degrade to the deployed wire, never to
+    an undefined one, and must never do so silently.
+    """
+    # The flag name is spelled as a LITERAL here on purpose: tools/audit/
+    # flag_inventory.py extracts names from the call site, so reading it via the
+    # _WIRE_ENV constant would leave ZOE_FLUE_WIRE out of the generated
+    # inventory — registered nowhere, invisible to the CI pin.
+    raw = (os.environ.get("ZOE_FLUE_WIRE") or "").strip()
+    if not raw or raw == "1":
+        return _WIRE_1
+    if raw == "2":
+        return _WIRE_2
+    logger.error(
+        "%s=%r is not a known Flue wire version (expected '1' or '2'); using wire 1",
+        _WIRE_ENV, raw,
+    )
+    return _WIRE_1
+
+
 def _endpoint(session_id: str, *, stream: bool = False) -> str:
     sid = (session_id or "default").strip() or "default"
     # URL-encode the sid as a single path segment: a raw session id containing
     # '/', '?', '#', or '..' would otherwise change the route (path traversal /
     # query injection) instead of addressing that literal Flue session.
     base = f"{_base_url()}/agents/zoe/{quote(sid, safe='')}"
+    if _wire_version() >= _WIRE_2:
+        # Flue 2.x REJECTS any `wait` param with InvalidRequestError — there is
+        # no whole-result mode to address, so every 2.x request is the bare URL.
+        return base
     # ?wait=result WINS over the Accept header on the sidecar, so the streaming
     # request must omit it (src/streaming.ts mode selection).
     return base if stream else f"{base}?wait=result"
+
+
+def _request_payload(outbound_message: str) -> bytes:
+    """The POST body for the active wire.
+
+    wire 1: ``{"message": "<text>"}`` — Flue beta's payload schema.
+    wire 2: ``{"kind": "user", "body": "<text>"}`` — a DeliveredMessage at the
+    TOP LEVEL. Upstream's migration guide's nested ``{"message": {...}}`` is
+    refused with HTTP 400; this is the measured shape (PR #1616).
+
+    Either way the acting-identity envelope rides INSIDE the text — Flue drops
+    every body field its schema does not know, on both wires.
+    """
+    if _wire_version() >= _WIRE_2:
+        return json.dumps({"kind": "user", "body": outbound_message}).encode()
+    return json.dumps({"message": outbound_message}).encode()
 
 
 def _stream_enabled() -> bool:
@@ -384,12 +539,208 @@ def _text_from_body(body: Any) -> str:
     return ""
 
 
+def _wire1_envelope_hint(raw_body: bytes) -> str:
+    """A loud diagnosis when a wire-2 request got a wire-1 answer, else ''.
+
+    The failure this exists to prevent is a SILENT MISPARSE: ``_text_from_body``
+    is deliberately shape-tolerant, so if the wire-2 path ever fell back to it,
+    a Flue 1.x ``{"result": {"text": …}}`` reply would be accepted happily and
+    the operator would never learn the wire flag was pointed at the wrong
+    sidecar. Wire 2 therefore never parses a whole-result body — it names it.
+    """
+    try:
+        body = json.loads(raw_body.decode("utf-8", "replace") or "null")
+    except ValueError:
+        return ""
+    if isinstance(body, dict) and "result" in body:
+        return (
+            "the reply is the Flue 1.x whole-result envelope {'result': …}, "
+            "i.e. this is a 1.x sidecar — set ZOE_FLUE_WIRE=1 or point "
+            "ZOE_FLUE_BRAIN_URL at the 2.x sidecar"
+        )
+    return ""
+
+
+async def _run_turn_aggregated_wire2(
+    session_id: str,
+    payload: bytes,
+    *,
+    raise_transport_errors: bool = False,
+    outcome_sink: dict[str, str] | None = None,
+) -> AsyncIterator[str]:
+    """Wire-2 'non-streaming' turn: read the NDJSON stream, yield ONE delta.
+
+    Flue 2.x rejects ``?wait=result``, so there is no whole-result call left;
+    the sanctioned way to obtain a reply is to follow the 202 admission (read
+    the conversation stream, or the SDK's ``wait()``). This uses the sidecar's
+    OWN Seam-A NDJSON upgrade of that admission, which keeps it a single
+    request/response and exercises the exact path voice already uses — the same
+    choice PR #1616's parity suite made for its reference client
+    (``labs/flue-zoe-brain-2x/parity/flue_wire.py``: ``ask``).
+
+    OBSERVABLE SHAPE IS WIRE-1'S: one joined text delta, sentinels suppressed —
+    identical to what ``?wait=result`` yields today, which exposes no sentinels
+    either. So ``ZOE_FLUE_WIRE=2`` changes the wire and nothing the caller sees;
+    incremental deltas remain the separate, orthogonal ``ZOE_FLUE_STREAM_ENABLED``
+    decision. Flipping one flag changes one thing.
+
+    Deliberately NOT folded into the streaming block below: that block is the
+    live voice path, and its admitted / yielded_any / never-re-POST state
+    machine is the pinned prod contract. Duplicating ~30 lines of line parsing
+    is cheaper than reworking it.
+
+    ``raise_transport_errors`` carries the SAME contract here as on the streaming
+    path: a pre-admission transport failure (no 2xx, no text) raises
+    ``FlueTransportError`` so the caller may re-dispatch. An HTTP 400 does NOT —
+    the sidecar answered, so the turn was REFUSED, not unreachable.
+    """
+    import httpx
+
+    headers = dict(_headers())
+    headers["Accept"] = _NDJSON_CONTENT_TYPE
+    parts: list[str] = []
+    done_seen = False
+    error_terminal = ""
+    # A 2xx means the sidecar is EXECUTING the turn — the same admission gate the
+    # streaming path uses, tracked here so a transport raise can never fire once
+    # the sidecar has taken ownership of the turn.
+    admitted = False
+    stream_died = False
+    try:
+        async with httpx.AsyncClient(timeout=_timeout_s()) as client:
+            async with client.stream(
+                "POST", _endpoint(session_id, stream=True), content=payload, headers=headers
+            ) as resp:
+                if resp.status_code == 400:
+                    # The MIRROR misconfig of the wire-1-reply case below: a 1.x
+                    # sidecar rejects the wire-2 {kind, body} shape with 400
+                    # ("message" required), and raise_for_status() would bury
+                    # the diagnosis in a bare HTTPStatusError. 4xx = the turn
+                    # was NEVER admitted, so naming the wire flag is safe here.
+                    logger.error(
+                        "flue wire-2 turn: sidecar rejected the wire-2 body with "
+                        "HTTP 400 — if ZOE_FLUE_BRAIN_URL points at a Flue 1.x "
+                        "sidecar, set ZOE_FLUE_WIRE=1 or repoint at the 2.x one "
+                        "(body: %r)", (await resp.aread())[:200],
+                    )
+                    # NOT a transport failure: the sidecar answered. The turn was
+                    # refused, not unreachable, so a lane failover would be
+                    # re-dispatching on a guess rather than on proof.
+                    _record_outcome(
+                        outcome_sink, FLUE_OUTCOME_FALLBACK, "wire2_body_rejected_400"
+                    )
+                    yield _FALLBACK_TEXT
+                    return
+                resp.raise_for_status()
+                admitted = True
+                if _NDJSON_CONTENT_TYPE not in (resp.headers.get("content-type") or ""):
+                    # The turn WAS admitted (2xx) and is running; re-POSTing it
+                    # would double-execute (the #1137 duplicate-write class), and
+                    # there is no wait=result to fall back to on 2.x anyway.
+                    hint = _wire1_envelope_hint(await resp.aread())
+                    logger.error(
+                        "flue wire-2 turn: sidecar answered %r, not %s%s "
+                        "(turn admitted; NOT re-POSTing)",
+                        resp.headers.get("content-type"), _NDJSON_CONTENT_TYPE,
+                        f" — {hint}" if hint else "",
+                    )
+                    _record_outcome(
+                        outcome_sink, FLUE_OUTCOME_FALLBACK, "wire2_not_ndjson"
+                    )
+                    yield _FALLBACK_TEXT
+                    return
+                async for line in resp.aiter_lines():
+                    line = (line or "").strip()
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except ValueError:
+                        logger.warning("flue wire-2 stream: undecodable line %r", line[:120])
+                        continue
+                    if isinstance(chunk, str):
+                        # Activity sentinels are not reply text — dropped here
+                        # exactly as the wire-1 whole-result path never sees them.
+                        if chunk.startswith((_TOOL_SENTINEL_PREFIX, _THINKING_SENTINEL_PREFIX)):
+                            continue
+                        parts.append(chunk)
+                        continue
+                    if isinstance(chunk, dict):
+                        if chunk.get("done"):
+                            done_seen = True
+                            break
+                        if "error" in chunk:
+                            error_terminal = str(chunk["error"])[:200]
+                            break
+    except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
+        # No re-POST on either branch: a 2.x turn is fire-and-forget, so the
+        # sidecar may already be executing it.
+        logger.warning("flue wire-2 turn failed: %s", exc)
+        if not parts:
+            if not admitted and raise_transport_errors and _is_transport_failure(exc):
+                # Never admitted, nothing accumulated: the sidecar did not
+                # execute this turn, so the caller may safely re-dispatch it.
+                # Guarded on ``admitted`` as well as the exception class, so a
+                # connect-shaped error surfacing mid-stream can never be
+                # mistaken for "the turn never happened".
+                raise FlueTransportError(str(exc)) from exc
+            _record_outcome(outcome_sink, FLUE_OUTCOME_FALLBACK, "wire2_turn_failed")
+            yield _FALLBACK_TEXT
+            return
+        # Partial text survives — the turn ran and is reported below as a failed
+        # (truncated) turn rather than a clean success.
+        stream_died = True
+
+    text = "".join(parts)
+    # A success is ONLY a {"done": true} terminal. An {"error": ...} terminal or
+    # a truncated EOF still returns whatever text arrived — the turn already
+    # executed server-side (writes included) and nothing was spoken yet, so the
+    # partial reply is strictly better than a fallback that pretends the brain
+    # was unreachable — but it must be LOUD, never a silent success.
+    if error_terminal:
+        logger.error(
+            "flue wire-2 turn ended with an error terminal: %s%s",
+            error_terminal,
+            " (partial reply text returned)" if text else "",
+        )
+    elif not done_seen and text:
+        logger.error(
+            "flue wire-2 stream ended without {'done': true} — reply may be "
+            "TRUNCATED (%d chars returned)", len(text),
+        )
+    if text:
+        # A clean success is a {"done": true} terminal and nothing else. An error
+        # terminal, a mid-stream death, or a truncated EOF all still SERVE the
+        # partial text (the turn executed server-side) — but they are failures,
+        # and reporting them as ok is what hid them from the operator.
+        if error_terminal:
+            _record_outcome(
+                outcome_sink, FLUE_OUTCOME_ERROR, f"wire2_error_terminal:{error_terminal}"
+            )
+        elif stream_died:
+            _record_outcome(outcome_sink, FLUE_OUTCOME_ERROR, "wire2_stream_died_after_text")
+        elif not done_seen:
+            _record_outcome(outcome_sink, FLUE_OUTCOME_ERROR, "wire2_truncated_no_done")
+        else:
+            _record_outcome(outcome_sink, FLUE_OUTCOME_OK)
+        yield text
+        return
+    logger.warning("flue wire-2 turn produced no text; treating as a failed turn")
+    _record_outcome(
+        outcome_sink,
+        FLUE_OUTCOME_FALLBACK,
+        f"wire2_error_terminal:{error_terminal}" if error_terminal else "wire2_no_text",
+    )
+    yield _FALLBACK_TEXT
+
+
 async def run_flue_brain_streaming(
     message: str,
     session_id: str,
     user_id: str = "",
     *,
     raise_transport_errors: bool = False,
+    outcome_sink: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> AsyncIterator[str]:
     """Streaming brain turn through the Flue sidecar.
@@ -398,7 +749,12 @@ async def run_flue_brain_streaming(
     transport failure raise ``FlueTransportError`` instead of yielding
     ``_FALLBACK_TEXT``, so ``brain_dispatch`` can re-dispatch the turn on the
     core lane. It NEVER fires once text has been yielded or the turn was
-    admitted (2xx) — see the mid-stream comments below.
+    admitted (2xx) — see the mid-stream comments below. It holds identically on
+    both wires: every wire-2 route reaches its own pre-admission check.
+
+    ``outcome_sink`` (opt-in, default None) is a dict this turn writes its
+    terminal verdict into (``outcome`` / ``reason``) for the caller's operator
+    log. Labels only — nothing here changes what is yielded or retried.
 
     Drop-in for ``run_zoe_core_streaming``: yields text deltas (and, in future,
     ``__TOOL__`` / ``__THINKING__`` sentinels if the sidecar exposes them). The
@@ -438,8 +794,22 @@ async def run_flue_brain_streaming(
     _blocks = "\n".join(b for b in (recall_block, offer_block) if b)
     brain_message = f"{_blocks}\n{message}" if _blocks else message
     outbound_message = _wrap_message_with_identity(brain_message, uid)
-    body_obj: dict[str, str] = {"message": outbound_message}
-    payload = json.dumps(body_obj).encode()
+    payload = _request_payload(outbound_message)
+
+    if _wire_version() >= _WIRE_2 and not _stream_enabled():
+        # Wire 2 has no whole-result call: the non-streaming turn is a stream
+        # read collapsed to a single delta. See _run_turn_aggregated_wire2.
+        # Both opt-ins are forwarded: a wire-2 non-streaming turn must be able to
+        # fail over on a dead sidecar exactly like the wire-1 wait=result turn
+        # it replaces, and must report the same truthful outcome.
+        async for delta in _run_turn_aggregated_wire2(
+            session_id,
+            payload,
+            raise_transport_errors=raise_transport_errors,
+            outcome_sink=outcome_sink,
+        ):
+            yield delta
+        return
 
     if _stream_enabled():
         # Seam-A NDJSON stream (src/streaming.ts): each line is a JSON string
@@ -460,10 +830,30 @@ async def run_flue_brain_streaming(
                 async with client.stream(
                     "POST", _endpoint(session_id, stream=True), content=payload, headers=headers
                 ) as resp:
+                    if resp.status_code == 400 and _wire_version() >= _WIRE_2:
+                        # Same mirror-misconfig diagnosis as the aggregated
+                        # wire-2 path: a 1.x sidecar 400s the {kind, body}
+                        # shape, and raise_for_status() would bury the wire
+                        # diagnosis. 4xx = never admitted, safe to name it.
+                        logger.error(
+                            "flue wire-2 stream: sidecar rejected the wire-2 "
+                            "body with HTTP 400 — if ZOE_FLUE_BRAIN_URL points "
+                            "at a Flue 1.x sidecar, set ZOE_FLUE_WIRE=1 or "
+                            "repoint at the 2.x one (body: %r)",
+                            (await resp.aread())[:200],
+                        )
+                        # Refused, not unreachable — never a transport failure.
+                        _record_outcome(
+                            outcome_sink, FLUE_OUTCOME_FALLBACK, "wire2_body_rejected_400"
+                        )
+                        yield _FALLBACK_TEXT
+                        return
                     resp.raise_for_status()
                     admitted = True
                     if "application/x-ndjson" in (resp.headers.get("content-type") or ""):
                         finished = False
+                        done_ok = False
+                        stream_error = ""
                         async for line in resp.aiter_lines():
                             line = (line or "").strip()
                             if not line:
@@ -481,16 +871,42 @@ async def run_flue_brain_streaming(
                             if isinstance(chunk, dict):
                                 if chunk.get("done"):
                                     finished = True
+                                    done_ok = True
                                     break
                                 if "error" in chunk:
                                     logger.warning("flue stream reported error: %s", str(chunk["error"])[:200])
                                     finished = True  # sidecar owned + reported the failure
+                                    stream_error = str(chunk["error"])[:160]
                                     if not yielded_any:
                                         yield _FALLBACK_TEXT
                                     break
                         if finished or yielded_any:
+                            # Truthful terminal label. Only a {"done": true} that
+                            # actually carried text is a success: an error
+                            # terminal is a failed brain turn, and running out of
+                            # lines without a terminal is a truncated one. Both
+                            # used to reach the caller indistinguishable from ok.
+                            if stream_error:
+                                _record_outcome(
+                                    outcome_sink,
+                                    FLUE_OUTCOME_ERROR if yielded_any else FLUE_OUTCOME_FALLBACK,
+                                    f"stream_error_terminal:{stream_error}",
+                                )
+                            elif not done_ok:
+                                _record_outcome(
+                                    outcome_sink, FLUE_OUTCOME_ERROR, "stream_truncated_no_terminal"
+                                )
+                            elif yielded_any:
+                                _record_outcome(outcome_sink, FLUE_OUTCOME_OK)
+                            else:
+                                _record_outcome(
+                                    outcome_sink, FLUE_OUTCOME_ERROR, "stream_done_without_text"
+                                )
                             return
                         logger.warning("flue stream ended without a terminal line and no text")
+                        _record_outcome(
+                            outcome_sink, FLUE_OUTCOME_FALLBACK, "stream_no_terminal_no_text"
+                        )
                         yield _FALLBACK_TEXT
                         return
                     # Sidecar ignored the Accept header (older build / stream
@@ -499,10 +915,17 @@ async def run_flue_brain_streaming(
                     # wait=result re-POST would execute it a second time. This
                     # is an operator misconfig (client flag on, sidecar off):
                     # flip ZOE_FLUE_STREAM_ENABLED off or ZOE_BRAIN_STREAM on.
+                    # A wire-1 whole-result envelope means the flag points at a
+                    # 1.x sidecar — name that too, same as the wire-2 turn path.
+                    hint = _wire1_envelope_hint(await resp.aread())
                     logger.error(
                         "flue stream misconfig: client streaming ON but sidecar replied %r "
-                        "(turn admitted async; reply unavailable — NOT re-POSTing)",
+                        "(turn admitted async; reply unavailable — NOT re-POSTing)%s",
                         resp.headers.get("content-type"),
+                        f" — {hint}" if hint else "",
+                    )
+                    _record_outcome(
+                        outcome_sink, FLUE_OUTCOME_FALLBACK, "stream_misconfig_not_ndjson"
                     )
                     yield _FALLBACK_TEXT
                     return
@@ -511,6 +934,9 @@ async def run_flue_brain_streaming(
                 # Mid-stream failure after real text: the turn executed; ending
                 # here loses the tail but never re-runs it.
                 logger.warning("flue stream died mid-turn (after text): %s", exc)
+                _record_outcome(
+                    outcome_sink, FLUE_OUTCOME_ERROR, f"stream_died_after_text:{exc}"
+                )
                 return
             if admitted:
                 # 2xx received ⇒ the sidecar is already running this turn
@@ -518,15 +944,43 @@ async def run_flue_brain_streaming(
                 # it a second time — the #1137 duplicate-write class. Eat the
                 # reply rather than double-run the action.
                 logger.warning("flue stream died after admission, before text (%s) — NOT re-POSTing", exc)
+                _record_outcome(
+                    outcome_sink, FLUE_OUTCOME_FALLBACK, "stream_died_after_admission"
+                )
                 yield _FALLBACK_TEXT
                 return
+            # PRE-ADMISSION, NO TEXT — and the transport check is ordered BEFORE
+            # the wire-2 branch on purpose. Both wires arrive here having
+            # admitted nothing and yielded nothing, which is exactly the proof a
+            # re-dispatch needs, so the opt-in raise is correct on wire 2 too.
+            # Ordering it after the wire-2 return would silently disable failover
+            # for every turn with ZOE_FLUE_WIRE=2 — the wire the 2.x sidecar
+            # speaks, i.e. precisely the deployment this failover exists to cover.
             if raise_transport_errors and _is_transport_failure(exc):
-                # Never admitted, no text: the sidecar did not run this turn, so
-                # the caller may safely re-dispatch it. Raise HERE rather than
-                # falling through to wait=result — that re-POST would pay a
-                # second failed connect against the same dead socket.
+                # The sidecar did not run this turn, so the caller may safely
+                # re-dispatch it. Raise HERE rather than falling through to
+                # wait=result: that re-POST would pay a second failed connect
+                # against the same dead socket, and on wire 2 there is no
+                # wait=result to fall through TO at all.
                 raise FlueTransportError(str(exc)) from exc
+            if _wire_version() >= _WIRE_2:
+                # No wait=result on 2.x to fall back TO — the block below would
+                # send a `?wait=result` the runtime answers with a 400. Nothing
+                # was admitted, so the turn simply did not happen.
+                logger.warning("flue wire-2 stream failed pre-admission (%s) — no wait=result fallback exists", exc)
+                _record_outcome(outcome_sink, FLUE_OUTCOME_FALLBACK, "wire2_pre_admission_failure")
+                yield _FALLBACK_TEXT
+                return
             logger.warning("flue stream request failed pre-admission (%s) — falling back to wait=result", exc)
+
+    # WIRE-1 ONLY BELOW. Both wire-2 routes into this block return above; this
+    # guard makes that structural fact checkable rather than merely argued, so a
+    # later edit cannot quietly send a `?wait=result` to a 2.x runtime.
+    if _wire_version() >= _WIRE_2:  # pragma: no cover - unreachable by construction
+        logger.error("flue wire-2 reached the wait=result path — refusing to send it")
+        _record_outcome(outcome_sink, FLUE_OUTCOME_FALLBACK, "wire2_reached_wait_result")
+        yield _FALLBACK_TEXT
+        return
 
     try:
         import httpx
@@ -540,12 +994,17 @@ async def run_flue_brain_streaming(
             # Connect refused/timed out: the request never reached the sidecar,
             # so nothing executed and the caller may re-dispatch this turn.
             raise FlueTransportError(str(exc)) from exc
+        # Reached only for the NON-transport classes (HTTP status error, read
+        # timeout, decode error) — the sidecar answered or is still running the
+        # turn, so this is a failed brain turn, not an unreachable brain.
         logger.warning("flue brain turn failed: %s", exc)
+        _record_outcome(outcome_sink, FLUE_OUTCOME_FALLBACK, f"turn_failed:{exc}")
         yield _FALLBACK_TEXT
         return
 
     text = _text_from_body(body)
     if text:
+        _record_outcome(outcome_sink, FLUE_OUTCOME_OK)
         yield text
         return
 
@@ -555,6 +1014,7 @@ async def run_flue_brain_streaming(
     # result as a failed brain turn and emit the same graceful fallback we use for
     # transport/parse errors, so the user always gets a coherent reply.
     logger.warning("flue brain returned an empty result; treating as a failed turn")
+    _record_outcome(outcome_sink, FLUE_OUTCOME_FALLBACK, "empty_200")
     yield _FALLBACK_TEXT
 
 
@@ -564,6 +1024,7 @@ async def run_flue_brain(
     user_id: str = "",
     *,
     raise_transport_errors: bool = False,
+    outcome_sink: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> str:
     """Non-streaming brain turn — collects the Flue stream into one string.
@@ -581,6 +1042,7 @@ async def run_flue_brain(
         session_id,
         user_id,
         raise_transport_errors=raise_transport_errors,
+        outcome_sink=outcome_sink,
         **kwargs,
     ):
         if delta.startswith("__TOOL__:") or delta.startswith("__THINKING__:"):

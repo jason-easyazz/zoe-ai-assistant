@@ -34,8 +34,37 @@ data/wyoming/
 *.pfx
 *.crt
 *.cert
+# Secrets/passwords by NAME, default-deny with an explicit SOURCE allowlist.
+# History, both directions:
+#   - A blanket `*secret*` silently dropped tests/unit/test_livekit_config_no_secrets.py
+#     — the guard test written to stop a credential returning to
+#     services/livekit/config.yaml — and `git add` only WARNS, so the commit
+#     looked fine and the guard simply was not there.
+#   - Replacing it with an extension allowlist (`*secret*.json`, `*secret*.yaml`, ...)
+#     fixed that but re-opened the other side: `client_secret.ini`,
+#     `db-password.csv` and `secret.properties` all became trackable, and LiveKit
+#     keys have no vendor pattern for a content scanner to catch.
+# So: keep the blanket (it covers ANY extension, and none), and unignore the
+# SOURCE/TEST/DOC extensions by name. Adding a credential file with a new
+# extension stays blocked by default; adding a legitimately-named source file
+# needs one line here rather than a silent skip.
 *secret*
 *password*
+!*secret*.py
+!*password*.py
+!*secret*.md
+!*password*.md
+!*secret*.js
+!*password*.js
+!*secret*.ts
+!*password*.ts
+!*secret*.sh
+!*password*.sh
+!*secret*.html
+!*password*.html
+# NOTE: `*api_key*` below is still a blanket of the same kind and will drop a
+# legitimately-named source/test file if one is ever added. Left as-is
+# deliberately — nothing in the tree hits it today. Narrow it when it bites.
 # Token secrets by ARTIFACT shape, not blanket *token* — the blanket silently
 # dropped a legitimate test file (test_intent_dispatch_token_gate.py,
 # 2026-07-07) and had already needed a tokens.py exception. Source/tests/docs
@@ -171,6 +200,10 @@ credentials/
 !services/zoe-ui/dist/js/widgets/widget-manifest.json
 # generated flag inventory (tools/audit/flag_inventory.py) — no secrets, names+defaults only
 !docs/knowledge/flag-inventory.json
+# zoe-data test fixtures: golden recordings replayed by ci_safe tests. Contract
+# data only, no secrets. Without this, a new .json fixture is silently ignored
+# and CI fails on a file the author can see locally.
+!services/zoe-data/tests/fixtures/*.json
 !services/zoe-litellm/minimal_config.yaml
 # needle-benchmark lab: committed measurement artifacts (labs/needle-benchmark/README.md)
 !labs/needle-benchmark/zoe_tools.json
@@ -178,6 +211,18 @@ credentials/
 # router-90-campaign lab: committed measurement artifacts (labs/router-90-campaign/README.md)
 !labs/router-90-campaign/results/*.json
 !labs/router-90-campaign/run_definitive_training.sh
+# flue-zoe-brain-2x lab: the committed lockfile, matching its deployed sibling
+# labs/flue-zoe-brain/ (whose lockfile predates the blanket *.json rule above).
+# It is load-bearing, not incidental: a Flue app pins @flue/runtime, @flue/cli,
+# @flue/vite AND @earendil-works/pi-ai in lockstep — a floating transitive pi-ai
+# would give the tree two copies across the createProvider boundary. Negated
+# rather than `git add -f`, per the note on the desktop manifests above.
+!labs/flue-zoe-brain-2x/package-lock.json
+# ...and its built-server smoke script. It is the only check that exercises the
+# `'use agent'` BUILD scan (the test suite registers agents via `start()`, which
+# bypasses it), so losing it to the blanket *.sh rule would silently drop the
+# coverage for Flue 2.x's quietest failure mode.
+!labs/flue-zoe-brain-2x/smoke-built.sh
 
 # API Keys and Secrets
 *.env
@@ -336,8 +381,8 @@ data/router_selftrain/
 # the blessed deploy. None are load-bearing; all are regenerated at run time.
 # ChromaDB vector store (memory embeddings)
 data/chroma/
-# Music Assistant runtime state (auth.db/library.db are already tracked; these
-# are the runtime sidecars/backups/generated playlists that must never be)
+# Music Assistant runtime state. MA's live store is ~/.zoe/music-assistant
+# (outside the checkout); nothing under data/music-assistant/ is ever tracked.
 # LIVE SQLite stores, by GENERIC sidecar suffix rather than only the `.db`
 # variants (review: Codex, PR #1604). SQLite also creates `-journal` in rollback
 # mode, and a `runtime.sqlite` yields `runtime.sqlite-wal` / `-shm` — none of

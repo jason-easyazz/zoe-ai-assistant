@@ -1,0 +1,267 @@
+#!/bin/sh
+# =============================================================================
+# omp-omnigent-fenced — the environment fence for the oh-my-pi builder lane.
+#
+# TRACKED TEMPLATE. The LIVE file is authoritative; an operator installs this to
+#     /home/zoe/.local/bin/omp-omnigent-fenced   (install -Dm0755)
+# per docs/knowledge/omp-builder-fence-install.md — change and re-install in the
+# SAME pass, because byte-parity with live is this fence's only drift detector.
+# The container sees that path READ-ONLY
+# (docker-compose.module.yml: `- /home/zoe/.local/bin:/home/zoe/.local/bin:ro`)
+# and which is FIRST on the container's PATH.
+#
+# WHY THIS EXISTS
+# ---------------
+# Omnigent's `acp:` config block has no per-agent `env` field (verified against
+# the installed 0.7.0: omnigent/onboarding/acp_auth.py reads only name, command,
+# model, session_id_mode, send_model). And omnigent/inner/acp_executor.py does
+# `env = os.environ.copy()` — the ACP child inherits the FULL runner env, which
+# via OMNIGENT_RUNNER_ENV_PASSTHROUGH=OPENROUTER_API_KEY,ANTHROPIC_MODEL already
+# contains the shared OpenRouter key used by the `pi` review worker.
+#
+# So the fence is not "add some env" — it is "OVERRIDE and SCRUB the inherited
+# env" before exec. That can only happen in a wrapper.
+#
+# FAIL-CLOSED. Every precondition exits non-zero rather than falling through to
+# an unfenced omp. Omnigent surfaces that as a request-time harness error.
+# =============================================================================
+set -eu
+
+# --- 0. Locate the fence directory -------------------------------------------
+# In-container this is /root/.config/zoe (bind: /home/zoe/.config/zoe -> ro).
+# On the host it is /home/zoe/.config/zoe, so the same script is testable both
+# places. Override with OMP_FENCE_DIR for a dry run.
+if [ -n "${OMP_FENCE_DIR:-}" ]; then
+  FENCE_DIR="$OMP_FENCE_DIR"
+elif [ -d /root/.config/zoe ]; then
+  FENCE_DIR=/root/.config/zoe
+elif [ -d /home/zoe/.config/zoe ]; then
+  FENCE_DIR=/home/zoe/.config/zoe
+else
+  echo "omp-fence: no fence directory found (.config/zoe)" >&2
+  exit 78
+fi
+
+KEY_FILE="$FENCE_DIR/openrouter-omp.env"
+OVERLAY_FILE="$FENCE_DIR/omp-fence.yml"
+OMP_BIN="${OMP_BIN:-/home/zoe/.local/bin/omp}"
+# The lifetime supervisor, installed beside this script (same ro bind mount).
+SUPERVISOR="${OMP_SUPERVISOR_BIN:-/home/zoe/.local/bin/omp-acp-supervisor}"
+
+# --- 1. Preconditions (fail closed) ------------------------------------------
+[ -x "$OMP_BIN" ]      || { echo "omp-fence: omp binary not executable at $OMP_BIN" >&2; exit 78; }
+[ -r "$OVERLAY_FILE" ] || { echo "omp-fence: settings overlay missing: $OVERLAY_FILE" >&2; exit 78; }
+[ -r "$KEY_FILE" ]     || { echo "omp-fence: dedicated key file missing: $KEY_FILE" >&2; exit 78; }
+# The supervisor is PART OF THE FENCE, not an optional extra: without it a
+# metered omp outlives omnigent's kill switch (measured 2026-08-03 — omnigent
+# signals the ACP child NOTHING on turn-fail and never killpg's it; the full
+# file:line diagnosis is in the supervisor's header). A missing supervisor
+# fails the dispatch exactly like a missing key.
+[ -r "$SUPERVISOR" ]   || { echo "omp-fence: lifetime supervisor missing: $SUPERVISOR" >&2; exit 78; }
+SUPERVISOR_PY="$(command -v python3 2>/dev/null || :)"
+[ -n "$SUPERVISOR_PY" ] || { echo "omp-fence: python3 not found; cannot run lifetime supervisor" >&2; exit 78; }
+
+# --- 2. SCRUB every inherited credential -------------------------------------
+# omp ships a ~40-provider catalogue and reads each provider's native env var,
+# so anything credential-shaped left in the environment is spendable by it.
+# Unset by PATTERN, not by an allowlist of names we happened to think of.
+#
+# NOTE the ordering: this runs BEFORE we install our own key, so the dedicated
+# key can never be caught by its own scrubber.
+for _v in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); do
+  case "$_v" in
+    # Keep: git plumbing the container needs, and our own control vars.
+    GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*|GIT_CONFIG_COUNT) : ;;
+    OMP_FENCE_DIR|OMP_BIN|OMP_HOME_OVERRIDE) : ;;
+    # Scrub: anything that looks like a credential.
+    *_API_KEY|*_APIKEY|*_TOKEN|*_SECRET|*_PASSWORD|*_CREDENTIALS|*_ACCESS_KEY)
+      unset "$_v" 2>/dev/null || : ;;
+  esac
+done
+# Explicit belt-and-braces for names the patterns above do not catch.
+unset ANTHROPIC_AUTH_TOKEN AWS_SESSION_TOKEN GH_TOKEN GITHUB_TOKEN 2>/dev/null || :
+# INCLUDING OUR OWN DEDICATED-KEY NAME. It ends in _OMP, not _API_KEY, so none
+# of the credential globs above match it — an ambient OPENROUTER_API_KEY_OMP
+# exported by the runner would survive the scrub and reach the child ALONGSIDE
+# the key we parse from the file, handing omp a second, possibly stale secret
+# under a name it might read (cross-review, #1655). The parse in section 3 reads
+# the FILE, never the environment, so scrubbing it here cannot affect it.
+unset OPENROUTER_API_KEY_OMP 2>/dev/null || :
+# ANTHROPIC_MODEL is not a credential but it is a container-wide passthrough
+# aimed at the claude_code worker; omp must not inherit a model pin from it.
+unset ANTHROPIC_MODEL 2>/dev/null || :
+
+# --- 3. Install the DEDICATED capped key -------------------------------------
+# The key file defines OPENROUTER_API_KEY_OMP (and nothing else). We promote it
+# to OPENROUTER_API_KEY *for this process only*, so omp's native OpenRouter
+# provider resolves, while the shared review-lane key never reaches it.
+#
+# PARSED, NEVER SOURCED. Until 2026-08-06 this was `. "$KEY_FILE"` — the file was
+# EXECUTED as shell, AFTER the credential scrub of section 2 and AFTER every
+# precondition in section 1. So any extra assignment in it landed INSIDE the
+# fence with nothing left to catch it: a pasted `export ANTHROPIC_API_KEY=…`
+# re-armed a spendable credential the scrub had just removed, and an `OMP_BIN=`
+# or `SUPERVISOR=` line re-pointed the final `exec` of section (g). This reader
+# extracts exactly OPENROUTER_API_KEY_OMP and fail-closes on anything else;
+# nothing in the file is ever executed. (Cross-review #1650, P2.)
+#
+# Defence in depth, not a live hole: the key file is host-owned under
+# /home/zoe/.config/zoe, which the container sees `:ro`, so no fenced process can
+# append to it. The exposure it removes is a mistake by whoever edits the file on
+# the HOST — which is exactly the class the rest of this script already assumes.
+#
+# DIAGNOSTICS CARRY LINE NUMBERS, NEVER LINE TEXT: a rejected line may itself be
+# the key, and stderr goes to omnigent's logs.
+_OMP_TAB=$(printf '\t')
+_key_value=""
+_key_seen=0
+_key_lineno=0
+_line=""
+# `read -r` with a SINGLE variable strips leading/trailing IFS whitespace, so the
+# line arrives trimmed with no subprocess and no temp copy of the key. The
+# `|| [ -n "$_line" ]` tail handles a final line with no trailing newline.
+# The redirect is scoped to the loop: the script's own fd 0 is the ACP channel
+# and must stay untouched.
+while read -r _line || [ -n "$_line" ]; do
+  _key_lineno=$((_key_lineno + 1))
+  # Blank lines and comments are content-free; skip before classifying.
+  case "$_line" in
+    ""|"#"*) continue ;;
+  esac
+  # Tolerate an `export ` (or `export<TAB>`) prefix, then re-trim what it left.
+  case "$_line" in
+    "export "*|"export$_OMP_TAB"*)
+      _line=${_line#export}
+      while :; do
+        case "$_line" in
+          " "*) _line=${_line# } ;;
+          "$_OMP_TAB"*) _line=${_line#"$_OMP_TAB"} ;;
+          *) break ;;
+        esac
+      done
+      ;;
+  esac
+  # THE FENCE: exactly one variable may be assigned. Anything else — another
+  # credential, an OMP_BIN/SUPERVISOR re-point, a stray command — fails closed.
+  case "$_line" in
+    OPENROUTER_API_KEY_OMP=*) : ;;
+    *) echo "omp-fence: $KEY_FILE line $_key_lineno is not an OPENROUTER_API_KEY_OMP assignment; that file must define that variable and nothing else" >&2; exit 78 ;;
+  esac
+  [ "$_key_seen" -eq 0 ] || { echo "omp-fence: $KEY_FILE line $_key_lineno re-assigns OPENROUTER_API_KEY_OMP; refusing an ambiguous key file" >&2; exit 78; }
+  _key_value=${_line#OPENROUTER_API_KEY_OMP=}
+  # Unwrap one layer of matching quotes, the way sourcing would have.
+  case "$_key_value" in
+    '"'*'"') _key_value=${_key_value#\"}; _key_value=${_key_value%\"} ;;
+    "'"*"'") _key_value=${_key_value#\'}; _key_value=${_key_value%\'} ;;
+  esac
+  _key_seen=1
+done < "$KEY_FILE"
+[ "$_key_seen" -eq 1 ] || { echo "omp-fence: $KEY_FILE did not define OPENROUTER_API_KEY_OMP" >&2; exit 78; }
+[ -n "$_key_value" ] || { echo "omp-fence: $KEY_FILE defines an EMPTY OPENROUTER_API_KEY_OMP" >&2; exit 78; }
+# A key is opaque, but it is not arbitrary: anything outside this alphabet means
+# the line was never a plain assignment (e.g. `KEY=x; export OTHER=y`, which a
+# parser must not silently accept as a 24-character key).
+case "$_key_value" in
+  *[!A-Za-z0-9_.:/+=-]*) echo "omp-fence: OPENROUTER_API_KEY_OMP in $KEY_FILE contains characters outside the expected key alphabet; refusing" >&2; exit 78 ;;
+esac
+OPENROUTER_API_KEY="$_key_value"
+export OPENROUTER_API_KEY
+# The dedicated name is scrubbed in section 2 and again here: exactly ONE
+# OpenRouter credential leaves this script, under exactly one name.
+unset _key_value _key_seen _key_lineno _line _OMP_TAB OPENROUTER_API_KEY_OMP
+
+# --- 4. The fence proper ------------------------------------------------------
+# (a) AutoQA off via the env flag, which has HIGHEST precedence in omp
+#     (packages/coding-agent/src/tools/report-tool-issue.ts:
+#      "PI_AUTO_QA env flag > explicit dev.autoqa setting > ...").
+PI_AUTO_QA=0; export PI_AUTO_QA
+unset PI_AUTO_QA_PUSH PI_AUTO_QA_PUSH_TOKEN PI_AUTO_QA_PUSH_URL 2>/dev/null || :
+
+# (b) The settings OVERLAY — the authoritative half of the fence.
+#     packages/coding-agent/src/config/settings.ts::#rebuildMerged merges
+#         global -> project -> configOverlay -> runtime overrides
+#     so this overlay OUTRANKS both ~/.omp/config.yml AND the project-scoped
+#     <cwd>/.omp/config.yml. That second one matters enormously: cwd is the
+#     task worktree, which the agent under test can WRITE. Without the overlay,
+#     omp could disable its own fence by writing .omp/config.yml into the repo
+#     it was asked to edit.
+#     Also fail-closed by construction: #loadOverlayYaml is a STRICT loader —
+#     a missing or malformed overlay is a hard error, not a silent fallback.
+PI_CONFIG_FILES="$OVERLAY_FILE"; export PI_CONFIG_FILES
+
+# (c) Pin the config-dir name so a stray PI_CONFIG_DIR cannot relocate scope
+#     out from under the read-back commands in omp-settings-commands.sh.
+PI_CONFIG_DIR=.omp; export PI_CONFIG_DIR
+
+# (d) No profile indirection (OMP_PROFILE/PI_PROFILE re-root the config dir).
+unset OMP_PROFILE PI_PROFILE 2>/dev/null || :
+
+# (e) Do not let an ambient XDG_* redirect move the config root (dirs.ts
+#     redirects to $XDG_*_HOME/omp when these are set).
+unset XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME 2>/dev/null || :
+
+# (f) CLEAN HOME — this is the single highest-leverage line in the fence, and
+#     it is what actually bounds upstream #2227 (MCP discovery scans ~11 config
+#     dirs). Of those, the USER-level half is keyed off $HOME:
+#         $HOME/.claude.json          $HOME/.claude/mcp.json
+#         $HOME/.cursor/mcp.json      $HOME/.codex/config.toml
+#         $HOME/.gemini/settings.json $HOME/.codeium/windsurf/mcp_config.json
+#         $HOME/.config/opencode/opencode.json
+#     In zoe-omnigent HOME=/root and *those files exist and are populated* —
+#     /root/.claude.json alone is ~42 KB of live MCP + session config, and
+#     /root/.codex, /root/.cursor, /root/.claude are persistent docker volumes.
+#     So an unfenced omp would inherit Omnigent's entire MCP server fleet
+#     (serena, codebase-memory, ...) plus whatever creds those configs embed.
+#
+#     `mcp.enableProjectConfig: false` does NOT stop this — it only drops
+#     entries whose _source.level == "project" (mcp/config.ts:111-112). The
+#     user-level entries survive it. Pointing HOME at a directory that contains
+#     none of those files removes the whole class in one move, without relying
+#     on `disabledProviders` (which is OVERLOADED: model-registry.ts also reads
+#     it as a model-provider denylist, so writing it has side effects).
+#
+#     Chosen location: inside the persistent omnigent-data volume, so omp's own
+#     state survives container restarts, and OUTSIDE cwd so the agent under test
+#     is not writing into its own HOME.
+OMP_HOME="${OMP_HOME_OVERRIDE:-/root/.omnigent/omp-home}"
+mkdir -p "$OMP_HOME" 2>/dev/null || {
+  echo "omp-fence: cannot create omp HOME at $OMP_HOME" >&2; exit 78; }
+HOME="$OMP_HOME"; export HOME
+
+# (g) LIFETIME SUPERVISOR — the last line of the fence.
+#     We do NOT exec omp directly. omnigent 0.7.0 spawns the ACP child with
+#     `asyncio.create_subprocess_exec(...)` and no `start_new_session`
+#     (omnigent/inner/acp_executor.py:323-332), never killpg's anything, and on
+#     a turn-fail sends the child no signal at all — the idle watchdog is an
+#     `asyncio.timeout` that only cancels the coroutine
+#     (runtime/harnesses/_scaffold.py:1483-1513; the adapter's cancel path,
+#     _executor_adapter.py:483-519, calls neither interrupt_session nor
+#     close()). The one real kill, AcpExecutor.close() (acp_executor.py:1148),
+#     is reachable only from ASGI lifespan teardown, which the runner's
+#     `os._exit` hard-exit (_runner.py:193-202) and process_manager's SIGKILL
+#     escalation both skip. Result: a metered child that outlives its kill
+#     switch indefinitely.
+#
+#     The supervisor runs omp in its OWN process group and kills that whole
+#     group on parent death (PR_SET_PDEATHSIG + a getppid poll) or ACP stdin
+#     EOF. It is transparent otherwise: stdout/stderr are inherited untouched
+#     and the exit status is propagated. `exec` keeps the PID, so the
+#     supervisor IS the harness's direct child and PR_SET_PDEATHSIG is armed
+#     against the right process.
+#
+#     stdin-EOF watching is opt-in and armed ONLY for the `acp` subcommand.
+#     MEASURED: gating it on "fd 0 is a pipe" is not enough — the fence
+#     read-back (omp-settings-commands.sh) feeds its key list through
+#     `echo "$FENCE" | while read`, so each one-shot `omp config get` also has
+#     a pipe on stdin; relaying it ate the remaining keys and the EOF killed
+#     the command, turning a 6/6 PASS read-back into a FAIL. One-shot
+#     invocations must stay byte-transparent, so they get process-group +
+#     parent-death containment and no stdin handling at all.
+if [ "${1:-}" = "acp" ]; then
+  OMP_SUPERVISOR_WATCH_STDIN=1
+else
+  OMP_SUPERVISOR_WATCH_STDIN=0
+fi
+export OMP_SUPERVISOR_WATCH_STDIN
+
+exec "$SUPERVISOR_PY" "$SUPERVISOR" "$OMP_BIN" "$@"

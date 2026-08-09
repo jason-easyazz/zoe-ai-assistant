@@ -1,0 +1,32 @@
+{
+  "name": "flue-zoe-brain-2x",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PARALLEL Flue 2.0.1 port of labs/flue-zoe-brain (which stays on @flue/*@1.0.0-beta.6 and remains the deployed sidecar on :3578). Separate directory ON PURPOSE: deploy.yml rebuilds and restarts flue-zoe-brain.service on ANY diff under labs/flue-zoe-brain/, and Flue 2.x rejects the wire contract the live zoe-data client speaks AND performs a one-way v5->v8 store migration. Nothing here deploys; cutover is a deliberate, separate operator step.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite dev",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "start": "node dist/server.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.83.0",
+    "@flue/runtime": "2.0.1",
+    "hono": "^4.8.3",
+    "valibot": "^1.1.0"
+  },
+  "devDependencies": {
+    "@flue/cli": "2.0.1",
+    "@flue/vite": "2.0.1",
+    "@types/node": "22.20.1",
+    "@valibot/to-json-schema": "1.7.1",
+    "typescript": "5.7.2",
+    "vite": "^8.1.2"
+  }
+}
