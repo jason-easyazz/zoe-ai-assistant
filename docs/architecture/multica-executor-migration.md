@@ -1,5 +1,24 @@
 # Multica → Pi/Flue executor migration — scope
 
+> ## ⚠️ PARTIALLY SUPERSEDED (2026-08-04)
+>
+> **This document is now the HISTORICAL RECORD of how the executor got here.**
+> Its forward-looking half — *Phase 2 "still to do"*, *Phase 3*, *Phase 4*, and
+> the §4 kill-switch non-negotiable — is **superseded by
+> [`multica-autonomy-program.md`](multica-autonomy-program.md)**, which owns the
+> path from here to full autonomy (the Omnigent relevance gate, the Flue-2
+> executor rebuild, the two-lanes decision, auto-unwedge, and the wave plan).
+>
+> **Still binding and unchanged:** §1 (what Multica is, and why it is kept),
+> §2 (the coupling, and *do not rebuild `kanban_adapter`*), §5 (the operator
+> decisions of record), and §6 (the background-lane investigation + its lesson).
+>
+> **Three claims in this document were checked against the live box on
+> 2026-08-04 and are corrected inline below:** the kill switch was **not
+> present** (§4); the "33/33" e2e count is **stale three times over** (§3, Phase 1);
+> and the digest pin is **fixed in compose but unapplied on the running host** (§1).
+> The single live Phase-2 chain's real terminal state is also corrected (Phase 2).
+
 > **Decision of record (Jason, 2026-07-20): KEEP Multica.** Not for its data —
 > "I don't care about the issues inside multica, they could all be erased" — but
 > as **software**. What moves is *execution*, not the board.
@@ -36,6 +55,15 @@ Not a Hermes component. A third-party product running **on Zoe**:
 An unpinned third-party image on a load-bearing system means a bad upstream push
 lands silently on the next pull. **Pin the digests** — do this regardless of
 whether the migration proceeds.
+
+> **CORRECTION (2026-08-04) — this is HALF-DONE: fixed in compose, unapplied in
+> reality.** `docker-compose.modules.yml:75,125` carries `sha256:` digest pins,
+> but both live containers still report the **`:latest` tag** on image IDs
+> matching neither the pin nor the current remote digest — they were created
+> 2026-06-15 and predate the pin. So a `docker compose pull` on this profile
+> would still change the board software silently. **Recreate the containers on
+> the pinned digests.** Both ports also publish on `0.0.0.0`. Tracked as A14 in
+> [`multica-autonomy-program.md`](multica-autonomy-program.md) §7.5.
 
 ---
 
@@ -86,6 +114,18 @@ reap, and Omnigent-down failing loudly while the local lane runs.** Evidence:
 `labs/flue-executor/FINDINGS.md`. What remains before Phase 2: registering the
 executor's `agent_runtime` row and pointing it at the REAL Multica tables
 (the lab mirrors the DDL in a scratch DB).
+
+> **CORRECTION (2026-08-04) — quote the assert count with its caveat, or not at
+> all.** "33/33" was the 2026-07-22 state (21 local-lane + 12 Omnigent).
+> `FINDINGS.md` says 35. **The code today has 40** — the extra five are scenario
+> 4d (work_dir-defer), added after that note. And the three live-Omnigent asserts
+> were last recorded **RED** because the container's Claude account ran out of
+> usage credits — not a code regression, but **nothing in the repo re-verifies
+> 40/40**. There is therefore **no green baseline**, and "no regression" is
+> unmeasurable until one is re-established. Compounding it: `labs/flue-executor`
+> has **zero CI coverage** (nothing in `.github/workflows/`, `tools/audit/` or
+> `.zoe/` references it; `npm run test:unit` is hand-run only). Both are Wave 0
+> of [`multica-autonomy-program.md`](multica-autonomy-program.md).
 
 **The three unknowns — settled 2026-07-21** (full evidence in
 `labs/flue-executor/FINDINGS.md`):
@@ -152,6 +192,12 @@ executor process running, and land ≥3 real tickets end-to-end (≥1 heavy via
 Omnigent). The dispatch kill switch (`~/.zoe/multica_dispatch_paused`) stays
 until that holds.
 
+> **SUPERSEDED — this "still to do" is now Waves 4–5 of
+> [`multica-autonomy-program.md`](multica-autonomy-program.md)**, and the
+> executor it lands on is the **Flue-2 rebuild** (`labs/flue-executor-2x`), not
+> the 1.x lab build. The ≥3-real-tickets bar is unchanged and carries forward as
+> Wave 5's exit gate.
+
 **First live flip run (2026-07-28, ticket ZOE-6106) — what it proved and what it surfaced.**
 The flag needed no flip (`ZOE_KANBAN_BACKEND` code default is `executor`); the
 missing half was the executor process (`ZOE_EXECUTOR_MODE=live
@@ -171,6 +217,19 @@ recover the PR URL, and the evidence-format seam (open-gap (b) below — closed
 in this same PR). Routing: while the local Flue worker is still the lab's
 synthetic proof worker, every task carrying a real brief spawns on the
 Omnigent lane.
+> **CORRECTION (2026-08-04) — how that chain actually ENDED.** The live pipeline
+> journal (`~/.zoe/engineering_pipeline_runs.jsonl`, last write 2026-07-29) shows
+> `multica:d96f152e-…` (= ZOE-6106) terminating at
+> `gate_blocked, phase=verify, missing: ["test","validator"]`, with `implement`
+> having taken **5 attempts**; the board was closed to `done` **out-of-band**.
+> Read honestly, the first live flip run is *the evidence gate correctly refusing
+> an unverified phase, and a human closing the ticket around it.* It has sat
+> terminally blocked ever since, because **`pipeline_store.resume_pipeline()` has
+> zero production callers** — no route, no intent, no script — so unwedging means
+> a Python REPL. That gap is A6, and the bounded auto-resume + dead-letter policy
+> that closes it is §6 of
+> [`multica-autonomy-program.md`](multica-autonomy-program.md).
+
 **Open gaps:** (a) real local phase workers; (b) the evidence-format seam is
 CLOSED in this same PR (the fifth seam fix above) — the backend surfaces the completion text as
 `latest_summary` (what `pipeline_handoff._haystacks` reads) and the Omnigent
@@ -204,6 +263,12 @@ host ships the unit inert-but-ready; *enabling* it, arming the pause sentinel (a
 operator go-live tool, never an installer action), setting dispatch `full`, and
 removing the pause remain deliberate operator acts (gap (a)/end-to-end tickets
 still open).
+
+> **Phases 3 and 4 below are SUPERSEDED for planning purposes** by
+> [`multica-autonomy-program.md`](multica-autonomy-program.md) — routing
+> hardening and the real local phase workers are its Wave 5, and the Hermes
+> retirement gate list is unchanged but now sequenced behind that wave. Kept here
+> because the Phase-4 checklist is still the authoritative *gate list*.
 
 ### Phase 3 — (superseded by §5 decision 2: Omnigent is PRIMARY from day one)
 
@@ -257,6 +322,19 @@ was added to prevent.
 - **Multica stays paused** (`~/.zoe/multica_dispatch_paused`) until Phase 2 is
   proven. It is paused deliberately, not broken — it reached 100% hands-off
   idea→merged-PR autonomy on 2026-06-17 (ZOE-5834 → PR #682).
+
+  > **CORRECTION (2026-08-04) — this non-negotiable was NOT holding.** The
+  > sentinel **did not exist** on the live box; `zoe_ground_truth.sh` reported
+  > `✓ dispatch armed (no kill switch)` while `ZOE_MULTICA_AUTO_ADMIT=true`. The
+  > system was inert only by accident — four unrelated wedges (a dangling
+  > engineering assignee with no `agent` row, an unassigned `in_progress` zombie
+  > holding the lane, zero backlog tickets carrying a `dispatch_approved` block,
+  > and no executor process) — not by the designed brake. **The sentinel has been
+  > restored.** Related latent hazard: the Python readers use
+  > `ZOE_MULTICA_DISPATCH_PAUSE_FILE` while the TS runner and the board runner use
+  > `ZOE_MULTICA_KILL_SWITCH`, so setting one relocates half the fleet's sentinel.
+  > Unification + the four-reader test is Wave 1 of
+  > [`multica-autonomy-program.md`](multica-autonomy-program.md) (§7.1).
 
 ---
 
