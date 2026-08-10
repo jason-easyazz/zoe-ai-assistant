@@ -4,8 +4,13 @@
 
 Self-contained optional add-on **containers** that extend Zoe beyond the core assistant.
 
-A module is a container on `zoe-network` that something calls by URL. It is **not**
-auto-discovered: there is no MCP tool router, no intent scanner, and no widget loader
+A module is a container on `zoe-network` that something calls by URL — unless it declares
+`network_mode: host`, in which case it is on no Docker network at all and is reached over
+published localhost ports (Compose refuses `network_mode` and `networks:` together, so this
+is not a choice a module can hedge). `tools/validate_module.py` scopes its zoe-network check
+accordingly; the rule and both of its named exceptions live in
+[docs/governance/DOCKER_NETWORKING_RULES.md](../docs/governance/DOCKER_NETWORKING_RULES.md).
+It is **not** auto-discovered: there is no MCP tool router, no intent scanner, and no widget loader
 reading this tree. The practical "how do I add one", and the measured list of dead
 mechanisms not to build against, is [docs/guides/MODULE_SYSTEM.md](../docs/guides/MODULE_SYSTEM.md).
 

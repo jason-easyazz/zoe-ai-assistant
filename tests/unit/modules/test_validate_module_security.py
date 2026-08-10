@@ -719,3 +719,67 @@ def test_container_only_module_gains_no_new_errors(tmp_path):
     assert not any("ungated" in w.lower() or "loopback" in w.lower() for w in warnings), (
         f"the security checks added warnings to a container-only module: {warnings}"
     )
+
+
+# ── the zoe-network rule is SCOPED to bridge-networked services ───────────────
+
+
+HOST_NETWORK_COMPOSE = '''\
+services:
+  zoe-test-module:
+    build: .
+    container_name: zoe-test-module
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - ZOE_YOURMODULE_SERVICE_TOKEN=${ZOE_YOURMODULE_SERVICE_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8101/health"]
+      interval: 30s
+'''
+
+
+def test_host_networked_service_is_not_required_to_join_zoe_network(tmp_path):
+    """FALSE-POSITIVE CONTROL: `network_mode: host` is Exception B, not a defect.
+
+    Compose REFUSES `network_mode` together with `networks:`, so the only way to
+    satisfy "every service is on zoe-network" for a host-networked service is to
+    write a file Compose will not load. Demanding it would "fix" a valid
+    deployment into a broken one — `zoe-music-assistant` is exactly this shape
+    (docker-compose.modules.yml:47; it needs the host namespace for local device
+    discovery/streaming). Rule and reason:
+    docs/governance/DOCKER_NETWORKING_RULES.md.
+    """
+    ok, errors, _ = run_validator(build_module(tmp_path, compose=HOST_NETWORK_COMPOSE))
+    assert ok, f"a host-networked module was rejected for not joining zoe-network: {errors}"
+    assert not any("zoe-network" in e for e in errors), errors
+
+
+def test_bridge_networked_service_still_must_join_zoe_network(tmp_path):
+    """NEGATIVE CONTROL for the exemption: it must not disarm the rule itself.
+
+    Scoping is only safe if the unscoped case still goes RED — otherwise the
+    exemption is indistinguishable from deleting the check.
+    """
+    isolated = TEMPLATE_COMPOSE.replace("    networks:\n      - zoe-network\n", "")
+    assert "      - zoe-network\n" not in isolated, "the mutation did not take"
+
+    ok, errors, _ = run_validator(build_module(tmp_path, compose=isolated))
+    assert not ok, "a bridge-networked module off zoe-network validated clean"
+    assert any("NOT on zoe-network" in e for e in errors), errors
+
+
+def test_host_mode_combined_with_networks_is_an_error(tmp_path):
+    """The exemption must not become a way to smuggle in a file Compose rejects.
+
+    `network_mode` + `networks:` is a combination Compose errors out on, so the
+    validator should say so rather than silently treating the service as exempt
+    and declaring it clean.
+    """
+    both = HOST_NETWORK_COMPOSE.replace(
+        "    network_mode: host\n",
+        "    network_mode: host\n    networks:\n      - zoe-network\n",
+    )
+    ok, errors, _ = run_validator(build_module(tmp_path, compose=both))
+    assert not ok, "network_mode: host combined with networks: validated clean"
+    assert any("cannot be combined" in e for e in errors), errors
