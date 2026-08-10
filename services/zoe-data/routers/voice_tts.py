@@ -2800,9 +2800,14 @@ async def voice_command(
         # identified_user_id="voice-guest") must not out-rank a panel that is
         # actually bound to a real user in ui_panel_sessions — the turn would
         # be mis-attributed and its chat_messages save would die on the users
-        # FK. Reuse the panel lookups already resolved above. Persistence
-        # attribution only: the PIN/sensitive-scope gate reads
-        # _scope_identity_user/_has_scope_identity (set above) and is untouched.
+        # FK. Reuse the panel lookups already resolved above.
+        #
+        # STILL REACHABLE, deliberately: `effective_user` above starts from the
+        # RAW `identified_user_id`, so a client-supplied sentinel lands here even
+        # though `_scope_identity_user` normalises it. This block is attribution
+        # only — the PIN/sensitive-scope gate reads
+        # `_scope_identity_user`/`_has_scope_identity`, which now reject a
+        # sentinel outright rather than being rescued after the fact.
         _panel_bound_user = _panel_recent_user or _panel_default_user
         if _panel_bound_user and _panel_bound_user not in _GUEST_SENTINEL_USERS:
             logger.info(

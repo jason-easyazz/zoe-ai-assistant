@@ -108,6 +108,55 @@ def test_sentinel_never_outranks_a_real_user_in_the_scope_chain():
     assert scope_identity == "jason"
 
 
+def test_every_bound_user_id_read_is_normalised():
+    """Source guard: a helper-level test cannot see an unwrapped READ site.
+
+    Cross-review found the gap — mutating just the `_bound_user` read in
+    `voice_command` to skip normalisation reintroduces the live bug while every
+    behavioural test above still passes, because they exercise the helper, not
+    the call sites. There are only a handful of sites and they are the whole
+    fix, so assert on them directly: every expression that pulls
+    `bound_user_id` out of the session dict must pass through
+    `_real_user_or_none`.
+    """
+    import ast
+    import inspect
+
+    src = inspect.getsource(voice_tts)
+    tree = ast.parse(src)
+
+    unwrapped: list[int] = []
+    for node in ast.walk(tree):
+        # Match `<something>.get("bound_user_id")` …
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Attribute) and node.func.attr == "get"):
+            continue
+        if not (
+            node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "bound_user_id"
+        ):
+            continue
+        # … and require an enclosing _real_user_or_none(...) call.
+        wrapped = any(
+            isinstance(outer, ast.Call)
+            and isinstance(outer.func, ast.Name)
+            and outer.func.id == "_real_user_or_none"
+            and any(n is node for n in ast.walk(outer))
+            for outer in ast.walk(tree)
+            if isinstance(outer, ast.Call)
+        )
+        if not wrapped:
+            unwrapped.append(node.lineno)
+
+    assert not unwrapped, (
+        "raw bound_user_id read(s) at voice_tts.py line(s) "
+        f"{unwrapped} — a cached guest sentinel would shadow the signed-in "
+        "panel user again"
+    )
+
+
 def test_absent_identity_is_falsy_so_the_pin_gate_still_fires():
     """The security direction of the same fix.
 

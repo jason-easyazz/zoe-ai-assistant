@@ -66,6 +66,28 @@ def test_voice_login_prefers_the_estate_card_over_the_old_page(redirect_body: st
     )
 
 
+def test_the_card_branch_guard_has_the_canonical_shape(redirect_body: str):
+    """Pin the guard's exact form, not merely that the hook name appears.
+
+    Cross-review's fair hit on the first version of this file: a *semantic*
+    disable such as `false && typeof window.__showAuthCard === 'function'`
+    satisfies a substring check and still navigates to the old page every time.
+    Pinning the one canonical condition closes that without starting a
+    regex-versus-bypass arms race (the repo has already rejected one — see the
+    voice-gate notes in AGENTS.md); any rewrite must update this line
+    deliberately.
+
+    Honest limitation: this file is a TEXT guard. It proves the branch is
+    written correctly, not that it executes — there is no JS lane in CI for
+    `dist/js/`. Behavioural proof is the browser harnesses, which are local
+    gates (services/zoe-ui/AGENTS.md).
+    """
+    assert "if (typeof window.__showAuthCard === 'function') {" in redirect_body, (
+        "the estate-card guard is not in its canonical form — a rewritten or "
+        "short-circuited condition can silently always navigate to the old page"
+    )
+
+
 def test_the_card_branch_actually_stops_the_navigation(redirect_body: str):
     """Showing the card is not enough — it must return, or we navigate anyway."""
     assert AUTH_CARD_HOOK in redirect_body, (
