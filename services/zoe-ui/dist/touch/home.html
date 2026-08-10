@@ -4335,6 +4335,22 @@
     var AVC=['#7b96ff','#66d6a3','#f5b13c','#ff7a90','#9aa6bd','#5ec8f0'];
     var sel=null,code='';ov.classList.add('on');
     function rdots(){for(var i=0;i<4;i++)dots[i].classList.toggle('f',i<code.length);}
+    // A voice turn parked for identity waits on a panel auth challenge that the
+    // executor stashes here before opening this card. The PIN typed above is the
+    // answer to it, so post it to the panel endpoint (NOT the session login) to
+    // release the held command. Always resolves — a challenge that is stale,
+    // already used, or expired must never block a valid sign-in. `user_id` is
+    // deliberately omitted: the server resolves the acting identity from the
+    // challenge/panel binding and ignores caller-supplied ids by design.
+    function resolvePanelChallenge(pinValue){
+      var pend=null;
+      try{var raw=sessionStorage.getItem('zoe_panel_auth_challenge');if(raw)pend=JSON.parse(raw);}catch(e){}
+      if(!pend||!pend.challenge_id||!pinValue)return Promise.resolve();
+      return fetch('/api/panels/auth/pin',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({challenge_id:pend.challenge_id,pin:pinValue})})
+        .then(function(){try{sessionStorage.removeItem('zoe_panel_auth_challenge');}catch(e){}})
+        .catch(function(){});
+    }
     pad.innerHTML=['1','2','3','4','5','6','7','8','9','','0','⌫'].map(function(k){return k===''?'<button class="akey ghost"></button>':'<button class="akey" data-k="'+k+'">'+k+'</button>';}).join('');
     fetch('/api/auth/profiles').then(function(r){return r.json();}).then(function(ps){
       list.innerHTML=(ps||[]).slice(0,6).map(function(p,i){return '<div class="au" data-u="'+esc(p.user_id)+'" data-n="'+esc(p.username)+'"><div class="av" style="background:'+AVC[i%AVC.length]+'">'+esc((p.avatar||p.username||'?').charAt(0).toUpperCase())+'</div><div class="nm2">'+esc(p.username)+'</div></div>';}).join('');
@@ -4354,7 +4370,11 @@
           .then(function(x){
             if(x.ok&&x.d&&x.d.success&&x.d.session_id){
               try{localStorage.setItem('zoe_session',JSON.stringify({session_id:x.d.session_id,user_id:x.d.user_id||sel.user_id,username:sel.username,role:x.d.role||'user'}));}catch(e){}
-              location.reload();return;
+              // Signing in is NOT what releases a voice turn that was held for
+              // identity — answering its panel challenge is. Resolve it with the
+              // same PIN (server-side that triggers the held-turn replay), then
+              // reload either way so a stale challenge can't block the login.
+              resolvePanelChallenge(pc).then(function(){location.reload();});return;
             }
             pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);
           }).catch(function(){pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);});
