@@ -664,6 +664,39 @@ def _fast_first_audio_enabled() -> bool:
     return env_bool("ZOE_VOICE_FAST_FIRST_AUDIO", default=True)
 
 
+# ── Inter-sentence delivery pacing (ZOE_VOICE_TTS_MIN_SENTENCE_CADENCE_MS) ────
+#
+# Each spoken sentence is a STANDALONE Kokoro utterance, synthesized the instant
+# a sentence closes in the streaming buffer (_emit_sentence). So the cadence of
+# Kokoro /synthesize calls — and therefore the cadence at which audio chunks are
+# delivered to the panel and played — tracks the cadence at which brain deltas
+# arrive, one-for-one. That is fine when the brain streams tokens smoothly.
+#
+# The Flue 2.x sidecar (:3579, ZOE_FLUE_WIRE=2) does NOT: measured 2026-08-10 on
+# the live box, it flushes its NDJSON deltas in TIME-BURSTS — a run of tokens
+# arrives ~0ms apart, then the stream stalls ~1s, then the next burst. (Flue 1.x
+# on :3578 paces token-by-token, ~60ms apart.) The delta SIZES are the same on
+# both wires (~4 chars); only the timing bursts. When a burst lands, several
+# sentences complete in the buffer at once and _emit_sentence fires back-to-back
+# with ~0ms between synthesize calls, then nothing for ~1s — the "bursty then
+# stalled" synthesis an operator hears as uneven, less-natural rhythm.
+#
+# This floor decouples DELIVERY cadence from ARRIVAL cadence: no two consecutive
+# spoken sentences are delivered closer than the floor apart. It is a no-op on a
+# smoothly-paced stream (wire-1's natural inter-sentence gaps already exceed any
+# sane floor) and only spreads a burst back out to a natural speaking rhythm — so
+# it targets exactly the regression without touching the smooth path. It is timed
+# AFTER synthesis, so the knob is the true delivery cadence, independent of how
+# long Kokoro takes. First-audio is never delayed (no previous emit to pace from).
+#
+# DEFAULT 0 = OFF (ship-dark): a change on the live voice path lands behind a flag
+# and the operator enables it after an ear check. Recommended live value ~180-220.
+def _min_sentence_cadence_s() -> float:
+    """Minimum seconds between consecutive spoken-sentence deliveries (0 = off)."""
+    ms = env_int("ZOE_VOICE_TTS_MIN_SENTENCE_CADENCE_MS", default=0)
+    return (ms / 1000.0) if ms > 0 else 0.0
+
+
 # The Pi brain surfaces "what Zoe is doing" as text sentinels riding alongside the
 # spoken stream (see zoe_core_client._read_turn). They are NOT speech — the voice
 # path must consume them, never synthesize them (otherwise Kokoro reads raw JSON).
@@ -3899,6 +3932,26 @@ async def voice_command(
                 # through _emit_sentence), so _t_first_audio stays None even though
                 # the user already heard audio — track it separately.
                 _processing_ack_audio_sent = False
+                # Delivery-cadence pacing (ZOE_VOICE_TTS_MIN_SENTENCE_CADENCE_MS):
+                # monotonic time the previous spoken sentence was DELIVERED, so the
+                # next one can be held back to the cadence floor. None until the
+                # first delivery, so first-audio is never paced.
+                _last_emit_ts: Optional[float] = None
+
+                async def _pace_delivery() -> None:
+                    # Hold the just-synthesized audio until at least the cadence
+                    # floor has elapsed since the previous delivery, converting a
+                    # Flue-2.x delta burst back into an even speaking rhythm. Timed
+                    # AFTER synthesis, so the floor is the true delivery cadence and
+                    # is independent of how long Kokoro took. A no-op (floor 0, or a
+                    # gap already ≥ floor — the smoothly-paced wire-1 case).
+                    nonlocal _last_emit_ts
+                    floor = _min_sentence_cadence_s()
+                    if floor > 0.0 and _last_emit_ts is not None:
+                        wait = floor - (time.monotonic() - _last_emit_ts)
+                        if wait > 0.0:
+                            await asyncio.sleep(wait)
+                    _last_emit_ts = time.monotonic()
 
                 try:
                     async def _emit_sentence(sentence: str, *, record: bool = True):
@@ -3921,6 +3974,7 @@ async def voice_command(
                         wav_bytes = await _synthesize_kokoro_sidecar(s)
                         _tts_provider = "kokoro-sidecar"
                         if wav_bytes:
+                            await _pace_delivery()
                             if _t_first_audio is None:
                                 _t_first_audio = time.monotonic() - t_chat_start
                                 try:
@@ -3940,6 +3994,7 @@ async def voice_command(
 
                         # Sidecar down — fall back to the full synth waterfall.
                         audio_resp = await synthesize({"text": s}, caller=caller)
+                        await _pace_delivery()
                         if _t_first_audio is None:
                             _t_first_audio = time.monotonic() - t_chat_start
                             try:
