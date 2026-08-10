@@ -425,6 +425,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/measure_tts_cadence.py",
           "services/zoe-data/zoe_flue_client.py"
         ],
         "typed_env": false
