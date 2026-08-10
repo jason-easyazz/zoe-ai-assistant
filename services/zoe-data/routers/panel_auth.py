@@ -107,6 +107,57 @@ def _request_has_panel_device_token(request: Request | None, panel_id: str) -> b
     return bool(info and str(info.get("panel_id")) == str(panel_id))
 
 
+async def _resolve_session_principal_for_panel(request: Request | None, panel_id: str, db) -> Optional[str]:
+    """Resolve the acting identity from a SERVER-VERIFIED session credential.
+
+    The touch login card answers a voice PIN challenge immediately AFTER it has
+    authenticated the chosen profile, so it can attach that fresh session as the
+    ``X-Session-ID`` header on the answer. This is what lets a NON-DEFAULT
+    household member's correct PIN validate against THEIR identity instead of the
+    panel's default user (the deferred B2 bug: voice challenges carry no user, so
+    the answer used to resolve to the default binding and 403 everyone else).
+
+    This does NOT weaken the SECURITY invariant in ``submit_pin``: a caller-asserted
+    ``user_id`` in the payload is still ignored. A session id is categorically
+    different — it is a bearer credential VALIDATED SERVER-SIDE by zoe-auth, not an
+    unverified assertion. We adopt its principal ONLY when it is a real (non-guest,
+    non-degraded) user AND is bound to THIS panel in ``panel_user_bindings``. Any
+    failure returns ``None`` so the caller falls back to the panel default binding;
+    the credential can only ever NARROW the answer to the person who authenticated,
+    never approve a PIN for someone who did not.
+    """
+    try:
+        session_id = request.headers.get("X-Session-ID", "") if request is not None else ""
+    except Exception:
+        session_id = ""
+    if not session_id:
+        return None
+    try:
+        from auth import _validate_with_auth_service, _DEGRADED_MARK
+        user = await _validate_with_auth_service(session_id)
+    except Exception:
+        # zoe-auth down / unexpected error → do not adopt; fall back to default.
+        return None
+    if not user or user.get(_DEGRADED_MARK) or user.get("auth_degraded"):
+        return None
+    uid = str(user.get("user_id") or "").strip()
+    role = str(user.get("role") or "").strip().lower()
+    if not uid or uid == "guest" or role == "guest":
+        return None
+    # A validated session for a user with no relationship to this panel is not
+    # authorized to answer its challenge — must be bound here. Fail closed (None).
+    try:
+        allowed = await (await db.execute(
+            "SELECT 1 FROM panel_user_bindings WHERE panel_id = ? AND user_id = ? LIMIT 1",
+            (panel_id, uid),
+        )).fetchone()
+    except Exception:
+        return None
+    if not allowed:
+        return None
+    return uid
+
+
 async def _resolve_device_token_user(raw_token: str) -> dict | None:
     """Resolve a device token to a user dict for use in get_current_user().
 
@@ -606,6 +657,13 @@ async def submit_pin(payload: dict, request: Request = None, db=Depends(get_db))
     resolved_user_id = challenge_user_id
     resolved_from_binding = False
     if not resolved_user_id:
+        # Voice-originated challenges carry no user. Prefer the principal who JUST
+        # AUTHENTICATED on the panel — proven by a server-verified session credential
+        # (X-Session-ID), NOT a caller-asserted user_id — so a NON-DEFAULT household
+        # member's correct PIN validates against THEIR identity. Falls through to the
+        # panel default binding below when no valid, panel-bound session is presented.
+        resolved_user_id = await _resolve_session_principal_for_panel(request, row["panel_id"], db)
+    if not resolved_user_id:
         # Voice-originated challenges are often created with user_id=None.
         # Fall back to the panel's configured default user so PIN verification
         # has a concrete identity target.
@@ -726,8 +784,24 @@ async def submit_pin(payload: dict, request: Request = None, db=Depends(get_db))
 
     if pin_valid:
         _pin_clear(challenge_id)
+    elif resolved_from_binding:
+        # MITIGATION (deferred B2): the acting identity here was NOT attributable to
+        # the person answering — we fell back to the panel's DEFAULT binding for a
+        # user_id=None voice challenge because no server-verified, panel-bound session
+        # was presented. A wrong PIN in this case may simply be a NON-DEFAULT member
+        # answering CORRECTLY against the wrong identity, so counting it toward the
+        # challenge lockout would let a correct answer trip a 5-min lockout on the whole
+        # challenge (the worst harm of the bug). zoe-auth still rate-limits the passcode
+        # per-user (bcrypt + lockout), so brute force stays bounded; the challenge-level
+        # counter is a secondary guard we deliberately skip only in this ambiguous case.
+        logger.info(
+            "panel_auth: PIN failure on default-binding fallback for challenge %s — "
+            "not advancing challenge lockout (identity not attributable to answerer)",
+            challenge_id,
+        )
     else:
-        remaining_attempts = _pin_record_failure(challenge_id)
+        # Attributable failure: challenge-carried user or a session-verified principal.
+        _pin_record_failure(challenge_id)
 
     # Notify panel of result.
     try:

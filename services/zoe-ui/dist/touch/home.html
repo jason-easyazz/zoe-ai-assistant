@@ -4341,7 +4341,11 @@
     // release the held command. Always resolves — a challenge that is stale,
     // already used, or expired must never block a valid sign-in. `user_id` is
     // deliberately omitted: the server resolves the acting identity from the
-    // challenge/panel binding and ignores caller-supplied ids by design.
+    // challenge/panel binding and ignores caller-supplied ids by design. We DO
+    // attach the FRESH session id we just obtained as X-Session-ID: unlike an
+    // asserted user_id, that is a bearer credential the server verifies against
+    // zoe-auth, so a NON-DEFAULT member's turn replays under THEIR identity
+    // (deferred B2) rather than 403'ing against the panel default.
     // `fetch` RESOLVES on 4xx/5xx, so the status must be inspected: clearing the
     // challenge unconditionally would drop it on a 403/429/503 while the server
     // still has the turn parked (it only pops _PENDING_VOICE_IDENT on APPROVAL),
@@ -4350,12 +4354,14 @@
     // definitively-gone both clear; anything retryable KEEPS the challenge so a
     // later attempt can still answer it. Never throws: a valid sign-in must not
     // be blocked by challenge trouble.
-    function resolvePanelChallenge(pinValue){
+    function resolvePanelChallenge(pinValue,sessionId){
       var pend=null;
       try{var raw=sessionStorage.getItem('zoe_panel_auth_challenge');if(raw)pend=JSON.parse(raw);}catch(e){}
       if(!pend||!pend.challenge_id||!pinValue)return Promise.resolve();
       function drop(){try{sessionStorage.removeItem('zoe_panel_auth_challenge');}catch(e){}}
-      return fetch('/api/panels/auth/pin',{method:'POST',headers:{'Content-Type':'application/json'},
+      var hdrs={'Content-Type':'application/json'};
+      if(sessionId)hdrs['X-Session-ID']=sessionId;
+      return fetch('/api/panels/auth/pin',{method:'POST',headers:hdrs,
         body:JSON.stringify({challenge_id:pend.challenge_id,pin:pinValue})})
         .then(function(r){
           // 404 gone / 409 already resolved / 410 expired — the challenge can
@@ -4387,7 +4393,7 @@
               // identity — answering its panel challenge is. Resolve it with the
               // same PIN (server-side that triggers the held-turn replay), then
               // reload either way so a stale challenge can't block the login.
-              resolvePanelChallenge(pc).then(function(){location.reload();});return;
+              resolvePanelChallenge(pc,x.d.session_id).then(function(){location.reload();});return;
             }
             pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);
           }).catch(function(){pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);});
