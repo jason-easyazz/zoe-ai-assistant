@@ -804,6 +804,23 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         } catch (_) {
             // Non-fatal.
         }
+        // The estate (touch/home.html) carries its own who+PIN unlock card, and
+        // that card REPLACED the standalone login page — see "estate-native who
+        // + PIN unlock (replaces the old login page)" in home.html. Navigating
+        // away from the estate therefore dumps the user on the retired screen
+        // mid-conversation, which is exactly what a voice-forced login did.
+        // Prefer the in-place card wherever the host page offers one: it reads
+        // the same `zoe_panel_auth_challenge` stashed above and answers the same
+        // endpoint, so the held voice turn still replays. Pages without the card
+        // (desktop) keep the navigation fallback.
+        if (typeof window.__showAuthCard === 'function') {
+            try {
+                window.__showAuthCard();
+                return;
+            } catch (_) {
+                // Card failed to open — fall through to the standalone page.
+            }
+        }
         const suffix = panelId ? `?panel_id=${encodeURIComponent(panelId)}` : '';
         window.location.assign(`/touch/index.html${suffix}`);
     }
