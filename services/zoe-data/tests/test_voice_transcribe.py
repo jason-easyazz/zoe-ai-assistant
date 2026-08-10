@@ -310,6 +310,64 @@ def test_strip_wake_word_wake_only_clip_not_emptied():
     assert voice_tts._strip_wake_word(["", "  "]) == ""
 
 
+# ── Pre-roll bleed: the wake phrase is not always a clean leading line ───────
+# The panel prepends ~1.6s of pre-roll that reaches back before "Hey", so the
+# wake word arrives surrounded by room noise. Measured on the operator's corpus:
+# 26.7% of wake-path turns leak a wake token into the transcript vs 4.4% of
+# follow-up turns (which carry no wake word at all), n=393/607.
+
+
+@pytest.mark.ci_safe
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        # SPLIT: Moonshine breaks the wake phrase across a line boundary. Seen
+        # live as "Hey Zoe. Show me my contacts." reaching the brain unstripped.
+        (["Hey", "Zoe. Show me my contacts."], "Show me my contacts."),
+        (["Okay", "Zoe, turn on the light"], "Turn on the light"),
+        # FILLER: pre-roll junk lands on its own line BEFORE the wake line, so
+        # the wake line is no longer leading. Seen live as "Yeah. Hey Zoe. Show
+        # me my calendar."
+        (["Yeah.", "Hey Zoe.", "Show me my calendar."], "Show me my calendar."),
+        (["Um", "Hey Zoe.", "What time is it?"], "What time is it?"),
+        # Both at once.
+        (["Yeah.", "Hey", "Zoe. Add milk."], "Add milk."),
+    ],
+)
+def test_strip_wake_word_handles_preroll_bleed(lines, expected):
+    from routers import voice_tts
+
+    assert voice_tts._strip_wake_word(lines) == expected
+
+
+@pytest.mark.ci_safe
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        # A greeting with no wake name after it is NOT a split wake phrase.
+        (["Hey", "there how are you"], "Hey there how are you"),
+        # Filler lines are only ever SKIPPED to reach a wake line. With no wake
+        # line ahead, nothing may be dropped.
+        (["Yeah", "I said no"], "Yeah I said no"),
+        (["Um", "uh", "er", "what now"], "Um uh er what now"),
+        # The lookahead past a filler demands a STRONG wake name: a stray weak
+        # homophone ("so") must not authorise eating the line before it.
+        (["Well", "so", "what now"], "Well so what now"),
+        # Whole-line filler match only — a command that merely starts with one
+        # of those words is untouched.
+        (["So, add milk to my list"], "So, add milk to my list"),
+        # A real name subject still survives (no greeting -> no strip).
+        (["Joe wants the weather"], "Joe wants the weather"),
+    ],
+)
+def test_strip_wake_word_preroll_fix_never_eats_command(lines, expected):
+    """The pre-roll tolerance must not become a licence to drop real speech:
+    nothing is removed until a wake line is actually confirmed."""
+    from routers import voice_tts
+
+    assert voice_tts._strip_wake_word(lines) == expected
+
+
 def test_transcribe_audio_impl_is_moonshine_only(monkeypatch):
     """The live path uses ONLY Moonshine; whisper must never be called."""
     from routers import voice_tts
