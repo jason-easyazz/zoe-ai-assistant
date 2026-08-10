@@ -399,6 +399,8 @@ Merge mechanics & gotchas — canonical record: **[docs/knowledge/merge-and-depl
 
 Local pre-commit — a tracked `.pre-commit-config.yaml` at repo root runs the repo's own `tools/audit/validate_structure.py` + `validate_critical_files.py` plus standard hygiene hooks. Run `pre-commit install` once per clone to arm it. `validate_structure.py` treats any root file not in `.zoe/manifest.json` `approved_root_files` as an orphan and fails — register new root files there.
 
+The `zoe-flag-inventory-fresh` hook **auto-fixes** the `ZOE_*` flag-inventory papercut: on any commit touching a `*.py`/`*.env*`/`*.y?ml` file it reruns `tools/audit/flag_inventory.py` and `git add`s `docs/knowledge/flag-inventory.{md,json}` so the commit always carries a fresh inventory — the `validate` gate's `test_flag_inventory.py` can no longer go red because an env-flag edit shipped without a regen. It stages what it regenerates, so pre-commit's own unstaged-diff check stays empty and the commit is **not** aborted (no manual regen + re-commit). A no-real-change commit on a later calendar day restores the committed copy from the index rather than churning the date lines (`-I "Last generated:" -I "^timestamp:"`). It only helps a clone with the hook installed — the CI test remains the backstop for anyone who skips `pre-commit install`.
+
 ## Cursor MCP
 
 The tracked Cursor MCP config intentionally includes only non-secret local servers. `zoe-tools` launches the operator-local helper at `/home/zoe/bin/zoe-tools-mcp.py` through `uv run --with fastmcp --with httpx`; provision that helper on Zoe hosts before relying on the repo-local MCP entry. Keep token-backed servers such as Greptile in user-global Cursor config or environment-backed local config, never in tracked repo files.

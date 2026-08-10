@@ -138,8 +138,10 @@ def test_precommit_keeps_the_inventory_fresh_hook_wired():
     """The freshness hook must stay wired — a stale committed inventory cost six
     separate incidents (red CI + merge conflicts) on 2026-07-27 before it
     existed. Pins presence and the properties that make it correct: it runs the
-    real generator, fires on Python changes, and stays date-insensitive (the
-    -I stamp filters), or every commit on a later calendar day false-fails."""
+    real generator, AUTO-FIXES by restaging the regenerated files (not merely
+    failing, which just moves the papercut to commit time), fires on Python
+    changes, and stays date-insensitive (the -I stamp filters), or every commit
+    on a later calendar day false-fails."""
     import yaml
 
     cfg = yaml.safe_load((_REPO / ".pre-commit-config.yaml").read_text())
@@ -159,6 +161,12 @@ def test_precommit_keeps_the_inventory_fresh_hook_wired():
     script_tokens = _shlex.split(outer[2])
     assert script_tokens[:2] == ["python3", "tools/audit/flag_inventory.py"], \
         "entry's first command no longer executes the real generator"
+    # AUTO-FIX contract: the hook must RESTAGE the regenerated inventory (git
+    # add) so the commit carries a fresh copy — a check-only hook that just
+    # exits 1 moves the papercut to commit time (regenerate-by-hand + re-commit)
+    # instead of killing it. `git add` of the two generated files pins that.
+    assert "git add" in hook["entry"], \
+        "hook must auto-fix by restaging the regenerated inventory, not merely fail"
     import re as _re
     assert _re.search(hook["files"], "services/zoe-data/example.py"), \
         "hook must fire on Python changes"

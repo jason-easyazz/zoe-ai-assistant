@@ -31,19 +31,24 @@ repos:
         pass_filenames: false
         always_run: true
       # The committed flag inventory must match the generator's output — CI
-      # enforces this (test_flag_inventory.py) and it went stale->red THREE
-      # times on 2026-07-27 alone, each time because an env-flag edit shipped
-      # without a regen. Scoped to the files whose edits can stale it, so
-      # ordinary commits pay nothing.
+      # enforces this (test_flag_inventory.py) and it went stale->red repeatedly
+      # (three times on 2026-07-27 alone; #1619/#1633/#1671 on 2026-08-10), each
+      # time because an env-flag edit shipped without a regen. Scoped to the
+      # files whose edits can stale it, so ordinary commits pay nothing.
       - id: zoe-flag-inventory-fresh
-        name: Flag inventory matches generator output
-        # -I ignores the 'Last generated:' stamp line — the generator rewrites it
-        # to today, so without -I every commit on a later calendar day would
-        # false-fail (Bugbot). CI's test is date-insensitive the same way.
-        # On pass, restore the committed copy: the generator rewrites the two
-        # date lines even when nothing real changed, and leaving that churn in
-        # the worktree would ride into someone's next commit (Codex).
-        entry: bash -c 'python3 tools/audit/flag_inventory.py >/dev/null && if git diff --quiet -I "Last generated:" -I "^timestamp:" -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json; then git checkout -q -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json; else echo "flag inventory was STALE — regenerated; git add docs/knowledge/flag-inventory.* and re-commit"; exit 1; fi'
+        name: Flag inventory regenerated + restaged
+        # AUTO-FIX, not check-and-fail: a hook that only fails moves the papercut
+        # to commit time (author must regen + re-commit by hand). Instead we
+        # regenerate and `git add` the result, so the commit itself carries the
+        # fresh inventory and `validate`'s test_flag_inventory.py can never see a
+        # stale one. Because the hook stages what it regenerates, pre-commit's
+        # unstaged-diff check stays empty->empty and does NOT abort the commit.
+        # -I ignores the 'Last generated:'/'timestamp:' date lines — the
+        # generator rewrites them to today, so on a later calendar day a
+        # no-real-change commit must NOT churn (restore the committed copy from
+        # the index) rather than stage a date-only diff. CI's test is
+        # date-insensitive the same way.
+        entry: bash -c 'python3 tools/audit/flag_inventory.py >/dev/null && if git diff --quiet -I "Last generated:" -I "^timestamp:" -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json; then git checkout -q -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json; else git add -- docs/knowledge/flag-inventory.md docs/knowledge/flag-inventory.json; fi'
         language: system
         pass_filenames: false
         files: '(\.(py|env|ya?ml)$|\.env\.example$)'
