@@ -368,6 +368,42 @@ def test_strip_wake_word_preroll_fix_never_eats_command(lines, expected):
     assert voice_tts._strip_wake_word(lines) == expected
 
 
+@pytest.mark.ci_safe
+def test_strip_wake_word_keeps_bare_weak_homophone_first_word():
+    """A BARE, greeting-less leading LINE that is a weak wake homophone
+    (so/a/zo/joe) is the user's real first word, not a wake word — it must be
+    preserved, not silently deleted. The over-match dropped bare 'So'/'Joe' as
+    if they were wakes. (Distinct from the single-line "So, add milk…" case,
+    which was already safe: here 'So' is its OWN transcript line.)"""
+    from routers import voice_tts
+
+    # (a) "So, add milk to my list" split as its own line — 'So' must survive.
+    assert voice_tts._strip_wake_word(["So", "add milk to my list"]) == "So add milk to my list"
+    # (b) leading "A" — kept.
+    assert voice_tts._strip_wake_word(["A", "timer for ten minutes"]) == "A timer for ten minutes"
+    # (c) leading "Joe" (a real name/subject) — kept.
+    assert voice_tts._strip_wake_word(["Joe", "turn on the light"]) == "Joe turn on the light"
+
+
+@pytest.mark.ci_safe
+def test_strip_wake_word_bare_distinctive_name_still_strips():
+    """REGRESSION GUARD: a bare distinctive zoe-family wake line MUST still strip —
+    tightening the weak homophones must not weaken the real wake path."""
+    from routers import voice_tts
+
+    assert voice_tts._strip_wake_word(["Zoe", "what time is it"]) == "What time is it"
+
+
+@pytest.mark.ci_safe
+def test_strip_wake_word_greeting_plus_weak_homophone_still_strips():
+    """A weak homophone becomes a real wake when a REQUIRED greeting precedes it
+    ("hey so", "ok zo") — those whole lines must still be dropped."""
+    from routers import voice_tts
+
+    assert voice_tts._strip_wake_word(["Hey so", "add milk"]) == "Add milk"
+    assert voice_tts._strip_wake_word(["ok zo", "set a timer"]) == "Set a timer"
+
+
 def test_transcribe_audio_impl_is_moonshine_only(monkeypatch):
     """The live path uses ONLY Moonshine; whisper must never be called."""
     from routers import voice_tts
