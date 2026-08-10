@@ -19,23 +19,46 @@ jobs:
 
     steps:
       # MEMORY-HEADROOM GATE (self-hosted only — same Jetson as the live
-      # llama-server brain; unified memory means cgroup guards don't cover GPU
-      # allocations, and a CI memory burst has crash-looped the brain before —
-      # verified 2026-07-19). This job runs genuinely heavy steps on the box
-      # (docker compose --build for zoe-auth, npm ci + build for the Flue
-      # sidecars), so gate it the same way as self-hosted-tests.yml.
-      # Threshold 800MB (measured 2026-07-21): the box's NORMAL idle sits at
-      # 0.7-1.5GB available with the full resident stack (brain ~6.5G, Kokoro
-      # ~2.5G, Serena's session-cache creep ~1G) — the original 1800MB blocked
-      # EVERY deploy, including two on an idle box. The deploy itself is a
-      # light burst (git reset + service restart, which momentarily FREES
-      # zoe-data's ~0.5G); the brain-killing bursts are the TEST lanes, whose
-      # gate in self-hosted-tests.yml keeps the strict 1800MB. 800MB refuses
-      # only genuine starvation (the brain crash-looped reloading below ~600MB).
+      # llama-server brain). This is a COARSE "is the box in genuine crisis"
+      # floor for the LIGHT deploy path (git reset + pip --user + alembic +
+      # systemctl restart). The genuinely heavy transients — docker --build for
+      # zoe-auth, npm ci + vite build for the Flue sidecars — each wait on their
+      # OWN stricter sub-gate below, and only when that component actually
+      # changed; this base gate does not need to cover them.
+      #
+      # Threshold 250MB (recalibrated 2026-08-10, MEASURED on the box).
+      # Why the old 800MB was WRONG: it was structurally UNMEETABLE and blocked
+      # EVERY deploy (4+ of the last 8), so merged code never reached the box —
+      # strictly worse for reliability than a realistic gate. The arithmetic:
+      # of 15.6GB total, ~77% is legitimately resident in the rocks (llama-server
+      # ~8.0G, Kokoro ~2.5G, zoe-data ~1.1G) whose memory.low reservations total
+      # 11G (6+3+2), so MemAvailable STRUCTURALLY floats low — measured resting
+      # 185-402MB (mean ~304) over 45s, and it cannot reach 800MB even with
+      # non-essentials stopped. The old 800 (and the abandoned 1800 before it)
+      # conflated "healthy" with "lots of free RAM", which is false on a box
+      # built around an 8G model.
+      #
+      # Why 250MB is SAFE without defeating the protection:
+      #  - The LIGHT path this gate guards bursts ~0: git reset + service restart
+      #    momentarily FREE memory (restarting zoe-data releases its ~1.1G).
+      #  - The heavy builds it does NOT guard peak tiny anyway: a MEASURED npm ci
+      #    + vite build of the 220KB / 152-package sidecar dropped MemAvailable by
+      #    only ~100MB (291->192, recovering to 354) — the model lives in the
+      #    shared llama-server, so each sidecar is a ~66MB node process built from
+      #    a ~180KB bundle, not GB-scale. They still wait on the 350MB sub-gate
+      #    below out of caution.
+      #  - The rocks are swap-DENIED (MemorySwapMax=0) with 11G of memory.low, and
+      #    ~56GB of swap is free, so any build burst spills the (swappable) build
+      #    process to swap rather than evicting the (unswappable, low-protected)
+      #    brain. The 2026-07-19 brain crash was a CUDA/NvMap burst from the TEST
+      #    lanes (which cgroup guards genuinely don't cover); a pure-CPU JS bundle
+      #    here never touches the GPU and is a different animal.
+      # 250MB refuses only genuine starvation (sustained <250 = the brain already
+      # reclaim-thrashing); the 36x15s retry rides out normal dips.
       - name: Wait for memory headroom (protect the live brain)
         timeout-minutes: 10
         run: |
-          THRESHOLD_MB=800
+          THRESHOLD_MB=250
           for attempt in $(seq 1 36); do
             AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
             if [ "${AVAIL_MB}" -ge "${THRESHOLD_MB}" ]; then
@@ -45,7 +68,7 @@ jobs:
             echo "Waiting for memory headroom: ${AVAIL_MB}MB available (< ${THRESHOLD_MB}MB); retry in 15s (${attempt}/36)."
             sleep 15
           done
-          echo "::error::Jetson is memory-starved: ${AVAIL_MB}MB available after ~9min, need >= ${THRESHOLD_MB}MB. Refusing to deploy next to the live brain under memory pressure (unified memory — a CI burst here has crash-looped llama-server before). Operator: free memory on the box (check the brain's RSS, stray pytest/chromium, VmSwap of the :8000 pid), then re-run the deploy."
+          echo "::error::Jetson is memory-starved: ${AVAIL_MB}MB available after ~9min, need >= ${THRESHOLD_MB}MB. This is the coarse light-path floor; sustained sub-250MB means the brain is already reclaim-thrashing. Operator: free memory on the box (check the brain's RSS, stray pytest/chromium, VmSwap of the :8000 pid), then re-run the deploy."
           exit 1
 
       - name: Pull latest main
@@ -169,9 +192,9 @@ jobs:
         run: |
           cd /home/zoe/assistant
           # Change-detection (mirrors the Flue sidecar steps below): the full
-          # `--build` is the heavy transient that needs the 1400MB sub-gate, and
+          # `--build` is the heavy transient that needs the 350MB sub-gate, and
           # demanding it on EVERY deploy wedged the lane 6x straight while the
-          # box idled at 500-900MB free — skipping zoe-data restart + health and
+          # box idled at 185-402MB available — skipping zoe-data restart + health and
           # silently shipping stale code under a green-looking merge flow.
           # Only pay the gated rebuild when services/zoe-auth/ actually changed
           # since the previously-deployed SHA; an unchanged, healthy container
@@ -212,16 +235,22 @@ jobs:
             docker compose up -d zoe-auth
           else
             echo "zoe-auth changed since ${OLD_SHA:-<unknown>} (or first deploy) — rebuilding."
-            # Heavy-build sub-gate (Greptile, PR #1493): the base 800MB gate admits
-            # the light deploy path; an actual (re)build is the transient that can
-            # squeeze the brain, so it alone waits for the stricter bar.
+            # Heavy-build sub-gate: the base 250MB gate admits the light deploy
+            # path; an actual (re)build is the only real transient, so it waits
+            # on a stricter bar. 350MB (recalibrated 2026-08-10) is ~3x the
+            # MEASURED sidecar build burst (~100MB MemAvailable drop), leaving
+            # margin for this heavier docker/pip zoe-auth build. The old 1400MB
+            # was unmeetable (box tops out ~402MB available) so it silently
+            # blocked every build-carrying deploy. Safe: the rocks are swap-denied
+            # (MemorySwapMax=0) + memory.low-reserved and ~56GB of swap absorbs
+            # the swappable build, not the brain.
             for attempt in $(seq 1 20); do
               AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
-              [ "${AVAIL_MB}" -ge 1400 ] && break
-              echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+              [ "${AVAIL_MB}" -ge 350 ] && break
+              echo "heavy-build wait: ${AVAIL_MB}MB < 350MB (${attempt}/20)"; sleep 15
             done
-            if [ "${AVAIL_MB}" -lt 1400 ]; then
-              echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+            if [ "${AVAIL_MB}" -lt 350 ]; then
+              echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 350MB) — free memory and re-run the deploy."
               exit 1
             fi
             docker compose up -d --build zoe-auth
@@ -267,16 +296,22 @@ jobs:
             exit 0
           fi
           echo "sidecar changed (or dist missing) — rebuilding and restarting."
-          # Heavy-build sub-gate (Greptile, PR #1493): the base 800MB gate admits
-          # the light deploy path; an actual (re)build is the transient that can
-          # squeeze the brain, so it alone waits for the stricter bar.
+          # Heavy-build sub-gate: the base 250MB gate admits the light deploy
+          # path; an actual (re)build is the only real transient, so it waits on
+          # a stricter bar. 350MB (recalibrated 2026-08-10) is ~3x the MEASURED
+          # burst of this exact build — npm ci + vite build of the 220KB /
+          # 152-package sidecar dropped MemAvailable only ~100MB (the model is in
+          # the shared llama-server, not the node bundle). The old 1400MB was
+          # unmeetable (box tops out ~402MB available). Safe: the rocks are
+          # swap-denied (MemorySwapMax=0) + memory.low-reserved and ~56GB of swap
+          # absorbs the swappable build, not the brain.
           for attempt in $(seq 1 20); do
             AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
-            [ "${AVAIL_MB}" -ge 1400 ] && break
-            echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+            [ "${AVAIL_MB}" -ge 350 ] && break
+            echo "heavy-build wait: ${AVAIL_MB}MB < 350MB (${attempt}/20)"; sleep 15
           done
-          if [ "${AVAIL_MB}" -lt 1400 ]; then
-            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+          if [ "${AVAIL_MB}" -lt 350 ]; then
+            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 350MB) — free memory and re-run the deploy."
             exit 1
           fi
           # The self-hosted runner uses a non-login shell that does not source
@@ -329,13 +364,18 @@ jobs:
             exit 0
           fi
           echo "bot changed (or dist missing) — rebuilding and restarting."
+          # Heavy-build sub-gate: same 350MB bar and rationale as the brain
+          # sidecar above — ~3x the MEASURED ~100MB npm ci + vite build burst,
+          # meetable (old 1400MB was not, box tops out ~402MB available), and safe
+          # because the rocks are swap-denied (MemorySwapMax=0) + memory.low-
+          # reserved with ~56GB of swap absorbing the swappable build.
           for attempt in $(seq 1 20); do
             AVAIL_MB="$(free -m | awk '/Mem:/{print $7}')"
-            [ "${AVAIL_MB}" -ge 1400 ] && break
-            echo "heavy-build wait: ${AVAIL_MB}MB < 1400MB (${attempt}/20)"; sleep 15
+            [ "${AVAIL_MB}" -ge 350 ] && break
+            echo "heavy-build wait: ${AVAIL_MB}MB < 350MB (${attempt}/20)"; sleep 15
           done
-          if [ "${AVAIL_MB}" -lt 1400 ]; then
-            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 1400MB) — free memory and re-run the deploy."
+          if [ "${AVAIL_MB}" -lt 350 ]; then
+            echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 350MB) — free memory and re-run the deploy."
             exit 1
           fi
           # Same non-login-shell PATH fix as the brain step: nvm isn't sourced, so
