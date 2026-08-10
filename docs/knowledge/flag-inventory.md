@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-08-09T00:00:00Z
+timestamp: 2026-08-10T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-08-09T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-08-09. The table body is deterministic (sorted, no
+Last generated: 2026-08-10. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-448 flags; 447 not documented in `.env.example`.
+449 flags; 448 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -59,7 +59,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | `'45'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_BRAIN_STARTUP_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/main.py` |
-| `ZOE_BRAIN_TOKEN` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
+| `ZOE_BRAIN_TOKEN` | `-` | no | NO | `scripts/perf/measure_tts_cadence.py`<br>`services/zoe-data/zoe_flue_client.py` |
 | `ZOE_BRAIN_UNIT` | `'llama-server.service'` | no | NO | `scripts/maintenance/router_selftrain.py`<br>`services/zoe-data/main.py` |
 | `ZOE_BRAIN_URL` | `-` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_BUFFER_DELAY_S` | `'0.8'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -460,6 +460,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_STT_LOG_MAX_BYTES` | `5000000` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_TOOL_FILLER` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_TREND` | `dynamic` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
+| `ZOE_VOICE_TTS_MIN_SENTENCE_CADENCE_MS` | `0` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_WARN_MS` | `'1500'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_WARN_RATIO` | `'1.5'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_WAKE_ACK_PHRASE` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |

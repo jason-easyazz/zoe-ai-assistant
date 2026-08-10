@@ -425,6 +425,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/measure_tts_cadence.py",
           "services/zoe-data/zoe_flue_client.py"
         ],
         "typed_env": false
@@ -4501,6 +4502,16 @@
           "scripts/maintenance/voice_regression_probe.py"
         ],
         "typed_env": false
+      },
+      "ZOE_VOICE_TTS_MIN_SENTENCE_CADENCE_MS": {
+        "defaults": [
+          "0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
       },
       "ZOE_VOICE_WARN_MS": {
         "defaults": [

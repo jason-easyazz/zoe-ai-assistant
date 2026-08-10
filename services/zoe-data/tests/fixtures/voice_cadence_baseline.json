@@ -1,0 +1,15 @@
+{
+  "_comment": "Recorded TTS-cadence baseline for voice_cadence_guard. The band is an UPPER bound on rhythm disorder: an evenly-paced spoken stream (Flue 1.x, or the Flue-2.x stream after routers/voice_tts._pace_delivery) stays inside it; the pre-fix bursty 2.x stream does not. Refresh with scripts/perf/measure_tts_cadence.py --update-baseline on the live box, then decide explicitly (an operator ear check, since no automated gate hears rhythm).",
+  "recorded_utc": "2026-08-10",
+  "source": "Flue 1.x :3578 even-cadence reference; measured wire-1 emit gaps ~200-1200ms, rush_fraction 0.0, gap_cv ~0.5",
+  "band": {
+    "rush_fraction_max": 0.34,
+    "gap_cv_max": 0.9,
+    "min_gaps": 3,
+    "rush_ms": 80.0
+  },
+  "reference_metrics": {
+    "wire1_even": {"rush_fraction": 0.0, "gap_cv": 0.52, "note": "PASS — natural progressive pacing"},
+    "wire2_bursty_prefix": {"rush_fraction": 0.6, "gap_cv": 1.4, "note": "FAIL — burst(0ms)+stall(1s) signature"}
+  }
+}
