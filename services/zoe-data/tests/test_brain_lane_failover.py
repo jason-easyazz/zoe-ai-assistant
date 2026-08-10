@@ -1412,3 +1412,553 @@ async def test_outcome_label_never_changes_dispatch(monkeypatch):
     monkeypatch.setattr(zoe_flue_client, "run_flue_brain", silent_client)
 
     assert await bd.brain_oneshot("hi", "s1", "jason") == "answered without reporting"
+
+
+# ── (13) flag OFF: the DEFAULT deployment's lane line must be truthful too ───
+#
+# Everything above proves the label on the ZOE_BRAIN_FAILOVER=1 path. The flag
+# is default OFF, so the deployment an operator actually greps was the one still
+# logging `outcome=dispatched` — emitted BEFORE the request ran, and therefore
+# identical for a healthy turn, an HTTP 500, a read timeout, an empty 200 and a
+# truncated stream. These pin that the OFF path reads the same client verdict,
+# while its DISPATCH stays byte-identical (one call, no raise_transport_errors,
+# no lane hop, breaker untouched).
+
+
+@pytest.mark.asyncio
+async def test_flag_off_healthy_turn_logs_ok_not_dispatched(monkeypatch, caplog):
+    """The control: a genuinely good default-path turn reports ok."""
+    import brain_dispatch as bd
+
+    _flue_backend(monkeypatch)
+    monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    _boom_core(monkeypatch)
+    _oneshot_client(monkeypatch, response=_FakeResponse({"result": {"text": "hello"}}))
+
+    with caplog.at_level(logging.INFO, logger="brain_dispatch"):
+        assert await bd.brain_oneshot("hi", "s1", "jason") == "hello"
+
+    lines = _lane_lines(caplog)
+    assert len(lines) == 1
+    assert "outcome=ok" in lines[0] and "lane_served=flue" in lines[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "label,kind",
+    [
+        ("http_500", "status"),
+        ("read_timeout", "timeout"),
+        ("empty_200", "empty"),
+    ],
+)
+async def test_flag_off_failed_flue_turn_is_not_logged_as_dispatched(
+    monkeypatch, caplog, label, kind
+):
+    """THE ROUND-9 FINDING: with the flag unset these three all ended as the
+    canned sentinel behind an `outcome=dispatched` line written before the
+    request even ran — the default deployment's BRAIN_LANE record could not
+    distinguish a healthy turn from a failed one. Behaviour is unchanged (still
+    the sentinel, still no lane hop, breaker still untouched); only the label
+    becomes the client's verdict.
+    """
+    import brain_dispatch as bd
+    import httpx
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    _boom_core(monkeypatch)  # the no-failover behaviour is pinned unchanged
+    if kind == "status":
+        _oneshot_client(monkeypatch, response=_FakeResponse({}, status_code=500))
+    elif kind == "timeout":
+        _oneshot_client(monkeypatch, exc=httpx.ReadTimeout("generation too long"))
+    else:
+        _oneshot_client(monkeypatch, response=_FakeResponse({"result": {"text": ""}}))
+
+    with caplog.at_level(logging.INFO, logger="brain_dispatch"):
+        out = await bd.brain_oneshot("hi", "s1", "jason")
+
+    assert out == zoe_flue_client._FALLBACK_TEXT, "behaviour unchanged"
+    lines = _lane_lines(caplog)
+    assert len(lines) == 1
+    assert (
+        "outcome=dispatched" not in lines[0]
+    ), f"{label} still reports the pre-request label: {lines[0]}"
+    assert "outcome=ok" not in lines[0]
+    assert "outcome=fallback" in lines[0]
+    assert bd._circuit_open() is False, "flag OFF must not touch breaker state"
+
+
+@pytest.mark.asyncio
+async def test_flag_off_streaming_death_after_text_logs_error(monkeypatch, caplog):
+    """The streaming half, on the case a sentinel comparison could never catch:
+    real text was served, then the stream died. Truncated, not successful."""
+    import brain_dispatch as bd
+    import httpx
+
+    _flue_backend(monkeypatch)
+    monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "1")
+    _boom_core(monkeypatch)
+    _scripted_stream_client(
+        monkeypatch,
+        response=_StreamResp(
+            lines=[json.dumps("Turning the "), json.dumps("lights on.")],
+            raise_at_end=httpx.ConnectError("[Errno 104] Connection reset by peer"),
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="brain_dispatch"):
+        chunks = [c async for c in bd.brain_streaming("lights on", "s1", "jason")]
+
+    assert chunks == ["Turning the ", "lights on."], "the partial reply stands"
+    lines = _lane_lines(caplog)
+    assert len(lines) == 1
+    assert "outcome=error" in lines[0] and "outcome=ok" not in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_flag_off_streaming_consumer_disconnect_still_logs_once(
+    monkeypatch, caplog
+):
+    """The every-path contract applies to the default deployment as well."""
+    import brain_dispatch as bd
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    _boom_core(monkeypatch)
+
+    async def long_stream(msg, sid, uid="", **kw):
+        yield "first "
+        yield "second "
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", long_stream)
+
+    with caplog.at_level(logging.INFO, logger="brain_dispatch"):
+        gen = bd.brain_streaming("hi", "sess-off-cut", "jason")
+        assert await gen.__anext__() == "first "
+        await gen.aclose()
+
+    lines = _lane_lines(caplog)
+    assert len(lines) == 1, f"exactly one lane line per turn, got {lines}"
+    assert "outcome=interrupted" in lines[0]
+    assert "session=sess-off-cut" in lines[0]
+    assert bd._circuit_open() is False, "flag OFF never arms or clears the breaker"
+
+
+@pytest.mark.asyncio
+async def test_flag_off_dispatch_is_unchanged_by_the_label(monkeypatch):
+    """The guard on the fix itself: the OFF path may READ a verdict, never ACT
+    on one. It offers the sink, withholds `raise_transport_errors` (which is
+    what would let a transport error escape into a route with nothing to catch
+    it), makes exactly one client call, and never hops lanes."""
+    import brain_dispatch as bd
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    _boom_core(monkeypatch)  # any lane hop fails this test
+
+    seen: list[dict] = []
+
+    async def recording_client(msg, sid, uid="", **kw):
+        seen.append(kw)
+        return "answered"
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain", recording_client)
+
+    assert await bd.brain_oneshot("hi", "s1", "jason") == "answered"
+    assert len(seen) == 1, "exactly one dispatch"
+    assert "outcome_sink" in seen[0], "the sink is offered"
+    assert "raise_transport_errors" not in seen[0], (
+        "the OFF path must never opt into raising — FlueTransportError would "
+        "escape into a route that has nothing to catch it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_flag_off_streaming_dispatch_is_unchanged_by_the_label(monkeypatch):
+    """The same guard on the STREAMING half. The one-shot spy above cannot see
+    this path at all, and it is the one the panel speaks from."""
+    import brain_dispatch as bd
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    _boom_core(monkeypatch)  # any lane hop fails this test
+
+    seen: list[dict] = []
+
+    def recording_stream(msg, sid, uid="", **kw):
+        seen.append(kw)
+
+        async def _gen():
+            yield "a"
+            yield "b"
+
+        return _gen()
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", recording_stream)
+
+    assert [c async for c in bd.brain_streaming("hi", "s1", "jason")] == ["a", "b"]
+    assert len(seen) == 1, "exactly one dispatch"
+    assert "outcome_sink" in seen[0], "the sink is offered"
+    assert "raise_transport_errors" not in seen[0], (
+        "the OFF path must never opt into raising — FlueTransportError would "
+        "escape into a route that has nothing to catch it"
+    )
+    assert bd._circuit_open() is False, "flag OFF must not touch breaker state"
+
+
+@pytest.mark.asyncio
+async def test_flag_off_silent_client_still_dispatches(monkeypatch):
+    """Labels degrade, turns do not: a client that reports no verdict (an older
+    module, a test double) is dispatched to identically."""
+    import brain_dispatch as bd
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    _boom_core(monkeypatch)
+
+    async def silent(msg, sid, uid="", **kw):
+        return "answered without reporting"
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain", silent)
+
+    assert await bd.brain_oneshot("hi", "s1", "jason") == "answered without reporting"
+
+
+# ── (14) a CANCELLED one-shot owes a lane line too ──────────────────────────
+#
+# The streaming wrapper's try/finally has covered the disconnect case since
+# round 8. One-shots have the same hole and no generator to be closed: the
+# LiveKit lane awaits `brain_oneshot` under `asyncio.wait_for`, and chat
+# disconnect cleanup cancels its task — both exit the await without reaching any
+# terminal branch, so an ordinary interrupted turn logged NOTHING.
+
+
+def _parked_flue_oneshot(monkeypatch):
+    """Patch ``run_flue_brain`` with a turn that never finishes."""
+    import zoe_flue_client
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def parked(msg, sid, uid="", **kw):
+        entered.set()
+        await release.wait()
+        return "never returned"  # pragma: no cover
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain", parked)
+    return entered, release
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failover", ["1", None], ids=["flag_on", "flag_off"])
+async def test_cancelled_one_shot_logs_interrupted(monkeypatch, caplog, failover):
+    """NEGATIVE CONTROL for the one-shot try/finally: remove it and a cancelled
+    turn leaves no BRAIN_LANE record at all. Both flag states — the default-off
+    path is the one actually running."""
+    import brain_dispatch as bd
+
+    _flue_backend(monkeypatch)
+    if failover is None:
+        monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_BRAIN_FAILOVER", failover)
+    _boom_core(monkeypatch)
+    entered, _release = _parked_flue_oneshot(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="brain_dispatch"):
+        task = asyncio.create_task(bd.brain_oneshot("hi", "sess-cancel", "jason"))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    lines = _lane_lines(caplog)
+    assert len(lines) == 1, f"exactly one lane line per turn, got {lines}"
+    assert "lane_attempted=flue" in lines[0]
+    assert "outcome=interrupted" in lines[0]
+    assert "reason=caller_cancelled" in lines[0]
+    assert "session=sess-cancel" in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_timeout_on_a_one_shot_logs_interrupted(monkeypatch, caplog):
+    """The LiveKit lane's real shape: `asyncio.wait_for` cancels the turn from
+    the outside. Same hole, same record owed."""
+    import brain_dispatch as bd
+
+    _flue_backend(monkeypatch)
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    _boom_core(monkeypatch)
+    _parked_flue_oneshot(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="brain_dispatch"):
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                bd.brain_oneshot("hi", "sess-timeout", "jason"), timeout=0.02
+            )
+
+    lines = _lane_lines(caplog)
+    assert len(lines) == 1
+    assert "outcome=interrupted" in lines[0] and "session=sess-timeout" in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_one_shot_that_already_reported_does_not_double_log(
+    monkeypatch, caplog
+):
+    """The once-only guard, on the one-shot: a turn cancelled while its FALLBACK
+    lane is running already emitted its line. 'Exactly one per turn' is what
+    makes the signal countable."""
+    import brain_dispatch as bd
+    import zoe_core_client
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def parked_core(msg, sid, uid="", **kw):
+        entered.set()
+        await release.wait()
+        return "never"  # pragma: no cover
+
+    async def refused_flue(msg, sid, uid="", **kw):
+        raise zoe_flue_client.FlueTransportError("[Errno 111] refused")
+
+    monkeypatch.setattr(zoe_core_client, "run_zoe_core", parked_core)
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain", refused_flue)
+
+    with caplog.at_level(logging.INFO, logger="brain_dispatch"):
+        task = asyncio.create_task(bd.brain_oneshot("hi", "sess-hop", "jason"))
+        await entered.wait()  # the failover line is already written
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    lines = _lane_lines(caplog)
+    assert len(lines) == 1, f"exactly one lane line per turn, got {lines}"
+    assert "outcome=failover" in lines[0], "the turn's real verdict, not the cleanup's"
+
+
+# ── (15) a probe that PROVED the lane must not leave the breaker armed ──────
+#
+# The half-open probe re-arms the deadline as it claims the lapse, so the
+# breaker is open for the whole probe turn and only the probe's own outcome
+# closes it. Reaching `_close_circuit` after the loop is therefore not enough:
+# the consumer can disconnect after the first delta, which throws GeneratorExit
+# at the yield and skips it — leaving a demonstrably reachable sidecar in the
+# penalty box for another full cooldown. The evidence is the yield itself.
+
+
+async def _arm_the_breaker(bd, monkeypatch):
+    """One refused one-shot turn — the breaker's only entry point."""
+    import zoe_flue_client
+
+    async def refused(msg, sid, uid="", **kw):
+        raise zoe_flue_client.FlueTransportError("[Errno 111] refused")
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain", refused)
+    await bd.brain_oneshot("open-it", "s1", "jason")
+    assert bd._circuit_open() is True
+
+
+@pytest.mark.asyncio
+async def test_probe_that_yielded_then_lost_its_consumer_closes_the_breaker(
+    monkeypatch,
+):
+    """NEGATIVE CONTROL for the yielded_any close: drop it and a probe that
+    PROVED flue reachable still costs every following turn a full cooldown on
+    the fallback lane."""
+    import brain_dispatch as bd
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER_COOLDOWN_S", "30")
+    _recording_core(monkeypatch)
+
+    now = {"t": 700.0}
+    monkeypatch.setattr(bd, "_monotonic", lambda: now["t"])
+
+    await _arm_the_breaker(bd, monkeypatch)
+    now["t"] += 31.0  # TTL lapsed — the next streaming turn claims the probe
+
+    release = asyncio.Event()
+
+    async def one_delta_then_park(msg, sid, uid="", **kw):
+        yield "first "
+        await release.wait()  # pragma: no cover - the consumer leaves first
+        yield "never"  # pragma: no cover
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", one_delta_then_park)
+
+    gen = bd.brain_streaming("probe", "s2", "jason")
+    assert await gen.__anext__() == "first ", "flue answered — the lane is proven"
+    await gen.aclose()  # the consumer walks away mid-stream
+
+    assert bd._circuit_open() is False, (
+        "the probe yielded a flue delta, so the lane is demonstrably reachable — "
+        "the half-open claim must not survive the consumer's disconnect"
+    )
+
+
+@pytest.mark.asyncio
+async def test_probe_cancelled_before_any_delta_leaves_the_breaker_armed(monkeypatch):
+    """GUARD THE GUARD: the close is licensed by EVIDENCE, not by cleanup
+    running. A consumer that cancels before the first delta proved nothing about
+    flue — closing there would hand the next turn a failed connect on the word
+    of a turn that never saw an answer."""
+    import brain_dispatch as bd
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER_COOLDOWN_S", "30")
+    _recording_core(monkeypatch)
+
+    now = {"t": 800.0}
+    monkeypatch.setattr(bd, "_monotonic", lambda: now["t"])
+
+    await _arm_the_breaker(bd, monkeypatch)
+    now["t"] += 31.0
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def never_yields(msg, sid, uid="", **kw):
+        entered.set()
+        await release.wait()  # the consumer gives up first
+        yield "never"  # pragma: no cover
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", never_yields)
+
+    gen = bd.brain_streaming("probe", "s2", "jason")
+    first = asyncio.create_task(gen.__anext__())
+    await entered.wait()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await gen.aclose()
+
+    assert (
+        bd._circuit_open() is True
+    ), "nothing was yielded, so the probe proved nothing — the claim stands"
+
+
+@pytest.mark.asyncio
+async def test_a_stale_yielded_probe_must_not_erase_a_newer_open(monkeypatch):
+    """The cleanup close is a compare-and-set like every other breaker mutation,
+    and this is the race that proves it. Turn A observes a CLOSED breaker and
+    yields a flue delta; turn B's transport failure then arms a fresh cooldown;
+    only THEN does A's consumer disconnect. A's evidence is real but STALE — B
+    looked at flue more recently — so A's cleanup must not hand the next turn a
+    failed connect. An unconditional close in the `finally` reds here.
+    """
+    import brain_dispatch as bd
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER_COOLDOWN_S", "30")
+    _recording_core(monkeypatch)
+
+    now = {"t": 1000.0}
+    monkeypatch.setattr(bd, "_monotonic", lambda: now["t"])
+
+    release = asyncio.Event()
+
+    async def one_delta_then_park(msg, sid, uid="", **kw):
+        yield "first "
+        await release.wait()  # pragma: no cover - the consumer leaves first
+        yield "never"  # pragma: no cover
+
+    async def refused(msg, sid, uid="", **kw):
+        raise zoe_flue_client.FlueTransportError("[Errno 111] refused")
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", one_delta_then_park)
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain", refused)
+
+    gen = bd.brain_streaming("slow-ok", "s1", "jason")
+    assert await gen.__anext__() == "first "  # A observed a CLOSED breaker
+    assert bd._circuit_open() is False
+
+    assert await bd.brain_oneshot("fails", "s2", "jason") == "core answered"
+    assert bd._circuit_open() is True, "B's failure arms the cooldown"
+
+    await gen.aclose()  # A's consumer walks away, carrying stale evidence
+
+    assert bd._circuit_open() is True, (
+        "a turn that started BEFORE the open must not close it from cleanup — "
+        "stale evidence erased the newer cooldown"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_one_shot_probe_leaves_the_breaker_armed(monkeypatch):
+    """The same rule on the one-shot: it yields nothing incrementally, so a
+    cancelled await is never evidence that flue answered."""
+    import brain_dispatch as bd
+
+    _flue_backend(monkeypatch)
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER_COOLDOWN_S", "30")
+    _recording_core(monkeypatch)
+
+    now = {"t": 900.0}
+    monkeypatch.setattr(bd, "_monotonic", lambda: now["t"])
+
+    await _arm_the_breaker(bd, monkeypatch)
+    now["t"] += 31.0
+
+    entered, _release = _parked_flue_oneshot(monkeypatch)
+    task = asyncio.create_task(bd.brain_oneshot("probe", "s2", "jason"))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert bd._circuit_open() is True
+
+
+@pytest.mark.asyncio
+async def test_a_disconnected_turn_that_never_dialled_flue_touches_no_breaker_state(
+    monkeypatch,
+):
+    """The other side of the evidence rule: a turn served by the FALLBACK lane
+    because the breaker was open must not clear the breaker on its way out, no
+    matter how its consumer leaves. It never asked flue anything, so a fallback
+    delta must never count as proof — two independent guards hold that (it
+    emitted its record before dispatching, and `served_any` is set only inside
+    the flue loop)."""
+    import brain_dispatch as bd
+    import zoe_core_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER_COOLDOWN_S", "30")
+    _recording_core(monkeypatch)  # the arming turn fails over onto this lane
+
+    now = {"t": 1100.0}
+    monkeypatch.setattr(bd, "_monotonic", lambda: now["t"])
+
+    await _arm_the_breaker(bd, monkeypatch)
+
+    async def core_stream(msg, sid, uid="", **kw):
+        yield "core "
+        yield "answered"
+
+    monkeypatch.setattr(zoe_core_client, "run_zoe_core_streaming", core_stream)
+
+    gen = bd.brain_streaming("during-cooldown", "s2", "jason")
+    assert await gen.__anext__() == "core "
+    await gen.aclose()
+
+    assert (
+        bd._circuit_open() is True
+    ), "the fallback lane answering says nothing about flue's reachability"
