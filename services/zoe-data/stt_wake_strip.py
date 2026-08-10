@@ -17,13 +17,14 @@ import re
 # line, strip just that leading prefix. This NEVER cuts the raw audio, so command
 # words can't be clipped — the guard is the replay corpus (tests/replay_samples.py).
 
-# A line that is ENTIRELY a wake-word variant (so the whole line is dropped).
-_WAKE_LINE_RE = re.compile(
-    r"^\s*(?:hey|hi|ok|okay|a|hey,)?[\s,]*"
-    r"(?:zoe|zoey|zo|joey|joe|zoie|sewey|so|josie|zoee)"
-    r"[\s,.!?]*$",
-    re.IGNORECASE,
-)
+# A line that is ENTIRELY a wake-word variant is dropped — but ONLY on the right
+# terms, split across two matchers so a bare weak homophone that is really the
+# user's first word ("So, add milk to my list") is never silently deleted:
+#   * _STRONG_WAKE_LINE_RE (defined below) — a DISTINCTIVE zoe-family name, so a
+#     bare greeting-less wake-only line strips only on it ("Zoe.", "Hey zoe").
+#   * _GREETING_WEAK_WAKE_LINE_RE (below) — weak homophones (so/a/zo/joe/joey/
+#     josie) strip as a whole line ONLY when a REQUIRED greeting proves it is a
+#     real wake ("hey so", "ok zo"), mirroring _WAKE_GREETING_NAME_RE inline.
 # A leading wake prefix on a line that ALSO carries the command (strip the prefix
 # only). Requires a following word (?=\S) so a bare name that IS the command stays.
 _WAKE_PREFIX_RE = re.compile(
@@ -31,8 +32,8 @@ _WAKE_PREFIX_RE = re.compile(
     # Inline strip uses ONLY unambiguous non-word wake variants. Real names/words
     # (joe, joey, josie, so) are deliberately EXCLUDED here — as an inline prefix
     # they would corrupt a real command ("Joe wants the weather", "so, add milk").
-    # Those still get caught when they are a whole wake-only line (_WAKE_LINE_RE);
-    # only the risky inline strip is conservative.
+    # As a whole wake-only line they are caught ONLY with a leading greeting
+    # (_GREETING_WEAK_WAKE_LINE_RE); a bare one is the user's word and is kept.
     r"(?:zoe|zoey|zoie|zoee|zo|sewey)"
     r"[\s,.!?-]+(?=\S)",
     re.IGNORECASE,
@@ -83,28 +84,40 @@ _FILLER_LINE_RE = re.compile(
 # How far past a filler line we will look for the real wake line. Bounded so a
 # genuine multi-line command can never be consumed by a runaway scan.
 _MAX_FILLER_LOOKAHEAD = 2
-# Skipping a filler line reaches PAST it, so the wake line that justifies the
-# skip has to be a confident one. _WAKE_LINE_RE deliberately also accepts weak
-# homophones ("so", "zo", "a") — harmless when they are the leading line the
-# caller already decided to drop, but as a LOOKAHEAD target they would let a
-# stray "so" authorise eating the line before it ("Well" / "so" / "what now").
-# So the lookahead demands a distinctive zoe-family name.
+# A bare, greeting-less wake-only line strips only on a DISTINCTIVE zoe-family
+# name — a weak homophone ("so", "zo", "a") on its own is the user's real first
+# word, never a wake. This is ALSO the confident matcher the filler lookahead
+# demands: skipping a filler reaches PAST it, so a stray "so" must not authorise
+# eating the line before it ("Well" / "so" / "what now").
 _STRONG_WAKE_LINE_RE = re.compile(
     r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
     r"(?:zoe|zoey|zoie|zoee|sewey)"
     r"[\s,.!?]*$",
     re.IGNORECASE,
 )
+# Weak homophones strip as a whole wake-only line ONLY when a REQUIRED greeting
+# proves the line is a real wake ("hey so", "ok zo") — mirroring the inline
+# greeting+name rule (_WAKE_GREETING_NAME_RE). A bare weak line ("So", "Joe",
+# "A") matches neither this nor _STRONG_WAKE_LINE_RE and is kept intact.
+_GREETING_WEAK_WAKE_LINE_RE = re.compile(
+    r"^\s*(?:hey|hi|ok|okay)[\s,]+"
+    r"(?:so|a|zo|joe|joey|josie)"
+    r"[\s,.!?]*$",
+    re.IGNORECASE,
+)
 
 
 def _wake_line_at(kept: list, i: int, strong: bool = False) -> bool:
-    """True when line ``i`` is a wake word — either wholly (``_WAKE_LINE_RE``) or
-    as the bare greeting half of a SPLIT wake phrase whose name half opens the
-    next line.
+    """True when line ``i`` is a wake word — either wholly (a distinctive
+    zoe-family name, or a greeting-prefixed weak homophone) or as the bare
+    greeting half of a SPLIT wake phrase whose name half opens the next line.
 
     ``strong=True`` requires a distinctive zoe-family name, for the filler
-    lookahead where a weak homophone must not authorise a skip."""
-    if (_STRONG_WAKE_LINE_RE if strong else _WAKE_LINE_RE).match(kept[i]):
+    lookahead where a weak homophone must not authorise a skip. A bare weak
+    homophone ("So", "Joe") matches nothing here — it is the user's own word."""
+    if _STRONG_WAKE_LINE_RE.match(kept[i]):
+        return True
+    if not strong and _GREETING_WEAK_WAKE_LINE_RE.match(kept[i]):
         return True
     # The split form is inherently strong: a bare greeting AND a wake name.
     return (
