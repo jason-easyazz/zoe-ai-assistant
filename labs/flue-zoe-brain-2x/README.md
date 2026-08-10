@@ -1,52 +1,50 @@
-# flue-zoe-brain-2x — the PARALLEL Flue 2.0.1 port (NOT DEPLOYED)
+# flue-zoe-brain-2x — Zoe's live Gemma brain (Flue 2.0.1, sole brain since the 2026-08-09 cutover)
 
-> ## ⚠ Read this before touching anything here
+> ## ⚠ This directory IS the live voice brain
 >
-> **This directory is not live and must not become live by accident.** The
-> deployed sidecar on `:3578` is the sibling `labs/flue-zoe-brain/`, still on
-> `@flue/*@1.0.0-beta.6`. This is a parallel port to `@flue/*@2.0.1`, proven by
-> tests against a mock model. It has **no CI hook**, and its systemd template
-> (`flue-zoe-brain-2x.service`, `:3579`) **ships inert** — not enabled, not
-> started, and unreachable from zoe-data until an operator sets
-> `ZOE_FLUE_BRAIN_URL`. See "Cutover runbook" below for the deliberate flip.
+> **`flue-zoe-brain-2x.service` runs this build on `:3579`** with
+> `ZOE_FLUE_WIRE=2`, and `.github/workflows/deploy.yml` rebuilds + restarts the
+> unit on any merged diff under this path — **#1675 retargeted the deploy gate
+> here**. This is production, and the live voice path depends on it. Since the
+> **2026-08-09 cutover** it is the SOLE Zoe brain: it replaces the per-turn
+> `pi --mode rpc` subprocess behind the `run_zoe_core` seam
+> (`docs/architecture/zoe-flue-integration.md` Phase 2), reached via zoe-data's
+> `ZOE_BRAIN_BACKEND=flue` seam (`services/zoe-data/brain_dispatch.py`, priority
+> flue > core > legacy) with `ZOE_FLUE_WIRE=2` + `ZOE_FLUE_BRAIN_URL` pointed at
+> `:3579`.
 >
-> **Why it is a separate directory rather than a version bump in place** — two
-> independent reasons, either one sufficient:
+> **Because this unit auto-deploys, a merged change here reaches the live brain
+> on the next deploy with no further decision.** The 8k-context, wire-2,
+> store-schema and length-stop constraints documented below are load-bearing;
+> `parity/count_length_stops.py` and the voice replay gate remain the on-box
+> proof for any change that can affect a reply.
 >
-> 1. **`labs/flue-zoe-brain/` auto-deploys.** `.github/workflows/deploy.yml` gates
->    on `git diff -- labs/flue-zoe-brain/` and, on any diff, runs
->    `npm ci && npm run build && systemctl --user restart flue-zoe-brain.service`
->    on the Jetson. A merged one-line change there reaches the live voice brain
->    with no further decision.
-> 2. **The persisted schema boundary is one-way.** Flue 2.x stores schema v8; the
->    beta stored v5, and pre-1.0 schemas are *reset-only* — the runtime rejects an
->    older database **before any application code runs**. A 2.x process pointed at
->    the live data dir refuses to start, and once it has written a v8 store,
->    reverting the unit to the beta does **not** restore service either. Rollback
->    needs a wipe in *both* directions.
+> **The retired 1.x beta is GONE.** The old sidecar (`@flue/*@1.0.0-beta.6` on
+> `:3578`) and its source tree `labs/flue-zoe-brain/` were **removed in #1678**,
+> so there is no longer an in-place rollback-target directory: rolling back off
+> 2.x means reverting the cutover commits (#1675 + #1678) from git history, not
+> flipping an env var to a still-running sidecar. The "Cutover runbook" below is
+> kept as the **record of how the 2026-08-09 flip was executed and gated** — read
+> it as history, not as a pending step.
 >
-> **And the wire contract is not backward-compatible.** 2.x actively rejects
-> `?wait=result` and changed the POST body shape, so the live
-> `services/zoe-data/zoe_flue_client.py` cannot talk to a 2.x sidecar at all.
-> Cutover is therefore a coordinated change on both sides — see
-> `parity/flue_wire.py` for the reference implementation of the new wire.
->
-> **Cutover is a deliberate operator step:** start this directory's own unit on
-> `:3579` and point zoe-data at it, having decided explicitly what happens to live
-> session history. Never via the auto-deploy path. Leave `ZOE_BRAIN_DB` at its
-> default — the two sidecars must not share a store, or neither direction of the
-> rollback works. Full sequence: "Cutover runbook" below.
+> **How the cutover was structured (history).** 2.x was built and proven in this
+> separate directory precisely because two boundaries made an in-place upgrade of
+> the old `labs/flue-zoe-brain/` unsafe: (1) its store schema is one-way — Flue
+> 2.x writes v8, the beta wrote v5, and pre-1.0 schemas are *reset-only*, so a 2.x
+> process rejects an older database before any application code runs; and (2) the
+> wire contract is not backward-compatible — 2.x rejects `?wait=result` and
+> changed the POST body shape, so the flip was a coordinated change on both sides
+> (the `ZOE_FLUE_WIRE=2` selector in `services/zoe-data/zoe_flue_client.py`, and
+> `parity/flue_wire.py` as the reference implementation of the new wire).
 
-A Flue-hosted Pi `Agent` on Zoe's local Gemma brain — replaces the per-turn
-`pi --mode rpc` subprocess behind the `run_zoe_core` seam
-(`docs/architecture/zoe-flue-integration.md` Phase 2).
+A Flue-hosted Pi `Agent` on Zoe's local Gemma brain.
 
-**Wiring status of the DEPLOYED sibling** (`labs/flue-zoe-brain/`, not this
-directory): lab-hosted but production-reachable via zoe-data's
-`ZOE_BRAIN_BACKEND=flue` seam (`services/zoe-data/brain_dispatch.py`, priority
-flue > core > legacy). The **shipped repo default is OFF** (`core` =
-`services/zoe-core`); **this deployment flipped it live on 2026-07-03** (host
-`ZOE_BRAIN_BACKEND=flue`, sidecar on `:3578` under a systemd user unit).
+**Backend wiring.** The shipped repo default backend is OFF (`core` =
+`services/zoe-core`); this deployment runs `ZOE_BRAIN_BACKEND=flue`
+(`services/zoe-data/brain_dispatch.py`, priority flue > core > legacy). That seam
+was first flipped live on 2026-07-03 (then serving the 1.x sidecar on `:3578`);
+the 2026-08-09 cutover kept it and added `ZOE_FLUE_WIRE=2` + `ZOE_FLUE_BRAIN_URL`
+at `:3579`, moving the live brain onto this 2.x port.
 
 ## Running this port
 
@@ -357,20 +355,20 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible brain endpoint |
 | `ZOE_BRAIN_API_KEY` | `local-no-key` | placeholder key for the completions client |
 | `ZOE_BRAIN_DB` | `<package>/data/zoe-brain.db` | Flue durability sqlite path — **leave unset**, see the storage note under "Run as a service" |
-| `PORT` | `3000` | HTTP port (`flue-zoe-brain-2x.service` sets **`3579`**, not 3578) |
+| `PORT` | `3000` | HTTP port (`flue-zoe-brain-2x.service` sets **`3579`**, the live brain) |
 
 The agent route **fails closed**: with neither `ZOE_BRAIN_TOKEN` nor
 `ZOE_BRAIN_OPEN=1` set, every `POST /agents/zoe/:id` request is rejected with
 401. `GET /health` is unauthenticated and never touches the model.
 
-## Run as a service (systemd, operator opt-in)
+## Run as a service (systemd)
 
-A user-unit template ships at `scripts/setup/systemd/flue-zoe-brain-2x.service`
-— **port 3579, deliberately NOT 3578.** It is designed to run *beside* the live
-`flue-zoe-brain.service`, which stays up and warm: that is what makes the cutover
-an env flip with an instant rollback rather than a rebuild. It **ships inert** —
-installing it enables nothing, and zoe-data does not address `:3579` until an
-operator sets `ZOE_FLUE_BRAIN_URL`.
+The live brain runs from a user-unit template at
+`scripts/setup/systemd/flue-zoe-brain-2x.service` — **port 3579.** On the box the
+unit is installed, enabled, and serving, and `.github/workflows/deploy.yml` keeps
+its `dist/` rebuilt on every merged diff under this directory. The steps below are
+the install procedure — for standing the unit up on a fresh host or after a clean
+rebuild, not a switch to flip on.
 
 ```sh
 # 1. Build the sidecar (the unit runs dist/server.mjs, it does not build)
@@ -392,37 +390,45 @@ curl -f http://127.0.0.1:3579/health
 journalctl --user -u flue-zoe-brain-2x -f
 ```
 
-**Memory protections are identical to the live sidecar's** (`MemorySwapMax=0`,
-`MemoryLow=512M`, `MemoryMax=2G`), because after cutover this unit inherits the
-same latency contract. `tests/unit/test_systemd_memory_protection.py` pins them.
-Apply changes as a drop-in in `~/.config/systemd/user/flue-zoe-brain-2x.service.d/`;
-never copy the template over a running unit.
+**Memory protections** (`MemorySwapMax=0`, `MemoryLow=512M`, `MemoryMax=2G`) hold
+the live latency contract; `tests/unit/test_systemd_memory_protection.py` pins
+them. Apply changes as a drop-in in
+`~/.config/systemd/user/flue-zoe-brain-2x.service.d/`; never copy the template
+over the running unit.
 
-**Storage stays separate, and must.** `ZOE_BRAIN_DB` defaults to
-`labs/flue-zoe-brain-2x/data/zoe-brain.db`, already a different file from the
-live sidecar's. Flue 2.x writes schema v8 and the beta writes v5; the runtime
-rejects an older store before any application code runs, so a shared file makes
-the rollback half of the runbook impossible.
+**Storage.** `ZOE_BRAIN_DB` defaults to
+`labs/flue-zoe-brain-2x/data/zoe-brain.db`. Flue 2.x writes schema v8 and rejects
+an older store before any application code runs, so never point the unit at a
+foreign or pre-1.0 store — it will refuse to start.
 
-For hand runs (no unit): `PORT=3579 npm start` with the same env exported — but
-once the unit is installed, `:3579` is taken, so pick another scratch port or
-stop the unit first. Both `LANDING.md` recipes still say `3579`.
+For an isolated hand run (no unit): `PORT=<spare> npm start` with the env
+exported. **The live unit already owns `:3579`**, so pick a SPARE port (and set
+`ZOE_BRAIN_URL` for the parity probes) or stop the unit first — do not hand-start
+a second process on `:3579`.
 
-**Stopping a hand-started sidecar — kill by port ONLY:**
+**Stopping a hand-started sidecar — kill by port ONLY** (use the spare port you
+started it on):
 
 ```sh
-lsof -ti tcp:3579 | xargs -r kill
+lsof -ti tcp:<spare-port> | xargs -r kill
 ```
 
 Never `pkill -f` (it can take out unrelated node processes), and never restart
-zoe-data (`:8000`) or llama-server (`:11434`) as part of a lab run.
+zoe-data (`:8000`), llama-server (`:11434`), or the live brain unit as part of a
+hand run.
 
-## Cutover runbook (operator)
+## Cutover runbook (history — executed 2026-08-09)
 
-The operator lifted the merge hold on 2026-08-06. Merging this directory changes
-nothing on the box; the flip below is the separate, deliberate step.
+**This is the record of how the cutover was performed, kept for reference — not a
+pending step.** The operator lifted the merge hold on 2026-08-06 and the flip
+below was executed on 2026-08-09, moving the live brain from the 1.x sidecar
+(`:3578`) onto this 2.x unit (`:3579`). The 1.x sidecar and its source were then
+retired in #1678, so the env-flip rollback described here (repoint zoe-data at the
+still-running `:3578` sidecar) is **no longer available** — rolling back off 2.x
+today means reverting the cutover commits (#1675 + #1678) from git history. Read
+the blocks below as the executed procedure, not as live instructions.
 
-### Prerequisite — the Phase-2 client change (✅ LANDED, this PR's sibling)
+### Prerequisite — the Phase-2 client change (✅ LANDED)
 
 **The wire selector exists**: `ZOE_FLUE_WIRE` in
 `services/zoe-data/zoe_flue_client.py` (PR #1637, replay-gated in its own
@@ -442,7 +448,7 @@ client's logs: a wire-2 reply arriving on wire 1 names the flag, and a 1.x
 sidecar 400-ing the wire-2 body names it too. The flip below is therefore
 env-only: `ZOE_FLUE_WIRE=2` + `ZOE_FLUE_BRAIN_URL` together, never one alone.
 
-### The flip (once the client change has landed)
+### The flip (as executed)
 
 `ZOE_BRAIN_BACKEND=flue` already lives in `services/zoe-data/.env`, and that is
 the file the **live** `zoe-data.service` actually loads (`systemctl --user cat
@@ -520,13 +526,16 @@ curl -fsS http://127.0.0.1:8000/health
 systemctl --user stop flue-zoe-brain-2x   # optional; leaving it running is harmless
 ```
 
-Rollback works because the 1.x sidecar was never stopped and its v5 store was
-never touched. That is why step 3 says *do not stop it* — and why the two units
-must never share `ZOE_BRAIN_DB`.
+During the cutover window this env-flip rollback worked because the 1.x sidecar
+was kept running and its v5 store untouched — which is why step 3 said *do not
+stop it*. **That escape hatch no longer exists:** #1678 retired the 1.x sidecar
+and deleted its source, so there is nothing on `:3578` to repoint back to. A
+rollback off 2.x today is a git revert of the cutover commits (#1675 + #1678),
+not an env flip.
 
-Once the flip is accepted and you no longer want the escape hatch, delete the
-snapshot (`rm services/zoe-data/.env.pre-flue2x`) — it is a copy of a secret-
-bearing file and should not linger.
+The `services/zoe-data/.env.pre-flue2x` snapshot from the flip is a copy of a
+secret-bearing file and should not linger — delete it once the cutover is settled
+(`rm services/zoe-data/.env.pre-flue2x`).
 
 ### Guards
 
@@ -569,8 +578,8 @@ reassembles Flue's spilled >1MB batches so a truncation cannot hide in one.
 machine consumption.
 
 **"0 assistant replies" is a FAILURE.** The sidecar creates its store at boot, so
-a replay that never reached the 2.x lane (`ZOE_FLUE_WIRE` unset, zoe-data still on
-:3578, the restart forgotten) leaves a valid, empty database — and counting zero
+a replay that never reached the 2.x lane (`ZOE_FLUE_WIRE` unset, zoe-data pointed
+at the wrong lane, the restart forgotten) leaves a valid, empty database — and counting zero
 length-stops in it would green-light the flip on no evidence at all. The gate
 counts what it examined and fails when that is zero.
 
@@ -608,21 +617,24 @@ flip attempt; do not re-learn them.
   artifact: 2.x was generating far fewer tokens. Treat any speed comparison as
   void until step 6 is green, then re-measure.
 
-### `deploy.yml` cannot auto-restart this unit — verified, not assumed
+### `deploy.yml` auto-deploys this unit — #1675
 
-`.github/workflows/deploy.yml` gates its sidecar rebuild on
-`git diff --quiet "$OLD_SHA" HEAD -- labs/flue-zoe-brain/`, a **path prefix that
-matches the directory `labs/flue-zoe-brain/` only** — `labs/flue-zoe-brain-2x/`
-is a sibling, not a child, so it never matches. The job also short-circuits on
-`systemctl --user list-unit-files flue-zoe-brain.service`, naming the 1.x unit
-explicitly. Nothing in the workflow references `flue-zoe-brain-2x`. The sibling
-directory was chosen for exactly this property; re-check it if the workflow's
-path filter is ever loosened to a glob.
+`.github/workflows/deploy.yml` gates its brain rebuild on
+`git diff --quiet "$OLD_SHA" HEAD -- labs/flue-zoe-brain-2x/` and, on any diff
+(with `dist/server.mjs` present), runs `npm ci && npm run build && systemctl
+--user restart flue-zoe-brain-2x.service` on the Jetson, then polls
+`:3579/health`. The job short-circuits on `systemctl --user list-unit-files
+flue-zoe-brain-2x.service`, so a host without the unit is skipped. **A merged
+change under this directory therefore reaches the live brain on the next deploy
+with no further step.** #1675 retargeted this gate here from the retired
+`labs/flue-zoe-brain/` path; before the cutover this section documented the
+opposite (a sibling directory deploy could not touch), which is why it is called
+out explicitly now.
 
 ## Operator measurement (pending)
 
 The on-box measurement checklist for the #965 activator-fallback hardening —
-sidecar on a scratch port, ~10 trigger-free prompts, score `tool_start` events,
-re-run `parity/recall_reliability.py` — lives in [`LANDING.md`](LANDING.md).
+a hand instance on a spare port, ~10 trigger-free prompts, score `tool_start`
+events, re-run `parity/recall_reliability.py` — lives in [`LANDING.md`](LANDING.md).
 Acceptance: ≥50% activator fire on the trigger-free set, zero fabricated tool
 claims, recall ≥90%. It has not been run yet.

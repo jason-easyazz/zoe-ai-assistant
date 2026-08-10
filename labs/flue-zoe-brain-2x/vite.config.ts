@@ -14,7 +14,7 @@ import { defineConfig } from 'vite';
  * Node target and the entry paths live in `flue.config.ts` (the host-independent
  * project config), which this plugin auto-discovers.
  *
- * LAB ONLY — not a production unit.
+ * Build config for flue-zoe-brain-2x.service — the live Zoe brain (:3579).
  */
 export default defineConfig({
   plugins: [flue()],

@@ -54,7 +54,7 @@
  * Kill switch: ZOE_BRAIN_PROGRESSIVE_TOOLS=false restores the old
  * all-schemas-every-call behaviour (used for A/B latency comparison).
  *
- * LAB ONLY.
+ * Part of the live Zoe brain (flue-zoe-brain-2x.service, :3579).
  */
 import type { Context, Message } from '@earendil-works/pi-ai';
 

@@ -55,7 +55,7 @@
  * src/tools/tool-groups.ts; `activate_abilities` is the model's way to unlock
  * the rest).
  *
- * LAB ONLY.
+ * Part of the live Zoe brain (flue-zoe-brain-2x.service, :3579).
  */
 import { useModel, useTool } from '@flue/runtime';
 // .ts extensions so the offline strip-types tests can resolve these too (see

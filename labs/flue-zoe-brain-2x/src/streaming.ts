@@ -76,7 +76,7 @@
  * admitted CONCURRENTLY for the SAME session id can mis-latch — upstream
  * zoe-data never does this (a session's turns are strictly sequential).
  *
- * LAB ONLY.
+ * Part of the live Zoe brain (flue-zoe-brain-2x.service, :3579).
  */
 import { observe } from '@flue/runtime';
 import type { MiddlewareHandler } from 'hono';

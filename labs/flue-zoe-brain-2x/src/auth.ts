@@ -6,7 +6,7 @@
  * ("The agent-module `export const route` and `export const attachments`
  * conventions are deleted. Per-agent middleware becomes ordinary Hono
  * middleware registered before the mount." — @flue/runtime migration guide,
- * "Routing"). It cannot live in the agent module any more for a second reason:
+ * "Routing"). It cannot reside in the agent module any more for a second reason:
  * that module carries the `'use agent'` directive, and every exported
  * capitalized function in a marked module is registered as an agent.
  *
@@ -46,7 +46,8 @@
  *     localhost-bound smoke/lab use, never production, and writes still stay
  *     dry-run-gated behind ZOE_BRAIN_ALLOW_WRITES.
  *
- * LAB ONLY (production-reachable via ZOE_BRAIN_BACKEND=flue — prod quality).
+ * LIVE — the deployed Zoe brain (flue-zoe-brain-2x.service on :3579,
+ * ZOE_BRAIN_BACKEND=flue + ZOE_FLUE_WIRE=2; sole brain since the 2026-08-09 cutover).
  */
 import type { MiddlewareHandler } from 'hono';
 

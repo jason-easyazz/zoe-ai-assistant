@@ -27,7 +27,8 @@ Usage:
 Exit code is non-zero if any row is FAIL or ERROR (JUDGE rows never fail the
 run — they need a human/model read, surfaced in the report).
 
-LAB ONLY — never imported by services/zoe-data.
+Operator hand-run parity tooling — never imported by services/zoe-data and not
+part of the deployed unit.
 """
 from __future__ import annotations
 

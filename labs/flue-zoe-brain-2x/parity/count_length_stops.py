@@ -19,7 +19,7 @@ arithmetic is wrong somewhere. Exit code 1 on any hit; roll the flip back.
 
 A GREEN RESULT MUST MEAN "REPLIES WERE CHECKED", NOT "NOTHING WAS FOUND. The
 sidecar creates its store at boot, so a run that never actually reached the 2.x
-lane — ``ZOE_BRAIN_BACKEND`` not flipped, zoe-data pointed at :3578, the harness
+lane — ``ZOE_BRAIN_BACKEND`` not flipped, zoe-data pointed at the wrong sidecar, the harness
 env not applied — leaves a valid, empty database. Counting zero length-stops in
 it and printing PASS would green-light the flip on no evidence at all, which is
 the precise failure this gate exists to prevent. So the gate also counts the
