@@ -503,12 +503,32 @@ class ModuleValidator:
             else:
                 self._warn(f"Container name '{container_name}' doesn't match module '{module_name}'")
             
-            # Check for zoe-network
-            networks = service.get("networks", [])
-            if "zoe-network" in networks:
-                self._pass_check("On zoe-network")
+            # Check for zoe-network.
+            #
+            # SCOPED to bridge-networked services. `network_mode: host` is
+            # Exception B in docs/governance/DOCKER_NETWORKING_RULES.md: Compose
+            # REFUSES `network_mode` together with `networks:`, so demanding
+            # `networks: [zoe-network]` from a host-networked service asks for a
+            # file Compose will not load — it would reject a valid deployment
+            # rather than catch a broken one. (`zoe-music-assistant` is exactly
+            # this shape; see docker-compose.modules.yml:47.)
+            # tools/generate_module_compose.py already skips host mode here.
+            if service.get("network_mode") == "host":
+                if "networks" in service:
+                    self._fail_check(
+                        "network_mode: host cannot be combined with networks: "
+                        "- Compose rejects the file"
+                    )
+                else:
+                    self._pass_check(
+                        "network_mode: host - exempt from zoe-network by design"
+                    )
             else:
-                self._fail_check("NOT on zoe-network - module will be isolated!")
+                networks = service.get("networks", [])
+                if "zoe-network" in networks:
+                    self._pass_check("On zoe-network")
+                else:
+                    self._fail_check("NOT on zoe-network - module will be isolated!")
             
             # Check for network definition
             if "networks" in compose:

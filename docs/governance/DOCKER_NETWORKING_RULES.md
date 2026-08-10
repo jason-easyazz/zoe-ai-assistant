@@ -1,7 +1,14 @@
 # Docker Networking Rules - MANDATORY
 
-**Critical Rule**: All containerised Zoe services MUST be on the SAME Docker network
-(`zoe-network`, with an explicit `name:`) to reach each other by service name.
+**Critical Rule**: All **bridge-networked** containerised Zoe services MUST be on the SAME
+Docker network (`zoe-network`, with an explicit `name:`) to reach each other by service name.
+
+> **Scope, and it is load-bearing:** the rule governs services that join a Docker network at
+> all. A service running `network_mode: host` has no network to join — Compose *rejects*
+> `network_mode` and `networks:` together — and a service that is host-native (not in a
+> container) never had one. Applying the checklist below to either "fixes" a valid deployment
+> into a broken one. Both exceptions are named explicitly further down; there are exactly two,
+> and they exist for **different reasons**.
 
 > **The rule is live; the old cast is not.** Every service this document originally used
 > as an example — `zoe-core` (the old Docker monolith), `zoe-llamacpp`, `zoe-mcp-server`,
@@ -37,8 +44,8 @@ networks:
     driver: bridge
 ```
 
-### 2. All Services Use Same Network
-Every service MUST specify `zoe-network`:
+### 2. All Bridge-Networked Services Use the Same Network
+Every service that joins a Docker network MUST specify `zoe-network`:
 
 ```yaml
 services:
@@ -55,19 +62,55 @@ services:
       - zoe-network
 ```
 
-> `modules/omnigent` is the one deliberate exception to "one network": it joins
-> `zoe-network` **and** a second `internal` network, `zoe-codeintel`, whose only member is
-> pinned at `172.28.0.2` so the `serena-bridge.socket` allowlist can scope it. Adding a
-> second member to that network widens whole-repo read access — see `modules/AGENTS.md`.
+### The two deliberate exceptions
+
+They are listed separately on purpose. Merging them would be a mistake — one is about a
+service joining an **extra** network, the other about a service joining **no** network, and
+the reasons do not transfer.
+
+#### Exception A — `modules/omnigent`: a SECOND network (multi-homed)
+
+`modules/omnigent` joins `zoe-network` **and** a second `internal` network, `zoe-codeintel`,
+whose only member is pinned at `172.28.0.2` so the `serena-bridge.socket` allowlist can scope
+it. It still satisfies the rule above; it just is not *only* on `zoe-network`. Adding a second
+member to that network widens whole-repo read access — see `modules/AGENTS.md`.
+
+#### Exception B — `zoe-music-assistant`: NO network (`network_mode: host`)
+
+`docker-compose.modules.yml:47` declares `network_mode: host` on the live
+`zoe-music-assistant`, and **Compose refuses to combine `network_mode` with `networks:`** —
+so checklist item 2 is not merely waived here, it is *unsatisfiable by construction*.
+
+The reason is unrelated to omnigent's: Music Assistant needs the **host network namespace**
+for local device discovery and streaming (mDNS/SSDP broadcast, AirPlay/Chromecast, and the
+wide dynamic RTP/stream port range), none of which survive a bridge. The consequence is
+documented in that file's own design comments at `:68` and `:78` — because it is
+host-networked it reaches its companions **over published localhost ports**, not Docker DNS
+(e.g. the `ytmusic-potoken` sidecar at `127.0.0.1:4416`). That is a designed property with
+downstream wiring hanging off it, not an oversight to be normalised away.
+
+**Do not "fix" it.** Moving it onto `zoe-network` breaks discovery, breaks
+`po_token_server_url`, and breaks `ZOE_YTMUSIC_POTOKEN_URL` in
+`services/zoe-data/music_service.py`.
+
+`tools/generate_module_compose.py` already agrees with this: its per-service check skips any
+service with `network_mode: host` before asking whether it is on `zoe-network`. The rule
+lives in the code; this document was the thing that was out of date.
+
+> **Not an exception, because it is not in scope at all:** host-native processes. The brain,
+> zoe-data, Kokoro TTS and the router are not containers and never join a Docker network —
+> see "Why This Matters" below.
 
 ## 📋 Validation Checklist
 
-**BEFORE deploying or modifying docker-compose.yml:**
+**BEFORE deploying or modifying any compose file:**
 
 1. ✅ Network has explicit `name:` field
-2. ✅ All services specify `networks: [zoe-network]`
+2. ✅ Every service **that is not `network_mode: host`** specifies `networks: [zoe-network]`
+   (a host-networked service must NOT — see Exception B)
 3. ✅ Confirm every container actually joined it (command below)
-4. ✅ Test connectivity by service name between two LIVE containers
+4. ✅ Test connectivity by service name between two LIVE containers — and remember a
+   host-networked container is reached over `localhost:<published port>` instead
 
 > There is no `tools/docker/validate_networks.sh`. It is referenced in older docs but was
 > never committed; use the commands below.
@@ -205,8 +248,10 @@ fi
 
 - **What is actually running**: `scripts/maintenance/zoe_ground_truth.sh` (read-only) —
   the authority on live state, over any doc including this one.
-- **The one multi-network exception**: [`modules/AGENTS.md`](../../modules/AGENTS.md)
+- **Exception A, the multi-network one**: [`modules/AGENTS.md`](../../modules/AGENTS.md)
   (`omnigent` + `zoe-codeintel`).
+- **Exception B, the host-networking one**: `docker-compose.modules.yml` (`zoe-music-assistant`,
+  `network_mode: host`, with the port-based wiring explained in its `:68` / `:78` comments).
 - **Jetson/Pi Deployment**: Network config identical across platforms.
 
 (There is no `docs/guides/DOCKER_TROUBLESHOOTING.md`; it was referenced here but never
@@ -231,7 +276,10 @@ Check the brain directly (`scripts/maintenance/zoe_ground_truth.sh`).
 
 ## 📌 Summary
 
-**Golden Rule**: ONE network (`zoe-network`) for ALL services, with explicit `name:` field.
+**Golden Rule**: ONE network (`zoe-network`) for every service that joins a Docker network,
+with an explicit `name:` field. Two named exceptions, for two different reasons: `omnigent`
+joins a second network (`zoe-codeintel`); `zoe-music-assistant` joins none at all
+(`network_mode: host`, required for device discovery/streaming).
 
 **Before ANY docker-compose.yml change:**
 1. Validate network configuration
