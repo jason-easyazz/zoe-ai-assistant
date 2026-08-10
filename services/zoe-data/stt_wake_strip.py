@@ -48,20 +48,106 @@ _WAKE_GREETING_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── Pre-roll bleed: the wake phrase is rarely a single clean leading line ────
+# The panel prepends ~1.6s of PRE-ROLL audio to every wake-triggered capture
+# (`PREROLL_CHUNKS=20` x 1280 @ 16k in scripts/setup/zoe_voice_daemon.py). That
+# window deliberately reaches back to BEFORE "Hey" — at 12 chunks it opened
+# mid-phrase and ate the command onset (#1326) — so the wake word AND whatever
+# the room was doing beforehand are both inside the clip. Two consequences, both
+# measured on the operator's corpus, defeat the leading-wake-only-line drop:
+#
+#   (a) SPLIT — Moonshine breaks the wake phrase across a line boundary:
+#       ["Hey", "Zoe. Show me my contacts."]. "Hey" is not a wake-only line, so
+#       the drop never fires and the whole wake phrase reaches the brain.
+#   (b) FILLER — the pre-roll catches a breath/cough/"yeah" that Moonshine emits
+#       as its own line BEFORE the wake line: ["Yeah.", "Hey Zoe.", "Show me my
+#       calendar."]. The wake line is no longer leading, so the drop never fires.
+#
+# Both are fixed by SELECTING lines, never by cutting audio: per the note on
+# _prepare_audio_for_moonshine, trimming samples regressed as many clips as it
+# fixed, so the audio still reaches Moonshine untouched.
+_BARE_GREETING_RE = re.compile(r"^\s*(?:hey|hi|ok|okay)\s*[,.!?…]*\s*$", re.IGNORECASE)
+# The continuation of a SPLIT wake phrase: the line must START with an
+# unambiguous wake variant. The ambiguous real-name homophones (joe/joey/josie)
+# are excluded here for the same reason they are excluded from _WAKE_PREFIX_RE —
+# "Hey" / "Joe wants the weather" must not lose its subject.
+_WAKE_NAME_START_RE = re.compile(r"^\s*(?:zoe|zoey|zoie|zoee|zo|sewey)\b", re.IGNORECASE)
+# Pre-roll junk that Moonshine renders as a short standalone line. Whole-line
+# match only (the `$` anchor), so a real command that merely STARTS with one of
+# these words ("So, add milk to my list") can never be treated as filler.
+_FILLER_LINE_RE = re.compile(
+    r"^\s*(?:yeah|yep|yes|no|um+|uh+|ah+|oh+|mm+|hmm+|huh|er+|so|well|right)"
+    r"\s*[,.!?…]*\s*$",
+    re.IGNORECASE,
+)
+# How far past a filler line we will look for the real wake line. Bounded so a
+# genuine multi-line command can never be consumed by a runaway scan.
+_MAX_FILLER_LOOKAHEAD = 2
+# Skipping a filler line reaches PAST it, so the wake line that justifies the
+# skip has to be a confident one. _WAKE_LINE_RE deliberately also accepts weak
+# homophones ("so", "zo", "a") — harmless when they are the leading line the
+# caller already decided to drop, but as a LOOKAHEAD target they would let a
+# stray "so" authorise eating the line before it ("Well" / "so" / "what now").
+# So the lookahead demands a distinctive zoe-family name.
+_STRONG_WAKE_LINE_RE = re.compile(
+    r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
+    r"(?:zoe|zoey|zoie|zoee|sewey)"
+    r"[\s,.!?]*$",
+    re.IGNORECASE,
+)
+
+
+def _wake_line_at(kept: list, i: int, strong: bool = False) -> bool:
+    """True when line ``i`` is a wake word — either wholly (``_WAKE_LINE_RE``) or
+    as the bare greeting half of a SPLIT wake phrase whose name half opens the
+    next line.
+
+    ``strong=True`` requires a distinctive zoe-family name, for the filler
+    lookahead where a weak homophone must not authorise a skip."""
+    if (_STRONG_WAKE_LINE_RE if strong else _WAKE_LINE_RE).match(kept[i]):
+        return True
+    # The split form is inherently strong: a bare greeting AND a wake name.
+    return (
+        i + 1 < len(kept)
+        and _BARE_GREETING_RE.match(kept[i])
+        and bool(_WAKE_NAME_START_RE.match(kept[i + 1]))
+    )
+
 
 def _strip_wake_word(lines: list) -> str:
     """Given Moonshine's per-line transcript texts (in order), drop the leading
     wake word and return the command transcript.
 
-    Conservative by construction: it only removes whole leading wake-only lines or
-    an inline leading wake prefix, and never returns empty when there was content
-    (a clip that is *only* the wake word is left as-is for the caller to handle)."""
+    Conservative by construction: it only removes leading wake-only lines (plus
+    the pre-roll filler that can precede them) or an inline leading wake prefix,
+    and never returns empty when there was content (a clip that is *only* the
+    wake word is left as-is for the caller to handle)."""
     kept = [t for t in ((s or "").strip() for s in lines) if t]
     if not kept:
         return ""
-    # 1. Drop leading lines that are nothing but a wake word.
-    while len(kept) > 1 and _WAKE_LINE_RE.match(kept[0]):
-        kept = kept[1:]
+    # 1. Drop the leading wake word, tolerating the pre-roll bleed above.
+    #    NOTHING is dropped until a wake line is actually CONFIRMED: `cut` only
+    #    ever advances past a line _wake_line_at() vouched for, so a filler that
+    #    turns out not to precede a wake word leaves the transcript untouched.
+    #    The scan stops before the last line, so the command line always survives.
+    cut = 0
+    i = 0
+    while i < len(kept) - 1:
+        if _wake_line_at(kept, i):
+            cut = i + 1
+            i += 1
+            continue
+        # A filler line is SKIPPED (never itself dropped) only while a real wake
+        # line is still within reach — that is what marks it as pre-roll junk
+        # rather than the start of the command.
+        if _FILLER_LINE_RE.match(kept[i]) and any(
+            _wake_line_at(kept, j, strong=True)
+            for j in range(i + 1, min(i + 1 + _MAX_FILLER_LOOKAHEAD, len(kept) - 1))
+        ):
+            i += 1
+            continue
+        break
+    kept = kept[cut:]
     # 2. If the wake word is inline on the (now) first line, strip just the prefix:
     #    (a) greeting + ambiguous homophone ("hey joey, ..."), then (b) an
     #    unambiguous wake variant ("zoe, ..." / "zo ..."). A bare homophone

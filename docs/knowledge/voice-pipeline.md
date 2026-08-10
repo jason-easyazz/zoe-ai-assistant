@@ -453,6 +453,40 @@ lead-in silence) and the raw Moonshine lines begin at `"Zoe."` with `"Hey"` chop
 from the still-open wake stream (`record_command(pa, stream=...)`), chime fire-and-forget, pre-roll
 widened to ~1.6 s. Pinned by `tests/unit/test_voice_wake_no_dead_air.py`.
 
+**1b. The residual of that fix: wake-word bleed on the wake path only.**
+Widening pre-roll to ~1.6 s (`PREROLL_CHUNKS=20` x 1280 @ 16k) deliberately reaches back to *before*
+"Hey" — at 12 chunks it opened mid-phrase and ate the command onset. The cost is that the wake phrase
+itself is now inside essentially every wake-triggered capture, where it corrupts the head of the
+command. **Follow-up turns take a different path** (`FOLLOWUP_LOOKBACK_CHUNKS=4`, no wake word spoken),
+which makes them a free control group — the asymmetry between the two is the measurement:
+
+| metric (Pi `voice.log`, n=393 wake / 607 follow-up) | wake path | follow-up |
+|---|---|---|
+| wake token leaks into the transcript | 26.7% | 4.4% |
+| user repeats within 60s (near-duplicate utterance) | 27.2% | 16.6% |
+
+Verified by transcribing the bursts of a suspect capture separately: burst 1 is literally `"Hey Zoe"`,
+and removing it turns `"Let's see what they're like"` back into `"What's the weather like?"`. Matched
+pairs recur throughout the log — the same phrase misheard on wake, then correct on the repeat seconds
+later (`"Two on the one."` -> `"Turn on the light"`, `"Most of the time"` -> `"What's the time?"`).
+
+Two failure shapes, and only one is fixable in software today:
+
+- **Text bleed-through** — the wake word survives into the transcript because Moonshine split it
+  across lines (`["Hey", "Zoe. Show me my contacts."]`) or a pre-roll filler line preceded it
+  (`["Yeah.", "Hey Zoe.", ...]`), so the leading-wake-line drop never fired. `_strip_wake_word` now
+  tolerates both (`stt_wake_strip.py`).
+- **Acoustic corruption** — the wake word perturbs the command head with no wake token left in the
+  text (`"What's the weather like?"` -> `"Let's see what they're like"`). This is the *majority* of
+  the damage and no transcript-side rule can reach it.
+
+**Do not "fix" this by trimming the pre-roll audio.** Measured over 54 wake-path corpus clips, cutting
+the wake burst changed 19 transcripts: ~6 repaired, ~4 broken (`"Turn on the light"` -> `"10 on the
+light"`), rest a wash — the same result `_prepare_audio_for_moonshine` records for every other
+per-sample edit. Narrowing `PREROLL_CHUNKS` re-opens the onset clipping in **1** above. A real fix
+needs the daemon to send the *wake-fire offset* as metadata so the server can drop transcript lines
+that end before it — selection, never resampling.
+
 **2. TTS slower than real time (reply plays back chopped).**
 `turn_stream` synthesizes the reply sentence-by-sentence and feeds a single persistent `aplay` pipe.
 That only works if synthesis outruns playback. On a **CPU** backend Kokoro ran at **RTF
