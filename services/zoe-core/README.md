@@ -20,8 +20,8 @@ via Pi's extension hooks.
 > **Status: wired default `core` brain lane.** zoe-core (Pi on Gemma 4 E4B-QAT)
 > is the code default in `services/zoe-data/brain_dispatch.py` (`pi --mode rpc` via
 > `zoe_core_client.py`) — the lane below the live `flue` sidecar
-> (`labs/flue-zoe-brain`, reached via `ZOE_BRAIN_BACKEND=flue`, live on this
-> deployment since 2026-07-03). `zoe_agent.py` is the *legacy* last-resort lane,
+> (`labs/flue-zoe-brain-2x`, reached via `ZOE_BRAIN_BACKEND=flue`, live on this
+> deployment; 2.x since 2026-08-09). `zoe_agent.py` is the *legacy* last-resort lane,
 > not the brain. Extend zoe-core; do not retire it. Only the OLD Docker monolith
 > that once held this name is retired (git history only).
 >

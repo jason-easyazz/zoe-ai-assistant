@@ -160,7 +160,7 @@ failure dispatched it. **Answered by review (2026-07-27):** `_dispatch.ts` is
 the main *zoe-core* caller of `/api/system/intent-dispatch`, not the only caller
 in the repo. The Flue brain has its own tool registry:
 
-    labs/flue-zoe-brain/src/tools/zoe-tools.ts:53
+    labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts
       remember_fact → memory_store {text}   (Wave 3, fulfilled via MemoryService.ingest)
 
 So the competing tool is **`remember_fact`** — "store a durable fact about the

@@ -37,8 +37,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "labs/flue-zoe-brain-2x/parity/gatelib.py",
-          "labs/flue-zoe-brain/parity/gatelib.py"
+          "labs/flue-zoe-brain-2x/parity/gatelib.py"
         ],
         "typed_env": false
       },
@@ -48,8 +47,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py",
-          "labs/flue-zoe-brain/parity/tool_breadth_gate.py"
+          "labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py"
         ],
         "typed_env": false
       },

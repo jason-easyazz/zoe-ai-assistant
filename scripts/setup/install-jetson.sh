@@ -9,7 +9,7 @@
 #   4. Run PostgreSQL migrations (alembic + auth DDL, via scripts/deploy/migrate.sh)
 #   5. Download the canonical Gemma 4 E4B-QAT + MTP brain
 #   6. Install + enable the host-native systemd spine (llama-server, zoe-data, kokoro-tts);
-#      opt-in units (flue-executor, flue-zoe-brain) are installed as inert templates only
+#      opt-in units (flue-executor, flue-zoe-brain-2x) are installed as inert templates only
 #   7. Health-gate the result
 #
 # Re-runnable: existing .env / models / running services are left in place.
@@ -51,7 +51,7 @@ SYSTEMD_SPINE=(llama-server zoe-data kokoro-tts)
 # touches the shared Multica dispatch pause sentinel: arming that pause is an
 # operator go-live action, not a provisioning side effect (it is also read by the
 # live zoe-data poll loop, so recreating it on reinstall would halt live dispatch).
-OPTIONAL_UNITS=(flue-executor flue-zoe-brain)
+OPTIONAL_UNITS=(flue-executor flue-zoe-brain-2x)
 LLAMA_BIN="${HOME}/llama.cpp/build-jetson-new/bin/llama-server"
 
 while [[ $# -gt 0 ]]; do
@@ -195,7 +195,7 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   # edit slips one into SYSTEMD_SPINE, fail loudly rather than silently going live.
   # `systemctl enable` also accepts unit-FILE PATHS, so canonicalize by BASENAME
   # then strip '.service' on BOTH sides — bare, '.service', and path spellings
-  # (./flue-executor.service, /tmp/flue-zoe-brain.service, dir/flue-executor) all
+  # (./flue-executor.service, /tmp/flue-zoe-brain-2x.service, dir/flue-executor) all
   # reduce to the same key and are caught. The spine should never carry paths at
   # all, so a '/' in an entry is itself a defect.
   for u in "${enable_units[@]}"; do

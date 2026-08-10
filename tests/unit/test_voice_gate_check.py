@@ -558,13 +558,14 @@ def test_zoe_core_lockfile_is_voice_path():
 # identical blind spot: a change to the speaking brain took the no-op pass at
 # BOTH ends.
 @pytest.mark.parametrize("path", [
-    "labs/flue-zoe-brain/src/app.ts",
-    "labs/flue-zoe-brain/src/agents/zoe.ts",       # nested, via the src/* glob
-    "labs/flue-zoe-brain/package.json",
-    "labs/flue-zoe-brain/package-lock.json",
-    "labs/flue-zoe-brain/flue.config.ts",
-    "labs/flue-zoe-brain/tsconfig.json",
-    "scripts/setup/systemd/flue-zoe-brain.service",
+    "labs/flue-zoe-brain-2x/src/app.ts",
+    "labs/flue-zoe-brain-2x/src/agents/zoe.ts",    # nested, via the src/* glob
+    "labs/flue-zoe-brain-2x/package.json",
+    "labs/flue-zoe-brain-2x/package-lock.json",
+    "labs/flue-zoe-brain-2x/flue.config.ts",
+    "labs/flue-zoe-brain-2x/tsconfig.json",
+    "labs/flue-zoe-brain-2x/vite.config.ts",
+    "scripts/setup/systemd/flue-zoe-brain-2x.service",
     "services/zoe-data/zoe_flue_client.py",
     "services/zoe-data/brain_dispatch.py",
 ])
@@ -577,15 +578,12 @@ def test_live_flue_brain_lane_is_voice_path(path):
 
 
 @pytest.mark.parametrize("path", [
-    # An unmerged parallel port nothing deploys — gating it would charge every
-    # experimental commit a 20-sample Kokoro replay. Its prefix is one character
-    # from the gated lane, so this also pins that the globs are prefix-exact.
-    "labs/flue-zoe-brain-2x/src/app.ts",
-    "labs/flue-zoe-brain-2x/package.json",
-    # Not deployed: never compiled into dist/server.mjs, never served.
-    "labs/flue-zoe-brain/test/route_identity.test.ts",
-    "labs/flue-zoe-brain/parity/hard_gate.py",
-    "labs/flue-zoe-brain/README.md",
+    # Not deployed: never compiled into dist/server.mjs, never served — so a diff
+    # touching only these must NOT charge a 20-sample Kokoro replay.
+    "labs/flue-zoe-brain-2x/test/route_identity.test.ts",
+    "labs/flue-zoe-brain-2x/parity/hard_gate.py",
+    "labs/flue-zoe-brain-2x/README.md",
+    "labs/flue-zoe-brain-2x/LANDING.md",
 ])
 def test_flue_non_deployed_paths_do_not_gate(path):
     pats = vgc.voice_path_patterns()

@@ -31,6 +31,14 @@ timestamp: 2026-07-06T21:15:00Z
 > The snapshot below is retained as the evidence that motivated the fix — do not
 > read its numbers as current.
 
+> **RETIREMENT NOTE (2026-08-10):** the `flue-zoe-brain` (`:3578`) unit measured
+> throughout this doc was the **1.x** brain lane, since retired (stopped, disabled,
+> source-removed). The live brain is now `flue-zoe-brain-2x.service` on `:3579`,
+> which carries the **identical** caps (`MemorySwapMax=0` / `MemoryLow=512M` /
+> `MemoryMax=2G`) — so the mechanics and the apply/rollback runbook below apply to
+> that unit and port now. The 2026-08-03 measurements are kept verbatim as the
+> historical evidence that motivated the caps.
+
 > **STATUS 2026-08-03 — the two `flue-*` sidecars were MISSED by that fix and are
 > now capped in their templates.** `flue-zoe-brain` is not "lab": under
 > `ZOE_BRAIN_BACKEND=flue` it is the **top** dispatch lane (flue > core > legacy),

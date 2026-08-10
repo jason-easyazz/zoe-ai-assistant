@@ -164,7 +164,8 @@ per-process multi-user workaround in `zoe_core_client.py`.
   into a shared `guest`. Retiring Hermes Telegram happens only **after** this
   channel is live and verified (gates below).
 - **Phase 2 — Flue brain behind the `run_zoe_core` seam. ✅ DELIVERED** (PR trail
-  in §10). The sidecar lives at `labs/flue-zoe-brain/` (`registerProvider` Gemma,
+  in §10). The sidecar lives at `labs/flue-zoe-brain-2x/` (the Flue 2.x port; the
+  1.x `labs/flue-zoe-brain/` lane was retired 2026-08-10) (`registerProvider` Gemma,
   `soul` → instructions); zoe-data reaches it through the **default-OFF**
   `ZOE_BRAIN_BACKEND=flue` seam (#904 — default path byte-identical). E2E-verified
   through the seam. It is a **lab sidecar, not canonical** — the voice-corpus
@@ -429,11 +430,11 @@ Four parallel deep-dive threads (2026-06-28), each evidence-backed:
   default path byte-identical**.
 - **#952** — progressive tool disclosure: **11 → 3 schemas** on a typical turn
   (always-on core `get_time` / `recall_memory` / `activate_abilities`; keyword
-  groups in `labs/flue-zoe-brain/src/tools/tool-groups.ts`; wire filter in
+  groups in `labs/flue-zoe-brain-2x/src/tools/tool-groups.ts`; wire filter in
   `src/providers/capped-completions.ts`; kill switch
   `ZOE_BRAIN_PROGRESSIVE_TOOLS=false`). Also the operator opt-in systemd unit
   template `scripts/setup/systemd/flue-zoe-brain.service` and the lab runbook
-  (`labs/flue-zoe-brain/README.md`).
+  (`labs/flue-zoe-brain-2x/README.md`).
 - **#965** — activator fallback hardening: imperative activate-first /
   never-fabricate doctrine + the `GROUP_SUMMARY` group catalogue in the agent
   instructions; the activator's wire schema pinned to a bare enum by test;
@@ -485,7 +486,7 @@ re-run needs a real authenticated test user on both sides — now unblocked:
 `parity-gate-user` through AuthService with demo-user guardrails; log in via
 `POST :8002/api/auth/login` and pass the session as `X-Session-ID` on the prod
 side, same user through the Seam-A identity envelope on the flue side. Full
-record: `labs/flue-zoe-brain/parity/` scratch.
+record: `labs/flue-zoe-brain-2x/parity/` scratch.
 
 ### Cutover — DONE 2026-07-03 (operator-authorized), fix-after in progress
 
@@ -526,7 +527,7 @@ sidecar store. Rollback is one env removal + a zoe-data restart (~15 s).
    ALS was proven broken through the `?wait=result` path (the agent fiber does
    not inherit the route's ALS store). The working design keys identity by the
    turn's `AbortSignal` in a `WeakMap`, carried by a trusted ` zoe-uid:` message
-   envelope from the seam; see `labs/flue-zoe-brain/src/request-identity.ts`.
+   envelope from the seam; see `labs/flue-zoe-brain-2x/src/request-identity.ts`.
 3. **Quality is marginally below the old core** (92.5% vs 95%, confound-corrected)
    — the deliberate trade for the ~2× latency win; watch it in daily use. A clean
    re-run still needs an authenticated test user (zoe-auth provisioning).
@@ -539,7 +540,7 @@ sidecar store. Rollback is one env removal + a zoe-data restart (~15 s).
    tokens) exceeds the available context size (8192 tokens)` — observed live on
    the harness replay session at 198 stored entries; any long-lived Telegram or
    voice session hits the same wall). Fix: **prompt-fit history windowing** at
-   the capped-provider wire seam (`labs/flue-zoe-brain/src/context-window.ts`,
+   the capped-provider wire seam (`labs/flue-zoe-brain-2x/src/context-window.ts`,
    applied in `applyPolicies`): drop the OLDEST whole user-turn blocks until the
    estimated prompt (~4 chars/token, Flue's own heuristic) fits
    `ZOE_BRAIN_CONTEXT_WINDOW` (default 8192, the llama-server rock's

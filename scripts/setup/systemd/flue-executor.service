@@ -33,13 +33,13 @@
 [Unit]
 Description=Flue Executor (lab) — single-lane Multica queue consumer
 # Reads Multica's DB (via the shared zoe-database container). Restart=always
-# recovers start-order races on boot (same pattern as flue-zoe-brain.service).
+# recovers start-order races on boot (same pattern as flue-zoe-brain-2x.service).
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=%h/assistant/labs/flue-executor
-# Adjust the node path if you are not using nvm (same convention as flue-zoe-brain).
+# Adjust the node path if you are not using nvm (same convention as flue-zoe-brain-2x).
 ExecStart=%h/.nvm/current/bin/node --experimental-strip-types src/live-runner.ts
 Restart=always
 RestartSec=5

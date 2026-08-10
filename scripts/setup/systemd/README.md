@@ -15,8 +15,7 @@ Secrets are never inlined — they are read from `.env` files.
 | `kokoro-tts.service`       | 10201 | Local neural TTS sidecar |
 | `zoe-data.service`         | 8000  | Primary backend API |
 | `functiongemma-router.service` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M r2, CPU) — **platform-specific paths**; optional |
-| `flue-zoe-brain.service`   | 3578  | Flue Zoe-brain sidecar (optional, operator opt-in) |
-| `flue-zoe-brain-2x.service` | 3579 | Flue **2.x** Zoe-brain sidecar, the parallel port in `labs/flue-zoe-brain-2x/` — **ships inert; runs BESIDE :3578 so cutover is an env flip with a warm fallback.** Cutover + rollback runbook: `labs/flue-zoe-brain-2x/README.md` |
+| `flue-zoe-brain-2x.service` | 3579 | Flue **2.x** Zoe-brain sidecar in `labs/flue-zoe-brain-2x/` — **the LIVE brain lane** (`ZOE_BRAIN_BACKEND=flue`), cut over 2026-08-09; the 1.x `:3578` sidecar was retired 2026-08-10. Optional/operator opt-in; ships inert. Runbook: `labs/flue-zoe-brain-2x/README.md` |
 | `flue-executor.service`    | —     | Multica queue consumer (executor migration Phase 2) — **optional, operator opt-in; ships inert (not enabled, dispatch defaults dry) — see below** |
 | `serena-mcp.service`       | 9121  | Shared Serena MCP code-intelligence server (dev tooling, one per HOST — see below) |
 
@@ -160,10 +159,10 @@ its first request — it walks every `.gitignore` under the checkout, and the
 2026-07-22. A hanging handshake right after a restart is warm-up, not the
 bridge; check `systemctl --user status serena-mcp` before debugging.
 
-`flue-zoe-brain.service` is deliberately NOT in that enable line: it supervises
+`flue-zoe-brain-2x.service` is deliberately NOT in that enable line: it supervises
 the sidecar behind zoe-data's default-OFF `ZOE_BRAIN_BACKEND=flue` seam.
 Enable it only when running the Flue brain — build + env steps are in
-[labs/flue-zoe-brain/README.md](../../../labs/flue-zoe-brain/README.md).
+[labs/flue-zoe-brain-2x/README.md](../../../labs/flue-zoe-brain-2x/README.md).
 
 ## Opt-in Multica queue consumer (`flue-executor.service`)
 
@@ -337,7 +336,7 @@ reply after idle) rather than a resource one.
 | `llama-server` | `0` | `6G` | *(none — see below)* |
 | `kokoro-tts`   | `0` | `3G` | `4G` |
 | `zoe-data`     | `0` | `2G` | *(none — see below)* — also `CPUWeight`/`IOWeight` `300` |
-| `flue-zoe-brain` | `0` | `512M` | `2G` |
+| `flue-zoe-brain-2x` | `0` | `512M` | `2G` |
 | `flue-zoe-telegram` | `0` | `256M` | `1G` |
 | `functiongemma-router` | `0` | `768M` | `1G` |
 | `serena-mcp`   | `2G` | — | `2G` (dev tooling, deliberately yields) |
@@ -353,9 +352,10 @@ voice path on disk. `kokoro-tts` had no memory directives at all (cgroup
 `memory.low` was `0`), so the kernel reclaimed it first.
 
 The same thing was true of both `flue-*` sidecars until 2026-08-03 — that pass
-fixed the units it knew about and nothing enforced the class. `flue-zoe-brain` is
+fixed the units it knew about and nothing enforced the class. The Flue brain is
 the **top** brain lane under `ZOE_BRAIN_BACKEND=flue` (flue > core > legacy) and
-was 87% paged out; `flue-zoe-telegram` had no directives at all. Measurements,
+the then-live 1.x sidecar was 87% paged out; `flue-zoe-telegram` had no
+directives at all. Measurements,
 sizing rationale and the operator apply/rollback sequence:
 [`docs/knowledge/memory-pressure-profile.md`](../../../docs/knowledge/memory-pressure-profile.md)
 (2026-08-03 section). **Applying these live means a drop-in, not a template copy**

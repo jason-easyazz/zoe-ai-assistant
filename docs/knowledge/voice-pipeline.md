@@ -211,8 +211,8 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
 - **Deploy-path checker — `scripts/maintenance/voice_gate_check.py`:** the cheap counterpart the
   blessed deploy (`deploy_live.sh`) invokes. If the incoming git diff touches the **voice runtime
   path** (`voice_tts.py` / `zoe_core_client.py` / `fast_tiers.py` / `*kokoro*` / `*moonshine*`, plus
-  the **live** brain lane — `labs/flue-zoe-brain/` deployed source, `zoe_flue_client.py`,
-  `brain_dispatch.py`, `flue-zoe-brain.service` — the dormant zoe-core fallback's manifest, and the
+  the **live** brain lane — `labs/flue-zoe-brain-2x/` deployed source, `zoe_flue_client.py`,
+  `brain_dispatch.py`, `flue-zoe-brain-2x.service` — the dormant zoe-core fallback's manifest, and the
   live router's model directory `services/zoe-data/models/*`, which holds the stage-1 checkpoint that
   decides which tool a voice turn fires (swapping that file re-routes every turn with **no code diff
   at all**; it is a directory glob so the next head added there gates by default, and the offline

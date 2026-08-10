@@ -33,7 +33,7 @@ systemd user services for the latency-sensitive ones.
 
 | Layer | Service | Port | Notes |
 |-------|---------|------|-------|
-| Brain sidecar | `flue-zoe-brain` | 3578 | Flue Pi-Agent brain, enabled via `ZOE_BRAIN_BACKEND=flue` |
+| Brain sidecar | `flue-zoe-brain-2x` | 3579 | Flue 2.x Pi-Agent brain, enabled via `ZOE_BRAIN_BACKEND=flue` |
 | Router | `functiongemma-router` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M) |
 | Music | `zoe-music-assistant` (Music Assistant) | 8095 | Docker module (`docker-compose.modules.yml`), proxied at `/modules/music-assistant/` |
 

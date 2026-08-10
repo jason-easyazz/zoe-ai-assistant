@@ -17,13 +17,13 @@
 Description=Flue Zoe Telegram channel (lab)
 # Talks to zoe-data (:8000) for the resolver + /api/chat. A user unit cannot
 # order itself after that reliably on boot; Restart=always recovers start-order
-# races (same pattern as zoe-data.service / flue-zoe-brain.service).
+# races (same pattern as zoe-data.service / flue-zoe-brain-2x.service).
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=%h/assistant/labs/flue-zoe-telegram-2x
-# Adjust the node path if you are not using nvm (same convention as flue-zoe-brain).
+# Adjust the node path if you are not using nvm (same convention as flue-zoe-brain-2x).
 ExecStart=%h/.nvm/current/bin/node dist/server.mjs
 Restart=always
 RestartSec=5
@@ -35,7 +35,7 @@ RestartSec=5
 EnvironmentFile=%h/assistant/labs/flue-zoe-telegram-2x/.env
 
 # ── Keep the channel bridge out of swap ──────────────────────────────────────
-# Same gap as flue-zoe-brain.service, and worse: measured on the live Orin
+# Same gap as flue-zoe-brain-2x.service, and worse: measured on the live Orin
 # 2026-08-03 this unit had NO memory directives at all, so its cgroup
 # `memory.low` was 0 — zero reclaim protection, the exact state kokoro-tts was
 # in before #1409. It held VmRSS 6.1 MB against VmSwap 65.2 MB (78% paged out),
@@ -51,7 +51,7 @@ EnvironmentFile=%h/assistant/labs/flue-zoe-telegram-2x/.env
 #
 # Sizing. Corrected alongside flue-zoe-brain — the original 768M was a multiple
 # of VmHWM (145.9 MB), and VmHWM was sampled on an already-starved box, so it is
-# a LOWER bound on the unstressed peak. See flue-zoe-brain.service for the full
+# a LOWER bound on the unstressed peak. See flue-zoe-brain-2x.service for the full
 # measurement; the load-bearing part applies here identically: V8 sizes its JS
 # heap to ~51% of the cgroup ceiling, so a JS-heap runaway hits V8's limit first
 # (a logged, attributable heap-OOM — which still usually terminates the process,

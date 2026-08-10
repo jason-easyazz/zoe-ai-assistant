@@ -29,7 +29,7 @@ These run as **user systemd** units (`systemctl --user`), straight on the host:
 | Brain | `llama-server.service` | `0.0.0.0:11434` | host-native llama.cpp serving the Gemma 4 E4B-QAT + MTP rock (~5.2 GB mlock) | journald |
 | TTS | `kokoro-tts.service` | `127.0.0.1:10201` | Kokoro voice sidecar (localhost-only, `device=cuda`, RTF ~0.08) | journald |
 | Router (stage-2) | `functiongemma-router.service` | `127.0.0.1:11436` | FunctionGemma-270M decoder for the **two-stage router** (SetFit MLP shortlist → GBNF decode); zoe-data selects it via `ZOE_ROUTER_HEAD=active` (#1322, live) | journald |
-| Brain sidecar | `flue-zoe-brain.service` | `127.0.0.1:3578` | Flue Pi-Agent brain sidecar; **LIVE** on this deployment via `ZOE_BRAIN_BACKEND=flue` (shares the Gemma rock on `:11434`) | journald |
+| Brain sidecar | `flue-zoe-brain-2x.service` | `127.0.0.1:3579` | Flue 2.x Pi-Agent brain sidecar; **LIVE** on this deployment via `ZOE_BRAIN_BACKEND=flue` + `ZOE_FLUE_WIRE=2` (shares the Gemma rock on `:11434`). The 1.x `:3578` lane was retired 2026-08-10 | journald |
 | Telegram | `flue-zoe-telegram.service` | — | Flue Telegram front door (re-slotted through `/api/chat`) | journald |
 
 - `zoe-data` runs from the **live checkout** `WorkingDirectory=/home/zoe/assistant/services/zoe-data`,

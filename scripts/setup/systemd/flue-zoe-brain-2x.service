@@ -1,23 +1,24 @@
-# Flue 2.x Zoe-brain sidecar (parallel port) — labs/flue-zoe-brain-2x/, port 3579.
+# Flue 2.x Zoe-brain sidecar — labs/flue-zoe-brain-2x/, port 3579.
 #
-# SHIPS INERT. Installing this file does nothing on its own: it is not enabled,
-# nothing starts it, and zoe-data does not address :3579 until an operator sets
-# ZOE_FLUE_BRAIN_URL. The sibling `flue-zoe-brain.service` (:3578) remains the
-# live brain lane under ZOE_BRAIN_BACKEND=flue. Both units are designed to run
-# SIDE BY SIDE — that is the whole point of the parallel directory: the cutover
-# is an env flip on zoe-data with the old sidecar still up and warm, so rollback
-# is another env flip rather than a rebuild.
+# THE LIVE BRAIN LANE. Since the brain retirement this is the sole production
+# brain (ZOE_BRAIN_BACKEND=flue, reached via ZOE_FLUE_BRAIN_URL → :3579). The
+# former 1.x sibling `flue-zoe-brain.service` (:3578) was stopped, disabled and
+# its source removed; deploy.yml's BRAIN job was retargeted to this directory /
+# service / port in #1675. There is no warm-fallback sidecar any more — the 1.x
+# instant-rollback path (ZOE_FLUE_WIRE=1 + repoint :3578) is retired with it.
 #
-# The full cutover + rollback sequence lives in labs/flue-zoe-brain-2x/README.md
-# ("Cutover runbook"). Read it before starting this unit — there is a client-side
-# prerequisite (below) without which a flip returns HTTP 400 on every turn.
+# SHIPS INERT in the repo: installing this template does nothing on its own
+# (not enabled by the installer), and a fresh box does not address :3579 until
+# an operator sets ZOE_FLUE_BRAIN_URL and enables the unit. The cutover +
+# (historical) rollback record lives in labs/flue-zoe-brain-2x/README.md.
 #
-# PREREQUISITE — the wire contract is NOT backward-compatible. Flue 2.x rejects
-# the beta's POST body. Measured against the built 2.x server 2026-08-06:
+# WIRE — Flue 2.x uses a POST body that is NOT the beta's. Measured against the
+# built 2.x server 2026-08-06:
 #   {"message":"hi"}                -> HTTP 400 invalid_request
 #   {"kind":"user","body":"hi"}     -> HTTP 202
-# `services/zoe-data/zoe_flue_client.py` sends the first shape today, so pointing
-# it at this unit before the Phase-2 client change lands breaks every brain turn.
+# The live client speaks this wire via `ZOE_FLUE_WIRE=2` in zoe-data's env
+# (`services/zoe-data/zoe_flue_client.py` still DEFAULTS to the beta wire in
+# code — the default is the retired-rollback leftover, overridden on the box).
 # `labs/flue-zoe-brain-2x/parity/flue_wire.py` is the reference implementation of
 # the 2.x wire (fire-and-forget admission + NDJSON stream read).
 #
@@ -28,31 +29,28 @@
 #
 # STORAGE IS SEPARATE AND MUST STAY SEPARATE. Flue 2.x persists schema v8; the
 # beta persists v5, and the runtime REJECTS an older store before any application
-# code runs. A 2.x process that has written a v8 database cannot be rolled back to
-# the beta on that file. Leave ZOE_BRAIN_DB unset: it defaults to
-# labs/flue-zoe-brain-2x/data/zoe-brain.db, which is already a different file from
-# the live sidecar's. Never point the two units at one store — it makes the
-# rollback half of the runbook impossible.
+# code runs. A 2.x process that has written a v8 database cannot be read by the
+# retired beta at all. Leave ZOE_BRAIN_DB unset: it defaults to
+# labs/flue-zoe-brain-2x/data/zoe-brain.db, its own file.
 #
-# PORT NOTE: :3579 is also the scratch port used by both LANDING.md hand-run
-# recipes (1.x and 2.x). Once this unit is installed, use a different scratch port
-# for hand runs, or `systemctl --user stop flue-zoe-brain-2x` first.
+# PORT NOTE: :3579 is also the scratch port used by the LANDING.md hand-run
+# recipe. Once this unit is installed, use a different scratch port for hand
+# runs, or `systemctl --user stop flue-zoe-brain-2x` first.
 [Unit]
-Description=Flue 2.x Zoe-brain sidecar (parallel port, port 3579)
+Description=Flue 2.x Zoe-brain sidecar (port 3579)
 # Talks to llama-server (:11434) and zoe-data (:8000). A user unit cannot order
 # itself after those reliably on boot; Restart=always recovers start-order races
-# (same pattern as flue-zoe-brain.service / zoe-data.service).
+# (same pattern as zoe-data.service).
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=%h/assistant/labs/flue-zoe-brain-2x
-# Adjust the node path if you are not using nvm (same convention as the sibling).
+# Adjust the node path if you are not using nvm.
 ExecStart=%h/.nvm/current/bin/node dist/server.mjs
 Restart=always
 RestartSec=5
-# 3579, NOT 3578: this unit is designed to run beside the live sidecar so the
-# cutover can be an env flip with a warm fallback still listening.
+# 3579 — the production brain port since the 1.x :3578 sidecar was retired.
 Environment=PORT=3579
 # Secrets and identity (ZOE_BRAIN_TOKEN or ZOE_BRAIN_OPEN, ZOE_BRAIN_USER_ID,
 # ZOE_INTERNAL_TOKEN, ZOE_BRAIN_ALLOW_WRITES, ...) live in the lab-local .env —
@@ -63,10 +61,9 @@ Environment=PORT=3579
 EnvironmentFile=%h/assistant/labs/flue-zoe-brain-2x/.env
 
 # ── Keep the brain lane out of swap ──────────────────────────────────────────
-# IDENTICAL to flue-zoe-brain.service, deliberately: after cutover this unit IS
-# the top brain lane, so it inherits the same latency contract and the same
-# measured rationale. Do not re-derive these numbers here — the full working is
-# in scripts/setup/systemd/flue-zoe-brain.service and
+# This unit IS the top brain lane, so it carries the brain latency contract and
+# the measured rationale carried over from the retired 1.x sidecar. Do not
+# re-derive these numbers here — the full working is in
 # docs/knowledge/memory-pressure-profile.md. In summary:
 #
 #   MemorySwapMax=0 — the only directive that actually holds. Measured on the
