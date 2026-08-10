@@ -243,7 +243,7 @@ jobs:
 
       # The Flue brain sidecar is the production brain when ZOE_BRAIN_BACKEND=flue.
       # It runs a pre-built dist/ and `flue build` externalizes deps, so a change to
-      # labs/flue-zoe-brain/ on main does NOT reach the running brain until dist is
+      # labs/flue-zoe-brain-2x/ on main does NOT reach the running brain until dist is
       # rebuilt and the service restarted. Do that here — but ONLY when the sidecar
       # source actually changed (a build is ~1-2 min), and only if the service is
       # installed (skips cleanly when the seam isn't in use on this host).
@@ -254,15 +254,15 @@ jobs:
           # exits 0 with empty output on some systemd versions when the unit is
           # absent, so an exit-code-only check would fall through and then fail on
           # restart. Match the unit name in the output instead.
-          if ! systemctl --user list-unit-files flue-zoe-brain.service 2>/dev/null \
-               | grep -q '^flue-zoe-brain\.service'; then
-            echo "flue-zoe-brain.service not installed on this host — skipping."
+          if ! systemctl --user list-unit-files flue-zoe-brain-2x.service 2>/dev/null \
+               | grep -q '^flue-zoe-brain-2x\.service'; then
+            echo "flue-zoe-brain-2x.service not installed on this host — skipping."
             exit 0
           fi
           cd /home/zoe/assistant
           if [ -n "${OLD_SHA:-}" ] \
-             && git diff --quiet "${OLD_SHA}" HEAD -- labs/flue-zoe-brain/ \
-             && [ -f labs/flue-zoe-brain/dist/server.mjs ]; then
+             && git diff --quiet "${OLD_SHA}" HEAD -- labs/flue-zoe-brain-2x/ \
+             && [ -f labs/flue-zoe-brain-2x/dist/server.mjs ]; then
             echo "sidecar source unchanged since ${OLD_SHA} and dist present — no rebuild needed."
             exit 0
           fi
@@ -284,10 +284,10 @@ jobs:
           # ~/.nvm/current/bin/node for the same reason). Put nvm's active-version
           # bin on PATH so `npm ci` / `npm run build` resolve — otherwise this
           # step fails with "npm: command not found" (exit 127) the first time a
-          # commit actually touches labs/flue-zoe-brain/ and triggers the rebuild.
+          # commit actually touches labs/flue-zoe-brain-2x/ and triggers the rebuild.
           export PATH="$HOME/.nvm/current/bin:$PATH"
           command -v npm >/dev/null || { echo "npm still not found on PATH: $PATH"; exit 1; }
-          cd labs/flue-zoe-brain
+          cd labs/flue-zoe-brain-2x
           # npm ci = reproducible install from the committed lockfile, so the
           # deployed dist matches what was tested (npm install could pull newer
           # transitive deps between merge and deploy). Fall back to npm install
@@ -298,13 +298,13 @@ jobs:
             npm install --no-audit --no-fund
           fi
           npm run build
-          systemctl --user restart flue-zoe-brain.service
+          systemctl --user restart flue-zoe-brain-2x.service
           for attempt in $(seq 1 12); do
-            curl -sf http://127.0.0.1:3578/health > /dev/null 2>&1 \
-              && { echo "flue-zoe-brain healthy after ${attempt} attempt(s)"; exit 0; }
+            curl -sf http://127.0.0.1:3579/health > /dev/null 2>&1 \
+              && { echo "flue-zoe-brain-2x healthy after ${attempt} attempt(s)"; exit 0; }
             sleep 5
           done
-          echo "flue-zoe-brain failed health check after restart"
+          echo "flue-zoe-brain-2x failed health check after restart"
           exit 1
 
       # The Telegram bot (flue-zoe-telegram) is a front-door channel that also runs
