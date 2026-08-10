@@ -78,6 +78,37 @@ _PENDING_VOICE_IDENT: dict[str, dict] = {}
 # step 1 = collected first answer, asking follow-up
 _INTRO_STATE: dict[str, dict] = {}
 
+# Identity sentinels that are not real user accounts. Chat persistence must
+# never attribute a turn to one of them: "voice-guest" has no `users` row, so
+# the chat_messages save dies on the FK — and that failure used to be swallowed
+# silently, which is why NO panel voice conversation ever persisted (P-F6,
+# live-diagnosed 2026-07-07). A panel actually bound to a real user in
+# ui_panel_sessions always takes precedence over these sentinels.
+_GUEST_SENTINEL_USERS = frozenset({"", "guest", "voice-guest", "voice-daemon"})
+
+
+def _real_user_or_none(value) -> Optional[str]:
+    """Normalise a guest sentinel to None so it can never pose as an identity.
+
+    A sentinel string like "guest" is TRUTHY, so storing one in a slot that is
+    later consumed by an `or`-chain silently out-ranks the real logged-in user
+    and can never be refreshed. That is not hypothetical: it is the
+    panel-login-invisible-to-voice bug (live 2026-08-10). `bound_user_id` was
+    stamped with "guest" while nobody was signed in, survived every session
+    rollover, and then shadowed `panel_recent`/`panel_default` — so after a
+    successful PIN login the voice lane still resolved scope identity to
+    "guest" and kept forcing re-authentication.
+
+    Use this at every boundary where an identity is STORED or READ, so a
+    sentinel is normalised once rather than special-cased at each consumer.
+    """
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if cleaned in _GUEST_SENTINEL_USERS:
+        return None
+    return cleaned
+
 
 def _get_or_create_voice_session(panel_id: str) -> str:
     """Return the existing session_id for this panel, or create a new one."""
@@ -89,10 +120,13 @@ def _get_or_create_voice_session(panel_id: str) -> str:
         return entry["session_id"]
     session_id = f"voice-panel-{panel_id}-{_uuid.uuid4().hex[:8]}"
     # Preserve bound identity across idle TTL rollovers so authenticated
-    # panels do not get unnecessary repeat auth challenges.
+    # panels do not get unnecessary repeat auth challenges. A guest sentinel is
+    # NOT an identity, so it must not be carried forward — doing so made an
+    # "unbound" panel look permanently bound to "guest" across every rollover.
     _next = {"session_id": session_id, "last_at": now}
-    if entry and entry.get("bound_user_id"):
-        _next["bound_user_id"] = entry["bound_user_id"]
+    _carried = _real_user_or_none(entry.get("bound_user_id")) if entry else None
+    if _carried:
+        _next["bound_user_id"] = _carried
     if entry and entry.get("context") and entry["context"].is_fresh():
         _next["context"] = entry["context"]
     _VOICE_SESSIONS[panel_id] = _next
@@ -2480,15 +2514,6 @@ async def _handle_introduce_intent(
     return person_id
 
 
-# Identity sentinels that are not real user accounts. Chat persistence must
-# never attribute a turn to one of them: "voice-guest" has no `users` row, so
-# the chat_messages save dies on the FK — and that failure used to be swallowed
-# silently, which is why NO panel voice conversation ever persisted (P-F6,
-# live-diagnosed 2026-07-07). A panel actually bound to a real user in
-# ui_panel_sessions always takes precedence over these sentinels.
-_GUEST_SENTINEL_USERS = frozenset({"", "guest", "voice-guest", "voice-daemon"})
-
-
 async def _schedule_voice_chat_save(
     session_id: str, user_text: str, reply: str, user_id: str
 ) -> None:
@@ -2673,10 +2698,13 @@ async def voice_command(
 
     # Pass 3 B3: if daemon supplied an identified_user_id, bind it to the session
     # so the next turn from the same panel doesn't need to re-verify.
-    if identified_user_id:
+    _identified_real_user = _real_user_or_none(identified_user_id)
+    if _identified_real_user:
         _ses = _VOICE_SESSIONS.get(panel_id)
         if _ses:
-            _ses["bound_user_id"] = identified_user_id
+            # Store the NORMALISED value: the slot must only ever hold a real
+            # user id, so every reader can trust it without re-checking.
+            _ses["bound_user_id"] = _identified_real_user
 
     # Resolve effective user once so all downstream branches (intent fast path,
     # scope checks, Zoe Agent, and Hermes escalation) share the same identity.
@@ -2689,7 +2717,13 @@ async def voice_command(
     # the resolvers' best-effort `except: pass` swallows it → None → effective_user
     # ='guest' → every panel voice turn was silently dropped from memory. A private
     # short-lived connection removes the race (reproduced: solo→jason, concurrent→None).
-    _bound_user = (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
+    # A sentinel here is treated as NO binding, so a real panel login below can
+    # claim the slot. Without this, "guest" was truthy, out-ranked
+    # `_panel_recent_user` in every `or`-chain, and blocked the refresh at the
+    # `if not _bound_user` guard — the panel login was invisible to voice.
+    _bound_user = _real_user_or_none(
+        (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
+    )
     _panel_recent_user = None
     _panel_default_user = None
     try:
@@ -2730,14 +2764,26 @@ async def voice_command(
     # stale-owner reclaim could never arm. Freshness confers trust (#1348); a stale
     # owner is reclaimable. Attribution is unaffected: `_panel_default_user` is
     # already the last resort in `effective_user` below.
-    if _panel_recent_user and _panel_recent_user not in _GUEST_SENTINEL_USERS:
-        await _touch_panel_session(panel_id, _panel_recent_user)
-    if not _bound_user and _panel_recent_user:
+    _recent_real_user = _real_user_or_none(_panel_recent_user)
+    if _recent_real_user:
+        await _touch_panel_session(panel_id, _recent_real_user)
+    # Only a REAL user may claim the binding slot. Stamping a sentinel here is
+    # what poisoned the cache: a turn taken while nobody was signed in wrote
+    # "guest", and that value then outlived the login it was supposed to track.
+    if not _bound_user and _recent_real_user:
         _ses = _VOICE_SESSIONS.get(panel_id)
         if _ses is not None:
-            _ses["bound_user_id"] = _panel_recent_user
-        _bound_user = _panel_recent_user
-    _scope_identity_user = identified_user_id or _bound_user or _panel_recent_user
+            _ses["bound_user_id"] = _recent_real_user
+        _bound_user = _recent_real_user
+    # The PIN / sensitive-scope gate reads these two. Every input is normalised
+    # so a sentinel can neither (a) shadow the real signed-in user — which made
+    # a successful panel login invisible and re-challenged it forever — nor
+    # (b) pose as an identity itself: `bool("guest")` is True, so a guest used
+    # to satisfy `_has_scope_identity` and walk straight through the
+    # `user_scoped` gates below. Absent identity must be None, not "guest".
+    _scope_identity_user = (
+        _real_user_or_none(identified_user_id) or _bound_user or _recent_real_user
+    )
     _has_scope_identity = bool(_scope_identity_user)
     effective_user = (
         identified_user_id
@@ -2754,9 +2800,14 @@ async def voice_command(
         # identified_user_id="voice-guest") must not out-rank a panel that is
         # actually bound to a real user in ui_panel_sessions — the turn would
         # be mis-attributed and its chat_messages save would die on the users
-        # FK. Reuse the panel lookups already resolved above. Persistence
-        # attribution only: the PIN/sensitive-scope gate reads
-        # _scope_identity_user/_has_scope_identity (set above) and is untouched.
+        # FK. Reuse the panel lookups already resolved above.
+        #
+        # STILL REACHABLE, deliberately: `effective_user` above starts from the
+        # RAW `identified_user_id`, so a client-supplied sentinel lands here even
+        # though `_scope_identity_user` normalises it. This block is attribution
+        # only — the PIN/sensitive-scope gate reads
+        # `_scope_identity_user`/`_has_scope_identity`, which now reject a
+        # sentinel outright rather than being rescued after the fact.
         _panel_bound_user = _panel_recent_user or _panel_default_user
         if _panel_bound_user and _panel_bound_user not in _GUEST_SENTINEL_USERS:
             logger.info(
@@ -4844,7 +4895,9 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         if not _brain_prewarm_on_wake_enabled():
             return
         session_id = _get_or_create_voice_session(panel_id)
-        user_id = (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id") or ""
+        user_id = _real_user_or_none(
+            (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
+        ) or ""
         if not user_id:
             try:
                 from db_pool import get_db_ctx
