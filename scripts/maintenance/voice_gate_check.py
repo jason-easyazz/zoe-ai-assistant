@@ -166,34 +166,38 @@ VOICE_PATH_PATTERNS = (
     # PR that committed the lockfile for exactly this determinism).
     "services/zoe-core/package.json",
     "services/zoe-core/package-lock.json",
-    # THE LIVE BRAIN LANE. zoe-core above is the DORMANT fallback; since
-    # 2026-07-03 the brain that actually answers voice turns is the Flue sidecar
-    # (ZOE_BRAIN_BACKEND=flue), supervised by flue-zoe-brain.service and reached
-    # from zoe-data through zoe_flue_client.py. The gate matched the fallback and
-    # not the live lane, so a change to the brain that is ACTUALLY SPEAKING took
-    # the no-op pass at PR time AND at deploy — the deploy gate calls this same
-    # module, so it inherited the identical blind spot.
+    # THE LIVE BRAIN LANE. zoe-core above is the DORMANT fallback; the brain that
+    # actually answers voice turns is the Flue sidecar (ZOE_BRAIN_BACKEND=flue),
+    # supervised by flue-zoe-brain-2x.service and reached from zoe-data through
+    # zoe_flue_client.py. The gate matched the fallback and not the live lane, so
+    # a change to the brain that is ACTUALLY SPEAKING took the no-op pass at PR
+    # time AND at deploy — the deploy gate calls this same module, so it inherited
+    # the identical blind spot.
+    #
+    # Repointed 1.x → 2.x on the brain retirement (the 1.x `labs/flue-zoe-brain/`
+    # sidecar on :3578 was stopped+disabled and its source removed; the Flue 2.x
+    # port `labs/flue-zoe-brain-2x/` on :3579 is the sole live brain, matching the
+    # deploy.yml BRAIN job retargeted in #1675). The 2.x port was DELIBERATELY
+    # ABSENT here while it was an unmerged parallel port — it is the served lane
+    # now, so it is gated here, exactly as the "gate it THEN" note intended.
     #
     # Only the DEPLOYED inputs are listed: src/ (compiled into dist/server.mjs by
-    # `flue build`), the manifest + lockfile `npm ci` installs, and the two build
-    # configs that decide what gets emitted. test/ and parity/ are NOT gated on
-    # purpose — they never reach the running sidecar, and gating them would force
-    # a 20-sample Kokoro replay for a test-only or docs-only diff. Same for
+    # the Vite build), the manifest + lockfile `npm ci` installs, and the two
+    # build configs that decide what gets emitted. test/ and parity/ are NOT gated
+    # on purpose — they never reach the running sidecar, and gating them would
+    # force a 20-sample Kokoro replay for a test-only or docs-only diff. Same for
     # README/LANDING/.env.example.
-    "labs/flue-zoe-brain/src/*",
-    "labs/flue-zoe-brain/package.json",
-    "labs/flue-zoe-brain/package-lock.json",
-    "labs/flue-zoe-brain/flue.config.ts",
-    "labs/flue-zoe-brain/tsconfig.json",
-    # DELIBERATELY ABSENT: labs/flue-zoe-brain-2x/. It is an unmerged parallel
-    # port that nothing deploys or serves, so it is outside the voice runtime
-    # path. If it ever becomes the served lane, gate it THEN — do not add it
-    # pre-emptively, or every experimental commit pays a replay run.
+    "labs/flue-zoe-brain-2x/src/*",
+    "labs/flue-zoe-brain-2x/package.json",
+    "labs/flue-zoe-brain-2x/package-lock.json",
+    "labs/flue-zoe-brain-2x/flue.config.ts",
+    "labs/flue-zoe-brain-2x/tsconfig.json",
+    "labs/flue-zoe-brain-2x/vite.config.ts",
     #
     # The unit is the sidecar's serving config (ExecStart, EnvironmentFile, port)
     # exactly as llama-server.service is for the model server, gated above for
     # the same reason.
-    "scripts/setup/systemd/flue-zoe-brain.service",
+    "scripts/setup/systemd/flue-zoe-brain-2x.service",
     # The prod client for that lane (streaming, seam recall, timeouts) and the
     # dispatcher that CHOOSES the lane — a change to either alters what a voice
     # turn gets answered by, and neither matched any glob above.
@@ -206,7 +210,7 @@ VOICE_PATH_PATTERNS = (
     # from routers/voice_tts.py and fast_tiers.py, both gated above. Three files,
     # two distinct reasons, and BOTH are needed: the unit is the serving config
     # (which GGUF is loaded, --ctx-size, --parallel, and its memory caps),
-    # exactly the llama-server.service / flue-zoe-brain.service case; the two
+    # exactly the llama-server.service / flue-zoe-brain-2x.service case; the two
     # modules are the logic that decides WHICH TOOL a voice turn fires. Gating
     # either alone leaves the other able to change routing behaviour and take the
     # no-op pass. (The stage-1 CHECKPOINT those modules load is the third leg,
@@ -268,7 +272,7 @@ VOICE_PATH_PATTERNS = (
     # FUNCTION, not an isolation harness: it makes a unit change carry a fresh,
     # head-bound said-vs-did run instead of taking the no-op pass, exactly the
     # bargain already accepted for llama-server.service (Greptile P1 on #1494)
-    # and flue-zoe-brain.service. Dropping the entry because that evidence is
+    # and flue-zoe-brain-2x.service. Dropping the entry because that evidence is
     # indirect would restore the blind spot those two closed, which is strictly
     # worse; the unit's own ExecStart/caps are verified at DEPLOY, when it is
     # actually installed and the sidecar restarted. Codex P1 on #1621.
@@ -323,7 +327,7 @@ VOICE_PATH_PATTERNS = (
     #     arrives as LIVEKIT_KEYS, interpolated by compose from the untracked
     #     repo-root .env, and tests/unit/test_livekit_config_no_secrets.py keeps it
     #     that way. Still voice-path: it is what the serving container reads.
-    #     Same class as llama-server.service / flue-zoe-brain.service / the
+    #     Same class as llama-server.service / flue-zoe-brain-2x.service / the
     #     functiongemma-router unit, all gated above for the same reason.
     # PR #1636 (MERGED) is the demonstration: ~25-33% of EVERY frame on this path
     # was FFmpeg plane padding carrying stale PCM from earlier frames (silent input

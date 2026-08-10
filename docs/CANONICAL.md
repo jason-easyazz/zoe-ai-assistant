@@ -72,14 +72,17 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
   MTP rock on host-native `llama-server :11434`). **That order is CONFIGURATION
   PRECEDENCE, resolved once per turn from the env — not runtime failover**
   (failover behind `ZOE_BRAIN_FAILOVER`, default off). With `flue` selected and
-  `:3578` down, every brain turn is answered by the flue client's canned sentinel;
+  `:3579` down, every brain turn is answered by the flue client's canned sentinel;
   the healthy `core` lane is not tried (#1613). `ZOE_BRAIN_FAILOVER=1` adds a
   bounded retry (transport-level connect failures only, never after a turn's first
   token, one hop, short-TTL circuit breaker) — operator-flipped after the voice
   replay gate:
-  - **`flue`** (LIVE on this deployment) — the Flue Pi-Agent sidecar
-    `labs/flue-zoe-brain` on `:3578` (systemd user unit, token auth), reached via
-    `ZOE_BRAIN_BACKEND=flue`. It reimplements Zoe's persona + ability slot-shapes
+  - **`flue`** (LIVE on this deployment) — the Flue 2.x Pi-Agent sidecar
+    `labs/flue-zoe-brain-2x` on `:3579` (systemd user unit `flue-zoe-brain-2x.service`,
+    token auth, `ZOE_FLUE_WIRE=2`), reached via `ZOE_BRAIN_BACKEND=flue`. (The 1.x
+    `labs/flue-zoe-brain` sidecar on `:3578` was retired 2026-08-10 — stopped,
+    disabled and source-removed after the 2.x parity cutover.) It reimplements
+    Zoe's persona + ability slot-shapes
     and calls back into zoe-data via `POST /api/system/intent-dispatch`
     (`services/zoe-data/zoe_flue_client.py`). See
     [`architecture/zoe-flue-integration.md`](architecture/zoe-flue-integration.md).

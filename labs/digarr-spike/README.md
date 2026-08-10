@@ -86,7 +86,7 @@ NOT as a resident service. **Always `docker stop` after the batch.**
 
 **Brain-slot guardrail (labs contract):** this spike points at `:11434` by
 design — its explicit subject is Gemma-mediated music discovery for Zoe (the
-same carve-out class as `flue-zoe-brain/`), not harness self-engineering, which
+same carve-out class as `flue-zoe-brain-2x/`), not harness self-engineering, which
 the labs contract forbids from using the voice brain. Even so: **never run a
 discovery batch while voice is in active use.** Discovery prompts queue on the
 single live brain slot and would regress voice latency. Hand-run batches only

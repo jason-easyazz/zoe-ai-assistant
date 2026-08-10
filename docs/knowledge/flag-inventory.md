@@ -485,7 +485,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BRAIN_TOKEN` | `''` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py` |
 | `ZOE_BRAIN_URL` | `'http://127.0.0.1:3579'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py` |
 | `ZOE_KOKORO_VOICES` | `'/home/zoe/models/voices-v1.0.bin'` | no | NO | `labs/kokoro-voice-blend/blend_zoe_voices.py` |
-| `ZOE_LIVE_ROOT` | `-` | no | NO | `labs/flue-zoe-brain-2x/parity/gatelib.py`<br>`labs/flue-zoe-brain/parity/gatelib.py` |
-| `ZOE_PGU_SID` | `-` | no | NO | `labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py`<br>`labs/flue-zoe-brain/parity/tool_breadth_gate.py` |
+| `ZOE_LIVE_ROOT` | `-` | no | NO | `labs/flue-zoe-brain-2x/parity/gatelib.py` |
+| `ZOE_PGU_SID` | `-` | no | NO | `labs/flue-zoe-brain-2x/parity/tool_breadth_gate.py` |
 | `ZOE_ROUTER_HEAD_LOG` | `dynamic` | no | NO | `labs/router-selftrain/mine_candidates.py` |
 | `ZOE_ROUTER_SIDECAR_PORT` | `'11436'` | no | NO | `labs/router-90-campaign/prod_path_eval.py` |

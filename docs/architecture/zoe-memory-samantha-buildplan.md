@@ -132,7 +132,7 @@ live brain. Watch with `scripts/maintenance/check_emotional_thread.py`; when the
 appears, spot-check that recall + the morning brief surface it, then this is truly done for a real
 user. Do NOT resurrect the dead idle-consolidation path (§8) as "the" memory path — the live memory
 is the immediate voice/chat writers + the for-prompt packet + the Flue `recall_memory` tool
-(governed by the live persona doctrines in `labs/flue-zoe-brain/src/agents/zoe.ts`).
+(governed by the live persona doctrines in `labs/flue-zoe-brain-2x/src/agents/zoe.ts`).
 
 ## 8. Increment 1c — enable runbooks
 

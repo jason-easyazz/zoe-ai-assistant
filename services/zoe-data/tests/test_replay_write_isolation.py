@@ -40,8 +40,8 @@ import zoe_flue_client
 
 _REPO = Path(__file__).resolve().parents[3]
 _REPLAY_SRC = Path(__file__).parent / "replay_samples.py"
-_TOOLS_TS = _REPO / "labs" / "flue-zoe-brain" / "src" / "tools" / "zoe-tools.ts"
-_REPLAY_MODE_TS = _REPO / "labs" / "flue-zoe-brain" / "src" / "replay-mode.ts"
+_TOOLS_TS = _REPO / "labs" / "flue-zoe-brain-2x" / "src" / "tools" / "zoe-tools.ts"
+_REPLAY_MODE_TS = _REPO / "labs" / "flue-zoe-brain-2x" / "src" / "replay-mode.ts"
 
 
 # ── fake transport (mirrors test_flue_client_wire.py) ────────────────────────
@@ -78,7 +78,7 @@ class _FakeClient:
 
 @pytest.fixture()
 def wire(monkeypatch):
-    monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", "http://127.0.0.1:3578")
+    monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", "http://127.0.0.1:3579")
     monkeypatch.setenv("ZOE_BRAIN_TOKEN", "fixture-token")
     monkeypatch.delenv("ZOE_FLUE_WIRE", raising=False)
     monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "0")

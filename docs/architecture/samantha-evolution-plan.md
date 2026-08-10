@@ -1035,7 +1035,7 @@ packet and this plan disagree, this plan wins and the packet gets fixed.
 ## 11. Compute doctrine — build now, localise later
 
 The platform is settled: **Pi/Flue is the brain lane** (live since the 2026-07-03
-cutover; capabilities land as Flue tools/doctrines in `labs/flue-zoe-brain/src/agents/
+cutover; capabilities land as Flue tools/doctrines in `labs/flue-zoe-brain-2x/src/agents/
 zoe.ts` per [`zoe-flue-integration.md`](zoe-flue-integration.md)), and **Omnigent is the
 builder fleet** (claude_code / codex / pi workers — the pi worker already runs on
 OpenRouter, precedent set). The rocks (Gemma/Moonshine/Kokoro) govern the **companion

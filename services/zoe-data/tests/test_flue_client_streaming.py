@@ -1,6 +1,6 @@
 """Seam-A NDJSON streaming in zoe_flue_client (ZOE_FLUE_STREAM_ENABLED).
 
-The sidecar has streamed since #971 (labs/flue-zoe-brain src/streaming.ts) but
+The sidecar has streamed since #971 (labs/flue-zoe-brain-2x src/streaming.ts) but
 the client kept ?wait=result — voice TTS waited for the WHOLE reply. These pin
 the new client mode: deltas yielded as they arrive, terminal-line handling, and
 the no-re-POST rules (a 2xx admission means the sidecar is executing the turn;

@@ -32,7 +32,7 @@ Runs like every Zoe increment: **lab-prove before prod**, behind isolation, non-
 
 ## Forbidden
 - Editing `services/zoe-data/routers/voice_livekit.py`, `livekit_aiortc.py`, or restarting
-  `zoe-data`/`flue-zoe-brain`/the LiveKit container.
+  `zoe-data`/`flue-zoe-brain-2x`/the LiveKit container.
 - Installing Pipecat into the zoe-data runtime env (use an **isolated venv**).
 - Touching `ZOE_KOKORO_*`, Moonshine, or `llama-server` configuration.
 - Leaving the spike process or its port running after measurement (clean up).

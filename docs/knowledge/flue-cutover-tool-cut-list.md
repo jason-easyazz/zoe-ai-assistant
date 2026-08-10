@@ -59,7 +59,7 @@ scheduling, `report_issue`, and AG-UI card components (`show_map` /
 `show_chart` / `show_action_menu`). No one source enumerates exactly which 56
 tool names make up the target — it is a rough design estimate.
 
-The **sidecar** (`labs/flue-zoe-brain/src/tools/zoe-tools.ts`, auto-discovered
+The **sidecar** (`labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts`, auto-discovered
 by `agents/zoe.ts`) currently serves **12 tools** (11 capability + 1
 `activate_abilities` activator for progressive disclosure) — all targeting
 zoe-data's `_DISPATCHABLE_INTENTS` allowlist at
@@ -108,7 +108,7 @@ Close the highest-value voice-command gaps:
 the Wave-2 action-dispatch pattern, which is what makes this +5 tools.
 **100% thin HTTP wrapper over existing `_DISPATCHABLE_INTENTS`. Zero new
 zoe-data surface.** Reuses the `dispatchIntent` helper at
-`labs/flue-zoe-brain/src/tools/zoe-tools.ts:101-141`. Each new tool gets
+`labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts`. Each new tool gets
 its group in `tool-groups.ts` for progressive disclosure.
 
 ### Wave 2 — "Music & Home" (1 PR, 2 tools)
@@ -143,7 +143,7 @@ new intent `memory_store` to the `_DISPATCHABLE_INTENTS` allowlist
 `docs/PLANS.md` blocker #1 (voice-parity gate) is the gate that flips
 `_USE_ZOE_CORE=true` for real users. The verification for Waves 1–3 is the
 existing voice-corpus replay (`scripts/maintenance/voice_regression_probe.py`),
-the tool-call reliability harness (`labs/flue-zoe-brain/parity/tool_reliability.py`),
+the tool-call reliability harness (`labs/flue-zoe-brain-2x/parity/tool_reliability.py`),
 and the recall reliability check (`parity/recall_reliability.py`, current 97%,
 target ≥90%). All three are mandatory per root `AGENTS.md` voice-change rules.
 

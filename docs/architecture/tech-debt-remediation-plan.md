@@ -60,8 +60,9 @@ under `flock /tmp/zoe-voice-harness.lock`; new test files must be reachable by C
 **flue > core > legacy** (evaluated once per turn from the env — NOT runtime
 failover; failover behind `ZOE_BRAIN_FAILOVER`, default off).
 Code default is `core`; **the live host `.env:262` sets `ZOE_BRAIN_BACKEND=flue`**, so:
-- **flue = LIVE.** `zoe_flue_client.py` → Flue Pi-`Agent` sidecar `labs/flue-zoe-brain` on
-  `:3578` (systemd user unit `enabled+active`, token auth). Standalone reimpl: persona is a
+- **flue = LIVE.** `zoe_flue_client.py` → Flue 2.x Pi-`Agent` sidecar `labs/flue-zoe-brain-2x`
+  on `:3579` (systemd user unit `flue-zoe-brain-2x.service` `enabled+active`, token auth,
+  `ZOE_FLUE_WIRE=2`; the 1.x `:3578` lane was retired 2026-08-10). Standalone reimpl: persona is a
   *verbatim copy* of `services/zoe-core/SOUL.md`, ability slot-shapes *mirror*
   `services/zoe-core/abilities/*.ts`, and it calls **back** into zoe-data via
   `POST /api/system/intent-dispatch` → `intent_router.execute_intent` (same path as live chat).
@@ -88,7 +89,7 @@ called "authoritative" is itself stale.** Per-doc verdict (verified):
   **CONTRADICTORY/dangerous**: tells agents to ignore the wired fallback brain. Must distinguish
   the *truly-retired legacy Docker/RouteLLM monolith* from *current Pi-agent zoe-core*.
 - root `README.md:34` ("archived under docs/archive/") — **WRONG**.
-- `labs/flue-zoe-brain/README.md:1` ("LAB ONLY / Not wired into production") + `labs/AGENTS.md`
+- `labs/flue-zoe-brain-2x/README.md:1` ("LAB ONLY / Not wired into production") + `labs/AGENTS.md`
   "default-OFF seam / never live" framing — **STALE**: live on this host. But keep the honest
   nuance: *shipped repo default is OFF; live-ON on this deployment since 2026-07-03* — do NOT
   over-correct the systemd unit templates in `scripts/setup/systemd/` (those correctly describe

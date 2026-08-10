@@ -54,11 +54,10 @@ NO_SWAP_UNITS = (
     "llama-server.service",
     "kokoro-tts.service",
     "zoe-data.service",
-    "flue-zoe-brain.service",
-    # The Flue 2.x parallel port. Covered from the moment the template exists,
-    # not from the moment it is cut over: the gap this file closes is a unit
-    # shipping uncapped and only being noticed once it is live, and a template
-    # is exactly where that is cheap to prevent.
+    # The Flue 2.x sidecar is the sole live brain lane (ZOE_BRAIN_BACKEND=flue,
+    # :3579) since the 1.x `flue-zoe-brain.service` (:3578) was stopped, disabled
+    # and its source removed. It stays covered whether or not it is the live
+    # target — the gap this file closes is a unit shipping uncapped.
     "flue-zoe-brain-2x.service",
     "flue-zoe-telegram.service",
     "functiongemma-router.service",
@@ -299,7 +298,6 @@ def test_the_flue_sidecars_are_actually_covered():
     not being in anyone's list. Removing one from NO_SWAP_UNITS must fail here
     rather than silently shrinking the test matrix."""
     for unit in (
-        "flue-zoe-brain.service",
         "flue-zoe-brain-2x.service",
         "flue-zoe-telegram.service",
     ):
@@ -308,35 +306,29 @@ def test_the_flue_sidecars_are_actually_covered():
         )
 
 
-def test_the_2x_brain_sidecar_mirrors_the_live_one():
-    """The 2.x parallel port is a CUTOVER TARGET, not a second workload: after
-    the flip it becomes the top brain lane, on the same box, running the same
-    Node runtime against the same llama-server. So its protection is not merely
-    "present and self-consistent" — it must be the SAME protection, or the flip
-    silently changes the memory contract of the brain lane as a side effect.
-
-    This pins the MIRRORING rather than the literal numbers, which keeps faith
-    with this file's doctrine: retuning a cap is fine, and retuning it on both
-    units together stays green. Drifting them apart does not. The rest of the
-    suite already covers each unit's own directives; without this, a drift to
-    MemoryLow=600M/MemoryMax=3G on one side would pass everything.
+def test_the_2x_brain_sidecar_is_the_capped_live_lane():
+    """The 2.x sidecar is the SOLE live brain lane now (ZOE_BRAIN_BACKEND=flue,
+    :3579) — the 1.x `flue-zoe-brain.service` (:3578) was stopped, disabled and
+    removed on the brain retirement. This once pinned the 1.x↔2.x MIRRORING while
+    both ran during cutover; with 1.x gone there is nothing to mirror against, so
+    it pins the live lane's protection directly: the full protective triple must
+    be present. The parametrized suite above already exercises each directive's
+    own rule; this is the named "guards the guard" backstop that a future edit
+    cannot quietly drop the brain lane from NO_SWAP_UNITS without failing.
     """
-    live = _directives("flue-zoe-brain.service")
-    port = _directives("flue-zoe-brain-2x.service")
-    for key in ("MemorySwapMax", "MemoryLow", "MemoryMax"):
-        assert port.get(key) == live.get(key), (
-            f"flue-zoe-brain-2x.service sets {key}={port.get(key)!r} against the "
-            f"live sidecar's {key}={live.get(key)!r}. The 2.x port is the cutover "
-            f"target for the SAME lane on the SAME box — change both together or "
-            f"the flip quietly retunes the brain lane's memory contract."
+    d = _directives("flue-zoe-brain-2x.service")
+    assert d.get("MemorySwapMax") == "0", (
+        "the live brain sidecar must set MemorySwapMax=0; its working set is "
+        "latency-critical and must never be paged out"
+    )
+    for key in ("MemoryLow", "MemoryMax"):
+        assert key in d, (
+            f"the live brain sidecar must set {key} — without it the reclaim "
+            f"floor/ceiling that protects the speaking brain is absent"
         )
-    # The ports must NOT match: the whole cutover design is both sidecars up at
-    # once, so a shared port would make the warm-fallback rollback impossible.
-    live_port = _directives("flue-zoe-brain.service", section="Service").get("Environment")
-    port_port = _directives("flue-zoe-brain-2x.service", section="Service").get("Environment")
-    assert live_port != port_port, (
-        "flue-zoe-brain-2x.service must listen on a DIFFERENT port from the live "
-        "sidecar; the cutover runs both at once so rollback has a warm fallback"
+    assert _parse_size(d["MemoryMax"]) >= MIN_CEILING_TO_FLOOR_RATIO * _parse_size(d["MemoryLow"]), (
+        "the live brain sidecar's MemoryMax must leave real headroom over "
+        "MemoryLow for V8's uncovered external allocation (the 3x rule)"
     )
 
 

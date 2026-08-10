@@ -119,7 +119,7 @@ two efforts for a role the box nearly covers already.
 | file | role |
 |---|---|
 | `setup.sh` | builds the isolated venv + patched needle source OUTSIDE the repo |
-| `extract_tools.py` | Zoe's real 20-tool set (names/descriptions from `labs/flue-zoe-brain/src/tools/zoe-tools.ts`) → `zoe_tools.json` |
+| `extract_tools.py` | Zoe's real 20-tool set (names/descriptions from `labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts`) → `zoe_tools.json` |
 | `zoe_tools.json` | committed extraction artifact (regenerable) |
 | `corpus.jsonl` | 81 labeled utterances: canonical / paraphrase-sloppy / chat |
 | `needle_bench.py` | Needle accuracy + latency (`--mode full \| shortlist \| retrieval \| oracle`) |

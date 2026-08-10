@@ -136,7 +136,7 @@ When substrate first appears, the memory-side wiring above is unblocked and I pi
   (#1014). The live backend is `ZOE_BRAIN_BACKEND=flue`, which pulls memory via the
   `recall_memory` *tool*, not the `memory.ts` every-turn inject — so recall wiring in the
   endpoint wasn't enough. Added `EMOTIONAL_RECALL_DOCTRINE` to the Flue persona
-  (`labs/flue-zoe-brain/src/agents/zoe.ts`): measured **4/4** emotional recall on the live
+  (`labs/flue-zoe-brain-2x/src/agents/zoe.ts`): measured **4/4** emotional recall on the live
   4B brain. Acceptance suite (`test_samantha_acceptance.py`) extended to all four criteria,
   8/8 on the box. #3 proactive delivered by the deterministic morning brief (in-turn 4B
   surfacing measured ~1/5 and rejected). #1017 added 3b importance scoring.

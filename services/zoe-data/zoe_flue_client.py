@@ -5,7 +5,8 @@ selected ONLY when ``ZOE_BRAIN_BACKEND == 'flue'`` (see ``brain_dispatch`` /
 ``routers.chat``); with the env unset or ``'core'`` this module is never reached
 and the live brain path is byte-identical to today.
 
-The Flue sidecar (``labs/flue-zoe-brain``) serves::
+Wire 1 — this client's in-code default, formerly served by the retired 1.x
+sidecar (``labs/flue-zoe-brain``) — is::
 
     POST {base}/agents/zoe/<session>?wait=result
     body: {"message": "..."}
@@ -17,11 +18,11 @@ the bearer token from ``ZOE_BRAIN_TOKEN`` when set.
 
 Wire versions — ``ZOE_FLUE_WIRE`` (default ``1``)
 -------------------------------------------------
-The block above is the **Flue 1.x (beta.6)** wire, which is what the deployed
-sidecar on :3578 speaks and what this client sends unless told otherwise.
-``ZOE_FLUE_WIRE=2`` switches to the **Flue 2.x** wire served by the parallel
-port in ``labs/flue-zoe-brain-2x`` (PR #1616). Three things change, and only
-these three::
+The block above is the **Flue 1.x (beta.6)** wire, which the retired sidecar on
+:3578 spoke and which this client still sends by default (a rollback leftover).
+``ZOE_FLUE_WIRE=2`` switches to the **Flue 2.x** wire served by the LIVE sidecar
+in ``labs/flue-zoe-brain-2x`` on :3579 (PR #1616) — the wire the box runs. Three
+things change, and only these three::
 
     wire 1                                  wire 2
     ─────────────────────────────────────   ─────────────────────────────────────
@@ -311,7 +312,7 @@ def _headers() -> dict[str, str]:
 
 
 # Machine-readable acting-identity envelope. MUST match the sidecar's parser
-# (labs/flue-zoe-brain src/request-identity.ts IDENTITY_ENVELOPE_PREFIX / _RE):
+# (labs/flue-zoe-brain-2x src/request-identity.ts IDENTITY_ENVELOPE_PREFIX / _RE):
 # a leading " zoe-uid:<id>\n" line the sidecar reads then strips before the model
 # sees the message. Kept here so the trusted user_id rides the one field Flue
 # persists into the agent fiber (the message) rather than a body field it drops.
@@ -335,7 +336,7 @@ def _wrap_message_with_identity(message: str, user_id: str) -> str:
 
 
 # Machine-readable REPLAY-ISOLATION envelope. MUST match the sidecar's parser
-# (labs/flue-zoe-brain src/replay-mode.ts REPLAY_ENVELOPE_PREFIX / _RE).
+# (labs/flue-zoe-brain-2x src/replay-mode.ts REPLAY_ENVELOPE_PREFIX / _RE).
 #
 # WHY: the replay gate replays Jason's corpus through the LIVE pipeline. The
 # harness's allow_writes=False governs only fast_tiers; on brain fall-through the
@@ -400,7 +401,7 @@ def _wrap_message_with_replay(message: str, replay: bool) -> str:
 # queries — this is a floor, not a replacement.
 #
 # ENVELOPE CONTRACT: the block is placed AFTER the identity line. The sidecar's
-# stripIdentityEnvelope (labs/flue-zoe-brain/src/request-identity.ts) matches
+# stripIdentityEnvelope (labs/flue-zoe-brain-2x/src/request-identity.ts) matches
 # `^ zoe-uid:<id>\n` anchored at the START of the message, so the wire order is
 # " zoe-uid:<id>\n<block>\n<user message>" — the sidecar strips only the
 # identity line and the model reads block + message.
@@ -828,7 +829,7 @@ async def run_flue_brain_streaming(
     # not a separate body field: the sidecar's Flue payload schema accepts only
     # {message, images} and silently drops any other field, so a top-level
     # ``user_id`` never reaches the agent fiber. The sidecar reads this prefix and
-    # strips it before the model sees the text (see labs/flue-zoe-brain
+    # strips it before the model sees the text (see labs/flue-zoe-brain-2x
     # src/request-identity.ts wrapMessageWithIdentity / forwardedIdentityFromMessages).
     # Keep the format byte-for-byte in sync with that module. Omit empty/guest ids
     # so the sidecar's own fail-closed identity handling applies.

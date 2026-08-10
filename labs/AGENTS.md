@@ -18,15 +18,16 @@ with its own README/RUNBOOK and is self-contained.
   unit, a Docker image, or CI. Labs run as hand-started processes only.
   (Deliberate exceptions, each an **operator opt-in** user-unit *template* that is
   never auto-installed or auto-enabled:
-  `flue-zoe-brain/` → `scripts/setup/systemd/flue-zoe-brain.service` (port 3578);
+  `flue-zoe-brain-2x/` → `scripts/setup/systemd/flue-zoe-brain-2x.service` (port 3579);
   production reaches the sidecar only through zoe-data's `ZOE_BRAIN_BACKEND=flue`
   seam. The **shipped repo default is OFF** (`core` = `services/zoe-core`), but the
-  seam is production-reachable and **this deployment flipped it live on 2026-07-03**
-  — so `flue-zoe-brain/` is lab-hosted yet production-reachable, not "never live".
+  seam is production-reachable and **this deployment has it live** (cut over to 2.x
+  2026-08-09; the 1.x `flue-zoe-brain/` sidecar on :3578 was retired 2026-08-10) —
+  so `flue-zoe-brain-2x/` is lab-hosted yet production-reachable, not "never live".
   That seam is CONFIGURED LANE SELECTION, not runtime failover: while this sidecar
   is down every brain turn fails with zoe-data's canned sentinel rather than
   falling through to `core` (failover behind `ZOE_BRAIN_FAILOVER`, default off —
-  see `services/zoe-data/AGENTS.md`). Treat a stopped `flue-zoe-brain` as a live
+  see `services/zoe-data/AGENTS.md`). Treat a stopped `flue-zoe-brain-2x` as a live
   outage, not a graceful degrade;
   `flue-zoe-telegram/` → `scripts/setup/systemd/flue-zoe-telegram.service` (the
   long-poll Telegram bot; the operator installs it with their own bot token) plus
@@ -41,27 +42,28 @@ with its own README/RUNBOOK and is self-contained.
   `~/.zoe/multica_dispatch_paused` exists, `ZOE_EXECUTOR_DISPATCH` defaults to
   `dry` (poll + log, mutate nothing), and it claims at most one task at a time.
   No other lab may ship a unit without amending this contract.)
-- ⚠ **`labs/flue-zoe-brain/` AND `labs/flue-zoe-telegram-2x/` ARE AUTO-DEPLOYED.** They
+- ⚠ **`labs/flue-zoe-brain-2x/` AND `labs/flue-zoe-telegram-2x/` ARE AUTO-DEPLOYED.** They
   are the two labs where "it's only a lab directory" is false. `.github/workflows/deploy.yml`
-  gates on `git diff --quiet "$OLD_SHA" HEAD -- labs/flue-zoe-brain/` and, on ANY
+  gates on `git diff --quiet "$OLD_SHA" HEAD -- labs/flue-zoe-brain-2x/` and, on ANY
   diff, runs `npm ci && npm run build && systemctl --user restart
-  flue-zoe-brain.service` on the Jetson — the live voice brain. A merged commit
-  touching one line under that path reaches production without any further
-  decision. So: **breaking or version-bumping work goes in a SIBLING directory**
-  (see `flue-zoe-brain-2x/`), never in place, and the deployed path stays
-  byte-identical to `main` on such a branch. Verify before committing with
-  `git diff origin/main --stat -- labs/flue-zoe-brain/` — it must print nothing.
+  flue-zoe-brain-2x.service` on the Jetson — the live voice brain (retargeted to
+  2.x in #1675 when the 1.x `labs/flue-zoe-brain/` lane was retired). A merged
+  commit touching one line under that path reaches production without any further
+  decision. So: **breaking or version-bumping work goes in a SIBLING directory**,
+  never in place, and the deployed path stays byte-identical to `main` on such a
+  branch. Verify before committing with
+  `git diff origin/main --stat -- labs/flue-zoe-brain-2x/` — it must print nothing.
   A sibling name does NOT match that pathspec (git treats the trailing slash as an
   exact directory component), which is what makes the pattern safe; re-verify if a
   future path is chosen differently.
 - Do **not** let lab **harness/agent** work point at the local voice brain on
   `:11434` (Gemma-4-E4B) for *its own* engineering work — harnesses must use a
   separate harness model so the live GPU slot is never contended. (Exception: a
-  spike whose explicit subject **is** the Gemma brain — e.g. `flue-zoe-brain/`,
+  spike whose explicit subject **is** the Gemma brain — e.g. `flue-zoe-brain-2x/`,
   porting Zoe's brain onto Flue per `docs/architecture/zoe-flue-integration.md`
   Seam M — points at `:11434` by design. The prod seam that reaches it ships
   default-OFF (`core`), but is production-reachable and is **live on this
-  deployment since 2026-07-03** via `ZOE_BRAIN_BACKEND=flue`.)
+  deployment** (2.x since 2026-08-09) via `ZOE_BRAIN_BACKEND=flue`.)
 - Do **not** promote a spike to prod without passing its stated acceptance bar
   (the "Samantha tests") and showing no voice-latency regression.
 
@@ -130,52 +132,35 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   pins the omnigent session-id shell guard (`assertSafeSessionId` — the third call
   site of the docker-exec kick, agreeing with `omnigent_issue_executor.py` and
   `cross_review.sh`) with a behavioural negative control.
-- `flue-zoe-brain/` — Flue-hosted Pi `Agent` on the local Gemma brain (a third
-  implementation behind the `run_zoe_core` seam, per
-  `docs/architecture/zoe-flue-integration.md`). Serves 21 tools (20 capability
-  tools against zoe-data + the `activate_abilities` activator; Waves 1–3 of the
-  cut-list record `docs/knowledge/flue-cutover-tool-cut-list.md` §3, plus the
+- `flue-zoe-brain-2x/` — **THE LIVE BRAIN.** Flue 2.0.1-hosted Pi `Agent` on the
+  local Gemma brain (the `flue` lane behind the `run_zoe_core` seam, per
+  `docs/architecture/zoe-flue-integration.md`), cut over 2026-08-09 from the
+  retired 1.x `flue-zoe-brain/` beta lane (stopped, disabled and source-removed
+  2026-08-10). Serves 21 tools (20 capability tools against zoe-data + the
+  `activate_abilities` activator; Waves 1–3 of the cut-list record
+  `docs/knowledge/flue-cutover-tool-cut-list.md` §3, plus the
   `remember_emotional_moment` emotional-thread capture signal per
-  `docs/architecture/zoe-memory-emotional-thread-handoff.md` — the parity
-  target) with progressive
+  `docs/architecture/zoe-memory-emotional-thread-handoff.md`) with progressive
   tool disclosure at the wire (always-on core + activated groups per call;
   `src/tools/tool-groups.ts`), per-request acting identity (the seam-forwarded
   `user_id` rides a message envelope, is bound per-turn by the AbortSignal in the
   capped-completions provider, and read by tools via `currentUserId(signal)` —
   `src/request-identity.ts`; env fallback), identity fail-closed, writes
-  dry-run-gated.
-  Emits the Seam-A text-delta + `__TOOL__`/`__THINKING__` sentinel stream
-  (byte-pinned to the prod contract) via content-negotiated NDJSON on the
-  agent route (`src/streaming.ts`); whole-result `?wait=result` unchanged.
+  dry-run-gated. Emits the Seam-A text-delta + `__TOOL__`/`__THINKING__` sentinel
+  stream (byte-pinned to the prod contract) via content-negotiated NDJSON
+  (`src/streaming.ts`).
   Reached from prod via the `ZOE_BRAIN_BACKEND=flue` seam — shipped default-OFF
-  (`core`) but production-reachable and **live on this deployment since
-  2026-07-03**; supervised via the opt-in unit template (see Forbidden above).
-  Operator measurement checklists pending in `flue-zoe-brain/LANDING.md`.
-  Quality gates against the live brain live in `flue-zoe-brain/parity/` — a
-  committed harness (`gatelib.py` shared library + `run_gates.py` runner that
-  discovers `*_gate.py` modules; corpus + adversarial gates today). LAB-only,
-  hand-run against the live host, never CI-wired. See
-  `flue-zoe-brain/parity/README-GATES.md`.
-- `flue-zoe-brain-2x/` — the **PARALLEL Flue 2.0.1 port** of `flue-zoe-brain/`,
-  which stays on `@flue/*@1.0.0-beta.6` and remains the deployed sidecar on
-  `:3578`. A separate directory is the whole point, for two reasons that both
-  make an in-place bump unsafe: (a) the deployed path auto-deploys on any diff
-  (see Forbidden above); (b) Flue 2.x's persisted schema is **v8 against the
-  beta's v5, reset-only** — the runtime rejects an older database *before any
-  application code runs*, and a 2.x process that has written a v8 store cannot be
-  rolled back to the beta either. Cutover is therefore a deliberate operator step,
-  never an auto-deploy.
-  **Not wired to CI, and not cut over — the live brain lane is untouched.** It
-  does now ship an INERT unit template, `scripts/setup/systemd/flue-zoe-brain-2x.service`
-  on **`:3579`**, sized to run BESIDE the live `:3578` sidecar so a cutover is an
-  env flip with a warm fallback rather than a rebuild. Installing it enables
-  nothing; zoe-data cannot reach `:3579` until an operator sets
-  `ZOE_FLUE_BRAIN_URL`. Its memory caps mirror the live sidecar's exactly
-  (`MemorySwapMax=0` / `MemoryLow=512M` / `MemoryMax=2G`) and are pinned by
-  `tests/unit/test_systemd_memory_protection.py`. Leave `ZOE_BRAIN_DB` at its
-  default — a shared store would make the rollback impossible in both directions.
-  Cutover + rollback runbook: `flue-zoe-brain-2x/README.md`.
-  What differs from the beta sibling, all forced by deleted 2.x APIs:
+  (`core`) but production-reachable and **live on this deployment**; supervised
+  via the opt-in unit template `scripts/setup/systemd/flue-zoe-brain-2x.service`
+  on **`:3579`** (see Forbidden above). Its memory caps (`MemorySwapMax=0` /
+  `MemoryLow=512M` / `MemoryMax=2G`) are pinned by
+  `tests/unit/test_systemd_memory_protection.py`. Persisted schema is **v8,
+  reset-only** — the beta's v5 is not readable and there is no rollback to it —
+  so leave `ZOE_BRAIN_DB` at its default. Quality gates hand-run against the live
+  brain live in `parity/` — a committed harness (`gatelib.py` shared library +
+  `run_gates.py` runner that discovers `*_gate.py` modules; corpus + adversarial
+  gates). LAB-only, never CI-wired. See `parity/README-GATES.md`.
+  What differed from the retired beta lane, all forced by deleted 2.x APIs:
   `flue build` → **Vite** (`vite.config.ts` + `@flue/vite`; the `'use agent'`
   build scan is what REGISTERS agents — mounting registers nothing);
   `defineAgent` → the `'use agent'` directive + `export function Zoe()` with
@@ -188,11 +173,12 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `run({ input })` → `run({ data })` across all 21 tools.
   **The wire contract changed and is NOT backward-compatible**: `?wait=result` is
   actively rejected, and the POST body is a top-level DeliveredMessage
-  (`{"kind":"user","body":"…"}`) — so the live `services/zoe-data/zoe_flue_client.py`
-  cannot talk to a 2.x sidecar. `parity/flue_wire.py` is the reference
-  implementation of the new wire (fire-and-forget admission + NDJSON stream read)
-  and the model for that Phase-2 client change.
-  Also carries a prompt-prefix stability fix absent from the beta sibling: the
+  (`{"kind":"user","body":"…"}`). The live `services/zoe-data/zoe_flue_client.py`
+  speaks it via `ZOE_FLUE_WIRE=2` in zoe-data's env (its in-code DEFAULT is still
+  the retired beta wire — a rollback leftover to be cleaned up with the client).
+  `parity/flue_wire.py` is the reference implementation of the wire
+  (fire-and-forget admission + NDJSON stream read).
+  Also carries a prompt-prefix stability fix absent from the retired beta lane: the
   windowing anchor is quantised and derived from a mid-turn-stable basis, the
   tool-cap wrap-up note moved off the system prompt, and tool disclosure derives
   from the pre-window basis — see `src/context-window.ts` and
@@ -218,9 +204,9 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   mass-truncating lane 18/20. Run it with `--since <replay start>`, and note that
   **"0 assistant replies" is a FAILURE**, not a pass — an empty store means the
   replay never reached the 2.x sidecar.
-  Carries the beta sibling's per-request **replay isolation** too, and must keep
-  it: this port's `.env` also sets `ZOE_BRAIN_ALLOW_WRITES=true`, so without it a
-  voice replay-gate run commits real writes into live zoe-data at cutover. The
+  Carries per-request **replay isolation** too, and must keep it: this lane's
+  `.env` sets `ZOE_BRAIN_ALLOW_WRITES=true`, so without it a voice replay-gate run
+  commits real writes into live zoe-data. The
   seam-forwarded ` zoe-replay:1` marker rides AHEAD of the identity line on the
   wire, is bound per-turn by the AbortSignal in the capped-completions provider,
   and makes `runWrite` return its success text without dispatching

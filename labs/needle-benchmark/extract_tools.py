@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Extract Zoe's real tool set (names + descriptions + rough params) from the
-live Flue brain's tool file (labs/flue-zoe-brain/src/tools/zoe-tools.ts) into
+live Flue brain's tool file (labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts) into
 Needle's tools-JSON format.
 
 LAB-ONLY. Parsing is regex-grade, good enough for a router benchmark: tool
@@ -18,7 +18,7 @@ import re
 import sys
 from pathlib import Path
 
-TS = Path(__file__).resolve().parents[1] / "flue-zoe-brain" / "src" / "tools" / "zoe-tools.ts"
+TS = Path(__file__).resolve().parents[1] / "flue-zoe-brain-2x" / "src" / "tools" / "zoe-tools.ts"
 
 # The activator is progressive-disclosure plumbing, not a user-intent tool.
 SKIP = {"activate_abilities"}

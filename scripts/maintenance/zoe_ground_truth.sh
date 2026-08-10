@@ -69,8 +69,8 @@ printf '%sZOE GROUND TRUTH%s  %s  (read-only)\n' "$C_HDR" "$C_0" "$(uptime -p 2>
 # than calling systemctl again.
 hdr "SERVICES (health-checked, not is-active)"
 declare -A HEALTH=( [zoe-data]=8000 [llama-server]=11434 [kokoro-tts]=10201
-                    [functiongemma-router]=11436 [flue-zoe-brain]=3578 )
-UNITS="zoe-data llama-server kokoro-tts functiongemma-router flue-zoe-brain
+                    [functiongemma-router]=11436 [flue-zoe-brain-2x]=3579 )
+UNITS="zoe-data llama-server kokoro-tts functiongemma-router flue-zoe-brain-2x
        flue-zoe-telegram hermes-agent openclaw-gateway serena-mcp github-runner"
 _tmp_svc=$(mktemp 2>/dev/null || echo /tmp/zgt_svc.$$)
 for unit in $UNITS; do

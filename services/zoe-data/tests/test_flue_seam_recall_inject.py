@@ -6,7 +6,7 @@ that stored" — the model didn't invoke its recall_memory tool that turn (the
 ~97% invocation ceiling). These tests pin the deterministic floor: on a
 conservative personal-question shape the seam prepends the for-prompt packet
 to the outbound message, AFTER the identity envelope line so the sidecar's
-stripIdentityEnvelope regex (labs/flue-zoe-brain/src/request-identity.ts,
+stripIdentityEnvelope regex (labs/flue-zoe-brain-2x/src/request-identity.ts,
 anchored `^ zoe-uid:...\n`) still strips cleanly and the model sees
 block + question.
 

@@ -211,8 +211,7 @@ credentials/
 # router-90-campaign lab: committed measurement artifacts (labs/router-90-campaign/README.md)
 !labs/router-90-campaign/results/*.json
 !labs/router-90-campaign/run_definitive_training.sh
-# flue-zoe-brain-2x lab: the committed lockfile, matching its deployed sibling
-# labs/flue-zoe-brain/ (whose lockfile predates the blanket *.json rule above).
+# flue-zoe-brain-2x lab: the committed lockfile for the LIVE brain sidecar.
 # It is load-bearing, not incidental: a Flue app pins @flue/runtime, @flue/cli,
 # @flue/vite AND @earendil-works/pi-ai in lockstep — a floating transitive pi-ai
 # would give the tree two copies across the createProvider boundary. Negated
@@ -354,7 +353,13 @@ data/music-assistant/*.log.*
 data/skills.lock
 # autoresearch run dirs are runtime output; the FEATURE is live but reads live run-dirs, not committed samples
 data/autoresearch/*/
-labs/flue-zoe-brain/parity/gate-results/
+labs/flue-zoe-brain-2x/parity/gate-results/
+# Tombstone for the RETIRED 1.x brain lane: its source tree was deleted, but its
+# own .gitignore went with it, so on an established checkout the built artifacts
+# it used to ignore (node_modules, .env, dist, data) would resurface as untracked
+# after `git reset --hard`. Keep them ignored so `git status` stays clean until
+# the dir is manually removed on the box. Exact dir name — does NOT match -2x.
+labs/flue-zoe-brain/
 
 # functiongemma-feasibility lab: committed measurement artifacts (labs/functiongemma-feasibility/README.md)
 !labs/functiongemma-feasibility/zoe_tools.json
