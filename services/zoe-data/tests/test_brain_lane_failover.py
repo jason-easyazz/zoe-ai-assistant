@@ -1579,6 +1579,40 @@ async def test_flag_off_dispatch_is_unchanged_by_the_label(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_flag_off_streaming_dispatch_is_unchanged_by_the_label(monkeypatch):
+    """The same guard on the STREAMING half. The one-shot spy above cannot see
+    this path at all, and it is the one the panel speaks from."""
+    import brain_dispatch as bd
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.delenv("ZOE_BRAIN_FAILOVER", raising=False)
+    _boom_core(monkeypatch)  # any lane hop fails this test
+
+    seen: list[dict] = []
+
+    def recording_stream(msg, sid, uid="", **kw):
+        seen.append(kw)
+
+        async def _gen():
+            yield "a"
+            yield "b"
+
+        return _gen()
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", recording_stream)
+
+    assert [c async for c in bd.brain_streaming("hi", "s1", "jason")] == ["a", "b"]
+    assert len(seen) == 1, "exactly one dispatch"
+    assert "outcome_sink" in seen[0], "the sink is offered"
+    assert "raise_transport_errors" not in seen[0], (
+        "the OFF path must never opt into raising — FlueTransportError would "
+        "escape into a route that has nothing to catch it"
+    )
+    assert bd._circuit_open() is False, "flag OFF must not touch breaker state"
+
+
+@pytest.mark.asyncio
 async def test_flag_off_silent_client_still_dispatches(monkeypatch):
     """Labels degrade, turns do not: a client that reports no verdict (an older
     module, a test double) is dispatched to identically."""
@@ -1815,6 +1849,54 @@ async def test_probe_cancelled_before_any_delta_leaves_the_breaker_armed(monkeyp
     assert (
         bd._circuit_open() is True
     ), "nothing was yielded, so the probe proved nothing — the claim stands"
+
+
+@pytest.mark.asyncio
+async def test_a_stale_yielded_probe_must_not_erase_a_newer_open(monkeypatch):
+    """The cleanup close is a compare-and-set like every other breaker mutation,
+    and this is the race that proves it. Turn A observes a CLOSED breaker and
+    yields a flue delta; turn B's transport failure then arms a fresh cooldown;
+    only THEN does A's consumer disconnect. A's evidence is real but STALE — B
+    looked at flue more recently — so A's cleanup must not hand the next turn a
+    failed connect. An unconditional close in the `finally` reds here.
+    """
+    import brain_dispatch as bd
+    import zoe_flue_client
+
+    _flue_backend(monkeypatch)
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER_COOLDOWN_S", "30")
+    _recording_core(monkeypatch)
+
+    now = {"t": 1000.0}
+    monkeypatch.setattr(bd, "_monotonic", lambda: now["t"])
+
+    release = asyncio.Event()
+
+    async def one_delta_then_park(msg, sid, uid="", **kw):
+        yield "first "
+        await release.wait()  # pragma: no cover - the consumer leaves first
+        yield "never"  # pragma: no cover
+
+    async def refused(msg, sid, uid="", **kw):
+        raise zoe_flue_client.FlueTransportError("[Errno 111] refused")
+
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", one_delta_then_park)
+    monkeypatch.setattr(zoe_flue_client, "run_flue_brain", refused)
+
+    gen = bd.brain_streaming("slow-ok", "s1", "jason")
+    assert await gen.__anext__() == "first "  # A observed a CLOSED breaker
+    assert bd._circuit_open() is False
+
+    assert await bd.brain_oneshot("fails", "s2", "jason") == "core answered"
+    assert bd._circuit_open() is True, "B's failure arms the cooldown"
+
+    await gen.aclose()  # A's consumer walks away, carrying stale evidence
+
+    assert bd._circuit_open() is True, (
+        "a turn that started BEFORE the open must not close it from cleanup — "
+        "stale evidence erased the newer cooldown"
+    )
 
 
 @pytest.mark.asyncio

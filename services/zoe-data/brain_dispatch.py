@@ -325,6 +325,14 @@ class _LaneRecord:
         self.logged = False
 
     def emit(self, **fields: Any) -> None:
+        # The flag is set BEFORE the log call, deliberately. If ``_log_lane``
+        # ever raised, the alternative ordering would leave the obligation
+        # unpaid and send the ``finally`` cleanup straight back into the same
+        # broken handler — turning one failed log into two, inside an unwind
+        # that may already be carrying an exception. Marking it paid first keeps
+        # the failure at one attempt and lets the original exception propagate
+        # unmasked. In practice this cannot fire: `logging` routes handler
+        # failures through ``Handler.handleError`` rather than raising.
         if self.logged:
             return
         self.logged = True
