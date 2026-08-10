@@ -1,5 +1,13 @@
 # LANDING — operator on-box checklists (sandbox cannot reach live services)
 
+> **`:3579` is the LIVE Zoe brain** (`flue-zoe-brain-2x.service`, sole brain since
+> the 2026-08-09 cutover). The hand-run recipes below spin up a SEPARATE instance:
+> either **stop the live unit first** (`systemctl --user stop flue-zoe-brain-2x`)
+> or run on a **spare port** (change `PORT` and the `:3579` URLs, and set
+> `ZOE_BRAIN_URL` for the parity probes). Never start a second process on the live
+> `:3579`. These are hand runs against the shared box — never restart zoe-data
+> (`:8000`) or llama-server (`:11434`).
+
 ## Per-request identity verification (multi-user)
 
 The sidecar now threads the trusted, seam-forwarded `user_id` (request body)
@@ -7,8 +15,7 @@ through an `AsyncLocalStorage` (`src/request-identity.ts`) so every tool call in
 turn acts as **that** user, not the process-wide `ZOE_BRAIN_USER_ID`. Offline
 proof is pinned in `test/request_identity.test.ts` + `test/route_identity.test.ts`
 (90/90 green). Live half — prove two identities produce two different memory
-recalls against the real Gemma brain + zoe-data (scratch port only; do NOT touch
-the live `:3578` sidecar):
+recalls against the real Gemma brain + zoe-data:
 
 ```bash
 npm ci && npm run build
@@ -46,8 +53,8 @@ NDJSON via content negotiation. The byte contract is pinned offline
 (`test/sentinel_stream.test.ts`, 59/59 green); this is the live half — eyeball
 sentinels + deltas against the real Gemma brain.
 
-1. Build and start the sidecar on the scratch port (hand-started, lab
-   discipline — do NOT touch the live services):
+1. Build and start a hand instance (stop the live unit first, or use a spare
+   port — see the note at the top):
 
    ```bash
    npm ci && npm run build
@@ -110,8 +117,8 @@ yet.
 
 ### On-box measurement (operator)
 
-1. Build and start the sidecar (from `labs/flue-zoe-brain/`, hand-started, lab
-   discipline — do NOT touch the live services):
+1. Build and start a hand instance (from `labs/flue-zoe-brain-2x/`; stop the live
+   unit first, or use a spare port — see the note at the top):
 
    ```bash
    npm ci && npm run build
@@ -169,7 +176,8 @@ cannot reach zoe-data `:8000` or llama-server `:11434`.
    lists, reminders, calendar, and notes in zoe-data. Record it as
    `DEMO_USER_ID`.
 
-2. Build and start the sidecar from `labs/flue-zoe-brain/`:
+2. Build and start a hand instance from `labs/flue-zoe-brain-2x/` (stop the live
+   unit first, or use a spare port — see the note at the top):
 
    ```bash
    npm ci && npm run build

@@ -13,7 +13,7 @@ import { defineConfig } from '@flue/runtime/config';
  *   - the `root` / `output` fields are retired; Vite owns both, and strict
  *     validation REJECTS them here.
  *
- * LAB ONLY — not a production unit.
+ * Build config for flue-zoe-brain-2x.service — the live Zoe brain (:3579).
  */
 export default defineConfig({
   target: 'node',

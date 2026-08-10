@@ -68,7 +68,8 @@ All three misses were the same silent failure mode (no tool called, hallucinated
 targets. Treat n=30 as directional, not an SLA: the binomial CI on 6/9 is wide
 (~35–88%). Re-run under the cutover gate above with ≥30 trials **per tool**.
 
-Run: `python3 parity/tool_reliability.py` (sidecar on :3578). Raw summary lands in
+Run: `python3 parity/tool_reliability.py` (live brain on :3579, or a hand
+instance via `ZOE_BRAIN_URL`). Raw summary lands in
 `parity/tool_reliability_last.json` (gitignored runtime artifact).
 
 ---

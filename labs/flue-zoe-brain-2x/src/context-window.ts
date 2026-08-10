@@ -75,7 +75,8 @@
  * English STT + English chat, where 4 chars/token slightly OVERcounts (safe
  * direction), and the 1536-token reserve absorbs the residual error.
  *
- * LAB ONLY (production-reachable via ZOE_BRAIN_BACKEND=flue — prod quality).
+ * LIVE — the deployed Zoe brain (flue-zoe-brain-2x.service on :3579,
+ * ZOE_BRAIN_BACKEND=flue + ZOE_FLUE_WIRE=2; sole brain since the 2026-08-09 cutover).
  */
 import type { Context, Message, Tool } from '@earendil-works/pi-ai';
 

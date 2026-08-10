@@ -20,7 +20,7 @@ tool_start/tool/tool_call/function_call (case- and separator-insensitive); and r
 the tool name from any of toolName/name/tool_name. It stays precise — only a genuine
 recall_memory tool event counts, never a text mention.
 
-Run (with the Flue brain serving on :3578):
+Run (against the live Flue brain on :3579, or a hand instance via ZOE_BRAIN_URL):
     python3 parity/recall_reliability.py
 
 Keep it modest/sequential (one shared GPU) — no concurrency.
@@ -34,7 +34,7 @@ import urllib.request
 
 import flue_wire
 
-BASE = "http://127.0.0.1:3578"
+BASE = flue_wire.base_url()
 GET_URL = BASE + "/agents/zoe/{sid}"
 
 # Varied phrasings that SHOULD trigger recall_memory — the model must consult

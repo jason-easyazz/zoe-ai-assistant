@@ -11,7 +11,7 @@ Increment 1 of the Flue brain is persona-only (no memory/abilities tools), so
 tool-needing prompts (time, lists, memory) are EXPECTED to differ — that gap is
 exactly what tells us what Phase 3 must wire before any cutover.
 
-Run (with the Flue brain serving on :3578):
+Run (against the live Flue brain on :3579, or a hand instance via ZOE_BRAIN_URL):
     python3 parity/parity_check.py
 """
 from __future__ import annotations

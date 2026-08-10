@@ -81,7 +81,7 @@
  *     that is a property to keep, not a coincidence to rely on, so
  *     test/tool_shapes.test.ts asserts it table-driven across all 21 tools.
  *
- * LAB ONLY — read-ish by default. Writes are gated behind ZOE_BRAIN_ALLOW_WRITES
+ * Read-ish by default. Writes are gated behind ZOE_BRAIN_ALLOW_WRITES
  * (default OFF → dry-run, so a parity run doesn't mutate Jason's real data).
  * See parity/RESULTS.md.
  */

@@ -44,7 +44,8 @@
  * the cap, ALL tools are stripped regardless of disclosure).
  * ZOE_BRAIN_PROGRESSIVE_TOOLS=false disables disclosure for A/B comparison.
  *
- * LAB ONLY (production-reachable via ZOE_BRAIN_BACKEND=flue — prod quality).
+ * LIVE — the deployed Zoe brain (flue-zoe-brain-2x.service on :3579,
+ * ZOE_BRAIN_BACKEND=flue + ZOE_FLUE_WIRE=2; sole brain since the 2026-08-09 cutover).
  */
 import { createProvider } from '@earendil-works/pi-ai';
 // FLUE-API: built-in OpenAI-completions wire handlers. In pi-ai 0.79 these lived

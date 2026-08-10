@@ -24,7 +24,8 @@ runner (run_gates.py) discovers every ``*_gate.py`` with a ``GATE`` and drives
 them against ONE freshly provisioned user.
 
 Runs under system python3 like the service (needs asyncpg, available in the
-zoe-data venv/site-packages). LAB ONLY — never imported by services/zoe-data.
+zoe-data venv/site-packages). Operator hand-run parity tooling — never imported
+by services/zoe-data and not part of the deployed unit.
 """
 from __future__ import annotations
 

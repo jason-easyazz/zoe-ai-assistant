@@ -16,7 +16,7 @@ the Flue session event stream (GET /agents/zoe/<sid>) and look at the actual
 `operation_start` whose `operationKind` is `prompt`. Reply text can claim a tool
 ran when it didn't (or vice-versa); the event stream cannot.
 
-Run (with the Flue brain serving on :3578):
+Run (against the live Flue brain on :3579, or a hand instance via ZOE_BRAIN_URL):
     python3 parity/tool_reliability.py
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ import uuid
 from collections import defaultdict
 from pathlib import Path
 
-BASE = "http://127.0.0.1:3578"
+BASE = flue_wire.base_url()
 GET_URL = BASE + "/agents/zoe/{sid}"
 
 REPEATS = 3  # per prompt

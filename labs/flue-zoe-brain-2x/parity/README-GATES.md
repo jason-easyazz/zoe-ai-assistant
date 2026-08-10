@@ -11,8 +11,10 @@
 > `./smoke-built.sh`, which run offline against a mock model.
 >
 > `flue_wire.py` is the exception: it addresses a sidecar directly
-> (`ZOE_BRAIN_URL`, default `:3578`) and is the reference implementation of the
-> 2.x wire. Point it at `:3579` to exercise this port without touching zoe-data.
+> (`ZOE_BRAIN_URL`, default `:3579` — the live brain) and is the reference
+> implementation of the 2.x wire. To exercise it in isolation, start a hand
+> instance on a spare port and point `ZOE_BRAIN_URL` at it rather than the live
+> `:3579`.
 
 A committed, reusable testing system for the live Flue Zoe-brain (the production
 brain via `ZOE_BRAIN_BACKEND=flue`). It grew out of the ad-hoc 2026-07-07
@@ -85,7 +87,8 @@ registration.
 
 ## Scope
 
-LAB ONLY. Nothing here is imported by `services/zoe-data` or run in CI; these are
-hand-started checks against the live host. Known coverage gaps (candidates for
+Operator hand-run tooling. Nothing here is imported by `services/zoe-data` or run
+in CI (it is not part of the deployed unit); these are hand-started checks against
+the live host. Known coverage gaps (candidates for
 new `*_gate.py`): real-audio E2E through Moonshine/Kokoro, streaming/barge-in,
 long-horizon session soak, and full concurrency.

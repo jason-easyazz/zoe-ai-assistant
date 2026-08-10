@@ -23,7 +23,8 @@
  * makes `Zoe` an agent at all is the `'use agent'` directive scan run by the
  * `@flue/vite` plugin at build time. Both are required.
  *
- * LAB ONLY (production-reachable via ZOE_BRAIN_BACKEND=flue — prod quality).
+ * LIVE — the deployed Zoe brain (flue-zoe-brain-2x.service on :3579,
+ * ZOE_BRAIN_BACKEND=flue + ZOE_FLUE_WIRE=2; sole brain since the 2026-08-09 cutover).
  */
 import { setProvider } from '@flue/runtime';
 import { createAgentRouter } from '@flue/runtime/routing';

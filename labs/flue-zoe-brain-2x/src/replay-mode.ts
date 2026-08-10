@@ -56,7 +56,7 @@
  * ABSENT MARKER = TODAY'S BEHAVIOUR, byte for byte. Nothing here changes the live
  * lane; the marker is only ever sent by the replay harness.
  *
- * LAB ONLY.
+ * Part of the live Zoe brain (flue-zoe-brain-2x.service, :3579).
  */
 
 /**

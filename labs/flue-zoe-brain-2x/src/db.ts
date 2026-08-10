@@ -26,7 +26,7 @@
  * `@flue/runtime/node` defaults to in-memory SQLite, so a test run touches no
  * file at all.
  *
- * LAB ONLY.
+ * Part of the live Zoe brain (flue-zoe-brain-2x.service, :3579).
  */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

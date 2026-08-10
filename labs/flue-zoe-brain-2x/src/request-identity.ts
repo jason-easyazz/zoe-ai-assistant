@@ -34,7 +34,7 @@
  * at all. Outside a turn (unit tests, non-HTTP paths) no signal id is bound and
  * callers fall back to the env — see `actingUserId()` in src/tools/zoe-tools.ts.
  *
- * LAB ONLY.
+ * Part of the live Zoe brain (flue-zoe-brain-2x.service, :3579).
  */
 
 /**
