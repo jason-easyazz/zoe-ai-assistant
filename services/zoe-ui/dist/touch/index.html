@@ -388,7 +388,7 @@
             }
         }
 
-        async function resolvePendingPanelChallenge(pinValue) {
+        async function resolvePendingPanelChallenge(pinValue, sessionId) {
             const pending = getPendingPanelChallenge();
             if (!pending || !pending.challenge_id || !pinValue) return true;
             try {
@@ -396,12 +396,18 @@
                     challenge_id: pending.challenge_id,
                     pin: pinValue,
                 };
-                if (selectedUserId && selectedUserId !== 'guest') {
-                    payload.user_id = selectedUserId;
-                }
+                // Attach the FRESH session we just obtained as X-Session-ID. A
+                // caller-asserted user_id is deliberately NOT sent: the server
+                // ignores it (unauthenticated endpoint). The session id, by
+                // contrast, is a bearer credential the server verifies against
+                // zoe-auth and checks against this panel's bindings — that is what
+                // lets a NON-DEFAULT member's held voice turn replay under THEIR
+                // identity instead of 403'ing against the panel default (B2).
+                const headers = { 'Content-Type': 'application/json' };
+                if (sessionId) headers['X-Session-ID'] = sessionId;
                 const r = await fetch('/api/panels/auth/pin', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers,
                     body: JSON.stringify(payload),
                 });
                 if (!r.ok) {
@@ -607,7 +613,7 @@
                                 return;
                             }
                         }
-                        const challengeOk = await resolvePendingPanelChallenge(currentPin);
+                        const challengeOk = await resolvePendingPanelChallenge(currentPin, data && data.session_id);
                         if (!challengeOk) {
                             // Keep login flow successful even if challenge handoff fails.
                             // Voice replay may be skipped, but the user should still enter.
