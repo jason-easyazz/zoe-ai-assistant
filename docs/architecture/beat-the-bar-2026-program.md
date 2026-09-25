@@ -67,9 +67,30 @@ status: 🔨 active — NEXT ACTION is always §0
   `mkswap`, `swapon -p 5`; then change `/ 2 /` → `/ 8 /` in `/etc/systemd/nvzramconfig.sh` so it
   survives a reboot; `echo 3 > /proc/sys/vm/drop_caches` before starting the brain. Gate:
   `free -m` available ≥ 2 GB idle; the next nightly replay gate PASS.
-- B0.2 ✅ 2026-09-25: openclaw-gateway + Hermes keep-warm off; router swap guard; zoe-data lean
-  restart; HNSW rebuild; journald persistent; log rotation; docker prune; security pip set;
-  Node 22.23.3; zoe-auth rebuilt; replay gate PASS 13/13.
+- B0.2 ✅ 2026-09-25 (all verified on the box, evidence in the review §1): Telegram
+  Happy-Eyeballs fix; openclaw-gateway + Hermes keep-warm off; health/watchdog scripts fixed;
+  router swap guard applied; zoe-data lean restart; HNSW rebuild (recall `ok`); backup script
+  SQLite snapshot; journald persistent; daily log rotation + log dir 750/640; docker prune
+  12 GB; Dependabot alerts on; security pip set (anyio critical etc.) + 6 drifted pins;
+  Node 22.23.3 on both Flue units; zoe-auth image rebuilt; Omnigent container Codex → shared
+  Serena URL; Multica 401 explained; **replay gate PASS 13/13** (first in 41 runs).
+- B0.14 🔨 **Feature-audit defects** (review PR #1684 found five; fix PR in flight, each with a
+  negative-controlled test): (1) `proactive/scheduler.py` logs the Postgres password at
+  startup — redact, then 🧑 rotate the password per the secret-topology runbook; (2)
+  `GET /api/memories/people` 500 (`COLLATE NOCASE` on Postgres) + sweep the class; (3)
+  reminders: date-only rows skipped and a literal `"tomorrow"` due date swallowed; (4)
+  `ZOE_DEFAULT_MEDIA_PLAYER` names a non-existent HA entity → fail soft + 🧑 set the right id;
+  (5) web search advertised to the brain but no tool registered → make the capability honest
+  (the tool itself is B10). Also 🧑 set `MEMORY_DIGEST_MODEL` in the live `.env` to the real
+  model name (stale `gpt-4o-mini`, harmless, misleading).
+- B0.15 ⬜ **DGX Spark evaluation** (Jason is considering one): candidate builder/brain models
+  for 128 GB unified memory + CUDA 13 on ARM — Gemma 4 26B-A4B (same family, MoE, MTP drafter
+  exists; watch llama.cpp #29168 MoE-fusion acceptance drop), Gemma 4 31B, Qwen3.6 35B-A3B,
+  Muse Glimmer 30B (Apache-2.0, "always-on local agents"), gpt-oss-120B 4-bit; local builder
+  lane = Pi through Omnigent's `pi` harness against a local OpenAI-compatible server (no
+  metered key); training on-box (router self-train, tool-calling fine-tune on Zoe's corpus).
+  Re-taking the brain-rock decision on a new box is deliberate: edit CANONICAL + its invariant
+  test. Gate: a written bake-off with tokens/s, RAM, tool-call accuracy on Zoe's corpus.
 - B0.3 🧑 Telegram token rotation (BotFather) + `journalctl --rotate && --vacuum-time=1s`.
 - B0.4 ⬜ **llama.cpp rebuild ≥ b11178** and re-enable `--flash-attn on` +
   `--cache-type-v q8_0` with MTP (upstream fix PR #25148, 2026-06-30). Keep `--fit off`.
@@ -99,7 +120,10 @@ status: 🔨 active — NEXT ACTION is always §0
   Orin wheel index exist.
 
 ### B1 — Turn-taking that feels like a person (beats GPT-Live locally)
-- B1.1 ⬜ **Speculative turn-start with a speculation gate**: fire the brain on Smart Turn's
+- B1.1 🔨 **Speculative turn-start with a speculation gate** — draft PR #1685 (flag-dark
+  `ZOE_SPECULATIVE_*`, server-side gate + daemon verdict, 30 tests, break-the-fix controls;
+  stays dark until phase 2 defers write side-effects to commit; needs the panel on + replay
+  gate for the live proof): fire the brain on Smart Turn's
   first "complete" (or a short VAD stop), hold TTS frames until the turn is confirmed,
   drop on cancel, keep if the final transcript is equivalent. Source: HF
   `speech-to-speech --speculative_reopen_ms`, Pipecat `speculation_gate.py`, LiveKit
@@ -155,7 +179,8 @@ status: 🔨 active — NEXT ACTION is always §0
   contradiction only if intervals overlap (Graphiti `edge_operations.py`); reconciliation
   with mem0's update prompt, top-10 neighbours, integer ids. Fixes the distilled-vs-richer
   dedupe bug (M7/M9) without deleting anything. Lab: 50-pair fixture from demo transcripts.
-- B3.2 ⬜ **Deterministic dream gating** for the idle consolidator (≥N new facts, ≥H hours,
+- B3.2 🔨 **Deterministic dream gating** for the idle consolidator (first step landed as draft
+  PR #1682: the alert now distinguishes "idle" from "processed 0 of N eligible") (≥N new facts, ≥H hours,
   idle ≥M min, cancel on speech) + a hard brain-call budget per window + a 40-line profile
   cap (Honcho, Memobase). Explains the 44 zero-effect digests; make them explainable.
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
@@ -221,8 +246,8 @@ status: 🔨 active — NEXT ACTION is always §0
 - B8.2 ⬜ SkillSpector 2.12 with the LLM stage on the local llama-server.
 - B8.3 ⬜ Standing watchers (B2.4) as the first Zoe-authored background agents.
 
-### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle)
-Plan: [`omi-integration-plan.md`](omi-integration-plan.md) (PR #1683). Pendant → BLE → the Pi
+### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle) — 🔨 plan in draft PR #1683
+Plan: [`omi-integration-plan.md`](omi-integration-plan.md). Pendant → BLE → the Pi
 panel (later a Pi Zero 2 W dock) → Opus decode + Silero → existing `/api/voice/ambient` →
 owner-only, speaker-gated `ambient_memory`. Nothing to Omi's cloud; the phone app is out
 (one bonded central only; their backend needs Firebase/GCS/Pinecone/OpenAI; their own
@@ -309,4 +334,6 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
-- 2026-09-25 — created from the return-from-absence review; B0.2 done the same day.
+- 2026-09-25 — created from the return-from-absence review; B0.2 done the same day; B1.1
+  (#1685), B3.2 first step (#1682), B9 plan (#1683), the feature audit (#1684) and the 1.x
+  Telegram-lab retirement (#1681) opened as drafts; B0.14/B0.15 added; §4b triage recorded.
