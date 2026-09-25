@@ -21,12 +21,16 @@ status: 🔨 active — NEXT ACTION is always §0
 ## 0. NEXT ACTION (keep this current)
 
 1. 🧑 **Root window on the box (one sitting, ~20 min):** shrink zram (B0.1), rotate the
-   Telegram token + vacuum the journal (B0.3), then let one nightly replay gate and one
-   self-hosted test run go green. Everything in §1–§8 that is voice-path assumes this.
-2. Merge PR #1680 (this program's parent review), then open the small PR that removes
-   the retired 1.x Telegram lab (B0.5) — 35 of 52 Dependabot alerts.
-3. Start B1.1 (speculative turn-start) as the first lab spike — it is the largest
-   perceived-latency win and it is where Zoe can beat GPT-Live/Siri locally.
+   Telegram token + vacuum the journal (B0.3), rotate the Postgres password once #1689 is
+   deployed (B0.14), set `ZOE_DEFAULT_MEDIA_PLAYER` to the real entity and turn
+   `ZOE_MUSIC_DISCOVERY` off (§4b), then let one nightly replay gate and one self-hosted test
+   run go green. Everything in §1–§9 that is voice-path assumes this.
+2. ✅ #1680 review+tracker, ✅ #1681 1.x lab retired (Dependabot 52 → 17), ✅ #1682 digest
+   verdicts, ✅ #1683 Omi plan, ✅ #1687 feature audit; queued: #1688 audit corrections,
+   #1689 audit-fix code. Then: B1.1 (#1685) needs a replay gate bound to its head + review.
+3. Next build items, in order: B0.4 llama.cpp FA rebuild (voice-gated, needs the window),
+   B10.0 honest web fallback (small), B3.1 bi-temporal supersession (lab), B2.1
+   presence-triggered routines (needs the panel on), B9.1 Omi lab receive (off-Orin).
 
 ## 1. Where Zoe already beats the bar (protect these)
 
@@ -74,8 +78,11 @@ status: 🔨 active — NEXT ACTION is always §0
   12 GB; Dependabot alerts on; security pip set (anyio critical etc.) + 6 drifted pins;
   Node 22.23.3 on both Flue units; zoe-auth image rebuilt; Omnigent container Codex → shared
   Serena URL; Multica 401 explained; **replay gate PASS 13/13** (first in 41 runs).
-- B0.14 🔨 **Feature-audit defects** (review PR #1684 found five; fix PR in flight, each with a
-  negative-controlled test): (1) `proactive/scheduler.py` logs the Postgres password at
+- B0.14 🔨 **Feature-audit defects** (audit merged as #1687 — redacted; corrections #1688; the
+  un-redacted #1684 was closed and its branch deleted because household data had reached a
+  public branch. Fixes in PR #1689 — rebuilt clean after a fake-password fixture tripped
+  GitGuardian's history scan — each with a negative-controlled test, plus the reminder
+  same-day fallback, ZOE_TIMEZONE-relative dates, no titles in logs, lenient stored times): (1) `proactive/scheduler.py` logs the Postgres password at
   startup — redact, then 🧑 rotate the password per the secret-topology runbook; (2)
   `GET /api/memories/people` 500 (`COLLATE NOCASE` on Postgres) + sweep the class; (3)
   reminders: date-only rows skipped and a literal `"tomorrow"` due date swallowed; (4)
@@ -125,8 +132,9 @@ status: 🔨 active — NEXT ACTION is always §0
 ### B1 — Turn-taking that feels like a person (beats GPT-Live locally)
 - B1.1 🔨 **Speculative turn-start with a speculation gate** — draft PR #1685 (flag-dark
   `ZOE_SPECULATIVE_*`, server-side gate + daemon verdict, 30 tests, break-the-fix controls;
-  stays dark until phase 2 defers write side-effects to commit; needs the panel on + replay
-  gate for the live proof): fire the brain on Smart Turn's
+  stays dark until phase 2 defers write side-effects to commit; needs the panel on + a replay
+  gate bound to its head — the 2026-09-25 attempt skipped on the 700 MB floor, so it waits
+  for B0.1 or a quiet nightly): fire the brain on Smart Turn's
   first "complete" (or a short VAD stop), hold TTS frames until the turn is confirmed,
   drop on cancel, keep if the final transcript is equivalent. Source: HF
   `speech-to-speech --speculative_reopen_ms`, Pipecat `speculation_gate.py`, LiveKit
@@ -182,8 +190,10 @@ status: 🔨 active — NEXT ACTION is always §0
   contradiction only if intervals overlap (Graphiti `edge_operations.py`); reconciliation
   with mem0's update prompt, top-10 neighbours, integer ids. Fixes the distilled-vs-richer
   dedupe bug (M7/M9) without deleting anything. Lab: 50-pair fixture from demo transcripts.
-- B3.2 🔨 **Deterministic dream gating** for the idle consolidator (first step landed as draft
-  PR #1682: the alert now distinguishes "idle" from "processed 0 of N eligible") (≥N new facts, ≥H hours,
+- B3.2 🔨 **Deterministic dream gating** for the idle consolidator (first step MERGED as #1682:
+  the alert distinguishes idle / no-history / extractor vs processing errors, one cutoff for
+  selection and probe, the emotional pass survives a fact-parse failure, consolidation has its
+  own verdict vocabulary, counts on the status endpoint) (≥N new facts, ≥H hours,
   idle ≥M min, cancel on speech) + a hard brain-call budget per window + a 40-line profile
   cap (Honcho, Memobase). Explains the 44 zero-effect digests; make them explainable.
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
@@ -249,9 +259,11 @@ status: 🔨 active — NEXT ACTION is always §0
 - B8.2 ⬜ SkillSpector 2.12 with the LLM stage on the local llama-server.
 - B8.3 ⬜ Standing watchers (B2.4) as the first Zoe-authored background agents.
 
-### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle) — 🔨 plan pending in PR #1683
-Plan: `docs/architecture/omi-integration-plan.md`, arriving in PR #1683 (not in this commit;
-link it here once that PR merges). Pendant → BLE → the Pi
+### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle) — 🔨 plan merged (#1683)
+Plan: [`omi-integration-plan.md`](omi-integration-plan.md) (two review rounds: every phase
+replay-gated, no transcript text in shadow mode, a real multi-speaker detector, storage-off
+firmware mandatory, scoped rows incl. the existing panel writer, "same eligible speaker" rule;
+§6.1 lists what is still unverified). Pendant → BLE → the Pi
 panel (later a Pi Zero 2 W dock) → Opus decode + Silero → existing `/api/voice/ambient` →
 owner-only, speaker-gated `ambient_memory`. Nothing to Omi's cloud; the phone app is out
 (one bonded central only; their backend needs Firebase/GCS/Pinecone/OpenAI; their own
@@ -286,9 +298,15 @@ from outside, hence B9.0.
   the pendant lives during the day, retention, minors, who does the legal check).
 
 ### B10 — Web lookup + claim backing (Jason, 2026-07-24)
-- B10.1 ⬜ Re-land the Python core of the web-search spike (PR #1610: DDG/Wikipedia/HN
-  scrapers, block detection, consensus merge, ≤350-token voice packet; 44 offline fixture
-  tests) as a ≤300-line PR; Tavily stays the opt-in primary. B10.2 ⬜ Wire a `web_search`
+- B10.0 ⬜ **Make the existing chat fallback honest first** (found by the audit re-check
+  2026-09-26): `research_evidence.fetch_web_fallback_results` reaches DuckDuckGo with no brain
+  tool, but DDG now answers scripted fetches with a challenge page (HTTP 202) and the function
+  swallows it and returns `[]`, so a research turn silently degrades to placeholders. Surface
+  "nothing found", and prefer the configured Tavily key (`web_search_provider`) when set.
+- B10.1 ⬜ Re-land the Python core of the web-search spike (PR #1610, now closed: DDG/Wikipedia/
+  HN scrapers, block detection, consensus merge, ≤350-token voice packet; 44 offline fixture
+  tests) as a ≤300-line PR behind the approved research/delegation seam (the cut-list cut a
+  direct `web_search` tool on purpose); Tavily stays the opt-in primary. B10.2 ⬜ Wire a `web_search`
   tool into the Flue brain lane behind a flag; "are you sure?" triggers a backed re-answer.
   Gate: fixture tests + replay corpus unchanged + 20 live lookups scored by hand.
 
@@ -341,3 +359,6 @@ a decision input.
 - 2026-09-25 — created from the return-from-absence review; B0.2 done the same day; B1.1
   (#1685), B3.2 first step (#1682), B9 plan (#1683), the feature audit (#1684) and the 1.x
   Telegram-lab retirement (#1681) opened as drafts; B0.14/B0.15 added; §4b triage recorded.
+- 2026-09-26 — #1680/#1681/#1682/#1683/#1687 merged; PO-token container recreated on 2.0.0
+  and verified; #1684 replaced by the redacted #1687; #1686 replaced by the clean #1689; B9
+  linked; B10.0 added (DDG challenge page); §0 refreshed.
