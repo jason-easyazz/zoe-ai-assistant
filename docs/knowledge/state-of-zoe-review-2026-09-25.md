@@ -571,11 +571,11 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
 3. ✓ openclaw-gateway + keepwarm disabled; ✓ health/watchdog scripts fixed; **still to do:**
    `systemctl --user restart zoe-data` (loads the installed package set; poll `/health`),
    then apply the router swap-guard template (`cp` + `daemon-reload` + restart).
-4. Maintenance window (brain + Kokoro stopped, §3): shrink zram; HNSW rebuild
-   (`check_memory_tombstones.py --execute mempalace_drawers --yes`, then the
-   `resize_factor=2.0` guard); restart the stack; confirm `free -m` clears ≥1 GB and
-   `/health` recall is `ok`; let one nightly replay gate and one self-hosted test run go
-   green, and check the digest does work that night.
+4. Maintenance window (brain + Kokoro stopped, §3): shrink zram (B0.1 in the program
+   tracker); restart the stack; confirm `free -m` clears ≥1 GB. ✓ The HNSW rebuild is
+   DONE (22:26, `/health` recall `ok`) and ✓ the replay gate has passed (22:39); do not
+   rebuild again unless `/health` reports `memory_capture` degraded. Still watch that
+   the nightly digest does work tonight (M3 in the register).
 5. Reconnect YouTube Music (panel Sources → Reconnect), restart zoe-data.
 6. Turn `ZOE_MUSIC_DISCOVERY` off until it can run; decide `ZOE_FACE_ID_ENABLED`.
 7. Fix the Multica 401; renew Omnigent's login before 2026-10-11; set Copilot review to
