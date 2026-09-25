@@ -15,11 +15,12 @@ status: complete — live fixes applied where the harness allowed; the rest is s
 
 ## 0. TL;DR
 
-- **Zoe has been effectively unreachable since 2026-09-03.** The last chat message is
-  2026-09-03. Three independent failures stacked: the **Telegram bot could not connect**
-  (fixed today, root cause below), the **touch panel is off the network** (needs a physical
-  check), and **memory recall is silently broken** by Chroma HNSW corruption since
-  2026-09-03 21:05.
+- **Zoe had been effectively unreachable since 2026-09-03.** The last chat message is
+  2026-09-03. Two independent failures stacked (a third, the panel, was Jason turning the
+  screen off): the **Telegram bot could not connect** (fixed 21:51, root cause below) and
+  **memory recall was silently broken** by Chroma HNSW corruption since 2026-09-03 21:05
+  (**rebuilt 22:26, `/health` recall `ok`**). Both are fixed and verified; §1 has the
+  evidence. Do not repeat the rebuild unless `/health` reports `memory_capture` degraded.
 - **The box is memory-starved and it is structural, not a leak.** ~100 MiB free, 5.2 GB in
   zram swap that itself costs ~1.9 GB of real RAM. That single fact is the root cause of the
   voice replay gate skipping 40 runs in a row, the self-hosted test lane flatlining for 21
@@ -645,8 +646,8 @@ LIVE-BROKEN (verified failing on the box today).
 ### Memory
 | ID | Problem | Source | State | Unblock |
 |---|---|---|---|---|
-| M1 | Chroma HNSW corruption; recall degraded since 09-03 | `/health`; app log | LIVE-BROKEN | rebuild (§2.2) |
-| M2 | `mempalace_drawers` 96% dead rows | memory-export.log | AWAITING OPERATOR | compaction in the same window |
+| M1 | Chroma HNSW corruption; recall degraded 09-03 → 09-25 22:26 | `/health`; app log | **FIXED 09-25** (rebuilt; recall `ok`) | watch `/health`; rebuild only if degraded again |
+| M2 | `mempalace_drawers` 96% dead rows | memory-export.log | **FIXED 09-25** (compacted with M1) | — |
 | M3 | `memory_digest` 44 zero-effect nightly runs | app log 03:00 | LIVE-BROKEN | diagnose after M1 |
 | M4 | db-pool exhaustion bursts (09-13, 09-25) coincide with load spikes | app log | RECURRING | correlate |
 | M5 | Graph recall boost enablement contested/unverified; migration 0015 missing = silent no-boost | IDEAS.md:40-44 | UNVERIFIED | functional probe + eval |
