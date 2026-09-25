@@ -578,24 +578,26 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
    rebuild again unless `/health` reports `memory_capture` degraded. Still watch that
    the nightly digest does work tonight (M3 in the register).
 5. Reconnect YouTube Music (panel Sources → Reconnect), restart zoe-data.
-6. Turn `ZOE_MUSIC_DISCOVERY` off until it can run; decide `ZOE_FACE_ID_ENABLED`.
-7. Fix the Multica 401; renew Omnigent's login before 2026-10-11; set Copilot review to
-   Lite; allow-list the two `pull_request_target` workflows; enable Dependabot alerts.
+6. Turn `ZOE_MUSIC_DISCOVERY` off until it can run (an `.env` edit + zoe-data restart);
+   decide `ZOE_FACE_ID_ENABLED`; rotate the Postgres password once the scheduler log
+   redaction (feature-audit fix PR) is deployed.
+7. ✓ Multica 401 explained (stale process env; cleared by the 22:27 restart — confirm at
+   the next 06:00 autopilot run). ✓ Dependabot alerts enabled. Still: renew Omnigent's
+   login before 2026-10-11; set Copilot review to Lite; allow-list the two
+   `pull_request_target` workflows.
 
 **Next two weeks (code, one workstream per PR, voice-gated where marked):**
-8. llama.cpp rebuild + FA + q8 V-cache (voice-gated).
+8. llama.cpp rebuild + FA + q8 V-cache (voice-gated) — B0.4 in the program tracker.
 9. Flip `zoe_flue_client` defaults to `:3579`/wire-2 and enable `ZOE_BRAIN_FAILOVER`
    (voice-gated; today a sidecar blip cans every turn and a fresh box is unbootable without
    the `.env`).
-10. ✓ Backup script fixed. Still: log rotation for `~/.zoe-logs/zoe-data.stdout.log`;
-    deploy pip contract decision; docs sweep for the 16 contradictions; close stale
-    issues (#863, #1607); rebase-or-close #1610; resolve #1641.
-10b. **Retire `labs/flue-zoe-telegram/` (the 1.x lab) by removing it** in its own small PR
-    after this one merges (13 files, ~930 non-lockfile lines; nothing in deploy or the
-    voice gate references it; update the `labs/AGENTS.md` index and the three docs that
-    still name its path). That single deletion clears 35 of the 52 Dependabot alerts;
-    the 7 in `services/zoe-core/package-lock.json` go with the pi 0.84+ port or that
-    tree's retirement.
+10. ✓ Backup script fixed; ✓ log rotation installed (daily user timer, 425 → 50 MB);
+    ✓ #863 and #1607 closed. Still: deploy pip contract decision (B0.6); docs sweep for
+    the 16 contradictions; close #1610 (re-land small as B10); park #1641 (program triage).
+10b. ✓ Retirement of `labs/flue-zoe-telegram/` (the 1.x lab) is draft PR #1681, to be
+    merged right after this one (clears 35 of the 52 Dependabot alerts; the 7 in
+    `services/zoe-core/package-lock.json` go with the pi 0.84+ port or that tree's
+    retirement).
 11. `moonshine-voice` 0.1.5 with `keyterms` (voice-gated); Smart Turn 3.2; Silero 6.2.
 12. Flue 2.1.1 in the brain sidecar (voice-gated).
 
