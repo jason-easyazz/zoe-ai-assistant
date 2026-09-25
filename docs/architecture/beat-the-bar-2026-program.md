@@ -230,6 +230,28 @@ B4.3 face decision ─> B4.1/B4.2 shadow week (Pi on) ─> B3.9
 B8.1 executor ─> B8.3 watchers (B2.4 can ship on the plain scheduler first)
 ```
 
+## 4b. Triage of the inherited plans (2026-09-25, on Jason's "do we need to finish this?")
+
+The test for each: does it move Zoe toward the north star, and does what exists actually
+work today. Verdicts are recorded here so they are not re-litigated in chat.
+
+| Inherited plan / idea | Verdict | Why |
+|---|---|---|
+| **oh-my-pi as a builder harness** (`omp-builder-adoption.md`, staged binary, H8) | **RETIRE the staging** | Its own trial found a cost leak, not a quality win; the fence is a wrapper + overlay the doc admits is not the top of the stack; it needs a metered OpenRouter key in a flat-rate economy; hashline was disabled upstream for small models. Keep the five pinned ideas as design inputs (replay invariant → B1.1, fact IDs → B3.1). Remove `/home/zoe/.local/bin/omp` + the container mount; mark the record "evaluated, not adopted". |
+| Web-search + claim-backing spike (PR #1610, 62 files, conflicting) | **Re-land small as B10** | Jason asked for live lookups and "are you sure?" backing on 2026-07-24; the valuable part is a few hundred lines of Python. Close #1610, open a ≤300-line PR from its `labs/web-search-spike` core when B1.1 is in review. |
+| Ask-card conversation mode (PR-1b/1c) + `voice.html` retirement | Finish | One front door; removes a legacy surface; needed for B1 on the panel. |
+| Panel identity W5 shadow week, face enroll/delete UI | Finish (when the panel is on) | Multi-user identity is the edge Apple/Amazon lack locally. Face-ID: build the delete screen or turn the flag off (policy). |
+| Relationship graph / recall boost enablement | Finish the measurement only | Merged; verify the running state and measure lift on real data; no more docs. |
+| OpenClaw runtime code | Delete | Gateway stopped 2026-09-25; 31 skills never ran; router + trigger still mounted in `main.py`. Gated deletion PRs. |
+| Desktop UI overhaul (waves 0–6) | **Park after Wave 0/1 (XSS + data-loss)** | The panel, Telegram and phone are the surfaces; 30k lines of desktop pages are not the product. Revisit after B1–B3. |
+| Multica full-autonomy program (PR #1641) + Hermes retirement gates + retirement-gates packet | **Park** | Self-evolution is a pillar, but the warden plan is the most expensive, least user-visible work on the board. Keep the executor's minimal Phase 2 (B8.1); close #1641 as parked with a pointer; do not execute the gates packet. |
+| Router self-train loop (`ZOE_ROUTER_SELFTRAIN`) | Park | Ratchet rejected its only candidate; 91.4% is fine; needs data and RAM that B1 needs more. |
+| Brain tool-selection flake investigation | Drop | Not user-visible (router decides first); its own doc says dropping is legitimate. |
+| Music discovery batch (`ZOE_MUSIC_DISCOVERY`) | Park (flag off) | Never ran (memory gate); revisit after B0.1. |
+| Tauri desktop shell, orb-reacts-to-music, Pinterest-style ideas board | Park | Not on the path. |
+| Telegram voice notes (W8) | Later, after B1 | Cheap once the panel lane is right. |
+| Chat-split / typed-config / voice_tts split (Wave 4 tech debt) | Only when touching those files | Refactor-as-you-go; no standalone PRs. |
+
 ## 5. Explicitly NOT doing (and why)
 Speech-to-speech models (replace the brain rock, >8 GB); Pipecat as a framework (lift the
 pieces instead); Graphiti/Neo4j, MemOS/MIRIX, Second-Me; TEN turn detection (7B);
