@@ -14,7 +14,13 @@ from database import get_db
 from guest_policy import require_feature_access
 from models import ReminderCreate, ReminderUpdate, SnoozeBody
 from push import broadcaster
-from reminder_service import _create_notification, create_reminder_record, row_to_dict
+from reminder_service import (
+    _create_notification,
+    create_reminder_record,
+    normalize_due_date,
+    normalize_due_time,
+    row_to_dict,
+)
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +77,8 @@ async def _reschedule_reminder_due_safe(db, reminder_id: str) -> None:
                 )
             return  # snooze in the past → reminder_scan will re-pick it up
 
-        if r.get("due_time"):
+        if r.get("due_time") or r.get("due_date"):
+            # date-only rows fire at the household default time (reminder_scan)
             from proactive.triggers.reminder_scan import schedule_due_reminder
             await schedule_due_reminder(db, row)
     except Exception:
@@ -183,6 +190,12 @@ async def update_reminder(
         if key == "is_active":
             updates.append("is_active = ?")
             params.append(1 if value else 0)
+        elif key == "due_date":
+            updates.append("due_date = ?")
+            params.append(normalize_due_date(value))
+        elif key == "due_time":
+            updates.append("due_time = ?")
+            params.append(normalize_due_time(value))
         else:
             updates.append(f"{key} = ?")
             params.append(value)
