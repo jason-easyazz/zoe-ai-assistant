@@ -360,6 +360,10 @@ labs/flue-zoe-brain-2x/parity/gate-results/
 # after `git reset --hard`. Keep them ignored so `git status` stays clean until
 # the dir is manually removed on the box. Exact dir name — does NOT match -2x.
 labs/flue-zoe-brain/
+# Same tombstone for the RETIRED 1.x Telegram lane (source removed 2026-09-25;
+# its own .gitignore covered node_modules/.env/dist/data). Exact dir name — does
+# NOT match -2x.
+labs/flue-zoe-telegram/
 
 # functiongemma-feasibility lab: committed measurement artifacts (labs/functiongemma-feasibility/README.md)
 !labs/functiongemma-feasibility/zoe_tools.json

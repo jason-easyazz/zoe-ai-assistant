@@ -302,7 +302,7 @@ obtain-step · **DoD** · **STOP conditions**. Then link it from the plan §6 li
   people/person_relationships writers (`person_extractor` fulfillment path) + a consent
   row. Deterministic script, Gemma phrases. Tests: interview answers land in people
   graph attributed to the new user. Software: none.
-- **P-W8.1 Telegram voice notes:** in `labs/flue-zoe-telegram/src/app.ts` add
+- **P-W8.1 Telegram voice notes:** in `labs/flue-zoe-telegram-2x/src/app.ts` add
   `bot.on('message:voice')` → download OGG/Opus (Bot API `getFile`) → ffmpeg → WAV 16k →
   POST to zoe-data STT (`_transcribe_audio` route) → brain via the existing bot path →
   reply text AND `sendVoice` (Kokoro WAV → `ffmpeg -c:a libopus` OGG). Flag
