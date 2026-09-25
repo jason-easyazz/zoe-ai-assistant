@@ -541,7 +541,15 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
         from memory_service import MemoryServiceError, get_memory_service
         svc = get_memory_service()
 
-        facts = await _extract_facts_with_gemma(chat_text)
+        try:
+            facts = await _extract_facts_with_gemma(chat_text)
+        except ExtractorError as exc:
+            # An outage is an ERROR row, never a quiet "no facts": the nightly
+            # loop classifies it as extractor_errors. Return early — the
+            # emotional pass hits the same endpoint and would only time out again.
+            result["error"] = f"extractor_failed:{exc.kind}"
+            logger.warning("memory_digest: extractor failed for %s: %s", user_id, exc)
+            return result
         result["extracted"] = len(facts)
 
         if facts:
@@ -794,8 +802,27 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
         return ""
 
 
+class ExtractorError(RuntimeError):
+    """The fact extractor could not produce an answer (transport / HTTP / JSON).
+
+    Distinct from "the transcript had no facts" (``[]``): an outage MUST
+    classify as an error row in the nightly digest, not as ``attempted_no_facts``
+    (Codex P2 on #1682). ``kind`` is the underlying exception class name.
+    """
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(f"{kind}: {message}")
+        self.kind = kind
+
+
 async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
-    """Send chat transcript to the LLM and parse the JSON fact list."""
+    """Send chat transcript to the LLM and parse the JSON fact list.
+
+    Returns ``[]`` only when the model answered and stated no facts. Every
+    failure to get a parseable answer raises :class:`ExtractorError` so callers
+    can tell an outage from an empty transcript (``memory_idle_consolidation``
+    already catches it and leaves its watermark un-advanced).
+    """
     if len(chat_text) > 3000:
         logger.warning(
             "memory_digest: transcript truncated to 3000 chars for fact "
@@ -824,14 +851,16 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
             end = text.rfind("]") + 1
             if start == -1 or end == 0:
                 logger.warning("memory_digest: LLM returned no JSON array: %s", text[:200])
-                return []
+                raise ExtractorError("NoJSONArray", text[:200])
             return json.loads(text[start:end])
+    except ExtractorError:
+        raise
     except json.JSONDecodeError as je:
         logger.warning("memory_digest: JSON parse error: %s", je)
-        return []
+        raise ExtractorError(type(je).__name__, str(je)) from je
     except Exception as exc:
         logger.warning("memory_digest: LLM call failed: %s", exc)
-        return []
+        raise ExtractorError(type(exc).__name__, str(exc)) from exc
 
 
 async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:

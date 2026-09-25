@@ -149,6 +149,114 @@ def test_digest_input_seen_uses_the_lookback_window():
     assert md.digest_input_seen(lookback + 1.0) is False    # the 2026-09 case: 530h
 
 
+def test_extractor_outage_raises_a_typed_error_not_an_empty_list(monkeypatch):
+    """Transport / HTTP / non-JSON answers raise ExtractorError; only a real ``[]`` is ``[]``.
+
+    Negative control: before this fix the extractor swallowed every failure and
+    returned ``[]``, indistinguishable from "no facts stated".
+    """
+    import asyncio
+
+    md = pytest.importorskip("memory_digest")
+
+    class _Resp:
+        def __init__(self, content):
+            self._c = content
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": self._c}}]}
+
+    def _client_factory(behaviour):
+        class _Client:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *a, **kw):
+                return behaviour()
+        return _Client
+
+    def _boom():
+        raise md.httpx.ConnectError("All connection attempts failed")
+
+    monkeypatch.setattr(md.httpx, "AsyncClient", _client_factory(_boom))
+    with pytest.raises(md.ExtractorError) as ei:
+        asyncio.run(md._extract_facts_with_gemma("some transcript " * 10))
+    assert ei.value.kind == "ConnectError"
+
+    monkeypatch.setattr(md.httpx, "AsyncClient", _client_factory(lambda: _Resp("I cannot help with that.")))
+    with pytest.raises(md.ExtractorError) as ei:
+        asyncio.run(md._extract_facts_with_gemma("x " * 30))
+    assert ei.value.kind == "NoJSONArray"
+
+    monkeypatch.setattr(md.httpx, "AsyncClient", _client_factory(lambda: _Resp("[]")))
+    assert asyncio.run(md._extract_facts_with_gemma("x " * 30)) == []
+
+
+def test_extractor_failure_is_an_error_row_and_classifies_as_extractor_errors(mm, monkeypatch):
+    """End to end through run_memory_digest: an outage must NOT read as attempted_no_facts."""
+    import asyncio
+    import sys
+    import types
+
+    md = pytest.importorskip("memory_digest")
+
+    async def _twenty_words(_user_id, _db=None):
+        return " ".join(["I told Zoe my dad is called Neil and we live in Geraldton"] * 3)  # >= 20 words
+
+    async def _down(_chat_text):
+        raise md.ExtractorError("ReadTimeout", "timed out")
+
+    monkeypatch.setattr(md, "_load_todays_messages", _twenty_words)
+    monkeypatch.setattr(md, "_extract_facts_with_gemma", _down)
+    # The engine imports its store collaborators before extracting; stub them so
+    # the slim CI venv never touches the brain or MemPalace.
+    monkeypatch.setitem(sys.modules, "zoe_agent",
+                        types.SimpleNamespace(_mempalace_load_user_facts=lambda *a, **k: []))
+    monkeypatch.setitem(sys.modules, "memory_service", types.SimpleNamespace(
+        MemoryServiceError=RuntimeError, get_memory_service=lambda: object()))
+
+    row = asyncio.run(md.run_memory_digest("jason"))
+    assert row["error"] == "extractor_failed:ReadTimeout"
+    assert row["extracted"] == 0
+
+    summary = mm.record_digest_run([row], now=1.0, input_seen=True)
+    assert summary["verdict"] == mm.VERDICT_EXTRACTOR_ERRORS
+    assert summary["verdict"] != mm.VERDICT_ATTEMPTED_NO_FACTS
+    assert (summary["attempted"], summary["errors"]) == (0, 1)
+
+
+def test_status_surfaces_the_row_counts_of_the_last_run(mm):
+    """memory_loop_status (and the admin endpoint built on it) carry attempted/skipped/errors."""
+    import asyncio
+
+    never = mm.memory_loop_status(now=0.0)["digest"]
+    assert (never["attempted"], never["skipped"], never["errors"]) == (None, None, None)
+
+    mm.record_digest_run([
+        {"user_id": "a", "extracted": 0},
+        {"user_id": "b", "extracted": 0, "skipped_reason": "insufficient_activity"},
+        {"user_id": "b2", "extracted": 0, "skipped_reason": "insufficient_activity"},
+        {"user_id": "c", "extracted": 0, "error": "extractor_failed:ConnectError"},
+    ], now=1.0, input_seen=True)
+    digest = mm.memory_loop_status(now=2.0)["digest"]
+    assert (digest["attempted"], digest["skipped"], digest["errors"]) == (1, 2, 1)
+    assert digest["verdict"] == mm.VERDICT_EXTRACTOR_ERRORS
+
+    import routers.system as system
+    body = asyncio.run(system.get_memory_loops_status(user={"role": "admin"}))
+    via_endpoint = body["loops"]["digest"]
+    assert (via_endpoint["attempted"], via_endpoint["skipped"], via_endpoint["errors"]) == (1, 2, 1)
+
+
 def test_loop_recorder_logs_idle_as_info_and_names_the_verdict_on_alert(mm, caplog):
     """The durable memory-loop log must carry the same distinction the endpoint shows."""
     import routers.system as system

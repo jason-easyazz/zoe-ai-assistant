@@ -597,6 +597,9 @@ def memory_loop_status(now: float | None = None) -> dict:
                 "users": None,
                 "effects": None,
                 "effect_count": None,
+                "attempted": None,
+                "skipped": None,
+                "errors": None,
                 "healthy": False,
                 **common,
             }
@@ -612,6 +615,11 @@ def memory_loop_status(now: float | None = None) -> dict:
             "users": info["users"],
             "effects": info["effects"],
             "effect_count": info.get("effect_count"),
+            # Row classification of the last run (Codex P2 on #1682): the
+            # verdict alone does not say HOW MANY users errored vs skipped.
+            "attempted": info.get("attempted"),
+            "skipped": info.get("skipped"),
+            "errors": info.get("errors"),
             "healthy": not stale and not alert,
             **common,
         }
