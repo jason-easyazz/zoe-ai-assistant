@@ -85,11 +85,17 @@ services:
   # localhost), so an IPv4 loopback publish is what `http://localhost:4416` hits.
   ytmusic-potoken:
     # 2.0.0 (2026-09-08) fixes GHSA-qpv9-8xfj-xx9m (RCE via crafted proxy settings,
-    # CVSS 8.8, <2.0.0). The loopback bind below already closed the LAN vector; 2.0.0
-    # also binds localhost itself, requires application/json and rejects browser-origin
-    # requests, which closes the remaining vector on a box that runs a headless
-    # Chromium. Music Assistant installs the matching client plugin unpinned at
-    # provider load, so it already floats to 2.x. Verify with
+    # CVSS 8.8, <2.0.0). The host-side loopback publish below already closed the LAN
+    # vector; 2.0.0 adds the in-process guards that close the browser-origin vector on
+    # a box that runs a headless Chromium: it requires `application/json` (else 415)
+    # and rejects requests carrying a browser Origin (403). Bind address: the NATIVE
+    # server now defaults to localhost, but the DOCKER IMAGE deliberately binds all
+    # interfaces inside the container "so that port forwarding works" (upstream
+    # README) — verified 2026-09-25 on this box with a throwaway 2.0.0 container:
+    # in-container listener 0.0.0.0:4416, `/ping` → 200 through the published port,
+    # Origin POST → 403, text/plain POST → 415. So the 127.0.0.1:4416 publish is what
+    # keeps it host-local, exactly as before. Music Assistant installs the matching
+    # client plugin unpinned at provider load, so it already floats to 2.x. Run
     # scripts/maintenance/music_jsruntime_probe.sh after the container is recreated.
     image: brainicism/bgutil-ytdlp-pot-provider:2.0.0
     container_name: zoe-ytmusic-potoken
