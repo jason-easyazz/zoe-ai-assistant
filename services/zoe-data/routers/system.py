@@ -750,8 +750,12 @@ def _record_memory_loop(loop: str, results, *, input_seen: bool | None = None,
 
         recorder = record_digest_run if loop == "digest" else record_consolidation_run
         summary = recorder(results, input_seen=input_seen)
-        age_txt = ("unknown" if newest_turn_age_hours is None
-                   else f"{newest_turn_age_hours:.1f}h ago")
+        if newest_turn_age_hours is None:
+            age_txt = "unknown (probe failed)"
+        elif newest_turn_age_hours == float("inf"):
+            age_txt = "never (no owned user turns exist)"
+        else:
+            age_txt = f"{newest_turn_age_hours:.1f}h ago"
         if summary.get("idle"):
             logger.info(
                 "memory_%s: run idle — no input to process (newest owned user turn %s, "
@@ -784,22 +788,6 @@ def _record_memory_loop(loop: str, results, *, input_seen: bool | None = None,
         }
 
 
-async def _digest_input_probe() -> tuple[bool | None, float | None]:
-    """(input_seen, newest_owned_user_turn_age_hours) for the nightly digest.
-
-    Never raises: an unknown answer (``None``) keeps legacy alerting.
-    """
-    try:
-        from memory_digest import (  # type: ignore[import]
-            digest_input_seen, newest_owned_user_turn_age_hours,
-        )
-        age_h = await newest_owned_user_turn_age_hours()
-        return digest_input_seen(age_h), age_h
-    except Exception as _probe_exc:  # pragma: no cover - the probe must never break the loop
-        logger.warning("memory_digest: input probe failed (non-fatal): %s", _probe_exc)
-        return None, None
-
-
 async def _memory_digest_loop():
     """Wait until 3am, then run LLM digest for all active users daily."""
     import datetime
@@ -814,9 +802,13 @@ async def _memory_digest_loop():
         logger.info("memory_digest: next run in %.0f minutes", delay_s / 60)
         await asyncio.sleep(delay_s)
         try:
-            from memory_digest import run_digest_for_all_active_users  # type: ignore[import]
-            results = await run_digest_for_all_active_users()
-            input_seen, newest_age_h = await _digest_input_probe()
+            from memory_digest import run_nightly_digest_pass  # type: ignore[import]
+            # One cutoff instant for selection AND the input probe (see
+            # run_nightly_digest_pass) — a turn landing mid-pass cannot make
+            # the probe contradict selection.
+            passed = await run_nightly_digest_pass()
+            results, input_seen = passed["results"], passed["input_seen"]
+            newest_age_h = passed["newest_turn_age_hours"]
             summary = _record_memory_loop(
                 "digest", results, input_seen=input_seen, newest_turn_age_hours=newest_age_h,
             )

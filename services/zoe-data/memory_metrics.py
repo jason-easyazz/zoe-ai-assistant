@@ -344,8 +344,18 @@ VERDICT_IDLE = "idle"  # no input inside the lookback window — not an alert
 VERDICT_NO_ELIGIBLE_USERS_DESPITE_INPUT = "no_eligible_users_despite_input"  # #1480 class
 VERDICT_NO_ELIGIBLE_USERS = "no_eligible_users"  # input presence unknown (legacy callers)
 VERDICT_ALL_SKIPPED = "all_skipped_insufficient_activity"
-VERDICT_EXTRACTOR_ERRORS = "extractor_errors"
+VERDICT_EXTRACTOR_ERRORS = "extractor_errors"  # row error starts with "extractor_failed:"
+VERDICT_PROCESSING_ERRORS = "processing_errors"  # any other row error (write/processing step)
 VERDICT_ATTEMPTED_NO_FACTS = "attempted_no_facts"
+
+# The weekly consolidation loop has its own vocabulary: it merges, resolves and
+# archives — "extractor" / "activity floor" prose would be wrong for it.
+CONSOLIDATION_VERDICT_CONSOLIDATED = "consolidated"
+CONSOLIDATION_VERDICT_NOTHING_TO_DO = "nothing_to_consolidate"
+CONSOLIDATION_VERDICT_NO_USERS = "no_users_to_consolidate"
+CONSOLIDATION_VERDICT_ERRORS = "consolidation_errors"
+
+_EXTRACTOR_ERROR_PREFIX = "extractor_failed:"
 
 
 def zero_effect_threshold(loop: str) -> int | None:
@@ -395,15 +405,24 @@ def _classify_rows(results) -> dict[str, int]:
     """Count what happened to each per-user row before any effect could exist.
 
     ``skipped`` rows carry a ``skipped_reason`` (the digest's activity floor);
-    ``errors`` rows carry a truthy ``error``; ``attempted`` rows reached the
+    ``errors`` rows carry a truthy ``error`` and are split into
+    ``extractor_errors`` (``error`` starts with ``extractor_failed:`` — the
+    brain never answered) and ``processing_errors`` (anything after
+    extraction: supersede / ingest / store); ``attempted`` rows reached the
     extractor. Non-dict rows are ignored, matching ``_sum_effects``.
     """
-    counts = {"attempted": 0, "skipped": 0, "errors": 0}
+    counts = {"attempted": 0, "skipped": 0, "errors": 0,
+              "extractor_errors": 0, "processing_errors": 0}
     for row in results or []:
         if not isinstance(row, dict):
             continue
-        if row.get("error"):
+        err = row.get("error")
+        if err:
             counts["errors"] += 1
+            if str(err).startswith(_EXTRACTOR_ERROR_PREFIX):
+                counts["extractor_errors"] += 1
+            else:
+                counts["processing_errors"] += 1
         elif row.get("skipped_reason"):
             counts["skipped"] += 1
         else:
@@ -411,8 +430,23 @@ def _classify_rows(results) -> dict[str, int]:
     return counts
 
 
-def _run_verdict(*, users: int, effect_count: int, idle: bool,
+def _run_verdict(loop: str, *, users: int, effect_count: int, idle: bool,
                  input_seen: bool | None, rows: dict[str, int]) -> str:
+    if loop == "consolidation":
+        if rows["errors"]:
+            return CONSOLIDATION_VERDICT_ERRORS
+        if effect_count > 0:
+            return CONSOLIDATION_VERDICT_CONSOLIDATED
+        if users == 0:
+            return CONSOLIDATION_VERDICT_NO_USERS
+        return CONSOLIDATION_VERDICT_NOTHING_TO_DO
+    # Errors outrank effects in the VERDICT (a night that extracted facts and
+    # then failed to write them is not "productive"); the zero-effect STREAK
+    # still resets on any real effect, so alerting is unchanged.
+    if rows["extractor_errors"]:
+        return VERDICT_EXTRACTOR_ERRORS
+    if rows["processing_errors"]:
+        return VERDICT_PROCESSING_ERRORS
     if effect_count > 0:
         return VERDICT_PRODUCTIVE
     if idle:
@@ -420,11 +454,16 @@ def _run_verdict(*, users: int, effect_count: int, idle: bool,
     if users == 0:
         return (VERDICT_NO_ELIGIBLE_USERS_DESPITE_INPUT if input_seen
                 else VERDICT_NO_ELIGIBLE_USERS)
-    if rows["errors"]:
-        return VERDICT_EXTRACTOR_ERRORS
     if rows["attempted"] == 0:
         return VERDICT_ALL_SKIPPED
     return VERDICT_ATTEMPTED_NO_FACTS
+
+
+def verdict_text(loop: str, verdict: str | None) -> str | None:
+    """Human prose for a loop's verdict, in THAT loop's vocabulary."""
+    if verdict is None:
+        return None
+    return _VERDICT_PROSE.get(loop, {}).get(verdict, verdict)
 
 
 def _record_loop_run(
@@ -475,7 +514,7 @@ def _record_loop_run(
     _IDLE_STREAK[loop] = idle_streak
     threshold = zero_effect_threshold(loop)
     alert = threshold is not None and streak >= threshold and not idle
-    verdict = _run_verdict(users=users, effect_count=effect_count, idle=idle,
+    verdict = _run_verdict(loop, users=users, effect_count=effect_count, idle=idle,
                            input_seen=input_seen, rows=rows)
 
     ts_gauge.set(now_ts)
@@ -600,6 +639,9 @@ def memory_loop_status(now: float | None = None) -> dict:
                 "attempted": None,
                 "skipped": None,
                 "errors": None,
+                "extractor_errors": None,
+                "processing_errors": None,
+                "verdict_text": None,
                 "healthy": False,
                 **common,
             }
@@ -620,6 +662,9 @@ def memory_loop_status(now: float | None = None) -> dict:
             "attempted": info.get("attempted"),
             "skipped": info.get("skipped"),
             "errors": info.get("errors"),
+            "extractor_errors": info.get("extractor_errors"),
+            "processing_errors": info.get("processing_errors"),
+            "verdict_text": verdict_text(loop, info.get("verdict")),
             "healthy": not stale and not alert,
             **common,
         }
@@ -641,16 +686,33 @@ def refresh_memory_loop_gauges() -> None:
         pass
 
 
-_VERDICT_PROSE = {
-    VERDICT_NO_ELIGIBLE_USERS_DESPITE_INPUT: (
-        "user turns exist inside the lookback window but the selection query "
-        "found no eligible user (the #1480 dead-window class)"),
-    VERDICT_NO_ELIGIBLE_USERS: "no eligible user found (input presence unknown)",
-    VERDICT_ALL_SKIPPED: "every eligible user was below the activity floor",
-    VERDICT_EXTRACTOR_ERRORS: "the extractor errored for at least one user",
-    VERDICT_ATTEMPTED_NO_FACTS: (
-        "transcripts reached the extractor and it returned no facts (no errors)"),
-    VERDICT_IDLE: "idle — no input inside the lookback window",
+_VERDICT_PROSE: dict[str, dict[str, str]] = {
+    "digest": {
+        VERDICT_PRODUCTIVE: "facts were extracted or stored",
+        VERDICT_NO_ELIGIBLE_USERS_DESPITE_INPUT: (
+            "user turns exist inside the lookback window but the selection query "
+            "found no eligible user (the #1480 dead-window class)"),
+        VERDICT_NO_ELIGIBLE_USERS: "no eligible user found (input presence unknown)",
+        VERDICT_ALL_SKIPPED: "every eligible user was below the activity floor",
+        VERDICT_EXTRACTOR_ERRORS: (
+            "the extractor never answered for at least one user (brain transport / "
+            "HTTP / non-JSON reply)"),
+        VERDICT_PROCESSING_ERRORS: (
+            "extraction answered but the write/processing step failed for at least "
+            "one user (supersede / ingest / store) — check the memory service, not the brain"),
+        VERDICT_ATTEMPTED_NO_FACTS: (
+            "transcripts reached the extractor and it returned no facts (no errors)"),
+        VERDICT_IDLE: "idle — no input inside the lookback window",
+    },
+    "consolidation": {
+        CONSOLIDATION_VERDICT_CONSOLIDATED: (
+            "near-duplicates were merged, contradictions resolved or stale rows archived"),
+        CONSOLIDATION_VERDICT_NOTHING_TO_DO: (
+            "no near-duplicates to merge, contradictions to resolve or stale rows to "
+            "archive (normal on a well-maintained store)"),
+        CONSOLIDATION_VERDICT_NO_USERS: "no user with approved memories to consolidate",
+        CONSOLIDATION_VERDICT_ERRORS: "consolidation failed for at least one user",
+    },
 }
 
 
@@ -670,7 +732,7 @@ def memory_loop_health(now: float | None = None) -> dict:
             alerts.append(
                 f"{loop}: ran {info['zero_effect_streak']} times in a row and did "
                 f"nothing each time (threshold {info['zero_effect_alert_after']}); "
-                f"last run verdict: {_VERDICT_PROSE.get(info.get('verdict'), info.get('verdict'))}"
+                f"last run verdict: {verdict_text(loop, info.get('verdict'))}"
             )
         if info["stale"]:
             if not info["ever_ran"]:
@@ -748,6 +810,7 @@ __all__ = [
     "memory_loop_zero_effect_alert",
     "memory_loop_idle_streak",
     "zero_effect_threshold",
+    "verdict_text",
     "record_digest_run",
     "record_consolidation_run",
     "memory_loop_status",
