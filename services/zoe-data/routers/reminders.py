@@ -14,7 +14,13 @@ from database import get_db
 from guest_policy import require_feature_access
 from models import ReminderCreate, ReminderUpdate, SnoozeBody
 from push import broadcaster
-from reminder_service import _create_notification, create_reminder_record, normalize_due_date, row_to_dict
+from reminder_service import (
+    _create_notification,
+    create_reminder_record,
+    normalize_due_date,
+    normalize_due_time,
+    row_to_dict,
+)
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +193,9 @@ async def update_reminder(
         elif key == "due_date":
             updates.append("due_date = ?")
             params.append(normalize_due_date(value))
+        elif key == "due_time":
+            updates.append("due_time = ?")
+            params.append(normalize_due_time(value))
         else:
             updates.append(f"{key} = ?")
             params.append(value)

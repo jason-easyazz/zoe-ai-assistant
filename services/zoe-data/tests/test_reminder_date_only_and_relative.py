@@ -189,7 +189,10 @@ async def test_non_iso_due_date_warns_once_naming_the_reminder(_scan_env, caplog
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "non-ISO due_date" in r.getMessage()]
     assert len(warnings) == 1, "must warn exactly once per reminder id, not every scan cycle"
     assert "rem-van" in warnings[0].getMessage()
-    assert "'tomorrow'" in warnings[0].getMessage()
+    # Greptile P2 (security): id + problem class only — never the private title
+    # or the raw stored text in the persisted app log.
+    assert "tomorrow" not in caplog.text
+    assert "handover" not in caplog.text
     assert _scan_env == []
 
 
@@ -322,3 +325,156 @@ async def test_bad_default_time_falls_back_to_0900_with_one_warning(_scan_env, m
         assert (local.hour, local.minute) == (9, 0)  # control: pre-fix '25:00' → 01:00, '09:99' → raise
     warnings = [r for r in caplog.records if "ZOE_REMINDER_DEFAULT_TIME" in r.getMessage()]
     assert len(warnings) == 1 and bad in warnings[0].getMessage()
+
+
+# --------------------------------------------------------------------------- #
+# Greptile threads on #1686
+# --------------------------------------------------------------------------- #
+class _ScanDbFiredToday(_ScanDb):
+    """proactive_scheduled reports a job for the reminder already FIRED today."""
+
+    def execute(self, sql, params=()):
+        self.sql.append(sql)
+
+        async def _run():
+            if "FROM reminders" in sql:
+                return _Cursor(self.reminders)
+            if "fired = 1" in sql:
+                return _Cursor([(1,)])
+            return _Cursor([])
+
+        return _Exec(_run)
+
+
+def _now_local(hour: int, minute: int = 0) -> datetime:
+    today = datetime.now(scan._ZOE_TZ).date()
+    return datetime(today.year, today.month, today.day, hour, minute, tzinfo=scan._ZOE_TZ).astimezone(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_same_day_date_only_reminder_after_default_time_fires_shortly(_scan_env, monkeypatch, caplog):
+    """P1: 'remind me today to call mum' said at 15:00 → 09:00 is gone; fire in
+    _SAME_DAY_GRACE_MIN minutes, not never. Negative control: pre-fix this
+    returned None (past-due skip) and _scan_env stayed empty."""
+    caplog.set_level(logging.INFO, logger=scan.__name__)
+    monkeypatch.setattr(scan, "_SAME_DAY_FALLBACK_LOGGED", set())
+    now_utc = _now_local(15, 0)
+    today_iso = scan.zoe_now(now_utc).date().isoformat()
+    row = {"id": "rem-today", "user_id": "jason", "title": "call mum", "due_date": today_iso, "due_time": None, "snoozed_until": None}
+    db = _ScanDb([row])
+
+    assert await scan.schedule_due_reminder(db, row, now_utc=now_utc) == "rem-today"
+    assert await scan.schedule_due_reminder(db, row, now_utc=now_utc) == "rem-today"  # not yet fired → still schedules
+
+    assert len(_scan_env) == 2
+    assert _scan_env[0]["send_at"] == now_utc + timedelta(minutes=scan._SAME_DAY_GRACE_MIN)
+    infos = [r for r in caplog.records if "same-day fallback" in r.getMessage()]
+    assert len(infos) == 1 and "rem-today" in infos[0].getMessage()
+    assert "call mum" not in infos[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_same_day_fallback_does_not_refire_once_fired_today(_scan_env):
+    """The other branch: a job for this reminder already fired since local
+    midnight → the fallback must NOT re-arm on the next 5-minute scan."""
+    now_utc = _now_local(15, 0)
+    today_iso = scan.zoe_now(now_utc).date().isoformat()
+    row = {"id": "rem-today", "user_id": "jason", "title": "call mum", "due_date": today_iso, "due_time": None, "snoozed_until": None}
+
+    assert await scan.schedule_due_reminder(_ScanDbFiredToday([row]), row, now_utc=now_utc) is None
+    assert _scan_env == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_past_due_time_today_is_still_skipped(_scan_env):
+    """The fallback is for date-ONLY rows; a user-named time that has passed
+    is not silently moved."""
+    now_utc = _now_local(15, 0)
+    today_iso = scan.zoe_now(now_utc).date().isoformat()
+    row = {"id": "rem-explicit", "user_id": "jason", "title": "t", "due_date": today_iso, "due_time": "09:00", "snoozed_until": None}
+
+    assert await scan.schedule_due_reminder(_ScanDb([row]), row, now_utc=now_utc) is None
+    assert _scan_env == []
+
+
+@pytest.mark.asyncio
+async def test_same_day_fallback_not_applied_to_a_past_date(_scan_env):
+    now_utc = _now_local(15, 0)
+    yesterday = (scan.zoe_now(now_utc).date() - timedelta(days=1)).isoformat()
+    row = {"id": "rem-old", "user_id": "jason", "title": "t", "due_date": yesterday, "due_time": None, "snoozed_until": None}
+
+    assert await scan.schedule_due_reminder(_ScanDb([row]), row, now_utc=now_utc) is None
+    assert _scan_env == []
+
+
+def test_relative_dates_resolve_in_zoe_timezone_not_server_date(monkeypatch):
+    """P1: 23:30 UTC is already the NEXT day for a +08:00 household. "today" must
+    be the household's today. Control: with a UTC household the same instant
+    resolves to the UTC date, proving the tz (not the server clock) decides."""
+    from zoneinfo import ZoneInfo
+
+    frozen = datetime(2026, 9, 25, 23, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(scan, "_ZOE_TZ", ZoneInfo("Etc/GMT-8"))  # POSIX sign: Etc/GMT-8 == UTC+08:00
+    assert normalize_due_date("today", now_utc=frozen) == "2026-09-26"
+    assert normalize_due_date("tomorrow", now_utc=frozen) == "2026-09-27"
+    # Household today is Saturday 09-26, so "saturday" is NEXT Saturday (the
+    # weekday grammar never means today) — the UTC control below gets 09-26.
+    assert normalize_due_date("saturday", now_utc=frozen) == "2026-10-03"
+    assert normalize_due_date("june 3", now_utc=frozen) == "2026-06-03"
+
+    monkeypatch.setattr(scan, "_ZOE_TZ", ZoneInfo("UTC"))
+    assert normalize_due_date("today", now_utc=frozen) == "2026-09-25"  # still Friday in UTC
+    assert normalize_due_date("saturday", now_utc=frozen) == "2026-09-26"
+
+
+@pytest.mark.asyncio
+async def test_bad_due_date_warning_never_logs_title_or_raw_value(_scan_env, caplog):
+    """P2 security: only the reminder id and the problem class reach the log."""
+    caplog.set_level(logging.DEBUG, logger=scan.__name__)
+    row = {"id": "rem-private", "user_id": "jason", "title": "call the divorce lawyer about the house",
+           "due_date": "next week sometime", "due_time": None, "snoozed_until": None}
+
+    assert await scan.schedule_due_reminder(_ScanDb([row]), row, now_utc=_now_local(8)) is None
+
+    assert "rem-private" in caplog.text
+    assert "divorce" not in caplog.text
+    assert "next week sometime" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stored_legacy_out_of_range_due_time_still_fires_at_default(_scan_env, monkeypatch, caplog):
+    """P1: a stored '25:00' (the old parser fired it at 01:00) must keep firing —
+    at the household default time — with one id-only warning, not be skipped.
+    Negative control: pre-fix this returned None on every pass."""
+    caplog.set_level(logging.WARNING, logger=scan.__name__)
+    monkeypatch.setattr(scan, "_WARNED_BAD_DUE_TIME", set())
+    now_utc = _now_local(8)
+    tomorrow_iso = (scan.zoe_now(now_utc).date() + timedelta(days=1)).isoformat()
+    row = {"id": "rem-legacy", "user_id": "jason", "title": "private thing", "due_date": tomorrow_iso, "due_time": "25:00", "snoozed_until": None}
+    db = _ScanDb([row])
+
+    assert await scan.schedule_due_reminder(db, row, now_utc=now_utc) == "rem-legacy"
+    assert await scan.schedule_due_reminder(db, row, now_utc=now_utc) == "rem-legacy"
+
+    fired_local = _scan_env[0]["send_at"].astimezone(scan._ZOE_TZ)
+    assert (fired_local.hour, fired_local.minute) == (9, 0)
+    warnings = [r for r in caplog.records if "invalid stored due_time" in r.getMessage()]
+    assert len(warnings) == 1 and "rem-legacy" in warnings[0].getMessage()
+    assert "25:00" not in caplog.text and "private thing" not in caplog.text
+
+
+@pytest.mark.parametrize("bad", ["25:00", "09:99", "noon-ish"])
+def test_write_path_rejects_invalid_due_time(bad):
+    from reminder_service import normalize_due_time
+
+    with pytest.raises(HTTPException) as exc:
+        normalize_due_time(bad)
+    assert exc.value.status_code == 422
+
+
+def test_write_path_keeps_valid_due_time_as_given():
+    from reminder_service import normalize_due_time
+
+    assert normalize_due_time("10:25 PM") == "10:25 PM"
+    assert normalize_due_time("") is None
+    assert normalize_due_time(None) is None

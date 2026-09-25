@@ -16,9 +16,21 @@ Rules:
   tomorrow to …"); skipping them meant none of them ever fired (2026-09-25
   audit §2.2).
 - Reminder has neither → skip (nothing to anchor a fire time to).
+- STORED due_time the strict parser rejects ("25:00", "09:99" — legacy rows the
+  old `% 24` parser scheduled at the wrong hour) → WARN once per id and fire at
+  the household default time; never skip a row that used to fire. Strictness
+  lives on the WRITE paths (`reminder_service.normalize_due_time` → 422).
+- Same-day fallback: a date-only reminder for TODAY whose default fire time has
+  already passed ("remind me today to call mum", said at 15:00) fires
+  `_SAME_DAY_GRACE_MIN` minutes from now, once — guarded by the fired-today
+  check so it never re-fires each scan. An EXPLICIT past due_time is still
+  skipped (the user named a time; inventing another is worse than silence).
 - due_date that is not an ISO date (a stored literal like "tomorrow") → skip,
   and WARN once per reminder id so it is visible instead of silently dead.
   `reminder_service.normalize_due_date` now resolves those at write time.
+- Log hygiene: warnings name the reminder ID and the problem CLASS only —
+  never the title or the raw stored text (private content must not enter the
+  persisted app log).
 - Reminders that are deleted, acknowledged, or inactive → skip.
 - Only schedules reminders up to 25 hours in advance to avoid duplicate
   APScheduler jobs across restarts (APScheduler persists jobs in SQLite).
@@ -44,9 +56,21 @@ _ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
 # change is honoured without a restart of the scan loop's module state.
 _DEFAULT_DUE_TIME_FALLBACK = (9, 0)
 
-# Reminder ids already warned about for a non-ISO due_date — warn ONCE per id,
-# not every 5-minute scan cycle.
+# Reminder ids already warned about — warn ONCE per id, not every 5-minute cycle.
 _WARNED_BAD_DUE_DATE: set[str] = set()
+_WARNED_BAD_DUE_TIME: set[str] = set()
+_SAME_DAY_FALLBACK_LOGGED: set[str] = set()
+
+# Same-day fallback: minutes from now a date-only reminder for today fires when
+# its default time has already passed.
+_SAME_DAY_GRACE_MIN = 2
+
+
+def zoe_now(now_utc: datetime | None = None) -> datetime:
+    """Current wall-clock time in ZOE_TIMEZONE — THE household clock. The write
+    path resolves "today"/"tomorrow" against this, the scan fires against this;
+    a server whose own local date differs near midnight must not leak in."""
+    return (now_utc or datetime.now(timezone.utc)).astimezone(_ZOE_TZ)
 
 
 # Bad ZOE_REMINDER_DEFAULT_TIME values already warned about (warn once per value).
@@ -148,6 +172,18 @@ def build_run_at(
     return candidate.astimezone(timezone.utc)
 
 
+async def _fired_today(db, rid: str, now_utc: datetime) -> bool:
+    """True when a job for this reminder already fired since local midnight —
+    the guard that keeps the same-day fallback from re-firing every scan."""
+    start_local = zoe_now(now_utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start_str = start_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    async with db.execute(
+        "SELECT 1 FROM proactive_scheduled WHERE item_id = ? AND fired = 1 AND send_at >= ?",
+        (rid, start_str),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
 async def schedule_due_reminder(db, row, *, now_utc: datetime | None = None) -> str | None:
     """Schedule ONE reminder row into APScheduler (Tier 1) if it has a parseable,
     in-window, future due time and isn't already scheduled.
@@ -173,21 +209,32 @@ async def schedule_due_reminder(db, row, *, now_utc: datetime | None = None) -> 
     due_time = row["due_time"]
     due_date = row["due_date"]
     hm = _parse_due_time(due_time)
+    used_default_time = False
     if hm is None:
         if due_time:
-            log.debug("reminder_scan: unparseable due_time %r for %s", due_time, rid)
-            return None
-        if not due_date:
+            # Legacy stored value the strict parser rejects ("25:00"): the old
+            # `% 24` parser still fired it. Keep it firing — at the default time —
+            # and say so once. Write paths reject such values now.
+            if rid not in _WARNED_BAD_DUE_TIME:
+                _WARNED_BAD_DUE_TIME.add(rid)
+                log.warning(
+                    "reminder_scan: reminder %s has an invalid stored due_time "
+                    "(problem: unparseable-or-out-of-range clock time); firing at the "
+                    "household default time until the row is fixed (HH:MM).",
+                    rid,
+                )
+        elif not due_date:
             return None  # neither a time nor a date: nothing to anchor to
-        hm = _default_due_hm()  # date-only → household default time
+        hm = _default_due_hm()
+        used_default_time = True
 
     if due_date and not _is_iso_date(due_date):
         if rid not in _WARNED_BAD_DUE_DATE:
             _WARNED_BAD_DUE_DATE.add(rid)
             log.warning(
-                "reminder_scan: reminder %s has non-ISO due_date %r (title %r) — it can never "
-                "fire; fix the row (YYYY-MM-DD). New writes resolve relative dates at create time.",
-                rid, due_date, row["title"],
+                "reminder_scan: reminder %s has a non-ISO due_date (problem: not YYYY-MM-DD) "
+                "— it can never fire; fix the row. New writes resolve relative dates at create time.",
+                rid,
             )
         return None
 
@@ -199,10 +246,24 @@ async def schedule_due_reminder(db, row, *, now_utc: datetime | None = None) -> 
     if run_at > now_utc + timedelta(hours=_LOOKAHEAD_HOURS):
         return None
 
-    # Don't (re)schedule reminders whose time has already passed.
+    # Don't (re)schedule reminders whose time has already passed — EXCEPT the
+    # same-day case: a date-only reminder for today whose default time is gone
+    # fires shortly from now (once), instead of being accepted and never firing.
     if run_at <= now_utc:
-        log.debug("reminder_scan: reminder %s is past-due (%s), skipping", rid, run_at)
-        return None
+        if used_default_time and due_date == zoe_now(now_utc).date().isoformat():
+            if await _fired_today(db, rid, now_utc):
+                return None
+            run_at = now_utc + timedelta(minutes=_SAME_DAY_GRACE_MIN)
+            if rid not in _SAME_DAY_FALLBACK_LOGGED:
+                _SAME_DAY_FALLBACK_LOGGED.add(rid)
+                log.info(
+                    "reminder_scan: reminder %s is date-only for today and the default time "
+                    "has passed — firing in %d min (same-day fallback)",
+                    rid, _SAME_DAY_GRACE_MIN,
+                )
+        else:
+            log.debug("reminder_scan: reminder %s is past-due (%s), skipping", rid, run_at)
+            return None
 
     await schedule_reminder(
         user_id=row["user_id"],

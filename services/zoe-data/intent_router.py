@@ -4975,19 +4975,22 @@ async def _execute_set_volume_intent(intent: Intent) -> str:
         return "I'll try to speak more softly. You can also adjust volume in Settings."
 
 
-def _parse_date(raw: str) -> Optional[str]:
+def _parse_date(raw: str, today: Optional["date"] = None) -> Optional[str]:
+    """Resolve a date phrase to ISO. `today` anchors relative phrases ("today",
+    "tomorrow", weekdays, year-less "June 3"); callers with a household clock
+    (reminders → ZOE_TIMEZONE) pass it, the default is the server's local date."""
     from datetime import date, timedelta
     raw = raw.strip().lower()
+    today = today or date.today()
 
     if raw == "today":
-        return date.today().isoformat()
+        return today.isoformat()
     if raw == "tomorrow":
-        return (date.today() + timedelta(days=1)).isoformat()
+        return (today + timedelta(days=1)).isoformat()
 
     day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
     for i, name in enumerate(day_names):
         if raw.startswith(name):
-            today = date.today()
             days_ahead = (i - today.weekday()) % 7
             if days_ahead == 0:
                 days_ahead = 7
@@ -5006,7 +5009,7 @@ def _parse_date(raw: str) -> Optional[str]:
         month_name, day, year = m.group(1), int(m.group(2)), m.group(3)
         month = months.get(month_name)
         if month:
-            yr = int(year) if year else date.today().year
+            yr = int(year) if year else today.year
             return f"{yr:04d}-{month:02d}-{day:02d}"
 
     m = re.match(r"(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(\w+)(?:\s+(\d{4}))?", raw)
@@ -5014,7 +5017,7 @@ def _parse_date(raw: str) -> Optional[str]:
         day, month_name, year = int(m.group(1)), m.group(2), m.group(3)
         month = months.get(month_name)
         if month:
-            yr = int(year) if year else date.today().year
+            yr = int(year) if year else today.year
             return f"{yr:04d}-{month:02d}-{day:02d}"
 
     m = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)
