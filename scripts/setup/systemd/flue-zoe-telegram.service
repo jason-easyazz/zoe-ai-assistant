@@ -34,6 +34,17 @@ RestartSec=5
 # a missing TELEGRAM_BOT_TOKEN anyway.
 EnvironmentFile=%h/assistant/labs/flue-zoe-telegram-2x/.env
 
+# ── Happy-Eyeballs attempt timeout ───────────────────────────────────────────
+# Node 22 tries each resolved address for `--network-family-autoselection-
+# attempt-timeout` (default 250 ms) before moving on. The TCP round trip from
+# this box to api.telegram.org measured ~410 ms on 2026-09-25, so EVERY
+# hostname connect aborted ETIMEDOUT, the bot never polled, and the watchdog
+# restarted it ~4,000 times. Verified with a negative control: the same
+# fetch() fails at the default and succeeds at 1500 ms (or with
+# --no-network-family-autoselection). Curl was unaffected (no such timeout).
+# Applied live as a drop-in first; mirrored here so a fresh install matches.
+Environment=NODE_OPTIONS=--network-family-autoselection-attempt-timeout=1500
+
 # ── Keep the channel bridge out of swap ──────────────────────────────────────
 # Same gap as flue-zoe-brain-2x.service, and worse: measured on the live Orin
 # 2026-08-03 this unit had NO memory directives at all, so its cgroup
