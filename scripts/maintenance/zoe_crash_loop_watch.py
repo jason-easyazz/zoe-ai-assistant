@@ -79,7 +79,7 @@ def _save_state(state: dict) -> None:
 def _recipients(env: dict) -> list[str]:
     """Chat ids to alert, newest setting first.
 
-    `TELEGRAM_ALLOWED_USERS` is RETIRED — `labs/flue-zoe-telegram/.env.example`
+    `TELEGRAM_ALLOWED_USERS` is RETIRED — `labs/flue-zoe-telegram-2x/.env.example`
     says so explicitly, and a host provisioned from that example has no such
     key. Reading only it (as this did) meant every freshly-provisioned host
     would find zero recipients and print "alert NOT delivered" forever while a

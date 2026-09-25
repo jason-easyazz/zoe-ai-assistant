@@ -17,6 +17,12 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 
 ## 🔨 Active
 
+### ⛔ READ FIRST — return-from-absence review (2026-09-25)
+- **What:** [`docs/knowledge/state-of-zoe-review-2026-09-25.md`](knowledge/state-of-zoe-review-2026-09-25.md) — the full audit after the 2026-08-10 → 2026-09-25 gap, security must-dos, dependency currency, ecosystem changes, the comparable-projects borrow list, and a ~90-item known-problems register with 16 doc contradictions.
+- **Fixed the same day (verified live):** Telegram bot (Node Happy-Eyeballs timeout), the Chroma HNSW recall corruption (rebuilt 22:26, `/health` recall `ok`), zoe-data restarted lean, router swap guard applied, Node 22.23.3, zoe-auth image rebuilt, security pip set, and the **voice replay gate passed 13/13** for the first time in 41 runs. The panel is off on purpose (Jason). Do NOT repeat the rebuild unless `/health` reports `memory_capture` degraded.
+- **Still open and gating:** structural RAM starvation (the zram shrink needs root — B0.1), Telegram token rotation, YouTube Music re-auth, the face-ID flag decision. The review is a historical knowledge record (evidence), not a contract.
+- **The authoritative sequence is the program tracker:** [`docs/architecture/beat-the-bar-2026-program.md`](architecture/beat-the-bar-2026-program.md) — B0 platform floor → B1 turn-taking → B2 proactivity with judgement → B3 visible, sound memory → B4 identity/presence → B5 voice expressiveness → B6 brain headroom → B7 UI → B8 self-evolution → B9 Omi → B10 web lookup. Its **§0 is the NEXT ACTION** that every workstream below inherits; update it in the PR that lands each step. Do not start new feature work until B0.1 has cleared the 700/800 MB gates.
+
 ### Panel multi-signal identity (voice + camera + presence) — W5 in flight
 - **Goal:** the touch panel learns household voices AND faces, plus device/room presence, fusing them into a live per-user confidence rating (personalization always; PIN-equivalent step-up only on agreeing signals; PIN stays the root credential). **Pi-heavy by design:** every panel does its own embedding + matching (multi-panel scales at zero Jetson cost); the Jetson stores profiles + applies policy only — no vision models on the Orin.
 - **Detail / executable plan:** [`docs/architecture/panel-identity-plan.md`](architecture/panel-identity-plan.md) (phases, fusion math, presence continuity, research grounding, consent gates).

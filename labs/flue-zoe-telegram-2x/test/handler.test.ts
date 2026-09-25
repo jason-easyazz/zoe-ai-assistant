@@ -1,7 +1,8 @@
 /**
  * The channel's identity gates, as pure decisions.
  *
- * Ported verbatim in intent from labs/flue-zoe-telegram/src/handler.test.ts, and
+ * Ported verbatim in intent from the 1.x beta's src/handler.test.ts (the
+ * labs/flue-zoe-telegram/ tree, removed from the repo 2026-09-25), and
  * EXTENDED to the two gates the beta could not test: `/start` (deliberately
  * ungated, so the test pins that it links only on a valid token) and `/new`
  * (identity-gated, and the negative control below is the one that matters — an

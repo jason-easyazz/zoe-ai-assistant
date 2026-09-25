@@ -2,11 +2,13 @@
 
 > **This directory IS the deployed bot.** `flue-zoe-telegram.service` runs this
 > build on `:3582`, and `deploy.yml` rebuilds + restarts the unit on any merged
-> diff under this path — production, not a lab. The retired beta stays in
-> `labs/flue-zoe-telegram/` as the ROLLBACK TARGET only (runbook step 7 at the
-> bottom: repoint the unit + carry the epoch map back + revert the deploy
-> retarget together). The historical parallel-trial and cutover sections below
-> are kept as the record of how the cutover was executed.
+> diff under this path — production, not a lab. The 1.x beta
+> (`labs/flue-zoe-telegram/`) was **removed from the repo 2026-09-25**; there is
+> no directory to repoint the unit at. **Rollback is git-revert-based** (runbook
+> step 7 at the bottom): revert the offending 2.x commit on `main` and let
+> `deploy.yml` rebuild + restart the unit. The historical parallel-trial and
+> cutover sections below are kept as the record of how the cutover was executed;
+> the 1.x paths they name no longer exist on disk or in the tree.
 
 Phase 1 of the operator-declared "move to Flue 2" programme, taken on the
 **smallest Flue surface in the repo** deliberately: this channel is ~700 lines,
@@ -26,6 +28,9 @@ with a throwaway store.
 ---
 
 ## Why a sibling directory and not an in-place upgrade
+
+(As it stood before the cutover. Since #1665 the auto-deployed pathspec is
+**this** directory, and the 1.x tree is gone.)
 
 `.github/workflows/deploy.yml` rebuilds and restarts `flue-zoe-telegram.service`
 on **any** diff under `labs/flue-zoe-telegram/`. An in-place upgrade would
@@ -204,6 +209,11 @@ step that stops the live unit and moves the port to 3582.
 
 ## Cutover runbook (OPERATOR, not an agent)
 
+> **Historical record — executed 2026-08-09.** Steps 1–6 are kept as written so
+> the brain-sidecar cutover can learn from them; every `labs/flue-zoe-telegram/`
+> path in them refers to the 1.x tree that was removed 2026-09-25. Only step 7
+> (rollback) describes the CURRENT procedure.
+
 Prerequisite: this is the *pathfinder*, so do it only when the operator wants
 Flue 2 on the Telegram channel — and only after the parallel trial above.
 Nothing below is automated and nothing merges it.
@@ -300,30 +310,26 @@ at the wrong port.
    *your* memory (not a guest answer), and that `/new` still answers "fresh
    conversation". Watch `journalctl --user -u flue-zoe-telegram -f` for
    `polling (took the bot over)` and the absence of a 409.
-7. **Rollback = repoint the unit — carry the EPOCH FILE back, and REVERT THE
-   DEPLOY RETARGET.** If step 5 landed, `deploy.yml` now builds and restarts
-   `-2x`; leaving it that way after rolling the unit back to 1.x means the next
-   merge rebuilds a directory nothing runs while the live 1.x `dist/` goes
-   stale — the same green-deploy-old-code failure step 5 exists to prevent,
-   pointing the other way (cross-review, #1639). Revert that commit as part of
-   the rollback, not after it.
+7. **Rollback = `git revert` the offending 2.x commit on `main`.** There is no
+   1.x tree to repoint the unit at any more (removed 2026-09-25), and there
+   never was a clean one: 2.x persists schema **v8**, which the beta (v5)
+   cannot read, so "rolling back to 1.x" always meant discarding everything
+   persisted since the cutover and reviving a store frozen on 2026-08-09. The
+   only state that genuinely crossed the boundary was our own
+   `data/session_epochs.json`, and a revert within 2.x keeps it in place.
    ```sh
-   systemctl --user stop flue-zoe-telegram.service
-   # /new epochs advanced under 2.x live in the -2x directory. Without this copy
-   # the beta reloads its stale map and resumes a conversation the user already
-   # ended (cross-review, #1639) — the one piece of state that genuinely crosses
-   # the boundary, because it is OUR json, not Flue's store.
-   cp ~/assistant/labs/flue-zoe-telegram-2x/data/session_epochs.json \
-      ~/assistant/labs/flue-zoe-telegram/data/session_epochs.json
-   rm ~/.config/systemd/user/flue-zoe-telegram.service.d/flue2.conf
-   systemctl --user daemon-reload
-   systemctl --user start flue-zoe-telegram.service
+   # on a worktree, never the live checkout — normal PR flow, squash-merged
+   git revert <offending sha>
    ```
-   `labs/flue-zoe-telegram/data/zoe.db` was never opened by the 2.x process, so
-   the beta runtime reads it exactly as it left it. (This is the property the
-   brain sidecar does **not** get for free — see below.) The epoch map is the
-   exception in both directions: it is copied FORWARD at cutover (step 2) and
-   must be copied BACK here, or `/new` silently un-happens.
+   Merging the revert is the rollback: `deploy.yml` sees the diff under this
+   directory, runs `npm ci && npm run build`, restarts
+   `flue-zoe-telegram.service` and fails loudly if `:3582/health` does not come
+   back. The store and the epoch map are untouched by the revert (both live in
+   the git-ignored `data/`), so nothing is copied anywhere. If the bad commit
+   also changed the persisted schema, the runtime rejects the older database
+   before any application code runs — then, and only then, move `data/zoe.db`
+   aside and let a fresh store be created (replies come from zoe-data keyed by
+   `sessionFor(chatId)`, so nothing user-visible lives in Flue's store).
 
 ---
 
@@ -336,7 +342,8 @@ at the wrong port.
    answer the same question about its own conversations before its cutover is
    scheduled — and it must answer it with a measurement, not an assumption.
 2. **Two units read config from a directory path, not from the service.** The
-   watchdog timer greps `PORT=` out of `labs/flue-zoe-telegram/.env` and
+   watchdog timer greps `PORT=` out of the bot directory's `.env` (at cutover
+   time the 1.x one; both now read `labs/flue-zoe-telegram-2x/.env`) and
    `zoe_crash_loop_watch.py` reads `TELEGRAM_BOT_TOKEN` from the same file
    (`scripts/maintenance/zoe_crash_loop_watch.py:35`). Repointing the unit does
    **not** repoint them. Enumerate every consumer of a lab directory's `.env`
