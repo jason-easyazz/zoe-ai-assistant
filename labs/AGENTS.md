@@ -245,11 +245,13 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   this subtree is production-deployed, treat changes accordingly. The 1.x beta
   (`labs/flue-zoe-telegram/`, `@flue/*@1.0.0-beta.6`) was **retired by removal
   2026-09-25** — it had been the rollback target only, its `@flue/*` beta
-  lockfile carried 35 of the repo's 52 open Dependabot alerts, and the beta's
-  persisted store (schema **v5**) was never readable by 2.x (schema **v8**,
-  reset-only), so there is **no rollback to 1.x** — recover the source with
-  `git log --all -- labs/flue-zoe-telegram` if ever needed. Rolling back now
-  means reverting the offending 2.x commit, never repointing the unit.
+  lockfile carried 35 of the repo's 52 open Dependabot alerts, and that rollback
+  meant discarding everything 2.x had persisted (schema **v8** is unreadable by
+  the beta's **v5**) for a store frozen at cutover — not a rollback after seven
+  weeks live. There is **no rollback to 1.x**: rolling back means `git revert`
+  of the offending 2.x commit (the README's step 7), which the auto-deploy then
+  builds + restarts; recover the 1.x source with
+  `git log --all -- labs/flue-zoe-telegram` if ever needed.
   Since the cutover the AUTO-DEPLOYED pathspec is `labs/flue-zoe-telegram-2x/` —
   breaking work on the LIVE bot needs its own sibling (the same rule that
   protected the beta). Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
