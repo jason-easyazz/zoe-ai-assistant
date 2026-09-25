@@ -32,13 +32,15 @@ status: complete — live fixes applied where the harness allowed; the rest is s
   single biggest free win (RAM and prefill). Moonshine's package gained keyword biasing and
   speculative decoding; Kokoro can run on ONNX Runtime CUDA at roughly a third of its
   current 2.3 GB. Details §5.
-- **Security must-dos found by the dependency audit:** the pinned YouTube PO-token image
-  (`bgutil-ytdlp-pot-provider:1.3.1`) carries a **CVSS 8.8 RCE** (fixed in 2.0.0; the LAN
-  vector is already closed by the loopback bind, the browser-origin vector is not); the
-  **zoe-auth container still runs FastAPI 0.104.1 / pydantic 2.5.0 / bcrypt 4.1.2** — the
-  "DONE" audit in PR 1645 never reached the box; host `anyio` has a **critical** TLS
-  host-spoofing CVE; Node 22.22.0 is four security releases behind; the Samba image was
-  last pushed in 2021. Details §4 and §6.
+- **Security findings from the dependency audit (state at end of day):** the pinned
+  YouTube PO-token image (`bgutil-ytdlp-pot-provider:1.3.1`) carries a **CVSS 8.8 RCE** —
+  bumped to 2.0.0 in this PR (applied at deploy; the loopback bind already closed the LAN
+  vector). **Done on the box the same day:** the zoe-auth image rebuilt (was FastAPI
+  0.104.1 / pydantic 2.5.0 / bcrypt 4.1.2 — the PR 1645 audit had never reached the box),
+  the host `anyio` critical TLS host-spoofing CVE and eight other advisories patched, Node
+  22.22.0 → 22.23.3 live. **Still open:** the Samba image (last pushed 2021), the Telegram
+  token rotation, and the Postgres password the scheduler logs at startup (feature audit,
+  PR 1684; fix in flight). Details §4 and §6.
 - **Platform clocks are ticking:** Python 3.10 reaches end-of-life on **2026-10-31**
   (onnxruntime 1.23.2 is already the last cp310 wheel; websockets 17, av 18, numpy 2.3,
   scikit-learn 1.8 all need 3.11+); GitHub will **stop running `pull_request_target`
@@ -256,20 +258,20 @@ an OKF profile) applies.
    localhost POSTs) is live because the Jetson runs CloakBrowser. Bumped in this branch;
    run `music_jsruntime_probe.sh` after deploy. Music Assistant installs the matching
    client plugin unpinned, so it already floats to 2.x.
-10. **zoe-auth image is stale:** running container has FastAPI 0.104.1 / pydantic 2.5.0 /
-    bcrypt 4.1.2 (image built 2026-07-17) while the file says 0.141.1 / 2.13.4 / 4.3.0
-    (PR 1645, 2026-08-09). Rebuild the image and find out why the deploy rebuild gate
-    skipped it.
-11. **Host site-packages with fixed advisories in the zoe-data import graph:** anyio 4.13.0
-    (**critical**, TLS host spoofing, fix 4.14.2), urllib3 2.6.3 (2× high, fix 2.7.0),
-    pillow 12.2.0 (12 advisories, fix 12.3.0), transformers 5.5.0 (high, path traversal on
-    `save_pretrained`, fix 5.10.0 — replay-gated), pyasn1 0.6.2 (fix 0.6.4), idna, h2/hpack,
-    msgpack, pydantic-settings, mcp 1.27.0 (server-transport only). All install on 3.10.
-    Box first, then record in `requirements.txt`, then restart zoe-data and poll `/health`.
-12. **Node 22.22.0 on the host** lacks 22.22.3 → 22.23.2 (three High CVEs in http2 and
-    permissions); latest 22.23.3. Bump via nvm; the brain sidecar restart is replay-gated
-    even with no code diff. Also `npm update hono nanoid` in both Flue trees (hono ≤4.13.4
-    has three moderate advisories, nanoid <3.3.18 a High).
+10. ✓ **zoe-auth image was stale** (FastAPI 0.104.1 / pydantic 2.5.0 / bcrypt 4.1.2 from a
+    2026-07-17 build while the file said 0.141.1 / 2.13.4 / 4.3.0). **Rebuilt and recreated
+    2026-09-25 22:40**; healthy; bad-login smoke returns `success:false` not a 500. Still
+    to find: why the deploy rebuild gate skipped it.
+11. ✓ **Host site-packages with fixed advisories — patched 2026-09-25 and live since the
+    22:27 restart:** anyio 4.13.0 → 4.15.1 (was **critical**, TLS host spoofing), urllib3 →
+    2.8.0, pillow → 12.3.0, pyasn1 → 0.6.4, idna → 3.20, h2/hpack, msgpack, pydantic-settings.
+    **Deferred, replay-gated:** transformers 5.5.0 → ≥5.10 (high, path traversal on
+    `save_pretrained`; voice path) and mcp 1.27.0 (server-transport only). Record the new
+    floors in `requirements.txt` in the deps PR (B0.6).
+12. ✓ **Node 22.22.0 → 22.23.3 live** for both Flue units since 22:30 (three High CVEs in
+    http2/permissions closed); validated by the 22:39 replay-gate PASS. **Still open:**
+    `npm update hono nanoid` in both Flue trees (hono ≤4.13.4 has three moderate advisories,
+    nanoid <3.3.18 a High) — deploy-triggering, so bundle with the Flue 2.1.1 bump (B1.11).
 13. **`dperson/samba`** (zoe-smb-drop) was last pushed 2021-03-31 — five years of Samba
     CVEs. Replace (e.g. `ghcr.io/servercontainers/samba`) or drop the share.
 14. **Dependabot alerts** were disabled on the repo; enabled today (alerts only, no
