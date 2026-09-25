@@ -51,7 +51,9 @@ before acting.
 1. **Provision `ZOE_INTERNAL_TOKEN`** (blocked for agents by design):
    generate once (`python3 -c "import secrets;print(secrets.token_hex(32))"`),
    put the SAME value in `services/zoe-data/.env` AND
-   `labs/flue-zoe-telegram/.env`, then restart `flue-zoe-telegram.service`,
+   `labs/flue-zoe-telegram/.env` (historical path — that 1.x lab was removed
+   2026-09-25; the live bot's env is `labs/flue-zoe-telegram-2x/.env`), then
+   restart `flue-zoe-telegram.service`,
    then `zoe-data.service`. Until then Telegram turns run as guest (journal
    warning says why). Follow-up PR after provisioning: token-gate
    `POST /api/system/intent-dispatch` (same impersonation class; the flue

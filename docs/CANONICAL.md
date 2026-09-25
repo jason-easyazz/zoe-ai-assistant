@@ -144,6 +144,14 @@ Do not grep for `zoe-music` and treat a `zoe-music-assistant` hit as a module re
   see *Music — the name collision* above. In git history →
   `git log --all -- modules/zoe-music`. Enforced by `test_no_zoe_music_module` in
   `services/zoe-data/tests/test_canonical_invariants.py`.
+- **`labs/flue-zoe-telegram/`** — the 1.x (`@flue/*@1.0.0-beta.6`) Flue Telegram bot.
+  Retired 2026-09-25 by deletion. Dead since the 2026-08-09 cutover to
+  `labs/flue-zoe-telegram-2x/` (the live `flue-zoe-telegram.service` on `:3582`,
+  auto-deployed by `deploy.yml`); it survived only as a rollback target, but 2.x's
+  persisted store (schema v8, reset-only) was never readable by the beta (v5), so no
+  rollback existed — and its lockfile carried 35 of the repo's 52 open Dependabot
+  alerts. Same pattern as the 1.x brain lane (#1678). In git history →
+  `git log --all -- labs/flue-zoe-telegram`.
 - **`modules/orbit`** (social-interaction platform) — retired 2026-06-24. Was wired in
   `docker-compose.modules.yml` (not running). Tracked in git → `git log --all -- modules/orbit`.
 - **`modules/agent-zero`** — retired 2026-06-24, no longer used. In git history.

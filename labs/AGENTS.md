@@ -29,7 +29,7 @@ with its own README/RUNBOOK and is self-contained.
   falling through to `core` (failover behind `ZOE_BRAIN_FAILOVER`, default off —
   see `services/zoe-data/AGENTS.md`). Treat a stopped `flue-zoe-brain-2x` as a live
   outage, not a graceful degrade;
-  `flue-zoe-telegram/` → `scripts/setup/systemd/flue-zoe-telegram.service` (the
+  `flue-zoe-telegram-2x/` → `scripts/setup/systemd/flue-zoe-telegram.service` (the
   long-poll Telegram bot; the operator installs it with their own bot token) plus
   its supervisor `scripts/setup/systemd/flue-zoe-telegram-watchdog.{service,timer}`
   (polls the bot's `GET /health` once a minute and restarts it when the poll loop
@@ -238,31 +238,21 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   is a record, not a contract; harness is hand-run, hard-gated on
   MemAvailable ≥ 2 GB, never resident, never prod-wired. Weights stay at
   `/home/zoe/models/lab/`.
-- `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
-  `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
-  and registers no model provider — never points at the voice brain on `:11434`).
-  Maps each verified sender to their **real Zoe user** via account linking: a user
-  stores their numeric telegram id in their profile (`PUT /api/user/profile/telegram`),
-  the bot resolves it (`GET /api/system/resolve-telegram/<id>`, internal-only) and
-  forwards the turn as that user over zoe-data's **trusted** `/api/chat` override
-  (`X-Zoe-User-Id`, honoured only for loopback / valid `X-Internal-Token` — a public
-  request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
-  their id and refused (never reach the brain as a real user). Ships the opt-in unit
-  template above. Hand-started, demo-only; README is a record, not a contract.
 - `flue-zoe-telegram-2x/` — the **LIVE Telegram bot since the 2026-08-09 cutover**
   (Flue 2.0.1). `flue-zoe-telegram.service` runs THIS directory on `:3582` (via the
   operator drop-in; the tracked template also points here), and `deploy.yml`
   rebuilds + restarts the unit on any diff under `labs/flue-zoe-telegram-2x/` —
-  this subtree is production-deployed, treat changes accordingly. The retired
-  beta stays in `flue-zoe-telegram/` (`@flue/*@1.0.0-beta.6`) as the rollback
-  target ONLY: rolling back = repoint the unit + carry the epoch map back +
-  revert the deploy retarget together (its README, cutover step 7). The store
-  boundary is one-way in BOTH directions (2.x persists schema **v8** against the
-  beta's **v5**, reset-only, rejected before any application code runs) — never
-  point either process at the other's `data/`.
+  this subtree is production-deployed, treat changes accordingly. The 1.x beta
+  (`labs/flue-zoe-telegram/`, `@flue/*@1.0.0-beta.6`) was **retired by removal
+  2026-09-25** — it had been the rollback target only, its `@flue/*` beta
+  lockfile carried 35 of the repo's 52 open Dependabot alerts, and the beta's
+  persisted store (schema **v5**) was never readable by 2.x (schema **v8**,
+  reset-only), so there is **no rollback to 1.x** — recover the source with
+  `git log --all -- labs/flue-zoe-telegram` if ever needed. Rolling back now
+  means reverting the offending 2.x commit, never repointing the unit.
   Since the cutover the AUTO-DEPLOYED pathspec is `labs/flue-zoe-telegram-2x/` —
-  breaking work on the LIVE bot now needs its own sibling (the same rule that
-  protected the beta), and the retired beta directory is safe to edit freely. Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
+  breaking work on the LIVE bot needs its own sibling (the same rule that
+  protected the beta). Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
   API and a mock zoe-data on loopback, so no bot token, no real sends, and no
   metered model call) plus `npm run typecheck`, `npm run build`, and
   `./smoke-built.sh` (the only check that exercises the built artifact, because
