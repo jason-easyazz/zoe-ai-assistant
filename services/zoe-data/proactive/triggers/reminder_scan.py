@@ -10,7 +10,15 @@ Rules:
   - If due_date is set → use that date.
   - If no due_date → treat as daily: schedule for today if the time hasn't
     passed yet, otherwise schedule for tomorrow.
-- Reminder has no due_time → skip (no precise time to fire).
+- Reminder has a due_date but no due_time → schedule it at the household
+  default time (`ZOE_REMINDER_DEFAULT_TIME`, default 09:00 local). Date-only
+  reminders are how they are actually created from voice/chat ("remind me
+  tomorrow to …"); skipping them meant none of them ever fired (2026-09-25
+  audit §2.2).
+- Reminder has neither → skip (nothing to anchor a fire time to).
+- due_date that is not an ISO date (a stored literal like "tomorrow") → skip,
+  and WARN once per reminder id so it is visible instead of silently dead.
+  `reminder_service.normalize_due_date` now resolves those at write time.
 - Reminders that are deleted, acknowledged, or inactive → skip.
 - Only schedules reminders up to 25 hours in advance to avoid duplicate
   APScheduler jobs across restarts (APScheduler persists jobs in SQLite).
@@ -31,6 +39,28 @@ log = logging.getLogger(__name__)
 _LOOKAHEAD_HOURS = 25
 
 _ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
+
+# Local wall-clock time a date-only reminder fires at. Read per call so an env
+# change is honoured without a restart of the scan loop's module state.
+_DEFAULT_DUE_TIME_FALLBACK = (9, 0)
+
+# Reminder ids already warned about for a non-ISO due_date — warn ONCE per id,
+# not every 5-minute scan cycle.
+_WARNED_BAD_DUE_DATE: set[str] = set()
+
+
+def _default_due_hm() -> tuple[int, int]:
+    """(hour, minute) for date-only reminders: `ZOE_REMINDER_DEFAULT_TIME` (e.g.
+    '09:00', '7:30 AM'), falling back to 09:00 when unset or unparseable."""
+    return _parse_due_time(os.environ.get("ZOE_REMINDER_DEFAULT_TIME", "")) or _DEFAULT_DUE_TIME_FALLBACK
+
+
+def _is_iso_date(value: str) -> bool:
+    try:
+        date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _parse_due_time(due_time_raw: str) -> tuple[int, int] | None:
@@ -114,12 +144,28 @@ async def schedule_due_reminder(db, row, *, now_utc: datetime | None = None) -> 
         if await cur.fetchone() is not None:
             return None
 
-    hm = _parse_due_time(row["due_time"])
+    due_time = row["due_time"]
+    due_date = row["due_date"]
+    hm = _parse_due_time(due_time)
     if hm is None:
-        log.debug("reminder_scan: unparseable due_time %r for %s", row["due_time"], rid)
+        if due_time:
+            log.debug("reminder_scan: unparseable due_time %r for %s", due_time, rid)
+            return None
+        if not due_date:
+            return None  # neither a time nor a date: nothing to anchor to
+        hm = _default_due_hm()  # date-only → household default time
+
+    if due_date and not _is_iso_date(due_date):
+        if rid not in _WARNED_BAD_DUE_DATE:
+            _WARNED_BAD_DUE_DATE.add(rid)
+            log.warning(
+                "reminder_scan: reminder %s has non-ISO due_date %r (title %r) — it can never "
+                "fire; fix the row (YYYY-MM-DD). New writes resolve relative dates at create time.",
+                rid, due_date, row["title"],
+            )
         return None
 
-    run_at = build_run_at(row["due_date"], hm[0], hm[1], now_utc)
+    run_at = build_run_at(due_date, hm[0], hm[1], now_utc)
     if run_at is None:
         return None
 
@@ -160,7 +206,8 @@ class ReminderScanTrigger(ProactiveTrigger):
         now_utc = datetime.now(timezone.utc)
 
         # Fetch active, unacknowledged, non-deleted reminders that have a due_time
-        # and are not currently snoozed.
+        # OR a due_date (date-only rows fire at the household default time) and
+        # are not currently snoozed.
         now_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         async with db.execute(
             """SELECT id, user_id, title, due_date, due_time, snoozed_until
@@ -168,8 +215,8 @@ class ReminderScanTrigger(ProactiveTrigger):
                WHERE is_active = 1
                  AND acknowledged = 0
                  AND deleted = 0
-                 AND due_time IS NOT NULL
-                 AND due_time != ''
+                 AND ((due_time IS NOT NULL AND due_time != '')
+                      OR (due_date IS NOT NULL AND due_date != ''))
                  AND (snoozed_until IS NULL OR snoozed_until <= ?)""",
             (now_iso,),
         ) as cur:

@@ -4120,6 +4120,58 @@ async def _music_recent_skip_count(user_id: str) -> int:
         return 0
 
 
+# Resolution cache for the HA media_player target (see _resolve_media_player_entity).
+_MEDIA_PLAYER_CACHE: dict = {"configured": None, "resolved": None, "expires": 0.0}
+_MEDIA_PLAYER_CACHE_TTL_S = 300.0
+_MEDIA_PLAYER_WARNED: set = set()
+
+
+async def _resolve_media_player_entity(ha_url: str) -> str:
+    """entity_id for HA media_player service calls — fail SOFT on a stale env value.
+
+    `ZOE_DEFAULT_MEDIA_PLAYER` is operator config; the 2026-09-25 audit found the
+    live value (`media_player.living_room`) is not an HA entity at all, so every
+    play/pause/volume that fell through to HA 404ed. Resolution: the configured id
+    when HA lists it; otherwise the first `media_player.*` HA does list, with ONE
+    warning per configured id naming the entities HA actually has; otherwise the
+    configured value unchanged (nothing better is known — behave as before). The
+    default `media_player.all` is HA's own broadcast target and skips the lookup.
+    Cached for 5 minutes so a music command does not cost an extra bridge call.
+    """
+    import os as _os, time as _time, httpx as _httpx
+    configured = _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all")
+    if configured == "media_player.all":
+        return configured
+    cache = _MEDIA_PLAYER_CACHE
+    if cache["configured"] == configured and cache["resolved"] and _time.monotonic() < cache["expires"]:
+        return cache["resolved"]
+    try:
+        async with _httpx.AsyncClient(timeout=4.0) as c:
+            resp = await c.get(f"{ha_url}/entities?domain=media_player")
+            data = resp.json() if resp.status_code < 400 else {}
+    except Exception as exc:
+        logger.debug("media player resolve: HA bridge entity list unavailable (%s)", exc)
+        return configured
+    entities = data.get("entities", []) if isinstance(data, dict) else (data or [])
+    ids = [
+        str(e.get("entity_id"))
+        for e in entities
+        if isinstance(e, dict) and str(e.get("entity_id") or "").startswith("media_player.")
+    ]
+    if not ids:
+        return configured
+    resolved = configured if configured in ids else ids[0]
+    if resolved != configured and configured not in _MEDIA_PLAYER_WARNED:
+        _MEDIA_PLAYER_WARNED.add(configured)
+        logger.warning(
+            "ZOE_DEFAULT_MEDIA_PLAYER=%s is not a Home Assistant entity; using %s instead. "
+            "HA lists: %s. Set the env to a real media_player id.",
+            configured, resolved, ", ".join(ids[:8]),
+        )
+    cache.update(configured=configured, resolved=resolved, expires=_time.monotonic() + _MEDIA_PLAYER_CACHE_TTL_S)
+    return resolved
+
+
 async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional[str]:
     try:
         response = await client.post(f"{ha_url}/devices/control", json=payload)
@@ -4166,7 +4218,7 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                     _query = "music"  # final fallback
 
             payload = {
-                "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                "entity_id": await _resolve_media_player_entity(ha_url),
                 "action": "play_media",
                 "data": {
                     "media_content_id": _query,
@@ -4329,7 +4381,7 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 if cmd == "mute":    extra = {"is_volume_muted": True}
                 if cmd == "unmute":  extra = {"is_volume_muted": False}
                 payload = {
-                    "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                    "entity_id": await _resolve_media_player_entity(ha_url),
                     "action": svc,
                     "data": extra,
                 }
@@ -4373,7 +4425,7 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
             level = int(slots.get("level", 50))
             vol = max(0, min(100, level)) / 100.0
             payload = {
-                "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                "entity_id": await _resolve_media_player_entity(ha_url),
                 "action": "volume_set",
                 "data": {"volume_level": vol},
             }
