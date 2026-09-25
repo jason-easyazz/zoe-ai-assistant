@@ -61,9 +61,12 @@ status: 🔨 active — NEXT ACTION is always §0
 ## 3. Program items
 
 ### B0 — Platform floor (everything else waits on this)
-- B0.1 🧑 **zram shrink**: `swapoff` all 8 zram devices with brain+Kokoro stopped, set each
-  `disksize` to 244 MiB, `mkswap`+`swapon -p 5`, and change `/ 2 /` → `/ 8 /` in
-  `/etc/systemd/nvzramconfig.sh`. Gate: `free -m` available ≥ 2 GB idle; nightly gate PASS.
+- B0.1 🧑 **zram shrink** (root; with llama-server + kokoro-tts stopped): for each of
+  `/dev/zram0..7`: `swapoff`, then **`zramctl --reset /dev/zramN`** (a `disksize` write on an
+  initialised device fails EBUSY), then `echo $((244*1024*1024)) > /sys/block/zramN/disksize`,
+  `mkswap`, `swapon -p 5`; then change `/ 2 /` → `/ 8 /` in `/etc/systemd/nvzramconfig.sh` so it
+  survives a reboot; `echo 3 > /proc/sys/vm/drop_caches` before starting the brain. Gate:
+  `free -m` available ≥ 2 GB idle; the next nightly replay gate PASS.
 - B0.2 ✅ 2026-09-25: openclaw-gateway + Hermes keep-warm off; router swap guard; zoe-data lean
   restart; HNSW rebuild; journald persistent; log rotation; docker prune; security pip set;
   Node 22.23.3; zoe-auth rebuilt; replay gate PASS 13/13.
@@ -218,6 +221,48 @@ status: 🔨 active — NEXT ACTION is always §0
 - B8.2 ⬜ SkillSpector 2.12 with the LLM stage on the local llama-server.
 - B8.3 ⬜ Standing watchers (B2.4) as the first Zoe-authored background agents.
 
+### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle)
+Plan: [`omi-integration-plan.md`](omi-integration-plan.md) (PR #1683). Pendant → BLE → the Pi
+panel (later a Pi Zero 2 W dock) → Opus decode + Silero → existing `/api/voice/ambient` →
+owner-only, speaker-gated `ambient_memory`. Nothing to Omi's cloud; the phone app is out
+(one bonded central only; their backend needs Firebase/GCS/Pinecone/OpenAI; their own
+maintainers call their speaker-ID "not reliable enough to trust"). The consumer pendant is an
+nRF5340 with an SD ring buffer that records whenever powered — a retention Zoe cannot gate
+from outside, hence B9.0.
+- B9.0 🧑 **Consent posture decisions**: (a) firmware variant `omi-zoe` with offline SD storage
+  OFF vs stock + `RING_CLEAR` on connect; (b) default retention window (proposal 7 d); (c) which
+  household members may opt into ambient; (d) legal sanity check of the discard-unknown rule
+  under the WA Surveillance Devices Act 1998 s5/s9 for guests. Gate: written answers in the
+  plan's §8 before B9.4.
+- B9.1 ⬜ **Lab receive** (`scripts/setup/omi_bridge.py`, bleak + opuslib, off-Orin): connect,
+  decode, 10-min WAV, reconnect-on-drop. Gate: <1 % packet gaps at 3 m/one wall; Moonshine WER on
+  20 corpus sentences ≤ panel + 5 pts; battery drop/h logged.
+- B9.2 ⬜ **Bridge thread in the Pi daemon, flag-dark** (`OMI_BRIDGE_ENABLED`,
+  `ZOE_AMBIENT_OMI_ENABLED`, both off): `source="omi"`, `device_id`, `speaker_id`, `expires_at`
+  on `ambient_memory` (one migration). Gate: ci_safe tests (flag off ⇒ no row); replay gate
+  PASS with the thread live; Pi RSS +≤120 MB.
+- B9.3 ⬜ **Speaker gate in shadow** on the Orin (sherpa-onnx embedder per B4.1; margin rule;
+  multi-speaker ⇒ discard). Gate: one shadow week; negative control — another voice alone for
+  10 min ⇒ zero owner verdicts.
+- B9.4 ⬜ **Physical consent**: long-press session toggle + haptic + LED; per-profile
+  `ambient_consent_at`; retention purge in the idle consolidator; firmware per B9.0. Gate:
+  stranger test ⇒ no row/file/log text; toggle-off stops posts ≤1 s.
+- B9.5 ⬜ **Attributed storage + promotion** (`ZOE_AMBIENT_OMI_ATTRIBUTE=1`): admission gate,
+  `[ambient:omi]` citation, rows on the memory page with delete. Gate: `memory_recall_probe`
+  unchanged; 20-item "said near Zoe" set ≥80 % attributed recall.
+- B9.6 ⬜ Optional offline drain on reconnect (session-gated ring only). B9.7 ⬜ Optional
+  push-to-talk via the button (replies on the nearest panel/Telegram; the CV1 has no speaker).
+- Not doing: Omi app/backend/webhooks/MCP (cloud), DevKit 2 purchase, diarization in v1.
+- Open questions for Jason are in the plan's §8 (which device, is the phone app paired, where
+  the pendant lives during the day, retention, minors, who does the legal check).
+
+### B10 — Web lookup + claim backing (Jason, 2026-07-24)
+- B10.1 ⬜ Re-land the Python core of the web-search spike (PR #1610: DDG/Wikipedia/HN
+  scrapers, block detection, consensus merge, ≤350-token voice packet; 44 offline fixture
+  tests) as a ≤300-line PR; Tavily stays the opt-in primary. B10.2 ⬜ Wire a `web_search`
+  tool into the Flue brain lane behind a flag; "are you sure?" triggers a backed re-answer.
+  Gate: fixture tests + replay corpus unchanged + 20 live lookups scored by hand.
+
 ## 4. Sequencing (dependencies)
 
 ```
@@ -228,7 +273,12 @@ B0.7 py3.12 venv ─> B0.8 Chroma/MemPalace ─> B3.1 (design against the new st
 B3.2 dream gating ─> B3.3 reflection ─> B2.2 delivery policy ─> B2.1/B2.3/B2.4
 B4.3 face decision ─> B4.1/B4.2 shadow week (Pi on) ─> B3.9
 B8.1 executor ─> B8.3 watchers (B2.4 can ship on the plain scheduler first)
+B0.1 ─> B9.1 ─> B9.2 ─> (B4.1, B4.3) ─> B9.3 ─> B9.0 ─> B9.4 ─> B9.5 ─> B3.9
 ```
+
+Diagnosed 2026-09-25 (PR #1682): the 44 zero-effect nightly digests were an **idle
+household**, not a bug — no owned user turn since 09-03; the alert now distinguishes "idle"
+from "processed 0 of N eligible" (B3.2 gains that verdict as its first gate).
 
 ## 4b. Triage of the inherited plans (2026-09-25, on Jason's "do we need to finish this?")
 

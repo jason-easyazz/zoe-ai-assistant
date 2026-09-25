@@ -77,7 +77,7 @@ status: complete — live fixes applied where the harness allowed; the rest is s
 | Local `ci_safe` unit lane (what `validate` runs) | **6,277 passed, 0 failed** on the host after the package bumps (97 s). |
 | CI `validate` red on the PR: `test_multi_hop_graph_recall` | **Fixed** (second commit on the PR). Not a ranker regression: the benchmark's fixture pinned `added_at` to fixed dates while its autouse fixture turns hybrid retrieval on; the semantic term decays with age but the "person" preference boost is constant, so past ~2 months the answer row entered the top five even with the graph OFF. Dates are now relative to `now`. Negative control reproduces the failure with the old date; whole file 7/7. |
 | Multica API 401 | **Explained**: the API returns 200 with the configured token; the 401s came from the six-week-old zoe-data process calling without one. Cleared by the restart; confirm at the next 06:00 autopilot run. |
-| zram shrink | **Blocked** (root-level `swapoff`/`/sys` writes and the `/etc/systemd/nvzramconfig.sh` edit were both refused by the classifier). One-time recipe for you, with the brain and Kokoro stopped: `for n in 7 6 5 4 3 2 1 0; do sudo swapoff /dev/zram$n; done`, then set each device's `disksize` to 244 MiB (1/8 of RAM across 8 devices), `mkswap` + `swapon -p 5`, and change the `/ 2 /` to `/ 8 /` in `/etc/systemd/nvzramconfig.sh` so it sticks across reboots. Expected gain 2–3 GB. |
+| zram shrink | **Blocked** (root-level `swapoff`/`/sys` writes and the `/etc/systemd/nvzramconfig.sh` edit were both refused by the classifier). One-time recipe for you, with the brain and Kokoro stopped, per device: `sudo swapoff /dev/zramN && sudo zramctl --reset /dev/zramN` (a `disksize` write on an initialised device fails EBUSY), then `echo $((244*1024*1024)) | sudo tee /sys/block/zramN/disksize`, `sudo mkswap /dev/zramN && sudo swapon -p 5 /dev/zramN`; then change the `/ 2 /` to `/ 8 /` in `/etc/systemd/nvzramconfig.sh` so it sticks across reboots. Full sequence is B0.1 in the program tracker. Expected gain 2–3 GB. |
 | Issue #863 (README says "E2B") | Already fixed on main (README line 27 reads E4B). Close the issue. |
 
 Measured effect of today's reclaim (before → after): available memory **25 MiB → ~830 MiB** (gateway + timer stopped, zoe-data restarted lean, router resident, journald capped). The big lever (zram, §3 step 2) is still ahead and is the one step that needs root.
@@ -569,9 +569,9 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
    --vacuum-time=1s` to drop the lines that carry the old one. ✓ journald is persistent.
 2. Physically check the Pi; bring the panel back; verify `ZOE_VAD_TAIL_MS=640` in the
    daemon env.
-3. ✓ openclaw-gateway + keepwarm disabled; ✓ health/watchdog scripts fixed; **still to do:**
-   `systemctl --user restart zoe-data` (loads the installed package set; poll `/health`),
-   then apply the router swap-guard template (`cp` + `daemon-reload` + restart).
+3. ✓ openclaw-gateway + keepwarm disabled; ✓ health/watchdog scripts fixed; ✓ zoe-data
+   restarted on the installed package set (22:27, `/readyz` ready); ✓ router swap-guard
+   template applied and the router restarted resident (22:30). Nothing left in this step.
 4. Maintenance window (brain + Kokoro stopped, §3): shrink zram (B0.1 in the program
    tracker); restart the stack; confirm `free -m` clears ≥1 GB. ✓ The HNSW rebuild is
    DONE (22:26, `/health` recall `ok`) and ✓ the replay gate has passed (22:39); do not
