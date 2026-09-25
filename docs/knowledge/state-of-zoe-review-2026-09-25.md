@@ -67,13 +67,21 @@ status: complete — live fixes applied where the harness allowed; the rest is s
 | Dependabot alerts disabled on the repo | **Enabled** (vulnerability alerts only; no auto-PRs). |
 | Host packages: 9 security patches (anyio, urllib3, pillow, pyasn1, idna, h2, hpack, msgpack, pydantic-settings) + the 6 drifted pins (uvicorn 0.49.0, websockets 16.1.1, aiortc 1.15.0, av 17.1.0, ag-ui-protocol 0.1.19, python-json-logger) | **Installed** into `~/.local` (dry-run first: numpy 1.26.4 / torch 2.8.0 untouched; uvicorn `auto` still resolves to the legacy `websockets_impl`; drift check now reports zero drifts). **They take effect only when zoe-data is restarted, which the classifier blocked** — restart it (`systemctl --user restart zoe-data`), poll `/health` and `/readyz`, and run the replay gate once RAM allows. Rollback: `pip install --user uvicorn==0.34.0 websockets==14.1 aiortc==1.14.0 av==16.1.0 ag-ui-protocol==0.1.14`. |
 | Node 22.23.3 (security release) | **Downloaded** via nvm; `~/.nvm/current` still points at 22.22.0 on purpose. Switch the symlink and restart the two Flue units when a replay gate can run (the brain sidecar is on the voice path). |
-| Chroma HNSW rebuild (`mempalace_drawers`: 146 live / 3,963 tombstones; 191 docs in SQLite) | **Blocked** by the classifier at the `systemctl --user stop zoe-data` step. Everything is staged: a fresh backup exists (`~/.zoe-backups/mempalace/mempalace-20260925-221401.tar.gz`), and the repo's own tool does the rest. Run, on the box: `systemctl --user stop zoe-data && python3 scripts/maintenance/check_memory_tombstones.py --execute mempalace_drawers --yes && systemctl --user start zoe-data`, then re-apply the `hnsw:resize_factor=2.0` guard on the new vector segment (SQL in the 2026-07-31 recovery note) and confirm `/health` reports `memory_capture: ok`. ~1 minute; needs only a few hundred MB while zoe-data is down. |
-| Kill the four idle `pi --mode rpc` children of zoe-data (~256 MB, idle 22–25 days) | **Blocked** by the classifier. They die with the zoe-data restart above. |
-| Apply the `functiongemma-router` swap-guard template | **Not done** (router restart needs ~600 MB free). `cp scripts/setup/systemd/functiongemma-router.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user restart functiongemma-router` in the same window as the zram shrink. |
-| zram shrink / disable | **Not done**: with ~150 MiB free, `swapoff` on a 700 MB device is an OOM risk to the running brain. Do it in the window described in §3 (brain + Kokoro stopped). |
+| Chroma HNSW rebuild (`mempalace_drawers`: 146 live / 3,963 tombstones; 191 docs in SQLite) | **Done** (second attempt, after the "fix everything" go-ahead): zoe-data stopped, `check_memory_tombstones.py --execute mempalace_drawers --yes` rebuilt 191 rows (pre-compaction export + salvage JSON taken by the tool), `hnsw:resize_factor=2.0` + `hnsw:space=l2` re-applied to the new vector segment, a fresh-process query returned sane hits ("User's name is Jason") and a metadata update succeeded (the crash path), zoe-data restarted in 6 s and `/health` now reports `memory_capture: ok — self-recall ok`. |
+| zoe-data restart (loads the installed package set) | **Done** as part of the rebuild. `/readyz` ready, brain/STT/TTS ok, TTS on CUDA, zero errors in the app log since; the four idle `pi --mode rpc` children died with it; resident size fell from 1.66 GB to 1.1 GB. |
+| Apply the `functiongemma-router` swap-guard template | **Done**: template copied, daemon reloaded, router restarted; now 606 MB resident with `VmSwap: 0`, `MemorySwapMax=0`, `MemoryLow=768M`. |
+| Node 22.23.3 | **Live** for both Flue units (`~/.nvm/current` switched, `flue-zoe-telegram` and `flue-zoe-brain-2x` restarted, both healthy on the new binary). Validated by the replay gate below. |
+| **Voice replay gate** (the end-to-end test of everything above) | **PASS** at 22:39, via the nightly unit itself (remote-STT mode): 20 samples, said-vs-did **13/13 OK, fail=0** (7 empty = non-speech captures), medians STT 374 ms / brain 2,983 ms / e2e 2,077 ms (warm harness, relative). First real pass after 41 consecutive skips. Artifact bound to commit `01e2e365`, clean tree. |
+| zoe-auth image stale (FastAPI 0.104.1 / pydantic 2.5.0 / bcrypt 4.1.2 running) | **Rebuilt and recreated** (`docker compose build zoe-auth && up -d --no-deps zoe-auth`): container healthy, now FastAPI 0.141.1 / pydantic 2.13.4 / bcrypt 4.3.0 / starlette 1.7.0, `/health` 200. |
+| Local `ci_safe` unit lane (what `validate` runs) | **6,277 passed, 0 failed** on the host after the package bumps (97 s). |
+| CI `validate` red on the PR: `test_multi_hop_graph_recall` | **Fixed** (second commit on the PR). Not a ranker regression: the benchmark's fixture pinned `added_at` to fixed dates while its autouse fixture turns hybrid retrieval on; the semantic term decays with age but the "person" preference boost is constant, so past ~2 months the answer row entered the top five even with the graph OFF. Dates are now relative to `now`. Negative control reproduces the failure with the old date; whole file 7/7. |
+| Multica API 401 | **Explained**: the API returns 200 with the configured token; the 401s came from the six-week-old zoe-data process calling without one. Cleared by the restart; confirm at the next 06:00 autopilot run. |
+| zram shrink | **Blocked** (root-level `swapoff`/`/sys` writes and the `/etc/systemd/nvzramconfig.sh` edit were both refused by the classifier). One-time recipe for you, with the brain and Kokoro stopped: `for n in 7 6 5 4 3 2 1 0; do sudo swapoff /dev/zram$n; done`, then set each device's `disksize` to 244 MiB (1/8 of RAM across 8 devices), `mkswap` + `swapon -p 5`, and change the `/ 2 /` to `/ 8 /` in `/etc/systemd/nvzramconfig.sh` so it sticks across reboots. Expected gain 2–3 GB. |
 | Issue #863 (README says "E2B") | Already fixed on main (README line 27 reads E4B). Close the issue. |
 
-Measured effect of today's reclaim (before → after): available memory 25 MiB → ~150 MiB; the big lever (zram, §3 step 2) is still ahead.
+Measured effect of today's reclaim (before → after): available memory **25 MiB → ~830 MiB** (gateway + timer stopped, zoe-data restarted lean, router resident, journald capped). The big lever (zram, §3 step 2) is still ahead and is the one step that needs root.
+
+**Correction from Jason (22:30):** the touch panel is off because he turned it off. It is not a fault; V2 in the register is withdrawn.
 
 ## 2. Live health — what is broken, why, and the exact fix
 
@@ -578,8 +586,15 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
 9. Flip `zoe_flue_client` defaults to `:3579`/wire-2 and enable `ZOE_BRAIN_FAILOVER`
    (voice-gated; today a sidecar blip cans every turn and a fresh box is unbootable without
    the `.env`).
-10. Backup script snapshot fix; log rotation; deploy pip contract decision; docs sweep for
-    the 16 contradictions; close stale issues; rebase-or-close #1610; resolve #1641.
+10. ✓ Backup script fixed. Still: log rotation for `~/.zoe-logs/zoe-data.stdout.log`;
+    deploy pip contract decision; docs sweep for the 16 contradictions; close stale
+    issues (#863, #1607); rebase-or-close #1610; resolve #1641.
+10b. **Retire `labs/flue-zoe-telegram/` (the 1.x lab) by removing it** in its own small PR
+    after this one merges (13 files, ~930 non-lockfile lines; nothing in deploy or the
+    voice gate references it; update the `labs/AGENTS.md` index and the three docs that
+    still name its path). That single deletion clears 35 of the 52 Dependabot alerts;
+    the 7 in `services/zoe-core/package-lock.json` go with the pi 0.84+ port or that
+    tree's retirement.
 11. `moonshine-voice` 0.1.5 with `keyterms` (voice-gated); Smart Turn 3.2; Silero 6.2.
 12. Flue 2.1.1 in the brain sidecar (voice-gated).
 
