@@ -217,11 +217,16 @@ def _message_owner_expr() -> str:
     )
 
 
-def _message_owner_users_sql(*, today_only: bool, lookback_hours: int | None = None) -> str:
+def _message_owner_users_sql(*, today_only: bool, lookback_hours: int | None = None,
+                             cutoff: bool = False) -> str:
     """Users with chat activity, optionally windowed.
 
     ``lookback_hours`` selects a ROLLING window ending now and takes precedence
-    over ``today_only``.
+    over ``today_only``. With ``cutoff=True`` the window instead ends at a
+    caller-supplied ``?::timestamptz`` (bound as ``(cutoff, hours, cutoff)``),
+    so the nightly pass can hand the SAME instant to selection and to the
+    input probe — otherwise a turn landing between the two calls reads as
+    "turns exist but nobody was selected" (Greptile P2 on #1682).
 
     It exists because ``today_only`` is calendar-day based and the nightly
     digest fires at 03:00: "today" was therefore a three-hour-old window
@@ -232,7 +237,13 @@ def _message_owner_users_sql(*, today_only: bool, lookback_hours: int | None = N
     """
     owner_expr = _message_owner_expr()
     date_clause = ""
-    if lookback_hours is not None:
+    if lookback_hours is not None and cutoff:
+        date_clause = """
+          AND cm.created_at::timestamptz >=
+              (?::timestamptz - make_interval(hours => ?::int))
+          AND cm.created_at::timestamptz < ?::timestamptz
+        """
+    elif lookback_hours is not None:
         # Same cast discipline as the calendar clause below: through the
         # positional-compat layer an uncast placeholder binds as "unknown" and
         # overload resolution fails, silently zeroing the result rather than
@@ -541,7 +552,17 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
         from memory_service import MemoryServiceError, get_memory_service
         svc = get_memory_service()
 
-        facts = await _extract_facts_with_gemma(chat_text)
+        try:
+            facts = await _extract_facts_with_gemma(chat_text)
+        except ExtractorError as exc:
+            # An outage is an ERROR row, never a quiet "no facts": the nightly
+            # loop classifies it as extractor_errors. The EMOTIONAL pass below is
+            # a separate call with its own parser and runs regardless — a
+            # malformed fact reply must not cost the night's emotional moments
+            # (Greptile P1 on #1682); both outcomes are recorded on the row.
+            result["error"] = f"extractor_failed:{exc.kind}"
+            logger.warning("memory_digest: extractor failed for %s: %s", user_id, exc)
+            facts = []
         result["extracted"] = len(facts)
 
         if facts:
@@ -671,6 +692,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             emotional_new = await _emotional_memory_pass(user_id, chat_text, svc)
             result["emotional_new"] = emotional_new
         except Exception as exc:
+            result["emotional_error"] = f"{type(exc).__name__}: {exc}"
             logger.debug("memory_digest: emotional pass failed (non-fatal) user=%s: %s", user_id, exc)
 
     except Exception as exc:
@@ -794,8 +816,27 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
         return ""
 
 
+class ExtractorError(RuntimeError):
+    """The fact extractor could not produce an answer (transport / HTTP / JSON).
+
+    Distinct from "the transcript had no facts" (``[]``): an outage MUST
+    classify as an error row in the nightly digest, not as ``attempted_no_facts``
+    (Codex P2 on #1682). ``kind`` is the underlying exception class name.
+    """
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(f"{kind}: {message}")
+        self.kind = kind
+
+
 async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
-    """Send chat transcript to the LLM and parse the JSON fact list."""
+    """Send chat transcript to the LLM and parse the JSON fact list.
+
+    Returns ``[]`` only when the model answered and stated no facts. Every
+    failure to get a parseable answer raises :class:`ExtractorError` so callers
+    can tell an outage from an empty transcript (``memory_idle_consolidation``
+    already catches it and leaves its watermark un-advanced).
+    """
     if len(chat_text) > 3000:
         logger.warning(
             "memory_digest: transcript truncated to 3000 chars for fact "
@@ -824,14 +865,16 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
             end = text.rfind("]") + 1
             if start == -1 or end == 0:
                 logger.warning("memory_digest: LLM returned no JSON array: %s", text[:200])
-                return []
+                raise ExtractorError("NoJSONArray", text[:200])
             return json.loads(text[start:end])
+    except ExtractorError:
+        raise
     except json.JSONDecodeError as je:
         logger.warning("memory_digest: JSON parse error: %s", je)
-        return []
+        raise ExtractorError(type(je).__name__, str(je)) from je
     except Exception as exc:
         logger.warning("memory_digest: LLM call failed: %s", exc)
-        return []
+        raise ExtractorError(type(exc).__name__, str(exc)) from exc
 
 
 async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
@@ -1074,19 +1117,89 @@ async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
     return results
 
 
-async def run_digest_for_all_active_users(db=None) -> list[dict]:
+# The probe's "there has never been an owned user turn" answer. A fresh install
+# is IDLE (nothing to digest), not "unknown": ``None`` is reserved for a probe
+# FAILURE, which keeps the legacy every-zero-run-counts alerting. Infinity
+# compares naturally against the lookback (never inside the window).
+NO_OWNED_TURNS = float("inf")
+
+
+def _utcnow():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)
+
+
+async def newest_owned_user_turn_age_hours(db=None, cutoff=None) -> float | None:
+    """Hours (at ``cutoff``) since the newest user turn owned by a real user.
+
+    The nightly loop's INDEPENDENT answer to "was there anything to digest".
+    Deliberately NOT the selection query (no lookback clause) so a broken
+    window — the #1480 dead-window class — shows up as "turns exist but nobody
+    was selected" instead of being invisible. Only turns strictly before
+    ``cutoff`` count, so the caller can bind the same instant here and to
+    selection (``run_nightly_digest_pass``).
+
+    Returns ``NO_OWNED_TURNS`` (``inf``) when no owned turn has ever been
+    written — a fresh install is idle, not unknown — and ``None`` ONLY when the
+    probe itself failed. Never raises.
+    """
+    if cutoff is None:
+        cutoff = _utcnow()
+    owner_expr = _message_owner_expr()
+    sql = f"""
+        SELECT EXTRACT(EPOCH FROM (?::timestamptz - max(cm.created_at::timestamptz))) / 3600.0
+        FROM chat_messages cm
+        JOIN chat_sessions cs ON cm.session_id = cs.id
+        WHERE cm.role = 'user'
+          AND ({owner_expr}) IS NOT NULL
+          AND cm.created_at::timestamptz < ?::timestamptz
+    """
+    params = (cutoff, cutoff)
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+        if db is not None:
+            row = await (await db.execute(sql, params)).fetchone()
+        else:
+            async with get_db_ctx() as _db:
+                row = await (await _db.execute(sql, params)).fetchone()
+        if not row or row[0] is None:
+            return NO_OWNED_TURNS
+        return float(row[0])
+    except Exception as exc:
+        logger.warning("memory_digest: newest-turn probe failed (non-fatal): %s", exc)
+        return None
+
+
+def digest_input_seen(newest_turn_age_hours: float | None) -> bool | None:
+    """Was there an owned user turn inside the digest lookback window.
+
+    ``None`` only when the probe FAILED — callers then keep the legacy
+    every-zero-run-counts alerting rather than guessing. ``NO_OWNED_TURNS``
+    (fresh install) is simply outside the window: ``False``, i.e. idle.
+    """
+    if newest_turn_age_hours is None:
+        return None
+    return newest_turn_age_hours <= _DIGEST_LOOKBACK_HOURS
+
+
+async def run_digest_for_all_active_users(db=None, cutoff=None) -> list[dict]:
     """Run memory digest for users active within the rolling lookback window.
 
     A rolling window, NOT calendar-today — see _message_owner_users_sql. Asking
     for "today" at 03:00 selected a three-hour dead window and processed nobody.
+    With ``cutoff`` the window ends at that instant instead of ``now()`` (the
+    nightly pass binds the same instant to the input probe).
     """
     results = []
     try:
-        user_ids = await _list_user_ids(
-            _message_owner_users_sql(today_only=False, lookback_hours=_DIGEST_LOOKBACK_HOURS),
-            (_DIGEST_LOOKBACK_HOURS,),
-            db=db,
-        )
+        if cutoff is not None:
+            sql = _message_owner_users_sql(
+                today_only=False, lookback_hours=_DIGEST_LOOKBACK_HOURS, cutoff=True)
+            params = (cutoff, _DIGEST_LOOKBACK_HOURS, cutoff)
+        else:
+            sql = _message_owner_users_sql(today_only=False, lookback_hours=_DIGEST_LOOKBACK_HOURS)
+            params = (_DIGEST_LOOKBACK_HOURS,)
+        user_ids = await _list_user_ids(sql, params, db=db)
     except Exception as exc:
         logger.error("memory_digest: could not list active users: %s", exc)
         return []
@@ -1096,6 +1209,26 @@ async def run_digest_for_all_active_users(db=None) -> list[dict]:
         results.append(result)
         logger.info("memory_digest: %s", result)
     return results
+
+
+async def run_nightly_digest_pass(db=None) -> dict:
+    """Selection + per-user digest + input probe, all against ONE cutoff instant.
+
+    Returns ``{"results", "cutoff", "newest_turn_age_hours", "input_seen"}``.
+    A single cutoff computed before selection is bound to both queries, so a
+    turn that lands while the pass runs is invisible to both — it cannot make
+    the probe say "input exists" about a turn selection never had a chance to
+    see. The probe never raises (``None`` = probe failure).
+    """
+    cutoff = _utcnow()
+    results = await run_digest_for_all_active_users(db=db, cutoff=cutoff)
+    age_h = await newest_owned_user_turn_age_hours(db=db, cutoff=cutoff)
+    return {
+        "results": results,
+        "cutoff": cutoff,
+        "newest_turn_age_hours": age_h,
+        "input_seen": digest_input_seen(age_h),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
