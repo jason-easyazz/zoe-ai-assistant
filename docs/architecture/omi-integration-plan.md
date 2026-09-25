@@ -235,7 +235,7 @@ object); s9 separately prohibits publishing such a record; individuals face up t
 $5,000 / 12 months ([Lavan](https://www.lavan.com.au/publications/lights-camera-illegal-evidence-should-you-be-recording-a-private-conversation/),
 [Andrew Williams](https://www.andrewwilliamslawyer.com.au/can-you-record-someone-without-permission.html),
 [TechSafety WA guide](https://techsafety.org.au/blog/legal_articles/legal-guide-to-surveillance-legislation-in-wa/),
-[Act text](https://www.legislation.wa.gov.au/legislation/statutes.nsf/law_a2077.html)).
+[Act text](https://www.legislation.wa.gov.au/legislation/statutes.nsf/law_a1919.html)).
 Two consequences for the design, neither of which is legal advice:
 
 - The **discard-unknown rule is load-bearing legally, not only ethically** (as the
@@ -369,7 +369,7 @@ repo: <https://github.com/BasedHardware/omi> (files read: `omi/firmware/omi/omi.
 `sdks/python/pyproject.toml`, `backend/parakeet/README.md`) · issues/PRs: #12765, #13055, #13290 ·
 community: <https://github.com/j2h4u/omi-collector>, <https://github.com/kbdevs/omibutfree> ·
 Pi Zero 2 W: <https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/> ·
-WA SDA 1998: <https://www.legislation.wa.gov.au/legislation/statutes.nsf/law_a2077.html>,
+WA SDA 1998: <https://www.legislation.wa.gov.au/legislation/statutes.nsf/law_a1919.html>,
 <https://www.lavan.com.au/publications/lights-camera-illegal-evidence-should-you-be-recording-a-private-conversation/>,
 <https://techsafety.org.au/blog/legal_articles/legal-guide-to-surveillance-legislation-in-wa/>.
 
