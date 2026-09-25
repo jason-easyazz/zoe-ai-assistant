@@ -49,10 +49,28 @@ _DEFAULT_DUE_TIME_FALLBACK = (9, 0)
 _WARNED_BAD_DUE_DATE: set[str] = set()
 
 
+# Bad ZOE_REMINDER_DEFAULT_TIME values already warned about (warn once per value).
+_WARNED_BAD_DEFAULT_TIME: set[str] = set()
+
+
 def _default_due_hm() -> tuple[int, int]:
     """(hour, minute) for date-only reminders: `ZOE_REMINDER_DEFAULT_TIME` (e.g.
-    '09:00', '7:30 AM'), falling back to 09:00 when unset or unparseable."""
-    return _parse_due_time(os.environ.get("ZOE_REMINDER_DEFAULT_TIME", "")) or _DEFAULT_DUE_TIME_FALLBACK
+    '09:00', '7:30 AM'), falling back to 09:00 — with ONE warning per bad value —
+    when unset, unparseable, or out of range ('25:00', '09:99')."""
+    raw = os.environ.get("ZOE_REMINDER_DEFAULT_TIME", "")
+    if not raw.strip():
+        return _DEFAULT_DUE_TIME_FALLBACK
+    hm = _parse_due_time(raw)
+    if hm is not None:
+        return hm
+    if raw not in _WARNED_BAD_DEFAULT_TIME:
+        _WARNED_BAD_DEFAULT_TIME.add(raw)
+        log.warning(
+            "reminder_scan: ZOE_REMINDER_DEFAULT_TIME=%r is not a valid clock time "
+            "(HH:MM, 00-23:00-59, optional AM/PM); date-only reminders fire at 09:00 local.",
+            raw,
+        )
+    return _DEFAULT_DUE_TIME_FALLBACK
 
 
 def _is_iso_date(value: str) -> bool:
@@ -68,7 +86,9 @@ def _parse_due_time(due_time_raw: str) -> tuple[int, int] | None:
     Parse a due_time string into (hour, minute) in 24-hour format.
 
     Handles formats: '08:42', '10:25PM', '10:25 PM', '8:42 AM', '22:00'
-    Returns None if unparseable.
+    Returns None if unparseable OR out of range (hour 0-23, minute 0-59 — no
+    silent `% 24` wrap: '25:00' is a config error, not 01:00, and '09:99' used
+    to reach `datetime()` and raise on every scan cycle).
     """
     if not due_time_raw:
         return None
@@ -78,18 +98,24 @@ def _parse_due_time(due_time_raw: str) -> tuple[int, int] | None:
     m = re.match(r'^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$', s)
     if m:
         h, mi, ampm = int(m.group(1)), int(m.group(2)), m.group(3).upper()
+        if h < 1 or h > 12:
+            return None
         if ampm == 'PM' and h != 12:
             h += 12
         elif ampm == 'AM' and h == 12:
             h = 0
-        return (h % 24, mi)
+        return _in_range(h, mi)
 
     # Try 24-hour: "08:42", "22:00"
     m = re.match(r'^(\d{1,2}):(\d{2})$', s)
     if m:
-        return (int(m.group(1)) % 24, int(m.group(2)))
+        return _in_range(int(m.group(1)), int(m.group(2)))
 
     return None
+
+
+def _in_range(hour: int, minute: int) -> tuple[int, int] | None:
+    return (hour, minute) if 0 <= hour <= 23 and 0 <= minute <= 59 else None
 
 
 def build_run_at(

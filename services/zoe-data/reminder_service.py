@@ -48,7 +48,13 @@ def normalize_due_date(raw: object) -> str | None:
         relative = relative[5:].strip()  # "next friday" → the weekday grammar
     resolved = _parse_date(relative)
     if resolved:
-        return resolved
+        # _parse_date recognises the PHRASE, not the calendar: "June 31" comes
+        # back as "2026-06-31". Re-validate so an unfireable date is a 422 here,
+        # never a stored row the scan can only warn about (Codex P2, #1686).
+        try:
+            return date.fromisoformat(resolved).isoformat()
+        except ValueError:
+            pass
     raise HTTPException(
         status_code=422,
         detail=f"due_date {text!r} is not a date; use YYYY-MM-DD or a day like 'tomorrow'",
