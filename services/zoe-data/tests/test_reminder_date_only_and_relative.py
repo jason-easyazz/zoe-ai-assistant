@@ -209,8 +209,8 @@ def test_normalize_due_date_resolves_relative_days_and_keeps_iso():
     assert normalize_due_date("tomorrow") == tomorrow
     assert normalize_due_date("Tomorrow ") == tomorrow
     assert normalize_due_date("today") == household_today.isoformat()
-    assert normalize_due_date("2026-06-15") == "2026-06-15"
-    assert normalize_due_date("2026-06-15T09:00:00") == "2026-06-15"
+    assert normalize_due_date("2099-06-15") == "2099-06-15"
+    assert normalize_due_date("2099-06-15T09:00:00") == "2099-06-15"
     assert normalize_due_date(None) is None
     assert normalize_due_date("") is None
     nxt = normalize_due_date("next friday")
@@ -281,7 +281,7 @@ async def test_create_reminder_record_stores_iso_not_the_literal_tomorrow(monkey
 # --------------------------------------------------------------------------- #
 # Codex P2s on #1686
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("phrase", ["June 31", "31 june", "2026-06-31", "2026-06-31T09:00", "feb 30 2026"])
+@pytest.mark.parametrize("phrase", ["June 31", "31 june", "2099-06-31", "2099-06-31T09:00", "feb 30 2099"])
 def test_recognised_phrase_that_is_not_a_real_date_is_422_not_stored(phrase):
     """`_parse_date` recognises the PHRASE ("June 31" → "2026-06-31") but not the
     calendar; the resolved value must be re-validated or the scan can only ever
@@ -293,7 +293,8 @@ def test_recognised_phrase_that_is_not_a_real_date_is_422_not_stored(phrase):
 
 
 def test_real_calendar_phrase_still_resolves():
-    assert normalize_due_date("June 30") == f"{scan.zoe_now().date().year}-06-30"
+    frozen = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)  # household: 2026-03-01
+    assert normalize_due_date("June 30", now_utc=frozen) == "2026-06-30"
 
 
 @pytest.mark.parametrize("bad", ["25:00", "09:99", "13:00 PM", "0:60", "24:00"])
@@ -425,7 +426,7 @@ def test_relative_dates_resolve_in_zoe_timezone_not_server_date(monkeypatch):
     # Household today is Saturday 09-26, so "saturday" is NEXT Saturday (the
     # weekday grammar never means today) — the UTC control below gets 09-26.
     assert normalize_due_date("saturday", now_utc=frozen) == "2026-10-03"
-    assert normalize_due_date("june 3", now_utc=frozen) == "2026-06-03"
+    assert normalize_due_date("june 3", now_utc=frozen) == "2027-06-03"  # bare month-day already past → next year
 
     monkeypatch.setattr(scan, "_ZOE_TZ", ZoneInfo("UTC"))
     assert normalize_due_date("today", now_utc=frozen) == "2026-09-25"  # still Friday in UTC
@@ -483,3 +484,77 @@ def test_write_path_keeps_valid_due_time_as_given():
     assert normalize_due_time("10:25 PM") == "10:25 PM"
     assert normalize_due_time("") is None
     assert normalize_due_time(None) is None
+
+
+# --------------------------------------------------------------------------- #
+# Greptile P1s on #1689
+# --------------------------------------------------------------------------- #
+_SEPT = datetime(2026, 9, 25, 23, 30, tzinfo=timezone.utc)  # household (+08): 2026-09-26
+
+
+def test_bare_month_day_already_past_resolves_to_next_year():
+    """"June 3" said in September means NEXT June 3. Negative control: pre-fix
+    this returned 2026-06-03, which the scan would skip forever."""
+    assert normalize_due_date("june 3", now_utc=_SEPT) == "2027-06-03"
+    assert normalize_due_date("3rd of June", now_utc=_SEPT) == "2027-06-03"
+    assert normalize_due_date("december 3", now_utc=_SEPT) == "2026-12-03"  # still ahead this year
+
+
+@pytest.mark.parametrize("phrase", ["2026-06-15", "2026-06-15T09:00", "june 3 2026", "2026-09-25"])
+def test_explicit_past_date_is_422(phrase):
+    with pytest.raises(HTTPException) as exc:
+        normalize_due_date(phrase, now_utc=_SEPT)
+    assert exc.value.status_code == 422
+    assert "already past" in exc.value.detail
+
+
+def test_today_is_not_past():
+    assert normalize_due_date("2026-09-26", now_utc=_SEPT) == "2026-09-26"
+    assert normalize_due_date("september 26", now_utc=_SEPT) == "2026-09-26"
+
+
+@pytest.mark.asyncio
+async def test_date_only_recurring_row_is_excluded_with_one_warning(_scan_env, monkeypatch, caplog):
+    """A fixed date + recurring_pattern would fire once then be past-due forever;
+    exclude it and say so once. Negative control: pre-fix it was scheduled."""
+    caplog.set_level(logging.WARNING, logger=scan.__name__)
+    monkeypatch.setattr(scan, "_WARNED_RECURRING_DATE_ONLY", set())
+    now_utc = _now_local_0800()
+    today_iso = scan.zoe_now(now_utc).date().isoformat()
+    row = {"id": "rem-weekly", "user_id": "jason", "title": "water the plants", "due_date": today_iso,
+           "due_time": None, "snoozed_until": None, "recurring_pattern": "weekly"}
+    db = _ScanDb([row])
+
+    assert await scan.schedule_due_reminder(db, row, now_utc=now_utc) is None
+    assert await scan.schedule_due_reminder(db, row, now_utc=now_utc) is None
+
+    assert _scan_env == []
+    warnings = [r for r in caplog.records if "recurring_pattern" in r.getMessage()]
+    assert len(warnings) == 1 and "rem-weekly" in warnings[0].getMessage()
+    assert "water the plants" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_timed_recurring_row_without_date_still_schedules_daily(_scan_env):
+    """The supported recurrence shape (time, no date) is untouched."""
+    now_utc = _now_local_0800()
+    row = {"id": "rem-daily", "user_id": "jason", "title": "t", "due_date": None,
+           "due_time": "09:00", "snoozed_until": None, "recurring_pattern": "daily"}
+    assert await scan.schedule_due_reminder(_ScanDb([row]), row, now_utc=now_utc) == "rem-daily"
+
+
+@pytest.mark.asyncio
+async def test_scheduling_path_never_logs_title_or_user(_scan_env, caplog):
+    """P1 security: the success line used to write the TITLE and user id into
+    the persisted app log for every date-only reminder. Ids only now."""
+    caplog.set_level(logging.DEBUG, logger=scan.__name__)
+    now_utc = _now_local_0800()
+    today_iso = scan.zoe_now(now_utc).date().isoformat()
+    row = {"id": "rem-secret", "user_id": "jason-private-user", "title": "pick up the test results from the clinic",
+           "due_date": today_iso, "due_time": None, "snoozed_until": None}
+
+    assert await scan.schedule_due_reminder(_ScanDb([row]), row, now_utc=now_utc) == "rem-secret"
+
+    assert "rem-secret" in caplog.text
+    assert "clinic" not in caplog.text and "test results" not in caplog.text
+    assert "jason-private-user" not in caplog.text

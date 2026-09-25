@@ -24,7 +24,7 @@ class _FakeDB:
             "id": "rem-1",
             "user_id": "family-admin",
             "title": "check the oven",
-            "due_date": "2026-06-15",
+            "due_date": "2099-06-15",
             "due_time": "23:00",
             "is_active": 1,
             "acknowledged": 0,
@@ -58,7 +58,7 @@ async def test_create_reminder_record_preserves_policy_write_notification_and_br
     monkeypatch.setattr("reminder_service.broadcaster.broadcast", fake_broadcast)
 
     reminder = await create_reminder_record(
-        ReminderCreate(title="check the oven", due_date="2026-06-15", due_time="23:00"),
+        ReminderCreate(title="check the oven", due_date="2099-06-15", due_time="23:00"),
         user={"user_id": "family-admin", "role": "admin"},
         db=db,
     )
@@ -88,12 +88,12 @@ async def test_execute_reminder_create_uses_direct_path_before_mcporter(monkeypa
     monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
 
     result = await execute_intent(
-        Intent("reminder_create", {"title": "check the oven", "date": "2026-06-15", "time": "23:00"}),
+        Intent("reminder_create", {"title": "check the oven", "date": "2099-06-15", "time": "23:00"}),
         "family-admin",
     )
 
     assert result == "Reminder set: check the oven."
-    assert calls == [("reminder_create", {"title": "check the oven", "date": "2026-06-15", "time": "23:00"}, "family-admin")]
+    assert calls == [("reminder_create", {"title": "check the oven", "date": "2099-06-15", "time": "23:00"}, "family-admin")]
 
 
 @pytest.mark.asyncio
@@ -128,11 +128,11 @@ async def test_execute_reminder_create_falls_back_to_mcporter_when_direct_unavai
     monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
 
     result = await execute_intent(
-        Intent("reminder_create", {"title": "check the oven", "date": "2026-06-15", "time": "23:00"}),
+        Intent("reminder_create", {"title": "check the oven", "date": "2099-06-15", "time": "23:00"}),
         "family-admin",
     )
 
-    assert result == "Reminder set: check the oven for 2026-06-15 at 23:00."
+    assert result == "Reminder set: check the oven for 2099-06-15 at 23:00."
     assert calls == [
         ("direct", "reminder_create", "family-admin"),
         ("build", "reminder_create", "family-admin"),
@@ -182,7 +182,7 @@ async def test_execute_reminder_list_empty_returns_no_reminders_message(monkeypa
 @pytest.mark.asyncio
 async def test_execute_reminder_list_nonempty_formats_reminders(monkeypatch):
     rows = [
-        {"id": "rem-1", "title": "check the oven", "due_date": "2026-06-15",
+        {"id": "rem-1", "title": "check the oven", "due_date": "2099-06-15",
          "due_time": "23:00", "priority": "normal", "category": "general"},
         {"id": "rem-2", "title": "water plants", "due_date": None,
          "due_time": None, "priority": "normal", "category": "general"},
@@ -198,7 +198,7 @@ async def test_execute_reminder_list_nonempty_formats_reminders(monkeypatch):
 
     assert result == (
         "Your reminders:\n"
-        "  - check the oven (due: 2026-06-15)\n"
+        "  - check the oven (due: 2099-06-15)\n"
         "  - water plants (due: TBD)"
     )
 
@@ -235,14 +235,14 @@ async def test_execute_reminder_list_falls_back_to_mcporter_when_direct_unavaila
         yield  # pragma: no cover
 
     async def fake_mcporter(_cmd):
-        return '{"reminders": [{"title": "check the oven", "due_date": "2026-06-15"}]}'
+        return '{"reminders": [{"title": "check the oven", "due_date": "2099-06-15"}]}'
 
     monkeypatch.setattr("database.get_db_ctx", broken_ctx)
     monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
 
     result = await execute_intent(Intent("reminder_list", {}), "family-admin")
 
-    assert result == "Your reminders:\n  - check the oven (due: 2026-06-15)"
+    assert result == "Your reminders:\n  - check the oven (due: 2099-06-15)"
 
 
 @pytest.mark.asyncio
@@ -300,7 +300,7 @@ def _mcp_reminder_service_harness(monkeypatch):
 _MCP_CREATE_ARGS = {
     "_user_id": "family-admin",
     "title": "check the oven",
-    "due_date": "2026-06-15",
+    "due_date": "2099-06-15",
     "due_time": "23:00",
 }
 
@@ -317,7 +317,7 @@ async def test_mcp_reminder_create_routes_through_reminder_service(monkeypatch):
     payload, user, service_db = service_calls[0]
     assert service_db is db
     assert payload.title == "check the oven"
-    assert payload.due_date == "2026-06-15"
+    assert payload.due_date == "2099-06-15"
     assert payload.due_time == "23:00"
     assert payload.priority == "normal"
     assert payload.category == "general"
@@ -332,7 +332,7 @@ async def test_mcp_reminder_create_routes_through_reminder_service(monkeypatch):
     assert result == {
         "id": "rem-1",
         "title": "check the oven",
-        "due_date": "2026-06-15",
+        "due_date": "2099-06-15",
         "due_time": "23:00",
         "priority": "normal",
         "status": "created",
@@ -357,6 +357,6 @@ async def test_mcp_reminder_create_stdio_worker_relays_exactly_one_ui_update(mon
     assert notify_calls == [(
         "reminders",
         "reminder_created",
-        {"id": "rem-1", "title": "check the oven", "due_date": "2026-06-15",
+        {"id": "rem-1", "title": "check the oven", "due_date": "2099-06-15",
          "due_time": "23:00", "priority": "normal"},
     )]

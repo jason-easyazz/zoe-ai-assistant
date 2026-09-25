@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import date, datetime
 from typing import Mapping
@@ -32,6 +33,11 @@ def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str |
     - Relative day ("today", "tomorrow", "next friday", "june 3") → resolved via
       the same grammar the calendar quick-add already uses
       (`intent_router._parse_date`, imported lazily to keep this module light).
+    - A bare month-day with NO year ("june 3") that is already past this year
+      means NEXT year's — nobody sets a reminder for a day that has gone.
+    - An explicit date in the past (ISO, or a phrase carrying a year) → 422:
+      the scan never fires past-dated rows, so storing one is the silent-never-
+      fires bug this function exists to prevent. Today is allowed.
     - Anything else → 422; a reminder with an unfireable date is worse than an
       error the caller can see.
     """
@@ -40,27 +46,47 @@ def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str |
     text = str(raw).strip()
     if not text:
         return None
+    from proactive.triggers.reminder_scan import zoe_now
+
+    today = zoe_now(now_utc).date()
+
+    def _not_past(d: date) -> str:
+        if d < today:
+            raise HTTPException(
+                status_code=422,
+                detail=f"due_date {text!r} is already past ({d.isoformat()}); a reminder for a past day can never fire",
+            )
+        return d.isoformat()
+
     # ISO date, or ISO datetime ("2026-06-15T09:00") — keep the date part.
     iso_candidate = text[:10] if len(text) > 10 and text[10] in "T " else text
     try:
-        return date.fromisoformat(iso_candidate).isoformat()
+        return _not_past(date.fromisoformat(iso_candidate))
     except ValueError:
         pass
     from intent_router import _parse_date  # lazy: intent_router is the heavy module
-    from proactive.triggers.reminder_scan import zoe_now
 
     relative = text.lower()
     if relative.startswith("next "):
         relative = relative[5:].strip()  # "next friday" → the weekday grammar
-    resolved = _parse_date(relative, today=zoe_now(now_utc).date())
+    resolved = _parse_date(relative, today=today)
     if resolved:
         # _parse_date recognises the PHRASE, not the calendar: "June 31" comes
         # back as "2026-06-31". Re-validate so an unfireable date is a 422 here,
         # never a stored row the scan can only warn about (Codex P2, #1686).
         try:
-            return date.fromisoformat(resolved).isoformat()
+            d = date.fromisoformat(resolved)
         except ValueError:
-            pass
+            d = None
+        if d is not None:
+            has_year = re.search(r"\b\d{4}\b", relative) is not None
+            if d < today and not has_year:
+                # Bare "june 3" after June 3 → next year's June 3 (Greptile P1, #1689).
+                try:
+                    d = d.replace(year=d.year + 1)
+                except ValueError:  # Feb 29 → the next leap year is not "next year"
+                    raise HTTPException(status_code=422, detail=f"due_date {text!r} has no valid next occurrence")
+            return _not_past(d)
     raise HTTPException(
         status_code=422,
         detail=f"due_date {text!r} is not a date; use YYYY-MM-DD or a day like 'tomorrow'",

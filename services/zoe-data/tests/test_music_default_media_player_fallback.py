@@ -71,7 +71,7 @@ def _fakes(monkeypatch):
     _FakeAsyncClient.gets = []
     _FakeAsyncClient.entities = [{"entity_id": _REAL, "state": "idle"}]
     _FakeAsyncClient.get_raises = None
-    monkeypatch.setattr(intent_router, "_MEDIA_PLAYER_CACHE", {"configured": None, "resolved": None, "expires": 0.0})
+    monkeypatch.setattr(intent_router, "_MEDIA_PLAYER_CACHE", {"players": None, "expires": 0.0})
     monkeypatch.setattr(intent_router, "_MEDIA_PLAYER_WARNED", set())
     monkeypatch.setattr(intent_router, "_music_top_recent_genre", lambda _u: asyncio.sleep(0, result=None))
     monkeypatch.setattr(intent_router, "_music_recent_skip_count", lambda _u: asyncio.sleep(0, result=0))
@@ -170,3 +170,85 @@ async def test_ha_with_no_media_players_keeps_configured_id():
     await intent_router._execute_music_intent(Intent("music_control", {"command": "pause"}), "jason")
 
     assert _FakeAsyncClient.posts[0]["json"]["entity_id"] == _STALE
+
+
+# --------------------------------------------------------------------------- #
+# Greptile P1 on #1689: room / availability-aware fallback
+# --------------------------------------------------------------------------- #
+_BEDROOM = "media_player.bedroom_speaker"
+_KITCHEN = "media_player.kitchen_display"
+
+
+@pytest.mark.asyncio
+async def test_fallback_prefers_player_matching_requested_room():
+    """'pause the music in the kitchen' must not act on the first-listed bedroom
+    speaker. Negative control: pre-fix the first listed id (_BEDROOM) was posted."""
+    _FakeAsyncClient.entities = [
+        {"entity_id": _BEDROOM, "state": "playing", "attributes": {"friendly_name": "Bedroom Speaker"}},
+        {"entity_id": _KITCHEN, "state": "idle", "attributes": {"friendly_name": "Kitchen Display"}},
+    ]
+
+    await intent_router._execute_music_intent(Intent("music_control", {"command": "pause", "room": "kitchen"}), "jason")
+
+    assert _FakeAsyncClient.posts[0]["json"]["entity_id"] == _KITCHEN
+
+
+@pytest.mark.asyncio
+async def test_fallback_matches_room_by_friendly_name_or_area():
+    _FakeAsyncClient.entities = [
+        {"entity_id": "media_player.lva_1", "state": "idle", "attributes": {"friendly_name": "Office TV"}},
+        {"entity_id": "media_player.lva_2", "state": "idle", "attributes": {"friendly_name": "Samsung Q80"}, "area_id": "living_room"},
+    ]
+
+    await intent_router._execute_music_intent(Intent("music_control", {"command": "pause", "room": "Living Room"}), "jason")
+
+    assert _FakeAsyncClient.posts[0]["json"]["entity_id"] == "media_player.lva_2"
+
+
+@pytest.mark.asyncio
+async def test_fallback_skips_unavailable_players():
+    _FakeAsyncClient.entities = [
+        {"entity_id": _BEDROOM, "state": "unavailable"},
+        {"entity_id": _KITCHEN, "state": "idle"},
+    ]
+
+    await intent_router._execute_music_intent(Intent("music_control", {"command": "pause"}), "jason")
+
+    assert _FakeAsyncClient.posts[0]["json"]["entity_id"] == _KITCHEN
+
+
+@pytest.mark.asyncio
+async def test_configured_player_that_is_unavailable_is_not_used(monkeypatch):
+    monkeypatch.setenv("ZOE_DEFAULT_MEDIA_PLAYER", _BEDROOM)
+    _FakeAsyncClient.entities = [
+        {"entity_id": _BEDROOM, "state": "unavailable"},
+        {"entity_id": _KITCHEN, "state": "idle"},
+    ]
+
+    await intent_router._execute_music_intent(Intent("music_control", {"command": "pause"}), "jason")
+
+    assert _FakeAsyncClient.posts[0]["json"]["entity_id"] == _KITCHEN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "intent",
+    [
+        Intent("music_play", {"query": "Daft Punk"}),
+        Intent("music_control", {"command": "pause"}),
+        Intent("music_volume", {"level": 35}),
+    ],
+)
+async def test_no_available_player_fails_soft_without_posting(intent, caplog):
+    """Nothing available → say so; never drive whatever is listed first."""
+    caplog.set_level(logging.WARNING, logger=intent_router.logger.name)
+    _FakeAsyncClient.entities = [
+        {"entity_id": _BEDROOM, "state": "unavailable"},
+        {"entity_id": _KITCHEN, "state": "unavailable"},
+    ]
+
+    result = await intent_router._execute_music_intent(intent, "jason")
+
+    assert result == intent_router._NO_PLAYER_MSG
+    assert _FakeAsyncClient.posts == []
+    assert any("no media_player is available" in r.getMessage() for r in caplog.records)

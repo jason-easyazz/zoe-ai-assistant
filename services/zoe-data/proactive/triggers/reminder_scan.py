@@ -28,9 +28,15 @@ Rules:
 - due_date that is not an ISO date (a stored literal like "tomorrow") → skip,
   and WARN once per reminder id so it is visible instead of silently dead.
   `reminder_service.normalize_due_date` now resolves those at write time.
-- Log hygiene: warnings name the reminder ID and the problem CLASS only —
-  never the title or the raw stored text (private content must not enter the
-  persisted app log).
+- Date-only rows that ALSO carry a recurring_pattern are excluded with a WARN
+  once per id: nothing in the proactive path advances a fixed due_date per
+  pattern (recurrence today = "time, no date" → daily via build_run_at), so
+  scheduling such a row from its fixed date would fire it exactly once and then
+  skip it as past-due forever — a lie about recurrence. Fix the row: drop the
+  date to make it daily, or drop the pattern to make it one-shot.
+- Log hygiene: every line on this path names the reminder ID (and counts) only —
+  never the title, the user id or the raw stored text (private content must not
+  enter the persisted app log).
 - Reminders that are deleted, acknowledged, or inactive → skip.
 - Only schedules reminders up to 25 hours in advance to avoid duplicate
   APScheduler jobs across restarts (APScheduler persists jobs in SQLite).
@@ -59,6 +65,7 @@ _DEFAULT_DUE_TIME_FALLBACK = (9, 0)
 # Reminder ids already warned about — warn ONCE per id, not every 5-minute cycle.
 _WARNED_BAD_DUE_DATE: set[str] = set()
 _WARNED_BAD_DUE_TIME: set[str] = set()
+_WARNED_RECURRING_DATE_ONLY: set[str] = set()
 _SAME_DAY_FALLBACK_LOGGED: set[str] = set()
 
 # Same-day fallback: minutes from now a date-only reminder for today fires when
@@ -172,6 +179,14 @@ def build_run_at(
     return candidate.astimezone(timezone.utc)
 
 
+def _row_get(row, key: str):
+    """Tolerate both mapping rows and the minimal dicts tests/callers pass."""
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
 async def _fired_today(db, rid: str, now_utc: datetime) -> bool:
     """True when a job for this reminder already fired since local midnight —
     the guard that keeps the same-day fallback from re-firing every scan."""
@@ -225,6 +240,18 @@ async def schedule_due_reminder(db, row, *, now_utc: datetime | None = None) -> 
                 )
         elif not due_date:
             return None  # neither a time nor a date: nothing to anchor to
+        elif _row_get(row, "recurring_pattern"):
+            # A fixed date + a recurrence: no code advances the date, so this
+            # would fire once and then be past-due forever. Say so, don't pretend.
+            if rid not in _WARNED_RECURRING_DATE_ONLY:
+                _WARNED_RECURRING_DATE_ONLY.add(rid)
+                log.warning(
+                    "reminder_scan: reminder %s is date-only with a recurring_pattern "
+                    "(problem: recurrence cannot advance a fixed due_date) — not scheduled; "
+                    "drop the date (daily at its time) or the pattern (one-shot).",
+                    rid,
+                )
+            return None
         hm = _default_due_hm()
         used_default_time = True
 
@@ -271,10 +298,8 @@ async def schedule_due_reminder(db, row, *, now_utc: datetime | None = None) -> 
         send_at=run_at,
         item_id=rid,
     )
-    log.info(
-        "reminder_scan: scheduled reminder '%s' for user %s at %s",
-        row["title"], row["user_id"], run_at.isoformat(),
-    )
+    # ids only — the title is private content and must not enter the app log.
+    log.info("reminder_scan: scheduled reminder %s at %s", rid, run_at.isoformat())
     return rid
 
 
@@ -297,7 +322,7 @@ class ReminderScanTrigger(ProactiveTrigger):
         # are not currently snoozed.
         now_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         async with db.execute(
-            """SELECT id, user_id, title, due_date, due_time, snoozed_until
+            """SELECT id, user_id, title, due_date, due_time, snoozed_until, recurring_pattern
                FROM reminders
                WHERE is_active = 1
                  AND acknowledged = 0
