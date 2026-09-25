@@ -10,7 +10,8 @@ import asyncio
 import sys
 import os
 
-# Add active source paths. The retired zoe-core tree lives only in docs/archive.
+# Add active source paths. services/zoe-core (the dormant Pi brain lane) is
+# TypeScript and is not on the Python path; docs/archive no longer exists.
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'services/zoe-data'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'services/zoe-auth'))
