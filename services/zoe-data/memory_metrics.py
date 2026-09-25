@@ -289,6 +289,14 @@ memory_loop_zero_effect_alert = Gauge(
     ["loop"],
     registry=REGISTRY,
 )
+memory_loop_idle_streak = Gauge(
+    "zoe_memory_loop_idle_streak",
+    "Consecutive completed runs of this loop that had NO input to work on "
+    "(no owned user turn inside the digest lookback window). Idle runs neither "
+    "extend nor reset the zero-effect streak: nothing was tested.",
+    ["loop"],
+    registry=REGISTRY,
+)
 
 # Effect keys summed per loop (see memory_digest.run_memory_digest /
 # run_weekly_consolidation). Unknown/missing keys are simply skipped.
@@ -323,6 +331,21 @@ _IDLE_TOLERANT_LOOPS = frozenset({"consolidation"})
 # a restart therefore forgives the streak but not the staleness clock.
 _LAST_RUN: dict[str, dict] = {}
 _ZERO_EFFECT_STREAK: dict[str, int] = {}
+_IDLE_STREAK: dict[str, int] = {}
+
+# Per-run verdicts. "zero effects" alone conflated four different worlds —
+# measured 2026-08-13..09-25: a 44-night ZERO-EFFECT ALERT on the nightly
+# digest that was an idle household (last owned user turn 2026-09-03; the
+# earlier nights were voice commands with no personal facts in them), not the
+# #1480 dead-window bug the alert was built for. The verdict names WHICH world
+# the run was in so the operator does not have to re-derive it from SQL.
+VERDICT_PRODUCTIVE = "productive"
+VERDICT_IDLE = "idle"  # no input inside the lookback window — not an alert
+VERDICT_NO_ELIGIBLE_USERS_DESPITE_INPUT = "no_eligible_users_despite_input"  # #1480 class
+VERDICT_NO_ELIGIBLE_USERS = "no_eligible_users"  # input presence unknown (legacy callers)
+VERDICT_ALL_SKIPPED = "all_skipped_insufficient_activity"
+VERDICT_EXTRACTOR_ERRORS = "extractor_errors"
+VERDICT_ATTEMPTED_NO_FACTS = "attempted_no_facts"
 
 
 def zero_effect_threshold(loop: str) -> int | None:
@@ -368,6 +391,42 @@ def _sum_effects(results, keys) -> dict[str, int]:
     return totals
 
 
+def _classify_rows(results) -> dict[str, int]:
+    """Count what happened to each per-user row before any effect could exist.
+
+    ``skipped`` rows carry a ``skipped_reason`` (the digest's activity floor);
+    ``errors`` rows carry a truthy ``error``; ``attempted`` rows reached the
+    extractor. Non-dict rows are ignored, matching ``_sum_effects``.
+    """
+    counts = {"attempted": 0, "skipped": 0, "errors": 0}
+    for row in results or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("error"):
+            counts["errors"] += 1
+        elif row.get("skipped_reason"):
+            counts["skipped"] += 1
+        else:
+            counts["attempted"] += 1
+    return counts
+
+
+def _run_verdict(*, users: int, effect_count: int, idle: bool,
+                 input_seen: bool | None, rows: dict[str, int]) -> str:
+    if effect_count > 0:
+        return VERDICT_PRODUCTIVE
+    if idle:
+        return VERDICT_IDLE
+    if users == 0:
+        return (VERDICT_NO_ELIGIBLE_USERS_DESPITE_INPUT if input_seen
+                else VERDICT_NO_ELIGIBLE_USERS)
+    if rows["errors"]:
+        return VERDICT_EXTRACTOR_ERRORS
+    if rows["attempted"] == 0:
+        return VERDICT_ALL_SKIPPED
+    return VERDICT_ATTEMPTED_NO_FACTS
+
+
 def _record_loop_run(
     loop: str,
     results,
@@ -377,25 +436,47 @@ def _record_loop_run(
     users_gauge: Gauge,
     effects_gauge: Gauge,
     now: float | None = None,
+    input_seen: bool | None = None,
 ) -> dict:
     """Persist last-run timestamp + aggregate counts for a memory loop.
 
     Sets the Prometheus gauges and updates the in-process ``_LAST_RUN`` state.
     Returns a summary dict (``timestamp``, ``users``, ``effects``,
-    ``effect_count``, ``zero_effect_streak``, ``zero_effect_alert``) so callers
-    can log a single enriched run-complete line that says what the run DID, not
-    merely that it ran.
+    ``effect_count``, ``zero_effect_streak``, ``zero_effect_alert``,
+    ``verdict``, ...) so callers can log a single enriched run-complete line
+    that says what the run DID, not merely that it ran.
+
+    ``input_seen`` is the caller's INDEPENDENT answer to "was there anything
+    to digest" (for the nightly digest: an owned user turn inside the lookback
+    window — see ``memory_digest.digest_input_seen``). ``False`` with zero users
+    is an IDLE run: it neither extends nor resets the zero-effect streak,
+    because nothing was tested, and it never raises the alert. ``True`` with
+    zero users is the #1480 dead-window class — the selection query found
+    nobody while turns existed — and counts toward the alert exactly as before.
+    ``None`` (unknown) keeps the legacy behaviour: every zero-effect run counts.
     """
     now_ts = time.time() if now is None else now
     users = len(results) if results is not None else 0
     effects = _sum_effects(results, keys)
     effect_count = sum(effects.values())
+    rows = _classify_rows(results)
+    idle = input_seen is False and users == 0 and effect_count == 0
 
-    # A run that produced nothing extends the streak; any real effect clears it.
-    streak = _ZERO_EFFECT_STREAK.get(loop, 0) + 1 if effect_count == 0 else 0
+    if idle:
+        # Nothing to test: hold the streak where it is. A quiet house is not
+        # evidence the loop works, but it is not evidence it is broken either.
+        streak = _ZERO_EFFECT_STREAK.get(loop, 0)
+        idle_streak = _IDLE_STREAK.get(loop, 0) + 1
+    else:
+        # A run that produced nothing extends the streak; any real effect clears it.
+        streak = _ZERO_EFFECT_STREAK.get(loop, 0) + 1 if effect_count == 0 else 0
+        idle_streak = 0
     _ZERO_EFFECT_STREAK[loop] = streak
+    _IDLE_STREAK[loop] = idle_streak
     threshold = zero_effect_threshold(loop)
-    alert = threshold is not None and streak >= threshold
+    alert = threshold is not None and streak >= threshold and not idle
+    verdict = _run_verdict(users=users, effect_count=effect_count, idle=idle,
+                           input_seen=input_seen, rows=rows)
 
     ts_gauge.set(now_ts)
     users_gauge.set(users)
@@ -404,6 +485,7 @@ def _record_loop_run(
     memory_loop_last_run_effect_count.labels(loop=loop).set(effect_count)
     memory_loop_zero_effect_streak.labels(loop=loop).set(streak)
     memory_loop_zero_effect_alert.labels(loop=loop).set(1 if alert else 0)
+    memory_loop_idle_streak.labels(loop=loop).set(idle_streak)
 
     summary = {
         "timestamp": now_ts,
@@ -413,13 +495,23 @@ def _record_loop_run(
         "zero_effect_streak": streak,
         "zero_effect_alert_after": threshold,
         "zero_effect_alert": alert,
+        "input_seen": input_seen,
+        "idle": idle,
+        "idle_streak": idle_streak,
+        "verdict": verdict,
+        **rows,
     }
     _LAST_RUN[loop] = summary
     return summary
 
 
-def record_digest_run(results, *, now: float | None = None) -> dict:
-    """Record a completed nightly digest run (timestamp + summed effects)."""
+def record_digest_run(results, *, now: float | None = None,
+                      input_seen: bool | None = None) -> dict:
+    """Record a completed nightly digest run (timestamp + summed effects).
+
+    ``input_seen``: whether an owned user turn existed inside the lookback
+    window (``memory_digest.digest_input_seen``); see ``_record_loop_run``.
+    """
     return _record_loop_run(
         "digest",
         results,
@@ -428,10 +520,12 @@ def record_digest_run(results, *, now: float | None = None) -> dict:
         users_gauge=memory_digest_last_run_users,
         effects_gauge=memory_digest_last_run_effects,
         now=now,
+        input_seen=input_seen,
     )
 
 
-def record_consolidation_run(results, *, now: float | None = None) -> dict:
+def record_consolidation_run(results, *, now: float | None = None,
+                             input_seen: bool | None = None) -> dict:
     """Record a completed weekly consolidation run (timestamp + summed effects)."""
     return _record_loop_run(
         "consolidation",
@@ -441,6 +535,7 @@ def record_consolidation_run(results, *, now: float | None = None) -> dict:
         users_gauge=memory_consolidation_last_run_users,
         effects_gauge=memory_consolidation_last_run_effects,
         now=now,
+        input_seen=input_seen,
     )
 
 
@@ -470,20 +565,27 @@ def memory_loop_status(now: float | None = None) -> dict:
     ):
         threshold = zero_effect_threshold(loop)
         streak = _ZERO_EFFECT_STREAK.get(loop, 0)
+        info = _LAST_RUN.get(loop)
+        last_idle = bool(info and info.get("idle"))
         # Recomputed here (not read from the recorded run) so an operator
         # retuning the threshold sees the effect without waiting for a run.
-        alert = threshold is not None and streak >= threshold
+        # An idle last run (no input to digest) never alerts: the held streak
+        # is reported, and the alert returns the moment input reappears and
+        # still produces nothing.
+        alert = threshold is not None and streak >= threshold and not last_idle
         # Re-sync the exported gauge to the recomputed verdict, otherwise a
         # retuned threshold would move this endpoint while the PromQL alert
         # kept the value written at the last run — two surfaces disagreeing
         # about health is exactly the confusion this change exists to remove.
         memory_loop_zero_effect_alert.labels(loop=loop).set(1 if alert else 0)
-        info = _LAST_RUN.get(loop)
         common = {
             "idle_tolerant": loop in _IDLE_TOLERANT_LOOPS,
             "zero_effect_streak": streak,
             "zero_effect_alert_after": threshold,
             "zero_effect_alert": alert,
+            "idle": last_idle,
+            "idle_streak": _IDLE_STREAK.get(loop, 0),
+            "verdict": info.get("verdict") if info else None,
         }
         if not info:
             out[loop] = {
@@ -531,6 +633,19 @@ def refresh_memory_loop_gauges() -> None:
         pass
 
 
+_VERDICT_PROSE = {
+    VERDICT_NO_ELIGIBLE_USERS_DESPITE_INPUT: (
+        "user turns exist inside the lookback window but the selection query "
+        "found no eligible user (the #1480 dead-window class)"),
+    VERDICT_NO_ELIGIBLE_USERS: "no eligible user found (input presence unknown)",
+    VERDICT_ALL_SKIPPED: "every eligible user was below the activity floor",
+    VERDICT_EXTRACTOR_ERRORS: "the extractor errored for at least one user",
+    VERDICT_ATTEMPTED_NO_FACTS: (
+        "transcripts reached the extractor and it returned no facts (no errors)"),
+    VERDICT_IDLE: "idle — no input inside the lookback window",
+}
+
+
 def memory_loop_health(now: float | None = None) -> dict:
     """Roll the per-loop status up into one glanceable healthy/alert verdict.
 
@@ -546,7 +661,8 @@ def memory_loop_health(now: float | None = None) -> dict:
         if info["zero_effect_alert"]:
             alerts.append(
                 f"{loop}: ran {info['zero_effect_streak']} times in a row and did "
-                f"nothing each time (threshold {info['zero_effect_alert_after']})"
+                f"nothing each time (threshold {info['zero_effect_alert_after']}); "
+                f"last run verdict: {_VERDICT_PROSE.get(info.get('verdict'), info.get('verdict'))}"
             )
         if info["stale"]:
             if not info["ever_ran"]:
@@ -622,6 +738,7 @@ __all__ = [
     "memory_loop_last_run_effect_count",
     "memory_loop_zero_effect_streak",
     "memory_loop_zero_effect_alert",
+    "memory_loop_idle_streak",
     "zero_effect_threshold",
     "record_digest_run",
     "record_consolidation_run",

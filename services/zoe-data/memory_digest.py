@@ -1074,6 +1074,49 @@ async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
     return results
 
 
+async def newest_owned_user_turn_age_hours(db=None) -> float | None:
+    """Hours since the newest user turn owned by a real (non-guest) user.
+
+    The nightly loop's INDEPENDENT answer to "was there anything to digest".
+    Deliberately NOT the selection query: no lookback clause, no placeholders
+    — so a broken window (the #1480 dead-window class) shows up as "turns exist
+    but nobody was selected" instead of being invisible. ``None`` when there
+    are no owned turns at all or the probe fails; it never raises.
+    """
+    owner_expr = _message_owner_expr()
+    sql = f"""
+        SELECT EXTRACT(EPOCH FROM (now()::timestamptz - max(cm.created_at::timestamptz))) / 3600.0
+        FROM chat_messages cm
+        JOIN chat_sessions cs ON cm.session_id = cs.id
+        WHERE cm.role = 'user'
+          AND ({owner_expr}) IS NOT NULL
+    """
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+        if db is not None:
+            row = await (await db.execute(sql)).fetchone()
+        else:
+            async with get_db_ctx() as _db:
+                row = await (await _db.execute(sql)).fetchone()
+        if not row or row[0] is None:
+            return None
+        return float(row[0])
+    except Exception as exc:
+        logger.warning("memory_digest: newest-turn probe failed (non-fatal): %s", exc)
+        return None
+
+
+def digest_input_seen(newest_turn_age_hours: float | None) -> bool | None:
+    """Was there an owned user turn inside the digest lookback window.
+
+    ``None`` when the age is unknown (probe failed / no turns ever) — callers
+    then keep the legacy every-zero-run-counts alerting rather than guessing.
+    """
+    if newest_turn_age_hours is None:
+        return None
+    return newest_turn_age_hours <= _DIGEST_LOOKBACK_HOURS
+
+
 async def run_digest_for_all_active_users(db=None) -> list[dict]:
     """Run memory digest for users active within the rolling lookback window.
 
