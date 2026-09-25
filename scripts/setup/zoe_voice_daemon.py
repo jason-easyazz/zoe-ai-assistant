@@ -122,6 +122,17 @@ VAD_ENDPOINT_THRESHOLD = float(os.environ.get("VAD_ENDPOINT_THRESHOLD", "0.35"))
 # _int_env, not int(): a malformed value (ZOE_VAD_TAIL_MS=off) must fall back
 # to disabled, never crash the daemon at import and take the panel's voice down.
 ZOE_VAD_TAIL_MS = _int_env("ZOE_VAD_TAIL_MS", 0)
+# ── B1.1 speculative turn-start (flag-dark, default OFF) ─────────────────
+# With ZOE_SPECULATIVE_TURN on, the recorder fires the turn at its FIRST
+# end-of-turn verdict — ZOE_SPECULATIVE_TAIL_MS of consecutive DEEP quiet after
+# confirmed speech — and keeps recording. The server holds everything audible
+# until this daemon sends the verdict (commit / resolve / cancel) after the
+# real endpoint closes. Needs VAD mode and the streaming turn; off (the
+# default) the endpointer never fires and the payload never carries the
+# fields — byte-identical to today. Design + protocol:
+# docs/architecture/b1-speculative-turn-start.md
+ZOE_SPECULATIVE_TURN = os.environ.get("ZOE_SPECULATIVE_TURN", "false").lower() in ("1", "true", "yes", "on")
+ZOE_SPECULATIVE_TAIL_MS = _int_env("ZOE_SPECULATIVE_TAIL_MS", 320)
 try:
     # The default lives INSIDE environ.get so the flag-inventory scanner records
     # it ("or 0.10" outside the call reads as no-default in the committed table).
@@ -385,13 +396,39 @@ class _Endpointer:
             max(1, -(-ZOE_VAD_TAIL_MS * SAMPLE_RATE // (1000 * CHUNK_SIZE)))
             if self.mode == "vad" and ZOE_VAD_TAIL_MS > 0 else None
         )
+        # B1.1 first-verdict tail (see ZOE_SPECULATIVE_TURN above): None = the
+        # speculative hook never fires. Same ceil rule as the fast tail.
+        self._spec_max_silent = (
+            max(1, -(-ZOE_SPECULATIVE_TAIL_MS * SAMPLE_RATE // (1000 * CHUNK_SIZE)))
+            if self.mode == "vad" and ZOE_SPECULATIVE_TURN and ZOE_SPECULATIVE_TAIL_MS > 0 else None
+        )
+        self.speculation_fired = False
+        self.resumed_after_speculation = False
         self._min_frames = int(0.5 * SAMPLE_RATE / CHUNK_SIZE)
+
+    def speculative_ready(self, n_frames: int) -> bool:
+        """True exactly ONCE per recording: the first end-of-turn verdict
+        (confirmed speech, then ZOE_SPECULATIVE_TAIL_MS of consecutive deep
+        quiet). Call after ``push`` returned False. Never fires when the flag
+        is off, in amplitude mode, or inside the minimum-recording guard."""
+        if (self._spec_max_silent is None or self.speculation_fired
+                or not self._spoke or n_frames <= self._min_frames):
+            return False
+        if self._deep_quiet >= self._spec_max_silent:
+            self.speculation_fired = True
+            return True
+        return False
 
     def push(self, data: bytes, n_frames: int) -> bool:
         """Feed one recorded chunk; True when the recording should stop."""
         if self.mode == "vad":
             prob = _vad_prob(self._model, np.frombuffer(data, dtype=np.int16))
             if prob >= VAD_ENDPOINT_THRESHOLD:
+                if self.speculation_fired:
+                    # Speech after the first verdict: the speculative turn ran
+                    # on a prefix. The verdict becomes ``resolve`` (server
+                    # compares transcripts), never a blind commit.
+                    self.resumed_after_speculation = True
                 self._spoke = True
                 self._quiet = 0
                 self._deep_quiet = 0
@@ -862,8 +899,22 @@ def play_follow_up_beep() -> None:
         log.debug("Follow-up beep failed: %s", exc)
 
 
-def record_command(pa: pyaudio.PyAudio, stream=None) -> bytes | None:
+def _frames_to_wav(pa: pyaudio.PyAudio, frames: list[bytes]) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(pa.get_sample_size(pyaudio.paInt16))
+        wf.setframerate(SAMPLE_RATE)
+        wf.writeframes(b"".join(frames))
+    return buf.getvalue()
+
+
+def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeTurn | None" = None) -> bytes | None:
     """Record audio until silence or max duration.
+
+    ``speculation`` (B1.1, flag-gated) receives the audio-so-far at the
+    endpointer's FIRST verdict via ``fire()`` while recording continues on the
+    same stream; when the recording closes it learns whether speech resumed.
 
     When ``stream`` is given, record from that ALREADY-OPEN mic stream (the
     always-on wake stream) and leave closing it to the caller — the no-dead-air
@@ -910,9 +961,13 @@ def record_command(pa: pyaudio.PyAudio, stream=None) -> bytes | None:
         if endpointer.push(data, len(frames)):
             stop_reason = "silence"
             break
+        if speculation is not None and endpointer.speculative_ready(len(frames)):
+            speculation.fire(_frames_to_wav(pa, frames))
     if owns_stream:
         stream.stop_stream()
         stream.close()
+    if speculation is not None:
+        speculation.recording_closed(resumed=endpointer.resumed_after_speculation)
     duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
     log.info(
         "Recorded command: duration=%.2fs chunks=%d stop=%s endpoint=%s silence_timeout=%.2fs",
@@ -921,13 +976,7 @@ def record_command(pa: pyaudio.PyAudio, stream=None) -> bytes | None:
     if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
         log.info("Command too short, ignoring.")
         return None
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(pa.get_sample_size(pyaudio.paInt16))
-        wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(b"".join(frames))
-    return buf.getvalue()
+    return _frames_to_wav(pa, frames)
 
 
 def stt_on_jetson(wav_bytes: bytes) -> str:
@@ -1492,10 +1541,85 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
     return aplay
 
 
-def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True, conversation: bool = False) -> bool:
+class _SpeculativeTurn:
+    """Daemon side of the B1.1 protocol (docs/architecture/b1-speculative-turn-start.md).
+
+    ``fire(wav)`` at the first verdict starts the speculative /turn_stream in a
+    thread (the server holds the audio); ``recording_closed(resumed)`` is the
+    recorder's hand-off; ``finish(final_wav)`` sends the verdict — ``commit``
+    when nothing followed the first verdict, ``resolve`` + the final utterance
+    when speech resumed — and joins the thread. ``cancelled`` afterwards means
+    the server dropped the speculative turn and the caller must run the normal
+    turn on the full recording (with the claim scored here, never re-scored).
+    """
+
+    def __init__(self, pa: pyaudio.PyAudio):
+        self.pa = pa
+        self.turn_id = uuid.uuid4().hex
+        self.fired = False
+        self.resumed = False
+        self.cancelled = False
+        self.voice_claim: object = _CLAIM_UNSET
+        self.wait_delta_ms: float | None = None
+        self._t_fire: float | None = None
+        self._thread: threading.Thread | None = None
+        self._played = False
+
+    def fire(self, wav: bytes) -> None:
+        self.fired = True
+        self._t_fire = time.monotonic()
+
+        def _run() -> None:
+            try:
+                self._played = _do_single_turn_stream(
+                    self.pa, wav, prompt_on_empty=False, speculation=self)
+            except Exception as exc:
+                log.warning("speculation: stream thread failed (%s) — treating as cancelled", exc)
+                self.cancelled = True
+                self._played = False
+
+        self._thread = threading.Thread(target=_run, daemon=True, name="spec-turn")
+        self._thread.start()
+        log.info("speculation: fired turn_id=%s (%.2fs of audio)", self.turn_id, len(wav) / (2.0 * SAMPLE_RATE))
+
+    def recording_closed(self, *, resumed: bool) -> None:
+        self.resumed = resumed
+        if self._t_fire is not None:
+            self.wait_delta_ms = (time.monotonic() - self._t_fire) * 1000.0
+
+    def finish(self, final_wav: bytes) -> bool:
+        """Send the verdict and wait for the speculative stream. Returns played."""
+        action = "resolve" if self.resumed else "commit"
+        body: dict = {"turn_id": self.turn_id, "action": action}
+        if self.resumed:
+            body["audio_base64"] = base64.b64encode(final_wav).decode()
+        resp = _api_post("/api/voice/turn_stream/speculation", body, timeout=15, retries=0)
+        log.info("speculation: %s turn_id=%s verdict=%s wait_delta=%.0fms",
+                 action, self.turn_id, resp.get("verdict", resp.get("error", "?")),
+                 self.wait_delta_ms or -1.0)
+        # Whatever the verdict POST returned, the STREAM is the source of truth:
+        # a lost verdict ends in the server's max-hold cancel, which the thread
+        # sees as a cancelled done frame. Nothing plays without a commit.
+        if self._thread is not None:
+            self._thread.join(timeout=90)
+            if self._thread.is_alive():
+                log.warning("speculation: stream thread still alive after join — not re-POSTing")
+                return False
+        return self._played and not self.cancelled
+
+
+def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
+                           conversation: bool = False, voice_claim: object = _CLAIM_UNSET,
+                           speculation: "_SpeculativeTurn | None" = None) -> bool:
     """Streaming turn: POST audio to /api/voice/turn_stream and play each TTS
     sentence chunk as it arrives (no buffer phrase — first audio ~1.3s). Falls
-    back to the blocking _do_single_turn on any error."""
+    back to the blocking _do_single_turn on any error.
+
+    ``voice_claim`` lets a caller hand over an already-scored claim (the B1.1
+    normal-turn re-run after a cancelled speculation) — re-scoring would append
+    a second shadow row for one spoken turn. ``speculation`` marks the request
+    speculative (server holds audio until the verdict) and receives the outcome.
+    """
     global _tts_process
     import time as _time
 
@@ -1503,15 +1627,20 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     # Sentinel, not None: if scoring RAISES, the fallback must re-score rather
     # than inherit a None that looks like a completed no-match. Only a scoring
     # call that actually returned replaces it.
-    voice_claim: object = _CLAIM_UNSET
-    try:
-        voice_claim = _speaker_claim_for_turn(wav)
-        if voice_claim:
-            log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
-    except Exception:
-        pass
+    if voice_claim is _CLAIM_UNSET:
+        try:
+            voice_claim = _speaker_claim_for_turn(wav)
+            if voice_claim:
+                log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
+        except Exception:
+            pass
+    if speculation is not None:
+        speculation.voice_claim = voice_claim
     _last_turn_flags.clear()
     payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
+    if speculation is not None:
+        payload["speculative"] = True
+        payload["turn_id"] = speculation.turn_id
     if conversation:
         # Tell the server we're inside an open conversation so ender phrases
         # ("that's all", "goodbye") are honoured; outside one they never fire.
@@ -1576,6 +1705,11 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 continue
             if obj.get("done"):
                 reply = obj.get("reply", "") or reply
+                if obj.get("cancelled") and speculation is not None:
+                    # The server dropped the speculative turn: nothing was and
+                    # nothing will be played on this stream. The caller runs
+                    # the normal turn on the full recording.
+                    speculation.cancelled = True
                 for _k in ("conversation_mode", "conversation_end"):
                     if obj.get(_k):
                         _last_turn_flags[_k] = True
@@ -1626,6 +1760,13 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         if transcript:
             log.warning("turn_stream failed after server processed it (%s) — NOT re-POSTing (avoid duplicate write)", exc)
             return False
+        if speculation is not None:
+            # Died before the server acknowledged it: nothing was processed, so
+            # the FULL recording may run as a normal turn — but from the caller,
+            # never a blocking re-POST of this prefix from inside the thread.
+            speculation.cancelled = True
+            log.warning("turn_stream (speculative) failed with no server response (%s) — cancelled", exc)
+            return False
         log.warning("turn_stream failed with no server response (%s) — falling back to blocking turn", exc)
         # Pass the claim we already scored: re-scoring here would append a
         # second shadow row + journal line for this one spoken turn.
@@ -1650,6 +1791,10 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         with _tts_process_lock:
             _tts_process = None
 
+    if speculation is not None and speculation.cancelled:
+        log.info("speculation: cancelled turn_id=%s transcript=%r — caller runs the normal turn",
+                 speculation.turn_id, transcript[:80])
+        return False
     if transcript and _is_junk_transcript(transcript):
         log.info("Ignoring junk/hallucination transcript: %r", transcript)
         return False
@@ -1914,9 +2059,12 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
     global _ignore_wake_until
     _recording_active.set()
     follow_ups_done = 0
+    # B1.1: only the streaming turn has the server-side gate; the endpointer
+    # itself never fires unless ZOE_SPECULATIVE_TURN is on and VAD mode is up.
+    _spec = _SpeculativeTurn(pa) if (ZOE_SPECULATIVE_TURN and VOICE_STREAM_ENABLED) else None
     try:
         try:
-            wav = record_command(pa, stream=wake_stream)
+            wav = record_command(pa, stream=wake_stream, speculation=_spec)
         finally:
             # Hand the mic device back before anything else opens it.
             if wake_stream is not None:
@@ -1936,7 +2084,14 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
         _monitor = _BargeMonitor(pa)
         _monitor.start()
         try:
-            played_audio = _turn_fn(pa, wav)
+            if _spec is not None and _spec.fired:
+                played_audio = _spec.finish(wav)
+                if _spec.cancelled:
+                    # Speculation dropped: run the FULL recording as a normal
+                    # turn, handing over the claim the speculative pass scored.
+                    played_audio = _turn_fn(pa, wav, voice_claim=_spec.voice_claim)
+            else:
+                played_audio = _turn_fn(pa, wav)
         finally:
             _monitor.stop()
 
