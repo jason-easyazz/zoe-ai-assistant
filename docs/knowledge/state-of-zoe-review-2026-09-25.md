@@ -88,7 +88,7 @@ Measured effect of today's reclaim (before → after): available memory **25 MiB
 
 Everything here was verified on the box on 2026-09-25 between 21:30 and 22:10 AWST.
 
-### 2.1 BROKEN
+### 2.1 BROKEN at 21:30 — status after the same-day fixes is in brackets
 
 **Telegram bot (fixed today).** `flue-zoe-telegram` logged `ETIMEDOUT` to `api.telegram.org`
 on every poll; the 1-minute watchdog restarted it ~4,000 times. Root cause, proven with a
@@ -101,13 +101,13 @@ grammy error path printed the **bot token in the URL into journald ~4,000 times*
 the token via BotFather and `journalctl --vacuum-time=1d`; (b) make the watchdog back off
 instead of restarting every 60 s.
 
-**Touch panel (`zoe-pi`, 192.168.1.61).** No route to host, ARP incomplete on both NICs.
+**Touch panel (`zoe-pi`, 192.168.1.61) — [NOT A FAULT: Jason turned the screen off].** At 21:30: no route to host, ARP incomplete on both NICs.
 Last server-side panel activity 2026-09-03; the last kiosk request before it went dark was a
 403 on `/api/ui/actions/pending`, which suggests the kiosk-guest session had already expired.
 Physical check needed (power, Wi-Fi). Nothing on the Pi (VAD tail, speaker-ID shadow, kiosk
 build) can be verified until it is back.
 
-**Memory recall (Chroma HNSW corruption).** `/health` reports
+**Memory recall (Chroma HNSW corruption) — [FIXED 22:26; recall `ok`; do not rebuild again unless `/health` degrades].** At 21:30 `/health` reported
 `memory_capture: degraded — "Cannot return the results in a contigious 2D array"` since
 2026-09-03 21:05 (`search failed user=jason`). This is the documented pre-crash signature
 from the 2026-07-31 incident: queries return nonsense before the segfault surfaces. Related
@@ -120,7 +120,7 @@ first, recreate with `hnsw:space=l2, hnsw:resize_factor=2.0`, re-add all documen
 metadata update → start zoe-data. Do this in the same maintenance window as the RAM work
 (§3), never with ~100 MiB free.
 
-**Voice replay gate + self-hosted tests + deploy gate.** All three are the same failure:
+**Voice replay gate + self-hosted tests + deploy gate — [replay gate PASSED 22:39 via the nightly unit, first in 41 runs; the deploy gate therefore has a fresh artifact; the self-hosted lane (800 MB floor) is confirmed at its next scheduled run].** At 21:30 all three were the same failure:
 the probe refuses below 700 MB free, the test lane below 800 MB, the deploy's memory gate
 was recalibrated to 250 MB on 2026-08-10 but the voice-path check still needs a fresh
 passing replay artifact. Result: no real PASS in 40 nightly runs, 21 test runs that never
@@ -133,9 +133,7 @@ then a zoe-data restart. Upstream confirms the cause is Google's cookie sessions
 within hours; MA 2.10.x only made the error clearer. The `bgutil-ytdlp-pot-provider` image
 is pinned at 1.3.1; 2.0.0 shipped 2026-09-08.
 
-**Multica autopilot "Platform Health Check".** Fails daily; `multica_client` gets **401**
-from `:8080/api/issues` — token drift between env and container. Cheap to fix, and until
-then the board runner is blind.
+**Multica autopilot "Platform Health Check" — [EXPLAINED; cleared by the 22:27 restart, confirm at the next 06:00 run].** It failed daily because the six-week-old zoe-data process called `:8080/api/issues` without the configured token (the API returns 200 with it).
 
 ### 2.2 DEGRADED
 
@@ -619,8 +617,8 @@ LIVE-BROKEN (verified failing on the box today).
 ### Voice path
 | ID | Problem | Source | State | Unblock |
 |---|---|---|---|---|
-| V1 | Replay gate: no real PASS in 40 nightly runs (skips <700 MB); voice-path changes undeployable | `~/.cache/zoe/voice_regression_last.json`; `deploy.yml:130-162` | LIVE-BROKEN | RAM plan, then `flock /tmp/zoe-voice-harness.lock python3 scripts/maintenance/voice_regression_probe.py --samples 20` |
-| V2 | Panel unreachable | ping/ssh | LIVE-BROKEN | physical check |
+| V1 | Replay gate: no real PASS in 40 nightly runs (skips <700 MB); voice-path changes undeployable | `~/.cache/zoe/voice_regression_last.json` | **FIXED 09-25 22:39** (PASS 13/13 via the nightly unit after the RAM reclaim) | keep the nightly PASS streak; zram shrink (B0.1) for margin |
+| V2 | Panel unreachable | ping/ssh | **WITHDRAWN** (Jason turned it off) | — |
 | V3 | W1.3 `ZOE_LIVEKIT_STREAM_TTS` merged (#1469) but unset; DoD never done | samantha-evolution-plan §7 | DARK / AWAITING OPERATOR | lab flip + gate |
 | V4 | W1.4 M3/M4 latency+RAM measurements never taken | same | stalled | same window |
 | V5 | W1.2b acceptance of `ZOE_VAD_TAIL_MS=640` (ear-check + nightly PASS) | IDEAS.md:57 | AWAITING OPERATOR | V1 |
@@ -664,25 +662,25 @@ LIVE-BROKEN (verified failing on the box today).
 | ID | Problem | Source | State | Unblock |
 |---|---|---|---|---|
 | D1 | Structural memory starvation (root of V1, D2, D3, Mu1, R1, M2) | `free -m`; samantha W3 | BLOCKED | §3 |
-| D2 | Self-hosted tests flatlined 21 runs | Actions | LIVE-BROKEN | D1 |
+| D2 | Self-hosted tests flatlined 21 runs | Actions | LIVE-BROKEN → likely clears (830 MiB free vs 800 MB floor); confirm at the next scheduled run | B0.1 for margin |
 | D3 | Deploy gates: 250 MB main, voice gate needs <24 h artifact; 2 of last 3 deploys failed | deploy.yml | RISK | D1 |
 | D4 | deploy.yml never restarts executor/kokoro/router/llama-server | deploy.yml | KNOWN GAP | doctrine or extend |
-| D6 | `openclaw-gateway` active despite retirement; Hermes health/watchdog/keepwarm noise | systemctl | AWAITING OPERATOR | disable; edit scripts |
+| D6 | `openclaw-gateway` active despite retirement; Hermes health/watchdog/keepwarm noise | systemctl | **FIXED 09-25** (gateway + keepwarm disabled; scripts patched; health check passes) | delete the OpenClaw runtime code (program triage) |
 | D7 | Root-owned paths in the live checkout (`.pi/`, `.polly/`, `.worktrees/`, `scripts/n8n`) | find | RISK | chown |
 | D8 | Untracked module/lab leftovers on the live disk | ls | hygiene | rm |
 | D9 | `ZOE_MULTICA_POLL_REF_TIMEOUT_S=300` band-aid | migration doc:190 | AWAITING OPERATOR | revert to 60 |
 | D10 | Multica images ~60 releases behind; `:latest` tags elsewhere | compose | open | pin/upgrade |
-| D11 | Extra Serenas from the Omnigent container's `/root/.codex/config.toml` (stdio) | pgrep | RECURRING | switch to URL |
+| D11 | Extra Serenas from the Omnigent container's `/root/.codex/config.toml` (stdio) | pgrep | **PATCHED LIVE 09-25** (url=…9121); reverts on container recreate | bake into the image (B0.11) |
 | D12 | `zoe-omnigent-runner-reaper.timer` inactive | systemctl | UNVERIFIED | enable |
 | D13 | #1609 follow-ups (deploy attribution, MA restart on deploy) | issue | open | small PR + decision |
-| D14 | Backup: live-SQLite tar race; pg step skipped on failure | journal 09-25 | DEGRADED | snapshot + `ExecStart=-` |
-| D15 | Volatile journald; 445 MB unrotated stdout log | fs | hygiene | persist + logrotate |
-| D16 | `functiongemma-router` swap guard template never applied | systemctl show | DEGRADED | cp + reload + restart |
+| D14 | Backup: live-SQLite tar race; pg step skipped on failure | journal 09-25 | **FIXED 09-25** (script snapshots SQLite; test run ok) | confirm tonight's 02:34 run |
+| D15 | Volatile journald; 445 MB unrotated stdout log | fs | **FIXED 09-25** (persistent journald 400 MB cap; daily user-level rotation, 425 → 50 MB) | — |
+| D16 | `functiongemma-router` swap guard template never applied | systemctl show | **FIXED 09-25** (606 MB resident, swap 0) | — |
 
 ### Telegram
 | ID | Problem | State | Unblock |
 |---|---|---|---|
-| T1 | Bot down (Happy-Eyeballs timeout) | **FIXED today** (drop-in + template) | rotate token; watchdog backoff |
+| T1 | Bot down (Happy-Eyeballs timeout) | **FIXED 09-25** (drop-in + template; re-verified after the Node 22.23.3 restart) | rotate token; watchdog backoff |
 | T2 | Token in journald | SECURITY | rotate + vacuum |
 | T3 | Crash-loop watcher env retarget to `-2x` unverified | UNVERIFIED | check |
 | T4 | W8 voice notes not started | BLOCKED (D1) | — |
@@ -709,7 +707,7 @@ LIVE-BROKEN (verified failing on the box today).
 | Mu4 | Panel-as-MA-speaker options | AWAITING OPERATOR | decide |
 | Mu5 | #1607 condition met | close | — |
 | H1 | Multica dispatch paused; executor unit inactive; local workers unbuilt | BLOCKED (go-live) | enable, dispatch full, unpause |
-| H2 | Multica API 401 / autopilot health fails daily | LIVE-BROKEN | token |
+| H2 | Multica API 401 / autopilot health fails daily | EXPLAINED (stale process env; cleared by the 22:27 restart) | confirm at the next 06:00 run |
 | H3 | PR #1641: 2 unresolved threads, size red, lane-collision decision | AWAITING OPERATOR | decide |
 | H4 | Hermes retirement gates unticked; 592 runtime refs | BLOCKED | H1 first |
 | H5 | OpenClaw: router still mounted (`main.py:52,2169`), trigger wired (`main.py:1260`) | IN PROGRESS | gated deletion PRs |
