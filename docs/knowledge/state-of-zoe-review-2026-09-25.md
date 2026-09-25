@@ -451,13 +451,15 @@ NeuTTS Air (GGUF). None replaces Kokoro.
 
 `requirements.txt` was reconciled to the box on 2026-08-06, then #1638 bumped pins on
 2026-08-09 without installing them — violating the file's own "box first, file second"
-rule. Drift today: uvicorn 0.34.0 (file 0.49.0), websockets 14.1 (16.1.1), aiortc 1.14.0
-(1.15.0), av 16.1.0 (17.1.0), ag-ui-protocol 0.1.14 (0.1.19), python-json-logger **not
-installed** (optional import, falls back). `validate.yml` pins av/aiortc to the box's
-versions, `requirements.txt` to the newer ones. `deploy.yml` installs only 9 packages; 30
-in `requirements.txt` are never installed by any automation. Decide the contract: either
-deploy runs `pip install -r` (voice-gated) or the header says plainly that the box is
-hand-managed and the file is a snapshot.
+rule. **Drift found at 21:30 (historical):** uvicorn 0.34.0 (file 0.49.0), websockets
+14.1 (16.1.1), aiortc 1.14.0 (1.15.0), av 16.1.0 (17.1.0), ag-ui-protocol 0.1.14
+(0.1.19), python-json-logger not installed. **Host truth since 22:27:** uvicorn 0.49.0,
+websockets 16.1.1, aiortc 1.15.0, av 17.1.0, ag-ui-protocol 0.1.19, python-json-logger
+4.2.0 installed and loaded (drift check: 38 checked, 0 drifted). Still true: `validate.yml`
+pins av/aiortc to the OLD versions (align it), and `deploy.yml` installs only 9 packages —
+30 in `requirements.txt` are never installed by any automation. Decide the contract (B0.6):
+either deploy runs `pip install -r` (voice-gated) or the header says plainly that the box
+is hand-managed and the file is a snapshot.
 
 Deliberate holds that still hold (reason re-checked 2026-09-25):
 - `uvicorn<0.50` — 0.50.0 (2026-07-04) did flip `--ws auto` to `websockets-sansio` and

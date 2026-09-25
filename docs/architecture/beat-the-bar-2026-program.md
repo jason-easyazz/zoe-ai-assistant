@@ -83,14 +83,17 @@ status: 🔨 active — NEXT ACTION is always §0
   (5) web search advertised to the brain but no tool registered → make the capability honest
   (the tool itself is B10). Also 🧑 set `MEMORY_DIGEST_MODEL` in the live `.env` to the real
   model name (stale `gpt-4o-mini`, harmless, misleading).
-- B0.15 ⬜ **DGX Spark evaluation** (Jason is considering one): candidate builder/brain models
-  for 128 GB unified memory + CUDA 13 on ARM — Gemma 4 26B-A4B (same family, MoE, MTP drafter
-  exists; watch llama.cpp #29168 MoE-fusion acceptance drop), Gemma 4 31B, Qwen3.6 35B-A3B,
-  Muse Glimmer 30B (Apache-2.0, "always-on local agents"), gpt-oss-120B 4-bit; local builder
-  lane = Pi through Omnigent's `pi` harness against a local OpenAI-compatible server (no
-  metered key); training on-box (router self-train, tool-calling fine-tune on Zoe's corpus).
-  Re-taking the brain-rock decision on a new box is deliberate: edit CANONICAL + its invariant
-  test. Gate: a written bake-off with tokens/s, RAM, tool-call accuracy on Zoe's corpus.
+- B0.15 ⬜ **DGX Spark evaluation as BUILDER capacity** (Jason is considering one). The brain
+  rock (Gemma 4 E4B-QAT + MTP) is fixed and this item does not touch it. What a 128 GB /
+  CUDA-13-on-ARM box adds: (a) a local **builder lane** — Pi through Omnigent's `pi` harness
+  against a local OpenAI-compatible server (no metered key) running a 30B-class model for fix
+  packets and reviews (candidates: Gemma 4 26B-A4B, Gemma 4 31B, Qwen3.6 35B-A3B, Muse
+  Glimmer 30B, gpt-oss-120B 4-bit; watch llama.cpp #29168 MoE-fusion acceptance drop); (b)
+  **training on-box** that the Orin cannot do (router self-train, tool-calling fine-tunes of
+  E4B on Zoe's corpus — optimising *around* the rock); (c) headroom for the voice stack.
+  Gate: a written bake-off (tokens/s, RAM, tool-call accuracy on Zoe's corpus) for the
+  builder lane only. Any question about the production brain on new hardware is a separate,
+  deliberate CANONICAL decision for Jason, out of scope here.
 - B0.3 🧑 Telegram token rotation (BotFather) + `journalctl --rotate && --vacuum-time=1s`.
 - B0.4 ⬜ **llama.cpp rebuild ≥ b11178** and re-enable `--flash-attn on` +
   `--cache-type-v q8_0` with MTP (upstream fix PR #25148, 2026-06-30). Keep `--fit off`.
@@ -246,8 +249,9 @@ status: 🔨 active — NEXT ACTION is always §0
 - B8.2 ⬜ SkillSpector 2.12 with the LLM stage on the local llama-server.
 - B8.3 ⬜ Standing watchers (B2.4) as the first Zoe-authored background agents.
 
-### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle) — 🔨 plan in draft PR #1683
-Plan: [`omi-integration-plan.md`](omi-integration-plan.md). Pendant → BLE → the Pi
+### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle) — 🔨 plan pending in PR #1683
+Plan: `docs/architecture/omi-integration-plan.md`, arriving in PR #1683 (not in this commit;
+link it here once that PR merges). Pendant → BLE → the Pi
 panel (later a Pi Zero 2 W dock) → Opus decode + Silero → existing `/api/voice/ambient` →
 owner-only, speaker-gated `ambient_memory`. Nothing to Omi's cloud; the phone app is out
 (one bonded central only; their backend needs Firebase/GCS/Pinecone/OpenAI; their own
