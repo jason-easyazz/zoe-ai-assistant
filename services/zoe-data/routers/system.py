@@ -2813,7 +2813,7 @@ async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_inten
 
 # ─── Telegram account linking (resolve a verified telegram_id → Zoe user) ─────
 #
-# The Telegram channel (labs/flue-zoe-telegram) forwards NO session, so every
+# The Telegram channel (labs/flue-zoe-telegram-2x) forwards NO session, so every
 # message would otherwise land as guest with no memory. A user links their
 # account by storing their numeric telegram_id in their profile (via
 # /api/user/profile, session-authed as themselves). This INTERNAL resolver maps
