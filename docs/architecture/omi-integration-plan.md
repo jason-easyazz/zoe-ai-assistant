@@ -135,16 +135,21 @@ Sub-options inside (A) — the receiver:
                                               ▼
                         POST /api/voice/ambient  {audio_base64 (WAV 16k), panel_id, room, duration_seconds,
                                                   source:"omi", device_id, capture_session_id}
-                                              │   (existing endpoint, device-token auth; Moonshine transcribe;
-                                              ▼    raw audio discarded after STT — already the contract)
-                     speaker gate (NEW, W6 step 1+2): embed segment → /identify semantics → margin rule
-                        │ owner match (consented profile, margin ≥ 0.10) → INSERT ambient_memory(... user_id=owner,
-                        │                                                   speaker_id, source='omi', expires_at)
-                        │ enrolled+consented other → attribute to them (only if they opted into ambient)
-                        └ unknown / below margin / multi-speaker → DISCARD (no row, no audio, count only)
+                                              │   (existing endpoint + device-token auth; source="omi" takes a
+                                              ▼    NEW handler — the owner-by-panel insert is never used)
+                     speaker gate BEFORE STT (NEW, W6 step 1+2):
+                        │ sherpa-onnx pyannote-segmentation-3.0 → mixed/overlap?  → DISCARD
+                        │ sub-window embeddings + B4.1 margin rule vs consented profiles
+                        │ unknown / below margin                                 → DISCARD (no row, no audio,
+                        │                                                           no text; numeric count only)
+                        │ owner, or enrolled+consented-for-ambient other
+                        ▼
+                     Moonshine transcribe (only now; only when ZOE_AMBIENT_OMI_ATTRIBUTE=1)
+                        → INSERT ambient_memory(user_id=<attributed>, speaker_id, scope='personal',
+                                                source='omi', device_id, expires_at); raw audio discarded
                                               │
                                               ▼
-                    existing admission gate → idle consolidation → recall with a distinct [ambient] citation
+                    existing admission gate (scope carried through) → idle consolidation → recall cited [ambient:omi]
 ```
 
 Why this shape:
@@ -155,8 +160,11 @@ Why this shape:
   (0017) and a `speaker_id` index that the insert path does not populate — which is
   W6 step 1 verbatim. `/api/voice/identify` already scores an embedding against
   *consenting* profiles only. The Pi daemon already segments room audio with Silero and
-  posts it. The new code is: a BLE input thread, one `source`/`device_id`/`speaker_id`
-  write, and the gate.
+  posts it. The new code is: a BLE input thread; a `source="omi"` handler that runs the
+  gate *before* STT (the existing handler transcribes first and inserts under the panel
+  owner, which is the wrong order for a pendant); one migration adding `scope`,
+  `source`, `device_id`, `speaker_id`, `expires_at`; and the gate itself (segmentation
+  + sub-window embeddings + margin rule).
 - **The pendant is a near-field mic on the owner.** A chest-mounted mic makes the wearer
   loud and everyone else far — which is exactly the asymmetry an owner-only attribution
   gate wants (high owner recall, easy rejection of far-field voices). The panel mic has
@@ -172,8 +180,8 @@ Why this shape:
 |---|---|
 | BLE link | ~4 KB/s per pendant; 50 notifications/s; one bonded central |
 | Receiver (Pi) | +60–120 MB RSS for bleak + opuslib + the segmenter (Silero is already resident in the daemon); <5 % of one core |
-| Orin, resident | **0 new resident models.** Moonshine is already loaded; per-segment cost is the same as a panel ambient segment |
-| Orin, per segment | Moonshine ~0.3–0.6 s for a 3–8 s segment (warm); embedding ~0.1–0.3 s CPU. Caveat: the server-side resemblyzer path pulls **CPU torch** on first use if torch is not already resident (~0.3–0.5 GB) — that is the B0.7 note "CPU torch for Resemblyzer". Prefer the sherpa-onnx embedder (B4.1) for the gate; it is ~30 MB and needs no torch |
+| Orin, resident | Two small ONNX models: `pyannote-segmentation-3.0` (~6 MB) + the sherpa-onnx speaker embedder (~30 MB), both CPU — tens of MB, not a new GPU tenant. Moonshine is already loaded |
+| Orin, per segment | Segmentation ~0.1–0.2 s + embedding ~0.1–0.3 s CPU (before STT; every segment); Moonshine ~0.3–0.6 s for a 3–8 s segment (warm; only attributed segments). Caveat: the server-side resemblyzer path pulls **CPU torch** on first use if torch is not already resident (~0.3–0.5 GB) — that is the B0.7 note "CPU torch for Resemblyzer". Prefer the sherpa-onnx embedder (B4.1) for the gate; it is ~30 MB and needs no torch |
 | Latency (not user-facing) | segment end → row committed ≈ 1–2 s |
 | Power | pendant 10–14 h; AAD sleeps the mic in silence, so a quiet day lasts longer |
 
@@ -214,9 +222,23 @@ capped at 30 ([#13055](https://github.com/BasedHardware/omi/pull/13055)).
    `ambient_consent_at` beside `consent_at`; revocable like speaker consent).
 3. **Unknown voices are discarded, never stored unattributed.** Not audio, not text.
    A counter (`discarded_unknown`) is the only trace, for the shadow-week review.
-4. **Multi-speaker segments are discarded** in v1 (the pendant hears Jason *and* the
-   guest; Moonshine would transcribe both). Per-utterance ID is all W5 has; diarization
-   (pyannote-grade who-spoke-when) is the named later upgrade in plan §8.5, not v1.
+4. **Multi-speaker segments are detected with a real detector, then discarded.** A
+   per-utterance identity score cannot do this: a loud owner plus a quieter guest in one
+   clip still matches the owner's embedding, and Moonshine would then transcribe both.
+   So before any text exists, every segment passes two checks on the Orin:
+   (a) **speaker segmentation** with the sherpa-onnx port of
+   `pyannote-segmentation-3.0` ([sherpa-onnx speaker diarization](https://k2-fsa.github.io/sherpa/onnx/speaker-diarization/index.html),
+   [model release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-segmentation-models)) —
+   a ~6 MB ONNX model whose powerset output labels overlap explicitly; a segment is
+   *mixed* if more than one speaker is active or overlap frames exceed a small budget;
+   (b) **embedding consistency across sub-windows** — the segment is cut into ~1.5 s
+   windows, each embedded; every window must clear the owner threshold and the margin,
+   otherwise the segment is *mixed*. Capture is also **narrowed**: the segmenter caps
+   segments at ≤8 s and stops on any speech pause ≥0.8 s, so a guest's reply tends to
+   land in its own segment rather than inside the owner's. Mixed ⇒ discard before STT.
+   Full who-spoke-when diarization stays the later upgrade (plan §8.5); v1 only needs
+   the binary *one speaker, and it is the owner* decision. Costs are estimates until
+   P2 measures them (§6.1).
 5. **The wearer controls capture with the button, with haptic acknowledgement**: long
    press toggles capture (haptic double-pulse on, single on off); the bridge only posts
    while the session is on; LED state mirrors it. Single tap is reserved for
@@ -224,6 +246,17 @@ capped at 30 ([#13055](https://github.com/BasedHardware/omi/pull/13055)).
 6. **Retention window on ambient rows** (`expires_at`, default short — proposal 7 days
    — configurable per person, 1 day → forever as Limitless does), purged by the idle
    consolidator; promotion into `facts` goes only through the existing admission gate.
+6b. **Every row carries a scope, and the scope is `personal`.** The design charter
+   ([`ZOE_DESIGN_PRINCIPLES.md`](../governance/ZOE_DESIGN_PRINCIPLES.md) §3) names three
+   scopes — personal, shared, ambient — and requires every memory write to carry one.
+   A pendant transcript is **not** charter-"ambient" (that scope is open-by-design
+   environment observation: sensors, room state); it is the wearer's own words, i.e.
+   **personal to the attributed user**, and `source='omi'` must never be read as scope.
+   Propagation contract: rows are written `scope='personal'`, `user_id=<attributed>`;
+   recall filters on scope + user exactly like the existing per-user visibility;
+   promotion through the admission gate carries `personal` through unchanged; the only
+   way a pendant-derived fact becomes `shared` is an explicit user action on the memory
+   page (B3.4). No unscoped write can exist because the column is `NOT NULL`.
 7. **Provenance is visible**: recall cites `[ambient:omi]`, and the B3.4 memory page
    lists ambient rows separately with delete.
 
@@ -245,67 +278,132 @@ Two consequences for the design, neither of which is legal advice:
 - **The stock firmware itself is a listening device that records continuously to SD,
   independent of Zoe.** `CONFIG_OMI_ENABLE_OFFLINE_STORAGE=y` writes a ring buffer
   whenever the pendant is on, connected or not. That is a retention Zoe cannot gate from
-  the outside. Options, in order of preference: (i) build the `omi-zoe` firmware
-  variant with offline storage **off** (a one-line Kconfig change in an open, UF2/OTA-
-  flashable firmware); (ii) keep stock firmware but wipe the ring (`0x13 RING_CLEAR`)
-  on every connect and never drain it; (iii) accept it. This is decision **B9.0**.
+  the outside, and **clearing the ring on connect is not a no-retention posture**: a
+  `RING_CLEAR` deletes what came before and the ring resumes retaining the next guest's
+  words immediately, and it stays on the device until the next connection if the pendant
+  walks away. So the **`omi-zoe` firmware variant with offline storage OFF is mandatory
+  for the no-trace guarantee** (one Kconfig line, `CONFIG_OMI_ENABLE_OFFLINE_STORAGE=n`,
+  in an open, UF2/OTA-flashable firmware; `transport.c` registers the storage GATT
+  service only under that `#ifdef`, so the variant also removes the service — read in
+  source, not yet flashed and verified). Until the variant is flashed the pendant is
+  **lab-only: worn by Jason alone, never in company.** `RING_CLEAR` is at most a lab
+  hygiene step during P0, never a consent posture. This is **B9.0**, and it gates P3.
 
 ## 6. Phases and gates (lab first, flag-dark)
 
 Every phase is flag-dark until its gate passes; every flag defaults off and lands in the
-flag inventory via the pre-commit hook. No phase touches the panel voice turn path, so
-the replay gate is *not* required — but P1+ run on the same Pi daemon, so P1's gate
-includes a full replay-corpus run to prove the bridge thread does not regress it.
+flag inventory via the pre-commit hook. **Every phase from P1 on is replay-gated
+(MANDATORY, per `AGENTS.md`)**: P1 edits `zoe_voice_daemon.py` and `/api/voice/ambient`,
+P2–P4 add model work and recall behaviour inside `voice_tts.py`, and all of it shares
+CPU, RAM and routing with ordinary panel turns. Each phase's PR runs
+`scripts/maintenance/voice_regression_probe.py` (baseline-compared) plus
+`scripts/perf/measure_voice.py` under `flock /tmp/zoe-voice-harness.lock`, with the new
+code path *enabled* in the lab configuration, and said-vs-did and per-stage speed must
+not regress. P0 alone is exempt because it runs on a laptop or the Pi with no Zoe code
+changed. The optional B9.7 (push-to-talk into `/api/voice/turn`) is voice path by
+definition and is replay-gated the same way.
+
+Two invariants hold across all phases and are tested, not assumed:
+
+- **No durable text before attribution is enabled.** Today's `/api/voice/ambient`
+  resolves the panel's default user and inserts *every* transcript under that user
+  (`voice_tts.py` ~5150–5169). For `source="omi"` that path is **replaced**, not reused:
+  while `ZOE_AMBIENT_OMI_ATTRIBUTE` is off (P1–P3) the endpoint runs the speaker gate
+  only — embedding, segmentation, verdict, duration — and **never calls Moonshine**, so
+  no transcript string exists even in memory, and it writes only numeric JSONL metrics
+  (verdict class, scores, margin, window count, duration; no audio, no text).
+- **No unscoped row.** `ambient_memory.scope` is `NOT NULL` with `personal` as the only
+  value the pendant path writes (§5 item 6b).
 
 | Phase | Build | Gate (measured, reproducible) |
 |---|---|---|
 | **P0 — Lab receive** (a laptop or the Pi panel, *never* the Orin) | `scripts/setup/omi_bridge.py` (bleak + opuslib, no SDK dependency beyond those two): scan, connect, read DIS + codec id, subscribe audio, decode to WAV, log button/battery, reconnect on drop. Dump 10 min of audio | ≥10 min continuous at 3 m and through one wall; packet-number gaps < 1 %; decoded WAV plays; **Moonshine WER on 20 replay-corpus sentences read while wearing the pendant ≤ panel-mic WER + 5 pts**; battery drop/hour recorded |
-| **P1 — Bridge into the daemon, flag-dark** | Bridge thread in `zoe_voice_daemon.py` behind `OMI_BRIDGE_ENABLED` (Pi env) feeding the existing ambient segmenter; posts carry `source="omi"`, `device_id`, `capture_session_id`. Server: `ambient_memory` gains `source` values, `device_id`, `speaker_id` write, `expires_at` (one Alembic migration); flag `ZOE_AMBIENT_OMI_ENABLED` (default off) → 404 for `source=omi` | `ci_safe` unit tests: flag off ⇒ no row, ever; migration up/down clean; **replay gate PASS with the bridge thread running** (proves no daemon regression); Pi RSS delta ≤ 120 MB |
-| **P2 — Speaker gate, shadow** | Embed each segment on the Orin (sherpa-onnx embedder per B4.1, resemblyzer fallback), apply the margin rule, **log the verdict to the W5 shadow JSONL** — store nothing attributed yet (rows still owner-by-panel as today, or skipped) | One shadow week: owner FA/FR on the pendant; a **negative control** — a second household voice speaking alone for 10 min yields **zero** owner-attributed verdicts; multi-speaker segments correctly flagged |
-| **P3 — Consent posture** | Button long-press session toggle + haptic + LED; `ambient_consent_at` per profile; retention purge job; `omi-zoe` firmware variant built and flashed **or** RING_CLEAR-on-connect, per B9.0 | A stranger test end-to-end: guest speaks near the wearer for 5 min → **no `ambient_memory` row, no temp file, no log line containing text**; toggling off stops posts within 1 s; retention purge verified with a clock-shifted row |
-| **P4 — Attributed storage + promotion** | Flip the gate from shadow to act (`ZOE_AMBIENT_OMI_ATTRIBUTE=1`); rows carry `speaker_id`; promotion through the admission gate; `[ambient:omi]` citation; rows visible/deletable on the memory page (B3.4) | `memory_recall_probe` unchanged on the existing corpus; a 20-item "said near, not to, Zoe" recall mini-set ≥ 80 % attributed recall; consolidation digest shows ambient-sourced candidates with provenance |
-| **P5 — Optional: offline drain** | Only if B9.0 chose to keep storage *and* the wearer's session toggle gates the ring: on reconnect, time-sync, `RING_INFO`/`RING_READ`, decode 444-byte records, feed the same gate; keep the pendant still until the checkpoint catches up | Drain of a 30-min away-session reproduces the live path's row count ±1; interrupted drain loses nothing (advance only on confirmed bytes) |
+| **P1 — Bridge into the daemon, flag-dark** | Bridge thread in `zoe_voice_daemon.py` behind `OMI_BRIDGE_ENABLED` (Pi env) feeding the existing ambient segmenter (≤8 s segments, ≥0.8 s pause); posts carry `source="omi"`, `device_id`, `capture_session_id`. Server: one Alembic migration adds to `ambient_memory` — `scope` (`NOT NULL`, charter values `personal`/`shared`/`ambient`; existing rows backfilled `personal`), `source` values, `device_id`, `speaker_id` write, `expires_at`; the `source="omi"` branch of `/ambient` is a new handler that does **not** call the owner-by-panel insert; flag `ZOE_AMBIENT_OMI_ENABLED` (default off) → 404 for `source=omi` | `ci_safe` unit tests: flag off ⇒ no row, ever; `source=omi` with attribution off ⇒ Moonshine never invoked (mock asserts zero calls) and zero rows; a write without `scope` is rejected by the schema; migration up/down clean; **replay gate PASS with the bridge thread running and the flag on in the lab config**; Pi RSS delta ≤ 120 MB |
+| **P2 — Speaker gate, shadow (metrics only, no text)** | On the Orin, per segment: sherpa-onnx `pyannote-segmentation-3.0` (mixed/overlap detector) + sub-window embedding consistency + the B4.1 margin rule against consented profiles (sherpa-onnx embedder; resemblyzer fallback). Output is a **numeric JSONL row only** (verdict ∈ {owner, other-consented, unknown, mixed}, scores, margin, windows, duration) appended to the W5 shadow file. **No Moonshine call, no transcript, no `ambient_memory` row** in this phase | One shadow week; owner FA/FR on the pendant; **negative control A** — a second household voice alone for 10 min ⇒ zero `owner` verdicts; **negative control B (mixed)** — a labelled 10-min session with the owner and a second voice talking to each other ⇒ zero `owner` verdicts on any segment the label marks as containing the second voice, and the `mixed` rate reported; a grep of the shadow file and the zoe-data log for any transcript-like text finds none; per-segment CPU time and RSS delta for the segmentation model recorded (§6.1); **replay gate PASS** |
+| **P3 — Consent posture** | Button long-press session toggle + haptic + LED; `ambient_consent_at` per profile; retention purge job; **`omi-zoe` firmware (offline storage OFF) built, flashed and verified** per B9.0 — a hard precondition of this phase | Stranger test end-to-end: guest speaks near the wearer for 5 min → **no `ambient_memory` row, no temp file, no log line containing text, and the device ring holds nothing** (GATT discovery shows no storage service `30295780-…` on the variant; on any pendant still running stock firmware the test fails by definition); toggling off stops posts within 1 s; retention purge verified with a clock-shifted row; **replay gate PASS** |
+| **P4 — Attributed storage + promotion** | Flip the gate from shadow to act (`ZOE_AMBIENT_OMI_ATTRIBUTE=1`): only `owner` / `other-consented` verdicts proceed to Moonshine; rows carry `speaker_id`, `scope='personal'`, `expires_at`; promotion through the admission gate keeps scope; `[ambient:omi]` citation; rows visible/deletable on the memory page (B3.4) | `memory_recall_probe` unchanged on the existing corpus; a 20-item "said near, not to, Zoe" recall mini-set ≥ 80 % attributed recall; a cross-user recall test proves user B never sees user A's pendant rows; consolidation digest shows ambient-sourced candidates with provenance; **replay gate PASS** |
+| **P5 — Optional: offline drain (not scheduled)** | Only on a *further* firmware variant whose ring is gated by the wearer's session toggle — never on stock: on reconnect, time-sync, `RING_INFO`/`RING_READ`, decode 444-byte records, feed the same gate; keep the pendant still until the checkpoint catches up | Drain of a 30-min away-session reproduces the live path's row count ±1; interrupted drain loses nothing (advance only on confirmed bytes) |
 
 Sequencing: **B0.1 (RAM floor) → P0 → P1**; **B4.1 (margin rule) + B4.3 (ID decision) →
-P2**; P3 needs Jason's B9.0 decision and the legal check; P4 feeds **B3.9** (speaker-
+P2**; P3 needs the `omi-zoe` flash (B9.0) and the legal check; P4 feeds **B3.9** (speaker-
 cluster-gated owner attribution) and gives **B2.1** presence a second signal.
 
-## 7. Proposed program block — B9 (for `beat-the-bar-2026-program.md`, not edited here)
+### 6.1 Unverified — what this plan asserts from reading, not from measuring
+
+Named so nobody reads a measurement into a guess. Each is closed by the phase listed.
+
+- BLE range/packet loss from the panel's position through walls — **P0**.
+- Receiver RSS (+60–120 MB) and Orin per-segment costs (Moonshine 0.3–0.6 s, embedding
+  0.1–0.3 s, segmentation model ~0.1–0.2 s on CPU) — **P1/P2**. The segmentation model
+  has not been run on the Orin at all.
+- Whether CPU torch is already resident for the resemblyzer path (+0.3–0.5 GB if not) —
+  **P2**; the plan prefers the torch-free sherpa-onnx embedder for exactly this reason.
+- That `CONFIG_OMI_ENABLE_OFFLINE_STORAGE=n` removes the storage GATT service — read in
+  `transport.c`, **not flashed and verified**; also whether the CV1 accepts a custom
+  UF2/mcumgr image without a signing step — **B9.0**.
+- Whether the sherpa-onnx segmentation + sub-window consistency checks catch a quiet
+  guest under a loud owner at the rates the P2 gate demands — **P2 negative control B**.
+- Whether the Orin's M.2 card exposes Bluetooth — irrelevant to the recommended path.
+- How the existing memory tables express scope today (no `scope` column was found on
+  `ambient_memory`; migration 0017 added `user_id` only) — the P1 migration designs the
+  column against whatever the `memories`/`facts` tables use, confirmed in P1.
+
+## 7. Program block — B9 (registered as B9 in the program tracker, PR #1680)
+
+The program tracker `beat-the-bar-2026-program.md` lands in PR #1680; this block is the
+B9 entry for it, kept here verbatim so the plan stays self-contained, and pointed to from
+`docs/PLANS.md` (Ambient voice) so the work is discoverable before the tracker merges.
 
 ```markdown
 ### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle)
 Plan: [`omi-integration-plan.md`](omi-integration-plan.md). Pendant → BLE → the Pi panel
 (later a Pi Zero 2 W dock) → Opus decode + Silero → existing `/api/voice/ambient` →
 owner-only, speaker-gated `ambient_memory`. Nothing to Omi's cloud; the phone app is out.
-- B9.0 🧑 **Consent posture decisions**: (a) firmware variant `omi-zoe` with offline SD
-  storage OFF vs stock + `RING_CLEAR` on connect; (b) default retention window (proposal
-  7 d); (c) household members who may opt into ambient; (d) a legal sanity check of the
-  discard-unknown rule under the WA Surveillance Devices Act for guests. Gate: written
-  answers in the plan's §8 before P3.
+Every item from B9.2 on is voice-path and **replay-gated** (probe + speed harness under
+`flock`, with the new path enabled in the lab config). Invariants tested in every item:
+no transcript exists until B9.5 flips attribution; every row carries `scope`.
+- B9.0 🧑 **Consent posture**: (a) **mandatory** — build + flash the `omi-zoe` firmware
+  (`CONFIG_OMI_ENABLE_OFFLINE_STORAGE=n`); until then the pendant is worn by Jason
+  alone (`RING_CLEAR` is lab hygiene, not a posture); (b) default retention window
+  (proposal 7 d); (c) household members who may opt into ambient; (d) legal sanity
+  check of the discard-unknown rule under the WA Surveillance Devices Act for guests.
+  Gate: variant flashed and GATT discovery shows no storage service; written answers in
+  the plan's §8 before B9.4.
 - B9.1 ⬜ **Lab receive** (`scripts/setup/omi_bridge.py`, bleak + opuslib, off-Orin):
   connect, decode, 10-min WAV, reconnect-on-drop (SDK bug #13290). Gate: <1 % packet
   gaps at 3 m/one wall; Moonshine WER on 20 corpus sentences ≤ panel + 5 pts; battery
   drop/h logged.
 - B9.2 ⬜ **Bridge thread in the Pi daemon, flag-dark** (`OMI_BRIDGE_ENABLED`,
-  `ZOE_AMBIENT_OMI_ENABLED`, both off): `source="omi"`, `device_id`, `speaker_id`,
-  `expires_at` on `ambient_memory` (one migration). Gate: ci_safe tests (flag off ⇒ no
-  row); replay gate PASS with the thread live; Pi RSS +≤120 MB.
-- B9.3 ⬜ **Speaker gate in shadow** on the Orin (sherpa-onnx embedder per B4.1; margin
-  rule; verdicts to the W5 shadow JSONL; multi-speaker ⇒ discard). Gate: one shadow
-  week; negative control — another voice alone for 10 min ⇒ zero owner verdicts.
+  `ZOE_AMBIENT_OMI_ENABLED`, both off): migration adds `scope` (NOT NULL, charter
+  values, backfill `personal`), `source`, `device_id`, `speaker_id`, `expires_at`; the
+  `source=omi` handler never uses the owner-by-panel insert. Gate: ci_safe (flag off ⇒
+  no row; attribution off ⇒ Moonshine never called; unscoped write rejected); replay
+  gate PASS with the thread live; Pi RSS +≤120 MB.
+- B9.3 ⬜ **Speaker gate in shadow — metrics only, no text**: sherpa-onnx
+  `pyannote-segmentation-3.0` mixed/overlap detector + sub-window embedding
+  consistency + B4.1 margin rule; numeric JSONL verdicts to the W5 shadow file; no
+  Moonshine, no rows. Gate: one shadow week; negative control A — another voice alone
+  10 min ⇒ zero owner verdicts; negative control B — labelled owner+guest session ⇒ zero
+  owner verdicts on guest-bearing segments, mixed rate reported; no text in logs; CPU/RSS
+  of the segmentation model recorded; replay gate PASS.
 - B9.4 ⬜ **Physical consent**: long-press session toggle + haptic + LED; per-profile
-  `ambient_consent_at`; retention purge in the idle consolidator; firmware per B9.0.
-  Gate: stranger test ⇒ no row/file/log text; toggle-off stops posts ≤1 s.
-- B9.5 ⬜ **Attributed storage + promotion** (`ZOE_AMBIENT_OMI_ATTRIBUTE=1`): admission
-  gate, `[ambient:omi]` citation, rows on the memory page with delete. Gate:
-  `memory_recall_probe` unchanged; 20-item "said near Zoe" set ≥80 % attributed recall.
-- B9.6 ⬜ Optional **offline drain** on reconnect (time-sync + ring read, confirmed-bytes
-  advance) — only under a session-gated ring. Gate: 30-min away-session row count ±1.
+  `ambient_consent_at`; retention purge in the idle consolidator; requires B9.0 flashed.
+  Gate: stranger test ⇒ no row/file/log text **and** no storage service on the device;
+  toggle-off stops posts ≤1 s; replay gate PASS.
+- B9.5 ⬜ **Attributed storage + promotion** (`ZOE_AMBIENT_OMI_ATTRIBUTE=1`): only
+  owner/other-consented verdicts reach Moonshine; rows `scope='personal'`; admission
+  gate keeps scope; `[ambient:omi]` citation; rows on the memory page with delete. Gate:
+  `memory_recall_probe` unchanged; 20-item "said near Zoe" set ≥80 % attributed recall;
+  cross-user recall test (B never sees A's rows); replay gate PASS.
+- B9.6 ⬜ Optional **offline drain** — only ever on a firmware whose ring is gated by the
+  session toggle (a further variant, not stock), time-sync + ring read, confirmed-bytes
+  advance. Gate: 30-min away-session row count ±1. Not scheduled.
 - B9.7 ⬜ Optional **push-to-talk**: single tap ⇒ next segment goes to `/api/voice/turn`
   as a normal command (no speaker on CV1 ⇒ reply via the nearest panel/Telegram; haptic
-  ack). Gate: replay-corpus commands via the pendant said-vs-did = panel.
+  ack). Gate: replay-corpus commands via the pendant said-vs-did = panel; replay gate.
 Dependencies: B0.1 → B9.1/B9.2; B4.1 + B4.3 → B9.3; B9.0 → B9.4; B9.5 → B3.9, B2.1.
-Not doing: Omi app/backend/webhooks/MCP (cloud), DevKit 2 purchase, diarization in v1.
+Not doing: Omi app/backend/webhooks/MCP (cloud), DevKit 2 purchase, full diarization
+in v1 (only the binary one-speaker-and-it-is-the-owner decision).
 ```
 
 Sequencing line for §4 of the program: `B0.1 ─> B9.1 ─> B9.2 ─> (B4.1, B4.3) ─> B9.3 ─> B9.0 ─> B9.4 ─> B9.5 ─> B3.9`.
@@ -319,10 +417,10 @@ Sequencing line for §4 of the program: `B0.1 ─> B9.1 ─> B9.2 ─> (B4.1, B4
    this plan needs it).
 3. **Where does the pendant spend the day?** Decides panel-as-receiver vs a Pi Zero 2 W
    dock (and which room). BLE through walls is ~5–10 m.
-4. **Consent posture (B9.0):** flash the `omi-zoe` firmware with offline storage off, or
-   keep stock and wipe the ring on connect? Default retention window? Which household
-   members may opt into ambient attribution — and is anyone under 18 (the plan's
-   strictest-retention rule)?
+4. **Consent posture (B9.0):** the `omi-zoe` flash (storage off) is mandatory before the
+   pendant is worn in company — are you willing to run custom firmware on it? Default
+   retention window? Which household members may opt into ambient attribution — and is
+   anyone under 18 (the plan's strictest-retention rule)?
 5. **Legal sanity check:** who does it (a short paid consult vs. Jason's own read of the
    Act), specifically on transient classification of a guest's voice that is then
    discarded, and on implied consent inside the household.
@@ -339,9 +437,12 @@ Sequencing line for §4 of the program: `B0.1 ─> B9.1 ─> B9.2 ─> (B4.1, B4
 
 | Risk | Why it is real | Mitigation |
 |---|---|---|
-| Stock firmware records to SD regardless of Zoe | `CONFIG_OMI_ENABLE_OFFLINE_STORAGE=y`, continuous ring | B9.0: `omi-zoe` variant with storage off, or RING_CLEAR on connect; never drain without a session gate |
-| Guest words retained | WA SDA s5/s9 | discard-unknown + multi-speaker discard + stranger test as a hard gate; legal check before P3 |
-| Speaker gate mis-attributes | Omi's own 0.45 raw cutoff proved unreliable | margin rule + one embedder end-to-end + shadow week + negative control |
+| Stock firmware records to SD regardless of Zoe | `CONFIG_OMI_ENABLE_OFFLINE_STORAGE=y`, continuous ring; clearing on connect only deletes the past | B9.0: `omi-zoe` variant with storage off is **mandatory**; lab-only wear until flashed; never drain a stock ring |
+| Guest words retained | WA SDA s5/s9 | discard-unknown + a real mixed-speaker detector + no-text shadow + stranger test (incl. device ring) as hard gates; legal check before P3 |
+| Shadow mode itself leaks text | today's `/ambient` inserts every transcript under the panel owner | `source=omi` gets its own handler; Moonshine is not called until attribution is on; tested with a zero-call mock |
+| Speaker gate mis-attributes | Omi's own 0.45 raw cutoff proved unreliable | margin rule + one embedder end-to-end + shadow week + two negative controls |
+| A quiet guest hides under a loud owner | per-utterance ID alone cannot see it | segmentation model + sub-window consistency + short segments; P2 negative control B measures the miss rate before anything is stored |
+| Scope walls | charter §3: no unscoped writes; personal never crosses users | `scope NOT NULL`, pendant rows `personal`; cross-user recall test in P4 |
 | Firehose of ambient audio | always-on mic → Moonshine load on the Orin | AAD sleeps the mic; Silero segmenter; session toggle; per-day cap flag (`ZOE_AMBIENT_OMI_MAX_MIN_PER_DAY`) |
 | Orin RAM | CPU-torch resemblyzer on first use ≈ +0.3–0.5 GB | sherpa-onnx embedder (B4.1) for the gate; measure in P2; B0.1 first |
 | BLE drop/reconnect | SDK never sees disconnects (#13290); one bonded central | own `disconnected_callback` + backoff; un-pair the phone app |
