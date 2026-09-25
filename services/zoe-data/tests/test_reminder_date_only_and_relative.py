@@ -268,3 +268,57 @@ async def test_create_reminder_record_stores_iso_not_the_literal_tomorrow(monkey
     assert f'"due_date": "{tomorrow}"' in notif_params[5]
     # And the stored value is what reminder_scan can now fire.
     assert scan._is_iso_date(db.stored["due_date"])
+
+
+# --------------------------------------------------------------------------- #
+# Codex P2s on #1686
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("phrase", ["June 31", "31 june", "2026-06-31", "2026-06-31T09:00", "feb 30 2026"])
+def test_recognised_phrase_that_is_not_a_real_date_is_422_not_stored(phrase):
+    """`_parse_date` recognises the PHRASE ("June 31" → "2026-06-31") but not the
+    calendar; the resolved value must be re-validated or the scan can only ever
+    warn about the stored row. Negative control: pre-fix `normalize_due_date("June 31")`
+    returned "2026-06-31"."""
+    with pytest.raises(HTTPException) as exc:
+        normalize_due_date(phrase)
+    assert exc.value.status_code == 422
+
+
+def test_real_calendar_phrase_still_resolves():
+    assert normalize_due_date("June 30") == f"{date.today().year}-06-30"
+
+
+@pytest.mark.parametrize("bad", ["25:00", "09:99", "13:00 PM", "0:60", "24:00"])
+def test_parse_due_time_rejects_out_of_range(bad):
+    """No silent `% 24` wrap: '25:00' is a config error, not 01:00, and '09:99'
+    used to reach datetime() and raise on every scan cycle."""
+    assert scan._parse_due_time(bad) is None
+
+
+@pytest.mark.parametrize("good, hm", [("00:00", (0, 0)), ("23:59", (23, 59)), ("12:30 PM", (12, 30)), ("12:05 AM", (0, 5))])
+def test_parse_due_time_accepts_range_edges(good, hm):
+    assert scan._parse_due_time(good) == hm
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["25:00", "09:99"])
+async def test_bad_default_time_falls_back_to_0900_with_one_warning(_scan_env, monkeypatch, caplog, bad):
+    caplog.set_level(logging.WARNING, logger=scan.__name__)
+    monkeypatch.setenv("ZOE_REMINDER_DEFAULT_TIME", bad)
+    monkeypatch.setattr(scan, "_WARNED_BAD_DEFAULT_TIME", set())
+    now_utc = _now_local_0800()
+    today_iso = now_utc.astimezone(scan._ZOE_TZ).date().isoformat()
+    rows = [
+        {"id": f"r-{i}", "user_id": "jason", "title": "t", "due_date": today_iso, "due_time": None, "snoozed_until": None}
+        for i in range(2)
+    ]
+
+    for row in rows:
+        assert await scan.schedule_due_reminder(_ScanDb(rows), row, now_utc=now_utc) == row["id"]
+
+    assert len(_scan_env) == 2, "both date-only rows scheduled — the bad value must not block them"
+    for fired in _scan_env:
+        local = fired["send_at"].astimezone(scan._ZOE_TZ)
+        assert (local.hour, local.minute) == (9, 0)  # control: pre-fix '25:00' → 01:00, '09:99' → raise
+    warnings = [r for r in caplog.records if "ZOE_REMINDER_DEFAULT_TIME" in r.getMessage()]
+    assert len(warnings) == 1 and bad in warnings[0].getMessage()
