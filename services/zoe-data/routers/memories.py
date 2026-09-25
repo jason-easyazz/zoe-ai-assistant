@@ -795,6 +795,10 @@ async def people_with_memories(
     Implements the endpoint `journal-ui-enhancements.js` has always called
     but which previously 404ed. Response shape matches the consumer:
     `{people: [{id,name,relationship,avatar_url}], count}`.
+
+    Ordering is `lower(name)` — portable SQL. SQLite's NOCASE collation is SQLite-only
+    and made this endpoint 500 on Postgres (`collation "nocase" ... does not
+    exist`, 2026-09-25 audit §2.1) while the SQLite-backed unit lane stayed green.
     """
     await require_feature_access(db, user, feature="memories", action="read")
     user_id = user["user_id"]
@@ -808,7 +812,7 @@ async def people_with_memories(
         f"""SELECT id, name, relationship, visibility, user_id, preferences
             FROM people
             {where}
-            ORDER BY name COLLATE NOCASE
+            ORDER BY lower(name), name
             LIMIT ?""",
         params,
     )

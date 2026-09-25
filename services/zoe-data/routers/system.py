@@ -2783,6 +2783,11 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
         result = await execute_intent(
             Intent(name=intent_name, slots=dict(body.slots or {})), user_id=user_id
         )
+    except HTTPException:
+        # A validation verdict from the fulfilment path (e.g. reminder_service's
+        # 422 for an unfireable due_date) is the answer, not a failure: pass it
+        # through so the brain's tool sees 4xx, not a generic 500 (Codex P2, #1686).
+        raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("intent-dispatch failed intent=%s: %s", intent_name, exc)
         raise HTTPException(status_code=500, detail="intent execution failed") from exc

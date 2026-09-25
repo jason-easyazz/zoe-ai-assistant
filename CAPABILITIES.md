@@ -156,12 +156,10 @@
 - **Voice**: Wyoming/Whisper transcription + TTS
 - **Push**: WebSocket /ws/push + proactive engine (morning brief, open loop follow-ups)
 - **Panel**: show_map, show_chart, show_image, open_touch_page, panel_browser_screenshot
-- **Web search**: DuckDuckGo scraping via web_search tool (no API key required)
 - **Self-improvement**: intent-miss review → Hermes/Multica proposal workflow (`self_improve` intent)
 - **Hermes engineering loop**: source context → small feature → cleanup pass → review/test
 - **Agent sync**: POST /api/system/agent-sync regenerates this file and all agent docs
 
 ## Escalation Guide
-1. `web_search` — current events, live prices, news after training cutoff
-2. `escalate_to_hermes` — default for complex tasks, engineering, architecture, code review, planning, board repair, and Greptile loops
-3. `escalate_to_openclaw` — explicit/manual fallback; Hermes remains the default route
+1. `escalate_to_hermes` — default for complex tasks, engineering, architecture, code review, planning, board repair, and Greptile loops
+2. `escalate_to_openclaw` — explicit/manual fallback; Hermes remains the default route

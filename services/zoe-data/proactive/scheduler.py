@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import uuid
 from datetime import datetime
 from enum import Enum
@@ -33,6 +34,25 @@ def _jobstore_url() -> str:
     return f"sqlite:///{DB_PATH}"
 
 
+_URL_USERINFO_RE = re.compile(r"://([^/@:]+):[^@]*@")
+
+
+def redact_url(url: str) -> str:
+    """Return `url` with any password replaced by `***`, for logging ONLY.
+
+    The jobstore URL is a full DSN (`postgresql+psycopg2://user:PASSWORD@host/db`),
+    and the 2026-09-25 audit found it written verbatim to the app log on every
+    start. SQLAlchemy's own renderer is the authority on its URL grammar; the
+    regex is the fallback so a URL SQLAlchemy cannot parse is still never logged
+    with its secret intact.
+    """
+    try:
+        from sqlalchemy.engine.url import make_url
+        return make_url(url).render_as_string(hide_password=True)
+    except Exception:
+        return _URL_USERINFO_RE.sub(r"://\1:***@", url)
+
+
 def get_scheduler() -> AsyncIOScheduler:
     global _scheduler
     if _scheduler is None:
@@ -52,7 +72,7 @@ def start_scheduler() -> AsyncIOScheduler:
         timezone="UTC",
     )
     _scheduler.start()
-    log.info("Proactive APScheduler started (jobstore: %s)", jobstore_url)
+    log.info("Proactive APScheduler started (jobstore: %s)", redact_url(jobstore_url))
     return _scheduler
 
 
