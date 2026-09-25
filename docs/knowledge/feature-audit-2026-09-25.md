@@ -170,9 +170,10 @@ conflated:
    `delegate-sync`, no brain tool involved. Read-only probe from the box on 2026-09-26: the
    classifier accepted a complete brief, but the fetch returned **0 results on three
    queries** because DuckDuckGo served its anomaly/challenge page (HTTP 202, ~14 kB, no
-   `result__a` links) to the scripted request; the function catches everything and returns
-   `[]`, so the turn silently degrades to the "deterministic research brief with … evidence
-   placeholders" text. Whether this is a temporary rate-limit or a lasting block is
+   `result__a` links) to the scripted request; the function returns `[]`. The turn keeps
+   the brain's reply and attaches a fallback evidence package; the "deterministic research
+   brief with … evidence placeholders" text appears only if the brain call fails. Whether
+   this is a temporary rate-limit or a lasting block is
    **UNVERIFIED** — re-probe on another day before treating it as a fix target.
 2. **`research` delegation seam — BROKEN.** The approved cut list
    ([flue-cutover-tool-cut-list.md](flue-cutover-tool-cut-list.md) item 10) deliberately cut
