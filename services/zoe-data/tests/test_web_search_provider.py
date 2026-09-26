@@ -177,3 +177,17 @@ def test_outcome_distinguishes_error_from_no_results(monkeypatch):
     status, rows = wsp.tavily_search_outcome("q")
     assert status == wsp.TAVILY_OUTCOME_RESULTS
     assert rows == [{"title": "A", "href": "https://a.test", "body": "c"}]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"results": None}, {"results": "nope"}, {"results": {"a": 1}}, ["not", "a", "dict"]],
+    ids=["missing", "null", "string", "dict", "top-level-list"],
+)
+def test_outcome_malformed_200_is_error_not_no_results(monkeypatch, payload):
+    """HTTP 200 whose body has no interpretable `results` list is an API failure
+    (contract drift / proxy page), not an honest empty answer — the recorded
+    detail must let an operator tell the two apart (review P2 on #1691)."""
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    _fake_transport(monkeypatch, lambda url, **kw: _Resp(200, payload))
+    assert wsp.tavily_search_outcome("q") == (wsp.TAVILY_OUTCOME_ERROR, [])

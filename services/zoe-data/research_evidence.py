@@ -396,18 +396,24 @@ def web_fallback_provider() -> str:
 def classify_ddg_response(status: int | None, body: str) -> str:
     """Pure classifier for a DuckDuckGo HTML response.
 
-    Order matters: a challenge body is checked BEFORE result parsing, so a
-    challenge page with zero result links is ``blocked``, never ``no_results``.
-    A ``None`` status is a transport failure (nothing came back).
+    A page carrying ``result__a`` links IS a results page: a challenge/anomaly
+    page never has them (measured live), while a genuine results page can
+    easily *mention* a wall phrase ("unusual traffic", "just a moment...") in a
+    snippet or in the echoed query. So the block markers are consulted only once
+    result links are known to be absent — a challenge page with zero result
+    links is ``blocked``, never ``no_results``, and a results page is never
+    thrown away over a phrase in its text. A ``None`` status is a transport
+    failure (nothing came back).
     """
     if status is None:
         return WEB_LOOKUP_ERROR
-    low = (body or "").lower()
-    if any(marker in low for marker in DDG_BLOCK_MARKERS):
-        return WEB_LOOKUP_BLOCKED
     has_results = _DDG_RESULT_RE.search(body or "") is not None
-    if status in _BLOCKED_STATUSES and not has_results:
-        return WEB_LOOKUP_BLOCKED
+    if not has_results:
+        low = (body or "").lower()
+        if any(marker in low for marker in DDG_BLOCK_MARKERS):
+            return WEB_LOOKUP_BLOCKED
+        if status in _BLOCKED_STATUSES:
+            return WEB_LOOKUP_BLOCKED
     if not 200 <= status < 300 and status not in _BLOCKED_STATUSES:
         return WEB_LOOKUP_ERROR
     return WEB_LOOKUP_RESULTS if has_results else WEB_LOOKUP_NO_RESULTS
@@ -585,9 +591,17 @@ def fetch_web_fallback(query: str, max_results: int = 5, timeout_s: float = 8.0)
 def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: float = 8.0) -> list[dict[str, str]]:
     """Compatibility shape (bare rows) for ``zoe_agent._ddg_search_sync``.
 
-    Chat uses :func:`fetch_web_fallback`, which also says WHY rows are empty.
+    Deliberately DDG-ONLY (its pre-B10.0 behaviour): ``zoe_agent._web_search_ddg``
+    already ran the Tavily tier itself before falling through to this last
+    resort, so routing it through :func:`fetch_web_fallback`'s ``auto`` would
+    spend a second Tavily credit and a second timeout on the same query. Chat
+    uses :func:`fetch_web_fallback`, which picks the provider and says WHY rows
+    are empty.
     """
-    return fetch_web_fallback(query, max_results=max_results, timeout_s=timeout_s).results
+    q = (query or "").strip()
+    if not q:
+        return []
+    return _fetch_ddg(q, max_results, timeout_s).results
 
 
 def package_needs_web_fallback(package: dict[str, Any]) -> bool:

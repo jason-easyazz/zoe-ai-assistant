@@ -137,7 +137,13 @@ def tavily_search_outcome(
         return TAVILY_OUTCOME_ERROR, []
 
     results = data.get("results") if isinstance(data, dict) else None
-    rows = _to_common(results if isinstance(results, list) else [])
+    if not isinstance(results, list):
+        # HTTP 200 without an interpretable `results` list is an API failure
+        # (contract drift, proxy/interstitial JSON) — NOT an honest "nothing
+        # found". Report `error` so the recorded detail tells an operator which.
+        logger.info("web_search: tavily 200 with malformed body (%s) — falling back to ddg", type(results).__name__)
+        return TAVILY_OUTCOME_ERROR, []
+    rows = _to_common(results)
     return (TAVILY_OUTCOME_RESULTS if rows else TAVILY_OUTCOME_NO_RESULTS), rows
 
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from urllib.error import HTTPError
 
 import pytest
@@ -166,6 +167,44 @@ def test_classifier_matrix(status, body, expected):
     assert classify_ddg_response(status, body) == expected
 
 
+# A normal results page that merely MENTIONS a wall phrase — in a snippet and in
+# the echoed query — must stay `results` (review P1 on #1691: the whole-body
+# marker scan misclassified such pages as blocked and threw real rows away).
+RESULTS_PAGE_MENTIONING_WALL = RESULTS_PAGE.replace(
+    '<div id="links">',
+    '<input name="q" value="why does duckduckgo say unusual traffic just a moment...">'
+    '<div id="links">',
+).replace(
+    "Example deal for $19.99 today",
+    "Example deal for $19.99 today — guide: fix the &quot;unusual traffic&quot; "
+    "and &quot;verifying your browser&quot; captcha wall",
+)
+
+
+def test_results_page_mentioning_a_wall_phrase_is_still_results():
+    assert "unusual traffic" in RESULTS_PAGE_MENTIONING_WALL
+    assert classify_ddg_response(200, RESULTS_PAGE_MENTIONING_WALL) == WEB_LOOKUP_RESULTS
+    assert classify_ddg_response(202, RESULTS_PAGE_MENTIONING_WALL) == WEB_LOOKUP_RESULTS
+
+
+def test_negative_control_same_phrases_without_result_links_are_blocked():
+    """Strip the result anchors and the very same phrases DO mean a wall — proves
+    the fix keys on the absence of `result__a` links, not on dropping markers."""
+    no_links = re.sub(r'<a class="result__a"[^>]*>.*?</a>', "", RESULTS_PAGE_MENTIONING_WALL, flags=re.S)
+    assert "result__a" not in no_links and "unusual traffic" in no_links
+    assert classify_ddg_response(200, no_links) == WEB_LOOKUP_BLOCKED
+
+
+def test_fetch_keeps_rows_from_a_results_page_mentioning_a_wall_phrase(monkeypatch):
+    _serve_ddg(monkeypatch, RESULTS_PAGE_MENTIONING_WALL)
+    out = fetch_web_fallback("example deal", max_results=5)
+    assert out.status == WEB_LOOKUP_RESULTS
+    assert [r["url"] for r in out.results] == [
+        "https://example.com/deals",
+        "https://example.org/other-deal",
+    ]
+
+
 # ── 2. structured outcome from the fetch ──────────────────────────────────────
 
 def test_fetch_reports_blocked_on_live_shaped_challenge(monkeypatch):
@@ -229,6 +268,23 @@ def test_compat_wrapper_keeps_bare_list_shape(monkeypatch):
     assert isinstance(rows, list) and rows[0]["url"] == "https://example.com/deals"
     _serve_ddg(monkeypatch, CHALLENGE_PAGE, status=202)
     assert fetch_web_fallback_results("example deal") == []
+
+
+def test_compat_wrapper_is_ddg_only_even_with_a_tavily_key(monkeypatch):
+    """zoe_agent._web_search_ddg already ran Tavily itself before reaching this
+    last-resort tier; routing the wrapper through `auto` would spend a SECOND
+    Tavily credit + timeout on the same query (review P2 on #1691)."""
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv(re_mod.WEB_FALLBACK_PROVIDER_ENV, "auto")
+    _forbid_tavily_transport(monkeypatch)
+
+    def _leak(*a, **k):
+        raise AssertionError("compat wrapper consulted Tavily")
+
+    monkeypatch.setattr(wsp, "tavily_search_outcome", _leak)
+    ddg = _serve_ddg(monkeypatch, RESULTS_PAGE)
+    rows = fetch_web_fallback_results("example deal", max_results=1)
+    assert ddg["n"] == 1 and rows[0]["url"] == "https://example.com/deals"
 
 
 def test_empty_query_makes_no_request(monkeypatch):
@@ -420,3 +476,71 @@ def test_package_without_lookup_keeps_legacy_shape():
     assert pkg["web_lookup"] == {}
     assert pkg["sources"] and "duckduckgo.com/?q=" in pkg["sources"][0]
     assert pkg["results"][0]["name"] == "Option 1"
+
+
+# ── 6. chat router: a failed/off lookup captures NO screenshot ────────────────
+# `_build_research_package` used to hand an empty `sources` list to the
+# screenshot step, whose fallback navigated the browser to a DuckDuckGo search
+# URL — so `off` still sent the query out, and a search-page capture could be
+# shown as "evidence" beside the failure message (review P1s on #1691).
+
+@pytest.fixture
+def chat_router():
+    return pytest.importorskip("routers.chat", reason="needs service modules")
+
+
+def _spy_capture(monkeypatch, chat_router):
+    calls: list[str] = []
+
+    async def _capture(*, query, candidate_source, user_id, session_id):
+        calls.append(candidate_source)
+        return "aW1n", candidate_source or "https://duckduckgo.com/?q=leak"
+
+    monkeypatch.setattr(chat_router, "_capture_research_screenshot", _capture)
+    return calls
+
+
+def _build(chat_router):
+    import asyncio
+
+    return asyncio.run(
+        chat_router._build_research_package(
+            query="cheapest flights to bali",
+            response_text="",
+            backend="zoeAgent",
+            user_id="u",
+            session_id="s",
+        )
+    )
+
+
+def test_off_builds_package_with_no_request_and_no_capture(monkeypatch, chat_router):
+    monkeypatch.setenv(re_mod.WEB_FALLBACK_PROVIDER_ENV, "off")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    _forbid_tavily_transport(monkeypatch)
+    ddg = _serve_ddg(monkeypatch, RESULTS_PAGE)
+    captures = _spy_capture(monkeypatch, chat_router)
+    pkg = _build(chat_router)
+    assert pkg["web_lookup"]["status"] == WEB_LOOKUP_OFF
+    assert ddg["n"] == 0, "off must send nothing to DuckDuckGo"
+    assert captures == [], "off must not navigate a browser to a search page either"
+    assert pkg["sources"] == [] and pkg["screenshots"] == []
+
+
+def test_blocked_lookup_captures_no_search_page_as_evidence(monkeypatch, chat_router):
+    _serve_ddg(monkeypatch, CHALLENGE_PAGE, status=202)
+    captures = _spy_capture(monkeypatch, chat_router)
+    pkg = _build(chat_router)
+    assert pkg["web_lookup"]["status"] == WEB_LOOKUP_BLOCKED
+    assert captures == [] and pkg["screenshots"] == []
+
+
+def test_positive_control_results_still_capture_the_first_source(monkeypatch, chat_router):
+    """Proves the spy is live: with real rows the capture DOES run, against the
+    first result — never against a duckduckgo.com search URL."""
+    _serve_ddg(monkeypatch, RESULTS_PAGE)
+    captures = _spy_capture(monkeypatch, chat_router)
+    pkg = _build(chat_router)
+    assert pkg["web_lookup"]["status"] == WEB_LOOKUP_RESULTS
+    assert captures == ["https://example.com/deals"]
+    assert pkg["screenshots"] and pkg["screenshots"][0]["source_url"] == "https://example.com/deals"
