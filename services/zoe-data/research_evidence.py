@@ -563,19 +563,30 @@ def fetch_web_fallback(query: str, max_results: int = 5, timeout_s: float = 8.0)
         outcome = WebFallbackOutcome(WEB_LOOKUP_OFF, "none", [], f"{WEB_FALLBACK_PROVIDER_ENV}=off")
     else:
         attempted: list[str] = []
-        tavily_status = ""
-        outcome: WebFallbackOutcome | None = None
+        tavily: WebFallbackOutcome | None = None
         if provider == "auto" and _tavily_configured():
             attempted.append("tavily")
-            outcome = _fetch_tavily(q, max_results, timeout_s)
-            if outcome.status != WEB_LOOKUP_RESULTS:
-                tavily_status = outcome.status
-                outcome = None
-        if outcome is None:
+            tavily = _fetch_tavily(q, max_results, timeout_s)
+        if tavily is not None and tavily.status == WEB_LOOKUP_RESULTS:
+            outcome = tavily
+        else:
             attempted.append("duckduckgo")
-            outcome = _fetch_ddg(q, max_results, timeout_s)
-            if len(attempted) > 1 and outcome.status != WEB_LOOKUP_RESULTS:
-                outcome.detail = f"tavily={tavily_status}; duckduckgo={outcome.detail or outcome.status}"
+            ddg = _fetch_ddg(q, max_results, timeout_s)
+            if tavily is None:
+                outcome = ddg
+            else:
+                # Keep the BEST-QUALITY verdict. `results` beats everything; a
+                # completed Tavily `no_results` is a real answer and must not be
+                # overwritten by a later DDG wall/transport failure — the card
+                # would say "unavailable" for a lookup that finished and found
+                # nothing. Only real rows may replace it.
+                keep_tavily = tavily.status == WEB_LOOKUP_NO_RESULTS and ddg.status != WEB_LOOKUP_RESULTS
+                outcome = tavily if keep_tavily else ddg
+                if outcome.status != WEB_LOOKUP_RESULTS:
+                    outcome.detail = f"tavily={tavily.status}; duckduckgo={ddg.detail or ddg.status}"
+                    if keep_tavily:
+                        # The verdict is Tavily's; DDG's attempt is in `detail`.
+                        attempted = ["tavily"]
         outcome.provider = outcome.provider if outcome.status == WEB_LOOKUP_RESULTS else ">".join(attempted)
     logger.info(
         "web_fallback: provider=%s status=%s results=%d query_len=%d%s",

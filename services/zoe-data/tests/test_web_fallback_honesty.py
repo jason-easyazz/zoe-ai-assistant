@@ -387,6 +387,44 @@ def test_auto_tavily_no_results_then_ddg_results(monkeypatch):
     assert out.status == WEB_LOOKUP_RESULTS and out.provider == "duckduckgo"
 
 
+def test_auto_tavily_no_results_survives_a_blocked_ddg(monkeypatch):
+    """Tavily COMPLETED and found nothing; DDG then hit its challenge page. The
+    completed verdict must win — the card says "nothing found", never
+    "unavailable" (Codex P2 on #1691). Only real rows may replace it."""
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    tav = _fake_tavily(monkeypatch, wsp.TAVILY_OUTCOME_NO_RESULTS)
+    ddg = _serve_ddg(monkeypatch, CHALLENGE_PAGE, status=202)
+    out = fetch_web_fallback("example deal")
+    assert tav["n"] == 1 and ddg["n"] == 1
+    assert out.status == WEB_LOOKUP_NO_RESULTS
+    assert out.provider == "tavily"
+    assert "nothing" in out.message.lower()
+    assert "tavily=no_results" in out.detail and "duckduckgo=blocked" in out.detail
+
+
+def test_auto_tavily_no_results_survives_a_ddg_transport_error(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    _fake_tavily(monkeypatch, wsp.TAVILY_OUTCOME_NO_RESULTS)
+
+    def _open(url, *, timeout, headers=None):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(re_mod, "guarded_urlopen", _open)
+    out = fetch_web_fallback("example deal")
+    assert out.status == WEB_LOOKUP_NO_RESULTS and out.provider == "tavily"
+    assert "duckduckgo=error" in out.detail
+
+
+def test_negative_control_tavily_error_does_not_mask_a_blocked_ddg(monkeypatch):
+    """Only a COMPLETED verdict is preserved: a Tavily transport/HTTP error is
+    not a verdict, so DDG's blocked answer is still the reported status."""
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    _fake_tavily(monkeypatch, wsp.TAVILY_OUTCOME_ERROR)
+    _serve_ddg(monkeypatch, CHALLENGE_PAGE, status=202)
+    out = fetch_web_fallback("example deal")
+    assert out.status == WEB_LOOKUP_BLOCKED and out.provider == "tavily>duckduckgo"
+
+
 def test_duckduckgo_forces_the_scrape_even_with_a_key(monkeypatch):
     monkeypatch.setenv(re_mod.WEB_FALLBACK_PROVIDER_ENV, "duckduckgo")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
