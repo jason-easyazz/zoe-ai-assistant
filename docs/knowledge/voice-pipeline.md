@@ -21,6 +21,11 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    helpers remain defined for offline tooling but never run on a live turn. `_run_moonshine` also runs
    a `_strip_wake_word` pass removing the "Hey Zoe" wake bleed (Moonshine emits the wake on its own
    line; greeting-prefixed homophones like "hey joey" strip, bare real names like "Joe" are kept).
+   Package upgrade to `moonshine-voice` 0.1.5 (speculative decoding, `set_keyterms` biasing behind
+   `ZOE_MOONSHINE_KEYTERMS`, default off) is B1.10 — **HELD 2026-09-26**: call sites are unchanged
+   and said-vs-did passed, but STT ran +43 % median / ~1.9× per file slower on the Orin CPU, so the
+   box stays on 0.0.62; numbers, method and retest conditions in
+   [moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md).
 2. **Brain — Gemma 4 E4B-QAT + MTP**, host-native `llama-server` on `:11434`. Since **#1322 a
    two-stage router runs as a fast-tier FRONT** for the brain (`ZOE_ROUTER_HEAD=active`, live-verified):
    a SetFit/MLP head (`models/router_head_mlp.joblib`) shortlists the top-3 domains + a chat gate,

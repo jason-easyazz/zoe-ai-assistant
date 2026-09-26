@@ -2425,6 +2425,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_MOONSHINE_KEYTERMS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MULTICA": {
         "defaults": [
           "'false'"

@@ -41,10 +41,10 @@ fastapi==0.141.1
 # Verified on-box (py3.10): 0.49.0 still resolves `auto` -> websockets_impl.
 # Moving to >=0.50 is a deliberate, replay-gated change, not a currency bump.
 uvicorn[standard]==0.49.0
-pydantic==2.13.4
+pydantic==2.13.5
 aiosqlite==0.22.1
 asyncpg==0.31.0
-alembic==1.18.5
+alembic==1.20.0
 psycopg2-binary==2.9.12
 python-multipart==0.0.32
 httpx==0.28.1
@@ -60,8 +60,11 @@ aiohttp==3.14.3
 # ever changes, the local Music-Assistant and LiveKit sockets must pass proxy=None.
 websockets==16.1.1
 python-jose[cryptography]==3.5.0
-PyJWT==2.13.0
-passlib[bcrypt]==1.7.4
+PyJWT==2.15.0
+# passlib was declared here for years with NO consumer (`grep -rn passlib services
+# tools scripts tests` finds only this file; password hashing lives in zoe-auth,
+# which declares its own deps). Dropped 2026-09-26 — a spec line nobody imports is
+# drift waiting to happen.
 ag-ui-protocol==0.1.19
 python-json-logger>=4.1.0
 
@@ -101,18 +104,28 @@ chromadb==0.6.3
 # "no matching wheel" and a dead voice path.
 numpy<2
 # ONNX Runtime is a DIRECT dependency, not merely a transitive one: `voice_vad.py`
-# and `voice_turn.py` both `import onnxruntime` to run the Silero v5 VAD .onnx
+# and `voice_turn.py` both `import onnxruntime` to run the Silero VAD .onnx (v6.2.1
+# on the box since 2026-09-26; the file is ~/models/silero_vad.onnx, not a wheel)
 # (there is deliberately no `silero-vad` PyPI pin — the model file is the
 # dependency, not the wrapper). It was undeclared here until 2026-08-06 while
 # being load-bearing on the voice path; pinned to the live Orin's version.
+# 1.23.2 is the LAST onnxruntime release with a cp310 wheel (1.24+ requires
+# Python >=3.11), so this pin cannot move until the zoe-data 3.12 venv (B0.7).
 onnxruntime==1.23.2
 # Cloud TTS fallback (fast, AU Neural voice)
 edge-tts>=6.1.12
 # Primary offline TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py,
 # port 10201) — NOT an in-process dep here. zoe-data reaches it over HTTP and falls
 # back to edge/espeak if it is down (see ZOE_TTS_MODE in .env.example).
-# STT primary: Moonshine v2 (MEDIUM_STREAMING) — accurate on real room audio, CPU/ONNX
-moonshine-voice
+# STT primary: Moonshine v2 (MEDIUM_STREAMING) — accurate on real room audio, CPU/ONNX.
+# Pinned to what the live Orin actually runs (box-first rule). 0.1.5 (B1.10:
+# speculative decoding, `Transcriber.set_keyterms`) was installed, measured and
+# ROLLED BACK on 2026-09-26: said-vs-did passed but STT was +43 % median / ~1.9x
+# per file slower on the Orin CPU, failing the per-stage speed rule — numbers,
+# method and retest conditions in docs/knowledge/moonshine-0-1-5-upgrade.md
+# ("Measured 2026-09-26 — HELD"). The ZOE_MOONSHINE_KEYTERMS plumbing is
+# feature-detected and dormant on this version.
+moonshine-voice==0.0.62
 # ── Declared-but-previously-implicit runtime deps ─────────────────────────────
 # Both are imported DIRECTLY by live zoe-data code but were in no requirements
 # file, so they only ever arrived as somebody else's transitive dependency
@@ -122,13 +135,16 @@ moonshine-voice
 # not at install time.
 #   onnxruntime — voice_turn.py (Smart Turn v3 endpointing), voice_vad.py
 #   transformers — voice_turn.py (WhisperFeatureExtractor)
-# Pinned AT THE CURRENTLY-INSTALLED VERSIONS to record reality, NOT to upgrade;
-# these are deliberately not bumped here. (onnxruntime's own py3.10 ceiling is
-# 1.24.3, so there is headroom when someone wants it.)
-transformers==5.5.0
+# Pinned AT THE CURRENTLY-INSTALLED VERSIONS to record reality (box first, file
+# second). transformers 5.5.0 -> 5.17.0 was installed on the box 2026-09-26 and
+# replay-gated (voice_regression_probe PASS 13/13 scoreable) before this line moved.
+transformers==5.17.0
 # Tier-1 semantic router: bge-small ONNX embeddings (~7-30ms/query, CPU) for
 # fuzzy domain classification between the regex fast-path and the Pi brain.
-fastembed
+# HELD at 0.8.0: 0.9.x changes the default ONNX provider/model-cache layout and
+# was not part of the 2026-09-26 gated batch. Bump deliberately, with the router
+# shadow report (`scripts/maintenance/router_shadow2_report.py`) unchanged.
+fastembed==0.8.0
 # SetFit router head (shadow mode, ZOE_ROUTER_HEAD): loads
 # models/router_head_logreg.joblib — pins MUST match the versions the artifact
 # was trained with (labs/setfit-router/requirements.txt).
@@ -155,14 +171,23 @@ joblib==1.5.3
 # Upgrading means draining/re-registering the jobstore (or keeping pytz
 # installed explicitly) and re-pinning tzlocal in validate.yml. Not in place.
 APScheduler==3.10.4
+# tzlocal is a DIRECT requirement of the pinned APScheduler and was previously
+# undeclared (arrived transitively). Declared so the 2.x/3.x split above is visible
+# here and not only in the workflows. Box: 2.1.
+tzlocal>=2,<3
+# 2.0.54 on the box (2026-09-26); the range stays so a patch release is not drift.
 SQLAlchemy>=2.0,<3.0
 # Push notifications
-pywebpush==2.3.0
+pywebpush==2.5.0
 py-vapid==1.9.4
 # Speaker identification (voice enrollment and identify endpoints)
 resemblyzer>=0.1.3
 # LiveKit WebRTC server-side agent (joins room, STT+LLM+TTS, publishes audio)
-livekit>=0.14
+# 1.1.20 on the box (2026-09-26). The floor is raised because the 0.x API is long
+# gone; not pinned exactly because pip also reports the leftover `livekit-agents`
+# 1.5.10 (unused by zoe-data) wanting `livekit==1.1.8` — an exact pin would turn
+# that stale package into a resolver fight on every install.
+livekit>=1.1.8
 # aiortc and av move TOGETHER: aiortc 1.14.0 caps `av<17`, so av cannot advance
 # without it (1.15.0 widens the cap to `av<18`).
 # av is held at 17.1.0 because 18.0.0 requires Python >=3.11 (host is 3.10.12).
@@ -173,7 +198,9 @@ livekit>=0.14
 aiortc==1.15.0
 av==17.1.0
 # A2A federation + skill discovery + web search
-ddgs>=6.0
+# ddgs floor raised to the version verified on the box 2026-09-26 (9.16.0); the
+# 6.x/7.x line predates the current DuckDuckGo challenge handling.
+ddgs>=9.16
 cloakbrowser>=0.3.28
 PyYAML>=6.0
 # CloakBrowser — stealth Chromium for bot-blocked web search fallback (optional).
