@@ -23,6 +23,7 @@ from auth import get_current_user
 from database import get_db
 from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_list, env_str
+import voice_speculation as _speculation
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
@@ -4650,6 +4651,24 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     t_upload = time.monotonic() - t_turn_start
     suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
 
+    # ── B1.1 speculation gate (ZOE_SPECULATIVE_TURN, default OFF) ──
+    # The daemon fired this turn at its FIRST end-of-turn verdict and is still
+    # listening; everything audible is held until its commit/resolve/cancel
+    # arrives on /turn_stream/speculation. Registered BEFORE STT so a verdict
+    # can never outrun the gate. Flag off: the fields are never read.
+    _spec_gate = None
+    if _speculation.speculative_turn_enabled() and (payload or {}).get("speculative"):
+        _spec_turn_id = str((payload or {}).get("turn_id") or "").strip()
+        if not _spec_turn_id:
+            raise HTTPException(status_code=400, detail="turn_id is required for a speculative turn")
+        try:
+            _spec_gate = _speculation.open_gate(_spec_turn_id)
+        except _speculation.DuplicateTurn:
+            raise HTTPException(status_code=409, detail="speculative turn_id is already active")
+
+    def _gated(gen):
+        return _speculation.gate_frames(gen, _spec_gate) if _spec_gate is not None else gen
+
     # ── STT (Moonshine, same waterfall as /turn) ──
     t_stt_start = time.monotonic()
     duration_s: float | None = None
@@ -4666,6 +4685,8 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             except OSError:
                 pass
     except Exception as exc:
+        if _spec_gate is not None:
+            _speculation.close_gate(_spec_gate)
         logger.error("voice/turn_stream STT failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
 
@@ -4689,16 +4710,38 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
 
     import json as _json
 
+    if _spec_gate is not None:
+        _spec_gate.speculative_transcript = transcript
+
     if not transcript:
         try:
             from voice_metrics import voice_turn_count
             voice_turn_count.labels(outcome="empty_transcript", path="turn_stream").inc()
         except Exception:
             pass
+        if _spec_gate is not None:
+            # Nothing was processed for this prefix (no brain, no write), so
+            # the daemon must run the FULL recording as a normal turn — and it
+            # does that only on a ``cancelled`` done frame. This is an upstream
+            # FACT, not a verdict: the daemon's commit routinely wins the slot
+            # before STT returns (fire→commit ≈ 320-480 ms < a Moonshine pass),
+            # so it must not go through the gate, where a won commit would pass
+            # a plain ``done`` and the turn would be lost. Close the slot and
+            # answer ``cancelled`` directly.
+            _speculation.close_gate(_spec_gate)
+            _speculation.record_outcome("empty_transcript")
+            _gate_for_frames = _spec_gate
+
+            async def _empty_cancelled():
+                yield _speculation.ack_frame(_gate_for_frames)
+                yield _speculation.cancelled_frame(_gate_for_frames, reason="empty_transcript")
+            return StreamingResponse(
+                _empty_cancelled(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+            )
         async def _empty():
             yield (_json.dumps({"transcript": "", "done": True, "reply": ""}) + "\n").encode()
         return StreamingResponse(
-            _empty(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+            _gated(_empty()), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
         )
 
     logger.info("voice/turn_stream panel=%s STT=%.2fs transcript=%r", panel_id, t_stt, transcript[:80])
@@ -4761,7 +4804,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         except Exception:
             pass
         return StreamingResponse(
-            _fast_stream(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+            _gated(_fast_stream()), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
         )
 
     command_payload = {
@@ -4999,8 +5042,59 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             sub_task.cancel()
 
     return StreamingResponse(
-        _wrapped(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+        _gated(_wrapped()), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
     )
+
+
+@router.post("/turn_stream/speculation")
+async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """B1.1 verdict for a speculative /turn_stream turn (flag-gated, default OFF).
+
+    ``{"turn_id": ..., "action": "commit" | "cancel" | "resolve", "audio_base64"?}``
+    ``resolve`` carries the FINAL utterance (speech resumed after the first
+    verdict): it is transcribed here and compared with the speculative
+    transcript — equivalent releases the held audio, otherwise the speculative
+    turn is cancelled and the daemon runs the normal turn. Unknown/expired
+    turn_id → 404 (the max-hold valve already cancelled it).
+    """
+    if not _speculation.speculative_turn_enabled():
+        raise HTTPException(status_code=409, detail="speculative turns are disabled")
+    turn_id = str((payload or {}).get("turn_id") or "").strip()
+    action = str((payload or {}).get("action") or "").strip().lower()
+    if action not in _speculation.ACTIONS:
+        raise HTTPException(status_code=400, detail="action must be commit, cancel or resolve")
+    gate = _speculation.get_gate(turn_id)
+    if gate is None:
+        raise HTTPException(status_code=404, detail="unknown or expired speculative turn")
+    final_transcript = None
+    if action == "resolve":
+        b64 = str((payload or {}).get("audio_base64") or "").strip()
+        if not b64:
+            raise HTTPException(status_code=400, detail="audio_base64 is required for resolve")
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
+        suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(raw)
+                wav_path = tmp.name
+            try:
+                final_transcript = (await _transcribe_audio(wav_path) or "").strip()
+            finally:
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
+        except Exception as exc:
+            # STT failure is not a verdict: fail closed. The gate drops the
+            # held audio rather than guessing the resume was noise.
+            gate.resolve("cancel", reason="resolve_stt_failed")
+            logger.error("voice/turn_stream speculation resolve STT failed: %s", exc)
+            return {"ok": True, "turn_id": turn_id, "action": "cancel", "verdict": "cancel"}
+    gate.resolve(action, final_transcript=final_transcript)
+    return {"ok": True, "turn_id": turn_id, "action": action, "verdict": gate.verdict()}
 
 
 def _brain_prewarm_on_wake_enabled() -> bool:

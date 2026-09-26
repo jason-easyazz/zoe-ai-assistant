@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-452 flags; 451 not documented in `.env.example`.
+455 flags; 454 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -409,6 +409,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SMART_TURN_THREADS` | `'1'` | no | NO | `services/zoe-data/voice_turn.py` |
 | `ZOE_SMART_TURN_THRESHOLD` | `'0.5'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SPEAKER_ID_THRESHOLD` | `'0.82'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_SPECULATIVE_MAX_HOLD_MS` | `5000` | yes | NO | `services/zoe-data/voice_speculation.py` |
+| `ZOE_SPECULATIVE_TAIL_MS` | `320` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_SPECULATIVE_TURN` | `'false'`, `False` | yes | NO | `scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/voice_speculation.py` |
 | `ZOE_STT_BACKEND` | `'moonshine'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_SUBPROCESS_QUEUE_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/async_subprocess.py` |
