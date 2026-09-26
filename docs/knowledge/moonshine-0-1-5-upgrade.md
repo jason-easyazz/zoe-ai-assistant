@@ -1,14 +1,20 @@
 ---
 type: Runbook
-title: Moonshine 0.1.5 upgrade (B1.10) — API deltas, keyterms, install/replay/rollback
+title: Moonshine 0.1.5 upgrade (B1.10) — HELD after measurement; API deltas, keyterms, install/replay/rollback
 description: What changes for Zoe's STT call sites when moonshine-voice goes 0.0.62 → 0.1.5 (rock unchanged — still Moonshine v2 Medium / MEDIUM_STREAMING), the ZOE_MOONSHINE_KEYTERMS biasing flag, and the box-first install + replay-gate + rollback sequence.
 tags: [voice, stt, moonshine, upgrade, runbook, b1-10]
-timestamp: 2026-09-26T00:00:00Z
+timestamp: 2026-09-26T12:00:00Z
 ---
 
-# Moonshine 0.1.5 upgrade (B1.10)
+# Moonshine 0.1.5 upgrade (B1.10) — HELD
 
-**Verdict (2026-09-26, measured in a throwaway venv on the Orin, aarch64 / Python 3.10):
+> **Status 2026-09-26: HELD, box rolled back to 0.0.62.** The runbook below was executed the same
+> day: 0.1.5 passes said-vs-did but **fails the per-stage speed rule** (+43 % median STT, ~1.9× on
+> every non-trivial file, Orin CPU). Numbers, method and retest conditions are in §8. Everything
+> else on this page stands as the readiness record — the `ZOE_MOONSHINE_KEYTERMS` plumbing is
+> merged dormant, `requirements.txt` pins the version the box actually runs (0.0.62).
+
+**API verdict (2026-09-26, measured in a throwaway venv on the Orin, aarch64 / Python 3.10):
 compatible.** Every call Zoe makes into `moonshine_voice` has the same signature and return
 shape on 0.1.5 as on the installed 0.0.62. The rock does not move: the arch is still
 `ModelArch.MEDIUM_STREAMING` = Moonshine v2 Medium (English streaming), and
@@ -195,3 +201,74 @@ stops before TTS — see voice-pipeline.md); the numbers that matter are said-vs
 - **Feature only:** `ZOE_MOONSHINE_KEYTERMS=` (empty) + restart. Speculative decoding cannot be
   toggled from Zoe today (no options plumbing) — that is the `ZOE_MOONSHINE_OPTIONS` follow-up in §4.
 - The `requirements.txt` pin should follow the box either way (box first, file second).
+
+## 8. Measured 2026-09-26 — HELD (rolled back to 0.0.62)
+
+Runbook §5 was executed by the coordinator (install → pre-download → restart → replay).
+Outcome per rule:
+
+| Gate | Result |
+|---|---|
+| Said-vs-did (replay, in-process, keyterms OFF) | **PASS** — 13/13 OK, 7 EMPTY (identical to baseline) |
+| Said-vs-did (in-process, keyterms ON) | **PASS** — 13/13 OK, 7 EMPTY |
+| Said-vs-did (remote, live service) | **PASS** — 13/13 OK, 7 EMPTY |
+| Per-stage speed (`stt`) | **FAIL** — live remote replay medians 546–619 ms on 0.1.5 vs 315–406 ms on 0.0.62 |
+
+**Engine-only A/B** (`stt_bench`: `get_model_for_language` → `Transcriber` →
+`transcribe_without_streaming` per file; isolated venvs per version; same 20 newest corpus
+files, all 16 kHz, ~1.3 s each; 2 passes, warm, `nice -n 5`, Orin CPU; per-file ms):
+
+| Configuration | median | p90 |
+|---|---|---|
+| 0.0.62 (run 1 / repeat) | **284 / 286 ms** | 885 / 929 ms |
+| 0.1.5 default (speculative decoding on) | 408 ms (**+43 %**) | 1439 ms |
+| 0.1.5, `use_speculative_decoding=false` | 508 ms (worse) | 1902 ms |
+| 0.1.5 library + the OLD `quantized/` bundle | 382 ms | 1184 ms |
+
+Per-file it is ~1.9× on every non-trivial clip (333→626, 1204→2816, 294→676, 460→879,
+634→1297 ms). The old-bundle row shows **most of the cost is the 0.1.5 runtime/library, not
+the moved model files**, and disabling speculative decoding makes it slower still, so the
+headline latency feature does not pay for the regression on this CPU. Transcripts differed on
+9/20 files, mixed: some better ("What's the time?" vs "Was it time?", "Turn the wall off" vs
+"To love"), some worse ("The UAV is true" vs "destroyed") — a wash on this corpus, not a
+reason to absorb 1.9×.
+
+**Decision:** per the replay-gate rule (per-stage speed must not regress) 0.1.5 is **not
+adopted**. Rollback (§7) was performed and confirmed: `pip3 install --user
+moonshine-voice==0.0.62`, `ZOE_MOONSHINE_KEYTERMS` unset, zoe-data restarted; the 0.0.62 bundle
+was still in `…/quantized/` so no download; `/readyz` reports `stt.loaded: true`,
+`keyterms.supported: false` (the plumbing feature-detects its absence, as designed).
+`requirements.txt` now pins `moonshine-voice==0.0.62` — reality, box-first.
+
+**Why it is slower — what the wheel says (strings/symbols only; not benchmarked further):**
+
+- The bundled ONNX Runtime carries the same auditwheel name in both wheels
+  (`moonshine_voice.libs/libonnxruntime-ab8c4363.so.1`) but is **NOT the same file** — the
+  sha256 differs (`29f74af7…` in 0.1.5 vs `2723a421…` in 0.0.62). So the ORT build itself is a
+  candidate variable alongside `libmoonshine.so` (36 MB → 12 MB) and how it drives ORT.
+- 0.1.5's `libmoonshine.so` carries a **new** `ort_maybe_force_single_thread(const OrtApi*,
+  OrtSessionOptions*)` and a **new** environment-variable string `MOONSHINE_ORT_SINGLE_THREAD`;
+  neither exists in 0.0.62. There is no other thread/CPU option string (`intra_op` / `inter_op` /
+  `num_threads` / `OMP_*` do not appear; `SileroVad::init_engine_threads(int,int)` is present in
+  both and belongs to the VAD). Nothing on the Python side reads that variable and it is not a
+  `Transcriber` option. Disassembled (aarch64): the function calls `getenv`, returns
+  immediately when the variable is **unset**, empty, or starts with `0`, and only then forces the
+  single-thread session options — i.e. it is an **opt-in** single-thread switch, OFF by default.
+  It does not explain the default-configuration slowdown; it is a knob for the retest (set it to
+  `1` in the isolated venv to see whether *fewer* threads help on this CPU — ORT's spin-wait on
+  a small model can cost more than it saves).
+- Hypothesis to retest against, not a conclusion: the ORT build and/or the decode loop in
+  `libmoonshine.so` changed its CPU threading behaviour between the versions, which on a 6-core
+  Orin would show exactly as a uniform ~1.9× per-file cost that the bundle swap does not move.
+
+**Retest conditions (any one re-opens B1.10):**
+
+1. The next `moonshine-voice` release (> 0.1.5) — rerun the engine-only A/B first (cheap, no
+   service restart), then §5 only if it is at parity with 0.0.62 on the Orin.
+2. Evidence that a thread/CPU knob explains it — e.g. upstream documenting
+   `MOONSHINE_ORT_SINGLE_THREAD` or an intra-op thread option; then A/B 0.1.5 with that knob set
+   the other way in the isolated venv before touching the box.
+3. An upstream changelog entry about aarch64 / CPU decode performance.
+
+The engine-only A/B is the instrument for all three: same 20 files, 2 passes, warm, per-file ms,
+compare medians and the per-file ratios — a median alone hides a bimodal result.
