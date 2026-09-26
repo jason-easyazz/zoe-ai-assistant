@@ -305,6 +305,20 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+- `b3-1-supersession/` — B3.1 lab: **bi-temporal supersession + keep-the-richer-fact
+  reconciliation**, pure Python, no model, no I/O, flag-dark
+  (`ZOE_BITEMPORAL_SUPERSEDE`, default off, read by nothing in prod). Graphiti's
+  overlap rule (contradiction only when validity intervals overlap; invalidate by
+  `valid_until = new.valid_from` + `expired_at = now`, never delete), mem0's
+  ADD/UPDATE/SUPERSEDE/NONE controller with integer-id candidates and an injectable
+  LLM `judge` (fake in tests; a judge naming an unseen id degrades to ADD), the
+  `attribute_key` normalisation that closes the M7 "works at X" gap, and the
+  richer-fact rule. 50-pair SYNTHETIC fixture (Person A/B/C, invented employers —
+  never household data) + `run_fixture.py` scorer with both negative controls.
+  Design + schema/migration PLAN + prod wiring:
+  `docs/architecture/b3-1-bitemporal-supersession.md`. Regression net is CI-wired
+  by marker: `tests/unit/test_b3_1_supersession_lab.py` (`ci_safe`). README is a
+  record, not a contract.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
