@@ -173,3 +173,23 @@ def test_template_that_spawns_serena_is_refused(tmp_path: Path):
     assert proc.returncode == 0, proc.stderr
     assert cfg.read_text() == LEGACY_STDIO
     assert "refusing to seed" in proc.stderr, proc.stderr
+
+
+def test_unrelated_server_whose_quoted_name_starts_with_a_managed_name_survives(tmp_path: Path):
+    """Greptile #1700: `[mcp_servers."serena.debug"]` is a DIFFERENT server (a quoted
+    key), not a sub-table of serena — the seed must not strip it, and the
+    post-merge guard must refuse a rewrite that loses any unmanaged server."""
+    cfg = tmp_path / "codex" / "config.toml"
+    cfg.parent.mkdir()
+    extra = '[mcp_servers."serena.debug"]\nurl = "http://127.0.0.1:9999/mcp"\n'
+    cfg.write_text(LEGACY_STDIO + "\n" + extra)
+
+    proc = _run(tmp_path, cfg)
+
+    assert proc.returncode == 0, proc.stderr
+    servers = _servers(cfg)
+    assert servers["serena.debug"] == {"url": "http://127.0.0.1:9999/mcp"}, (
+        "an unrelated quoted-name server was deleted:\n" + proc.stdout + proc.stderr
+    )
+    for name, body in _template_servers().items():
+        assert servers[name] == body

@@ -75,7 +75,7 @@ within seconds with a logged-out `failure_reason` (the 2026-07-22 and 2026-08-18
   then. Inside the container (headless paste flow, no browser):
   ```bash
   docker exec -it zoe-omnigent claude          # in the TUI: /login → open the URL elsewhere → paste the code
-  docker exec zoe-omnigent python3 - <<'PY'    # short-lived access-token expiry + plan (no secrets printed)
+  docker exec -i zoe-omnigent python3 - <<'PY' # -i: the heredoc is stdin; without it nothing prints (no secrets printed)
   import json, datetime
   o = json.load(open('/root/.claude/.credentials.json'))['claudeAiOauth']
   print(datetime.datetime.fromtimestamp(o['expiresAt']/1000, datetime.UTC), o.get('subscriptionType'))

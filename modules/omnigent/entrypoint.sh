@@ -166,8 +166,13 @@ if all(have.get(name) == body for name, body in want.items()):
     sys.exit(0)
 
 # Drop every managed table (and any sub-table of it) textually; keep every other line.
+# The name must match EXACTLY, bare (`serena`, `serena.env` = its sub-table) or quoted
+# (`"serena"`): a quoted key such as `"serena.debug"` is a DIFFERENT server, not a
+# sub-table, and must survive (Greptile, #1700).
 names = "|".join(re.escape(n) for n in want)
-managed = re.compile(r'^\s*\[\s*mcp_servers\s*\.\s*"?(' + names + r')"?\s*(\.[^\]]*)?\]')
+managed = re.compile(
+    r'^\s*\[\s*mcp_servers\s*\.\s*(?:(?:' + names + r')|"(?:' + names + r')")\s*(?:\.[^\]]*)?\]'
+)
 any_header = re.compile(r"^\s*\[")
 kept, skipping = [], False
 for line in cur_text.splitlines(keepends=True):
@@ -184,6 +189,10 @@ except Exception as exc:  # noqa: BLE001
     bail(f"merged config would not parse ({exc}) — leaving {cfg_path} untouched")
 if not all(got.get(name) == body for name, body in want.items()):
     bail(f"merged config does not carry the managed servers verbatim — leaving {cfg_path} untouched")
+unmanaged_before = {n: b for n, b in have.items() if n not in want}
+unmanaged_after = {n: b for n, b in got.items() if n not in want}
+if unmanaged_before != unmanaged_after:
+    bail(f"merge would alter an unmanaged server ({sorted(set(unmanaged_before) ^ set(unmanaged_after)) or 'body changed'}) — leaving {cfg_path} untouched")
 
 os.makedirs(os.path.dirname(cfg_path) or ".", exist_ok=True)
 if cur_text:
