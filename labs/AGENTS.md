@@ -305,6 +305,22 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+- `omi-receiver/` — **B9.1 Omi lab receive** (P0 of
+  `docs/architecture/omi-integration-plan.md`): a hand-run, OFF-Orin BLE receiver
+  for the Omi CV1 pendant — `omi_bridge.py` (bleak 0.22.3 → 3-byte-header framer
+  with gap/wrap/fragment/resync accounting → opuslib decode → rolling 16 kHz WAVs;
+  registers its own `disconnected_callback` because the official SDK never sees
+  drops, #13290; prints the P0 numbers: gaps %, reconnects, battery drop/h),
+  `wer.py` + `split_on_silence.py` for the Moonshine WER comparison, and the
+  README's manual protocol + gate + open questions for Jason. Wire format verified
+  against the firmware's `push_to_gatt()` (id advances per NOTIFICATION; CV1
+  reports codec **21**, not the plan's 20). Regression net (hand-run, slim-venv
+  green, `ci_safe`-marked but NOT in production CI by this contract):
+  `pytest labs/omi-receiver/tests -q -x -p no:cacheprovider` — includes a
+  negative control on the gap detector and a real opuslib round trip that SKIPS
+  with a reason when libopus is absent. Scaffold + fixtures only until the pendant
+  is run: no live result is claimed. Never wired into the Pi daemon, `zoe-data`,
+  or CI (that is B9.2, flag-dark).
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
