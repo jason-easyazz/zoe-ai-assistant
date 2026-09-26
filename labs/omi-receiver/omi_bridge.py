@@ -25,7 +25,9 @@ bytes) is a single fragment, so packet gaps == frame gaps in practice.
 Codec ids (``sdks/device/PROTOCOL.md``): ``0`` PCM16 16 kHz, ``1`` PCM16 8 kHz,
 ``20`` Opus 10 ms frames (DevKit), ``21`` Opus FS320 20 ms frames (Omi CV1 —
 ``omi/firmware/omi/src/lib/core/config.h`` ``#define CODEC_ID 21``). Both Opus ids
-decode to 16 kHz mono PCM16; they differ only in frame duration.
+decode to 16 kHz mono PCM16; they differ only in frame duration. ``--codec`` is the
+assumption until the pendant answers ``19b10002``: a different supported id rebuilds
+the decoder before audio flows, an unsupported one (1, 10, 11) aborts the run.
 
 Decoding: ``opuslib`` (pure-Python ctypes binding to the system ``libopus``; the
 wheel is ``py3-none-any`` so it runs on aarch64/Pi with ``apt install libopus0``).
@@ -43,6 +45,7 @@ import argparse
 import asyncio
 import json
 import logging
+import signal
 import struct
 import sys
 import time
@@ -113,6 +116,7 @@ class FramerStats:
     packets_lost: int = 0        # sum of forward jumps in the packet id
     gap_events: int = 0
     largest_gap: int = 0
+    silence_capped_events: int = 0  # gap fills truncated by AudioPipeline's bound (see max_gap_fill_s)
     reordered: int = 0           # id behind the expected one (duplicate / late) — dropped
     truncated: int = 0           # shorter than the 3-byte header
     empty: int = 0               # header only, no payload
@@ -147,21 +151,34 @@ class OmiFramer:
         self._expected: Optional[int] = None
         self._last_id: Optional[int] = None
         self._partial: Optional[bytearray] = None
+        self._partial_start = -1    # packet id of the pending frame's fragment 0
         self._partial_fragment = -1
         self._partial_broken = False
         self._lost_since_last_call = 0
         self._fragmenting = False   # set once any fragment index > 0 is seen (an MTU property)
         self._behind_streak = 0
 
-    def resync(self) -> None:
-        """Forget the expected id (call on every (re)connect: the firmware counter may restart)."""
+    def resync(self, *, new_connection: bool = False) -> None:
+        """Forget the expected id (call on every (re)connect: the firmware counter may restart).
+
+        ``new_connection`` also forgets whether the stream fragments: the MTU — and with
+        it fragmentation — is negotiated per connection, so an earlier fragmented session
+        must not make a later unfragmented one drop whole frames on a gap.
+        """
         if self._expected is not None:
             self.stats.resyncs += 1
         self._expected = self._last_id = None
         self._behind_streak = 0
+        if new_connection:
+            self._fragmenting = False
 
     def push(self, data: bytes) -> list[bytes]:
-        """Feed one notification; return the frames it completed (0, 1)."""
+        """Feed one notification; return the frames it completed (0, 1).
+
+        A completed frame always PRECEDES any gap this notification revealed (a frame
+        is only ever finished by the packet after it), so callers writing gap silence
+        must write the returned frames first.
+        """
         st = self.stats
         pkt = parse_packet(data)
         if pkt is None:
@@ -171,6 +188,8 @@ class OmiFramer:
         if not pkt.payload:
             st.empty += 1
 
+        gap = False
+        prev_last = self._last_id
         if self._expected is not None and self.detect_gaps:
             delta = (pkt.packet_id - self._expected) % INDEX_MOD
             if delta == 0:
@@ -180,14 +199,8 @@ class OmiFramer:
                 st.gap_events += 1
                 st.largest_gap = max(st.largest_gap, delta)
                 self._lost_since_last_call += delta
+                gap = True
                 log.warning("packet gap: expected %d got %d (%d lost)", self._expected, pkt.packet_id, delta)
-                # A frame is complete only when the next fragment-0 arrives, so a gap
-                # right after fragment 0 is ambiguous. Fragmentation is fixed by the
-                # MTU for the whole connection: if this stream has never fragmented the
-                # pending frame is whole and is kept; if it has, it may be missing
-                # fragments and is dropped.
-                if self._partial is not None and self._fragmenting:
-                    self._partial_broken = True
             elif self._behind_streak + 1 >= self.BEHIND_STREAK_RESYNC:
                 log.warning("%d consecutive packets behind the expected id — counter restarted; resyncing at %d",
                             self.BEHIND_STREAK_RESYNC, pkt.packet_id)
@@ -204,21 +217,47 @@ class OmiFramer:
 
         completed: list[bytes] = []
         if pkt.fragment == 0:
+            # A frame is complete only when the next fragment-0 arrives, so a gap right
+            # before a fragment-0 is ambiguous: the lost ids may have been the pending
+            # frame's trailing fragments or whole frames. Fragmentation is fixed by the
+            # MTU for the connection: if this stream has never fragmented the pending
+            # frame is whole and is kept; if it has, it may be incomplete and is dropped.
+            if gap and self._partial is not None and self._fragmenting:
+                self._partial_broken = True
             done = self._finish_partial()
             if done is not None:
                 completed.append(done)
             self._partial = bytearray(pkt.payload)
+            self._partial_start = pkt.packet_id
             self._partial_fragment = 0
             self._partial_broken = False
         else:
             self._fragmenting = True
+            # Fragment indices count from 0 inside one frame with consecutive ids, so the
+            # index says which id carried this frame's fragment 0.
+            frame_start = (pkt.packet_id - pkt.fragment) % INDEX_MOD
             if self._partial is None:
                 st.orphan_fragments += 1
-            elif pkt.fragment != self._partial_fragment + 1:
-                self._partial_broken = True
+            elif frame_start == self._partial_start:
+                if pkt.fragment == self._partial_fragment + 1:
+                    self._partial.extend(pkt.payload)
+                    self._partial_fragment = pkt.fragment
+                else:
+                    self._partial_broken = True   # a fragment of THIS frame went missing
             else:
-                self._partial.extend(pkt.payload)
+                # A new frame began at frame_start inside the gap, so the pending frame
+                # ended at frame_start-1: it is whole iff its last fragment was the last
+                # id received. Emit it; the new frame has lost its fragment 0 and is
+                # carried as a broken partial so its later fragments are not orphans.
+                if prev_last != (frame_start - 1) % INDEX_MOD:
+                    self._partial_broken = True
+                done = self._finish_partial()
+                if done is not None:
+                    completed.append(done)
+                self._partial = bytearray()
+                self._partial_start = frame_start
                 self._partial_fragment = pkt.fragment
+                self._partial_broken = True
         return completed
 
     def flush(self) -> list[bytes]:
@@ -319,15 +358,19 @@ class WavSink:
         self._file_samples = 0
 
     def write(self, pcm: bytes) -> None:
-        if not pcm:
-            return
-        if self._wav is None or self._file_samples >= self.roll_samples:
-            self._open_next()
-        assert self._wav is not None
-        self._wav.writeframes(pcm)
-        n = len(pcm) // 2
-        self._file_samples += n
-        self.total_samples += n
+        """Append PCM16, splitting it across files so no file exceeds ``roll_samples``."""
+        offset = 0
+        while offset < len(pcm):
+            if self._wav is None or self._file_samples >= self.roll_samples:
+                self._open_next()
+            assert self._wav is not None
+            room = 2 * (self.roll_samples - self._file_samples)
+            chunk = pcm[offset:offset + room]
+            self._wav.writeframes(chunk)
+            n = len(chunk) // 2
+            self._file_samples += n
+            self.total_samples += n
+            offset += len(chunk)
 
     def _open_next(self) -> None:
         self.close()
@@ -360,24 +403,54 @@ class AudioPipeline:
     ``fill_gaps`` writes one frame of silence per lost packet so the WAV keeps
     wall-clock length across drops (exact when frames are unfragmented, which is
     the CV1 at the normal 247-byte MTU; an approximation otherwise).
+
+    The fill is BOUNDED, because the packet id is untrusted input: a notification
+    that jumps the id by 32767 would otherwise write ~21 MB of silence, and a device
+    repeating that fills the disk. ``max_gap_fill_s`` caps one gap's fill, and the
+    total silence may never run ahead of the wall clock by more than that same
+    allowance (legitimate loss takes real time, so real fills stay under it). A
+    truncated fill is counted in ``FramerStats.silence_capped_events``; the packet
+    accounting (``packets_lost``, gap %) is untouched. ``None`` disables the bound
+    (tests only).
     """
 
-    def __init__(self, framer: OmiFramer, decoder: Decoder, sink: WavSink, *, fill_gaps: bool = True) -> None:
+    def __init__(self, framer: OmiFramer, decoder: Decoder, sink: WavSink, *, fill_gaps: bool = True,
+                 max_gap_fill_s: Optional[float] = 5.0, clock: Callable[[], float] = time.monotonic) -> None:
         self.framer = framer
         self.decoder = decoder
         self.sink = sink
         self.fill_gaps = fill_gaps
+        self.max_gap_fill_s = max_gap_fill_s
         self.silence_samples = 0
+        self._clock = clock
+        self._started: Optional[float] = None
 
     def on_packet(self, data: bytes) -> None:
+        if self._started is None:
+            self._started = self._clock()
         frames = self.framer.push(data)
         lost = self.framer.take_lost()
-        if lost and self.fill_gaps:
-            n = lost * self.decoder.frame_samples
-            self.sink.write(bytes(2 * n))
-            self.silence_samples += n
-        for frame in frames:
+        for frame in frames:            # a completed frame always precedes the gap
             self.sink.write(self.decoder.decode(frame))
+        if lost and self.fill_gaps:
+            n = self._bounded_fill(lost * self.decoder.frame_samples, lost)
+            if n:
+                self.sink.write(bytes(2 * n))
+                self.silence_samples += n
+
+    def _bounded_fill(self, samples: int, lost: int) -> int:
+        if self.max_gap_fill_s is None:
+            return samples
+        rate = self.sink.sample_rate
+        cap = int(self.max_gap_fill_s * rate)
+        elapsed = self._clock() - (self._started or 0.0)
+        budget = int(elapsed * rate) + cap - self.silence_samples
+        allowed = max(0, min(samples, cap, budget))
+        if allowed < samples:
+            self.framer.stats.silence_capped_events += 1
+            log.warning("gap fill capped: %d lost packets = %.1f s of silence, wrote %.2f s (bound %.1f s/gap, total ≤ wall clock + bound)",
+                        lost, samples / rate, allowed / rate, self.max_gap_fill_s)
+        return allowed
 
     def flush(self) -> None:
         for frame in self.framer.flush():
@@ -489,6 +562,7 @@ class BridgeSummary:
     gap_pct: float = 0.0
     gap_events: int = 0
     largest_gap: int = 0
+    silence_capped_events: int = 0
     frames_complete: int = 0
     frames_dropped: int = 0
     truncated: int = 0
@@ -497,6 +571,7 @@ class BridgeSummary:
     resyncs: int = 0
     reconnects: int = 0
     connect_failures: int = 0
+    interrupted: bool = False              # Ctrl-C ended the run (the summary is still complete)
     battery_start: Optional[int] = None
     battery_end: Optional[int] = None
     battery_drop_per_hour: Optional[float] = None
@@ -511,13 +586,18 @@ class BridgeSummary:
 class Bridge:
     def __init__(self, transport: Transport, pipeline: AudioPipeline, *, reconnect: bool = True,
                  max_seconds: Optional[float] = None, backoff: tuple[float, ...] = (1, 2, 4, 8, 16, 30),
-                 expected_codec: Optional[int] = None) -> None:
+                 expected_codec: Optional[int] = None,
+                 decoder_factory: Optional[Callable[[int], Decoder]] = None) -> None:
         self.transport = transport
         self.pipeline = pipeline
         self.reconnect = reconnect
         self.max_seconds = max_seconds
         self.backoff = backoff
+        # ``expected_codec`` is what ``pipeline.decoder`` was built for; when the pendant
+        # reports a different supported codec the decoder is rebuilt with this factory
+        # before any audio flows (an unsupported one aborts the run).
         self.expected_codec = expected_codec
+        self.decoder_factory = decoder_factory or make_decoder
         self.summary = BridgeSummary(device=transport.identity)
         self._disconnected: Optional[asyncio.Event] = None
 
@@ -551,7 +631,7 @@ class Bridge:
                     await asyncio.sleep(delay)
                     continue
                 attempt = 0
-                self.pipeline.framer.resync()
+                self.pipeline.framer.resync(new_connection=True)
                 self.summary.device = self.transport.identity
                 log.info("connected to %s", self.summary.device)
                 session_start = time.monotonic()
@@ -588,6 +668,7 @@ class Bridge:
                 await asyncio.sleep(delay)
         except (KeyboardInterrupt, asyncio.CancelledError):
             log.info("interrupted; finishing")
+            self.summary.interrupted = True
             self.pipeline.flush()
             if self.transport.is_connected:
                 await self._read_battery(final=True)
@@ -638,7 +719,10 @@ class Bridge:
             if s.codec_id not in SUPPORTED_CODECS:
                 raise RuntimeError(f"pendant reports codec {s.codec_id} ({s.codec}); this bridge decodes {SUPPORTED_CODECS}")
             if self.expected_codec is not None and s.codec_id != self.expected_codec:
-                log.warning("codec id %d != decoder built for %d; frame timing may be off", s.codec_id, self.expected_codec)
+                log.warning("pendant reports codec %d (%s) but --codec was %d (%s): rebuilding the decoder for %d",
+                            s.codec_id, s.codec, self.expected_codec, CODEC_NAMES.get(self.expected_codec, "?"), s.codec_id)
+                self.pipeline.decoder = self.decoder_factory(s.codec_id)
+                self.expected_codec = s.codec_id
         log.info("model=%s fw=%s hw=%s codec=%s", s.model, s.firmware, s.hardware, s.codec)
         await self._read_battery(final=False)
 
@@ -659,6 +743,7 @@ class Bridge:
         s.packets_received, s.packets_lost, s.packets_expected = st.packets_received, st.packets_lost, st.packets_expected
         s.gap_pct = round(st.gap_pct, 3)
         s.gap_events, s.largest_gap = st.gap_events, st.largest_gap
+        s.silence_capped_events = st.silence_capped_events
         s.frames_complete, s.frames_dropped = st.frames_complete, st.frames_dropped
         s.truncated, s.reordered, s.wraps, s.resyncs = st.truncated, st.reordered, st.wraps, st.resyncs
         if s.battery_start is not None and s.battery_end is not None and s.connected_s > 0:
@@ -671,11 +756,13 @@ def format_summary(s: BridgeSummary) -> str:
     bat = f"{s.battery_start}% → {s.battery_end}%" if s.battery_start is not None else "unreadable"
     if s.battery_drop_per_hour is not None:
         bat += f" ({s.battery_drop_per_hour:+.1f} pts/h drop)"
+    capped = f", {s.silence_capped_events} fill(s) capped" if s.silence_capped_events else ""
     return (
         f"device={s.device} model={s.model} fw={s.firmware} codec={s.codec}\n"
-        f"run {s.duration_s:.0f}s, connected {s.connected_s:.0f}s, audio {s.wav_seconds:.1f}s in {len(s.wav_files)} file(s)\n"
+        f"run {s.duration_s:.0f}s{' (interrupted)' if s.interrupted else ''}, connected {s.connected_s:.0f}s, "
+        f"audio {s.wav_seconds:.1f}s in {len(s.wav_files)} file(s)\n"
         f"packets {s.packets_received} received / {s.packets_lost} lost = {s.gap_pct:.3f}% gaps "
-        f"({s.gap_events} events, largest {s.largest_gap}) → P0 gap gate {gate}\n"
+        f"({s.gap_events} events, largest {s.largest_gap}{capped}) → P0 gap gate {gate}\n"
         f"frames {s.frames_complete} ok / {s.frames_dropped} dropped; truncated {s.truncated}, reordered {s.reordered}, wraps {s.wraps}\n"
         f"reconnects {s.reconnects} (connect failures {s.connect_failures}); battery {bat}; buttons {s.button_events}\n"
         f"storage service {STORAGE_SERVICE_UUID[:8]}… present: {s.storage_service_seen} (stock CV1 firmware records to SD whenever powered — see B9.0)"
@@ -695,8 +782,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--reconnect", action="store_true", help="reconnect with backoff when the pendant drops")
     ap.add_argument("--scan-timeout", type=float, default=15.0)
     ap.add_argument("--codec", type=int, default=CODEC_OPUS_FS320, choices=sorted(SUPPORTED_CODECS),
-                    help="codec the decoder is built for (CV1 reports 21); the pendant's own answer is logged")
+                    help="codec assumed until the pendant answers (CV1 reports 21); a different supported "
+                         "answer rebuilds the decoder, an unsupported one aborts")
     ap.add_argument("--no-fill-gaps", action="store_true", help="do not write silence for lost packets")
+    ap.add_argument("--max-gap-fill-seconds", type=float, default=5.0,
+                    help="most silence written for one packet gap; total silence never leads the wall clock by more")
     ap.add_argument("-v", "--verbose", action="store_true")
     return ap
 
@@ -705,10 +795,26 @@ async def amain(args: argparse.Namespace) -> BridgeSummary:
     transport = BleakTransport(name=args.device_name, address=args.address, adapter=args.adapter,
                                scan_timeout=args.scan_timeout)
     pipeline = AudioPipeline(OmiFramer(), make_decoder(args.codec),
-                             WavSink(args.out, roll_seconds=args.roll_minutes * 60), fill_gaps=not args.no_fill_gaps)
+                             WavSink(args.out, roll_seconds=args.roll_minutes * 60), fill_gaps=not args.no_fill_gaps,
+                             max_gap_fill_s=args.max_gap_fill_seconds)
     bridge = Bridge(transport, pipeline, reconnect=args.reconnect,
                     max_seconds=args.max_minutes * 60 if args.max_minutes else None, expected_codec=args.codec)
-    return await bridge.run()
+    # Ctrl-C must end the run with a summary. Before Python 3.11 ``asyncio.run`` installs
+    # no SIGINT handler, so the KeyboardInterrupt would escape the loop without the bridge
+    # ever seeing it; route it into a cancellation the bridge already handles instead.
+    loop = asyncio.get_running_loop()
+    task = asyncio.current_task()
+    handler_installed = False
+    try:
+        loop.add_signal_handler(signal.SIGINT, task.cancel)
+        handler_installed = True
+    except (NotImplementedError, RuntimeError):  # non-Unix loop / not the main thread
+        pass
+    try:
+        return await bridge.run()
+    finally:
+        if handler_installed:
+            loop.remove_signal_handler(signal.SIGINT)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -717,7 +823,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                         format="%(asctime)s %(levelname)s %(message)s")
     try:
         summary = asyncio.run(amain(args))
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        log.error("interrupted again before the summary could be finished; no summary.json")
         return 130
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "summary.json").write_text(summary.to_json())

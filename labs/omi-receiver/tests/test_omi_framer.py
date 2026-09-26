@@ -369,3 +369,185 @@ def test_wer():
     assert wer.corpus_wer(["a b c d", "e f"], ["a b c d", "x y"]) == pytest.approx(2 / 6)
     with pytest.raises(ValueError):
         wer.corpus_wer(["a"], [])
+
+
+# --- review round 1 (PR #1693): each test was red before its fix ---------------------------
+def wav_pcm(path: Path) -> list[int]:
+    with wave.open(str(path), "rb") as w:
+        return list(struct.unpack(f"<{w.getnframes()}h", w.readframes(w.getnframes())))
+
+
+def test_gap_silence_is_written_after_the_frame_that_preceded_it(tmp_path):
+    """packet 0, [1 lost], packet 2 → WAV is frame0 → silence → frame2, not silence first."""
+    p = make_pipeline(tmp_path)
+    run_stream(p, packets([0, 2]))
+    pcm = wav_pcm(p.sink.files[0])
+    assert len(pcm) == 3 * SAMPLES
+    assert set(pcm[:SAMPLES]) == {1000}                   # frame 0 (StubDecoder value)
+    assert set(pcm[SAMPLES:2 * SAMPLES]) == {0}           # the lost packet's silence
+    assert set(pcm[2 * SAMPLES:]) == {1000}               # frame 2
+
+
+def test_gap_before_a_fragment_of_the_next_frame_keeps_the_complete_pending_frame(tmp_path):
+    """Fragmented stream: frame A = ids 1(f0)+2(f1); id 3 (f0 of B) is LOST; id 4 arrives
+    as f1 of B. The arriving index says B started at id 3, so A (ending at id 2) is
+    complete and must be emitted; B lacks its fragment 0 and is the only frame lost."""
+    big = bytes(range(200))
+    stream = [ob.build_packet(1, 0, big[:100]), ob.build_packet(2, 1, big[100:]),
+              ob.build_packet(4, 1, big[100:]),                    # id 3 = B's fragment 0, lost
+              ob.build_packet(5, 0, FRAME), ob.build_packet(6, 0, FRAME)]
+    p = make_pipeline(tmp_path)
+    st = run_stream(p, stream)
+    assert st.packets_lost == 1
+    assert p.decoder.frames == [big, FRAME, FRAME]
+    assert st.frames_complete == 3 and st.frames_dropped == 1
+
+
+def test_gap_that_swallows_a_trailing_fragment_still_drops_that_frame(tmp_path):
+    """Frame A = ids 1(f0)+2(f1)+3(f2); id 2 lost → A is broken, not emitted."""
+    big = bytes(range(240))
+    stream = [ob.build_packet(1, 0, big[:80]), ob.build_packet(3, 2, big[160:]),
+              ob.build_packet(4, 0, FRAME)]
+    p = make_pipeline(tmp_path)
+    st = run_stream(p, stream)
+    assert p.decoder.frames == [FRAME]
+    assert st.frames_dropped == 1 and st.frames_complete == 1
+
+
+def test_fragmentation_memory_is_reset_per_connection(tmp_path):
+    """MTU (hence fragmentation) is negotiated per connection: an earlier fragmented
+    session must not make a later unfragmented session drop whole frames on a gap."""
+    fragmented = [ob.build_packet(1, 0, FRAME), ob.build_packet(2, 1, FRAME), ob.build_packet(3, 0, FRAME)]
+    t = FakeTransport([fragmented, packets([10, 12, 13])])   # session 2: unfragmented, id 11 lost
+    s = run_bridge(t, tmp_path, reconnect=True, max_seconds=0.3)
+    assert s.reconnects == 1 and s.packets_lost == 1
+    assert s.frames_dropped == 0 and s.frames_complete == 2 + 3
+
+
+def test_gap_fill_is_capped_per_event_and_by_wall_clock(tmp_path):
+    """Greptile P1 (security): a forward id jump used to write delta × frame of silence
+    with no bound (≈20 MB per notification). Now: ≤ max_gap_fill_s per event, and the
+    total silence never runs ahead of the wall clock by more than that allowance."""
+    now = [0.0]
+    framer = ob.OmiFramer()
+    p = ob.AudioPipeline(framer, ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path),
+                         max_gap_fill_s=1.0, clock=lambda: now[0])
+    p.on_packet(ob.build_packet(0, 0, FRAME))
+    p.on_packet(ob.build_packet(1000, 0, FRAME))          # 999 lost ≈ 20 s → capped to 1 s
+    assert p.silence_samples == 16000 and framer.stats.silence_capped_events == 1
+    p.on_packet(ob.build_packet(2000, 0, FRAME))          # wall clock still 0 → allowance spent
+    assert p.silence_samples == 16000 and framer.stats.silence_capped_events == 2
+    now[0] = 10.0                                         # 10 s elapsed → budget is back
+    p.on_packet(ob.build_packet(3000, 0, FRAME))
+    assert p.silence_samples == 32000
+    p.flush(); p.sink.close()
+    assert p.sink.total_samples == 4 * SAMPLES + 32000
+    assert framer.stats.packets_lost == 3 * 999          # accounting is untouched by the cap
+
+
+def test_negative_control_uncapped_gap_fill_writes_the_whole_jump(tmp_path):
+    p = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path),
+                         max_gap_fill_s=None, clock=lambda: 0.0)
+    p.on_packet(ob.build_packet(0, 0, FRAME))
+    p.on_packet(ob.build_packet(1000, 0, FRAME))
+    assert p.silence_samples == 999 * SAMPLES
+
+
+def test_wav_roll_splits_one_large_write_at_the_boundary(tmp_path):
+    sink = ob.WavSink(tmp_path, roll_seconds=2 * SAMPLES / 16000)   # two frames per file
+    sink.write(bytes(2 * 5 * SAMPLES))                               # one 5-frame block
+    sink.close()
+    assert [wav_samples(f) for f in sink.files] == [2 * SAMPLES, 2 * SAMPLES, SAMPLES]
+    assert sink.total_samples == 5 * SAMPLES
+
+
+def test_bridge_rebuilds_the_decoder_for_the_codec_the_pendant_reports(tmp_path):
+    """--codec 21 but the pendant answers 20 (10 ms frames): the decoder is rebuilt for
+    20 before any audio flows, so a lost packet is concealed with 160 samples, not 320."""
+    built = []
+
+    def factory(codec_id):
+        built.append(codec_id)
+        return ob.StubDecoder(ob.FRAME_SAMPLES_BY_CODEC[codec_id])
+
+    t = FakeTransport([packets([0, 2])], codec=ob.CODEC_OPUS_10MS)
+    pipeline = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path))
+    bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=False, max_seconds=0.3,
+                       expected_codec=ob.CODEC_OPUS_FS320, decoder_factory=factory)
+    s = asyncio.run(bridge.run())
+    assert built == [ob.CODEC_OPUS_10MS] and s.codec_id == 20
+    assert pipeline.decoder.frame_samples == 160 and pipeline.silence_samples == 160
+    assert s.wav_seconds == pytest.approx(3 * 0.01)
+
+
+def test_bridge_keeps_the_decoder_when_the_reported_codec_matches(tmp_path):
+    t = FakeTransport([packets(range(3))], codec=ob.CODEC_OPUS_FS320)
+    pipeline = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path))
+    bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=False, max_seconds=0.3,
+                       expected_codec=ob.CODEC_OPUS_FS320,
+                       decoder_factory=lambda c: pytest.fail("must not rebuild on a match"))
+    asyncio.run(bridge.run())
+    assert pipeline.decoder.frame_samples == SAMPLES
+
+
+def test_ctrl_c_still_writes_the_summary(tmp_path, monkeypatch):
+    """README: 'Ctrl-C ends a run cleanly (summary still written)'. On Python < 3.11
+    asyncio.run installs no SIGINT handler, so the KeyboardInterrupt used to escape
+    main() before summary.json existed."""
+    import os
+    import signal
+    import threading
+
+    t = FakeTransport([packets(range(10))])            # one session that never drops
+    monkeypatch.setattr(ob, "BleakTransport", lambda **kw: t)
+    monkeypatch.setattr(ob, "make_decoder", lambda codec_id: ob.StubDecoder(SAMPLES))
+    timer = threading.Timer(0.3, lambda: os.kill(os.getpid(), signal.SIGINT))
+    timer.start()
+    try:
+        rc = ob.main(["--device-name", "Omi", "--out", str(tmp_path)])
+    finally:
+        timer.cancel()
+    summary = __import__("json").loads((tmp_path / "summary.json").read_text())
+    assert rc == 0 and summary["packets_received"] == 10 and summary["interrupted"] is True
+    assert summary["battery_end"] == 80 and not t.connected
+
+
+def test_wer_cli_rejects_a_transcript_count_mismatch(tmp_path, capsys):
+    ref = tmp_path / "ref.txt"
+    hyp = tmp_path / "hyp.txt"
+    ref.write_text("one two three\nfour five six\n")
+    hyp.write_text("one two three\n")
+    assert wer.main(["--ref", str(ref), "--hyp", str(hyp)]) == 2
+    out = capsys.readouterr()
+    assert "corpus WER" not in out.out and "2 reference" in out.err and "1 " in out.err
+    hyp.write_text("one two three\nfour five six\nextra line\n")
+    assert wer.main(["--ref", str(ref), "--hyp", str(hyp)]) == 2
+    hyp.write_text("one two three\nfour fife six\n")
+    assert wer.main(["--ref", str(ref), "--hyp", str(hyp)]) == 0
+    assert "corpus WER 16.7% over 2 sentences" in capsys.readouterr().out
+
+
+def test_wer_cli_reads_replay_samples_json_in_file_order(tmp_path, capsys):
+    """--hyp may be replay_samples.py's --json output: {"rows": [{"file", "transcript"}]}."""
+    import json
+    ref = tmp_path / "ref.txt"
+    ref.write_text("alpha bravo\ncharlie delta\n")
+    replay = tmp_path / "replay.json"
+    replay.write_text(json.dumps({"counts": {}, "stt_mode": "remote", "rows": [
+        {"file": "seg_01.wav", "transcript": "alpha bravo"},
+        {"file": "seg_02.wav", "transcript": ""}]}))
+    assert wer.main(["--ref", str(ref), "--hyp", str(replay)]) == 0
+    assert "corpus WER 50.0% over 2 sentences" in capsys.readouterr().out
+    assert wer.load_hypotheses(replay) == ["alpha bravo", ""]
+
+
+def test_split_on_silence_rerun_replaces_the_previous_segments(tmp_path):
+    import array
+    rate = 16000
+    pcm = array.array("h", [0] * rate)
+    old = sos.write_segments(pcm, rate, [(0, 100), (100, 200), (200, 300)], tmp_path, "cap")
+    assert len(old) == 3 and all(p.exists() for p in old)
+    (tmp_path / "other_01.wav").write_bytes(b"keep")          # a different stem is not ours
+    new = sos.write_segments(pcm, rate, [(0, 100), (100, 200)], tmp_path, "cap")
+    assert sorted(p.name for p in tmp_path.glob("*.wav")) == ["cap_01.wav", "cap_02.wav", "other_01.wav"]
+    assert new == old[:2]

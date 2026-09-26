@@ -3,14 +3,21 @@
 
 Stdlib only. ``wer(ref, hyp)`` is the standard word-level Levenshtein distance over
 the reference word count after light normalisation (lower-case, punctuation
-stripped). The CLI takes two line-aligned text files (one sentence per line) and
+stripped). The CLI takes the reference sentences (one per line) and the transcripts
+— either one per line in the same order, or ``replay_samples.py --json`` output
+(``{"rows": [{"file", "transcript", ...}]}``, taken in row = file order) — and
 prints per-line and corpus WER::
 
     python3 wer.py --ref sentences.txt --hyp pendant_transcripts.txt
+    python3 wer.py --ref sentences.txt --hyp /tmp/pendant20.json
+
+A transcript count that differs from the reference count is an error (exit 2), never
+silently padded or truncated: the gate number must score exactly the 20 sentences.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -51,14 +58,31 @@ def corpus_wer(refs: list[str], hyps: list[str]) -> float:
     return errors / words if words else 0.0
 
 
+def load_hypotheses(path: Path) -> list[str]:
+    """Transcripts in order: one per line from a text file, or the ``transcript`` of
+    each row of ``replay_samples.py --json`` output (a ``.json`` path)."""
+    text = path.read_text()
+    if path.suffix.lower() != ".json":
+        return text.splitlines()
+    data = json.loads(text)
+    rows = data["rows"] if isinstance(data, dict) else data
+    return [str(row.get("transcript") or "") for row in rows]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--ref", type=Path, required=True, help="reference sentences, one per line")
-    ap.add_argument("--hyp", type=Path, required=True, help="transcripts, one per line, same order")
+    ap.add_argument("--hyp", type=Path, required=True,
+                    help="transcripts: one per line in the same order, or replay_samples.py --json output")
     args = ap.parse_args(argv)
     refs = [l for l in args.ref.read_text().splitlines() if l.strip()]
-    hyps = args.hyp.read_text().splitlines()
-    hyps = (hyps + [""] * len(refs))[: len(refs)]
+    hyps = load_hypotheses(args.hyp)
+    if len(hyps) != len(refs):
+        print(f"transcript count mismatch: {len(refs)} reference sentences in {args.ref} vs "
+              f"{len(hyps)} transcripts in {args.hyp}. Expect exactly one transcript per sentence, in "
+              "order — fix the segmentation (split_on_silence.py) or the transcript file before scoring.",
+              file=sys.stderr)
+        return 2
     for i, (r, h) in enumerate(zip(refs, hyps), 1):
         print(f"{i:2d}  WER {100 * wer(r, h):5.1f}%  | {r}\n" + " " * 16 + f"| {h}")
     print(f"corpus WER {100 * corpus_wer(refs, hyps):.1f}% over {len(refs)} sentences")

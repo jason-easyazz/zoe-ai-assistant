@@ -14,17 +14,17 @@ live result.
 
 | file | role |
 |---|---|
-| `omi_bridge.py` | the bridge: `BleakTransport` (bleak 0.22.3, BlueZ) → `OmiFramer` (3-byte header, fragment reassembly, gap/wrap/resync accounting) → `OpusDecoder16k` (opuslib) → `WavSink` (rolling WAVs). `Bridge` owns connect / own `disconnected_callback` / backoff reconnect / DIS+codec+battery reads / summary. The BLE surface is the `Transport` protocol, so everything below it runs without hardware. |
-| `wer.py` | word error rate (stdlib) for the Moonshine comparison; CLI over two line-aligned text files. |
-| `split_on_silence.py` | cuts one long capture into per-utterance WAVs (stdlib) so the replay path, which treats each WAV as one utterance, can transcribe the 20 sentences. |
-| `tests/test_omi_framer.py` | synthetic packet streams: contiguous, gap (+ a **negative control** that bypasses the detector and proves the gap assertions go red), counter wrap (65535→0, and a gap across it), truncated/header-only packets, fragmentation (reassembly, missing fragment, orphan), counter restart mid-session and on reconnect, WAV rolling, the bridge over a scripted fake transport (reconnect, no-reconnect, failed connect + backoff, 1.0 % gap = gate FAIL, unsupported codec), a **real opuslib encode→decode** round trip (skips with a stated reason when opuslib/libopus is absent — never a fake pass), and the two helpers. |
+| `omi_bridge.py` | the bridge: `BleakTransport` (bleak 0.22.3, BlueZ) → `OmiFramer` (3-byte header, fragment reassembly, gap/wrap/resync accounting) → `OpusDecoder16k` (opuslib) → `WavSink` (rolling WAVs; a write that crosses the roll boundary is split, never overshoots). `Bridge` owns connect / own `disconnected_callback` / backoff reconnect / DIS+codec+battery reads / summary. `--codec` is only the assumption until the pendant answers: a different **supported** codec rebuilds the decoder before any audio flows, an unsupported one aborts. Gap silence is bounded (`--max-gap-fill-seconds`, default 5: per gap, and the total may never lead the wall clock by more — the packet id is untrusted input, an unbounded fill could write ~21 MB per notification). The BLE surface is the `Transport` protocol, so everything below it runs without hardware. |
+| `wer.py` | word error rate (stdlib) for the Moonshine comparison; CLI over the reference sentences and the transcripts — a line-aligned text file **or `replay_samples.py --json` output directly**. A transcript count that differs from the sentence count is exit 2, never padded or truncated. |
+| `split_on_silence.py` | cuts one long capture into per-utterance WAVs (stdlib) so the replay path, which treats each WAV as one utterance, can transcribe the 20 sentences. Re-running into the same `--out` replaces that capture's previous segments (no stale higher-numbered files survive a re-tune). |
+| `tests/test_omi_framer.py` | synthetic packet streams: contiguous, gap (+ a **negative control** that bypasses the detector and proves the gap assertions go red; frame-before-silence ordering; the fill bound + its uncapped negative control), counter wrap (65535→0, and a gap across it), truncated/header-only packets, fragmentation (reassembly, missing fragment, orphan, a gap that lands on the next frame's fragment 0 keeps the complete pending frame, fragmentation memory reset per connection), counter restart mid-session and on reconnect, WAV rolling (incl. one write split across files), the bridge over a scripted fake transport (reconnect, no-reconnect, failed connect + backoff, 1.0 % gap = gate FAIL, unsupported codec, reported-codec decoder rebuild, **real SIGINT → summary.json still written**), a **real opuslib encode→decode** round trip (skips with a stated reason when opuslib/libopus is absent — never a fake pass), and the two helpers (count mismatch, `--json` rows, segment replacement). |
 | `requirements.txt` | `bleak==0.22.3`, `opuslib==3.0.1` (+ `apt install libopus0`). Why opuslib and not pyogg is in the file. |
 
 Run the tests (hand-run; labs are outside production CI by design):
 
 ```bash
-pytest labs/omi-receiver/tests -q -x -p no:cacheprovider          # 24 pass + 1 skip (real decode) without opuslib
-PYTHONPATH=<dir with opuslib> pytest labs/omi-receiver/tests -q -x -p no:cacheprovider   # 25 pass
+pytest labs/omi-receiver/tests -q -x -p no:cacheprovider          # 37 pass + 1 skip (real decode) without opuslib
+PYTHONPATH=<dir with opuslib> pytest labs/omi-receiver/tests -q -x -p no:cacheprovider   # 38 pass
 ```
 
 ## The wire format this bridge relies on (verified in firmware, not from the plan)
@@ -111,7 +111,10 @@ python3 labs/omi-receiver/omi_bridge.py --device-name Omi --out ~/omi-capture/wa
 
 `--address AA:BB:…` instead of `--device-name` if two Omis are around;
 `--adapter hci1` for a USB dongle; `-v` for per-packet gap logging. Ctrl-C ends a
-run cleanly (summary still written). Play a WAV back to confirm it is speech:
+run cleanly (summary still written, `"interrupted": true`; a second Ctrl-C while it
+is finishing aborts without one). If the pendant answers a codec other than
+`--codec` the log says so and the decoder is rebuilt for it (`summary.json`
+`codec_id` is what it reported). Play a WAV back to confirm it is speech:
 `aplay ~/omi-capture/3m/omi_*_000.wav`.
 
 ### 4. The 20 corpus sentences (the WER gate)
@@ -127,16 +130,14 @@ the live Moonshine instead of loading a second one; always under the harness loc
 ```bash
 cd ~/assistant/services/zoe-data
 flock /tmp/zoe-voice-harness.lock python3 tests/replay_samples.py --last 20 --stt remote --json /tmp/panel20.json
-python3 - <<'PY'
-import json; rows = json.load(open('/tmp/panel20.json'))
-rows = rows if isinstance(rows, list) else rows.get('results') or rows.get('samples')
-for r in rows: print(r.get('sample') or r.get('file') or r.get('name'), '|', r.get('transcript'))
-PY
+# the JSON is {"counts", "stt_mode", "rows": [{"file", "transcript", ...}]} in file (mtime) order:
+python3 -c "import json; [print(r['file'], '|', r['transcript']) for r in json.load(open('/tmp/panel20.json'))['rows']]"
 ```
 
 Listen to those 20 WAVs (`aplay ~/.zoe-voice-samples/<name>.wav`) and write what
-was **actually said**, one per line, in order, to `sentences.txt` — that is the
-reference; the panel transcripts go to `panel.txt` in the same order.
+was **actually said**, one per line, **in that same row order**, to `sentences.txt`
+— that is the reference. `wer.py` reads the panel transcripts straight from
+`/tmp/panel20.json` (row order), so no `panel.txt` is needed.
 
 Then, wearing the pendant, run one capture and read the 20 sentences in order
 with a ~1.5 s pause between them:
@@ -145,6 +146,7 @@ with a ~1.5 s pause between them:
 python3 labs/omi-receiver/omi_bridge.py --device-name Omi --out ~/omi-capture/read20 --roll-minutes 60 --reconnect
 python3 labs/omi-receiver/split_on_silence.py ~/omi-capture/read20/omi_*_000.wav --out ~/omi-capture/read20/segments
 #   → expect exactly 20 segments; tune --threshold / --min-silence and re-run if not
+#     (a re-run into the same --out replaces the previous segments; wer.py refuses ≠ 20 anyway)
 ```
 
 Copy `segments/` to the Orin and transcribe them through the same replay path:
@@ -153,9 +155,9 @@ Copy `segments/` to the Orin and transcribe them through the same replay path:
 scp -r ~/omi-capture/read20/segments zoe@<orin>:/tmp/omi-read20
 cd ~/assistant/services/zoe-data
 ZOE_VOICE_SAMPLE_DIR=/tmp/omi-read20 flock /tmp/zoe-voice-harness.lock python3 tests/replay_samples.py --stt remote --json /tmp/pendant20.json
-#   extract the 20 transcripts in file order into pendant.txt (same one-liner as above)
-python3 ~/assistant/labs/omi-receiver/wer.py --ref sentences.txt --hyp panel.txt     # panel-mic WER
-python3 ~/assistant/labs/omi-receiver/wer.py --ref sentences.txt --hyp pendant.txt   # pendant WER
+python3 ~/assistant/labs/omi-receiver/wer.py --ref sentences.txt --hyp /tmp/panel20.json     # panel-mic WER
+python3 ~/assistant/labs/omi-receiver/wer.py --ref sentences.txt --hyp /tmp/pendant20.json   # pendant WER
+#   exit 2 = the transcript count is not 20 → re-split, do not score a misaligned comparison
 ```
 
 (`replay_samples.py` also routes each transcript through the fast tiers with

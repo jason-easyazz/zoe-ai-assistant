@@ -9,11 +9,17 @@ ONE utterance, so a 10-minute capture of 20 read sentences must be split first::
 ``threshold`` is peak absolute sample value (int16) below which a 20 ms window
 counts as silence; ``--min-silence`` seconds of it ends an utterance. Prints the
 segments it wrote so they can be checked against the sentence list (expect 20).
+
+Re-running into the same ``--out`` (the protocol says to tune the settings and
+re-run) first removes that capture's previous ``<stem>_NN.wav`` segments, so a run
+that finds fewer utterances never leaves stale higher-numbered files behind for
+the replay to transcribe.
 """
 from __future__ import annotations
 
 import argparse
 import array
+import re
 import sys
 import wave
 from pathlib import Path
@@ -61,8 +67,20 @@ def find_segments(pcm: array.array, rate: int, *, threshold: int, min_silence_s:
     return segments
 
 
+def clear_segments(out_dir: Path, stem: str) -> int:
+    """Delete this capture's earlier ``<stem>_NN.wav`` segments; other files are untouched."""
+    pattern = re.compile(rf"{re.escape(stem)}_\d+\.wav")
+    stale = [p for p in out_dir.glob(f"{stem}_*.wav") if pattern.fullmatch(p.name)]
+    for p in stale:
+        p.unlink()
+    return len(stale)
+
+
 def write_segments(pcm: array.array, rate: int, segments: list[tuple[int, int]], out_dir: Path, stem: str) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
+    removed = clear_segments(out_dir, stem)
+    if removed:
+        print(f"removed {removed} segment(s) from a previous run of {stem}", file=sys.stderr)
     paths = []
     for n, (a, b) in enumerate(segments, 1):
         path = out_dir / f"{stem}_{n:02d}.wav"
