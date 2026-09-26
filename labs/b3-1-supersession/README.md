@@ -61,30 +61,31 @@ phrasings of the same value. A bare "moved from X to Y" is a residence change;
 
 **Intervals — the interval rule.** The INCOMING fact's start is the boundary of
 what is known. Same value over a DISJOINT window is a repeated occurrence and
-ADDs a new interval. Same value over an overlapping window: candidates are
-filtered by overlap first, then the richest survives and EVERY other overlapping
-same-value duplicate is retired (`also_close`; `works at acme` + `is employed by
-acme` collapse — the M9 idle-pass shape); the survivor's window becomes the
-UNION of the overlapping same-value windows (Acme [2020, 2025) + Acme [2024, ∞)
-→ [2020, ∞)). Every conflicting (different-value, overlapping) row closes at the
-boundary, linked to the survivor. If a conflicting row ran in the span BEFORE the
-boundary, the survivor's earlier period is never destroyed and never left
-overlapping it: the union is SPLIT — the existing row keeps its earlier period as
-live history, closed at that conflict's start, and the value continues in a NEW
-row from the boundary (Globex 2021–, Acme 2023–, Globex again from 2024 →
-Globex [2021, 2023), Acme [2023, 2024), Globex [2024, ∞); `Decision.retime`).
-A conflict that predates the survivor leaves it an empty window, never an end
-before its start. Conflicts not overlapping the incoming window are not that
-fact's business and are left alone. `invalidate` closes an old window at the
-successor's start, never extends an earlier end, never leaves an end before the
-start.
+ADDs a new interval. Same value over an overlapping window: a row's DETAILS are
+asserted only from that row's own start. Rows are ranked by richness; rows of
+equal richness are absorbed into one (windows unioned — nothing is backdated,
+the value is identical: Acme [2020, 2025) + Acme [2024, ∞) → [2020, ∞); `works
+at acme` + `is employed by acme` collapse — the M9 idle-pass shape); a strictly
+plainer row keeps only the slice BEFORE the richer rows begin, as live history
+(plain Globex 2021–, rich Globex 2023– → plain [2021, 2023), rich [2023, ∞)),
+and a plainer row entirely covered by richer ones is retired. The top row's end
+extends to the union end. Every conflicting (different-value, overlapping) row
+closes at the boundary, linked to the survivor. If a conflicting row ran BEFORE
+the boundary and some slice of the value lies before it, every slice is cut at
+that conflict's start and the top value CONTINUES in a NEW row from the boundary
+— the split (Globex 2021–, Acme 2023–, Globex again from 2024 → Globex [2021,
+2023), Acme [2023, 2024), Globex [2024, ∞); `Decision.retime`). A row with no
+valid slice left (a conflict predating it entirely) is retired, never rewritten
+into an end before its start. Conflicts not overlapping the incoming window are
+not that fact's business and are left alone. `invalidate` closes an old window
+at the successor's start, never extends an earlier end, never leaves an end
+before the start; an empty `[t, t)` window is true at no instant.
 
 **Transitions.** "switched from X to Y" writes the open `Y` row and closes any
 live same-value `X` row that covers the boundary. The closed `X` "from" row is
-written ONLY when the store holds no row for that value at all — a same-value
-row over an earlier window already records the occurrence, and inventing another
-with no start would claim `X` across every other value in between (Acme 2000–2010,
-Globex 2012–2024, "switched from Acme" in 2025). When it is written it starts no
-earlier than the end of the latest other-value row that ended before the
-boundary; if another value is still open at the boundary there is no room, so
-nothing is written and the `Y` side supersedes that row instead.
+written ONLY when the store holds no live row for that attribute at all. A
+same-value row over an earlier window already records the occurrence, and ANY
+other-value history (Acme 2000–2010, Globex 2012–2024, "switched from Acme" in
+2025) means the statement only establishes precedence — which the `Y` side plus
+its closure already capture — not when `X` began, so no dated `X` row is
+invented. With nothing recorded, an open-start closed row is the honest minimum.

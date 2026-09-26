@@ -446,16 +446,22 @@ def test_lab_test_is_outside_every_ci_collection_path():
 def test_surviving_same_value_row_never_overlaps_a_closed_conflicting_row():
     # rule: the incoming start is the boundary; conflicts close there and the
     # survivor yields any span a conflict covered before it (README, "Rules")
-    for acme_from, keep_until in (("2022-01-01", "2022-01-01"),   # conflict starts after the survivor: history kept to it
-                                  ("2019-01-01", "2021-01-01")):  # conflict predates the survivor: empty window, never end < start
+    for acme_from, also, retime, kept in (
+            ("2022-01-01", [2], {1: ("2021-01-01", "2022-01-01")}, True),      # conflict starts after the survivor: history kept to it
+            ("2019-01-01", [2, 1], {1: ("2021-01-01", "2021-01-01")}, False)):  # conflict predates the survivor: empty window, then retired
         globex = _fact(1, "person a works at globex", "2021-01-01")
         acme = _fact(2, "person a works at acme", acme_from)
         new = _fact(0, "Person A works at Globex", "2024-01-01")
         d = bt.reconcile(new, [globex, acme], now=NOW)
-        assert (d.event, d.also_close, d.retime) == (bt.ADD, [2], {1: ("2021-01-01", keep_until)}), d
+        assert (d.event, d.also_close, d.retime) == (bt.ADD, also, retime), d
         store = bt.apply(d, new, {1: globex, 2: acme}, now=NOW)
         assert (store[2].valid_from, store[2].valid_until) == (acme_from, "2024-01-01")
-        assert (store[1].valid_from, store[1].valid_until, store[1].is_live) == ("2021-01-01", keep_until, True)
+        if kept:
+            assert (store[1].valid_from, store[1].valid_until, store[1].is_live) == ("2021-01-01", "2022-01-01", True)
+        else:
+            assert not store[1].is_live and store[1].superseded_by == 3
+            assert (store[1].valid_from, store[1].valid_until) == ("2021-01-01", "2021-01-01")   # true at no instant
+            assert not bt.intervals_overlap(store[1], store[2])
         assert (store[3].valid_from, store[3].valid_until) == ("2024-01-01", None)
         assert not bt.intervals_overlap(store[1], store[2]) and not bt.intervals_overlap(store[2], store[3])
         assert bt.live_texts(store) == ["person a works at globex"]   # continued row keeps the survivor's (equally rich) phrasing
@@ -518,12 +524,14 @@ def test_merge_retires_every_overlapping_same_value_duplicate():
     # the M9 idle pass: re-reconciling one of the stored rows itself collapses the pair
     d = bt.reconcile(_fact(0, b.text), [a, b], now=NOW)
     assert d.target_id in (1, 2) and set(d.also_close) == {1, 2} - {d.target_id}
-    # richest survives; the others (terse) retire, their windows folded into the survivor
+    # richest survives from its OWN start; the plainer pair collapses to one history
+    # row for the span before the details begin (round 5: never backdate details)
     rich = _fact(3, "person a works at acme as a senior mechanical engineer", "2019-01-01")
     d = bt.reconcile(new, [a, b, rich], now=NOW)
-    assert d.target_id == 3 and set(d.also_close) == {1, 2}
-    assert d.interval == (None, None)      # a and b are open-ended both ways → union is unbounded
-    assert d.event == bt.UPDATE           # the survivor's window widened (was 2019–)
+    assert (d.event, d.target_id, d.also_close, d.retime) == (bt.NONE, 3, [2], {1: (None, "2019-01-01")}), d
+    store = bt.apply(d, new, {1: a, 2: b, 3: rich}, now=NOW)
+    assert (store[1].valid_until, store[1].is_live, store[2].is_live, store[3].valid_from) == ("2019-01-01", True, False, "2019-01-01")
+    assert bt.live_texts(store) == [rich.text]
 
 
 def test_transition_history_is_only_suppressed_by_a_row_covering_the_boundary():
@@ -591,13 +599,58 @@ def test_transition_never_invents_from_side_history():
     store = bt.apply(d, new, {1: acme_hist, 2: globex}, now=NOW)
     assert store[1] == acme_hist and store[2] == globex
     assert bt.live_texts(store) == ["person a works at initech"]
-    # no Acme row at all: the from side IS written, but starts where the last other value ended
+    # no Acme row but OTHER-value history: the statement only establishes precedence, not
+    # when Acme began — no dated Acme row is invented (round 5)
     d = bt.reconcile(new, [globex], now=NOW)
-    assert [(c.text, c.valid_from, c.valid_until) for c in d.extra_closed] == [("person a works at acme", "2024-01-01", "2025")]
-    # another value still open at the boundary: no room before it → nothing written, it is superseded instead
+    assert d.extra_closed == [] and d.event == bt.ADD
+    # another value still open at the boundary: nothing written, it is superseded instead
     open_globex = _fact(2, "person a works at globex", "2012-01-01")
     d = bt.reconcile(new, [open_globex], now=NOW)
     assert d.extra_closed == [] and (d.event, d.target_id) == (bt.SUPERSEDE, 2)
     # nothing about the attribute at all: unbounded closed from-side, as before
     d = bt.reconcile(new, [_fact(3, "person a has a cat named tabby")], now=NOW)
     assert [(c.valid_from, c.valid_until) for c in d.extra_closed] == [(None, "2025")]
+
+
+# ── review round 5 (PR #1692) ────────────────────────────────────────────────
+
+def test_richer_details_are_never_backdated_before_their_own_start():
+    plain = _fact(1, "person a works at globex", "2021-01-01")
+    rich = _fact(2, "person a works at globex as a senior mechanical engineer", "2023-01-01")
+    new = _fact(0, "Person A works at Globex", "2024-01-01")
+    # plain union path (no conflict): the plain row keeps [2021, 2023) as history, the rich row owns from 2023
+    d = bt.reconcile(new, [plain, rich], now=NOW)
+    assert (d.event, d.target_id, d.also_close, d.retime) == (bt.NONE, 2, [], {1: ("2021-01-01", "2023-01-01")}), d
+    store = bt.apply(d, new, {1: plain, 2: rich}, now=NOW)
+    assert (store[1].valid_from, store[1].valid_until, store[1].is_live) == ("2021-01-01", "2023-01-01", True)
+    assert (store[2].valid_from, store[2].valid_until) == ("2023-01-01", None)
+    assert bt.live_texts(store) == [rich.text]
+    # the split path (Acme from mid-2023 interrupts): same ownership, every slice cut at Acme's start,
+    # the rich value continues from the boundary
+    acme = _fact(3, "person a works at acme", "2023-06-01")
+    d = bt.reconcile(new, [plain, rich, acme], now=NOW)
+    assert d.event == bt.ADD and d.also_close == [3]
+    assert d.retime == {1: ("2021-01-01", "2023-01-01"), 2: ("2023-01-01", "2023-06-01")}, d
+    store = bt.apply(d, new, {1: plain, 2: rich, 3: acme}, now=NOW)
+    assert (store[3].valid_from, store[3].valid_until) == ("2023-06-01", "2024-01-01")
+    assert (store[4].text, store[4].valid_from, store[4].valid_until) == (rich.text, "2024-01-01", None)
+    rows = sorted(store.values(), key=lambda f: f.valid_from)
+    for x, y in zip(rows, rows[1:]):
+        assert not bt.intervals_overlap(x, y) or bt.same_value(x.text, y.text), (x, y)
+    # the richer INCOMING does not backdate either: the plain stored row keeps its earlier slice
+    d = bt.reconcile(_fact(0, "Person A works at Globex as a senior mechanical engineer", "2023-01-01"), [plain], now=NOW)
+    assert (d.event, d.retime) == (bt.ADD, {1: ("2021-01-01", "2023-01-01")}), d
+    assert (d.write_as.valid_from, d.write_as.valid_until) == ("2023-01-01", None)
+    # equal richness IS absorbed (nothing to backdate): the classic union
+    d = bt.reconcile(_fact(0, "Person A works at Globex", "2018-01-01"), [plain], now=NOW)
+    assert (d.event, d.target_id, d.interval) == (bt.UPDATE, 1, ("2018-01-01", None))
+
+
+def test_transition_from_side_written_only_when_the_attribute_has_no_rows():
+    new = _fact(0, "Person A switched from Acme to Initech in 2025")
+    globex = _fact(2, "person a works at globex", "2012-01-01", "2024-01-01")
+    assert bt.reconcile(new, [globex], now=NOW).extra_closed == []                    # other-value history → nothing
+    assert bt.reconcile(new, [_fact(1, "person a works at acme", "2000-01-01", "2010-01-01")], now=NOW).extra_closed == []
+    d = bt.reconcile(new, [_fact(3, "person a has a cat named tabby")], now=NOW)       # nothing for the attribute → open-start closed row
+    assert [(c.text, c.valid_from, c.valid_until) for c in d.extra_closed] == [("person a works at acme", None, "2025")]
+    assert bt.reconcile(new, [], now=NOW).extra_closed[0].valid_from is None

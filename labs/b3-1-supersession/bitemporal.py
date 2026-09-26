@@ -476,29 +476,20 @@ def reconcile(
         closed_from = new.valid_from or now.isoformat()
         edge = parse_ts(closed_from)
         live_same_key = [n for n in neighbours if n.is_live and n.key() == old_key]
-        # The closed "from" side is written ONLY when the store holds no row
-        # for that value at all. A same-value row that covers the boundary is
-        # the thing being superseded; a same-value row over an earlier window
-        # already records the occurrence — writing another with no start
-        # would claim the value across every other employer in between
-        # (Acme 2000–2010, Globex 2012–2024, "switched from Acme" in 2025).
-        # And when it is written, it starts no earlier than the end of the
-        # latest other-value row that ended before the boundary; if another
-        # value is still open at the boundary there is no room, so nothing
-        # is written — the "to" side supersedes that row instead.
-        if not any(same_value(n.text, old_text) for n in live_same_key):
-            other_ends = [min(parse_ts(n.valid_until) or FAR_FUTURE, edge)
-                          for n in live_same_key
-                          if (parse_ts(n.valid_from) or FAR_PAST) < edge]
-            bound = max(other_ends) if other_ends else None
-            if bound is None or bound < edge:
-                from_start = None if bound is None else max(
-                    (n for n in live_same_key if parse_ts(n.valid_until) == bound),
-                    key=lambda n: parse_ts(n.valid_until)).valid_until
-                extra_closed.append(Fact(
-                    id=-1, text=old_text, valid_from=from_start, valid_until=closed_from,
-                    created_at=now.isoformat(), attribute_key=old_key,
-                ))
+        # The closed "from" side is written ONLY when the store holds no live
+        # row for that attribute at all. A same-value row that covers the
+        # boundary is the thing being superseded; a same-value row over an
+        # earlier window already records the occurrence; and ANY other-value
+        # history (Globex 2012–2024, "switched from Acme" in 2025) means the
+        # statement only establishes precedence — which the "to" side plus
+        # its closure already capture — not when Acme began, so no dated
+        # Acme row is invented. With nothing recorded, an open-start closed
+        # row is the honest minimum ("was at Acme until the switch").
+        if not live_same_key:
+            extra_closed.append(Fact(
+                id=-1, text=old_text, valid_from=None, valid_until=closed_from,
+                created_at=now.isoformat(), attribute_key=old_key,
+            ))
 
     live = [n for n in neighbours if n.is_live]
 
@@ -527,64 +518,128 @@ def reconcile(
     same_val_overlapping = [n for n in same_attr if same_value(new.text, n.text) and _overlaps(n)]
     close_edge = parse_ts(new.valid_from) or now   # where every also_close row is cut
 
-    def _union(existing: Fact) -> tuple[Optional[str], Optional[str]]:
-        """Union of the incoming window and every overlapping same-value row
-        (an open end wins)."""
-        rows = [new, existing] + [n for n in same_val_overlapping if n.id != existing.id]
-        froms = [parse_ts(r.valid_from) for r in rows]
-        untils = [parse_ts(r.valid_until) for r in rows]
-        u_from: Optional[str] = None if any(f is None for f in froms) else \
-            min(rows, key=lambda r: parse_ts(r.valid_from)).valid_from
-        u_until: Optional[str] = None if any(u is None for u in untils) else \
-            max(rows, key=lambda r: parse_ts(r.valid_until)).valid_until
-        return u_from, u_until
-
     def _merge(existing: Fact, why: str) -> Decision:
+        """Fold ``new`` into the overlapping same-value rows.
+
+        Rule (README, "interval rule"): a row's DETAILS are asserted only from
+        that row's own start. Rows are ranked by richness; rows of equal
+        richness are absorbed into one (their windows unioned — nothing is
+        backdated, the value is identical); a strictly plainer row keeps only
+        the slice BEFORE the richer rows begin, as live history (plain Globex
+        2021–, rich Globex 2023– → plain [2021, 2023), rich [2023, …)); a
+        plainer row entirely covered by richer ones is retired. Every
+        conflicting row closes at the incoming start (the boundary); if one
+        ran before the boundary, every slice is cut there and the top row's
+        value CONTINUES in a new row from the boundary (the split). The top
+        row's end extends to the union end (the incoming says the value is
+        still current).
+        """
         if not _overlaps(existing):
             return _decision(ADD, None, why + " but intervals disjoint (repeated occurrence, new interval)")
-        # retire every contradicting row AND every duplicate of the survivor
-        also = [n.id for n in stale if n.id != existing.id] + \
-               [n.id for n in same_val_overlapping if n.id != existing.id]
-        interval = _union(existing)
-        keep = existing.text if not richer_rule else \
-            richer(new.text, existing.text, candidate_key=new_key, existing_key=existing.key())
-        text = new.text if (not richer_rule or keep != existing.text) else existing.text
+        stored = [existing] + [n for n in same_val_overlapping if n.id != existing.id]
+        also = [n.id for n in stale]
+        retime: dict[int, tuple[Optional[str], Optional[str]]] = {}
+        boundary_s = new.valid_from or now.isoformat()
 
-        # Rule (README, "interval rule"): the INCOMING fact's start is the
-        # boundary of what is known. Conflicting rows close there. If a
-        # conflicting row ran in the span BEFORE the boundary, the survivor's
-        # earlier period is never destroyed and never left overlapping it:
-        # the union is SPLIT — the existing row keeps [union start, earliest
-        # such conflict's start) as live history, and the value continues in a
-        # NEW row from the boundary. No conflict before the boundary → the
-        # survivor is simply widened to the union.
-        earlier = [n for n in stale if n.id != existing.id
-                   and (parse_ts(n.valid_from) or FAR_PAST) < close_edge]
-        if earlier and (interval[0] is None or parse_ts(interval[0]) < close_edge):
-            cut = min(earlier, key=lambda n: parse_ts(n.valid_from) or FAR_PAST)
-            keep_until = cut.valid_from or interval[0] or new.valid_from or now.isoformat()
-            if interval[0] is not None and parse_ts(keep_until) < parse_ts(interval[0]):
-                keep_until = interval[0]              # conflict predates the survivor: empty window, never end < start
-            continued = replace(write_as or new, text=text, valid_from=new.valid_from or now.isoformat(),
-                                valid_until=interval[1], attribute_key=new_key)
-            return _decision(ADD, None, why + f" (split: history kept to {keep_until}, continued from the boundary)",
-                             text=text, also_close=also, retime={existing.id: (interval[0], keep_until)},
-                             write=continued)
-
-        widened = interval != (existing.valid_from, existing.valid_until)
+        # ranking → levels (richest first); the incoming joins the existing
+        # row's level unless the richer rule says it genuinely carries more
         if not richer_rule:
-            # negative control: newest phrasing always wins
-            return _decision(UPDATE, existing.id, why + " (newest wins)", text=new.text,
-                             also_close=also, interval=interval)
-        keep = richer(new.text, existing.text, candidate_key=new_key, existing_key=existing.key())
-        if keep == existing.text and not widened:
-            return _decision(NONE, existing.id, why + " (existing at least as rich)",
-                             text=existing.text, also_close=also)
-        if keep == existing.text:
-            return _decision(UPDATE, existing.id, why + " (existing at least as rich; validity window widened)",
-                             text=existing.text, also_close=also, interval=interval)
-        return _decision(UPDATE, existing.id, why + " (candidate richer)", text=new.text,
-                         also_close=also, interval=interval)
+            levels = [[new] + stored]                       # newest wins: one level, incoming text
+            top_text = new.text
+        else:
+            keep = richer(new.text, existing.text, candidate_key=new_key, existing_key=existing.key())
+            new_info = information(new.text) if keep != existing.text else min(information(new.text), information(existing.text))
+            buckets: dict[int, list[Fact]] = {}
+            for r in stored:
+                buckets.setdefault(information(r.text), []).append(r)
+            buckets.setdefault(new_info, []).append(new)
+            levels = [buckets[k] for k in sorted(buckets, reverse=True)]
+            top_text = new.text if keep != existing.text else next(r for r in levels[0] if r is not new).text \
+                if any(r is not new for r in levels[0]) else new.text
+
+        earlier = [n for n in stale if (parse_ts(n.valid_from) or FAR_PAST) < close_edge]
+        cut_row = min(earlier, key=lambda n: parse_ts(n.valid_from) or FAR_PAST) if earlier else None
+        cut = (parse_ts(cut_row.valid_from) or FAR_PAST) if cut_row else None
+        if cut is not None and all((parse_ts(r.valid_from) or FAR_PAST) >= close_edge for r in stored + [new]):
+            cut = None          # nothing of this value lies before the boundary: no slice to split, the conflict just closes
+
+        def _from(rows):   # union start (None = open) as (dt, str)
+            if any(r.valid_from is None for r in rows):
+                return FAR_PAST, None
+            f = min((r.valid_from for r in rows), key=parse_ts)
+            return parse_ts(f), f
+
+        def _until(rows):  # union end (None = open) as (dt, str)
+            if any(r.valid_until is None for r in rows):
+                return FAR_FUTURE, None
+            u = max((r.valid_until for r in rows), key=parse_ts)
+            return parse_ts(u), u
+
+        write: Optional[Fact] = None
+        event, target, text_out = NONE, existing.id, existing.text
+        richer_from_dt: Optional[datetime] = None          # where the richer levels' details begin
+        for i, rows in enumerate(levels):
+            f_dt, f_s = _from(rows)
+            u_dt, u_s = _until(rows)
+            caps: list[tuple[datetime, Optional[str]]] = [(u_dt, u_s)]
+            if cut is not None:
+                caps.append((cut, cut_row.valid_from))
+            if i > 0:
+                caps.append((richer_from_dt, richer_from_s))
+            end_dt, end_s = min(caps, key=lambda c: c[0])
+            if i == 0:
+                richer_from_dt, richer_from_s = f_dt, f_s
+            else:
+                richer_from_dt = min(richer_from_dt, f_dt)
+                richer_from_s = f_s if richer_from_dt == f_dt else richer_from_s
+            head = next((r for r in rows if r is not new), None)   # a stored row keeps its id
+            slice_ok = f_dt < end_dt
+            for r in rows:
+                if r is new or r is head:
+                    continue
+                also.append(r.id)                                  # absorbed duplicate → retired
+            if head is not None:
+                if slice_ok:
+                    if (f_s, end_s) != (head.valid_from, head.valid_until):
+                        retime[head.id] = (f_s, end_s)
+                else:
+                    # no valid slice left (a conflict or richer row predates it entirely):
+                    # closed to an empty window at its own start, then retired
+                    also.append(head.id)
+                    if head.valid_from is not None:
+                        retime[head.id] = (head.valid_from, head.valid_from)
+            elif slice_ok and i > 0:
+                # the incoming is a plainer level preceding the richer rows: history row
+                write = replace(write_as or new, valid_from=f_s, valid_until=end_s, attribute_key=new_key)
+                event = ADD
+            if i == 0:
+                top = (f_s, u_s, end_s, head)
+        f_s, u_s, end_s, head = top
+        if cut is not None:
+            # the split: the top value continues from the boundary in a NEW row
+            write = replace(write_as or new, text=top_text, valid_from=boundary_s,
+                            valid_until=u_s, attribute_key=new_key)
+            event, target = ADD, None
+        elif head is None:
+            if existing.id in also:
+                # the richer incoming covers the existing row's whole window → UPDATE in place
+                also.remove(existing.id)
+                retime.pop(existing.id, None)
+                retime[existing.id] = (f_s, end_s)
+                event, text_out = UPDATE, top_text
+            else:
+                # the existing row keeps an earlier slice; the richer incoming is a new row from its own start
+                write = replace(write_as or new, valid_from=f_s, valid_until=u_s, attribute_key=new_key)
+                event, target = ADD, None
+        elif head is existing and (head.id in retime or top_text != existing.text):
+            event, text_out = UPDATE, top_text
+        interval = retime.pop(existing.id, None) if event == UPDATE else None
+        reason = why + (" (newest wins)" if not richer_rule else
+                        " (split: value continued from the boundary)" if cut is not None else
+                        " (candidate richer)" if event == UPDATE and text_out == new.text and new.text != existing.text else
+                        " (existing at least as rich)")
+        return _decision(event, target if event != ADD else None, reason, text=text_out,
+                         also_close=also, interval=interval, retime=retime, write=write)
 
     # 3) (removed) a near-exact-text shortcut used to live here; once it
     #    required a real matching key it was a strict subset of 4) that picked
