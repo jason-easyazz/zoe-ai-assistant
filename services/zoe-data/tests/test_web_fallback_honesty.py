@@ -544,3 +544,28 @@ def test_positive_control_results_still_capture_the_first_source(monkeypatch, ch
     assert pkg["web_lookup"]["status"] == WEB_LOOKUP_RESULTS
     assert captures == ["https://example.com/deals"]
     assert pkg["screenshots"] and pkg["screenshots"][0]["source_url"] == "https://example.com/deals"
+
+
+def test_reply_with_its_own_source_is_still_captured_when_lookup_is_off(monkeypatch, chat_router):
+    """A reply citing one real URL (no price) still asks for enrichment; when
+    that lookup is off/blocked the reply's OWN source stays in `sources` and must
+    still be photographed — the lookup outcome governs the honest row, not the
+    evidence for sources the reply already cites (Codex P2, #1691)."""
+    import asyncio
+
+    monkeypatch.setenv(re_mod.WEB_FALLBACK_PROVIDER_ENV, "off")
+    ddg = _serve_ddg(monkeypatch, RESULTS_PAGE)
+    captures = _spy_capture(monkeypatch, chat_router)
+    pkg = asyncio.run(
+        chat_router._build_research_package(
+            query="cheapest flights to bali",
+            response_text="See https://example.com/bali-fares for current fares.",
+            backend="zoeAgent",
+            user_id="u",
+            session_id="s",
+        )
+    )
+    assert pkg["web_lookup"]["status"] == WEB_LOOKUP_OFF and ddg["n"] == 0
+    assert pkg["sources"] == ["https://example.com/bali-fares"]
+    assert captures == ["https://example.com/bali-fares"]
+    assert pkg["screenshots"] and pkg["screenshots"][0]["source_url"] == "https://example.com/bali-fares"

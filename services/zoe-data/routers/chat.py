@@ -361,7 +361,6 @@ from db_pool import get_db_ctx
 from ui_orchestrator import enqueue_ui_action
 from zoe_ui_components import auto_extract_components
 from research_evidence import (
-    WEB_LOOKUP_RESULTS,
     build_package,
     classify_query,
     default_source_for_query,
@@ -1512,14 +1511,16 @@ async def _build_research_package(
             web_fallback_results=fallback_rows,
             web_lookup=web_lookup,
         )
-    if web_lookup and web_lookup.get("status") != WEB_LOOKUP_RESULTS:
-        # The lookup was off / blocked / errored / empty: there is no source to
-        # photograph. `_capture_research_screenshot` would otherwise fall back to
-        # a duckduckgo.com search URL — so `off` would still send the query out,
-        # and a search-page capture would be shown as "evidence" beside the
-        # failure message. Return the honest package as is.
-        return pkg
     source = (pkg.get("sources") or [""])[0]
+    if not source:
+        # Nothing to photograph: the lookup was off / blocked / errored / empty
+        # AND the reply cited no source of its own. `_capture_research_screenshot`
+        # would otherwise fall back to a duckduckgo.com search URL — so `off`
+        # would still send the query out, and a search-page capture would be
+        # shown as "evidence" beside the failure message. A source the reply
+        # itself cites is still captured regardless of the lookup outcome: that
+        # outcome governs the honest row, not evidence the reply already has.
+        return pkg
     image_b64, screenshot_url = await _capture_research_screenshot(
         query=query,
         candidate_source=str(source or ""),
