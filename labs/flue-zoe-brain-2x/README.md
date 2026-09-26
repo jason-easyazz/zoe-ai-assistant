@@ -350,6 +350,7 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_CONTEXT_WINDOW` | `8192` | llama-server's per-lane SLOT size — the budget for prompt-fit history windowing (`src/context-window.ts`); `0` disables windowing |
 | `ZOE_BRAIN_REPLY_RESERVE` | `1536` | tokens held back from the window for the reply + estimator slack. **Also the reply CAP** (`model.maxTokens`), so lowering it to buy prompt room shortens replies by the same amount — see "the output-budget clamp" |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | `true` | `false` disables progressive tool disclosure |
+| `ZOE_WEB_SEARCH_TOOL` | `0` | B10.1: `1` registers the flag-gated `web_search` tool (thin wrapper over zoe-data `POST /api/system/web-search`, which needs the SAME flag on its side); always disclosed when registered |
 | `ZOE_BRAIN_STREAM` | `on` | `0`/`false` disables the NDJSON sentinel-stream mode |
 | `ZOE_BRAIN_STREAM_TIMEOUT_S` | `180` | streamed-turn deadline (mirrors prod `ZOE_CORE_TIMEOUT_S`) |
 | `ZOE_BRAIN_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible brain endpoint |

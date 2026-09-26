@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-452 flags; 451 not documented in `.env.example`.
+453 flags; 451 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -469,6 +469,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_WEATHER_CACHE_TTL_S` | `'600'` | no | NO | `services/zoe-data/routers/weather.py` |
 | `ZOE_WEB_BROWSE_MAX_HTML` | `1500000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_WEB_FALLBACK_PROVIDER` | `'auto'` | no | NO | `services/zoe-data/research_evidence.py` |
+| `ZOE_WEB_SEARCH_TOOL` | `'0'` | no | yes | `services/zoe-data/research_evidence.py` |
 | `ZOE_WORKTREE_PRUNE_INTERVAL_S` | `86400.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_WORKTREE_ROOT` | `''` | no | NO | `services/zoe-data/worktree_bootstrap.py` |
 | `ZOE_WS_IDLE_TIMEOUT_SECONDS` | `120.0` | yes | NO | `services/zoe-data/main.py` |

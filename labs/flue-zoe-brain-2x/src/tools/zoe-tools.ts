@@ -1068,6 +1068,91 @@ const activateAbilities = defineTool({
   },
 });
 
+/**
+ * web_search — B10.1, FLAG-GATED (ZOE_WEB_SEARCH_TOOL=1 in THIS sidecar's env).
+ *
+ * Jason's ask (2026-07-24): back a claim on "are you sure?" and do live lookups
+ * ("tickets to Bali at the moment"). A thin wrapper over zoe-data's
+ * POST /api/system/web-search (routers/system.py), which is itself only the
+ * B10.0 `research_evidence.fetch_web_fallback` — provider-aware (Tavily when
+ * keyed, else DuckDuckGo), bounded to ≤5 title/url/snippet rows, and HONEST:
+ * its `status` (results / no_results / blocked / error / off) is surfaced to
+ * the model verbatim, so a blocked scrape is reported as blocked, never as
+ * "nothing on the web says that". zoe-data serves the endpoint only under its
+ * OWN ZOE_WEB_SEARCH_TOOL=1 — a 404 here means that side is off, and the tool
+ * says so. Read-only, no user identity needed (nothing is written as anyone).
+ *
+ * NOT in `zoeTools` (the 21-tool always-registered set): `optionalZoeTools()`
+ * appends it only when the flag is on, so the default brain is unchanged. It
+ * is deliberately ungrouped in tool-groups.ts — an ungrouped tool is ALWAYS
+ * disclosed, which is what "are you sure?" needs.
+ */
+export function webSearchToolEnabled(): boolean {
+  return ['1', 'true', 'yes', 'on'].includes((process.env.ZOE_WEB_SEARCH_TOOL ?? '0').trim().toLowerCase());
+}
+
+type WebSearchPayload = {
+  status?: string;
+  provider?: string;
+  message?: string;
+  detail?: string;
+  results?: Array<{ title?: string; url?: string; snippet?: string }>;
+};
+
+const webSearch = defineTool({
+  name: 'web_search',
+  description:
+    'Look something up on the live web: current events, today\'s prices or availability ' +
+    '("tickets to Bali at the moment"), a fact after your training data, or to BACK UP a ' +
+    'claim when the user asks "are you sure?" — search, then answer from the results and ' +
+    'cite the source. Returns up to 5 results (title, link, snippet) or an honest ' +
+    'status when the lookup was blocked or found nothing. Build a tight 4-8 word query.',
+  input: v.object({
+    query: v.pipe(v.string(), v.description('A tight 4-8 word search query.')),
+  }),
+  run: async ({ data, signal }) => {
+    const query = String(data?.query ?? '').trim().slice(0, 300);
+    if (!query) return 'I need something to search for.';
+    try {
+      const res = await fetch(new URL('/api/system/web-search', zoeDataUrl()), {
+        method: 'POST',
+        headers: internalHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ query, max_results: 5 }),
+        signal: fetchSignal(signal),
+      });
+      if (res.status === 404) return 'Web search is switched off on this box (ZOE_WEB_SEARCH_TOOL), so I can\'t look that up.';
+      if (!res.ok) return "I couldn't reach web search right now.";
+      const body = (await res.json()) as WebSearchPayload;
+      const status = String(body.status ?? 'error');
+      const rows = Array.isArray(body.results) ? body.results.slice(0, 5) : [];
+      if (status === 'results' && rows.length > 0) {
+        const lines = rows.map((r, i) => {
+          const title = String(r.title ?? '').trim() || '(untitled)';
+          const url = String(r.url ?? '').trim();
+          const snippet = String(r.snippet ?? '').trim().slice(0, 300);
+          return `${i + 1}. ${title} — ${url}${snippet ? `\n   ${snippet}` : ''}`;
+        });
+        return `Web results (${String(body.provider ?? 'web')}):\n${lines.join('\n')}`;
+      }
+      const why = String(body.detail ?? '').trim();
+      if (status === 'no_results') return 'Web lookup found nothing for that — say so rather than guessing.';
+      if (status === 'blocked') return `Web lookup was BLOCKED by the search provider${why ? ` (${why})` : ''} — I could not check; say so.`;
+      if (status === 'off') return 'Web lookup is switched off on this box, so I could not check.';
+      return `Web lookup failed${why ? ` (${why})` : ''} — I could not check; say so.`;
+    } catch {
+      return "I couldn't reach web search right now.";
+    }
+  },
+});
+
+/**
+ * Flag-gated tools appended to `zoeTools` at agent render (src/agents/zoe.ts).
+ * Empty under default env, so the always-registered set stays exactly 21.
+ */
+export function optionalZoeTools() {
+  return webSearchToolEnabled() ? [webSearch] : [];
+}
+
 /** All Zoe-brain tools, wired onto the agent in src/agents/zoe.ts. */
 export const zoeTools = [
   // Phase 3 increment 1

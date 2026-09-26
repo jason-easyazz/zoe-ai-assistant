@@ -22,7 +22,13 @@ from auth import (
 )
 from database import get_db
 from hermes_http import hermes_auth_headers
-from research_evidence import web_lookup_status
+from research_evidence import (
+    WEB_SEARCH_TOOL_MAX_RESULTS,
+    fetch_web_fallback,
+    web_lookup_status,
+    web_search_tool_enabled,
+    web_search_tool_payload,
+)
 from openclaw_maintenance import (
     fetch_gateway_status,
     fetch_npm_latest_version,
@@ -2811,6 +2817,41 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
         logger.warning("intent-dispatch failed intent=%s: %s", intent_name, exc)
         raise HTTPException(status_code=500, detail="intent execution failed") from exc
     return {"intent": intent_name, "ok": result is not None, "result": result or ""}
+
+
+# ─── Web search for the brain's flag-gated web_search tool (B10.1) ────────────
+#
+# The Flue sidecar's `web_search` tool (labs/flue-zoe-brain-2x/src/tools/
+# zoe-tools.ts, registered only under its own ZOE_WEB_SEARCH_TOOL=1) is a thin
+# wrapper over this endpoint, which is itself just `research_evidence.
+# fetch_web_fallback` (B10.0: provider-aware, bounded, honest status). No new
+# HTTP client, no scraping beyond B10.0. Absent (404) unless zoe-data's
+# ZOE_WEB_SEARCH_TOOL=1, so the default box is byte-identical to before.
+# Same internal gate as intent-dispatch: the model can spend Tavily credits and
+# reach the network through it, so it is loopback / X-Internal-Token only.
+# The query text is never logged here or below (fetch_web_fallback logs only
+# its length).
+
+
+class _WebSearchBody(BaseModel):
+    query: str
+    max_results: int = WEB_SEARCH_TOOL_MAX_RESULTS
+
+
+@router.post("/web-search")
+async def web_search(body: _WebSearchBody, _: None = Depends(require_intent_dispatch_auth)):
+    """One bounded web lookup for the brain: ≤5 rows of title/url/snippet plus
+    the B10.0 outcome (`status` ∈ results/no_results/blocked/error/off) verbatim.
+    Fails closed (404) while ZOE_WEB_SEARCH_TOOL is off."""
+    if not web_search_tool_enabled():
+        raise HTTPException(status_code=404, detail="web search tool disabled (ZOE_WEB_SEARCH_TOOL=1 to enable)")
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query required")
+    max_results = max(1, min(int(body.max_results or WEB_SEARCH_TOOL_MAX_RESULTS), WEB_SEARCH_TOOL_MAX_RESULTS))
+    # Blocking urllib/httpx under the hood — keep it off the event loop.
+    outcome = await asyncio.to_thread(fetch_web_fallback, query, max_results)
+    return web_search_tool_payload(outcome)
 
 
 # Synchronous delegation targets the zoe-core brain may invoke in-turn. Hermes
