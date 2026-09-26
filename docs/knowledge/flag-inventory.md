@@ -481,10 +481,11 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Lab flags (`labs/` — not prod)
 
-7 flags; 7 not documented in `.env.example`.
+8 flags; 8 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
+| `ZOE_BITEMPORAL_SUPERSEDE` | `-` | no | NO | `labs/b3-1-supersession/bitemporal.py` |
 | `ZOE_BRAIN_TOKEN` | `''` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py` |
 | `ZOE_BRAIN_URL` | `'http://127.0.0.1:3579'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py` |
 | `ZOE_KOKORO_VOICES` | `'/home/zoe/models/voices-v1.0.bin'` | no | NO | `labs/kokoro-voice-blend/blend_zoe_voices.py` |

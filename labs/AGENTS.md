@@ -305,6 +305,22 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+- `b3-1-supersession/` — B3.1 lab: **bi-temporal supersession + keep-the-richer-fact
+  reconciliation**, pure Python, no model, no I/O, flag-dark
+  (`ZOE_BITEMPORAL_SUPERSEDE`, default off, read by nothing in prod). Graphiti's
+  overlap rule (contradiction only when validity intervals overlap; invalidate by
+  `valid_until = new.valid_from` + `expired_at = now`, never delete), mem0's
+  ADD/UPDATE/SUPERSEDE/NONE controller with integer-id candidates and an injectable
+  LLM `judge` (fake in tests; a judge naming an unseen id degrades to ADD), the
+  `attribute_key` normalisation that closes the M7 "works at X" gap, and the
+  richer-fact rule. 50-pair SYNTHETIC fixture (Person A/B/C, invented employers —
+  never household data) + `run_fixture.py` scorer with both negative controls.
+  Design + schema/migration PLAN + prod wiring:
+  `docs/architecture/b3-1-bitemporal-supersession.md`. Regression net
+  `test_supersession_lab.py` lives INSIDE the lab dir (hand-run:
+  `nice -n 15 python3 -m pytest labs/b3-1-supersession -q -p no:cacheprovider`) —
+  `pytest.ini` `testpaths` and both CI lanes never collect `labs/`, so nothing in
+  CI imports it. README is a record, not a contract.
 - `omi-receiver/` — **B9.1 Omi lab receive** (P0 of
   `docs/architecture/omi-integration-plan.md`): a hand-run, OFF-Orin BLE receiver
   for the Omi CV1 pendant — `omi_bridge.py` (bleak 0.22.3 → 3-byte-header framer
