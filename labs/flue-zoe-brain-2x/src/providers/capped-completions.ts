@@ -6,7 +6,7 @@
  * assistant message with NO tool calls (node_modules/@earendil-works/
  * pi-agent-core/dist/agent-loop.js). RE-VERIFIED ON 0.83.0 (2026-08-03): still
  * `while (true)`, still no `maxIterations` / `maxSteps` / `iterationLimit`
- * anywhere in its dist. Flue 2.0.1 keeps `MAX_FOLLOWUPS = 32`, but with the SAME
+ * anywhere in its dist. Flue 2.0.1 AND 2.1.1 keep `MAX_FOLLOWUPS = 32`, but with the SAME
  * semantics as the beta — it bounds FOLLOW-UP PROMPTS on the result-tools path,
  * not tool-call rounds, and upstream's own comment calls it "a defense-in-depth
  * ceiling against pathological loops". Nothing in 2.x caps tool rounds per turn.
@@ -16,7 +16,7 @@
  * THE FIX (supported seam, RE-SEATED FOR 2.x): the beta hooked this via
  * `registerApiProvider({ api, stream, streamSimple })` — a global wire-protocol
  * registry keyed by an `api` slug. That registry is DELETED in 2.x
- * (`registerProvider`/`registerApiProvider` appear nowhere in @flue/runtime@2.0.1's
+ * (`registerProvider`/`registerApiProvider` appear nowhere in @flue/runtime@2.0.1's or 2.1.1's
  * dist, only in its migration guide). The replacement is Pi's own provider object:
  * `setProvider(createProvider({ id, auth, models, api }))`, where `api` takes the
  * very same `{ stream, streamSimple }` pair. So the WRAPPING TECHNIQUE is
