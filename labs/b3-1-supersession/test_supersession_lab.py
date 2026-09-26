@@ -696,3 +696,39 @@ def test_plainer_row_keeps_every_slice_not_owned_by_richer_rows():
     # the richer stored row's end is NOT extended by a plainer current observation
     d = bt.reconcile(new, [rich], now=NOW)
     assert d.event == bt.ADD and 2 not in d.retime and (d.write_as.text, d.write_as.valid_from) == (new.text, "2025-01-01")
+
+
+# ── review round 7 (PR #1692) ────────────────────────────────────────────────
+
+def test_stored_unknown_start_history_survives_a_dated_richer_row():
+    plain = _fact(1, "person a works at globex")                    # recorded with no known start
+    rich = _fact(2, "person a works at globex as a senior mechanical engineer", "2023-01-01", "2025-01-01")
+    new = _fact(0, "Person A works at Globex", "2024-01-01")
+    d = bt.reconcile(new, [plain, rich], now=NOW)
+    assert (d.event, d.also_close, d.retime) == (bt.ADD, [], {1: (None, "2023-01-01")}), d
+    store = bt.apply(d, new, {1: plain, 2: rich}, now=NOW)
+    assert [(f.valid_from, f.valid_until, f.is_live) for f in store.values()] == [
+        (None, "2023-01-01", True), ("2023-01-01", "2025-01-01", True), ("2025-01-01", None, True)]
+    # an UNDATED incoming still adopts a dated peer's start instead of pushing it to unknown
+    d = bt.reconcile(_fact(0, "Person A works at Globex"), [_fact(1, "person a works at globex", "2021-01-01")], now=NOW)
+    assert d.event == bt.NONE and d.retime == {}
+
+
+def test_conflicts_close_at_the_incoming_start_even_when_write_as_is_a_later_slice():
+    plain = _fact(1, "person a works at globex", "2021-01-01")
+    rich = _fact(2, "person a works at globex as a senior mechanical engineer", "2024-01-01", "2025-01-01")
+    acme = _fact(3, "person a works at acme", "2022-01-01")
+    new = _fact(0, "Person A works at Globex", "2024-01-01")
+    d = bt.reconcile(new, [plain, rich, acme], now=NOW)
+    assert d.also_close == [3] and d.close_at == "2024-01-01"
+    assert (d.write_as.valid_from, d.write_as.valid_until) == ("2025-01-01", None)   # the later slice
+    store = bt.apply(d, new, {1: plain, 2: rich, 3: acme}, now=NOW)
+    assert (store[3].valid_from, store[3].valid_until) == ("2022-01-01", "2024-01-01")   # closed at the boundary, not 2025
+    assert (store[1].valid_from, store[1].valid_until) == ("2021-01-01", "2022-01-01")
+    rows = sorted(store.values(), key=lambda f: f.valid_from)
+    for x, y in zip(rows, rows[1:]):
+        assert not bt.intervals_overlap(x, y), (x, y)
+    assert bt.live_texts(store) == [plain.text]
+    # a transition carries its own date as the close edge
+    d = bt.reconcile(_fact(0, "Person A switched from Acme to Globex in 2025"), [_fact(1, "person a works at acme", "2020-01-01")], now=NOW)
+    assert d.close_at == "2025" and (d.event, d.target_id) == (bt.SUPERSEDE, 1)

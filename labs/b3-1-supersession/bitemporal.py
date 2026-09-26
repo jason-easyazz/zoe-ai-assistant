@@ -440,6 +440,11 @@ class Decision:
     # rich Globex [2023, 2025) keeps [2021, 2023) on its own row and gets
     # [2025, ∞) as a new row here.
     extra_rows: list[Fact] = field(default_factory=list)
+    # The boundary every ``also_close`` row (and a SUPERSEDE target) is closed
+    # at: the incoming fact's start as reconciled. Carried explicitly because
+    # ``write_as`` may be a LATER slice of the value (plain Globex resuming in
+    # 2025 after a richer 2024–2025 row) and must not move the close edge.
+    close_at: Optional[str] = None
 
 
 def _validate_judge(verdict: dict, candidates: list[Fact]) -> Optional[tuple[str, Optional[int]]]:
@@ -537,7 +542,7 @@ def reconcile(
         return Decision(event, target, why, text=text, extra_closed=extra_closed,
                         write_as=write if write is not None else write_as,
                         also_close=list(also_close or []), interval=interval, retime=dict(retime or {}),
-                        extra_rows=list(extra_rows or []))
+                        extra_rows=list(extra_rows or []), close_at=new.valid_from)
 
     if not live:
         return _decision(ADD, None, "no live neighbours")
@@ -613,12 +618,14 @@ def reconcile(
         strs.setdefault(close_edge, boundary_s)
 
         def _window(rows: list[Fact]) -> list[tuple[datetime, datetime]]:
-            """Union of the rows' windows. A missing start is UNKNOWN (the
-            least informative: a known start wins); a missing end is OPEN
-            (the most informative: still true)."""
+            """Union of the rows' windows. A STORED row with no start was
+            recorded as history of unknown depth and keeps it (FAR_PAST); an
+            undated INCOMING observation makes no start claim and adopts the
+            level's earliest known start (never pushing a dated row's start
+            to unknown, never inventing depth). A missing end is OPEN."""
             starts = [_dt(r.valid_from, FAR_PAST) for r in rows if r.valid_from]
-            start = min(starts) if starts else FAR_PAST
-            return _union([(max(start, _dt(r.valid_from, FAR_PAST)) if r.valid_from else start,
+            known = min(starts) if starts else FAR_PAST
+            return _union([(known if (r is new and not r.valid_from) else _dt(r.valid_from, FAR_PAST),
                             _dt(r.valid_until, FAR_FUTURE)) for r in rows])
 
         write: Optional[Fact] = None
@@ -744,6 +751,7 @@ def apply(decision: Decision, new: Fact, store: dict[int, Fact],
     first, then the old one is retired — a crash between the two leaves a
     duplicate, never a hole."""
     now = now or utcnow()
+    close_at = decision.close_at if decision.close_at is not None else new.valid_from
     if decision.write_as is not None:
         new = decision.write_as
     next_id = (max(store) + 1) if store else 1
@@ -764,7 +772,7 @@ def apply(decision: Decision, new: Fact, store: dict[int, Fact],
         store[next_id] = new_row
         successor = new_row
         if decision.event == SUPERSEDE and decision.target_id is not None:
-            store[decision.target_id] = invalidate(store[decision.target_id], new_row, now)
+            store[decision.target_id] = invalidate(store[decision.target_id], replace(new_row, valid_from=close_at), now)
     for extra in decision.extra_rows:
         next_id = (max(store) + 1) if store else 1
         store[next_id] = replace(extra, id=next_id, created_at=now.isoformat(),
@@ -779,7 +787,7 @@ def apply(decision: Decision, new: Fact, store: dict[int, Fact],
     # earlier, valid_from
     for cid in decision.also_close:
         if successor is not None and cid in store and store[cid].is_live and cid != successor.id:
-            edge = replace(successor, valid_from=new.valid_from)
+            edge = replace(successor, valid_from=close_at)
             store[cid] = invalidate(store[cid], edge, now)
     return store
 
