@@ -159,10 +159,12 @@ jobs:
           # resolve to manylinux x86_64 wheels for cp310 with no source build
           # (verified: `pip download --only-binary=:all:
           #  --platform manylinux_2_28_x86_64 --python-version 3.10 --abi cp310`).
-          # Versions are pinned to what the Jetson actually runs.
+          # Versions are pinned to what the Jetson actually runs (av 17.1.0 /
+          # aiortc 1.15.0 since 2026-09-26; the x86_64 cp310 wheels were re-verified
+          # with `pip download` when the pins moved).
           # test_livekit_ci_dep_guard.py FAILS this lane if they ever go missing,
           # so deleting this line cannot silently re-open the hole.
-          pip install --quiet "av==16.1.0" "aiortc==1.14.0" "livekit-protocol==1.1.8"
+          pip install --quiet "av==17.1.0" "aiortc==1.15.0" "livekit-protocol==1.1.8"
           # zoe-data slim-dep-green tests are selected by the `ci_safe` marker
           # (registered in pytest.ini), not a hand-enumerated file list — so a new
           # slim-safe test runs here just by adding a co-located

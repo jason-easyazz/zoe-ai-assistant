@@ -20,13 +20,20 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ## 0. NEXT ACTION (keep this current)
 
-1. 🧑 **Root window on the box (one sitting, ~20 min):** shrink zram (B0.1), rotate the
-   Telegram token + vacuum the journal (B0.3), then let one nightly replay gate and one
-   self-hosted test run go green. Everything in §1–§8 that is voice-path assumes this.
-2. Merge PR #1680 (this program's parent review), then open the small PR that removes
-   the retired 1.x Telegram lab (B0.5) — 35 of 52 Dependabot alerts.
-3. Start B1.1 (speculative turn-start) as the first lab spike — it is the largest
-   perceived-latency win and it is where Zoe can beat GPT-Live/Siri locally.
+1. 🧑 **Root / operator window on the box (one sitting, ~30 min):** shrink zram (B0.1);
+   rotate the Telegram token + vacuum the journal (B0.3); rotate the Postgres password
+   (B0.14); **swap in the verified Gemma re-upload** (B6.2 — tensors are byte-identical,
+   only the chat template changed; staged + checksummed, the swap itself was refused to the
+   agent as a production deploy) and restart `llama-server`, then run one replay gate; move
+   the ignored leftover `modules/zoe-music/` (root-owned `__pycache__`, retired in #1653) out
+   of the live checkout — it makes `test_no_zoe_music_module` red locally while CI is green.
+2. **Drain the PR queue in order:** #1691 (B10.0) and #1695 (B0.12 pt 1) are ready + queued;
+   #1692 (B3.1 lab) and #1693 (B9.1 lab) are in a batched review-thread round; #1694 (Flue
+   2.1.1) and #1696 (Moonshine 0.1.5) are voice-path drafts that need a **head-bound** replay
+   run before ready (B1.11 needs the 2.1.1 sidecar on a parallel port; B1.10 needs the
+   runbook's install-on-box step first).
+3. **B0.4 llama.cpp rebuild** (brain-stop window, ~1 h compile) — after the Gemma swap has
+   its own replay gate, so the two changes are attributable separately.
 
 ## 1. Where Zoe already beats the bar (protect these)
 
@@ -74,8 +81,18 @@ status: 🔨 active — NEXT ACTION is always §0
   12 GB; Dependabot alerts on; security pip set (anyio critical etc.) + 6 drifted pins;
   Node 22.23.3 on both Flue units; zoe-auth image rebuilt; Omnigent container Codex → shared
   Serena URL; Multica 401 explained; **replay gate PASS 13/13** (first in 41 runs).
-- B0.14 🔨 **Feature-audit defects** (review PR #1684 found five; fix PR in flight, each with a
-  negative-controlled test): (1) `proactive/scheduler.py` logs the Postgres password at
+  **2026-09-26 batch:** transformers 5.17.0, mcp 1.30.0, pydantic 2.13.5, alembic 1.20.0,
+  PyJWT 2.15.0, pywebpush 2.5.0, livekit 1.1.20, ddgs 9.16.0, SQLAlchemy 2.0.54 installed
+  (dry-run first; fastembed held at 0.8.0); zoe-data restarted (`/readyz` all ok, no new
+  errors); Silero VAD file v6.2.1 in place; `ci_safe` lane 442 passed locally; **replay gate
+  PASS #2** (13/13 scoreable, 7 EMPTY as baseline; medians stt 406 / brain 1962 / e2e
+  1753 ms). Two pip-declared conflicts are pre-existing and belong to packages zoe-data
+  does not import (`livekit-agents` 1.5.10 wants livekit 1.1.8; `memu-py` wants
+  httpx<0.28) — candidates for removal in B0.7, not blockers.
+- B0.14 ✅ 2026-09-26 (**PR #1689**, each with a negative-controlled test; all five live-verified
+  on the box after the restart — people endpoint 200, scheduler line redacted, a date-only
+  reminder for a test user fired via the same-day fallback with id-only logging, media-player
+  fail-soft, honest capabilities). Remaining 🧑 steps below. Original list: (1) `proactive/scheduler.py` logs the Postgres password at
   startup — redact, then 🧑 rotate the password per the secret-topology runbook; (2)
   `GET /api/memories/people` 500 (`COLLATE NOCASE` on Postgres) + sweep the class; (3)
   reminders: date-only rows skipped and a literal `"tomorrow"` due date swallowed; (4)
@@ -100,9 +117,16 @@ status: 🔨 active — NEXT ACTION is always §0
   Gate: 20-turn multi-prompt replay under `flock`; RSS/TTFT vs baseline; watch #25522.
 - B0.5 ⬜ Retire `labs/flue-zoe-telegram/` (1.x) by removal; update `labs/AGENTS.md`;
   clears 35 Dependabot alerts. Small PR after #1680.
-- B0.6 ⬜ Decide the deploy pip contract (deploy installs 9 of 39 packages). Either
-  `pip install -r` in deploy (voice-gated) or state in the file header that the box is
-  hand-managed. Declare `tzlocal`; drop `passlib`; fix the onnxruntime/ctranslate2 comments.
+- B0.6 ✅ 2026-09-26 **Deploy pip contract decided: the box is hand-managed, BOX FIRST, FILE
+  SECOND** (the header of `services/zoe-data/requirements.txt` already said so; kept). The
+  file is reconciled to the box after the gated batch (drift check: 0 MISMATCH; only
+  `moonshine-voice` unpinned, owned by #1696); `deploy.yml`'s hard-coded list bumped in the
+  same pass (alembic 1.20.0, pywebpush 2.5.0 — it would otherwise DOWNGRADE the box on the
+  next deploy); the CI lane's av/aiortc aligned to 17.1.0/1.15.0 (x86_64 cp310 wheels
+  re-verified); `tzlocal` declared; `passlib` dropped (no consumer); onnxruntime comment
+  corrected (1.23.2 is the last cp310 wheel — moves only with B0.7). Not adopted:
+  `pip install -r` in deploy — it would make every deploy a 39-package resolve on the live
+  box, which is exactly the class of unobserved runtime change the header forbids.
 - B0.7 ⬜ **Python 3.12 venv for zoe-data only** (Kokoro + llama-server stay on 3.10/CUDA 12.6);
   CPU torch for Resemblyzer, onnxruntime 1.30, websockets 17, av 18, numpy 2, sklearn 1.9
   (re-export the router head). Gate: full `ci_safe` lanes in the venv + replay gate +
@@ -229,8 +253,21 @@ status: 🔨 active — NEXT ACTION is always §0
 - B5.6 ⬜ Voxtral Realtime as an offline second-opinion ASR judge in the replay harness.
 
 ### B6 — Brain headroom (optimise around the rock)
-- B6.1 = B0.4 (FA rebuild). B6.2 ⬜ sha256 the local GGUF + MTP drafter vs Unsloth's
-  2026-07-17 re-upload; stage + replay-gate if different. B6.3 ⬜ Domain-prefixed tool
+- B6.1 = B0.4 (FA rebuild). B6.2 🔨 **Re-upload staged, swap is an operator step.** Downloaded
+  to `~/models/gemma4-e4b-qat/staging-hf-20260717/`, sha256 verified against the HF LFS oids
+  (df0fd4ee… / 423074e5…). Diffed with the gguf-py reader: **all 666 + 49 tensors
+  byte-identical, tokenizer identical; the ONLY change is `tokenizer.chat_template`** (16804 →
+  18808 chars) — `null` tool arguments render as `null`; pre-serialised JSON-string tool
+  arguments no longer double-wrap; `image_url`/`input_audio` content parts; `messages and …`
+  guards on empty histories; O(1) continuation tracking; a `<|channel>thought` opener after a
+  tool response when thinking is enabled. The live server uses the embedded template
+  (`--jinja`), so this is a prompt-format change on the tool-calling path and must be
+  replay-gated. 🧑 Swap (both files, keep the old ones beside them):
+  `cd ~/models/gemma4-e4b-qat && for f in gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf
+  mtp-gemma-4-E4B-it.gguf; do mv -n $f $f.pre-hf-20260717; mv -n staging-hf-20260717/$f $f;
+  done && sha256sum *.gguf`, then `systemctl --user restart llama-server` (health probe
+  waits for model + draft), then `systemctl --user start zoe-voice-regression.service` and
+  read `~/.cache/zoe/voice_regression_last.json`. Rollback = the reverse `mv`. B6.3 ⬜ Domain-prefixed tool
   names (`ha__`, `ma__`, `memory__`). B6.4 ⬜ Consider an E2B "fast/cheap turn" lane only
   if RAM allows after B0.1/B5.1 (AICore's variant-by-task split) — not a rock change.
 - B6.5 ⬜ Client defaults: `zoe_flue_client` → `:3579`/wire 2; `ZOE_BRAIN_FAILOVER=1` after
@@ -338,6 +375,10 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-26 — gated Python batch on the box + replay gate PASS #2; B0.6 deps contract
+  (this PR); B0.14 ✅ via #1689; B6.2 re-upload diffed (template-only) and staged; B10.0
+  (#1691), B0.12 pt 1 (#1695), B1.11 (#1694), B1.10 (#1696) opened by agents; #1692/#1693
+  in review-thread rounds; §0 rewritten around the operator window + queue order.
 - 2026-09-25 — created from the return-from-absence review; B0.2 done the same day; B1.1
   (#1685), B3.2 first step (#1682), B9 plan (#1683), the feature audit (#1684) and the 1.x
   Telegram-lab retirement (#1681) opened as drafts; B0.14/B0.15 added; §4b triage recorded.
