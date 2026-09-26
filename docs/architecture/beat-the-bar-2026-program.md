@@ -33,8 +33,11 @@ status: 🔨 active — NEXT ACTION is always §0
    #1691 (B10.0) and #1692 (B3.1 lab), each with ~10–30 review threads closed by
    failing-test-first fixes. #1694 (B1.11) parked — see B1.11. Voice-scope PRs need a
    head-bound probe after EVERY `update-branch` (strict mode); the Kokoro-paused window
-   (`systemctl --user stop kokoro-tts` → probe with `--service-dir` → start → check `/readyz`
-   tts) frees ~2 GB and is what made today's runs possible under the 700 MB floor. Hold the
+   (`systemctl --user stop kokoro-tts` → probe with `--service-dir` → start → verify
+   `curl :10201/health` shows `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
+   `dependencies.tts` names the `kokoro-sidecar` provider — `tts.ok` alone is not enough,
+   it also goes green on the espeak/edge fallback or on a CPU-mode Kokoro) frees ~2 GB and is
+   what made today's runs possible under the 700 MB floor. Hold the
    other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again.
 3. **B0.4 llama.cpp rebuild** (brain-stop window, ~1 h compile) — after the Gemma swap has
    its own replay gate, so the two changes are attributable separately.
@@ -98,8 +101,10 @@ status: 🔨 active — NEXT ACTION is always §0
   aborted `git reset --hard` left the live tree partially updated (HEAD stayed, 7 files
   moved ahead, no service restarted). Fixed by 🧑 `chown -R zoe:zoe` + deploy re-run (green,
   live clean). The HA bridge is a Docker container with the source bind-mounted and deploy
-  does NOT restart it — `docker restart homeassistant-mcp-bridge` after any bridge merge
-  (`/tools/names` live, scheme `legacy` against HA 2026.5.2). Other root-owned paths in the
+  does NOT restart it — after a SOURCE-only bridge merge, `docker restart
+  homeassistant-mcp-bridge` (`/tools/names` live, scheme `legacy` against HA 2026.5.2); after a
+  merge that touches the bridge's `requirements.txt` or Dockerfile, a restart reuses the old
+  image's packages — rebuild instead: `docker compose up -d --build homeassistant-mcp-bridge`. Other root-owned paths in the
   checkout are runtime data only (`homeassistant/`, `.pi`, `.polly`, `scripts/n8n`).
   Deploys for #1698 and #1696 then ran green; live = main; drift check 0 MISMATCH.
 - B0.14 ✅ 2026-09-26 (audit merged as #1687 — redacted; corrections #1688; the
