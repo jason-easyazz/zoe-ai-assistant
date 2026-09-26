@@ -437,12 +437,22 @@ from outside, hence B9.0.
   → `WebFallbackOutcome` recorded in the package as `web_lookup` + an honest card row,
   `ZOE_WEB_FALLBACK_PROVIDER` (auto = Tavily-first when keyed | duckduckgo | off), one INFO line
   per lookup (query length, never text); mutation-checked negative controls. Voice-gate scope CLEAR.
-- B10.1 ⬜ Re-land the Python core of the web-search spike (PR #1610, now closed: DDG/Wikipedia/
-  HN scrapers, block detection, consensus merge, ≤350-token voice packet; 44 offline fixture
-  tests) as a ≤300-line PR behind the approved research/delegation seam (the cut-list cut a
-  direct `web_search` tool on purpose); Tavily stays the opt-in primary. B10.2 ⬜ Wire a `web_search`
-  tool into the Flue brain lane behind a flag; "are you sure?" triggers a backed re-answer.
-  Gate: fixture tests + replay corpus unchanged + 20 live lookups scored by hand.
+- B10.1 🔨 **Flag-dark `web_search` brain tool over the B10.0 lookup** — draft PR #1702.
+  Not the #1610 spike (DDG/Wikipedia/HN scrapers, consensus merge — no new scraping, no new
+  HTTP client): `ZOE_WEB_SEARCH_TOOL=1` (default 0 = byte-identical) serves
+  `POST /api/system/web-search` (= `fetch_web_fallback`, ≤5 title/url/snippet rows, outcome
+  `status` verbatim, same `require_intent_dispatch_auth` gate as intent-dispatch, query never
+  logged) and the Flue sidecar registers a thin `web_search` wrapper under its OWN copy of the
+  flag (`optionalZoeTools()`; the 21-tool `zoeTools` set untouched, ungrouped = always
+  disclosed). `/api/system/status` `web_lookup.tool_enabled`; capability prose advertises it
+  only under the flag (B0.14 honesty test made flag-aware + structural gate check). Seam found:
+  the sidecar's tools are static TS `defineTool`s wrapping zoe-data endpoints — there is no
+  HTTP tool catalogue. Voice-gate scope VOICE via the two sidecar `src/` files (flag-dark).
+  Cut-list item 10 tension stated in the PR (the `research`→`delegate-sync` seam it preferred
+  is broken; this is the tracker's B10.2 tool, dark by default). Tavily stays the opt-in
+  primary. B10.2 ⬜ now = flip it live: both `.env`s on, 20 live lookups scored by hand,
+  "are you sure?" triggers a backed re-answer; then decide whether the `research` seam is
+  still needed. Gate: fixture tests + replay corpus unchanged + the 20 scored lookups.
 
 ## 4. Sequencing (dependencies)
 

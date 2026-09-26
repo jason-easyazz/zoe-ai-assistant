@@ -9,6 +9,12 @@ advertisement is removed. This guard keeps the two in step in BOTH directions
 of time: today it fails if the claim creeps back; when B10 registers a tool it
 lets the prose advertise it again.
 
+B10.1 registered `web_search` FLAG-GATED (`ZOE_WEB_SEARCH_TOOL=1`, off by
+default): it lives outside the always-on `zoeTools` array and is appended by
+`optionalZoeTools()` only under the flag. So "registered" here is flag-aware:
+a gated tool counts only when its flag is on in THIS process, and the source
+is checked structurally to prove the gate is real (`_FLAG_GATED_BRAIN_TOOLS`).
+
 The registered set is read from the brain's tool source
 (`labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts`, `name: '…'` literals) — read
 only, never imported. The `## MCP Tools` section is mcp_server's own registry
@@ -20,6 +26,7 @@ text, is caught by the same extractor.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -40,9 +47,35 @@ _WEB_LOOKUP_TOOLS = {"web_search", "web_browse", "deep_web_research", "cloakbrow
 _PROSE_SECTIONS = ("## Core Capabilities", "## Key Capabilities", "## Escalation Guide")
 
 
+# Tools the brain registers ONLY under an env flag (tool name → flag). Each
+# must be absent from the always-on `zoeTools = [...]` array in the source.
+_FLAG_GATED_BRAIN_TOOLS = {"web_search": "ZOE_WEB_SEARCH_TOOL"}
+
+
+def _flag_on(name: str) -> bool:
+    return (os.environ.get(name, "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _always_on_array(src: str) -> str:
+    m = re.search(r"export const zoeTools = \[(.*?)\];", src, flags=re.DOTALL)
+    assert m, "zoeTools array not found in the brain tool source"
+    return m.group(1)
+
+
 def _registered_brain_tools() -> set[str]:
     src = BRAIN_TOOLS_TS.read_text()
-    return set(re.findall(r"^\s*name:\s*['\"]([a-z_]+)['\"]", src, flags=re.MULTILINE))
+    names = set(re.findall(r"^\s*name:\s*['\"]([a-z_]+)['\"]", src, flags=re.MULTILINE))
+    always_on = _always_on_array(src)
+    for tool, flag in _FLAG_GATED_BRAIN_TOOLS.items():
+        # Structural proof the gate is real: the tool's const is not in the
+        # always-on array, and optionalZoeTools() appends it under the flag.
+        ident = "".join(w.capitalize() if i else w for i, w in enumerate(tool.split("_")))
+        assert re.search(rf"\b{ident}\b", always_on) is None, f"{tool} must not be in the always-on zoeTools array"
+        assert re.search(rf"process\.env\.{flag}\b", src), f"{flag} is not read in the brain tool source"
+        assert re.search(rf"optionalZoeTools\(\)\s*\{{[^}}]*\b{ident}\b", src), f"{tool} is not appended by optionalZoeTools()"
+        if not _flag_on(flag):
+            names.discard(tool)
+    return names
 
 
 def _prose_sections(text: str) -> str:
@@ -63,13 +96,33 @@ def _advertised_web_tools(text: str) -> set[str]:
     return {t for t in _WEB_LOOKUP_TOOLS if t in words}
 
 
-def test_brain_tool_extractor_is_not_vacuous():
+def test_brain_tool_extractor_is_not_vacuous(monkeypatch):
+    monkeypatch.delenv("ZOE_WEB_SEARCH_TOOL", raising=False)
     tools = _registered_brain_tools()
     assert len(tools) >= 10, tools
     assert {"add_reminder", "media", "home"} <= tools
+    # B10.1: gated tool is registered only under its flag — both directions.
+    assert "web_search" not in tools
+    monkeypatch.setenv("ZOE_WEB_SEARCH_TOOL", "1")
+    assert "web_search" in _registered_brain_tools()
 
 
-def test_generated_capabilities_prose_advertises_no_unregistered_web_tool():
+def test_negative_control_a_gated_tool_placed_in_the_always_on_array_is_caught(monkeypatch):
+    """If someone moves `webSearch` into `zoeTools`, the gate is gone and the
+    structural check must fail rather than quietly counting it as gated."""
+    src = BRAIN_TOOLS_TS.read_text().replace("export const zoeTools = [\n", "export const zoeTools = [\n  webSearch,\n", 1)
+    assert "  webSearch,\n" in src
+    monkeypatch.setattr(BRAIN_TOOLS_TS.__class__, "read_text", lambda self, *a, **k: src)
+    with pytest.raises(AssertionError, match="always-on"):
+        _registered_brain_tools()
+
+
+@pytest.mark.parametrize("flag_on", [False, True])
+def test_generated_capabilities_prose_advertises_no_unregistered_web_tool(monkeypatch, flag_on):
+    if flag_on:
+        monkeypatch.setenv("ZOE_WEB_SEARCH_TOOL", "1")
+    else:
+        monkeypatch.delenv("ZOE_WEB_SEARCH_TOOL", raising=False)
     registered = _registered_brain_tools()
     for builder in (
         lambda: _build_capabilities_md(["web_search"], [], []),
@@ -83,7 +136,8 @@ def test_generated_capabilities_prose_advertises_no_unregistered_web_tool():
         )
 
 
-def test_compact_summary_advertises_no_unregistered_web_tool():
+def test_compact_summary_advertises_no_unregistered_web_tool(monkeypatch):
+    monkeypatch.delenv("ZOE_WEB_SEARCH_TOOL", raising=False)
     """The compact line's hard-coded prose (not its `MCP tools: …` registry
     echo, which is factual) must not name an unregistered web tool."""
     registered = _registered_brain_tools()
@@ -91,7 +145,8 @@ def test_compact_summary_advertises_no_unregistered_web_tool():
     assert advertised <= registered
 
 
-def test_committed_snapshot_matches_the_generator_prose():
+def test_committed_snapshot_matches_the_generator_prose(monkeypatch):
+    monkeypatch.delenv("ZOE_WEB_SEARCH_TOOL", raising=False)
     """CAPABILITIES.md is regenerated on every service start; the committed
     copy must already say what the generator says or the live checkout dirties."""
     committed = _prose_sections(CAPS_MD.read_text())
@@ -99,7 +154,8 @@ def test_committed_snapshot_matches_the_generator_prose():
     assert committed == generated
 
 
-def test_negative_control_pre_fix_line_is_caught():
+def test_negative_control_pre_fix_line_is_caught(monkeypatch):
+    monkeypatch.delenv("ZOE_WEB_SEARCH_TOOL", raising=False)
     pre_fix = _build_capabilities_md([], [], []).replace(
         "## Escalation Guide\n",
         "## Escalation Guide\n1. `web_search` — current events, live prices, news after training cutoff\n",

@@ -69,6 +69,16 @@ _BLOCKED_STATUSES = frozenset({202, 401, 403, 407, 429, 451, 503})
 # a flip needs no restart.
 WEB_FALLBACK_PROVIDER_ENV = "ZOE_WEB_FALLBACK_PROVIDER"
 _WEB_FALLBACK_PROVIDERS = ("auto", "duckduckgo", "off")
+# ``ZOE_WEB_SEARCH_TOOL`` (B10.1): ``1`` serves the brain-callable
+# ``POST /api/system/web-search`` endpoint behind the same lookup, so the Flue
+# sidecar's flag-gated ``web_search`` tool can back a claim or do a live
+# lookup. Default ``0`` = the endpoint is absent (404) and the capability prose
+# says nothing about a web tool. Read per call so a flip needs no restart. The
+# sidecar reads its OWN copy of the same variable to decide whether to
+# register the tool (labs/flue-zoe-brain-2x/.env); both must be on.
+WEB_SEARCH_TOOL_ENV = "ZOE_WEB_SEARCH_TOOL"
+WEB_SEARCH_TOOL_MAX_RESULTS = 5
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 WEB_LOOKUP_MESSAGES = {
     WEB_LOOKUP_RESULTS: "",
@@ -392,6 +402,31 @@ def _read_bounded_response(resp: Any, max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
+def web_search_tool_enabled() -> bool:
+    """Is the brain-callable web-search endpoint served (``ZOE_WEB_SEARCH_TOOL``)?"""
+    raw = (os.environ.get("ZOE_WEB_SEARCH_TOOL", "0") or "0").strip().lower()
+    return raw in _TRUTHY
+
+
+def web_search_tool_payload(outcome: WebFallbackOutcome) -> dict[str, Any]:
+    """The wire shape the brain's ``web_search`` tool receives: the honest
+    outcome fields verbatim (``status``/``provider``/``message``/``detail``)
+    plus at most ``WEB_SEARCH_TOOL_MAX_RESULTS`` rows of title/url/snippet.
+    Nothing else from a row (no page text, no price scrape) crosses the seam."""
+    rows = [
+        {
+            "title": str(r.get("title", "") or ""),
+            "url": str(r.get("url", "") or ""),
+            "snippet": str(r.get("snippet", "") or ""),
+        }
+        for r in outcome.results[:WEB_SEARCH_TOOL_MAX_RESULTS]
+    ]
+    payload = outcome.as_dict()
+    payload["result_count"] = len(rows)
+    payload["results"] = rows
+    return payload
+
+
 def web_fallback_provider() -> str:
     """Selected fallback provider: auto|duckduckgo|off (unknown values → auto)."""
     raw = (os.environ.get("ZOE_WEB_FALLBACK_PROVIDER", "auto") or "auto").strip().lower()
@@ -591,7 +626,8 @@ def web_lookup_status() -> dict[str, Any]:
     (``auto`` collapses to ``tavily`` when keyed and not switched off, else
     ``duckduckgo``); ``configured`` is the raw ``ZOE_WEB_FALLBACK_PROVIDER``
     value. ``tavily_key_present`` says whether a key exists — the key itself is
-    never exposed. ``last_outcome`` is ``None`` until a lookup has run.
+    never exposed. ``tool_enabled`` is ``ZOE_WEB_SEARCH_TOOL`` (B10.1: the
+    brain-callable endpoint). ``last_outcome`` is ``None`` until a lookup has run.
     """
     configured = web_fallback_provider()
     if configured == "auto":
@@ -602,6 +638,8 @@ def web_lookup_status() -> dict[str, Any]:
         "provider": resolved,
         "configured": configured,
         "tavily_key_present": _tavily_key_present(),
+        # B10.1: whether zoe-data serves the brain's web_search endpoint.
+        "tool_enabled": web_search_tool_enabled(),
         "last_outcome": dict(_LAST_WEB_LOOKUP) or None,
     }
 

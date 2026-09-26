@@ -62,7 +62,7 @@ import { useModel, useTool } from '@flue/runtime';
 // the note in zoe-tools.ts; the Vite build resolves .ts specifiers fine).
 import { ZOE_MODEL_SPECIFIER } from '../providers/capped-completions.ts';
 import { GROUP_SUMMARY } from '../tools/tool-groups.ts';
-import { zoeTools } from '../tools/zoe-tools.ts';
+import { optionalZoeTools, zoeTools } from '../tools/zoe-tools.ts';
 
 // Verbatim from services/zoe-core/SOUL.md (the persona soul.ts injects as the
 // system prompt every turn). Keep in sync if SOUL.md changes.
@@ -299,7 +299,8 @@ export function Zoe(): string {
   // every tool must stay registered and executable while the model only SEES the
   // active subset. Moving disclosure into conditional useTool() calls would break
   // execution of a tool the model called from an earlier round's schema set.
-  for (const tool of zoeTools) useTool(tool);
+  // B10.1: `optionalZoeTools()` is the flag-gated web_search (ZOE_WEB_SEARCH_TOOL=1); [] by default.
+  for (const tool of [...zoeTools, ...optionalZoeTools()]) useTool(tool);
   return ZOE_INSTRUCTIONS;
 }
 
