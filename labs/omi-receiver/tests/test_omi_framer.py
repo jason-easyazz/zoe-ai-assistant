@@ -699,3 +699,35 @@ def test_outage_runs_from_the_drop_until_audio_actually_resumes(tmp_path):
     assert s.sessions == 2 and s.packets_received == 20 and s.gap_pct == 0.0
     assert s.disconnected_s >= 0.2
     assert s.gap_gate_pass is False and any("disconnected" in r for r in s.gate_fail_reasons)
+
+
+# --- review round 5 (PR #1693) --------------------------------------------------------------
+def test_on_packet_reports_whether_the_framer_accepted_audio(tmp_path):
+    p = make_pipeline(tmp_path)
+    assert p.on_packet(b"") is False                              # truncated
+    assert p.on_packet(b"\x01\x00") is False                      # truncated
+    assert p.on_packet(ob.build_packet(0, 0, b"")) is False       # header only, no audio
+    assert p.on_packet(ob.build_packet(1, 0, FRAME)) is True      # audio
+
+
+def test_reconnect_that_delivers_only_junk_does_not_end_the_outage(tmp_path):
+    """After the reconnect only truncated / header-only notifications arrive: the framer
+    rejects them, so the outage keeps running to the end of the run and the gate FAILS."""
+    junk = [ob.build_packet(100 + i, 0, b"") for i in range(5)] + [b"\x01"] * 3
+    t = FakeTransport([packets(range(10)), junk])
+    pipeline = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path))
+    bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=True, max_seconds=0.3, max_disconnected_s=0.06)
+    s = asyncio.run(bridge.run())
+    assert s.sessions == 2 and s.truncated == 3 and s.packets_received == 15 and s.frames_complete == 10
+    assert s.disconnected_s >= 0.2                                # ran until the 0.3 s run ended
+    assert s.gap_gate_pass is False and any("disconnected" in r for r in s.gate_fail_reasons)
+
+
+def test_reconnect_outage_ends_at_the_first_accepted_audio_packet(tmp_path):
+    """Control: junk first, then a real packet → the real packet ends the outage → PASS."""
+    t = FakeTransport([packets(range(10)), [ob.build_packet(100, 0, b""), b"\x01"] + packets(range(101, 110))])
+    pipeline = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path))
+    bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=True, max_seconds=0.3, max_disconnected_s=0.06)
+    s = asyncio.run(bridge.run())
+    assert s.sessions == 2 and s.truncated == 1 and s.frames_complete == 19
+    assert s.disconnected_s < 0.06 and s.gap_gate_pass is True

@@ -425,10 +425,16 @@ class AudioPipeline:
         self._clock = clock
         self._started: Optional[float] = None
 
-    def on_packet(self, data: bytes) -> None:
+    def on_packet(self, data: bytes) -> bool:
+        """Feed one notification. Returns True when the framer ACCEPTED an audio-bearing
+        packet (parsed, with a payload) — a truncated or header-only notification is not
+        audio and returns False."""
         if self._started is None:
             self._started = self._clock()
+        st = self.framer.stats
+        audio_before = st.packets_received - st.empty
         frames = self.framer.push(data)
+        accepted = (st.packets_received - st.empty) > audio_before
         lost = self.framer.take_lost()
         for frame in frames:            # a completed frame always precedes the gap
             self.sink.write(self.decoder.decode(frame))
@@ -437,6 +443,7 @@ class AudioPipeline:
             if n:
                 self.sink.write(bytes(2 * n))
                 self.silence_samples += n
+        return accepted
 
     def _bounded_fill(self, samples: int, lost: int) -> int:
         if self.max_gap_fill_s is None:
@@ -718,10 +725,11 @@ class Bridge:
         ev.set()
 
     def _on_audio(self, data: bytes) -> None:
-        """Audio notification: the first one after an outage is what ends it — a reconnect
-        that has not yet delivered audio is still lost audio."""
-        self._end_outage()
-        self.pipeline.on_packet(data)
+        """Audio notification: the first packet the framer ACCEPTS after an outage is what
+        ends it — a reconnect that delivers nothing, or only truncated / header-only
+        notifications, is still lost audio."""
+        if self.pipeline.on_packet(data):
+            self._end_outage()
 
     def _end_outage(self) -> None:
         if self._outage_started is not None:
