@@ -86,6 +86,9 @@ def flue_env(monkeypatch):
     monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", "http://127.0.0.1:3578")
     monkeypatch.setenv("ZOE_BRAIN_TOKEN", "sekret")
     monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "1")
+    # These doubles speak the wire-1 ?wait=result POST; wire 1 is opt-in since
+    # B6.5 (the client's default is wire 2), so select it explicitly.
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
     monkeypatch.setenv("ZOE_RECALL_CONTEXT_ENABLED", "0")
 
     async def _no_recall(message, uid):

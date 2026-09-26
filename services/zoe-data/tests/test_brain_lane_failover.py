@@ -85,6 +85,9 @@ def _refused_httpx(monkeypatch):
 def _flue_backend(monkeypatch):
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", "flue")
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "true")
+    # The httpx doubles in this file are post-only wire-1 doubles unless a test
+    # calls `_wire2` (which overrides this). Wire 1 is opt-in since B6.5.
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
     monkeypatch.delenv("ZOE_FLUE_STREAM_ENABLED", raising=False)
     monkeypatch.delenv("ZOE_SEAM_RECALL_INJECT", raising=False)
     monkeypatch.delenv("ZOE_SEAM_OFFER_INJECT", raising=False)

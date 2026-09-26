@@ -174,8 +174,8 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   **The wire contract changed and is NOT backward-compatible**: `?wait=result` is
   actively rejected, and the POST body is a top-level DeliveredMessage
   (`{"kind":"user","body":"…"}`). The live `services/zoe-data/zoe_flue_client.py`
-  speaks it via `ZOE_FLUE_WIRE=2` in zoe-data's env (its in-code DEFAULT is still
-  the retired beta wire — a rollback leftover to be cleaned up with the client).
+  speaks it BY DEFAULT since B6.5 (`ZOE_FLUE_WIRE` unset = 2, `ZOE_FLUE_BRAIN_URL`
+  unset = `:3579`); `ZOE_FLUE_WIRE=1` opts back into the retired beta wire for parity only.
   `parity/flue_wire.py` is the reference implementation of the wire
   (fire-and-forget admission + NDJSON stream read).
   Also carries a prompt-prefix stability fix absent from the retired beta lane: the

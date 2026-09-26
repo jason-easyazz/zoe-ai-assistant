@@ -15,8 +15,8 @@ because a length stop that hid inside a spilled batch would be invisible to a na
 `LIKE '%length%'` scan.
 
 The subtler case, and the one that actually happens: an EMPTY store must FAIL. The sidecar
-creates its database at boot, so a replay that never reached the 2.x lane (`ZOE_FLUE_WIRE`
-unset, zoe-data still pointed at :3578, the restart forgotten) leaves a valid database with
+creates its database at boot, so a replay that never reached the 2.x lane (`ZOE_FLUE_WIRE=1`
+left set, zoe-data pointed at a dead port, the restart forgotten) leaves a valid database with
 zero replies in it. Counting zero length-stops there and reporting PASS would green-light
 the flip on no evidence at all — the exact shape of the failure the gate exists to catch.
 `--since` gets the same treatment, since a mis-typed timestamp silently examines nothing.
