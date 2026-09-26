@@ -645,8 +645,15 @@ class Bridge:
                     await self._subscribe_optional(BATTERY_LEVEL_UUID, self._on_battery)
                     timed_out = await self._wait_for_drop(ev, self._remaining(start))
                 except Exception as exc:
-                    log.error("session aborted: %s", exc)
-                    fatal = True
+                    # The link dying during setup (identity reads / start_notify) is a DROP
+                    # and follows the reconnect path; an error raised while the link is
+                    # still up (unsupported codec, decoder build) is configuration → fatal.
+                    dropped = ev.is_set() or not self.transport.is_connected
+                    if dropped and self.reconnect:
+                        log.warning("link dropped during setup (%s)", exc)
+                    else:
+                        log.error("session aborted: %s", exc)
+                        fatal = True
                 finally:
                     self.summary.connected_s += time.monotonic() - session_start
                     self.pipeline.flush()

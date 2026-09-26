@@ -15,16 +15,16 @@ live result.
 | file | role |
 |---|---|
 | `omi_bridge.py` | the bridge: `BleakTransport` (bleak 0.22.3, BlueZ) → `OmiFramer` (3-byte header, fragment reassembly, gap/wrap/resync accounting) → `OpusDecoder16k` (opuslib) → `WavSink` (rolling WAVs; a write that crosses the roll boundary is split, never overshoots). `Bridge` owns connect / own `disconnected_callback` / backoff reconnect / DIS+codec+battery reads / summary. `--codec` is only the assumption until the pendant answers: a different **supported** codec rebuilds the decoder before any audio flows, an unsupported one aborts. Gap silence is bounded (`--max-gap-fill-seconds`, default 5: per gap, and the total may never lead the wall clock by more — the packet id is untrusted input, an unbounded fill could write ~21 MB per notification). The BLE surface is the `Transport` protocol, so everything below it runs without hardware. |
-| `wer.py` | word error rate (stdlib) for the Moonshine comparison; CLI over the reference sentences and the transcripts — a line-aligned text file **or `replay_samples.py --json` output directly**. A transcript count that differs from the sentence count is exit 2, never padded or truncated. |
+| `wer.py` | word error rate (stdlib) for the Moonshine comparison; CLI over the reference sentences and the transcripts — a line-aligned text file **or `replay_samples.py --json` output directly**. A transcript count that differs from the sentence count, or a replay row with `stt_error` (transcription failed, not misheard), is exit 2 — never padded, truncated or scored as 100 %. |
 | `split_on_silence.py` | cuts one long capture into per-utterance WAVs (stdlib) so the replay path, which treats each WAV as one utterance, can transcribe the 20 sentences. Re-running into the same `--out` replaces that capture's previous segments (no stale higher-numbered files survive a re-tune). |
-| `tests/test_omi_framer.py` | synthetic packet streams: contiguous, gap (+ a **negative control** that bypasses the detector and proves the gap assertions go red; frame-before-silence ordering; the fill bound + its uncapped negative control), counter wrap (65535→0, and a gap across it), truncated/header-only packets, fragmentation (reassembly, missing fragment, orphan, a gap that lands on the next frame's fragment 0 keeps the complete pending frame, fragmentation memory reset per connection), counter restart mid-session and on reconnect, WAV rolling (incl. one write split across files), the bridge over a scripted fake transport (reconnect, no-reconnect, failed connect + backoff, 1.0 % gap = gate FAIL, unsupported codec, reported-codec decoder rebuild, **real SIGINT → summary.json still written**), a **real opuslib encode→decode** round trip (skips with a stated reason when opuslib/libopus is absent — never a fake pass), and the two helpers (count mismatch, `--json` rows, segment replacement). |
+| `tests/test_omi_framer.py` | synthetic packet streams: contiguous, gap (+ a **negative control** that bypasses the detector and proves the gap assertions go red; frame-before-silence ordering; the fill bound + its uncapped negative control), counter wrap (65535→0, and a gap across it), truncated/header-only packets, fragmentation (reassembly, missing fragment, orphan, a gap that lands on the next frame's fragment 0 keeps the complete pending frame, fragmentation memory reset per connection), counter restart mid-session and on reconnect, WAV rolling (incl. one write split across files), the bridge over a scripted fake transport (reconnect, no-reconnect, failed connect + backoff, a drop *during setup* reconnects, 1.0 % gap = gate FAIL, unsupported codec, reported-codec decoder rebuild, **real SIGINT → summary.json still written**), a **real opuslib encode→decode** round trip (skips with a stated reason when opuslib/libopus is absent — never a fake pass), and the two helpers (count mismatch, `--json` rows, segment replacement). |
 | `requirements.txt` | `bleak==0.22.3`, `opuslib==3.0.1` (+ `apt install libopus0`). Why opuslib and not pyogg is in the file. |
 
 Run the tests (hand-run; labs are outside production CI by design):
 
 ```bash
-pytest labs/omi-receiver/tests -q -x -p no:cacheprovider          # 37 pass + 1 skip (real decode) without opuslib
-PYTHONPATH=<dir with opuslib> pytest labs/omi-receiver/tests -q -x -p no:cacheprovider   # 38 pass
+pytest labs/omi-receiver/tests -q -x -p no:cacheprovider          # 41 pass + 1 skip (real decode) without opuslib
+PYTHONPATH=<dir with opuslib> pytest labs/omi-receiver/tests -q -x -p no:cacheprovider   # 42 pass
 ```
 
 ## The wire format this bridge relies on (verified in firmware, not from the plan)
@@ -149,15 +149,21 @@ python3 labs/omi-receiver/split_on_silence.py ~/omi-capture/read20/omi_*_000.wav
 #     (a re-run into the same --out replaces the previous segments; wer.py refuses ≠ 20 anyway)
 ```
 
-Copy `segments/` to the Orin and transcribe them through the same replay path:
+Copy the segments to the Orin and transcribe them through the same replay path.
+`replay_samples.py` reads only the **top-level** `*.wav` of the sample dir (never
+subdirectories, on purpose), so the copy must *replace* the directory's contents:
+a repeated `scp -r segments /tmp/omi-read20` would nest the new files under
+`/tmp/omi-read20/segments/` and leave the previous 20 in place to be scored again.
 
 ```bash
-scp -r ~/omi-capture/read20/segments zoe@<orin>:/tmp/omi-read20
+rsync -a --delete ~/omi-capture/read20/segments/ zoe@<orin>:/tmp/omi-read20/   # trailing slashes: contents, stale files removed
+#   (no rsync: ssh zoe@<orin> rm -rf /tmp/omi-read20 && scp -r ~/omi-capture/read20/segments zoe@<orin>:/tmp/omi-read20)
 cd ~/assistant/services/zoe-data
 ZOE_VOICE_SAMPLE_DIR=/tmp/omi-read20 flock /tmp/zoe-voice-harness.lock python3 tests/replay_samples.py --stt remote --json /tmp/pendant20.json
 python3 ~/assistant/labs/omi-receiver/wer.py --ref sentences.txt --hyp /tmp/panel20.json     # panel-mic WER
 python3 ~/assistant/labs/omi-receiver/wer.py --ref sentences.txt --hyp /tmp/pendant20.json   # pendant WER
-#   exit 2 = the transcript count is not 20 → re-split, do not score a misaligned comparison
+#   exit 2 = the transcript count is not 20 (re-split), or a row has an stt_error (Moonshine failed
+#            on that file — re-run the replay); a failed transcription is never scored as 100 % WER
 ```
 
 (`replay_samples.py` also routes each transcript through the fast tiers with

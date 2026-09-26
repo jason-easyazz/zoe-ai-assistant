@@ -205,11 +205,13 @@ def test_wav_rolls_into_multiple_files(tmp_path):
 class FakeTransport:
     """Scripted pendant: each session feeds its packets then drops (except the last)."""
 
-    def __init__(self, sessions, *, codec=ob.CODEC_OPUS_FS320, battery=(90, 80), fail_first_connect=False):
+    def __init__(self, sessions, *, codec=ob.CODEC_OPUS_FS320, battery=(90, 80), fail_first_connect=False,
+                 drop_during_setup=False):
         self.sessions = list(sessions)
         self.codec = codec
         self.battery = list(battery)
         self.fail_first_connect = fail_first_connect
+        self.drop_during_setup = drop_during_setup   # first connect: the link dies inside start_notify
         self.connects = 0
         self.connected = False
         self.notify = {}
@@ -245,6 +247,10 @@ class FakeTransport:
     async def start_notify(self, uuid, callback):
         if uuid == ob.BUTTON_TRIGGER_UUID:
             raise RuntimeError("no button service on this fixture")
+        if uuid == ob.AUDIO_DATA_UUID and self.drop_during_setup and self.connects == 1:
+            self.connected = False
+            self._on_disconnect()
+            raise ConnectionError("Not connected")      # what bleak raises once the link is gone
         self.notify[uuid] = callback
         if uuid == ob.AUDIO_DATA_UUID and self.sessions:
             for pkt in self.sessions.pop(0):
@@ -551,3 +557,49 @@ def test_split_on_silence_rerun_replaces_the_previous_segments(tmp_path):
     new = sos.write_segments(pcm, rate, [(0, 100), (100, 200)], tmp_path, "cap")
     assert sorted(p.name for p in tmp_path.glob("*.wav")) == ["cap_01.wav", "cap_02.wav", "other_01.wav"]
     assert new == old[:2]
+
+
+# --- review round 2 (PR #1693) --------------------------------------------------------------
+def test_bridge_reconnects_after_a_drop_during_setup(tmp_path):
+    """A link that dies inside start_notify() on the first connect is a DROP, not a fatal
+    error: with --reconnect the bridge must follow the reconnect path and capture."""
+    t = FakeTransport([packets(range(10))], drop_during_setup=True)
+    s = run_bridge(t, tmp_path, reconnect=True, max_seconds=0.3)
+    assert t.connects == 2 and s.reconnects == 1 and s.connect_failures == 0
+    assert s.packets_received == 10 and s.frames_complete == 10
+    assert (s.model, s.codec_id, s.battery_start) == ("Omi CV 1", 21, 90)   # identity re-read after the drop
+
+
+def test_bridge_without_reconnect_stops_at_a_setup_drop(tmp_path):
+    t = FakeTransport([packets(range(10))], drop_during_setup=True)
+    s = run_bridge(t, tmp_path, reconnect=False, max_seconds=0.3)
+    assert t.connects == 1 and s.reconnects == 0 and s.packets_received == 0
+
+
+def test_wer_cli_rejects_replay_rows_with_an_stt_error(tmp_path, capsys):
+    """A row replay_samples.py marked stt_error (empty transcript) is a transcription
+    FAILURE, not a mishearing: refuse to score it rather than count it as 100 % WER."""
+    import json
+    ref = tmp_path / "ref.txt"
+    ref.write_text("alpha bravo\ncharlie delta\n")
+    replay = tmp_path / "replay.json"
+    replay.write_text(json.dumps({"rows": [
+        {"file": "seg_01.wav", "transcript": "alpha bravo"},
+        {"file": "seg_02.wav", "transcript": "", "stt_error": "HTTP 503 from /stt"}]}))
+    assert wer.main(["--ref", str(ref), "--hyp", str(replay)]) == 2
+    out = capsys.readouterr()
+    assert "corpus WER" not in out.out and "seg_02.wav" in out.err and "HTTP 503" in out.err
+    replay.write_text(json.dumps({"rows": [                       # an honestly empty transcript still scores
+        {"file": "seg_01.wav", "transcript": "alpha bravo"},
+        {"file": "seg_02.wav", "transcript": ""}]}))
+    assert wer.main(["--ref", str(ref), "--hyp", str(replay)]) == 0
+    assert "corpus WER 50.0%" in capsys.readouterr().out
+
+
+def test_split_on_silence_rerun_replaces_segments_of_a_glob_looking_stem(tmp_path):
+    import array
+    rate = 16000
+    pcm = array.array("h", [0] * rate)
+    sos.write_segments(pcm, rate, [(0, 100), (100, 200), (200, 300)], tmp_path, "cap[1]")
+    sos.write_segments(pcm, rate, [(0, 100), (100, 200)], tmp_path, "cap[1]")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["cap[1]_01.wav", "cap[1]_02.wav"]

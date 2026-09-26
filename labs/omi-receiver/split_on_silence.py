@@ -69,8 +69,8 @@ def find_segments(pcm: array.array, rate: int, *, threshold: int, min_silence_s:
 
 def clear_segments(out_dir: Path, stem: str) -> int:
     """Delete this capture's earlier ``<stem>_NN.wav`` segments; other files are untouched."""
-    pattern = re.compile(rf"{re.escape(stem)}_\d+\.wav")
-    stale = [p for p in out_dir.glob(f"{stem}_*.wav") if pattern.fullmatch(p.name)]
+    pattern = re.compile(rf"{re.escape(stem)}_\d+\.wav")   # literal stem: no glob, so `cap[1]` matches itself
+    stale = [p for p in out_dir.iterdir() if pattern.fullmatch(p.name)]
     for p in stale:
         p.unlink()
     return len(stale)

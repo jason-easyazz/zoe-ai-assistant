@@ -58,14 +58,27 @@ def corpus_wer(refs: list[str], hyps: list[str]) -> float:
     return errors / words if words else 0.0
 
 
+class TranscriptError(ValueError):
+    """The transcript file cannot be scored as-is (STT failed on a row)."""
+
+
 def load_hypotheses(path: Path) -> list[str]:
     """Transcripts in order: one per line from a text file, or the ``transcript`` of
-    each row of ``replay_samples.py --json`` output (a ``.json`` path)."""
+    each row of ``replay_samples.py --json`` output (a ``.json`` path).
+
+    A row carrying ``stt_error`` is a transcription FAILURE (replay writes it with an
+    empty transcript) — scoring it would charge the pendant 100 % WER for a Moonshine
+    outage, so it raises ``TranscriptError`` naming the rows instead. An honestly
+    empty transcript (no error) still scores.
+    """
     text = path.read_text()
     if path.suffix.lower() != ".json":
         return text.splitlines()
     data = json.loads(text)
     rows = data["rows"] if isinstance(data, dict) else data
+    failed = [f"{row.get('file', '?')}: {row['stt_error']}" for row in rows if row.get("stt_error")]
+    if failed:
+        raise TranscriptError("STT failed on " + "; ".join(failed) + " — re-run the replay for these before scoring")
     return [str(row.get("transcript") or "") for row in rows]
 
 
@@ -76,7 +89,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="transcripts: one per line in the same order, or replay_samples.py --json output")
     args = ap.parse_args(argv)
     refs = [l for l in args.ref.read_text().splitlines() if l.strip()]
-    hyps = load_hypotheses(args.hyp)
+    try:
+        hyps = load_hypotheses(args.hyp)
+    except TranscriptError as exc:
+        print(f"{args.hyp}: {exc}", file=sys.stderr)
+        return 2
     if len(hyps) != len(refs):
         print(f"transcript count mismatch: {len(refs)} reference sentences in {args.ref} vs "
               f"{len(hyps)} transcripts in {args.hyp}. Expect exactly one transcript per sentence, in "
