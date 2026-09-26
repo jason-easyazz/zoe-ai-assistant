@@ -169,6 +169,7 @@ Once on 2026.10, Zoe can pass the panel's HA device id in `params._meta["io.home
   # 2. Failure handler for everything after HA is stopped: put the set-aside state back (discarding any
   #    partial extraction), restart HA on whatever state is now consistent, and say so. HA is never left stopped.
   PHASE=stopped
+  EXTRACT_STARTED=0
   on_exit() {
     rc=$?; [ "$rc" -eq 0 ] && return 0
     trap - EXIT
@@ -177,8 +178,12 @@ Once on 2026.10, Zoe can pass the panel's HA device id in `params._meta["io.home
       # .storage is ALWAYS put back first (registries, config entries, auth) — whatever failed after it moved.
       rm -rf homeassistant/.storage
       [ -d "$ASIDE/.storage" ] && mv "$ASIDE/.storage" homeassistant/
+      # Once extraction has started, any db file in the live tree is (partial) archive output — the newer
+      # db, if there was one, is in $ASIDE. Before that (e.g. the db mv itself failed) the live db IS the
+      # newer one and must be kept. Then put the set-aside files back.
+      [ "$EXTRACT_STARTED" = 1 ] && rm -f homeassistant/home-assistant_v2.db*
       for f in "$ASIDE"/home-assistant_v2.db*; do [ -e "$f" ] && { rm -f "homeassistant/$(basename "$f")"; mv "$f" homeassistant/; }; done
-      echo "newer .storage (and recorder db, if any) put back from $ASIDE; tag unchanged"
+      echo "partial extraction (if any) removed; newer .storage (and recorder db, if any) put back from $ASIDE; tag unchanged"
     elif [ "$PHASE" = restored ]; then
       sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$PREV#" docker-compose.yml
       echo "backup state is restored and the tag is $PREV; newer state kept in $ASIDE"
@@ -200,6 +205,7 @@ Once on 2026.10, Zoe can pass the panel's HA device id in `params._meta["io.home
   else
     echo "no recorder db in the live tree — nothing to set aside; the archive's copy will be restored"
   fi
+  EXTRACT_STARTED=1
   tar -C /home/zoe/assistant -xzf "$BK" --wildcards homeassistant/.storage 'homeassistant/home-assistant_v2.db*'
   PHASE=restored
   sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$PREV#" docker-compose.yml
