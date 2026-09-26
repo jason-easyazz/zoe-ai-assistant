@@ -435,6 +435,17 @@ _FORM_INTENTS: frozenset[str] = frozenset({
     "timer_create",
 })
 
+
+def _shows_form(intent_name: str, slots: dict) -> bool:
+    """A recurring reminder skips the form and executes directly: the reminder
+    form carries only title/date/time, so confirming it would silently store a
+    one-off (and an unsupported recurrence has no title to pre-fill). The direct
+    executor's reply states the schedule, or why nothing was set."""
+    if intent_name == "reminder_create" and (slots.get("recurrence") or slots.get("unsupported_recurrence")):
+        return False
+    return intent_name in _FORM_INTENTS
+
+
 # Intents that deliberately do not have a direct `execute_intent` handler
 # because they're designed to be expanded via openclaw_user_message() and
 # routed to OpenClaw.  For these, a None result from execute_intent is not a
@@ -2051,7 +2062,7 @@ async def chat_stream_generator(
             yield emit(ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id=tool_call_id))
 
             # ── Form-based intents: show a generative UI tile instead of silently executing ──
-            if intent.name in _FORM_INTENTS:
+            if _shows_form(intent.name, slots):
                 logger.info("intent_outcome=matched_form intent=%s", intent.name)
                 _comp_name, _prop_builder = _FORM_COMPONENT_MAP[intent.name]
                 _form_props = _prop_builder(slots)

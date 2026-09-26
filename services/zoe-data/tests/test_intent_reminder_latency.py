@@ -190,32 +190,33 @@ async def test_modifier_day_reminder_still_uses_existing_extractor(monkeypatch, 
 
 
 @pytest.mark.parametrize(
-    "text",
+    "text, title, rrule",
     [
-        "remind me to call mum every Monday",
-        "remind me to water the garden every week",
+        ("remind me to call mum every Monday", "call mum", "FREQ=WEEKLY;BYDAY=MO"),
+        ("remind me to water the garden every week", "water the garden", "FREQ=WEEKLY"),
     ],
 )
 @pytest.mark.asyncio
-async def test_recurring_reminder_still_uses_existing_extractor(monkeypatch, text):
-    calls = []
+async def test_recurring_reminder_is_parsed_deterministically(monkeypatch, text, title, rrule):
+    """Recurrence used to be deferred to the LLM extractor, whose schema had no
+    recurrence field — so it was dropped. It is now parsed in code (RRULE slot)
+    and a plain title needs no LLM call at all."""
     module = types.ModuleType("nlu_extractor")
 
-    async def fake_extract(intent_name, raw):
-        calls.append((intent_name, raw))
-        return {"title": "recurring reminder", "date": "2026-06-22", "recurrence": "weekly"}
+    async def fail_extract(_intent_name, _raw):
+        raise AssertionError("recurring reminder should not call the LLM slot extractor")
 
-    module.extract_slots_for_intent = fake_extract
+    module.extract_slots_for_intent = fail_extract
     monkeypatch.setitem(sys.modules, "nlu_extractor", module)
 
     from intent_router import detect_and_extract_intent
 
     intent = await detect_and_extract_intent(text, user_id="guest")
 
-    assert calls == [("reminder_create", text)]
     assert intent is not None
     assert intent.name == "reminder_create"
-    assert intent.slots == {"title": "recurring reminder", "date": "2026-06-22", "recurrence": "weekly"}
+    assert intent.slots["title"] == title
+    assert intent.slots["recurrence"] == rrule
 
 
 @pytest.mark.parametrize(
