@@ -367,6 +367,37 @@ def split_transition(text: str, attr_hint: Optional[str] = None,
     return old, new, (m.group("when") or when)
 
 
+# ── Interval arithmetic (half-open [start, end) over aware datetimes) ─────────
+
+
+def _union(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    out: list[tuple[datetime, datetime]] = []
+    for start, end in sorted(i for i in intervals if i[0] < i[1]):
+        if out and start <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((start, end))
+    return out
+
+
+def _subtract(intervals: list[tuple[datetime, datetime]],
+              covers: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    """``intervals`` minus ``covers`` — every slice left uncovered, in order."""
+    out = list(_union(intervals))
+    for c_start, c_end in _union(covers):
+        nxt: list[tuple[datetime, datetime]] = []
+        for start, end in out:
+            if c_end <= start or end <= c_start:
+                nxt.append((start, end))
+                continue
+            if start < c_start:
+                nxt.append((start, c_start))
+            if c_end < end:
+                nxt.append((c_end, end))
+        out = nxt
+    return out
+
+
 # ── Controller ────────────────────────────────────────────────────────────────
 
 ADD, UPDATE, SUPERSEDE, NONE = "ADD", "UPDATE", "SUPERSEDE", "NONE"
@@ -404,6 +435,11 @@ class Decision:
     # earlier period is kept, closed at the start of the conflict that
     # interrupted it, while the value continues in a NEW row from the boundary.
     retime: dict[int, tuple[Optional[str], Optional[str]]] = field(default_factory=dict)
+    # Further NEW rows to write (after ``write_as``): the extra slices a value
+    # keeps around richer rows or a conflict — plain Globex [2021, ∞) around
+    # rich Globex [2023, 2025) keeps [2021, 2023) on its own row and gets
+    # [2025, ∞) as a new row here.
+    extra_rows: list[Fact] = field(default_factory=list)
 
 
 def _validate_judge(verdict: dict, candidates: list[Fact]) -> Optional[tuple[str, Optional[int]]]:
@@ -497,10 +533,11 @@ def reconcile(
                   also_close: Optional[list[int]] = None,
                   interval: Optional[tuple[Optional[str], Optional[str]]] = None,
                   retime: Optional[dict] = None,
-                  write: Optional[Fact] = None) -> Decision:
+                  write: Optional[Fact] = None, extra_rows: Optional[list[Fact]] = None) -> Decision:
         return Decision(event, target, why, text=text, extra_closed=extra_closed,
                         write_as=write if write is not None else write_as,
-                        also_close=list(also_close or []), interval=interval, retime=dict(retime or {}))
+                        also_close=list(also_close or []), interval=interval, retime=dict(retime or {}),
+                        extra_rows=list(extra_rows or []))
 
     if not live:
         return _decision(ADD, None, "no live neighbours")
@@ -527,12 +564,15 @@ def reconcile(
         backdated, the value is identical); a strictly plainer row keeps only
         the slice BEFORE the richer rows begin, as live history (plain Globex
         2021–, rich Globex 2023– → plain [2021, 2023), rich [2023, …)); a
-        plainer row entirely covered by richer ones is retired. Every
-        conflicting row closes at the incoming start (the boundary); if one
-        ran before the boundary, every slice is cut there and the top row's
-        value CONTINUES in a new row from the boundary (the split). The top
-        row's end extends to the union end (the incoming says the value is
-        still current).
+        plainer row keeps EVERY slice richer rows do not cover — before,
+        between and after them (plain [2021, ∞) around rich [2023, 2025) →
+        plain [2021, 2023), rich [2023, 2025), plain [2025, ∞)); the richer
+        row owns only its own window. A stored row keeps the slice at its own
+        start in place (``retime``); every further slice is a new row
+        (``extra_rows``); a row whose own start is covered is closed to an
+        empty window and retired. Every conflicting row closes at the incoming
+        start (the boundary), and the conflict's span [its start, boundary) is
+        removed from every slice (the split).
         """
         if not _overlaps(existing):
             return _decision(ADD, None, why + " but intervals disjoint (repeated occurrence, new interval)")
@@ -559,87 +599,82 @@ def reconcile(
 
         earlier = [n for n in stale if (parse_ts(n.valid_from) or FAR_PAST) < close_edge]
         cut_row = min(earlier, key=lambda n: parse_ts(n.valid_from) or FAR_PAST) if earlier else None
-        cut = (parse_ts(cut_row.valid_from) or FAR_PAST) if cut_row else None
-        if cut is not None and all((parse_ts(r.valid_from) or FAR_PAST) >= close_edge for r in stored + [new]):
-            cut = None          # nothing of this value lies before the boundary: no slice to split, the conflict just closes
+        # the conflict span [cut, boundary) is removed from every slice of the value
+        conflict = [((parse_ts(cut_row.valid_from) or FAR_PAST), close_edge)] if cut_row else []
 
-        def _from(rows):   # union start (None = open) as (dt, str)
-            if any(r.valid_from is None for r in rows):
-                return FAR_PAST, None
-            f = min((r.valid_from for r in rows), key=parse_ts)
-            return parse_ts(f), f
+        strs: dict[datetime, Optional[str]] = {FAR_PAST: None, FAR_FUTURE: None}   # dt → original string
 
-        def _until(rows):  # union end (None = open) as (dt, str)
-            if any(r.valid_until is None for r in rows):
-                return FAR_FUTURE, None
-            u = max((r.valid_until for r in rows), key=parse_ts)
-            return parse_ts(u), u
+        def _dt(value: Optional[str], default: datetime) -> datetime:
+            d = parse_ts(value) or default
+            strs.setdefault(d, value)
+            return d
+        _dt(cut_row.valid_from, FAR_PAST) if cut_row else None
+        _dt(new.valid_from, FAR_PAST) if new.valid_from else None
+        strs.setdefault(close_edge, boundary_s)
+
+        def _window(rows: list[Fact]) -> list[tuple[datetime, datetime]]:
+            """Union of the rows' windows. A missing start is UNKNOWN (the
+            least informative: a known start wins); a missing end is OPEN
+            (the most informative: still true)."""
+            starts = [_dt(r.valid_from, FAR_PAST) for r in rows if r.valid_from]
+            start = min(starts) if starts else FAR_PAST
+            return _union([(max(start, _dt(r.valid_from, FAR_PAST)) if r.valid_from else start,
+                            _dt(r.valid_until, FAR_FUTURE)) for r in rows])
 
         write: Optional[Fact] = None
+        extra_rows: list[Fact] = []
         event, target, text_out = NONE, existing.id, existing.text
-        richer_from_dt: Optional[datetime] = None          # where the richer levels' details begin
+        owned: list[tuple[datetime, datetime]] = []        # what richer levels own
         for i, rows in enumerate(levels):
-            f_dt, f_s = _from(rows)
-            u_dt, u_s = _until(rows)
-            caps: list[tuple[datetime, Optional[str]]] = [(u_dt, u_s)]
-            if cut is not None:
-                caps.append((cut, cut_row.valid_from))
-            if i > 0:
-                caps.append((richer_from_dt, richer_from_s))
-            end_dt, end_s = min(caps, key=lambda c: c[0])
-            if i == 0:
-                richer_from_dt, richer_from_s = f_dt, f_s
-            else:
-                richer_from_dt = min(richer_from_dt, f_dt)
-                richer_from_s = f_s if richer_from_dt == f_dt else richer_from_s
+            slices = _subtract(_window(rows), owned + conflict)
+            owned = _union(owned + _window(rows))
             head = next((r for r in rows if r is not new), None)   # a stored row keeps its id
-            slice_ok = f_dt < end_dt
+            level_text = top_text if i == 0 else (head.text if head is not None else new.text)
             for r in rows:
                 if r is new or r is head:
                     continue
                 also.append(r.id)                                  # absorbed duplicate → retired
             if head is not None:
-                if slice_ok:
-                    if (f_s, end_s) != (head.valid_from, head.valid_until):
-                        retime[head.id] = (f_s, end_s)
+                own_start = _dt(head.valid_from, FAR_PAST)
+                if slices and slices[0][0] <= own_start:
+                    # the row keeps the slice at its own start (an equal peer may extend it backwards)
+                    f, u = strs[slices[0][0]], strs[slices[0][1]]
+                    if (f, u) != (head.valid_from, head.valid_until):
+                        retime[head.id] = (f, u)
+                    rest = slices[1:]
                 else:
-                    # no valid slice left (a conflict or richer row predates it entirely):
+                    # its own start is covered (a conflict or richer row predates it):
                     # closed to an empty window at its own start, then retired
                     also.append(head.id)
                     if head.valid_from is not None:
                         retime[head.id] = (head.valid_from, head.valid_from)
-            elif slice_ok and i > 0:
-                # the incoming is a plainer level preceding the richer rows: history row
-                write = replace(write_as or new, valid_from=f_s, valid_until=end_s, attribute_key=new_key)
-                event = ADD
-            if i == 0:
-                top = (f_s, u_s, end_s, head)
-        f_s, u_s, end_s, head = top
-        if cut is not None:
-            # the split: the top value continues from the boundary in a NEW row
-            write = replace(write_as or new, text=top_text, valid_from=boundary_s,
-                            valid_until=u_s, attribute_key=new_key)
-            event, target = ADD, None
-        elif head is None:
-            if existing.id in also:
+                    rest = slices
+                if head is existing and (head.id in retime or (i == 0 and level_text != existing.text)):
+                    event, text_out = UPDATE, level_text
+            else:
+                rest = slices
+            for f_dt, u_dt in rest:
+                # every further slice is a NEW row carrying the level's text
+                extra_rows.append(replace(write_as or new, text=level_text, valid_from=strs[f_dt],
+                                          valid_until=strs[u_dt], attribute_key=new_key))
+        if extra_rows:
+            if (existing.id in also and len(levels) > 1 and levels[0] == [new]
+                    and len(extra_rows) == 1 and not stale):
                 # the richer incoming covers the existing row's whole window → UPDATE in place
                 also.remove(existing.id)
                 retime.pop(existing.id, None)
-                retime[existing.id] = (f_s, end_s)
-                event, text_out = UPDATE, top_text
+                retime[existing.id] = (extra_rows[0].valid_from, extra_rows[0].valid_until)
+                event, text_out, extra_rows = UPDATE, top_text, []
             else:
-                # the existing row keeps an earlier slice; the richer incoming is a new row from its own start
-                write = replace(write_as or new, valid_from=f_s, valid_until=u_s, attribute_key=new_key)
+                write, extra_rows = extra_rows[0], extra_rows[1:]
                 event, target = ADD, None
-        elif head is existing and (head.id in retime or top_text != existing.text):
-            event, text_out = UPDATE, top_text
         interval = retime.pop(existing.id, None) if event == UPDATE else None
         reason = why + (" (newest wins)" if not richer_rule else
-                        " (split: value continued from the boundary)" if cut is not None else
+                        " (split around a conflict)" if cut_row is not None and event == ADD else
                         " (candidate richer)" if event == UPDATE and text_out == new.text and new.text != existing.text else
                         " (existing at least as rich)")
         return _decision(event, target if event != ADD else None, reason, text=text_out,
-                         also_close=also, interval=interval, retime=retime, write=write)
+                         also_close=also, interval=interval, retime=retime, write=write, extra_rows=extra_rows)
 
     # 3) (removed) a near-exact-text shortcut used to live here; once it
     #    required a real matching key it was a strict subset of 4) that picked
@@ -730,8 +765,11 @@ def apply(decision: Decision, new: Fact, store: dict[int, Fact],
         successor = new_row
         if decision.event == SUPERSEDE and decision.target_id is not None:
             store[decision.target_id] = invalidate(store[decision.target_id], new_row, now)
-    # split: the survivor's earlier period stays LIVE history with its window
-    # rewritten (closed at the interrupting conflict's start)
+    for extra in decision.extra_rows:
+        next_id = (max(store) + 1) if store else 1
+        store[next_id] = replace(extra, id=next_id, created_at=now.isoformat(),
+                                 attribute_key=attribute_key(extra.text) if extra.attribute_key is None else extra.attribute_key)
+    # a row's window rewritten in place (its slice at its own start), staying live
     for rid, (vf, vu) in decision.retime.items():
         if rid in store:
             store[rid] = replace(store[rid], valid_from=vf, valid_until=vu)

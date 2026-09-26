@@ -654,3 +654,45 @@ def test_transition_from_side_written_only_when_the_attribute_has_no_rows():
     d = bt.reconcile(new, [_fact(3, "person a has a cat named tabby")], now=NOW)       # nothing for the attribute → open-start closed row
     assert [(c.text, c.valid_from, c.valid_until) for c in d.extra_closed] == [("person a works at acme", None, "2025")]
     assert bt.reconcile(new, [], now=NOW).extra_closed[0].valid_from is None
+
+
+# ── review round 6 (PR #1692) ────────────────────────────────────────────────
+
+def test_plainer_row_keeps_every_slice_not_owned_by_richer_rows():
+    # plain Globex [2021, ∞) around rich Globex [2023, 2025), another plain observation 2024:
+    # plain [2021, 2023), rich [2023, 2025), plain [2025, ∞) — nothing valid is lost after 2025
+    plain = _fact(1, "person a works at globex", "2021-01-01")
+    rich = _fact(2, "person a works at globex as a senior mechanical engineer", "2023-01-01", "2025-01-01")
+    new = _fact(0, "Person A works at Globex", "2024-01-01")
+    d = bt.reconcile(new, [plain, rich], now=NOW)
+    assert (d.event, d.also_close, d.retime) == (bt.ADD, [], {1: ("2021-01-01", "2023-01-01")}), d
+    assert (d.write_as.text, d.write_as.valid_from, d.write_as.valid_until) == (plain.text, "2025-01-01", None)
+    store = bt.apply(d, new, {1: plain, 2: rich}, now=NOW)
+    assert [(f.text, f.valid_from, f.valid_until, f.is_live) for f in store.values()] == [
+        (plain.text, "2021-01-01", "2023-01-01", True),
+        (rich.text, "2023-01-01", "2025-01-01", True),      # the richer row owns only its own window
+        (plain.text, "2025-01-01", None, True),
+    ]
+    assert bt.live_texts(store) == [plain.text]
+    # a richer row sitting INSIDE a closed plainer one: before + after slices, both closed
+    plain_closed = _fact(1, "person a works at globex", "2021-01-01", "2027-01-01")
+    d = bt.reconcile(_fact(0, "Person A works at Globex", "2024-01-01", "2026-01-01"), [plain_closed, rich], now=NOW)
+    assert d.retime == {1: ("2021-01-01", "2023-01-01")} and \
+        (d.write_as.valid_from, d.write_as.valid_until) == ("2025-01-01", "2027-01-01") and d.extra_rows == []
+    # two richer rows inside one plain row: before, between and after
+    rich2 = _fact(3, "person a works at globex as a principal engineer", "2026-01-01", "2027-01-01")
+    d = bt.reconcile(new, [plain, rich, rich2], now=NOW)
+    assert d.retime == {1: ("2021-01-01", "2023-01-01")}
+    assert [(r.valid_from, r.valid_until) for r in [d.write_as] + d.extra_rows] == [("2025-01-01", "2026-01-01"), ("2027-01-01", None)]
+    store = bt.apply(d, new, {1: plain, 2: rich, 3: rich2}, now=NOW)
+    rows = sorted(store.values(), key=lambda f: f.valid_from)
+    for x, y in zip(rows, rows[1:]):
+        assert not bt.intervals_overlap(x, y), (x, y)
+    # a richer INCOMING with a bounded window leaves the plain row's later slice too
+    d = bt.reconcile(_fact(0, "Person A works at Globex as a senior mechanical engineer", "2023-01-01", "2025-01-01"), [plain], now=NOW)
+    assert d.retime == {1: ("2021-01-01", "2023-01-01")}
+    assert [(r.text[:24], r.valid_from, r.valid_until) for r in [d.write_as] + d.extra_rows] == [
+        ("Person A works at Globex", "2023-01-01", "2025-01-01"), ("person a works at globex", "2025-01-01", None)]
+    # the richer stored row's end is NOT extended by a plainer current observation
+    d = bt.reconcile(new, [rich], now=NOW)
+    assert d.event == bt.ADD and 2 not in d.retime and (d.write_as.text, d.write_as.valid_from) == (new.text, "2025-01-01")

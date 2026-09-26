@@ -62,24 +62,27 @@ phrasings of the same value. A bare "moved from X to Y" is a residence change;
 **Intervals — the interval rule.** The INCOMING fact's start is the boundary of
 what is known. Same value over a DISJOINT window is a repeated occurrence and
 ADDs a new interval. Same value over an overlapping window: a row's DETAILS are
-asserted only from that row's own start. Rows are ranked by richness; rows of
+asserted only over that row's own window. Rows are ranked by richness; rows of
 equal richness are absorbed into one (windows unioned — nothing is backdated,
 the value is identical: Acme [2020, 2025) + Acme [2024, ∞) → [2020, ∞); `works
-at acme` + `is employed by acme` collapse — the M9 idle-pass shape); a strictly
-plainer row keeps only the slice BEFORE the richer rows begin, as live history
-(plain Globex 2021–, rich Globex 2023– → plain [2021, 2023), rich [2023, ∞)),
-and a plainer row entirely covered by richer ones is retired. The top row's end
-extends to the union end. Every conflicting (different-value, overlapping) row
-closes at the boundary, linked to the survivor. If a conflicting row ran BEFORE
-the boundary and some slice of the value lies before it, every slice is cut at
-that conflict's start and the top value CONTINUES in a NEW row from the boundary
-— the split (Globex 2021–, Acme 2023–, Globex again from 2024 → Globex [2021,
-2023), Acme [2023, 2024), Globex [2024, ∞); `Decision.retime`). A row with no
-valid slice left (a conflict predating it entirely) is retired, never rewritten
-into an end before its start. Conflicts not overlapping the incoming window are
-not that fact's business and are left alone. `invalidate` closes an old window
-at the successor's start, never extends an earlier end, never leaves an end
-before the start; an empty `[t, t)` window is true at no instant.
+at acme` + `is employed by acme` collapse — the M9 idle-pass shape; a missing
+start is unknown, so a known start wins; a missing end is open, so it wins). A
+plainer row keeps EVERY slice the richer rows do not cover — before, between
+and after them — as separate rows (plain Globex [2021, ∞) around rich Globex
+[2023, 2025) → plain [2021, 2023), rich [2023, 2025), plain [2025, ∞)); the
+richer row owns only its own window and is never extended. A stored row keeps
+the slice at its own start in place (`Decision.retime`); every further slice is
+a new row (`Decision.extra_rows`); a row whose own start is covered (a conflict
+or richer row predates it) is closed to an empty `[t, t)` window and retired,
+never rewritten to a later start. Every conflicting (different-value,
+overlapping) row closes at the boundary, linked to the survivor, and if one ran
+BEFORE the boundary its span [its start, boundary) is removed from every slice
+of the value — the split (Globex 2021–, Acme 2023–, Globex again from 2024 →
+Globex [2021, 2023), Acme [2023, 2024), Globex [2024, ∞)). Conflicts not
+overlapping the incoming window are not that fact's business and are left
+alone. `invalidate` closes an old window at the successor's start, never
+extends an earlier end, never leaves an end before the start; an empty `[t, t)`
+window is true at no instant.
 
 **Transitions.** "switched from X to Y" writes the open `Y` row and closes any
 live same-value `X` row that covers the boundary. The closed `X` "from" row is
