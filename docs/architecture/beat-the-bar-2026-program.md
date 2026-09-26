@@ -218,11 +218,16 @@ status: 🔨 active — NEXT ACTION is always §0
   person (Letta); prefix-cache friendly.
 
 ### B3 — Memory that is sound and visible (beats Siri Recap / ChatGPT Dreaming)
-- B3.1 ⬜ **Bi-temporal supersession + "keep the richer fact"** at idle: `valid_from /
-  valid_until / expired_at / superseded_by` on `facts` and `person_relationships`;
-  contradiction only if intervals overlap (Graphiti `edge_operations.py`); reconciliation
-  with mem0's update prompt, top-10 neighbours, integer ids. Fixes the distilled-vs-richer
-  dedupe bug (M7/M9) without deleting anything. Lab: 50-pair fixture from demo transcripts.
+- B3.1 🔨 **Bi-temporal supersession + "keep the richer fact"** at idle — lab spike in
+  draft PR #1692 (flag-dark `ZOE_BITEMPORAL_SUPERSEDE`, no prod wiring): `valid_from /
+  valid_until / expired_at / superseded_by` on the fact rows (Chroma metadata keys) and
+  `person_relationships` (Alembic plan, not applied); contradiction only if intervals
+  overlap (Graphiti `edge_operations.py`); reconciliation with mem0's update prompt,
+  top-10 neighbours, integer ids. Fixes the distilled-vs-richer dedupe bug (M7/M9)
+  without deleting anything. Lab: 50-pair SYNTHETIC fixture scores 1.00 with the fake
+  judge; controls without the overlap rule / richer rule fail 0/10 historical, 4/8
+  richer. Design + gates: `b3-1-bitemporal-supersession.md`. Next: real-brain judge run,
+  flip the two `test_live_dedup.py` strict-xfails, idle pass behind B3.2's gates.
 - B3.2 🔨 **Deterministic dream gating** for the idle consolidator (first step MERGED as #1682:
   the alert distinguishes idle / no-history / extractor vs processing errors, one cutoff for
   selection and probe, the emotional pass survives a fact-parse failure, consolidation has its
