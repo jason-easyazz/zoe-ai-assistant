@@ -89,7 +89,25 @@ class FakePrefsDB:
         if norm.startswith("INSERT INTO user_preferences"):
             uid, prefs_json = p[0], p[1]
             self._clock += 1
+            if "::jsonb ||" in norm and uid in self.store:
+                # user_prefs.set_pref: atomic single-key merge (jsonb ||).
+                merged = json.loads(self.store[uid][0])
+                merged.update(json.loads(prefs_json))
+                prefs_json = json.dumps(merged)
             self.store[uid] = (prefs_json, self._clock)
+            return _Cursor()
+
+        if norm.startswith("UPDATE user_preferences SET prefs = (COALESCE(prefs, '{}')::jsonb -"):
+            # user_prefs.delete_pref: atomic key removal, optionally only when the
+            # key still holds the expected value (params: key, uid[, key, value]).
+            key, uid = p[0], p[1]
+            entry = self.store.get(uid)
+            if entry is not None:
+                prefs = json.loads(entry[0])
+                if len(p) == 2 or prefs.get(p[2]) == p[3]:
+                    prefs.pop(key, None)
+                    self._clock += 1
+                    self.store[uid] = (json.dumps(prefs), self._clock)
             return _Cursor()
 
         raise AssertionError(f"unexpected SQL: {norm}")
