@@ -18,6 +18,12 @@ model, no I/O) so the lab's numbers cannot drift silently:
 
 A negative control you have not seen go red is not a control, so every one
 here asserts the SPECIFIC wrong outcome, not merely "score is lower".
+
+Deliberately NOT ``ci_safe``: it imports the lab modules, and the labs contract
+(``labs/AGENTS.md``) keeps lab code out of the GitHub gate. Hand-run it (see
+``labs/b3-1-supersession/README.md``):
+
+    nice -n 15 python3 -m pytest tests/unit/test_b3_1_supersession_lab.py -q -p no:cacheprovider
 """
 from __future__ import annotations
 
@@ -26,8 +32,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-
-pytestmark = pytest.mark.ci_safe
 
 LAB = Path(__file__).resolve().parents[2] / "labs" / "b3-1-supersession"
 sys.path.insert(0, str(LAB))
@@ -208,3 +212,137 @@ def test_flag_default_off(monkeypatch):
     assert bt.enabled() is False
     monkeypatch.setenv("ZOE_BITEMPORAL_SUPERSEDE", "1")
     assert bt.enabled() is True
+
+
+# ── review round 1 (PR #1692): each a negative control that was red first ──────
+
+def test_near_duplicate_text_never_merges_across_subjects_or_attributes():
+    # "person b works at acme" vs "person a works at acme": ratio 0.955 > NEAR_DUP_RATIO
+    assert bt._similarity("person b works at acme", "person a works at acme") >= bt.NEAR_DUP_RATIO
+    d = bt.reconcile(_fact(0, "Person B works at Acme"), [_fact(1, "person a works at acme")], now=NOW)
+    assert d.event == bt.ADD and d.target_id is None, d
+    # same name, different relative: two facts, not one
+    d = bt.reconcile(_fact(0, "Person A's mother's name is Sam"),
+                     [_fact(1, "person a's father's name is sam")], now=NOW)
+    assert d.event == bt.ADD, d
+    # and the merge still happens when subject + attribute DO match
+    d = bt.reconcile(_fact(0, "Person A works at Acme"), [_fact(1, "person a works at acme")], now=NOW)
+    assert (d.event, d.target_id) == (bt.NONE, 1)
+    assert bt.subjects("Neil, Person A's dad, says hi") == {"person a"}
+    assert bt.subjects("user's dad's name is neil, spelled n-e-i-l") == {"user"}  # 'i' inside n-e-i-l is not a subject
+    assert bt.same_subject("I live in Northport", "user lives in northport")
+
+
+def test_repeated_value_in_disjoint_window_is_a_new_interval_not_a_duplicate():
+    # worked at Acme 2018–2021 and again from 2024: two intervals, both kept
+    old = _fact(1, "person a works at acme", "2018-01-01", "2021-01-01")
+    for text in ("Person A works at Acme", "Person A works at Acme now"):  # same-attr path AND near-dup path
+        new = _fact(0, text, "2024-01-01")
+        d = bt.reconcile(new, [old], now=NOW)
+        assert d.event == bt.ADD and "disjoint" in d.reason, (text, d)
+        store = bt.apply(d, new, {1: old}, now=NOW)
+        assert store[1] == old                                   # history untouched
+        assert bt.live_texts(store) == [text]
+    # the judge path obeys the same rule
+    hist = _fact(1, "person a's father's name is neil", "2000-01-01", "2001-01-01")
+    d = bt.reconcile(_fact(0, "Neil, Person A's dad, says hi", "2026-01-01"), [hist], judge=fake_judge, now=NOW)
+    assert d.event == bt.ADD and "disjoint" in d.reason
+    # overlapping windows still dedupe
+    d = bt.reconcile(_fact(0, "Person A works at Acme", "2020-01-01"), [old], now=NOW)
+    assert (d.event, d.target_id) == (bt.NONE, 1)
+
+
+def test_supersede_closes_old_window_at_successor_start_and_never_leaves_end_before_start():
+    # old window ran to 2030; superseded in 2024 → cut at 2024, not left overlapping
+    old = _fact(1, "person a works at acme", "2018-01-01", "2030-01-01")
+    new = _fact(2, "person a works at globex", "2024-01-01")
+    assert bt.intervals_overlap(old, new)
+    closed = bt.invalidate(old, new, NOW)
+    assert closed.valid_until == "2024-01-01" and closed.superseded_by == 2
+    assert not bt.intervals_overlap(closed, new)
+    # backdated successor: old never true → empty [2020, 2020) window, never end < start
+    old = _fact(1, "person a works at acme", "2020-01-01", None)
+    closed = bt.invalidate(old, _fact(2, "person a works at globex", "2019-01-01"), NOW)
+    assert closed.valid_until == "2020-01-01"
+    assert bt.parse_ts(closed.valid_until) >= bt.parse_ts(closed.valid_from)
+    # a window that already ended earlier is never EXTENDED (only reachable with the overlap control off)
+    old = _fact(1, "person a works at acme", "2018-01-01", "2021-01-01")
+    closed = bt.invalidate(old, _fact(2, "person a works at globex", "2024-01-01"), NOW)
+    assert closed.valid_until == "2021-01-01"
+    # no successor start at all → closed now
+    closed = bt.invalidate(_fact(1, "person a works at acme"), _fact(2, "person a works at globex"), NOW)
+    assert closed.valid_until == NOW.isoformat()
+    # end to end through the controller
+    old = _fact(1, "person a works at acme", "2018-01-01", "2030-01-01")
+    new = _fact(0, "Person A works at Globex", "2024-01-01")
+    store = bt.apply(bt.reconcile(new, [old], now=NOW), new, {1: old}, now=NOW)
+    assert store[1].valid_until == "2024-01-01"
+
+
+def test_bare_move_is_a_residence_change_not_an_employer_change():
+    assert bt.split_transition("Person A moved from Southbay to Northport") == \
+        ("person a lives in southbay", "person a lives in northport", None)
+    assert bt.split_transition("User moved from London to Paris") == ("user lives in london", "user lives in paris", None)
+    assert bt.split_transition("User relocated from London to Paris")[0] == "user lives in london"
+    # explicit job qualifier / org suffix / other verbs stay employer
+    assert bt.split_transition("User moved jobs from Initech to Vandelay")[0] == "user works at initech"
+    assert bt.split_transition("User moved from Acme Corp to Globex Inc")[0] == "user works at acme corp"
+    assert bt.split_transition("Person A switched from Acme to Globex")[0] == "person a works at acme"
+    assert bt.split_transition("Person B went from Initech to Globex")[0] == "person b works at initech"
+    # a bare move supersedes the RESIDENCE and leaves the employer alone
+    live = [_fact(1, "person a lives in southbay"), _fact(2, "person a works at acme")]
+    new = _fact(0, "Person A moved from Southbay to Northport")
+    d = bt.reconcile(new, live, now=NOW)
+    assert (d.event, d.target_id) == (bt.SUPERSEDE, 1), d
+    store = bt.apply(d, new, {f.id: f for f in live}, now=NOW)
+    assert sorted(bt.live_texts(store)) == ["person a lives in northport", "person a works at acme"]
+
+
+def test_judge_is_only_shown_and_can_only_target_facts_about_the_same_person():
+    shown_log = []
+
+    def naming_first(new_text, candidates):
+        shown_log.append([cid for cid, _ in candidates])
+        return {"event": "SUPERSEDE", "id": candidates[0][0]}
+
+    other = _fact(1, "person b's father's name is neil")
+    mine = _fact(2, "person a's father's name is neil")
+    new = _fact(0, "Tom, Person A's dad, says hi")
+    # only the other person's fact around: the judge is not even called with it
+    d = bt.reconcile(new, [other], judge=naming_first, now=NOW)
+    assert d.event == bt.ADD and "same subject" in d.reason and shown_log == []
+    # both around: Person B's row is never shown, so it can never be named
+    d = bt.reconcile(new, [other, mine], judge=naming_first, now=NOW)
+    assert shown_log == [[2]]
+    assert (d.event, d.target_id) == (bt.SUPERSEDE, 2)
+    d = bt.reconcile(new, [other, mine], judge=fake_judge, now=NOW)
+    assert (d.event, d.target_id) == (bt.SUPERSEDE, 2)
+    # and an UPDATE can only rewrite the same person's row
+    d = bt.reconcile(_fact(0, "Neil, Person A's dad, says hi and he loves fishing"), [other, mine],
+                     judge=lambda t, c: {"event": "UPDATE", "id": c[0][0]}, now=NOW)
+    assert d.target_id == 2
+
+
+def test_supersede_closes_every_contradicting_live_row_not_just_one():
+    acme = _fact(1, "person a works at acme")
+    initech = _fact(2, "person a works at initech", "2020-01-01")
+    new = _fact(0, "Person A works at Globex", "2024-01-01")
+    d = bt.reconcile(new, [acme, initech], now=NOW)
+    assert (d.event, d.target_id, d.also_close) == (bt.SUPERSEDE, 2, [1]), d
+    store = bt.apply(d, new, {1: acme, 2: initech}, now=NOW)
+    assert bt.live_texts(store) == ["Person A works at Globex"]
+    assert store[1].superseded_by == store[2].superseded_by == 3
+    assert store[1].valid_until == store[2].valid_until == "2024-01-01"
+    # an interrupted new-row-first write left the old row live beside the new one:
+    # re-reconciling the same fact sweeps the straggler instead of returning a bare NONE
+    acme = _fact(1, "person a works at acme")
+    globex = _fact(2, "person a works at globex", "2024-01-01")
+    d = bt.reconcile(new, [acme, globex], now=NOW)
+    assert (d.event, d.target_id, d.also_close) == (bt.NONE, 2, [1]), d
+    store = bt.apply(d, new, {1: acme, 2: globex}, now=NOW)
+    assert bt.live_texts(store) == ["person a works at globex"]
+    assert store[1].superseded_by == 2 and not store[1].is_live
+    # a disjoint same-attribute row is history, never swept
+    old = _fact(1, "person a works at acme", "2010-01-01", "2012-01-01")
+    d = bt.reconcile(new, [old, globex], now=NOW)
+    assert (d.event, d.also_close) == (bt.NONE, [])

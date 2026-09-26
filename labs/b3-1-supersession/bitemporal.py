@@ -118,14 +118,26 @@ def intervals_overlap(a: Fact, b: Fact) -> bool:
 
 def invalidate(old: Fact, new: Fact, now: Optional[datetime] = None) -> Fact:
     """Graphiti's write, never a delete: close the old validity window at the
-    new fact's start, retire the row now, and link forward."""
+    new fact's start, retire the row now, and link forward.
+
+    The closing edge is ``new.valid_from`` (``now`` when the successor has no
+    start) — an old window that ran PAST the successor's start is cut there,
+    so the two never overlap in event time. Two clamps keep the window
+    well-formed: a window that already ended earlier is never extended, and a
+    backdated successor (starting before the old fact did) closes the old
+    window at its own start — an empty ``[from, from)`` window, never an end
+    before the start.
+    """
     now = now or utcnow()
-    return replace(
-        old,
-        valid_until=old.valid_until or new.valid_from or now.isoformat(),
-        expired_at=now.isoformat(),
-        superseded_by=new.id,
-    )
+    until = new.valid_from or now.isoformat()
+    end = parse_ts(until)
+    old_until = parse_ts(old.valid_until)
+    if old_until is not None and old_until < end:
+        until, end = old.valid_until, old_until
+    old_from = parse_ts(old.valid_from)
+    if old_from is not None and end < old_from:
+        until = old.valid_from
+    return replace(old, valid_until=until, expired_at=now.isoformat(), superseded_by=new.id)
 
 
 # ── Attribute-key normalisation ───────────────────────────────────────────────
@@ -204,6 +216,26 @@ def parse_fact(text: str) -> tuple[Optional[str], Optional[str], str]:
     return subject, None, rest
 
 
+_SUBJECT_MENTION_RE = re.compile(
+    r"(?<![\w-])(?:user|person [a-z]|i|my|me)(?![\w-])", re.IGNORECASE,
+)
+
+
+def subjects(text: str) -> frozenset[str]:
+    """Every subject a text mentions, anywhere in it, canonicalised
+    (``i``/``my``/``me`` → ``user``): "Neil, Person A's dad, says hi" →
+    {"person a"}. Empty when the text names nobody."""
+    return frozenset(_canon_subject(m.group(0)) for m in _SUBJECT_MENTION_RE.finditer(_normalize(text)))
+
+
+def same_subject(a: str, b: str) -> bool:
+    """Two texts are about the same person when they share a subject mention,
+    or when neither names anyone. A fact about Person B can never merge
+    into, supersede, or be judged against a fact about Person A."""
+    sa, sb = subjects(a), subjects(b)
+    return bool(sa & sb) if (sa or sb) else True
+
+
 def attribute_key(text: str) -> Optional[str]:
     """'user/employer', 'person a/dog name', … or None when unrecognised."""
     subject, attr, _ = parse_fact(text)
@@ -262,10 +294,12 @@ def richer(candidate: str, existing: str) -> str:
 
 _TRANSITION_RE = re.compile(
     r"^(?P<subj>(?:the\s+)?(?:user|person [a-z]|i)\b)\s+"
-    r"(?:switched|moved|changed|went)\s+(?:jobs?\s+)?from\s+(?P<old>.+?)\s+to\s+(?P<new>.+?)"
+    r"(?P<verb>switched|moved|changed|went|relocated)\s+(?P<jobs>jobs?\s+)?from\s+(?P<old>.+?)\s+to\s+(?P<new>.+?)"
     r"(?:\s+(?:in|on|as of|since)\s+(?P<when>\d{4}(?:-\d{2}(?:-\d{2})?)?))?$",
     re.IGNORECASE,
 )
+_PLACE_WORDS_RE = re.compile(r"\b(?:city|town|suburb|village|street|avenue|road)\b")
+_ORG_WORDS_RE = re.compile(r"\b(?:corp|corporation|inc|ltd|llc|pty|co|company|industries|logistics|group|labs)\b")
 
 _TRANSITION_FRAMING = {
     "employer": "works at",
@@ -273,19 +307,34 @@ _TRANSITION_FRAMING = {
 }
 
 
+def _transition_attribute(m: "re.Match", attr_hint: Optional[str]) -> str:
+    """Which attribute a "<verb> from X to Y" changes. Explicit signals first
+    (``attr_hint``, a ``jobs`` qualifier, an org suffix, a place word); then
+    the verb: a bare "moved/relocated from X to Y" is a change of ADDRESS,
+    while "switched/changed/went from X to Y" is a change of employer."""
+    if attr_hint:
+        return attr_hint
+    values = m.group("old") + " " + m.group("new")
+    if m.group("jobs") or _ORG_WORDS_RE.search(values):
+        return "employer"
+    if _PLACE_WORDS_RE.search(values) or m.group("verb") in ("moved", "relocated"):
+        return "residence"
+    return "employer"
+
+
 def split_transition(text: str, attr_hint: Optional[str] = None,
                      when: Optional[str] = None) -> Optional[tuple[str, str, Optional[str]]]:
     """"Person A switched from Acme to Globex" → ("person a works at acme",
     "person a works at globex", when). None when not a transition.
 
-    The attribute is guessed from the values' framing hint (employer unless the
-    values look like places / ``attr_hint`` says residence)."""
+    The attribute comes from :func:`_transition_attribute`: "User moved from
+    London to Paris" is a residence change; "User moved jobs from Initech to
+    Globex" (or any org-suffixed pair) is an employer change."""
     m = _TRANSITION_RE.match(_normalize(text))
     if not m:
         return None
     subj = _canon_subject(m.group("subj").replace("the ", ""))
-    attr = attr_hint or ("residence" if re.search(r"\b(?:city|town|suburb|street|avenue|road)\b",
-                                                   m.group("old") + " " + m.group("new")) else "employer")
+    attr = _transition_attribute(m, attr_hint)
     framing = _TRANSITION_FRAMING.get(attr, "works at")
     old = f"{subj} {framing} {m.group('old').strip()}"
     new = f"{subj} {framing} {m.group('new').strip()}"
@@ -315,6 +364,12 @@ class Decision:
     # The fact as it should be WRITTEN (a transition rewrites "switched from X
     # to Y" into the open "…works at Y" row; None = write ``new`` unchanged).
     write_as: Optional[Fact] = None
+    # OTHER live rows of the same attribute that assert a different value over
+    # an overlapping window: every one is retired by ``apply``, not just
+    # ``target_id`` (several contradicting rows — e.g. a duplicate left by an
+    # interrupted new-row-first write — must all close, or stale facts keep
+    # competing in recall).
+    also_close: list[int] = field(default_factory=list)
 
 
 def _similarity(a: str, b: str) -> float:
@@ -354,12 +409,19 @@ def reconcile(
       2. Contradiction candidates = live neighbours whose validity interval
          OVERLAPS the new fact's (``overlap_check=False`` is the negative
          control that reproduces Graphiti-less "newest wins").
-      3. Near-exact text duplicate → NONE / UPDATE by richness.
+      3. Near-exact text duplicate → NONE / UPDATE by richness — only when the
+         two share the attribute key AND the subject ("person b works at acme"
+         never merges into "person a works at acme"; a same-name mother and
+         father are two facts) and only when their windows overlap.
       4. Same attribute key: same value → NONE / UPDATE by richness
-         (``richer_rule=False`` is the negative control: newest wins);
-         different value → SUPERSEDE if overlapping, ADD (history) if not.
-      5. Key unknown on either side → ``judge`` (LLM) with integer ids; an id
-         outside the shown set, or no judge, degrades to ADD.
+         (``richer_rule=False`` is the negative control: newest wins), but a
+         same value over a DISJOINT window is a repeated occurrence and ADDs a
+         separate interval (worked at Acme 2018–2021 and again from 2024);
+         different value → SUPERSEDE if overlapping (EVERY overlapping
+         contradicting row closes, via ``also_close``), ADD (history) if not.
+      5. Key unknown on either side → ``judge`` (LLM) with integer ids, shown
+         ONLY the neighbours about the same subject; an id outside the shown
+         set, or no judge, degrades to ADD.
     """
     now = now or utcnow()
     extra_closed: list[Fact] = []
@@ -379,74 +441,91 @@ def reconcile(
             ))
 
     live = [n for n in neighbours if n.is_live]
-    if not live:
-        return Decision(ADD, None, "no live neighbours", extra_closed=extra_closed, write_as=write_as)
 
-    def _merge(existing: Fact, why: str) -> Decision:
-        if not richer_rule:
-            # negative control: newest phrasing always wins
-            return Decision(UPDATE, existing.id, why + " (newest wins)", text=new.text,
-                            extra_closed=extra_closed, write_as=write_as)
-        keep = richer(new.text, existing.text)
-        if keep == existing.text:
-            return Decision(NONE, existing.id, why + " (existing at least as rich)",
-                            text=existing.text, extra_closed=extra_closed, write_as=write_as)
-        return Decision(UPDATE, existing.id, why + " (candidate richer)", text=new.text,
-                        extra_closed=extra_closed, write_as=write_as)
+    def _decision(event: str, target: Optional[int], why: str, *, text: Optional[str] = None,
+                  also_close: Optional[list[int]] = None) -> Decision:
+        return Decision(event, target, why, text=text, extra_closed=extra_closed,
+                        write_as=write_as, also_close=list(also_close or []))
+
+    if not live:
+        return _decision(ADD, None, "no live neighbours")
+
+    def _overlaps(n: Fact) -> bool:
+        return (not overlap_check) or intervals_overlap(new, n)
 
     new_key = attribute_key(new.text)
+    same_attr = [n for n in live if attribute_key(n.text) == new_key] if new_key else []
+    # every live same-attribute row asserting a DIFFERENT value over an
+    # overlapping window — all of them must close, whatever the decision
+    stale = [n for n in same_attr if not same_value(new.text, n.text) and _overlaps(n)]
 
-    # 3) near-exact duplicate (value-checked: "…is Jo" vs "…is Joe" is a correction)
+    def _merge(existing: Fact, why: str) -> Decision:
+        if not _overlaps(existing):
+            return _decision(ADD, None, why + " but intervals disjoint (repeated occurrence, new interval)")
+        also = [n.id for n in stale if n.id != existing.id]
+        if not richer_rule:
+            # negative control: newest phrasing always wins
+            return _decision(UPDATE, existing.id, why + " (newest wins)", text=new.text, also_close=also)
+        keep = richer(new.text, existing.text)
+        if keep == existing.text:
+            return _decision(NONE, existing.id, why + " (existing at least as rich)",
+                             text=existing.text, also_close=also)
+        return _decision(UPDATE, existing.id, why + " (candidate richer)", text=new.text, also_close=also)
+
+    # 3) near-exact duplicate — same key, same subject, same value, overlapping
+    #    window. A different value with the same key ("…is Jo" vs "…is Joe")
+    #    is a correction and takes the contradiction path in 4).
     best = max(live, key=lambda n: _similarity(new.text, n.text))
-    if _similarity(new.text, best.text) >= NEAR_DUP_RATIO:
-        if new_key and attribute_key(best.text) == new_key and not same_value(new.text, best.text):
-            if not overlap_check or intervals_overlap(new, best):
-                return Decision(SUPERSEDE, best.id, "near-dup text, different value", extra_closed=extra_closed, write_as=write_as)
-        else:
-            return _merge(best, "near-exact duplicate")
+    if (_similarity(new.text, best.text) >= NEAR_DUP_RATIO
+            and attribute_key(best.text) == new_key and same_subject(new.text, best.text)
+            and (new_key is None or same_value(new.text, best.text))
+            and _overlaps(best)):
+        return _merge(best, "near-exact duplicate")
 
     # 4) same attribute
     if new_key:
-        same_attr = [n for n in live if attribute_key(n.text) == new_key]
         same_attr_same_val = [n for n in same_attr if same_value(new.text, n.text)]
         if same_attr_same_val:
             target = max(same_attr_same_val, key=lambda n: information(n.text))
-            return _merge(target, "same attribute, same value")
+            if _overlaps(target):
+                return _merge(target, "same attribute, same value")
+            # same value, disjoint window: a repeated occurrence → a separate interval
+        if stale:
+            # supersede the most recent live assertion; close every other contradicting row too
+            target = max(stale, key=lambda n: parse_ts(n.valid_from) or FAR_PAST)
+            return _decision(SUPERSEDE, target.id, "same attribute, different value, intervals overlap",
+                             also_close=[n.id for n in stale if n.id != target.id])
         if same_attr:
-            contradicting = [n for n in same_attr if (not overlap_check) or intervals_overlap(new, n)]
-            if contradicting:
-                # supersede the most recent live assertion of that attribute
-                target = max(contradicting, key=lambda n: parse_ts(n.valid_from) or FAR_PAST)
-                return Decision(SUPERSEDE, target.id, "same attribute, different value, intervals overlap",
-                                extra_closed=extra_closed, write_as=write_as)
-            return Decision(ADD, None, "same attribute, different value, intervals disjoint (history)",
-                            extra_closed=extra_closed, write_as=write_as)
+            return _decision(ADD, None, "same attribute, intervals disjoint (history / repeated occurrence)")
         # known attribute, no neighbour shares it → distinct fact
         if all(attribute_key(n.text) for n in live):
-            return Decision(ADD, None, "different attribute", extra_closed=extra_closed, write_as=write_as)
+            return _decision(ADD, None, "different attribute")
 
-    # 5) judge — only for the ambiguous remainder, only over shown ids
+    # 5) judge — only for the ambiguous remainder, only over shown ids, and
+    #    only shown the neighbours about the SAME subject: an id the judge was
+    #    not shown is rejected, so it can never retire or overwrite another
+    #    person's fact.
     if judge is None:
-        return Decision(ADD, None, "attribute unknown, no judge → add", extra_closed=extra_closed, write_as=write_as)
-    shown = [(n.id, n.text) for n in live]
+        return _decision(ADD, None, "attribute unknown, no judge → add")
+    shown_facts = [n for n in live if same_subject(new.text, n.text)]
+    if not shown_facts:
+        return _decision(ADD, None, "attribute unknown, no neighbour about the same subject → add")
+    shown = [(n.id, n.text) for n in shown_facts]
     try:
         verdict = judge(new.text, shown)
     except Exception as exc:  # the LLM step must never lose a fact
-        return Decision(ADD, None, f"judge failed ({type(exc).__name__}) → add", extra_closed=extra_closed, write_as=write_as)
-    validated = _validate_judge(verdict, live)
+        return _decision(ADD, None, f"judge failed ({type(exc).__name__}) → add")
+    validated = _validate_judge(verdict, shown_facts)
     if validated is None:
-        return Decision(ADD, None, "judge named an id it was not shown / bad shape → add",
-                        extra_closed=extra_closed, write_as=write_as)
+        return _decision(ADD, None, "judge named an id it was not shown / bad shape → add")
     event, target_id = validated
     if event == ADD:
-        return Decision(ADD, None, "judge: unrelated", extra_closed=extra_closed, write_as=write_as)
-    target = next(n for n in live if n.id == target_id)
+        return _decision(ADD, None, "judge: unrelated")
+    target = next(n for n in shown_facts if n.id == target_id)
     if event == SUPERSEDE:
-        if overlap_check and not intervals_overlap(new, target):
-            return Decision(ADD, None, "judge said contradiction but intervals disjoint (history)",
-                            extra_closed=extra_closed, write_as=write_as)
-        return Decision(SUPERSEDE, target.id, "judge: contradiction, intervals overlap",
-                        extra_closed=extra_closed, write_as=write_as)
+        if not _overlaps(target):
+            return _decision(ADD, None, "judge said contradiction but intervals disjoint (history)")
+        return _decision(SUPERSEDE, target.id, "judge: contradiction, intervals overlap")
     # judge says same fact (UPDATE/NONE): the richness rule decides, not the judge
     return _merge(target, "judge: same fact")
 
@@ -468,17 +547,24 @@ def apply(decision: Decision, new: Fact, store: dict[int, Fact],
     for closed in decision.extra_closed:
         store[next_id] = replace(closed, id=next_id, created_at=now.isoformat())
         next_id += 1
+    successor: Optional[Fact] = None
     if decision.event == NONE:
-        return store
-    if decision.event == UPDATE and decision.target_id is not None:
+        successor = store.get(decision.target_id) if decision.target_id is not None else None
+    elif decision.event == UPDATE and decision.target_id is not None:
         old = store[decision.target_id]
         store[decision.target_id] = replace(old, text=decision.text or new.text)
-        return store
-    new_row = replace(new, id=next_id, created_at=now.isoformat(),
-                      attribute_key=attribute_key(new.text) if new.attribute_key is None else new.attribute_key)
-    store[next_id] = new_row
-    if decision.event == SUPERSEDE and decision.target_id is not None:
-        store[decision.target_id] = invalidate(store[decision.target_id], new_row, now)
+        successor = store[decision.target_id]
+    else:
+        new_row = replace(new, id=next_id, created_at=now.isoformat(),
+                          attribute_key=attribute_key(new.text) if new.attribute_key is None else new.attribute_key)
+        store[next_id] = new_row
+        successor = new_row
+        if decision.event == SUPERSEDE and decision.target_id is not None:
+            store[decision.target_id] = invalidate(store[decision.target_id], new_row, now)
+    # every OTHER contradicting live row closes too, linked to the surviving row
+    for cid in decision.also_close:
+        if successor is not None and cid in store and store[cid].is_live and cid != successor.id:
+            store[cid] = invalidate(store[cid], successor, now)
     return store
 
 
@@ -490,5 +576,5 @@ __all__ = [
     "ADD", "UPDATE", "SUPERSEDE", "NONE", "Decision", "Fact", "Judge",
     "apply", "attribute_key", "enabled", "information", "intervals_overlap",
     "invalidate", "live_texts", "parse_fact", "reconcile", "richer",
-    "same_value", "split_transition", "value_tokens",
+    "same_subject", "same_value", "split_transition", "subjects", "value_tokens",
 ]

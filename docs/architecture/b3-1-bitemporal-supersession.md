@@ -2,7 +2,8 @@
 
 **Status:** lab spike (draft PR #1692), flag-dark (`ZOE_BITEMPORAL_SUPERSEDE`, default off), nothing
 prod-wired. Lab code + 50-pair fixture: `labs/b3-1-supersession/`; regression net
-`tests/unit/test_b3_1_supersession_lab.py` (`ci_safe`). Program item B3.1 in
+`tests/unit/test_b3_1_supersession_lab.py` (hand-run, not `ci_safe` — lab code stays
+out of the GitHub gate; see the lab README). Program item B3.1 in
 `beat-the-bar-2026-program.md`; review §7 #3 + register rows M7/M9 in
 `docs/knowledge/state-of-zoe-review-2026-09-25.md`.
 
@@ -170,7 +171,9 @@ rollback after history rows exist needs `valid_until != ""` added to the read fi
 first — do that in the same PR as the flag reader, before any write).
 
 Gates before the flag reader ships (all deterministic, locally runnable):
-1. `tests/unit/test_b3_1_supersession_lab.py` green in `validate` (this PR).
+1. `tests/unit/test_b3_1_supersession_lab.py` green, hand-run against the PR head (it
+   is not `ci_safe`; the lab stays out of the GitHub gate). When the controller moves
+   to a non-lab package for prod wiring, its tests move with it and become `ci_safe`.
 2. `test_live_dedup.py:97` and `:145` flipped from strict-xfail to pass on the Jetson
    lane, against the real Gemma extractor — the actual M7/M9 evidence.
 3. A real-brain judge run on the 50-pair fixture ≥ 0.9 P/R (hand-run, `/slots`-gated,
