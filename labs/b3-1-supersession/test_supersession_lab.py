@@ -248,9 +248,9 @@ def test_repeated_value_in_disjoint_window_is_a_new_interval_not_a_duplicate():
     hist = _fact(1, "person a's father's name is neil", "2000-01-01", "2001-01-01")
     d = bt.reconcile(_fact(0, "Neil, Person A's dad, says hi", "2026-01-01"), [hist], judge=fake_judge, now=NOW)
     assert d.event == bt.ADD and "disjoint" in d.reason
-    # overlapping windows still dedupe
+    # overlapping windows still dedupe — and (round 3) the survivor's window is the union
     d = bt.reconcile(_fact(0, "Person A works at Acme", "2020-01-01"), [old], now=NOW)
-    assert (d.event, d.target_id) == (bt.NONE, 1)
+    assert (d.event, d.target_id, d.interval) == (bt.UPDATE, 1, ("2018-01-01", None))
 
 
 def test_supersede_closes_old_window_at_successor_start_and_never_leaves_end_before_start():
@@ -395,7 +395,7 @@ def test_same_value_candidate_is_chosen_by_overlap_before_richness():
 
 
 def test_persisted_attribute_key_is_honoured_over_text_reparse():
-    legacy = _fact(1, "person a: employer = acme", attribute_key="person a/employer")
+    legacy = _fact(1, "person a: acme", attribute_key="person a/employer")   # compact "Name: value" row
     assert bt.attribute_key(legacy.text) is None and legacy.key() == "person a/employer"
     new = _fact(0, "Person A works at Globex")
     d = bt.reconcile(new, [legacy], now=NOW)
@@ -416,14 +416,15 @@ def test_sweep_closes_conflicting_rows_at_the_incoming_start_not_the_stored_star
     conflicting = _fact(2, "person a works at acme", "2022-01-01")
     new = _fact(0, "Person A works at Globex", "2024-01-01")
     d = bt.reconcile(new, [stored, conflicting], now=NOW)
-    assert (d.event, d.target_id, d.also_close) == (bt.NONE, 1, [2])
+    assert (d.event, d.target_id, d.also_close) == (bt.UPDATE, 1, [2])   # UPDATE: the survivor's window moves
     store = bt.apply(d, new, {1: stored, 2: conflicting}, now=NOW)
     assert store[2].valid_until == "2024-01-01" and store[2].superseded_by == 1   # was "2022-01-01": empty window
-    assert store[1].valid_from == "2021-01-01"                                    # surviving row untouched
+    assert store[1].valid_from == "2024-01-01"    # survivor yields the span Acme covered (round 3, see README rule)
+    assert not bt.intervals_overlap(store[1], store[2])
     # incoming with no start: closed now, not at the stored 2021 start
     new = _fact(0, "Person A works at Globex")
     store = bt.apply(bt.reconcile(new, [stored, conflicting], now=NOW), new, {1: stored, 2: conflicting}, now=NOW)
-    assert store[2].valid_until == NOW.isoformat()
+    assert store[2].valid_until == NOW.isoformat() and store[1].valid_from == NOW.isoformat()
 
 
 def test_lab_test_is_outside_every_ci_collection_path():
@@ -434,3 +435,104 @@ def test_lab_test_is_outside_every_ci_collection_path():
         text = (repo / ".github" / "workflows" / wf).read_text()
         assert "b3-1-supersession" not in text and "pytest labs" not in text, wf
     assert not list((repo / "tests").rglob("test_*b3_1*.py"))   # .py only: a stale __pycache__ is not collection
+
+
+# ── review round 3 (PR #1692) ────────────────────────────────────────────────
+
+def test_surviving_same_value_row_never_overlaps_a_closed_conflicting_row():
+    # rule: the incoming start is the boundary; conflicts close there and the
+    # survivor yields any span a conflict covered before it (README, "Rules")
+    for acme_from in ("2022-01-01", "2019-01-01"):          # conflict starts after / before the survivor
+        globex = _fact(1, "person a works at globex", "2021-01-01")
+        acme = _fact(2, "person a works at acme", acme_from)
+        new = _fact(0, "Person A works at Globex", "2024-01-01")
+        d = bt.reconcile(new, [globex, acme], now=NOW)
+        assert (d.event, d.target_id, d.also_close, d.interval) == (bt.UPDATE, 1, [2], ("2024-01-01", None)), d
+        store = bt.apply(d, new, {1: globex, 2: acme}, now=NOW)
+        assert (store[2].valid_from, store[2].valid_until) == (acme_from, "2024-01-01")
+        assert (store[1].valid_from, store[1].valid_until) == ("2024-01-01", None)
+        assert not bt.intervals_overlap(store[1], store[2])
+        assert bt.live_texts(store) == ["person a works at globex"]
+    # the other order of events: Acme arrives as the correction of a live Globex → SUPERSEDE path
+    globex = _fact(1, "person a works at globex", "2021-01-01")
+    new = _fact(0, "Person A works at Acme", "2022-01-01")
+    store = bt.apply(bt.reconcile(new, [globex], now=NOW), new, {1: globex}, now=NOW)
+    assert (store[1].valid_until, store[2].valid_from) == ("2022-01-01", "2022-01-01")
+    assert not bt.intervals_overlap(store[1], store[2])
+    # a conflict starting AT/AFTER the boundary closes to an empty window and the survivor keeps its start
+    globex = _fact(1, "person a works at globex", "2021-01-01")
+    acme = _fact(2, "person a works at acme", "2025-01-01")
+    new = _fact(0, "Person A works at Globex", "2024-01-01")
+    d = bt.reconcile(new, [globex, acme], now=NOW)
+    assert (d.event, d.also_close) == (bt.NONE, [2]) and d.interval is None
+    store = bt.apply(d, new, {1: globex, 2: acme}, now=NOW)
+    assert store[1].valid_from == "2021-01-01" and store[2].valid_until == "2025-01-01"
+
+
+def test_prefix_extension_is_a_correction_not_a_rephrasing():
+    assert not bt.same_value("person a lives in york", "person a lives in new york")
+    d = bt.reconcile(_fact(0, "Person A lives in New York"), [_fact(1, "person a lives in york")], now=NOW)
+    assert (d.event, d.target_id) == (bt.SUPERSEDE, 1), d      # was NONE: the new residence was dropped
+    # appended detail is still the same head entity → enrichment, not a correction
+    assert bt.same_value("person a lives in york", "person a lives in york, near the old town")
+    d = bt.reconcile(_fact(0, "Person A lives in York, near the old town"), [_fact(1, "person a lives in york")], now=NOW)
+    assert (d.event, d.target_id) == (bt.UPDATE, 1)
+    assert bt.same_value("person a works at globex", "person a is employed by globex")
+    assert not bt.same_value("person a's dad's name is neil the fisherman", "person a's dad's name is neil, spelled n-e-i-l")
+    assert bt.value_seq("user drives a blue Wexford hatchback") == ["blue", "wexford", "hatchback"]
+
+
+def test_overlapping_same_value_intervals_union_into_the_surviving_row():
+    old = _fact(1, "person a works at acme", "2020-01-01", "2025-01-01")
+    new = _fact(0, "Person A works at Acme", "2024-01-01")
+    d = bt.reconcile(new, [old], now=NOW)
+    assert (d.event, d.target_id, d.interval) == (bt.UPDATE, 1, ("2020-01-01", None)), d
+    store = bt.apply(d, new, {1: old}, now=NOW)
+    assert (store[1].valid_from, store[1].valid_until, store[1].text) == ("2020-01-01", None, old.text)
+    assert bt.live_texts(store) == ["person a works at acme"]
+    # widening backwards too; and a window already covering the incoming stays NONE
+    d = bt.reconcile(_fact(0, "Person A works at Acme", "2018-01-01", "2021-01-01"), [old], now=NOW)
+    assert (d.event, d.interval) == (bt.UPDATE, ("2018-01-01", "2025-01-01"))
+    d = bt.reconcile(_fact(0, "Person A works at Acme", "2021-01-01", "2022-01-01"), [old], now=NOW)
+    assert d.event == bt.NONE and d.interval is None
+    # the negative control (newest wins) still carries the union
+    d = bt.reconcile(new, [old], richer_rule=False, now=NOW)
+    assert d.event == bt.UPDATE and d.interval == ("2020-01-01", None)
+
+
+def test_merge_retires_every_overlapping_same_value_duplicate():
+    a = _fact(1, "person a works at acme")
+    b = _fact(2, "person a is employed by acme")
+    new = _fact(0, "Person A works at Acme")
+    d = bt.reconcile(new, [a, b], now=NOW)
+    assert (d.event, d.target_id, d.also_close) == (bt.NONE, 1, [2]), d
+    store = bt.apply(d, new, {1: a, 2: b}, now=NOW)
+    assert bt.live_texts(store) == ["person a works at acme"]
+    assert store[2].superseded_by == 1 and store[2].valid_until == NOW.isoformat()
+    # the M9 idle pass: re-reconciling one of the stored rows itself collapses the pair
+    d = bt.reconcile(_fact(0, b.text), [a, b], now=NOW)
+    assert d.target_id in (1, 2) and set(d.also_close) == {1, 2} - {d.target_id}
+    # richest survives; the others (terse) retire, their windows folded into the survivor
+    rich = _fact(3, "person a works at acme as a senior mechanical engineer", "2019-01-01")
+    d = bt.reconcile(new, [a, b, rich], now=NOW)
+    assert d.target_id == 3 and set(d.also_close) == {1, 2}
+    assert d.interval == (None, None)      # a and b are open-ended both ways → union is unbounded
+    assert d.event == bt.UPDATE           # the survivor's window widened (was 2019–)
+
+
+def test_transition_history_is_only_suppressed_by_a_row_covering_the_boundary():
+    hist = _fact(1, "person a works at acme", "2000-01-01", "2010-01-01")
+    new = _fact(0, "Person A switched from Acme to Globex in 2025")
+    d = bt.reconcile(new, [hist], now=NOW)
+    assert d.event == bt.ADD and [c.text for c in d.extra_closed] == ["person a works at acme"], d
+    store = bt.apply(d, new, {1: hist}, now=NOW)
+    closed = sorted(((f.valid_from, f.valid_until) for f in store.values() if f.text == "person a works at acme"), key=str)
+    assert closed == [("2000-01-01", "2010-01-01"), (None, "2025")]    # both occurrences kept
+    assert bt.live_texts(store) == ["person a works at globex"]
+    # a row that covers the boundary suppresses it and is superseded instead
+    current = _fact(1, "person a works at acme", "2020-01-01")
+    d = bt.reconcile(new, [current], now=NOW)
+    assert (d.event, d.target_id, d.extra_closed) == (bt.SUPERSEDE, 1, [])
+    # a row ending exactly at the boundary covers it (half-open: it was true the instant before)
+    ending = _fact(1, "person a works at acme", "2020-01-01", "2025")
+    assert bt.reconcile(new, [ending], now=NOW).extra_closed == []

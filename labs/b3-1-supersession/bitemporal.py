@@ -253,17 +253,31 @@ def attribute_key(text: str) -> Optional[str]:
     return f"{subject}/{attr}"
 
 
-def value_tokens(text: str) -> set[str]:
+def value_seq(text: str) -> list[str]:
+    """The value's salient tokens IN ORDER (framing + stopwords removed)."""
     _, _, rest = parse_fact(text)
-    return {t for t in re.findall(r"[a-z0-9]+", rest) if t not in _VALUE_STOPWORDS}
+    return [t for t in re.findall(r"[a-z0-9]+", rest) if t not in _VALUE_STOPWORDS]
+
+
+def value_tokens(text: str) -> set[str]:
+    return set(value_seq(text))
+
+
+def _extends(short: list[str], long: list[str]) -> bool:
+    """``long`` is ``short`` plus detail APPENDED after it (same head entity)."""
+    return bool(short) and len(long) >= len(short) and long[:len(short)] == short
 
 
 def same_value(a: str, b: str) -> bool:
-    """memory_quality._same_value's subset rule: a rephrasing has equal value
-    tokens, a richer restatement is a superset; a correction leaves a leftover
-    token on EACH side."""
-    va, vb = value_tokens(a), value_tokens(b)
-    return bool(va and vb) and (va <= vb or vb <= va)
+    """Equal after normalisation, or one value is the other with detail
+    APPENDED ("globex" ~ "globex as a senior engineer"; "neil" ~ "neil, spelled
+    n-e-i-l"): the head entity is unchanged, the rest is enrichment. A token
+    added BEFORE or inside the head is a potentially different entity —
+    "york" vs "new york" — and is a correction, not a rephrasing (the old
+    set-subset rule called those identical). A correction proper leaves a
+    leftover token on EACH side."""
+    va, vb = value_seq(a), value_seq(b)
+    return _extends(va, vb) or _extends(vb, va)
 
 
 # ── Richer-fact chooser (mem0: keep the fact with the most information) ───────
@@ -286,14 +300,14 @@ def richer(candidate: str, existing: str, *, candidate_key: Optional[str] = None
       * structure beats chatter — a keyed fact ("person a's father's name is
         neil") is never replaced by an unkeyed paraphrase ("Neil, Person A's
         dad, says hi"), however many tokens the chatter has;
-      * the candidate must CONTAIN the existing value (superset) — replacing
-        "neil, spelled n-e-i-l" with "neil the fisherman" would lose the
-        spelling, so it is not richer, it is different.
+      * the candidate must EXTEND the existing value (its tokens, then more)
+        — replacing "neil, spelled n-e-i-l" with "neil the fisherman" would
+        lose the spelling, so it is not richer, it is different.
     """
     if (candidate_key or attribute_key(candidate)) is None and (existing_key or attribute_key(existing)) is not None:
         return existing
-    vc, ve = value_tokens(candidate), value_tokens(existing)
-    if not ve <= vc:
+    vc, ve = value_seq(candidate), value_seq(existing)
+    if not _extends(ve, vc):
         return existing
     if information(candidate) > information(existing) + RICHNESS_MARGIN:
         return candidate
@@ -378,6 +392,11 @@ class Decision:
     # interrupted new-row-first write — must all close, or stale facts keep
     # competing in recall).
     also_close: list[int] = field(default_factory=list)
+    # For UPDATE: the validity window the surviving row should carry — the
+    # UNION of the incoming interval and every overlapping same-value row
+    # (stored Acme [2020, 2025) + new Acme [2024, ∞) → [2020, ∞)), clamped so
+    # it never overlaps a conflicting row closed by ``also_close``.
+    interval: Optional[tuple[Optional[str], Optional[str]]] = None
 
 
 def _validate_judge(verdict: dict, candidates: list[Fact]) -> Optional[tuple[str, Optional[int]]]:
@@ -420,7 +439,10 @@ def reconcile(
          merge on wording alone ("likes hiking" vs "likes biking" are 0.95
          similar and distinct); they go to the judge.
       4. Same attribute key: same value → NONE / UPDATE by richness
-         (``richer_rule=False`` is the negative control: newest wins), but a
+         (``richer_rule=False`` is the negative control: newest wins); the
+         survivor's window becomes the UNION of the overlapping same-value
+         windows (clamped so it never overlaps a conflict it closes) and
+         every other same-value duplicate is retired via ``also_close``; but a
          same value over a DISJOINT window is a repeated occurrence and ADDs a
          separate interval (worked at Acme 2018–2021 and again from 2024);
          different value → SUPERSEDE if overlapping (EVERY overlapping
@@ -442,9 +464,16 @@ def reconcile(
                       attribute_key=attribute_key(to_text))
         write_as = new
         old_key = attribute_key(old_text)
+        closed_from = new.valid_from or now.isoformat()
+        edge = parse_ts(closed_from)
+        # the closed "from" side is emitted unless a live same-value row
+        # already COVERS the instant before the transition (its window reaches
+        # the boundary) — a disjoint historical occurrence (Acme 2000–2010 vs
+        # "switched from Acme" in 2025) does not suppress it
         if not any(n.key() == old_key and same_value(n.text, old_text)
+                   and (parse_ts(n.valid_from) or FAR_PAST) < edge
+                   and (parse_ts(n.valid_until) or FAR_FUTURE) >= edge
                    for n in neighbours if n.is_live):
-            closed_from = new.valid_from or now.isoformat()
             extra_closed.append(Fact(
                 id=-1, text=old_text, valid_from=None, valid_until=closed_from,
                 created_at=now.isoformat(), attribute_key=old_key,
@@ -453,9 +482,10 @@ def reconcile(
     live = [n for n in neighbours if n.is_live]
 
     def _decision(event: str, target: Optional[int], why: str, *, text: Optional[str] = None,
-                  also_close: Optional[list[int]] = None) -> Decision:
+                  also_close: Optional[list[int]] = None,
+                  interval: Optional[tuple[Optional[str], Optional[str]]] = None) -> Decision:
         return Decision(event, target, why, text=text, extra_closed=extra_closed,
-                        write_as=write_as, also_close=list(also_close or []))
+                        write_as=write_as, also_close=list(also_close or []), interval=interval)
 
     if not live:
         return _decision(ADD, None, "no live neighbours")
@@ -468,19 +498,57 @@ def reconcile(
     # every live same-attribute row asserting a DIFFERENT value over an
     # overlapping window — all of them must close, whatever the decision
     stale = [n for n in same_attr if not same_value(new.text, n.text) and _overlaps(n)]
+    # every live same-attribute row asserting the SAME value over an
+    # overlapping window — one survives, the rest are duplicates to retire
+    same_val_overlapping = [n for n in same_attr if same_value(new.text, n.text) and _overlaps(n)]
+    close_edge = parse_ts(new.valid_from) or now   # where every also_close row is cut
+
+    def _survivor_interval(existing: Fact) -> tuple[Optional[str], Optional[str]]:
+        """Union of the incoming window and every overlapping same-value row,
+        then clamped: the surviving row may not start before the close edge
+        when a conflicting row it overlapped started before that edge.
+
+        Rule (documented in the README): the INCOMING fact's start is the
+        boundary of what is known. Conflicting rows close there; the surviving
+        same-value row is widened to the union, but if a conflicting row ran
+        in the span before the boundary, the survivor yields that span (it
+        starts at the boundary) so no two contradicting rows are ever valid at
+        the same instant. Conflicts not overlapping the incoming window are
+        not this fact's business and are left as they are."""
+        rows = [new, existing] + [n for n in same_val_overlapping if n.id != existing.id]
+        froms = [parse_ts(r.valid_from) for r in rows]
+        untils = [parse_ts(r.valid_until) for r in rows]
+        u_from: Optional[str] = None if any(f is None for f in froms) else \
+            min(rows, key=lambda r: parse_ts(r.valid_from)).valid_from
+        u_until: Optional[str] = None if any(u is None for u in untils) else \
+            max(rows, key=lambda r: parse_ts(r.valid_until)).valid_until
+        conflict_before_edge = any((parse_ts(n.valid_from) or FAR_PAST) < close_edge
+                                   for n in stale if n.id != existing.id)
+        if conflict_before_edge and (u_from is None or parse_ts(u_from) < close_edge):
+            u_from = new.valid_from or now.isoformat()
+        return u_from, u_until
 
     def _merge(existing: Fact, why: str) -> Decision:
         if not _overlaps(existing):
             return _decision(ADD, None, why + " but intervals disjoint (repeated occurrence, new interval)")
-        also = [n.id for n in stale if n.id != existing.id]
+        # retire every contradicting row AND every duplicate of the survivor
+        also = [n.id for n in stale if n.id != existing.id] + \
+               [n.id for n in same_val_overlapping if n.id != existing.id]
+        interval = _survivor_interval(existing)
+        widened = interval != (existing.valid_from, existing.valid_until)
         if not richer_rule:
             # negative control: newest phrasing always wins
-            return _decision(UPDATE, existing.id, why + " (newest wins)", text=new.text, also_close=also)
+            return _decision(UPDATE, existing.id, why + " (newest wins)", text=new.text,
+                             also_close=also, interval=interval)
         keep = richer(new.text, existing.text, candidate_key=new_key, existing_key=existing.key())
-        if keep == existing.text:
+        if keep == existing.text and not widened:
             return _decision(NONE, existing.id, why + " (existing at least as rich)",
                              text=existing.text, also_close=also)
-        return _decision(UPDATE, existing.id, why + " (candidate richer)", text=new.text, also_close=also)
+        if keep == existing.text:
+            return _decision(UPDATE, existing.id, why + " (existing at least as rich; validity window widened)",
+                             text=existing.text, also_close=also, interval=interval)
+        return _decision(UPDATE, existing.id, why + " (candidate richer)", text=new.text,
+                         also_close=also, interval=interval)
 
     # 3) (removed) a near-exact-text shortcut used to live here; once it
     #    required a real matching key it was a strict subset of 4) that picked
@@ -491,8 +559,7 @@ def reconcile(
     if new_key:
         # same value: only rows whose window OVERLAPS are candidates (a rich
         # disjoint historical row must not outrank a terse overlapping current
-        # one); among those, the richest wins
-        same_val_overlapping = [n for n in same_attr if same_value(new.text, n.text) and _overlaps(n)]
+        # one); among those, the richest survives and the rest are retired
         if same_val_overlapping:
             target = max(same_val_overlapping, key=lambda n: information(n.text))
             return _merge(target, "same attribute, same value")
@@ -562,7 +629,8 @@ def apply(decision: Decision, new: Fact, store: dict[int, Fact],
         successor = store.get(decision.target_id) if decision.target_id is not None else None
     elif decision.event == UPDATE and decision.target_id is not None:
         old = store[decision.target_id]
-        store[decision.target_id] = replace(old, text=decision.text or new.text)
+        vf, vu = decision.interval if decision.interval is not None else (old.valid_from, old.valid_until)
+        store[decision.target_id] = replace(old, text=decision.text or new.text, valid_from=vf, valid_until=vu)
         successor = store[decision.target_id]
     else:
         new_row = replace(new, id=next_id, created_at=now.isoformat(),
@@ -590,5 +658,5 @@ __all__ = [
     "ADD", "UPDATE", "SUPERSEDE", "NONE", "Decision", "Fact", "Judge",
     "apply", "attribute_key", "enabled", "information", "intervals_overlap",
     "invalidate", "live_texts", "parse_fact", "reconcile", "richer",
-    "same_subject", "same_value", "split_transition", "subjects", "value_tokens",
+    "same_subject", "same_value", "split_transition", "subjects", "value_seq", "value_tokens",
 ]

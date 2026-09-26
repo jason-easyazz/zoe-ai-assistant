@@ -54,5 +54,20 @@ reconcile of that fact. Round 2: the near-dup path needs a REAL matching key
 never shown a known, different attribute of the same person; same-value
 candidates are filtered by overlap before richness; `Fact.key()` (persisted
 `attribute_key` first) is what reconciliation groups by; the sweep closes
-conflicting rows at the INCOMING fact's start, not the surviving row's. A real-brain score on this fixture is a prod-wiring gate, not a lab
+conflicting rows at the INCOMING fact's start, not the surviving row's.
+
+Round 3 — the **interval rule** for a same-value match with conflicting rows:
+the INCOMING fact's start is the boundary of what is known. Every conflicting
+row closes there; the surviving same-value row's window becomes the UNION of
+the incoming window and every overlapping same-value duplicate (Acme [2020,
+2025) + Acme [2024, ∞) → [2020, ∞)); and if a closed conflict ran in the span
+before the boundary, the survivor yields that span and starts at the boundary —
+so no two contradicting rows are ever valid at the same instant. Conflicts that
+do not overlap the incoming window are not that fact's business and are left
+alone. Also: `_merge` retires EVERY overlapping same-value duplicate (`works at
+acme` + `is employed by acme` collapse to the richest, the M9 idle-pass shape);
+`same_value` is "equal, or detail APPENDED after the same head" — a token added
+before/inside the head (`york` → `new york`) is a correction; and a transition's
+closed `from` side is suppressed only by a live same-value row that covers the
+transition boundary, never by a disjoint historical occurrence. A real-brain score on this fixture is a prod-wiring gate, not a lab
 deliverable (the box has ~700 MiB free and a live voice brain).
