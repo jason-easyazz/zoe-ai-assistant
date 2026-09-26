@@ -617,8 +617,17 @@ collection must pass `_skip_name_check=True` after 3.10.
 - **VAD — Silero VAD v6.2.2 (2026-09-17)**: new offline **ONNX "sequence" model
   `silero_vad_16k_sequence.onnx` that releases the GIL** (`load_silero_vad(sequence=True)`,
   16 kHz only); **v6.2.3 (09-23)**: torchaudio optional, `import silero_vad` works without
-  onnxruntime. Directly useful in a Python voice loop on the Orin (B1.4 drop-in candidate
-  after the file just copied to v6.2.1).
+  onnxruntime. **Not a drop-in for the live VAD:** the sequence model is an OFFLINE
+  whole-utterance graph, while `services/zoe-data/voice_vad.py` runs the streaming model in
+  512-sample hops with a `(2,1,128)` recurrent state passed to every inference
+  (`voice_turn.py` is a different component — Smart Turn v3.2 scoring the last 8 s of a
+  turn, not Silero). A file swap would NOT fall back to RMS: RMS is chosen only when
+  `create_vad()` fails to *load* the model; a model that loads but rejects the streaming
+  inputs makes `process_hops` swallow the inference error and return no probabilities, so
+  the live VAD stays selected and simply reports no speech — a silent failure, worse than
+  the fallback. It would need a streaming adapter to be used live; its GIL release is useful
+  only where the whole clip is already in hand (replay harness, lab scoring). Live VAD stays
+  on the streaming v6 model (the v6.2.1 file already in place).
 - **Diarization — NVIDIA Nemotron 3 Diarization (2026-09-23)**: ~100M-param streaming/offline,
   up to 8 speakers, 320 ms labels; ONNX/GGUF ports 09-23/24. Relevant to B4.1/B9.3 (a
   multi-speaker detector), not the hot path.
@@ -638,12 +647,23 @@ collection must pass `_skip_name_check=True` after 3.10.
 **What it means.** No rock moves. The bar-setting event is Apple's October display with
 household face recognition — B4 (identity) is the line to protect; B4.3's face-ID decision
 becomes more urgent, not less. Concrete follow-ups, in order: Silero 6.2.2 sequence ONNX for
-the GIL (B1.4); Kokoro → ONNX-CUDA (B5.1, §3); a Parakeet Redux vs Moonshine 0.0.62 lab
+the OFFLINE replay/lab path only (B1.4, not live); Kokoro → ONNX-CUDA (B5.1, §3); a Parakeet Redux vs Moonshine 0.0.62 lab
 benchmark on the corpus (new, small); Nemotron 3 Diarization as the B9.3 multi-speaker
 detector candidate.
 
-**Action.** B1.4: Silero v6.2.2 sequence model as the drop-in (not just the 6.2.1 file).
-New lab item under B5/B1: Parakeet Redux benchmark on the replay corpus (WER + per-file ms
+**Action.** B1.4: evaluate the v6.2.2 sequence model for the OFFLINE replay/lab path only
+(GIL-free whole-clip scoring); live VAD stays on the streaming v6 model — a swap would need a
+streaming adapter plus validation that actually exercises the live VAD path, not a file copy.
+The replay harness (`voice_regression_probe.py` / `measure_voice.py`) starts at transcription
+and never runs VAD or barge-in, and the CI-safe VAD lanes inject a FAKE `voice_vad` with
+scripted probabilities, so green there cannot catch an adapter that returns no probabilities.
+The check that can: (a) `process_hops` on a corpus clip through the adapter returns
+non-empty probabilities that go high on speech; (b) the **host-only real-model lane** in
+`test_voice_barge_in.py` (`test_silero_real_model_detects_speech_across_corpus`,
+`test_real_voice_triggers_barge_from_cooldown` — real Silero, real corpus audio, asserts a
+`stop_playback`; skipped on CI runners, so it must be run on the box); (c) a **successful
+live interruption** on the panel with Kokoro playing, alongside the B1.3 false-barge count
+(which only measures unwanted interruptions). New lab item under B5/B1: Parakeet Redux benchmark on the replay corpus (WER + per-file ms
 vs 0.0.62). B9.3/B4.1: Nemotron 3 Diarization added to the shadow-week candidates.
 
 ## 13. Proposed tracker deltas (for Jason to fold in — not applied here)
@@ -681,8 +701,14 @@ vs 0.0.62). B9.3/B4.1: Nemotron 3 Diarization added to the shadow-week candidate
 8. **B0.8 (Chroma/MemPalace):** target chromadb 1.5.9 + mempalace 3.10.0; use `mempalace
    migrate` on the copy (built-in backup + `Expected X, got Y`); audit `get_collection`
    callers for `_skip_name_check`; fix the requirements comment (bound flipped at 3.4.0).
-9. **B1.4:** Silero VAD v6.2.2 sequence-ONNX (GIL-releasing) as the drop-in, not only the
-   6.2.1 file. **New lab item:** Parakeet Redux (178 MB CPU STT, 2026-09-22) benchmark vs
+9. **B1.4:** Silero VAD v6.2.2 sequence-ONNX is NOT a live drop-in (offline whole-sequence
+   graph; `voice_vad.py` runs 512-sample hops with recurrent state) — evaluate it for the
+   OFFLINE replay/lab path only; live VAD stays on the streaming v6.2.1 file already in
+   place; any live use needs a streaming adapter + real audio through it (`process_hops`
+   returns non-empty, speech-high probabilities; the host-only real-model lane in
+   `test_voice_barge_in.py` run ON THE BOX — CI fakes `voice_vad`) + a successful live
+   interruption on the panel, not only the false-barge count — the replay harness starts at
+   STT and does not exercise VAD. **New lab item:** Parakeet Redux (178 MB CPU STT, 2026-09-22) benchmark vs
    Moonshine 0.0.62 on the replay corpus. **B4.1/B9.3:** Nemotron 3 Diarization (09-23) as a
    multi-speaker-detector candidate.
 10. **B9.1:** confirm firmware rev (DIS `2A26` ≥3.0.20) before relying on the ring protocol;
