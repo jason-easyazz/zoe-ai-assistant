@@ -123,6 +123,9 @@ RUN (timeout 30s omnigent --version || echo "WARN: confirm 'omnigent --version' 
     && chown -R 1000:1000 /root \
     && chmod 750 /root
 
+# Codex MCP template (serena by url, never a stdio spawn) — applied to the persisted
+# /root/.codex/config.toml on every boot by the entrypoint. See codex-mcp.toml.
+COPY codex-mcp.toml /usr/local/share/zoe-omnigent/codex-mcp.toml
 COPY entrypoint.sh /usr/local/bin/omnigent-entrypoint.sh
 RUN chmod +x /usr/local/bin/omnigent-entrypoint.sh
 
