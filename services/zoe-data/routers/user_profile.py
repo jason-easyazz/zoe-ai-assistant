@@ -8,6 +8,7 @@ from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access
 import telegram_link
+from user_prefs import read_prefs, write_prefs
 
 router = APIRouter(prefix="/api/user/profile", tags=["user-profile"])
 
@@ -17,31 +18,10 @@ router = APIRouter(prefix="/api/user/profile", tags=["user-profile"])
 _TELEGRAM_ID_RE = re.compile(r"^[1-9][0-9]{1,19}$")
 
 
-async def _read_prefs(db, user_id: str) -> dict:
-    """Return the user_preferences.prefs JSON dict for user_id (or {})."""
-    cursor = await db.execute(
-        "SELECT prefs FROM user_preferences WHERE user_id = ?",
-        (user_id,),
-    )
-    row = await cursor.fetchone()
-    if not row:
-        return {}
-    try:
-        raw = row["prefs"]
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
-async def _write_prefs(db, user_id: str, prefs: dict) -> None:
-    await db.execute(
-        """INSERT INTO user_preferences (user_id, prefs, updated_at)
-           VALUES (?, ?, NOW())
-           ON CONFLICT(user_id) DO UPDATE SET prefs = excluded.prefs, updated_at = NOW()""",
-        (user_id, json.dumps(prefs)),
-    )
-    await db.commit()
+# Preference mechanics live in user_prefs.py (the one reader/writer of the
+# user_preferences JSON); these names are kept for routers/system.py.
+_read_prefs = read_prefs
+_write_prefs = write_prefs
 
 
 @router.get("")
