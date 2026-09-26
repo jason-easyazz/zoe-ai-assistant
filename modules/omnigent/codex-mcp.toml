@@ -1,0 +1,22 @@
+# Codex MCP servers for the zoe-omnigent CONTAINER — the Codex counterpart of
+# modules/omnigent/.mcp.json (Claude Code). Baked into the image at
+# /usr/local/share/zoe-omnigent/codex-mcp.toml (Dockerfile) and applied on every boot by
+# entrypoint.sh, which rewrites ONLY these [mcp_servers.*] tables inside the persisted
+# /root/.codex/config.toml (omnigent-codex volume) and keeps everything else — Codex's own
+# hooks.state hashes, auth — verbatim. Nothing else in the repo owns that file: it was
+# hand-patched live on 2026-09-25, and a volume reset silently brought the stdio spawn back.
+#
+# serena: the HOST's shared serena-mcp.service, reached over the internal zoe-codeintel
+# network at its gateway (serena-bridge.{socket,service}). NEVER `command =` here — that
+# stdio-spawns a private ~700 MB Serena per Codex session beside the shared server
+# (measured 2026-09-25: two of them). Pinned by tests/unit/modules/test_omnigent_mcp_config.py
+# and tests/unit/test_agent_mcp_memory_bounds.py; the URL must match .mcp.json.
+[mcp_servers.serena]
+url = "http://172.28.0.1:9121/mcp"
+
+# codebase-memory is stdio-only, so it runs in-container from the read-only host bin mount,
+# same as .mcp.json. The host's codebase_memory_capped.sh wrapper is deliberately NOT used
+# here: the container has no systemd user bus, so the wrapper could only fall back to the
+# same uncapped launch with an extra warning on every spawn.
+[mcp_servers.codebase-memory]
+command = "/home/zoe/.local/bin/codebase-memory-mcp"
