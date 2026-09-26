@@ -679,8 +679,7 @@ def test_web_lookup_status_resolves_auto_and_records_last_outcome(monkeypatch):
     assert re_mod.web_lookup_status()["provider"] == "duckduckgo"
 
 
-@pytest.fixture
-def system_status_client(monkeypatch):
+def _status_client(monkeypatch, user: dict):
     """`/api/system/status` with auth + DB overridden and every network probe
     stubbed to connection-refused, so only the pure blocks are exercised."""
     from fastapi import FastAPI
@@ -712,13 +711,38 @@ def system_status_client(monkeypatch):
 
     app = FastAPI()
     app.include_router(system.router)
-    app.dependency_overrides[get_current_user] = lambda: {"user_id": "u", "role": "member"}
+    app.dependency_overrides[get_current_user] = lambda: user
 
     async def _db():
         yield _NoDb()
 
     app.dependency_overrides[get_db] = _db
     return TestClient(app)
+
+
+@pytest.fixture
+def system_status_client(monkeypatch):
+    return _status_client(monkeypatch, {"user_id": "u", "role": "member"})
+
+
+def test_guest_gets_config_but_never_another_users_last_outcome(monkeypatch):
+    """A credential-less request resolves to the fail-closed guest principal;
+    the process-wide last outcome is someone else's activity (its timestamp +
+    disposition), so a guest sees the CONFIG fields only (Greptile on #1691)."""
+    monkeypatch.setenv(re_mod.WEB_FALLBACK_PROVIDER_ENV, "duckduckgo")
+    monkeypatch.setattr(re_mod, "_LAST_WEB_LOOKUP", {})
+    _serve_ddg(monkeypatch, RESULTS_PAGE)
+    fetch_web_fallback("example deal")
+    assert re_mod.web_lookup_status()["last_outcome"] is not None  # recorded
+    guest = _status_client(
+        monkeypatch, {"user_id": "guest", "role": "guest", "username": "guest", "permissions": []}
+    )
+    block = guest.get("/api/system/status").json()["web_lookup"]
+    assert block["provider"] == "duckduckgo" and block["tavily_key_present"] is False
+    assert block["last_outcome"] is None
+    # positive control: the same recorded outcome IS shown to a signed-in user
+    member = _status_client(monkeypatch, {"user_id": "u", "role": "member"})
+    assert member.get("/api/system/status").json()["web_lookup"]["last_outcome"]["status"] == WEB_LOOKUP_RESULTS
 
 
 def test_system_status_carries_web_lookup_block(monkeypatch, system_status_client):

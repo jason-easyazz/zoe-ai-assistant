@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
 from auth import (
+    GUEST_USER_ID,
     get_current_user,
     require_admin,
     require_signed_in,
@@ -222,8 +223,23 @@ async def get_system_status(
         },
         "pi_hybrid_production": _pi_hybrid_production_public_status(),
         # B10.0: web-lookup configuration + last outcome (never the query/key).
-        "web_lookup": web_lookup_status(),
+        "web_lookup": _web_lookup_block_for(user),
     }
+
+
+def _web_lookup_block_for(user: dict) -> dict[str, Any]:
+    """Config fields for everyone; `last_outcome` only for a signed-in member.
+
+    `get_current_user` resolves a credential-less request to the fail-closed
+    GUEST principal rather than rejecting it, and the last outcome is
+    process-wide — another household member's activity (its timestamp and
+    disposition). Same predicate as `auth.require_signed_in`, minus the raise.
+    """
+    block = web_lookup_status()
+    is_guest = user.get("role") in (None, "guest") or user.get("user_id") in (None, GUEST_USER_ID)
+    if is_guest:
+        block["last_outcome"] = None
+    return block
 
 
 @router.get("/memory-router/status")
