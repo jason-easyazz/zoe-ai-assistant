@@ -1,6 +1,6 @@
 # B3.1 — Bi-temporal supersession + keep-the-richer-fact reconciliation
 
-**Status:** lab spike, flag-dark (`ZOE_BITEMPORAL_SUPERSEDE`, default off), nothing
+**Status:** lab spike (draft PR #1692), flag-dark (`ZOE_BITEMPORAL_SUPERSEDE`, default off), nothing
 prod-wired. Lab code + 50-pair fixture: `labs/b3-1-supersession/`; regression net
 `tests/unit/test_b3_1_supersession_lab.py` (`ci_safe`). Program item B3.1 in
 `beat-the-bar-2026-program.md`; review §7 #3 + register rows M7/M9 in
