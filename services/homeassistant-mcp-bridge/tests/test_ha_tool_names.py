@@ -172,6 +172,54 @@ def test_table_round_trips(tn):
     for scheme in ("legacy", "prefixed"):
         for base, spelled in tn.tool_table(scheme).items():
             assert tn.normalize_tool_name(spelled) == base
+            assert tn.normalize_tool_name(spelled, scheme=scheme) == base
+
+
+def test_script_names_round_trip_in_both_schemes(tn):
+    """script_tool_name(...) → normalize_tool_name(..., scheme) is the identity on script ids."""
+    for scheme in ("legacy", "prefixed"):
+        for sid in ("morning", "3am_check", "night_mode_2"):
+            spelled = tn.script_tool_name(f"script.{sid}", scheme)
+            assert tn.normalize_tool_name(spelled, scheme=scheme) == f"script.{sid}"
+
+
+def test_normalize_legacy_bare_script_names_only_under_legacy_scheme(tn):
+    """A legacy HA emits bare script names (``morning``, ``_3am_check``); those are
+    recognisable ONLY when the connected HA is known to be legacy — a bare unknown
+    name under the prefixed scheme (or with no scheme) is still rejected."""
+    assert tn.normalize_tool_name("morning", scheme="legacy") == "script.morning"
+    assert tn.normalize_tool_name("_3am_check", scheme="legacy") == "script.3am_check"
+    for bad_scheme in (None, "prefixed"):
+        with pytest.raises(tn.UnknownHaToolError):
+            tn.normalize_tool_name("morning", scheme=bad_scheme)
+        with pytest.raises(tn.UnknownHaToolError):
+            tn.normalize_tool_name("_3am_check", scheme=bad_scheme)
+    with pytest.raises(ValueError):
+        tn.normalize_tool_name("morning", scheme="v2")
+
+
+def test_normalize_base_table_wins_over_legacy_script_shape(tn):
+    """``calendar_get_events`` / ``todo_get_items`` are script-shaped bare names; the
+    base table must be consulted first so they never come back as scripts."""
+    assert tn.normalize_tool_name("calendar_get_events", scheme="legacy") == "calendar_get_events"
+    assert tn.normalize_tool_name("todo_get_items", scheme="legacy") == "todo_get_items"
+    assert tn.normalize_tool_name("HassTurnOn", scheme="legacy") == "HassTurnOn"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "3am_check",     # legacy HA spells this ``_3am_check``; the bare form is never emitted
+        "_morning",      # leading ``_`` is only the digit rule; HA object ids cannot start with ``_``
+        "morning_",      # trailing ``_`` is not a valid object id either
+        "Morning",       # object ids are lowercase
+        "my__script",    # ``__`` is not allowed inside an entity id (it is the prefix separator)
+        "HassMakeCoffee",
+    ],
+)
+def test_normalize_legacy_scheme_still_rejects_non_script_shapes(tn, bad):
+    with pytest.raises(tn.UnknownHaToolError):
+        tn.normalize_tool_name(bad, scheme="legacy")
 
 
 # ── detection: once, cached, logged once ──────────────────────────────────────
@@ -196,6 +244,30 @@ async def test_detect_legacy_from_live_version(tn, caplog):
     assert first.scheme == "legacy" and first.ha_version == "2026.5.2" and first.source == "api"
     assert second is first
     assert fetch.calls == 1, "version must be read from /api/config exactly once"
+    assert sum("HA LLM tool-name scheme" in r.getMessage() for r in caplog.records) == 1
+
+
+async def test_detect_concurrent_first_calls_fetch_once(tn, caplog):
+    """Two cold detect()s racing must share ONE /api/config call and ONE log line."""
+    import asyncio
+
+    gate = asyncio.Event()
+
+    class _GatedFetch(_Fetch):
+        async def __call__(self):
+            self.calls += 1
+            await gate.wait()  # hold the first fetch open so the second detect() overlaps it
+            return {"version": self.version}
+
+    fetch = _GatedFetch("2026.9.3")
+    det = tn.HaToolNameSchemeDetector(fetch, env={})
+    with caplog.at_level(logging.INFO, logger="ha_tool_names"):
+        tasks = [asyncio.create_task(det.detect()) for _ in range(3)]
+        await asyncio.sleep(0)  # let every task reach the cache check / fetch
+        gate.set()
+        results = await asyncio.gather(*tasks)
+    assert fetch.calls == 1, f"detection ran {fetch.calls} times for concurrent first calls"
+    assert all(r is results[0] for r in results)
     assert sum("HA LLM tool-name scheme" in r.getMessage() for r in caplog.records) == 1
 
 
@@ -277,6 +349,27 @@ async def test_resolve_endpoint_accepts_both_and_404s_unknown(bridge):
         await bridge.resolve_tool_name("HassMakeCoffee")
     assert ei.value.status_code == 404
     assert "HassMakeCoffee" in ei.value.detail  # named in the error, never echoed as valid
+
+
+async def test_resolve_endpoint_legacy_bare_script_names(bridge):
+    bridge.tool_name_scheme = bridge.HaToolNameSchemeDetector(_Fetch("2026.5.2"), env={})
+    got = await bridge.resolve_tool_name("morning")
+    assert got["base"] == "script.morning" and got["legacy"] == "morning"
+    assert got["prefixed"] == "script__morning" and got["active"] == "morning"
+    digit = await bridge.resolve_tool_name("_3am_check")
+    assert digit["base"] == "script.3am_check" and digit["active"] == "_3am_check"
+    assert digit["prefixed"] == "script__3am_check"
+    # prefixed spelling is accepted on a legacy HA too (either scheme, as promised) …
+    assert (await bridge.resolve_tool_name("script__morning"))["active"] == "morning"
+    # … but a bare unknown name is still 404, never a script
+    with pytest.raises(bridge.HTTPException) as ei:
+        await bridge.resolve_tool_name("HassMakeCoffee")
+    assert ei.value.status_code == 404
+    # negative control: a prefixed HA never emits bare script names — 404, not a guess
+    bridge.tool_name_scheme = bridge.HaToolNameSchemeDetector(_Fetch("2026.9.3"), env={})
+    with pytest.raises(bridge.HTTPException) as ei:
+        await bridge.resolve_tool_name("morning")
+    assert ei.value.status_code == 404
 
 
 async def test_root_health_reports_cached_scheme_without_extra_call(bridge, monkeypatch):

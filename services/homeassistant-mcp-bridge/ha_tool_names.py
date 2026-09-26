@@ -26,6 +26,7 @@ Source of truth for the table: home-assistant/core tag 2026.9.3,
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -97,7 +98,11 @@ RENAMED_TOOLS: Dict[str, Tuple[str, str]] = {
 }
 
 SCRIPT_DOMAIN = "script"
-_SCRIPT_ID_RE = re.compile(r"^[a-z0-9_]+$")
+# HA object-id rule (``homeassistant.core.valid_entity_id``): lowercase ``[a-z0-9_]``,
+# no leading or trailing ``_``, never ``__`` inside. The ``__`` exclusion is what
+# keeps ``script__<id>`` unambiguous; the no-leading-``_`` rule is what makes the
+# legacy digit prefix (``_3am_check``) reversible.
+_SCRIPT_ID_RE = re.compile(r"^(?!_)(?!.*__)[a-z0-9_]+(?<!_)$")
 
 
 class UnknownHaToolError(ValueError):
@@ -157,14 +162,37 @@ def script_tool_name(script_id: str, scheme: str) -> str:
     return f"_{sid}" if sid[0].isdigit() else sid
 
 
-def normalize_tool_name(name: str) -> str:
+def _legacy_script_id(name: str) -> Optional[str]:
+    """Undo ``script_tool_name(..., LEGACY)``: ``morning`` → ``morning``,
+    ``_3am_check`` → ``3am_check``; ``None`` when ``name`` is not a spelling a
+    legacy HA would emit for any valid script object id."""
+    sid = name[1:] if name.startswith("_") and name[1:2].isdigit() else name
+    if not _SCRIPT_ID_RE.match(sid):
+        return None
+    # a digit-leading id is always emitted WITH the ``_``; the bare form never is
+    if sid[0].isdigit() and not name.startswith("_"):
+        return None
+    return sid
+
+
+def normalize_tool_name(name: str, scheme: Optional[str] = None) -> str:
     """Accept a tool name in EITHER scheme and return Zoe's base name.
 
     Rejects unknown names (no pass-through) so a typo, a tool from a
     not-yet-supported HA integration, or a bogus ``foo__bar`` cannot leak
     through as if it were a valid tool. Script tools normalise to
     ``script.<id>`` — an entity id, so callers can tell them from core tools.
+
+    ``scheme`` is the scheme the CONNECTED HA speaks. It is needed for one case
+    only: a legacy HA names scripts by their bare object id (``morning``,
+    ``_3am_check``), which is indistinguishable from an unknown bare name
+    unless the caller knows the HA is legacy. So a bare, script-shaped name is
+    accepted as ``script.<id>`` ONLY when ``scheme == LEGACY`` — and only after
+    the base table has been checked, since ``calendar_get_events`` is also
+    script-shaped. With no scheme (or the prefixed one) such names are rejected.
     """
+    if scheme is not None and scheme not in SCHEMES:
+        raise ValueError(f"unknown tool-name scheme: {scheme!r}")
     if not isinstance(name, str) or not name:
         raise UnknownHaToolError(f"unknown Home Assistant LLM tool: {name!r}")
     if name in TOOL_DOMAINS or name in RENAMED_TOOLS:
@@ -178,6 +206,10 @@ def normalize_tool_name(name: str) -> str:
             return f"script.{base}"
         if TOOL_DOMAINS.get(base) == domain:
             return base
+    elif scheme == LEGACY:
+        sid = _legacy_script_id(name)
+        if sid is not None:
+            return f"script.{sid}"
     raise UnknownHaToolError(f"unknown Home Assistant LLM tool: {name!r}")
 
 
@@ -202,6 +234,9 @@ class HaToolNameSchemeDetector:
     → ``default`` (only when ``fail_open`` is set; otherwise the error
     propagates so a caller never silently spells names for the wrong HA).
     The chosen scheme is logged exactly once per process/cache lifetime.
+    Concurrent cold calls are serialised on an ``asyncio.Lock`` so ``/api/config``
+    is read once, not once per racing request; the lock is created lazily so the
+    detector can be built at import time before any event loop exists.
     """
 
     def __init__(
@@ -215,6 +250,7 @@ class HaToolNameSchemeDetector:
         self._env = os.environ if env is None else env
         self._default = default
         self._cached: Optional[SchemeDetection] = None
+        self._lock: Optional[asyncio.Lock] = None
 
     @property
     def cached(self) -> Optional[SchemeDetection]:
@@ -226,6 +262,14 @@ class HaToolNameSchemeDetector:
     async def detect(self, *, fail_open: bool = False) -> SchemeDetection:
         if self._cached is not None:
             return self._cached
+        if self._lock is None:  # no await between check and set: safe within one loop
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            if self._cached is not None:  # a racing call finished detection while we waited
+                return self._cached
+            return await self._detect_uncached(fail_open=fail_open)
+
+    async def _detect_uncached(self, *, fail_open: bool) -> SchemeDetection:
         pinned = (self._env.get("HA_TOOL_NAME_SCHEME") or "").strip().lower()
         if pinned:
             if pinned not in SCHEMES:

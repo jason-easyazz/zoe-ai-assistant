@@ -579,12 +579,16 @@ async def get_tool_names():
 
 @app.get("/tools/names/{name}")
 async def resolve_tool_name(name: str):
-    """Normalise a tool name given in EITHER scheme; unknown names are 404, never echoed."""
+    """Normalise a tool name given in EITHER scheme; unknown names are 404, never echoed.
+
+    The detected scheme is passed through so a legacy HA's bare script names
+    (``morning``, ``_3am_check``) resolve; on a prefixed HA those stay 404.
+    """
+    detected = await tool_name_scheme.detect()
     try:
-        base = normalize_tool_name(name)
+        base = normalize_tool_name(name, scheme=detected.scheme)
     except UnknownHaToolError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    detected = await tool_name_scheme.detect()
     if base.startswith("script."):
         legacy, prefixed = script_tool_name(base, "legacy"), script_tool_name(base, "prefixed")
     else:

@@ -34,16 +34,14 @@ The sweep (2026-09-26, this repo at `main`) found **no live call site** that sen
 
 So the upgrade cannot break a tool-name call site today. The exposure is forward-looking — the moment Zoe consumes HA's MCP server or Assist LLM API (the B0.12 `device_id` follow-up does exactly that), names must be spelled per the connected HA's scheme. That is now centralised:
 
-- **`services/homeassistant-mcp-bridge/ha_tool_names.py`** — base-name → domain table, `ha_tool_name(base, scheme)`, `script_tool_name(id, scheme)`, `normalize_tool_name(inbound)` (accepts either scheme, **rejects unknown names**), and `HaToolNameSchemeDetector` (reads `/api/config` `version` once, caches, logs the chosen scheme once; `HA_TOOL_NAME_SCHEME=legacy|prefixed` pins it).
+- **`services/homeassistant-mcp-bridge/ha_tool_names.py`** — base-name → domain table, `ha_tool_name(base, scheme)`, `script_tool_name(id, scheme)`, `normalize_tool_name(inbound, scheme=…)` (accepts either scheme, **rejects unknown names**; the detected scheme is what lets a legacy HA's bare script names — `morning`, `_3am_check` — resolve, since those are otherwise indistinguishable from unknown bare names), and `HaToolNameSchemeDetector` (reads `/api/config` `version` once, caches, logs the chosen scheme once; `HA_TOOL_NAME_SCHEME=legacy|prefixed` pins it).
 - **`GET /tools/names`** on the bridge (port 8007) returns `{scheme, ha_version, tools: {base: spelling}}`; **`GET /tools/names/<name>`** normalises a name in either scheme (404 for unknown). `GET /` reports `tool_name_scheme` once detected.
 - Tests: `services/homeassistant-mcp-bridge/tests/test_ha_tool_names.py` (ci_safe; enumerated in `validate.yml`).
 
 ## Preconditions
 
 1. **This PR merged and the bridge container rebuilt** (`docker compose build homeassistant-mcp-bridge && docker compose up -d homeassistant-mcp-bridge`; `/app` is volume-mounted, so a restart alone also picks the code up). `curl -s localhost:8007/tools/names | jq .scheme` → `"legacy"` against 2026.5.2.
-2. **Backup the config dir** (bind-mounted `./homeassistant:/config` in `docker-compose.yml`, i.e. `/home/zoe/assistant/homeassistant/` — `.storage/` holds the registries, config entries and auth; it is NOT in git):
-   `tar -C /home/zoe/assistant -czf ~/backups/homeassistant-$(date +%F)-pre-2026.6.tgz homeassistant/`.
-   Take a fresh one before EACH monthly step — `.storage` migrations are forward-only.
+2. **Backup the config dir** (bind-mounted `./homeassistant:/config` in `docker-compose.yml`, i.e. `/home/zoe/assistant/homeassistant/` — `.storage/` holds the registries, config entries and auth, `home-assistant_v2.db` is the recorder history; neither is in git). The upgrade block below takes it **with HA stopped** (a hot copy of the SQLite recorder can be inconsistent) and **verifies the archive lists both `.storage/` and the recorder db before anything else runs**. Take a fresh one before EACH monthly step — `.storage` migrations AND recorder schema bumps are forward-only, and the backup from immediately before a step is that step's only rollback point.
 3. **Pin the image tag.** `docker-compose.yml` uses `ghcr.io/home-assistant/home-assistant:stable` (the `# pinned: sha256:…` comment is documentation, not a pin). A bare `docker compose pull` would jump 2026.5.2 → 2026.9.3 in one hop. For the stepped upgrade, edit the tag per step (`:2026.6.4`, `:2026.7.x`, `:2026.8.x`, `:2026.9.3` — use the latest patch of each month from `gh api repos/home-assistant/core/releases`) and only return to `:stable` at the end if that policy is kept.
 4. **Custom components on the box** (`/home/zoe/assistant/homeassistant/custom_components/`): `auth_oidc` (Zoe SSO — the login path), `hacs`, `localtuya`, `zoe_conversation`. These are the likeliest breakers; check each one's release page for the target HA version before every step, and keep the local `homeassistant` auth provider (it is configured — see `configuration.yaml`) as the fallback login if `auth_oidc` fails.
 5. Quiet window: HA Assist → `zoe_conversation` → bridge `/voice/*` is part of the panel's voice path; do this while nobody needs the panel. Do **not** touch the brain/STT/TTS services.
@@ -55,7 +53,15 @@ For each of `2026.6.x`, `2026.7.x`, `2026.8.x`, `2026.9.3` (from `/home/zoe/assi
 
 ```bash
 TAG=2026.6.4   # then 2026.7.x, 2026.8.x, 2026.9.3
-tar -C /home/zoe/assistant -czf ~/backups/homeassistant-$(date +%F)-pre-$TAG.tgz homeassistant/
+BK=~/backups/homeassistant-$(date +%F)-pre-$TAG.tgz
+docker compose stop homeassistant          # consistent .storage + recorder db (no open WAL)
+tar -C /home/zoe/assistant -czf "$BK" homeassistant/ \
+  && tar -tzf "$BK" > "$BK.list" \
+  && grep -q '^homeassistant/\.storage/' "$BK.list" \
+  && grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" \
+  || { echo "BACKUP FAILED OR INCOMPLETE ($BK) — STOP HERE; do not change the tag"; docker compose start homeassistant; }
+# Continue ONLY if the line above printed nothing. A failed backup is a hard stop:
+# HA restarts on the current tag and this step is not attempted.
 sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$TAG#" docker-compose.yml
 docker compose pull homeassistant
 docker compose up -d homeassistant
@@ -92,6 +98,27 @@ Once on 2026.10, Zoe can pass the panel's HA device id in `params._meta["io.home
 ## Rollback
 
 - **Same-month patch rollback** (e.g. 2026.9.3 → 2026.9.1): change the tag, `docker compose up -d homeassistant`. Safe.
-- **Cross-month rollback**: `.storage` migrations are forward-only, so restore the backup from immediately before that step: `docker compose stop homeassistant && rm -rf homeassistant/.storage && tar -C /home/zoe/assistant -xzf ~/backups/homeassistant-<date>-pre-<TAG>.tgz homeassistant/.storage && sed -i 's#home-assistant:[^ ]*#home-assistant:<previous-tag>#' docker-compose.yml && docker compose up -d homeassistant`.
+- **Cross-month rollback**: `.storage` migrations and recorder schema bumps are forward-only, so restore the backup from immediately before that step. **Validate the archive before touching live state, and set the newer state aside rather than deleting it** — a mistyped date/tag, a backup that failed, or a damaged archive must fail *before* the registries, config entries, auth state and history are gone, not after:
+
+  ```bash
+  BK=~/backups/homeassistant-<date>-pre-<TAG>.tgz   # the backup taken immediately before the failed step
+  PREV=<previous-tag>                                # e.g. 2026.8.9 when rolling back from 2026.9.3
+  # 1. Prove the archive is readable and holds what we are about to replace. Nothing below runs otherwise.
+  tar -tzf "$BK" > /tmp/ha-rollback.list \
+    && grep -q '^homeassistant/\.storage/' /tmp/ha-rollback.list \
+    && grep -q '^homeassistant/home-assistant_v2\.db$' /tmp/ha-rollback.list \
+    || { echo "ARCHIVE UNUSABLE ($BK) — STOP; live state untouched"; false; }
+  # 2. Only after step 1 printed nothing: stop HA, move (not rm) the newer state aside, restore .storage
+  #    AND the recorder db (an older core can refuse a newer recorder schema), then downgrade the tag.
+  ASIDE=~/backups/homeassistant-rolled-back-$(date +%F) && mkdir -p "$ASIDE" \
+    && docker compose stop homeassistant \
+    && mv homeassistant/.storage "$ASIDE"/ \
+    && mv homeassistant/home-assistant_v2.db* "$ASIDE"/ \
+    && tar -C /home/zoe/assistant -xzf "$BK" --wildcards homeassistant/.storage 'homeassistant/home-assistant_v2.db*' \
+    && sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$PREV#" docker-compose.yml \
+    && docker compose up -d homeassistant
+  ```
+
+  Rolling back the recorder db means **history recorded after that backup is lost** (energy/statistics included); that is the price of a consistent older-schema database, and it is why the backup is taken with HA stopped immediately before each step. The set-aside copy in `$ASIDE` keeps the newer state for forensics; delete it once the rollback is confirmed good.
 - The bridge needs nothing on rollback: the scheme is re-detected on its next restart (or pin `HA_TOOL_NAME_SCHEME=legacy` in `.env` for the window and remove it afterwards).
 - Panel voice path is untouched by any of this; if it misbehaves after a step, the suspect is `zoe_conversation` or `auth_oidc` under the new core, not Zoe's services.
