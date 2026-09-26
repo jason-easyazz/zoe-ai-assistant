@@ -34,7 +34,6 @@ import os
 import re
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
-from difflib import SequenceMatcher
 from typing import Callable, Optional
 
 # ── Flag (lab-only reader; prod wiring reads the same name, default off) ─────
@@ -100,7 +99,16 @@ class Fact:
         return self.expired_at is None
 
     def key(self) -> Optional[str]:
+        """The persisted ``attribute_key`` when the row carries one (a legacy
+        or unrecognised phrasing keyed at write time), else parsed from text.
+        Reconciliation groups by THIS, never by re-parsing neighbour text."""
         return self.attribute_key or attribute_key(self.text)
+
+    def subjects(self) -> frozenset[str]:
+        """Subjects the row is about: text mentions plus the key's subject."""
+        found = subjects(self.text)
+        k = self.key()
+        return found | {k.split("/", 1)[0]} if k else found
 
 
 def intervals_overlap(a: Fact, b: Fact) -> bool:
@@ -228,11 +236,12 @@ def subjects(text: str) -> frozenset[str]:
     return frozenset(_canon_subject(m.group(0)) for m in _SUBJECT_MENTION_RE.finditer(_normalize(text)))
 
 
-def same_subject(a: str, b: str) -> bool:
-    """Two texts are about the same person when they share a subject mention,
-    or when neither names anyone. A fact about Person B can never merge
-    into, supersede, or be judged against a fact about Person A."""
-    sa, sb = subjects(a), subjects(b)
+def same_subject(a, b) -> bool:
+    """Two texts (or :class:`Fact` rows) are about the same person when they
+    share a subject, or when neither names anyone. A fact about Person B can
+    never merge into, supersede, or be judged against a fact about Person A."""
+    sa = a.subjects() if isinstance(a, Fact) else subjects(a)
+    sb = b.subjects() if isinstance(b, Fact) else subjects(b)
     return bool(sa & sb) if (sa or sb) else True
 
 
@@ -269,7 +278,8 @@ def information(text: str) -> int:
     return sum(len(t) for t in value_tokens(text))
 
 
-def richer(candidate: str, existing: str) -> str:
+def richer(candidate: str, existing: str, *, candidate_key: Optional[str] = None,
+           existing_key: Optional[str] = None) -> str:
     """Return whichever text carries more information; ties keep ``existing``.
 
     Two guards keep "richer" from meaning "longer":
@@ -280,7 +290,7 @@ def richer(candidate: str, existing: str) -> str:
         "neil, spelled n-e-i-l" with "neil the fisherman" would lose the
         spelling, so it is not richer, it is different.
     """
-    if attribute_key(candidate) is None and attribute_key(existing) is not None:
+    if (candidate_key or attribute_key(candidate)) is None and (existing_key or attribute_key(existing)) is not None:
         return existing
     vc, ve = value_tokens(candidate), value_tokens(existing)
     if not ve <= vc:
@@ -346,8 +356,6 @@ def split_transition(text: str, attr_hint: Optional[str] = None,
 ADD, UPDATE, SUPERSEDE, NONE = "ADD", "UPDATE", "SUPERSEDE", "NONE"
 _DECISIONS = {ADD, UPDATE, SUPERSEDE, NONE}
 
-NEAR_DUP_RATIO = 0.92
-
 # judge(new_text, [(id, text), …]) → {"event": ADD|UPDATE|SUPERSEDE|NONE, "id": int|None}
 Judge = Callable[[str, list[tuple[int, str]]], dict]
 
@@ -370,10 +378,6 @@ class Decision:
     # interrupted new-row-first write — must all close, or stale facts keep
     # competing in recall).
     also_close: list[int] = field(default_factory=list)
-
-
-def _similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, _normalize(a), _normalize(b)).ratio()
 
 
 def _validate_judge(verdict: dict, candidates: list[Fact]) -> Optional[tuple[str, Optional[int]]]:
@@ -409,10 +413,12 @@ def reconcile(
       2. Contradiction candidates = live neighbours whose validity interval
          OVERLAPS the new fact's (``overlap_check=False`` is the negative
          control that reproduces Graphiti-less "newest wins").
-      3. Near-exact text duplicate → NONE / UPDATE by richness — only when the
-         two share the attribute key AND the subject ("person b works at acme"
-         never merges into "person a works at acme"; a same-name mother and
-         father are two facts) and only when their windows overlap.
+      3. There is NO text-similarity shortcut. Two facts merge only through
+         a shared REAL attribute key (which carries the subject: "person b
+         works at acme" never merges into "person a works at acme"; a
+         same-name mother and father are two facts). Two UNKEYED texts never
+         merge on wording alone ("likes hiking" vs "likes biking" are 0.95
+         similar and distinct); they go to the judge.
       4. Same attribute key: same value → NONE / UPDATE by richness
          (``richer_rule=False`` is the negative control: newest wins), but a
          same value over a DISJOINT window is a repeated occurrence and ADDs a
@@ -420,8 +426,11 @@ def reconcile(
          different value → SUPERSEDE if overlapping (EVERY overlapping
          contradicting row closes, via ``also_close``), ADD (history) if not.
       5. Key unknown on either side → ``judge`` (LLM) with integer ids, shown
-         ONLY the neighbours about the same subject; an id outside the shown
-         set, or no judge, degrades to ADD.
+         ONLY the neighbours about the same subject whose key is unknown or
+         equal to the new fact's (a known, different attribute is never shown,
+         so the model cannot override deterministic attribute separation); an
+         id outside the shown set, or no judge, degrades to ADD.
+    Keys come from :meth:`Fact.key` (persisted ``attribute_key`` first).
     """
     now = now or utcnow()
     extra_closed: list[Fact] = []
@@ -429,10 +438,11 @@ def reconcile(
     split = split_transition(new.text)
     if split:
         old_text, to_text, when = split
-        new = replace(new, text=to_text, valid_from=new.valid_from or when)
+        new = replace(new, text=to_text, valid_from=new.valid_from or when,
+                      attribute_key=attribute_key(to_text))
         write_as = new
         old_key = attribute_key(old_text)
-        if not any(attribute_key(n.text) == old_key and same_value(n.text, old_text)
+        if not any(n.key() == old_key and same_value(n.text, old_text)
                    for n in neighbours if n.is_live):
             closed_from = new.valid_from or now.isoformat()
             extra_closed.append(Fact(
@@ -453,8 +463,8 @@ def reconcile(
     def _overlaps(n: Fact) -> bool:
         return (not overlap_check) or intervals_overlap(new, n)
 
-    new_key = attribute_key(new.text)
-    same_attr = [n for n in live if attribute_key(n.text) == new_key] if new_key else []
+    new_key = new.key()
+    same_attr = [n for n in live if n.key() == new_key] if new_key else []
     # every live same-attribute row asserting a DIFFERENT value over an
     # overlapping window — all of them must close, whatever the decision
     stale = [n for n in same_attr if not same_value(new.text, n.text) and _overlaps(n)]
@@ -466,30 +476,27 @@ def reconcile(
         if not richer_rule:
             # negative control: newest phrasing always wins
             return _decision(UPDATE, existing.id, why + " (newest wins)", text=new.text, also_close=also)
-        keep = richer(new.text, existing.text)
+        keep = richer(new.text, existing.text, candidate_key=new_key, existing_key=existing.key())
         if keep == existing.text:
             return _decision(NONE, existing.id, why + " (existing at least as rich)",
                              text=existing.text, also_close=also)
         return _decision(UPDATE, existing.id, why + " (candidate richer)", text=new.text, also_close=also)
 
-    # 3) near-exact duplicate — same key, same subject, same value, overlapping
-    #    window. A different value with the same key ("…is Jo" vs "…is Joe")
-    #    is a correction and takes the contradiction path in 4).
-    best = max(live, key=lambda n: _similarity(new.text, n.text))
-    if (_similarity(new.text, best.text) >= NEAR_DUP_RATIO
-            and attribute_key(best.text) == new_key and same_subject(new.text, best.text)
-            and (new_key is None or same_value(new.text, best.text))
-            and _overlaps(best)):
-        return _merge(best, "near-exact duplicate")
+    # 3) (removed) a near-exact-text shortcut used to live here; once it
+    #    required a real matching key it was a strict subset of 4) that picked
+    #    its target by wording instead of richness, so 4) is the only path.
 
-    # 4) same attribute
+    # 4) same attribute — a different value with the same key ("…is Jo" vs
+    #    "…is Joe") is a correction and takes the contradiction branch
     if new_key:
-        same_attr_same_val = [n for n in same_attr if same_value(new.text, n.text)]
-        if same_attr_same_val:
-            target = max(same_attr_same_val, key=lambda n: information(n.text))
-            if _overlaps(target):
-                return _merge(target, "same attribute, same value")
-            # same value, disjoint window: a repeated occurrence → a separate interval
+        # same value: only rows whose window OVERLAPS are candidates (a rich
+        # disjoint historical row must not outrank a terse overlapping current
+        # one); among those, the richest wins
+        same_val_overlapping = [n for n in same_attr if same_value(new.text, n.text) and _overlaps(n)]
+        if same_val_overlapping:
+            target = max(same_val_overlapping, key=lambda n: information(n.text))
+            return _merge(target, "same attribute, same value")
+        # a same value only over disjoint windows is a repeated occurrence → a separate interval
         if stale:
             # supersede the most recent live assertion; close every other contradicting row too
             target = max(stale, key=lambda n: parse_ts(n.valid_from) or FAR_PAST)
@@ -498,18 +505,21 @@ def reconcile(
         if same_attr:
             return _decision(ADD, None, "same attribute, intervals disjoint (history / repeated occurrence)")
         # known attribute, no neighbour shares it → distinct fact
-        if all(attribute_key(n.text) for n in live):
+        if all(n.key() for n in live):
             return _decision(ADD, None, "different attribute")
 
     # 5) judge — only for the ambiguous remainder, only over shown ids, and
-    #    only shown the neighbours about the SAME subject: an id the judge was
-    #    not shown is rejected, so it can never retire or overwrite another
-    #    person's fact.
+    #    only shown the neighbours about the SAME subject whose key is unknown
+    #    or equal to the new fact's: an id the judge was not shown is rejected,
+    #    so it can never retire or overwrite another person's fact, nor a
+    #    known DIFFERENT attribute of the same person (a new employer fact
+    #    never sees the residence row).
     if judge is None:
         return _decision(ADD, None, "attribute unknown, no judge → add")
-    shown_facts = [n for n in live if same_subject(new.text, n.text)]
+    shown_facts = [n for n in live if same_subject(new, n)
+                   and (n.key() is None or new_key is None or n.key() == new_key)]
     if not shown_facts:
-        return _decision(ADD, None, "attribute unknown, no neighbour about the same subject → add")
+        return _decision(ADD, None, "attribute unknown, no eligible neighbour (same subject, unknown or same attribute) → add")
     shown = [(n.id, n.text) for n in shown_facts]
     try:
         verdict = judge(new.text, shown)
@@ -561,10 +571,14 @@ def apply(decision: Decision, new: Fact, store: dict[int, Fact],
         successor = new_row
         if decision.event == SUPERSEDE and decision.target_id is not None:
             store[decision.target_id] = invalidate(store[decision.target_id], new_row, now)
-    # every OTHER contradicting live row closes too, linked to the surviving row
+    # every OTHER contradicting live row closes too, linked to the surviving
+    # row but closed at the INCOMING fact's start (the window the contradiction
+    # was measured against) — never at the surviving row's own, possibly much
+    # earlier, valid_from
     for cid in decision.also_close:
         if successor is not None and cid in store and store[cid].is_live and cid != successor.id:
-            store[cid] = invalidate(store[cid], successor, now)
+            edge = replace(successor, valid_from=new.valid_from)
+            store[cid] = invalidate(store[cid], edge, now)
     return store
 
 

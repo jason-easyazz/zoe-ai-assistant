@@ -13,15 +13,13 @@ wiring, no model, no I/O.** This is a record, not a contract.
 | `fixture.py` | 50 SYNTHETIC pairs (Person A/B/C, invented employers/towns) — 10 correction, 10 paraphrase, 8 richer-vs-distilled, 10 disjoint-history, 7 transition, 5 unrelated |
 | `run_fixture.py` | scores the controller + both negative controls; `python3 run_fixture.py` |
 
-Regression net: `tests/unit/test_b3_1_supersession_lab.py` (pure Python, hand-run).
-It is deliberately **not** `ci_safe`: it imports these lab modules, and the labs
-contract (`labs/AGENTS.md`) keeps lab code out of the GitHub `validate` gate.
+| `test_supersession_lab.py` | the regression net (pure Python, hand-run) — it lives HERE, not under `tests/`, because `pytest.ini` `testpaths` and both CI lanes (`validate.yml`'s `pytest tests/unit -m ci_safe`, whose collection imports every `tests/unit` module, and `self-hosted-tests.yml`'s `pytest tests/unit`) never collect `labs/`; that is what keeps the labs contract (lab code is never imported or executed by CI) true |
 
 ## Run locally
 
 ```bash
 # from the repo root (worktree), niced — the box runs a live voice brain
-nice -n 15 python3 -m pytest tests/unit/test_b3_1_supersession_lab.py -q -p no:cacheprovider
+nice -n 15 python3 -m pytest labs/b3-1-supersession -q -p no:cacheprovider
 nice -n 15 python3 labs/b3-1-supersession/run_fixture.py   # scoreboard + both negative controls
 ```
 
@@ -51,5 +49,10 @@ extends it, never leaves an end before the start); a bare "moved from X to Y" is
 a residence change ("moved jobs from" / an org suffix → employer); and a
 supersession closes EVERY overlapping contradicting live row (`also_close`), so
 a duplicate left by an interrupted new-row-first write is swept on the next
-reconcile of that fact. A real-brain score on this fixture is a prod-wiring gate, not a lab
+reconcile of that fact. Round 2: the near-dup path needs a REAL matching key
+(two unkeyed texts go to the judge, never merge on similarity); the judge is
+never shown a known, different attribute of the same person; same-value
+candidates are filtered by overlap before richness; `Fact.key()` (persisted
+`attribute_key` first) is what reconciliation groups by; the sweep closes
+conflicting rows at the INCOMING fact's start, not the surviving row's. A real-brain score on this fixture is a prod-wiring gate, not a lab
 deliverable (the box has ~700 MiB free and a live voice brain).

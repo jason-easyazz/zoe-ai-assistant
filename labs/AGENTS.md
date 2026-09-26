@@ -317,9 +317,10 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   never household data) + `run_fixture.py` scorer with both negative controls.
   Design + schema/migration PLAN + prod wiring:
   `docs/architecture/b3-1-bitemporal-supersession.md`. Regression net
-  `tests/unit/test_b3_1_supersession_lab.py` is hand-run and deliberately NOT
-  `ci_safe` (it imports these lab modules; the GitHub gate never collects it —
-  run command in the lab README). README is a record, not a contract.
+  `test_supersession_lab.py` lives INSIDE the lab dir (hand-run:
+  `nice -n 15 python3 -m pytest labs/b3-1-supersession -q -p no:cacheprovider`) —
+  `pytest.ini` `testpaths` and both CI lanes never collect `labs/`, so nothing in
+  CI imports it. README is a record, not a contract.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%

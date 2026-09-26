@@ -19,11 +19,13 @@ model, no I/O) so the lab's numbers cannot drift silently:
 A negative control you have not seen go red is not a control, so every one
 here asserts the SPECIFIC wrong outcome, not merely "score is lower".
 
-Deliberately NOT ``ci_safe``: it imports the lab modules, and the labs contract
-(``labs/AGENTS.md``) keeps lab code out of the GitHub gate. Hand-run it (see
-``labs/b3-1-supersession/README.md``):
+Lives INSIDE the lab directory on purpose: ``pytest.ini`` ``testpaths`` and both
+CI lanes (``validate.yml`` ``pytest tests/unit -m ci_safe``, whose collection
+imports every ``tests/unit`` module; ``self-hosted-tests.yml`` ``pytest tests/unit``)
+never collect ``labs/``, so the labs contract (``labs/AGENTS.md``: lab code is
+never imported or executed by CI) holds. Hand-run it:
 
-    nice -n 15 python3 -m pytest tests/unit/test_b3_1_supersession_lab.py -q -p no:cacheprovider
+    nice -n 15 python3 -m pytest labs/b3-1-supersession -q -p no:cacheprovider
 """
 from __future__ import annotations
 
@@ -33,7 +35,7 @@ from pathlib import Path
 
 import pytest
 
-LAB = Path(__file__).resolve().parents[2] / "labs" / "b3-1-supersession"
+LAB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LAB))
 
 import bitemporal as bt  # noqa: E402
@@ -217,8 +219,7 @@ def test_flag_default_off(monkeypatch):
 # ── review round 1 (PR #1692): each a negative control that was red first ──────
 
 def test_near_duplicate_text_never_merges_across_subjects_or_attributes():
-    # "person b works at acme" vs "person a works at acme": ratio 0.955 > NEAR_DUP_RATIO
-    assert bt._similarity("person b works at acme", "person a works at acme") >= bt.NEAR_DUP_RATIO
+    # "person b works at acme" vs "person a works at acme" differ by one character
     d = bt.reconcile(_fact(0, "Person B works at Acme"), [_fact(1, "person a works at acme")], now=NOW)
     assert d.event == bt.ADD and d.target_id is None, d
     # same name, different relative: two facts, not one
@@ -346,3 +347,90 @@ def test_supersede_closes_every_contradicting_live_row_not_just_one():
     old = _fact(1, "person a works at acme", "2010-01-01", "2012-01-01")
     d = bt.reconcile(new, [old, globex], now=NOW)
     assert (d.event, d.also_close) == (bt.NONE, [])
+
+
+# ── review round 2 (PR #1692) ────────────────────────────────────────────────
+
+def test_two_unkeyed_texts_never_merge_on_similarity_alone():
+    # "likes hiking" vs "likes biking": one character apart, no key on either side
+    assert bt.attribute_key("person a likes hiking") is None
+    shown = []
+    judge = lambda t, c: (shown.append([i for i, _ in c]), {"event": "ADD", "id": None})[1]
+    d = bt.reconcile(_fact(0, "Person A likes hiking"), [_fact(1, "person a likes biking")], judge=judge, now=NOW)
+    assert d.event == bt.ADD and shown == [[1]], d          # the judge decided, not similarity
+    d = bt.reconcile(_fact(0, "Person A likes hiking"), [_fact(1, "person a likes biking")], judge=None, now=NOW)
+    assert d.event == bt.ADD and "no judge" in d.reason
+    # a keyed near-dup still merges deterministically
+    d = bt.reconcile(_fact(0, "User works at Globex"), [_fact(1, "user works at globex")], now=NOW)
+    assert (d.event, d.target_id) == (bt.NONE, 1)
+
+
+def test_judge_never_shown_a_known_different_attribute():
+    residence = _fact(1, "person a lives in southbay")
+    unkeyed = _fact(2, "person a likes biking")
+    shown = []
+    def naming_first(t, c):
+        shown.append([i for i, _ in c]); return {"event": "SUPERSEDE", "id": c[0][0]}
+    d = bt.reconcile(_fact(0, "Person A works at Globex"), [residence, unkeyed], judge=naming_first, now=NOW)
+    assert shown == [[2]], shown                              # the residence row was never a candidate
+    assert (d.event, d.target_id) == (bt.SUPERSEDE, 2)
+    # unkeyed incoming text: keyed AND unkeyed same-subject rows are all fair game
+    shown.clear()
+    bt.reconcile(_fact(0, "Neil, Person A's dad, says hi"), [residence, unkeyed], judge=naming_first, now=NOW)
+    assert shown == [[1, 2]]
+
+
+def test_same_value_candidate_is_chosen_by_overlap_before_richness():
+    rich_history = _fact(1, "person a works at acme as a senior mechanical engineer", "2010-01-01", "2012-01-01")
+    terse_current = _fact(2, "person a works at acme", "2024-01-01")
+    new = _fact(0, "Person A works at Acme", "2025-01-01")
+    d = bt.reconcile(new, [rich_history, terse_current], now=NOW)
+    assert (d.event, d.target_id) == (bt.NONE, 2), d          # not ADD (a duplicate current interval)
+    store = bt.apply(d, new, {1: rich_history, 2: terse_current}, now=NOW)
+    assert set(store) == {1, 2} and store[1] == rich_history
+    # richness still decides AMONG overlapping rows
+    rich_current = _fact(3, "person a works at acme as a senior mechanical engineer", "2023-01-01")
+    d = bt.reconcile(new, [terse_current, rich_current], now=NOW)
+    assert (d.event, d.target_id) == (bt.NONE, 3)
+
+
+def test_persisted_attribute_key_is_honoured_over_text_reparse():
+    legacy = _fact(1, "person a: employer = acme", attribute_key="person a/employer")
+    assert bt.attribute_key(legacy.text) is None and legacy.key() == "person a/employer"
+    new = _fact(0, "Person A works at Globex")
+    d = bt.reconcile(new, [legacy], now=NOW)
+    assert (d.event, d.target_id) == (bt.SUPERSEDE, 1), d     # was: ADD (treated as unknown)
+    # same value through the persisted key → merge, not a second row
+    d = bt.reconcile(_fact(0, "Person A works at Acme"), [legacy], now=NOW)
+    assert (d.event, d.target_id) == (bt.NONE, 1)
+    # the persisted key also carries the subject for judge scoping
+    assert legacy.subjects() == {"person a"}
+    # an incoming row with a persisted key is grouped by it too
+    d = bt.reconcile(bt.Fact(id=0, text="globex — new gig", attribute_key="person a/employer"),
+                     [_fact(1, "person a works at acme")], now=NOW)
+    assert (d.event, d.target_id) == (bt.SUPERSEDE, 1)
+
+
+def test_sweep_closes_conflicting_rows_at_the_incoming_start_not_the_stored_start():
+    stored = _fact(1, "person a works at globex", "2021-01-01")
+    conflicting = _fact(2, "person a works at acme", "2022-01-01")
+    new = _fact(0, "Person A works at Globex", "2024-01-01")
+    d = bt.reconcile(new, [stored, conflicting], now=NOW)
+    assert (d.event, d.target_id, d.also_close) == (bt.NONE, 1, [2])
+    store = bt.apply(d, new, {1: stored, 2: conflicting}, now=NOW)
+    assert store[2].valid_until == "2024-01-01" and store[2].superseded_by == 1   # was "2022-01-01": empty window
+    assert store[1].valid_from == "2021-01-01"                                    # surviving row untouched
+    # incoming with no start: closed now, not at the stored 2021 start
+    new = _fact(0, "Person A works at Globex")
+    store = bt.apply(bt.reconcile(new, [stored, conflicting], now=NOW), new, {1: stored, 2: conflicting}, now=NOW)
+    assert store[2].valid_until == NOW.isoformat()
+
+
+def test_lab_test_is_outside_every_ci_collection_path():
+    repo = LAB.parents[1]
+    ini = (repo / "pytest.ini").read_text()
+    assert "labs" not in ini
+    for wf in ("validate.yml", "self-hosted-tests.yml"):
+        text = (repo / ".github" / "workflows" / wf).read_text()
+        assert "b3-1-supersession" not in text and "pytest labs" not in text, wf
+    assert not list((repo / "tests").rglob("test_*b3_1*.py"))   # .py only: a stale __pycache__ is not collection
