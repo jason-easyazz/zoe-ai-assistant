@@ -8,6 +8,7 @@ from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access
 import telegram_link
+from user_prefs import delete_pref, read_prefs, set_pref
 
 router = APIRouter(prefix="/api/user/profile", tags=["user-profile"])
 
@@ -17,31 +18,9 @@ router = APIRouter(prefix="/api/user/profile", tags=["user-profile"])
 _TELEGRAM_ID_RE = re.compile(r"^[1-9][0-9]{1,19}$")
 
 
-async def _read_prefs(db, user_id: str) -> dict:
-    """Return the user_preferences.prefs JSON dict for user_id (or {})."""
-    cursor = await db.execute(
-        "SELECT prefs FROM user_preferences WHERE user_id = ?",
-        (user_id,),
-    )
-    row = await cursor.fetchone()
-    if not row:
-        return {}
-    try:
-        raw = row["prefs"]
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
-async def _write_prefs(db, user_id: str, prefs: dict) -> None:
-    await db.execute(
-        """INSERT INTO user_preferences (user_id, prefs, updated_at)
-           VALUES (?, ?, NOW())
-           ON CONFLICT(user_id) DO UPDATE SET prefs = excluded.prefs, updated_at = NOW()""",
-        (user_id, json.dumps(prefs)),
-    )
-    await db.commit()
+# Preference mechanics live in user_prefs.py (the one reader/writer of the
+# user_preferences JSON); the read alias is kept for routers/system.py.
+_read_prefs = read_prefs
 
 
 @router.get("")
@@ -168,10 +147,7 @@ async def set_telegram_link(
 
     # Unlink path: null / empty clears the caller's own link.
     if raw is None or (isinstance(raw, str) and not raw.strip()):
-        prefs = await _read_prefs(db, user_id)
-        if "telegram_id" in prefs:
-            prefs.pop("telegram_id", None)
-            await _write_prefs(db, user_id, prefs)
+        await delete_pref(user_id, "telegram_id", db=db)
         return {"telegram_id": None, "linked": False}
 
     tid = str(raw).strip()
@@ -188,16 +164,13 @@ async def set_telegram_link(
            WHERE prefs::jsonb ->> 'telegram_id' = ? AND user_id != ?""",
         (tid, user_id),
     )
+    # Atomic + conditional: the clear only lands while the other row STILL holds
+    # this id, and the set merges one key — neither can clobber a concurrent
+    # write to a different key (e.g. an opt-out PUT). See user_prefs.
     for row in await cursor.fetchall():
-        other_id = row["user_id"]
-        other_prefs = await _read_prefs(db, other_id)
-        if other_prefs.get("telegram_id") == tid:
-            other_prefs.pop("telegram_id", None)
-            await _write_prefs(db, other_id, other_prefs)
+        await delete_pref(row["user_id"], "telegram_id", db=db, only_if=tid)
 
-    prefs = await _read_prefs(db, user_id)
-    prefs["telegram_id"] = tid
-    await _write_prefs(db, user_id, prefs)
+    await set_pref(user_id, "telegram_id", tid, db=db)
     return {"telegram_id": tid, "linked": True}
 
 

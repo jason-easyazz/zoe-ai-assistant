@@ -917,7 +917,7 @@ async def get_memory_opt_out(
     """Return the caller's memory opt-out flag. Default False."""
     await require_feature_access(db, user, feature="memories", action="read")
     from user_prefs import is_memory_opted_out
-    flag = await is_memory_opted_out(user["user_id"])
+    flag = await is_memory_opted_out(user["user_id"], db=db)
     return {"user_id": user["user_id"], "memory_opt_out": flag}
 
 
@@ -938,5 +938,5 @@ async def set_memory_opt_out(
     await require_feature_access(db, user, feature="memories", action="write")
     value = bool((payload or {}).get("memory_opt_out"))
     from user_prefs import KEY_MEMORY_OPT_OUT, set_pref
-    await set_pref(user["user_id"], KEY_MEMORY_OPT_OUT, value)
+    await set_pref(user["user_id"], KEY_MEMORY_OPT_OUT, value, db=db)
     return {"user_id": user["user_id"], "memory_opt_out": value}
