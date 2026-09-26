@@ -121,6 +121,8 @@ def intervals_overlap(a: Fact, b: Fact) -> bool:
     a_until = parse_ts(a.valid_until) or FAR_FUTURE
     b_from = parse_ts(b.valid_from) or FAR_PAST
     b_until = parse_ts(b.valid_until) or FAR_FUTURE
+    if a_from >= a_until or b_from >= b_until:
+        return False   # an EMPTY window ([t, t), a fact retired at its own start) is true at no instant
     return a_from < b_until and b_from < a_until
 
 
@@ -397,6 +399,11 @@ class Decision:
     # (stored Acme [2020, 2025) + new Acme [2024, ∞) → [2020, ∞)), clamped so
     # it never overlaps a conflicting row closed by ``also_close``.
     interval: Optional[tuple[Optional[str], Optional[str]]] = None
+    # Rows whose validity window is REWRITTEN but which stay live (event-time
+    # history, not a retirement): the split case — a same-value survivor whose
+    # earlier period is kept, closed at the start of the conflict that
+    # interrupted it, while the value continues in a NEW row from the boundary.
+    retime: dict[int, tuple[Optional[str], Optional[str]]] = field(default_factory=dict)
 
 
 def _validate_judge(verdict: dict, candidates: list[Fact]) -> Optional[tuple[str, Optional[int]]]:
@@ -441,8 +448,10 @@ def reconcile(
       4. Same attribute key: same value → NONE / UPDATE by richness
          (``richer_rule=False`` is the negative control: newest wins); the
          survivor's window becomes the UNION of the overlapping same-value
-         windows (clamped so it never overlaps a conflict it closes) and
-         every other same-value duplicate is retired via ``also_close``; but a
+         windows — SPLIT around a conflict that ran before the incoming start
+         (earlier period kept as live history, value continued in a new row
+         from the boundary; ``Decision.retime``) — and every other same-value
+         duplicate is retired via ``also_close``; but a
          same value over a DISJOINT window is a repeated occurrence and ADDs a
          separate interval (worked at Acme 2018–2021 and again from 2024);
          different value → SUPERSEDE if overlapping (EVERY overlapping
@@ -466,26 +475,41 @@ def reconcile(
         old_key = attribute_key(old_text)
         closed_from = new.valid_from or now.isoformat()
         edge = parse_ts(closed_from)
-        # the closed "from" side is emitted unless a live same-value row
-        # already COVERS the instant before the transition (its window reaches
-        # the boundary) — a disjoint historical occurrence (Acme 2000–2010 vs
-        # "switched from Acme" in 2025) does not suppress it
-        if not any(n.key() == old_key and same_value(n.text, old_text)
-                   and (parse_ts(n.valid_from) or FAR_PAST) < edge
-                   and (parse_ts(n.valid_until) or FAR_FUTURE) >= edge
-                   for n in neighbours if n.is_live):
-            extra_closed.append(Fact(
-                id=-1, text=old_text, valid_from=None, valid_until=closed_from,
-                created_at=now.isoformat(), attribute_key=old_key,
-            ))
+        live_same_key = [n for n in neighbours if n.is_live and n.key() == old_key]
+        # The closed "from" side is written ONLY when the store holds no row
+        # for that value at all. A same-value row that covers the boundary is
+        # the thing being superseded; a same-value row over an earlier window
+        # already records the occurrence — writing another with no start
+        # would claim the value across every other employer in between
+        # (Acme 2000–2010, Globex 2012–2024, "switched from Acme" in 2025).
+        # And when it is written, it starts no earlier than the end of the
+        # latest other-value row that ended before the boundary; if another
+        # value is still open at the boundary there is no room, so nothing
+        # is written — the "to" side supersedes that row instead.
+        if not any(same_value(n.text, old_text) for n in live_same_key):
+            other_ends = [min(parse_ts(n.valid_until) or FAR_FUTURE, edge)
+                          for n in live_same_key
+                          if (parse_ts(n.valid_from) or FAR_PAST) < edge]
+            bound = max(other_ends) if other_ends else None
+            if bound is None or bound < edge:
+                from_start = None if bound is None else max(
+                    (n for n in live_same_key if parse_ts(n.valid_until) == bound),
+                    key=lambda n: parse_ts(n.valid_until)).valid_until
+                extra_closed.append(Fact(
+                    id=-1, text=old_text, valid_from=from_start, valid_until=closed_from,
+                    created_at=now.isoformat(), attribute_key=old_key,
+                ))
 
     live = [n for n in neighbours if n.is_live]
 
     def _decision(event: str, target: Optional[int], why: str, *, text: Optional[str] = None,
                   also_close: Optional[list[int]] = None,
-                  interval: Optional[tuple[Optional[str], Optional[str]]] = None) -> Decision:
+                  interval: Optional[tuple[Optional[str], Optional[str]]] = None,
+                  retime: Optional[dict] = None,
+                  write: Optional[Fact] = None) -> Decision:
         return Decision(event, target, why, text=text, extra_closed=extra_closed,
-                        write_as=write_as, also_close=list(also_close or []), interval=interval)
+                        write_as=write if write is not None else write_as,
+                        also_close=list(also_close or []), interval=interval, retime=dict(retime or {}))
 
     if not live:
         return _decision(ADD, None, "no live neighbours")
@@ -503,18 +527,9 @@ def reconcile(
     same_val_overlapping = [n for n in same_attr if same_value(new.text, n.text) and _overlaps(n)]
     close_edge = parse_ts(new.valid_from) or now   # where every also_close row is cut
 
-    def _survivor_interval(existing: Fact) -> tuple[Optional[str], Optional[str]]:
-        """Union of the incoming window and every overlapping same-value row,
-        then clamped: the surviving row may not start before the close edge
-        when a conflicting row it overlapped started before that edge.
-
-        Rule (documented in the README): the INCOMING fact's start is the
-        boundary of what is known. Conflicting rows close there; the surviving
-        same-value row is widened to the union, but if a conflicting row ran
-        in the span before the boundary, the survivor yields that span (it
-        starts at the boundary) so no two contradicting rows are ever valid at
-        the same instant. Conflicts not overlapping the incoming window are
-        not this fact's business and are left as they are."""
+    def _union(existing: Fact) -> tuple[Optional[str], Optional[str]]:
+        """Union of the incoming window and every overlapping same-value row
+        (an open end wins)."""
         rows = [new, existing] + [n for n in same_val_overlapping if n.id != existing.id]
         froms = [parse_ts(r.valid_from) for r in rows]
         untils = [parse_ts(r.valid_until) for r in rows]
@@ -522,10 +537,6 @@ def reconcile(
             min(rows, key=lambda r: parse_ts(r.valid_from)).valid_from
         u_until: Optional[str] = None if any(u is None for u in untils) else \
             max(rows, key=lambda r: parse_ts(r.valid_until)).valid_until
-        conflict_before_edge = any((parse_ts(n.valid_from) or FAR_PAST) < close_edge
-                                   for n in stale if n.id != existing.id)
-        if conflict_before_edge and (u_from is None or parse_ts(u_from) < close_edge):
-            u_from = new.valid_from or now.isoformat()
         return u_from, u_until
 
     def _merge(existing: Fact, why: str) -> Decision:
@@ -534,7 +545,32 @@ def reconcile(
         # retire every contradicting row AND every duplicate of the survivor
         also = [n.id for n in stale if n.id != existing.id] + \
                [n.id for n in same_val_overlapping if n.id != existing.id]
-        interval = _survivor_interval(existing)
+        interval = _union(existing)
+        keep = existing.text if not richer_rule else \
+            richer(new.text, existing.text, candidate_key=new_key, existing_key=existing.key())
+        text = new.text if (not richer_rule or keep != existing.text) else existing.text
+
+        # Rule (README, "interval rule"): the INCOMING fact's start is the
+        # boundary of what is known. Conflicting rows close there. If a
+        # conflicting row ran in the span BEFORE the boundary, the survivor's
+        # earlier period is never destroyed and never left overlapping it:
+        # the union is SPLIT — the existing row keeps [union start, earliest
+        # such conflict's start) as live history, and the value continues in a
+        # NEW row from the boundary. No conflict before the boundary → the
+        # survivor is simply widened to the union.
+        earlier = [n for n in stale if n.id != existing.id
+                   and (parse_ts(n.valid_from) or FAR_PAST) < close_edge]
+        if earlier and (interval[0] is None or parse_ts(interval[0]) < close_edge):
+            cut = min(earlier, key=lambda n: parse_ts(n.valid_from) or FAR_PAST)
+            keep_until = cut.valid_from or interval[0] or new.valid_from or now.isoformat()
+            if interval[0] is not None and parse_ts(keep_until) < parse_ts(interval[0]):
+                keep_until = interval[0]              # conflict predates the survivor: empty window, never end < start
+            continued = replace(write_as or new, text=text, valid_from=new.valid_from or now.isoformat(),
+                                valid_until=interval[1], attribute_key=new_key)
+            return _decision(ADD, None, why + f" (split: history kept to {keep_until}, continued from the boundary)",
+                             text=text, also_close=also, retime={existing.id: (interval[0], keep_until)},
+                             write=continued)
+
         widened = interval != (existing.valid_from, existing.valid_until)
         if not richer_rule:
             # negative control: newest phrasing always wins
@@ -639,6 +675,11 @@ def apply(decision: Decision, new: Fact, store: dict[int, Fact],
         successor = new_row
         if decision.event == SUPERSEDE and decision.target_id is not None:
             store[decision.target_id] = invalidate(store[decision.target_id], new_row, now)
+    # split: the survivor's earlier period stays LIVE history with its window
+    # rewritten (closed at the interrupting conflict's start)
+    for rid, (vf, vu) in decision.retime.items():
+        if rid in store:
+            store[rid] = replace(store[rid], valid_from=vf, valid_until=vu)
     # every OTHER contradicting live row closes too, linked to the surviving
     # row but closed at the INCOMING fact's start (the window the contradiction
     # was measured against) — never at the surviving row's own, possibly much

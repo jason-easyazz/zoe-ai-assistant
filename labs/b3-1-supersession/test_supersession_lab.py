@@ -96,6 +96,8 @@ def test_overlap_rule_boundary_is_half_open():
     assert bt.intervals_overlap(old, new2)
     # open-ended on both sides overlaps
     assert bt.intervals_overlap(_fact(1, "x"), _fact(2, "y"))
+    # an empty window (retired at its own start) is true at no instant
+    assert not bt.intervals_overlap(_fact(1, "x", "2021-01-01", "2021-01-01"), _fact(2, "y"))
 
 
 # ── negative control 2: no richer rule → distilled fact wins ──────────────────
@@ -416,15 +418,17 @@ def test_sweep_closes_conflicting_rows_at_the_incoming_start_not_the_stored_star
     conflicting = _fact(2, "person a works at acme", "2022-01-01")
     new = _fact(0, "Person A works at Globex", "2024-01-01")
     d = bt.reconcile(new, [stored, conflicting], now=NOW)
-    assert (d.event, d.target_id, d.also_close) == (bt.UPDATE, 1, [2])   # UPDATE: the survivor's window moves
+    assert (d.event, d.also_close, d.retime) == (bt.ADD, [2], {1: ("2021-01-01", "2022-01-01")})   # split (round 4)
     store = bt.apply(d, new, {1: stored, 2: conflicting}, now=NOW)
-    assert store[2].valid_until == "2024-01-01" and store[2].superseded_by == 1   # was "2022-01-01": empty window
-    assert store[1].valid_from == "2024-01-01"    # survivor yields the span Acme covered (round 3, see README rule)
-    assert not bt.intervals_overlap(store[1], store[2])
+    assert store[2].valid_until == "2024-01-01" and store[2].superseded_by == 3   # was "2022-01-01": empty window
+    assert (store[1].valid_from, store[1].valid_until, store[1].is_live) == ("2021-01-01", "2022-01-01", True)
+    assert (store[3].valid_from, store[3].valid_until) == ("2024-01-01", None)
+    assert not bt.intervals_overlap(store[1], store[2]) and not bt.intervals_overlap(store[2], store[3])
     # incoming with no start: closed now, not at the stored 2021 start
     new = _fact(0, "Person A works at Globex")
     store = bt.apply(bt.reconcile(new, [stored, conflicting], now=NOW), new, {1: stored, 2: conflicting}, now=NOW)
-    assert store[2].valid_until == NOW.isoformat() and store[1].valid_from == NOW.isoformat()
+    assert store[2].valid_until == NOW.isoformat()
+    assert store[1].valid_until == "2022-01-01" and store[3].valid_from == NOW.isoformat()
 
 
 def test_lab_test_is_outside_every_ci_collection_path():
@@ -442,17 +446,19 @@ def test_lab_test_is_outside_every_ci_collection_path():
 def test_surviving_same_value_row_never_overlaps_a_closed_conflicting_row():
     # rule: the incoming start is the boundary; conflicts close there and the
     # survivor yields any span a conflict covered before it (README, "Rules")
-    for acme_from in ("2022-01-01", "2019-01-01"):          # conflict starts after / before the survivor
+    for acme_from, keep_until in (("2022-01-01", "2022-01-01"),   # conflict starts after the survivor: history kept to it
+                                  ("2019-01-01", "2021-01-01")):  # conflict predates the survivor: empty window, never end < start
         globex = _fact(1, "person a works at globex", "2021-01-01")
         acme = _fact(2, "person a works at acme", acme_from)
         new = _fact(0, "Person A works at Globex", "2024-01-01")
         d = bt.reconcile(new, [globex, acme], now=NOW)
-        assert (d.event, d.target_id, d.also_close, d.interval) == (bt.UPDATE, 1, [2], ("2024-01-01", None)), d
+        assert (d.event, d.also_close, d.retime) == (bt.ADD, [2], {1: ("2021-01-01", keep_until)}), d
         store = bt.apply(d, new, {1: globex, 2: acme}, now=NOW)
         assert (store[2].valid_from, store[2].valid_until) == (acme_from, "2024-01-01")
-        assert (store[1].valid_from, store[1].valid_until) == ("2024-01-01", None)
-        assert not bt.intervals_overlap(store[1], store[2])
-        assert bt.live_texts(store) == ["person a works at globex"]
+        assert (store[1].valid_from, store[1].valid_until, store[1].is_live) == ("2021-01-01", keep_until, True)
+        assert (store[3].valid_from, store[3].valid_until) == ("2024-01-01", None)
+        assert not bt.intervals_overlap(store[1], store[2]) and not bt.intervals_overlap(store[2], store[3])
+        assert bt.live_texts(store) == ["person a works at globex"]   # continued row keeps the survivor's (equally rich) phrasing
     # the other order of events: Acme arrives as the correction of a live Globex → SUPERSEDE path
     globex = _fact(1, "person a works at globex", "2021-01-01")
     new = _fact(0, "Person A works at Acme", "2022-01-01")
@@ -524,11 +530,11 @@ def test_transition_history_is_only_suppressed_by_a_row_covering_the_boundary():
     hist = _fact(1, "person a works at acme", "2000-01-01", "2010-01-01")
     new = _fact(0, "Person A switched from Acme to Globex in 2025")
     d = bt.reconcile(new, [hist], now=NOW)
-    assert d.event == bt.ADD and [c.text for c in d.extra_closed] == ["person a works at acme"], d
+    # round 4: the history row already records the occurrence — no open-start
+    # Acme row is invented beside it (it would overlap everything in between)
+    assert d.event == bt.ADD and d.extra_closed == [], d
     store = bt.apply(d, new, {1: hist}, now=NOW)
-    closed = sorted(((f.valid_from, f.valid_until) for f in store.values() if f.text == "person a works at acme"), key=str)
-    assert closed == [("2000-01-01", "2010-01-01"), (None, "2025")]    # both occurrences kept
-    assert bt.live_texts(store) == ["person a works at globex"]
+    assert store[1] == hist and bt.live_texts(store) == ["person a works at globex"]
     # a row that covers the boundary suppresses it and is superseded instead
     current = _fact(1, "person a works at acme", "2020-01-01")
     d = bt.reconcile(new, [current], now=NOW)
@@ -536,3 +542,62 @@ def test_transition_history_is_only_suppressed_by_a_row_covering_the_boundary():
     # a row ending exactly at the boundary covers it (half-open: it was true the instant before)
     ending = _fact(1, "person a works at acme", "2020-01-01", "2025")
     assert bt.reconcile(new, [ending], now=NOW).extra_closed == []
+
+
+# ── review round 4 (PR #1692) ────────────────────────────────────────────────
+
+def test_split_keeps_the_valid_earlier_period_instead_of_clamping_it_away():
+    # Globex from 2021, Acme from 2023 (still open, so it overlaps the incoming
+    # fact and the sweep closes it at 2024 → Acme 2023–2024), new Globex from
+    # 2024: the 2021–2023 Globex period is real history and must survive as its
+    # own closed row, not be clamped away
+    globex = _fact(1, "person a works at globex", "2021-01-01")
+    acme = _fact(2, "person a works at acme", "2023-01-01")
+    new = _fact(0, "Person A works at Globex", "2024-01-01")
+    d = bt.reconcile(new, [globex, acme], now=NOW)
+    assert d.event == bt.ADD and d.retime == {1: ("2021-01-01", "2023-01-01")} and d.also_close == [2], d
+    store = bt.apply(d, new, {1: globex, 2: acme}, now=NOW)
+    assert (store[1].valid_from, store[1].valid_until, store[1].is_live, store[1].superseded_by) == ("2021-01-01", "2023-01-01", True, None)
+    assert (store[2].valid_from, store[2].valid_until) == ("2023-01-01", "2024-01-01")
+    assert (store[3].valid_from, store[3].valid_until, store[3].text) == ("2024-01-01", None, "person a works at globex")
+    rows = sorted(store.values(), key=lambda f: f.valid_from)
+    for a, b in zip(rows, rows[1:]):
+        assert not bt.intervals_overlap(a, b), (a, b)
+    assert bt.live_texts(store) == ["person a works at globex"]
+    # a conflict already closed at/before the boundary (Acme [2023, 2024)) never overlaps the
+    # incoming fact, so it is not a conflict of it and nothing is swept or split
+    d = bt.reconcile(new, [globex, _fact(2, "person a works at acme", "2023-01-01", "2024-01-01")], now=NOW)
+    assert (d.event, d.target_id, d.also_close, d.retime) == (bt.NONE, 1, [], {})
+    # no earlier conflict → plain union, no split
+    globex = _fact(1, "person a works at globex", "2021-01-01", "2025-01-01")
+    d = bt.reconcile(new, [globex], now=NOW)
+    assert (d.event, d.target_id, d.interval, d.retime) == (bt.UPDATE, 1, ("2021-01-01", None), {})
+    # a conflict starting at/after the boundary is not "earlier": no split either
+    late = _fact(2, "person a works at acme", "2025-01-01")
+    d = bt.reconcile(new, [_fact(1, "person a works at globex", "2021-01-01"), late], now=NOW)
+    assert (d.event, d.also_close, d.retime) == (bt.NONE, [2], {})
+    # the richer-text rule still applies to the continued row
+    d = bt.reconcile(_fact(0, "Person A works at Globex as a senior mechanical engineer", "2024-01-01"),
+                     [_fact(1, "person a works at globex", "2021-01-01"), acme], now=NOW)
+    assert d.event == bt.ADD and d.write_as.text.startswith("Person A works at Globex as")
+
+
+def test_transition_never_invents_from_side_history():
+    acme_hist = _fact(1, "person a works at acme", "2000-01-01", "2010-01-01")
+    globex = _fact(2, "person a works at globex", "2012-01-01", "2024-01-01")
+    new = _fact(0, "Person A switched from Acme to Initech in 2025")
+    d = bt.reconcile(new, [acme_hist, globex], now=NOW)
+    assert d.event == bt.ADD and d.extra_closed == [], d      # history already records Acme; nothing invented
+    store = bt.apply(d, new, {1: acme_hist, 2: globex}, now=NOW)
+    assert store[1] == acme_hist and store[2] == globex
+    assert bt.live_texts(store) == ["person a works at initech"]
+    # no Acme row at all: the from side IS written, but starts where the last other value ended
+    d = bt.reconcile(new, [globex], now=NOW)
+    assert [(c.text, c.valid_from, c.valid_until) for c in d.extra_closed] == [("person a works at acme", "2024-01-01", "2025")]
+    # another value still open at the boundary: no room before it → nothing written, it is superseded instead
+    open_globex = _fact(2, "person a works at globex", "2012-01-01")
+    d = bt.reconcile(new, [open_globex], now=NOW)
+    assert d.extra_closed == [] and (d.event, d.target_id) == (bt.SUPERSEDE, 2)
+    # nothing about the attribute at all: unbounded closed from-side, as before
+    d = bt.reconcile(new, [_fact(3, "person a has a cat named tabby")], now=NOW)
+    assert [(c.valid_from, c.valid_until) for c in d.extra_closed] == [(None, "2025")]
