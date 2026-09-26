@@ -153,15 +153,23 @@ def close_gate(gate: SpeculationGate) -> None:
         gate.resolve("cancel", reason="closed")
 
 
-def cancelled_frame(gate: SpeculationGate) -> bytes:
+def ack_frame(gate: SpeculationGate) -> bytes:
+    """First frame of every gated stream. It is the daemon's PROOF that the
+    server is gating: audio on a speculative stream that never carried this
+    frame means the server's flag is off (rollback / one-sided rollout) and the
+    daemon must play nothing. Never emitted with the flag off (wire unchanged)."""
+    return (json.dumps({"speculation": "gated", "turn_id": gate.turn_id}) + "\n").encode()
+
+
+def cancelled_frame(gate: SpeculationGate, reason: Optional[str] = None) -> bytes:
     return (json.dumps({
         "done": True, "cancelled": True, "reply": "",
-        "turn_id": gate.turn_id, "reason": gate.verdict(),
+        "turn_id": gate.turn_id, "reason": reason or gate.verdict(),
         "transcript": gate.speculative_transcript or "",
     }) + "\n").encode()
 
 
-def _record_outcome(outcome: str) -> None:
+def record_outcome(outcome: str) -> None:
     try:
         from voice_metrics import voice_speculation_count
         voice_speculation_count.labels(outcome=outcome).inc()
@@ -184,6 +192,7 @@ async def gate_frames(upstream: AsyncIterator[bytes], gate: SpeculationGate) -> 
     upstream_done = False
     started = False  # has upstream.__anext__ ever been called?
     try:
+        yield ack_frame(gate)
         while not gate.resolved:
             remaining = gate.deadline - time.monotonic()
             if remaining <= 0:
@@ -219,7 +228,7 @@ async def gate_frames(upstream: AsyncIterator[bytes], gate: SpeculationGate) -> 
                 yield frame
 
         verdict = gate.verdict()
-        _record_outcome(verdict)
+        record_outcome(verdict)
         logger.info("voice/turn_stream speculation %s turn_id=%s held=%d",
                     verdict, gate.turn_id, len(held))
         if verdict not in ("commit", "equivalent"):

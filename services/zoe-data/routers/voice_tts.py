@@ -4722,9 +4722,22 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         if _spec_gate is not None:
             # Nothing was processed for this prefix (no brain, no write), so
             # the daemon must run the FULL recording as a normal turn — and it
-            # does that only on a ``cancelled`` done frame. A plain ``done``
-            # here would make it commit a closed gate (404) and drop the turn.
-            _spec_gate.resolve("cancel", reason="empty_transcript")
+            # does that only on a ``cancelled`` done frame. This is an upstream
+            # FACT, not a verdict: the daemon's commit routinely wins the slot
+            # before STT returns (fire→commit ≈ 320-480 ms < a Moonshine pass),
+            # so it must not go through the gate, where a won commit would pass
+            # a plain ``done`` and the turn would be lost. Close the slot and
+            # answer ``cancelled`` directly.
+            _speculation.close_gate(_spec_gate)
+            _speculation.record_outcome("empty_transcript")
+            _gate_for_frames = _spec_gate
+
+            async def _empty_cancelled():
+                yield _speculation.ack_frame(_gate_for_frames)
+                yield _speculation.cancelled_frame(_gate_for_frames, reason="empty_transcript")
+            return StreamingResponse(
+                _empty_cancelled(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+            )
         async def _empty():
             yield (_json.dumps({"transcript": "", "done": True, "reply": ""}) + "\n").encode()
         return StreamingResponse(

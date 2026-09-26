@@ -283,7 +283,9 @@ def test_cancelled_speculative_stream_plays_nothing_and_marks_cancelled(daemon, 
 
 
 def test_committed_speculative_stream_plays(daemon, monkeypatch):
+    spec = daemon._SpeculativeTurn(_FakePA())
     lines = [
+        json.dumps({"speculation": "gated", "turn_id": spec.turn_id}).encode(),
         json.dumps({"transcript": "what time is it"}).encode(),
         json.dumps({"chunk": 0, "text": "Noon."}).encode(),
         base64.b64encode(b"RIFFnoon"),
@@ -291,20 +293,19 @@ def test_committed_speculative_stream_plays(daemon, monkeypatch):
     ]
     _, played = _wire(daemon, monkeypatch, lines)
     monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t: False)
-    spec = daemon._SpeculativeTurn(_FakePA())
-    spec.verdict_sent = True  # a gating server releases audio only AFTER the verdict
     ok = daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False, speculation=spec)
-    assert ok is True and spec.cancelled is False
+    assert ok is True and spec.cancelled is False and spec.gated is True
     assert played == [b"RIFFnoon"]
 
 
-def test_audio_before_verdict_means_server_is_not_gating(daemon, monkeypatch):
+def test_audio_without_gated_ack_means_server_is_not_gating(daemon, monkeypatch):
     """Daemon flag ON, server flag OFF (rollback / staged rollout): the server
-    runs the prefix as an ordinary turn and streams audio while the daemon is
-    still recording. A gating server NEVER releases audio before the verdict,
-    so audio-before-verdict is proof of an ungated server: play nothing, do not
-    re-POST (the prefix WAS processed), and latch speculation off for the
-    process so it cannot happen twice."""
+    runs the prefix as an ordinary turn and streams audio — early OR late (a
+    slow server can answer after the verdict POST, so timing proves nothing).
+    A gating server always leads with the ``speculation: gated`` ack; audio on
+    a speculative stream that never carried it is proof of an ungated server:
+    play nothing, do not re-POST (the prefix WAS processed), and latch
+    speculation off for the process so it cannot happen twice."""
     lines = [
         json.dumps({"transcript": "what time is it"}).encode(),
         json.dumps({"chunk": 0, "text": "Noon."}).encode(),
@@ -319,7 +320,7 @@ def test_audio_before_verdict_means_server_is_not_gating(daemon, monkeypatch):
     try:
         assert daemon._speculation_available() is True
         spec = daemon._SpeculativeTurn(_FakePA())
-        assert spec.verdict_sent is False
+        assert spec.gated is False
         ok = daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False, speculation=spec)
         assert ok is False
         assert played == [], "audio from an ungated server must never be played"
@@ -328,6 +329,33 @@ def test_audio_before_verdict_means_server_is_not_gating(daemon, monkeypatch):
         # finish() on an ungated turn posts no verdict (the server would 409) and plays nothing.
         monkeypatch.setattr(daemon, "_api_post", lambda *a, **k: pytest.fail("verdict POST to an ungated server"))
         assert spec.finish(b"RIFFfinal") is False
+    finally:
+        daemon._speculation_disabled.clear()
+
+
+def test_verdict_409_latches_speculation_off(daemon, monkeypatch):
+    """Belt to the ack's braces: the verdict endpoint answers 409 only when the
+    server's flag is off. That response alone must latch speculation off and
+    report nothing played, even if the (ungated) stream is still open."""
+    monkeypatch.setattr(daemon, "ZOE_SPECULATIVE_TURN", True)
+    monkeypatch.setattr(daemon, "VOICE_STREAM_ENABLED", True)
+    monkeypatch.setattr(daemon, "_api_post", lambda *a, **k: {"ok": False, "error": "HTTP 409"})
+    daemon._speculation_disabled.clear()
+    try:
+        spec = daemon._SpeculativeTurn(_FakePA())
+        spec.fired = True
+        spec.recording_closed(resumed=False)
+        assert spec.finish(b"RIFFfinal") is False
+        assert spec.ungated is True
+        assert daemon._speculation_available() is False
+        # A 404 (gate already closed by max-hold) is NOT an ungated server.
+        daemon._speculation_disabled.clear()
+        monkeypatch.setattr(daemon, "_api_post", lambda *a, **k: {"ok": False, "error": "HTTP 404"})
+        spec2 = daemon._SpeculativeTurn(_FakePA())
+        spec2.fired = True
+        spec2.recording_closed(resumed=False)
+        spec2.finish(b"RIFFfinal")
+        assert spec2.ungated is False and daemon._speculation_available() is True
     finally:
         daemon._speculation_disabled.clear()
 

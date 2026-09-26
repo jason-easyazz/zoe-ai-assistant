@@ -1593,10 +1593,11 @@ class _SpeculativeTurn:
         self.fired = False
         self.resumed = False
         self.cancelled = False
-        # True once finish() has handed the verdict to the server. A gating
-        # server releases audio only AFTER that, so audio seen while this is
-        # False proves the server is not gating (flag off there) → ``ungated``.
-        self.verdict_sent = False
+        # ``gated`` flips on the server's ``speculation: gated`` ack — the first
+        # frame of every gated stream. Audio on this stream WITHOUT it proves the
+        # server is not gating (its flag is off) → ``ungated``: play nothing.
+        # Timing cannot prove this (a slow ungated server answers late).
+        self.gated = False
         self.ungated = False
         self.voice_claim: object = _CLAIM_UNSET
         self.wait_delta_ms: float | None = None
@@ -1639,8 +1640,16 @@ class _SpeculativeTurn:
         body: dict = {"turn_id": self.turn_id, "action": action}
         if self.resumed:
             body["audio_base64"] = base64.b64encode(final_wav).decode()
-        self.verdict_sent = True
         resp = _api_post("/api/voice/turn_stream/speculation", body, timeout=15, retries=0)
+        if resp.get("error") == "HTTP 409":
+            # Only an ungated server (flag off) answers 409 here (a max-hold
+            # close is 404). Latch off; the stream thread plays nothing without
+            # the ack anyway, and nothing may be re-POSTed (prefix processed).
+            log.error("speculation: verdict refused (409) — server is NOT gating turn_id=%s; "
+                      "speculation disabled until restart. Set ZOE_SPECULATIVE_TURN on the server "
+                      "or off on this panel.", self.turn_id)
+            self.ungated = True
+            _speculation_disabled.set()
         log.info("speculation: %s turn_id=%s verdict=%s wait_delta=%.0fms",
                  action, self.turn_id, resp.get("verdict", resp.get("error", "?")),
                  self.wait_delta_ms or -1.0)
@@ -1739,14 +1748,17 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
             if obj.get("error"):
                 log.warning("turn_stream server error: %s", obj["error"])
                 break
+            if speculation is not None and obj.get("speculation") == "gated":
+                speculation.gated = True
+                continue
             if speculation is not None and ("full_audio" in obj or "chunk" in obj) \
-                    and not speculation.verdict_sent:
-                # Audio BEFORE this daemon's verdict: a gating server never does
-                # that, so the server's flag is off and it answered the prefix as
-                # an ordinary turn (rollback / one-sided rollout). Fail closed:
-                # play nothing (the user may still be talking), never re-POST
-                # (the prefix was processed), and stop speculating for good.
-                log.error("speculation: server is NOT gating (audio before verdict) turn_id=%s — "
+                    and not speculation.gated:
+                # Audio on a speculative stream that never carried the gated
+                # ack: the server's flag is off and it answered the prefix as an
+                # ordinary turn (rollback / one-sided rollout), early or late.
+                # Fail closed: play nothing (the user may still be talking),
+                # never re-POST (the prefix was processed), stop speculating.
+                log.error("speculation: server is NOT gating (audio without ack) turn_id=%s — "
                           "playing nothing; speculation disabled until restart. Set ZOE_SPECULATIVE_TURN "
                           "on the server or off on this panel.", speculation.turn_id)
                 speculation.ungated = True

@@ -56,9 +56,13 @@ panel lane (the LiveKit lane already is that); out of scope for a spike.
    - `cancel` — explicit drop.
 
    A `turn_id` whose gate is still unresolved is refused (409) rather than replaced — a
-   retried POST must not start a second brain call against one verdict slot. An EMPTY
-   speculative transcript resolves the gate itself (`empty_transcript`): nothing was
-   processed, so the stream ends `cancelled` and the daemon runs the full recording.
+   retried POST must not start a second brain call against one verdict slot. Every gated
+   stream leads with `{"speculation": "gated", "turn_id"}` (the daemon's proof the server
+   is gating). An EMPTY speculative transcript closes the slot and answers `cancelled`
+   (`empty_transcript`) directly, bypassing the gate: nothing was processed, the daemon must
+   run the full recording, and the daemon's commit routinely wins the slot before STT
+   returns (fire→commit ≈ 320-480 ms, shorter than a Moonshine pass) — through the gate a
+   won commit would pass a plain `done` and lose the turn.
    Cancel drops the held frames, closes the upstream generator (which cancels the
    `voice_command` task), and ends the stream with
    `{"done": true, "cancelled": true, "reply": ""}`. The daemon then runs the **normal**
@@ -70,11 +74,13 @@ panel lane (the LiveKit lane already is that); out of scope for a spike.
 5. **Flag OFF** (server or daemon): the `speculative`/`turn_id` fields are never read,
    the endpoint answers 409, the daemon never fires — byte-identical to today.
 6. **One-sided rollout guard (daemon on, server off)**: the server then answers the prefix
-   as an ordinary turn and streams audio while the daemon is still recording. A gating
-   server never releases audio before the verdict, so audio-before-verdict is the daemon's
-   proof of an ungated server: it plays nothing, posts no verdict, does not re-POST (the
-   prefix was processed — the duplicate-write class), logs an ERROR and latches
-   speculation off for the process. One silent turn, never a second.
+   as an ordinary turn and streams audio — early (while the daemon still records) or late
+   (a slow server, after the verdict POST), so timing proves nothing. The proof is the
+   ack: a gating server leads with `speculation: gated`; an audible frame on a speculative
+   stream that never carried it means an ungated server. The daemon plays nothing, does
+   not re-POST (the prefix was processed — the duplicate-write class), logs an ERROR and
+   latches speculation off for the process; a `409` from the verdict endpoint (only an
+   ungated server answers that) latches the same way. One silent turn, never a second.
 
 ## Failure modes
 

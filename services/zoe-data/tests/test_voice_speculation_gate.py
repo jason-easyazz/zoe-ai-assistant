@@ -107,7 +107,8 @@ def test_commit_releases_held_audio_in_order_exactly_once(monkeypatch):
 
     out, gate = asyncio.run(_run_gate(_brain_stream(), _commit, monkeypatch=monkeypatch))
     parsed = _parse(out)
-    assert parsed[0] == {"transcript": "turn on the kitchen light"}, "transcript passes through before the verdict"
+    assert parsed[0].get("speculation") == "gated", "a gated stream leads with the ack"
+    assert parsed[1] == {"transcript": "turn on the kitchen light"}, "transcript passes through before the verdict"
     assert [p.get("chunk") for p in parsed if "chunk" in p] == [0, 1]
     assert len(_audible(out)) == 4  # 2 headers + 2 b64 lines, no duplicates
     assert parsed[-1].get("done") and not parsed[-1].get("cancelled")
@@ -189,7 +190,7 @@ def test_upstream_with_no_audio_ends_without_waiting_for_a_verdict(monkeypatch):
         return None
 
     out, _ = asyncio.run(_run_gate(lambda: _text_only(), _never, max_hold_ms="5000", monkeypatch=monkeypatch))
-    assert [p.get("done") for p in _parse(out)] == [None, True]
+    assert [p.get("done") for p in _parse(out)] == [None, None, True]
 
 
 # ── review round 1 (Greptile/Copilot on #1685) ────────────────────────────
@@ -269,6 +270,50 @@ def test_flag_on_empty_speculative_transcript_ends_cancelled(monkeypatch):
         assert spec[-1].get("reason") == "empty_transcript"
         assert not _audible([_line(o) for o in spec])
         assert vs.get_gate("empty1") is None
+
+
+# ── review round 2 (Greptile on 195f57cb) ─────────────────────────────────
+
+def test_flag_on_gated_stream_leads_with_ack_carrying_turn_id(monkeypatch):
+    """The ack is the daemon's proof that the server IS gating: audio on a
+    speculative stream that never carried it means the server's flag is off
+    (rollback / one-sided rollout). Emitted only on gated streams — the
+    flag-off wire is pinned byte-identical elsewhere."""
+    monkeypatch.setenv(vs.FLAG, "1")
+    monkeypatch.setenv(vs.MAX_HOLD_FLAG, "3000")
+
+    def brain(payload, caller=None, stream=True, db=None):
+        async def _make():
+            vs.get_gate("ack1").resolve("commit")
+            return {"reply": "Noon.", "audio_base64": base64.b64encode(b"RIFFnoon").decode()}
+        return _make()
+    app = _app(monkeypatch, brain)
+    with TestClient(app) as client:
+        parsed = _parse(_post_raw(client, {"speculative": True, "turn_id": "ack1"}).splitlines())
+    assert parsed[0] == {"speculation": "gated", "turn_id": "ack1"}
+    assert parsed[-1].get("done") and not parsed[-1].get("cancelled")
+
+
+def test_flag_on_empty_transcript_after_early_commit_still_ends_cancelled(monkeypatch):
+    """fire→commit is ~320-480 ms, shorter than a Moonshine pass, so the
+    commit routinely WINS the verdict slot before STT returns. An empty prefix
+    transcript must still end the stream ``cancelled`` (nothing was processed;
+    the daemon has to run the full recording) — it is an upstream fact, not a
+    verdict, and must not lose to the slot."""
+    monkeypatch.setenv(vs.FLAG, "1")
+    app = _app(monkeypatch, _dict_brain)
+
+    async def _stt_commit_wins(_path, capture=True):
+        vs.get_gate("early2").resolve("commit")  # daemon's commit lands mid-STT
+        return ""
+    monkeypatch.setattr(vt, "_transcribe_audio", _stt_commit_wins)
+    with TestClient(app) as client:
+        spec = _parse(_post_raw(client, {"speculative": True, "turn_id": "early2"}).splitlines())
+    assert spec[0] == {"speculation": "gated", "turn_id": "early2"}
+    assert spec[-1].get("done") and spec[-1].get("cancelled"), spec
+    assert spec[-1].get("reason") == "empty_transcript"
+    assert not _audible([_line(o) for o in spec])
+    assert vs.get_gate("early2") is None
 
 
 # ── (d) negative control: the invariant must go red when the gate is bypassed ─
@@ -390,7 +435,8 @@ def test_flag_on_commit_from_verdict_endpoint_releases(monkeypatch):
         body = _post_raw(client, {"speculative": True, "turn_id": "commit-1"})
     frames = [ln for ln in body.split(b"\n") if ln]
     parsed = _parse(frames)
-    assert parsed[0] == {"transcript": "what time is it"}
+    assert parsed[0] == {"speculation": "gated", "turn_id": parsed[0].get("turn_id")}
+    assert parsed[1] == {"transcript": "what time is it"}
     assert len(_audible(frames)) == 2
     assert parsed[-1].get("done") and not parsed[-1].get("cancelled")
     assert vs.get_gate("commit-1") is None
