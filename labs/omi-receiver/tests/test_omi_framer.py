@@ -206,13 +206,16 @@ class FakeTransport:
     """Scripted pendant: each session feeds its packets then drops (except the last)."""
 
     def __init__(self, sessions, *, codec=ob.CODEC_OPUS_FS320, battery=(90, 80), fail_first_connect=False,
-                 drop_during_setup=False, codec_unreadable_first=False):
+                 drop_during_setup=False, codec_unreadable_first=False, codec_unreadable=False,
+                 notify_delay_after_reconnect=0.0):
         self.sessions = list(sessions)
         self.codec = codec
         self.battery = list(battery)
         self.fail_first_connect = fail_first_connect
         self.drop_during_setup = drop_during_setup   # first connect: the link dies inside start_notify
         self.codec_unreadable_first = codec_unreadable_first  # first connect: the codec read fails (None, as BleakTransport.read does)
+        self.codec_unreadable = codec_unreadable               # every codec read fails while the link stays up
+        self.notify_delay_after_reconnect = notify_delay_after_reconnect  # reconnect: audio resumes only after this long
         self.connects = 0
         self.connected = False
         self.notify = {}
@@ -242,7 +245,7 @@ class FakeTransport:
         self.reads.append(uuid)
         if uuid == ob.BATTERY_LEVEL_UUID:
             return bytes([self.battery.pop(0)]) if self.battery else None
-        if uuid == ob.AUDIO_CODEC_UUID and self.codec_unreadable_first and self.connects == 1:
+        if uuid == ob.AUDIO_CODEC_UUID and (self.codec_unreadable or (self.codec_unreadable_first and self.connects == 1)):
             return None
         return {ob.DIS_MODEL_UUID: b"Omi CV 1\x00", ob.DIS_FIRMWARE_UUID: b"3.0.21", ob.DIS_HARDWARE_UUID: b"5.0",
                 ob.AUDIO_CODEC_UUID: bytes([self.codec])}.get(uuid)
@@ -256,6 +259,8 @@ class FakeTransport:
             raise ConnectionError("Not connected")      # what bleak raises once the link is gone
         self.notify[uuid] = callback
         if uuid == ob.AUDIO_DATA_UUID and self.sessions:
+            if self.connects > 1 and self.notify_delay_after_reconnect:
+                await asyncio.sleep(self.notify_delay_after_reconnect)
             for pkt in self.sessions.pop(0):
                 callback(pkt)
             if self.sessions:
@@ -619,15 +624,15 @@ def test_interrupted_identity_probe_is_re_read_on_reconnect_and_rebuilds_the_dec
         built.append(codec_id)
         return ob.StubDecoder(ob.FRAME_SAMPLES_BY_CODEC[codec_id])
 
-    t = FakeTransport([packets(range(5)), packets([10, 12])], codec=ob.CODEC_OPUS_10MS, codec_unreadable_first=True)
+    t = FakeTransport([packets([10, 12])], codec=ob.CODEC_OPUS_10MS, codec_unreadable_first=True)
     pipeline = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path))
-    bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=True, max_seconds=0.3,
+    bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=True, max_seconds=0.3, codec_retry_delay_s=0.01,
                        expected_codec=ob.CODEC_OPUS_FS320, decoder_factory=factory)
     s = asyncio.run(bridge.run())
     assert t.connects == 2 and s.reconnects == 1
-    assert built == [ob.CODEC_OPUS_10MS] and s.codec_id == 20 and s.codec == "opus-10ms"
-    assert pipeline.decoder.frame_samples == 160 and pipeline.silence_samples == 160   # session-2 gap at 10 ms
-    assert t.reads.count(ob.AUDIO_CODEC_UUID) == 2 and s.battery_start == 90
+    assert built == [ob.CODEC_OPUS_10MS] and s.codec_id == 20 and s.codec == "opus-10ms" and s.codec_verified is True
+    assert pipeline.decoder.frame_samples == 160 and pipeline.silence_samples == 160   # the gap at 10 ms
+    assert t.reads.count(ob.AUDIO_CODEC_UUID) == ob.Bridge.CODEC_READ_ATTEMPTS + 1 and s.battery_start == 90
 
 
 def test_wer_cli_rejects_an_stt_error_row_with_an_empty_message(tmp_path, capsys):
@@ -661,3 +666,36 @@ def test_gate_passes_when_the_outage_budget_is_not_exceeded(tmp_path):
     bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=True, max_seconds=0.3, max_disconnected_s=1.0)
     s = asyncio.run(bridge.run())
     assert s.sessions == 2 and 0.0 < s.disconnected_s < 1.0 and s.gap_gate_pass is True and s.gate_fail_reasons == []
+
+
+# --- review round 4 (PR #1693) --------------------------------------------------------------
+def test_unverified_codec_never_subscribes_and_aborts_without_reconnect(tmp_path):
+    """The codec read fails while the link stays up: retry it on the same connection, and
+    if it is still unread do NOT capture on the assumed --codec — abort (no --reconnect)."""
+    t = FakeTransport([packets(range(10))], codec_unreadable=True)
+    s = run_bridge(t, tmp_path, reconnect=False, max_seconds=0.3, codec_retry_delay_s=0.01)
+    assert t.reads.count(ob.AUDIO_CODEC_UUID) == ob.Bridge.CODEC_READ_ATTEMPTS
+    assert ob.AUDIO_DATA_UUID not in t.notify and s.packets_received == 0 and t.connects == 1
+    assert s.codec_verified is False and s.codec_id is None
+    assert s.gap_gate_pass is False and any("codec" in r for r in s.gate_fail_reasons)
+    assert not t.connected
+
+
+def test_unverified_codec_reconnects_instead_of_capturing_when_reconnect_is_on(tmp_path):
+    t = FakeTransport([packets(range(10))], codec_unreadable=True)
+    s = run_bridge(t, tmp_path, reconnect=True, max_seconds=0.25, codec_retry_delay_s=0.01)
+    assert t.connects >= 2 and s.reconnects >= 1
+    assert ob.AUDIO_DATA_UUID not in t.notify and s.packets_received == 0
+    assert s.codec_verified is False and s.gap_gate_pass is False
+
+
+def test_outage_runs_from_the_drop_until_audio_actually_resumes(tmp_path):
+    """Connect success is not recovery: the outage lasts until the first audio notification
+    after the reconnect, so a pendant that reconnects but stays silent past the budget FAILS."""
+    t = FakeTransport([packets(range(10)), packets(range(100, 110))], notify_delay_after_reconnect=0.2)
+    pipeline = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path))
+    bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=True, max_seconds=0.5, max_disconnected_s=0.06)
+    s = asyncio.run(bridge.run())
+    assert s.sessions == 2 and s.packets_received == 20 and s.gap_pct == 0.0
+    assert s.disconnected_s >= 0.2
+    assert s.gap_gate_pass is False and any("disconnected" in r for r in s.gate_fail_reasons)

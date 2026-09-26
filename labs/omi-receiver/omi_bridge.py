@@ -544,6 +544,11 @@ class BleakTransport:
 
 
 # --- the bridge --------------------------------------------------------------------
+class ProbeIncomplete(Exception):
+    """The pendant never answered the codec read on this connection: nothing may be captured
+    on the assumed ``--codec``. Recoverable (reconnect) when ``--reconnect`` is on."""
+
+
 @dataclass
 class BridgeSummary:
     device: str = ""
@@ -553,6 +558,7 @@ class BridgeSummary:
     storage_service_seen: Optional[bool] = None
     codec_id: Optional[int] = None
     codec: Optional[str] = None
+    codec_verified: bool = False           # the pendant answered the codec read; the gate requires it
     duration_s: float = 0.0
     connected_s: float = 0.0
     wav_seconds: float = 0.0
@@ -572,7 +578,7 @@ class BridgeSummary:
     reconnects: int = 0
     connect_failures: int = 0
     sessions: int = 0                      # successful connections
-    disconnected_s: float = 0.0            # wall time spent in outages (drop → next successful connect)
+    disconnected_s: float = 0.0            # wall time without audio: drop detected → first audio notification after reconnect
     longest_connected_s: float = 0.0       # longest single uninterrupted session
     max_disconnected_s: float = 0.0        # the outage budget the verdict used
     interrupted: bool = False              # Ctrl-C ended the run (the summary is still complete)
@@ -589,11 +595,13 @@ class BridgeSummary:
 
 
 class Bridge:
+    CODEC_READ_ATTEMPTS = 3   # codec reads tried on ONE connection before the probe is declared incomplete
+
     def __init__(self, transport: Transport, pipeline: AudioPipeline, *, reconnect: bool = True,
                  max_seconds: Optional[float] = None, backoff: tuple[float, ...] = (1, 2, 4, 8, 16, 30),
                  expected_codec: Optional[int] = None,
                  decoder_factory: Optional[Callable[[int], Decoder]] = None,
-                 max_disconnected_s: float = 2.0) -> None:
+                 max_disconnected_s: float = 2.0, codec_retry_delay_s: float = 0.5) -> None:
         self.transport = transport
         self.pipeline = pipeline
         self.reconnect = reconnect
@@ -602,6 +610,7 @@ class Bridge:
         # Every reconnect resyncs the packet id, so packets lost DURING an outage never
         # reach gap_pct; the verdict therefore also bounds the total outage wall time.
         self.max_disconnected_s = max_disconnected_s
+        self.codec_retry_delay_s = codec_retry_delay_s
         self._outage_started: Optional[float] = None
         # ``expected_codec`` is what ``pipeline.decoder`` was built for; when the pendant
         # reports a different supported codec the decoder is rebuilt with this factory
@@ -629,7 +638,7 @@ class Bridge:
                 self._disconnected = asyncio.Event()
                 ev = self._disconnected
                 try:
-                    await self.transport.connect(lambda: loop.call_soon_threadsafe(ev.set))
+                    await self.transport.connect(lambda: loop.call_soon_threadsafe(self._on_drop, ev))
                 except Exception as exc:
                     self.summary.connect_failures += 1
                     if not self.reconnect:
@@ -641,7 +650,6 @@ class Bridge:
                     await asyncio.sleep(delay)
                     continue
                 attempt = 0
-                self._end_outage()
                 self.summary.sessions += 1
                 self.pipeline.framer.resync(new_connection=True)
                 self.summary.device = self.transport.identity
@@ -650,18 +658,20 @@ class Bridge:
                 timed_out = fatal = False
                 try:
                     if not probed:
-                        probed = await self._read_identity()
-                    await self.transport.start_notify(AUDIO_DATA_UUID, self.pipeline.on_packet)
+                        await self._read_identity()   # raises ProbeIncomplete: never subscribe on an assumed codec
+                        probed = True
+                    await self.transport.start_notify(AUDIO_DATA_UUID, self._on_audio)
                     await self._subscribe_optional(BUTTON_TRIGGER_UUID, self._on_button)
                     await self._subscribe_optional(BATTERY_LEVEL_UUID, self._on_battery)
                     timed_out = await self._wait_for_drop(ev, self._remaining(start))
                 except Exception as exc:
-                    # The link dying during setup (identity reads / start_notify) is a DROP
-                    # and follows the reconnect path; an error raised while the link is
-                    # still up (unsupported codec, decoder build) is configuration → fatal.
+                    # The link dying during setup (identity reads / start_notify) and an
+                    # unanswered codec read are RECOVERABLE and follow the reconnect path;
+                    # an error raised while the link is still up (unsupported codec,
+                    # decoder build) is configuration → fatal.
                     dropped = ev.is_set() or not self.transport.is_connected
-                    if dropped and self.reconnect:
-                        log.warning("link dropped during setup (%s)", exc)
+                    if (dropped or isinstance(exc, ProbeIncomplete)) and self.reconnect:
+                        log.warning("%s during setup (%s); reconnecting", "link dropped" if dropped else "probe incomplete", exc)
                     else:
                         log.error("session aborted: %s", exc)
                         fatal = True
@@ -679,10 +689,11 @@ class Bridge:
                     await self.transport.disconnect()
                     break
                 log.warning("disconnected from %s", self.summary.device)
+                if self._outage_started is None:   # a setup-time drop / incomplete probe never hit the callback
+                    self._outage_started = time.monotonic()
                 await self.transport.disconnect()
                 if not self.reconnect:
                     break
-                self._outage_started = time.monotonic()
                 self.summary.reconnects += 1
                 delay = self.backoff[0]
                 log.info("reconnecting in %.0fs", delay)
@@ -698,6 +709,19 @@ class Bridge:
             self.pipeline.sink.close()
         self._finish(start)
         return self.summary
+
+    def _on_drop(self, ev: asyncio.Event) -> None:
+        """Disconnect callback (on the loop): the outage clock starts the moment the drop is
+        detected, before any cleanup or backoff."""
+        if self._outage_started is None:
+            self._outage_started = time.monotonic()
+        ev.set()
+
+    def _on_audio(self, data: bytes) -> None:
+        """Audio notification: the first one after an outage is what ends it — a reconnect
+        that has not yet delivered audio is still lost audio."""
+        self._end_outage()
+        self.pipeline.on_packet(data)
 
     def _end_outage(self) -> None:
         if self._outage_started is not None:
@@ -732,17 +756,24 @@ class Bridge:
         raw = await self.transport.read(uuid)
         return raw.decode("utf-8", "replace").strip("\x00 ") if raw else None
 
-    async def _read_identity(self) -> bool:
-        """Read DIS + codec + battery. Returns True only when the codec was actually read on
-        a link that is still up: ``Transport.read`` answers ``None`` for a failed GATT read,
-        so a probe cut short by a drop would otherwise leave the assumed ``--codec`` in place
-        for the whole recovered capture. An incomplete probe is repeated on the next connect."""
+    async def _read_identity(self) -> None:
+        """Read DIS + codec + battery. The codec read is retried ``CODEC_READ_ATTEMPTS`` times
+        on this connection (``Transport.read`` answers ``None`` for a failed GATT read); if it
+        is still unanswered, ``ProbeIncomplete`` is raised BEFORE any audio subscription —
+        nothing is ever captured on the assumed ``--codec``, and ``codec_verified`` stays
+        false so the gate cannot pass. The caller repeats the probe on the next connect."""
         s = self.summary
         s.model = await self._read_text(DIS_MODEL_UUID) or s.model
         s.firmware = await self._read_text(DIS_FIRMWARE_UUID) or s.firmware
         s.hardware = await self._read_text(DIS_HARDWARE_UUID) or s.hardware
         s.storage_service_seen = self.transport.has_service(STORAGE_SERVICE_UUID)
-        codec_raw = await self.transport.read(AUDIO_CODEC_UUID)
+        codec_raw = None
+        for attempt in range(1, self.CODEC_READ_ATTEMPTS + 1):
+            codec_raw = await self.transport.read(AUDIO_CODEC_UUID)
+            if codec_raw or not self.transport.is_connected:
+                break
+            log.warning("codec read %d/%d unanswered; retrying in %.1fs", attempt, self.CODEC_READ_ATTEMPTS, self.codec_retry_delay_s)
+            await asyncio.sleep(self.codec_retry_delay_s)
         if codec_raw:
             s.codec_id = codec_raw[0]
             s.codec = CODEC_NAMES.get(s.codec_id, "unknown")
@@ -754,12 +785,11 @@ class Bridge:
                 self.pipeline.decoder = self.decoder_factory(s.codec_id)
                 self.expected_codec = s.codec_id
         log.info("model=%s fw=%s hw=%s codec=%s", s.model, s.firmware, s.hardware, s.codec)
+        if not codec_raw:
+            raise ProbeIncomplete(f"pendant did not answer the codec read ({AUDIO_CODEC_UUID[:8]}…) "
+                                  f"in {self.CODEC_READ_ATTEMPTS} attempts; refusing to capture on the assumed --codec")
+        s.codec_verified = True
         await self._read_battery(final=False)
-        complete = bool(codec_raw) and self.transport.is_connected
-        if not complete:
-            log.warning("identity probe incomplete (codec %s, connected %s); will re-read on the next connect",
-                        "read" if codec_raw else "unread", self.transport.is_connected)
-        return complete
 
     async def _read_battery(self, *, final: bool) -> None:
         raw = await self.transport.read(BATTERY_LEVEL_UUID)
@@ -789,6 +819,8 @@ class Bridge:
         s.longest_connected_s = round(s.longest_connected_s, 2)
         s.max_disconnected_s = self.max_disconnected_s
         reasons = []
+        if not s.codec_verified:
+            reasons.append("codec unverified (the pendant never answered the codec read)")
         if st.packets_expected == 0:
             reasons.append("no packets received")
         elif st.gap_pct >= 1.0:
@@ -807,14 +839,14 @@ def format_summary(s: BridgeSummary) -> str:
     capped = f", {s.silence_capped_events} fill(s) capped" if s.silence_capped_events else ""
     why = f" ({'; '.join(s.gate_fail_reasons)})" if s.gate_fail_reasons else ""
     return (
-        f"device={s.device} model={s.model} fw={s.firmware} codec={s.codec}\n"
+        f"device={s.device} model={s.model} fw={s.firmware} codec={s.codec}{'' if s.codec_verified else ' (UNVERIFIED)'}\n"
         f"run {s.duration_s:.0f}s{' (interrupted)' if s.interrupted else ''}, connected {s.connected_s:.0f}s, "
         f"audio {s.wav_seconds:.1f}s in {len(s.wav_files)} file(s)\n"
         f"packets {s.packets_received} received / {s.packets_lost} lost = {s.gap_pct:.3f}% gaps "
         f"({s.gap_events} events, largest {s.largest_gap}{capped}) → P0 gap gate {gate}{why}\n"
         f"frames {s.frames_complete} ok / {s.frames_dropped} dropped; truncated {s.truncated}, reordered {s.reordered}, wraps {s.wraps}\n"
         f"sessions {s.sessions}, reconnects {s.reconnects} (connect failures {s.connect_failures}), "
-        f"disconnected {s.disconnected_s:.1f}s (budget {s.max_disconnected_s:g}s), longest uninterrupted {s.longest_connected_s:.0f}s; "
+        f"without audio {s.disconnected_s:.1f}s across outages (budget {s.max_disconnected_s:g}s), longest uninterrupted {s.longest_connected_s:.0f}s; "
         f"battery {bat}; buttons {s.button_events}\n"
         f"storage service {STORAGE_SERVICE_UUID[:8]}… present: {s.storage_service_seen} (stock CV1 firmware records to SD whenever powered — see B9.0)"
     )
@@ -836,8 +868,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="codec assumed until the pendant answers (CV1 reports 21); a different supported "
                          "answer rebuilds the decoder, an unsupported one aborts")
     ap.add_argument("--max-disconnected-seconds", type=float, default=2.0,
-                    help="gate FAILS if the run spent longer than this in outages (reconnects resync the "
-                         "packet id, so outage loss never shows in the gap %%)")
+                    help="gate FAILS if the run spent longer than this in outages, measured from the drop to "
+                         "the first audio after reconnect (reconnects resync the packet id, so outage loss "
+                         "never shows in the gap %%)")
     ap.add_argument("--no-fill-gaps", action="store_true", help="do not write silence for lost packets")
     ap.add_argument("--max-gap-fill-seconds", type=float, default=5.0,
                     help="most silence written for one packet gap; total silence never leads the wall clock by more")

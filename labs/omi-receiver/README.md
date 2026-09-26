@@ -17,14 +17,14 @@ live result.
 | `omi_bridge.py` | the bridge: `BleakTransport` (bleak 0.22.3, BlueZ) → `OmiFramer` (3-byte header, fragment reassembly, gap/wrap/resync accounting) → `OpusDecoder16k` (opuslib) → `WavSink` (rolling WAVs; a write that crosses the roll boundary is split, never overshoots). `Bridge` owns connect / own `disconnected_callback` / backoff reconnect / DIS+codec+battery reads / summary. `--codec` is only the assumption until the pendant answers: a different **supported** codec rebuilds the decoder before any audio flows, an unsupported one aborts. Gap silence is bounded (`--max-gap-fill-seconds`, default 5: per gap, and the total may never lead the wall clock by more — the packet id is untrusted input, an unbounded fill could write ~21 MB per notification). The BLE surface is the `Transport` protocol, so everything below it runs without hardware. |
 | `wer.py` | word error rate (stdlib) for the Moonshine comparison; CLI over the reference sentences and the transcripts — a line-aligned text file **or `replay_samples.py --json` output directly**. A transcript count that differs from the sentence count, or a replay row with `stt_error` (transcription failed, not misheard), is exit 2 — never padded, truncated or scored as 100 % (an `stt_error` with an empty message still counts as an error). |
 | `split_on_silence.py` | cuts one long capture into per-utterance WAVs (stdlib) so the replay path, which treats each WAV as one utterance, can transcribe the 20 sentences. Re-running into the same `--out` replaces that capture's previous segments (no stale higher-numbered files survive a re-tune). |
-| `tests/test_omi_framer.py` | synthetic packet streams: contiguous, gap (+ a **negative control** that bypasses the detector and proves the gap assertions go red; frame-before-silence ordering; the fill bound + its uncapped negative control), counter wrap (65535→0, and a gap across it), truncated/header-only packets, fragmentation (reassembly, missing fragment, orphan, a gap that lands on the next frame's fragment 0 keeps the complete pending frame, fragmentation memory reset per connection), counter restart mid-session and on reconnect, WAV rolling (incl. one write split across files), the bridge over a scripted fake transport (reconnect, no-reconnect, failed connect + backoff, a drop *during setup* reconnects, an interrupted identity probe is re-read on reconnect, 1.0 % gap = gate FAIL, repeated outages = gate FAIL even with contiguous sessions, unsupported codec, reported-codec decoder rebuild, **real SIGINT → summary.json still written**), a **real opuslib encode→decode** round trip (skips with a stated reason when opuslib/libopus is absent — never a fake pass), and the two helpers (count mismatch, `--json` rows, segment replacement). |
+| `tests/test_omi_framer.py` | synthetic packet streams: contiguous, gap (+ a **negative control** that bypasses the detector and proves the gap assertions go red; frame-before-silence ordering; the fill bound + its uncapped negative control), counter wrap (65535→0, and a gap across it), truncated/header-only packets, fragmentation (reassembly, missing fragment, orphan, a gap that lands on the next frame's fragment 0 keeps the complete pending frame, fragmentation memory reset per connection), counter restart mid-session and on reconnect, WAV rolling (incl. one write split across files), the bridge over a scripted fake transport (reconnect, no-reconnect, failed connect + backoff, a drop *during setup* reconnects, an interrupted identity probe is re-read on reconnect, an unanswered codec read never subscribes (abort / reconnect) and fails the gate, 1.0 % gap = gate FAIL, repeated outages = gate FAIL even with contiguous sessions, a reconnect that stays silent past the budget = gate FAIL, unsupported codec, reported-codec decoder rebuild, **real SIGINT → summary.json still written**), a **real opuslib encode→decode** round trip (skips with a stated reason when opuslib/libopus is absent — never a fake pass), and the two helpers (count mismatch, `--json` rows, segment replacement). |
 | `requirements.txt` | `bleak==0.22.3`, `opuslib==3.0.1` (+ `apt install libopus0`). Why opuslib and not pyogg is in the file. |
 
 Run the tests (hand-run; labs are outside production CI by design):
 
 ```bash
-pytest labs/omi-receiver/tests -q -x -p no:cacheprovider          # 45 pass + 1 skip (real decode) without opuslib
-PYTHONPATH=<dir with opuslib> pytest labs/omi-receiver/tests -q -x -p no:cacheprovider   # 46 pass
+pytest labs/omi-receiver/tests -q -x -p no:cacheprovider          # 48 pass + 1 skip (real decode) without opuslib
+PYTHONPATH=<dir with opuslib> pytest labs/omi-receiver/tests -q -x -p no:cacheprovider   # 49 pass
 ```
 
 ## The wire format this bridge relies on (verified in firmware, not from the plan)
@@ -114,10 +114,14 @@ python3 labs/omi-receiver/omi_bridge.py --device-name Omi --out ~/omi-capture/wa
 run cleanly (summary still written, `"interrupted": true`; a second Ctrl-C while it
 is finishing aborts without one). If the pendant answers a codec other than
 `--codec` the log says so and the decoder is rebuilt for it (`summary.json`
-`codec_id` is what it reported); a probe the link cut short (`codec_id: null` in the
-log) is repeated on the next connect, never assumed. Exit code 1 also covers a run
-whose outages exceed `--max-disconnected-seconds` — reconnects hide outage loss from
-the gap %, so `disconnected_s` is gated on its own. Play a WAV back to confirm it is speech:
+`codec_id` is what it reported). The codec answer is **required**: the read is retried
+3× on the connection, and if the pendant still does not answer nothing is subscribed —
+with `--reconnect` the bridge reconnects and probes again, without it the run aborts —
+so no audio is ever captured on the assumed `--codec`, and the gate cannot pass with
+`codec_verified: false`. Exit code 1 also covers a run whose outages exceed
+`--max-disconnected-seconds` — reconnects hide outage loss from the gap %, so
+`disconnected_s` (measured from the moment the drop is detected until the **first
+audio notification** after the reconnect, not merely connect success) is gated on its own. Play a WAV back to confirm it is speech:
 `aplay ~/omi-capture/3m/omi_*_000.wav`.
 
 ### 4. The 20 corpus sentences (the WER gate)
@@ -192,7 +196,8 @@ If `battery_start` is `null` the characteristic was not readable on this firmwar
 | `model` / `firmware` / `hardware` / `codec_id` | summary, first lines | any |
 | `storage_service_seen` | summary (GATT discovery of `30295780-…`) | any — expected **true** on stock CV1 (B9.0) |
 | packets received / lost / `gap_pct`, `gap_events`, `largest_gap` | summary | 3 m, one wall |
-| `sessions`, `reconnects`, `connect_failures`, `disconnected_s` (outage wall time), `longest_connected_s` vs `duration_s` | summary — the gate FAILS on `disconnected_s` > `--max-disconnected-seconds` (2 s) because a reconnect resyncs the packet id and outage loss never shows in `gap_pct` | 3 m, one wall |
+| `sessions`, `reconnects`, `connect_failures`, `disconnected_s` (drop detected → first audio after reconnect), `longest_connected_s` vs `duration_s` | summary — the gate FAILS on `disconnected_s` > `--max-disconnected-seconds` (2 s) because a reconnect resyncs the packet id and outage loss never shows in `gap_pct` | 3 m, one wall |
+| `codec_verified` | summary — must be `true`; `false` = the pendant never answered `19b10002` and nothing was captured | any |
 | `frames_dropped`, `truncated`, `reordered`, `wraps`, `resyncs` | summary — anything but 0 in `truncated`/`reordered` is a finding about the firmware, not the link | any |
 | WAV plays as speech | `aplay` | 3 m |
 | panel WER vs pendant WER on the 20 sentences | `wer.py` | read20 |
@@ -202,9 +207,10 @@ If `battery_start` is `null` the characteristic was not readable on this firmwar
 ## Gate (P0, from the plan §6 — measured, reproducible)
 
 - ≥ 10 min continuous at 3 m **and** through one wall;
-- packet-number gaps **< 1 %** on each **and** outages totalling ≤ `--max-disconnected-seconds`
-  (2 s) — both are the summary's `gap_gate_pass` / exit code 0; `gate_fail_reasons` says which
-  failed, and `longest_connected_s` is the number to quote for "continuous";
+- packet-number gaps **< 1 %** on each **and** time without audio across outages ≤
+  `--max-disconnected-seconds` (2 s) **and** `codec_verified` — all three are the summary's
+  `gap_gate_pass` / exit code 0; `gate_fail_reasons` says which failed, and
+  `longest_connected_s` is the number to quote for "continuous";
 - decoded WAV plays;
 - **Moonshine WER on the 20 replay-corpus sentences read while wearing the pendant ≤ panel-mic WER + 5 pts**;
 - battery drop per hour recorded.
