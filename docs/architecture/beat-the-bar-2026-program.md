@@ -306,6 +306,9 @@ status: 🔨 active — NEXT ACTION is always §0
   then restart):
   ```
   set -eu; cd ~/models/gemma4-e4b-qat; BK=pre-hf-20260717; ST=staging-hf-20260717
+  for f in gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf mtp-gemma-4-E4B-it.gguf; do   # check BOTH backups first:
+    [ -e "$f.$BK" ] || { echo "STOP: $f.$BK missing — already rolled back, or never swapped; nothing moved"; exit 1; }
+  done
   for f in gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf mtp-gemma-4-E4B-it.gguf; do mv "$f" "$ST/$f"; mv "$f.$BK" "$f"; done
   sha256sum -c <<'SUMS'
   b3052f962d6449b4eb2075733c068bdec1c51eadb7b237e6c3157bfbb7b1dae0  gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf
