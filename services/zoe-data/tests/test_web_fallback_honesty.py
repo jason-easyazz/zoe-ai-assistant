@@ -142,7 +142,10 @@ def test_negative_control_markers_carry_the_verdict(monkeypatch):
     Proves the classifier is looking at the challenge body, not passing by luck.
     """
     monkeypatch.setattr(re_mod, "DDG_BLOCK_MARKERS", ())
-    assert classify_ddg_response(200, CHALLENGE_PAGE) == WEB_LOOKUP_NO_RESULTS
+    # Without the markers the verdict changes (blocked -> error): the challenge
+    # page has no result anchors and is not a recognisable empty results page.
+    assert classify_ddg_response(200, CHALLENGE_PAGE) == WEB_LOOKUP_ERROR
+    assert classify_ddg_response(200, CHALLENGE_PAGE) != WEB_LOOKUP_BLOCKED
     # and the 202 status is an independent second signal for the same page
     assert classify_ddg_response(202, CHALLENGE_PAGE) == WEB_LOOKUP_BLOCKED
 
@@ -153,7 +156,7 @@ def test_negative_control_markers_carry_the_verdict(monkeypatch):
         (200, RESULTS_PAGE, WEB_LOOKUP_RESULTS),
         (202, RESULTS_PAGE, WEB_LOOKUP_RESULTS),   # results win over an odd 2xx
         (200, EMPTY_PAGE, WEB_LOOKUP_NO_RESULTS),
-        (200, "", WEB_LOOKUP_NO_RESULTS),
+        (200, "", WEB_LOOKUP_ERROR),                # blank body: not a results page
         (403, EMPTY_PAGE, WEB_LOOKUP_BLOCKED),
         (429, "", WEB_LOOKUP_BLOCKED),
         (503, "", WEB_LOOKUP_BLOCKED),
@@ -179,6 +182,39 @@ RESULTS_PAGE_MENTIONING_WALL = RESULTS_PAGE.replace(
     "Example deal for $19.99 today — guide: fix the &quot;unusual traffic&quot; "
     "and &quot;verifying your browser&quot; captcha wall",
 )
+
+
+# `no_results` is a POSITIVE verdict — "DDG answered and rendered its empty
+# results page" — so it needs DDG's own empty-results marker. A 2xx body with
+# no anchors and no marker (blank, truncated mid-page, consent / maintenance
+# page, a markup change) is NOT a successful lookup (Codex P2 on #1691).
+TRUNCATED_RESULTS_PAGE = RESULTS_PAGE.split('<a class="result__a"', 1)[0]
+MAINTENANCE_PAGE = "<!DOCTYPE html><html><head><title>DuckDuckGo</title></head><body>We'll be back soon.</body></html>"
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["", "   ", TRUNCATED_RESULTS_PAGE, MAINTENANCE_PAGE],
+    ids=["blank", "whitespace", "truncated", "maintenance"],
+)
+def test_unrecognised_2xx_page_is_error_not_no_results(body):
+    assert "result__a" not in body and "no-results" not in body
+    assert classify_ddg_response(200, body) == WEB_LOOKUP_ERROR
+    assert classify_ddg_response(200, body) != WEB_LOOKUP_NO_RESULTS
+
+
+def test_positive_control_recognised_empty_results_page_is_no_results():
+    assert 'class="no-results"' in EMPTY_PAGE and "result__a" not in EMPTY_PAGE
+    assert classify_ddg_response(200, EMPTY_PAGE) == WEB_LOOKUP_NO_RESULTS
+    assert classify_ddg_response(200, RESULTS_PAGE) == WEB_LOOKUP_RESULTS
+
+
+def test_fetch_reports_unrecognised_page_as_error_with_detail(monkeypatch):
+    _serve_ddg(monkeypatch, TRUNCATED_RESULTS_PAGE)
+    out = fetch_web_fallback("example deal")
+    assert out.status == WEB_LOOKUP_ERROR and out.results == []
+    assert out.detail == "unrecognised page (HTTP 200)"
+    assert "unavailable" in out.message.lower() and "nothing" not in out.message.lower()
 
 
 def test_results_page_mentioning_a_wall_phrase_is_still_results():

@@ -52,6 +52,14 @@ DDG_BLOCK_MARKERS = (
     "you have been blocked",
     "access to this page has been denied",
 )
+# What html.duckduckgo.com renders for a query with NO hits: an empty results
+# shell carrying `<div class="no-results">No results.</div>`. This is the only
+# body that earns `no_results` — that verdict is POSITIVE ("DDG answered and
+# said nothing matches"), so a 2xx body with neither result anchors nor this
+# marker (blank, truncated mid-page, consent/maintenance page, a markup change)
+# is an `error` ("unrecognised page"), not a successful empty lookup.
+DDG_EMPTY_RESULTS_MARKERS = ('class="no-results"',)
+DDG_UNRECOGNISED_PAGE = "unrecognised page"
 # Explicit refusals by status; 503 is what a Cloudflare/Akamai interstitial
 # commonly returns. DDG's own anomaly page comes back as 202.
 _BLOCKED_STATUSES = frozenset({202, 401, 403, 407, 429, 451, 503})
@@ -402,8 +410,10 @@ def classify_ddg_response(status: int | None, body: str) -> str:
     snippet or in the echoed query. So the block markers are consulted only once
     result links are known to be absent — a challenge page with zero result
     links is ``blocked``, never ``no_results``, and a results page is never
-    thrown away over a phrase in its text. A ``None`` status is a transport
-    failure (nothing came back).
+    thrown away over a phrase in its text. ``no_results`` is a POSITIVE verdict
+    and needs DDG's empty-results shell (``DDG_EMPTY_RESULTS_MARKERS``); any
+    other anchor-less 2xx body is ``error`` (``unrecognised page``). A ``None``
+    status is a transport failure (nothing came back).
     """
     if status is None:
         return WEB_LOOKUP_ERROR
@@ -416,7 +426,16 @@ def classify_ddg_response(status: int | None, body: str) -> str:
             return WEB_LOOKUP_BLOCKED
     if not 200 <= status < 300 and status not in _BLOCKED_STATUSES:
         return WEB_LOOKUP_ERROR
-    return WEB_LOOKUP_RESULTS if has_results else WEB_LOOKUP_NO_RESULTS
+    if has_results:
+        return WEB_LOOKUP_RESULTS
+    # 2xx, no anchors, no wall: only DDG's own empty-results shell is a real
+    # "nothing matches" answer; anything else is a page we cannot read.
+    return WEB_LOOKUP_NO_RESULTS if _is_ddg_empty_results_page(body) else WEB_LOOKUP_ERROR
+
+
+def _is_ddg_empty_results_page(body: str) -> bool:
+    low = (body or "").lower()
+    return any(marker in low for marker in DDG_EMPTY_RESULTS_MARKERS)
 
 
 def _parse_ddg_results(body: str, max_results: int) -> list[dict[str, str]]:
@@ -509,6 +528,8 @@ def _fetch_ddg(query: str, max_results: int, timeout_s: float) -> WebFallbackOut
 
     verdict = classify_ddg_response(status, body)
     if verdict != WEB_LOOKUP_RESULTS:
+        if verdict == WEB_LOOKUP_ERROR and 200 <= status < 300:
+            detail = f"{DDG_UNRECOGNISED_PAGE} (HTTP {status})"
         return WebFallbackOutcome(verdict, "duckduckgo", [], detail or f"HTTP {status}")
     rows = _verify_rows(query, _parse_ddg_results(body, max_results), timeout_s)
     if not rows:
