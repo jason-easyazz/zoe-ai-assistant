@@ -732,3 +732,33 @@ def test_conflicts_close_at_the_incoming_start_even_when_write_as_is_a_later_sli
     # a transition carries its own date as the close edge
     d = bt.reconcile(_fact(0, "Person A switched from Acme to Globex in 2025"), [_fact(1, "person a works at acme", "2020-01-01")], now=NOW)
     assert d.close_at == "2025" and (d.event, d.target_id) == (bt.SUPERSEDE, 1)
+
+
+# ── review round 8 (PR #1692) ────────────────────────────────────────────────
+
+def test_undated_incoming_closes_conflicts_at_the_reconciliation_instant_not_at_apply_time():
+    t_reconcile = datetime(2026, 9, 26, 10, 0, tzinfo=timezone.utc)
+    t_apply = datetime(2026, 9, 26, 18, 0, tzinfo=timezone.utc)          # apply runs eight hours later
+    # merge sweep: undated same-value incoming, a live conflict
+    globex = _fact(1, "person a works at globex", "2021-01-01")
+    acme = _fact(2, "person a works at acme", "2022-01-01")
+    new = _fact(0, "Person A works at Globex")                             # no start date
+    d = bt.reconcile(new, [globex, acme], now=t_reconcile)
+    assert d.close_at == t_reconcile.isoformat() and d.also_close == [2]
+    store = bt.apply(d, new, {1: globex, 2: acme}, now=t_apply)
+    assert store[2].valid_until == t_reconcile.isoformat()                 # closed where the slicing cut it
+    assert store[2].expired_at == t_apply.isoformat()                      # transaction time is apply time, correctly
+    resumed = next(f for f in store.values() if f.id not in (1, 2))
+    assert resumed.valid_from == t_reconcile.isoformat()                   # and the value resumes at the same instant
+    for f in store.values():
+        assert not (f.id != 2 and bt.intervals_overlap(f, store[2])), (f, store[2])
+    # SUPERSEDE path: undated correction
+    d = bt.reconcile(_fact(0, "Person A works at Initech"), [globex], now=t_reconcile)
+    store = bt.apply(d, _fact(0, "Person A works at Initech"), {1: globex}, now=t_apply)
+    assert (d.event, store[1].valid_until, store[2].valid_from) == (bt.SUPERSEDE, t_reconcile.isoformat(), None)
+    # transition with no date: the closed from-side and the superseded row share the instant too
+    new = _fact(0, "Person A switched from Globex to Initech")
+    d = bt.reconcile(new, [globex], now=t_reconcile)
+    assert d.close_at == t_reconcile.isoformat()
+    store = bt.apply(d, new, {1: globex}, now=t_apply)
+    assert store[1].valid_until == t_reconcile.isoformat()

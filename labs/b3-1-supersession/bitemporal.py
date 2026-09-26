@@ -441,9 +441,12 @@ class Decision:
     # [2025, ∞) as a new row here.
     extra_rows: list[Fact] = field(default_factory=list)
     # The boundary every ``also_close`` row (and a SUPERSEDE target) is closed
-    # at: the incoming fact's start as reconciled. Carried explicitly because
+    # at: the incoming fact's start as reconciled, or — for an UNDATED incoming
+    # — the very ``now`` the slicing used. Carried explicitly because
     # ``write_as`` may be a LATER slice of the value (plain Globex resuming in
-    # 2025 after a richer 2024–2025 row) and must not move the close edge.
+    # 2025 after a richer 2024–2025 row) and must not move the close edge, and
+    # because ``apply`` may run later than ``reconcile``: the two must share
+    # one instant or both rows stay valid in between.
     close_at: Optional[str] = None
 
 
@@ -542,7 +545,7 @@ def reconcile(
         return Decision(event, target, why, text=text, extra_closed=extra_closed,
                         write_as=write if write is not None else write_as,
                         also_close=list(also_close or []), interval=interval, retime=dict(retime or {}),
-                        extra_rows=list(extra_rows or []), close_at=new.valid_from)
+                        extra_rows=list(extra_rows or []), close_at=new.valid_from or now.isoformat())
 
     if not live:
         return _decision(ADD, None, "no live neighbours")
