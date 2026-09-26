@@ -168,7 +168,7 @@ def test_transcriber_construction_failure_still_surfaces(monkeypatch):
     def _ctor(*a, **k):
         raise Boom("no model files")
 
-    sys.modules["moonshine_voice.transcriber"].Transcriber = _ctor
+    monkeypatch.setattr(sys.modules["moonshine_voice.transcriber"], "Transcriber", _ctor)
     monkeypatch.setenv("ZOE_MOONSHINE_KEYTERMS", "Jason")
     with pytest.raises(Boom):
         vt._ensure_moonshine()
@@ -199,7 +199,10 @@ def test_configured_survives_a_failed_load(monkeypatch):
     """A construction failure must not zero out `configured` — the list is still
     what the env says; `supported` stays unknown because nothing was probed."""
     _install_fake_moonshine(monkeypatch, with_keyterms=True)
-    sys.modules["moonshine_voice.transcriber"].Transcriber = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no model"))
+    def _ctor(*a, **k):
+        raise RuntimeError("no model")
+
+    monkeypatch.setattr(sys.modules["moonshine_voice.transcriber"], "Transcriber", _ctor)
     monkeypatch.setenv("ZOE_MOONSHINE_KEYTERMS", "Jason,Zoe")
     with pytest.raises(RuntimeError):
         vt._ensure_moonshine()
