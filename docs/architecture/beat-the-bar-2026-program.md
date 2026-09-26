@@ -271,30 +271,48 @@ status: 🔨 active — NEXT ACTION is always §0
   guards on empty histories; O(1) continuation tracking; a `<|channel>thought` opener after a
   tool response when thinking is enabled. The live server uses the embedded template
   (`--jinja`), so this is a prompt-format change on the tool-calling path and must be
-  replay-gated. 🧑 Swap (both files, keep the old ones beside them) — run as ONE script, not a
-  loop that only reports its last iteration: `set -e` + a pre-check that no `.pre-hf-20260717`
-  backup exists yet (a leftover from a partial attempt would make `mv -n` skip silently and
-  leave the pair at mixed versions), then a `sha256sum -c` against the expected pair:
+  replay-gated. 🧑 Swap (both files, keep the old ones beside them) — run as ONE script: it
+  refuses to start on a partial earlier attempt (a leftover `.pre-hf-20260717` backup would
+  make a bare `mv -n` skip silently and leave the pair at mixed versions), restores BOTH
+  files if anything fails mid-way (so the production names never point at a partial or
+  unverified pair), and verifies the installed pair with `sha256sum -c` BEFORE the restart:
   ```
-  set -e; cd ~/models/gemma4-e4b-qat
-  for f in gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf mtp-gemma-4-E4B-it.gguf; do
-    [ -e "$f.pre-hf-20260717" ] && { echo "STOP: $f.pre-hf-20260717 exists — partial earlier attempt"; exit 1; }
-    [ -e "staging-hf-20260717/$f" ] || { echo "STOP: staged $f missing"; exit 1; }
+  set -eu; cd ~/models/gemma4-e4b-qat
+  A=gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf; B=mtp-gemma-4-E4B-it.gguf; BK=pre-hf-20260717; ST=staging-hf-20260717
+  for f in $A $B; do
+    [ -e "$f.$BK" ] && { echo "STOP: $f.$BK exists — partial earlier attempt, inspect first"; exit 1; }
+    [ -e "$ST/$f" ] || { echo "STOP: staged $ST/$f missing"; exit 1; }
   done
-  for f in gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf mtp-gemma-4-E4B-it.gguf; do
-    mv "$f" "$f.pre-hf-20260717"; mv "staging-hf-20260717/$f" "$f"
-  done
+  restore() {  # put the previous pair back; park whatever was moved in as *.failed
+    for f in $A $B; do
+      if [ -e "$f.$BK" ]; then [ -e "$f" ] && mv -f "$f" "$ST/$f.failed"; mv "$f.$BK" "$f"; fi
+    done
+    echo "RESTORED the previous pair — verify with the PREVIOUS hashes below before any restart"
+  }
+  trap restore ERR
+  mv "$A" "$A.$BK"; mv "$ST/$A" "$A"; mv "$B" "$B.$BK"; mv "$ST/$B" "$B"
   sha256sum -c <<'SUMS'
   df0fd4ee07072c607c29a0a1cb4f98918426cca12f45a2776bdd6ee6d09a4de3  gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf
   423074e537504b4f9ec5eafed5c639fac82c96631626efccacdd3c4039b20605  mtp-gemma-4-E4B-it.gguf
   SUMS
+  trap - ERR; echo "SWAP OK — restart llama-server now"
   ```
-  `sha256sum -c` exits non-zero on any mismatch, so a wrong or half-swapped pair stops here,
-  BEFORE the restart. Then `systemctl --user restart llama-server` (health probe waits for
-  model + draft), then `systemctl --user start zoe-voice-regression.service` and read
-  `~/.cache/zoe/voice_regression_last.json`. Rollback = the reverse `mv` for BOTH files, then
-  the same `sha256sum -c` against the previous hashes (recorded in the review §5) and a
-  restart. B6.3 ⬜ Domain-prefixed tool
+  Any failing `mv` or a hash mismatch triggers `restore` (the running server keeps its
+  already-open files either way; nothing changes until the restart). Then
+  `systemctl --user restart llama-server` (health probe waits for model + draft), then
+  `systemctl --user start zoe-voice-regression.service` and read
+  `~/.cache/zoe/voice_regression_last.json`. **Rollback after a failed gate** (reverse both
+  files, then verify against the PREVIOUS pair's hashes, measured on the box 2026-09-26,
+  then restart):
+  ```
+  set -eu; cd ~/models/gemma4-e4b-qat; BK=pre-hf-20260717; ST=staging-hf-20260717
+  for f in gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf mtp-gemma-4-E4B-it.gguf; do mv "$f" "$ST/$f"; mv "$f.$BK" "$f"; done
+  sha256sum -c <<'SUMS'
+  b3052f962d6449b4eb2075733c068bdec1c51eadb7b237e6c3157bfbb7b1dae0  gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf
+  b0005dc39d47ede950c3ec413cb20e832f15b216126eae368d9f572676153cb6  mtp-gemma-4-E4B-it.gguf
+  SUMS
+  systemctl --user restart llama-server
+  ``` B6.3 ⬜ Domain-prefixed tool
   names (`ha__`, `ma__`, `memory__`). B6.4 ⬜ Consider an E2B "fast/cheap turn" lane only
   if RAM allows after B0.1/B5.1 (AICore's variant-by-task split) — not a rock change.
 - B6.5 ⬜ Client defaults: `zoe_flue_client` → `:3579`/wire 2; `ZOE_BRAIN_FAILOVER=1` after
