@@ -171,14 +171,15 @@ stops before TTS — see voice-pipeline.md); the numbers that matter are said-vs
    adopt: put the line in `services/zoe-data/.env` (an `EnvironmentFile` of `zoe-data.service`),
    restart, confirm `/readyz` shows `applied == configured`, then re-run once with
    `--stt remote` so the LIVE transcriber is what got measured.
-7. **Record.** `--update-baseline` on the accepted configuration; the `requirements.txt` pin
-   (`moonshine-voice==0.1.5`) is already in this PR and stops reading as MISMATCH in
-   `requirements_drift_check.py` the moment step 2 is done; flip B1.10 to ✅ in the program
-   tracker; after a few quiet days delete the old bundle
-   (`rm -rf ~/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized`, ~430 MB).
-   For the PR's own `voice-gate`, the probe must run against a checkout of the PR head
-   (`--service-dir ~/.worktrees/b1-10-moonshine/services/zoe-data`) so the artifact binds to
-   that revision.
+7. **Record.** `--update-baseline` on the accepted configuration. **The pin follows the box in
+   the same pass**: adoption after a future successful trial REQUIRES editing
+   `services/zoe-data/requirements.txt` to the trialled version (`moonshine-voice==<version>`)
+   together with the box install — box first, file second — so `requirements_drift_check.py`
+   reads `match` again; until such a trial passes the pin stays `moonshine-voice==0.0.62` (what
+   the Orin runs). Flip B1.10 to ✅ in the program tracker; after a few quiet days delete the old
+   bundle (`rm -rf ~/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized`,
+   ~430 MB). For a PR's own `voice-gate`, the probe must run against a checkout of that PR's head
+   (`--service-dir <worktree>/services/zoe-data`) so the artifact binds to that revision.
 
 ## 6. RAM / latency expectations (from the changelog — measure, do not assume)
 

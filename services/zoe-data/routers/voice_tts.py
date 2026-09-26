@@ -2188,7 +2188,12 @@ def moonshine_keyterms() -> tuple[str, ...]:
 
 
 def moonshine_keyterms_state() -> dict:
-    return dict(_moonshine_keyterms_state)
+    """`configured` is the ENV (what the operator asked for), read at call time and
+    independent of the model load; `applied`/`supported`/`error` describe what the
+    transcriber did with it and stay at their zero-values until it has loaded."""
+    state = dict(_moonshine_keyterms_state)
+    state["configured"] = len(moonshine_keyterms())
+    return state
 
 
 def _apply_moonshine_keyterms(tr) -> None:

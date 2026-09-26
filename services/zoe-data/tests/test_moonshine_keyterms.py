@@ -186,9 +186,32 @@ def test_arch_fallback_is_unchanged(monkeypatch):
 
 # ── readiness visibility ─────────────────────────────────────────────────────
 
+def test_configured_reflects_env_before_any_load(monkeypatch):
+    """`configured` must report the operator's list even when no transcriber has
+    loaded yet (startup, warmup still running) — only applied/supported wait."""
+    monkeypatch.setenv("ZOE_MOONSHINE_KEYTERMS", "Jason,Zoe,Kitchen")
+    assert vt.moonshine_keyterms_state() == {
+        "configured": 3, "applied": 0, "supported": None, "error": None,
+    }
+
+
+def test_configured_survives_a_failed_load(monkeypatch):
+    """A construction failure must not zero out `configured` — the list is still
+    what the env says; `supported` stays unknown because nothing was probed."""
+    _install_fake_moonshine(monkeypatch, with_keyterms=True)
+    sys.modules["moonshine_voice.transcriber"].Transcriber = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no model"))
+    monkeypatch.setenv("ZOE_MOONSHINE_KEYTERMS", "Jason,Zoe")
+    with pytest.raises(RuntimeError):
+        vt._ensure_moonshine()
+    state = vt.moonshine_keyterms_state()
+    assert state["configured"] == 2
+    assert state["applied"] == 0 and state["supported"] is None
+
+
 def test_readyz_stt_reports_keyterms_state(monkeypatch):
     import main
 
+    monkeypatch.setenv("ZOE_MOONSHINE_KEYTERMS", "Jason,Zoe")  # configured comes from the env
     monkeypatch.setattr(vt, "moonshine_ready", lambda: True)
     monkeypatch.setattr(vt, "moonshine_error", lambda: None)
     monkeypatch.setattr(
