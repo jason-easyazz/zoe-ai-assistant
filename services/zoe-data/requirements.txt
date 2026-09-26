@@ -180,6 +180,11 @@ SQLAlchemy>=2.0,<3.0
 # Push notifications
 pywebpush==2.5.0
 py-vapid==1.9.4
+# Imported UNGUARDED at module level by memory_metrics.py, voice_metrics.py and
+# guest_policy.py, yet declared nowhere until 2026-09-26 (found by the B0.7 AST
+# import scan, docs/knowledge/python-312-venv-migration.md) — it only ever
+# arrived transitively. Pinned to the box.
+prometheus-client==0.25.0
 # Speaker identification (voice enrollment and identify endpoints)
 resemblyzer>=0.1.3
 # LiveKit WebRTC server-side agent (joins room, STT+LLM+TTS, publishes audio)
@@ -188,6 +193,10 @@ resemblyzer>=0.1.3
 # 1.5.10 (unused by zoe-data) wanting `livekit==1.1.8` — an exact pin would turn
 # that stale package into a resolver fight on every install.
 livekit>=1.1.8
+# `livekit_aiortc.py` imports `livekit.protocol`, a SEPARATE distribution that
+# `livekit` does not pull in — it only ever arrived via the unused livekit-agents
+# (validate.yml already hand-installs it). Declared 2026-09-26 (B0.7 import scan).
+livekit-protocol==1.1.8
 # aiortc and av move TOGETHER: aiortc 1.14.0 caps `av<17`, so av cannot advance
 # without it (1.15.0 widens the cap to `av<18`).
 # av is held at 17.1.0 because 18.0.0 requires Python >=3.11 (host is 3.10.12).

@@ -1,0 +1,120 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# zoe-data on Python 3.12 — the manifest that BUILDS the B0.7 venv.
+#
+# This file is the INVERSE of its sibling `requirements.txt`. That one is a
+# declared spec reconciled to a hand-managed system-Python site-packages (box
+# first, file second). THIS one is the input to `scripts/setup/build_py312_venv.sh`,
+# which creates `~/.zoe/venvs/zoe-data-py312` with uv from exactly these lines —
+# so here the FILE is the installer and the venv is the artifact. Drift between
+# the two is measured, not assumed, with the same tool as before, pointed at the
+# venv interpreter:
+#     ~/.zoe/venvs/zoe-data-py312/bin/python \
+#         scripts/maintenance/requirements_drift_check.py services/zoe-data/requirements-py312.txt
+#
+# RESOLUTION IS MEASURED (2026-09-26, uv 0.10.11, CPython 3.12.13 aarch64,
+# `--python-platform aarch64-manylinux_2_31`, glibc 2.35): every line below
+# resolves to a cp312 / abi3 / py3 aarch64 wheel whose manylinux tag is <= 2.35,
+# except one pure-Python sdist (`http-ece`, via pywebpush). Runbook, package
+# table and the measured blockers: docs/knowledge/python-312-venv-migration.md.
+#
+# POLICY: pins are IDENTICAL to the 3.10 box wherever a cp312 wheel exists, so
+# the interpreter is the only variable in the first cut. The step-ups the tracker
+# names (onnxruntime 1.30, websockets 17, numpy 2, scikit-learn 1.9) each
+# resolve too — they are recorded in the runbook as separate, gated moves, not
+# folded in here.
+#
+# The comments in `requirements.txt` explaining WHY each pin holds (uvicorn 0.49
+# cap, APScheduler 3.10.4 pickled-pytz jobstore, chromadb 0.6.3 palace format,
+# aiortc/av moving together) are not repeated; they still apply.
+# ═══════════════════════════════════════════════════════════════════════════
+fastapi==0.141.1
+# 0.49.0: `--ws auto` -> uvicorn.protocols.websockets.websockets_impl (legacy
+# websockets server protocol). MEASURED on this interpreter with websockets 17.1
+# as well (the alias `websockets.server.WebSocketServerProtocol` survives in 17.x
+# as a deprecated lazy import), so the cap is about NOT crossing 0.50, unchanged.
+uvicorn[standard]==0.49.0
+pydantic==2.13.5
+aiosqlite==0.22.1
+asyncpg==0.31.0
+alembic==1.20.0
+psycopg2-binary==2.9.12
+python-multipart==0.0.32
+httpx==0.28.1
+aiohttp==3.14.3
+# 16.1.1 has a cp312 wheel; 17.x (>=3.11 only) is a separate replay-gated step.
+websockets==16.1.1
+python-jose[cryptography]==3.5.0
+PyJWT==2.15.0
+ag-ui-protocol==0.1.19
+python-json-logger==4.2.0
+
+# ── Vector memory store (unchanged pair; B0.8 moves them together) ─────────
+mempalace==3.3.1
+chromadb==0.6.3
+
+# ── Voice dependencies ────────────────────────────────────────────────────
+# numpy is pinned EXACTLY here (not `<2`): on 3.12 nothing in this set declares
+# numpy<2 (measured: the uncapped resolve picks 2.5.3, and chroma-hnswlib 0.7.6's
+# cp312 wheel imports and queries on 2.5.3). It is HELD at the box's 1.26.4 so
+# the router head's training numpy and the STT/embedding numerics stay identical
+# in the first cut; numpy 2 is the runbook's step 2, gated on its own.
+numpy==1.26.4
+# 1.23.2 ships a cp312 wheel; 1.30.0 (>=3.11 only) is the runbook's step-up.
+onnxruntime==1.23.2
+edge-tts==7.2.8
+# py3-none-manylinux_2_31_aarch64 wheel: ABI-independent (ctypes-loaded .so),
+# the SAME wheel the 3.10 box runs — the STT rock does not move.
+moonshine-voice==0.0.62
+transformers==5.17.0
+fastembed==0.8.0
+scikit-learn==1.7.2
+joblib==1.5.3
+APScheduler==3.10.4
+tzlocal==2.1
+SQLAlchemy==2.0.54
+pywebpush==2.5.0
+py-vapid==1.9.4
+# DIRECT, UNGUARDED module-level imports (memory_metrics.py, voice_metrics.py,
+# guest_policy.py) that no manifest declared — found by an AST scan of every
+# third-party import in zoe-data against this venv (the only way to find what a
+# transitive install has been carrying). Box: 0.25.0.
+prometheus-client==0.25.0
+# drift-optional: mcp_server.py imports it inside try/except for the status tool.
+psutil==7.2.2
+
+# ── Resemblyzer (speaker ID) — the ONE package that needs a two-phase install ─
+# Resemblyzer 0.1.4 declares `webrtcvad>=2.0.10`, `torch>=1.0.1`, `librosa`,
+# `numpy`, `scipy`, `typing`. Three of those are wrong for a 3.12 venv:
+#   * webrtcvad 2.0.10 is sdist-only AND its module does `import pkg_resources`
+#     at import time. setuptools 84 (what torch pulls) no longer ships
+#     pkg_resources, so the sdist builds with gcc and then FAILS TO IMPORT
+#     (measured). `webrtcvad-wheels` 2.0.14 is the maintained fork: same
+#     `_webrtcvad` extension, no pkg_resources, cp312 aarch64 wheel.
+#   * torch on PyPI for aarch64 became a 454 MB CUDA-13 bundle (+ nvidia-*-cu13,
+#     triton) from 2.9; the CPU build lives on the PyTorch CPU index. Pinned to
+#     the exact wheel so no index-precedence rule can swap it.
+#   * `typing` is the py2 backport; it must not be installed on 3.12.
+# So the build script installs this file, then `resemblyzer==0.1.4 --no-deps`.
+webrtcvad-wheels==2.0.14
+torch @ https://download.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl
+# librosa 1.0.0 (>=3.12 only, API removals) is what an uncapped resolve picks on
+# this interpreter; Resemblyzer was written against 0.x, so it is held.
+librosa==0.11.0
+scipy==1.17.1
+
+# ── WebRTC / LiveKit ──────────────────────────────────────────────────────
+livekit==1.1.20
+# `livekit_aiortc.py` does `from livekit.protocol import rtc` — a SEPARATE
+# distribution (`livekit-protocol`) that `livekit` does not depend on; it only
+# ever arrived via the unused livekit-agents. CI already installs it by hand
+# (validate.yml). Box: 1.1.8.
+livekit-protocol==1.1.8
+# aiortc 1.15.0 caps av<18, so av 18 (>=3.11) is BLOCKED by aiortc, not by Python.
+aiortc==1.15.0
+av==17.1.0
+
+# ── A2A federation + skill discovery + web search ─────────────────────────
+ddgs==9.16.0
+cloakbrowser==0.3.28
+PyYAML==6.0.3
+segno==1.6.6
