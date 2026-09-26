@@ -432,7 +432,8 @@ the blocks below as the executed procedure, not as live instructions.
 
 **The wire selector exists**: `ZOE_FLUE_WIRE` in
 `services/zoe-data/zoe_flue_client.py` (PR #1637, replay-gated in its own
-right). Default `1` posts the wire-1 body byte-identically; `2` speaks the 2.x
+right). Default `2` since B6.5 (it was `1` until then); `1` posts the wire-1
+body byte-identically for parity, and `2` speaks the 2.x
 `{kind: "user", body}` shape with fire-and-forget admission + NDJSON stream
 read (modeled on `parity/flue_wire.py`). The historical measurement that
 motivated it, against the built 2.x server on 2026-08-06 (throwaway port,
@@ -446,7 +447,8 @@ throwaway store):
 2.x also rejects `?wait=result`. Both misconfig directions are diagnosed in the
 client's logs: a wire-2 reply arriving on wire 1 names the flag, and a 1.x
 sidecar 400-ing the wire-2 body names it too. The flip below is therefore
-env-only: `ZOE_FLUE_WIRE=2` + `ZOE_FLUE_BRAIN_URL` together, never one alone.
+env-only: `ZOE_FLUE_WIRE=2` + `ZOE_FLUE_BRAIN_URL` together, never one alone
+(since B6.5 both are also the client's in-code defaults, so unset = this lane).
 
 ### The flip (as executed)
 
@@ -578,7 +580,7 @@ reassembles Flue's spilled >1MB batches so a truncation cannot hide in one.
 machine consumption.
 
 **"0 assistant replies" is a FAILURE.** The sidecar creates its store at boot, so
-a replay that never reached the 2.x lane (`ZOE_FLUE_WIRE` unset, zoe-data pointed
+a replay that never reached the 2.x lane (`ZOE_FLUE_WIRE=1` left set, zoe-data pointed
 at the wrong lane, the restart forgotten) leaves a valid, empty database — and counting zero
 length-stops in it would green-light the flip on no evidence at all. The gate
 counts what it examined and fails when that is zero.
