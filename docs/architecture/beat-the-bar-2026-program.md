@@ -333,8 +333,13 @@ status: 🔨 active — NEXT ACTION is always §0
   ``` B6.3 ⬜ Domain-prefixed tool
   names (`ha__`, `ma__`, `memory__`). B6.4 ⬜ Consider an E2B "fast/cheap turn" lane only
   if RAM allows after B0.1/B5.1 (AICore's variant-by-task split) — not a rock change.
-- B6.5 ⬜ Client defaults: `zoe_flue_client` → `:3579`/wire 2; `ZOE_BRAIN_FAILOVER=1` after
-  a gate (B1 in the register).
+- B6.5 🔨 Client defaults: `zoe_flue_client` → `:3579`/wire 2 — draft PR #1701 (both in-code
+  defaults flipped + pinned with the retired `:3578`/wire-1 pair as negative control;
+  `ZOE_FLUE_WIRE=1` stays opt-in for parity; voice-scope, head-bound replay gate before ready).
+  `ZOE_BRAIN_FAILOVER=1` deliberately NOT flipped — default stays off; its three-step gate
+  (failover suite green → replay PASS with the flag exported → live stop-the-sidecar drill
+  read from `BRAIN_LANE`) is now spelled out in `services/zoe-data/.env.example` (B1 in the
+  register).
 
 ### B7 — Window into Zoe (UI)
 - B7.1 ⬜ AG-UI 1.0 (`ACTIVITY_SNAPSHOT/DELTA`) + a fixed A2UI-style component catalog as the
