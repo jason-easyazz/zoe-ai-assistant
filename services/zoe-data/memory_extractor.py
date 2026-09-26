@@ -766,12 +766,12 @@ async def _load_recent_user_messages(
 
 
 async def _memory_opted_out(user_id: str) -> bool:
-    """Per-user ``memory_opt_out`` preference (``user_prefs``). Fail-open: any
-    lookup failure (no pool in tests, DB blip) returns False so a preference
-    read can never break extraction."""
+    """Per-user ``memory_opt_out`` (``user_prefs``, cached). The chokepoint in
+    ``MemoryService.ingest`` enforces it for every writer; this early exit just
+    skips the reconcile/supersede work for a user who opted out. Fail-open."""
     try:
-        from user_prefs import is_memory_opted_out
-        return await is_memory_opted_out(user_id)
+        import user_prefs
+        return await user_prefs.is_memory_opted_out(user_id)
     except Exception as exc:
         logger.debug("memory opt-out lookup failed (%s) — treating as opted in", exc)
         return False
