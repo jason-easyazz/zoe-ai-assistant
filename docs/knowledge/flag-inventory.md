@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-450 flags; 449 not documented in `.env.example`.
+451 flags; 450 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -255,6 +255,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MERGE_QUEUE_MAX_CANDIDATES` | `'50'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MIRROR_INTENTS_TO_OPENCLAW` | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'`, `'v2'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_MOONSHINE_KEYTERMS` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MULTICA` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES` | `-` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES_FOR` | `-` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |

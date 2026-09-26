@@ -117,8 +117,15 @@ edge-tts>=6.1.12
 # Primary offline TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py,
 # port 10201) — NOT an in-process dep here. zoe-data reaches it over HTTP and falls
 # back to edge/espeak if it is down (see ZOE_TTS_MODE in .env.example).
-# STT primary: Moonshine v2 (MEDIUM_STREAMING) — accurate on real room audio, CPU/ONNX
-moonshine-voice
+# STT primary: Moonshine v2 (MEDIUM_STREAMING) — accurate on real room audio, CPU/ONNX.
+# Pinned to what the live Orin actually runs (box-first rule). 0.1.5 (B1.10:
+# speculative decoding, `Transcriber.set_keyterms`) was installed, measured and
+# ROLLED BACK on 2026-09-26: said-vs-did passed but STT was +43 % median / ~1.9x
+# per file slower on the Orin CPU, failing the per-stage speed rule — numbers,
+# method and retest conditions in docs/knowledge/moonshine-0-1-5-upgrade.md
+# ("Measured 2026-09-26 — HELD"). The ZOE_MOONSHINE_KEYTERMS plumbing is
+# feature-detected and dormant on this version.
+moonshine-voice==0.0.62
 # ── Declared-but-previously-implicit runtime deps ─────────────────────────────
 # Both are imported DIRECTLY by live zoe-data code but were in no requirements
 # file, so they only ever arrived as somebody else's transitive dependency
