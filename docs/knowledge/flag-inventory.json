@@ -4591,6 +4591,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_WEB_FALLBACK_PROVIDER": {
+        "defaults": [
+          "'auto'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/research_evidence.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_WORKTREE_PRUNE_INTERVAL_S": {
         "defaults": [
           "86400.0"

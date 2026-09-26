@@ -4869,11 +4869,19 @@
                 return `<img style="max-width:100%;border-radius:10px;margin-top:8px;" src="data:image/png;base64,${String(s.image_base64).replace(/^data:image\/\\w+;base64,/, '')}" alt="">`;
             }).join('');
             const sourceHtml = sources.slice(0, 5).map((u) => `<li>${escapeHtml(String(u))}</li>`).join('');
+            // B10.0: say plainly when the web lookup was refused / errored / found nothing,
+            // instead of letting an empty package read like a ranked answer.
+            const lookup = (props.web_lookup && typeof props.web_lookup === 'object') ? props.web_lookup : {};
+            const lookupMsg = lookup.status && lookup.status !== 'results' ? String(lookup.message || '') : '';
+            const lookupHtml = lookupMsg
+                ? `<div class="info-card-desc" style="margin-top:6px;opacity:.85;">${escapeHtml(lookupMsg)}</div>`
+                : '';
             container.innerHTML = `
                 <div class="info-card">
                     <div class="info-card-body" style="width:100%;">
                         <div class="info-card-title">Research Evidence</div>
                         <div class="info-card-desc">${escapeHtml(String(props.query || ''))}</div>
+                        ${lookupHtml}
                         <table class="data-grid-component" style="margin-top:10px;">
                             <thead><tr><th>#</th><th>Option</th><th>Value</th><th>Location</th></tr></thead>
                             <tbody>${resultRows || '<tr><td colspan="4">No ranked results.</td></tr>'}</tbody>

@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from html import unescape
 
 from agent_safety import guarded_urlopen
+
+logger = logging.getLogger(__name__)
 
 
 _URL_RE = re.compile(r"https?://[^\s)>\]\"']+")
@@ -21,6 +26,57 @@ _DDG_RESULT_RE = re.compile(
 _TAG_RE = re.compile(r"<[^>]+>")
 _HTML_PRICE_RE = re.compile(r"(?i)(?:\$|aud\s*)([0-9]{1,4}(?:\.[0-9]{1,2})?)")
 DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
+
+# ── Web-lookup outcome (B10.0) ────────────────────────────────────────────────
+# A challenge page is NOT "no results". DuckDuckGo answers scripted fetches with
+# an anomaly page (measured live 2026-09-26: HTTP 202, ~14 kB, zero `result__a`
+# links, `anomaly-modal` + `anomaly.js` in the body); other walls serve HTTP 200
+# with a captcha title. Status alone is not a wall detector and neither is body
+# size, so both signals feed `classify_ddg_response`.
+WEB_LOOKUP_RESULTS = "results"
+WEB_LOOKUP_NO_RESULTS = "no_results"
+WEB_LOOKUP_BLOCKED = "blocked"
+WEB_LOOKUP_ERROR = "error"
+WEB_LOOKUP_OFF = "off"
+
+DDG_BLOCK_MARKERS = (
+    "anomaly-modal",
+    "anomaly.js",
+    "<title>captcha",
+    "unusual traffic",
+    "verifying your browser",
+    "just a moment...",
+    "cf-browser-verification",
+    "challenges.cloudflare.com",
+    "enable javascript and cookies to continue",
+    "you have been blocked",
+    "access to this page has been denied",
+)
+# What html.duckduckgo.com renders for a query with NO hits: an empty results
+# shell carrying `<div class="no-results">No results.</div>`. This is the only
+# body that earns `no_results` — that verdict is POSITIVE ("DDG answered and
+# said nothing matches"), so a 2xx body with neither result anchors nor this
+# marker (blank, truncated mid-page, consent/maintenance page, a markup change)
+# is an `error` ("unrecognised page"), not a successful empty lookup.
+DDG_EMPTY_RESULTS_MARKERS = ('class="no-results"',)
+DDG_UNRECOGNISED_PAGE = "unrecognised page"
+# Explicit refusals by status; 503 is what a Cloudflare/Akamai interstitial
+# commonly returns. DDG's own anomaly page comes back as 202.
+_BLOCKED_STATUSES = frozenset({202, 401, 403, 407, 429, 451, 503})
+
+# ``ZOE_WEB_FALLBACK_PROVIDER``: auto (Tavily when keyed, else DDG) |
+# duckduckgo (never call Tavily) | off (no web lookup at all). Read per call so
+# a flip needs no restart.
+WEB_FALLBACK_PROVIDER_ENV = "ZOE_WEB_FALLBACK_PROVIDER"
+_WEB_FALLBACK_PROVIDERS = ("auto", "duckduckgo", "off")
+
+WEB_LOOKUP_MESSAGES = {
+    WEB_LOOKUP_RESULTS: "",
+    WEB_LOOKUP_NO_RESULTS: "Web lookup found nothing for this.",
+    WEB_LOOKUP_BLOCKED: "Web lookup unavailable right now — the search provider refused the request.",
+    WEB_LOOKUP_ERROR: "Web lookup unavailable right now.",
+    WEB_LOOKUP_OFF: "Web lookup is switched off.",
+}
 _STOPWORDS = {
     "the",
     "and",
@@ -88,6 +144,31 @@ class ResearchEvidencePackage:
     sources: list[str]
     actions: list[dict[str, Any]]
     accessibility: dict[str, Any]
+    # {status, provider, result_count, message}; empty when no lookup was attempted.
+    web_lookup: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class WebFallbackOutcome:
+    """What a web lookup actually did: rows PLUS why they may be empty."""
+
+    status: str
+    provider: str
+    results: list[dict[str, str]] = field(default_factory=list)
+    detail: str = ""
+
+    @property
+    def message(self) -> str:
+        return WEB_LOOKUP_MESSAGES.get(self.status, WEB_LOOKUP_MESSAGES[WEB_LOOKUP_ERROR])
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "provider": self.provider,
+            "result_count": len(self.results),
+            "message": self.message,
+            "detail": self.detail,
+        }
 
 
 # Self-recall questions about the user's own life ("what do I do on
@@ -311,23 +392,53 @@ def _read_bounded_response(resp: Any, max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
-def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: float = 8.0) -> list[dict[str, str]]:
-    """Fetch lightweight fallback web results from DuckDuckGo HTML endpoint."""
-    if not (query or "").strip():
-        return []
-    url = f"https://duckduckgo.com/html/?q={quote_plus(query.strip())}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    try:
-        with guarded_urlopen(url, timeout=timeout_s, headers=headers) as resp:
-            body = _read_bounded_response(resp, DDG_SEARCH_HTML_MAX_BYTES).decode(
-                "utf-8", errors="replace"
-            )
-    except Exception:  # incl. SSRFBlocked
-        return []
+def web_fallback_provider() -> str:
+    """Selected fallback provider: auto|duckduckgo|off (unknown values → auto)."""
+    raw = (os.environ.get("ZOE_WEB_FALLBACK_PROVIDER", "auto") or "auto").strip().lower()
+    if raw not in _WEB_FALLBACK_PROVIDERS:
+        logger.warning("%s=%r is not one of %s; using auto", WEB_FALLBACK_PROVIDER_ENV, raw, _WEB_FALLBACK_PROVIDERS)
+        return "auto"
+    return raw
 
+
+def classify_ddg_response(status: int | None, body: str) -> str:
+    """Pure classifier for a DuckDuckGo HTML response.
+
+    A page carrying ``result__a`` links IS a results page: a challenge/anomaly
+    page never has them (measured live), while a genuine results page can
+    easily *mention* a wall phrase ("unusual traffic", "just a moment...") in a
+    snippet or in the echoed query. So the block markers are consulted only once
+    result links are known to be absent — a challenge page with zero result
+    links is ``blocked``, never ``no_results``, and a results page is never
+    thrown away over a phrase in its text. ``no_results`` is a POSITIVE verdict
+    and needs DDG's empty-results shell (``DDG_EMPTY_RESULTS_MARKERS``); any
+    other anchor-less 2xx body is ``error`` (``unrecognised page``). A ``None``
+    status is a transport failure (nothing came back).
+    """
+    if status is None:
+        return WEB_LOOKUP_ERROR
+    has_results = _DDG_RESULT_RE.search(body or "") is not None
+    if not has_results:
+        low = (body or "").lower()
+        if any(marker in low for marker in DDG_BLOCK_MARKERS):
+            return WEB_LOOKUP_BLOCKED
+        if status in _BLOCKED_STATUSES:
+            return WEB_LOOKUP_BLOCKED
+    if not 200 <= status < 300 and status not in _BLOCKED_STATUSES:
+        return WEB_LOOKUP_ERROR
+    if has_results:
+        return WEB_LOOKUP_RESULTS
+    # 2xx, no anchors, no wall: only DDG's own empty-results shell is a real
+    # "nothing matches" answer; anything else is a page we cannot read.
+    return WEB_LOOKUP_NO_RESULTS if _is_ddg_empty_results_page(body) else WEB_LOOKUP_ERROR
+
+
+def _is_ddg_empty_results_page(body: str) -> bool:
+    low = (body or "").lower()
+    return any(marker in low for marker in DDG_EMPTY_RESULTS_MARKERS)
+
+
+def _parse_ddg_results(body: str, max_results: int) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     seen: set[str] = set()
     for match in _DDG_RESULT_RE.finditer(body):
@@ -349,16 +460,22 @@ def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: floa
             flags=re.IGNORECASE | re.DOTALL,
         )
         snippet = _clean_html_text(snippet_match.group(1) if snippet_match else "")
-        price_match = _PRICE_RE.search(snippet)
-        rows.append(
-            {
-                "title": title[:160],
-                "url": target,
-                "price": f"${price_match.group(1)}" if price_match else "",
-                "snippet": snippet[:280],
-            }
-        )
-    # Best-effort price enrichment from destination pages.
+        rows.append(_fallback_row(title=title, url=target, snippet=snippet))
+    return rows
+
+
+def _fallback_row(*, title: str, url: str, snippet: str) -> dict[str, str]:
+    price_match = _PRICE_RE.search(snippet)
+    return {
+        "title": title[:160],
+        "url": url,
+        "price": f"${price_match.group(1)}" if price_match else "",
+        "snippet": snippet[:280],
+    }
+
+
+def _verify_rows(query: str, rows: list[dict[str, str]], timeout_s: float) -> list[dict[str, str]]:
+    """Relevance + best-effort price enrichment from destination pages."""
     for row in rows:
         if not _looks_relevant(
             query,
@@ -383,6 +500,189 @@ def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: floa
         if str(row.get("verified") or "") == "true":
             filtered.append(row)
     return filtered or rows
+
+
+def _fetch_ddg(query: str, max_results: int, timeout_s: float) -> WebFallbackOutcome:
+    url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    status: int | None = None
+    body = ""
+    detail = ""
+    try:
+        with guarded_urlopen(url, timeout=timeout_s, headers=headers) as resp:
+            status = int(getattr(resp, "status", None) or getattr(resp, "code", None) or 200)
+            body = _read_bounded_response(resp, DDG_SEARCH_HTML_MAX_BYTES).decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        # urllib raises on 4xx/5xx; the body still carries the wall's markers.
+        status = int(exc.code)
+        try:
+            body = exc.read(DDG_SEARCH_HTML_MAX_BYTES).decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 - body is optional evidence
+            body = ""
+        detail = f"HTTP {status}"
+    except Exception as exc:  # incl. SSRFBlocked, timeouts, over-cap bodies
+        return WebFallbackOutcome(WEB_LOOKUP_ERROR, "duckduckgo", [], type(exc).__name__)
+
+    verdict = classify_ddg_response(status, body)
+    if verdict != WEB_LOOKUP_RESULTS:
+        if verdict == WEB_LOOKUP_ERROR and 200 <= status < 300:
+            detail = f"{DDG_UNRECOGNISED_PAGE} (HTTP {status})"
+        return WebFallbackOutcome(verdict, "duckduckgo", [], detail or f"HTTP {status}")
+    rows = _verify_rows(query, _parse_ddg_results(body, max_results), timeout_s)
+    if not rows:
+        return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "duckduckgo", [], "no http result targets")
+    return WebFallbackOutcome(WEB_LOOKUP_RESULTS, "duckduckgo", rows)
+
+
+def _fetch_tavily(query: str, max_results: int, timeout_s: float) -> WebFallbackOutcome:
+    # Lazy import: web_search_provider pulls typed_env/httpx; the classifier half
+    # of this module stays stdlib-only for the slim CI lane.
+    from web_search_provider import tavily_search_outcome
+
+    status, raw = tavily_search_outcome(query, max_results=max_results, timeout_s=timeout_s)
+    if status != WEB_LOOKUP_RESULTS:
+        return WebFallbackOutcome(status, "tavily", [])
+    rows = [
+        _fallback_row(
+            title=str(r.get("title") or "") or f"Option {i}",
+            url=str(r.get("href") or ""),
+            snippet=str(r.get("body") or ""),
+        )
+        for i, r in enumerate(raw[:max_results], start=1)
+    ]
+    rows = _verify_rows(query, rows, timeout_s)
+    if not rows:
+        return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "tavily", [])
+    return WebFallbackOutcome(WEB_LOOKUP_RESULTS, "tavily", rows)
+
+
+# In-process record of the LAST lookup for the backend status surface
+# (`/api/system/status` -> `web_lookup`): status / provider / detail / UTC
+# timestamp only — never the query text (personal data) and never the key.
+_LAST_WEB_LOOKUP: dict[str, Any] = {}
+
+
+def _record_last_outcome(outcome: WebFallbackOutcome) -> None:
+    _LAST_WEB_LOOKUP.clear()
+    _LAST_WEB_LOOKUP.update(
+        status=outcome.status,
+        provider=outcome.provider,
+        detail=outcome.detail,
+        at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+
+
+def _tavily_key_present() -> bool:
+    try:
+        from web_search_provider import tavily_api_key
+
+        return bool(tavily_api_key())
+    except Exception:  # noqa: BLE001 - provider module absent → no key
+        return False
+
+
+def web_lookup_status() -> dict[str, Any]:
+    """Backend status block for the web lookup — configuration + last outcome.
+
+    ``provider`` is the RESOLVED provider a lookup would use right now
+    (``auto`` collapses to ``tavily`` when keyed and not switched off, else
+    ``duckduckgo``); ``configured`` is the raw ``ZOE_WEB_FALLBACK_PROVIDER``
+    value. ``tavily_key_present`` says whether a key exists — the key itself is
+    never exposed. ``last_outcome`` is ``None`` until a lookup has run.
+    """
+    configured = web_fallback_provider()
+    if configured == "auto":
+        resolved = "tavily" if _tavily_configured() else "duckduckgo"
+    else:
+        resolved = configured
+    return {
+        "provider": resolved,
+        "configured": configured,
+        "tavily_key_present": _tavily_key_present(),
+        "last_outcome": dict(_LAST_WEB_LOOKUP) or None,
+    }
+
+
+def _tavily_configured() -> bool:
+    try:
+        from web_search_provider import tavily_enabled
+
+        return bool(tavily_enabled())
+    except Exception:  # noqa: BLE001 - provider module absent → DDG only
+        return False
+
+
+def fetch_web_fallback(query: str, max_results: int = 5, timeout_s: float = 8.0) -> WebFallbackOutcome:
+    """Web lookup with an HONEST outcome: rows plus status + provider.
+
+    Provider order under ``auto``: Tavily when a key is configured (a real API,
+    not a scrape), then DuckDuckGo HTML. A blocked/error DDG answer is reported
+    as such — never as "no results". One INFO line per lookup; the query text is
+    never logged (it can carry personal data), only its length.
+    """
+    q = (query or "").strip()
+    if not q:
+        return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "none", [], "empty query")
+    provider = web_fallback_provider()
+    if provider == "off":
+        outcome = WebFallbackOutcome(WEB_LOOKUP_OFF, "none", [], f"{WEB_FALLBACK_PROVIDER_ENV}=off")
+    else:
+        attempted: list[str] = []
+        tavily: WebFallbackOutcome | None = None
+        if provider == "auto" and _tavily_configured():
+            attempted.append("tavily")
+            tavily = _fetch_tavily(q, max_results, timeout_s)
+        if tavily is not None and tavily.status == WEB_LOOKUP_RESULTS:
+            outcome = tavily
+        else:
+            attempted.append("duckduckgo")
+            ddg = _fetch_ddg(q, max_results, timeout_s)
+            if tavily is None:
+                outcome = ddg
+            else:
+                # Keep the BEST-QUALITY verdict. `results` beats everything; a
+                # completed Tavily `no_results` is a real answer and must not be
+                # overwritten by a later DDG wall/transport failure — the card
+                # would say "unavailable" for a lookup that finished and found
+                # nothing. Only real rows may replace it.
+                keep_tavily = tavily.status == WEB_LOOKUP_NO_RESULTS and ddg.status != WEB_LOOKUP_RESULTS
+                outcome = tavily if keep_tavily else ddg
+                if outcome.status != WEB_LOOKUP_RESULTS:
+                    ddg_why = f"{ddg.status} ({ddg.detail})" if ddg.detail else ddg.status
+                    outcome.detail = f"tavily={tavily.status}; duckduckgo={ddg_why}"
+                    if keep_tavily:
+                        # The verdict is Tavily's; DDG's attempt is in `detail`.
+                        attempted = ["tavily"]
+        outcome.provider = outcome.provider if outcome.status == WEB_LOOKUP_RESULTS else ">".join(attempted)
+    logger.info(
+        "web_fallback: provider=%s status=%s results=%d query_len=%d%s",
+        outcome.provider,
+        outcome.status,
+        len(outcome.results),
+        len(q),
+        f" detail={outcome.detail}" if outcome.detail else "",
+    )
+    _record_last_outcome(outcome)
+    return outcome
+
+
+def fetch_web_fallback_results(query: str, max_results: int = 5, timeout_s: float = 8.0) -> list[dict[str, str]]:
+    """Compatibility shape (bare rows) for ``zoe_agent._ddg_search_sync``.
+
+    Deliberately DDG-ONLY (its pre-B10.0 behaviour): ``zoe_agent._web_search_ddg``
+    already ran the Tavily tier itself before falling through to this last
+    resort, so routing it through :func:`fetch_web_fallback`'s ``auto`` would
+    spend a second Tavily credit and a second timeout on the same query. Chat
+    uses :func:`fetch_web_fallback`, which picks the provider and says WHY rows
+    are empty.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    return _fetch_ddg(q, max_results, timeout_s).results
 
 
 def package_needs_web_fallback(package: dict[str, Any]) -> bool:
@@ -454,9 +754,12 @@ def build_package(
     screenshot_b64: str = "",
     screenshot_url: str = "",
     web_fallback_results: list[dict[str, str]] | None = None,
+    web_lookup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     url_price_pairs = _extract_url_price_pairs(response_text or "")
     fallback_rows = web_fallback_results or []
+    lookup = dict(web_lookup or {})
+    lookup_failed = bool(lookup) and lookup.get("status") != WEB_LOOKUP_RESULTS
     if not url_price_pairs and fallback_rows:
         for row in fallback_rows:
             url = str(row.get("url") or "").strip()
@@ -465,7 +768,9 @@ def build_package(
             price = str(row.get("price") or "").strip()
             url_price_pairs.append((url, price))
     urls = [u for u, _ in url_price_pairs]
-    if not urls:
+    if not urls and not lookup_failed:
+        # No lookup was attempted (legacy callers): keep the DDG search link as a
+        # pointer the user can follow.
         urls = [default_source_for_query(query)]
     results: list[ResearchResult] = []
     for idx, url in enumerate(urls[:5], start=1):
@@ -492,15 +797,31 @@ def build_package(
             )
         )
     if not results:
-        # fallback single-row summary to keep package non-empty
-        results.append(
-            ResearchResult(
-                rank=1,
-                name="Top result summary",
-                notes=(response_text or "")[:280],
-                confidence=0.55,
+        if lookup_failed:
+            # HONEST placeholder: say the lookup found nothing / was refused,
+            # never dress an empty evidence package up as a ranked option.
+            results.append(
+                ResearchResult(
+                    rank=1,
+                    name=(
+                        "Nothing found"
+                        if lookup.get("status") == WEB_LOOKUP_NO_RESULTS
+                        else "Web lookup unavailable"
+                    ),
+                    notes=str(lookup.get("message") or WEB_LOOKUP_MESSAGES[WEB_LOOKUP_ERROR]),
+                    confidence=0.2,
+                )
             )
-        )
+        else:
+            # fallback single-row summary to keep package non-empty
+            results.append(
+                ResearchResult(
+                    rank=1,
+                    name="Top result summary",
+                    notes=(response_text or "")[:280],
+                    confidence=0.55,
+                )
+            )
 
     screenshots: list[ResearchScreenshot] = []
     if screenshot_b64:
@@ -557,5 +878,6 @@ def build_package(
             "font_scale": 1.15,
             "high_contrast": True,
         },
+        web_lookup=lookup,
     )
     return asdict(pkg)
