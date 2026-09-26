@@ -261,6 +261,12 @@ docker exec -it zoe-omnigent codex login       # "Sign in with ChatGPT"
 docker exec -it zoe-omnigent env NO_OPEN_BROWSER=1 cursor-agent login   # prints a URL to open
 docker exec -it zoe-omnigent cursor-agent status   # verify
 ```
+**Renewal:** the Claude refresh token lapses (recorded 2026-09-25: valid to **2026-10-11**) and
+nothing alarms ahead of it — the executor only reports the logged-out failure afterwards. Re-run
+the `claude` login above before the date; the check commands, the Codex/Cursor equivalents and the
+pending policy to move the polly lane off `claude-sdk` subscription OAuth are in
+[docs/knowledge/omnigent-container-config.md](../../docs/knowledge/omnigent-container-config.md).
+
 Each is a headless device/paste flow (no browser in the container). Alternatively, copy an
 existing login in from a machine where you're already signed in: `~/.claude`, `~/.codex`,
 `~/.cursor` → the matching `omnigent-*` volume.
@@ -391,6 +397,17 @@ reached over `zoe-codeintel`:
 Install the bridge units before recreating this container — `scripts/setup/systemd/README.md`
 has the commands and the mandatory negative control. `tests/unit/modules/test_omnigent_mcp_config.py`
 fails if a stdio serena comes back or the pinned addresses drift apart.
+
+**Codex in the container (B0.11):** Codex reads `/root/.codex/config.toml`, which lives in the
+`omnigent-codex` VOLUME — nothing tracked owned it, so it kept a per-session stdio serena spawn
+long after `.mcp.json` was migrated (two private ~700 MB Serenas measured 2026-09-25, patched
+live, and lost again on any volume reset). The tracked template `codex-mcp.toml` (same serena
+`url`, same codebase-memory binary as `.mcp.json`) is baked into the image at
+`/usr/local/share/zoe-omnigent/codex-mcp.toml`, and `entrypoint.sh` rewrites ONLY the managed
+`[mcp_servers.*]` tables from it on every boot, keeping Codex's own `hooks.state` and everything
+else verbatim (idempotent, non-fatal on an unparseable file). Applying a template change means an
+image rebuild + recreate; boot log line `codex mcp seed: already current` is the healthy state.
+Pinned by `tests/unit/test_omnigent_entrypoint_codex_mcp.py` and the two MCP config tests.
 
 **Repo rules:** the repo-root `CLAUDE.md` (tracked, `@AGENTS.md`-includes the hub) is visible
 at `/workspace/CLAUDE.md`, so Claude-in-container reads the rules.

@@ -28,11 +28,17 @@ status: 🔨 active — NEXT ACTION is always §0
    agent as a production deploy) and restart `llama-server`, then run one replay gate; move
    the ignored leftover `modules/zoe-music/` (root-owned `__pycache__`, retired in #1653) out
    of the live checkout — it makes `test_no_zoe_music_module` red locally while CI is green.
-2. **Drain the PR queue in order:** #1691 (B10.0) and #1695 (B0.12 pt 1) are ready + queued;
-   #1692 (B3.1 lab) and #1693 (B9.1 lab) are in a batched review-thread round; #1694 (Flue
-   2.1.1) and #1696 (Moonshine 0.1.5) are voice-path drafts that need a **head-bound** replay
-   run before ready (B1.11 needs the 2.1.1 sidecar on a parallel port; B1.10 needs the
-   runbook's install-on-box step first).
+2. **Queue state (2026-09-26 pm):** MERGED today — #1695 (B0.12 pt 1), #1698 (B0.6 deps
+   contract), #1696 (B1.10 hold + keyterms plumbing), #1693 (B9.1 Omi lab). Still queued:
+   #1691 (B10.0) and #1692 (B3.1 lab), each with ~10–30 review threads closed by
+   failing-test-first fixes. #1694 (B1.11) parked — see B1.11. Voice-scope PRs need a
+   head-bound probe after EVERY `update-branch` (strict mode); the Kokoro-paused window
+   (`systemctl --user stop kokoro-tts` → probe with `--service-dir` → start → verify
+   `curl http://localhost:10201/health` shows `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
+   `dependencies.tts` names the `kokoro-sidecar` provider — `tts.ok` alone is not enough,
+   it also goes green on the espeak/edge fallback or on a CPU-mode Kokoro) frees ~2 GB and is
+   what made today's runs possible under the 700 MB floor. Hold the
+   other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again.
 3. **B0.4 llama.cpp rebuild** (brain-stop window, ~1 h compile) — after the Gemma swap has
    its own replay gate, so the two changes are attributable separately.
 
@@ -90,6 +96,17 @@ status: 🔨 active — NEXT ACTION is always §0
   1753 ms). Two pip-declared conflicts are pre-existing and belong to packages zoe-data
   does not import (`livekit-agents` 1.5.10 wants livekit 1.1.8; `memu-py` wants
   httpx<0.28) — candidates for removal in B0.7, not blockers.
+  **2026-09-26 pm:** the post-merge deploy of #1695 FAILED — `services/homeassistant-mcp-bridge/tests/`
+  in the live checkout was root-owned, git could not create the new test file, and the
+  aborted `git reset --hard` left the live tree partially updated (HEAD stayed, 7 files
+  moved ahead, no service restarted). Fixed by 🧑 `chown -R zoe:zoe` + deploy re-run (green,
+  live clean). The HA bridge is a Docker container with the source bind-mounted and deploy
+  does NOT restart it — after a SOURCE-only bridge merge, `docker restart
+  homeassistant-mcp-bridge` (`/tools/names` live, scheme `legacy` against HA 2026.5.2); after a
+  merge that touches the bridge's `requirements.txt` or Dockerfile, a restart reuses the old
+  image's packages — rebuild instead: `docker compose up -d --build homeassistant-mcp-bridge`. Other root-owned paths in the
+  checkout are runtime data only (`homeassistant/`, `.pi`, `.polly`, `scripts/n8n`).
+  Deploys for #1698 and #1696 then ran green; live = main; drift check 0 MISMATCH.
 - B0.14 ✅ 2026-09-26 (audit merged as #1687 — redacted; corrections #1688; the
   un-redacted #1684 was closed and its branch deleted because household data had reached a
   public branch. Fixes in **PR #1689** — rebuilt clean after a fake-password fixture tripped
@@ -153,9 +170,15 @@ status: 🔨 active — NEXT ACTION is always §0
 - B0.10 ⬜ GitHub: allow-list `voice-gate.yml` + `break-glass.yml` under the new
   `pull_request_target` protection before 2026-11-02; set Copilot code review to Lite
   before 2026-09-28; add CodeRabbit (free on this public repo); Greptile to Starter.
-- B0.11 ⬜ Omnigent: bake the `url=` Serena entry into the image (patched live 2026-09-25 in
+- B0.11 🔨 Omnigent: bake the `url=` Serena entry into the image (patched live 2026-09-25 in
   `/root/.codex/config.toml`; a container recreate reverts it); renew the Claude login before
-  2026-10-11; move the polly lane off `claude-sdk` OAuth (policy).
+  2026-10-11; move the polly lane off `claude-sdk` OAuth (policy). Draft PR #1700: the file
+  lives in the `omnigent-codex` VOLUME with no tracked owner — now a tracked template
+  (`modules/omnigent/codex-mcp.toml`) baked into the image and seeded idempotently by
+  `entrypoint.sh` on every boot (hooks.state kept); renewal steps + the polly-lane policy note
+  recorded in `docs/knowledge/omnigent-container-config.md`. Post-merge: coordinator rebuilds +
+  recreates the container (`docker compose ... up -d --build` from `modules/omnigent/`); the
+  login renewal and the policy decision remain operator steps.
 - B0.12 🔨 HA tool-name sweep (`domain__Tool` prefixes) → HA 2026.9/10 upgrade; adopt the
   MCP `device_id` meta so panel commands resolve to their room. Then MA 2.10 client check.
   Part 1 = draft PR #1695: sweep found NO live call site (bridge is pure REST; HA's
@@ -197,14 +220,30 @@ status: 🔨 active — NEXT ACTION is always §0
   recognition for confirmations and menus (HA assist_satellite + speech-to-phrase).
 - B1.9 ⬜ Template fast path for the router's top-20 highest-precision intents (zero brain
   call; TTS-safe phonetic normaliser) — axiom-voice-agent.
-- B1.10 ⏸ HELD — Moonshine 0.1.5 with `keyterms`: installed, replay-measured and rolled back
-  2026-09-26 (said-vs-did 13/13 OK, but STT +43 % median / ~1.9× per file slower on the Orin
-  CPU — per-stage speed rule fails; most of the cost is the 0.1.5 runtime, not the bundle).
-  Draft PR #1696 keeps the readiness: `ZOE_MOONSHINE_KEYTERMS` plumbing (feature-detected,
-  dormant on 0.0.62) + the runbook with numbers and retest conditions:
-  `docs/knowledge/moonshine-0-1-5-upgrade.md`. Retest on the next moonshine-voice release.
-- B1.11 ⬜ Flue 2.1.1 in the brain sidecar (first-delta latency fix, retryable connection
-  errors, truncated tool-batch recovery); then 2.2.0 for the llama.cpp tool-call fixes.
+- B1.10 ⏸ HELD 2026-09-26 — Moonshine 0.1.5 passes said-vs-did (13/13 OK in-process off/on
+  keyterms and remote; 7 EMPTY = baseline) but the STT stage is ~1.9× slower per file on the
+  Orin. **Root-caused** with the per-session ONNX log (`options={"log_ort_run": True}`):
+  encoder / adapter / cross-KV runs identical (~50 ms), same 8 decoder steps, same input
+  shapes, but EACH decoder step is 57–70 ms in 0.1.5 vs 20–22 ms in 0.0.62. Not the model
+  bundle (0.1.5 lib + old bundle: still 60 ms/step), not the ONNX Runtime binary (0.0.62's
+  libonnxruntime swapped into the 0.1.5 package: still ~70 ms/step), not threads
+  (`MOONSHINE_ORT_SINGLE_THREAD=1` → 1010 ms median; 2/4-core pinning 860–880; OMP 2 → 584),
+  not speculative decoding (off → 508), not the update interval (10 s → 525). The cost is in
+  libmoonshine 0.1.x's own decoder-run path. No matching upstream issue (searched 2026-09-26).
+  Shipped by **PR #1696 (merged)**: pin `moonshine-voice==0.0.62` recorded, the
+  `ZOE_MOONSHINE_KEYTERMS` plumbing (feature-detected, dormant on 0.0.62, visible on `/readyz`),
+  runbook `docs/knowledge/moonshine-0-1-5-upgrade.md` §8 with the numbers. Next: 🧑 file
+  upstream at moonshine-ai/moonshine with these numbers (outward-facing — Jason's call); retest
+  on the next release with the same engine-only A/B.
+- B1.11 ⏸ PARKED 2026-09-26 — Flue 2.1.1 (`@flue/*` 2.0.1 → 2.1.1 in both 2x sidecars; hono /
+  nanoid advisories cleared, `npm audit` 0; 209/209 + 44/44 tests; store format unchanged, one
+  fold-checkpoint re-fold on first start). Draft **PR #1694** was proven the way the contract
+  intends — the 2.1.1 build from the PR worktree ran on a parallel port :3580 with an isolated
+  store and the head-bound replay PASSED twice — but the branch upgrades the auto-deployed trees
+  IN PLACE and `labs/AGENTS.md` mandates a SIBLING directory for version bumps. 🧑 Jason
+  decides: (a) the two-PR sibling + cutover route (as #1675 did for 1.x → 2.x), or (b) amend
+  the contract to allow in-place patch/minor dependency bumps that carry head-bound
+  parallel-port evidence. Then 2.2.0 for the llama.cpp tool-call fixes.
 
 ### B2 — Proactivity with judgement (beats Daily Brief / Alexa+ nudges)
 - B2.1 ⬜ **Presence-triggered routines**: emit `person_recognized(panel, person, ts)` from the
@@ -460,6 +499,10 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-26 (pm) — Moonshine 0.1.5 measured + root-caused (decoder-step cost inside the
+  0.1.x library), HELD; Flue 2.1.1 PARKED on the sibling-directory contract; deploy
+  root-ownership wedge found + fixed; #1693/#1695/#1696/#1698 merged and deployed; bridge
+  restarted by hand; ~70 review threads closed across the day's PRs.
 - 2026-09-26 — gated Python batch on the box + replay gate PASS #2; B0.6 deps contract
   (this PR); B0.14 ✅ via #1689; B6.2 re-upload diffed (template-only) and staged; B10.0
   (#1691), B0.12 pt 1 (#1695), B1.11 (#1694), B1.10 (#1696) opened by agents; #1692/#1693
