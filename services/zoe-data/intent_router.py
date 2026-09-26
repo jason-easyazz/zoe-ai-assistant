@@ -4120,6 +4120,107 @@ async def _music_recent_skip_count(user_id: str) -> int:
         return 0
 
 
+# Cached HA media_player inventory (see _resolve_media_player_entity).
+_MEDIA_PLAYER_CACHE: dict = {"players": None, "expires": 0.0}
+_MEDIA_PLAYER_CACHE_TTL_S = 300.0
+_MEDIA_PLAYER_WARNED: set = set()
+_NO_PLAYER_MSG = "I can't find an available speaker to control right now."
+
+
+def _norm_room(text: object) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+async def _list_media_players(ha_url: str) -> list[dict] | None:
+    """[{entity_id, state, name, area}] from the HA bridge, cached 5 min; None
+    when the bridge cannot be asked (callers then behave as before)."""
+    import time as _time, httpx as _httpx
+    cache = _MEDIA_PLAYER_CACHE
+    if cache["players"] is not None and _time.monotonic() < cache["expires"]:
+        return cache["players"]
+    try:
+        async with _httpx.AsyncClient(timeout=4.0) as c:
+            resp = await c.get(f"{ha_url}/entities?domain=media_player")
+            data = resp.json() if resp.status_code < 400 else {}
+    except Exception as exc:
+        logger.debug("media player resolve: HA bridge entity list unavailable (%s)", exc)
+        return None
+    entities = data.get("entities", []) if isinstance(data, dict) else (data or [])
+    players = []
+    for e in entities:
+        if not isinstance(e, dict):
+            continue
+        eid = str(e.get("entity_id") or "")
+        if not eid.startswith("media_player."):
+            continue
+        attrs = e.get("attributes") or {}
+        players.append({
+            "entity_id": eid,
+            "state": str(e.get("state") or ""),
+            "name": str(attrs.get("friendly_name") or "") if isinstance(attrs, dict) else "",
+            "area": str(e.get("area_id") or e.get("area") or ""),
+        })
+    cache.update(players=players, expires=_time.monotonic() + _MEDIA_PLAYER_CACHE_TTL_S)
+    return players
+
+
+async def _resolve_media_player_entity(ha_url: str, room: object = None) -> str | None:
+    """entity_id for HA media_player service calls — fail SOFT on a stale env value.
+
+    `ZOE_DEFAULT_MEDIA_PLAYER` is operator config; the 2026-09-25 audit found the
+    live value (`media_player.living_room`) is not an HA entity at all, so every
+    play/pause/volume that fell through to HA 404ed. Resolution order:
+      1. the configured id when HA lists it and it is not `unavailable`;
+      2. an available player matching the requested `room` (entity id, friendly
+         name or area — "kitchen" must not drive the bedroom speaker);
+      3. any available player (the first HA lists), warned ONCE per configured
+         id naming what HA actually has;
+      4. None — nothing is available; the caller says so instead of acting on
+         the wrong speaker.
+    If the bridge cannot be asked at all, the configured id is returned unchanged
+    (no new failure mode). `media_player.all` is HA's own broadcast target and
+    skips the lookup.
+    """
+    import os as _os
+    configured = _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all")
+    if configured == "media_player.all":
+        return configured
+    players = await _list_media_players(ha_url)
+    if players is None:
+        return configured
+    if not players:
+        return configured  # HA lists no media players at all: behave as before
+    by_id = {pl["entity_id"]: pl for pl in players}
+    if configured in by_id and by_id[configured]["state"] != "unavailable":
+        return configured
+    available = [pl for pl in players if pl["state"] != "unavailable"]
+    chosen = None
+    want = _norm_room(room)
+    if want:
+        for pl in available:
+            hay = " ".join(_norm_room(x) for x in (pl["entity_id"], pl["name"], pl["area"]))
+            if want in hay:
+                chosen = pl["entity_id"]
+                break
+    if chosen is None and available:
+        chosen = available[0]["entity_id"]
+    if chosen is None:
+        logger.warning(
+            "ZOE_DEFAULT_MEDIA_PLAYER=%s is not usable and no media_player is available "
+            "(HA lists: %s) — refusing to control a speaker.",
+            configured, ", ".join(f"{pl['entity_id']}={pl['state'] or '?'}" for pl in players[:8]),
+        )
+        return None
+    if configured not in _MEDIA_PLAYER_WARNED:
+        _MEDIA_PLAYER_WARNED.add(configured)
+        logger.warning(
+            "ZOE_DEFAULT_MEDIA_PLAYER=%s is not an available Home Assistant entity; using %s "
+            "instead. HA lists: %s. Set the env to a real media_player id.",
+            configured, chosen, ", ".join(pl["entity_id"] for pl in players[:8]),
+        )
+    return chosen
+
+
 async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional[str]:
     try:
         response = await client.post(f"{ha_url}/devices/control", json=payload)
@@ -4165,8 +4266,11 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 if not _query:
                     _query = "music"  # final fallback
 
+            target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
+            if target is None:
+                return _NO_PLAYER_MSG
             payload = {
-                "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                "entity_id": target,
                 "action": "play_media",
                 "data": {
                     "media_content_id": _query,
@@ -4328,8 +4432,11 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 if cmd == "shuffle": extra = {"shuffle": True}
                 if cmd == "mute":    extra = {"is_volume_muted": True}
                 if cmd == "unmute":  extra = {"is_volume_muted": False}
+                target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
+                if target is None:
+                    return _NO_PLAYER_MSG
                 payload = {
-                    "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                    "entity_id": target,
                     "action": svc,
                     "data": extra,
                 }
@@ -4372,8 +4479,11 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
         elif intent.name == "music_volume":
             level = int(slots.get("level", 50))
             vol = max(0, min(100, level)) / 100.0
+            target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
+            if target is None:
+                return _NO_PLAYER_MSG
             payload = {
-                "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                "entity_id": target,
                 "action": "volume_set",
                 "data": {"volume_level": vol},
             }
@@ -4923,19 +5033,22 @@ async def _execute_set_volume_intent(intent: Intent) -> str:
         return "I'll try to speak more softly. You can also adjust volume in Settings."
 
 
-def _parse_date(raw: str) -> Optional[str]:
+def _parse_date(raw: str, today: Optional["date"] = None) -> Optional[str]:
+    """Resolve a date phrase to ISO. `today` anchors relative phrases ("today",
+    "tomorrow", weekdays, year-less "June 3"); callers with a household clock
+    (reminders → ZOE_TIMEZONE) pass it, the default is the server's local date."""
     from datetime import date, timedelta
     raw = raw.strip().lower()
+    today = today or date.today()
 
     if raw == "today":
-        return date.today().isoformat()
+        return today.isoformat()
     if raw == "tomorrow":
-        return (date.today() + timedelta(days=1)).isoformat()
+        return (today + timedelta(days=1)).isoformat()
 
     day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
     for i, name in enumerate(day_names):
         if raw.startswith(name):
-            today = date.today()
             days_ahead = (i - today.weekday()) % 7
             if days_ahead == 0:
                 days_ahead = 7
@@ -4954,7 +5067,7 @@ def _parse_date(raw: str) -> Optional[str]:
         month_name, day, year = m.group(1), int(m.group(2)), m.group(3)
         month = months.get(month_name)
         if month:
-            yr = int(year) if year else date.today().year
+            yr = int(year) if year else today.year
             return f"{yr:04d}-{month:02d}-{day:02d}"
 
     m = re.match(r"(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(\w+)(?:\s+(\d{4}))?", raw)
@@ -4962,7 +5075,7 @@ def _parse_date(raw: str) -> Optional[str]:
         day, month_name, year = int(m.group(1)), m.group(2), m.group(3)
         month = months.get(month_name)
         if month:
-            yr = int(year) if year else date.today().year
+            yr = int(year) if year else today.year
             return f"{yr:04d}-{month:02d}-{day:02d}"
 
     m = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)

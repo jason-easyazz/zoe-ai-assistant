@@ -29,7 +29,7 @@ with its own README/RUNBOOK and is self-contained.
   falling through to `core` (failover behind `ZOE_BRAIN_FAILOVER`, default off —
   see `services/zoe-data/AGENTS.md`). Treat a stopped `flue-zoe-brain-2x` as a live
   outage, not a graceful degrade;
-  `flue-zoe-telegram/` → `scripts/setup/systemd/flue-zoe-telegram.service` (the
+  `flue-zoe-telegram-2x/` → `scripts/setup/systemd/flue-zoe-telegram.service` (the
   long-poll Telegram bot; the operator installs it with their own bot token) plus
   its supervisor `scripts/setup/systemd/flue-zoe-telegram-watchdog.{service,timer}`
   (polls the bot's `GET /health` once a minute and restarts it when the poll loop
@@ -238,31 +238,23 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   is a record, not a contract; harness is hand-run, hard-gated on
   MemAvailable ≥ 2 GB, never resident, never prod-wired. Weights stay at
   `/home/zoe/models/lab/`.
-- `flue-zoe-telegram/` — Flue Telegram channel: long-poll bot bridged to zoe-data's
-  `/api/chat` (NOT a Flue LLM agent; `src/agents/zoe.ts` is a build-only placeholder
-  and registers no model provider — never points at the voice brain on `:11434`).
-  Maps each verified sender to their **real Zoe user** via account linking: a user
-  stores their numeric telegram id in their profile (`PUT /api/user/profile/telegram`),
-  the bot resolves it (`GET /api/system/resolve-telegram/<id>`, internal-only) and
-  forwards the turn as that user over zoe-data's **trusted** `/api/chat` override
-  (`X-Zoe-User-Id`, honoured only for loopback / valid `X-Internal-Token` — a public
-  request can't impersonate; `auth.resolve_acting_user`). Unlinked senders are told
-  their id and refused (never reach the brain as a real user). Ships the opt-in unit
-  template above. Hand-started, demo-only; README is a record, not a contract.
 - `flue-zoe-telegram-2x/` — the **LIVE Telegram bot since the 2026-08-09 cutover**
   (Flue 2.0.1). `flue-zoe-telegram.service` runs THIS directory on `:3582` (via the
   operator drop-in; the tracked template also points here), and `deploy.yml`
   rebuilds + restarts the unit on any diff under `labs/flue-zoe-telegram-2x/` —
-  this subtree is production-deployed, treat changes accordingly. The retired
-  beta stays in `flue-zoe-telegram/` (`@flue/*@1.0.0-beta.6`) as the rollback
-  target ONLY: rolling back = repoint the unit + carry the epoch map back +
-  revert the deploy retarget together (its README, cutover step 7). The store
-  boundary is one-way in BOTH directions (2.x persists schema **v8** against the
-  beta's **v5**, reset-only, rejected before any application code runs) — never
-  point either process at the other's `data/`.
+  this subtree is production-deployed, treat changes accordingly. The 1.x beta
+  (`labs/flue-zoe-telegram/`, `@flue/*@1.0.0-beta.6`) was **retired by removal
+  2026-09-25** — it had been the rollback target only, its `@flue/*` beta
+  lockfile carried 35 of the repo's 52 open Dependabot alerts, and that rollback
+  meant discarding everything 2.x had persisted (schema **v8** is unreadable by
+  the beta's **v5**) for a store frozen at cutover — not a rollback after seven
+  weeks live. There is **no rollback to 1.x**: rolling back means `git revert`
+  of the offending 2.x commit (the README's step 7), which the auto-deploy then
+  builds + restarts; recover the 1.x source with
+  `git log --all -- labs/flue-zoe-telegram` if ever needed.
   Since the cutover the AUTO-DEPLOYED pathspec is `labs/flue-zoe-telegram-2x/` —
-  breaking work on the LIVE bot now needs its own sibling (the same rule that
-  protected the beta), and the retired beta directory is safe to edit freely. Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
+  breaking work on the LIVE bot needs its own sibling (the same rule that
+  protected the beta). Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
   API and a mock zoe-data on loopback, so no bot token, no real sends, and no
   metered model call) plus `npm run typecheck`, `npm run build`, and
   `./smoke-built.sh` (the only check that exercises the built artifact, because
@@ -313,6 +305,38 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+- `b3-1-supersession/` — B3.1 lab: **bi-temporal supersession + keep-the-richer-fact
+  reconciliation**, pure Python, no model, no I/O, flag-dark
+  (`ZOE_BITEMPORAL_SUPERSEDE`, default off, read by nothing in prod). Graphiti's
+  overlap rule (contradiction only when validity intervals overlap; invalidate by
+  `valid_until = new.valid_from` + `expired_at = now`, never delete), mem0's
+  ADD/UPDATE/SUPERSEDE/NONE controller with integer-id candidates and an injectable
+  LLM `judge` (fake in tests; a judge naming an unseen id degrades to ADD), the
+  `attribute_key` normalisation that closes the M7 "works at X" gap, and the
+  richer-fact rule. 50-pair SYNTHETIC fixture (Person A/B/C, invented employers —
+  never household data) + `run_fixture.py` scorer with both negative controls.
+  Design + schema/migration PLAN + prod wiring:
+  `docs/architecture/b3-1-bitemporal-supersession.md`. Regression net
+  `test_supersession_lab.py` lives INSIDE the lab dir (hand-run:
+  `nice -n 15 python3 -m pytest labs/b3-1-supersession -q -p no:cacheprovider`) —
+  `pytest.ini` `testpaths` and both CI lanes never collect `labs/`, so nothing in
+  CI imports it. README is a record, not a contract.
+- `omi-receiver/` — **B9.1 Omi lab receive** (P0 of
+  `docs/architecture/omi-integration-plan.md`): a hand-run, OFF-Orin BLE receiver
+  for the Omi CV1 pendant — `omi_bridge.py` (bleak 0.22.3 → 3-byte-header framer
+  with gap/wrap/fragment/resync accounting → opuslib decode → rolling 16 kHz WAVs;
+  registers its own `disconnected_callback` because the official SDK never sees
+  drops, #13290; prints the P0 numbers: gaps %, reconnects, battery drop/h),
+  `wer.py` + `split_on_silence.py` for the Moonshine WER comparison, and the
+  README's manual protocol + gate + open questions for Jason. Wire format verified
+  against the firmware's `push_to_gatt()` (id advances per NOTIFICATION; CV1
+  reports codec **21**, not the plan's 20). Regression net (hand-run, slim-venv
+  green, `ci_safe`-marked but NOT in production CI by this contract):
+  `pytest labs/omi-receiver/tests -q -x -p no:cacheprovider` — includes a
+  negative control on the gap detector and a real opuslib round trip that SKIPS
+  with a reason when libopus is absent. Scaffold + fixtures only until the pendant
+  is run: no live result is claimed. Never wired into the Pi daemon, `zoe-data`,
+  or CI (that is B9.2, flag-dark).
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%

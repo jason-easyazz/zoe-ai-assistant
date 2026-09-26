@@ -22,7 +22,7 @@ from fastapi.responses import StreamingResponse
 from auth import get_current_user
 from database import get_db
 from stt_wake_strip import _strip_wake_word
-from typed_env import env_bool, env_float, env_int, env_str
+from typed_env import env_bool, env_float, env_int, env_list, env_str
 import voice_speculation as _speculation
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
@@ -2165,10 +2165,78 @@ def moonshine_error() -> Optional[str]:
     return _moonshine_load_error
 
 
+# ZOE_MOONSHINE_KEYTERMS — runtime decoder biasing (moonshine-voice >= 0.1.2,
+# `Transcriber.set_keyterms`). Default EMPTY = off: the rock decodes exactly as it
+# did on 0.0.62. Feature-detected, never version-gated: 0.0.62 reports
+# `__version__ == "0.1.0"`, so the only honest probe is `hasattr(tr, "set_keyterms")`.
+# The list is applied ONCE, right after the singleton loads (a restart re-reads it).
+# State is kept for /readyz so an operator can see "configured N / applied N".
+_moonshine_keyterms_state: dict = {"configured": 0, "applied": 0, "supported": None, "error": None}
+
+
+def moonshine_keyterms() -> tuple[str, ...]:
+    """Parsed ZOE_MOONSHINE_KEYTERMS: comma-separated, stripped, empties dropped,
+    de-duplicated in order. Splitting on the comma is what makes every term
+    comma-free BY CONSTRUCTION — the library uses the comma as its own delimiter
+    and raises on a term containing one."""
+    seen: set = set()
+    out: list = []
+    for term in env_list("ZOE_MOONSHINE_KEYTERMS"):
+        if term not in seen:
+            seen.add(term)
+            out.append(term)
+    return tuple(out)
+
+
+def moonshine_keyterms_state() -> dict:
+    """`configured` is the ENV (what the operator asked for), read at call time and
+    independent of the model load; `applied`/`supported`/`error` describe what the
+    transcriber did with it and stay at their zero-values until it has loaded."""
+    state = dict(_moonshine_keyterms_state)
+    state["configured"] = len(moonshine_keyterms())
+    return state
+
+
+def _apply_moonshine_keyterms(tr) -> None:
+    """Best-effort: biasing must never cost the rock its transcriber. A missing
+    API (0.0.62) or a refused list logs a WARNING and leaves decoding unbiased;
+    the singleton is still installed by the caller."""
+    terms = moonshine_keyterms()
+    supported = callable(getattr(tr, "set_keyterms", None))
+    state = {"configured": len(terms), "applied": 0, "supported": supported, "error": None}
+    if terms:
+        if not supported:
+            logger.warning(
+                "ZOE_MOONSHINE_KEYTERMS has %d term(s) but this moonshine-voice has no "
+                "Transcriber.set_keyterms (needs >= 0.1.2; installed %s) — biasing OFF",
+                len(terms), _moonshine_dist_version(),
+            )
+        else:
+            try:
+                tr.set_keyterms(list(terms))
+                state["applied"] = len(terms)
+                logger.info("Moonshine keyterms applied: %d term(s)", len(terms))
+            except Exception as exc:
+                state["error"] = exc.__class__.__name__
+                logger.warning("Moonshine set_keyterms refused the list (%s: %s) — biasing OFF",
+                               exc.__class__.__name__, exc)
+    _moonshine_keyterms_state.update(state)
+
+
+def _moonshine_dist_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("moonshine-voice")
+    except Exception:
+        return "unknown"
+
+
 def _ensure_moonshine():
     """Lazily build the Moonshine v2 transcriber (MEDIUM_STREAMING by default —
     accurate on real room audio, ~0.5s/clip). Locked so a concurrent first call
-    can't race the model load."""
+    can't race the model load. Call shape is identical on moonshine-voice 0.0.62
+    and 0.1.5 (`get_model_for_language` / `Transcriber` / `transcribe_without_streaming`
+    are unchanged); only the optional keyterms step is version-sensitive."""
     global _moonshine_model, _moonshine_load_error
     if _moonshine_model is not None:
         return _moonshine_model
@@ -2181,7 +2249,9 @@ def _ensure_moonshine():
                 archname = env_str("ZOE_MOONSHINE_ARCH", "MEDIUM_STREAMING")
                 arch = getattr(mv.ModelArch, archname, mv.ModelArch.MEDIUM_STREAMING)
                 model_path, resolved_arch = mv.get_model_for_language("en", arch)
-                _moonshine_model = Transcriber(model_path, resolved_arch)
+                tr = Transcriber(model_path, resolved_arch)
+                _apply_moonshine_keyterms(tr)
+                _moonshine_model = tr
                 _moonshine_load_error = None
             except Exception as exc:
                 _moonshine_load_error = exc.__class__.__name__

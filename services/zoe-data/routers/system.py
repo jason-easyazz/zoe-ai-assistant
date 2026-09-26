@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
 from auth import (
+    GUEST_USER_ID,
     get_current_user,
     require_admin,
     require_signed_in,
@@ -21,6 +22,7 @@ from auth import (
 )
 from database import get_db
 from hermes_http import hermes_auth_headers
+from research_evidence import web_lookup_status
 from openclaw_maintenance import (
     fetch_gateway_status,
     fetch_npm_latest_version,
@@ -220,7 +222,24 @@ async def get_system_status(
             "online_panels_30s": panels_online,
         },
         "pi_hybrid_production": _pi_hybrid_production_public_status(),
+        # B10.0: web-lookup configuration + last outcome (never the query/key).
+        "web_lookup": _web_lookup_block_for(user),
     }
+
+
+def _web_lookup_block_for(user: dict) -> dict[str, Any]:
+    """Config fields for everyone; `last_outcome` only for a signed-in member.
+
+    `get_current_user` resolves a credential-less request to the fail-closed
+    GUEST principal rather than rejecting it, and the last outcome is
+    process-wide — another household member's activity (its timestamp and
+    disposition). Same predicate as `auth.require_signed_in`, minus the raise.
+    """
+    block = web_lookup_status()
+    is_guest = user.get("role") in (None, "guest") or user.get("user_id") in (None, GUEST_USER_ID)
+    if is_guest:
+        block["last_outcome"] = None
+    return block
 
 
 @router.get("/memory-router/status")
@@ -731,27 +750,50 @@ def _attach_memory_loop_log_handler() -> None:
         logger.warning("memory_loops: could not attach file log: %s", _log_exc)
 
 
-def _record_memory_loop(loop: str, results) -> dict:
+def _record_memory_loop(loop: str, results, *, input_seen: bool | None = None,
+                        newest_turn_age_hours: float | None = None) -> dict:
     """Record a completed loop run for observability, never raising.
 
     Persists last-run timestamp + aggregate effect counts (Prometheus gauges +
     the queryable ``memory_loop_status`` state). A metrics failure must never
     break the maintenance loop, so it degrades to a plain user count.
+
+    ``input_seen`` is the loop's independent "was there anything to do" answer
+    (digest: an owned user turn inside the lookback window). ``False`` with no
+    users is an IDLE run — logged as such, never as a ZERO-EFFECT ALERT, and it
+    holds the streak rather than extending it. The 44-night alert of
+    2026-08-13..09-25 was this: an idle household, not a broken loop.
     """
     try:
         from memory_metrics import record_consolidation_run, record_digest_run
 
         recorder = record_digest_run if loop == "digest" else record_consolidation_run
-        summary = recorder(results)
+        summary = recorder(results, input_seen=input_seen)
+        if newest_turn_age_hours is None:
+            age_txt = "unknown (probe failed)"
+        elif newest_turn_age_hours == float("inf"):
+            age_txt = "never (no owned user turns exist)"
+        else:
+            age_txt = f"{newest_turn_age_hours:.1f}h ago"
+        if summary.get("idle"):
+            logger.info(
+                "memory_%s: run idle — no input to process (newest owned user turn %s, "
+                "outside the lookback window); idle_streak=%s, zero-effect streak held at %s",
+                loop, age_txt, summary.get("idle_streak"), summary.get("zero_effect_streak"),
+            )
         # A loop that runs on schedule and does nothing must not read as
         # healthy. Escalate to WARNING once the zero-effect streak trips its
         # threshold, so the durable memory-loop log carries the same verdict
-        # the status endpoint shows.
+        # the status endpoint shows — and SAY WHY, so "no eligible input" is
+        # never mistaken for "processed N users and got nothing".
         if summary.get("zero_effect_alert"):
             logger.warning(
                 "memory_%s: ZERO-EFFECT ALERT — %d consecutive runs produced no "
-                "effects (threshold %s). The loop is running but doing nothing.",
+                "effects (threshold %s). verdict=%s users=%s attempted=%s skipped=%s "
+                "errors=%s newest_owned_user_turn=%s. The loop is running but doing nothing.",
                 loop, summary.get("zero_effect_streak"), summary.get("zero_effect_alert_after"),
+                summary.get("verdict"), summary.get("users"), summary.get("attempted"),
+                summary.get("skipped"), summary.get("errors"), age_txt,
             )
         return summary
     except Exception as _rec_exc:  # pragma: no cover - metrics must never break the loop
@@ -779,14 +821,24 @@ async def _memory_digest_loop():
         logger.info("memory_digest: next run in %.0f minutes", delay_s / 60)
         await asyncio.sleep(delay_s)
         try:
-            from memory_digest import run_digest_for_all_active_users  # type: ignore[import]
-            results = await run_digest_for_all_active_users()
-            summary = _record_memory_loop("digest", results)
+            from memory_digest import run_nightly_digest_pass  # type: ignore[import]
+            # One cutoff instant for selection AND the input probe (see
+            # run_nightly_digest_pass) — a turn landing mid-pass cannot make
+            # the probe contradict selection.
+            passed = await run_nightly_digest_pass()
+            results, input_seen = passed["results"], passed["input_seen"]
+            newest_age_h = passed["newest_turn_age_hours"]
+            summary = _record_memory_loop(
+                "digest", results, input_seen=input_seen, newest_turn_age_hours=newest_age_h,
+            )
             logger.info(
                 "memory_digest: nightly run complete — %d users processed, "
-                "effect_count=%s, effects=%s, zero_effect_streak=%s",
+                "effect_count=%s, effects=%s, zero_effect_streak=%s, verdict=%s, "
+                "attempted=%s, skipped=%s, errors=%s, input_seen=%s",
                 summary["users"], summary.get("effect_count"), summary["effects"],
-                summary.get("zero_effect_streak"),
+                summary.get("zero_effect_streak"), summary.get("verdict"),
+                summary.get("attempted"), summary.get("skipped"), summary.get("errors"),
+                input_seen,
             )
         except Exception as exc:
             logger.error("memory_digest: nightly loop error: %s", exc, exc_info=True)
@@ -2750,6 +2802,11 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
         result = await execute_intent(
             Intent(name=intent_name, slots=dict(body.slots or {})), user_id=user_id
         )
+    except HTTPException:
+        # A validation verdict from the fulfilment path (e.g. reminder_service's
+        # 422 for an unfireable due_date) is the answer, not a failure: pass it
+        # through so the brain's tool sees 4xx, not a generic 500 (Codex P2, #1686).
+        raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("intent-dispatch failed intent=%s: %s", intent_name, exc)
         raise HTTPException(status_code=500, detail="intent execution failed") from exc
@@ -2813,7 +2870,7 @@ async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_inten
 
 # ─── Telegram account linking (resolve a verified telegram_id → Zoe user) ─────
 #
-# The Telegram channel (labs/flue-zoe-telegram) forwards NO session, so every
+# The Telegram channel (labs/flue-zoe-telegram-2x) forwards NO session, so every
 # message would otherwise land as guest with no memory. A user links their
 # account by storing their numeric telegram_id in their profile (via
 # /api/user/profile, session-authed as themselves). This INTERNAL resolver maps

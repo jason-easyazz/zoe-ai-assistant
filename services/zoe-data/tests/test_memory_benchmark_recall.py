@@ -28,6 +28,7 @@ prints a per-class P@5 / R@5 / Hit@1 table plus an overall score — the number 
 grow toward the full brain-as-judge benchmark (500 Qs) later.
 """
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -37,8 +38,15 @@ from memory_service import MemoryService
 
 USER = "demo_bench_user"        # DEMO user only
 OTHER = "demo_bench_intruder"   # a second DEMO user, for isolation cases
-_NEW = "2026-07-08T00:00:00Z"
-_OLD = "2026-01-01T00:00:00Z"   # ~6 months older → time-decay + recency bite
+# Fixture timestamps are RELATIVE to now. They were fixed dates until 2026-09-25,
+# which made the multi-hop class a time bomb: the semantic term decays with
+# age (exp(-λ·age_days)) while the hybrid preference boost is a constant, so as
+# the calendar moved past ~2 months the "person" answer row overtook the nearer
+# distractors even with the graph OFF and `test_multi_hop_graph_recall` went red
+# on an untouched ranker (green 2026-08-10, red 2026-09-25, same code).
+_NOW = datetime.now(timezone.utc).replace(microsecond=0)
+_NEW = _NOW.isoformat().replace("+00:00", "Z")
+_OLD = (_NOW - timedelta(days=188)).isoformat().replace("+00:00", "Z")  # ~6 months older → time-decay + recency bite
 K = 5                            # report P@K / R@K
 
 

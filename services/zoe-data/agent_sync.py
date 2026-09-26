@@ -130,13 +130,11 @@ def _build_zoe_self_md(
         "- Voice: Wyoming/Whisper transcribe + TTS",
         "- Push notifications: WebSocket /ws/push + proactive engine",
         "- Panel display: show_map, show_chart, show_image, open_touch_page",
-        "- Web search: DDG scraping via web_search tool (no API key)",
         "- Builder skills: zoe-widget-builder, zoe-page-builder, zoe-capability-extender",
         "- Hermes engineering loop: source context → small feature → cleanup pass → review/test",
         "- Agent sync: POST /api/system/agent-sync updates this file",
         "",
         "## Escalation Guide",
-        "- web_search: current events, live prices, today's news",
         "- escalate_to_hermes: default for complex tasks, engineering, architecture, code review, planning, board repair, and Greptile loops",
         "- escalate_to_openclaw: available as an explicit/manual fallback; Hermes is the default escalation path",
         "",
@@ -191,7 +189,7 @@ def _build_compact(mcp_tools: list[str], skills: list[str]) -> str:
     compact = (
         f"Zoe: 3-tier AI (Gemma4/Agent :11434, Hermes/default engineering+browser :8642, OpenClaw available fallback :18789). "
         f"MCP tools: {tool_summary}. Skills: {skill_summary}. "
-        f"web_search (DDG), show_map/chart, HA, push, builder skills (admin+staged). "
+        f"show_map/chart, HA, push, builder skills (admin+staged). "
         f"Check zoe_self_capabilities MCP. Full: ZOE_SELF.md."
     )
     if len(compact) > _MAX_COMPACT_CHARS:
@@ -333,15 +331,19 @@ def _build_capabilities_md(
         "- **Voice**: Wyoming/Whisper transcription + TTS",
         "- **Push**: WebSocket /ws/push + proactive engine (morning brief, open loop follow-ups)",
         "- **Panel**: show_map, show_chart, show_image, open_touch_page, panel_browser_screenshot",
-        "- **Web search**: DuckDuckGo scraping via web_search tool (no API key required)",
         "- **Self-improvement**: intent-miss review → Hermes/Multica proposal workflow (`self_improve` intent)",
         "- **Hermes engineering loop**: source context → small feature → cleanup pass → review/test",
         "- **Agent sync**: POST /api/system/agent-sync regenerates this file and all agent docs",
         "",
         "## Escalation Guide",
-        "1. `web_search` — current events, live prices, news after training cutoff",
-        "2. `escalate_to_hermes` — default for complex tasks, engineering, architecture, code review, planning, board repair, and Greptile loops",
-        "3. `escalate_to_openclaw` — explicit/manual fallback; Hermes remains the default route",
+        # Web lookup is NOT listed: the live Flue brain registers no web_search /
+        # web_browse tool (2026-09-25 audit §2.6). The MCP Tools section above is
+        # mcp_server's own registry and stays factual; this prose is what the
+        # brain/prompt is TOLD it can do, so it must not claim a tool it cannot
+        # call. Re-add when program item B10 registers one — the guard is
+        # tests/test_capabilities_honest.py.
+        "1. `escalate_to_hermes` — default for complex tasks, engineering, architecture, code review, planning, board repair, and Greptile loops",
+        "2. `escalate_to_openclaw` — explicit/manual fallback; Hermes remains the default route",
     ]
     return "\n".join(lines) + "\n"
 
