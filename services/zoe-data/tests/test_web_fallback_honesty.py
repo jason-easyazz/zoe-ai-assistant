@@ -643,3 +643,99 @@ def test_reply_with_its_own_source_is_still_captured_when_lookup_is_off(monkeypa
     assert pkg["sources"] == ["https://example.com/bali-fares"]
     assert captures == ["https://example.com/bali-fares"]
     assert pkg["screenshots"] and pkg["screenshots"][0]["source_url"] == "https://example.com/bali-fares"
+
+
+# ── 7. backend status surface (Greptile on #1691: integrations need a status
+#       endpoint, not just an in-turn card) ──────────────────────────────────
+# `research_evidence.web_lookup_status()` is the pure block; `/api/system/status`
+# carries it as `web_lookup`. The last outcome is recorded in-process with a
+# timestamp — status/provider/detail only, NEVER the query text or the key.
+
+def test_web_lookup_status_block_reports_off_and_no_outcome_yet(monkeypatch):
+    monkeypatch.setenv(re_mod.WEB_FALLBACK_PROVIDER_ENV, "off")
+    monkeypatch.setattr(re_mod, "_LAST_WEB_LOOKUP", {})
+    block = re_mod.web_lookup_status()
+    assert block["provider"] == "off" and block["configured"] == "off"
+    assert block["tavily_key_present"] is False
+    assert block["last_outcome"] is None
+
+
+def test_web_lookup_status_resolves_auto_and_records_last_outcome(monkeypatch):
+    monkeypatch.setenv(re_mod.WEB_FALLBACK_PROVIDER_ENV, "auto")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-secret-do-not-leak")
+    monkeypatch.setattr(re_mod, "_LAST_WEB_LOOKUP", {})
+    assert re_mod.web_lookup_status()["provider"] == "tavily"
+    _fake_tavily(monkeypatch, wsp.TAVILY_OUTCOME_NO_RESULTS)
+    _serve_ddg(monkeypatch, CHALLENGE_PAGE, status=202)
+    fetch_web_fallback("cheapest flights for Jason Smith to Bali")
+    block = re_mod.web_lookup_status()
+    last = block["last_outcome"]
+    assert last["status"] == WEB_LOOKUP_NO_RESULTS and last["provider"] == "tavily"
+    assert last["at"].endswith("+00:00") or last["at"].endswith("Z")
+    dumped = str(block)
+    assert "tvly-secret" not in dumped and "Jason" not in dumped and "Bali" not in dumped
+    # no key -> auto resolves to duckduckgo
+    monkeypatch.delenv("TAVILY_API_KEY")
+    assert re_mod.web_lookup_status()["provider"] == "duckduckgo"
+
+
+@pytest.fixture
+def system_status_client(monkeypatch):
+    """`/api/system/status` with auth + DB overridden and every network probe
+    stubbed to connection-refused, so only the pure blocks are exercised."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import httpx
+
+    system = pytest.importorskip("routers.system", reason="needs service modules")
+    from auth import get_current_user
+    from database import get_db
+
+    class _Refuse:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Refuse)
+
+    class _NoDb:
+        async def execute(self, *a, **k):
+            raise RuntimeError("no db in test")
+
+    app = FastAPI()
+    app.include_router(system.router)
+    app.dependency_overrides[get_current_user] = lambda: {"user_id": "u", "role": "member"}
+
+    async def _db():
+        yield _NoDb()
+
+    app.dependency_overrides[get_db] = _db
+    return TestClient(app)
+
+
+def test_system_status_carries_web_lookup_block(monkeypatch, system_status_client):
+    monkeypatch.setenv(re_mod.WEB_FALLBACK_PROVIDER_ENV, "off")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-secret-do-not-leak")
+    monkeypatch.setattr(re_mod, "_LAST_WEB_LOOKUP", {})
+    resp = system_status_client.get("/api/system/status")
+    assert resp.status_code == 200
+    block = resp.json()["web_lookup"]
+    assert block["provider"] == "off" and block["tavily_key_present"] is True
+    assert block["last_outcome"] is None
+    assert "tvly-secret" not in resp.text
+
+    _serve_ddg(monkeypatch, RESULTS_PAGE)
+    monkeypatch.setenv(re_mod.WEB_FALLBACK_PROVIDER_ENV, "duckduckgo")
+    fetch_web_fallback("example deal")
+    block = system_status_client.get("/api/system/status").json()["web_lookup"]
+    assert block["provider"] == "duckduckgo"
+    assert block["last_outcome"]["status"] == WEB_LOOKUP_RESULTS
+    assert block["last_outcome"]["provider"] == "duckduckgo" and block["last_outcome"]["at"]

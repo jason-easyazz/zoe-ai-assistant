@@ -21,6 +21,7 @@ from auth import (
 )
 from database import get_db
 from hermes_http import hermes_auth_headers
+from research_evidence import web_lookup_status
 from openclaw_maintenance import (
     fetch_gateway_status,
     fetch_npm_latest_version,
@@ -220,6 +221,8 @@ async def get_system_status(
             "online_panels_30s": panels_online,
         },
         "pi_hybrid_production": _pi_hybrid_production_public_status(),
+        # B10.0: web-lookup configuration + last outcome (never the query/key).
+        "web_lookup": web_lookup_status(),
     }
 
 

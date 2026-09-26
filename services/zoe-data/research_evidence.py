@@ -559,6 +559,53 @@ def _fetch_tavily(query: str, max_results: int, timeout_s: float) -> WebFallback
     return WebFallbackOutcome(WEB_LOOKUP_RESULTS, "tavily", rows)
 
 
+# In-process record of the LAST lookup for the backend status surface
+# (`/api/system/status` -> `web_lookup`): status / provider / detail / UTC
+# timestamp only — never the query text (personal data) and never the key.
+_LAST_WEB_LOOKUP: dict[str, Any] = {}
+
+
+def _record_last_outcome(outcome: WebFallbackOutcome) -> None:
+    _LAST_WEB_LOOKUP.clear()
+    _LAST_WEB_LOOKUP.update(
+        status=outcome.status,
+        provider=outcome.provider,
+        detail=outcome.detail,
+        at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+
+
+def _tavily_key_present() -> bool:
+    try:
+        from web_search_provider import tavily_api_key
+
+        return bool(tavily_api_key())
+    except Exception:  # noqa: BLE001 - provider module absent → no key
+        return False
+
+
+def web_lookup_status() -> dict[str, Any]:
+    """Backend status block for the web lookup — configuration + last outcome.
+
+    ``provider`` is the RESOLVED provider a lookup would use right now
+    (``auto`` collapses to ``tavily`` when keyed and not switched off, else
+    ``duckduckgo``); ``configured`` is the raw ``ZOE_WEB_FALLBACK_PROVIDER``
+    value. ``tavily_key_present`` says whether a key exists — the key itself is
+    never exposed. ``last_outcome`` is ``None`` until a lookup has run.
+    """
+    configured = web_fallback_provider()
+    if configured == "auto":
+        resolved = "tavily" if _tavily_configured() else "duckduckgo"
+    else:
+        resolved = configured
+    return {
+        "provider": resolved,
+        "configured": configured,
+        "tavily_key_present": _tavily_key_present(),
+        "last_outcome": dict(_LAST_WEB_LOOKUP) or None,
+    }
+
+
 def _tavily_configured() -> bool:
     try:
         from web_search_provider import tavily_enabled
@@ -618,6 +665,7 @@ def fetch_web_fallback(query: str, max_results: int = 5, timeout_s: float = 8.0)
         len(q),
         f" detail={outcome.detail}" if outcome.detail else "",
     )
+    _record_last_outcome(outcome)
     return outcome
 
 
