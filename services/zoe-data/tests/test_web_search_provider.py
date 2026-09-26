@@ -153,3 +153,27 @@ def test_empty_query_never_spends_a_credit(monkeypatch):
         raise AssertionError("should not spend a credit on an empty query")
     _fake_transport(monkeypatch, must_not_call)
     assert wsp.tavily_search_sync("   ") == []
+
+
+# ── status-aware outcome (B10.0: the fallback needs to know WHY it is empty) ──
+
+def test_outcome_off_without_key(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    def must_not_call(url, **kw):
+        raise AssertionError("no key → no request")
+    _fake_transport(monkeypatch, must_not_call)
+    assert wsp.tavily_search_outcome("q") == (wsp.TAVILY_OUTCOME_OFF, [])
+
+
+def test_outcome_distinguishes_error_from_no_results(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    _fake_transport(monkeypatch, lambda url, **kw: _Resp(429))
+    assert wsp.tavily_search_outcome("q") == (wsp.TAVILY_OUTCOME_ERROR, [])
+    _fake_transport(monkeypatch, lambda url, **kw: _Resp(200, {"results": []}))
+    assert wsp.tavily_search_outcome("q") == (wsp.TAVILY_OUTCOME_NO_RESULTS, [])
+    _fake_transport(
+        monkeypatch,
+        lambda url, **kw: _Resp(200, {"results": [{"title": "A", "url": "https://a.test", "content": "c"}]}))
+    status, rows = wsp.tavily_search_outcome("q")
+    assert status == wsp.TAVILY_OUTCOME_RESULTS
+    assert rows == [{"title": "A", "href": "https://a.test", "body": "c"}]

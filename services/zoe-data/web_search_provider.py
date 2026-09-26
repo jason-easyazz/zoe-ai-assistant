@@ -76,14 +76,28 @@ def _to_common(results: list[dict[str, Any]]) -> list[dict[str, str]]:
     return out
 
 
-def tavily_search_sync(query: str, max_results: int = 6, timeout_s: float = 8.0) -> list[dict[str, str]]:
-    """Search via Tavily. Returns [] on ANY failure so the caller falls back.
+# Outcome statuses shared with ``research_evidence.fetch_web_fallback`` so the
+# chat fallback can say *why* it has nothing, not just that it has nothing.
+TAVILY_OUTCOME_RESULTS = "results"
+TAVILY_OUTCOME_NO_RESULTS = "no_results"
+TAVILY_OUTCOME_ERROR = "error"
+TAVILY_OUTCOME_OFF = "off"
 
-    Synchronous (like ``_ddg_search_sync``) — the caller runs it in an executor.
+
+def tavily_search_outcome(
+    query: str, max_results: int = 6, timeout_s: float = 8.0
+) -> tuple[str, list[dict[str, str]]]:
+    """Search via Tavily and report HOW it went: ``(status, rows)``.
+
+    ``status`` is one of ``results`` / ``no_results`` / ``error`` / ``off``.
+    ``off`` means no key or an explicit ``ZOE_SEARCH_PROVIDER=ddg`` (nothing was
+    sent); ``error`` covers every HTTP/transport failure (401 bad key, 429 quota,
+    timeouts). Rows are ``[]`` for anything but ``results``. The key is never
+    logged. Synchronous (like ``_ddg_search_sync``) — run it in an executor.
     """
     q = (query or "").strip()
     if not q or not tavily_enabled():
-        return []
+        return TAVILY_OUTCOME_OFF, []
     try:
         import httpx
 
@@ -116,11 +130,21 @@ def tavily_search_sync(query: str, max_results: int = 6, timeout_s: float = 8.0)
             # 401 = bad/absent key, 429 = quota exhausted. Both are expected
             # operational states, not crashes — fall back quietly.
             logger.info("web_search: tavily HTTP %s — falling back to ddg", resp.status_code)
-            return []
+            return TAVILY_OUTCOME_ERROR, []
         data = resp.json()
     except Exception as exc:  # noqa: BLE001 - any failure falls back to ddg
         logger.info("web_search: tavily unavailable (%s) — falling back to ddg", type(exc).__name__)
-        return []
+        return TAVILY_OUTCOME_ERROR, []
 
     results = data.get("results") if isinstance(data, dict) else None
-    return _to_common(results if isinstance(results, list) else [])
+    rows = _to_common(results if isinstance(results, list) else [])
+    return (TAVILY_OUTCOME_RESULTS if rows else TAVILY_OUTCOME_NO_RESULTS), rows
+
+
+def tavily_search_sync(query: str, max_results: int = 6, timeout_s: float = 8.0) -> list[dict[str, str]]:
+    """Search via Tavily. Returns [] on ANY failure so the caller falls back.
+
+    Compatibility shape for ``zoe_agent``'s web_search tier; the status-aware
+    form is :func:`tavily_search_outcome`.
+    """
+    return tavily_search_outcome(query, max_results=max_results, timeout_s=timeout_s)[1]

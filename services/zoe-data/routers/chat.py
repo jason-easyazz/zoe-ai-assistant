@@ -364,7 +364,7 @@ from research_evidence import (
     build_package,
     classify_query,
     default_source_for_query,
-    fetch_web_fallback_results,
+    fetch_web_fallback,
     missing_brief_fields,
     package_needs_web_fallback,
 )
@@ -1496,16 +1496,21 @@ async def _build_research_package(
 ) -> dict:
     """Build research package and attach screenshot evidence when possible."""
     fallback_rows: list[dict] = []
+    web_lookup: dict = {}
     pkg = build_package(query=query, response_text=response_text, backend=backend)
     if package_needs_web_fallback(pkg):
-        fallback_rows = await asyncio.to_thread(fetch_web_fallback_results, query)
-        if fallback_rows:
-            pkg = build_package(
-                query=query,
-                response_text=response_text,
-                backend=backend,
-                web_fallback_results=fallback_rows,
-            )
+        # B10.0: the outcome says WHY rows may be empty (blocked / error / off /
+        # nothing found) so the package is honest instead of placeholder-shaped.
+        outcome = await asyncio.to_thread(fetch_web_fallback, query)
+        fallback_rows = outcome.results
+        web_lookup = outcome.as_dict()
+        pkg = build_package(
+            query=query,
+            response_text=response_text,
+            backend=backend,
+            web_fallback_results=fallback_rows,
+            web_lookup=web_lookup,
+        )
     source = (pkg.get("sources") or [""])[0]
     image_b64, screenshot_url = await _capture_research_screenshot(
         query=query,
@@ -1521,6 +1526,7 @@ async def _build_research_package(
             screenshot_b64=image_b64,
             screenshot_url=screenshot_url,
             web_fallback_results=fallback_rows,
+            web_lookup=web_lookup,
         )
     return pkg
 
