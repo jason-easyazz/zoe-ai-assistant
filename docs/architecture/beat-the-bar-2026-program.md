@@ -275,8 +275,9 @@ from outside, hence B9.0.
   household members may opt into ambient; (d) legal sanity check of the discard-unknown rule
   under the WA Surveillance Devices Act 1998 s5/s9 for guests. Gate: written answers in the
   plan's §8 before B9.4.
-- B9.1 ⬜ **Lab receive** (`scripts/setup/omi_bridge.py`, bleak + opuslib, off-Orin): connect,
-  decode, 10-min WAV, reconnect-on-drop. Gate: <1 % packet gaps at 3 m/one wall; Moonshine WER on
+- B9.1 🔨 **Lab receive** (`labs/omi-receiver/omi_bridge.py`, bleak + opuslib, off-Orin): connect,
+  decode, 10-min WAV, reconnect-on-drop. Code + fixture tests + manual protocol: #1693 (draft;
+  the pendant has not been run yet — every gate number is still hardware-only). Gate: <1 % packet gaps at 3 m/one wall; Moonshine WER on
   20 corpus sentences ≤ panel + 5 pts; battery drop/h logged.
 - B9.2 ⬜ **Bridge thread in the Pi daemon, flag-dark** (`OMI_BRIDGE_ENABLED`,
   `ZOE_AMBIENT_OMI_ENABLED`, both off): `source="omi"`, `device_id`, `speaker_id`, `expires_at`
