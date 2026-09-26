@@ -206,12 +206,13 @@ class FakeTransport:
     """Scripted pendant: each session feeds its packets then drops (except the last)."""
 
     def __init__(self, sessions, *, codec=ob.CODEC_OPUS_FS320, battery=(90, 80), fail_first_connect=False,
-                 drop_during_setup=False):
+                 drop_during_setup=False, codec_unreadable_first=False):
         self.sessions = list(sessions)
         self.codec = codec
         self.battery = list(battery)
         self.fail_first_connect = fail_first_connect
         self.drop_during_setup = drop_during_setup   # first connect: the link dies inside start_notify
+        self.codec_unreadable_first = codec_unreadable_first  # first connect: the codec read fails (None, as BleakTransport.read does)
         self.connects = 0
         self.connected = False
         self.notify = {}
@@ -241,6 +242,8 @@ class FakeTransport:
         self.reads.append(uuid)
         if uuid == ob.BATTERY_LEVEL_UUID:
             return bytes([self.battery.pop(0)]) if self.battery else None
+        if uuid == ob.AUDIO_CODEC_UUID and self.codec_unreadable_first and self.connects == 1:
+            return None
         return {ob.DIS_MODEL_UUID: b"Omi CV 1\x00", ob.DIS_FIRMWARE_UUID: b"3.0.21", ob.DIS_HARDWARE_UUID: b"5.0",
                 ob.AUDIO_CODEC_UUID: bytes([self.codec])}.get(uuid)
 
@@ -603,3 +606,58 @@ def test_split_on_silence_rerun_replaces_segments_of_a_glob_looking_stem(tmp_pat
     sos.write_segments(pcm, rate, [(0, 100), (100, 200), (200, 300)], tmp_path, "cap[1]")
     sos.write_segments(pcm, rate, [(0, 100), (100, 200)], tmp_path, "cap[1]")
     assert sorted(p.name for p in tmp_path.iterdir()) == ["cap[1]_01.wav", "cap[1]_02.wav"]
+
+
+# --- review round 3 (PR #1693) --------------------------------------------------------------
+def test_interrupted_identity_probe_is_re_read_on_reconnect_and_rebuilds_the_decoder(tmp_path):
+    """BleakTransport.read() returns None on a GATT failure, so a drop during the probe used
+    to leave codec_id unset with `first` already cleared: the recovered capture then ran on
+    the assumed --codec. The probe is complete only once the codec was actually read."""
+    built = []
+
+    def factory(codec_id):
+        built.append(codec_id)
+        return ob.StubDecoder(ob.FRAME_SAMPLES_BY_CODEC[codec_id])
+
+    t = FakeTransport([packets(range(5)), packets([10, 12])], codec=ob.CODEC_OPUS_10MS, codec_unreadable_first=True)
+    pipeline = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path))
+    bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=True, max_seconds=0.3,
+                       expected_codec=ob.CODEC_OPUS_FS320, decoder_factory=factory)
+    s = asyncio.run(bridge.run())
+    assert t.connects == 2 and s.reconnects == 1
+    assert built == [ob.CODEC_OPUS_10MS] and s.codec_id == 20 and s.codec == "opus-10ms"
+    assert pipeline.decoder.frame_samples == 160 and pipeline.silence_samples == 160   # session-2 gap at 10 ms
+    assert t.reads.count(ob.AUDIO_CODEC_UUID) == 2 and s.battery_start == 90
+
+
+def test_wer_cli_rejects_an_stt_error_row_with_an_empty_message(tmp_path, capsys):
+    import json
+    ref = tmp_path / "ref.txt"
+    ref.write_text("alpha bravo\n")
+    replay = tmp_path / "replay.json"
+    replay.write_text(json.dumps({"rows": [{"file": "seg_01.wav", "transcript": "", "stt_error": ""}]}))
+    assert wer.main(["--ref", str(ref), "--hyp", str(replay)]) == 2
+    out = capsys.readouterr()
+    assert "corpus WER" not in out.out and "seg_01.wav" in out.err
+
+
+def test_gate_fails_a_run_with_repeated_outages_even_when_each_session_is_contiguous(tmp_path):
+    """Every reconnect resyncs the packet id, so outage loss never reaches gap_pct; the
+    verdict must also bound the disconnected wall time (and report the sessions)."""
+    t = FakeTransport([packets(range(10)), packets(range(100, 110)), packets(range(200, 210))])
+    pipeline = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path))
+    bridge = ob.Bridge(t, pipeline, backoff=(0.05,), reconnect=True, max_seconds=0.5, max_disconnected_s=0.06)
+    s = asyncio.run(bridge.run())
+    assert s.packets_lost == 0 and s.gap_pct == 0.0                       # each session contiguous
+    assert s.reconnects == 2 and s.sessions == 3 and s.disconnected_s >= 0.1
+    assert s.gap_gate_pass is False and any("disconnected" in r for r in s.gate_fail_reasons)
+    assert "FAIL" in ob.format_summary(s)
+    assert s.longest_connected_s <= s.connected_s
+
+
+def test_gate_passes_when_the_outage_budget_is_not_exceeded(tmp_path):
+    t = FakeTransport([packets(range(10)), packets(range(100, 110))])
+    pipeline = ob.AudioPipeline(ob.OmiFramer(), ob.StubDecoder(SAMPLES), ob.WavSink(tmp_path))
+    bridge = ob.Bridge(t, pipeline, backoff=(0.01,), reconnect=True, max_seconds=0.3, max_disconnected_s=1.0)
+    s = asyncio.run(bridge.run())
+    assert s.sessions == 2 and 0.0 < s.disconnected_s < 1.0 and s.gap_gate_pass is True and s.gate_fail_reasons == []

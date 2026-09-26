@@ -76,7 +76,7 @@ def load_hypotheses(path: Path) -> list[str]:
         return text.splitlines()
     data = json.loads(text)
     rows = data["rows"] if isinstance(data, dict) else data
-    failed = [f"{row.get('file', '?')}: {row['stt_error']}" for row in rows if row.get("stt_error")]
+    failed = [f"{row.get('file', '?')}: {row['stt_error'] or '(no message)'}" for row in rows if "stt_error" in row]
     if failed:
         raise TranscriptError("STT failed on " + "; ".join(failed) + " — re-run the replay for these before scoring")
     return [str(row.get("transcript") or "") for row in rows]
