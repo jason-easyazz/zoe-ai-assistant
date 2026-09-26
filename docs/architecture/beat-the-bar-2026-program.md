@@ -389,11 +389,15 @@ from outside, hence B9.0.
   the pendant lives during the day, retention, minors, who does the legal check).
 
 ### B10 — Web lookup + claim backing (Jason, 2026-07-24)
-- B10.0 ⬜ **Make the existing chat fallback honest first** (found by the audit re-check
-  2026-09-26): `research_evidence.fetch_web_fallback_results` reaches DuckDuckGo with no brain
+- B10.0 🔨 **Make the existing chat fallback honest first** — draft PR #1691, pending review
+  (found by the audit re-check 2026-09-26): `research_evidence.fetch_web_fallback_results` reaches DuckDuckGo with no brain
   tool, but DDG now answers scripted fetches with a challenge page (HTTP 202) and the function
   swallows it and returns `[]`, so a research turn silently degrades to placeholders. Surface
   "nothing found", and prefer the configured Tavily key (`web_search_provider`) when set.
+  #1691: `classify_ddg_response` (challenge = `blocked`, never `no_results`), `fetch_web_fallback`
+  → `WebFallbackOutcome` recorded in the package as `web_lookup` + an honest card row,
+  `ZOE_WEB_FALLBACK_PROVIDER` (auto = Tavily-first when keyed | duckduckgo | off), one INFO line
+  per lookup (query length, never text); mutation-checked negative controls. Voice-gate scope CLEAR.
 - B10.1 ⬜ Re-land the Python core of the web-search spike (PR #1610, now closed: DDG/Wikipedia/
   HN scrapers, block detection, consensus merge, ≤350-token voice packet; 44 offline fixture
   tests) as a ≤300-line PR behind the approved research/delegation seam (the cut-list cut a
