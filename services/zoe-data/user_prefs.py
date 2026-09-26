@@ -55,9 +55,16 @@ _UNSET = object()
 # through this module invalidates the user's entry (zoe-data is one process).
 _OPT_OUT_TTL_S = 30.0
 _opt_out_cache: dict[str, tuple[bool, float]] = {}
+# Bumped by every invalidation. A read captures it before awaiting the DB and
+# stores its result only if nothing was invalidated meanwhile — otherwise a
+# read that began before an opt-out PUT would resume after the PUT cleared the
+# cache and park its stale False for a full TTL (Greptile #1704).
+_cache_gen = 0
 
 
 def clear_pref_cache(user_id: str | None = None) -> None:
+    global _cache_gen
+    _cache_gen += 1
     if user_id is None:
         _opt_out_cache.clear()
     else:
@@ -154,6 +161,8 @@ async def is_memory_opted_out(user_id: str, *, db=None) -> bool:
     hit = _opt_out_cache.get(user_id)
     if hit is not None and hit[1] > now:
         return hit[0]
+    gen = _cache_gen
     flag = bool(await get_pref(user_id, KEY_MEMORY_OPT_OUT, False, db=db))
-    _opt_out_cache[user_id] = (flag, now + _OPT_OUT_TTL_S)
+    if _cache_gen == gen:          # nothing invalidated while we were reading
+        _opt_out_cache[user_id] = (flag, time.monotonic() + _OPT_OUT_TTL_S)
     return flag

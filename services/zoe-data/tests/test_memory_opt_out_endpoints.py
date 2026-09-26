@@ -280,3 +280,58 @@ async def test_memory_service_chokepoint_drops_all_automatic_sources(monkeypatch
     ref = await svc.ingest("Opted-in user fact.", user_id="u-other", source="turn_digest")
     assert ref is not None
     assert {s for s, _ in written} == {"brain_tool", "voice_fact", "proposal", "turn_digest"}
+
+
+# ── Greptile #1704 round 2 ───────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_opt_out_cache_never_restores_a_value_invalidated_mid_read(monkeypatch):
+    """A read that started BEFORE an opt-out PUT must not park its stale False in
+    the cache after the PUT invalidated it (that would drop memories for 30 s)."""
+    import asyncio
+    import user_prefs
+
+    user_prefs.clear_pref_cache()
+    gate = asyncio.Event()
+    stored = {"flag": False}
+
+    async def slow_get_pref(user_id, key, default=None, *, db=None):
+        answer = stored["flag"]               # what the DB held when the read began
+        await gate.wait()                     # parked mid-read
+        return answer
+
+    monkeypatch.setattr(user_prefs, "get_pref", slow_get_pref)
+
+    in_flight = asyncio.create_task(user_prefs.is_memory_opted_out("u1"))
+    await asyncio.sleep(0)                    # the read is now awaiting the DB
+    stored["flag"] = True
+    await user_prefs.set_pref("u1", user_prefs.KEY_MEMORY_OPT_OUT, True, db=_FakeDb())  # PUT lands
+    gate.set()
+    assert await in_flight is False           # its own (pre-PUT) answer is fine …
+    assert await user_prefs.is_memory_opted_out("u1") is True   # … but it must not be cached
+
+
+@pytest.mark.asyncio
+async def test_review_edit_by_automatic_actor_honours_opt_out(tmp_path, monkeypatch):
+    """reconcile_for_ingest's UPDATE path supersedes via review(decision="edit"),
+    not ingest — an automatic actor must hit the same opt-out wall."""
+    import user_prefs
+    from memory_service import MemoryService
+
+    async def opted_out(user_id, *, db=None):
+        return user_id == "u-optout"
+
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_out)
+    svc = MemoryService(data_dir=str(tmp_path))
+    ref = await svc.ingest("Jason's dentist is on Friday.", user_id="u-optout",
+                           source="brain_tool", status="approved")   # explicit teach: stored
+    assert ref is not None
+
+    for actor in ("turn_digest", "conversation", "digest", "consolidation", "chat_regex"):
+        out = await svc.review(ref.id, decision="edit", edits="Jason's dentist is on Saturday.", actor=actor)
+        assert out is None, f"{actor} edited an opted-out user's memory"
+    assert (await svc.get(ref.id)).text == "Jason's dentist is on Friday."
+
+    # An explicit reviewer still edits.
+    new_ref = await svc.review(ref.id, decision="edit", edits="Jason's dentist is on Saturday.", actor="review_ui")
+    assert new_ref is not None and "Saturday" in new_ref.text
