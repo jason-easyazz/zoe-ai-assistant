@@ -583,7 +583,8 @@ def fetch_web_fallback(query: str, max_results: int = 5, timeout_s: float = 8.0)
                 keep_tavily = tavily.status == WEB_LOOKUP_NO_RESULTS and ddg.status != WEB_LOOKUP_RESULTS
                 outcome = tavily if keep_tavily else ddg
                 if outcome.status != WEB_LOOKUP_RESULTS:
-                    outcome.detail = f"tavily={tavily.status}; duckduckgo={ddg.detail or ddg.status}"
+                    ddg_why = f"{ddg.status} ({ddg.detail})" if ddg.detail else ddg.status
+                    outcome.detail = f"tavily={tavily.status}; duckduckgo={ddg_why}"
                     if keep_tavily:
                         # The verdict is Tavily's; DDG's attempt is in `detail`.
                         attempted = ["tavily"]
