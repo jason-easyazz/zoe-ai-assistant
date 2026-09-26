@@ -903,8 +903,15 @@ class MemoryService:
         actor: str,
         edits: Optional[str] = None,
         note: Optional[str] = None,
-    ) -> MemoryRef:
-        """Approve / reject / edit a pending memory."""
+    ) -> Optional[MemoryRef]:
+        """Approve / reject / edit a pending memory.
+
+        Returns None only when an AUTOMATIC actor (``MEMORY_OPT_OUT_SOURCES``)
+        tries to ``edit`` an opted-out user's memory — the reconcile UPDATE
+        path supersedes via this method instead of ``ingest``, so it must hit
+        the same opt-out wall. Every such caller already treats None as
+        "supersede failed" and falls through to ``ingest``, which drops.
+        """
         decision = decision.lower().strip()
         if decision not in {"approve", "reject", "archive", "edit"}:
             raise MemoryServiceError(
@@ -915,6 +922,13 @@ class MemoryService:
             raise MemoryServiceError(f"memory {mem_id} not found")
         user_id = current.metadata.get("user_id") or current.metadata.get("wing")
         self._require(user_id, "reviewed row is missing user_id metadata")
+        if (
+            decision == "edit"
+            and actor in MEMORY_OPT_OUT_SOURCES
+            and await _user_opted_out(user_id)
+        ):
+            self._bump("opt_out", actor)
+            return None
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
