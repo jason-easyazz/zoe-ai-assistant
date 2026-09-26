@@ -161,9 +161,15 @@ status: 🔨 active — NEXT ACTION is always §0
 - B0.10 ⬜ GitHub: allow-list `voice-gate.yml` + `break-glass.yml` under the new
   `pull_request_target` protection before 2026-11-02; set Copilot code review to Lite
   before 2026-09-28; add CodeRabbit (free on this public repo); Greptile to Starter.
-- B0.11 ⬜ Omnigent: bake the `url=` Serena entry into the image (patched live 2026-09-25 in
+- B0.11 🔨 Omnigent: bake the `url=` Serena entry into the image (patched live 2026-09-25 in
   `/root/.codex/config.toml`; a container recreate reverts it); renew the Claude login before
-  2026-10-11; move the polly lane off `claude-sdk` OAuth (policy).
+  2026-10-11; move the polly lane off `claude-sdk` OAuth (policy). Draft PR #1700: the file
+  lives in the `omnigent-codex` VOLUME with no tracked owner — now a tracked template
+  (`modules/omnigent/codex-mcp.toml`) baked into the image and seeded idempotently by
+  `entrypoint.sh` on every boot (hooks.state kept); renewal steps + the polly-lane policy note
+  recorded in `docs/knowledge/omnigent-container-config.md`. Post-merge: coordinator rebuilds +
+  recreates the container (`docker compose ... up -d --build` from `modules/omnigent/`); the
+  login renewal and the policy decision remain operator steps.
 - B0.12 🔨 HA tool-name sweep (`domain__Tool` prefixes) → HA 2026.9/10 upgrade; adopt the
   MCP `device_id` meta so panel commands resolve to their room. Then MA 2.10 client check.
   Part 1 = draft PR #1695: sweep found NO live call site (bridge is pure REST; HA's
