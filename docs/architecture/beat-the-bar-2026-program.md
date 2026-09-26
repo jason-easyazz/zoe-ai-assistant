@@ -29,7 +29,7 @@ status: 🔨 active — NEXT ACTION is always §0
    verdicts, ✅ #1683 Omi plan, ✅ #1687 feature audit; queued: #1688 audit corrections,
    #1689 audit-fix code. Then: B1.1 (#1685) needs a replay gate bound to its head + review.
 3. Next build items, in order: B0.4 llama.cpp FA rebuild (voice-gated, needs the window),
-   B10.0 honest web fallback (small), B3.1 bi-temporal supersession (lab), B2.1
+   B10.0 honest web fallback (draft #1691, needs review), B3.1 bi-temporal supersession (lab), B2.1
    presence-triggered routines (needs the panel on), B9.1 Omi lab receive (off-Orin).
 
 ## 1. Where Zoe already beats the bar (protect these)
@@ -303,11 +303,15 @@ from outside, hence B9.0.
   the pendant lives during the day, retention, minors, who does the legal check).
 
 ### B10 — Web lookup + claim backing (Jason, 2026-07-24)
-- B10.0 ⬜ **Make the existing chat fallback honest first** (found by the audit re-check
-  2026-09-26): `research_evidence.fetch_web_fallback_results` reaches DuckDuckGo with no brain
+- B10.0 🔨 **Make the existing chat fallback honest first** — draft PR #1691, pending review
+  (found by the audit re-check 2026-09-26): `research_evidence.fetch_web_fallback_results` reaches DuckDuckGo with no brain
   tool, but DDG now answers scripted fetches with a challenge page (HTTP 202) and the function
   swallows it and returns `[]`, so a research turn silently degrades to placeholders. Surface
   "nothing found", and prefer the configured Tavily key (`web_search_provider`) when set.
+  #1691: `classify_ddg_response` (challenge = `blocked`, never `no_results`), `fetch_web_fallback`
+  → `WebFallbackOutcome` recorded in the package as `web_lookup` + an honest card row,
+  `ZOE_WEB_FALLBACK_PROVIDER` (auto = Tavily-first when keyed | duckduckgo | off), one INFO line
+  per lookup (query length, never text); mutation-checked negative controls. Voice-gate scope CLEAR.
 - B10.1 ⬜ Re-land the Python core of the web-search spike (PR #1610, now closed: DDG/Wikipedia/
   HN scrapers, block detection, consensus merge, ≤350-token voice packet; 44 offline fixture
   tests) as a ≤300-line PR behind the approved research/delegation seam (the cut-list cut a
