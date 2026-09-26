@@ -49,29 +49,52 @@ So the upgrade cannot break a tool-name call site today. The exposure is forward
 
 ## Upgrade — one monthly release at a time
 
-For each of `2026.6.x`, `2026.7.x`, `2026.8.x`, `2026.9.3` (from `/home/zoe/assistant`, the live checkout, **not** a worktree — compose reads the live tree):
+For each of `2026.6.x`, `2026.7.x`, `2026.8.x`, `2026.9.3`. **Run the block as a script, never pasted line by line**: save it as `~/ha-upgrade-step.sh` and run `bash ~/ha-upgrade-step.sh 2026.6.4` from `/home/zoe/assistant` (the live checkout, **not** a worktree — compose reads the live tree). It is `set -euo pipefail` with explicit `exit 1` on every guard, so a failed or incomplete backup, a failed pull, or an HA that never comes up **terminates the step** — in an interactive paste the same failure would print a message and the shell would carry on into the retag.
 
 ```bash
-TAG=2026.6.4   # then 2026.7.x, 2026.8.x, 2026.9.3
+#!/usr/bin/env bash
+# usage: bash ~/ha-upgrade-step.sh <TAG>     (from /home/zoe/assistant)
+set -euo pipefail
+TAG=${1:?usage: ha-upgrade-step.sh <TAG>}   # 2026.6.4, then 2026.7.x, 2026.8.x, 2026.9.3
+cd /home/zoe/assistant
+# HA_ACCESS_TOKEN lives in the repo .env; compose passes it to containers but never exports it into
+# this shell, so read it here — otherwise every curl below sends an empty bearer and gets 401.
+HA_ACCESS_TOKEN=$(grep -E '^HA_ACCESS_TOKEN=' .env | cut -d= -f2-)
+[ -n "$HA_ACCESS_TOKEN" ] || { echo "HA_ACCESS_TOKEN not found in .env — STOP"; exit 1; }
+mkdir -p ~/backups
 BK=~/backups/homeassistant-$(date +%F)-pre-$TAG.tgz
-docker compose stop homeassistant          # consistent .storage + recorder db (no open WAL)
-tar -C /home/zoe/assistant -czf "$BK" homeassistant/ \
-  && tar -tzf "$BK" > "$BK.list" \
-  && grep -q '^homeassistant/\.storage/' "$BK.list" \
-  && grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list" \
-  || { echo "BACKUP FAILED OR INCOMPLETE ($BK) — STOP HERE; do not change the tag"; docker compose start homeassistant; }
-# Continue ONLY if the line above printed nothing. A failed backup is a hard stop:
-# HA restarts on the current tag and this step is not attempted.
+
+# 1. Backup with HA stopped (consistent .storage + recorder db, no open WAL), then PROVE the archive
+#    lists both before the tag changes. Any failure restarts HA on the current tag and exits.
+docker compose stop homeassistant
+if ! { tar -C /home/zoe/assistant -czf "$BK" homeassistant/ \
+       && tar -tzf "$BK" > "$BK.list" \
+       && grep -q '^homeassistant/\.storage/' "$BK.list" \
+       && grep -q '^homeassistant/home-assistant_v2\.db$' "$BK.list"; }; then
+  echo "BACKUP FAILED OR INCOMPLETE ($BK) — restarting HA on the current tag; step NOT attempted"
+  docker compose start homeassistant
+  exit 1
+fi
+
+# 2. Retag, pull, start. A failed pull leaves the tag edited but HA still on the old image; restore
+#    the tag line by hand (git checkout docker-compose.yml) before retrying.
 sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$TAG#" docker-compose.yml
 docker compose pull homeassistant
 docker compose up -d homeassistant
-# wait for startup (registries migrate on first boot; 1–3 min on the Orin)
-until curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/config >/dev/null; do sleep 5; done
+
+# 3. Wait for startup (registries migrate on first boot; 1–3 min on the Orin). Bounded: a bad token or
+#    a boot loop must not spin forever — 10 min then exit 1 (HA is left running for inspection).
+for _ in $(seq 1 120); do
+  curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/config >/dev/null && break
+  sleep 5
+done
+curl -sf -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/config >/dev/null \
+  || { echo "HA not answering /api/config with this token after 10 min — STOP and inspect docker logs"; exit 1; }
 curl -s -H "Authorization: Bearer $HA_ACCESS_TOKEN" localhost:8123/api/config | jq '{version, components: (.components|length)}'
-docker logs homeassistant --since 10m 2>&1 | grep -iE "error|migrat|deprecat|custom integration" | head -40
+docker logs homeassistant --since 10m 2>&1 | { grep -iE "error|migrat|deprecat|custom integration" || true; } | head -40
 ```
 
-Per-step verification (all read-only):
+Per-step verification (all read-only; for the manual `curl`s below, export the token into your shell first — `export HA_ACCESS_TOKEN=$(grep -E '^HA_ACCESS_TOKEN=' /home/zoe/assistant/.env | cut -d= -f2-)` — compose does not do it for you):
 
 - `version` matches `$TAG`; component count roughly unchanged (166 on 2026.5.2).
 - Settings → Repairs: no NEW repair beyond the pre-existing `config_entry_only_mcp_server` (see below).
@@ -100,23 +123,35 @@ Once on 2026.10, Zoe can pass the panel's HA device id in `params._meta["io.home
 - **Same-month patch rollback** (e.g. 2026.9.3 → 2026.9.1): change the tag, `docker compose up -d homeassistant`. Safe.
 - **Cross-month rollback**: `.storage` migrations and recorder schema bumps are forward-only, so restore the backup from immediately before that step. **Validate the archive before touching live state, and set the newer state aside rather than deleting it** — a mistyped date/tag, a backup that failed, or a damaged archive must fail *before* the registries, config entries, auth state and history are gone, not after:
 
+  Same rule as the upgrade step: **run it as a script** (`bash ~/ha-rollback.sh <archive> <previous-tag>`), not pasted — the preflight is only connected to the destructive block by `set -e` + `exit 1`; pasted interactively, a failed check prints and the shell keeps going.
+
   ```bash
-  BK=~/backups/homeassistant-<date>-pre-<TAG>.tgz   # the backup taken immediately before the failed step
-  PREV=<previous-tag>                                # e.g. 2026.8.9 when rolling back from 2026.9.3
-  # 1. Prove the archive is readable and holds what we are about to replace. Nothing below runs otherwise.
-  tar -tzf "$BK" > /tmp/ha-rollback.list \
-    && grep -q '^homeassistant/\.storage/' /tmp/ha-rollback.list \
-    && grep -q '^homeassistant/home-assistant_v2\.db$' /tmp/ha-rollback.list \
-    || { echo "ARCHIVE UNUSABLE ($BK) — STOP; live state untouched"; false; }
-  # 2. Only after step 1 printed nothing: stop HA, move (not rm) the newer state aside, restore .storage
-  #    AND the recorder db (an older core can refuse a newer recorder schema), then downgrade the tag.
-  ASIDE=~/backups/homeassistant-rolled-back-$(date +%F) && mkdir -p "$ASIDE" \
-    && docker compose stop homeassistant \
-    && mv homeassistant/.storage "$ASIDE"/ \
-    && mv homeassistant/home-assistant_v2.db* "$ASIDE"/ \
-    && tar -C /home/zoe/assistant -xzf "$BK" --wildcards homeassistant/.storage 'homeassistant/home-assistant_v2.db*' \
-    && sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$PREV#" docker-compose.yml \
-    && docker compose up -d homeassistant
+  #!/usr/bin/env bash
+  # usage: bash ~/ha-rollback.sh ~/backups/homeassistant-<date>-pre-<TAG>.tgz <previous-tag>
+  #        (archive = the backup taken immediately before the failed step; previous-tag e.g. 2026.8.9)
+  set -euo pipefail
+  BK=${1:?usage: ha-rollback.sh <archive.tgz> <previous-tag>}
+  PREV=${2:?usage: ha-rollback.sh <archive.tgz> <previous-tag>}
+  cd /home/zoe/assistant
+  # 1. Prove the archive is readable and holds what we are about to replace. exit 1 here means live
+  #    state was never touched.
+  if ! { tar -tzf "$BK" > /tmp/ha-rollback.list \
+         && grep -q '^homeassistant/\.storage/' /tmp/ha-rollback.list \
+         && grep -q '^homeassistant/home-assistant_v2\.db$' /tmp/ha-rollback.list; }; then
+    echo "ARCHIVE UNUSABLE ($BK) — STOP; live state untouched"
+    exit 1
+  fi
+  # 2. Only now: stop HA, move (not rm) the newer state aside, restore .storage AND the recorder db
+  #    (an older core can refuse a newer recorder schema), then downgrade the tag. set -e aborts on
+  #    the first failing command, and the set-aside copy makes every point recoverable by hand.
+  ASIDE=~/backups/homeassistant-rolled-back-$(date +%F)
+  mkdir -p "$ASIDE"
+  docker compose stop homeassistant
+  mv homeassistant/.storage "$ASIDE"/
+  mv homeassistant/home-assistant_v2.db* "$ASIDE"/
+  tar -C /home/zoe/assistant -xzf "$BK" --wildcards homeassistant/.storage 'homeassistant/home-assistant_v2.db*'
+  sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$PREV#" docker-compose.yml
+  docker compose up -d homeassistant
   ```
 
   Rolling back the recorder db means **history recorded after that backup is lost** (energy/statistics included); that is the price of a consistent older-schema database, and it is why the backup is taken with HA stopped immediately before each step. The set-aside copy in `$ASIDE` keeps the newer state for forensics; delete it once the rollback is confirmed good.

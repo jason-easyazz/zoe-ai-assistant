@@ -326,20 +326,20 @@ def bridge(monkeypatch):
     return _load("main", "ha_mcp_bridge_main_tool_names")
 
 
-async def test_tools_names_endpoint_legacy_and_prefixed(bridge):
+async def test_tools_names_endpoint_legacy_and_prefixed(bridge, monkeypatch):
     for version, scheme, expect in (
         ("2026.5.2", "legacy", "HassTurnOn"),
         ("2026.9.3", "prefixed", "intent__HassTurnOn"),
     ):
-        bridge.tool_name_scheme = bridge.HaToolNameSchemeDetector(_Fetch(version), env={})
+        monkeypatch.setattr(bridge, "tool_name_scheme", bridge.HaToolNameSchemeDetector(_Fetch(version), env={}))
         body = await bridge.get_tool_names()
         assert body["scheme"] == scheme and body["ha_version"] == version
         assert body["tools"]["HassTurnOn"] == expect
         assert body["unprefixed_breaks_in"] == "2027.3"
 
 
-async def test_resolve_endpoint_accepts_both_and_404s_unknown(bridge):
-    bridge.tool_name_scheme = bridge.HaToolNameSchemeDetector(_Fetch("2026.9.3"), env={})
+async def test_resolve_endpoint_accepts_both_and_404s_unknown(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "tool_name_scheme", bridge.HaToolNameSchemeDetector(_Fetch("2026.9.3"), env={}))
     a = await bridge.resolve_tool_name("HassTurnOn")
     b = await bridge.resolve_tool_name("intent__HassTurnOn")
     assert a == b and a["active"] == "intent__HassTurnOn" and a["legacy"] == "HassTurnOn"
@@ -351,8 +351,8 @@ async def test_resolve_endpoint_accepts_both_and_404s_unknown(bridge):
     assert "HassMakeCoffee" in ei.value.detail  # named in the error, never echoed as valid
 
 
-async def test_resolve_endpoint_legacy_bare_script_names(bridge):
-    bridge.tool_name_scheme = bridge.HaToolNameSchemeDetector(_Fetch("2026.5.2"), env={})
+async def test_resolve_endpoint_legacy_bare_script_names(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "tool_name_scheme", bridge.HaToolNameSchemeDetector(_Fetch("2026.5.2"), env={}))
     got = await bridge.resolve_tool_name("morning")
     assert got["base"] == "script.morning" and got["legacy"] == "morning"
     assert got["prefixed"] == "script__morning" and got["active"] == "morning"
@@ -366,7 +366,7 @@ async def test_resolve_endpoint_legacy_bare_script_names(bridge):
         await bridge.resolve_tool_name("HassMakeCoffee")
     assert ei.value.status_code == 404
     # negative control: a prefixed HA never emits bare script names — 404, not a guess
-    bridge.tool_name_scheme = bridge.HaToolNameSchemeDetector(_Fetch("2026.9.3"), env={})
+    monkeypatch.setattr(bridge, "tool_name_scheme", bridge.HaToolNameSchemeDetector(_Fetch("2026.9.3"), env={}))
     with pytest.raises(bridge.HTTPException) as ei:
         await bridge.resolve_tool_name("morning")
     assert ei.value.status_code == 404
@@ -379,7 +379,7 @@ async def test_root_health_reports_cached_scheme_without_extra_call(bridge, monk
 
     monkeypatch.setattr(bridge, "ha_bridge", FakeHa())
     fetch = _Fetch("2026.9.3")
-    bridge.tool_name_scheme = bridge.HaToolNameSchemeDetector(fetch, env={})
+    monkeypatch.setattr(bridge, "tool_name_scheme", bridge.HaToolNameSchemeDetector(fetch, env={}))
     assert (await bridge.root())["tool_name_scheme"] == "undetected"
     await bridge.tool_name_scheme.detect()
     assert (await bridge.root())["tool_name_scheme"] == "prefixed"
