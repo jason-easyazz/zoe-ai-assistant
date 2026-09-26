@@ -4661,7 +4661,10 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         _spec_turn_id = str((payload or {}).get("turn_id") or "").strip()
         if not _spec_turn_id:
             raise HTTPException(status_code=400, detail="turn_id is required for a speculative turn")
-        _spec_gate = _speculation.open_gate(_spec_turn_id)
+        try:
+            _spec_gate = _speculation.open_gate(_spec_turn_id)
+        except _speculation.DuplicateTurn:
+            raise HTTPException(status_code=409, detail="speculative turn_id is already active")
 
     def _gated(gen):
         return _speculation.gate_frames(gen, _spec_gate) if _spec_gate is not None else gen
@@ -4716,6 +4719,12 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             voice_turn_count.labels(outcome="empty_transcript", path="turn_stream").inc()
         except Exception:
             pass
+        if _spec_gate is not None:
+            # Nothing was processed for this prefix (no brain, no write), so
+            # the daemon must run the FULL recording as a normal turn — and it
+            # does that only on a ``cancelled`` done frame. A plain ``done``
+            # here would make it commit a closed gate (404) and drop the turn.
+            _spec_gate.resolve("cancel", reason="empty_transcript")
         async def _empty():
             yield (_json.dumps({"transcript": "", "done": True, "reply": ""}) + "\n").encode()
         return StreamingResponse(

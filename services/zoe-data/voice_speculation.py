@@ -36,6 +36,15 @@ MAX_HOLD_FLAG = "ZOE_SPECULATIVE_MAX_HOLD_MS"
 
 ACTIONS = ("commit", "cancel", "resolve")
 
+# Cancel reasons that are reported (metric label + ``reason`` on the cancelled
+# frame) as their own outcome: neither is a user interruption, so neither may
+# count toward the cancellation-rate gate.
+_DISTINCT_CANCEL_REASONS = ("hold_timeout", "empty_transcript")
+
+
+class DuplicateTurn(ValueError):
+    """``open_gate`` for a ``turn_id`` whose gate is still unresolved."""
+
 
 def speculative_turn_enabled() -> bool:
     """Per-call env read (like the other voice flags) so a flip needs no restart."""
@@ -106,20 +115,28 @@ class SpeculationGate:
             pass
 
     def verdict(self) -> str:
-        """``commit`` / ``equivalent`` / ``cancel`` / ``hold_timeout``."""
+        """``commit`` / ``equivalent`` / ``cancel`` / ``hold_timeout`` / ``empty_transcript``."""
         if self.action == "commit":
             return "commit"
         if self.action == "resolve":
             return ("equivalent"
                     if transcripts_equivalent(self.speculative_transcript, self.final_transcript)
                     else "cancel")
-        return "hold_timeout" if self.reason == "hold_timeout" else "cancel"
+        return self.reason if self.reason in _DISTINCT_CANCEL_REASONS else "cancel"
 
 
 _GATES: dict[str, SpeculationGate] = {}
 
 
 def open_gate(turn_id: str) -> SpeculationGate:
+    """Register the gate for ``turn_id``. ``turn_id`` is request-supplied, so a
+    retried/duplicated ``/turn_stream`` must NOT silently replace an active
+    gate (the verdict would resolve only the newer one and the first stream
+    would hold to timeout while a second brain call ran): it is refused with
+    ``DuplicateTurn`` (409 at the router). A resolved gate no longer blocks."""
+    existing = _GATES.get(turn_id)
+    if existing is not None and not existing.resolved:
+        raise DuplicateTurn(turn_id)
     gate = SpeculationGate(turn_id, max_hold_s=max_hold_seconds())
     _GATES[turn_id] = gate
     return gate
@@ -165,6 +182,7 @@ async def gate_frames(upstream: AsyncIterator[bytes], gate: SpeculationGate) -> 
     held: list[bytes] = []
     pending: Optional[asyncio.Task] = None
     upstream_done = False
+    started = False  # has upstream.__anext__ ever been called?
     try:
         while not gate.resolved:
             remaining = gate.deadline - time.monotonic()
@@ -179,6 +197,7 @@ async def gate_frames(upstream: AsyncIterator[bytes], gate: SpeculationGate) -> 
                 continue
             if pending is None:
                 pending = asyncio.ensure_future(upstream.__anext__())
+                started = True
             done, _ = await asyncio.wait({pending, waiter}, timeout=remaining,
                                          return_when=asyncio.FIRST_COMPLETED)
             if not waiter.done():
@@ -226,6 +245,19 @@ async def gate_frames(upstream: AsyncIterator[bytes], gate: SpeculationGate) -> 
         close_gate(gate)
         aclose = getattr(upstream, "aclose", None)
         if aclose is not None:
+            if not started:
+                # A verdict that arrived before the first pull (cancel during
+                # STT) means upstream was never started — and ``aclose()`` on a
+                # never-started async generator does NOT run its ``finally``,
+                # which is where the router cancels the brain task. Prime it to
+                # its first yield (the transcript line: no brain work) so the
+                # close below reaches that cleanup.
+                try:
+                    await upstream.__anext__()
+                except StopAsyncIteration:
+                    pass
+                except Exception as exc:  # cleanup must not raise
+                    logger.debug("speculation: priming upstream for close failed: %s", exc)
             try:
                 await aclose()
             except Exception:

@@ -133,6 +133,20 @@ ZOE_VAD_TAIL_MS = _int_env("ZOE_VAD_TAIL_MS", 0)
 # docs/architecture/b1-speculative-turn-start.md
 ZOE_SPECULATIVE_TURN = os.environ.get("ZOE_SPECULATIVE_TURN", "false").lower() in ("1", "true", "yes", "on")
 ZOE_SPECULATIVE_TAIL_MS = _int_env("ZOE_SPECULATIVE_TAIL_MS", 320)
+# Process-wide fail-closed latch: set the moment a speculative stream proves
+# the server is NOT gating (audio arrived before this daemon sent its verdict —
+# daemon flag on, server flag off, e.g. a server rollback). No further turn
+# speculates until the daemon restarts; the ERROR log names the cause.
+_speculation_disabled = threading.Event()
+_speculation_warned: set = set()
+
+
+def _speculation_available() -> bool:
+    return ZOE_SPECULATIVE_TURN and VOICE_STREAM_ENABLED and not _speculation_disabled.is_set()
+
+
+def _reset_speculation_warnings() -> None:
+    _speculation_warned.clear()
 try:
     # The default lives INSIDE environ.get so the flag-inventory scanner records
     # it ("or 0.10" outside the call reads as no-default in the committed table).
@@ -402,6 +416,19 @@ class _Endpointer:
             max(1, -(-ZOE_SPECULATIVE_TAIL_MS * SAMPLE_RATE // (1000 * CHUNK_SIZE)))
             if self.mode == "vad" and ZOE_SPECULATIVE_TURN and ZOE_SPECULATIVE_TAIL_MS > 0 else None
         )
+        if (self._spec_max_silent is not None and self._deep_max_silent is not None
+                and self._deep_max_silent <= self._spec_max_silent):
+            # The fast tail closes the recording at or before the first verdict
+            # could fire, so there is no dead time to reclaim: firing at the
+            # close would only add a verdict round-trip. Inert — but LOUDLY,
+            # once per process, so an inert flag is never mistaken for a live one.
+            self._spec_max_silent = None
+            if "inert_tail" not in _speculation_warned:
+                _speculation_warned.add("inert_tail")
+                log.warning(
+                    "ZOE_SPECULATIVE_TURN is inert: ZOE_VAD_TAIL_MS=%d <= ZOE_SPECULATIVE_TAIL_MS=%d "
+                    "closes the recording before the first verdict — raise the fast tail or lower the "
+                    "speculative tail", ZOE_VAD_TAIL_MS, ZOE_SPECULATIVE_TAIL_MS)
         self.speculation_fired = False
         self.resumed_after_speculation = False
         self._min_frames = int(0.5 * SAMPLE_RATE / CHUNK_SIZE)
@@ -439,8 +466,15 @@ class _Endpointer:
             # take the fast exit, only unambiguous silence may. The same goes for
             # the inference-failure sentinel (prob < 0): a broken VAD is the
             # opposite of evidence of silence.
-            self._deep_quiet = (self._deep_quiet + 1
-                                if 0.0 <= prob < ZOE_VAD_TAIL_DEEP_PROB else 0)
+            deep = 0.0 <= prob < ZOE_VAD_TAIL_DEEP_PROB
+            self._deep_quiet = self._deep_quiet + 1 if deep else 0
+            if self.speculation_fired and not deep:
+                # Quiet continuation (soft speech that never crosses the speech
+                # threshold, or a VAD failure) after the first verdict: audio
+                # the prefix did not contain. Force ``resolve`` — the server
+                # compares transcripts and still releases when it was noise —
+                # never a blind commit that skips transcribing it.
+                self.resumed_after_speculation = True
             if n_frames <= self._min_frames:
                 return False
             if (self._spoke and self._deep_max_silent is not None
@@ -1559,6 +1593,11 @@ class _SpeculativeTurn:
         self.fired = False
         self.resumed = False
         self.cancelled = False
+        # True once finish() has handed the verdict to the server. A gating
+        # server releases audio only AFTER that, so audio seen while this is
+        # False proves the server is not gating (flag off there) → ``ungated``.
+        self.verdict_sent = False
+        self.ungated = False
         self.voice_claim: object = _CLAIM_UNSET
         self.wait_delta_ms: float | None = None
         self._t_fire: float | None = None
@@ -1589,10 +1628,18 @@ class _SpeculativeTurn:
 
     def finish(self, final_wav: bytes) -> bool:
         """Send the verdict and wait for the speculative stream. Returns played."""
+        if self._thread is not None and self.ungated:
+            self._thread.join(timeout=90)
+        if self.ungated:
+            # The server ran the prefix as an ordinary turn (its flag is off):
+            # there is no gate to post to (409) and nothing may be played or
+            # re-POSTed — the prefix WAS processed. Silent turn; latched off.
+            return False
         action = "resolve" if self.resumed else "commit"
         body: dict = {"turn_id": self.turn_id, "action": action}
         if self.resumed:
             body["audio_base64"] = base64.b64encode(final_wav).decode()
+        self.verdict_sent = True
         resp = _api_post("/api/voice/turn_stream/speculation", body, timeout=15, retries=0)
         log.info("speculation: %s turn_id=%s verdict=%s wait_delta=%.0fms",
                  action, self.turn_id, resp.get("verdict", resp.get("error", "?")),
@@ -1691,6 +1738,19 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 continue
             if obj.get("error"):
                 log.warning("turn_stream server error: %s", obj["error"])
+                break
+            if speculation is not None and ("full_audio" in obj or "chunk" in obj) \
+                    and not speculation.verdict_sent:
+                # Audio BEFORE this daemon's verdict: a gating server never does
+                # that, so the server's flag is off and it answered the prefix as
+                # an ordinary turn (rollback / one-sided rollout). Fail closed:
+                # play nothing (the user may still be talking), never re-POST
+                # (the prefix was processed), and stop speculating for good.
+                log.error("speculation: server is NOT gating (audio before verdict) turn_id=%s — "
+                          "playing nothing; speculation disabled until restart. Set ZOE_SPECULATIVE_TURN "
+                          "on the server or off on this panel.", speculation.turn_id)
+                speculation.ungated = True
+                _speculation_disabled.set()
                 break
             if "full_audio" in obj:
                 # Skybridge/confirmation path: voice_command returned one full
@@ -1791,6 +1851,8 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         with _tts_process_lock:
             _tts_process = None
 
+    if speculation is not None and speculation.ungated:
+        return False
     if speculation is not None and speculation.cancelled:
         log.info("speculation: cancelled turn_id=%s transcript=%r — caller runs the normal turn",
                  speculation.turn_id, transcript[:80])
@@ -2061,7 +2123,7 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
     follow_ups_done = 0
     # B1.1: only the streaming turn has the server-side gate; the endpointer
     # itself never fires unless ZOE_SPECULATIVE_TURN is on and VAD mode is up.
-    _spec = _SpeculativeTurn(pa) if (ZOE_SPECULATIVE_TURN and VOICE_STREAM_ENABLED) else None
+    _spec = _SpeculativeTurn(pa) if _speculation_available() else None
     try:
         try:
             wav = record_command(pa, stream=wake_stream, speculation=_spec)

@@ -143,6 +143,44 @@ def test_amplitude_mode_never_fires(daemon, monkeypatch):
     assert ep.speculative_ready(10_000) is False
 
 
+def test_quiet_continuation_after_first_verdict_forces_resolve(daemon, monkeypatch):
+    """Soft speech after the first verdict (deep_prob <= prob < speech threshold)
+    resets the deep counter but never crosses the speech threshold. It is still
+    audio the prefix did not contain, so the verdict must be ``resolve`` (the
+    server compares transcripts), never a blind ``commit``."""
+    k = _chunks(daemon, 320)
+    borderline = (daemon.ZOE_VAD_TAIL_DEEP_PROB + daemon.VAD_ENDPOINT_THRESHOLD) / 2.0
+    probs = [SPEECH] * 3 + [DEEP] * k + [borderline] * 2 + [DEEP] * 40
+    ep = _endpointer(daemon, monkeypatch, probs, flag_on=True)
+    fire, stop, resumed = _drive(ep, daemon, probs)
+    assert fire == 3 + k - 1
+    assert resumed, "quiet continuation after the first verdict must force a resolve"
+    # Pure deep quiet after the fire stays a commit (the common case).
+    probs2 = [SPEECH] * 3 + [DEEP] * (k + 40)
+    ep2 = _endpointer(daemon, monkeypatch, probs2, flag_on=True)
+    _, _, resumed2 = _drive(ep2, daemon, probs2)
+    assert not resumed2
+
+
+def test_fast_tail_at_or_below_speculative_tail_disables_speculation_loudly(daemon, monkeypatch, caplog):
+    """ZOE_VAD_TAIL_MS <= ZOE_SPECULATIVE_TAIL_MS closes the recording before
+    the first verdict could fire, so there is no dead time to reclaim: the hook
+    must be inert AND say so (a silently-inert flag is a misconfiguration
+    nobody sees)."""
+    import logging
+    daemon._reset_speculation_warnings()
+    probs = [SPEECH] * 3 + [DEEP] * 40
+    with caplog.at_level(logging.WARNING, logger=daemon.log.name):
+        ep = _endpointer(daemon, monkeypatch, probs, flag_on=True, spec_tail_ms=320, vad_tail_ms=200)
+    assert ep._spec_max_silent is None
+    fire, stop, _ = _drive(ep, daemon, probs)
+    assert fire is None and stop is not None
+    assert any("ZOE_SPECULATIVE_TAIL_MS" in r.getMessage() for r in caplog.records), caplog.text
+    # A fast tail LONGER than the speculative tail keeps the hook live.
+    ep_ok = _endpointer(daemon, monkeypatch, probs, flag_on=True, spec_tail_ms=320, vad_tail_ms=640)
+    assert ep_ok._spec_max_silent is not None
+
+
 # ── record_command hook ──────────────────────────────────────────────────
 
 class _FakeStream:
@@ -254,9 +292,44 @@ def test_committed_speculative_stream_plays(daemon, monkeypatch):
     _, played = _wire(daemon, monkeypatch, lines)
     monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t: False)
     spec = daemon._SpeculativeTurn(_FakePA())
+    spec.verdict_sent = True  # a gating server releases audio only AFTER the verdict
     ok = daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False, speculation=spec)
     assert ok is True and spec.cancelled is False
     assert played == [b"RIFFnoon"]
+
+
+def test_audio_before_verdict_means_server_is_not_gating(daemon, monkeypatch):
+    """Daemon flag ON, server flag OFF (rollback / staged rollout): the server
+    runs the prefix as an ordinary turn and streams audio while the daemon is
+    still recording. A gating server NEVER releases audio before the verdict,
+    so audio-before-verdict is proof of an ungated server: play nothing, do not
+    re-POST (the prefix WAS processed), and latch speculation off for the
+    process so it cannot happen twice."""
+    lines = [
+        json.dumps({"transcript": "what time is it"}).encode(),
+        json.dumps({"chunk": 0, "text": "Noon."}).encode(),
+        base64.b64encode(b"RIFFnoon"),
+        json.dumps({"done": True, "reply": "Noon."}).encode(),
+    ]
+    _, played = _wire(daemon, monkeypatch, lines)
+    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t: False)
+    monkeypatch.setattr(daemon, "ZOE_SPECULATIVE_TURN", True)
+    monkeypatch.setattr(daemon, "VOICE_STREAM_ENABLED", True)
+    daemon._speculation_disabled.clear()
+    try:
+        assert daemon._speculation_available() is True
+        spec = daemon._SpeculativeTurn(_FakePA())
+        assert spec.verdict_sent is False
+        ok = daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False, speculation=spec)
+        assert ok is False
+        assert played == [], "audio from an ungated server must never be played"
+        assert spec.ungated is True and spec.cancelled is False  # processed → no re-run
+        assert daemon._speculation_available() is False, "must latch off for the process"
+        # finish() on an ungated turn posts no verdict (the server would 409) and plays nothing.
+        monkeypatch.setattr(daemon, "_api_post", lambda *a, **k: pytest.fail("verdict POST to an ungated server"))
+        assert spec.finish(b"RIFFfinal") is False
+    finally:
+        daemon._speculation_disabled.clear()
 
 
 def test_non_speculative_payload_carries_no_speculation_fields(daemon, monkeypatch):

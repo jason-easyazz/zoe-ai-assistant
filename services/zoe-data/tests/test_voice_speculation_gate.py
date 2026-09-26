@@ -192,6 +192,85 @@ def test_upstream_with_no_audio_ends_without_waiting_for_a_verdict(monkeypatch):
     assert [p.get("done") for p in _parse(out)] == [None, True]
 
 
+# ── review round 1 (Greptile/Copilot on #1685) ────────────────────────────
+
+def test_cancel_before_upstream_started_still_closes_upstream(monkeypatch):
+    """A cancel that lands while STT is still running resolves the gate before
+    the router's generator was ever pulled. ``aclose()`` on a never-started
+    async generator skips its ``finally`` — which is where the brain task gets
+    cancelled — so the gate must prime the upstream before closing it."""
+    monkeypatch.setenv(vs.MAX_HOLD_FLAG, "3000")
+    closed = {"ran": False}
+
+    async def upstream():
+        try:
+            yield _line({"transcript": "add milk"})
+            yield _line({"chunk": 0, "text": "Added."})
+            yield B64
+        finally:
+            closed["ran"] = True
+
+    async def run():
+        gate = vs.open_gate("early-cancel")
+        gate.resolve("cancel")
+        return [f async for f in vs.gate_frames(upstream(), gate)]
+
+    out = asyncio.run(run())
+    _assert_nothing_audible_after_cancel(out)
+    assert closed["ran"], "upstream finally (brain cancel) never ran for an early cancel"
+    assert vs.get_gate("early-cancel") is None
+
+
+def test_open_gate_rejects_an_active_duplicate_turn_id():
+    async def run():
+        first = vs.open_gate("dup")
+        try:
+            with pytest.raises(vs.DuplicateTurn):
+                vs.open_gate("dup")
+            assert vs.get_gate("dup") is first, "the active gate must not be replaced"
+            first.resolve("commit")
+            # A resolved (finished) gate no longer blocks its id.
+            second = vs.open_gate("dup")
+            assert second is not first
+            vs.close_gate(second)
+        finally:
+            vs.close_gate(first)
+
+    asyncio.run(run())
+
+
+def test_flag_on_duplicate_turn_id_is_409(monkeypatch):
+    monkeypatch.setenv(vs.FLAG, "1")
+    app = _app(monkeypatch, _dict_brain)
+    import types
+    monkeypatch.setitem(vs._GATES, "busy", types.SimpleNamespace(resolved=False))
+    with TestClient(app) as client:
+        payload = {"audio_base64": base64.b64encode(b"\x00\x01" * 400).decode(),
+                   "speculative": True, "turn_id": "busy"}
+        assert client.post("/api/voice/turn_stream", json=payload).status_code == 409
+
+
+def test_flag_on_empty_speculative_transcript_ends_cancelled(monkeypatch):
+    """An empty prefix transcript means the server processed NOTHING, so the
+    daemon must run the full recording as a normal turn — it only does that on
+    a ``cancelled`` done frame. The plain (non-speculative) empty path is
+    unchanged."""
+    monkeypatch.setenv(vs.FLAG, "1")
+    app = _app(monkeypatch, _dict_brain)
+
+    async def _empty_stt(_path, capture=True):
+        return ""
+    monkeypatch.setattr(vt, "_transcribe_audio", _empty_stt)
+    with TestClient(app) as client:
+        plain = _parse(_post_raw(client, {}).splitlines())
+        assert plain == [{"transcript": "", "done": True, "reply": ""}]
+        spec = _parse(_post_raw(client, {"speculative": True, "turn_id": "empty1"}).splitlines())
+        assert spec[-1].get("done") and spec[-1].get("cancelled"), spec
+        assert spec[-1].get("reason") == "empty_transcript"
+        assert not _audible([_line(o) for o in spec])
+        assert vs.get_gate("empty1") is None
+
+
 # ── (d) negative control: the invariant must go red when the gate is bypassed ─
 
 def test_negative_control_bypassed_gate_is_caught(monkeypatch):

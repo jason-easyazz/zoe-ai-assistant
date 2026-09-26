@@ -54,6 +54,11 @@ panel lane (the LiveKit lane already is that); out of scope for a spike.
      speculative transcript (`transcripts_equivalent`, LiveKit-style normalised
      equality). Equivalent → release (the resume was noise); otherwise → cancel.
    - `cancel` — explicit drop.
+
+   A `turn_id` whose gate is still unresolved is refused (409) rather than replaced — a
+   retried POST must not start a second brain call against one verdict slot. An EMPTY
+   speculative transcript resolves the gate itself (`empty_transcript`): nothing was
+   processed, so the stream ends `cancelled` and the daemon runs the full recording.
    Cancel drops the held frames, closes the upstream generator (which cancels the
    `voice_command` task), and ends the stream with
    `{"done": true, "cancelled": true, "reply": ""}`. The daemon then runs the **normal**
@@ -64,6 +69,12 @@ panel lane (the LiveKit lane already is that); out of scope for a spike.
    turn nobody confirmed.
 5. **Flag OFF** (server or daemon): the `speculative`/`turn_id` fields are never read,
    the endpoint answers 409, the daemon never fires — byte-identical to today.
+6. **One-sided rollout guard (daemon on, server off)**: the server then answers the prefix
+   as an ordinary turn and streams audio while the daemon is still recording. A gating
+   server never releases audio before the verdict, so audio-before-verdict is the daemon's
+   proof of an ungated server: it plays nothing, posts no verdict, does not re-POST (the
+   prefix was processed — the duplicate-write class), logs an ERROR and latches
+   speculation off for the process. One silent turn, never a second.
 
 ## Failure modes
 
@@ -83,6 +94,20 @@ panel lane (the LiveKit lane already is that); out of scope for a spike.
   (llama-server), so a cancelled request is a queue slot, not a second model. The gate
   buffer holds base64 WAV sentences (tens of KB). Measure, do not assume: RAM must be
   flat across the replay run.
+- **Prefix processed, audio never arrives** (connection lost after the transcript frame,
+  brain error frame): the daemon's existing rule applies — a stream that carried a
+  transcript is never re-POSTed, because the server may already have executed a write.
+  The rest of the utterance is lost for that turn (WARNING logged). Deliberate: the
+  alternative is the duplicate-write class above. Only the EMPTY-transcript case is safe
+  to re-run, and the server marks it `cancelled` for exactly that reason.
+- **Cancel during STT.** The verdict can resolve the gate before the router's generator
+  was ever pulled; `aclose()` on a never-started async generator skips its `finally`
+  (where the brain task is cancelled), so the gate primes the upstream to its first
+  yield — the transcript line, no brain work — before closing it.
+- **Quiet continuation.** Soft speech after the first verdict that never crosses the
+  speech threshold still resets the deep counter; the daemon treats ANY non-deep chunk
+  after the fire as resumed (→ `resolve`, one extra STT pass, released if equivalent)
+  rather than committing a prefix that missed it.
 - **Verdict lost / late.** Max-hold cancels; a verdict for an unknown `turn_id` is 404
   and the daemon treats "nothing played" as its existing no-audio path.
 
@@ -92,8 +117,9 @@ panel lane (the LiveKit lane already is that); out of scope for a spike.
   logged by the daemon per turn, aggregated as median in `measure_voice.py` when the
   replay drives the daemon protocol.
 - `speculation_rate` / `cancellation_rate`: server counter
-  `zoe_voice_speculation_count{outcome=commit|equivalent|cancel|hold_timeout}` (added in
-  `voice_metrics.py`); the probe reports `cancel/(commit+equivalent+cancel)`.
+  `zoe_voice_speculation_count{outcome=commit|equivalent|cancel|hold_timeout|empty_transcript}`
+  (added in `voice_metrics.py`); the probe reports `cancel/(commit+equivalent+cancel)` —
+  `hold_timeout` and `empty_transcript` are not user interruptions and stay out of the ratio.
 - `interruptions_per_conversation`: cancels per conversation-mode session (the daemon
   already counts conversation turns); reported alongside `ok_rate`.
 
