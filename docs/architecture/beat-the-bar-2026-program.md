@@ -34,7 +34,7 @@ status: 🔨 active — NEXT ACTION is always §0
    failing-test-first fixes. #1694 (B1.11) parked — see B1.11. Voice-scope PRs need a
    head-bound probe after EVERY `update-branch` (strict mode); the Kokoro-paused window
    (`systemctl --user stop kokoro-tts` → probe with `--service-dir` → start → verify
-   `curl :10201/health` shows `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
+   `curl http://localhost:10201/health` shows `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
    `dependencies.tts` names the `kokoro-sidecar` provider — `tts.ok` alone is not enough,
    it also goes green on the espeak/edge fallback or on a CPU-mode Kokoro) frees ~2 GB and is
    what made today's runs possible under the 700 MB floor. Hold the
