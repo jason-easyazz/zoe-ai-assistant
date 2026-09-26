@@ -271,12 +271,30 @@ status: 🔨 active — NEXT ACTION is always §0
   guards on empty histories; O(1) continuation tracking; a `<|channel>thought` opener after a
   tool response when thinking is enabled. The live server uses the embedded template
   (`--jinja`), so this is a prompt-format change on the tool-calling path and must be
-  replay-gated. 🧑 Swap (both files, keep the old ones beside them):
-  `cd ~/models/gemma4-e4b-qat && for f in gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf
-  mtp-gemma-4-E4B-it.gguf; do mv -n $f $f.pre-hf-20260717; mv -n staging-hf-20260717/$f $f;
-  done && sha256sum *.gguf`, then `systemctl --user restart llama-server` (health probe
-  waits for model + draft), then `systemctl --user start zoe-voice-regression.service` and
-  read `~/.cache/zoe/voice_regression_last.json`. Rollback = the reverse `mv`. B6.3 ⬜ Domain-prefixed tool
+  replay-gated. 🧑 Swap (both files, keep the old ones beside them) — run as ONE script, not a
+  loop that only reports its last iteration: `set -e` + a pre-check that no `.pre-hf-20260717`
+  backup exists yet (a leftover from a partial attempt would make `mv -n` skip silently and
+  leave the pair at mixed versions), then a `sha256sum -c` against the expected pair:
+  ```
+  set -e; cd ~/models/gemma4-e4b-qat
+  for f in gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf mtp-gemma-4-E4B-it.gguf; do
+    [ -e "$f.pre-hf-20260717" ] && { echo "STOP: $f.pre-hf-20260717 exists — partial earlier attempt"; exit 1; }
+    [ -e "staging-hf-20260717/$f" ] || { echo "STOP: staged $f missing"; exit 1; }
+  done
+  for f in gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf mtp-gemma-4-E4B-it.gguf; do
+    mv "$f" "$f.pre-hf-20260717"; mv "staging-hf-20260717/$f" "$f"
+  done
+  sha256sum -c <<'SUMS'
+  df0fd4ee07072c607c29a0a1cb4f98918426cca12f45a2776bdd6ee6d09a4de3  gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf
+  423074e537504b4f9ec5eafed5c639fac82c96631626efccacdd3c4039b20605  mtp-gemma-4-E4B-it.gguf
+  SUMS
+  ```
+  `sha256sum -c` exits non-zero on any mismatch, so a wrong or half-swapped pair stops here,
+  BEFORE the restart. Then `systemctl --user restart llama-server` (health probe waits for
+  model + draft), then `systemctl --user start zoe-voice-regression.service` and read
+  `~/.cache/zoe/voice_regression_last.json`. Rollback = the reverse `mv` for BOTH files, then
+  the same `sha256sum -c` against the previous hashes (recorded in the review §5) and a
+  restart. B6.3 ⬜ Domain-prefixed tool
   names (`ha__`, `ma__`, `memory__`). B6.4 ⬜ Consider an E2B "fast/cheap turn" lane only
   if RAM allows after B0.1/B5.1 (AICore's variant-by-task split) — not a rock change.
 - B6.5 ⬜ Client defaults: `zoe_flue_client` → `:3579`/wire 2; `ZOE_BRAIN_FAILOVER=1` after
