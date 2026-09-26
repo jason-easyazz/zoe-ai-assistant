@@ -181,6 +181,7 @@ jobs:
             --override-ini="asyncio_mode=auto"
           pytest \
             services/homeassistant-mcp-bridge/tests/test_ha_bridge.py \
+            services/homeassistant-mcp-bridge/tests/test_ha_tool_names.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
           # Repo-root tests/unit uses the SAME marker lane as zoe-data (no

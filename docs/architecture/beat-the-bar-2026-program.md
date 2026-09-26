@@ -124,8 +124,13 @@ status: 🔨 active — NEXT ACTION is always §0
 - B0.11 ⬜ Omnigent: bake the `url=` Serena entry into the image (patched live 2026-09-25 in
   `/root/.codex/config.toml`; a container recreate reverts it); renew the Claude login before
   2026-10-11; move the polly lane off `claude-sdk` OAuth (policy).
-- B0.12 ⬜ HA tool-name sweep (`domain__Tool` prefixes) → HA 2026.9/10 upgrade; adopt the
+- B0.12 🔨 HA tool-name sweep (`domain__Tool` prefixes) → HA 2026.9/10 upgrade; adopt the
   MCP `device_id` meta so panel commands resolve to their room. Then MA 2.10 client check.
+  Part 1 = draft PR #1695: sweep found NO live call site (bridge is pure REST; HA's
+  `mcp_server` is not loaded on 2026.5.2); `ha_tool_names.py` + `GET /tools/names` centralise
+  the spelling with `/api/config` version detection; runbook
+  `docs/knowledge/ha-2026-9-upgrade-runbook.md`. Part 2 = the stepped upgrade (operator) then
+  MCP-server + `device_id` adoption.
 - B0.13 ⬜ JetPack 7.2.x reflash window — only after B0.7/B0.8 and when the J401 BSP + an
   Orin wheel index exist.
 
