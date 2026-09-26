@@ -71,6 +71,7 @@ status: 🔨 active — NEXT ACTION is always §0
 | 12 | "Ask about what you see" (glasses, panel camera) | face-ID only | B7.4 |
 | 13 | Cheap speech on every endpoint (Pocket TTS on CPU) | Orin-only TTS | B5.4 |
 | 14 | A named, consistent persona; safety-gated companionship | Zoe persona; demo-users guardrail | B3.7 |
+| 15 | Household face recognition on a home display (Apple's ~7-inch Siri display, October 2026 per Gurman 2026-09-21) | per-panel face-ID behind flags, no enroll/delete UI | B4.3 → B4.1/B4.2; keep ahead of B7.4 |
 
 ## 3. Program items
 
@@ -135,9 +136,27 @@ status: 🔨 active — NEXT ACTION is always §0
   builder lane only. Any question about the production brain on new hardware is a separate,
   deliberate CANONICAL decision for Jason, out of scope here.
 - B0.3 🧑 Telegram token rotation (BotFather) + `journalctl --rotate && --vacuum-time=1s`.
-- B0.4 ⬜ **llama.cpp rebuild ≥ b11178** and re-enable `--flash-attn on` +
+- B0.4 ⬜ **llama.cpp rebuild at b11194** and re-enable `--flash-attn on` +
   `--cache-type-v q8_0` with MTP (upstream fix PR #25148, 2026-06-30). Keep `--fit off`.
-  Gate: 20-turn multi-prompt replay under `flock`; RSS/TTFT vs baseline; watch #25522.
+  Gate: 20-turn multi-prompt replay under `flock`; RSS/TTFT vs baseline.
+  **2026-09-26 (ecosystem-watch §1):** b11194 ≡ b11178 for this build — 16 commits
+  b11178→b11194, none touching CUDA arch 87 / FA / MTP / Gemma / jinja (only cpp-httplib
+  0.58.0, #29407); source build stays mandatory (prebuilt arm64 asset is CUDA 13.4).
+  **#25522 DROPPED** — every repro is multi-GPU `--split-mode tensor`, N/A on one Orin.
+  Inherits #28285 (SM87 MMQ crossover, benchmarked on AGX Orin), #29152 (Gemma 4 FA),
+  #28549 (CUDA graph for the MTP draft — ggml's `GGML_CUDA_GRAPHS_DEFAULT` is OFF at b11194,
+  confirm the built binary has it on). Gate adds: (1) f16-K / q8_0-V is a MIXED pair vs the
+  `GGML_CUDA_FA_QUANTS` default (`q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16`) — verify it lands on a
+  compiled FA kernel, else build `-DGGML_CUDA_FA_ALL_QUANTS=ON` or run q8_0/q8_0; (2) keep
+  `-np 1` (#28286 draft-MTP cross-slot contamination, fix #29454 open); (3) the replay must
+  include multi-tool + thinking turns for #28827 (template re-injects `thinking_text` without
+  the leading `\n` → trailing garbage; moot while `enable_thinking=false`, UNVERIFIED on E4B);
+  (4) budget the separate MTP CUDA compute arena (#27282 / PR #27489, OOM near the limit).
+  Watch #29391 / fix #29467 (b11159+: a slot `bad allocation` under prefix reuse aborts the
+  whole server — memory-pressure-triggered). Chat template: llama.cpp uses its own
+  `common/jinja` (not minja); every construct in the 2026-07-17 re-upload is supported at
+  b11194, so `--jinja` renders; #28511 + #29115 (Gemma 4 typed content / `tool_choice`
+  grammar) are in.
 - B0.5 ⬜ Retire `labs/flue-zoe-telegram/` (1.x) by removal; update `labs/AGENTS.md`;
   clears 35 Dependabot alerts. Small PR after #1680.
 - B0.6 ✅ 2026-09-26 **Deploy pip contract decided: the box is hand-managed, BOX FIRST, FILE
@@ -154,13 +173,65 @@ status: 🔨 active — NEXT ACTION is always §0
   CPU torch for Resemblyzer, onnxruntime 1.30, websockets 17, av 18, numpy 2, sklearn 1.9
   (re-export the router head). Gate: full `ci_safe` lanes in the venv + replay gate +
   `memory_recall_probe`. Target: before 2026-10-31 (3.10 EOL).
+  **Two-interpreter split (2026-09-26, §10):** system 3.10 = CUDA consumers from `jp6/cu126`
+  (cp310-only: torch, onnxruntime-gpu 1.23/1.24; last upload 2026-04-01) — after EOL frozen
+  at ORT 1.23.2, numpy 2.2.6, av 17.1.0, sklearn 1.7.2, websockets 16.1.1 (all dropped cp310
+  on PyPI); venv 3.12 = zoe-data (ORT 1.30, numpy 2.5, av 18, chromadb 1.5.9 abi3, CPU torch
+  2.14). Needs a per-interpreter `requirements.txt` (markers or two files) + a voice-gate
+  probe re-baseline pointed at the interpreter that runs STT (the probe never installs
+  requirements — see `reference_voice_gate_instrument_facts`).
 - B0.8 ⬜ MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7); reconcile row
   counts against `export_memory_store.py`; self-recall probe.
+  **2026-09-26 (§11):** target chromadb **1.5.9** (#6953 preserves legacy `hnsw:` keys —
+  MemPalace's `hnsw:space=cosine`; cp39-abi3 aarch64, works on 3.10 and 3.12) + mempalace
+  **3.10.0**. Run `mempalace migrate` on the copy — it does the copy
+  (`<palace>.pre-migrate.<ts>`, `max_backups=10`), reads drawers from `chroma.sqlite3`,
+  probes a write round-trip (0.6→1.5 stores can stay readable while writes silently no-op),
+  rebuilds + `os.replace`-swaps with rollback, and prints the reconciliation
+  (`Drawers migrated: N` / `WARNING: Expected X, got Y`); then cross-check
+  `export_memory_store.py` counts + `memory_recall_probe`. Chroma has no 0.6→1.x tool of its
+  own (first open migrates; `chroma-migrate` is 0.4-only). 3.10's `get_collection()` rejects
+  names other than the drawers collection — audit callers for `_skip_name_check=True`. Fix the
+  `requirements.txt` comment (~line 82): the chromadb bound flipped at mempalace **3.4.0**
+  (2026-06-06), not 3.6.0 (`migrate.py`'s docstring is wrong the same way).
 - B0.9 ⬜ APScheduler 3.11.3 via `export_jobs`/`import_jobs` with pytz present; `tzlocal>=3`
   in both workflows. Gate: reminder + autopilot row counts unchanged.
-- B0.10 ⬜ GitHub: allow-list `voice-gate.yml` + `break-glass.yml` under the new
-  `pull_request_target` protection before 2026-11-02; set Copilot code review to Lite
-  before 2026-09-28; add CodeRabbit (free on this public repo); Greptile to Starter.
+- B0.10 ⬜ GitHub review-pipeline housekeeping — split into dated sub-items 2026-09-26
+  (ecosystem-watch §9); Greptile to Starter unchanged:
+  - (a) 🧑 **before 2026-09-28** — Copilot code-review effort = **Lite** (the Default value
+    flips to Balanced, ~5× dearer: Lite ≈ $0.05–1 vs Balanced ≈ $0.25–5 of credits per
+    review; changelog 2026-08-28). Repo: Settings → Code, planning, and automation → Copilot →
+    Code review → "Review effort level" → Lite (not Default). Account: profile → Copilot
+    settings → Code review (also the auto-review toggles). `gh pr edit --add-reviewer
+    @copilot` passes no effort — which default it takes is UNVERIFIED.
+  - (b) 🧑 **before 2026-11-02** — repo Actions **event policy** allowing
+    `pull_request_target` for `.github/workflows/voice-gate.yml` +
+    `.github/workflows/break-glass.yml`. Measured 2026-09-26:
+    `gh api repos/<owner>/<repo>/actions/policies` → `{"total_count":0}` — no policy exists,
+    so the default rule (GA changelog 2026-09-17, evaluate mode now) auto-enforces on 11-02
+    and both workflows FAIL with `Event 'pull_request_target' is not allowed …` (a failed
+    run, not a skip). UI: Settings → Actions → Policies → new rule, type
+    `restrict_action_events`, `allowed_events: [pull_request_target]`, `include` the two
+    workflow paths, enforcement `evaluate` first → `active` (a community thread says a
+    user-created rule enforces immediately, so verify in the Actions tab filtered on
+    `event:pull_request_target` before flipping). API: `POST
+    /repos/{owner}/{repo}/actions/policies` via `gh api -X POST … --input body.json` (no `gh`
+    subcommand; read the REST page for field names); `GET/PUT/DELETE …/policies/{id}`.
+  - (c) ⬜ `ggshield-action` v1.53.0 → v1.55.0 in `validate.yml` (1.55.0 2026-09-24; no
+    breaking change to `secret scan ci`, exit codes or `.gitguardian.yaml` in 1.53–1.55) +
+    🧑 `ggshield install --mode global --force` on the box: ggshield 1.53 fixed the global hook
+    skipping repo-local hooks in git worktrees (all Zoe work is in worktrees) and an existing
+    global install only picks the fix up on re-install.
+  - (d) 🧑 optional — CodeRabbit (free on public repos; non-blocking, no required check;
+    drafts skipped by default): install via coderabbit.ai → Login with GitHub → only this
+    repo, plus a minimal `.coderabbit.yaml` (`profile: chill`,
+    `request_changes_workflow: false`, `auto_review.drafts: false`). Its inline comments are
+    review threads and count toward `required_conversation_resolution`.
+  - (e) ⬜ optional review-scoped `.github/copilot-instructions.md` — Copilot review ingests
+    `AGENTS.md` wholesale (~600 lines billed per review); a short review-only file bounds it.
+  - Review pipeline, 2026-09-26: the **Codex code-review quota was exhausted** mid-day, so the
+    cross-vendor pass is unavailable until it refills — fallback for the day's PRs is Greptile
+    (label) + Copilot; the deterministic gate is unchanged.
 - B0.11 🔨 Omnigent: bake the `url=` Serena entry into the image (patched live 2026-09-25 in
   `/root/.codex/config.toml`; a container recreate reverts it); renew the Claude login before
   2026-10-11; move the polly lane off `claude-sdk` OAuth (policy). Draft PR #1700: the file
@@ -176,7 +247,21 @@ status: 🔨 active — NEXT ACTION is always §0
   `mcp_server` is not loaded on 2026.5.2); `ha_tool_names.py` + `GET /tools/names` centralise
   the spelling with `/api/config` version detection; runbook
   `docs/knowledge/ha-2026-9-upgrade-runbook.md`. Part 2 = the stepped upgrade (operator) then
-  MCP-server + `device_id` adoption.
+  MCP-server + `device_id` adoption. **Pre-flight (2026-09-26, §6/§7):** latest HA is
+  2026.9.3 (09-18; no 2026.10 beta yet); recorder `SCHEMA_VERSION = 53` on 2026.5.2, 2026.9.3
+  and `dev` — no DB migration, rollback-safe on the schema axis; `mcp_server` `require_admin`
+  (#180713, lands 2026.10) migrates an EXISTING entry to `require_admin: False`, so Zoe keeps
+  access until flipped; `device_id` meta → `LLMContext.device_id` is #182057 (09-13). Check
+  the `auth_oidc` v1.2.1 kiosk auto-login path before/after (hass-oidc-auth #422, open
+  09-15: `trusted_networks` + `allow_bypass_login` tablets land on `/auth/oidc/welcome` — the
+  panel's path). HA 2026.9 removed `VacuumEntityFeature.BATTERY`: any localtuya vacuum with a
+  battery DP crashes on load (rospogrigio #2285 open, fix PR #2286 unmerged; xZetsubou master
+  fixed 09-05, no tagged release) — if one exists, stop at 2026.8 or move fork. The
+  `ToolResult` deprecation (2027.11) has no Zoe impact. MA: pin `2.10.4` (`stable` ≡ same
+  digest); bump `music-assistant-client` to 1.5.1 first; probe Sendspin re-pairing
+  (aiosendspin 9.1.1, PIN-pairing breaking at 9.0.0), the panel's shairport-sync 5.1 in
+  PTP/Automatic mode (support #6243 pattern — pin the streaming mode if silent), and the
+  bgutil 2.0.0 localhost bind reachable from MA's namespace (`127.0.0.1:4416`).
 - B0.13 ⬜ JetPack 7.2.x reflash window — only after B0.7/B0.8 and when the J401 BSP + an
   Orin wheel index exist.
 
@@ -200,6 +285,19 @@ status: 🔨 active — NEXT ACTION is always §0
   Smart Turn "incomplete" score to play a soft "mm-hm" after ≥0.7 s of speech, 2.5 s
   cooldown. Add "interruptions per conversation" and "silence before first audio" to the
   replay harness.
+  **2026-09-26 (§12; wording per #1705):** the Silero v6.2.1 file is already in place (B0.2).
+  Silero v6.2.2's `silero_vad_16k_sequence.onnx` (GIL-releasing, `sequence=True`) is an
+  OFFLINE whole-utterance graph — **NOT a live drop-in**: `services/zoe-data/voice_vad.py`
+  runs the streaming model in 512-sample hops with a `(2,1,128)` recurrent state, and a file
+  swap would NOT fall back to RMS (RMS is chosen only when the model fails to load; a model
+  that loads but rejects streaming inputs makes `process_hops` swallow the error and report
+  no speech — a silent failure). Live VAD stays on streaming v6.2.1; evaluate the sequence
+  model for the replay/lab path only (whole clip in hand). Validation for ANY live VAD change
+  = the VAD unit lanes (`test_livekit_vad_segmentation.py`, `test_voice_barge_in.py`) + a
+  live barge-in count on the panel with Kokoro playing (B1.3 metric) — the replay harness
+  starts at STT and never exercises VAD or barge-in. New lab item (small, B1/B5): **Parakeet
+  Redux** (Moondream 2026-09-22; 178 MB / 149M ternary encoder, CPU, streaming, CC-BY-4.0)
+  WER + per-file ms vs Moonshine 0.0.62 on the replay corpus — a benchmark, not a rock swap.
 - B1.5 ⬜ **Acknowledge-while-thinking + async tools**: fast tier emits a first clause or
   backchannel in ~300 ms, tool calls run async, the brain revises mid-utterance
   (GPT-Live "delegated backend", Sesame "speak while searching"). Flag-gated.
@@ -225,7 +323,9 @@ status: 🔨 active — NEXT ACTION is always §0
   `ZOE_MOONSHINE_KEYTERMS` plumbing (feature-detected, dormant on 0.0.62, visible on `/readyz`),
   runbook `docs/knowledge/moonshine-0-1-5-upgrade.md` §8 with the numbers. Next: 🧑 file
   upstream at moonshine-ai/moonshine with these numbers (outward-facing — Jason's call); retest
-  on the next release with the same engine-only A/B.
+  on the next release with the same engine-only A/B. 2026-09-26 (§2): upstream is silent since
+  0.1.5 (zero commits, no perf issue filed by anyone); watch moonshine #229 (shared Silero VAD
+  across concurrent streams); the issue draft is in ecosystem-watch §2.
 - B1.11 ⏸ PARKED 2026-09-26 — Flue 2.1.1 (`@flue/*` 2.0.1 → 2.1.1 in both 2x sidecars; hono /
   nanoid advisories cleared, `npm audit` 0; 209/209 + 44/44 tests; store format unchanged, one
   fold-checkpoint re-fold on first start). Draft **PR #1694** was proven the way the contract
@@ -235,6 +335,20 @@ status: 🔨 active — NEXT ACTION is always §0
   decides: (a) the two-PR sibling + cutover route (as #1675 did for 1.x → 2.x), or (b) amend
   the contract to allow in-place patch/minor dependency bumps that carry head-bound
   parallel-port evidence. Then 2.2.0 for the llama.cpp tool-call fixes.
+  **Flue 2.2.0 is NOT drop-in (2026-09-26, §4):** it exists only as `2.2.0-next.1` on npm
+  (2026-09-25; no 2.1.2, no 2.2.0 final) and bumps Pi to 0.87.1. Pi ≥0.86 changes the
+  `ProviderStreams` input from `Context` to `TranscriptContext` (system prompt + tools travel
+  in the leading system message). Zoe's `capped-completions.ts` sets `tools: []` to enforce
+  the iteration cap and `context-window.ts:189-190 / 259-260` read `context.systemPrompt` /
+  `context.tools` for the budget — under 0.86+ the cap becomes a **silent no-op** and the
+  budget reads `undefined`. Port to `getCurrentSystemPrompt()` / `getCurrentTools()` plus a
+  tools-removed system message and re-verify with a cap negative control (the cap must still
+  trip) BEFORE any 2.2.0 bump. Only #9816 (0.87.0: no strict tool schemas for endpoints that
+  do not advertise them) is a Flue-reachable llama.cpp fix; #8275 (thinking budget) came in
+  0.84.3; #9528 (`enable_thinking`) is CLI-side. 2.1.1 already swapped the `flue.tool.call.*`
+  trace attrs for `gen_ai.tool.call.*` (check trace consumers). Pins are
+  `@earendil-works/pi-ai` 0.83.0 (2x sidecar) / `pi-coding-agent` 0.82.1 (`zoe-core`), not
+  `@mariozechner/*` (dead scope, last publish 0.73.1).
 
 ### B2 — Proactivity with judgement (beats Daily Brief / Alexa+ nudges)
 - B2.1 ⬜ **Presence-triggered routines**: emit `person_recognized(panel, person, ts)` from the
@@ -294,10 +408,14 @@ status: 🔨 active — NEXT ACTION is always §0
 ### B4 — Identity and presence (where Apple and Amazon are weakest locally)
 - B4.1 ⬜ Speaker-verification **margin rule** (distance < θ and ≥0.10 over the second-best
   profile) + sherpa-onnx ERes2Net/CAM++ embedder in shadow during the W5 week (Omi).
+  Multi-speaker-detector candidate for the B9.3 shadow week (2026-09-26, §12): NVIDIA
+  **Nemotron 3 Diarization** (09-23; ~100M params, streaming/offline, up to 8 speakers,
+  320 ms labels; ONNX/GGUF ports 09-23/24) — not on the hot path.
 - B4.2 ⬜ Speaker-gated wake word (openWakeWord custom verifier) or a purpose-trained
   "Hey Zoe" (2026 trainers).
 - B4.3 🧑 Decide `ZOE_FACE_ID_ENABLED` (on, against the retention policy) → build the
-  face enroll/delete UI (ZOE-6129) or turn it off.
+  face enroll/delete UI (ZOE-6129) or turn it off. More urgent, not less (2026-09-26): Apple's
+  October home display ships household face recognition (§2 row 15) — keep B4.3 ahead of B7.4.
 - B4.4 ⬜ Dual-channel mic (processed for wake/STT, raw for voice-ID) on one panel (VPE).
 - B4.5 ⬜ Presence hardware: Raspberry Pi AI Camera (IMX500) person-detect stream as a
   zero-CPU presence signal; HA device presence (Phase 2.5).
@@ -305,12 +423,24 @@ status: 🔨 active — NEXT ACTION is always §0
 ### B5 — Voice quality and expressiveness
 - B5.1 ⬜ **Kokoro on ONNX Runtime CUDA** (same model, same voices): 2.3 GB → ~0.6–1 GB;
   RTF < 0.3 required; jetson-containers `kokoro-tts-onnx` recipe.
+  **Recipe (2026-09-26, §3):** `kokoro-onnx==0.6.1` (2026-08-19; PR #198 re-export with
+  `speed`/duration outputs, **fp16 164 MB / int8 114 MB** graphs in release `model-files-v1.1`
+  beside the 326 MB fp32) + `onnxruntime_gpu==1.24.0` cp310 aarch64 from
+  `https://pypi.jetson-ai-lab.io/jp6/cu126/` (verified 09-26; PyPI ships no aarch64 GPU wheel,
+  so it lives on system 3.10 beside llama-server, not in the B0.7 venv). The `[gpu]` extra is
+  x86_64-only — install `kokoro-onnx` plain and bring ORT-GPU; pin numpy to the ORT wheel's
+  ABI (kokoro-onnx wants 2.x, the Jetson wheel was built on 1.x). No Kokoro weights since
+  2025-04 and no published Jetson RAM numbers — the 2.3 GB → ~0.6–1 GB claim is a hypothesis:
+  **measure with a CPU-EP control** (same graph on the CPU provider), gate RTF < 0.3 + the
+  replay corpus. CPU fallback if the sidecar ever loses CUDA: Moonshine 0.1.5's two-stage
+  Kokoro ORT graph (~100–200 MB).
 - B5.2 ⬜ Emotion → bounded, auditable prompt modifiers under immutable rules (GLaDOS
   constitution); Gemma emits one expression tag per sentence (OLV convention); a 48-dim
   emotion vector as the shared wire format (Hume schema).
 - B5.3 ⬜ Expressive-lane bake-off for W11: Chatterbox Nano/Turbo, Supertonic 3, NeuTTS Air.
 - B5.4 ⬜ **Pocket TTS on the Pi panels** (100M, MIT, CPU) for local acks/toasts when the
-  Orin is busy or the brain is stopped.
+  Orin is busy or the brain is stopped. Still the strongest candidate at v3.3.0 (2026-09-24;
+  retrained ES/IT/PT/DE, new NL/FR, training code released 08-25).
 - B5.5 ⬜ Gemma 4 E4B **audio input** for paralinguistics on flagged turns only (BF16 mmproj
   costs RAM — after B0.1/B5.1).
 - B5.6 ⬜ Voxtral Realtime as an offline second-opinion ASR judge in the replay harness.
@@ -325,7 +455,9 @@ status: 🔨 active — NEXT ACTION is always §0
   guards on empty histories; O(1) continuation tracking; a `<|channel>thought` opener after a
   tool response when thinking is enabled. The live server uses the embedded template
   (`--jinja`), so this is a prompt-format change on the tool-calling path and must be
-  replay-gated. 🧑 Swap (both files, keep the old ones beside them) — run as ONE script: it
+  replay-gated — include multi-tool-call + thinking turns so llama.cpp #28827 (trailing
+  garbage from the re-injected `thinking_text`, see B0.4) shows if it reproduces on E4B.
+  🧑 Swap (both files, keep the old ones beside them) — run as ONE script: it
   refuses to start on a partial earlier attempt (a leftover `.pre-hf-20260717` backup would
   make a bare `mv -n` skip silently and leave the pair at mixed versions), restores BOTH
   files if anything fails mid-way (so the production names never point at a partial or
@@ -400,7 +532,8 @@ maintainers call their speaker-ID "not reliable enough to trust"). The consumer 
 nRF5340 with an SD ring buffer that records whenever powered — a retention Zoe cannot gate
 from outside, hence B9.0.
 - B9.0 🧑 **Consent posture decisions**: (a) firmware variant `omi-zoe` with offline SD storage
-  OFF vs stock + `RING_CLEAR` on connect; (b) default retention window (proposal 7 d); (c) which
+  OFF vs stock + `RING_CLEAR` on connect (= `0x13 CLEAR` on the stock ≥3.0.20 ring
+  protocol); (b) default retention window (proposal 7 d); (c) which
   household members may opt into ambient; (d) legal sanity check of the discard-unknown rule
   under the WA Surveillance Devices Act 1998 s5/s9 for guests. Gate: written answers in the
   plan's §8 before B9.4.
@@ -408,6 +541,18 @@ from outside, hence B9.0.
   decode, 10-min WAV, reconnect-on-drop. Code + fixture tests + manual protocol: #1693 (draft;
   the pendant has not been run yet — every gate number is still hardware-only). Gate: <1 % packet gaps at 3 m/one wall; Moonshine WER on
   20 corpus sentences ≤ panel + 5 pts; battery drop/h logged.
+  **Protocol facts (2026-09-26, §8, read from `sdks/device/PROTOCOL.md` + the app — the
+  docs.omi.me Protocol page is stale, no codec 21):** codec ids **0 = PCM16, 1 = PCM8,
+  20 = Opus 160-sample/10 ms (DevKit), 21 = Opus FS320 320-sample/20 ms (CV1)**; **3-byte
+  header** (u16 LE packet number + u8 index) then Opus; CV1 = 32 kbps VBR, ~16 kB/s on the
+  wire, PCM16 mono 16 kHz out; UUIDs as in `omi_bridge.py`. Ring protocol needs firmware
+  **≥3.0.20** — 🧑 confirm via DIS `2A26` before relying on it (CV1 config reports 3.0.21;
+  `0x10 INFO` / `0x11 READ` / `0x12 ADVANCE` / `0x13 CLEAR` / `0x03 STOP`, big-endian ints,
+  444-byte records = 4-byte timestamp + 440 audio; storage UUID UNVERIFIED). No local STT
+  anywhere upstream (cloud stack; "Local AI provider" PR #13538 unmerged) — Moonshine stays
+  Zoe's job. Firmware 08-27 removed software VAD for T5838 AAD hardware VAD, so the pendant
+  may already drop silence: the "<1 % packet gaps" metric must separate AAD-gated silence
+  from BLE loss. No GitHub firmware release since v2.0.4 (2024-11); firmware ships by app OTA.
 - B9.2 ⬜ **Bridge thread in the Pi daemon, flag-dark** (`OMI_BRIDGE_ENABLED`,
   `ZOE_AMBIENT_OMI_ENABLED`, both off): `source="omi"`, `device_id`, `speaker_id`, `expires_at`
   on `ambient_memory` (one migration). Gate: ci_safe tests (flag off ⇒ no row); replay gate
@@ -490,6 +635,13 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-26 (pm, fold) — ecosystem-watch 2026-09-26 (#1703; B1.4 wording per #1705) folded
+  into the rows: B0.4 b11194 gate (#25522 dropped), B0.7 two-interpreter split, B0.8 migrate
+  recipe + 3.4.0 correction, B0.10 split into dated 🧑 sub-items (Copilot Lite 09-28, Actions
+  event policy 11-02, ggshield 1.55 + worktree hook, CodeRabbit optional) + Codex quota note,
+  B0.12 HA/MA pre-flight, B1.4 Silero sequence-model correction + Parakeet lab item, B1.10
+  upstream silence, B1.11 Flue 2.2.0 not-drop-in, B4.1 Nemotron candidate, B4.3 urgency,
+  B5.1 ONNX recipe, B5.4 Pocket v3.3, B6.2 replay scope, B9.0/B9.1 protocol facts, §2 row 15.
 - 2026-09-26 (pm) — Moonshine 0.1.5 measured + root-caused (decoder-step cost inside the
   0.1.x library), HELD; Flue 2.1.1 PARKED on the sibling-directory contract; deploy
   root-ownership wedge found + fixed; #1693/#1695/#1696/#1698 merged and deployed; bridge
