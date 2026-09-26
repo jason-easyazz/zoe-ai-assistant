@@ -174,9 +174,11 @@ Once on 2026.10, Zoe can pass the panel's HA device id in `params._meta["io.home
     trap - EXIT
     echo "ROLLBACK FAILED (rc=$rc) with HA stopped (phase=$PHASE)"
     if [ "$PHASE" = aside ]; then
-      rm -rf homeassistant/.storage; mv "$ASIDE/.storage" homeassistant/
+      # .storage is ALWAYS put back first (registries, config entries, auth) — whatever failed after it moved.
+      rm -rf homeassistant/.storage
+      [ -d "$ASIDE/.storage" ] && mv "$ASIDE/.storage" homeassistant/
       for f in "$ASIDE"/home-assistant_v2.db*; do [ -e "$f" ] && { rm -f "homeassistant/$(basename "$f")"; mv "$f" homeassistant/; }; done
-      echo "newer .storage + recorder db put back from $ASIDE; tag unchanged"
+      echo "newer .storage (and recorder db, if any) put back from $ASIDE; tag unchanged"
     elif [ "$PHASE" = restored ]; then
       sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$PREV#" docker-compose.yml
       echo "backup state is restored and the tag is $PREV; newer state kept in $ASIDE"
@@ -191,8 +193,13 @@ Once on 2026.10, Zoe can pass the panel's HA device id in `params._meta["io.home
   #    can refuse a newer recorder schema), then downgrade the tag.
   docker compose stop homeassistant
   mv homeassistant/.storage "$ASIDE"/
-  mv homeassistant/home-assistant_v2.db* "$ASIDE"/
-  PHASE=aside
+  PHASE=aside   # from here the handler puts .storage back before restarting HA, whatever fails next
+  # The recorder db may be absent after a failed step — not an error on rollback (the archive's copy is restored).
+  if compgen -G "homeassistant/home-assistant_v2.db*" >/dev/null; then
+    mv homeassistant/home-assistant_v2.db* "$ASIDE"/
+  else
+    echo "no recorder db in the live tree — nothing to set aside; the archive's copy will be restored"
+  fi
   tar -C /home/zoe/assistant -xzf "$BK" --wildcards homeassistant/.storage 'homeassistant/home-assistant_v2.db*'
   PHASE=restored
   sed -i "s#home-assistant/home-assistant:[^ ]*#home-assistant/home-assistant:$PREV#" docker-compose.yml
