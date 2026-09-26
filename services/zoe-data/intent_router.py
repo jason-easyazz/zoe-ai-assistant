@@ -2014,9 +2014,21 @@ async def detect_and_extract_intent(
         )
         return routed_intent
     if intent.slots and "raw" in intent.slots:
+        recurrence = None
         if intent.name == "reminder_create":
+            # Recurrence is parsed deterministically BEFORE any slot filler: the
+            # regex tier and the NLU schema only know one-off dates, so "every
+            # weekday at 7" used to be stored as a single reminder. The phrase is
+            # removed from the text the fillers see and carried as an RRULE slot.
+            from reminder_recurrence import extract_recurrence
+
+            hit = extract_recurrence(intent.slots["raw"])
+            if hit:
+                recurrence, intent.slots["raw"] = hit
             structured = _extract_simple_reminder_slots(intent.slots["raw"])
             if structured:
+                if recurrence:
+                    structured["recurrence"] = recurrence
                 intent.slots = structured
                 _schedule_pi_shadow(
                     intent,
@@ -2031,6 +2043,8 @@ async def detect_and_extract_intent(
             from nlu_extractor import extract_slots_for_intent  # lazy — avoids circular at load
             structured = await extract_slots_for_intent(intent.name, intent.slots["raw"])
             if structured:
+                if recurrence:
+                    structured["recurrence"] = recurrence
                 intent.slots = structured
                 _schedule_pi_shadow(
                     intent,
@@ -2207,6 +2221,7 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
                 due_date=slots.get("date") or None,
                 due_time=slots.get("time") or None,
                 category=slots.get("category") or "general",
+                recurring_pattern=slots.get("recurrence") or None,
             )
             reminder = await create_reminder_record(payload, user=user, db=db)
         return _format_response(intent, json.dumps(reminder, default=str))
@@ -4703,7 +4718,15 @@ def _format_response(intent: Intent, raw_output: str) -> str:
         date_str = s.get("date", "")
         time_str = s.get("time", "")
         suffix = ""
-        if date_str:
+        rule = None
+        if s.get("recurrence"):
+            from reminder_recurrence import describe_rrule, parse_rrule
+
+            rule = parse_rrule(s["recurrence"])
+        if rule:
+            # The slot date is only the start anchor; say the schedule instead.
+            suffix += f", {describe_rrule(rule)}"
+        elif date_str:
             suffix += f" for {date_str}"
         if time_str:
             suffix += f" at {time_str}"

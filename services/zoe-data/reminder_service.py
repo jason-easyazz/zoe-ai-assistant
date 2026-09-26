@@ -113,6 +113,39 @@ def normalize_due_time(raw: object) -> str | None:
     return text
 
 
+def normalize_recurrence_fields(
+    raw_pattern: object, due_date: str | None, due_time: str | None, *, now_utc: datetime | None = None
+) -> tuple[str | None, str | None]:
+    """Resolve a reminder's recurrence at WRITE time → (rrule, anchor due_date).
+
+    `raw_pattern` may be an RRULE or a spoken phrase ("every weekday"); it is
+    stored as a canonical RRULE, never free text the scan cannot run. The
+    returned due_date is the FIRST occurrence on/after the given date (or today)
+    that is still in the future, which the scan then uses as the rule's anchor.
+    Unsupported patterns → 422. No pattern → (None, due_date) unchanged."""
+    from reminder_recurrence import first_occurrence_date, normalize_recurrence, parse_rrule
+
+    try:
+        rrule = normalize_recurrence(raw_pattern)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"recurring_pattern {str(raw_pattern)!r} is not a supported recurrence "
+            "(RRULE FREQ=DAILY|WEEKLY|MONTHLY|YEARLY, or e.g. 'every weekday')",
+        )
+    if rrule is None:
+        return None, due_date
+    from proactive.triggers.reminder_scan import _ZOE_TZ, _default_due_hm, _parse_due_time, zoe_now
+
+    now = zoe_now(now_utc)
+    hour, minute = _parse_due_time(due_time or "") or _default_due_hm()
+    start = date.fromisoformat(due_date) if due_date else now.date()
+    first = first_occurrence_date(parse_rrule(rrule), start, hour, minute, now, _ZOE_TZ)
+    if first is None:
+        raise HTTPException(status_code=422, detail=f"recurrence {rrule!r} has no upcoming occurrence")
+    return rrule, first.isoformat()
+
+
 def row_to_dict(row) -> dict | None:
     """Convert asyncpg/compat rows to a plain reminder dict."""
     if row is None:
@@ -146,6 +179,10 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     reminder_id = str(uuid.uuid4())
     due_date = normalize_due_date(payload.due_date)
     due_time = normalize_due_time(payload.due_time)
+    recurring_pattern, due_date = normalize_recurrence_fields(payload.recurring_pattern, due_date, due_time)
+    reminder_type = payload.reminder_type
+    if recurring_pattern and reminder_type == "one-time":
+        reminder_type = "recurring"
 
     await db.execute(
         """INSERT INTO reminders (
@@ -158,12 +195,12 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
             user_id,
             payload.title,
             payload.description,
-            payload.reminder_type,
+            reminder_type,
             payload.category,
             payload.priority,
             due_date,
             due_time,
-            payload.recurring_pattern,
+            recurring_pattern,
             payload.visibility,
         ),
     )
@@ -173,7 +210,8 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
         notif_type="reminder_created",
         title="Reminder Created",
         message=f"Reminder added: {payload.title}",
-        data={"reminder_id": reminder_id, "due_date": due_date, "due_time": due_time},
+        data={"reminder_id": reminder_id, "due_date": due_date, "due_time": due_time,
+              "recurring_pattern": recurring_pattern},
     )
     await db.commit()
 

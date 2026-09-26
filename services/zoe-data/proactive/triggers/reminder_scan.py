@@ -28,12 +28,14 @@ Rules:
 - due_date that is not an ISO date (a stored literal like "tomorrow") → skip,
   and WARN once per reminder id so it is visible instead of silently dead.
   `reminder_service.normalize_due_date` now resolves those at write time.
-- Date-only rows that ALSO carry a recurring_pattern are excluded with a WARN
-  once per id: nothing in the proactive path advances a fixed due_date per
-  pattern (recurrence today = "time, no date" → daily via build_run_at), so
-  scheduling such a row from its fixed date would fire it exactly once and then
-  skip it as past-due forever — a lie about recurrence. Fix the row: drop the
-  date to make it daily, or drop the pattern to make it one-shot.
+- recurring_pattern that is a supported RRULE (`reminder_recurrence`) → the
+  due_date is the rule's ANCHOR, not a one-shot date: schedule the next
+  occurrence at due_time (or the household default time), every cycle, forever.
+- Date-only rows whose recurring_pattern is NOT an RRULE (legacy free text such
+  as "weekly") are excluded with a WARN once per id: nothing can advance a fixed
+  due_date per free text, so scheduling such a row from its fixed date would
+  fire it exactly once and then skip it as past-due forever. Fix the row: store
+  an RRULE, drop the date to make it daily, or drop the pattern (one-shot).
 - Log hygiene: every line on this path names the reminder ID (and counts) only —
   never the title, the user id or the raw stored text (private content must not
   enter the persisted app log).
@@ -50,6 +52,7 @@ import zoneinfo
 from datetime import datetime, timedelta, timezone, date
 
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
+from reminder_recurrence import next_occurrence, parse_rrule
 
 log = logging.getLogger(__name__)
 
@@ -199,6 +202,28 @@ async def _fired_today(db, rid: str, now_utc: datetime) -> bool:
         return await cur.fetchone() is not None
 
 
+async def _schedule_recurring(row, rule: dict, now_utc: datetime) -> str | None:
+    """Schedule the NEXT occurrence of an RRULE reminder. The stored due_date is
+    the rule's anchor (the write path sets it to the first occurrence), not a
+    one-shot date, so it never goes "past-due". After an occurrence fires the
+    next scan finds no unfired job and schedules the following one."""
+    from proactive.triggers.reminders import schedule_reminder  # deferred
+
+    rid = row["id"]
+    due_date = row["due_date"]
+    hm = _parse_due_time(row["due_time"]) or _default_due_hm()
+    anchor = date.fromisoformat(due_date) if due_date and _is_iso_date(due_date) else zoe_now(now_utc).date()
+    run_local = next_occurrence(rule, anchor, hm[0], hm[1], now_utc, _ZOE_TZ)
+    if run_local is None:
+        return None
+    run_at = run_local.astimezone(timezone.utc)
+    if run_at > now_utc + timedelta(hours=_LOOKAHEAD_HOURS):
+        return None
+    await schedule_reminder(user_id=row["user_id"], message=row["title"], send_at=run_at, item_id=rid)
+    log.info("reminder_scan: scheduled recurring reminder %s at %s", rid, run_at.isoformat())
+    return rid
+
+
 async def schedule_due_reminder(db, row, *, now_utc: datetime | None = None) -> str | None:
     """Schedule ONE reminder row into APScheduler (Tier 1) if it has a parseable,
     in-window, future due time and isn't already scheduled.
@@ -223,6 +248,11 @@ async def schedule_due_reminder(db, row, *, now_utc: datetime | None = None) -> 
 
     due_time = row["due_time"]
     due_date = row["due_date"]
+
+    rule = parse_rrule(_row_get(row, "recurring_pattern") or "")
+    if rule is not None:
+        return await _schedule_recurring(row, rule, now_utc)
+
     hm = _parse_due_time(due_time)
     used_default_time = False
     if hm is None:
