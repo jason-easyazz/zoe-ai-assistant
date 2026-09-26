@@ -17,6 +17,19 @@ from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.append('/app')
+# ... and main.py's own directory, so the module resolves when tests load main.py by path.
+sys.path.append(str(Path(__file__).resolve().parent))
+
+from ha_tool_names import (  # noqa: E402 — same directory as main.py (volume-mounted /app)
+    PREFIXED_SINCE,
+    UNPREFIXED_BREAKS_IN,
+    HaToolNameSchemeDetector,
+    UnknownHaToolError,
+    ha_tool_name,
+    normalize_tool_name,
+    script_tool_name,
+    tool_table,
+)
 
 app = FastAPI(title="Zoe Home Assistant MCP Bridge", version="1.0.0")
 
@@ -81,6 +94,10 @@ class HomeAssistantBridge:
     async def get_services(self) -> Dict:
         """Get all available services from Home Assistant"""
         return await self._make_request("GET", "services")
+
+    async def get_config(self) -> Dict:
+        """Get HA core config (``version`` drives the LLM tool-name scheme)."""
+        return await self._make_request("GET", "config")
     
     async def call_service(self, domain: str, service: str, entity_id: str = None, data: Dict = None) -> Dict:
         """Call a Home Assistant service"""
@@ -124,6 +141,10 @@ class HomeAssistantBridge:
 # Initialize bridge
 ha_bridge = HomeAssistantBridge(HA_BASE_URL, HA_ACCESS_TOKEN)
 
+# HA >= 2026.9 domain-prefixes every LLM/MCP tool name (intent__HassTurnOn); detected
+# once from /api/config and cached for the process. See ha_tool_names.py.
+tool_name_scheme = HaToolNameSchemeDetector(ha_bridge.get_config)
+
 # Pydantic models
 class DeviceControlRequest(BaseModel):
     entity_id: str
@@ -165,7 +186,10 @@ async def root():
             "status": "healthy",
             "version": "1.0.0",
             "ha_connected": True,
-            "entities_count": len(states)
+            "entities_count": len(states),
+            "tool_name_scheme": (
+                tool_name_scheme.cached.scheme if tool_name_scheme.cached else "undetected"
+            ),
         }
     except Exception as e:
         return {
@@ -532,6 +556,46 @@ async def get_services():
             "error": f"Failed to get services: {str(e)}",
             "status": 500
         }
+
+@app.get("/tools/names")
+async def get_tool_names():
+    """The HA LLM tool-name scheme the connected HA speaks, and the full base→name table.
+
+    Consumers (zoe-data, the brain, prompts) MUST spell HA tool names through this
+    table rather than hard-coding ``HassTurnOn`` / ``intent__HassTurnOn``: HA 2026.9
+    prefixed every name and 2027.3 rejects the unprefixed ones.
+    """
+    detected = await tool_name_scheme.detect()
+    return {
+        "scheme": detected.scheme,
+        "ha_version": detected.ha_version,
+        "source": detected.source,
+        "prefixed_since": ".".join(map(str, PREFIXED_SINCE)),
+        "unprefixed_breaks_in": ".".join(map(str, UNPREFIXED_BREAKS_IN)),
+        "tools": tool_table(detected.scheme),
+        "script_tool_example": script_tool_name("script.example", detected.scheme),
+    }
+
+
+@app.get("/tools/names/{name}")
+async def resolve_tool_name(name: str):
+    """Normalise a tool name given in EITHER scheme; unknown names are 404, never echoed."""
+    try:
+        base = normalize_tool_name(name)
+    except UnknownHaToolError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    detected = await tool_name_scheme.detect()
+    if base.startswith("script."):
+        legacy, prefixed = script_tool_name(base, "legacy"), script_tool_name(base, "prefixed")
+    else:
+        legacy, prefixed = ha_tool_name(base, "legacy"), ha_tool_name(base, "prefixed")
+    return {
+        "base": base,
+        "legacy": legacy,
+        "prefixed": prefixed,
+        "active": prefixed if detected.scheme == "prefixed" else legacy,
+        "scheme": detected.scheme,
+    }
 
 @app.get("/analysis")
 async def analyze_home_assistant():
