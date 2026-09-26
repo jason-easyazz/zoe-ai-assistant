@@ -165,7 +165,12 @@ status: 🔨 active — NEXT ACTION is always §0
   recognition for confirmations and menus (HA assist_satellite + speech-to-phrase).
 - B1.9 ⬜ Template fast path for the router's top-20 highest-precision intents (zero brain
   call; TTS-safe phonetic normaliser) — axiom-voice-agent.
-- B1.10 ⬜ Moonshine 0.1.5 with `keyterms` (household names, rooms, devices). Voice-gated.
+- B1.10 🔨 Moonshine 0.1.5 with `keyterms` (household names, rooms, devices) — draft PR #1696:
+  0.1.5 verified source-compatible with every call site (rock unchanged, `warm_moonshine` untouched);
+  `ZOE_MOONSHINE_KEYTERMS` (default off, feature-detected so 0.0.62 keeps working) + the box-first
+  runbook in `docs/knowledge/moonshine-0-1-5-upgrade.md`. Waits on the operator steps there:
+  install on the host, pre-download the moved bundle (~290 MB), restart, replay WITHOUT then WITH
+  keyterms. Voice-gated.
 - B1.11 ⬜ Flue 2.1.1 in the brain sidecar (first-delta latency fix, retryable connection
   errors, truncated tool-batch recovery); then 2.2.0 for the llama.cpp tool-call fixes.
 
