@@ -132,7 +132,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   pins the omnigent session-id shell guard (`assertSafeSessionId` — the third call
   site of the docker-exec kick, agreeing with `omnigent_issue_executor.py` and
   `cross_review.sh`) with a behavioural negative control.
-- `flue-zoe-brain-2x/` — **THE LIVE BRAIN.** Flue 2.0.1-hosted Pi `Agent` on the
+- `flue-zoe-brain-2x/` — **THE LIVE BRAIN.** Flue 2.1.1-hosted Pi `Agent` on the
   local Gemma brain (the `flue` lane behind the `run_zoe_core` seam, per
   `docs/architecture/zoe-flue-integration.md`), cut over 2026-08-09 from the
   retired 1.x `flue-zoe-brain/` beta lane (stopped, disabled and source-removed
@@ -239,7 +239,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   MemAvailable ≥ 2 GB, never resident, never prod-wired. Weights stay at
   `/home/zoe/models/lab/`.
 - `flue-zoe-telegram-2x/` — the **LIVE Telegram bot since the 2026-08-09 cutover**
-  (Flue 2.0.1). `flue-zoe-telegram.service` runs THIS directory on `:3582` (via the
+  (Flue 2.1.1). `flue-zoe-telegram.service` runs THIS directory on `:3582` (via the
   operator drop-in; the tracked template also points here), and `deploy.yml`
   rebuilds + restarts the unit on any diff under `labs/flue-zoe-telegram-2x/` —
   this subtree is production-deployed, treat changes accordingly. The 1.x beta

@@ -161,8 +161,10 @@ status: 🔨 active — NEXT ACTION is always §0
 - B1.9 ⬜ Template fast path for the router's top-20 highest-precision intents (zero brain
   call; TTS-safe phonetic normaliser) — axiom-voice-agent.
 - B1.10 ⬜ Moonshine 0.1.5 with `keyterms` (household names, rooms, devices). Voice-gated.
-- B1.11 ⬜ Flue 2.1.1 in the brain sidecar (first-delta latency fix, retryable connection
-  errors, truncated tool-batch recovery); then 2.2.0 for the llama.cpp tool-call fixes.
+- B1.11 🔨 Flue 2.1.1 in the brain sidecar (first-delta latency fix, retryable connection
+  errors, truncated tool-batch recovery) — draft PR #1694 (both Flue trees to 2.1.1, hono/nanoid
+  advisories cleared, pi-ai held at 0.83.0; acceptance = post-deploy replay gate); then 2.2.0
+  for the llama.cpp tool-call fixes (unreleased upstream as of 2026-09-26; bumps Pi to 0.87).
 
 ### B2 — Proactivity with judgement (beats Daily Brief / Alexa+ nudges)
 - B2.1 ⬜ **Presence-triggered routines**: emit `person_recognized(panel, person, ts)` from the

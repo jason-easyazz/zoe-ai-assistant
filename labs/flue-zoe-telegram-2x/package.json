@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The LIVE Flue 2.0.1 Telegram bot since the 2026-08-09 cutover: flue-zoe-telegram.service runs THIS directory on :3582, and deploy.yml rebuilds+restarts the unit on any diff here — production-deployed, treat changes accordingly. The retired beta stays in labs/flue-zoe-telegram as the rollback target only (one-way v5<->v8 store boundary, never share data/).",
+  "description": "The LIVE Flue 2.1.1 Telegram bot (@flue/*@2.1.1, upgraded from 2.0.1 in B1.11) since the 2026-08-09 cutover: flue-zoe-telegram.service runs THIS directory on :3582, and deploy.yml rebuilds+restarts the unit on any diff here — production-deployed, treat changes accordingly. The retired beta stays in labs/flue-zoe-telegram as the rollback target only (one-way v5<->v8 store boundary, never share data/).",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.19.0"
@@ -17,14 +17,14 @@
     "smoke": "./smoke-built.sh"
   },
   "dependencies": {
-    "@flue/runtime": "2.0.1",
+    "@flue/runtime": "2.1.1",
     "grammy": "1.44.0",
     "hono": "^4.8.3",
     "valibot": "^1.1.0"
   },
   "devDependencies": {
-    "@flue/cli": "2.0.1",
-    "@flue/vite": "2.0.1",
+    "@flue/cli": "2.1.1",
+    "@flue/vite": "2.1.1",
     "@types/node": "22.20.1",
     "typescript": "5.7.2",
     "vite": "^8.1.2"
