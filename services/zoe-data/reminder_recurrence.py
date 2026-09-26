@@ -36,9 +36,12 @@ _ORDINALS = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3,
              "fourth": 4, "4th": 4, "last": -1}
 _NUMBER_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
 _FREQS = ("DAILY", "WEEKLY", "MONTHLY", "YEARLY")
-# Longest supported gap is yearly; two years + a margin always contains the next
-# occurrence of any valid rule, and bounds the scan loop.
-_SEARCH_DAYS = 800
+# Candidate search steps whole PERIODS (a day, a week, INTERVAL months or years),
+# never a fixed day window — "every 3 years" or a Feb-29 yearly rule can be
+# years away. Bounds: day/week rules hit within 7*INTERVAL+7 days; monthly
+# BYMONTHDAY=31 / yearly Feb 29 can skip periods, but never more than these.
+_MAX_MONTH_PERIODS = 24
+_MAX_YEAR_PERIODS = 12
 
 
 def parse_rrule(value: str) -> dict | None:
@@ -142,18 +145,63 @@ def _day_matches(rule: dict, anchor: date, day: date, *, use_interval: bool = Tr
             and (day.month, day.day) == (anchor.month, anchor.day))
 
 
+def _month_candidate(rule: dict, anchor: date, year: int, month: int) -> date | None:
+    last = calendar.monthrange(year, month)[1]
+    if rule["byday"]:
+        ordinal, weekday = rule["byday"][0]
+        if ordinal == -1:
+            day = last - (date(year, month, last).weekday() - weekday) % 7
+        else:
+            day = 1 + (weekday - date(year, month, 1).weekday()) % 7 + 7 * (ordinal - 1)
+        return date(year, month, day) if day <= last else None
+    target = rule["bymonthday"] if rule["bymonthday"] is not None else anchor.day
+    if target == -1:
+        return date(year, month, last)
+    return date(year, month, target) if target <= last else None  # 31st skips short months
+
+
+def _candidate_dates(rule: dict, anchor: date, start: date, interval: int):
+    """Matching dates >= `start`, in order, bounded per frequency."""
+    freq = rule["freq"]
+    if freq in ("DAILY", "WEEKLY"):
+        day = start
+        for _ in range(7 * interval + 8):
+            if _day_matches(rule, anchor, day, use_interval=interval != 1):
+                yield day
+            day += timedelta(days=1)
+        return
+    if freq == "MONTHLY":
+        k = _months_between(anchor, start)
+        k += (-k) % interval
+        for _ in range(_MAX_MONTH_PERIODS):
+            year, month0 = divmod(anchor.month - 1 + k, 12)
+            hit = _month_candidate(rule, anchor, anchor.year + year, month0 + 1)
+            if hit and hit >= start:
+                yield hit
+            k += interval
+        return
+    k = start.year - anchor.year
+    k += (-k) % interval
+    for _ in range(_MAX_YEAR_PERIODS):
+        try:
+            hit = date(anchor.year + k, anchor.month, anchor.day)
+        except ValueError:  # Feb 29 in a common year — RFC 5545 skips it
+            hit = None
+        if hit and hit >= start:
+            yield hit
+        k += interval
+
+
 def next_occurrence(rule: dict, anchor: date, hour: int, minute: int, after: datetime,
                     tz: tzinfo, *, use_interval: bool = True) -> datetime | None:
     """First local fire time strictly after `after` (aware) that the rule
-    produces, never before `anchor`. None if none within the search window."""
+    produces, never before `anchor`. None only if the rule can never fire."""
     after_local = after.astimezone(tz)
-    day = max(anchor, after_local.date())
-    for _ in range(_SEARCH_DAYS):
-        if _day_matches(rule, anchor, day, use_interval=use_interval):
-            candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz)
-            if candidate > after_local:
-                return candidate
-        day += timedelta(days=1)
+    interval = rule["interval"] if use_interval else 1
+    for day in _candidate_dates(rule, anchor, max(anchor, after_local.date()), interval):
+        candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz)
+        if candidate > after_local:
+            return candidate
     return None
 
 
@@ -350,3 +398,21 @@ def normalize_recurrence(raw: object) -> str | None:
     if rule is None:
         raise ValueError(f"unsupported recurrence {text!r}")
     return format_rrule(rule)
+
+
+_UNIT_WORDS = (r"(?:minute|hour|day|night|morning|evening|afternoon|arvo|week|weekday|weekend|"
+               rf"fortnight|month|quarter|year|{_DAY_ALT})s?")
+_UNSUPPORTED_CUE = re.compile(
+    rf"\b(?:every|each)\s+(?:(?:\d+|[a-z]+)\s+){{0,2}}?{_UNIT_WORDS}\b"
+    rf"|\b(?:hourly|quarterly|fortnightly|nightly|daily|weekly|monthly|yearly|annually)\b{_ADVERB_END}",
+    re.IGNORECASE,
+)
+
+
+def find_unsupported_recurrence(text: str) -> str | None:
+    """A recurrence cue `extract_recurrence` could NOT turn into a supported rule
+    ("every 53 days", "every hour", "every third monday"). Callers must refuse it
+    rather than store a one-off — silently dropping the repeat is the bug this
+    module exists to fix. Call only after `extract_recurrence` returned None."""
+    m = _UNSUPPORTED_CUE.search(text or "")
+    return m.group(0) if m else None

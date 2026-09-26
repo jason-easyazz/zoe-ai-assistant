@@ -2020,11 +2020,18 @@ async def detect_and_extract_intent(
             # regex tier and the NLU schema only know one-off dates, so "every
             # weekday at 7" used to be stored as a single reminder. The phrase is
             # removed from the text the fillers see and carried as an RRULE slot.
-            from reminder_recurrence import extract_recurrence
+            from reminder_recurrence import extract_recurrence, find_unsupported_recurrence
 
             hit = extract_recurrence(intent.slots["raw"])
             if hit:
                 recurrence, intent.slots["raw"] = hit
+            else:
+                unsupported = find_unsupported_recurrence(intent.slots["raw"])
+                if unsupported:
+                    # Never degrade "every 53 days" / "every hour" to a one-off:
+                    # the executor answers honestly and writes nothing.
+                    intent.slots = {"unsupported_recurrence": unsupported}
+                    return intent
             structured = _extract_simple_reminder_slots(intent.slots["raw"])
             if structured:
                 if recurrence:
@@ -2204,6 +2211,11 @@ async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
 
 async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     slots = intent.slots or {}
+    if slots.get("unsupported_recurrence"):
+        return (
+            f"I can't repeat a reminder {slots['unsupported_recurrence']} yet, so I haven't set it. "
+            "I can do daily, weekdays, weekly, fortnightly, monthly or yearly."
+        )
     title = str(slots.get("title") or "").strip()
     if not title:
         return None

@@ -324,3 +324,74 @@ async def test_direct_execution_stores_rrule_and_speaks_the_schedule(monkeypatch
     row = inserts[0]
     assert "recurring" in row and "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" in row
     assert "every weekday" in reply and "07:00" in reply
+
+
+# --------------------------------------------------------------------------- #
+# 6. cross-review findings (Codex, #1708)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("rrule, anchor, after, expected", [
+    # Next occurrence is ~3 years away — beyond any fixed day window.
+    ("FREQ=YEARLY;INTERVAL=3", date(2026, 1, 1), datetime(2026, 1, 1, 8, 0, tzinfo=PERTH), date(2029, 1, 1)),
+    # Feb 29 yearly: common years are skipped, not shifted.
+    ("FREQ=YEARLY", date(2028, 2, 29), datetime(2028, 3, 1, 8, 0, tzinfo=PERTH), date(2032, 2, 29)),
+    ("FREQ=MONTHLY;INTERVAL=52", date(2026, 1, 31), datetime(2026, 1, 31, 8, 0, tzinfo=PERTH), date(2030, 5, 31)),
+    ("FREQ=WEEKLY;INTERVAL=52;BYDAY=MO", date(2026, 9, 28), datetime(2026, 9, 28, 8, 0, tzinfo=PERTH), date(2027, 9, 27)),
+])
+def test_long_interval_rules_keep_recurring(rrule, anchor, after, expected):
+    hit = next_occurrence(parse_rrule(rrule), anchor, 7, 0, after, PERTH)
+    assert hit is not None and hit.date() == expected
+
+
+@pytest.mark.parametrize("text, cue", [
+    ("remind me to stretch every 53 days", "every 53 days"),
+    ("remind me to drink water every hour", "every hour"),
+    ("remind me about the bins every third monday", "every third monday"),
+    ("remind me to back up hourly", "hourly"),
+])
+def test_unsupported_recurrence_is_detected(text, cue):
+    from reminder_recurrence import find_unsupported_recurrence
+
+    assert extract_recurrence(text) is None
+    assert find_unsupported_recurrence(text) == cue
+
+
+@pytest.mark.parametrize("text", [
+    "remind me to thank everyone for each gift",
+    "remind me to buy the daily paper",
+    "remind me to do the quarterly BAS",
+])
+def test_ordinary_titles_are_not_mistaken_for_recurrence(text):
+    from reminder_recurrence import find_unsupported_recurrence
+
+    assert find_unsupported_recurrence(text) is None
+
+
+@pytest.mark.asyncio
+async def test_unsupported_recurrence_is_refused_not_stored_as_one_off(monkeypatch):
+    module = types.ModuleType("nlu_extractor")
+
+    async def fail_extract(_intent_name, _raw):
+        raise AssertionError("an unsupported recurrence must not reach the slot filler")
+
+    module.extract_slots_for_intent = fail_extract
+    monkeypatch.setitem(sys.modules, "nlu_extractor", module)
+    import intent_router
+
+    intent = await intent_router.detect_and_extract_intent("remind me to stretch every 53 days", user_id="guest")
+    assert intent.slots == {"unsupported_recurrence": "every 53 days"}
+
+    async def no_db(*_a, **_k):
+        raise AssertionError("nothing may be written for an unsupported recurrence")
+
+    monkeypatch.setattr(intent_router, "_load_direct_execution_user", no_db)
+    reply = await intent_router._execute_reminder_create_direct(intent, "jason")
+    assert "every 53 days" in reply and "haven't set it" in reply
+
+
+def test_chat_skips_the_one_off_form_for_recurring_reminders():
+    from routers.chat import _shows_form
+
+    assert _shows_form("reminder_create", {"title": "pills", "time": "07:00"}) is True
+    assert _shows_form("reminder_create", {"title": "pills", "recurrence": "FREQ=DAILY"}) is False
+    assert _shows_form("reminder_create", {"unsupported_recurrence": "every hour"}) is False
+    assert _shows_form("calendar_create", {"recurrence": "FREQ=DAILY"}) is True
