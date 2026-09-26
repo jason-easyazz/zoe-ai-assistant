@@ -655,10 +655,15 @@ detector candidate.
 (GIL-free whole-clip scoring); live VAD stays on the streaming v6 model — a swap would need a
 streaming adapter plus validation that actually exercises the live VAD path, not a file copy.
 The replay harness (`voice_regression_probe.py` / `measure_voice.py`) starts at transcription
-and never runs VAD or barge-in, so the check is: the VAD unit lanes
-(`test_livekit_vad_segmentation.py`, `test_voice_barge_in.py`) green against the adapter,
-plus a live barge-in count on the panel with Kokoro playing (the B1.3 false-barge metric).
-New lab item under B5/B1: Parakeet Redux benchmark on the replay corpus (WER + per-file ms
+and never runs VAD or barge-in, and the CI-safe VAD lanes inject a FAKE `voice_vad` with
+scripted probabilities, so green there cannot catch an adapter that returns no probabilities.
+The check that can: (a) `process_hops` on a corpus clip through the adapter returns
+non-empty probabilities that go high on speech; (b) the **host-only real-model lane** in
+`test_voice_barge_in.py` (`test_silero_real_model_detects_speech_across_corpus`,
+`test_real_voice_triggers_barge_from_cooldown` — real Silero, real corpus audio, asserts a
+`stop_playback`; skipped on CI runners, so it must be run on the box); (c) a **successful
+live interruption** on the panel with Kokoro playing, alongside the B1.3 false-barge count
+(which only measures unwanted interruptions). New lab item under B5/B1: Parakeet Redux benchmark on the replay corpus (WER + per-file ms
 vs 0.0.62). B9.3/B4.1: Nemotron 3 Diarization added to the shadow-week candidates.
 
 ## 13. Proposed tracker deltas (for Jason to fold in — not applied here)
@@ -699,9 +704,11 @@ vs 0.0.62). B9.3/B4.1: Nemotron 3 Diarization added to the shadow-week candidate
 9. **B1.4:** Silero VAD v6.2.2 sequence-ONNX is NOT a live drop-in (offline whole-sequence
    graph; `voice_vad.py` runs 512-sample hops with recurrent state) — evaluate it for the
    OFFLINE replay/lab path only; live VAD stays on the streaming v6.2.1 file already in
-   place; any live use needs a streaming adapter + the VAD unit lanes
-   (`test_livekit_vad_segmentation.py`, `test_voice_barge_in.py`) + a live barge-in count on
-   the panel — the replay harness starts at STT and does not exercise VAD. **New lab item:** Parakeet Redux (178 MB CPU STT, 2026-09-22) benchmark vs
+   place; any live use needs a streaming adapter + real audio through it (`process_hops`
+   returns non-empty, speech-high probabilities; the host-only real-model lane in
+   `test_voice_barge_in.py` run ON THE BOX — CI fakes `voice_vad`) + a successful live
+   interruption on the panel, not only the false-barge count — the replay harness starts at
+   STT and does not exercise VAD. **New lab item:** Parakeet Redux (178 MB CPU STT, 2026-09-22) benchmark vs
    Moonshine 0.0.62 on the replay corpus. **B4.1/B9.3:** Nemotron 3 Diarization (09-23) as a
    multi-speaker-detector candidate.
 10. **B9.1:** confirm firmware rev (DIS `2A26` ≥3.0.20) before relying on the ring protocol;
