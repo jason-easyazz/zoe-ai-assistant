@@ -149,7 +149,11 @@ async def _run_setup_flow(oauth_id: str, provider: str) -> None:
                 # The flow may have ended (MA drops it from its registry at once)
                 # or MA/the network hiccupped. Only a transition decides.
                 now = await _provider_state(provider)
-                if now is not None and _completed_by_transition(before, now, existing):
+                # A transition is shared provider state, so it only speaks for
+                # THIS attempt while it is the newest one for the provider (MA
+                # itself allows one flow per target and aborts the older one).
+                if (not flow.get("superseded") and now is not None
+                        and _completed_by_transition(before, now, existing)):
                     flow["state"] = "connected"
                     return
                 poll_failures += 1
@@ -157,6 +161,9 @@ async def _run_setup_flow(oauth_id: str, provider: str) -> None:
                     logger.info("music oauth flow %s (%s): %d failed polls, no completion seen",
                                 flow_id, provider, poll_failures)
                     flow.update(state="failed", error="couldn't confirm the sign-in — please try again")
+                    # MA may still hold the flow; a late callback must not
+                    # complete an attempt the phone was told had failed.
+                    await music_service._abort_setup_flow(flow_id)
                     return
                 await asyncio.sleep(min(_POLL_BACKOFF_MAX_S, _FLOW_POLL_S * 2 ** poll_failures))
                 polled = await music_service._ma_flow_step("config/flows/get", flow_id=flow_id)
@@ -246,6 +253,11 @@ async def start_oauth(provider: str) -> dict[str, Any]:
     oauth_id = secrets.token_urlsafe(12)
     flow: dict[str, Any] = {"state": "pending", "auth_url": None, "provider": provider,
                             "error": None, "created": time.time(), "event": asyncio.Event()}
+    # A newer attempt for the same provider supersedes older pending ones: their
+    # provider-state evidence could be THIS attempt's success (see _run_setup_flow).
+    for other in _flows.values():
+        if other.get("provider") == provider and other.get("state") == "pending":
+            other["superseded"] = True
     _flows[oauth_id] = flow
     flow["task"] = asyncio.create_task(_run_flow(oauth_id, provider))
     try:

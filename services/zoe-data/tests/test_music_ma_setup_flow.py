@@ -589,6 +589,7 @@ async def test_210_oauth_failed_polls_are_not_completion(monkeypatch):
     st = music_oauth.oauth_status(res["oauth_id"])
     assert st["state"] != "connected" and st["error"], st
     assert not fake.instances
+    assert fake.sent("config/flows/abort"), "gave up polling but left MA's flow open"
 
     consumed = []
     monkeypatch.setattr(music_setup, "verify", lambda t: {"p": "spotify"})
@@ -647,3 +648,44 @@ async def test_lost_submit_response_aborts_the_flow(monkeypatch):
     assert saved is None
     assert fake.sent("config/flows/abort"), "a flow MA may still hold was left running"
     assert not fake.flows
+
+
+@pytest.mark.asyncio
+async def test_210_oauth_superseded_attempt_ignores_shared_state_change(monkeypatch):
+    """Attempt A's polls fail while a NEWER attempt for the same provider
+    succeeds: the provider transition is B's, not A's — A must not connect."""
+    fake = Fake210().install(monkeypatch)
+    fake.oauth_url = "https://accounts.spotify.com/authorize?x=5"
+    state = {"a": None}
+
+    def get_while_b_wins(flow_id):
+        if state["a"] and not music_oauth._flows[state["a"]].get("superseded"):
+            music_oauth._flows[state["a"]]["superseded"] = True  # B started...
+            fake._create("spotify", {"refresh_token": "b"})        # ...and succeeded
+        return _ERR
+    fake.cmd_config__flows__get = get_while_b_wins
+    monkeypatch.setattr(music_oauth, "_FLOW_POLL_S", 0)
+
+    res = await music_oauth.start_oauth("spotify")
+    state["a"] = res["oauth_id"]
+    await music_oauth._flows[res["oauth_id"]]["task"]
+    assert music_oauth.oauth_status(res["oauth_id"])["state"] != "connected"
+    music_oauth._flows.pop(res["oauth_id"], None)
+
+
+@pytest.mark.asyncio
+async def test_start_oauth_supersedes_older_pending_attempt(monkeypatch):
+    fake = Fake210().install(monkeypatch)
+    fake.oauth_url = "https://accounts.spotify.com/authorize?x=6"
+    monkeypatch.setattr(music_oauth, "_FLOW_POLL_S", 0)
+    music_oauth._flows["older"] = {"state": "pending", "provider": "spotify", "created": 9e18}
+    music_oauth._flows["other"] = {"state": "pending", "provider": "tidal", "created": 9e18}
+    res = await music_oauth.start_oauth("spotify")
+    try:
+        assert music_oauth._flows["older"].get("superseded") is True
+        assert not music_oauth._flows["other"].get("superseded")
+    finally:
+        task = music_oauth._flows[res["oauth_id"]]["task"]
+        task.cancel()
+        for k in ("older", "other", res["oauth_id"]):
+            music_oauth._flows.pop(k, None)
