@@ -102,6 +102,12 @@ def _rpc_command() -> list[str]:
     cmd += [
         "--no-extensions", "--no-skills", "--no-prompt-templates",
         "--no-themes", "--no-context-files", "--thinking", "off",
+        # Trust zoe-core's own project dir so Pi loads services/zoe-core/.pi/
+        # settings.json (compaction sized for one 8192-token slot). A project
+        # settings.json is a trust-requiring resource in Pi 0.82.1, and without
+        # an explicit --approve a non-interactive RPC spawn would load it untrusted
+        # (ignored), falling back to reserve 16384 / keep 20000.
+        "--approve",
     ]
     return cmd
 

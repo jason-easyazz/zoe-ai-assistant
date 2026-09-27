@@ -16,6 +16,23 @@ break the brain at STARTUP rather than in any test, so they are pinned here:
   must be explicit for the written config to be the served config.
 * ExecStart and LD_LIBRARY_PATH must name the SAME build — mixing b9733 libs
   with the b11194 binary (or vice versa) is an ABI mismatch.
+
+B6.6 (2026-09-27, docs/knowledge/brain-flags-tuning-2026-09.md) adds two sizing
+couplings that fail at RUNTIME, not startup:
+
+* The per-slot context (``--ctx-size`` / ``--parallel``) must be at least the
+  window the Flue brain client budgets for (``DEFAULT_CONTEXT_WINDOW_TOKENS`` in
+  ``labs/flue-zoe-brain-2x/src/context-window.ts``). Below it, a long session
+  the client considers in-budget is refused by the server — every such turn fails.
+* zoe-core's ``local-gemma`` Pi provider must not declare more context than
+  one slot holds (``provider-local-gemma.ts`` defaults): Pi compacts against the
+  declared window, so an oversized declaration lets sessions grow until the
+  server refuses them. Its compaction thresholds (``services/zoe-core/.pi/
+  settings.json``) must fit that window, and the RPC spawn must ``--approve``
+  the project so Pi actually loads them.
+* ``--cache-ram`` must stay a positive cap. ``0`` disables the host prompt cache,
+  and with one slot every chat turn then re-prefills its whole prompt (+4.1 s
+  TTFT measured); ``-1`` is "no limit" on 15.6G unified memory.
 """
 
 from __future__ import annotations
@@ -93,3 +110,95 @@ def test_draft_mtp_implies_single_slot():
 
 def test_fit_is_explicitly_off():
     assert _flag(_exec_start(), "--fit") == "off", "--fit defaults ON; the B0.4 gate keeps it off explicitly"
+
+
+FLUE_WINDOW = ROOT / "labs" / "flue-zoe-brain-2x" / "src" / "context-window.ts"
+
+
+def _flue_default_window() -> int:
+    m = re.search(r"DEFAULT_CONTEXT_WINDOW_TOKENS\s*=\s*([0-9_]+)", FLUE_WINDOW.read_text(encoding="utf-8"))
+    assert m, "context-window.ts lost DEFAULT_CONTEXT_WINDOW_TOKENS — re-point this pin"
+    return int(m.group(1).replace("_", ""))
+
+
+def test_slot_context_covers_the_flue_brain_window():
+    cmd = _exec_start()
+    ctx = int(_flag(cmd, "--ctx-size") or 0)
+    parallel = int(_flag(cmd, "--parallel") or 1)
+    window = _flue_default_window()
+    assert ctx // parallel >= window, (
+        f"per-slot context {ctx}//{parallel} = {ctx // parallel} is below the Flue brain's "
+        f"{window}-token window: turns the client thinks fit would be refused by llama-server"
+    )
+
+
+def test_adopted_b6_6_context_size():
+    # 8192 = the Flue window exactly; measured p99 prompt+reply 3280 tokens (B6.6).
+    assert _flag(_exec_start(), "--ctx-size") == "8192"
+
+
+def test_host_prompt_cache_is_a_positive_cap():
+    cram = _flag(_exec_start(), "--cache-ram")
+    assert cram is not None, "--cache-ram missing: the llama.cpp default is 8192 MiB (OOM hazard here)"
+    assert int(cram) > 0, (
+        f"--cache-ram {cram}: 0 disables the host prompt cache (one slot -> full re-prefill on "
+        "every chat turn, +4.1 s TTFT measured) and -1 is unbounded on unified memory"
+    )
+
+
+CORE_PROVIDER = ROOT / "services" / "zoe-core" / "extensions" / "provider-local-gemma.ts"
+
+
+def _core_provider_default(env_name: str) -> int:
+    m = re.search(
+        rf"Number\(process\.env\.{env_name}\)\s*\|\|\s*([0-9_]+)", CORE_PROVIDER.read_text(encoding="utf-8")
+    )
+    assert m, f"provider-local-gemma.ts lost its {env_name} default — re-point this pin"
+    return int(m.group(1).replace("_", ""))
+
+
+def test_core_provider_context_fits_one_slot():
+    cmd = _exec_start()
+    per_slot = int(_flag(cmd, "--ctx-size") or 0) // int(_flag(cmd, "--parallel") or 1)
+    ctx = _core_provider_default("ZOE_CORE_MODEL_CONTEXT")
+    max_out = _core_provider_default("ZOE_CORE_MODEL_MAXTOKENS")
+    assert ctx <= per_slot, (
+        f"zoe-core local-gemma declares a {ctx}-token context but llama-server serves {per_slot} per slot: "
+        "Pi would not compact until the server already refuses the session"
+    )
+    # Half the window for the reply at most: measured p99 prompts are ~3.3k tokens
+    # (B6.6), so 3.3k + a full reply must still fit. 2048 of 8192 does.
+    assert 0 < max_out <= ctx // 2, f"max output {max_out} leaves too little of the {ctx} window for the prompt"
+
+
+CORE_PI_SETTINGS = ROOT / "services" / "zoe-core" / ".pi" / "settings.json"
+# Headroom for zoe-core's system prompt + tool schemas that survive compaction.
+_CORE_FIXED_PROMPT_HEADROOM = 2048
+
+
+def test_core_pi_compaction_fits_one_slot():
+    """Pi 0.82.1 defaults (reserve 16384 / keep 20000) assume a huge window: with an
+    8192 contextWindow, shouldCompact() compares usage to 8192 - 16384 (< 0) and
+    compaction can never make room. zoe-core must ship its own values."""
+    import json
+
+    settings = json.loads(CORE_PI_SETTINGS.read_text(encoding="utf-8"))
+    comp = settings["compaction"]
+    reserve, keep = int(comp["reserveTokens"]), int(comp["keepRecentTokens"])
+    ctx = _core_provider_default("ZOE_CORE_MODEL_CONTEXT")
+    max_out = _core_provider_default("ZOE_CORE_MODEL_MAXTOKENS")
+    assert comp.get("enabled", True) is True
+    assert reserve + keep < ctx, f"reserve {reserve} + keepRecent {keep} >= context {ctx}"
+    assert reserve >= max_out, "compaction must trigger early enough to leave room for a full reply"
+    # After compaction: fixed prompt + summary (Pi caps it at 0.8 x reserve) + kept
+    # recent turns must sit BELOW the trigger (ctx - reserve), or it re-compacts forever.
+    assert _CORE_FIXED_PROMPT_HEADROOM + int(0.8 * reserve) + keep <= ctx - reserve
+    assert int(settings["branchSummary"]["reserveTokens"]) < ctx
+
+
+def test_core_rpc_spawn_trusts_the_project_settings():
+    # A project .pi/settings.json is a trust-requiring resource in Pi 0.82.1; a
+    # non-interactive RPC spawn without --approve would ignore it.
+    src = (ROOT / "services" / "zoe-data" / "zoe_core_client.py").read_text(encoding="utf-8")
+    body = src[src.index("def _rpc_command"): src.index("def _data_url")]
+    assert '"--approve"' in body
