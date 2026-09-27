@@ -45,7 +45,7 @@ also resolves on 3.12, held for its own gated move.
 |---|---|---|---|---|
 | fastapi | 0.141.1 | 0.141.1 | pure | imports |
 | uvicorn[standard] | 0.49.0 | **0.53.0** (2026-09-27) | pure (+uvloop/httptools/watchfiles cp312) | Was capped at 0.49 (`--ws auto` → legacy `websockets_impl`). Crossed deliberately 2026-09-27: `auto` → `websockets_sansio_impl` (same websockets 16.1.1; no wsproto); real-socket A/B identical except the deflate window (12 bits). The build smoke now asserts sansio. Rationale + rollback: `requirements.txt`. |
-| websockets | 16.1.1 | 16.1.1 | cp312 + pure | **step-up 17.1** (≥3.11): keeps `websockets.legacy.*` and the deprecated `websockets.server.WebSocketServerProtocol` lazy alias that uvicorn 0.49's legacy impl imports (verified in source + by import). Replay-gate the move. |
+| websockets | 16.1.1 | 16.1.1 | cp312 + pure | **step-up 17.1** (≥3.11): keeps `websockets.legacy.*` and the deprecated `websockets.server.WebSocketServerProtocol` lazy alias that uvicorn's legacy impl (the `--ws websockets` rollback; 0.53.0's default is sans-I/O) imports (verified in source + by import). Replay-gate the move. |
 | pydantic / -core | 2.13.5 | 2.13.5 | cp312 | imports |
 | aiosqlite, asyncpg, alembic, psycopg2-binary, python-multipart, httpx, aiohttp | as pinned | same | cp312 / pure | all import; asyncpg 0.31.0 `manylinux_2_28`, psycopg2-binary 2.9.12 `2_27/2_28` |
 | python-jose[cryptography], PyJWT | 3.5.0 / 2.15.0 | same | pure; cryptography 50.0.1 cp312 abi3 | imports |
@@ -96,7 +96,8 @@ the bare manifest: sync installs its input literally, without dependencies) → 
 distribution that lost files to a removal (shared paths; the `webrtcvad` sdist and
 `webrtcvad-wheels` both ship `webrtcvad.py`) → `uv pip install --no-deps resemblyzer==0.1.4`
 (phase 2, §3 blocker 1; AFTER the sync, which would strip it) → import smoke (fails the
-build if any load-bearing import fails; asserts `--ws auto` still resolves to the legacy impl and
+build if any load-bearing import fails; asserts `--ws auto` resolves to the sans-I/O
+`websockets_sansio_impl` (uvicorn 0.53.0 since 2026-09-27 — any other selection fails the build) and
 that torch has no CUDA). It refuses to install when `MemAvailable` < 500 MB (`ZOE_PY312_MIN_MEM_MB`)
 and runs everything under `nice -n 15`.
 
@@ -228,8 +229,8 @@ All of it is executed against stubs by `tests/unit/test_zoe_data_py312_cutover.p
    no WebSocket client, so a green run here says nothing about the venv's `websockets` stack.
 5. **The `/ws/voice/` lane — the only gate that exercises it.** Speak one idle→first-utterance
    turn through a `/ws/voice/` client (`voice.html` / `touch/voice.html` — the in-repo clients)
-   and confirm a reply plays; the build smoke only proves `--ws auto` *selects* the legacy
-   websockets impl, and gates 2 and 4 never open a WebSocket.
+   and confirm a reply plays; the build smoke only proves `--ws auto` *selects* the sans-I/O
+   `websockets_sansio_impl` (uvicorn 0.53.0), and gates 2 and 4 never open a WebSocket.
    Watch `journalctl --user -u zoe-data` (and `~/.zoe-logs/`) through it for WebSocket errors and
    `InconsistentVersionWarning`/`DeprecationWarning` floods; then run
    `requirements_drift_check.py` with the venv interpreter (0 MISMATCH expected — it also checks

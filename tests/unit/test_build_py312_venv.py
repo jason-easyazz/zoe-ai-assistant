@@ -139,3 +139,62 @@ def test_negative_control_dry_run_resolves_the_real_phase2_pins(tmp_path: Path) 
     assert nodeps and "--python-version 3.12" in nodeps[0] and "aarch64" in nodeps[0], log
     for pin in _phase2_pins():
         assert pin in log.split("NO-DEPS INPUT:", 1)[1], log
+
+
+# ── --refresh warms the semantic-router embedding cache (fastembed 0.8.1) ─────
+# fastembed 0.8.1 moved bge-small to a differently-cased cache dir, so the first
+# service load after the bump downloads the model; the deploy (which has network)
+# must pre-populate it. The fake interpreter records every script it is fed on
+# stdin, so the test sees the warm step RUN, after both install phases.
+
+_RECORDING_PY = """#!/usr/bin/env bash
+if [[ "$1" == "-c" ]]; then echo 3.12; exit 0; fi
+if [[ "$1" == "-" ]]; then
+  { echo "---STDIN---"; cat; } >> "$FAKE_PY_LOG"
+  exit "${FAKE_WARM_RC:-0}"
+fi
+exit 0
+"""
+
+
+def _refresh(tmp_path: Path, warm_rc: int = 0):
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    py = venv / "bin" / "python"
+    py.write_text(_RECORDING_PY)
+    py.chmod(0o755)
+    calls = tmp_path / "uv-calls.log"
+    uv = tmp_path / "uv"
+    uv.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{calls}"\n'
+                  '[[ "$1" == "--version" ]] && echo "uv 0.0.0-fake"\nexit 0\n')
+    uv.chmod(0o755)
+    pylog = tmp_path / "py-stdin.log"
+    env = {**os.environ, "UV_BIN": str(uv), "ZOE_PY312_VENV": str(venv),
+           "FAKE_PY_LOG": str(pylog), "FAKE_WARM_RC": str(warm_rc)}
+    r = subprocess.run(["bash", str(SCRIPT), "--refresh"], env=env, capture_output=True,
+                       text=True, timeout=60)
+    return r, (calls.read_text() if calls.exists() else ""), (pylog.read_text() if pylog.exists() else "")
+
+
+def test_refresh_warms_the_fastembed_router_model(tmp_path: Path) -> None:
+    r, uv_calls, fed = _refresh(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert uv_calls.count("pip install") >= 2, uv_calls  # both phases ran first
+    assert "from fastembed import TextEmbedding" in fed, fed
+    assert 'os.environ.get("ZOE_ROUTER_MODEL", "BAAI/bge-small-en-v1.5")' in fed, fed
+    assert ".embed(" in fed, fed  # actually loads + runs the model, not just an import
+    assert "embedding model cached" in r.stdout
+
+
+def test_refresh_warm_failure_warns_but_does_not_fail_the_deploy(tmp_path: Path) -> None:
+    r, _, fed = _refresh(tmp_path, warm_rc=1)
+    assert "TextEmbedding" in fed  # the warm ran...
+    assert r.returncode == 0, r.stdout + r.stderr  # ...and its failure is non-fatal
+    assert "warm FAILED" in r.stderr
+
+
+def test_router_model_default_matches_semantic_router() -> None:
+    """The warm step must fill the cache for the model the service actually loads."""
+    router = (ROOT / "services" / "zoe-data" / "semantic_router.py").read_text()
+    assert 'os.environ.get("ZOE_ROUTER_MODEL", "BAAI/bge-small-en-v1.5")' in router
+    assert 'os.environ.get("ZOE_ROUTER_MODEL", "BAAI/bge-small-en-v1.5")' in SCRIPT.read_text()

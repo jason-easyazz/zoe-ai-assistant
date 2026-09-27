@@ -216,6 +216,30 @@ case "$MODE" in
     refresh_phase -r "$REQ_FILE"
     log "phase 2: ${PHASE2_NO_DEPS[*]} --no-deps"
     refresh_phase --no-deps "${PHASE2_NO_DEPS[@]}"
+    # WARM the semantic router's embedding model while the deploy still has
+    # network. fastembed 0.8.1 re-resolves `BAAI/bge-small-en-v1.5` to the
+    # canonical repo id, whose cache dir differs in CASE from 0.8.0's, so without
+    # this the FIRST service load after a bump downloads the model (~30 MB) — and
+    # a restart with no network would fall off the tier-1 semantic fast path.
+    # Same model name (ZOE_ROUTER_MODEL) and default cache dir (FASTEMBED_CACHE_PATH
+    # or <tmp>/fastembed_cache) as semantic_router.py, so it fills the exact cache
+    # the service reads. Already cached = a local load, no network. NON-FATAL: a
+    # failed warm leaves the pre-existing behaviour (download on first use), so it
+    # warns instead of failing a deploy whose install already succeeded.
+    log "warming the semantic-router embedding model (fastembed cache)"
+    if "${NICE[@]}" "$VENV_PY" - <<'PY'
+import os, sys
+try:
+    from fastembed import TextEmbedding
+except ImportError:
+    print("fastembed not installed: nothing to warm"); sys.exit(0)
+name = os.environ.get("ZOE_ROUTER_MODEL", "BAAI/bge-small-en-v1.5")
+vec = next(iter(TextEmbedding(model_name=name).embed(["warm"])))
+print(f"warmed {name}: dim={len(vec)}")
+PY
+    then ok "embedding model cached"
+    else warn "embedding-model warm FAILED — the first service load will download it (needs network)"
+    fi
     ok "venv refreshed: $VENV_PY"
     ;;
   build)

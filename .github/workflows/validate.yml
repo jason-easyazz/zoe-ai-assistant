@@ -46,7 +46,11 @@ jobs:
       # Slim install — avoids Jetson-specific packages (torch/onnx/whisper stacks)
       # that would timeout or fail on x86_64 GitHub runners.
       #
-      # KEEP THE PINNED ENTRIES IN LOCKSTEP WITH services/zoe-data/requirements.txt.
+      # KEEP THE PINNED ENTRIES IN LOCKSTEP WITH services/zoe-data/requirements.txt —
+      # EXCEPT a package recorded in STEP_UP_DIVERGENCE (tests/unit/
+      # test_zoe_data_py312_cutover.py): there the pin follows requirements-py312.txt,
+      # the LIVE lane, since the 3.10 manifest describes a rollback-only env
+      # (uvicorn, ag-ui-protocol, livekit-protocol as of 2026-09-27).
       # Anything left unpinned here resolves to the newest release at CI time, so
       # the lane silently tests a DIFFERENT version than production runs — which is
       # exactly how uvicorn/websockets drifted (CI was exercising uvicorn 0.5x and
