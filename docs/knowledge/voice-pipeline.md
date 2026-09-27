@@ -654,6 +654,13 @@ prompt cache is what keeps the prefixes warm between them. It is load-bearing wi
 `--cache-ram 0` measured +4.1 s TTFT on every repeat chat turn. The test pins `draft-mtp` ⇒ `--parallel 1`. Raise it only once #28286
 is fixed upstream and replay-gated here.
 
+**MTP draft depth stays `--spec-draft-n-max 4 --spec-draft-p-min 0.6`.** The full 3×3 grid,
+n-max {3,4,6} × p-min {0.4,0.6,0.8}, was measured on 2026-09-27 (W3 in
+[brain-flags-tuning-2026-09.md](brain-flags-tuning-2026-09.md)) and produced no win.
+Total decode time is flat across arms. The replay probe's brain median moves with
+prefix-cache reuse, which speculation does not affect, so do not read an MTP gain off the
+probe median alone.
+
 **Apply** (operator/coordinator only, in a Kokoro-paused brain window, after the PR merges and
 the live checkout is fast-forwarded):
 

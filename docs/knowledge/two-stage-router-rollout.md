@@ -96,6 +96,38 @@ the flue cutover. Any failure mid-stage triggers the same restore
 automatically via the script's trap. Roll back with the flag, never by
 uninstalling the sidecar mid-incident (it is inert when the flag is off).
 
+## Sidecar flags (`functiongemma-router.service`, 2026-09-27)
+
+The sidecar stays on llama.cpp **b9733** (`~/llama.cpp/build-jetson-new`, also the
+brain's rollback build). Two sizing flags were added to the template and installed
+on the box; everything else is unchanged:
+
+| flag | was | now | why |
+|---|---|---|---|
+| `--cache-ram` | unset = **8192 MiB** default | `64` | The unit has `MemoryMax=1G`. An 8 GiB prompt-cache cap inside a 1 GiB cgroup means the cache never evicts: the cgroup OOM-kills the sidecar first. The corpus alone fills 18 entries / 32 MiB, so the cache does grow with traffic. At 64 MiB it evicts oldest-first. |
+| `--ctx-size` | 4096 | `1024` | The longest live routing request was 87 tokens (608 requests, p99 72). 1024 is about 12× headroom. |
+
+`--no-repack` is deliberately NOT used. Without repack the weights are served from
+reclaimable file pages, which is the paging failure the unit's `MemorySwapMax=0`
+exists to prevent. `tests/unit/test_llama_server_unit_flags.py` pins
+`--cache-ram` as a positive cap under a quarter of `MemoryMax`.
+
+Measurement: a fresh restart for each arm, then the 81-case prod-path corpus
+(`labs/router-90-campaign/prod_path_eval.py`) run against the live sidecar:
+
+| arm | overall | chat-FP | p50 / p90 ms | per-case decisions | VmRSS idle → after corpus (MiB) | RssAnon after (MiB) | cgroup after (MiB) | prompt cache after corpus |
+|---|---|---|---|---|---|---|---|---|
+| control (4096, no cap) | 91.4 % | 0 % | 369.7 / 494.4 | — | 599 → 680 | 337 | 268 | 18 prompts, 32.0 MiB (limit 8192) |
+| new (1024, cap 64) | 91.4 % | 0 % | 381.4 / 509.5 | **identical** (all 81, args included) | 503 → 651 | 321 | 250 | 18 prompts, 32.0 MiB (limit 64) |
+
+The RSS saving is small, about 16-19 MiB anonymous or cgroup. The latency
+difference is inside run-to-run noise: the long-lived pre-restart instance
+measured 377.6 ms p50 on the same corpus. The point of the change is the bound,
+not the bytes.
+
+Rollback: `~/.cache/zoe/functiongemma-router.service.pre-cache-ram` (the unit as
+it was on the box), then `daemon-reload` and `restart functiongemma-router`.
+
 ## Where the numbers land
 
 - shadow2 JSONL: `services/zoe-data/data/router_head_shadow.jsonl`
