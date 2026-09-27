@@ -130,6 +130,20 @@ def test_client_must_match_palace_format(tmp_path, sysdb, client, ok):
             memory_service._check_palace_format(str(d), client)
 
 
+@pytest.mark.parametrize("client", ["1.5.9", "0.6.3"])
+def test_existing_db_with_unreadable_format_is_refused(tmp_path, client):
+    """An EXISTING chroma.sqlite3 whose format cannot be read (no migrations table: partial
+    restore / unknown schema) must fail closed for every client — a 1.x client would otherwise
+    initialise or migrate it in place before the guard identified it. Only a MISSING db is new."""
+    import sqlite3
+    d = tmp_path / "palace"; d.mkdir()
+    con = sqlite3.connect(d / "chroma.sqlite3"); con.execute("CREATE TABLE unrelated (x INTEGER)"); con.commit(); con.close()
+    with pytest.raises(RuntimeError, match="cannot be identified"):
+        memory_service._check_palace_format(str(d), client)
+    # negative control of the allowed case: a missing db is a brand-new palace
+    memory_service._check_palace_format(str(tmp_path / "fresh"), client)
+
+
 def test_format_guard_runs_before_the_client_is_built(monkeypatch, tmp_path):
     d = tmp_path / "palace"
     _palace_db(d, 9)

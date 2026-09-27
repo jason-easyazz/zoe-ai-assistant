@@ -118,8 +118,14 @@ def _check_palace_format(palace_dir: str, chromadb_version: str) -> None:
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         row = con.execute("SELECT max(version) FROM migrations WHERE dir = 'sysdb'").fetchone()
-    except sqlite3.OperationalError:
-        return  # no migrations table: not a chroma-initialised palace
+    except sqlite3.OperationalError as exc:
+        # An EXISTING chroma.sqlite3 whose format cannot be read (no migrations table, partial
+        # restore, unknown schema) must fail closed: a 1.x client would otherwise initialise or
+        # migrate it in place before the guard has identified it. Only a missing DB is "new".
+        raise RuntimeError(
+            f"palace {palace_dir} has a chroma.sqlite3 whose format cannot be identified ({exc}); "
+            "refusing to open it (see docs/knowledge/chroma-1-5-migration.md)"
+        ) from exc
     finally:
         con.close()
     on_disk = "1.x" if row and row[0] is not None and int(row[0]) >= 10 else "0.6"

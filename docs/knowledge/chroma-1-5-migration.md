@@ -236,7 +236,9 @@ if [ -f /tmp/zoe-b08-deploy-lock-holder.pid ] && kill -0 "$(cat /tmp/zoe-b08-dep
 fi
 rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired      # stale file from a dead holder only
 # The new holder must ACQUIRE (flock -n exits at once if the lock is busy) and prove it with a marker.
-( exec -a zoe-b08-deploy-lock-holder bash -c 'flock -n 8 && echo acquired > /tmp/zoe-b08-deploy-lock.acquired && sleep 14400' ) 8>/tmp/zoe-deploy.lock &
+# (the holder loops on short sleeps: bash exec-optimises a trailing `sleep N`, which would replace
+#  the process and erase its argv[0] identity from /proc/<pid>/cmdline)
+( exec -a zoe-b08-deploy-lock-holder bash -c 'flock -n 8 && echo acquired > /tmp/zoe-b08-deploy-lock.acquired && while :; do sleep 60; done' ) 8>/tmp/zoe-deploy.lock &
 MY_HOLDER=$!; echo "$MY_HOLDER" > /tmp/zoe-b08-deploy-lock-holder.pid
 sleep 2; test -f /tmp/zoe-b08-deploy-lock.acquired && kill -0 "$MY_HOLDER"   # lock OWNED by this attempt (else a deploy has it — do not proceed)
 STAGE=pre-stop
@@ -279,6 +281,7 @@ curl -sf localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.st
 STAGE=live
 echo "B0.8 transition OK: TS=$TS (rollback dir ~/.mempalace.pre-b08-$TS)"
 echo "If you abandon the cutover after block A, release the deploy lock: kill \$(cat /tmp/zoe-b08-deploy-lock-holder.pid)"
+echo "PRE-CUTOVER live sha (for §6 rollback): $LIVE_HEAD"
 echo "FOR BLOCK B:  D=$D DEPLOY_ID=$DEPLOY_ID"
 CUTOVER
 ```
@@ -371,13 +374,13 @@ Stop zoe-data and the timers. Then:
 - `mv ~/.mempalace ~/.mempalace.b08-failed-<ts>`
 - `mv ~/.mempalace.pre-b08-<ts> ~/.mempalace`
 - reinstall the old pair: `~/.local/bin/uv pip install --offline --python ~/.zoe/venvs/zoe-data-py312/bin/python chromadb==0.6.3 mempalace==3.3.1`
-- revert the cutover PR (the pins and the opener move back with the store). The format guard
-  will otherwise refuse the 0.6 store under 1.5.9, and it will refuse the 1.x store under 0.6.3.
-- start and poll `/readyz`
-- **release the deploy lock the cutover kept** (a post-swap failure deliberately keeps it so no
-  deploy can reset/restart mid-inconsistency): `kill $(cat /tmp/zoe-b08-deploy-lock-holder.pid);
-  rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired` — then re-arm the
-  timers. Until this is done, deploys wait on `/tmp/zoe-deploy.lock` and time out after 300 s.
+- move the live code back to the pre-cutover commit (`git -C /home/zoe/assistant reset --hard <pre-cutover sha printed by block A>`) so the
+  old opener runs against the restored 0.6 store; the format guard refuses any mismatch.
+- **release the deploy lock the cutover kept** — store, client and code are consistent again, and
+  the revert deploy below needs the lock: verify the pid still IS our holder before signalling it:
+  `p=$(cat /tmp/zoe-b08-deploy-lock-holder.pid); grep -q zoe-b08-deploy-lock-holder /proc/$p/cmdline && kill $p; rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired`
+- revert the cutover PR on GitHub (its deploy now runs normally and converges venv + code).
+- start and poll `/readyz`, then re-arm the timers.
 
 **Restore the directory. Never just re-pin**: 0.6.3 cannot open the 1.x sysdb (proof f). Writes
 made after cutover live only in the 1.x store. Export them first with `export_memory_store.py`,
