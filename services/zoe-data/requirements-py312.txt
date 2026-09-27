@@ -74,6 +74,10 @@ edge-tts==7.2.8
 moonshine-voice==0.1.3
 transformers==5.17.0
 fastembed==0.8.1
+# scikit-learn/joblib: NOT imported at runtime (router heads are numpy since
+# 2026-09-27, router_heads_numpy.py). Installed anyway as librosa requirements
+# (Resemblyzer block below); held at the training pins while the one-release
+# ZOE_ROUTER_HEADS_BACKEND=joblib fallback can still unpickle the .joblib heads.
 scikit-learn==1.7.2
 joblib==1.5.3
 APScheduler==3.10.4

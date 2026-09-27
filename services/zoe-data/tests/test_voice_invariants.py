@@ -72,7 +72,10 @@ def test_voice_defers_people_and_memory():
 def test_voice_brain_memory_injected():
     s = _src("routers/voice_tts.py")
     assert "_voice_brain_memory" in s, "voice memory loader removed"
-    assert "db_memory_context=_v" in s, "memory context not passed into the voice brain turn"
+    # The packet is built by _voice_brain_kwargs (eagerly, or lazily on the Flue
+    # lane — see test_voice_memory_packet_lazy.py) and splatted into the brain call.
+    assert '"db_memory_context": _merge_brain_context(' in s, "memory context not built for the voice brain turn"
+    assert "voice_mode=True, **_v_brain_kwargs" in s, "memory context not passed into the voice brain turn"
 
 
 # ── 5. NO STORE-QUESTION: recall questions are answered, never stored (#756) ─
