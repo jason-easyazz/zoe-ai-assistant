@@ -62,27 +62,26 @@ that `import main` leaves `resemblyzer`, `torch` and `transformers` out of `sys.
 
 **Not done here, recommended:**
 
-- Both endpoints call the embedding **synchronously inside `async def` handlers**
-  (`routers/voice_tts.py`), so the first enrolment blocks zoe-data's event loop for ~6 s —
-  every live voice turn and WebSocket stalls with it. The fix is `await
-  asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)` at the two call sites; it is
-  a voice-gated file, so it needs its own head-bound replay gate.
+- ✅ (B6.6 follow-up PR) Both endpoints used to call the embedding **synchronously inside
+  `async def` handlers** (`routers/voice_tts.py`), so the first enrolment blocked zoe-data's
+  event loop for ~6 s — every live voice turn and WebSocket stalled with it. They now `await
+  asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)`; pinned behaviourally by
+  `services/zoe-data/tests/test_voice_embedding_off_loop.py`.
 - To give the 568 MB back after an enrolment session, run the embedding in a short-lived
   subprocess instead of in-process. Cost: ~6 s per phrase instead of once per process (the
   3-phrase enrol flow has a 60 s client timeout, so it fits). Worth it only if enrolment
   becomes more than a one-off.
 
-## 2. zoe-data — the Smart Turn torch landmine (voice path, not changed)
+## 2. zoe-data — the Smart Turn torch landmine (fixed in the B6.6 follow-up PR)
 
 `voice_turn.SmartTurnDetector` (LiveKit end-of-turn scorer, live `ZOE_SMART_TURN_ENABLED=1`)
-imports `transformers.WhisperFeatureExtractor` only to compute an 80×800 log-mel, and in
+imported `transformers.WhisperFeatureExtractor` only to compute an 80×800 log-mel, and in
 transformers 5.17 that import drags in **torch: +360 MB** the first time a LiveKit session
-scores a turn — resident for the rest of the process. It is not loaded today only because
-LiveKit is on-demand and no session has run since the last restart. The model itself is ONNX;
-the extractor has a pure-numpy path (`_np_extract_fbank_features`, `audio_utils.spectrogram`
-+ `mel_filter_bank`), so a numpy log-mel with a parity test against the current features would
-remove torch from this path entirely. It is turn-end code (voice hot path), so it needs a
-replay gate and an A/B of the end-of-turn probabilities — a separate item, not a lazy-load.
+scores a turn — resident for the rest of the process. The model itself is ONNX, so the
+features are now a pure-numpy log-mel (`voice_turn.log_mel_features`), **bit-identical** to
+transformers' numpy path; a fresh process running the detector + one scoring call dropped from
+446–455 MB to 84 MB RSS. Parity numbers and the end-of-turn A/B on the corpus are in
+[voice-pipeline.md](voice-pipeline.md) (Smart Turn section).
 
 ## 3. Music Assistant (`zoe-music-assistant`, MA 2.8.7)
 
