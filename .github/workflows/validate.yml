@@ -413,7 +413,7 @@ jobs:
 
       - name: GitGuardian scan
         if: steps.forkcheck.outputs.skip != 'true'
-        uses: GitGuardian/ggshield-action@v1.54.0
+        uses: GitGuardian/ggshield-action@v1.55.0
         env:
           # `github.event.before` is all-zeros on a branch's first push and absent on
           # pull_request events — an invalid base makes ggshield scan the wrong range.
