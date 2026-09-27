@@ -3,15 +3,28 @@ Panel first-boot provisioning API.
 
 Endpoints:
   POST /api/panels/provision/request           — Pi requests a pairing code (no auth)
-  GET  /api/panels/provision/{code}            — Pi polls for status (no auth)
+  GET  /api/panels/provision/{code}            — Pi polls for status (X-Provision-Secret)
   GET  /api/panels/provision/{code}/public     — Phone reads code info (no auth)
-  POST /api/panels/provision/{code}/confirm    — User confirms pairing (requires session)
+  POST /api/panels/provision/{code}/confirm    — a signed-in household member confirms
+
+Trust model (auth audit 2026-09-27):
+  * ``/confirm`` requires a REAL member session (``X-Session-ID`` that zoe-auth
+    validates to a non-guest user). ``get_current_user`` alone resolves an
+    anonymous caller to guest rather than refusing it, which let any LAN device
+    holding the 6-char code pair a panel and mint a kiosk device token.
+  * ``/request`` returns a per-attempt ``poll_secret`` to the pairing device
+    ONLY. The DB keeps its sha256. The status poll must present it, so the raw
+    device token is released to the device that started the flow — never to
+    whoever happens to poll the code first.
+  * Codes come from ``secrets`` (not ``random``), expire after
+    ``ZOE_PROVISION_CODE_TTL_S``, and a confirmed token that is not collected
+    within ``_PICKUP_GRACE_S`` of expiry is cleared and its device token revoked.
 """
 
 import hashlib
 import logging
+import hmac
 import os
-import random
 import secrets
 import string
 import time
@@ -20,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from auth import get_current_user
+from auth import get_current_user, require_signed_in
 from database import get_db
 
 logger = logging.getLogger(__name__)
@@ -29,6 +42,13 @@ router = APIRouter(prefix="/api/panels/provision", tags=["panel-provision"])
 
 _PROVISION_CODE_TTL_S = int(os.environ.get("ZOE_PROVISION_CODE_TTL_S", "300"))  # 5 min
 _BASE_URL = os.environ.get("ZOE_BASE_URL", "https://192.168.1.218")
+# How long after the code's expiry a CONFIRMED device token may still be
+# collected. The Pi polls every 3s, so a token still uncollected past this is
+# from a pairing device that went away — clear it and revoke the device token
+# rather than leave a raw credential sitting in the table.
+_PICKUP_GRACE_S = int(os.environ.get("ZOE_PROVISION_PICKUP_GRACE_S", "120"))
+_POLL_SECRET_HEADER = "X-Provision-Secret"
+_SWEEP_INTERVAL_S = 300  # sweep_uncollected_tokens cadence (main.py)
 
 # In-memory rate limit: device_id → list of request timestamps
 _rate_limit: dict[str, list[float]] = {}
@@ -53,7 +73,33 @@ def _check_rate_limit(device_id: str) -> None:
 def _generate_code() -> str:
     """Generate a 6-character alphanumeric code (uppercase, no ambiguous chars)."""
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # omit O, 0, I, 1
-    return "".join(random.choices(alphabet, k=6))
+    return "".join(secrets.choice(alphabet) for _ in range(6))
+
+
+def _hash_secret(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+async def _require_member_session(
+    request: Request, user: dict = Depends(get_current_user)
+) -> dict:
+    """A signed-in household member (admin or member), presenting a SESSION.
+
+    Refuses, in order:
+      * no ``X-Session-ID`` at all → 401. ``get_current_user`` would otherwise
+        hand back a guest (or, under the ZOE_UNAUTHENTICATED_ROLE override, the
+        household admin) and the confirm would run anonymously.
+      * a degraded identity (zoe-auth down, fail-open mode) → 503; the header
+        was not actually checked.
+      * a guest session → 403 (via ``auth.require_signed_in``).
+    A device token is not a person, so it cannot confirm a pairing either: with
+    no session header it is refused by the first rule.
+    """
+    if not request.headers.get("X-Session-ID", "").strip():
+        raise HTTPException(status_code=401, detail="Sign in to pair a panel")
+    if user.get("auth_degraded"):
+        raise HTTPException(status_code=503, detail="Authentication service unavailable")
+    return await require_signed_in(user)
 
 
 def _now_utc() -> str:
@@ -66,9 +112,14 @@ def _expires_utc(seconds: int) -> str:
 
 
 def _is_expired(expires_at: str) -> bool:
+    return _is_expired_by(expires_at, 0)
+
+
+def _is_expired_by(expires_at: str, grace_s: int) -> bool:
+    """True once ``expires_at`` + ``grace_s`` has passed (unparseable → expired)."""
     try:
         exp = datetime.strptime(expires_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        return datetime.now(tz=timezone.utc) > exp
+        return datetime.now(tz=timezone.utc) > exp + timedelta(seconds=grace_s)
     except Exception:
         return True
 
@@ -80,7 +131,11 @@ async def provision_request(payload: dict, request: Request, db=Depends(get_db))
     No authentication required. Rate-limited to 3 requests per device per 10 minutes.
 
     Body: { "device_id": "<MAC address>" }
-    Returns: { "code": "A3F7K2", "pair_url": "...", "expires_in": 300 }
+    Returns: { "code": "A3F7K2", "pair_url": "...", "expires_in": 300,
+               "poll_secret": "<per-attempt secret>" }
+
+    ``poll_secret`` goes to THIS caller only (the pairing device) and must be
+    sent as ``X-Provision-Secret`` on every status poll. Only its sha256 is kept.
     """
     device_id = str(payload.get("device_id") or "").strip().lower()
     if not device_id:
@@ -108,10 +163,12 @@ async def provision_request(payload: dict, request: Request, db=Depends(get_db))
         code = _generate_code()
 
     expires_at = _expires_utc(_PROVISION_CODE_TTL_S)
+    poll_secret = secrets.token_urlsafe(32)
     await db.execute(
-        """INSERT INTO panel_provision_codes (code, device_id, status, created_at, expires_at)
-           VALUES (?, ?, 'pending', ?, ?)""",
-        (code, device_id, _now_utc(), expires_at),
+        """INSERT INTO panel_provision_codes
+               (code, device_id, status, created_at, expires_at, poll_secret_hash)
+           VALUES (?, ?, 'pending', ?, ?, ?)""",
+        (code, device_id, _now_utc(), expires_at, _hash_secret(poll_secret)),
     )
     await db.commit()
 
@@ -121,23 +178,98 @@ async def provision_request(payload: dict, request: Request, db=Depends(get_db))
         "code": code,
         "pair_url": pair_url,
         "expires_in": _PROVISION_CODE_TTL_S,
+        "poll_secret": poll_secret,
     }
 
 
+async def _expire_uncollected_token(db, code: str, token: str) -> bool:
+    """A confirmed token nobody collected in time: clear the raw token, mark the
+    attempt expired, and revoke the device token it maps to.
+
+    Race-safe at the grace boundary: the clear is conditional on the EXACT token
+    still being on the row, and the revoke happens ONLY if this statement won
+    (rowcount == 1). If the pairing device's poll collected the token first, its
+    own conditional clear won, this matches zero rows, and the now-live panel
+    keeps its credential. Returns whether this call revoked."""
+    token_hash = _hash_secret(token)
+    cleared = await db.execute(
+        "UPDATE panel_provision_codes SET token = NULL, status = 'expired' WHERE code = ? AND token = ?",
+        (code, token),
+    )
+    if getattr(cleared, "rowcount", 0) != 1:
+        await db.commit()
+        return False
+    await db.execute("UPDATE device_tokens SET revoked = 1 WHERE token_hash = ?", (token_hash,))
+    await db.commit()
+    try:
+        from routers.panel_auth import _token_cache
+        if token_hash in _token_cache:
+            _token_cache[token_hash] = {**_token_cache[token_hash], "revoked": 1}
+    except Exception:
+        pass
+    logger.warning("provision_poll: code=%s token not collected in time — revoked", code)
+    return True
+
+
+async def sweep_uncollected_tokens(db=None) -> int:
+    """Server-side expiry that does NOT depend on a poll: revoke every confirmed
+    token still uncollected past its grace (the pairing device went away), and
+    mark stale pending codes expired. Scheduled by main.py every
+    ``_SWEEP_INTERVAL_S``; returns how many tokens it revoked."""
+    if db is None:
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as conn:
+            return await sweep_uncollected_tokens(conn)
+    rows = await (await db.execute(
+        "SELECT code, token, expires_at FROM panel_provision_codes "
+        "WHERE status = 'confirmed' AND token IS NOT NULL"
+    )).fetchall()
+    revoked = 0
+    for row in rows:
+        if _is_expired_by(row["expires_at"], _PICKUP_GRACE_S):
+            if await _expire_uncollected_token(db, row["code"], row["token"]):
+                revoked += 1
+    pending = await (await db.execute(
+        "SELECT code, expires_at FROM panel_provision_codes WHERE status = 'pending'"
+    )).fetchall()
+    for row in pending:
+        if _is_expired(row["expires_at"]):
+            await db.execute(
+                "UPDATE panel_provision_codes SET status = 'expired' WHERE code = ? AND status = 'pending'",
+                (row["code"],),
+            )
+    await db.commit()
+    return revoked
+
+
 @router.get("/{code}")
-async def provision_poll(code: str, db=Depends(get_db)):
+async def provision_poll(code: str, request: Request, db=Depends(get_db)):
     """
     Pi polls this to check if the user has confirmed pairing.
     Token is returned ONCE when status=confirmed, then cleared from DB.
 
-    No authentication required (Pi has no session at this point).
+    The Pi has no session at this point; it proves it is the device that
+    started THIS attempt with the ``poll_secret`` from ``/request``, sent as the
+    ``X-Provision-Secret`` header (never a query param — nginx logs those).
     """
     row = await (await db.execute(
-        "SELECT code, status, token, panel_id, expires_at FROM panel_provision_codes WHERE code = ?",
+        "SELECT code, status, token, panel_id, expires_at, poll_secret_hash "
+        "FROM panel_provision_codes WHERE code = ?",
         (code,),
     )).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Unknown provision code")
+
+    # Bind the poll to the pairing device BEFORE anything else — a stranger who
+    # read the code off the screen learns nothing here and changes nothing. A
+    # row with no stored hash predates this check and is refused outright.
+    presented = request.headers.get(_POLL_SECRET_HEADER, "")
+    stored_hash = row["poll_secret_hash"]
+    if not presented or not stored_hash or not hmac.compare_digest(
+        _hash_secret(presented), str(stored_hash)
+    ):
+        raise HTTPException(status_code=403, detail="This pairing attempt belongs to another device")
 
     status = row["status"]
     expires_at = row["expires_at"]
@@ -164,6 +296,9 @@ async def provision_poll(code: str, db=Depends(get_db)):
         # above (we must NOT use `RETURNING token` here — PostgreSQL RETURNING yields
         # the post-update value, which is the NULL we just wrote).
         token = row["token"]
+        if token and _is_expired_by(expires_at, _PICKUP_GRACE_S):
+            await _expire_uncollected_token(db, code, token)
+            return {"status": "expired"}
         if token:
             cleared = await db.execute(
                 "UPDATE panel_provision_codes SET token = NULL WHERE code = ? AND token = ?",
@@ -172,6 +307,16 @@ async def provision_poll(code: str, db=Depends(get_db)):
             await db.commit()
             if getattr(cleared, "rowcount", 0) == 1:
                 return {"status": "confirmed", "token": token, "panel_id": row["panel_id"]}
+            # Our clear matched nothing. If the expiry sweep won the race it
+            # marked the attempt expired and revoked the token: say so, so the
+            # Pi requests a fresh code instead of stalling on a tokenless
+            # "confirmed". If another poll of this device collected it, the row
+            # is still confirmed.
+            now = await (await db.execute(
+                "SELECT status FROM panel_provision_codes WHERE code = ?", (code,)
+            )).fetchone()
+            if not now or now["status"] != "confirmed":
+                return {"status": "expired"}
         # Token already delivered to an earlier poll (or rotated out from under us).
         return {"status": "confirmed"}
 
@@ -185,7 +330,7 @@ async def provision_public_info(code: str, db=Depends(get_db)):
     No authentication required.
     """
     row = await (await db.execute(
-        "SELECT code, device_id, status, expires_at FROM panel_provision_codes WHERE code = ?",
+        "SELECT code, device_id, status, token, expires_at FROM panel_provision_codes WHERE code = ?",
         (code,),
     )).fetchone()
     if not row:
@@ -194,6 +339,9 @@ async def provision_public_info(code: str, db=Depends(get_db)):
     status = row["status"]
     if status == "pending" and _is_expired(row["expires_at"]):
         status = "expired"
+    if status == "confirmed" and row["token"] and _is_expired_by(row["expires_at"], _PICKUP_GRACE_S):
+        if await _expire_uncollected_token(db, code, row["token"]):  # any later request revokes
+            status = "expired"
 
     return {
         "code": code,
@@ -203,13 +351,19 @@ async def provision_public_info(code: str, db=Depends(get_db)):
 
 
 @router.post("/{code}/confirm")
-async def provision_confirm(code: str, payload: dict, user: dict = Depends(get_current_user), db=Depends(get_db)):
+async def provision_confirm(
+    code: str, payload: dict, user: dict = Depends(_require_member_session), db=Depends(get_db)
+):
     """
-    User confirms pairing from their phone (must be logged in).
+    A signed-in household member confirms pairing from their phone. Anonymous
+    callers get 401, guest sessions 403 (see ``_require_member_session``).
     Creates the panel record, issues a device token, and stores it for the Pi to pick up.
 
     Body: { "name": "Living Room", "location": "Living Room", "panel_id": "living-room-panel" }
     """
+    user_id = user.get("user_id") or user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=403, detail="Sign in to pair a panel")
     row = await (await db.execute(
         "SELECT code, device_id, status, expires_at FROM panel_provision_codes WHERE code = ?",
         (code,),
@@ -255,7 +409,6 @@ async def provision_confirm(code: str, payload: dict, user: dict = Depends(get_c
 
     # Bind confirming user as default user for this panel
     binding_id = str(uuid.uuid4())
-    user_id = user.get("user_id") or user.get("sub") or "family-admin"
     await db.execute(
         """INSERT INTO panel_user_bindings (id, panel_id, user_id, binding_type)
            VALUES (?, ?, ?, 'default')""",

@@ -1311,6 +1311,15 @@ async def resolve_skybridge_request(
     if skybridge_intent_requires_identity(intent) and _is_guest_user(user_id):
         return _attach_skybridge_context(_auth_required_result(intent))
 
+    # B1.1 phase 2: a speculative voice turn (verdict pending) must not run a
+    # Skybridge WRITE (list add, calendar create, music, smart-home, timers) on a
+    # transcript prefix — hold it for the verdict; reads render at once. No-op
+    # whenever no speculative turn is bound.
+    import voice_speculation as _vs
+    if (_vs.bound_gate() is not None
+            and not _vs.skybridge_intent_is_speculation_safe(intent.domain, intent.action)):
+        await _vs.await_commit(f"skybridge:{intent.domain}:{intent.action}")
+
     if intent.domain == "clock":
         return _attach_skybridge_context(_resolve_clock(intent))
 

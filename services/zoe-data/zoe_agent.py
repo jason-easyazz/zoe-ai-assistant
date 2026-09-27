@@ -221,7 +221,7 @@ TOOL ROUTING — call proactively, don't ask for clarification first:
 - show_chart — a chart/graph or data to visualise. Render it, don't describe it.
 - show_action_menu — to offer 2-5 next steps after a multi-step task or at a decision point. Not after simple one-shot answers.
 - open_touch_page — "open/show/bring up" a Zoe page (weather, calendar, reminders, lists).
-- setup_telegram — set up/connect Telegram. list_openclaw_plugins — plugins/add-ons/extensions.
+- list_openclaw_plugins — plugins/add-ons/extensions.
 - list_openclaw_skills — skills, capabilities, "what can you do". When you can't do something a skill would enable, call it with highlight=<skill-name> (never omit highlight) and say so — e.g. "send me a Discord notification" → list_openclaw_skills(highlight="discord"), "I can't yet — the Discord skill would enable it."
 
 SELF-BUILDING: For a NEW widget/page/capability, don't refuse — call list_openclaw_skills with the builder highlight ("zoe-widget-builder", "zoe-page-builder", or "zoe-capability-extender"), then offer to escalate to Hermes to build it. Before saying "I can't do X", check the ZOE_SELF context below for what Zoe actually has.
@@ -832,14 +832,6 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "setup_telegram",
-            "description": "Show the Telegram setup wizard in chat so the user can connect their Telegram bot to Zoe. Use when the user asks to set up, connect, or configure Telegram.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "proactive_schedule",
             "description": (
                 "Schedule a proactive push notification at a future time (notify/remind/message later). "
@@ -925,7 +917,7 @@ _SKILL_TOOLS: dict[str, list[str]] = {
     "touch":      ["open_touch_page"],
     "bash":       ["bash"],
     "visual":     ["show_map", "show_chart"],
-    "discovery":  ["list_openclaw_plugins", "list_openclaw_skills", "setup_telegram", "show_action_menu"],
+    "discovery":  ["list_openclaw_plugins", "list_openclaw_skills", "show_action_menu"],
     "openclaw-fallback": ["escalate_to_openclaw"],
 }
 
@@ -3226,13 +3218,6 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "guest") -> 
                 "prompt": args.get("prompt", ""),
                 "options": args.get("options", []),
             },
-        }
-        return f"__UI__:{json.dumps(payload)}"
-
-    if tool_name == "setup_telegram":
-        payload = {
-            "component": "telegram_setup",
-            "props": {},
         }
         return f"__UI__:{json.dumps(payload)}"
 

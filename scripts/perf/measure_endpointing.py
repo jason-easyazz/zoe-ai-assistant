@@ -50,6 +50,10 @@ Examples:
     python3 scripts/perf/measure_endpointing.py --vad-silence-s 0.1
     # before/after for the deep-quiet fast tail (ZOE_VAD_TAIL_MS):
     python3 scripts/perf/measure_endpointing.py --tail-flag-ms 640
+    # B1.1 speculative turn-start: cancel rate + saving at each first-verdict tail,
+    # against the live 640 ms close, with an optional Smart Turn veto arm:
+    python3 scripts/perf/measure_endpointing.py --samples 2000 --tail-flag-ms 640 \
+        --speculative-ms 320,400,480,560,640 --smart-turn-veto 0.5
 """
 from __future__ import annotations
 
@@ -288,6 +292,164 @@ def measure(mod: types.ModuleType, samples: list[np.ndarray], gaps_ms: list[int]
     }
 
 
+def load_smart_turn(threads: int, model_path: str | None = None):
+    """The REAL zoe-data Smart Turn scorer (numpy log-mel + ORT CPU), loaded by
+    path so the probe needs neither the service's import graph nor torch.
+    Returns None (with a message) when the model or onnxruntime is missing."""
+    import os
+    os.environ["ZOE_SMART_TURN_THREADS"] = str(max(1, min(4, threads)))
+    if model_path:
+        os.environ["ZOE_SMART_TURN_MODEL"] = model_path
+    src = REPO / "services" / "zoe-data" / "voice_turn.py"
+    spec = importlib.util.spec_from_file_location("_zoe_voice_turn_probe", src)
+    if not spec or not spec.loader:
+        return None
+    vt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vt)
+    det = vt.get_smart_turn()
+    if det is None:
+        print("Smart Turn unavailable (model file or onnxruntime missing) — veto arm skipped",
+              file=sys.stderr)
+    return det
+
+
+def _record_vad_probs(mod: types.ModuleType) -> list[float]:
+    """Wrap the daemon's ``_vad_prob`` so the probe sees each chunk's probability
+    WITHOUT a second Silero call (Silero is stateful: scoring a chunk twice would
+    corrupt the very state under test). Returns the list the wrapper appends to."""
+    seen: list[float] = []
+    inner = getattr(mod, "_vad_prob_unwrapped", None) or mod._vad_prob
+    mod._vad_prob_unwrapped = inner
+
+    def _wrapped(model, chunk_int16, sample_rate: int = 16000) -> float:
+        p = inner(model, chunk_int16, sample_rate)
+        seen.append(p)
+        return p
+
+    mod._vad_prob = _wrapped
+    return seen
+
+
+def speculate_stream(mod: types.ModuleType, stream: np.ndarray, chunk: int, probs: list[float],
+                     smart_turn=None, veto_p: float | None = None) -> dict[str, Any]:
+    """Run ONE recording through a fresh ``_Endpointer`` exactly as
+    ``record_command`` drives it (push, then ``speculative_ready`` when push did
+    not close; ``n_frames`` is the CHUNK count, as the daemon passes it).
+
+    Smart Turn veto arm (simulated — the daemon has no veto today): at a fire
+    point Smart Turn scores the audio so far; below ``veto_p`` the fire is
+    withdrawn and may only re-arm after the deep-quiet run is broken (a new
+    pause). A vetoed terminal pause therefore means NO speculation for that turn
+    (saving 0), never a later guess inside the same silence.
+    """
+    reset_vad_state(mod)
+    ep = mod._Endpointer()
+    fire = close = None
+    speech_after_fire = False
+    latched = False
+    vetoes = 0
+    st_ms: list[float] = []
+    n_chunks = 0
+    for start in range(0, len(stream) - chunk + 1, chunk):
+        n_chunks += 1
+        del probs[:]
+        closed = ep.push(stream[start:start + chunk].tobytes(), n_chunks)
+        if fire is not None and probs and probs[-1] >= mod.VAD_ENDPOINT_THRESHOLD:
+            speech_after_fire = True
+        if closed:
+            close = start + chunk
+            break
+        if fire is not None:
+            continue
+        if latched:
+            if ep._deep_quiet == 0:
+                latched = False
+            continue
+        if ep.speculative_ready(n_chunks):
+            idx = start + chunk
+            if smart_turn is not None and veto_p is not None:
+                import time as _time
+                t0 = _time.perf_counter()
+                p = smart_turn.end_of_turn_prob(stream[:idx])
+                st_ms.append((_time.perf_counter() - t0) * 1000.0)
+                if p < veto_p:
+                    ep.speculation_fired = False
+                    latched = True
+                    vetoes += 1
+                    continue
+            fire = idx
+    return {"fire": fire, "close": close, "speech_after_fire": speech_after_fire,
+            "resumed": bool(ep.resumed_after_speculation), "vetoes": vetoes, "st_ms": st_ms}
+
+
+def measure_speculation(mod: types.ModuleType, recordings: list[tuple[np.ndarray, int]],
+                        spec_ms: int, live_tail_ms: int, tail_ms: int, rate: int, chunk: int,
+                        smart_turn=None, veto_p: float | None = None) -> dict[str, Any]:
+    """B1.1 offline cancel-rate estimate at one first-verdict tail.
+
+    Each recording is the UNTRIMMED corpus clip (so its real end-of-turn room
+    silence is scored, not a digital-zero stand-in) plus ``tail_ms`` of zeros so
+    every stream closes. Outcomes, per the daemon's own verdict rules:
+
+      commit        fired, nothing but deep quiet followed  → held audio released
+      resolve_quiet fired, a non-deep chunk followed but no chunk crossed the
+                    speech threshold → ``resolve``; almost surely transcript-
+                    equivalent (released after one extra STT pass)
+      cancel        fired, then a chunk crossed the speech threshold → the user
+                    was still talking; ``resolve`` → non-equivalent → cancel
+      no_fire       the first verdict never came before the close
+
+    ``cancel_rate`` = cancel / (commit + resolve_quiet + cancel) — the doc's gate
+    ratio; ``cancel_rate_conservative`` also counts every resolve_quiet as a cancel.
+    Saving = close − fire on released turns (minus the Smart Turn scoring time on
+    the veto arm, since the daemon would pay it before firing).
+    ``live_cuts`` = the LIVE endpointer itself closed before the clip's last speech
+    (a pre-existing cut speculation neither causes nor fixes).
+    """
+    mod.ZOE_SPECULATIVE_TURN = True
+    mod.ZOE_SPECULATIVE_TAIL_MS = spec_ms
+    mod.ZOE_VAD_TAIL_MS = live_tail_ms
+    probs = _record_vad_probs(mod)
+    counts = {"commit": 0, "resolve_quiet": 0, "cancel": 0, "no_fire": 0, "never_closed": 0}
+    savings: list[float] = []
+    live_cuts = vetoes = 0
+    st_all: list[float] = []
+    for audio, speech_end in recordings:
+        stream = np.concatenate([audio, silence(tail_ms, rate)])
+        r = speculate_stream(mod, stream, chunk, probs, smart_turn, veto_p)
+        vetoes += r["vetoes"]
+        st_all.extend(r["st_ms"])
+        if r["close"] is None:
+            counts["never_closed"] += 1
+            continue
+        if r["close"] < speech_end:
+            live_cuts += 1
+        if r["fire"] is None:
+            counts["no_fire"] += 1
+            continue
+        if r["speech_after_fire"]:
+            counts["cancel"] += 1
+            continue
+        counts["resolve_quiet" if r["resumed"] else "commit"] += 1
+        st_cost = r["st_ms"][-1] if r["st_ms"] else 0.0
+        savings.append(1000.0 * (r["close"] - r["fire"]) / rate - st_cost)
+    decided = counts["commit"] + counts["resolve_quiet"] + counts["cancel"]
+    n = len(recordings)
+    return {
+        "speculative_ms": spec_ms, "live_tail_ms": live_tail_ms,
+        "smart_turn_veto": veto_p, "n": n, **counts,
+        "fired": decided,
+        "cancel_rate": round(counts["cancel"] / decided, 4) if decided else None,
+        "cancel_rate_conservative": (round((counts["cancel"] + counts["resolve_quiet"]) / decided, 4)
+                                     if decided else None),
+        "median_saving_ms": round(statistics.median(savings), 1) if savings else None,
+        "mean_saving_per_turn_ms": round(sum(savings) / n, 1) if n else None,
+        "live_cuts": live_cuts, "vetoes": vetoes,
+        "smart_turn_calls": len(st_all),
+        "smart_turn_ms_median": round(statistics.median(st_all), 1) if st_all else None,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--samples", type=int, default=25, help="corpus utterances to use")
@@ -306,6 +468,15 @@ def main() -> int:
                     help="override SILENCE_TIMEOUT_S — the amplitude-mode knob (negative control)")
     ap.add_argument("--amplitude-mode", action="store_true",
                     help="measure the LEGACY amplitude endpointer instead of the live VAD one")
+    ap.add_argument("--speculative-ms",
+                    help="B1.1: comma-separated first-verdict tails (ZOE_SPECULATIVE_TAIL_MS) to sweep; "
+                         "measures cancel rate + saving against the --tail-flag-ms close (default 640, "
+                         "the live panel value) on untrimmed recordings, and skips the tail/false-cut table")
+    ap.add_argument("--smart-turn-veto",
+                    help="with --speculative-ms: comma-separated Smart Turn thresholds for a simulated "
+                         "veto arm (fire only if P(complete) >= p)")
+    ap.add_argument("--smart-turn-threads", type=int, default=4,
+                    help="ORT intra-op threads for the veto arm (clamped to 1..4)")
     ap.add_argument("--json", type=Path, help="write results here")
     args = ap.parse_args()
 
@@ -349,6 +520,8 @@ def main() -> int:
                   f"a deployable configuration.")
 
     _is_speech = speech_predicate(mod, chunk)
+    if args.speculative_ms:
+        return run_speculation_sweep(args, mod, rate, chunk, _is_speech)
     files = sorted(args.corpus.glob("*.wav"))[-args.samples * 4:]
     loaded: list[np.ndarray] = []
     for path in reversed(files):
@@ -394,6 +567,53 @@ def main() -> int:
 
     if args.json:
         args.json.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        print(f"\nWrote {args.json}")
+    return 0
+
+
+def run_speculation_sweep(args, mod: types.ModuleType, rate: int, chunk: int, is_speech) -> int:
+    live_tail = args.tail_flag_ms if args.tail_flag_ms is not None else 640
+    spec_list = [int(x) for x in args.speculative_ms.split(",") if x.strip()]
+    vetoes = [None] + [float(x) for x in (args.smart_turn_veto or "").split(",") if x.strip()]
+    smart_turn = load_smart_turn(args.smart_turn_threads) if len(vetoes) > 1 else None
+    if smart_turn is None:
+        vetoes = [None]
+    files = sorted(args.corpus.glob("*.wav"))[-args.samples:]
+    recordings: list[tuple[np.ndarray, int]] = []
+    for path in files:
+        audio = read_wav_mono16(path, rate)
+        if audio is None or len(audio) < 4 * chunk:
+            continue
+        speech_end = len(trim_to_speech_end(audio, chunk, is_speech))
+        reset_vad_state(mod)
+        recordings.append((audio, speech_end))
+    if not recordings:
+        print(f"no usable {rate}Hz mono16 samples in {args.corpus}", file=sys.stderr)
+        return 2
+    if mod._Endpointer().mode != "vad":
+        print("*** Silero unavailable — the speculative hook never fires in amplitude mode; "
+              "refusing to report a fiction.", file=sys.stderr)
+        return 2
+    rows = []
+    print(f"\nB1.1 speculative turn-start — n={len(recordings)} recordings, live close "
+          f"ZOE_VAD_TAIL_MS={live_tail} ms (rate={rate} chunk={chunk})")
+    print(f"  {'spec_ms':>7} {'veto':>5} {'fired':>5} {'commit':>6} {'res_q':>5} {'cancel':>6} "
+          f"{'cancel%':>7} {'cons%':>6} {'med_save':>8} {'mean/turn':>9} {'vetoes':>6} {'st_ms':>6}")
+    for veto in vetoes:
+        for spec in spec_list:
+            row = measure_speculation(mod, recordings, spec, live_tail, args.tail_ms, rate, chunk,
+                                      smart_turn if veto is not None else None, veto)
+            rows.append(row)
+            pct = lambda v: "n/a" if v is None else f"{v:.1%}"  # noqa: E731
+            print(f"  {spec:>7} {('-' if veto is None else veto):>5} {row['fired']:>5} "
+                  f"{row['commit']:>6} {row['resolve_quiet']:>5} {row['cancel']:>6} "
+                  f"{pct(row['cancel_rate']):>7} {pct(row['cancel_rate_conservative']):>6} "
+                  f"{str(row['median_saving_ms']):>8} {str(row['mean_saving_per_turn_ms']):>9} "
+                  f"{row['vetoes']:>6} {str(row['smart_turn_ms_median'] or '-'):>6}")
+    print(f"  live-endpointer cuts before the clip's last speech (pre-existing, not caused by "
+          f"speculation): {rows[0]['live_cuts']}/{rows[0]['n']}")
+    if args.json:
+        args.json.write_text(json.dumps({"mode": "speculation", "rows": rows}, indent=2), encoding="utf-8")
         print(f"\nWrote {args.json}")
     return 0
 

@@ -1,27 +1,33 @@
 """routers/music_setup — the QR→phone "add a music source through Zoe" flow.
 
-- POST /api/music/setup/start   (panel) → mint a one-time token + QR for a provider
-- GET  /api/music/setup/catalogue (panel) → the "Add music" list
-- GET  /api/music/setup/form     (phone) → validate token → the provider's form schema
-- POST /api/music/setup/save     (phone) → validate+consume token → save to MA
+- POST /api/music/setup/start        (panel) → mint a one-time token + QR handle
+- GET  /api/music/setup/catalogue    (panel) → the "Add music" list
+- GET  /api/music/setup/qr/{handle}  (panel) → the QR image (single-use handle)
+- GET  /api/music/setup/form         (phone) → validate token → the provider's form schema
+- POST /api/music/setup/save         (phone) → validate+consume token → save to MA
 
 The panel calls /start behind the normal panel auth. The phone endpoints are
 gated ONLY by the one-time setup token (the phone is unauthenticated), so they
 must never do anything but read a provider's public form schema and save the
 values the user just typed for THAT provider.
+
+The token NEVER travels in a query string (nginx logs those): the phone link
+keeps it in the #fragment, POSTs carry it in the body, GETs in the
+``X-Setup-Token`` header, and the panel's QR image is fetched by an opaque
+single-use handle (``setup_qr``).
 """
 from __future__ import annotations
 
-import io
 import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import Response
 
 import music_service
 import music_setup
+import setup_qr
 from auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -72,29 +78,29 @@ async def setup_start(payload: dict, request: Request, user: dict = Depends(get_
         "provider": provider,
         "auth": form.get("auth"),
         "setup_url": _setup_url(request, minted["token"], provider),
-        "qr_path": f"/api/music/setup/qr?token={minted['token']}&provider={provider}",
+        "qr_path": music_setup.qr_path(minted["token"], provider),
         "expires_in": minted["expires_in"],
     }
 
 
-@router.get("/qr")
-async def setup_qr(request: Request, token: str = "", provider: str = "") -> Response:
-    """QR image (SVG) for the setup URL — rendered on the panel. Token is opaque
-    here; the image just encodes the URL."""
-    if not music_setup.verify(token):
+@router.get("/qr/{handle}")
+async def setup_qr_image(handle: str, request: Request) -> Response:
+    """QR image (SVG) for the setup URL — rendered on the panel. Redeems the
+    single-use handle; the token itself never appears in this request."""
+    held = setup_qr.redeem("music", handle)
+    if held is None or not music_setup.verify(held["token"]):
         return Response(status_code=404)
-    import segno
-    buf = io.BytesIO()
-    segno.make(_setup_url(request, token, provider), error="m").save(
-        buf, kind="svg", scale=1, border=2, dark="#0b1020", light="#ffffff")
-    return Response(content=buf.getvalue(), media_type="image/svg+xml",
-                    headers={"Cache-Control": "no-store"})
+    return Response(content=setup_qr.render_svg(_setup_url(request, held["token"], held["provider"])),
+                    media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
 
 
 # ── Phone endpoints — gated ONLY by the one-time token ───────────────────────
 
+_TOKEN_HEADER = Header(default="", alias="X-Setup-Token")
+
+
 @router.get("/form")
-async def setup_form(token: str = "", provider: str = "") -> dict[str, Any]:
+async def setup_form(token: str = _TOKEN_HEADER, provider: str = "") -> dict[str, Any]:
     """Phone: the provider's setup form (fields to fill). Token must be valid."""
     payload = music_setup.verify(token)
     if payload is None or payload.get("p") != provider:
@@ -154,7 +160,7 @@ async def oauth_start(payload: dict) -> dict[str, Any]:
 
 
 @router.get("/oauth/status")
-async def oauth_status(oauth_id: str = "", token: str = "") -> dict[str, Any]:
+async def oauth_status(oauth_id: str = "", token: str = _TOKEN_HEADER) -> dict[str, Any]:
     """Phone: poll the OAuth attempt. Consumes the one-time token on success."""
     if music_setup.verify(token) is None:
         return {"ok": False, "state": "unknown"}
@@ -196,7 +202,7 @@ async def browser_start(payload: dict) -> dict[str, Any]:
 
 
 @router.get("/browser/status")
-async def browser_status(session_id: str = "", token: str = "") -> dict[str, Any]:
+async def browser_status(session_id: str = "", token: str = _TOKEN_HEADER) -> dict[str, Any]:
     """Phone: poll the browser sign-in. Consumes the one-time token on success."""
     if music_setup.verify(token) is None:
         return {"ok": False, "state": "unknown"}

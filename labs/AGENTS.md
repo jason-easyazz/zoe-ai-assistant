@@ -224,7 +224,16 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   and makes `runWrite` return its success text without dispatching
   (`src/replay-mode.ts`, `test/replay_isolation.test.ts`). `set_timer` needs its
   own check — it does not route through `runWrite`.
-  Regression net (hand-run, not CI-wired): `npm test` — 24 `test/*.test.ts` files
+  Carries the B1.1 **speculative-turn echo** (flag-dark on the zoe-data side,
+  `ZOE_SPECULATIVE_TURN`): the seam's ` zoe-spec:<turn_id>` line rides OUTERMOST
+  (ahead of replay and identity), is bound per-turn by the same AbortSignal, is
+  stripped before the model sees anything, and `dispatchIntent` echoes it as
+  `speculative_turn_id` so zoe-data holds exactly that turn's writes for the panel
+  daemon's verdict. Ordinary turns carry no line and send a byte-identical body
+  (`src/speculative-turn.ts`, `test/speculative_turn.test.ts`; the prefix is
+  pinned equal to `zoe_flue_client._SPECULATIVE_ENVELOPE_PREFIX` by zoe-data's
+  `test_voice_speculation_write_deferral.py`).
+  Regression net (hand-run, not CI-wired): `npm test` — 26 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a

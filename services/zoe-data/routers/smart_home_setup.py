@@ -1,7 +1,11 @@
 """routers/smart_home_setup — the QR→phone "add a device to your home" flow.
 
-- GET /api/home/setup/qr    (panel) → QR image encoding the phone setup URL
-- GET /api/home/setup/info  (phone) → validate token → the branded setup guide
+- GET /api/home/setup/qr/{handle} (panel) → QR image encoding the phone setup URL
+- GET /api/home/setup/info        (phone) → validate token → the branded setup guide
+
+The token never travels in a query string (nginx logs those): the phone link
+keeps it in the #fragment, /info reads it from the ``X-Setup-Token`` header,
+and the panel's QR image is fetched by an opaque single-use handle (setup_qr).
 
 The panel mints the token in the smart_home resolver (smart_home_service._add_device_card)
 and shows the QR. The phone endpoint is gated ONLY by the one-time setup token
@@ -12,14 +16,14 @@ the home. Full auto-discovery is deferred until the bridge grows a pairing API.
 """
 from __future__ import annotations
 
-import io
 import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from fastapi.responses import Response
 
+import setup_qr
 import smart_home_setup
 
 logger = logging.getLogger(__name__)
@@ -92,21 +96,21 @@ _DEVICE_TYPES: list[dict[str, Any]] = [
 ]
 
 
-@router.get("/qr")
-async def setup_qr(request: Request, token: str = "") -> Response:
-    """QR image (SVG) encoding the phone setup URL — rendered on the panel."""
-    if smart_home_setup.verify(token) is None:
+@router.get("/qr/{handle}")
+async def setup_qr_image(handle: str, request: Request) -> Response:
+    """QR image (SVG) encoding the phone setup URL — rendered on the panel.
+    Redeems the single-use handle; the token never appears in this request."""
+    held = setup_qr.redeem("home", handle)
+    if held is None or smart_home_setup.verify(held["token"]) is None:
         return Response(status_code=404)
-    import segno
-    buf = io.BytesIO()
-    segno.make(_setup_url(request, token), error="m").save(
-        buf, kind="svg", scale=1, border=2, dark="#0b1020", light="#ffffff")
-    return Response(content=buf.getvalue(), media_type="image/svg+xml",
-                    headers={"Cache-Control": "no-store"})
+    return Response(content=setup_qr.render_svg(_setup_url(request, held["token"])),
+                    media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/info")
-async def setup_info(response: Response, token: str = "") -> dict[str, Any]:
+async def setup_info(
+    response: Response, token: str = Header(default="", alias="X-Setup-Token")
+) -> dict[str, Any]:
     """Phone: the branded setup guide. Gated by a one-time token which is SPENT
     here (the guide is the terminal step of this read-only flow, so consuming on
     fetch keeps a photographed/leaked QR from re-opening it). Returns guidance

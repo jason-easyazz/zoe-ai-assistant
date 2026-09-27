@@ -1744,6 +1744,6 @@ async def resolve_music_setup(provider_query: str) -> dict[str, Any]:
         msg = f"Added {match['name']}. Ask me to play a station." if saved else "I couldn't add that."
         return _result(msg, _catalogue_card(await provider_catalogue()), "setup")
     minted = music_setup.mint(match["domain"])
-    qr_path = f"/api/music/setup/qr?token={minted['token']}&provider={match['domain']}"
+    qr_path = music_setup.qr_path(minted["token"], match["domain"])
     return _result(f"Scan the code to connect {match['name']} from your phone.",
                    _qr_card(match["domain"], match["name"], qr_path), "setup")
