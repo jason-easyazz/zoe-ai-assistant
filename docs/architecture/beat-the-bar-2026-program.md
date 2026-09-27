@@ -566,15 +566,19 @@ status: 🔨 active — NEXT ACTION is always §0
 - B6.6 🔨 **Resident-memory hygiene** — measured 2026-09-27
   ([resident-memory-hygiene-2026-09-27.md](../knowledge/resident-memory-hygiene-2026-09-27.md)).
   zoe-data's `import main` loads no heavy library (~64 MB); the ~1.2 GB is the hot-path set
-  (Moonshine, router head, fastembed, Chroma). Speaker ID was already lazy; its first use costs
-  +568 MB / 6 s and still blocks the event loop while it loads. Done (draft PR): cached, CPU-pinned `VoiceEncoder`
-  + a fresh-interpreter test that `import main` stays free of resemblyzer/torch/transformers.
-  ⬜ Follow-ups (voice-gated, each needs its own replay gate): `asyncio.to_thread` around the
-  two embedding calls in `routers/voice_tts.py`; replace Smart Turn's
-  `WhisperFeatureExtractor` (drags in torch, +360 MB on the first LiveKit turn) with a numpy
-  log-mel + parity test. Music Assistant (~1.0 GB RSS+swap, flat): **no action** — no
-  `mem_limit`, no restart timer (re-auth risk); ⬜ re-measure RSS+swap in a few days on the
-  same container start, and add a weekly restart timer only if it grows > ~100 MB/day.
+  (Moonshine, router head, fastembed, Chroma). ✅ #1711: cached, CPU-pinned `VoiceEncoder` + a
+  fresh-interpreter test that `import main` stays free of resemblyzer/torch/transformers.
+  🔨 Voice-gated follow-ups — draft PR (head-bound replay gate before ready): (a) Smart Turn
+  features → pure-numpy log-mel (`voice_turn.log_mel_features`), bit-identical to transformers'
+  numpy path, so torch/transformers are never loaded (fresh-process RSS 446–455 → 84 MB); old
+  vs new on 302 corpus turns: median |Δp| 0, max 0.21, 0 decisions flipped at 0.5 (the model
+  is 1-ULP-sensitive on some turns — the same spread as transformers' own torch-vs-numpy
+  paths); (b) `/api/voice/enroll` + `/identify` run the speaker embedding in
+  `asyncio.to_thread`, so a first enrolment (~6 s) no longer freezes the event loop. Details:
+  [voice-pipeline.md](../knowledge/voice-pipeline.md) (Smart Turn section). Music Assistant
+  (~1.0 GB RSS+swap, flat): **no action** — no `mem_limit`, no restart timer (re-auth risk);
+  ⬜ re-measure RSS+swap in a few days on the same container start, and add a weekly restart
+  timer only if it grows > ~100 MB/day.
 
 ### B7 — Window into Zoe (UI)
 - B7.1 ⬜ AG-UI 1.0 (`ACTIVITY_SNAPSHOT/DELTA`) + a fixed A2UI-style component catalog as the
@@ -715,6 +719,7 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 — B6.6 follow-ups (draft PR): Smart Turn numpy log-mel (no torch in zoe-data from LiveKit) + speaker embedding off the event loop.
 - 2026-09-27 — B1.4: Silero v6.2.1 file reverted to v6.0 (it detected no speech — barge-in /
   idle listening silently off for a day); permanent gate = the probe's VAD stage + the gate
   check's `vad` block + `voice_vad.py`/`voice_turn.py`/`*silero*` voice-path patterns

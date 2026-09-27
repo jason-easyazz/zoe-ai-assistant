@@ -5451,7 +5451,9 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         wav_path = tmp.name
 
     try:
-        embedding_bytes = _compute_resemblyzer_embedding(wav_path)
+        # Off the event loop: the first call loads resemblyzer/torch (~6 s) and
+        # every call is CPU-bound — inline, it stalled every live voice turn.
+        embedding_bytes = await asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)
     finally:
         try:
             os.unlink(wav_path)
@@ -5554,7 +5556,8 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
             wav_path = tmp.name
 
         try:
-            query_emb = _compute_resemblyzer_embedding(wav_path)
+            # Off the event loop (see voice_enroll).
+            query_emb = await asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)
         finally:
             try:
                 os.unlink(wav_path)
