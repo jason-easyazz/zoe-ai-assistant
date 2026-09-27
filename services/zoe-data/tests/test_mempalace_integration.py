@@ -100,8 +100,22 @@ class _FakeCollection:
 _GLOBAL_COLLECTION = _FakeCollection()
 
 
+class _FakeAuditCollection(_FakeCollection):
+    """Audit-trail stub. ``MemoryService._audit_collection`` opens a REAL
+    ``chromadb.PersistentClient`` at ``MEMPALACE_DATA_DIR`` (default
+    ``~/.mempalace`` — the LIVE store on the Jetson), bypassing the mempalace
+    stub; every ingest in this file used to write audit rows there."""
+
+    def upsert(self, ids, documents, metadatas, embeddings=None):
+        super().upsert(ids, documents, metadatas)
+
+
+_AUDIT_COLLECTION = _FakeAuditCollection()
+
+
 def _reset_collection():
     _GLOBAL_COLLECTION._store.clear()
+    _AUDIT_COLLECTION._store.clear()
 
 
 def _fake_get_collection(_path):
@@ -178,7 +192,7 @@ _restore_mempalace_modules()
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def fresh_collection():
+def fresh_collection(monkeypatch):
     """Reset the in-memory Chroma collection before each test.
 
     Also resets the MemoryService singleton so per-instance state
@@ -193,6 +207,8 @@ def fresh_collection():
     """
     _install_mempalace_stubs()
     _reset_collection()
+    # Keep the audit trail off disk (see _FakeAuditCollection).
+    monkeypatch.setattr(MemoryService, "_audit_collection", lambda self: _AUDIT_COLLECTION)
     try:
         import memory_service as _ms
         _ms._service_singleton = None
@@ -392,40 +408,85 @@ async def test_all_agents_see_same_facts():
 
 
 # ---------------------------------------------------------------------------
-# 5b. Capture path lockdown — Pi + Hermes/OpenClaw shared hook
+# 5b. Capture path lockdown — agent post-turn save + chat post-turn hook
 # ---------------------------------------------------------------------------
 
+@pytest.fixture
+def chat_hook_offline(monkeypatch):
+    """Run ``_persist_memory_candidates`` with only its deterministic regex pass.
+
+    The hook also fans out to the LLM turn digest, the LLM person extractor,
+    the DB-backed person extractor and latent-intent detection. Left live,
+    this test passed ONLY where a Gemma server answered on localhost (the
+    Jetson lane) — the regex rows are ``pending`` unless auto-ingest is on, so
+    the assertion was really satisfied by the live model's digest. Those
+    passes have their own tests; stub them so this one pins the shared-store
+    contract and nothing else.
+    """
+    import latent_intent_detector
+    import memory_digest
+    import person_extractor
+    import person_extractor_llm
+    import routers.chat as chat_mod
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(memory_digest, "run_turn_digest", _noop)
+    monkeypatch.setattr(person_extractor, "process_text", _noop)
+    monkeypatch.setattr(person_extractor_llm, "process_text_llm", _noop)
+    monkeypatch.setattr(latent_intent_detector, "detect_and_store", _noop)
+
+    def _set_auto_ingest(value: bool):
+        monkeypatch.setattr(chat_mod, "_MEMORY_AUTO_INGEST", value)
+    return _set_auto_ingest
+
+
 @pytest.mark.asyncio
-async def test_memory_capture_paths_pi_hermes_openclaw():
-    """All runtime agent paths should persist through shared MemPalace pipeline."""
+async def test_memory_capture_paths_share_one_store(chat_hook_offline):
+    """Both post-turn capture paths persist through the one MemoryService store.
+
+    Formerly ``test_memory_capture_paths_pi_hermes_openclaw``: Hermes and
+    OpenClaw are retired, but the two paths it exercised are live —
+    ``zoe_agent._background_memory_save`` and the chat router's
+    ``_persist_memory_candidates`` hook every lane goes through.
+    """
     from zoe_agent import _background_memory_save
 
-    # Pi-agent post-turn capture
+    # Production runs MEMORY_AUTO_INGEST=true (zoe-data .env); the code default
+    # is false. Pin the production value explicitly rather than inherit either.
+    chat_hook_offline(True)
+
     await _background_memory_save(
         "remember that my friend Ava is a designer",
         "Got it.",
         user_id="jason",
     )
-
-    # Hermes/OpenClaw chat router shared persistence hook
     await _persist_memory_candidates(
-        "jason",
-        "sess-hermes",
-        "remember that i met Noah and he is a plumber",
-        "Noted.",
+        "jason", "sess-a", "remember that i met Noah and he is a plumber", "Noted.",
     )
     await _persist_memory_candidates(
-        "jason",
-        "sess-openclaw",
-        "remember that i prefer tea over coffee",
-        "Saved.",
+        "jason", "sess-b", "remember that i prefer tea over coffee", "Saved.",
     )
 
-    facts = await _mempalace_load_user_facts("jason")
-    facts_l = facts.lower()
+    facts_l = (await _mempalace_load_user_facts("jason")).lower()
     assert "ava" in facts_l
     assert "noah" in facts_l
     assert "tea" in facts_l
+
+
+@pytest.mark.asyncio
+async def test_chat_hook_candidates_stay_pending_without_auto_ingest(chat_hook_offline):
+    """Control for the test above: with auto-ingest OFF the hook's rows are
+    written ``pending`` and must NOT reach the prompt read — so the positive
+    test's "noah" really comes from the auto-ingest path, not a stray writer."""
+    chat_hook_offline(False)
+    await _persist_memory_candidates(
+        "jason", "sess-a", "remember that i met Noah and he is a plumber", "Noted.",
+    )
+    statuses = {r["metadata"].get("status") for r in _GLOBAL_COLLECTION._store.values()}
+    assert statuses == {"pending"}
+    assert "noah" not in (await _mempalace_load_user_facts("jason")).lower()
 
 
 # ---------------------------------------------------------------------------

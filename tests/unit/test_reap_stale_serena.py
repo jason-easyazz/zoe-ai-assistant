@@ -267,9 +267,7 @@ class _Fail:
     stderr = "Failed to restart serena-mcp.service: Interactive authentication required."
 
 
-def test_recycle_passes_the_user_bus_env():
-    # systemctl --user needs XDG_RUNTIME_DIR; the timer has it, a hand/CI run
-    # may not, and without it the restart fails while the bloat survives.
+def _recycle_env(monkeypatch) -> dict:
     seen = {}
 
     class _Rec:
@@ -277,15 +275,27 @@ def test_recycle_passes_the_user_bus_env():
         stderr = ""
 
     import types as _t
-    fake = _t.SimpleNamespace(run=lambda cmd, **kw: seen.update(kw) or _Rec())
-    orig = reaper.subprocess
-    reaper.subprocess = fake
-    try:
-        reaper.recycle_shared(execute=True)
-    finally:
-        reaper.subprocess = orig
-    assert "XDG_RUNTIME_DIR" in seen["env"]
-    assert seen["env"]["XDG_RUNTIME_DIR"] == f"/run/user/{os.getuid()}"
+    monkeypatch.setattr(reaper, "subprocess",
+                        _t.SimpleNamespace(run=lambda cmd, **kw: seen.update(kw) or _Rec()))
+    reaper.recycle_shared(execute=True)
+    return seen["env"]
+
+
+def test_recycle_passes_the_user_bus_env(monkeypatch):
+    # systemctl --user needs XDG_RUNTIME_DIR; the timer has it, a hand/CI run
+    # may not, and without it the restart fails while the bloat survives.
+    # Unset it first: the test used to inherit the caller's value, so under
+    # `unshare --map-root-user` (uid 0, XDG_RUNTIME_DIR=/run/user/1000) it
+    # compared the inherited path against /run/user/0 and failed.
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    env = _recycle_env(monkeypatch)
+    assert env["XDG_RUNTIME_DIR"] == f"/run/user/{os.getuid()}"
+
+
+def test_recycle_keeps_an_inherited_user_bus_env(monkeypatch):
+    # The fallback is a default, not an override: a caller's own value wins.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/4242")
+    assert _recycle_env(monkeypatch)["XDG_RUNTIME_DIR"] == "/run/user/4242"
 
 
 def test_failed_recycle_makes_the_run_fail(monkeypatch):

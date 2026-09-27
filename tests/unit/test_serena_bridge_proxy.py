@@ -53,6 +53,22 @@ proxy = _load_proxy()
 TIMEOUT = 10.0
 
 
+@pytest.fixture
+def loopback_required():
+    """The real-socket tests bind 127.0.0.1. In a no-network sandbox
+    (``unshare -rn`` without ``ip link set lo up``) the bind fails with EADDRNOTAVAIL
+    and all of them went red for an environmental reason. Skip with that reason
+    locally; never under ``CI``, where a dead loopback is a real failure."""
+    if os.environ.get("CI"):
+        return
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+    except OSError as exc:
+        pytest.skip(f"loopback unavailable ({exc}) — no-network sandbox; "
+                    "bring `lo` up (tests/AGENTS.md recipe) to run these real-socket tests")
+
+
 # --------------------------------------------------------------------------
 # Harness
 # --------------------------------------------------------------------------
@@ -154,6 +170,7 @@ def _request(host: str, path: str = "/mcp", body: bytes = b"", extra: bytes = b"
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_host_header_is_rewritten_to_the_upstream_authority():
     """The whole point: the container's `Host: 172.28.0.1:9121` must reach
     Serena as `Host: 127.0.0.1:<port>`, or the MCP SDK answers 421."""
@@ -182,6 +199,7 @@ def test_host_header_is_rewritten_to_the_upstream_authority():
     assert b"Host: 127.0.0.1:" in seen
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_every_request_on_a_kept_alive_connection_is_rewritten():
     """MCP clients reuse connections. Rewriting only the first request head
     leaves request #2 onward getting 421 — the subtle half of this bug."""
@@ -217,6 +235,7 @@ def test_every_request_on_a_kept_alive_connection_is_rewritten():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_other_headers_and_body_survive_byte_identical():
     """Only the Host line may differ. Header order, casing, spacing and the
     body are relayed verbatim."""
@@ -257,6 +276,7 @@ def test_other_headers_and_body_survive_byte_identical():
     assert seen.endswith(body), "request body was not relayed byte-identically"
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_chunked_request_body_is_relayed_verbatim_including_trailers():
     async def scenario():
         upstream = StubUpstream()
@@ -298,6 +318,7 @@ def test_chunked_request_body_is_relayed_verbatim_including_trailers():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_sse_response_is_relayed_incrementally_not_buffered():
     """MCP streamable-HTTP replies are open-ended `text/event-stream`.
 
@@ -361,6 +382,7 @@ def test_sse_response_is_relayed_incrementally_not_buffered():
     asyncio.run(asyncio.wait_for(scenario(), TIMEOUT))
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_response_head_arrives_before_the_body_is_complete():
     """A weaker but independent incrementality probe: the status line and
     headers must be readable while the body is still open."""
@@ -399,6 +421,7 @@ def test_response_head_arrives_before_the_body_is_complete():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_upstream_down_answers_502_and_the_proxy_keeps_serving():
     """Serena restarts (the reaper recycles it). The bridge must answer, stay
     up, and work again once upstream returns — on the SAME proxy server."""
@@ -447,6 +470,7 @@ def test_upstream_down_answers_502_and_the_proxy_keeps_serving():
     assert b"Host: 127.0.0.1:" in requests[0]
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_malformed_request_is_refused_without_killing_the_proxy():
     async def scenario():
         upstream = StubUpstream()
@@ -485,6 +509,7 @@ def test_malformed_request_is_refused_without_killing_the_proxy():
     assert head.startswith(b"HTTP/1.1 200")
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_client_disconnecting_mid_stream_does_not_kill_the_proxy():
     async def responder(writer: asyncio.StreamWriter, head: bytes, body: bytes) -> None:
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
@@ -575,6 +600,7 @@ def test_body_framing_refuses_ambiguous_framing(lines):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("loopback_required")
 def test_socket_activation_adopts_the_inherited_fd():
     """The socket unit owns the bind, and with it FreeBind + the
     IPAddressAllow list that is the bridge's actual access control. If this

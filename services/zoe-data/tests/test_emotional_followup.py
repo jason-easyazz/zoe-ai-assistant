@@ -54,7 +54,7 @@ class _FakeCursor:
 
 
 class _FakeDB:
-    """Dispatches the trigger's three queries by SQL shape. `fired_today` =
+    """Dispatches the trigger's queries by SQL shape. `fired_today` =
     set of user_ids already sent a follow-up today; `followed` = set of item_ids
     ever followed up."""
     def __init__(self, *, users, fired_today=(), followed=()):
@@ -64,8 +64,11 @@ class _FakeDB:
 
     def execute(self, sql, params=()):
         s = sql.lower()
-        if "from chat_sessions" in s:
-            return _FakeCursor([(u,) for u in self.users])
+        if "from chat_messages cm" in s:
+            # The recipient query (proactive/recipients.py). Returns the raw
+            # owners as the DB would hold them — guest/synthetic ids included —
+            # so the trigger's own filtering is what the tests exercise.
+            return _FakeCursor([(u, None) for u in self.users])
         if "proactive_pending" in s and "created_at::date = current_date" in s:
             user_id = params[1]
             return _FakeCursor([(1,)] if user_id in self.fired_today else [])
@@ -173,3 +176,33 @@ async def test_outside_waking_hours_is_skipped(monkeypatch, wired):
         def execute(self, *a, **k):
             raise AssertionError("must not query outside waking hours")
     assert await EmotionalFollowUpTrigger().check(_Boom()) == []
+
+
+# ── recipients: guest sentinels + synthetic ids are never followed up ────────
+
+@pytest.mark.parametrize("uid", [
+    "guest", "voice-guest", "anonymous",            # kiosk / voice sentinels
+    "test-sec-b-1", "demo_alice", "probe-route", "ci_run",  # synthetic ids
+])
+async def test_guest_and_synthetic_owners_never_followed_up(wired, uid):
+    """Negative control for the recipient filter: the SAME qualifying worry that
+    yields a follow-up for a real user must yield nothing for a guest sentinel
+    or a harness id (both have written to the live chat tables). Dropping the
+    ``proactive_recipients`` / ``is_synthetic_user`` filter reddens this."""
+    wired([_moment("m1", "Jason has been anxious about the house settlement",
+                   valence="neg", intensity=0.9, age_h=26)])
+    assert await _run(_FakeDB(users=[uid])) == []
+    # Control: a real user alongside is still served — the filter narrows, it
+    # does not silence the trigger.
+    res = await _run(_FakeDB(users=[uid, "jason"]))
+    assert [r.user_id for r in res] == ["jason"]
+
+
+async def test_synthetic_allowlist_opts_a_lab_user_back_in(wired, monkeypatch):
+    """The allowlist overrides the synthetic PATTERN only — a lab ``demo_*``
+    user can be opted in, the kiosk ``guest`` can never be."""
+    monkeypatch.setenv("ZOE_SYNTHETIC_USER_ALLOWLIST", "demo_alice,guest")
+    wired([_moment("m1", "Alice has been anxious about the exam",
+                   valence="neg", intensity=0.9, age_h=26)])
+    res = await _run(_FakeDB(users=["demo_alice", "guest"]))
+    assert [r.user_id for r in res] == ["demo_alice"]
