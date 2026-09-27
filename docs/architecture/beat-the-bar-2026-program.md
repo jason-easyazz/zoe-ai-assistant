@@ -60,9 +60,14 @@ State as of **2026-09-28 02:30 AWST**:
      - Prune old MemPalace snapshots.
      - `ggshield install --mode global --force` (B0.10 c).
 2. **Verify today:** the **07:30 morning brief** is the first run after #1726:
-   `grep -E "T07:3.*(morning_checkin|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`.
-   - Expect `users kept=N`, then `fired for N user(s)`.
-   - With the panel off, `outcome=absent` still proves the brief was created.
+   `grep -E "T07:[0-5][0-9].*(morning_checkin|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`
+   (the trigger can fire anywhere in the 07:30–07:59 window).
+   - The brief's own path logs `PROACTIVE_SPOKEN trigger=morning_checkin user=jason …` — that
+     line is the proof; the recipient helper's `users kept=N` line precedes it. Do not rely on
+     the autopilot `fired for N user(s)` line, which comes from a different path.
+   - With the panel off, `outcome=absent` on that PROACTIVE_SPOKEN line still proves the brief
+     was created; with the panel on and idle as guest expect `tier=bound_guest` and only the
+     generic line spoken; `tier=owner` speaks the full brief.
 
    Also check the Monday 02:31 dreaming run on the new venv drop-in (B3.2).
 3. **Queue state:** the 09-27 wave **landed: 24 PRs**, listed in §6. Still open:
