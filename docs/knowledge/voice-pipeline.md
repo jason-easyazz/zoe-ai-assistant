@@ -437,6 +437,41 @@ zero overlap the next probe scores twenty entirely different recordings and any 
 sample change, not a regression. **Run a fresh probe, read the diff as informational, then
 `--update-baseline` deliberately.** Do not treat the first post-change run as a regression signal.
 
+## Kokoro sidecar memory — glibc arena cap (B6.6, 2026-09-27)
+
+`kokoro-tts.service` (system python 3.10, PyTorch CUDA, 36 threads) ran with no `MALLOC_*` in its
+environment, so glibc gave it up to 8 × nproc malloc arenas. The tracked drop-in
+`scripts/setup/systemd/kokoro-tts.service.d/40-memory-tuning.conf` sets `MALLOC_ARENA_MAX=2` +
+`MALLOC_TRIM_THRESHOLD_=131072`, the same values as zoe-data's drop-in. It changes the allocator only.
+Inference is serialised by `_pipeline_lock`, so two arenas do not contend. **Applied live 2026-09-27.**
+
+**Measured result: about −120 MB, not the −400 to −800 MB that was predicted.** Each arm used a fresh
+process of the same age and the same workload: warm-up, 15 fixed synths, 50 novel synths, then 3 min
+to settle. `memory.current` is omitted because it swings ±500 MB with the model-load page cache.
+
+| | control (no drop-in) | `MALLOC_ARENA_MAX=2` | Δ |
+|---|---|---|---|
+| cgroup `anon`, 3 min after load | 1,405 MB | 1,280 MB | **−125 MB** |
+| VmRSS, 3 min after load | 2,547 MB | 2,474 MB | −73 MB |
+| arena-shaped 64 MB anon regions | 17 (843 MB) | 10 (340 MB) | — |
+| ABAB rounds ×2, cgroup `anon` after the bench | 1,385 / 1,382 MB | 1,269 / 1,272 MB | −113 MB |
+| ABAB rounds ×2, VmRSS after the bench | 2,660 / 2,620 MB | 2,540 / 2,516 MB | −112 MB |
+| 30 first-seen sentences, synth p50 / p95 | 330 / 362, 352 / 401 ms | 347 / 384, 347 / 384 ms | within noise |
+| 5 fixed sentences × 3, synth p50 / p95 | 304 / 357, 306 / 380 ms | 298 / 365, 297 / 357 ms | within noise |
+
+- **The 64 MB regions shrank by 500 MB, but total anon fell by only ~120 MB.** Most of what those
+  regions held was live data, and it moved into the two remaining arenas; very little was freed-but-retained
+  memory. The heap is therefore ~1.27 GB of real working set (the import stack plus the model), not bloat.
+  The other RAM levers are unchanged: a dedicated Kokoro venv without scikit-learn/pandas (~−100 MB)
+  and a one-shot `malloc_trim(0)` after `_load_pipeline()` (unmeasured).
+- **No numeric change.** Kokoro on CUDA is not bit-deterministic run to run. Control vs control
+  differs by a max |Δ| of 2.8k–4.2k int16, and treat vs control differs by 3.2k–5.7k int16 on the same
+  sentences, with identical sample counts. Latency was read over two alternating ABAB rounds because a
+  single round was misleading: one round showed a +14 % p95, while the control arm alone moved 10 %
+  between rounds.
+- Verify: `tr '\0' '\n' < /proc/$(systemctl --user show -p MainPID --value kokoro-tts)/environ | grep MALLOC`.
+  Rollback: remove the drop-in, `daemon-reload`, restart.
+
 ## Stopping the brain does NOT guarantee it restarts (2026-07-26)
 
 Freeing RAM by stopping `llama-server` — the documented move for a build or training window —
