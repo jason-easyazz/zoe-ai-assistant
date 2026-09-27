@@ -96,4 +96,21 @@ def test_tombstones_reads_both_pickle_formats_and_reports_unflushed_segments(tmp
     assert stats["legacy"]["tombstones"] == 0
     assert stats["mempalace_drawers"].get("pending") is True
     assert tomb.report(str(d), 0.25, 0.40) == 2  # the dict segment is 30% dead: seen, not 0/0
-    assert "not persisted yet" in capsys.readouterr().out
+    assert "UNKNOWN (no persisted index metadata yet)" in capsys.readouterr().out
+
+
+def test_unflushed_segment_is_unknown_never_healthy(tmp_path, capsys):
+    d = _palace(tmp_path, 10, segments=[("s-dict", "c1", "mempalace_audit"),
+                                        ("s-pending", "c3", "mempalace_drawers")])
+    (d / "s-dict").mkdir()
+    (d / "s-dict" / "index_metadata.pickle").write_bytes(pickle.dumps(
+        {"total_elements_added": 10, "id_to_label": {str(i): i for i in range(10)}}))
+    (d / "s-pending").mkdir()
+    (d / "s-pending" / "header.bin").write_bytes(b"\0")
+    rc = tomb.report(str(d), 0.25, 0.40)
+    out = capsys.readouterr().out
+    assert rc == 3  # distinct non-zero exit: the scheduled report surfaces it
+    drawers_line = next(ln for ln in out.splitlines() if ln.startswith("mempalace_drawers"))
+    assert "UNKNOWN" in drawers_line and " ok" not in drawers_line
+    (d / "s-pending" / "header.bin").unlink()  # no HNSW index at all -> genuinely nothing unknown
+    assert tomb.report(str(d), 0.25, 0.40) == 0

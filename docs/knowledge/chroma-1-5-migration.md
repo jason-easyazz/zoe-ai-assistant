@@ -156,56 +156,103 @@ The deploy gate also refuses the merged PR until a fresh replay artifact exists,
 live tree stays at `prev`. The replay needs the new stack running, so the order is: merge, then
 the window, then the replay, then re-run the deploy.
 
+Step 0: merge #1745 (squash). Its deploy will be REFUSED by the voice gate before the reset,
+so the live tree is untouched. That is expected; §B clears it.
+
+**A. The transition is ONE fail-closed script. Paste it whole.** It runs in its own
+`bash -euo pipefail`, so `set -e` cannot kill your login shell. Any failure stops it **before**
+`systemctl --user start zoe-data`, and the ERR trap prints the exact next step for the stage it
+reached:
+- Before the swap, nothing changed: restart the old service.
+- After the swap, do not start anything: roll back per §6.
+
+So a failed copy/rebuild, swap, venv refresh or ff-only merge can never start the old opener on
+the new client/store, or the new opener on the old store (the format guard would refuse that
+anyway, loudly).
+
 ```bash
-# 0. Merge #1732 then #1745 (squash). The deploy for #1745 will be REFUSED by the voice gate:
-#    live tree untouched. That is expected.
-exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9          # no replay/deploy window overlaps
-WT=/home/zoe/.worktrees/b0-8-cutover                        # or any checkout of the merged main
-D=cutover-$(date +%F)
+bash -euo pipefail <<'CUTOVER'
+exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay/deploy window overlaps
+WT=/home/zoe/.worktrees/b0-8-cutover                   # any checkout of the MERGED main
+D=cutover-$(date +%F); TS=""; STAGE=pre-stop
+TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
+fail() {
+  echo "!! B0.8 cutover FAILED at stage=$STAGE (line $1)." >&2
+  case $STAGE in
+    pre-stop|stopped|rebuilt)
+      echo "!! Nothing was swapped: old store + old client intact. Restore service:" >&2
+      echo "   systemctl --user start zoe-data $TIMERS" >&2 ;;
+    started)
+      echo "!! zoe-data started but is not ready. Stop it and roll back per runbook §6:" >&2
+      echo "   systemctl --user stop zoe-data   # then §6 with TS=$TS" >&2 ;;
+    *)
+      echo "!! The store WAS swapped (TS=$TS). Do NOT start zoe-data: roll back per runbook §6." >&2 ;;
+  esac
+}
+trap 'fail $LINENO' ERR
 
 # 1. Stop every writer/opener
-systemctl --user stop zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer
+systemctl --user stop $TIMERS
 systemctl --user stop zoe-data
-fuser ~/.mempalace/chroma.sqlite3                          # must print nothing
+STAGE=stopped
+if fuser ~/.mempalace/chroma.sqlite3; then echo "store still open" >&2; false; fi
 
-# 2. Final copy + rebuild from the STOPPED store. 10/10 must PASS.
-#    If not: systemctl --user start zoe-data, re-enable the timers, stop here.
+# 2. Final copy + rebuild from the STOPPED store (exit 1 unless all 10 proofs PASS)
 python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py run --date $D
+STAGE=rebuilt
 
-# 3. Swap (the old dir becomes the rollback; nothing opens it)
+# 3. Swap: the old dir becomes the rollback, and nothing opens it
 TS=$(date +%Y%m%d-%H%M%S)
 mv ~/.mempalace ~/.mempalace.pre-b08-$TS
-cp -a ~/.zoe/chroma-migration-rehearsal/$D/dst ~/.mempalace && chmod 700 ~/.mempalace
+STAGE=swapped
+cp -a ~/.zoe/chroma-migration-rehearsal/$D/dst ~/.mempalace
+chmod 700 ~/.mempalace
 
 # 4. New client into the live venv: the exact deploy path, additive
 ZOE_PY312_VENV=$HOME/.zoe/venvs/zoe-data-py312 bash $WT/scripts/setup/build_py312_venv.sh --refresh
-~/.zoe/venvs/zoe-data-py312/bin/python -c 'import chromadb; print(chromadb.__version__)'   # 1.5.9
+test "$(~/.zoe/venvs/zoe-data-py312/bin/python -c 'import chromadb; print(chromadb.__version__)')" = 1.5.9
+STAGE=client-installed
 
-# 5. Live code to merged main
-cd /home/zoe/assistant && git fetch origin main && git merge --ff-only origin/main
+# 5. Live code to the merged main (it must carry the new opener)
+cd /home/zoe/assistant
+git fetch origin main
+git merge --ff-only origin/main
+grep -q "def get_drawers_collection" services/zoe-data/memory_service.py
+STAGE=code-ff
 
-# 6. Start + readiness (is-active lies; poll)
+# 6. Start + readiness (is-active lies; poll, then REQUIRE self-recall ok)
 systemctl --user start zoe-data
+STAGE=started
 for i in $(seq 1 36); do curl -sf localhost:8000/readyz >/dev/null && break; sleep 5; done
-curl -s localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], d["memory_capture"])'
-#    must be: ok {'status': 'ok', 'detail': '... self-recall ok'}
+curl -sf localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); mc=d["memory_capture"]; print(d["status"], mc); assert d["status"]=="ok" and "self-recall ok" in mc.get("detail","")'
+STAGE=live
+echo "B0.8 transition OK: TS=$TS D=$D (rollback dir ~/.mempalace.pre-b08-$TS)"
+CUTOVER
+```
 
-# 7. Verify
+**B. Verify, replay, re-deploy, re-arm.** Run this only after A printed `B0.8 transition OK`.
+Use the same calendar day as A (it re-derives `D`).
+
+```bash
+WT=/home/zoe/.worktrees/b0-8-cutover; D=cutover-$(date +%F); R=~/.zoe/chroma-migration-rehearsal/$D
+DEMO=$(python3 -c "import json;print(json.load(open('$R/manifest.json'))['run']['recall_demo_user'])")
+SCR=$(mktemp -d)
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py copy --copy-from ~/.mempalace --copy-to $SCR/store  # consistent snapshot
 ~/.zoe/venvs/zoe-data-py312/bin/python $WT/scripts/maintenance/chroma_migrate_rehearsal.py probe recall \
-  --store <scratch copy of ~/.mempalace> --demo-user <recall_demo_user from $D/manifest.json> --out-file /tmp/b08_live_top.json
+  --store $SCR/store --demo-user $DEMO --out-file $SCR/live_top.json
 python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py compare-recall \
-  --old ~/.zoe/chroma-migration-rehearsal/$D/recall-parity/old_top.json --new /tmp/b08_live_top.json   # PASS = identical order
-/usr/bin/python3 $WT/scripts/maintenance/check_memory_tombstones.py                                    # 1.x-aware report
-grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value zoe-data)/status              # before: 1028 MB RSS, 0 swap
+  --old $R/recall-parity/old_top.json --new $SCR/live_top.json            # PASS = identical order
+rm -rf $SCR
+/usr/bin/python3 $WT/scripts/maintenance/check_memory_tombstones.py; echo "tombstones rc=$?"  # 3 = UNKNOWN until 1.x persists drawers metadata
+grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value zoe-data)/status     # before: 1028 MB RSS, 0 swap
 
-# 8. Replay gate (writes the artifact the deploy gate needs)
-#    Stop Kokoro for its duration, then restart it and health-check it.
+# Replay gate (writes the artifact the deploy gate needs). Stop Kokoro for its duration,
+# then restart it and health-check it.
 set -a; . ~/.hermes/.env; set +a
 ZOE_VOICE_REPLAY_STT=remote flock /tmp/zoe-voice-harness.lock nice -n 5 ~/.zoe/venvs/zoe-data-py312/bin/python \
   $WT/scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote --service-dir /home/zoe/assistant/services/zoe-data
 gh run rerun <refused deploy run id>          # now passes; no-op reset + restart
 
-# 9. Re-arm the timers
 systemctl --user start zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer
 ```
 

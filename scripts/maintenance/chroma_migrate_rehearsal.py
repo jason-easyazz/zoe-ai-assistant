@@ -1073,6 +1073,36 @@ def _proof_table(log: list) -> list[dict]:
     return rows
 
 
+def _step_passed(rec: dict | None) -> bool:
+    return bool(rec) and rec.get("rc") == 0 and bool(rec.get("verdicts")) and all(
+        v.startswith("PASS") for v in rec["verdicts"])
+
+
+def retain_parity_baseline(records: list, old_top: Path, new_top: Path, keep: Path) -> bool:
+    """Publish the (old_top, new_top) pair as the post-cutover parity baseline, ALL OR NOTHING.
+
+    Only when both recall probes AND the parity proof passed, and both files exist. The pair is
+    staged in a sibling directory and swapped in by rename, so `keep` is always either the
+    previous complete pair or the new complete pair, never a half pair. On any failure the
+    previous pair is left untouched and False is returned.
+    """
+    if not all(_step_passed(r) for r in records) or not (old_top.is_file() and new_top.is_file()):
+        return False
+    stage = keep.with_name(keep.name + f".staging-{os.getpid()}")
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(mode=0o700, parents=True)
+    for f in (old_top, new_top):
+        shutil.copy2(f, stage / f.name)
+    retired = keep.with_name(keep.name + f".previous-{os.getpid()}")
+    if keep.exists():
+        os.rename(keep, retired)
+    os.rename(stage, keep)
+    if retired.exists():
+        shutil.rmtree(retired, ignore_errors=True)
+    return True
+
+
 def _scratch_copy(src: Path, dst: Path) -> Path:
     if dst.exists():
         shutil.rmtree(dst)
@@ -1129,19 +1159,16 @@ def run_proofs(step: Step, facts: dict, summary: dict, *, src: Path, exp: Path, 
     old_r = _scratch_copy(src, scratch / "recall-old")
     new_r = _scratch_copy(dst, scratch / "recall-new")
     old_top, new_top = scratch / "old_top.json", scratch / "new_top.json"
-    step("recall.old", _self_argv(old_py, "probe", "recall", "--store", str(old_r), "--demo-user", demo,
-                                  "--out-file", str(old_top), *common))
-    step("recall.new", _self_argv(new_py, "probe", "recall", "--store", str(new_r), "--demo-user", demo,
-                                  "--out-file", str(new_top), *common))
-    step("proof.e_recall_parity", _self_argv(sys.executable, "compare-recall", "--old", str(old_top),
-                                             "--new", str(new_top)), heavy=False)
+    r_old = step("recall.old", _self_argv(old_py, "probe", "recall", "--store", str(old_r), "--demo-user", demo,
+                                          "--out-file", str(old_top), *common))
+    r_new = step("recall.new", _self_argv(new_py, "probe", "recall", "--store", str(new_r), "--demo-user", demo,
+                                          "--out-file", str(new_top), *common))
+    r_par = step("proof.e_recall_parity", _self_argv(sys.executable, "compare-recall", "--old", str(old_top),
+                                                     "--new", str(new_top)), heavy=False)
     # Keep the two top-10 files (synthetic demo ids only): after a cutover the 0.6.3 client
     # is gone, so this is the only "old" side a post-install live parity check can compare to.
-    keep = scratch.parent / "recall-parity"
-    keep.mkdir(mode=0o700, exist_ok=True)
-    for f in (old_top, new_top):
-        if f.exists():
-            shutil.copy2(f, keep / f.name)
+    facts["recall_parity_baseline_retained"] = retain_parity_baseline(
+        [r_old, r_new, r_par], old_top, new_top, scratch.parent / "recall-parity")
 
     # (f) negative control: the 0.6.3 client must fail loudly on (a scratch copy of) the new store.
     neg = _scratch_copy(dst, scratch / "negative" / "store")

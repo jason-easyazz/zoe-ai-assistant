@@ -19,7 +19,9 @@ resting state for an active collection, not a problem — the warn threshold sit
 above it deliberately so routine churn is not alarming.
 
 Exit codes: 0 = all below warn, 1 = error, 2 = at least one collection at/over
-the warn threshold (so a timer or CI lane can gate on it).
+the warn threshold (so a timer or CI lane can gate on it), 3 = no collection over
+warn but at least one whose tombstone count is UNKNOWN (a chromadb 1.x segment
+with an HNSW index but no persisted index metadata yet) — never reported as ok.
 """
 from __future__ import annotations
 
@@ -98,14 +100,17 @@ def report(palace: str, warn: float, critical: float) -> int:
         print("tombstone check: no vector segments found")
         return 0
     worst = 0.0
+    unknown = 0
     print(f"{'collection':34s} {'added':>7s} {'live':>7s} {'dead':>6s} {'ratio':>7s}  status")
     for s in sorted(stats, key=lambda x: -x.get("ratio", 0)):
         if "error" in s:
             print(f"{s['name']:34s} {'':>7s} {'':>7s} {'':>6s} {'':>7s}  UNREADABLE: {s['error']}")
             continue
         if s.get("pending"):
-            print(f"{s['name'][:34]:34s} {'':>7s} {'':>7s} {'':>6s} {'':>7s}  "
-                  "ok (index metadata not persisted yet)")
+            # NOT ok: without persisted index metadata the tombstone count is unknowable.
+            unknown += 1
+            print(f"{s['name'][:34]:34s} {'?':>7s} {'?':>7s} {'?':>6s} {'?':>7s}  "
+                  "UNKNOWN (no persisted index metadata yet)")
             continue
         ratio = s["ratio"]
         worst = max(worst, ratio)
@@ -124,6 +129,10 @@ def report(palace: str, warn: float, critical: float) -> int:
         print("Compaction requires a re-embed of every row: run with --execute while "
               "zoe-data is STOPPED and the box has RAM headroom.")
         return 2
+    if unknown:
+        print(f"\n{unknown} collection(s) have an UNKNOWN tombstone count (chromadb 1.x persists "
+              "index metadata only at its sync threshold). Not reported healthy.")
+        return 3
     return 0
 
 

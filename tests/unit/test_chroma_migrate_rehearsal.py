@@ -358,3 +358,33 @@ def test_fresh_only_deletes_directories_this_tool_made(tmp_path):
         m.main(["run", "--fresh", "--date", "..", "--rehearsal-root", str(tmp_path),
                 "--copy-from", str(tmp_path / "live")])
     assert (foreign / "precious.txt").exists()
+
+
+def _rec(ok: bool) -> dict:
+    return {"rc": 0 if ok else 1, "verdicts": ["PASS x"] if ok else ["FAIL x"]}
+
+
+def test_parity_baseline_is_retained_only_after_every_step_passes(tmp_path):
+    keep = tmp_path / "recall-parity"
+    keep.mkdir()
+    (keep / "old_top.json").write_text("PREVIOUS-OLD")
+    (keep / "new_top.json").write_text("PREVIOUS-NEW")
+    old, new = tmp_path / "old_top.json", tmp_path / "new_top.json"
+    old.write_text("NEXT-OLD")
+    new.write_text("NEXT-NEW")
+    # failing parity proof (or either probe, or a killed step) -> previous pair untouched
+    for records in ([_rec(True), _rec(True), _rec(False)], [_rec(False), _rec(True), _rec(True)],
+                    [_rec(True), {"rc": -9, "verdicts": []}, _rec(True)]):
+        assert m.retain_parity_baseline(records, old, new, keep) is False
+        assert (keep / "old_top.json").read_text() == "PREVIOUS-OLD"
+        assert (keep / "new_top.json").read_text() == "PREVIOUS-NEW"
+    # a missing half is never published
+    new.unlink()
+    assert m.retain_parity_baseline([_rec(True)] * 3, old, new, keep) is False
+    assert (keep / "new_top.json").read_text() == "PREVIOUS-NEW"
+    # all passed -> the complete new pair replaces the old one, no staging leftovers
+    new.write_text("NEXT-NEW")
+    assert m.retain_parity_baseline([_rec(True)] * 3, old, new, keep) is True
+    assert (keep / "old_top.json").read_text() == "NEXT-OLD"
+    assert (keep / "new_top.json").read_text() == "NEXT-NEW"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["new_top.json", "old_top.json", "recall-parity"]
