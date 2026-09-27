@@ -1,15 +1,16 @@
-"""Migration 0029 and the pairing router survive a database with NO
-``panel_provision_codes`` table.
+"""Migration 0029 works on a database with NO ``panel_provision_codes`` table.
 
 The 2026-09-27 deploy of #1741 failed at "Apply database migrations":
 ``ALTER TABLE panel_provision_codes ADD COLUMN IF NOT EXISTS poll_secret_hash``
 → ``relation "panel_provision_codes" does not exist`` — the live database never
-had the table. So 0029 is ``ALTER TABLE IF EXISTS`` in both directions (a no-op
-when the table is missing), and the router creates the table on first use
-WITH ``poll_secret_hash`` (``_ensure_table``).
+had the table (0005 did not land there). Schema comes from Alembic, never from
+request-time DDL (.cursor/rules/db-safety.mdc), so 0029 re-asserts 0005's table
+and indexes with ``IF NOT EXISTS`` and then adds the column; its downgrade drops
+only the column.
 
-Negative controls: drop ``IF EXISTS`` from 0029, or its SQLite table guard, or
-the column from the runtime DDL, and a test here goes red.
+Negative controls: drop the CREATE from 0029 (the empty-DB test goes red), or
+make the downgrade drop the table (the downgrade tests go red), or put
+request-time DDL back in the router (the router test goes red).
 """
 from __future__ import annotations
 
@@ -21,14 +22,11 @@ import importlib.util
 import io
 from pathlib import Path
 
-import aiosqlite
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-
-import routers.panel_provision as pp
 
 SVC = Path(__file__).resolve().parents[1]
 _DUMMY_URL = "postgresql+psycopg2://u:p@localhost/db"
@@ -44,15 +42,28 @@ def _render(monkeypatch, fn, rev: str) -> str:
     return buf.getvalue()
 
 
-def test_postgres_upgrade_is_alter_table_if_exists(monkeypatch):
+def test_postgres_upgrade_creates_the_table_then_adds_the_column(monkeypatch):
     sql = _render(monkeypatch, command.upgrade, "0028:0029")
-    assert "ALTER TABLE IF EXISTS panel_provision_codes ADD COLUMN IF NOT EXISTS poll_secret_hash" in sql
-    assert "ALTER TABLE panel_provision_codes" not in sql  # no bare ALTER left
+    create = sql.index("CREATE TABLE IF NOT EXISTS panel_provision_codes")
+    alter = sql.index("ALTER TABLE IF EXISTS panel_provision_codes ADD COLUMN IF NOT EXISTS poll_secret_hash")
+    assert create < alter
+    for idx in ("idx_provision_codes_device", "idx_provision_codes_status", "idx_provision_codes_expires"):
+        assert f"CREATE INDEX IF NOT EXISTS {idx}" in sql
+    # 0005's created_at default survives verbatim.
+    assert "created_at      TEXT NOT NULL DEFAULT (to_char(timezone('UTC', now())" in sql
 
 
-def test_postgres_downgrade_is_alter_table_if_exists(monkeypatch):
+def test_postgres_downgrade_drops_only_the_column(monkeypatch):
     sql = _render(monkeypatch, command.downgrade, "0029:0028")
     assert "ALTER TABLE IF EXISTS panel_provision_codes DROP COLUMN IF EXISTS poll_secret_hash" in sql
+    assert "DROP TABLE" not in sql
+
+
+def test_0029_table_ddl_is_0005_verbatim():
+    a = (SVC / "alembic/versions/0005_panel_provisioning.py").read_text()
+    b = (SVC / "alembic/versions/0029_provision_poll_secret.py").read_text()
+    i = a.index("CREATE TABLE IF NOT EXISTS panel_provision_codes")
+    assert a[i:a.index("        )\n", i)] in b
 
 
 def _migration():
@@ -75,45 +86,43 @@ def _columns(engine) -> set[str]:
         return {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(panel_provision_codes)")}
 
 
-def test_sqlite_upgrade_and_downgrade_are_noops_without_the_table():
+def _indexes(engine) -> set[str]:
+    with engine.connect() as conn:
+        return {r[1] for r in conn.exec_driver_sql("PRAGMA index_list(panel_provision_codes)")}
+
+
+def test_sqlite_upgrade_on_an_empty_db_creates_the_table_with_the_column():
     engine = sa.create_engine("sqlite://")
-    _run(engine, "upgrade")      # the deploy failure: must not raise
-    _run(engine, "downgrade")
-    assert _columns(engine) == set()  # and it did not invent the table
+    _run(engine, "upgrade")      # the deploy failure: must create, not raise
+    cols = _columns(engine)
+    assert {"code", "device_id", "status", "token", "expires_at", "poll_secret_hash"} <= cols
+    assert {"idx_provision_codes_device", "idx_provision_codes_status",
+            "idx_provision_codes_expires"} <= _indexes(engine)
+    _run(engine, "upgrade")      # re-running is a no-op
+    assert _columns(engine) == cols
 
 
-def test_sqlite_upgrade_adds_the_column_when_the_table_exists():
+def test_sqlite_upgrade_on_a_0005_table_adds_only_the_column():
     engine = sa.create_engine("sqlite://")
     with engine.begin() as conn:
-        conn.exec_driver_sql(
-            "CREATE TABLE panel_provision_codes (code TEXT PRIMARY KEY, device_id TEXT NOT NULL,"
-            " status TEXT, panel_id TEXT, token TEXT, created_at TEXT, expires_at TEXT NOT NULL,"
-            " confirmed_by TEXT)")
+        conn.exec_driver_sql(_migration()._TABLE_DDL)
+        conn.exec_driver_sql("INSERT INTO panel_provision_codes (code, device_id, created_at, expires_at)"
+                             " VALUES ('ABC234', 'dev', 'x', 'y')")
     _run(engine, "upgrade")
     assert "poll_secret_hash" in _columns(engine)
-    _run(engine, "upgrade")      # rerun-safe
+    with engine.connect() as conn:
+        assert conn.exec_driver_sql("SELECT COUNT(*) FROM panel_provision_codes").scalar() == 1
+
+
+def test_sqlite_downgrade_drops_only_the_column_never_the_table():
+    engine = sa.create_engine("sqlite://")
+    _run(engine, "upgrade")
     _run(engine, "downgrade")
-    assert "poll_secret_hash" not in _columns(engine)
+    cols = _columns(engine)
+    assert cols and "poll_secret_hash" not in cols
 
 
-def test_runtime_ddl_carries_the_poll_secret_column():
-    create = pp._TABLE_DDL[0]
-    assert create.startswith("CREATE TABLE IF NOT EXISTS panel_provision_codes")
-    assert "poll_secret_hash" in create
-
-
-async def test_router_creates_the_table_on_first_use(monkeypatch, tmp_path):
-    """A fresh box with no table: /request works and the table has the column."""
-    monkeypatch.setattr(pp, "_TABLE_READY", False)
-    pp._rate_limit.clear()
-    conn = await aiosqlite.connect(str(tmp_path / "fresh.db"))
-    conn.row_factory = aiosqlite.Row
-    try:
-        started = await pp.provision_request({"device_id": "aa:bb:cc:dd:ee:01"}, request=None, db=conn)
-        cols = {r[1] for r in await (await conn.execute("PRAGMA table_info(panel_provision_codes)")).fetchall()}
-        assert "poll_secret_hash" in cols
-        row = await (await conn.execute(
-            "SELECT poll_secret_hash FROM panel_provision_codes WHERE code = ?", (started["code"],))).fetchone()
-        assert row["poll_secret_hash"] == pp._hash_secret(started["poll_secret"])
-    finally:
-        await conn.close()
+def test_router_does_no_request_time_ddl():
+    src = (SVC / "routers/panel_provision.py").read_text()
+    assert "CREATE TABLE" not in src and "CREATE INDEX" not in src
+    assert "_ensure_table" not in src
