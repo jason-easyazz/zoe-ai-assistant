@@ -221,23 +221,51 @@ case "$MODE" in
     # canonical repo id, whose cache dir differs in CASE from 0.8.0's, so without
     # this the FIRST service load after a bump downloads the model (~30 MB) — and
     # a restart with no network would fall off the tier-1 semantic fast path.
-    # Same model name (ZOE_ROUTER_MODEL) and default cache dir (FASTEMBED_CACHE_PATH
-    # or <tmp>/fastembed_cache) as semantic_router.py, so it fills the exact cache
-    # the service reads. Already cached = a local load, no network. NON-FATAL: a
-    # failed warm leaves the pre-existing behaviour (download on first use), so it
-    # warns instead of failing a deploy whose install already succeeded.
-    log "warming the semantic-router embedding model (fastembed cache)"
-    if "${NICE[@]}" "$VENV_PY" - <<'PY'
-import os, sys
+    #   * The SERVICE's env, not the runner's: the repo `.env` then
+    #     services/zoe-data/.env are sourced with `set -a`, exactly as
+    #     scripts/deploy/migrate.sh does, inside a subshell (nothing leaks into
+    #     this script, and no value is ever printed). ZOE_PY312_ENV_ROOT
+    #     overrides where they are read from (tests only).
+    #   * The service's own resolution: semantic_router.py is imported for
+    #     `is_enabled()` and `_MODEL_NAME` (it imports only stdlib + numpy), and
+    #     fastembed's `define_cache_dir()` gives the cache dir it would use.
+    #   * Only when needed: skipped when routing is disabled, and skipped when
+    #     fastembed's own cache lookup (`download_model(..., local_files_only=True)`,
+    #     the check its loader runs first) already finds the model files — no
+    #     model load on an ordinary deploy.
+    # NON-FATAL: a failed warm leaves the old behaviour (download on first use).
+    log "semantic-router embedding model: warm if missing (fastembed cache)"
+    ENV_ROOT="${ZOE_PY312_ENV_ROOT:-$REPO_ROOT}"
+    if (
+      load_env_file() { if [[ -f "$1" ]]; then set -a; source "$1"; set +a; fi; }
+      load_env_file "$ENV_ROOT/.env"
+      load_env_file "$ENV_ROOT/services/zoe-data/.env"
+      exec "${NICE[@]}" "$VENV_PY" - "$REPO_ROOT/services/zoe-data" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import semantic_router as sr  # stdlib + numpy only at import time
+if not sr.is_enabled():
+    print("warm skipped: routing disabled"); sys.exit(0)
 try:
     from fastembed import TextEmbedding
+    from fastembed.common.utils import define_cache_dir
 except ImportError:
-    print("fastembed not installed: nothing to warm"); sys.exit(0)
-name = os.environ.get("ZOE_ROUTER_MODEL", "BAAI/bge-small-en-v1.5")
-vec = next(iter(TextEmbedding(model_name=name).embed(["warm"])))
-print(f"warmed {name}: dim={len(vec)}")
+    print("warm skipped: fastembed not installed"); sys.exit(0)
+cache = str(define_cache_dir(None))
+want = sr._MODEL_NAME.lower()
+desc = next((m for m in TextEmbedding._list_supported_models() if m.model.lower() == want), None)
+if desc is not None:
+    try:
+        TextEmbedding.download_model(desc, cache, local_files_only=True)
+        print("warm skipped: cached"); sys.exit(0)
+    except SystemExit:
+        raise
+    except Exception:
+        pass  # not in the cache yet -> warm below
+vec = next(iter(TextEmbedding(model_name=sr._MODEL_NAME).embed(["warm"])))
+print(f"warmed: dim={len(vec)}")
 PY
-    then ok "embedding model cached"
+    ); then ok "embedding model cache ready"
     else warn "embedding-model warm FAILED — the first service load will download it (needs network)"
     fi
     ok "venv refreshed: $VENV_PY"
