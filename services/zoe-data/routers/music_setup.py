@@ -2,7 +2,7 @@
 
 - POST /api/music/setup/start        (panel) → mint a one-time token + QR handle
 - GET  /api/music/setup/catalogue    (panel) → the "Add music" list
-- GET  /api/music/setup/qr/{handle}  (panel) → the QR image (short-lived handle)
+- GET  /api/music/setup/qr/{handle}  (panel) → the QR image (single-use handle)
 - GET  /api/music/setup/form         (phone) → validate token → the provider's form schema
 - POST /api/music/setup/save         (phone) → validate+consume token → save to MA
 
@@ -14,7 +14,7 @@ values the user just typed for THAT provider.
 The token NEVER travels in a query string (nginx logs those): the phone link
 keeps it in the #fragment, POSTs carry it in the body, GETs in the
 ``X-Setup-Token`` header, and the panel's QR image is fetched by an opaque
-short-lived handle (``setup_qr``).
+single-use handle (``setup_qr``).
 """
 from __future__ import annotations
 
@@ -85,9 +85,9 @@ async def setup_start(payload: dict, request: Request, user: dict = Depends(get_
 
 @router.get("/qr/{handle}")
 async def setup_qr_image(handle: str, request: Request) -> Response:
-    """QR image (SVG) for the setup URL — rendered on the panel. Looks up the
-    short-lived handle; the token itself never appears in this request."""
-    held = setup_qr.lookup("music", handle)
+    """QR image (SVG) for the setup URL — rendered on the panel. Redeems the
+    single-use handle; the token itself never appears in this request."""
+    held = setup_qr.redeem("music", handle)
     if held is None or not music_setup.verify(held["token"]):
         return Response(status_code=404)
     return Response(content=setup_qr.render_svg(_setup_url(request, held["token"], held["provider"])),

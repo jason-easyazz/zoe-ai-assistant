@@ -5,7 +5,7 @@
 
 The token never travels in a query string (nginx logs those): the phone link
 keeps it in the #fragment, /info reads it from the ``X-Setup-Token`` header,
-and the panel's QR image is fetched by an opaque short-lived handle (setup_qr).
+and the panel's QR image is fetched by an opaque single-use handle (setup_qr).
 
 The panel mints the token in the smart_home resolver (smart_home_service._add_device_card)
 and shows the QR. The phone endpoint is gated ONLY by the one-time setup token
@@ -99,8 +99,8 @@ _DEVICE_TYPES: list[dict[str, Any]] = [
 @router.get("/qr/{handle}")
 async def setup_qr_image(handle: str, request: Request) -> Response:
     """QR image (SVG) encoding the phone setup URL — rendered on the panel.
-    Looks up the short-lived handle; the token never appears in this request."""
-    held = setup_qr.lookup("home", handle)
+    Redeems the single-use handle; the token never appears in this request."""
+    held = setup_qr.redeem("home", handle)
     if held is None or smart_home_setup.verify(held["token"]) is None:
         return Response(status_code=404)
     return Response(content=setup_qr.render_svg(_setup_url(request, held["token"])),

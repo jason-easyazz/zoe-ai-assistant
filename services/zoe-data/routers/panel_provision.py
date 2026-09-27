@@ -182,14 +182,23 @@ async def provision_request(payload: dict, request: Request, db=Depends(get_db))
     }
 
 
-async def _expire_uncollected_token(db, code: str, token: str) -> None:
-    """A confirmed token nobody collected in time: clear the raw token and revoke
-    the device token it maps to, so no live credential outlives the attempt."""
+async def _expire_uncollected_token(db, code: str, token: str) -> bool:
+    """A confirmed token nobody collected in time: clear the raw token, mark the
+    attempt expired, and revoke the device token it maps to.
+
+    Race-safe at the grace boundary: the clear is conditional on the EXACT token
+    still being on the row, and the revoke happens ONLY if this statement won
+    (rowcount == 1). If the pairing device's poll collected the token first, its
+    own conditional clear won, this matches zero rows, and the now-live panel
+    keeps its credential. Returns whether this call revoked."""
     token_hash = _hash_secret(token)
-    await db.execute(
-        "UPDATE panel_provision_codes SET token = NULL WHERE code = ? AND token = ?",
+    cleared = await db.execute(
+        "UPDATE panel_provision_codes SET token = NULL, status = 'expired' WHERE code = ? AND token = ?",
         (code, token),
     )
+    if getattr(cleared, "rowcount", 0) != 1:
+        await db.commit()
+        return False
     await db.execute("UPDATE device_tokens SET revoked = 1 WHERE token_hash = ?", (token_hash,))
     await db.commit()
     try:
@@ -199,6 +208,7 @@ async def _expire_uncollected_token(db, code: str, token: str) -> None:
     except Exception:
         pass
     logger.warning("provision_poll: code=%s token not collected in time — revoked", code)
+    return True
 
 
 async def sweep_uncollected_tokens(db=None) -> int:
@@ -218,8 +228,8 @@ async def sweep_uncollected_tokens(db=None) -> int:
     revoked = 0
     for row in rows:
         if _is_expired_by(row["expires_at"], _PICKUP_GRACE_S):
-            await _expire_uncollected_token(db, row["code"], row["token"])
-            revoked += 1
+            if await _expire_uncollected_token(db, row["code"], row["token"]):
+                revoked += 1
     pending = await (await db.execute(
         "SELECT code, expires_at FROM panel_provision_codes WHERE status = 'pending'"
     )).fetchall()
@@ -320,7 +330,8 @@ async def provision_public_info(code: str, db=Depends(get_db)):
     if status == "pending" and _is_expired(row["expires_at"]):
         status = "expired"
     if status == "confirmed" and row["token"] and _is_expired_by(row["expires_at"], _PICKUP_GRACE_S):
-        await _expire_uncollected_token(db, code, row["token"])  # any later request revokes
+        if await _expire_uncollected_token(db, code, row["token"]):  # any later request revokes
+            status = "expired"
 
     return {
         "code": code,

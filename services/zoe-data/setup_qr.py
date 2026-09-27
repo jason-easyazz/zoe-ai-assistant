@@ -5,13 +5,13 @@ reaches a server log. The panel's ``<img src=…/qr?token=…>`` undid that: ngi
 logs every query string, so the same 15-minute token sat in the access log
 (auth audit 2026-09-27).
 
-Instead the panel gets an opaque, short-lived handle bound to its flow. The QR
-route looks it up and renders the QR from the payload held here, in process.
-The handle may be re-fetched until it expires (``QR_HANDLE_TTL_S``, 2 min) so a
-failed image load or a card redraw still shows the code; after that it 404s
-and the panel mints a fresh one through the flow's existing ``/start`` route.
-What an access log can leak is therefore a 2-minute handle, not the
-15-minute setup token.
+Instead the panel gets an opaque, SINGLE-USE, short-lived handle bound to its
+flow. The QR route redeems it on the first successful image fetch and renders
+the QR from the payload held here, in process. A handle copied out of an access
+log is already spent (the panel's own fetch redeemed it before the log line was
+written) and expires in ``QR_HANDLE_TTL_S`` regardless. A redraw or failed load
+does not need a reusable URL: the panel card renews by asking the flow's
+existing ``/start`` route for a fresh handle (touch/home.html, once per modal).
 
 In-process is fine for the same reason as ``music_setup``'s ledger: zoe-data is
 one process and a handle lives for seconds.
@@ -43,14 +43,16 @@ def issue(kind: str, **payload: Any) -> str:
     return handle
 
 
-def lookup(kind: str, handle: str) -> Optional[dict[str, Any]]:
-    """The payload behind ``handle`` while it is live. None if unknown, expired,
-    or issued for a different ``kind``. Re-fetchable within the TTL."""
+def redeem(kind: str, handle: str) -> Optional[dict[str, Any]]:
+    """Spend ``handle`` (single use). Returns its payload, or None if unknown,
+    expired, already spent, or issued for a different ``kind`` (a wrong-kind
+    probe does not spend it)."""
     now = time.time()
     _prune(now)
     entry = _HANDLES.get(str(handle or ""))
     if entry is None or entry[0].get("kind") != kind:
         return None
+    _HANDLES.pop(handle, None)
     payload, exp = entry
     return payload if exp >= now else None
 

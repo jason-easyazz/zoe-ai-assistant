@@ -2125,9 +2125,10 @@
   // Launch the existing QR setup flow: the panel mints a one-time link + QR, the
   // owner scans it on their phone and signs in (their password only touches the
   // provider). Free providers connect immediately with no phone step.
-  // qr_path is an opaque handle that lives ~2 min (never the setup token, which
-  // nginx would log). If the image fails (handle expired), renew it ONCE by
-  // re-POSTing /start — bounded, so a dead backend can't loop the panel.
+  // qr_path is an opaque SINGLE-USE handle (never the setup token, which nginx
+  // would log): the first image fetch spends it. If the image fails or needs a
+  // re-fetch, renew it ONCE by re-POSTing /start — bounded, so a dead backend
+  // can't loop the panel.
   function startProviderConnect(domain,label,name){
     apiJson('POST','/api/music/setup/start',{provider:domain}).then(function(r){
       if(r&&r.immediate){toast('Connected');loadQueue();return;}

@@ -63,39 +63,41 @@ def test_qr_paths_never_contain_the_token():
     assert htok not in hpath and "?" not in hpath and hpath.startswith("/api/home/setup/qr/")
 
 
-def test_music_qr_handle_reloads_within_its_ttl(client):
-    """A failed image load or card redraw must still show the code (Greptile, #1741)."""
+def test_music_qr_handle_is_single_use(client):
     tok = music_setup.mint("spotify")["token"]
     path = music_setup.qr_path(tok, "spotify")
     first = client.get(path)
     assert first.status_code == 200 and first.headers["content-type"].startswith("image/svg")
     assert first.headers["cache-control"] == "no-store"
-    assert client.get(path).status_code == 200  # second GET within the TTL
+    assert client.get(path).status_code == 404  # a handle copied from a log is spent
 
 
 def test_qr_handle_is_dead_after_its_ttl(client, monkeypatch):
     import time as _time
     tok = music_setup.mint("spotify")["token"]
     path = music_setup.qr_path(tok, "spotify")
-    assert client.get(path).status_code == 200
     real = _time.time
     monkeypatch.setattr(setup_qr.time, "time", lambda: real() + setup_qr.QR_HANDLE_TTL_S + 1)
-    assert client.get(path).status_code == 404  # a handle copied from a log is dead
+    assert client.get(path).status_code == 404  # never fetched, but expired
 
 
-def test_home_qr_handle_is_kind_bound(client):
+def test_home_qr_handle_is_single_use_and_kind_bound(client):
     htok = smart_home_setup.mint()["token"]
     hpath = smart_home_setup.qr_path(htok)
     handle = hpath.rsplit("/", 1)[1]
-    assert client.get(f"/api/music/setup/qr/{handle}").status_code == 404  # wrong flow
+    assert client.get(f"/api/music/setup/qr/{handle}").status_code == 404  # wrong flow, not spent
     assert client.get(hpath).status_code == 200
-    assert client.get(hpath).status_code == 200
+    assert client.get(hpath).status_code == 404
 
 
-def test_expired_qr_handle_is_refused(client, monkeypatch):
-    monkeypatch.setattr(setup_qr, "QR_HANDLE_TTL_S", -1)
-    tok = music_setup.mint("spotify")["token"]
-    assert client.get(music_setup.qr_path(tok, "spotify")).status_code == 404
+def test_touch_card_renews_a_spent_handle_via_start():
+    """A redraw/failed load renews through /start — no reusable URL needed."""
+    from pathlib import Path
+    home = (Path(__file__).resolve().parents[2] / "zoe-ui/dist/touch/home.html").read_text()
+    i = home.index("function startProviderConnect(")
+    body = home[i:home.index("function _qmsg(", i)]
+    assert "qi.onerror" in body and "renewed" in body
+    assert body.count("apiJson('POST','/api/music/setup/start'") == 2
 
 
 def test_phone_form_reads_the_token_from_the_header(client, monkeypatch):

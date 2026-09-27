@@ -349,3 +349,37 @@ def test_sweep_is_scheduled_at_startup():
     main_src = (Path(__file__).resolve().parents[1] / "main.py").read_text()
     assert "_panel_provision.sweep_uncollected_tokens" in main_src
     assert 'id="panel_provision_token_sweep"' in main_src
+
+
+# ── the grace-boundary race: whoever clears the row first wins (Greptile, #1741) ──
+
+async def _expire(db_path, code, token):
+    conn = await aiosqlite.connect(db_path)
+    conn.row_factory = aiosqlite.Row
+    try:
+        return await pp._expire_uncollected_token(conn, code, token)
+    finally:
+        await conn.close()
+
+
+async def test_poll_then_sweep_at_the_boundary_keeps_the_collected_token(client, db_path):
+    started = _start(client)
+    code = started["code"]
+    assert _confirm(client, code, headers={"X-Session-ID": "sess-member"}).status_code == 200
+    raw = _row(db_path, code)["token"]  # what a sweep that read the row just now holds
+    got = _poll(client, code, secret=started["poll_secret"]).json()
+    assert got["token"] == raw  # the pairing device collected it first
+    _age(db_path, code, pp._PICKUP_GRACE_S + 5)
+    # The sweep's stale snapshot loses: its conditional clear matches no row.
+    assert await _expire(db_path, code, raw) is False
+    assert _revoked(db_path) == 0, "a collected, live kiosk token must never be revoked"
+
+
+async def test_sweep_then_poll_the_poll_gets_expired_and_the_token_is_revoked(client, db_path):
+    started = _start(client)
+    code = started["code"]
+    assert _confirm(client, code, headers={"X-Session-ID": "sess-member"}).status_code == 200
+    _age(db_path, code, pp._PICKUP_GRACE_S + 5)
+    assert await _sweep(db_path) == 1
+    assert _poll(client, code, secret=started["poll_secret"]).json() == {"status": "expired"}
+    assert _revoked(db_path) == 1
