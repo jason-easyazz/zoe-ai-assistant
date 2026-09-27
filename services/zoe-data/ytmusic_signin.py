@@ -18,9 +18,17 @@ Security model (non-negotiable — mirrors the lab's Forbidden contract):
     under ``$ZOE_YTMUSIC_SECRET_DIR`` (default ``~/.zoe-ytmusic/``, mode 0700),
     OUTSIDE the repo.
   * ONE sign-in session at a time. Raw VNC binds to localhost only; only the
-    noVNC/websockify port is LAN-bound. The browser is transient: it is torn
-    down on completion, on timeout (~5 min), and on any error — it must never
-    outlive the session.
+    noVNC/websockify port is LAN-bound, and its WebSocket (the only channel that
+    shows or drives the browser) is locked to a per-session random secret:
+    websockify's TokenFile plugin maps ``<secret>`` → the local VNC port, so a
+    connection without it is refused before the upgrade. The phone reaches the
+    view directly on the LAN (not through nginx), and the secret travels only in
+    the view URL's ``#fragment`` → noVNC's ``path`` setting → the WebSocket
+    request to websockify (whose output is discarded) — never a server log.
+    The static noVNC client files stay public; they carry no session data.
+    The browser is transient: it is torn down on completion, on timeout
+    (~5 min), and on any error — it must never outlive the session, and the
+    token file is deleted with it.
   * RAM-aware (Jetson Orin, 16GB): the sign-in browser exists only during setup;
     the refresh path opens the profile HEADLESS, harvests, and closes promptly —
     never a resident Chromium.
@@ -34,11 +42,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import shutil
 import socket
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any, Optional
 
 import music_service
@@ -75,6 +85,7 @@ _USER_AGENT = os.environ.get("ZOE_RIG_USER_AGENT") or None
 SECRET_DIR = Path(os.environ.get("ZOE_YTMUSIC_SECRET_DIR", str(Path.home() / ".zoe-ytmusic")))
 PROFILE_DIR = SECRET_DIR / "profile"          # persistent Chromium user-data-dir
 _USERNAME_FILE = SECRET_DIR / "username"      # last connected account label (0600)
+_VIEWER_TOKEN_FILE = SECRET_DIR / "viewer-token"  # websockify TokenFile: <secret>: host:port (0600)
 
 # Session lifecycle tunables.
 SESSION_TIMEOUT_S = int(os.environ.get("ZOE_YTMUSIC_SESSION_TIMEOUT_S", "300"))  # 5 min
@@ -191,9 +202,50 @@ def _spawn(name: str, argv: list[str]) -> subprocess.Popen:
     return subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def _start_display_stack(bind: str) -> list[subprocess.Popen]:
+def _write_viewer_token(secret: str) -> Path:
+    """Write websockify's TokenFile: the per-session secret is the ONLY key that
+    maps to the local VNC port. Mode 0600, under the 0700 secret dir."""
+    _ensure_secret_dir()
+    fd = os.open(_VIEWER_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(f"{secret}: 127.0.0.1:{_VNC_PORT}\n")
+    os.chmod(_VIEWER_TOKEN_FILE, 0o600)
+    return _VIEWER_TOKEN_FILE
+
+
+def _clear_viewer_token() -> None:
+    """TokenFile re-reads on every lookup, so deleting it revokes the secret."""
+    try:
+        _VIEWER_TOKEN_FILE.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.debug("ytmusic sign-in: viewer token cleanup failed: %s", exc)
+
+
+def _websockify_argv(bind: str, token_file: Path, web: str = "") -> list[str]:
+    """websockify with NO fixed target: a connection is routed only when its
+    ``?token=`` matches the TokenFile, otherwise it is refused pre-upgrade."""
+    argv = ["websockify"]
+    if web:
+        argv += ["--web", web]
+    argv += ["--token-plugin", "TokenFile", "--token-source", str(token_file),
+             f"{bind}:{_NOVNC_PORT}"]
+    return argv
+
+
+def _view_url(bind: str, secret: str) -> str:
+    """The phone's view link. The secret rides in the FRAGMENT as noVNC's
+    ``path`` setting (noVNC reads config from the hash first), so it is never
+    sent in an HTTP request line except the WebSocket's own ``?token=``."""
+    path = quote(f"websockify?token={secret}", safe="")
+    return f"http://{bind}:{_NOVNC_PORT}/vnc.html#autoconnect=1&resize=scale&path={path}"
+
+
+def _start_display_stack(bind: str, token_file: Path) -> list[subprocess.Popen]:
     """Xvfb (virtual display) → x11vnc (localhost-only mirror) → websockify/noVNC
-    (the single LAN-bound port). Returns the process handles for teardown."""
+    (the single LAN-bound port, token-gated). Returns the process handles for
+    teardown."""
     procs: list[subprocess.Popen] = []
     procs.append(_spawn("Xvfb", ["Xvfb", _DISPLAY, "-screen", "0", _XVFB_GEOMETRY, "-nolisten", "tcp"]))
     time.sleep(1.0)
@@ -210,11 +262,7 @@ def _start_display_stack(bind: str) -> list[subprocess.Popen]:
         if os.path.isdir(cand):
             web = cand
             break
-    argv = ["websockify"]
-    if web:
-        argv += ["--web", web]
-    argv += [f"{bind}:{_NOVNC_PORT}", f"127.0.0.1:{_VNC_PORT}"]
-    procs.append(_spawn("websockify/noVNC", argv))
+    procs.append(_spawn("websockify/noVNC", _websockify_argv(bind, token_file, web)))
     _wait_port("127.0.0.1", _NOVNC_PORT)
     return procs
 
@@ -252,14 +300,16 @@ async def _bring_up_rig(session: dict[str, Any]) -> None:
     if missing:
         raise RuntimeError(f"missing sign-in binaries: {', '.join(missing)}")
     bind = _lan_ip()
+    viewer_secret = secrets.token_urlsafe(24)
+    token_file = _write_viewer_token(viewer_secret)
     # _start_display_stack does blocking work (subprocess.Popen forks, time.sleep,
     # blocking port waits). Run it OFF the event loop so a sign-in bring-up never
     # stalls the uvicorn worker (health checks, chat, websockets). subprocess.Popen
     # inside a thread executor is the safe fork pattern here — not a loop-thread
     # asyncio.create_subprocess_exec (see services/zoe-data/AGENTS.md).
-    session["procs"] = await asyncio.to_thread(_start_display_stack, bind)
+    session["procs"] = await asyncio.to_thread(_start_display_stack, bind, token_file)
     session["context"] = await _launch_browser(headless=False)
-    session["view_url"] = f"http://{bind}:{_NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale"
+    session["view_url"] = _view_url(bind, viewer_secret)
 
 
 async def _harvest_from_context(context: Any) -> tuple[str, list[str]]:
@@ -313,6 +363,7 @@ async def _teardown(session: dict[str, Any]) -> None:
                 p.kill()
             except Exception:  # noqa: BLE001
                 pass
+    _clear_viewer_token()
     session["view_url"] = None
 
 

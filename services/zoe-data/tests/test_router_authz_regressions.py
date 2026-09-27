@@ -301,21 +301,18 @@ def test_track_interaction_accepts_json_body_action(monkeypatch):
     assert update_calls[0][1][0] == "snooze"
 
 
-def test_non_admin_rejected_from_telegram_setup(monkeypatch):
+def test_openclaw_telegram_token_routes_are_retired():
+    """The OpenClaw bot-token setup/status routes were deleted (auth audit
+    2026-09-27): an admin-typed token written into ~/.openclaw that nothing
+    consumed. Asking for them must 404 for everyone, admin included."""
+    paths = {getattr(r, "path", "") for r in openclaw.router.routes}
+    assert not any(p.startswith("/api/openclaw/telegram") for p in paths)
     app = FastAPI()
     app.include_router(openclaw.router)
-    app.dependency_overrides[openclaw.get_current_user] = lambda: {
-        "user_id": "u-member",
-        "role": "member",
-    }
-
-    response = TestClient(app).post(
-        "/api/openclaw/telegram/setup",
-        json={"bot_token": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"},
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Admin access required"
+    app.dependency_overrides[openclaw.get_current_user] = lambda: {"user_id": "a", "role": "admin"}
+    client = TestClient(app)
+    assert client.post("/api/openclaw/telegram/setup", json={"bot_token": "1:x"}).status_code == 404
+    assert client.get("/api/openclaw/telegram/status").status_code == 404
 
 
 @pytest.mark.asyncio

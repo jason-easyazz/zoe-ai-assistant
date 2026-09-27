@@ -283,6 +283,10 @@ was added to prevent.
   the ACP path's 2,338 runs were improvisation, not skill execution). Rebuild
   capabilities on Pi/Flue when actually needed, referencing the public
   Agent-Skills ecosystem ("internet of skills") rather than porting blind.
+  *Progress 2026-09-27:* its two credential writers are deleted — the
+  "Connect ChatGPT" device-code intent (wrote `~/.openclaw/.../auth-profiles.json`
+  and `~/.hermes/auth.json`) and `/api/openclaw/telegram/{setup,status}` (typed
+  bot token), with their chat/touch UI and the `setup_telegram` brain tool.
 - **Hardware: PARKED, direction = DGX Spark.** No purchase now; "it will
   probably be a DGX Spark, i havent seen anything better yet" (Jason,
   2026-07-22). Coherent with the two-model direction: 128GB unified holds a

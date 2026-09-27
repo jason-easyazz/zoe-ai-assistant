@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -139,3 +140,144 @@ def test_negative_control_dry_run_resolves_the_real_phase2_pins(tmp_path: Path) 
     assert nodeps and "--python-version 3.12" in nodeps[0] and "aarch64" in nodeps[0], log
     for pin in _phase2_pins():
         assert pin in log.split("NO-DEPS INPUT:", 1)[1], log
+
+
+# ── --refresh warms the semantic-router embedding cache (fastembed 0.8.1) ─────
+# fastembed 0.8.1 moved bge-small to a differently-cased cache dir, so the first
+# service load after the bump downloads the model; the deploy (which has network)
+# pre-populates it — but only when needed, and against the SERVICE's env. These
+# run the REAL warm program under the test interpreter (a wrapper answers the
+# venv version probe) with the REAL semantic_router.py, and a stub `fastembed`
+# that implements the two calls the warm makes (cache lookup, model load) and
+# records what it was asked to do.
+
+_STUB_FASTEMBED = {
+    "fastembed/__init__.py": """
+import os
+from pathlib import Path
+from fastembed.common.utils import define_cache_dir
+
+class _Desc:
+    model = "BAAI/bge-small-en-v1.5"
+
+class TextEmbedding:
+    @classmethod
+    def _list_supported_models(cls):
+        return [_Desc()]
+
+    @classmethod
+    def download_model(cls, desc, cache_dir, local_files_only=False, **kw):
+        assert local_files_only, "the cache probe must never download"
+        (Path(cache_dir) / "PROBED").write_text("1")
+        if not (Path(cache_dir) / "CACHED").exists():
+            raise ValueError("not cached")
+        return Path(cache_dir)
+
+    def __init__(self, model_name):
+        cache = define_cache_dir(None)
+        (cache / "LOADED").write_text(model_name)
+
+    def embed(self, texts):
+        yield [0.0] * 384
+""",
+    "fastembed/common/__init__.py": "",
+    "fastembed/common/utils.py": """
+import os, tempfile
+from pathlib import Path
+
+def define_cache_dir(cache_dir=None):
+    default = os.path.join(tempfile.gettempdir(), "fastembed_cache")
+    p = Path(cache_dir) if cache_dir else Path(os.getenv("FASTEMBED_CACHE_PATH", default))
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+""",
+}
+
+
+def _refresh(tmp_path: Path, *, env_files: dict[str, str] | None = None,
+             extra_env: dict[str, str] | None = None):
+    pytest.importorskip("numpy")  # semantic_router.py imports it at module level
+    stub = tmp_path / "stub"
+    for rel, body in _STUB_FASTEMBED.items():
+        f = stub / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    py = venv / "bin" / "python"
+    py.write_text("#!/usr/bin/env bash\n"
+                  'if [[ "$1" == "-c" ]]; then echo 3.12; exit 0; fi\n'
+                  f'PYTHONPATH="{stub}" exec "{sys.executable}" "$@"\n')
+    py.chmod(0o755)
+    calls = tmp_path / "uv-calls.log"
+    uv = tmp_path / "uv"
+    uv.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{calls}"\n'
+                  '[[ "$1" == "--version" ]] && echo "uv 0.0.0-fake"\nexit 0\n')
+    uv.chmod(0o755)
+    env_root = tmp_path / "envroot"
+    (env_root / "services" / "zoe-data").mkdir(parents=True)
+    for rel, body in (env_files or {}).items():
+        (env_root / rel).write_text(body)
+    default_cache = tmp_path / "default-cache"
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("ZOE_ROUTER", "FASTEMBED", "HF_HUB"))}
+    env.update({"UV_BIN": str(uv), "ZOE_PY312_VENV": str(venv),
+                "ZOE_PY312_ENV_ROOT": str(env_root), "TMPDIR": str(tmp_path / "tmp"),
+                **(extra_env or {})})
+    (tmp_path / "tmp").mkdir(exist_ok=True)
+    r = subprocess.run(["bash", str(SCRIPT), "--refresh"], env=env, capture_output=True,
+                       text=True, timeout=120)
+    return r, (calls.read_text() if calls.exists() else ""), tmp_path / "tmp" / "fastembed_cache"
+
+
+def test_refresh_warms_when_the_model_is_missing(tmp_path: Path) -> None:
+    r, uv_calls, cache = _refresh(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert uv_calls.count("pip install") >= 2, uv_calls  # both phases ran first
+    assert (cache / "PROBED").exists()  # asked fastembed's cache first...
+    assert (cache / "LOADED").read_text() == "BAAI/bge-small-en-v1.5"  # ...then loaded it
+    assert "warmed: dim=384" in r.stdout
+
+
+def test_refresh_skips_the_warm_when_already_cached(tmp_path: Path) -> None:
+    cache = tmp_path / "tmp" / "fastembed_cache"
+    cache.mkdir(parents=True)
+    (cache / "CACHED").write_text("1")
+    r, _, _ = _refresh(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "warm skipped: cached" in r.stdout
+    assert not (cache / "LOADED").exists()  # no model load on an ordinary deploy
+
+
+def test_refresh_skips_the_warm_when_routing_is_disabled(tmp_path: Path) -> None:
+    r, _, cache = _refresh(tmp_path, env_files={"services/zoe-data/.env": "ZOE_ROUTER_ENABLED=0\n"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "warm skipped: routing disabled" in r.stdout
+    assert not (cache / "LOADED").exists() and not (cache / "PROBED").exists()
+
+
+def test_refresh_warm_reads_the_service_env_files(tmp_path: Path) -> None:
+    """A custom FASTEMBED_CACHE_PATH / ZOE_ROUTER_MODEL in the service's .env files
+    is what the warm targets — and neither value is echoed to the deploy log."""
+    custom = tmp_path / "service-cache"
+    r, _, default_cache = _refresh(tmp_path, env_files={
+        ".env": "ZOE_ROUTER_MODEL=BAAI/bge-small-en-v1.5\n",
+        "services/zoe-data/.env": f"FASTEMBED_CACHE_PATH={custom}\n",
+    })
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (custom / "LOADED").exists(), "warm must target the service's cache dir"
+    assert not (default_cache / "LOADED").exists()
+    assert str(custom) not in r.stdout + r.stderr
+
+
+def test_refresh_warm_failure_warns_but_does_not_fail_the_deploy(tmp_path: Path) -> None:
+    r, _, cache = _refresh(tmp_path, env_files={"services/zoe-data/.env": "FASTEMBED_CACHE_PATH=/proc/nope\n"})
+    assert r.returncode == 0, r.stdout + r.stderr  # non-fatal
+    assert "warm FAILED" in r.stderr
+
+
+def test_warm_uses_semantic_router_resolution() -> None:
+    """The warm must ask semantic_router.py itself (enable flag + model name)."""
+    text = SCRIPT.read_text()
+    assert "import semantic_router as sr" in text
+    assert "sr.is_enabled()" in text and "sr._MODEL_NAME" in text
