@@ -308,7 +308,12 @@ RMS-fallback warning). Scoring real corpus clips gives peak speech probabilities
 It has the same I/O names and shapes, so `onnxruntime` loads it and `voice_vad.SileroVAD` runs it —
 but on the service's 512-sample streaming path it scores 0/12 corpus clips ≥ 0.5 (v6.0: 12/12).
 `create_vad()` only falls back to RMS when the model FAILS to load, so a model that loads and says
-"no speech" is a silent failure. Check the file first:
+"no speech" is a silent failure. **Root cause (found 2026-09-27): the loader, not the file** —
+`voice_vad.py` fed bare 512-sample hops, while upstream's `OnnxWrapper` prepends the previous 64
+samples (576-sample input) and v6.2 cannot work without that context (v6.0 degrades). Fixed in
+`voice_vad.py` + pinned by `tests/test_voice_vad_context.py`; with it v6.2.1 detects speech
+(20/24 in the VAD stage). The same signature can still come from a genuinely bad file or a loader
+regression, so the checks below stand. Check the file first:
 
 ```bash
 md5sum /home/zoe/models/silero_vad.onnx      # compatible v6.0 = 00bdd41445da13fe3d52a5a074013aa1
@@ -319,8 +324,9 @@ jq .vad ~/.cache/zoe/voice_regression_last.json   # the probe's VAD stage (see P
 with the real-model test (small, ~100 MB — no flock needed):
 `cd services/zoe-data && nice -n 15 python3 -m pytest -q tests/test_voice_barge_in.py -k silero_real_model`.
 zoe-data loads the session lazily and keeps it, so a restart is needed for the running service to
-pick the restored file up. Restored 2026-09-27; the bad file is kept as
-`silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927` for forensics.
+pick the restored file up. Restored 2026-09-27; the v6.2.1 file is kept as
+`silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927` (historical name) as the A/B candidate — v6.0 stays
+live until the false-trigger A/B in voice-pipeline.md → *The VAD stage*.
 
 **Prevention.** `voice_regression_probe.py` now has a **VAD stage** (default on): it runs the
 service's real `voice_vad` over the newest 24 usable corpus clips and FAILS the run below 60 %
