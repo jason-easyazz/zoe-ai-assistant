@@ -467,6 +467,7 @@ async def test_setup_classify_and_resolver(monkeypatch):
     r2 = await music_service.resolve_music_setup("spotify")
     c = r2["cards"][0]["content"]
     assert c["mode"] == "qr" and c["provider"] == "spotify" and "/api/music/setup/qr" in c["qr_path"]
+    assert c["qr_path"].startswith("/api/music/setup/qr/") and "?" not in c["qr_path"]
 
 
 @pytest.mark.asyncio

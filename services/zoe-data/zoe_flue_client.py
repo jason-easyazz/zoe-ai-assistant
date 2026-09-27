@@ -93,7 +93,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
@@ -366,6 +366,49 @@ _REPLAY_ENVELOPE_PREFIX = " zoe-replay:"
 _REPLAY_ENVELOPE_RE = re.compile(r"^ zoe-replay:[^\n]*\n")
 
 
+# Machine-readable SPECULATIVE-TURN envelope (B1.1). MUST match the sidecar's
+# parser (labs/flue-zoe-brain-2x src/speculative-turn.ts SPECULATIVE_ENVELOPE_PREFIX
+# / _RE). A speculative voice turn's brain runs before the daemon's verdict; its
+# write tools reach zoe-data as a SEPARATE request (intent-dispatch) that the
+# turn's ContextVar cannot follow. The sidecar binds this id to the turn and echoes
+# it as ``speculative_turn_id`` on every dispatch, so zoe-data holds exactly that
+# turn's writes for its verdict — and nobody else's.
+#
+# WIRE ORDER: outermost, ahead of the replay and identity lines:
+#   " zoe-spec:<turn_id>\n zoe-replay:1\n zoe-uid:<id>\n<blocks>\n<user message>"
+# Only a speculative voice turn (flag on) carries it; absent = byte-identical.
+_SPECULATIVE_ENVELOPE_PREFIX = " zoe-spec:"
+_SPECULATIVE_ENVELOPE_RE = re.compile(r"^ zoe-spec:[^\n]*\n")
+
+
+def _wrap_message_with_speculative_turn(message: str, turn_id: Optional[str]) -> str:
+    """Prefix ``message`` with the speculative-turn envelope, or return it unchanged."""
+    if not turn_id:
+        return message
+    return f"{_SPECULATIVE_ENVELOPE_PREFIX}{turn_id}\n{message}"
+
+
+async def _speculative_turn_for_wire() -> Optional[str]:
+    """The bound speculative turn id to forward, or None.
+
+    Only the 2.x sidecar (wire 2) parses the envelope; on wire 1 the line would sit
+    ahead of the ^-anchored identity parse and break it, so there the turn instead
+    WAITS for its verdict before the brain starts (then nothing needs echoing —
+    a committed turn's writes are not held). Nothing bound → None, unchanged wire.
+    """
+    try:
+        import voice_speculation as _vs
+    except Exception:  # pragma: no cover - module is in-tree
+        return None
+    if _vs.bound_gate() is None:
+        return None
+    turn_id = _vs.bound_turn_id()  # None when the request-supplied id is not wire-safe
+    if _wire_version() < _WIRE_2 or turn_id is None:
+        await _vs.await_commit("brain:no-turn-echo")
+        return None
+    return turn_id
+
+
 def _strip_replay_envelope(message: str) -> str:
     """Remove any leading replay-envelope line(s) from UNTRUSTED message text.
 
@@ -383,6 +426,8 @@ def _strip_replay_envelope(message: str) -> str:
     while prev != message:
         prev = message
         message = _REPLAY_ENVELOPE_RE.sub("", message)
+        # The speculative-turn marker is trusted the same way: never user-forgeable.
+        message = _SPECULATIVE_ENVELOPE_RE.sub("", message)
     return message
 
 
@@ -904,6 +949,11 @@ async def run_flue_brain_streaming(
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.
     outbound_message = _wrap_message_with_replay(
         outbound_message, bool(kwargs.get("replay_isolation"))
+    )
+    # B1.1: a speculative voice turn's id rides OUTERMOST so the sidecar can echo
+    # it on this turn's tool writes. Nothing bound (every other turn) → unchanged.
+    outbound_message = _wrap_message_with_speculative_turn(
+        outbound_message, await _speculative_turn_for_wire()
     )
     payload = _request_payload(outbound_message)
 

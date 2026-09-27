@@ -514,7 +514,9 @@ async def test_add_device_returns_setup_card_with_qr():
     r = await smart_home_service.resolve_smart_home(_Intent("add_device"))
     props = r["cards"][0]["props"]
     assert props["mode"] == "setup"
-    assert props["qr_path"].startswith("/api/home/setup/qr?token=")
+    # An opaque single-use handle — never the setup token (nginx logs queries).
+    assert props["qr_path"].startswith("/api/home/setup/qr/")
+    assert "token" not in props["qr_path"] and "?" not in props["qr_path"]
     assert props["back_query"] == "smart home"
     assert r["handled"] is True
 

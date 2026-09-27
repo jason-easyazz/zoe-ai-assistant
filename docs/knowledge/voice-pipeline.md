@@ -449,7 +449,7 @@ Two INFO lines in `~/.zoe-logs/zoe-data.app.log` attribute a slow voice first to
 Join them on `session=`:
 
 ```
-VOICE TIMING turn=<ns> session=<sid> path=stream|command pre_brain_ms=… memory_packet_ms=… (history=… memory=… domain=…) brain_ttft_ms=… llm_first_token_ms=…
+VOICE TIMING turn=<ns> session=<sid> path=stream|command pre_brain_ms=… memory_packet_ms=… (history=… memory=… domain=…) brain_ttft_ms=… llm_first_token_ms=… packet=eager|lazy|interrupted|skipped
 FLUE_PROMPT_CACHE session=<sid> rounds=N first_prompt_n=… first_cache_n=… total_prompt_n=… per_round=p/c,…
 ```
 
@@ -475,10 +475,29 @@ emitted in activation order. `ZOE_BRAIN_STICKY_DISCLOSURE=false` on the sidecar 
 decay. The legacy `zoe_agent` voice mode had the same bug via its per-minute datetime header in the
 system prompt. That header now rides in the latest user message.
 
-**Known leftover.** On the live Flue lane the sidecar ignores `history` / `db_memory_context` /
-`portrait` (`zoe_flue_client.run_flue_brain_streaming`). So `memory_packet_ms` is spent on a
-context the live brain discards; it is only used by the core/legacy lanes (failover). Read
-`memory_packet_ms` before deciding whether to skip it on the flue lane.
+**The memory packet is lazy on the Flue lane.** The sidecar ignores `history` /
+`db_memory_context` / `portrait` (`zoe_flue_client.run_flue_brain_streaming`), so the gather
+measured right after #1725 (`memory_packet_ms=502`, almost all `memory`) was dead work on every
+live turn. With `ZOE_BRAIN_BACKEND=flue`, `voice_command` no longer awaits it. `_voice_brain_kwargs`
+hands `brain_dispatch` a `context_loader` instead. Dispatch strips the loader from every Flue
+call and resolves it only when the turn is dispatched to a lane that reads the packet: a
+`ZOE_BRAIN_FAILOVER` hop, a circuit-open skip, or a configured core/legacy lane. That lane gets
+the same `history` / merged memory+domain `db_memory_context` / `portrait` as before. A loader
+that fails leaves the turn with no context but still answered. What the Flue lane still gets is
+unchanged: the words, `session_id` and `user_id`. Its recall and offer blocks
+(`_recall_context_block` / `_pending_offer_block`) are built inside `zoe_flue_client` from those.
+- **Reading it**: `packet=skipped` means the packet was never built. `memory_packet_ms` and its
+  brackets then read 0 and no `memory_packet` stage is observed. `packet=lazy` means it was built
+  on a failover hop, so its cost is inside `brain_ttft_ms`. `packet=interrupted` means a hop
+  started the build but the turn was cancelled or timed out first; `memory_packet_ms` is then the
+  time it consumed. `packet=eager` means a non-Flue lane, or the kill switch, built it before
+  dispatch as before.
+- **Failover budget**: the non-streaming lane's `ZOE_VOICE_CHAT_TIMEOUT_S` window excludes a lazy
+  build (`_await_brain_with_packet_budget` extends the deadline by exactly the build's time), so
+  the fallback brain keeps the whole budget it had when the packet was built before the window.
+  The streaming lane has no brain deadline, so nothing changes there.
+- **Kill switch**: `ZOE_VOICE_MEMORY_PACKET_LAZY=false` (default `true`) restores the eager
+  build on every lane. Pinned by `test_voice_memory_packet_lazy.py`.
 
 ### Which samples the gate replays — capture time, not filename (fixed 2026-08-05)
 

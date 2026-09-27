@@ -80,6 +80,11 @@ import {
   forwardedReplayFromMessages,
   stripReplayEnvelope,
 } from '../replay-mode.ts';
+import {
+  bindTurnSpeculativeId,
+  forwardedSpeculativeTurnFromMessages,
+  stripSpeculativeEnvelope,
+} from '../speculative-turn.ts';
 // .ts extension so the offline strip-types tests can resolve it (see zoe-tools.ts).
 import {
   discloseTools,
@@ -201,7 +206,9 @@ export function applyPolicies(context: Context): Context {
   // replay marker rides AHEAD of the identity line on the wire (both parsers are
   // ^-anchored), so it must come off first or the identity line is never at the
   // start of the message. See src/replay-mode.ts "WIRE ORDER".
-  const unwrapped = stripReplayEnvelope(context.messages);
+  // The B1.1 speculative-turn line rides OUTERMOST (ahead of replay), so it
+  // comes off first. See src/speculative-turn.ts.
+  const unwrapped = stripReplayEnvelope(stripSpeculativeEnvelope(context.messages));
   const clean = { ...context, messages: stripIdentityEnvelope(unwrapped) };
   const windowed = windowContextToBudget(clean);
   const safe = stripCodingBuiltins(windowed);
@@ -234,8 +241,12 @@ export function bindIdentityForRound(context: Context, signal?: AbortSignal): vo
   // first and hand the identity parser the replay-stripped messages: the replay
   // line sits ahead of the identity line on the wire and both regexes are
   // ^-anchored, so parsing identity off the raw messages would find nothing.
-  bindTurnReplayMode(signal, forwardedReplayFromMessages(context.messages));
-  bindTurnUserId(signal, forwardedIdentityFromMessages(stripReplayEnvelope(context.messages)));
+  // B1.1: the speculative-turn id is OUTERMOST — read it off the raw messages,
+  // then hand the replay/identity parsers the spec-stripped list.
+  bindTurnSpeculativeId(signal, forwardedSpeculativeTurnFromMessages(context.messages));
+  const specStripped = stripSpeculativeEnvelope(context.messages);
+  bindTurnReplayMode(signal, forwardedReplayFromMessages(specStripped));
+  bindTurnUserId(signal, forwardedIdentityFromMessages(stripReplayEnvelope(specStripped)));
 }
 
 const DEFAULT_TEMPERATURE = 0.5;

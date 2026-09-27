@@ -3,7 +3,7 @@ type: Runbook
 title: Two-stage router rollout
 description: Staged rollout of the two-stage router (SetFit shortlist head + FunctionGemma sidecar) behind ZOE_ROUTER_HEAD — stages, verification checklist, rollback, and where the numbers land.
 tags: [router, rollout, functiongemma, setfit, operations]
-timestamp: 2026-07-14T00:00:00Z
+timestamp: 2026-09-27T21:00:00Z
 ---
 
 # Two-stage router rollout
@@ -95,6 +95,60 @@ Flag → `off`, restart, health-verified. Same instant-env-rollback pattern as
 the flue cutover. Any failure mid-stage triggers the same restore
 automatically via the script's trap. Roll back with the flag, never by
 uninstalling the sidecar mid-incident (it is inert when the flag is off).
+
+## Stage-1 heads are numpy (since 2026-09-27)
+
+zoe-data does not import scikit-learn, scipy or joblib. Both stage-1 heads
+(`router_head_logreg` 13×384 multinomial logreg; `router_head_mlp`
+384→256 relu→13 softmax) are served from their numpy export by
+`services/zoe-data/router_heads_numpy.py`:
+
+| file (`services/zoe-data/models/`) | role |
+|---|---|
+| `router_head_*.joblib` | TRAINING artefact (sklearn 1.7.2, `labs/setfit-router`); source of the export; loaded only by the fallback |
+| `router_head_*.npz` | the served weights — original dtypes, no pickle, byte-deterministic |
+| `router_head_*.json` | architecture, `classes`, source joblib sha256, npz sha256 (checked at load — a tampered or stale npz is refused and the head disables, non-fatal) |
+
+- Flag `ZOE_ROUTER_HEADS_BACKEND` = `numpy` (default) | `joblib` (the
+  pre-2026-09-27 path, kept for **one release** as the escape hatch; needs the
+  sklearn/joblib training pins, which zoe-data's manifests still carry because
+  librosa declares them). Unknown values fall back to `numpy`.
+- A custom `ZOE_ROUTER_HEAD_PATH` / `ZOE_ROUTER_HEAD_MLP_PATH` `.joblib`
+  **outside** `services/zoe-data/models/` with **no** `.npz`+`.json` beside it is
+  loaded via joblib for that head only, with a WARNING (so a working custom head
+  is not silently disabled). A **shipped** head with a missing export is logged
+  as an ERROR and disabled — a partial deploy never pulls sklearn back in. A
+  present but stale/tampered export is always refused.
+- Parity when exported: max-abs **0.0** vs sklearn `predict_proba` on 1,291
+  embedded corpus utterances (needle 81 + SetFit train set + `ROUTES`) and 2,000
+  random vectors. Measured head-load cost: +72.7 MB / 1.23 s → +1.7 MB / 0.012 s.
+- Pinned by `services/zoe-data/tests/test_router_heads_numpy.py` (`ci_safe`,
+  sklearn-free): parity ≤ 1e-6 on a committed 50-vector fixture, a perturbed-weight
+  negative control, the tampered-npz refusal, the joblib-sha drift check, and a
+  fresh interpreter proving the live loaders never import sklearn/scipy/joblib.
+
+**Regenerating after a retrain** (every stage-1 retrain — the drift check fails
+CI until you do). Run where the training pins are installed (the SetFit lab
+venv, or the zoe-data venv while it still carries sklearn 1.7.2 + fastembed):
+
+```
+cp labs/setfit-router/artifacts/head_mlp.joblib    services/zoe-data/models/router_head_mlp.joblib
+cp labs/setfit-router/artifacts/head_logreg.joblib services/zoe-data/models/router_head_logreg.joblib
+python3 scripts/maintenance/export_router_heads.py --corpus \
+    --fixture services/zoe-data/tests/fixtures/router_heads_parity.npz
+# verify-only (writes nothing): ... export_router_heads.py --check --corpus
+```
+
+It is all-or-nothing: both heads and the fixture are staged (`*.export-tmp.*`,
+next to their destinations) and verified before anything is published, and
+publication renames them all or rolls every replaced file back from its
+`*.export-bak` link — one failing head, a failed fixture write or a failed
+rename leaves the served set exactly as it was. `--check` is strictly read-only (it refuses `--fixture`/`--report`).
+It refuses to write if any parity value exceeds `--tol` (1e-6) or if its own
+negative control cannot go red, and it refuses head types it cannot reproduce
+bit-for-bit (a `Pipeline`/scaler, OvR/binary logreg, a `logistic` MLP
+activation). Commit the four model files and the fixture together; `models/*`
+is voice-path, so the PR needs the replay.
 
 ## Sidecar flags (`functiongemma-router.service`, 2026-09-27)
 

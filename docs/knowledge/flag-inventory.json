@@ -2433,6 +2433,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/measure_moonshine_vad_threshold.py",
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": true
@@ -3275,6 +3276,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PROVISION_PICKUP_GRACE_S": {
+        "defaults": [
+          "'120'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_provision.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PR_GUARD_ACTIVE_GREPTILE_STALE_SECONDS": {
         "defaults": [
           "dynamic"
@@ -3656,6 +3667,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_ROUTER_HEADS_BACKEND": {
+        "defaults": [
+          "'numpy'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/router_heads_numpy.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_ROUTER_HEAD_LOG": {
         "defaults": [
           "dynamic"
@@ -3903,6 +3924,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/routers/chat.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SETUP_QR_HANDLE_TTL_S": {
+        "defaults": [
+          "'120'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/setup_qr.py"
         ],
         "typed_env": false
       },
@@ -4430,6 +4461,16 @@
         "in_env_example": false,
         "readers": [
           "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_MEMORY_PACKET_LAZY": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": false
       },
