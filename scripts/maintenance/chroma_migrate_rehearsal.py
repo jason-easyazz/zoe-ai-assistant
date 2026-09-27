@@ -1135,6 +1135,13 @@ def run_proofs(step: Step, facts: dict, summary: dict, *, src: Path, exp: Path, 
                                   "--out-file", str(new_top), *common))
     step("proof.e_recall_parity", _self_argv(sys.executable, "compare-recall", "--old", str(old_top),
                                              "--new", str(new_top)), heavy=False)
+    # Keep the two top-10 files (synthetic demo ids only): after a cutover the 0.6.3 client
+    # is gone, so this is the only "old" side a post-install live parity check can compare to.
+    keep = scratch.parent / "recall-parity"
+    keep.mkdir(mode=0o700, exist_ok=True)
+    for f in (old_top, new_top):
+        if f.exists():
+            shutil.copy2(f, keep / f.name)
 
     # (f) negative control: the 0.6.3 client must fail loudly on (a scratch copy of) the new store.
     neg = _scratch_copy(dst, scratch / "negative" / "store")
