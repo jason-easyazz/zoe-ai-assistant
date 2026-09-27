@@ -33,13 +33,27 @@
 # below were reconciled to the live Orin on 2026-08-06.
 # ═══════════════════════════════════════════════════════════════════════════
 fastapi==0.141.1
-# uvicorn is CAPPED AT 0.49.x ON PURPOSE — do not "bump to latest".
-# 0.50.0 flipped `--ws auto` from the legacy `websockets` protocol to
-# `websockets-sansio` whenever websockets is installed. main.py serves NINE
-# @app.websocket routes and one of them is `/ws/voice/`, so that flip swaps the
-# WebSocket implementation underneath the live voice path with no code diff.
-# Verified on-box (py3.10): 0.49.0 still resolves `auto` -> websockets_impl.
-# Moving to >=0.50 is a deliberate, replay-gated change, not a currency bump.
+# 3.10 LANE HOLDS 0.49.0 — this file describes the hand-managed system Python 3.10
+# site-packages, which is now ROLLBACK-ONLY (zoe-data runs the 3.12 venv, B0.7), and
+# that env still has 0.49.0. The LIVE 3.12 lane moved to 0.53.0 on 2026-09-27
+# (requirements-py312.txt; recorded in STEP_UP_DIVERGENCE, tests/unit/
+# test_zoe_data_py312_cutover.py). Why that move is deliberate and replay-gated: 0.50.0 flipped `--ws auto` from the legacy
+# `websockets` protocol to `websockets-sansio` whenever websockets is installed
+# (main.py serves NINE @app.websocket routes, one is `/ws/voice/`). zoe-data
+# installs `websockets` (below, and via the [standard] extra) and NOT `wsproto`,
+# so `auto` stays on the websockets library — only its server protocol changes
+# (legacy asyncio server -> sans-I/O, the one upstream now maintains; legacy is
+# deprecated since 0.50). 0.50.1-0.52.4 fixed that impl (subprotocol split, close
+# handshake, write flow control, duplicate Date/denial headers); 0.53.0 cancels
+# the HTTP keep-alive timer on WebSocket upgrade. Real-socket A/B (2026-09-27,
+# py3.12, a /ws/voice/-shaped app: JSON + binary both ways, 1 MB in flight at a
+# server-initiated close, client close, with and without compression) against
+# 0.49.0: every frame, payload hash and close code identical. The ONE observable
+# difference: sansio answers permessage-deflate with `server_max_window_bits=12;
+# client_max_window_bits=12` (legacy: bare `permessage-deflate`, 15-bit window) —
+# less per-socket memory, marginally weaker compression. Rollback without a code
+# change: `--ws websockets` on the ExecStart (or UVICORN_WS=websockets) — but it
+# warns that a future release repoints that name at sansio, so it is temporary.
 uvicorn[standard]==0.49.0
 pydantic==2.13.5
 aiosqlite==0.22.1
@@ -52,9 +66,10 @@ aiohttp==3.14.3
 # websockets 16.1.1 is the LAST RELEASE THAT INSTALLS ON PYTHON 3.10 — 17.0
 # requires >=3.11 and this host is 3.10.12. Do not raise this pin without first
 # moving the host's Python. The client surface we use (`websockets.connect` with
-# open_timeout= / max_size=) is unchanged from 14.x, and uvicorn's legacy server
-# impl still finds `websockets.server.WebSocketServerProtocol` here (deprecated
-# alias, present through 16.x).
+# open_timeout= / max_size=) is unchanged from 14.x. uvicorn's default sans-I/O
+# server impl needs websockets>=13.0 (uvicorn 0.50.2); the legacy impl (the
+# `--ws websockets` rollback) still finds `websockets.server.WebSocketServerProtocol`
+# here (deprecated alias, present through 16.x).
 # NOTE: since 15.0 a client `connect()` honours OS/env proxy settings
 # automatically. Nothing sets HTTP_PROXY/ALL_PROXY on this box today, but if that
 # ever changes, the local Music-Assistant and LiveKit sockets must pass proxy=None.
@@ -65,6 +80,11 @@ PyJWT==2.15.0
 # tools scripts tests` finds only this file; password hashing lives in zoe-auth,
 # which declares its own deps). Dropped 2026-09-26 — a spec line nobody imports is
 # drift waiting to happen.
+# 3.10 lane (rollback-only) holds 0.1.19; the live 3.12 lane runs 1.0.0 since
+# 2026-09-27 (STEP_UP_DIVERGENCE). 1.0's breaking changes are INPUT-side (0.x content parts
+# such as `binary` retired; models regenerated from spec/1.0) — zoe-data only
+# EMITS the 14 event classes it imports, and every shape it emits encodes to
+# byte-identical SSE under 0.1.19 and 1.0.0 (pinned by test_ag_ui_chat_contract).
 ag-ui-protocol==0.1.19
 python-json-logger>=4.1.0
 
@@ -142,9 +162,14 @@ moonshine-voice==0.1.3
 transformers==5.17.0
 # Tier-1 semantic router: bge-small ONNX embeddings (~7-30ms/query, CPU) for
 # fuzzy domain classification between the regex fast-path and the Pi brain.
-# HELD at 0.8.0: 0.9.x changes the default ONNX provider/model-cache layout and
-# was not part of the 2026-09-26 gated batch. Bump deliberately, with the router
-# shadow report (`scripts/maintenance/router_shadow2_report.py`) unchanged.
+# 3.10 lane (rollback-only) holds 0.8.0; the live 3.12 lane runs 0.8.1 since
+# 2026-09-27 (STEP_UP_DIVERGENCE): new models + fixes only. It re-resolves the default
+# `BAAI/bge-small-en-v1.5` to the canonical repo id `Qdrant/bge-small-en-v1.5-onnx-Q`,
+# whose cache dir differs in CASE from 0.8.0's, so the first load after the bump
+# downloads the (same) model once (/tmp/fastembed_cache is wiped on reboot anyway).
+# Measured: bge-small vectors for the router exemplars are identical to 0.8.0's.
+# 0.9.x changes the default ONNX provider/model-cache layout — bump deliberately,
+# with the router shadow report (`scripts/maintenance/router_shadow2_report.py`) unchanged.
 fastembed==0.8.0
 # NOT imported by zoe-data at runtime since 2026-09-27: the stage-1 router heads
 # are served by router_heads_numpy.py from models/router_head_*.npz (numpy only).
@@ -202,6 +227,7 @@ livekit>=1.1.8
 # `livekit_aiortc.py` imports `livekit.protocol`, a SEPARATE distribution that
 # `livekit` does not pull in — it only ever arrived via the unused livekit-agents
 # (validate.yml already hand-installs it). Declared 2026-09-26 (B0.7 import scan).
+# 3.10 lane (rollback-only) holds 1.1.8; the live 3.12 lane runs 1.1.27 (STEP_UP_DIVERGENCE).
 livekit-protocol==1.1.8
 # aiortc and av move TOGETHER: aiortc 1.14.0 caps `av<17`, so av cannot advance
 # without it (1.15.0 widens the cap to `av<18`).

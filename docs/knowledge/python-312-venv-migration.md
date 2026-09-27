@@ -44,24 +44,24 @@ also resolves on 3.12, held for its own gated move.
 | package | current (box) | cp312 target | wheel on PyPI (aarch64) | measured / notes |
 |---|---|---|---|---|
 | fastapi | 0.141.1 | 0.141.1 | pure | imports |
-| uvicorn[standard] | 0.49.0 | 0.49.0 | pure (+uvloop/httptools/watchfiles cp312) | **`--ws auto` → `websockets_impl` (legacy) on 3.12 with websockets 16.1.1 AND 17.1** — the 0.49 cap is about not crossing 0.50, unchanged. 0.54.0 is latest. |
-| websockets | 16.1.1 | 16.1.1 | cp312 + pure | **step-up 17.1** (≥3.11): keeps `websockets.legacy.*` and the deprecated `websockets.server.WebSocketServerProtocol` lazy alias that uvicorn 0.49's legacy impl imports (verified in source + by import). Replay-gate the move. |
+| uvicorn[standard] | 0.49.0 | **0.53.0** (2026-09-27) | pure (+uvloop/httptools/watchfiles cp312) | Was capped at 0.49 (`--ws auto` → legacy `websockets_impl`). Crossed deliberately 2026-09-27: `auto` → `websockets_sansio_impl` (same websockets 16.1.1; no wsproto); real-socket A/B identical except the deflate window (12 bits). The build smoke now asserts sansio. Rationale + rollback: `requirements.txt`. |
+| websockets | 16.1.1 | 16.1.1 | cp312 + pure | **step-up 17.1** (≥3.11): keeps `websockets.legacy.*` and the deprecated `websockets.server.WebSocketServerProtocol` lazy alias that uvicorn's legacy impl (the `--ws websockets` rollback; 0.53.0's default is sans-I/O) imports (verified in source + by import). Replay-gate the move. |
 | pydantic / -core | 2.13.5 | 2.13.5 | cp312 | imports |
 | aiosqlite, asyncpg, alembic, psycopg2-binary, python-multipart, httpx, aiohttp | as pinned | same | cp312 / pure | all import; asyncpg 0.31.0 `manylinux_2_28`, psycopg2-binary 2.9.12 `2_27/2_28` |
 | python-jose[cryptography], PyJWT | 3.5.0 / 2.15.0 | same | pure; cryptography 50.0.1 cp312 abi3 | imports |
-| ag-ui-protocol, python-json-logger, PyYAML, segno | pinned | pinned exact | pure | imports |
+| ag-ui-protocol, python-json-logger, PyYAML, segno | pinned | pinned exact | pure | imports (ag-ui-protocol 1.0.0 since 2026-09-27: emitted SSE byte-identical to 0.1.19) |
 | mempalace | 3.3.1 | 3.3.1 | pure | imports on 3.12 (declares `>=3.9`). B0.8 moves it with chromadb. |
 | chromadb | 0.6.3 | 0.6.3 | pure + chroma-hnswlib 0.7.6 cp312 `manylinux_2_17` | **PersistentClient add/query works on 3.12.** Its telemetry logs `capture() takes 1 positional argument` against posthog 7.x (box: 7.12.0, same class) — noise, not a failure. 1.5.9 (abi3 aarch64 wheel) is B0.8. |
 | numpy | 1.26.4 (`<2`) | **1.26.4 exact** | cp312 | **Nothing in the set declares `numpy<2` on 3.12** — the uncapped resolve picks 2.5.3, and chroma-hnswlib 0.7.6's cp312 wheel imports/adds/queries on 2.5.3. Held at 1.26.4 so the router-head training numpy and STT/embedding numerics are unchanged in cut 1; numpy 2 = step-up, own gate. |
 | onnxruntime | 1.23.2 | 1.23.2 | cp312 `2_27/2_28` | Silero VAD `.onnx` session builds. **Step-up 1.30.0** (latest; ≥3.11; cp312 `2_28`). fastembed 0.8.0 allows `>=1.17,!=1.20,!=1.24.0/1` on 3.12. |
 | moonshine-voice | 0.1.3 (#1714) | 0.1.3 | `py3-none-manylinux_2_31` / `_2_34_aarch64` | **ABI-independent wheel — the SAME file the 3.10 box runs.** Measured at 0.0.62 first (imports, `__version__ 0.1.0`); moved to 0.1.3 with the box (resolves for cp312). First load fetches the `quantized_26_07_30` bundle the box already uses. Model load left to the replay gate (§8 step 3). |
 | transformers | 5.17.0 | 5.17.0 | pure | `WhisperFeatureExtractor` imports |
-| fastembed | 0.8.0 | 0.8.0 | pure | imports; 0.8.1 latest |
+| fastembed | 0.8.0 | **0.8.1** (2026-09-27) | pure | imports; bge-small vectors bit-identical to 0.8.0; first load re-downloads the model once (cache dir case changed) |
 | scikit-learn / joblib | 1.7.2 / 1.5.3 | 1.7.2 / 1.5.3 | cp312 | **Head loads, `predict_proba` OK.** Step-up 1.9.1 (≥3.11): the 1.7.2 artifact loads with `InconsistentVersionWarning` and predicts **bit-identically** (max Δproba = 0.0 on probe vectors, numpy 2.5.3). Re-export is a CONTRACT matter (`services/zoe-data/AGENTS.md`: pins must equal training pins in `labs/setfit-router/requirements.txt`), not a correctness blocker — retrain/re-export in the same PR that moves the pin. |
 | APScheduler / tzlocal / SQLAlchemy | 3.10.4 / 2.1 / 2.0.54 | same exact | pure / cp312 | `SQLAlchemyJobStore` imports, `pytz` present, local zone resolves. **`SQLAlchemy>=2.0,<3.0` resolves to 2.1.1 on 3.12** — pinned to the box's 2.0.54 so B0.9's jobstore question is not silently reopened. |
 | pywebpush / py-vapid | 2.5.0 / 1.9.4 | same | pure; `http-ece` 1.2.1 is a **pure-Python sdist** (only sdist in the set) | builds in uv's isolated build env |
 | **prometheus-client** | 0.25.0 (box), **undeclared** | 0.25.0 | pure | **Unguarded module-level import** in `memory_metrics.py`, `voice_metrics.py`, `guest_policy.py`. Declared in both manifests this PR. |
-| **livekit-protocol** | 1.1.8 (box), **undeclared** | 1.1.8 | pure | `livekit_aiortc.py` does `from livekit.protocol import rtc`; `livekit` does NOT depend on it — it rode in on the unused `livekit-agents` (CI hand-installs it). Found because the ci_safe lane failed collection without it. Declared in both manifests. |
+| **livekit-protocol** | 1.1.8 (box), **undeclared** | **1.1.27** (2026-09-27) | pure | `livekit_aiortc.py` does `from livekit.protocol import rtc`; `livekit` does NOT depend on it — it rode in on the unused `livekit-agents` (CI hand-installs it). Found because the ci_safe lane failed collection without it. Declared in both manifests. |
 | psutil | 7.2.2 (box), undeclared | 7.2.2 (`drift-optional`) | cp312 | guarded import in `mcp_server.py` status tool |
 | livekit | 1.1.20 | 1.1.20 exact | cp312 | `livekit.rtc` imports |
 | aiortc / av | 1.15.0 / 17.1.0 | same | pure / **cp311-abi3** `2_28` | `AudioResampler` builds. **av 18 is BLOCKED by aiortc 1.15.0's `av<18` cap** (latest aiortc), not by Python. |
@@ -96,7 +96,8 @@ the bare manifest: sync installs its input literally, without dependencies) → 
 distribution that lost files to a removal (shared paths; the `webrtcvad` sdist and
 `webrtcvad-wheels` both ship `webrtcvad.py`) → `uv pip install --no-deps resemblyzer==0.1.4`
 (phase 2, §3 blocker 1; AFTER the sync, which would strip it) → import smoke (fails the
-build if any load-bearing import fails; asserts `--ws auto` still resolves to the legacy impl and
+build if any load-bearing import fails; asserts `--ws auto` resolves to the sans-I/O
+`websockets_sansio_impl` (uvicorn 0.53.0 since 2026-09-27 — any other selection fails the build) and
 that torch has no CUDA). It refuses to install when `MemAvailable` < 500 MB (`ZOE_PY312_MIN_MEM_MB`)
 and runs everything under `nice -n 15`.
 
@@ -228,8 +229,8 @@ All of it is executed against stubs by `tests/unit/test_zoe_data_py312_cutover.p
    no WebSocket client, so a green run here says nothing about the venv's `websockets` stack.
 5. **The `/ws/voice/` lane — the only gate that exercises it.** Speak one idle→first-utterance
    turn through a `/ws/voice/` client (`voice.html` / `touch/voice.html` — the in-repo clients)
-   and confirm a reply plays; the build smoke only proves `--ws auto` *selects* the legacy
-   websockets impl, and gates 2 and 4 never open a WebSocket.
+   and confirm a reply plays; the build smoke only proves `--ws auto` *selects* the sans-I/O
+   `websockets_sansio_impl` (uvicorn 0.53.0), and gates 2 and 4 never open a WebSocket.
    Watch `journalctl --user -u zoe-data` (and `~/.zoe-logs/`) through it for WebSocket errors and
    `InconsistentVersionWarning`/`DeprecationWarning` floods; then run
    `requirements_drift_check.py` with the venv interpreter (0 MISMATCH expected — it also checks
