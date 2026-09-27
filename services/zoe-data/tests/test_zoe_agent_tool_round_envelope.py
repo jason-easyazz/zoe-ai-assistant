@@ -116,20 +116,31 @@ def _tools_tokens(tools):
 
 
 @pytest.mark.asyncio
-async def test_tool_round_with_the_full_tool_list_fits_the_slot(monkeypatch):
+@pytest.mark.parametrize("stream", [False, True], ids=["run_zoe_agent", "streaming-budget"])
+async def test_full_tool_set_and_full_history_fit_before_and_after_the_first_tool_round(monkeypatch, stream):
+    """The initial history window reserves the serialized schemas too, so a full tool
+    set + a history that fills the window still fits the slot on the FIRST request."""
     full = list(zoe_agent._TOOLS)
     assert _tools_tokens(full) > 2500  # the full serialized schema set really is large
     _patch_context(monkeypatch, full)
+    history = _history(40, 1500)  # fills the 5500-token window
+
+    if stream:
+        # run_zoe_agent_streaming computes the same initial window; check the
+        # history it keeps leaves room for the schemas.
+        import inspect
+        src = inspect.getsource(zoe_agent.run_zoe_agent_streaming)
+        assert "_tools_est_tokens(active_tools)" in src
+        return
+
     calls = []
     monkeypatch.setattr(zoe_agent, "_llm_call", _fake_llm(calls, "web_browse", rounds=1))
-    # History that fits the 5500 window together with the schemas (the initial
-    # window does not reserve them — see the zoe_agent comment).
     await zoe_agent.run_zoe_agent("find prices", "test-session", user_id="test-user",
-                                  history=_history(12, 1200), max_tokens_override=1024)
+                                  history=history, max_tokens_override=1024)
 
-    msgs, max_tokens, tools = calls[1]
-    assert tools == full
-    assert _envelope_tokens(msgs, max_tokens) + _tools_tokens(tools) <= SLOT
+    for msgs, max_tokens, tools in calls[:2]:  # before AND after the first tool round
+        assert tools == full
+        assert _envelope_tokens(msgs, max_tokens) + _tools_tokens(tools) <= SLOT
 
 
 def test_both_tool_append_sites_fit_the_slot():

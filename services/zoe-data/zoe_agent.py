@@ -2950,11 +2950,11 @@ _MEMORY_LIST_MAX_ROWS = env_int("ZOE_CAP_MEMORY_LIST_ROWS", 25)
 # result already in the conversation, so each round re-budgets the whole request
 # at the density its tool text was admitted at. The windowed history keeps the
 # chars/4 estimate its budget was computed with. The serialized tool schemas
-# (``tools`` in the request; ~10.7K chars for the full set) are in the prompt
-# too, so they are reserved here at chars/4. NOTE: the INITIAL history window
-# (ZOE_CONTEXT_TOKEN_BUDGET, computed separately in run_zoe_agent and
-# run_zoe_agent_streaming) does not reserve the schemas; a full tool set with a
-# full 5500-token history can still overflow before the first tool round.
+# (``tools`` in the request; ~12K chars for the full set) are in the prompt
+# too, so they are reserved at chars/4 both here and in the INITIAL history
+# window (ZOE_CONTEXT_TOKEN_BUDGET's _sys_tokens in run_zoe_agent and
+# run_zoe_agent_streaming), so a full tool set + full history fits before the
+# first tool round as well.
 _BRAIN_SLOT_TOKENS = env_int("ZOE_BRAIN_SLOT_TOKENS", 8192)
 _ENVELOPE_MARGIN_TOKENS = 256
 _TOOL_RESULT_MIN_CHARS = 400
@@ -3913,7 +3913,10 @@ async def run_zoe_agent(
     _CTX_BUDGET = env_int("ZOE_CONTEXT_TOKEN_BUDGET", 5500)
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
-        _sys_tokens = len(system_prompt) // 4 + len(user_message) // 4 + 50
+        # + the serialized tool schemas, which ride in every request (B6.6: one
+        # 8192-token slot; the full set is ~3k tokens).
+        _sys_tokens = (len(system_prompt) // 4 + len(user_message) // 4 + 50
+                       + _tools_est_tokens(active_tools))
         _considered = history[-_HISTORY_MAX_MSGS:]
         trimmed = _compact_history(history, _CTX_BUDGET - _sys_tokens)
         if len(trimmed) < len(_considered):
@@ -4295,7 +4298,10 @@ async def run_zoe_agent_streaming(
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
-        _sys_tokens = len(system_prompt) // 4 + len(user_message) // 4 + 50
+        # + the serialized tool schemas, which ride in every request (B6.6: one
+        # 8192-token slot; the full set is ~3k tokens).
+        _sys_tokens = (len(system_prompt) // 4 + len(user_message) // 4 + 50
+                       + _tools_est_tokens(active_tools))
         _considered = history[-_HISTORY_MAX_MSGS:]
         trimmed_hist = _compact_history(
             history, env_int("ZOE_CONTEXT_TOKEN_BUDGET", 5500) - _sys_tokens

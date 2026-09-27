@@ -123,10 +123,10 @@ now pass the result through `_fit_tool_result_to_slot()`:
 - the tool text is counted at chars/2, fail closed
 - a trimmed result gets an explicit `…[truncated to fit the context window]` marker
 - tool results already in the conversation are re-counted at chars/2 on every round
-- the serialized tool schemas (~12k chars for the full set) are reserved at chars/4. The
-  initial 5500 history window, computed separately in both agent entry points, does not
-  reserve them. With a full tool set and a full history, the first request can still
-  overflow on this non-live lane.
+- the serialized tool schemas (~12k chars for the full set) are reserved at chars/4, both
+  in the fitter and in the initial 5500 history window (`_sys_tokens` in `run_zoe_agent`
+  and `run_zoe_agent_streaming`). A full tool set plus a full history therefore fits
+  before the first tool round as well.
 
 `memory_digest._synthesis_pass()` (weekly insight synthesis) also posts straight to
 llama-server, with up to ten unbounded stored documents. `_build_synthesis_prompt()` caps
