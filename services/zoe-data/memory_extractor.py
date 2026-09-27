@@ -765,6 +765,18 @@ async def _load_recent_user_messages(
     return out
 
 
+async def _memory_opted_out(user_id: str) -> bool:
+    """Per-user ``memory_opt_out`` (``user_prefs``, cached). The chokepoint in
+    ``MemoryService.ingest`` enforces it for every writer; this early exit just
+    skips the reconcile/supersede work for a user who opted out. Fail-open."""
+    try:
+        import user_prefs
+        return await user_prefs.is_memory_opted_out(user_id)
+    except Exception as exc:
+        logger.debug("memory opt-out lookup failed (%s) — treating as opted in", exc)
+        return False
+
+
 async def _load_prev_user_message(user_id: str, session_id: str, current_message: str) -> str:
     """Most recent USER message in this session other than the current one."""
     recent = await _load_recent_user_messages(user_id, session_id, current_message, limit=5)
@@ -846,6 +858,9 @@ async def extract_and_ingest(
         # turn's correction/pronoun may anchor to it.
         note_user_turn(user_id, session_id, user_message)
     if not candidates:
+        return 0
+    if await _memory_opted_out(user_id):
+        logger.info("memory_extractor: user=%s opted out — dropping %d candidate(s)", user_id, len(candidates))
         return 0
 
     svc = get_memory_service()
