@@ -28,8 +28,11 @@
  * state, so concurrent sessions can't leak into each other and a process
  * restart loses nothing):
  *   1. the always-on core (get_time, recall_memory, activate_abilities);
- *   2. groups keyword-matched against the LAST user message (prod's
- *      `isRelevant` analogue — deterministic, no embedder);
+ *   2. groups keyword-matched against the session's USER messages (prod's
+ *      `isRelevant` analogue — deterministic, no embedder). Session-sticky by
+ *      default (see PROMPT-CACHE STABILITY below); `ZOE_BRAIN_STICKY_DISCLOSURE=
+ *      false` restores the old last-user-message-only match, where a keyword
+ *      group decays again on the next turn that lacks the keyword;
  *   3. groups the model explicitly unlocked via the `activate_abilities` tool
  *      anywhere in this session's transcript (the call lands in `messages`,
  *      so the very NEXT model request in the same turn already discloses the
@@ -41,6 +44,27 @@
  * a long session that touches every domain converges back to all schemas.
  * Sessions are per-conversation, so in practice a typical turn carries 3
  * schemas instead of all 19.
+ *
+ * PROMPT-CACHE STABILITY (2026-09-27). Gemma's chat template renders the tool
+ * declarations INSIDE the system turn — `<|turn>system\n{instructions}{<|tool>…
+ * per tool}<turn|>` — i.e. after the ~2.2k-token instructions and BEFORE every
+ * history message. llama-server's prompt cache reuses only a byte-identical
+ * PREFIX, so any change to the disclosed tool block re-prefills the tool tail
+ * AND the whole session history. Measured on the 2026-09-26 replay (one
+ * session, `--parallel 1`): turns split into hits (`f_keep 1.000`, 11-20
+ * tokens re-prefilled, ~200 ms) and misses (`f_keep 0.73-0.88`, 282-854 tokens,
+ * 0.6-1.5 s before the first token), the divergence sitting ~75% in — right
+ * after the instructions, at the tool block. Two causes, both fixed here:
+ *   - last-message-only keyword matching made the block RETRACT on the next
+ *     turn without the keyword (a miss on the keyword turn AND the turn after);
+ *     session-sticky matching makes the block append-only for the session;
+ *   - disclosed tools were emitted in REGISTRATION order, so a newly activated
+ *     group was inserted mid-block; they are now emitted in ACTIVATION order
+ *     (core + unknown first, then groups by first activation), so a new group
+ *     APPENDS and the tools already disclosed stay in the cached prefix.
+ * Model-visible effect: a group mentioned earlier in the session stays offered
+ * on later turns (at most the schemas of groups the session has touched), and
+ * the tool block's order follows the session rather than the registry.
  *
  * Unknown Zoe tool names (registered on the agent but absent from the grouping
  * map) are ALWAYS disclosed — adding a 12th Zoe tool without grouping it here
@@ -231,40 +255,67 @@ export function progressiveToolsEnabled(): boolean {
   return raw !== 'false' && raw !== '0';
 }
 
-/** Text of the last user message (user content may be a string or parts). */
-function lastUserText(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== 'user') continue;
-    if (typeof msg.content === 'string') return msg.content;
-    return msg.content
-      .filter((c): c is Extract<typeof c, { type: 'text' }> => c.type === 'text')
-      .map((c) => c.text)
-      .join('\n');
-  }
-  return '';
+/**
+ * Session-sticky keyword disclosure on/off (default ON). `false`/`0` restores
+ * the pre-2026-09-27 behaviour: keyword relevance reads ONLY the last user
+ * message, so a keyword group decays on the next turn — at the cost of a
+ * llama-server prompt-cache miss each time the tool block changes (see the
+ * PROMPT-CACHE STABILITY note in the header). Read fresh each call.
+ */
+export function stickyDisclosureEnabled(): boolean {
+  const raw = (process.env.ZOE_BRAIN_STICKY_DISCLOSURE ?? 'true').trim().toLowerCase();
+  return raw !== 'false' && raw !== '0';
+}
+
+/** Plain text of one user message (string content or its text parts). */
+function userText(msg: Message): string {
+  if (typeof msg.content === 'string') return msg.content;
+  return msg.content
+    .filter((c): c is Extract<typeof c, { type: 'text' }> => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n');
 }
 
 /**
- * Groups considered active for this request. See the module header for the
- * four sources. Pure function of the message window — no shared state.
+ * Active groups in ACTIVATION ORDER — the order each group first became active
+ * while reading the transcript front to back. Pure function of the message
+ * list — no shared state. See the module header for the sources:
+ *   2. keyword relevance on user messages (every user message when sticky;
+ *      only the LAST one when `ZOE_BRAIN_STICKY_DISCLOSURE=false`);
+ *   3 + 4. explicit `activate_abilities` calls and already-used grouped tools,
+ *      from the transcript's assistant tool calls.
+ * Guard string content the same way `userText` does, so a plain-text assistant
+ * message can never be iterated character-by-character if the pi-ai message
+ * type evolves.
  */
-export function activeGroups(messages: Message[]): Set<AbilityGroup> {
-  const active = new Set<AbilityGroup>();
-
-  // 2. Keyword relevance on the last user message.
-  const userText = lastUserText(messages);
-  if (userText) {
-    for (const group of GROUP_NAMES) {
-      if (GROUP_TRIGGERS[group].test(userText)) active.add(group);
+export function groupActivationOrder(messages: Message[]): AbilityGroup[] {
+  const order: AbilityGroup[] = [];
+  const seen = new Set<AbilityGroup>();
+  const add = (group: AbilityGroup) => {
+    if (seen.has(group)) return;
+    seen.add(group);
+    order.push(group);
+  };
+  const sticky = stickyDisclosureEnabled();
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastUserIndex = i;
+      break;
     }
   }
 
-  // 3 + 4. Explicit activations and sticky already-used groups, from the
-  // transcript's assistant tool calls. Guard string content the same way
-  // lastUserText does, so a plain-text assistant message can never be
-  // iterated character-by-character if the pi-ai message type evolves.
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === 'user') {
+      if (!sticky && i !== lastUserIndex) continue;
+      const text = userText(msg);
+      if (!text) continue;
+      for (const group of GROUP_NAMES) {
+        if (GROUP_TRIGGERS[group].test(text)) add(group);
+      }
+      continue;
+    }
     if (msg.role !== 'assistant') continue;
     if (typeof msg.content === 'string') continue;
     for (const part of msg.content) {
@@ -274,16 +325,21 @@ export function activeGroups(messages: Message[]): Set<AbilityGroup> {
           (part.arguments as Record<string, unknown> | undefined)?.group ?? '',
         ).toLowerCase();
         if ((GROUP_NAMES as readonly string[]).includes(requested)) {
-          active.add(requested as AbilityGroup);
+          add(requested as AbilityGroup);
         }
         continue;
       }
       const group = TOOL_TO_GROUP.get(part.name);
-      if (group) active.add(group);
+      if (group) add(group);
     }
   }
 
-  return active;
+  return order;
+}
+
+/** Groups considered active for this request (see `groupActivationOrder`). */
+export function activeGroups(messages: Message[]): Set<AbilityGroup> {
+  return new Set(groupActivationOrder(messages));
 }
 
 /** Tool names disclosed to the model for this request. */
@@ -329,13 +385,28 @@ export function activeToolNames(messages: Message[]): Set<string> {
 export function discloseTools(context: Context, basis?: Message[]): Context {
   const tools = context.tools;
   if (!tools || tools.length === 0) return context;
-  const active = activeToolNames(basis ?? context.messages);
-  const disclosed = tools.filter(
+  const order = groupActivationOrder(basis ?? context.messages);
+  const rank = new Map<AbilityGroup, number>(order.map((group, i) => [group, i]));
+  const active = new Set<string>(CORE_TOOL_NAMES);
+  for (const group of order) for (const name of TOOL_GROUPS[group]) active.add(name);
+  const filtered = tools.filter(
     (tool) =>
       !CODING_BUILTIN_TOOL_NAMES.has(tool.name) &&
       (active.has(tool.name) || !KNOWN_TOOL_NAMES.has(tool.name)),
   );
-  if (disclosed.length === tools.length) return context;
+  // ACTIVATION ORDER (prompt-cache stability, see the header): core + unknown
+  // tools first, then each group in the order it became active. The sort is
+  // stable, so registration order is kept within a rank. A newly activated
+  // group therefore APPENDS to the rendered tool block instead of being
+  // inserted mid-block, and the tools already disclosed stay a cached prefix.
+  const toolRank = (name: string): number => {
+    const group = TOOL_TO_GROUP.get(name);
+    return group === undefined ? -1 : (rank.get(group) ?? -1);
+  };
+  const disclosed = [...filtered].sort((a, b) => toolRank(a.name) - toolRank(b.name));
+  if (disclosed.length === tools.length && disclosed.every((tool, i) => tool === tools[i])) {
+    return context;
+  }
   return { ...context, tools: disclosed };
 }
 

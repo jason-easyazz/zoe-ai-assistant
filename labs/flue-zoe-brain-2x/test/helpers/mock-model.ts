@@ -38,7 +38,7 @@ export interface MockTurn {
    * recorded usage), so a test that never sets this is exercising a branch the
    * running system does not take. See test/output_budget_clamp.test.ts.
    */
-  usage?: { prompt: number; completion: number };
+  usage?: { prompt: number; completion: number; cached?: number };
 }
 
 /** What the mock saw, as parsed from the request body. */
@@ -166,6 +166,11 @@ async function writeTurn(res: ServerResponse, turn: MockTurn): Promise<void> {
           prompt_tokens: turn.usage.prompt,
           completion_tokens: turn.usage.completion,
           total_tokens: turn.usage.prompt + turn.usage.completion,
+          // llama-server's own shape for prompt-cache reuse (server-task.cpp
+          // usage_json_oaicompat: prompt_tokens_details.cached_tokens).
+          ...(turn.usage.cached !== undefined
+            ? { prompt_tokens_details: { cached_tokens: turn.usage.cached } }
+            : {}),
         },
       })}\n\n`,
     );
