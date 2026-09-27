@@ -176,7 +176,7 @@ case "$MODE" in
     # (measured: syncing the bare manifest would uninstall ~124 transitive deps).
     # So: freeze -> compile with the freeze as preferences (a rerun keeps what is
     # installed unless the manifest moved) -> sync that lock.
-    lock="$(mktemp)"; trap 'rm -f "$lock"' EXIT
+    lock="$(mktemp)"; damaged_out="$(mktemp)"; trap 'rm -f "$lock" "$damaged_out"' EXIT
     "${NICE[@]}" "$UV" pip freeze --python "$VENV_PY" >"$lock"
     log "phase 1: resolve the manifest for this interpreter, then sync to it"
     "${NICE[@]}" "$UV" pip compile "$REQ_FILE" --python "$VENV_PY" --no-header --quiet -o "$lock"
@@ -186,7 +186,11 @@ case "$MODE" in
     # `webrtcvad` sdist deleted `webrtcvad.py`/`_webrtcvad*.so`, which
     # `webrtcvad-wheels` ships at the same paths; its metadata survived, so sync saw
     # nothing to do. Reinstall whatever lost files (a no-op on a clean venv).
-    mapfile -t damaged < <("${NICE[@]}" "$VENV_PY" "$REPO_ROOT/scripts/maintenance/requirements_drift_check.py" --list-damaged)
+    # Via a file, NOT `mapfile < <(scanner)`: a process substitution drops the
+    # scanner's exit status, so a crashed scan read as "no damage" (#1706).
+    "${NICE[@]}" "$VENV_PY" "$REPO_ROOT/scripts/maintenance/requirements_drift_check.py" --list-damaged >"$damaged_out" \
+      || die "damage scan failed (exit $?) — not continuing on an unverified venv"
+    mapfile -t damaged <"$damaged_out"
     if (( ${#damaged[@]} )); then
       warn "files missing from: ${damaged[*]} (shared paths of a removed distribution) — reinstalling"
       reinstall=(); for d in "${damaged[@]}"; do reinstall+=(--reinstall-package "$d"); done

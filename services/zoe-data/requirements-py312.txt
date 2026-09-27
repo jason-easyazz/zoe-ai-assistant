@@ -62,9 +62,13 @@ numpy==1.26.4
 # 1.23.2 ships a cp312 wheel; 1.30.0 (>=3.11 only) is the runbook's step-up.
 onnxruntime==1.23.2
 edge-tts==7.2.8
-# py3-none-manylinux_2_31_aarch64 wheel: ABI-independent (ctypes-loaded .so),
-# the SAME wheel the 3.10 box runs — the STT rock does not move.
-moonshine-voice==0.0.62
+# py3-none aarch64 wheels (manylinux_2_31 and _2_34; glibc 2.35 takes either):
+# ABI-independent (ctypes-loaded .so), the SAME wheel the 3.10 box runs — the STT
+# rock does not move. Follows requirements.txt: 0.1.3 since #1714 (B1.10,
+# replay-gated on the box; set_keyterms + speculative decoding; 0.1.5 HELD). On
+# first load the venv fetches 0.1.3's own model bundle, `quantized_26_07_30`
+# (~/.cache/moonshine_voice/…/medium-streaming-en/) — the one the box already uses.
+moonshine-voice==0.1.3
 transformers==5.17.0
 fastembed==0.8.0
 scikit-learn==1.7.2
