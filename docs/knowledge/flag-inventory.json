@@ -3975,6 +3975,38 @@
         ],
         "typed_env": false
       },
+      "ZOE_SPECULATIVE_MAX_HOLD_MS": {
+        "defaults": [
+          "5000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_speculation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPECULATIVE_TAIL_MS": {
+        "defaults": [
+          "320"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SPECULATIVE_TURN": {
+        "defaults": [
+          "'false'",
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py",
+          "services/zoe-data/voice_speculation.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_STT_BACKEND": {
         "defaults": [
           "'moonshine'"
