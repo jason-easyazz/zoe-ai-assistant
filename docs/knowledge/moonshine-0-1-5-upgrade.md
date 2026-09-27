@@ -1,18 +1,20 @@
 ---
 type: Runbook
-title: Moonshine 0.1.5 upgrade (B1.10) — HELD after measurement; API deltas, keyterms, install/replay/rollback
+title: Moonshine upgrade (B1.10) — 0.1.3 ADOPTED, 0.1.5 HELD; API deltas, keyterms, install/replay/rollback
 description: What changes for Zoe's STT call sites when moonshine-voice goes 0.0.62 → 0.1.5 (rock unchanged — still Moonshine v2 Medium / MEDIUM_STREAMING), the ZOE_MOONSHINE_KEYTERMS biasing flag, and the box-first install + replay-gate + rollback sequence.
 tags: [voice, stt, moonshine, upgrade, runbook, b1-10]
-timestamp: 2026-09-26T12:00:00Z
+timestamp: 2026-09-27T12:00:00Z
 ---
 
-# Moonshine 0.1.5 upgrade (B1.10) — HELD
+# Moonshine upgrade (B1.10) — 0.1.3 ADOPTED, 0.1.5 HELD
 
-> **Status 2026-09-26: HELD, box rolled back to 0.0.62.** The runbook below was executed the same
+> **Status 2026-09-27: 0.1.3 ADOPTED — live on the box and pinned (§10). 0.1.5 remains HELD.**
+>
+> **2026-09-26: 0.1.5 HELD, box rolled back to 0.0.62.** The runbook below was executed the same
 > day: 0.1.5 passes said-vs-did but **fails the per-stage speed rule** (+43 % median STT, ~1.9× on
 > every non-trivial file, Orin CPU). Numbers, method and retest conditions are in §8; the root cause (two hard-coded ONNX session flags that no config reverts) is in §9. Everything
 > else on this page stands as the readiness record — the `ZOE_MOONSHINE_KEYTERMS` plumbing is
-> merged dormant, `requirements.txt` pins the version the box actually runs (0.0.62).
+> merged, and `requirements.txt` pins the version the box actually runs (0.1.3 since §10).
 
 **API verdict (2026-09-26, measured in a throwaway venv on the Orin, aarch64 / Python 3.10):
 compatible.** Every call Zoe makes into `moonshine_voice` has the same signature and return
@@ -411,3 +413,63 @@ the build-type change in 0.1.2's changelog).
   Zoe's singleton transcriber.
 - **Retest conditions (unchanged from §8):** 0.1.5 stays held. Nothing measured here beats
   0.0.62's 284 ms median or ~21 ms decoder step.
+
+## 10. Adopted 0.1.3 (2026-09-27)
+
+§9 predicted from source that 0.1.3 is the last release with 0.0.62's session setup: arena on,
+prepacking on. It is also the first release after keyterms landed in 0.1.2. The coordinator
+trialled it box first, the §5 way. Here it passed both rules.
+
+**Install:**
+
+- `pip3 install --user moonshine-voice==0.1.3` on the host.
+- Its bundle was pre-downloaded before the restart. It lives in
+  `~/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30/`
+  (291 MB): `adapter.ort, cross_kv.ort, decoder_kv.ort, encoder.ort, frontend.ort,
+  streaming_config.json, tokenizer.bin`.
+- zoe-data was restarted. `/readyz` then showed `stt.loaded: true` and
+  `keyterms.supported: true`.
+
+**Replay gate:** all runs came back 13/13 OK, 7 EMPTY, identical to baseline.
+
+| Replay | STT stage |
+|---|---|
+| in-process, keyterms OFF | 326 ms |
+| in-process, keyterms ON (`ZOE_MOONSHINE_KEYTERMS=Zoe`) | 351 ms |
+| remote, through the live service | 357 ms |
+| 0.0.62 (the same replay, earlier runs) | 302–406 ms |
+
+**Engine-only A/B:** Kokoro was paused for headroom. Same 20 files, two passes, per-file ms.
+
+| Version | median (pass 1 / pass 2) | decoder step |
+|---|---|---|
+| 0.0.62 | 302 / 328 ms | ~21 ms (§8/§9) |
+| **0.1.3** | **299 / 306 ms** | **23–25 ms** |
+
+Both rules hold: said-vs-did did not regress, and speed is at parity. 0.1.3 is the pin. 0.1.5 stays
+held on the §9 regression. Re-open 0.1.5 only when upstream keeps the arena and prepacking on for
+streaming sessions; the retest conditions from §8 still apply.
+
+**Keyterms guidance (the feature this buys):**
+
+- The operator sets `ZOE_MOONSHINE_KEYTERMS` in the **live** `services/zoe-data/.env` and
+  restarts zoe-data. The list is **never committed**: it names the household.
+- Keep it short and comma-free per term: household first names plus `Zoe`. Tens of terms, not
+  hundreds (§4 limits). Capitalise exactly as the transcript should read.
+- Verify with `GET /readyz` → `dependencies.stt.keyterms`:
+  - `supported: true`, and `applied == configured`.
+  - `error: null`. A refused list logs a WARNING and decoding stays unbiased.
+- Grow the list only on evidence. The ON replay above cost +25 ms (326 → 351) for a one-term list,
+  so re-run the replay after each change to the list and watch the `stt` stage.
+
+**Rollback:**
+
+1. Run `pip3 install --user moonshine-voice==0.0.62`.
+2. Unset `ZOE_MOONSHINE_KEYTERMS`. On 0.0.62 it is logged as unsupported and ignored anyway.
+3. Run `systemctl --user restart zoe-data`, then poll `/health` and `/readyz` until
+   `stt.loaded: true`.
+4. Set `requirements.txt` back to `==0.0.62` (box first, file second).
+
+The 0.0.62 bundle (`…/quantized/`) is still on disk, so the rollback downloads nothing. Keep both
+`quantized/` and `quantized_26_07_30/` until 0.1.3 has run a few quiet days. `quantized_26_08_21/`
+(0.1.5) can be deleted any time; it is only needed for a 0.1.5 retest.

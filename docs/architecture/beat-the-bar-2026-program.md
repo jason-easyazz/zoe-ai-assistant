@@ -349,7 +349,12 @@ status: 🔨 active — NEXT ACTION is always §0
   recognition for confirmations and menus (HA assist_satellite + speech-to-phrase).
 - B1.9 ⬜ Template fast path for the router's top-20 highest-precision intents (zero brain
   call; TTS-safe phonetic normaliser) — axiom-voice-agent.
-- B1.10 ⏸ HELD 2026-09-26 — Moonshine 0.1.5 passes said-vs-did (13/13 OK in-process off/on
+- B1.10 ✅ 0.1.3 ADOPTED 2026-09-27 — `moonshine-voice==0.1.3` live on the box (bundle
+  `quantized_26_07_30`) and pinned: replays 13/13 OK / 7 EMPTY (in-process keyterms off 326 ms,
+  on 351 ms, remote live 357 ms); engine A/B 299/306 vs 0.0.62's 302/328 ms median, decoder
+  step 23–25 ms. Keyterms are available: the operator sets `ZOE_MOONSHINE_KEYTERMS` in the live
+  `.env` (never committed), verified by `/readyz` `keyterms.applied`. Runbook §10. The 0.1.5
+  history follows. 0.1.5 ⏸ HELD 2026-09-26 — Moonshine 0.1.5 passes said-vs-did (13/13 OK in-process off/on
   keyterms and remote; 7 EMPTY = baseline) but the STT stage is ~1.9× slower per file on the
   Orin. **Root-caused** with the per-session ONNX log (`options={"log_ort_run": True}`):
   encoder / adapter / cross-KV runs identical (~50 ms), same 8 decoder steps, same input
