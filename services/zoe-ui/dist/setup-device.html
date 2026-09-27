@@ -88,7 +88,8 @@
 
   if (!token) { fail('This link is missing its setup code.'); return; }
 
-  fetch('/api/home/setup/info?token=' + encodeURIComponent(token))
+  // Header, not query string: the server's access log records query strings.
+  fetch('/api/home/setup/info', { headers: { 'X-Setup-Token': token } })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (!data.ok) { fail(data.reason || 'This setup link is no longer valid.'); return; }

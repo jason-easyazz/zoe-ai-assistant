@@ -92,6 +92,7 @@ import * as v from 'valibot';
 // bundles .ts specifiers fine.
 import { currentUserId } from '../request-identity.ts';
 import { isReplayTurn } from '../replay-mode.ts';
+import { currentSpeculativeTurnId } from '../speculative-turn.ts';
 import {
   fenceWebResults,
   isTurnUntrusted,
@@ -211,7 +212,14 @@ async function dispatchIntent(
     const res = await fetch(url, {
       method: 'POST',
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ user_id: userId, intent, slots }),
+      // B1.1: echo the speculative voice turn id (bound from the seam's envelope)
+      // so zoe-data holds THIS turn's writes for its verdict. Absent on every
+      // ordinary turn → the body is byte-identical to before.
+      body: JSON.stringify(
+        currentSpeculativeTurnId(signal)
+          ? { user_id: userId, intent, slots, speculative_turn_id: currentSpeculativeTurnId(signal) }
+          : { user_id: userId, intent, slots },
+      ),
       signal: fetchSignal(signal),
     });
     if (!res.ok) {

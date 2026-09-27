@@ -118,7 +118,9 @@ _MODEL_NAME = os.environ.get("ZOE_ROUTER_MODEL", "BAAI/bge-small-en-v1.5")
 
 # --- SetFit classifier head (labs/setfit-router PR #1296) -------------------
 # A 38 KB logistic-regression head trained on the SAME bge-small embedding this
-# module already computes per turn (+~0.2 ms). SHADOW-ONLY today: it logs its
+# module already computes per turn (+~0.2 ms). Served from the numpy export
+# (models/router_head_logreg.npz + .json, router_heads_numpy.py) — the .joblib
+# path below is the configured name; the numpy backend reads the pair beside it. SHADOW-ONLY today: it logs its
 # prediction + agreement with the similarity router and NEVER changes routing.
 _HEAD = None
 _HEAD_FAILED = False  # load failed once → don't retry every turn
@@ -325,15 +327,17 @@ def _ensure_head_loaded():
         if _HEAD is not None or _HEAD_FAILED:
             return
         try:
-            import joblib
+            # numpy backend by default (no sklearn/scipy in this process);
+            # ZOE_ROUTER_HEADS_BACKEND=joblib is the one-release fallback.
+            import router_heads_numpy
 
-            head = joblib.load(_HEAD_PATH)
-            # sanity: needs predict_proba + classes_ (sklearn LogisticRegression)
+            head = router_heads_numpy.load_head(_HEAD_PATH)
+            # sanity: needs predict_proba + classes_ (the LogisticRegression API)
             if not (hasattr(head, "predict_proba") and hasattr(head, "classes_")):
                 raise TypeError(f"unexpected head artifact type {type(head)!r}")
             _HEAD = head
-            logger.info("semantic_router head loaded %s (%d classes)",
-                        _HEAD_PATH, len(head.classes_))
+            logger.info("semantic_router head loaded %s (%d classes, backend=%s)",
+                        _HEAD_PATH, len(head.classes_), router_heads_numpy.backend())
         except Exception as exc:
             _HEAD_FAILED = True
             logger.warning("semantic_router head load failed (shadow disabled, "

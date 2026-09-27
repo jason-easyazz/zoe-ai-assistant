@@ -566,6 +566,41 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
 
 ## 9. Recommended sequence
 
+**Current order, refreshed 2026-09-28 02:30 AWST, after the 09-27 wave (24 PRs; list in the
+tracker §6).** The authoritative NEXT ACTION is the
+[program tracker §0](../architecture/beat-the-bar-2026-program.md). The dated lists below are
+the 2026-09-25 plan, kept with ✓ marks.
+
+1. 🧑 **Operator window.**
+   - The B0.8 Chroma 1.5 cutover. #1745 is prepared but not executed; follow
+     `chroma-1-5-migration.md` §5.
+   - Apply #1727: loopback Postgres 17.11, and rebuild the HA bridge.
+   - Music Assistant: YouTube Music re-auth on the panel (the cookies have rotated and the
+     provider does not load), then the MA 2.10.3 re-create per `music-ytdlp-js-runtime.md`
+     steps 1–6 — which includes a SECOND panel re-auth + search check after the re-create
+     (the 2.10 upgrade migrates `setup_data` one way, so the pre-recreate reconnect only
+     restores 2.8.7).
+   - Revoke the Telegram token; rotate the Postgres password.
+   - The Gemma re-upload swap (B6.2).
+2. **Panel on.**
+   - One real `/ws/voice/` turn on uvicorn 0.53 (#1743).
+   - B1.1: Pi proof → head-bound replay → operator flag-on week.
+3. **Verify.** The 2026-09-28 07:30 morning brief (#1726) and the Monday 02:31 dreaming run
+   on the venv drop-in.
+4. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).
+5. The `samantha_bar` harness.
+6. **B3.2** dream gating and **B3.3** reflection on the new store, after the B0.8 cutover.
+7. Brief-on-arrival (**B2.1**: the first recognition of the day, instead of the 07:30
+   timer).
+8. The Kokoro dedicated venv (~−100 MB) and the 24 h `--cache-ram` occupancy measurement.
+9. Dated operator items:
+   - Omnigent Claude re-login before 2026-10-11.
+   - The Actions event policy before 2026-11-02.
+   - Dismiss the chromadb alert.
+   - L4T 36.5; HA `auth_oidc` 1.2.1.
+   - The runner's PATH gets the nvm bin; `vm.page-cluster`.
+   - MemPalace snapshot prune.
+
 **This week (no code, ~1 hour at the box; items marked ✓ were done on 2026-09-25):**
 1. Rotate the Telegram token (BotFather) and `sudo journalctl --rotate && sudo journalctl
    --vacuum-time=1s` to drop the lines that carry the old one. ✓ journald is persistent.
@@ -589,10 +624,10 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
    `pull_request_target` workflows.
 
 **Next two weeks (code, one workstream per PR, voice-gated where marked):**
-8. llama.cpp rebuild + FA + q8 V-cache (voice-gated) — B0.4 in the program tracker.
+8. llama.cpp rebuild + FA + q8 V-cache (voice-gated) — B0.4 in the program tracker. ✓ applied 2026-09-27.
 9. Flip `zoe_flue_client` defaults to `:3579`/wire-2 and enable `ZOE_BRAIN_FAILOVER`
    (voice-gated; today a sidecar blip cans every turn and a fresh box is unbootable without
-   the `.env`).
+   the `.env`). (✓ defaults flipped in #1701; `ZOE_BRAIN_FAILOVER` deliberately stays off — B6.5.)
 10. ✓ Backup script fixed; ✓ log rotation installed (daily user timer, 425 → 50 MB);
     ✓ #863 and #1607 closed. Still: deploy pip contract decision (B0.6); docs sweep for
     the 16 contradictions; close #1610 (re-land small as B10); park #1641 (program triage).
@@ -601,14 +636,14 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
     `services/zoe-core/package-lock.json` go with the pi 0.84+ port or that tree's
     retirement).
 11. `moonshine-voice` 0.1.5 with `keyterms` (voice-gated); Smart Turn 3.2; Silero 6.2.
-12. Flue 2.1.1 in the brain sidecar (voice-gated).
+12. Flue 2.1.1 in the brain sidecar (voice-gated). ✓ #1694, 2026-09-27.
 
 **Next quarter:**
-13. Kokoro on ONNX Runtime CUDA (RAM) → then the expressive-lane bake-off.
+13. Kokoro on ONNX Runtime CUDA (RAM) → then the expressive-lane bake-off. (Measured 2026-09-27: not a win — B5.1 parked.)
 14. MemPalace 3.10 + Chroma 1.5.x migration on a copy, with the bi-temporal supersession
-    work (#3 in §7) designed against the new store.
+    work (#3 in §7) designed against the new store. (✓ rehearsal #1732; the cutover #1745 is 🧑.)
 15. Borrow list #1, #2, #4, #5, #6 in that order — each is a lab spike with a replay gate.
-16. HA tool-name sweep → HA 2026.9/10 → MA 2.10 client check; codebase-memory 0.11;
+16. HA tool-name sweep (✓ pt 1 #1695) → HA 2026.9/10 → MA 2.10 client check (✓ #1723 client port; re-create 🧑); codebase-memory 0.11;
     AG-UI 1.0 + the card carrier.
 17. Plan the JetPack 7.2.1 / Python 3.12 rebuild window; Multica/Omnigent upgrades after
     the executor design decision (Flue `init()` handles + durable tools).

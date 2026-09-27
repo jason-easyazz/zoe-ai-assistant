@@ -1933,35 +1933,6 @@
         .pi-step { display: flex; gap: 10px; align-items: center; padding: 6px 0; font-size: 13px; color: var(--clr-text-2); }
         .pi-step .step-num { width: 22px; height: 22px; border-radius: 50%; background: rgba(var(--clr-primary-rgb),0.12); color: var(--clr-primary); font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
-        /* Telegram Setup Wizard */
-        .telegram-setup { border-radius: var(--radius); overflow: hidden; border: 1.5px solid rgba(0,136,204,0.3); background: linear-gradient(135deg,rgba(0,136,204,0.05),var(--clr-surface)); }
-        .tgs-header { background: linear-gradient(135deg,#0088cc,#229ed9); color: #fff; padding: 16px 20px; display: flex; align-items: center; gap: 14px; }
-        .tgs-header-icon { font-size: 32px; }
-        .tgs-header-text h3 { font-size: 16px; font-weight: 700; margin: 0 0 2px; }
-        .tgs-header-text p { font-size: 12px; opacity: 0.85; margin: 0; }
-        .tgs-body { padding: 20px; }
-        .tgs-steps { display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px; }
-        .tgs-step { display: flex; gap: 14px; align-items: flex-start; }
-        .tgs-step-num { width: 28px; height: 28px; border-radius: 50%; background: rgba(0,136,204,0.12); color: #0088cc; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
-        .tgs-step-num.done { background: var(--clr-success-bg); color: var(--clr-success); }
-        .tgs-step-content { flex: 1; }
-        .tgs-step-title { font-weight: 600; font-size: 14px; color: var(--clr-text); margin-bottom: 3px; }
-        .tgs-step-desc { font-size: 13px; color: var(--clr-text-2); line-height: 1.5; }
-        .tgs-step-desc a { color: #0088cc; text-decoration: none; font-weight: 600; }
-        .tgs-step-desc a:hover { text-decoration: underline; }
-        .tgs-qr-row { display: flex; align-items: center; gap: 16px; margin: 10px 0; }
-        .tgs-qr-box { border: 1px solid var(--clr-border); border-radius: 10px; padding: 8px; background: #fff; flex-shrink: 0; }
-        .tgs-token-row { display: flex; gap: 8px; margin-top: 12px; }
-        .tgs-token-input { flex: 1; padding: 10px 14px; border: 1.5px solid var(--clr-border); border-radius: 10px; font-size: 14px; font-family: monospace; outline: none; transition: border-color 0.15s; }
-        .tgs-token-input:focus { border-color: #0088cc; }
-        .tgs-token-input.error { border-color: var(--clr-error); }
-        .tgs-connect-btn { background: #0088cc; color: #fff; border: none; border-radius: 10px; padding: 10px 20px; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; transition: all 0.15s; }
-        .tgs-connect-btn:hover { background: #006fa3; }
-        .tgs-connect-btn:disabled { opacity: 0.6; cursor: default; }
-        .tgs-status { margin-top: 12px; padding: 10px 14px; border-radius: 10px; font-size: 13px; font-weight: 600; display: none; }
-        .tgs-status.success { background: var(--clr-success-bg); color: var(--clr-success); display: block; }
-        .tgs-status.error { background: var(--clr-error-bg); color: var(--clr-error); display: block; }
-
         /* Background task notification */
         .task-notification { border-radius: var(--radius); border: 1.5px solid rgba(var(--clr-primary-rgb),0.25); background: linear-gradient(135deg,rgba(var(--clr-primary-rgb),0.06),var(--clr-surface)); padding: 14px 16px; margin-bottom: 8px; }
         .tn-result { font-size: 14px; color: var(--clr-text); line-height: 1.6; margin-top: 8px; }
@@ -3733,9 +3704,6 @@
                 case 'background_task_result':
                     renderBackgroundTaskResult(container, data.props || {});
                     break;
-                case 'telegram_setup':
-                    renderTelegramSetup(container, data.props || {});
-                    break;
                 default:
                     container.innerHTML = `<div class="ui-component-fallback">[Unknown component: ${escapeHtml(data.component)}]</div>`;
             }
@@ -5034,119 +5002,6 @@
             }));
         }
 
-        function renderTelegramSetup(container, props) {
-            container.className += ' telegram-setup';
-            const tokenInputId = 'tgs-token-' + Date.now();
-            const statusId = 'tgs-status-' + Date.now();
-            const btnId = 'tgs-btn-' + Date.now();
-            const qrId = 'tgs-qr-' + Date.now();
-
-            container.innerHTML = `
-                <div class="tgs-header">
-                    <span class="tgs-header-icon">✈️</span>
-                    <div class="tgs-header-text">
-                        <h3>Connect Telegram</h3>
-                        <p>Get Zoe's responses and task updates on Telegram</p>
-                    </div>
-                </div>
-                <div class="tgs-body">
-                    <div class="tgs-steps">
-                        <div class="tgs-step">
-                            <span class="tgs-step-num">1</span>
-                            <div class="tgs-step-content">
-                                <div class="tgs-step-title">Create your bot</div>
-                                <div class="tgs-step-desc">
-                                    Open Telegram and message <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>.
-                                    Send <code style="background:rgba(0,136,204,0.1);padding:1px 6px;border-radius:4px;font-family:monospace">/newbot</code>
-                                    and follow the prompts to create a new bot. You'll receive a token like <code style="background:rgba(0,136,204,0.1);padding:1px 6px;border-radius:4px;font-family:monospace">123456:ABC-DEF...</code>
-                                </div>
-                                <div class="tgs-qr-row">
-                                    <div class="tgs-qr-box"><canvas id="${qrId}" width="80" height="80"></canvas></div>
-                                    <div style="font-size:12px;color:var(--clr-text-2)">Scan to open<br>@BotFather on your phone</div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="tgs-step">
-                            <span class="tgs-step-num">2</span>
-                            <div class="tgs-step-content">
-                                <div class="tgs-step-title">Paste your bot token below</div>
-                                <div class="tgs-step-desc">Copy the token BotFather gave you and paste it here.</div>
-                                <div class="tgs-token-row">
-                                    <input id="${tokenInputId}" class="tgs-token-input" type="text" 
-                                           placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
-                                           autocomplete="off" spellcheck="false">
-                                    <button id="${btnId}" class="tgs-connect-btn" 
-                                            onclick="connectTelegram('${tokenInputId}','${btnId}','${statusId}')">
-                                        Connect
-                                    </button>
-                                </div>
-                                <div id="${statusId}" class="tgs-status"></div>
-                            </div>
-                        </div>
-                        <div class="tgs-step">
-                            <span class="tgs-step-num">3</span>
-                            <div class="tgs-step-content">
-                                <div class="tgs-step-title">Start a chat with your bot</div>
-                                <div class="tgs-step-desc">
-                                    After connecting, open your new bot on Telegram and send it a message. 
-                                    Zoe will reply and confirm the link is working.
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-
-            // Render QR code for BotFather
-            setTimeout(() => {
-                if (typeof QRCode !== 'undefined') {
-                    const qrCanvas = document.getElementById(qrId);
-                    if (qrCanvas) QRCode.toCanvas(qrCanvas, 'https://t.me/BotFather', { width: 80, margin: 1 });
-                }
-            }, 50);
-        }
-
-        async function connectTelegram(inputId, btnId, statusId) {
-            const input = document.getElementById(inputId);
-            const btn = document.getElementById(btnId);
-            const status = document.getElementById(statusId);
-            if (!input || !btn || !status) return;
-
-            const token = input.value.trim();
-            if (!token || !token.includes(':')) {
-                input.classList.add('error');
-                status.className = 'tgs-status error';
-                status.textContent = 'Please paste a valid bot token (format: 123456:ABC...)';
-                return;
-            }
-            input.classList.remove('error');
-            btn.disabled = true;
-            btn.textContent = 'Connecting…';
-            status.className = 'tgs-status';
-            status.style.display = 'none';
-
-            try {
-                const res = await apiRequest('/api/openclaw/telegram/setup', {
-                    method: 'POST',
-                    body: JSON.stringify({ bot_token: token }),
-                });
-                status.className = 'tgs-status success';
-                status.textContent = '✅ ' + (res.message || 'Telegram connected! Send your bot a message to verify.');
-                btn.textContent = 'Connected ✓';
-                btn.style.background = 'var(--clr-success)';
-                input.disabled = true;
-                // Mark step 2 badge as done
-                const stepNums = input.closest('.telegram-setup')?.querySelectorAll('.tgs-step-num');
-                if (stepNums && stepNums[1]) stepNums[1].className = 'tgs-step-num done';
-                if (stepNums && stepNums[1]) stepNums[1].textContent = '✓';
-            } catch (e) {
-                status.className = 'tgs-status error';
-                status.textContent = '❌ ' + (e.message || 'Connection failed. Check the token and try again.');
-                btn.disabled = false;
-                btn.textContent = 'Retry';
-            }
-        }
-        
         async function executeDashboardCommand(data) {
             let cmd = data.command;
             if (cmd === 'add_widget') cmd = 'add_widgets';

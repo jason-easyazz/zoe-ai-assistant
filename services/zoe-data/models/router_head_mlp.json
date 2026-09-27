@@ -1,0 +1,50 @@
+{
+  "activation": "relu",
+  "classes": [
+    "calendar",
+    "chat",
+    "journal",
+    "lists",
+    "memory",
+    "music",
+    "notes",
+    "people",
+    "reminders",
+    "smart_home",
+    "time",
+    "timers",
+    "weather"
+  ],
+  "dtypes": {
+    "coef_0": "float32",
+    "coef_1": "float32",
+    "intercept_0": "float32",
+    "intercept_1": "float32"
+  },
+  "estimator": "sklearn.neural_network.MLPClassifier",
+  "exported_with": {
+    "joblib": "1.5.3",
+    "numpy": "1.26.4",
+    "sklearn": "1.7.2"
+  },
+  "format": "zoe-router-head/1",
+  "input": "BAAI/bge-small-en-v1.5 embedding, float32, L2-normalised (semantic_router)",
+  "kind": "mlp",
+  "layer_shapes": [
+    [
+      384,
+      256
+    ],
+    [
+      256,
+      13
+    ]
+  ],
+  "n_features_in": 384,
+  "n_layers": 2,
+  "npz_sha256": "7f8138d11db0d64add974b588acbf39eaf80e78117ea748d844e808bb478b0c8",
+  "out_activation": "softmax",
+  "preprocessing": [],
+  "source": "router_head_mlp.joblib",
+  "source_sha256": "bb01c2a120d13f77d2b86255d05091d3712a719fc68bface522717baeaa8504f"
+}

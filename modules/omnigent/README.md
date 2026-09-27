@@ -10,7 +10,7 @@ mirroring the `agent-zero` module pattern.
 |------------------|--------------|-------|
 | `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code@2.1.220` (**pinned** — see below; min `2.1.161`) |
 | `codex` CLI      | ✅ works      | `@openai/codex@0.146.0` (**pinned**; min `0.137.0`) |
-| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@0.85.1` **exact**, `--ignore-scripts` (min `0.79.0`; identical value required in `services/zoe-core/package.json`) |
+| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@0.87.1` **exact**, `--ignore-scripts` (min `0.79.0`; identical value required in `services/zoe-core/package.json`) |
 | `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`). **omnigent 0.7.0 enforces a minimum** (`_CURSOR_MIN_VERSION`, currently `2026.06.02`) — an older binary reports `version-too-low`, not `false`. Provision it reproducibly with [`scripts/setup/install_cursor_agent.sh`](../../scripts/setup/install_cursor_agent.sh) (pinned; `--check` verifies a host without changing it). |
 | **omnigent core**| ✅ works      | `omnigent==0.7.0`, plain PyPI install — no vendored wheel needed |
 
@@ -64,8 +64,8 @@ print('broken:', {k:v for k,v in h.items() if not isinstance(v,bool)})"
 
 All three npm CLIs are **exact** pins, at both sites for `pi`
 (`modules/omnigent/Dockerfile` and `services/zoe-core/package.json`). A caret range was
-tried and rejected on review: even with zoe-core's committed lockfile, `^0.85.1` lets
-the Dockerfile's global install pull an unreviewed `0.85.x` and lets the two consumers drift apart — which
+tried and rejected on review: even with zoe-core's committed lockfile, `^0.87.1` lets
+the Dockerfile's global install pull an unreviewed `0.87.x` and lets the two consumers drift apart — which
 defeats the whole "bumps are deliberate" invariant these pins exist to enforce. The
 convenience of one edit instead of two is not worth reopening surprise upgrades.
 `cursor-agent` is pinned separately in `scripts/setup/install_cursor_agent.sh` because
@@ -113,6 +113,26 @@ present in `pi --help`; `pi` bin moved to `dist/bundle/cli.js` (nothing hardcode
 accepts both shapes (#1719). `pi_intent_classifier` and omnigent's `inner/pi_executor.py`
 read only `text_*`/`message_end`/`tool_execution_*` frames and are unaffected. zoe-core
 `npm test` 65/65 on 0.85.1.
+
+**Pi 0.87.1 bump (2026-09-27, age rule waived by the operator):** closes the 2026-09-04
+undici advisories (GHSA-w293-vg96-wgc3, GHSA-rfgv-xxqx-mfg5, GHSA-vp8m-p9jh-q5pm and the
+medium/low set): pi's shrinkwrap now pins **undici 8.10.2** (0.85.1: 8.9.0). It still pins
+**brace-expansion 5.0.9**, which the 2026-09-14 advisories (GHSA-6j4f-fj2g-mc7p,
+GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr — DoS, fixed in 5.0.12) affect; an `overrides`
+entry cannot reach inside pi's shrinkwrap, so that waits for a pi release. Measured by
+driving `pi --mode rpc` exactly like `zoe_core_client._rpc_command` (zoe-core's four
+extensions) against a request-logging fake llama-server, 0.85.1 vs 0.87.1, 3 turns incl.
+a tool call and seam context blocks: every `messages` array is **byte-identical** (one
+leading SOUL system message, superseded `[About you]` blocks still stripped by the
+`context` hook — it never touched system messages), the tool set per request is the same,
+no extra requests (cache warming needs a declared prompt-cache lifetime + ≥$0.05 saving;
+local-gemma declares neither), no grammar/`response_format` fields. The one request diff:
+tools no longer carry `"strict": false` (#9816). **One RPC stream change:** Pi ≥0.86 emits
+`role:"system"` `message_start`/`message_end` frames (initial prompt/tools, then
+`toolsAdded`/`toolsRemoved` on each `setActiveTools` change). `zoe_core_client` /
+`pi_intent_classifier` read text only from `role:"assistant"` (pinned by
+`test_pi087_system_*`), and omnigent's `inner/pi_executor.py` only takes usage/stopReason
+from assistant `message_end` — both unaffected.
 
 **Cursor 2026.01.28 → 2026.07.23-e383d2b coupled-surface review (2026-07-30):** the
 five-month jump was reviewed against the THREE surfaces omnigent 0.7.0 actually couples to
@@ -297,7 +317,7 @@ installed in the image; a worker is "available" only if its binary is on PATH (`
 in `GET /v1/hosts → configured_harnesses`).
 
 `pi` here is a **separate, vanilla install** of the same upstream agent as `services/zoe-core`'s
-brain — pinned to `0.85.1` to match core, but with **no** Zoe extensions / Gemma provider / soul.
+brain — pinned to `0.87.1` to match core, but with **no** Zoe extensions / Gemma provider / soul.
 It does not share state or creds with core's Pi.
 
 `pi` is wired to **OpenRouter** (default model `minimax/minimax-m3` — tool-calling + 1M context,

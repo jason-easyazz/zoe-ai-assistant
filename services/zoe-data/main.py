@@ -1356,6 +1356,25 @@ async def lifespan(app: FastAPI):
         except Exception as _mh_exc:
             logger.warning("Music listening-journal observer not scheduled (non-fatal): %s", _mh_exc)
 
+    # First-boot pairing: revoke confirmed kiosk tokens nobody collected (the
+    # pairing device went away) WITHOUT waiting for a poll that may never come.
+    # Always on — it is credential hygiene, cheap, and a no-op on an empty table.
+    try:
+        from routers import panel_provision as _panel_provision
+        from proactive.scheduler import get_scheduler as _get_aps
+
+        _get_aps().add_job(
+            _panel_provision.sweep_uncollected_tokens,
+            trigger="interval",
+            seconds=_panel_provision._SWEEP_INTERVAL_S,
+            id="panel_provision_token_sweep",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+    except Exception as _pp_exc:
+        logger.warning("Panel pairing token sweep not scheduled (non-fatal): %s", _pp_exc)
+
     # Weekly music discovery — ephemeral digarr batch refreshing the
     # "Zoe Discovery" MA playlist (scripts/maintenance/music_discovery_batch.py;
     # the script owns its own memory + brain-idle gates and container cleanup).

@@ -62,6 +62,14 @@ STEP_UP_DIVERGENCE: dict[str, str] = {
     # 3.10 lane keeps the 0.6.3 pair and must never open it (format guard refuses).
     "chromadb": "B0.8 palace migration — docs/knowledge/chroma-1-5-migration.md",
     "mempalace": "B0.8 — 3.3.1's _fix_blob_seq_ids is unsafe on a 1.x palace",
+    # 2026-09-27 age-waived batch (#1743): taken on the LIVE 3.12 lane only. The 3.10
+    # lane is the hand-managed system site-packages, now rollback-only (the service
+    # runs the 3.12 venv), and requirements.txt must describe what it actually has
+    # (drift check) — nothing installs into it.
+    "uvicorn": "3.12 lane 0.53.0 (ws sans-I/O, replay-gated); 3.10 rollback env holds 0.49.0",
+    "ag-ui-protocol": "3.12 lane 1.0.0 (SSE byte-identical); 3.10 rollback env holds 0.1.19",
+    "fastembed": "3.12 lane 0.8.1 (vectors bit-identical); 3.10 rollback env holds 0.8.0",
+    "livekit-protocol": "3.12 lane 1.1.27; 3.10 rollback env holds 1.1.8",
 }
 
 
@@ -391,6 +399,16 @@ def test_exact_pins_shared_by_both_manifests_agree():
     assert not diverged, (
         f"requirements.txt vs requirements-py312.txt disagree: {diverged} — move both, "
         "or record a deliberate 3.12 step-up in STEP_UP_DIVERGENCE"
+    )
+
+
+def test_step_up_divergence_is_exactly_the_diverged_set():
+    """Every recorded step-up must REALLY diverge — a stale entry would silently
+    exempt a package whose manifests later drift apart for no reason."""
+    a, b = _exact_pins(REQ_310), _exact_pins(REQ_312)
+    really = {k for k in set(a) & set(b) if a[k] != b[k]}
+    assert set(STEP_UP_DIVERGENCE) == really, (
+        f"STEP_UP_DIVERGENCE {sorted(STEP_UP_DIVERGENCE)} != diverged pins {sorted(really)}"
     )
 
 

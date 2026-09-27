@@ -440,8 +440,88 @@ def _drop_flue_only_kwargs(kwargs: dict) -> None:
         )
 
 
+# Caller-supplied LAZY lane context (#1725 follow-up). The Flue sidecar owns its
+# own persona/memory/history and ignores ``history`` / ``db_memory_context`` /
+# ``portrait`` (see ``zoe_flue_client.run_flue_brain_streaming``), yet building
+# them costs ~500 ms per voice turn (measured live: ``memory_packet_ms=502``). A
+# caller that knows the turn is headed for Flue passes an async zero-arg
+# ``context_loader`` INSTEAD of those kwargs; it is resolved only when a lane
+# that reads them is actually dispatched to — a configured core/legacy lane, a
+# circuit-open skip, or a failover hop — and is never called on a Flue-served
+# turn. Values the caller passed explicitly win over loaded ones.
+_CONTEXT_LOADER_KWARG = "context_loader"
+_LOADABLE_CONTEXT_KEYS = ("history", "db_memory_context", "portrait")
+
+
+def _without_context_loader(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The kwargs for a FLUE call: the loader is never forwarded, never called."""
+    if _CONTEXT_LOADER_KWARG not in kwargs:
+        return kwargs
+    return {k: v for k, v in kwargs.items() if k != _CONTEXT_LOADER_KWARG}
+
+
+async def _resolve_context_loader(loader: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Await ``loader`` and merge its lane context into ``kwargs``.
+
+    Best-effort, like the eager build it replaces: a loader that raises
+    degrades the turn to NO context rather than failing it (the lane still
+    answers). Cancellation is never swallowed. Only the known context keys are
+    merged — a loader cannot smuggle dispatch-internal or flue-only kwargs.
+    """
+    try:
+        loaded = await loader()
+    except Exception as exc:
+        logger.warning(
+            "brain dispatch: lazy lane context failed to load (non-fatal, "
+            "dispatching without it): %s",
+            exc,
+        )
+        return kwargs
+    merged = dict(kwargs)
+    for key in _LOADABLE_CONTEXT_KEYS:
+        if key in (loaded or {}):
+            merged.setdefault(key, loaded[key])
+    return merged
+
+
+async def _streaming_with_loaded_context(
+    loader: Any, message: str, session_id: str, user_id: str, kwargs: dict[str, Any]
+) -> AsyncIterator[str]:
+    kwargs = await _resolve_context_loader(loader, kwargs)
+    async for delta in _fallback_streaming_unheld(message, session_id, user_id, **kwargs):
+        yield delta
+
+
+async def _held_for_speculation(factory: Any, gate: Any) -> AsyncIterator[str]:
+    import voice_speculation as _vs
+
+    await _vs.await_commit("brain:non-echoing-lane", gate)
+    async for delta in factory():
+        yield delta
+
+
 def _fallback_streaming(message: str, session_id: str, user_id: str, **kwargs: Any) -> AsyncIterator[str]:
+    """Non-Flue lanes. B1.1: these lanes cannot echo a speculative turn id back on
+    their tool writes (only the Flue sidecar does), so a speculative voice turn
+    that lands here — configured lane or runtime failover — waits for the verdict
+    before the brain starts, and never runs on a cancel. No-op otherwise."""
+    import voice_speculation as _vs
+
+    gate = _vs.bound_gate()
+    if gate is not None:
+        return _held_for_speculation(
+            lambda: _fallback_streaming_unheld(message, session_id, user_id, **kwargs), gate)
+    return _fallback_streaming_unheld(message, session_id, user_id, **kwargs)
+
+
+def _fallback_streaming_unheld(message: str, session_id: str, user_id: str, **kwargs: Any) -> AsyncIterator[str]:
     _drop_flue_only_kwargs(kwargs)
+    loader = kwargs.pop(_CONTEXT_LOADER_KWARG, None)
+    if loader is not None:
+        # The context is built HERE — on the lane that reads it — and only
+        # once the consumer starts iterating. The replay-isolation refusal
+        # above still fires at call time.
+        return _streaming_with_loaded_context(loader, message, session_id, user_id, kwargs)
     if use_core_brain():
         from zoe_core_client import run_zoe_core_streaming
 
@@ -452,7 +532,14 @@ def _fallback_streaming(message: str, session_id: str, user_id: str, **kwargs: A
 
 
 async def _fallback_oneshot(message: str, session_id: str, user_id: str, **kwargs: Any) -> str:
+    import voice_speculation as _vs
+
+    if _vs.bound_gate() is not None:  # see _fallback_streaming: no turn-id echo here
+        await _vs.await_commit("brain:non-echoing-lane")
     _drop_flue_only_kwargs(kwargs)
+    loader = kwargs.pop(_CONTEXT_LOADER_KWARG, None)
+    if loader is not None:
+        kwargs = await _resolve_context_loader(loader, kwargs)
     if use_core_brain():
         from zoe_core_client import run_zoe_core
 
@@ -510,7 +597,7 @@ async def _flue_streaming_with_failover(
                 user_id,
                 raise_transport_errors=True,
                 outcome_sink=outcome_sink,
-                **kwargs,
+                **_without_context_loader(kwargs),
             ):
                 served_any = True
                 yield delta
@@ -606,7 +693,7 @@ async def _flue_oneshot_with_failover(
                 user_id,
                 raise_transport_errors=True,
                 outcome_sink=outcome_sink,
-                **kwargs,
+                **_without_context_loader(kwargs),
             )
         except FlueTransportError as exc:
             _open_circuit(generation)
@@ -666,7 +753,8 @@ async def _flue_streaming_labeled(
 
     try:
         async for delta in run_flue_brain_streaming(
-            message, session_id, user_id, outcome_sink=outcome_sink, **kwargs
+            message, session_id, user_id, outcome_sink=outcome_sink,
+            **_without_context_loader(kwargs),
         ):
             served_any = True
             yield delta
@@ -694,7 +782,8 @@ async def _flue_oneshot_labeled(
     outcome_sink: dict[str, str] = {}
     try:
         text = await run_flue_brain(
-            message, session_id, user_id, outcome_sink=outcome_sink, **kwargs
+            message, session_id, user_id, outcome_sink=outcome_sink,
+            **_without_context_loader(kwargs),
         )
         record.emit(
             attempted="flue",

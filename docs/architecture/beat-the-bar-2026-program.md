@@ -20,30 +20,89 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ## 0. NEXT ACTION (keep this current)
 
-1. 🧑 **Root / operator window on the box (one sitting, ~30 min):** (zram shrink ✅ done
-   2026-09-27 — B0.1); rotate the Telegram token + vacuum the journal (B0.3); rotate the Postgres password
-   (B0.14); set `ZOE_DEFAULT_MEDIA_PLAYER` to the real entity and turn `ZOE_MUSIC_DISCOVERY`
-   off (§4b); **swap in the verified Gemma re-upload** (B6.2 — tensors are byte-identical,
-   only the chat template changed; staged + checksummed, the swap itself was refused to the
-   agent as a production deploy) and restart `llama-server`, then run one replay gate; move
-   the ignored leftover `modules/zoe-music/` (root-owned `__pycache__`, retired in #1653) out
-   of the live checkout — it makes `test_no_zoe_music_module` red locally while CI is green.
-2. **Queue state (2026-09-27 pm):** MERGED since 09-26 — #1691 (B10.0), #1692 (B3.1 lab),
-   #1685 (B1.1, flag-dark), #1700 (B0.11), #1701 (B6.5), #1702 (B10.1, flag-dark), #1706 +
-   #1717 (B0.7), #1709 (B0.4), #1711 + #1712 (B6.6), #1713 (VAD gate), #1714 (B1.10). Landing:
-   #1716 (B6.6 ctx 8192, head-bound replay). Parked draft: #1715 (B5.1
-   evidence); #1694 (B1.11) lands in place per decision (b) 2026-09-27. Voice-scope PRs need a
-   head-bound probe after EVERY `update-branch` (strict mode); the Kokoro-paused window
-   (`systemctl --user stop kokoro-tts` → probe with `--service-dir` → start → verify
-   `curl http://localhost:10201/health` shows `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
-   `dependencies.tts` names the `kokoro-sidecar` provider — `tts.ok` alone is not enough,
-   it also goes green on the espeak/edge fallback or on a CPU-mode Kokoro) frees ~2 GB and is
-   what made today's runs possible under the 700 MB floor. Hold the
-   other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again.
-3. **B0.4 llama.cpp b11194 ✅ APPLIED 2026-09-27** (replay PASS 13/13) and **B0.7 py3.12 venv
-   ✅ LIVE 2026-09-27 16:13**. The Gemma swap (item 1) stays a separate window so the brain
-   changes remain separately attributable. B0.7's last item — one real `/ws/voice/` panel
-   turn — needs the panel on (🧑).
+State as of **2026-09-28 02:30 AWST**:
+- live = `main` `b409dfe5`, and every deploy is green.
+- zoe-data runs on CPython 3.12.13 with uvicorn 0.53.0; `/readyz` is ready and self-recall ok.
+- The brain sidecar is on Flue 2.1.1 + hono 4.13.9, restarted 02:26.
+- pi is 0.87.1 on the host and in Omnigent.
+
+1. 🧑 **Operator window on the box.** The agent cannot do these steps; each one is a production restart,
+   a secret, or a root change:
+   - **B0.8 Chroma 1.5 cutover.** PR #1745 has the client, the pins and the format guards, and
+     it has **not been executed**. The agent's first window step (stop zoe-data and the four
+     timers) was refused by the permission system. The box is unchanged: old palace, venv on
+     chromadb 0.6.3 / mempalace 3.3.1. Run
+     [`chroma-1-5-migration.md`](../knowledge/chroma-1-5-migration.md) §5 in order. Age note:
+     #1745 adopts `mempalace==3.10.0` (14-day rule clears 2026-09-30); Jason's 2026-09-27
+     "do them all now, don't worry about the age rule" covers this batch — record the waiver
+     in the PR when the window runs, or wait until 09-30.
+   - **B0.12 apply.** #1727 is files only. Live is still `0.0.0.0:5432` (`pgvector:pg17` =
+     17.10) and `0.0.0.0:8007`. Run the PR's apply sequence: rebuild the bridge, then recreate
+     Postgres on the pinned 17.11 digest.
+   - **Music Assistant.** Still **2.8.7**. Step 0 of #1723 is applied (bgutil plugin 2.0.0 +
+     yt-dlp 2026.8.19, no plugin/server mismatch lines), but the YouTube cookies have rotated
+     and the provider does not load. Do the panel re-auth first, then the 2.10.3 re-create per
+     `music-ytdlp-js-runtime.md`.
+   - **Secrets.** Revoke the Telegram token and vacuum the journal (B0.3). Rotate the Postgres
+     password (B0.14).
+   - **Needs the panel on.** Make one real `/ws/voice/` turn (the last B0.7 item, and the uvicorn
+     0.53 websockets-sansio proof for #1743). (The Pi provisioning helper is NOT deployed on the
+     live panel — `scripts/setup/touchscreen/README.md` — so #1741's poll secret applies only
+     to panels provisioned in future; re-align those helpers as a set before the next pairing.)
+   - **Brain.** Swap in the verified Gemma re-upload (B6.2). Only the template changed, and
+     the files are staged and checksummed. Do it in its own window so the brain change stays
+     separately attributable, then run one replay gate.
+   - **Housekeeping.**
+     - Set `ZOE_DEFAULT_MEDIA_PLAYER` and turn `ZOE_MUSIC_DISCOVERY` off (§4b).
+     - Move the leftover `modules/zoe-music/` out of the live checkout. It holds a root-owned
+       `__pycache__` (retired in #1653), and it makes `test_no_zoe_music_module` red locally.
+     - Omnigent Claude re-login **before 2026-10-11** (B0.11).
+     - Actions event policy **before 2026-11-02** (B0.10 b).
+     - Dismiss the chromadb Dependabot alert (the pin is held until B0.8).
+     - L4T 36.5; HA `auth_oidc` 1.2.1.
+     - Add the nvm bin to the self-hosted runner's `PATH`; set `vm.page-cluster`.
+     - Prune old MemPalace snapshots.
+     - `ggshield install --mode global --force` (B0.10 c).
+2. **Verify today:** the **07:30 morning brief** is the first run after #1726:
+   `grep -E "T(07:[3-5][0-9]:[0-9]{2}\+0800|23:[3-5][0-9]:[0-9]{2}\+0000).*(morning_checkin: users kept|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`
+   — the app log carries its UTC offset; lines are `+0800` (AWST, `T07:3x`) when the service
+   runs with the box's local zone and `+0000` (`T23:3x` of the previous date) when it runs in
+   UTC, so the pattern matches both (the trigger can fire anywhere in the 07:30–07:59 window).
+   - The brief's own path logs `PROACTIVE_SPOKEN trigger=morning_checkin user=jason …` — that
+     line is the proof; the recipient helper's `users kept=N` line precedes it. Do not rely on
+     the autopilot `fired for N user(s)` line, which comes from a different path.
+   - With the panel off, `outcome=absent` on that PROACTIVE_SPOKEN line still proves the brief
+     was created; with the panel on and idle as guest expect `tier=bound_guest` and only the
+     generic line spoken; `tier=owner` speaks the full brief.
+
+   Also check the Monday 02:31 dreaming run on the new venv drop-in (B3.2).
+3. **Queue state:** the 09-27 wave **landed: 24 PRs**, listed in §6. Still open:
+   - #1745: the B0.8 cutover, 🧑.
+   - #1715: B5.1 evidence, parked draft.
+
+   Dependabot #1734–#1740 were closed, each with a rationale (B0.10). The ~14-day age rule
+   **stays** in `AGENTS.md`; Jason waives it per batch (the 09-27 evening batch
+   #1743/#1744/#1746 was waived).
+
+   Voice-scope PRs need a head-bound probe after EVERY `update-branch` (strict mode). Use the
+   Kokoro-paused window:
+   - `systemctl --user stop kokoro-tts`, run the probe with `--service-dir`, then start Kokoro.
+   - Verify `curl http://localhost:10201/health` shows `pipeline_loaded: true` AND
+     `device: cuda`.
+   - Verify `/readyz` `dependencies.tts` names the `kokoro-sidecar` provider. `tts.ok` alone
+     is not enough: it also goes green on the espeak/edge fallback or on a CPU-mode Kokoro.
+
+   The window frees ~2 GB. Hold the other PRs (drop `auto-merge`) while a voice PR lands, or
+   it goes behind again.
+4. **Next engineering, in order:**
+   1. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).
+   2. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
+      week).
+   3. The `samantha_bar` harness.
+   4. **B3.2/B3.3** on the new store, after the B0.8 cutover.
+   5. Brief-on-arrival (**B2.1**).
+   6. A Kokoro venv without scikit-learn/pandas (B6.6 d).
+   7. The 24 h `--cache-ram` occupancy measurement (B0.4/B6.6).
 
 ## 1. Where Zoe already beats the bar (protect these)
 
@@ -51,7 +110,7 @@ status: 🔨 active — NEXT ACTION is always §0
 |---|---|---|---|
 | Fully local, offline-capable, nothing leaves the house | ✅ | Apple: personal context on-device but reasoning may go to PCC/Gemini; Google/Amazon: cloud | `test_canonical_invariants.py`; replay gate |
 | Per-panel voice + face identity, consented, local | ✅ (flags) | Amazon Omnisense (cloud); Apple: single-user Siri | biometric retention policy |
-| Speaks first (spoken morning brief, presence-gated) | 🔨 silent since 08-16 (guest-owned kiosk presence + session-created recipient rule); fix on `fix/synthetic-user-filter`, verify at 07:30 | Gemini Daily Brief is text; Alexa+ nudges | W2 record; [recipients record](../knowledge/synthetic-users-and-proactive-recipients.md) |
+| Speaks first (spoken morning brief, presence-gated) | 🔨 silent since 08-16 (guest-owned kiosk presence + session-created recipient rule); fix MERGED #1726 (+ `emotional_followup` #1731); first check 2026-09-28 07:30 | Gemini Daily Brief is text; Alexa+ nudges | W2 record; [recipients record](../knowledge/synthetic-users-and-proactive-recipients.md) |
 | Per-stage latency budget + said-vs-did replay gate | ✅ | nobody publishes one | `voice_regression_probe.py` |
 | Self-evolution harness (edits her own code behind a PR gate) | ✅ (paused) | none | Multica/Flue executor |
 | HA + Music Assistant as hidden organs | ✅ | Gemini for Home needs a $10/mo sub | — |
@@ -141,7 +200,7 @@ status: 🔨 active — NEXT ACTION is always §0
   Gate: a written bake-off (tokens/s, RAM, tool-call accuracy on Zoe's corpus) for the
   builder lane only. Any question about the production brain on new hardware is a separate,
   deliberate CANONICAL decision for Jason, out of scope here.
-- B0.3 🧑 Telegram token rotation (BotFather) + `journalctl --rotate && --vacuum-time=1s`.
+- B0.3 🧑 Telegram token rotation (BotFather) + `journalctl --rotate && --vacuum-time=1s`. Still open 2026-09-28.
 - B0.4 ✅ **llama.cpp rebuild at b11194** and re-enable `--flash-attn on` +
   `--cache-type-v q8_0` with MTP (upstream fix PR #25148, 2026-06-30). Keep `--fit off`.
   Gate: 20-turn multi-prompt replay under `flock`; RSS/TTFT vs baseline.
@@ -167,9 +226,8 @@ status: 🔨 active — NEXT ACTION is always §0
   item (1) below). Flag renames: `--mlock` → `--load-mode mmap+mlock`, `enable_thinking`
   kwargs → `--reasoning off`. Tracked template + apply/rollback recipe:
   `scripts/setup/systemd/llama-server.service`, [voice-pipeline.md](../knowledge/voice-pipeline.md)
-  ("Brain build + flags — B0.4"). ⚠ Until #1716 lands, the tracked template still says
-  `--ctx-size 16384` while the live unit runs 8192 (B6.6) — installing the template from
-  `main` before then undoes the B6.6 setting; apply from the #1716 branch or re-add the flag.
+  ("Brain build + flags — B0.4"). ✅ #1716 merged: the tracked template carries
+  `--ctx-size 8192`, the same as the live unit (B6.6).
   **Gate items (2) and "keep
   `--fit off`" are satisfied in the template.** It runs `--parallel 1`, because #28286 (open) leaks
   content between concurrent draft-MTP requests with no garbage-token signature, and the live
@@ -207,20 +265,37 @@ status: 🔨 active — NEXT ACTION is always §0
   corrected (1.23.2 is the last cp310 wheel — moves only with B0.7). Not adopted:
   `pip install -r` in deploy — it would make every deploy a 39-package resolve on the live
   box, which is exactly the class of unobserved runtime change the header forbids.
-  **Safe-now train 2026-09-27** (ecosystem-watch 09-27 §7(a)1; draft PR, voice-gated because
+  **Safe-now train 2026-09-27 — #1722 MERGED** (ecosystem-watch 09-27 §7(a)1; voice-gated because
   both manifests are): psycopg2-binary 2.9.12 → 2.9.13 + prometheus-client 0.25.0 → 0.26.0 in
   both manifests, `validate.yml`'s slim list and `deploy.yml`'s 3.10 fallback list. Proven in a
   throwaway 3.12.13 venv (build + `--check` no drift, ci_safe offline green). **joblib 1.6.0 NOT
   moved:** the pin must equal the router heads' training pin (`labs/setfit-router/requirements.txt`,
   `services/zoe-data/AGENTS.md`) and 1.6.0 adds a `cloudpickle>=3.0` dependency; both heads
   load and predict identically under 1.6.0, so it can ride the sklearn 1.9 re-export PR.
+  (Since B6.6(e) the runtime serves numpy exports, so this hold now protects only the
+  one-release `ZOE_ROUTER_HEADS_BACKEND=joblib` fallback; after it is removed the pin is a
+  plain librosa-transitive pin.)
+  **Age-waived batch 2026-09-27 — #1743 MERGED, live.** The deploy refreshed the venv and
+  restarted zoe-data at 2026-09-28 01:36 AWST; the venv reports uvicorn 0.53.0, fastembed
+  0.8.1, ag-ui-protocol 1.0.0 and livekit-protocol 1.1.27. Jason waived the 14-day rule for
+  this batch only.
+  - uvicorn 0.49.0 → **0.53.0**. `--ws auto` now resolves to websockets-sansio, and the venv
+    build smoke asserts `websockets_sansio_impl`. A real-socket A/B was identical except for
+    the deflate window bits (12). Rollback is `--ws websockets`.
+  - ag-ui-protocol **1.0.0**: the wire bytes are identical.
+  - fastembed **0.8.1**: the router model re-downloads once, and the embeddings are
+    bit-identical.
+  - livekit-protocol **1.1.27**.
+
+  🧑 Still to do: one real panel `/ws/voice/` turn (B0.7).
 - B0.7 ✅ **Python 3.12 venv for zoe-data only** (Kokoro + llama-server stay on 3.10/CUDA 12.6).
   **✅ CUTOVER LIVE 2026-09-27 16:13** — #1706 + #1717 MERGED, drop-in installed; zoe-data's
   MainPID exe is uv CPython 3.12.13 (`~/.zoe/venvs/zoe-data-py312`); `/readyz` ready,
   brain/stt/tts ok, `memory_capture` self-recall ok; replay `--stt remote` with the venv python
   **PASS 13/13** (medians STT 378 / brain 1825 / e2e 1578 ms, relative), VAD stage pass_frac
   0.958; requirements drift 0 problems. Rollback = delete the drop-in + `daemon-reload` +
-  restart. 🧑 Remaining: one real `/ws/voice/` panel turn (needs the panel on).
+  restart. 🧑 Remaining: one real `/ws/voice/` panel turn (needs the panel on). Since #1743, that
+  turn is also the transport proof for uvicorn 0.53's websockets-sansio (B0.6).
   **PR #1706**: every pin MEASURED to resolve on cp312/aarch64 (`requirements-py312.txt`,
   pins identical to the box wherever a cp312 wheel exists), `scripts/setup/build_py312_venv.sh`
   (uv, idempotent, `--dry-run`/`--check`), runbook `docs/knowledge/python-312-venv-migration.md`
@@ -251,7 +326,7 @@ status: 🔨 active — NEXT ACTION is always §0
   Needs a per-interpreter `requirements.txt` (two files: #1706) + a voice-gate
   probe re-baseline pointed at the interpreter that runs STT (the probe never installs
   requirements — see `reference_voice_gate_instrument_facts`).
-- B0.8 🔨 MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7); reconcile row
+- B0.8 🧑 MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7 ✅); reconcile row
   counts against `export_memory_store.py`; self-recall probe.
   **Recipe (2026-09-27): per-collection rebuild, NOT `mempalace migrate`.** mempalace 3.10's
   `extract_drawers_from_sqlite()` (`migrate.py`) selects every embedding in `chroma.sqlite3`
@@ -273,7 +348,7 @@ status: 🔨 active — NEXT ACTION is always §0
     09-25 rebuild, not `cosine`. Distances feed the `1/(1+dist)` blend, so the space must not change silently.
   - `config.json` gets `embedding_model: minilm`
 
-  **Rehearsed 2026-09-27, all 10 proofs PASS**, each in its own subprocess:
+  **Rehearsed 2026-09-27 (#1732 MERGED), all 10 proofs PASS**, each in its own subprocess:
   - counts via API and export-SQL, with the HNSW config kept
   - per-id metadata hash, plus a negative control that catches a single mutated row
   - write round-trip on each collection across 3 fresh processes
@@ -283,20 +358,21 @@ status: 🔨 active — NEXT ACTION is always §0
 
   Peak RSS was 372 MB (the rebuild) and the whole run took 4.4 min. Runbook, measured table
   and cutover/rollback: [docs/knowledge/chroma-1-5-migration.md](../knowledge/chroma-1-5-migration.md).
-  **Cutover prepared 2026-09-27, NOT executed** (PR #1745). The PR pins `chromadb==1.5.9` +
-  `mempalace==3.10.0` in `requirements-py312.txt`; the 3.10 lane keeps 0.6.3 and must never
-  open the palace. It also:
-  - moves zoe-data onto its own raw-chromadb opener with a cached MiniLM EF (1.x's default EF
-    reloads ONNX on every query: 0.4–0.9 s vs 0.2 s)
-  - adds a format guard to zoe-data and to every script opener (a 1.x client would migrate the
-    0.6 rollback snapshot in place)
-  - ports the tombstone report to 1.x pickles
+  **Remaining = the 🧑 cutover window.** **Cutover PR #1745** is open and prepared:
+  - `requirements-py312.txt` moves to `chromadb==1.5.9` + `mempalace==3.10.0`. The 3.10
+    manifest keeps 0.6.3 and must never open the palace.
+  - zoe-data opens the drawers collection with raw chromadb: one `PersistentClient` per
+    directory and one cached MiniLM EF. That measured 0.18–0.27 s per query, against
+    0.42–0.89 s uncached.
+  - Read-only format guards refuse a client of the wrong major version.
 
-  `~/bin/nightly-training-cycle.sh` already runs its store blocks on the venv. The agent's
-  window was refused at "stop zoe-data" by the permission system, so the box is unchanged (old
-  store + old client). The operator sequence is in the runbook §5: merge, window, swap, venv
-  refresh, ff the live tree, `/readyz`, replay, re-run the deploy.
-  **Remaining = the 🧑 cutover window.** mempalace **3.10.0** was uploaded 2026-09-16, so it
+  The cutover was **NOT executed on 2026-09-27 (22:19)**. The agent's first window step (stop
+  zoe-data + the four timers) was refused by the permission system. The box is unchanged: old
+  palace, venv on 0.6.3 / 3.3.1, every timer active. The operator sequence is runbook §5:
+  merge #1745 → lock → stop → `chroma_migrate_rehearsal.py run --date cutover-<date>` (10/10)
+  → swap → `build_py312_venv.sh --refresh` → ff → `/readyz` self-recall ok → demo parity +
+  tombstones + RSS → replay → re-deploy → re-arm the timers. Rollback is §6.
+  mempalace **3.10.0** was uploaded 2026-09-16, so it
   passes the 14-day rule on 2026-09-30. The rehearsal needs no mempalace (its EF's `name()` is
   `"default"`, the same identity the rebuild persists). chromadb 1.5.9 (#6953 legacy `hnsw:`
   keys; cp39-abi3 aarch64) is the target. 3.10's `get_collection()` rejects names other than
@@ -305,9 +381,9 @@ status: 🔨 active — NEXT ACTION is always §0
   (2026-06-06), not 3.6.0 (`migrate.py`'s docstring is wrong the same way).
 - B0.9 ⬜ APScheduler 3.11.3 via `export_jobs`/`import_jobs` with pytz present; `tzlocal>=3`
   in both workflows. Gate: reminder + autopilot row counts unchanged.
-- B0.10 ⬜ GitHub review-pipeline housekeeping — split into dated sub-items 2026-09-26
+- B0.10 🔨 GitHub review-pipeline housekeeping — split into dated sub-items 2026-09-26
   (ecosystem-watch §9); Greptile to Starter unchanged:
-  - (a) 🧑 **before 2026-09-28** — Copilot code-review effort = **Lite** (the Default value
+  - (a) ✅ 2026-09-27 — Jason set Copilot review effort to **Lite**. Original item: 🧑 **before 2026-09-28** — Copilot code-review effort = **Lite** (the Default value
     flips to Balanced, ~5× dearer: Lite ≈ $0.05–1 vs Balanced ≈ $0.25–5 of credits per
     review; changelog 2026-08-28). Repo: Settings → Code, planning, and automation → Copilot →
     Code review → "Review effort level" → Lite (not Default). Account: profile → Copilot
@@ -330,7 +406,7 @@ status: 🔨 active — NEXT ACTION is always §0
     (`event:pull_request_target`, `event:workflow_dispatch`) before flipping. API: `POST
     /repos/{owner}/{repo}/actions/policies` via `gh api -X POST … --input body.json` (no `gh`
     subcommand; read the REST page for field names); `GET/PUT/DELETE …/policies/{id}`.
-  - (c) ⬜ `ggshield-action` v1.53.0 → v1.55.0 in `validate.yml` (1.55.0 2026-09-24; no
+  - (c) ✅ `ggshield-action` v1.53.0 → v1.54.0 (#1731) → **v1.55.0 (#1744)** in `validate.yml` (1.55.0 2026-09-24; no
     breaking change to `secret scan ci`, exit codes or `.gitguardian.yaml` in 1.53–1.55) +
     🧑 `ggshield install --mode global --force` on the box: ggshield 1.53 fixed the global hook
     skipping repo-local hooks in git worktrees (all Zoe work is in worktrees) and an existing
@@ -345,6 +421,14 @@ status: 🔨 active — NEXT ACTION is always §0
   - Review pipeline, 2026-09-26: the **Codex code-review quota was exhausted** mid-day, so the
     cross-vendor pass is unavailable until it refills — fallback for the day's PRs is Greptile
     (label) + Copilot; the deterministic gate is unchanged.
+  - (f) ✅ 2026-09-27: Dependabot version updates configured by #1731. npm and pip each get a
+    minor-patch group, weekly, limit 2; the rocks and chromadb are ignored.
+    - The first batch, #1734–#1740, was closed with a rationale on each. #1734, #1735 and
+      #1739 were superseded by #1746, #1744 and #1743. Deliberately held: pi-ai 0.87 in
+      brain-2x breaks the tool cap (#1736); the TypeScript 7 and `@types/node` 26 majors;
+      tzlocal 5 goes with B0.9.
+    - The ~14-day age rule **stays** in `AGENTS.md`. Jason overrules it per batch; the 09-27
+      evening batch (#1743, #1744, #1746) was waived.
 - B0.11 🔨 Omnigent: bake the `url=` Serena entry into the image (patched live 2026-09-25 in
   `/root/.codex/config.toml`; a container recreate reverts it); renew the Claude login before
   2026-10-11; move the polly lane off `claude-sdk` OAuth (policy). PR #1700 (merged): the file
@@ -353,10 +437,13 @@ status: 🔨 active — NEXT ACTION is always §0
   `entrypoint.sh` on every boot (hooks.state kept); renewal steps + the polly-lane policy note
   recorded in `docs/knowledge/omnigent-container-config.md`. Post-merge: coordinator rebuilds +
   recreates the container (`docker compose ... up -d --build` from `modules/omnigent/`); the
-  login renewal and the policy decision remain operator steps.
+  login renewal and the policy decision remain operator steps. **2026-09-27:** container rebuilt
+  on **Node 22.23.3** (`docker exec zoe-omnigent node --version`). After #1746 merged, the
+  operator session rebuilt it again: `docker exec zoe-omnigent pi --version` = **0.87.1**
+  (2026-09-28 ~02:15). The host-global pi is also 0.87.1.
 - B0.12 🔨 HA tool-name sweep (`domain__Tool` prefixes) → HA 2026.9/10 upgrade; adopt the
   MCP `device_id` meta so panel commands resolve to their room. Then MA 2.10 client check.
-  Part 1 = draft PR #1695: sweep found NO live call site (bridge is pure REST; HA's
+  Part 1 = PR #1695 (merged): sweep found NO live call site (bridge is pure REST; HA's
   `mcp_server` is not loaded on 2026.5.2); `ha_tool_names.py` + `GET /tools/names` centralise
   the spelling with `/api/config` version detection; runbook
   `docs/knowledge/ha-2026-9-upgrade-runbook.md`. Part 2 = the stepped upgrade (operator) then
@@ -375,7 +462,7 @@ status: 🔨 active — NEXT ACTION is always §0
   (aiosendspin 9.1.1, PIN-pairing breaking at 9.0.0), the panel's shairport-sync 5.1 in
   PTP/Automatic mode (support #6243 pattern — pin the streaming mode if silent), and the
   bgutil 2.0.0 localhost bind reachable from MA's namespace (`127.0.0.1:4416`).
-  **MA 2.10.3 pt (2026-09-27, draft PR):** YouTube Music DOWN since 09-25 18:16 — bgutil
+  **MA 2.10.3 pt (2026-09-27, #1723 MERGED):** YouTube Music DOWN since 09-25 18:16 — bgutil
   plugin 1.3.1 inside MA vs server 2.0.0 (major mismatch; MA installs the plugin only on
   container CREATE, never on restart) + stale yt-dlp 2026.07.04 + rotated cookies. Pin moved
   to 2.10.3 (`sha256:88587222…`, closes the 3 MA advisories), stage 1 green (deno 2.9.5);
@@ -391,9 +478,14 @@ status: 🔨 active — NEXT ACTION is always §0
   2026.8.19 + plugin 2.0.0, `docker restart`, full probe, panel re-auth; then deploy
   zoe-data → stopped store backup → re-create on 2.10.3 → full probe → panel re-auth →
   Sendspin re-pair / "Zoe Panel" AirPlay mode check. Recipe + API table:
-  `docs/knowledge/music-ytdlp-js-runtime.md`.
-  **Network hardening (2026-09-27, draft PR `fix/loopback-postgres-ha-bridge`, operator
-  apply):** `zoe-database` → `127.0.0.1:5432` + `pgvector/pgvector:0.8.6-pg17@sha256:cf134a76…`
+  `docs/knowledge/music-ytdlp-js-runtime.md`. **Live 2026-09-28 01:00:**
+  - MA is still **2.8.7** (`/info`).
+  - Step 0 is applied: plugin 2.0.0 and yt-dlp 2026.8.19, with no mismatch lines in the
+    last 2 h.
+  - The ytmusic provider still fails to load, because the cookies have rotated.
+
+  🧑 Panel re-auth, then the 2.10.3 re-create.
+  **Network hardening (2026-09-27, #1727 MERGED — files only, 🧑 apply pending):** `zoe-database` → `127.0.0.1:5432` + `pgvector/pgvector:0.8.6-pg17@sha256:cf134a76…`
   (PostgreSQL 17.10 → 17.11, ~25 CVEs; minor = same data dir; `vector` 0.8.2 → 0.8.6 update
   scripts are no-ops, no hnsw/ivfflat index exists); `multica-backend` → `zoe-database:5432`
   (was `host.docker.internal`, unreachable once loopback-bound) and re-pinned to the digest it
@@ -401,16 +493,34 @@ status: 🔨 active — NEXT ACTION is always §0
   pins (starlette 1.6.0, anyio 4.15.1, idna 3.19, click 8.5.0 …) on
   `python:3.11.16-slim-bookworm@sha256`, rebuild required; CD/in-app updater `compose up` now
   `--no-deps` so a deploy cannot recreate Postgres. Guard: `tests/unit/test_compose_loopback_binds.py`
-  (`LAN_LEDGER`). Apply sequence in the PR body.
+  (`LAN_LEDGER`). Apply sequence in the PR body. Live 2026-09-28: still `0.0.0.0:5432` /
+  `0.0.0.0:8007`, image `pgvector/pgvector:pg17` (17.10) — not applied yet.
 - B0.13 ⬜ JetPack 7.2.x reflash window — only after B0.7/B0.8 and when the J401 BSP + an
   Orin wheel index exist.
 
 ### B1 — Turn-taking that feels like a person (beats GPT-Live locally)
 - B1.1 🔨 **Speculative turn-start with a speculation gate** — PR #1685 MERGED (flag-dark
   `ZOE_SPECULATIVE_*`, server-side gate + daemon verdict, 30 tests, break-the-fix controls;
-  stays dark until phase 2 defers write side-effects to commit; needs the panel on + a replay
+  stays dark until the flip criteria below are met; needs the panel on + a replay
   gate bound to its head — the 2026-09-25 attempt skipped on the 700 MB floor, so it waits
-  for B0.1 or a quiet nightly): fire the brain on Smart Turn's
+  for B0.1 or a quiet nightly). **2026-09-27 groundwork — #1742 MERGED (flag dark, deployed
+  16:54Z):** phase 2 DONE in code — every side effect of a speculative turn waits for the
+  verdict (turn-level hold + `execute_intent` / Skybridge / expert funnels + `_spawn_bg`
+  queue + the brain-tool intent-dispatch hold; once on commit, dropped on cancel; negative
+  controls). The review rounds added two things:
+  - a wire-2 turn-id echo. The Flue seam carries ` zoe-spec:<id>`, and the 2.x sidecar strips
+    it before the model and echoes `speculative_turn_id` on every dispatch. The brain-tool
+    hold is therefore keyed on the originating turn, not the user.
+  - fail-closed refusal of an unknown turn id, for example after a zoe-data restart.
+
+  Offline over 1171 corpus recordings at the live 640 ms close: tail 320 →
+  **14.3 % cancels (upper bound), 320 ms median saving**; 400 → 9.3 % / 240 ms; 480 →
+  5.0 % / 160 ms; 560 → 2.3 % / 80 ms; 640 inert. Smart Turn veto: NOT a win (−1 pt cancels,
+  −70–100 ms mean saving/turn). Moonshine `vad_threshold`: keep default (4 of 6 always-EMPTY
+  clips are empty even with VAD off; at most 1 command-shaped recovery at 0.0, +0.7 s wall;
+  engine output not deterministic across loads). Remaining before the flip (next, once the panel is on): Pi proof, head-bound
+  replay PASS, RAM flat, operator flag-on week (< 30 % live cancels, ≥ 250 ms median saving,
+  zero double-speak / duplicate writes). Original plan: fire the brain on Smart Turn's
   first "complete" (or a short VAD stop), hold TTS frames until the turn is confirmed,
   drop on cancel, keep if the final transcript is equivalent. Source: HF
   `speech-to-speech --speculative_reopen_ms`, Pipecat `speculation_gate.py`, LiveKit
@@ -421,7 +531,7 @@ status: 🔨 active — NEXT ACTION is always §0
   interrupt needs ≥3 s of TTS elapsed and low continue-probability; `MinWords` (2–3) from a
   fast STT pass before cancelling; VAD hysteresis gap 0.15. Gate: false-barge count on the
   corpus with Kokoro playing through the panel speaker.
-- B1.4 ⬜ **Smart Turn v3.2 + Silero v6.2 file** (drop-ins) and **backchannels**: reuse the
+- B1.4 🔨 **Smart Turn v3.2 + Silero v6.2 file** (drop-ins) and **backchannels**: reuse the
   Smart Turn "incomplete" score to play a soft "mm-hm" after ≥0.7 s of speech, 2.5 s
   cooldown. Add "interruptions per conversation" and "silence before first audio" to the
   replay harness.
@@ -435,13 +545,13 @@ status: 🔨 active — NEXT ACTION is always §0
   green) if the model file is absent, fewer usable 16 k clips than the minimum, or
   MemAvailable < 400 MB; read the artifact's `vad` block, not just the verdict. ✅ Nit: `voice_vad.py` docstring said "v5" — fixed with the loader fix below.
   **2026-09-27 (late) — CORRECTION: v6.2.1 was NOT incompatible; our loader was**
-  (fix/vad-64-sample-context). `voice_vad.py` fed bare 512-sample hops; upstream
+  (**#1721 MERGED**). `voice_vad.py` fed bare 512-sample hops; upstream
   `OnnxWrapper` prepends the previous 64 samples (576-sample input) and v6 models are
   calibrated for it. With the context: v6.2.1 42/44 stride clips (was 0/44), probe stage
   20/24 → pass; live v6.0 corpus-wide 95.9 % > 0.5 (was 94.0 %), median detection lag after
   energy onset 0 ms (was 128 ms), noise floor 0.114 (was 0.434); probe stage newest-24 moved
   23/24 → 19/24 (quiet recent captures; floor 60 % unchanged) — **VAD-stage numbers
-  re-baseline on merge**. Does not move live panel latency (the Pi daemon's torch.hub wrapper
+  re-baselined by #1721** (post-deploy replay VAD stage 0.792). Does not move live panel latency (the Pi daemon's torch.hub wrapper
   already handles context; `voice_vad.py` serves the dormant LiveKit lane + the probe).
   **v6.0 stays live.** ⬜ Follow-up: A/B v6.0 vs v6.2.x on TTS-echo/noise false triggers
   (+ onset) at the barge threshold, re-check the barge knobs and the curator's 0.20
@@ -507,19 +617,32 @@ status: 🔨 active — NEXT ACTION is always §0
   or env var reverts them; best config-only mitigation (glibc `MALLOC_*`) is still ~30 % slower
   per step, so HOLD stands (decoder step 63 ms vs 21 ms; runbook §8–§10). The 0.1.3 A/B is
   done (adopted, above). Next: 🧑 the upstream issue naming the flags — Jason's call.
-- B1.11 🔨 LANDING IN PLACE per operator decision (b) 2026-09-27 — Flue 2.1.1 (`@flue/*`
+- B1.11 ✅ LIVE 2026-09-27 (#1694 MERGED, landed in place per operator decision (b)) — Flue 2.1.1 (`@flue/*`
   2.0.1 → 2.1.1 in both 2x sidecars; `pi-ai` held at 0.83.0; `hono` pinned 4.13.7, the newest
   release ≥14 days old — 4.13.8/4.13.9 are too young; nanoid advisories cleared; `npm audit
   --omit=dev` 0 in both trees; 231/231 brain + 44/44 telegram tests, typecheck, build and both
   built smokes green on the merged tree; store format unchanged, one fold-checkpoint re-fold on
   first start). `labs/AGENTS.md` amended the same day: in-place PATCH/MINOR bumps of the two
   auto-deployed Flue trees are allowed with head-bound parallel-port proof + the land-time
-  voice-gate replay; majors still take route (a), sibling + cutover. Draft **PR #1694**: the
+  voice-gate replay; majors still take route (a), sibling + cutover. **PR #1694**: the
   final-head build ran as a second sidecar on :3580 with an isolated `ZOE_BRAIN_DB` store and
   the head-bound replay (`--service-dir` on the PR worktree, remote STT) PASSED — sha, OK count,
   medians and VAD in the PR's evidence comment (a commit cannot carry numbers measured on
-  itself). Remaining: the land-time head-bound voice-gate replay. Then 2.2.0 for the llama.cpp
-  tool-call fixes.
+  itself). It landed with the head-bound voice-gate replay. Follow-on bumps:
+  - hono 4.13.7 (#1719, which also lets `zoe_core_client` accept pi ≥0.84's `toolcall_start`
+    shape), then 4.13.9 (#1744, age-waived; live in both sidecars, and the brain restarted
+    by deploy at 02:26, `/health` ok).
+  - pi-coding-agent 0.82.1 → 0.85.1 (#1720) → **0.87.1** (#1746, age-waived; undici 8.10.2).
+    It moves at all three pin sites: zoe-core, the Omnigent Dockerfile and
+    `pi_runtime_probe`. **Live 2026-09-28:** the host-global pi under nvm 22.22.0 is 0.87.1,
+    and so is `zoe-omnigent`. Core-lane pi workers that are already running pick it up on
+    their next recycle.
+  - `pi-ai` stays **0.83.0** in the 2x sidecar. Dependabot #1736 was closed because 0.87
+    breaks the cap (below).
+  - Still open upstream: brace-expansion 5.0.9 inside pi's shrinkwrap. The fix needs a pi
+    release.
+
+  Next: 2.2.0 for the llama.cpp tool-call fixes, only after the port below.
   **Flue 2.2.0 is NOT drop-in (2026-09-26, §4):** it exists only as `2.2.0-next.1` on npm
   (2026-09-25; no 2.1.2, no 2.2.0 final) and bumps Pi to 0.87.1. Pi ≥0.86 changes the
   `ProviderStreams` input from `Context` to `TranscriptContext` (system prompt + tools travel
@@ -532,7 +655,7 @@ status: 🔨 active — NEXT ACTION is always §0
   do not advertise them) is a Flue-reachable llama.cpp fix; #8275 (thinking budget) came in
   0.84.3; #9528 (`enable_thinking`) is CLI-side. 2.1.1 already swapped the `flue.tool.call.*`
   trace attrs for `gen_ai.tool.call.*` (check trace consumers). Pins are
-  `@earendil-works/pi-ai` 0.83.0 (2x sidecar) / `pi-coding-agent` 0.82.1 (`zoe-core`), not
+  `@earendil-works/pi-ai` 0.83.0 (2x sidecar) / `pi-coding-agent` 0.87.1 (`zoe-core`, since #1746), not
   `@mariozechner/*` (dead scope, last publish 0.73.1).
 
 ### B2 — Proactivity with judgement (beats Daily Brief / Alexa+ nudges)
@@ -577,13 +700,14 @@ status: 🔨 active — NEXT ACTION is always §0
   `zoe-dreaming.timer` (02:30 AWST nightly) runs `scripts/maintenance/zoe-nightly-dreaming.py`
   → `run_dreaming_for_all`, whose weekly phases (consolidation, synthesis, portrait, agent sync)
   gate on a **UTC** Sunday = the Monday 02:30 AWST run; last weekly pass 2026-09-21 (portrait
-  `ok` for jason, 66 memories). Follow-ups: 🧑 `zoe-dreaming.service` (box-only unit, no repo
-  template under `scripts/setup/systemd/`) still runs `/usr/bin/python3` (3.10); operator step
-  = add drop-in `~/.config/systemd/user/zoe-dreaming.service.d/60-py312-venv.conf` overriding
+  `ok` for jason, 66 memories). Follow-ups: ✅ 2026-09-27 17:48, the operator installed the
+  drop-in for `zoe-dreaming.service`. It is a box-only unit with no repo template under
+  `scripts/setup/systemd/`, and it used to run `/usr/bin/python3` (3.10). The drop-in is
+  `~/.config/systemd/user/zoe-dreaming.service.d/60-py312-venv.conf`, overriding
   `ExecStart` to `%h/.zoe/venvs/zoe-data-py312/bin/python
   /home/zoe/assistant/scripts/maintenance/zoe-nightly-dreaming.py` + `daemon-reload`; imports
   (chromadb, db_pool, memory_digest) verified to resolve under the venv 2026-09-27; verify the
-  Mon 2026-09-28 02:31 AWST run log. ✅ It also iterated ~24 users incl. test/probe ids: now filtered by `user_filters.is_synthetic_user` (dreaming, consolidation, music, portrait, proactive triggers; `ZOE_SYNTHETIC_USER_ALLOWLIST`), and the leaking probe chat sessions are purged nightly (branch `fix/synthetic-user-filter`; [record](../knowledge/synthetic-users-and-proactive-recipients.md)).
+  Mon 2026-09-28 02:31 AWST run log. ✅ It also iterated ~24 users incl. test/probe ids: now filtered by `user_filters.is_synthetic_user` (dreaming, consolidation, music, portrait, proactive triggers; `ZOE_SYNTHETIC_USER_ALLOWLIST`), and the leaking probe chat sessions are purged nightly (#1726 MERGED; `emotional_followup` joined in #1731; [record](../knowledge/synthetic-users-and-proactive-recipients.md)).
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -714,7 +838,7 @@ status: 🔨 active — NEXT ACTION is always §0
   (failover suite green → replay PASS with the flag exported → live stop-the-sidecar drill
   read from `BRAIN_LANE`) is now spelled out in `services/zoe-data/.env.example` (B1 in the
   register).
-- B6.6 🔨 **Resident-memory hygiene** — measured 2026-09-27
+- B6.6 ✅ **Resident-memory hygiene** ((a)–(e) landed 2026-09-27; ⬜ follow-ups inline) — measured 2026-09-27
   ([resident-memory-hygiene-2026-09-27.md](../knowledge/resident-memory-hygiene-2026-09-27.md)).
   zoe-data's `import main` loads no heavy library (~64 MB); the ~1.2 GB is the hot-path set
   (Moonshine, router head, fastembed, Chroma). ✅ #1711: cached, CPU-pinned `VoiceEncoder` + a
@@ -732,28 +856,62 @@ status: 🔨 active — NEXT ACTION is always §0
   timer only if it grows > ~100 MB/day.
   (c) **`--ctx-size 8192` APPLIED 2026-09-27 14:13** (p99 prompt observed 3280 tokens; the
   Flue 2.x sidecar windows prompts to 8192); PR #1716 (unit template + Pi compaction + portrait
-  token budget + tool-result fitter) is **landing** via head-bound replay. Backup:
-  `~/.cache/zoe/llama-server.service.pre-b6-6`. ⬜ Stale comment:
-  `labs/flue-zoe-brain-2x/src/context-window.ts` still says `--ctx-size 16384 --parallel 2`
-  (fix in a labs PR, not here).
-  (d) ✅ **Kokoro glibc arena cap APPLIED 2026-09-27**. The tracked drop-in
+  token budget + tool-result fitter) **MERGED**. Backup:
+  `~/.cache/zoe/llama-server.service.pre-b6-6`. ✅ #1725 fixed the stale `--ctx-size 16384
+  --parallel 2` comments in the sidecar (`context-window.ts`, `capped-completions.ts`, README).
+  (d) ✅ **Kokoro glibc arena cap APPLIED 2026-09-27 (#1724 MERGED)**. The tracked drop-in
   `scripts/setup/systemd/kokoro-tts.service.d/40-memory-tuning.conf` sets `MALLOC_ARENA_MAX=2` +
   `MALLOC_TRIM_THRESHOLD_=131072`. Measured in a same-age controlled A/B: **−113 to −125 MB anon**
   (VmRSS −73 to −112 MB), with synth p50/p95 within noise over two ABAB rounds. The predicted
   −400 to −800 MB did not happen: the "arena bloat" was mostly live data. Details and table:
   [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro sidecar memory). ⬜ The remaining
   Kokoro RAM lever is a dedicated venv without scikit-learn/pandas (~−100 MB).
+  (e) ✅ **Router heads on numpy — no scikit-learn/scipy in zoe-data** (#1730 MERGED, LIVE:
+  the running zoe-data maps 0 sklearn/scipy files, checked 2026-09-28; −73 MB). Both stage-1
+  heads (logreg 13×384; MLP 384→256 relu→13 softmax) are exported to `.npz` + JSON by
+  `scripts/maintenance/export_router_heads.py` and served by `router_heads_numpy.py`
+  (`ZOE_ROUTER_HEADS_BACKEND=numpy` default, `joblib` = one-release fallback). Parity vs
+  sklearn 1.7.2 `predict_proba`: **max-abs 0.0** (bit-identical) on 1,291 embedded corpus
+  utterances + 1,000 unit + 1,000 Gaussian random vectors; negative control (one weight
+  +1e-2) goes red. Head load in a fresh capped interpreter: **+72.7 MB / 1.23 s / 815 modules
+  → +1.7 MB / 0.012 s / 7 modules**; `import main` unchanged (heads were already lazy). The
+  scikit-learn/joblib pins stay (librosa, via Resemblyzer, declares them), held at the
+  training pins until the fallback is removed; scipy stays (Resemblyzer imports it).
 
-- B6.6 🔨 **Brain flags tuning** (2026-09-27, two replay-gated brain windows on b11194, one
+- B6.6 ✅ **Brain flags tuning** (2026-09-27, two replay-gated brain windows on b11194, one
   flag vs the live set per run, same-session control; evidence in
-  `docs/knowledge/brain-flags-tuning-2026-09.md`). **`--ctx-size 16384 → 8192` ADOPTED in the
-  template** (draft PR, apply pending in a Kokoro-paused window). It saves −170 MiB RSS at
+  `docs/knowledge/brain-flags-tuning-2026-09.md`). **`--ctx-size 16384 → 8192` ADOPTED**
+  (#1716 MERGED; live since 2026-09-27 14:13). It saves −170 MiB RSS at
   load, replay PASS. 36 h of live traffic (630 turns): prompt+reply p99 3280 / max 3338. The
   Flue client already windows to 8192. **`--cache-ram` stays 2048**: `0` = +4.1 s TTFT on every
   repeat chat turn (one slot rotates ~5 prompts per turn), and `512` is unprovable because one
   main-turn entry is ~170 MiB with SWA checkpoints. **Draft-MTP stays n-max 4 / p-min 0.6**:
   3/6/8 and 0.5/0.7 are all within ~±3 % noise, and 6/8 are slightly worse, as upstream
-  #27210 predicts. Follow-up ⬜ `--ctx-checkpoints` (default 32 × ~10.6 MiB per cache entry)
+  #27210 predicts. **#1728 re-confirmed this with a full 3×3 grid.** It covered n-max {3,4,6}
+  × p-min {0.4,0.6,0.8} over 14 runs, and every run passed 13/13. The arms that beat the
+  control rode luckier prefix-cache reuse, and decode ms/token stayed flat. So nothing
+  changed, and the live unit was restored byte-identical.
+
+  **Router sidecar hardened live (#1728).**
+  - `--cache-ram 64`: when unset, the default was 8 GiB inside a 1 GiB cgroup.
+  - `--ctx-size 1024`: the longest live request was 87 tokens.
+  - The 81-case corpus decisions are identical (91.4 %, 0 chat-FP).
+
+  **Pre-brain latency (#1725).** The prompt-cache misses came from tool-list churn:
+  progressive disclosure retracted groups and inserted new ones mid-block.
+  - The tool block is now append-only per session.
+  - The context loads run concurrently.
+  - New `VOICE TIMING` / `FLUE_PROMPT_CACHE` log lines.
+
+  Post-deploy, misses fell from 6–7/14 to 2/14, both first activations of a group. The replay
+  brain median is 1476 ms.
+
+  **Lazy memory packet (#1733).** The Flue lane never read the ~500 ms voice memory packet. It
+  is now built only on a core/legacy failover hop (`ZOE_VOICE_MEMORY_PACKET_LAZY`, default
+  on), which saves ~500 ms per turn and keeps the failover budget. No live panel turn has run
+  since, so `packet=skipped` is not yet seen in the app log.
+
+  Follow-up ⬜ `--ctx-checkpoints` (default 32 × ~10.6 MiB per cache entry)
   + a 24 h live cache-occupancy read, before `--cache-ram` is revisited.
 
 ### B7 — Window into Zoe (UI)
@@ -762,7 +920,7 @@ status: 🔨 active — NEXT ACTION is always §0
 - B7.2 ⬜ Ask-card conversation mode (PR-1a) → retire `voice.html`.
 - B7.3 ⬜ Voice-authored automations via HA (Gemini for Home) — later.
 - B7.4 ⬜ "Ask about what you see" via the panel camera, one-shot.
-- B7.5 ⬜ **App-connection handoff engine (QR + send-to-phone)** — VISION principle 8 (Jason,
+- B7.5 ⬜ **NEXT** — **App-connection handoff engine (QR + send-to-phone)** — VISION principle 8 (#1729; Jason,
   2026-09-27): app/account sign-ins show a QR on the panel and finish on the phone, and the
   panel card reflects completion live. Today the music QR (the reference flow) never learns it
   finished, and the token/QR mechanics are copied three times (`music_setup`, `smart_home_setup`,
@@ -777,7 +935,14 @@ status: 🔨 active — NEXT ACTION is always §0
   (zero-scan, works with the panel asleep); guests always get the QR;
   (c) QR onboarding for new members — admin taps "Add person" → QR/Telegram carrying the setup
   token → phone page sets password + PIN (replaces the WARNING-log bootstrap token).
-  Security fixes on these flows are tracked in their own PR, not here.
+  The security fixes on these flows landed separately in **#1741**:
+  - pairing needs a member session and a per-attempt poll secret, and uncollected tokens are
+    swept;
+  - the YT Music viewer is locked per session;
+  - `setup_qr.py` issues one-use QR handles, so the setup token is out of query strings.
+
+  Step (a) builds on those handles. #1741's "set up music" reply already points panel chat at
+  Music → Browse → Sources.
 
 ### B8 — Self-evolution (nobody else has it)
 - B8.1 ⬜ Rebuild the executor on Flue 2 (`init()` handles + `durable: true` tools);
@@ -891,7 +1056,7 @@ work today. Verdicts are recorded here so they are not re-litigated in chat.
 | Inherited plan / idea | Verdict | Why |
 |---|---|---|
 | **oh-my-pi as a builder harness** (`omp-builder-adoption.md`, staged binary, H8) | **RETIRE the staging** | Its own trial found a cost leak, not a quality win; the fence is a wrapper + overlay the doc admits is not the top of the stack; it needs a metered OpenRouter key in a flat-rate economy; hashline was disabled upstream for small models. Keep the five pinned ideas as design inputs (replay invariant → B1.1, fact IDs → B3.1). Remove `/home/zoe/.local/bin/omp` + the container mount; mark the record "evaluated, not adopted". |
-| Web-search + claim-backing spike (PR #1610, 62 files, conflicting) | **Re-land small as B10** | Jason asked for live lookups and "are you sure?" backing on 2026-07-24; the valuable part is a few hundred lines of Python. Close #1610, open a ≤300-line PR from its `labs/web-search-spike` core when B1.1 is in review. |
+| Web-search + claim-backing spike (PR #1610, 62 files, conflicting) | **Re-land small as B10** | Jason asked for live lookups and "are you sure?" backing on 2026-07-24; the valuable part is a few hundred lines of Python. Close #1610, open a ≤300-line PR from its `labs/web-search-spike` core when B1.1 is in review. ✅ Done: #1610 closed; re-landed as B10.0 (#1691) + flag-dark B10.1 (#1702); B10.2 (flip) ⬜. |
 | Ask-card conversation mode (PR-1b/1c) + `voice.html` retirement | Finish | One front door; removes a legacy surface; needed for B1 on the panel. |
 | Panel identity W5 shadow week, face enroll/delete UI | Finish (when the panel is on) | Multi-user identity is the edge Apple/Amazon lack locally. Face-ID: build the delete screen or turn the flag off (policy). |
 | Relationship graph / recall boost enablement | Finish the measurement only | Merged; verify the running state and measure lift on real data; no more docs. |
@@ -912,6 +1077,57 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27/28 (overnight refresh, state as of 2026-09-28 02:30 AWST) — **the 09-27 wave
+  landed: 24 PRs.** In merge order:
+  - #1718: tracker.
+  - #1716: B6.6 ctx 8192.
+  - #1719: hono 4.13.7; pi ≥0.84 `toolcall_start` shape.
+  - #1720: pi 0.85.1, three-way pin.
+  - #1694: B1.11 Flue 2.1.1, in place. `labs/AGENTS.md` now allows in-place patch/minor bumps
+    with parallel-port proof.
+  - #1721: VAD 64-sample context. v6.2.1 was not incompatible. Probe re-baselined.
+  - #1727: B0.12 loopback Postgres/HA bridge, files only.
+  - #1726: proactive household recipients, guest-panel tiered presence, synthetic-user
+    filter, purge. This is the root cause and fix for the morning brief that had been silent
+    since 08-16.
+  - #1722: psycopg2 2.9.13, prometheus-client 0.26.
+  - #1723: MA 2.10.3 pin, zoe-data setup-flow port, the YouTube Music incident.
+  - #1724: Kokoro arena, −120 MB.
+  - #1725: pre-brain latency. Tool-list churn root cause; misses 6–7/14 → 2/14.
+  - #1728: router cache-ram/ctx, applied live. MTP A/B: no win, keep 4/0.6.
+  - #1729: VISION principle 8; QR/phone app connections; B7.5.
+  - #1731: housekeeping. Tests no longer write to the live memory store; ggshield 1.54;
+    Dependabot grouping.
+  - #1732: B0.8 rehearsal, 10/10 proofs, 372 MB peak, 266 s.
+  - #1730: numpy router heads, −73 MB, live.
+  - #1733: lazy memory packet, ~−500 ms/turn.
+  - #1741: auth hardening. Its deploy failed at migrate.
+  - #1747: migration 0029 hotfix; the deploy went green.
+  - #1742: B1.1 groundwork, dark.
+  - #1743: uvicorn 0.53 sansio, ag-ui 1.0, fastembed 0.8.1, livekit-protocol 1.1.27.
+  - #1744: ggshield 1.55, hono 4.13.9.
+  - #1746: pi 0.87.1, three-way.
+
+  Box changes:
+  - Serena stale-cache fix: ≈1 GB → 141 MB, and the reaper churn stopped.
+  - Omnigent rebuilt on Node 22.23.3.
+  - The router unit and the dreaming venv drop-in applied.
+
+  Not executed: the B0.8 cutover (#1745). The permission system refused stopping zoe-data;
+  it is 🧑 per runbook §5.
+
+  Process:
+  - Copilot review effort was set to Lite by Jason.
+  - Dependabot #1734–#1740 were closed with a rationale on each.
+  - The age rule stays; it is waived per batch.
+
+  §0 was rewritten around the operator queue, and review §9 was refreshed.
+- 2026-09-27 (night) — voice memory packet lazy on the Flue lane (draft PR): the live sidecar
+  never reads `history` / `db_memory_context` / `portrait`, so the ~500 ms gather measured after
+  #1725 is built only on a core/legacy failover hop (`ZOE_VOICE_MEMORY_PACKET_LAZY`, default on;
+  `VOICE TIMING … packet=skipped`). Voice path: operator lands with the replay gate.
+- 2026-09-27 (night) — B6.6(e) router heads on numpy (draft PR): sklearn/scipy/joblib no
+  longer imported by zoe-data; parity 0.0 on corpus + random; head load +72.7 → +1.7 MB.
 - 2026-09-27 (night) — B0.8 rehearsal done on a copy. The recipe changed from `mempalace migrate`,
   which would merge ~21k audit rows into drawers and drop the audit collection, to a
   per-collection rebuild (`chroma_migrate_rehearsal.py`). All 10 proofs pass; peak RSS 372 MB;

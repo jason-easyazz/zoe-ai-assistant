@@ -148,3 +148,56 @@ def test_brain_tool_sentinel_malformed_is_skipped():
     import json as _json
     s = "__TOOL__:" + _json.dumps({"phase": "start", "name": "x"})  # no id
     assert list(brain_tool_sentinel_events(s, assistant_message_id="m", tool_names=tool_names)) == []
+
+
+def test_emitted_sse_wire_bytes_are_pinned():
+    """The exact SSE bytes zoe-data puts on the wire, one per event shape it emits.
+
+    The chat UI parses these camelCase JSON lines, so a dependency bump that
+    renames a field, changes None-omission or reorders keys breaks the frontend
+    with no Python error. Measured identical under ag-ui-protocol 0.1.19 and
+    1.0.0 (1.0 moved None-omission from the encoder into the models; the bytes
+    did not change). Optional fields left as None must stay OFF the wire.
+    """
+    from ag_ui.core import (
+        RunErrorEvent,
+        StateSnapshotEvent,
+        StepStartedEvent,
+        TextMessageChunkEvent,
+    )
+
+    enc = EventEncoder()
+    cases = [
+        (CustomEvent(name="zoe.run_log", value={"level": "info", "n": None}),
+         '{"type":"CUSTOM","name":"zoe.run_log","value":{"level":"info","n":null}}'),
+        (RunErrorEvent(type=EventType.RUN_ERROR, message="boom", code="approval_invalid"),
+         '{"type":"RUN_ERROR","message":"boom","code":"approval_invalid"}'),
+        (RunErrorEvent(type=EventType.RUN_ERROR, message="boom", code=None),
+         '{"type":"RUN_ERROR","message":"boom"}'),
+        (RunStartedEvent(type=EventType.RUN_STARTED, thread_id="t", run_id="r"),
+         '{"type":"RUN_STARTED","threadId":"t","runId":"r"}'),
+        (RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id="t", run_id="r"),
+         '{"type":"RUN_FINISHED","threadId":"t","runId":"r"}'),
+        (StateSnapshotEvent(type=EventType.STATE_SNAPSHOT, snapshot={"status": "generating", "model": None}),
+         '{"type":"STATE_SNAPSHOT","snapshot":{"status":"generating","model":null}}'),
+        (StepStartedEvent(type=EventType.STEP_STARTED, step_name="calendar"),
+         '{"type":"STEP_STARTED","stepName":"calendar"}'),
+        (TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id="m", role="assistant"),
+         '{"type":"TEXT_MESSAGE_START","messageId":"m","role":"assistant"}'),
+        (TextMessageChunkEvent(type=EventType.TEXT_MESSAGE_CHUNK, message_id="m", role="assistant", delta="hi"),
+         '{"type":"TEXT_MESSAGE_CHUNK","messageId":"m","role":"assistant","delta":"hi"}'),
+        (TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id="m"),
+         '{"type":"TEXT_MESSAGE_END","messageId":"m"}'),
+        (ToolCallStartEvent(type=EventType.TOOL_CALL_START, tool_call_id="c", tool_call_name="lists",
+                            parent_message_id=None),
+         '{"type":"TOOL_CALL_START","toolCallId":"c","toolCallName":"lists"}'),
+        (ToolCallArgsEvent(type=EventType.TOOL_CALL_ARGS, tool_call_id="c", delta="{}"),
+         '{"type":"TOOL_CALL_ARGS","toolCallId":"c","delta":"{}"}'),
+        (ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id="c"),
+         '{"type":"TOOL_CALL_END","toolCallId":"c"}'),
+        (ToolCallResultEvent(type=EventType.TOOL_CALL_RESULT, message_id="m", tool_call_id="c",
+                             content="ok", role="tool"),
+         '{"type":"TOOL_CALL_RESULT","messageId":"m","toolCallId":"c","content":"ok","role":"tool"}'),
+    ]
+    for event, body in cases:
+        assert enc.encode(event) == f"data: {body}\n\n", type(event).__name__
