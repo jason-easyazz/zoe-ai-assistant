@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -50,7 +51,42 @@ def _import_mcp_server():
     return mcp_server
 
 
+def _postgres_endpoint() -> tuple[str, int] | None:
+    """(host, port) the spawned mcp_server will open its pool against: the env's
+    ``POSTGRES_URL``, else the first runtime_env ``.env`` it bootstraps from."""
+    from urllib.parse import urlsplit
+
+    url = os.environ.get("POSTGRES_URL", "")
+    if not url:
+        home = Path.home()
+        for path in (ZOE_DATA / ".env", PROJECT_ROOT / ".env", home / ".hermes" / ".env"):
+            try:
+                for raw in path.read_text(encoding="utf-8").splitlines():
+                    if raw.strip().startswith("POSTGRES_URL="):
+                        url = raw.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+            except OSError:
+                continue
+            if url:
+                break
+    if not url:
+        return None
+    parts = urlsplit(url)
+    return parts.hostname or "localhost", parts.port or 5432
+
+
 def test_stdio_tools_list_exposes_production_tools():
+    # The stdio server inits its DB pool before answering (validate.yml gives it
+    # a postgres service). Locally, skip when Postgres is unreachable (no-network
+    # sandbox) instead of failing; never skip under CI.
+    if not os.environ.get("CI"):
+        endpoint = _postgres_endpoint()
+        if endpoint is None:
+            pytest.skip("mcp_server stdio needs POSTGRES_URL (env or a runtime_env .env)")
+        try:
+            socket.create_connection(endpoint, timeout=1.0).close()
+        except OSError as exc:
+            pytest.skip(f"mcp_server stdio needs Postgres at {endpoint[0]}:{endpoint[1]} ({exc})")
     response = _run_mcp_stdio({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
 
     assert response["jsonrpc"] == "2.0"

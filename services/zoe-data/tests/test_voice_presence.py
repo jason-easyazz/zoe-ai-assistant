@@ -1,4 +1,6 @@
 from datetime import datetime
+import os
+import socket
 import sys
 from pathlib import Path
 
@@ -46,6 +48,59 @@ def _drop_cached_db_pool():
             # terminate() can raise "Event loop is closed" from the transport
             # abort. Connections die with the pytest process either way.
             pass
+
+
+def _lifespan_postgres_endpoint() -> tuple[str, int] | None:
+    """(host, port) of the Postgres ``main``'s lifespan will open, or None.
+
+    Mirrors how the lifespan resolves it without mutating the environment:
+    ``POSTGRES_URL`` from the process env, else the first ``.env`` that
+    ``runtime_env.bootstrap_runtime_env`` would read it from.
+    """
+    from urllib.parse import urlsplit
+
+    import runtime_env
+
+    url = os.environ.get("POSTGRES_URL", "")
+    if not url:
+        for path in runtime_env._ENV_FILES:
+            try:
+                for raw in Path(path).read_text(encoding="utf-8").splitlines():
+                    if raw.strip().startswith("POSTGRES_URL="):
+                        url = raw.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+            except OSError:
+                continue
+            if url:
+                break
+    if not url:
+        return None
+    parts = urlsplit(url)
+    return parts.hostname or "localhost", parts.port or 5432
+
+
+@pytest.fixture
+def lifespan_postgres():
+    """Skip (with the reason) when ``main``'s lifespan cannot reach Postgres.
+
+    The ``/ws/voice/`` tests enter ``TestClient(main.app)``, whose lifespan
+    opens the asyncpg pool — so they are Jetson-lane tests (never ``ci_safe``,
+    see tests/AGENTS.md). Run in a no-network sandbox (``unshare -rn``) they
+    used to fail with ``OSError: Network is unreachable``, which reads as a
+    voice regression and is not one. Probed at TEST time, not import time.
+    Never skips under ``CI`` (GitHub sets it on every runner, self-hosted
+    included): the Jetson lane must go red, not quietly skip, if Postgres is down.
+    """
+    if os.environ.get("CI"):
+        return  # fail closed on any CI runner: there, unreachable is a real failure
+    endpoint = _lifespan_postgres_endpoint()
+    if endpoint is None:
+        pytest.skip("main lifespan needs POSTGRES_URL (not in env or any runtime_env .env file)")
+    try:
+        socket.create_connection(endpoint, timeout=1.0).close()
+    except OSError as exc:
+        pytest.skip(f"main lifespan needs Postgres at {endpoint[0]}:{endpoint[1]} ({exc}) — "
+                    "no-network sandbox; runs on the Jetson self-hosted lane")
 
 
 @pytest.fixture(autouse=True)
@@ -317,6 +372,7 @@ def test_processing_ack_event_can_include_cached_audio(tmp_path):
     assert processing_ack_audio_payload(audio_path=str(audio_path))["source"] == "cached_processing_ack"
 
 
+@pytest.mark.usefixtures("lifespan_postgres")
 def test_websocket_wake_returns_presence_events_without_reasoning(monkeypatch):
     from fastapi.testclient import TestClient
     import main
@@ -340,6 +396,7 @@ def test_websocket_wake_returns_presence_events_without_reasoning(monkeypatch):
             assert ws.receive_json() == {"type": "done"}
 
 
+@pytest.mark.usefixtures("lifespan_postgres")
 def test_websocket_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
     from fastapi.testclient import TestClient
     import main
@@ -364,6 +421,7 @@ def test_websocket_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
             assert ws.receive_json() == {"type": "done"}
 
 
+@pytest.mark.usefixtures("lifespan_postgres")
 def test_websocket_raw_text_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
     from fastapi.testclient import TestClient
     import main
@@ -388,6 +446,7 @@ def test_websocket_raw_text_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
             assert ws.receive_json() == {"type": "done"}
 
 
+@pytest.mark.usefixtures("lifespan_postgres")
 def test_websocket_wake_can_emit_cached_audio_without_reasoning(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
     import main
@@ -419,6 +478,7 @@ def test_websocket_wake_can_emit_cached_audio_without_reasoning(monkeypatch, tmp
             assert ws.receive_json() == {"type": "done"}
 
 
+@pytest.mark.usefixtures("lifespan_postgres")
 def test_websocket_ignores_non_object_json_and_stays_alive(monkeypatch):
     from fastapi.testclient import TestClient
     import main
