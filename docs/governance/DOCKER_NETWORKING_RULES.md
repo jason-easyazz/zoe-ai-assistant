@@ -176,14 +176,20 @@ networks:
 | path | declared in |
 |---|---|
 | `zoe-auth` → `zoe-database:5432` | `docker-compose.yml` (`POSTGRES_URL`) |
+| `zoe-multica-backend` → `zoe-database:5432` | `docker-compose.modules.yml` (`DATABASE_URL`, since 2026-09-27) |
+| `homeassistant` → `homeassistant-mcp-bridge:8007` | `homeassistant/configuration.yaml`, `custom_components/zoe_conversation` |
 | `homeassistant-mcp-bridge` → `homeassistant:8123` | `docker-compose.yml` (`HA_BASE_URL`) |
 | `zoe-cloudflared` → `zoe-ui:80` | `config/cloudflared-config.yml` ingress |
 | `zoe-cloudflared` → `zoe-omnigent:6767` | `config/cloudflared-config.yml` ingress |
 
-> **Not every co-resident container uses Docker DNS.** `zoe-multica-backend` sits on
-> `zoe-network` but reaches Postgres via `host.docker.internal:5432`, **not**
-> `zoe-database:5432` — so "on the same network" does not imply "talks over the network
-> name". Check the service's own env before assuming a path exists.
+> **Container → container goes over the network name, never `host.docker.internal`.**
+> `zoe-database` (`127.0.0.1:5432`) and `homeassistant-mcp-bridge` (`127.0.0.1:8007`) are
+> published on **loopback only**, and `host.docker.internal` is the docker0 gateway, not
+> loopback — so a container using it for those ports gets connection refused.
+> `zoe-multica-backend` used exactly that path for Postgres until 2026-09-27. Every published
+> port is loopback-bound unless it is on the `LAN_LEDGER` in
+> `tests/unit/test_compose_loopback_binds.py`, which also fails on any
+> `host.docker.internal:<loopback-only port>` in a compose env.
 
 > **Most of Zoe's hot path is NOT on this network at all.** The brain (`llama-server`),
 > zoe-data, Kokoro TTS and the router run **host-native** and are reached over

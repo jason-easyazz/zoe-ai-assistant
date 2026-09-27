@@ -678,9 +678,13 @@ async def _install_zoe_platform(db: Any, user: dict) -> dict:
     # ── Docker rebuild for git-backed services ────────────────────────────────
     git_docker_services = [s[0] for s in _DOCKER_SERVICES if s[0] in _GIT_BACKED_IDS and s[5]]  # local_build only
     if git_docker_services:
+        # --no-deps: without it compose also converges depends_on targets, so an
+        # edited zoe-database block would recreate Postgres as a side effect of
+        # rebuilding zoe-auth. Database changes are an operator step (pg_dumpall
+        # first, ordered consumer recreates) — see deploy.yml's zoe-auth step.
         rc_build, out_build = await _run_cmd(
             "docker", "compose", "-f", COMPOSE_FILE,
-            "up", "--build", "-d", *git_docker_services,
+            "up", "--no-deps", "--build", "-d", *git_docker_services,
             timeout=300.0,
             cwd=COMPOSE_PROJECT_DIR,
         )
