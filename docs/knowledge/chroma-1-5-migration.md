@@ -172,7 +172,7 @@ anyway, loudly).
 
 ```bash
 bash -euo pipefail <<'CUTOVER'
-WT=/home/zoe/.worktrees/b0-8-cutover                   # any checkout of the MERGED main
+WT=/home/zoe/.worktrees/b0-8-cutover                   # a CLEAN checkout at exactly the merged cutover commit (verified in preflight)
 D=cutover-$(date +%F-%H%M%S); TS=""; STAGE=preflight    # unique per attempt: a retry gets a NEW dir
 TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
 fail() {
@@ -211,6 +211,11 @@ test -n "$DEPLOY_ID"                                    # empty = deploy not fin
 #    (c) that run must have been REFUSED before the checkout reset: the live tree must still be
 #        on the pre-merge commit (old opener). If the live HEAD already equals the merge commit,
 #        the deploy went through — stop here and follow §6 (the order code→store is broken).
+#    (d) the tool worktree must be clean and at exactly the cutover commit: the migration and the
+#        replay run ITS scripts while the artifact is attributed to the live checkout.
+git -C "$WT" fetch -q origin main && git -C "$WT" checkout -q --detach "$MERGE_SHA"
+test -z "$(git -C "$WT" status --porcelain --untracked-files=no)"   # clean tree (untracked scratch is fine)
+test "$(git -C "$WT" rev-parse HEAD)" = "$MERGE_SHA"
 LIVE_HEAD=$(git -C /home/zoe/assistant rev-parse HEAD)
 test "$LIVE_HEAD" != "$MERGE_SHA"                       # live checkout must NOT be on the merged main yet
 test "$(gh run view "$DEPLOY_ID" --json conclusion --jq .conclusion)" = failure   # the refused run
@@ -369,6 +374,10 @@ Stop zoe-data and the timers. Then:
 - revert the cutover PR (the pins and the opener move back with the store). The format guard
   will otherwise refuse the 0.6 store under 1.5.9, and it will refuse the 1.x store under 0.6.3.
 - start and poll `/readyz`
+- **release the deploy lock the cutover kept** (a post-swap failure deliberately keeps it so no
+  deploy can reset/restart mid-inconsistency): `kill $(cat /tmp/zoe-b08-deploy-lock-holder.pid);
+  rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired` — then re-arm the
+  timers. Until this is done, deploys wait on `/tmp/zoe-deploy.lock` and time out after 300 s.
 
 **Restore the directory. Never just re-pin**: 0.6.3 cannot open the 1.x sysdb (proof f). Writes
 made after cutover live only in the 1.x store. Export them first with `export_memory_store.py`,
