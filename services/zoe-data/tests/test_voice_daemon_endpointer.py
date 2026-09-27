@@ -81,6 +81,10 @@ def _make_endpointer(vad_enabled, vad_probs=None, spoke=False, tail_ms=0):
         # pre-existing case in this file exercises the flag-off path unchanged.
         "ZOE_VAD_TAIL_MS": tail_ms,
         "ZOE_VAD_TAIL_DEEP_PROB": 0.10,
+        # B1.1 speculative turn-start: off, so the first-verdict hook never
+        # fires and every case here stays on the pre-flag decision table.
+        "ZOE_SPECULATIVE_TURN": False,
+        "ZOE_SPECULATIVE_TAIL_MS": 320,
     }
     exec(compile(m.group(0), _DAEMON, "exec"), g)
     return g["_Endpointer"](spoke=spoke)

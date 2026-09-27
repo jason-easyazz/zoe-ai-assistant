@@ -2931,7 +2931,8 @@ async def consume_telegram_link_token(
     so a token can only ever link the redeemer's own Telegram account.
     """
     import telegram_link
-    from routers.user_profile import _TELEGRAM_ID_RE, _read_prefs, _write_prefs
+    from routers.user_profile import _TELEGRAM_ID_RE
+    from user_prefs import delete_pref, set_pref
 
     token = (body.token or "").strip()
     # verify_link_token validates AND atomically RESERVES the token (single-use).
@@ -2961,15 +2962,12 @@ async def consume_telegram_link_token(
                WHERE prefs::jsonb ->> 'telegram_id' = ? AND user_id != ?""",
             (tid, user_id),
         )
+        # Atomic + conditional key ops (see user_prefs): never a stale full-copy
+        # write that could drop a concurrent change to another key.
         for row in await cursor.fetchall():
-            other_prefs = await _read_prefs(db, row["user_id"])
-            if other_prefs.get("telegram_id") == tid:
-                other_prefs.pop("telegram_id", None)
-                await _write_prefs(db, row["user_id"], other_prefs)
+            await delete_pref(row["user_id"], "telegram_id", db=db, only_if=tid)
 
-        prefs = await _read_prefs(db, user_id)
-        prefs["telegram_id"] = tid
-        await _write_prefs(db, user_id, prefs)
+        await set_pref(user_id, "telegram_id", tid, db=db)
     except BaseException:
         # Failure before commit → free the reservation so the user can re-scan.
         # BaseException (not Exception) so asyncio.CancelledError — raised when
