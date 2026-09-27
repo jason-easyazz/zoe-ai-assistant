@@ -1,7 +1,7 @@
 ---
 type: reference
 title: Brain flags tuning (B6.6) — cache-ram, ctx-size, draft-MTP depth
-description: Measured on the Orin 2026-09-27 against llama.cpp b11194 (the B0.4 live set). What --cache-ram actually holds with one slot, the real prompt-length distribution behind --ctx-size, and draft-MTP n-max / p-min sweeps. Each candidate is one flag vs the live set, replay-gated, with a same-session control.
+description: Measured on the Orin 2026-09-27 against llama.cpp b11194 (the B0.4 live set). What --cache-ram actually holds with one slot, the real prompt-length distribution behind --ctx-size, and draft-MTP n-max / p-min sweeps (W2 one-flag, W3 full 3×3 grid). Each candidate is one flag vs the live set, replay-gated, with a same-session control.
 ---
 
 # Brain flags tuning (B6.6, 2026-09-27)
@@ -17,7 +17,7 @@ FA on, K/V q8_0, `--parallel 1`, `--fit off`). The rock is unchanged. The live R
 |---|---|---|---|
 | `--ctx-size` | 16384 | **→ 8192 (adopt)** | −170 MiB RSS at load and −120 MiB after traffic. The Flue client already windows every prompt to 8192. p99 prompt+reply is 3280 tokens. |
 | `--cache-ram` | 2048 | **keep 2048** | `0` adds +4.1 s TTFT on every repeat chat turn. `512` shows no difference in a short window, but one main-turn entry is ~170 MiB, so it cannot be shown safe. See below. |
-| `--spec-draft-n-max` / `--spec-draft-p-min` | 4 / 0.6 | **keep 4 / 0.6** | No candidate beats the control by more than the ~±3 % noise band, and none does so consistently across the two throughput measures. n-max 6/8 are slightly worse, as upstream predicts. |
+| `--spec-draft-n-max` / `--spec-draft-p-min` | 4 / 0.6 | **keep 4 / 0.6** | No candidate beats the control by more than the ~±3 % noise band, and none does so consistently across the two throughput measures. n-max 6/8 are slightly worse, as upstream predicts. W3 re-ran the full 3×3 grid and reached the same result. Its apparent brain-median wins track prefix-cache hits, not decode speed. |
 
 ## 1. `--cache-ram`: what it holds (source: b11194 `tools/server`)
 
@@ -192,6 +192,62 @@ What W2 shows:
 Decision: **no change.** A real gain here would need a larger, text-pinned benchmark
 (greedy, or `--spec-synth-*`) to separate it from sampling noise. At voice reply lengths
 (p50 22 tokens) even a 3 % decode gain is ~20 ms per turn.
+
+### W3 (2026-09-27 19:30–20:01): full n-max × p-min grid, replay-only
+
+This window re-checks W2 over the full grid, n-max {3, 4, 6} × p-min {0.4, 0.6, 0.8}.
+It ran in two Kokoro-paused windows, 22 minutes in total. The control (4 / 0.6) ran
+first and last in each window. Each arm is the live unit with only the two draft flags
+edited, followed by a restart and one 20-sample `voice_regression_probe.py --stt remote`
+run. Each arm's numbers are the `/metrics` deltas across its replay:
+
+- ms/token: Δ`tokens_predicted_seconds` / Δ`tokens_predicted`
+- acceptance: Δaccepted / Δdrafted
+- tokens per verify step: 1 + Δaccepted / Δ`drafts_total`
+- decode s: Δ`tokens_predicted_seconds`, i.e. total decode time
+- cached tok: Δ`prompt_tokens_cached`, i.e. prefix-cache reuse during the replay
+
+| run | n-max | p-min | said-vs-did | brain median ms | decode ms/tok | acceptance | tok/step | decode s | cached tok | prefill s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| control A1 | 4 | 0.6 | 13/13 | 1900 | 35.3 | 0.526 | 2.40 | 12.4 | 29,577 | 11.6 |
+| | 3 | 0.6 | 13/13 | 1664 | 36.8 | 0.517 | 2.22 | 11.9 | 33,591 | 10.5 |
+| | 6 | 0.6 | 13/13 | 1828 | 38.0 | 0.436 | 2.51 | 13.0 | 33,696 | 10.4 |
+| | 4 | 0.4 | 13/13 | 1614.5 | 35.3 | 0.401 | 2.40 | 11.2 | 33,510 | 10.3 |
+| | 4 | 0.8 | 13/13 | 1713.5 | 36.8 | 0.622 | 2.44 | 11.1 | 29,372 | 11.2 |
+| control A2 | 4 | 0.6 | 13/13 | 1941.5 | 34.2 | 0.540 | 2.56 | 12.4 | 29,400 | 11.5 |
+| control B1 | 4 | 0.6 | 13/13 | 2129 | 36.2 | 0.527 | 2.42 | 14.2 | 29,238 | 12.3 |
+| | 6 | 0.8 | 13/13 | 1774 | 34.9 | 0.616 | 2.65 | 11.2 | 29,383 | 11.3 |
+| | 3 | 0.4 | 13/13 | 2016.5 | 34.5 | 0.465 | 2.28 | 13.7 | 29,593 | 11.7 |
+| | 4 | 0.4 | 13/13 | 1684 | 32.6 | 0.437 | 2.60 | 11.2 | 33,597 | 10.4 |
+| | 3 | 0.8 | 13/13 | 1844 | 35.8 | 0.675 | 2.36 | 11.3 | 29,429 | 11.3 |
+| | 6 | 0.4 | 13/13 | 1836 | 39.6 | 0.307 | 2.61 | 13.5 | 29,475 | 11.4 |
+| | 3 | 0.6 | 13/13 | 1489 | 33.5 | 0.613 | 2.43 | 12.6 | 38,640 | 8.3 |
+| control B2 | 4 | 0.6 | 13/13 | 1908.5 | 36.2 | 0.489 | 2.41 | 12.7 | 29,425 | 11.4 |
+
+Every run was a replay PASS with 0 fail and 0 said-vs-did regressions. The four controls
+span 1900–2129 ms.
+
+What W3 shows:
+
+- **The brain-median "wins" are prefill luck, not drafting.** Two arms beat every
+  control by more than 5 % in both of their runs: 3 / 0.6 (1664 and 1489 ms) and
+  4 / 0.4 (1614.5 and 1684 ms). In all four of those runs the prefix cache happened to
+  reuse 33.5k–38.6k tokens instead of the controls' ~29.4k, so prefill took 8.3–10.5 s
+  instead of 11.3–12.3 s. Speculative decoding does not touch prefill. The quantity MTP
+  does control, total decode time, is flat across the grid (11.1–14.2 s) and shows no
+  arm pattern.
+- **Decode ms/token does not corroborate.** The per-arm value swings 32.6–39.6 with no
+  arm consistently ahead. Each arm has only ~300–400 predicted tokens, so this measure
+  carries about ±5 % noise here.
+- The mechanics match W2 and upstream. A higher p-min raises acceptance (0.8 → 0.62–0.68).
+  A lower p-min drafts more and lowers acceptance. Deeper drafts (n-max 6) at a low p-min
+  waste the most: 6 / 0.4 is the slowest per token, at 39.6 ms and 0.307 acceptance.
+
+Decision: **no change; keep 4 / 0.6.** No arm meets the adoption rule: a ≥ 5 % brain-median
+gain over both controls, with acceptance and tokens per step corroborating. The installed
+unit was restored byte-identical to its pre-trial copy (`cmp` clean). Measuring MTP
+properly needs the text-pinned bench noted under W2, not the replay probe, whose median
+is dominated by prefix-cache variance.
 
 ## Method (reproducible)
 

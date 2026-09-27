@@ -33,6 +33,11 @@ couplings that fail at RUNTIME, not startup:
 * ``--cache-ram`` must stay a positive cap. ``0`` disables the host prompt cache,
   and with one slot every chat turn then re-prefills its whole prompt (+4.1 s
   TTFT measured); ``-1`` is "no limit" on 15.6G unified memory.
+
+The FunctionGemma router sidecar (``functiongemma-router.service``, same llama.cpp
+server, CPU-only) carries one coupling of its own: its ``--cache-ram`` must be a
+positive cap that fits under the unit's ``MemoryMax``. Left at the 8192 MiB default
+inside a 1G cgroup, the cache never evicts — the cgroup OOM-kills the sidecar first.
 """
 
 from __future__ import annotations
@@ -48,10 +53,10 @@ ROOT = Path(__file__).resolve().parents[2]
 UNIT = ROOT / "scripts" / "setup" / "systemd" / "llama-server.service"
 
 
-def _exec_start() -> str:
-    text = UNIT.read_text(encoding="utf-8")
+def _exec_start(unit: Path = UNIT) -> str:
+    text = unit.read_text(encoding="utf-8")
     m = re.search(r"^ExecStart=(.*?)(?=\n[A-Z][A-Za-z]*=|\n\[|\Z)", text, re.DOTALL | re.MULTILINE)
-    assert m, "llama-server.service has no ExecStart block"
+    assert m, f"{unit.name} has no ExecStart block"
     # Drop comment lines and line continuations -> one command line.
     lines = [ln for ln in m.group(1).splitlines() if not ln.lstrip().startswith("#")]
     return " ".join(ln.rstrip("\\").strip() for ln in lines)
@@ -202,3 +207,26 @@ def test_core_rpc_spawn_trusts_the_project_settings():
     src = (ROOT / "services" / "zoe-data" / "zoe_core_client.py").read_text(encoding="utf-8")
     body = src[src.index("def _rpc_command"): src.index("def _data_url")]
     assert '"--approve"' in body
+
+
+ROUTER_UNIT = ROOT / "scripts" / "setup" / "systemd" / "functiongemma-router.service"
+
+
+def _memory_max_mib(unit: Path) -> int:
+    m = re.search(r"^MemoryMax=([0-9]+)([KMG])$", unit.read_text(encoding="utf-8"), re.MULTILINE)
+    assert m, f"{unit.name} lost its numeric MemoryMax — re-point this pin"
+    return int(m.group(1)) * {"K": 1 / 1024, "M": 1, "G": 1024}[m.group(2)]
+
+
+def test_router_prompt_cache_fits_under_its_cgroup_ceiling():
+    cmd = _exec_start(ROUTER_UNIT)
+    cram = _flag(cmd, "--cache-ram")
+    assert cram is not None, (
+        "router --cache-ram missing: the llama.cpp default is 8192 MiB, which a MemoryMax=1G "
+        "cgroup OOM-kills long before the cache would evict"
+    )
+    ceiling = _memory_max_mib(ROUTER_UNIT)
+    assert 0 < int(cram) < ceiling // 4, (
+        f"router --cache-ram {cram} MiB must be a positive cap well under MemoryMax "
+        f"({ceiling} MiB) — the model and KV already hold most of it"
+    )
