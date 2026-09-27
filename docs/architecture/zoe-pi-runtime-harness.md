@@ -24,7 +24,7 @@ On the Zoe host, Pi is installed under `nvm` rather than the default non-login s
 - `node`: `/home/zoe/.nvm/versions/node/v22.22.0/bin/node`;
 - `npm`: `/home/zoe/.nvm/versions/node/v22.22.0/bin/npm`;
 - `pi`: `/home/zoe/.nvm/versions/node/v22.22.0/bin/pi`;
-- Pi version: `0.85.1` (bumped 2026-09-27 for undici 8.9.0 / brace-expansion 5.0.9; the RPC toolcall_start shape changed in 0.84 — zoe_core_client accepts both);
+- Pi version: `0.87.1` (bumped 2026-09-27 from 0.85.1 for the undici 8.10.2 fixes; Pi ≥0.86 also streams `role:"system"` message frames, which zoe_core_client ignores; the RPC toolcall_start shape changed in 0.84 — zoe_core_client accepts both; request wire to llama-server measured byte-identical apart from `strict:false` no longer sent — modules/omnigent/README.md);
 - model config: `/home/zoe/.pi/agent/models.json` points at local `http://127.0.0.1:11434/v1`;
 - default policy: `ZOE_PI_ENABLED=false`, `ZOE_PI_INTENT_AUTO_PROMOTE=false`, and no promoted intent groups.
 
@@ -33,7 +33,7 @@ The readiness probe checks `PATH` plus `~/.nvm/versions/node/*/bin`, so it can r
 Current Pi install/readiness facts from upstream docs:
 
 - Pi is distributed as `@earendil-works/pi-coding-agent` and the safe npm install command is
-  `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1`.
+  `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1`.
 - Current Pi requires Node.js `>=22.19.0` based on the Pi 0.75.0 release notes.
 - Zoe's probe may execute `node --version` and `npm --version` for readiness, but it does not
   execute `pi`, install packages, or run agent/model tasks.
