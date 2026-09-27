@@ -19,13 +19,26 @@ Description=FunctionGemma Router Sidecar (two-stage router stage-2, CPU :11436)
 After=network.target
 
 [Service]
+# Flag sizing (2026-09-27, measured; evidence in docs/knowledge/two-stage-router-rollout.md
+# "Sidecar flags"):
+#  --cache-ram 64  = cap the host prompt cache. Unset, llama.cpp defaults it to
+#    8192 MiB — inside this unit's MemoryMax=1G that is not a cap at all: the cgroup
+#    OOM-kills the sidecar long before the cache would ever evict. 64 MiB holds the
+#    handful of ~1-2 MiB entries this workload makes (prompts <100 tokens) and turns
+#    growth into oldest-first eviction. Never remove it, never raise it past the
+#    MemoryMax headroom.
+#  --ctx-size 1024 = ~12x the longest routing request observed live (87 tokens over
+#    608 requests; p99 72). Was 4096. Do not raise without a measured need.
+#  Do NOT add --no-repack: weights would be served from reclaimable file pages —
+#    the paging failure the memory block below exists to prevent.
 Type=simple
 Environment=LD_LIBRARY_PATH=/home/zoe/llama.cpp/build-jetson-new/bin
 ExecStart=/home/zoe/llama.cpp/build-jetson-new/bin/llama-server \
   --model /home/zoe/models/functiongemma-router/functiongemma-270m-zoe-functok-r2-Q8_0.gguf \
   --host 127.0.0.1 \
   --port 11436 \
-  --ctx-size 4096 \
+  --ctx-size 1024 \
+  --cache-ram 64 \
   --n-gpu-layers 0 \
   --parallel 1 \
   --threads 4 \
@@ -76,7 +89,8 @@ ExecStartPost=/bin/bash -c 'for i in $(seq 1 60); do curl -sf http://127.0.0.1:1
 # documented TIGHT_CEILING_OK exception, for kokoro-tts's reason: the 3x rule
 # exists for runtimes whose UNCOVERED allocation grows with load (V8 external
 # buffers). llama.cpp here is bounded at startup — fixed Q8_0 GGUF, fixed
-# --ctx-size 4096 KV cache, --parallel 1 — so the only allocation outside the
+# --ctx-size 1024 KV cache, --parallel 1, prompt cache capped by --cache-ram 64
+# (the 8 GiB default was NOT bounded) — so the only allocation outside the
 # floor is per-request grammar/jinja/HTTP scratch for ONE in-flight request.
 # The trade is stated rather than assumed: an OOM kill here is a DEGRADATION,
 # not an outage (Restart=always + the fallback above), so the tighter backstop

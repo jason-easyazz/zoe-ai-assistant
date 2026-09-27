@@ -150,7 +150,11 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `remember_emotional_moment` emotional-thread capture signal per
   `docs/architecture/zoe-memory-emotional-thread-handoff.md`) with progressive
   tool disclosure at the wire (always-on core + activated groups per call;
-  `src/tools/tool-groups.ts`), per-request acting identity (the seam-forwarded
+  `src/tools/tool-groups.ts`) — the disclosed tool block is APPEND-ONLY per
+  session (session-sticky groups, activation order) because it renders ahead of
+  the history and any change re-prefills it; keep it that way (pinned by
+  `test/tool_disclosure.test.ts` + `test/prompt_cache_prefix.test.ts`),
+  per-request acting identity (the seam-forwarded
   `user_id` rides a message envelope, is bound per-turn by the AbortSignal in the
   capped-completions provider, and read by tools via `currentUserId(signal)` —
   `src/request-identity.ts`; env fallback), identity fail-closed, writes

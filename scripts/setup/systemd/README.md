@@ -52,6 +52,7 @@ copy (installed units carry host edits and their own untracked drop-ins). The
 | Drop-in | What it changes | Runbook |
 |---------|-----------------|---------|
 | `zoe-data.service.d/60-py312-venv.conf` | zoe-data's interpreter: `/usr/bin/python3` (3.10) → `~/.zoe/venvs/zoe-data-py312/bin/python` (B0.7). Build the venv FIRST. | `docs/knowledge/python-312-venv-migration.md` §8 |
+| `kokoro-tts.service.d/40-memory-tuning.conf` | Kokoro's glibc allocator: `MALLOC_ARENA_MAX=2` + `MALLOC_TRIM_THRESHOLD_=131072` (B6.6). Allocator only — no numeric change. | `docs/knowledge/voice-pipeline.md` (Kokoro memory) |
 
 ```bash
 mkdir -p ~/.config/systemd/user/zoe-data.service.d

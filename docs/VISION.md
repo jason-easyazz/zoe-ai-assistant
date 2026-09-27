@@ -41,6 +41,16 @@ Not a chatbot. A presence that grows with you.
    reusable idea, don't adopt someone else's whole stack.
 7. **Right tool, right place.** Use the repo's tools (Serena, codebase-memory, opensrc,
    Greptile, DOX) — don't guess when the source/graph is one command away.
+8. **Panel: voice first, touch second, no keyboard.** The panel is spoken to, then tapped;
+   anything that needs typing (credentials, long text, forms, codes) hands off to the
+   person's phone. Only exceptions: the PIN pad (panel sign-in / identity step-up) and short
+   search boxes. (A wall screen is shared and glanceable — typing on it is slow and exposes
+   what is typed.)
+   - **Connecting an app or account = QR on the panel, finish on the phone.** Music
+     services, calendar/email and any similar third-party sign-in show a QR; the person
+     completes it on their phone and the panel card reflects completion live. QR is the
+     baseline unless a better way exists — a known member may get a Telegram "send to my
+     phone" link instead; a guest always gets the QR. (Not about the panel PIN.)
 
 ## 🗂️ Where things live (the hierarchy)
 | Layer | File | Holds |

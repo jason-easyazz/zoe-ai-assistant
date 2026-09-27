@@ -24,6 +24,7 @@ import re
 import zoneinfo
 from datetime import datetime, timezone
 
+from proactive.recipients import proactive_recipients
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 log = logging.getLogger(__name__)
@@ -92,18 +93,15 @@ class EmotionalFollowUpTrigger(ProactiveTrigger):
         if not (_WAKE_START_H <= now.hour < _WAKE_END_H):
             return []
 
-        # Active users (anyone who chatted in the last 7 days) — same population
-        # the morning brief serves. Best-effort: a transient DB error here must not
-        # crash the slow-loop cycle for every trigger (peer triggers do the same).
-        try:
-            async with db.execute(
-                """SELECT DISTINCT user_id FROM chat_sessions
-                   WHERE created_at::timestamptz > (CURRENT_TIMESTAMP - INTERVAL '7 days')"""
-            ) as cur:
-                users = [row[0] async for row in cur]
-        except Exception as exc:
-            log.warning("emotional_followup: active-user query failed: %s", exc)
-            return []
+        # Active users only (a user turn in the last 7 days), minus the kiosk
+        # guest sentinels and synthetic test/probe/demo ids — the shared rule in
+        # proactive/recipients.py that the evening prompt uses. A worry is only
+        # captured from a conversation, so a quiet panel member has nothing to
+        # follow up and is not added. Never raises: a failed query yields nobody.
+        users = [
+            uid for uid, _name in await proactive_recipients(
+                db, pass_name=self.trigger_type, include_panel_members=False)
+        ]
 
         results: list[TriggerResult] = []
         for user_id in users:
