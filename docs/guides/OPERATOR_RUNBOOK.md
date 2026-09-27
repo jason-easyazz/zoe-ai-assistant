@@ -1,6 +1,6 @@
 # Zoe Operator Runbook
 
-**Last updated:** 2026-04-04  
+**Last updated:** 2026-04-04
 **Platform:** Jetson Orin (Zoe server) + Raspberry Pi (touch panel)
 
 ---
@@ -166,6 +166,10 @@ python3 scripts/maintenance/requirements_drift_check.py services/zoe-data/requir
 pip3 install --user "<package>==<version-from-the-file>"
 systemctl --user restart zoe-data
 ```
+After the B0.7 cutover the service runs the Python 3.12 venv (check: `bash scripts/deploy/zoe_data_python.sh`).
+Then the drift report is `~/.zoe/venvs/zoe-data-py312/bin/python scripts/maintenance/requirements_drift_check.py services/zoe-data/requirements-py312.txt`
+and the fix is `bash scripts/setup/build_py312_venv.sh` (converges the whole manifest) — never `pip3 --user`, which feeds the 3.10 interpreter the service no longer loads.
+Rollback to 3.10: `docs/knowledge/python-312-venv-migration.md` §6.
 
 > **Do NOT bulk-run `pip3 install --user -r services/zoe-data/requirements.txt` on the
 > live box.** That file is a declared spec that nothing installs (see its header), so the
@@ -283,7 +287,7 @@ done
 | 18789 | openclaw-gateway | zoe-data explicit/manual fallback |
 | 80/443 | nginx | browser, Pi kiosk |
 
-Pi → Jetson: needs HTTPS (443) for `/api/voice/*` and wss for WebSocket.  
+Pi → Jetson: needs HTTPS (443) for `/api/voice/*` and wss for WebSocket.
 If using self-signed cert on Jetson, set `VERIFY_SSL=false` in Pi `.env.voice` and add the cert to Pi trust store.
 
 ---

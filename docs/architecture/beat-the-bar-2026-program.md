@@ -199,9 +199,16 @@ status: 🔨 active — NEXT ACTION is always §0
   PyPI aarch64 torch is a CUDA-13 bundle → exact CPU wheel); `prometheus-client` +
   `livekit-protocol` were undeclared direct imports. **av 18 is capped by aiortc, not Python.**
   Step-ups (onnxruntime 1.30, websockets 17.1, numpy 2, sklearn 1.9 + head re-export) each
-  resolve and follow one at a time, replay-gated. 🧑 Remaining: replay probe with the venv
-  interpreter, drop-in + restart, `/readyz` + `memory_recall_probe`, replay `--stt remote` (HTTP STT only),
-  one real `/ws/voice/` turn, re-point `deploy.yml`'s pip step. Target: before 2026-10-31 (3.10 EOL).
+  resolve and follow one at a time, replay-gated. 🔨 **Cutover PR #1717** (draft): tracked drop-in
+  `scripts/setup/systemd/zoe-data.service.d/60-py312-venv.conf` (empty `ExecStart=` reset + the
+  template's exact uvicorn args on the venv python); `deploy.yml` reads the interpreter back from
+  systemd (`scripts/deploy/zoe_data_python.sh`) — venv → `build_py312_venv.sh --refresh`
+  (`--offline` first), 3.10 → the old `pip3 --user` list — and runs Alembic with it, so the
+  drop-in alone is the switch and deleting it is the rollback; a both-manifests exact-pin parity
+  test keeps the py312 manifest on the box's pins (e.g. `moonshine-voice==0.1.3`, #1714). 🧑 Remaining (runbook §8, after merge): build
+  + `--check`, replay `--stt inprocess` with the venv, drop-in + restart, `/readyz` +
+  `memory_recall_probe`, replay `--stt remote`, drift check with the venv, one real `/ws/voice/` turn.
+  Target: before 2026-10-31 (3.10 EOL).
   **Two-interpreter split (2026-09-26, §10):** system 3.10 = CUDA consumers from `jp6/cu126`
   (cp310-only: torch, onnxruntime-gpu 1.23/1.24; last upload 2026-04-01) — after EOL frozen
   at ORT 1.23.2, numpy 2.2.6, av 17.1.0, sklearn 1.7.2, websockets 16.1.1 (all dropped cp310
