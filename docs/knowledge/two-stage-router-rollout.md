@@ -113,6 +113,10 @@ zoe-data does not import scikit-learn, scipy or joblib. Both stage-1 heads
   pre-2026-09-27 path, kept for **one release** as the escape hatch; needs the
   sklearn/joblib training pins, which zoe-data's manifests still carry because
   librosa declares them). Unknown values fall back to `numpy`.
+- A custom `ZOE_ROUTER_HEAD_PATH` / `ZOE_ROUTER_HEAD_MLP_PATH` `.joblib` with
+  **no** `.npz`+`.json` beside it is loaded via joblib for that head only, with
+  a WARNING (so a working custom head is not silently disabled). A present but
+  stale/tampered export is still refused.
 - Parity when exported: max-abs **0.0** vs sklearn `predict_proba` on 1,291
   embedded corpus utterances (needle 81 + SetFit train set + `ROUTES`) and 2,000
   random vectors. Measured head-load cost: +72.7 MB / 1.23 s → +1.7 MB / 0.012 s.
@@ -133,6 +137,9 @@ python3 scripts/maintenance/export_router_heads.py --corpus \
 # verify-only (writes nothing): ... export_router_heads.py --check --corpus
 ```
 
+It is all-or-nothing: both heads are staged (`*.export-tmp.*`) and verified
+before any served file is replaced, so one failing head leaves both served pairs
+untouched. `--check` is strictly read-only (it refuses `--fixture`/`--report`).
 It refuses to write if any parity value exceeds `--tol` (1e-6) or if its own
 negative control cannot go red, and it refuses head types it cannot reproduce
 bit-for-bit (a `Pipeline`/scaler, OvR/binary logreg, a `logistic` MLP

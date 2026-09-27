@@ -158,6 +158,60 @@ def test_backend_joblib_uses_joblib_load(monkeypatch):
     assert calls == [path]
 
 
+def _fake_joblib(monkeypatch):
+    calls = []
+    fake = types.ModuleType("joblib")
+    fake.load = lambda p: calls.append(p) or "sklearn-estimator"
+    monkeypatch.setitem(sys.modules, "joblib", fake)
+    return calls
+
+
+def test_custom_joblib_without_export_falls_back_to_joblib(monkeypatch, tmp_path, caplog):
+    """A custom ZOE_ROUTER_HEAD_MLP_PATH predating the exports keeps working."""
+    monkeypatch.delenv("ZOE_ROUTER_HEADS_BACKEND", raising=False)
+    calls = _fake_joblib(monkeypatch)
+    custom = tmp_path / "my_head.joblib"
+    shutil.copy(MODELS / "router_head_mlp.joblib", custom)
+    with caplog.at_level("WARNING", logger="router_heads_numpy"):
+        assert rhn.load_head(str(custom)) == "sklearn-estimator"
+    assert calls == [str(custom)]
+    assert "no numpy export" in caplog.text and "my_head.npz" in caplog.text
+
+
+def test_fallback_is_only_for_a_missing_export(monkeypatch, tmp_path):
+    """Negative control: with the export present the numpy head is served and
+    joblib is never touched; a half-present export (json only) still falls back."""
+    monkeypatch.delenv("ZOE_ROUTER_HEADS_BACKEND", raising=False)
+    calls = _fake_joblib(monkeypatch)
+    for ext in (".joblib", ".npz", ".json"):
+        shutil.copy(MODELS / f"router_head_mlp{ext}", tmp_path / f"router_head_mlp{ext}")
+    assert isinstance(rhn.load_head(str(tmp_path / "router_head_mlp.joblib")), rhn.MLPHead)
+    assert calls == []
+    (tmp_path / "router_head_mlp.npz").unlink()
+    assert rhn.load_head(str(tmp_path / "router_head_mlp.joblib")) == "sklearn-estimator"
+    # no .joblib either -> nothing to fall back to: the load fails (head disabled)
+    (tmp_path / "router_head_mlp.joblib").unlink()
+    with pytest.raises(FileNotFoundError):
+        rhn.load_head(str(tmp_path / "router_head_mlp.joblib"))
+
+
+def test_live_two_stage_loader_keeps_a_custom_joblib_head(monkeypatch, tmp_path):
+    router_two_stage = pytest.importorskip("router_two_stage")
+    monkeypatch.delenv("ZOE_ROUTER_HEADS_BACKEND", raising=False)
+    fake_head = types.SimpleNamespace(classes_=np.asarray(["chat", "time"]),
+                                      predict_proba=lambda X: np.asarray([[0.1, 0.9]]))
+    fake = types.ModuleType("joblib")
+    fake.load = lambda p: fake_head
+    monkeypatch.setitem(sys.modules, "joblib", fake)
+    custom = tmp_path / "custom_mlp.joblib"
+    custom.write_bytes(b"not-read-by-the-fake")
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_MLP_PATH", str(custom))
+    monkeypatch.setattr(router_two_stage, "_HEAD", None)
+    monkeypatch.setattr(router_two_stage, "_HEAD_FAILED", False)
+    assert router_two_stage._ensure_head() is fake_head
+    assert router_two_stage._HEAD_FAILED is False
+
+
 def test_numpy_backend_accepts_an_npz_path_too():
     assert rhn.sidecar_paths("/m/router_head_mlp.npz") == (
         "/m/router_head_mlp.npz", "/m/router_head_mlp.json")

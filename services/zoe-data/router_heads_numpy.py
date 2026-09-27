@@ -17,7 +17,9 @@ and measured at 0.0).
 
 Backend flag (one-release escape hatch):
   ZOE_ROUTER_HEADS_BACKEND = numpy (default) | joblib
-    numpy   read `<head>.npz` + `<head>.json` next to the `.joblib` path
+    numpy   read `<head>.npz` + `<head>.json` next to the `.joblib` path; a
+            custom `.joblib` path with NO export beside it falls back to
+            joblib for that head only (warning logged) instead of disabling it
     joblib  the pre-2026-09-27 path: joblib.load the pickled sklearn estimator
             (needs scikit-learn/joblib at the training pins)
 
@@ -216,7 +218,25 @@ def load_head(path: str) -> Any:
     `predict_proba(X)` and `classes_` exactly as the sklearn estimator did.
     """
     if backend() == "joblib":
-        import joblib  # deliberate: the only sklearn-importing path left
-
-        return joblib.load(path)
+        return _load_joblib(path)
+    npz_path, json_path = sidecar_paths(path)
+    missing = [p for p in (npz_path, json_path) if not os.path.exists(p)]
+    if missing and path.endswith(".joblib") and os.path.exists(path):
+        # A custom ZOE_ROUTER_HEAD_PATH / ZOE_ROUTER_HEAD_MLP_PATH that predates
+        # the numpy exports: keep that head WORKING (the two-stage router would
+        # otherwise drop to similarity routing for the life of the process) by
+        # loading it through joblib — for this head only, and loudly. Only a
+        # MISSING export falls back; a stale/tampered one still refuses (above).
+        logger.warning(
+            "router head %s has no numpy export (%s missing) — loading it via joblib "
+            "(imports scikit-learn). Export it with "
+            "scripts/maintenance/export_router_heads.py to drop sklearn.",
+            path, ", ".join(os.path.basename(p) for p in missing))
+        return _load_joblib(path)
     return load_npz(path)
+
+
+def _load_joblib(path: str) -> Any:
+    import joblib  # deliberate: the only sklearn-importing path left
+
+    return joblib.load(path)

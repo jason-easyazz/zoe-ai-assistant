@@ -180,12 +180,18 @@ def negative_control(est, head, X: np.ndarray, tol: float) -> float:
     return diff
 
 
-def main() -> int:
+def _tmp_stem(npz: Path) -> Path:
+    """Staging name for an export: `<stem>.export-tmp` (+ .npz / .json)."""
+    return npz.with_name(npz.stem + ".export-tmp")
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--models-dir", type=Path, default=MODELS)
     ap.add_argument("--heads", default=",".join(HEADS))
     ap.add_argument("--check", action="store_true",
-                    help="verify the committed npz against the joblib; write nothing")
+                    help="verify the committed npz against the joblib; STRICTLY read-only "
+                         "(refuses --fixture/--report)")
     ap.add_argument("--corpus", action="store_true",
                     help="also compare on the embedded router corpus (needs fastembed)")
     ap.add_argument("--random", type=int, default=1000)
@@ -194,7 +200,9 @@ def main() -> int:
                     help="write the ci_safe parity fixture (50 corpus vectors + sklearn "
                          "probabilities); requires --corpus")
     ap.add_argument("--report", type=Path, help="write the parity report JSON here")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.check and (args.fixture or args.report):
+        ap.error("--check is read-only: it cannot be combined with --fixture/--report")
     if args.fixture and not args.corpus:
         ap.error("--fixture needs --corpus")
 
@@ -210,69 +218,74 @@ def main() -> int:
         "heads": {}}
     fixture: dict[str, np.ndarray] = {}
     failed = False
-    for name in args.heads.split(","):
-        src = args.models_dir / f"router_head_{name}.joblib"
-        npz, js = (Path(p) for p in rhn.sidecar_paths(str(src)))
-        est = joblib.load(src)
-        arrays, meta = extract(est)
-        meta = {"format": rhn.FORMAT, **meta,
-                "source": src.name, "source_sha256": _sha256(src),
-                "exported_with": report["versions"]}
-        sets.update(random_vectors(args.random, meta["n_features_in"]))
-        if args.check:
-            head = rhn.load_npz(str(src))
-            committed = json.loads(js.read_text(encoding="utf-8"))
-            if committed.get("source_sha256") != meta["source_sha256"]:
-                print(f"FAIL {name}: {js.name} was exported from a different joblib "
-                      f"({committed.get('source_sha256', '')[:12]} != "
-                      f"{meta['source_sha256'][:12]}) — re-export")
-                failed = True
-        else:
-            tmp_npz = npz.with_suffix(".npz.tmp")
-            write_npz(tmp_npz, arrays)
-            meta["npz_sha256"] = _sha256(tmp_npz)
-            with np.load(tmp_npz, allow_pickle=False) as z:
-                loaded = {k: z[k] for k in z.files}
-            if meta["kind"] == "mlp":
-                head = rhn.MLPHead(np.asarray(meta["classes"]),
-                                   [loaded[f"coef_{i}"] for i in range(meta["n_layers"])],
-                                   [loaded[f"intercept_{i}"] for i in range(meta["n_layers"])],
-                                   meta["activation"], meta["out_activation"])
-            else:
-                head = rhn.LogRegHead(np.asarray(meta["classes"]), loaded["coef"],
-                                      loaded["intercept"])
-        res = compare(est, head, sets)
-        worst = max(max(r["max_abs_batch"], r["max_abs_single_row"]) for r in res.values())
-        probe = sets.get("corpus", sets[f"random_unit_{args.random}"])
-        neg = negative_control(est, head, probe, args.tol)
-        report["heads"][name] = {"parity": res, "worst_max_abs": worst,
-                                 "negative_control_max_abs": neg,
-                                 "source_sha256": meta["source_sha256"]}
-        ok = worst <= args.tol
-        print(f"{'ok  ' if ok else 'FAIL'} {name}: worst max-abs {worst:.3g} "
-              f"(tol {args.tol:g}); negative control {neg:.3g}; "
-              + ", ".join(f"{k}[{v['n']}]={max(v['max_abs_batch'], v['max_abs_single_row']):.3g}"
-                          for k, v in res.items()))
-        failed |= not ok
-        if not args.check:
-            if ok:
-                os.replace(tmp_npz, npz)
-                js.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n",
-                              encoding="utf-8")
-                # round-trip through the RUNTIME loader (sha256 check included)
-                rt = max_abs(est.predict_proba(probe), rhn.load_npz(str(src)).predict_proba(probe))
-                if rt > args.tol:
-                    print(f"FAIL {name}: runtime-loader round trip max-abs {rt:.3g}")
+    # ALL-OR-NOTHING: every head is staged to `<stem>.export-tmp.{npz,json}` and
+    # verified (parity + a round trip through the runtime loader) before ANY
+    # served file is replaced. One failing head leaves every served file as it was
+    # — a mixed pair of heads is never written.
+    staged: list[tuple[Path, Path, Path, Path]] = []
+    try:
+        for name in args.heads.split(","):
+            src = args.models_dir / f"router_head_{name}.joblib"
+            npz, js = (Path(p) for p in rhn.sidecar_paths(str(src)))
+            est = joblib.load(src)
+            arrays, meta = extract(est)
+            meta = {"format": rhn.FORMAT, **meta,
+                    "source": src.name, "source_sha256": _sha256(src),
+                    "exported_with": report["versions"]}
+            sets.update(random_vectors(args.random, meta["n_features_in"]))
+            if args.check:
+                head = rhn.load_npz(str(src))
+                committed = json.loads(js.read_text(encoding="utf-8"))
+                if committed.get("source_sha256") != meta["source_sha256"]:
+                    print(f"FAIL {name}: {js.name} was exported from a different joblib "
+                          f"({committed.get('source_sha256', '')[:12]} != "
+                          f"{meta['source_sha256'][:12]}) — re-export")
                     failed = True
-                print(f"     wrote {npz} + {js.name}")
             else:
-                tmp_npz.unlink(missing_ok=True)
-        if args.fixture:
-            idx = np.linspace(0, len(texts) - 1, 50).round().astype(int)
-            fixture["vectors"] = sets["corpus"][idx]
-            fixture["texts"] = np.asarray([texts[i] for i in idx])
-            fixture[f"proba_{name}"] = est.predict_proba(sets["corpus"][idx])
-            fixture[f"source_sha256_{name}"] = np.asarray(meta["source_sha256"])
+                stem = _tmp_stem(npz)
+                tmp_npz, tmp_js = stem.with_name(stem.name + ".npz"), stem.with_name(stem.name + ".json")
+                write_npz(tmp_npz, arrays)
+                meta["npz_sha256"] = _sha256(tmp_npz)
+                tmp_js.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                staged.append((tmp_npz, npz, tmp_js, js))
+                # the staged pair, through the RUNTIME loader (sha256 check included)
+                head = rhn.load_npz(str(stem) + ".joblib")
+            res = compare(est, head, sets)
+            worst = max(max(r["max_abs_batch"], r["max_abs_single_row"]) for r in res.values())
+            probe = sets.get("corpus", sets[f"random_unit_{args.random}"])
+            neg = negative_control(est, head, probe, args.tol)
+            report["heads"][name] = {"parity": res, "worst_max_abs": worst,
+                                     "negative_control_max_abs": neg,
+                                     "source_sha256": meta["source_sha256"]}
+            ok = worst <= args.tol
+            print(f"{'ok  ' if ok else 'FAIL'} {name}: worst max-abs {worst:.3g} "
+                  f"(tol {args.tol:g}); negative control {neg:.3g}; "
+                  + ", ".join(f"{k}[{v['n']}]={max(v['max_abs_batch'], v['max_abs_single_row']):.3g}"
+                              for k, v in res.items()))
+            failed |= not ok
+            if args.fixture:
+                idx = np.linspace(0, len(texts) - 1, 50).round().astype(int)
+                fixture["vectors"] = sets["corpus"][idx]
+                fixture["texts"] = np.asarray([texts[i] for i in idx])
+                fixture[f"proba_{name}"] = est.predict_proba(sets["corpus"][idx])
+                fixture[f"source_sha256_{name}"] = np.asarray(meta["source_sha256"])
+    except BaseException:
+        # a refusal mid-run (unsupported head, blind negative control) must not
+        # leave staged files behind; served files were never touched
+        for tmp_npz, _, tmp_js, _ in staged:
+            tmp_npz.unlink(missing_ok=True)
+            tmp_js.unlink(missing_ok=True)
+        raise
+    for tmp_npz, npz, tmp_js, js in staged:
+        if failed:
+            tmp_npz.unlink(missing_ok=True)
+            tmp_js.unlink(missing_ok=True)
+        else:
+            os.replace(tmp_npz, npz)
+            os.replace(tmp_js, js)
+            print(f"     wrote {npz} + {js.name}")
+    if staged and failed:
+        print("     nothing written: every head must pass before any served file is replaced")
     if args.fixture and not failed:
         write_npz(args.fixture, fixture)
         print(f"     wrote fixture {args.fixture}")
