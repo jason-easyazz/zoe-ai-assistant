@@ -24,7 +24,7 @@
   "devDependencies": {
     "@flue/cli": "2.1.1",
     "@flue/vite": "2.1.1",
-    "@types/node": "22.20.1",
+    "@types/node": "26.6.2",
     "@valibot/to-json-schema": "1.7.1",
     "typescript": "5.7.2",
     "vite": "^8.1.2"
