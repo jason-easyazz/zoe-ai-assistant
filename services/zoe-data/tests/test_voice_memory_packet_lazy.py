@@ -106,7 +106,7 @@ def _lane(monkeypatch, lane: str):
 
 async def _voice_turn(streaming: bool = True):
     """What voice_command does: prepare the kwargs, then dispatch."""
-    kwargs, timings, mode = await vt._voice_brain_kwargs(
+    kwargs, packet = await vt._voice_brain_kwargs(
         "voice-panel-1", "jason", "what do I like to drink", {"domain": "lists"}
     )
     if streaming:
@@ -117,7 +117,7 @@ async def _voice_turn(streaming: bool = True):
         out = [await bd.brain_oneshot(
             "what do I like to drink", "voice-panel-1", user_id="jason", voice_mode=True, **kwargs
         )]
-    return out, timings, mode
+    return out, packet
 
 
 def _assert_packet(kw: dict) -> None:
@@ -139,12 +139,12 @@ async def test_flue_success_never_calls_the_packet_builder(monkeypatch, builder,
     flue_seen = _flue(monkeypatch)
     _lane(monkeypatch, "core")
 
-    out, timings, mode = await _voice_turn(streaming)
+    out, packet = await _voice_turn(streaming)
 
     assert out == ["flue answered"]
     assert builder == [], "the Flue lane never reads the packet — it must not be built"
-    assert mode == "lazy" and timings == {}
-    assert vt._voice_packet_state(mode, timings) == "skipped"
+    assert packet.mode == "lazy" and packet.timings == {}
+    assert packet.state() == "skipped" and packet.started_at is None
     # The sidecar gets exactly what it always got: the words, the session and the
     # identity its own recall/offer blocks are built from — and no packet kwargs.
     (call,) = flue_seen
@@ -164,10 +164,10 @@ async def test_negative_control_kill_switch_builds_eagerly(monkeypatch, builder)
     monkeypatch.setenv("ZOE_VOICE_MEMORY_PACKET_LAZY", "false")
     flue_seen = _flue(monkeypatch)
 
-    out, timings, mode = await _voice_turn()
+    out, packet = await _voice_turn()
 
     assert out == ["flue answered"]
-    assert mode == "eager" and len(builder) == 1
+    assert packet.mode == "eager" and len(builder) == 1
     with pytest.raises(AssertionError):
         assert builder == []
     assert flue_seen[0]["db_memory_context"] == f"{DB_MEMORY}\n\n{DOMAIN}"  # built, then ignored
@@ -184,15 +184,15 @@ async def test_flue_failure_falls_back_with_the_packet_built_lazily(monkeypatch,
     _flue(monkeypatch, fail=True)
     lane_seen = _lane(monkeypatch, lane)
 
-    out, timings, mode = await _voice_turn(streaming)
+    out, packet = await _voice_turn(streaming)
 
     assert out == [f"{lane} answered"]
     assert len(builder) == 1, "built exactly once, at the hop"
     assert builder[0] == ("voice-panel-1", "jason", "what do I like to drink", {"domain": "lists"})
     (kw,) = lane_seen
     _assert_packet(kw)
-    assert mode == "lazy" and timings["memory_packet"] == 0.5
-    assert vt._voice_packet_state(mode, timings) == "lazy"
+    assert packet.mode == "lazy" and packet.timings["memory_packet"] == 0.5
+    assert packet.state() == "lazy"
 
 
 @pytest.mark.asyncio
@@ -217,9 +217,9 @@ async def test_non_flue_lane_keeps_the_eager_build(monkeypatch, builder):
     monkeypatch.setenv("ZOE_BRAIN_BACKEND", "core")
     lane_seen = _lane(monkeypatch, "core")
 
-    out, timings, mode = await _voice_turn()
+    out, packet = await _voice_turn()
 
-    assert out == ["core answered"] and mode == "eager"
+    assert out == ["core answered"] and packet.state() == "eager"
     assert len(builder) == 1
     _assert_packet(lane_seen[0])
 
@@ -269,3 +269,190 @@ async def test_replay_isolation_still_fails_closed_at_call_time(monkeypatch):
 
     with pytest.raises(RuntimeError, match="replay_isolation"):
         bd.brain_streaming("hi", "s", "jason", replay_isolation=True, context_loader=loader)
+
+
+# ── failover budget: the lazy build must not eat the fallback brain's window ──
+#
+# Scaled-down timings (the live budget is ZOE_VOICE_CHAT_TIMEOUT_S=20 s): a
+# 0.4 s packet build, then a fallback brain that needs 0.3 s, inside a 0.5 s
+# budget. Before the packet was lazy it was built BEFORE the window opened, so
+# the brain had the whole 0.5 s; that must still hold.
+
+BUDGET = 0.5
+PACKET_S = 0.4
+
+
+@pytest.fixture
+def slow_builder(monkeypatch):
+    import asyncio
+
+    started: list[float] = []
+
+    async def slow_context(session_id, user_id, text, router_decision):
+        started.append(1.0)
+        await asyncio.sleep(PACKET_S)
+        return list(HISTORY), DB_MEMORY, PORTRAIT, None, {
+            "history": 0.0, "memory": PACKET_S, "domain": 0.0, "memory_packet": PACKET_S,
+        }
+
+    monkeypatch.setattr(vt, "_voice_brain_context", slow_context)
+    return started
+
+
+def _slow_core(monkeypatch, brain_s: float):
+    import asyncio
+    import zoe_core_client
+
+    async def core_stream(message, session_id, user_id="", **kw):
+        await asyncio.sleep(brain_s)
+        yield "core answered"
+
+    monkeypatch.setattr(zoe_core_client, "run_zoe_core_streaming", core_stream)
+
+
+async def _collect_failover_turn(packet_holder: list, out: list):
+    kwargs, packet = await vt._voice_brain_kwargs("voice-panel-1", "jason", "hi", None)
+    packet_holder.append(packet)
+    async for d in bd.brain_streaming("hi", "voice-panel-1", user_id="jason", voice_mode=True, **kwargs):
+        out.append(d)
+
+
+@pytest.mark.asyncio
+async def test_slow_lazy_packet_on_failover_does_not_shrink_the_brain_budget(monkeypatch, slow_builder):
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    _flue(monkeypatch, fail=True)
+    _slow_core(monkeypatch, brain_s=0.3)
+
+    kwargs, packet = await vt._voice_brain_kwargs("voice-panel-1", "jason", "hi", None)
+    out: list[str] = []
+
+    async def collect():
+        async for d in bd.brain_streaming("hi", "voice-panel-1", user_id="jason", voice_mode=True, **kwargs):
+            out.append(d)
+
+    await vt._await_brain_with_packet_budget(collect(), BUDGET, packet)
+
+    assert out == ["core answered"], "the fallback brain got its full budget"
+    assert packet.state() == "lazy"
+    assert packet.lazy_spent_s() >= PACKET_S * 0.9
+
+
+@pytest.mark.asyncio
+async def test_negative_control_plain_wait_for_starves_the_fallback_brain(monkeypatch, slow_builder):
+    """NEGATIVE CONTROL: the pre-fix ``asyncio.wait_for(…, budget)`` counts the
+    lazy build against the brain and cancels a turn that would have answered."""
+    import asyncio
+
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    _flue(monkeypatch, fail=True)
+    _slow_core(monkeypatch, brain_s=0.3)
+    holder: list = []
+    out: list[str] = []
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_collect_failover_turn(holder, out), timeout=BUDGET)
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_the_brain_itself_is_still_capped_at_the_budget(monkeypatch, slow_builder):
+    """The extension is exactly the packet's time — a brain slower than the
+    budget still times out."""
+    import asyncio
+
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    _flue(monkeypatch, fail=True)
+    _slow_core(monkeypatch, brain_s=BUDGET + 0.4)
+    kwargs, packet = await vt._voice_brain_kwargs("voice-panel-1", "jason", "hi", None)
+    out: list[str] = []
+
+    async def collect():
+        async for d in bd.brain_streaming("hi", "voice-panel-1", user_id="jason", voice_mode=True, **kwargs):
+            out.append(d)
+
+    t0 = asyncio.get_running_loop().time()
+    with pytest.raises(asyncio.TimeoutError):
+        await vt._await_brain_with_packet_budget(collect(), BUDGET, packet)
+    wall = asyncio.get_running_loop().time() - t0
+    assert out == []
+    assert packet.state() == "lazy"
+    # deadline = budget + the packet's time, not unbounded
+    assert PACKET_S + BUDGET * 0.9 <= wall < PACKET_S + BUDGET + 0.3, wall
+
+
+@pytest.mark.asyncio
+async def test_eager_packet_does_not_extend_the_budget(monkeypatch, slow_builder):
+    """An eager build ran BEFORE the window opened, so it neither counts against
+    nor extends it — the helper is a plain wait_for there."""
+    import asyncio
+
+    monkeypatch.setenv("ZOE_VOICE_MEMORY_PACKET_LAZY", "false")
+    kwargs, packet = await vt._voice_brain_kwargs("voice-panel-1", "jason", "hi", None)
+    assert packet.state() == "eager" and packet.lazy_spent_s() == 0.0
+
+    with pytest.raises(asyncio.TimeoutError):
+        await vt._await_brain_with_packet_budget(asyncio.sleep(BUDGET + 0.3), BUDGET, packet)
+
+
+def test_voice_command_non_stream_lane_uses_the_packet_budget():
+    import inspect
+
+    src = inspect.getsource(vt.voice_command)
+    assert "_await_brain_with_packet_budget(_stream_collect(), voice_timeout, _v_packet_nc)" in src
+    assert "asyncio.wait_for(_stream_collect()" not in src
+
+
+# ── interrupted vs skipped ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cancelled_lazy_build_reads_interrupted_not_skipped(monkeypatch, slow_builder, caplog):
+    import asyncio
+    import logging
+
+    monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
+    _flue(monkeypatch, fail=True)
+    _slow_core(monkeypatch, brain_s=0.0)
+    holder: list = []
+    out: list[str] = []
+
+    task = asyncio.ensure_future(_collect_failover_turn(holder, out))
+    await asyncio.sleep(PACKET_S / 2)  # mid-build
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    (packet,) = holder
+
+    assert packet.started_at is not None and not packet.completed
+    assert packet.state() == "interrupted"
+    spent = packet.lazy_spent_s()
+    assert PACKET_S / 4 < spent < PACKET_S
+
+    with caplog.at_level(logging.INFO, logger=vt.logger.name):
+        vt._log_voice_timing(
+            turn="t", session_id="s", path="stream", pre_brain_s=0.05,
+            ctx_timings=packet.log_timings(), brain_ttft_s=None, llm_first_token_s=None,
+            packet_state=packet.state(),
+        )
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("VOICE TIMING")]
+    assert line.endswith("packet=interrupted")
+    assert f"memory_packet_ms={int(round(spent * 1000))} " in line
+
+
+@pytest.mark.asyncio
+async def test_never_started_lazy_build_reads_skipped(monkeypatch, builder, caplog):
+    import logging
+
+    _flue(monkeypatch)
+    out, packet = await _voice_turn()
+
+    assert packet.state() == "skipped" and packet.lazy_spent_s() == 0.0
+    with caplog.at_level(logging.INFO, logger=vt.logger.name):
+        vt._log_voice_timing(
+            turn="t", session_id="s", path="stream", pre_brain_s=0.05,
+            ctx_timings=packet.log_timings(), brain_ttft_s=0.2, llm_first_token_s=0.2,
+            packet_state=packet.state(),
+        )
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("VOICE TIMING")]
+    assert "memory_packet_ms=0 (history=0 memory=0 domain=0)" in line
+    assert line.endswith("packet=skipped")

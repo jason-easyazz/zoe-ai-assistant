@@ -449,7 +449,7 @@ Two INFO lines in `~/.zoe-logs/zoe-data.app.log` attribute a slow voice first to
 Join them on `session=`:
 
 ```
-VOICE TIMING turn=<ns> session=<sid> path=stream|command pre_brain_ms=… memory_packet_ms=… (history=… memory=… domain=…) brain_ttft_ms=… llm_first_token_ms=… packet=eager|lazy|skipped
+VOICE TIMING turn=<ns> session=<sid> path=stream|command pre_brain_ms=… memory_packet_ms=… (history=… memory=… domain=…) brain_ttft_ms=… llm_first_token_ms=… packet=eager|lazy|interrupted|skipped
 FLUE_PROMPT_CACHE session=<sid> rounds=N first_prompt_n=… first_cache_n=… total_prompt_n=… per_round=p/c,…
 ```
 
@@ -488,8 +488,14 @@ unchanged: the words, `session_id` and `user_id`. Its recall and offer blocks
 (`_recall_context_block` / `_pending_offer_block`) are built inside `zoe_flue_client` from those.
 - **Reading it**: `packet=skipped` means the packet was never built. `memory_packet_ms` and its
   brackets then read 0 and no `memory_packet` stage is observed. `packet=lazy` means it was built
-  on a failover hop, so its cost is inside `brain_ttft_ms`. `packet=eager` means a non-Flue lane,
-  or the kill switch, built it before dispatch as before.
+  on a failover hop, so its cost is inside `brain_ttft_ms`. `packet=interrupted` means a hop
+  started the build but the turn was cancelled or timed out first; `memory_packet_ms` is then the
+  time it consumed. `packet=eager` means a non-Flue lane, or the kill switch, built it before
+  dispatch as before.
+- **Failover budget**: the non-streaming lane's `ZOE_VOICE_CHAT_TIMEOUT_S` window excludes a lazy
+  build (`_await_brain_with_packet_budget` extends the deadline by exactly the build's time), so
+  the fallback brain keeps the whole budget it had when the packet was built before the window.
+  The streaming lane has no brain deadline, so nothing changes there.
 - **Kill switch**: `ZOE_VOICE_MEMORY_PACKET_LAZY=false` (default `true`) restores the eager
   build on every lane. Pinned by `test_voice_memory_packet_lazy.py`.
 

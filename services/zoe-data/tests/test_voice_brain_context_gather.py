@@ -172,12 +172,12 @@ def test_voice_timing_log_line_lazy_packet(caplog):
     with caplog.at_level(logging.INFO, logger=vt.logger.name):
         vt._log_voice_timing(
             turn="t3", session_id="s", path="stream", pre_brain_s=0.05,
-            ctx_timings={}, brain_ttft_s=0.2, llm_first_token_s=0.2, packet_mode="lazy",
+            ctx_timings={}, brain_ttft_s=0.2, llm_first_token_s=0.2, packet_state="skipped",
         )
         vt._log_voice_timing(
             turn="t4", session_id="s", path="stream", pre_brain_s=0.05,
             ctx_timings={"memory_packet": 0.5, "history": 0.0, "memory": 0.5, "domain": 0.0},
-            brain_ttft_s=0.9, llm_first_token_s=0.9, packet_mode="lazy",
+            brain_ttft_s=0.9, llm_first_token_s=0.9, packet_state="lazy",
         )
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("VOICE TIMING")]
     assert "memory_packet_ms=0 (history=0 memory=0 domain=0)" in lines[0]
