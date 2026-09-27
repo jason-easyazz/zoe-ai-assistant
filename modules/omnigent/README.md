@@ -10,7 +10,7 @@ mirroring the `agent-zero` module pattern.
 |------------------|--------------|-------|
 | `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code@2.1.220` (**pinned** — see below; min `2.1.161`) |
 | `codex` CLI      | ✅ works      | `@openai/codex@0.146.0` (**pinned**; min `0.137.0`) |
-| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@0.82.1` **exact**, `--ignore-scripts` (min `0.79.0`; identical value required in `services/zoe-core/package.json`) |
+| `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@0.85.1` **exact**, `--ignore-scripts` (min `0.79.0`; identical value required in `services/zoe-core/package.json`) |
 | `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`). **omnigent 0.7.0 enforces a minimum** (`_CURSOR_MIN_VERSION`, currently `2026.06.02`) — an older binary reports `version-too-low`, not `false`. Provision it reproducibly with [`scripts/setup/install_cursor_agent.sh`](../../scripts/setup/install_cursor_agent.sh) (pinned; `--check` verifies a host without changing it). |
 | **omnigent core**| ✅ works      | `omnigent==0.7.0`, plain PyPI install — no vendored wheel needed |
 
@@ -64,8 +64,8 @@ print('broken:', {k:v for k,v in h.items() if not isinstance(v,bool)})"
 
 All three npm CLIs are **exact** pins, at both sites for `pi`
 (`modules/omnigent/Dockerfile` and `services/zoe-core/package.json`). A caret range was
-tried and rejected on review: zoe-core has no committed lockfile, so `^0.82.1` lets a
-clean build pull an unreviewed `0.82.x` and lets the two consumers drift apart — which
+tried and rejected on review: even with zoe-core's committed lockfile, `^0.85.1` lets
+the Dockerfile's global install pull an unreviewed `0.85.x` and lets the two consumers drift apart — which
 defeats the whole "bumps are deliberate" invariant these pins exist to enforce. The
 convenience of one edit instead of two is not worth reopening surprise upgrades.
 `cursor-agent` is pinned separately in `scripts/setup/install_cursor_agent.sh` because
@@ -103,6 +103,16 @@ else from pi.
 All flags confirmed present in `pi --help` output for installed 0.82.1. The RPC
 mode and all disable flags are documented and stable. No breaking changes found
 in CLI surface or RPC event shapes between 0.79.3 and 0.82.1.
+
+**Pi 0.85.1 bump (2026-09-27):** taken for the Dependabot alerts inside pi's own
+`npm-shrinkwrap.json` (undici 8.9.0, brace-expansion 5.0.9 — unfixable from our
+lockfile). `ExtensionAPI` surface used by zoe-core unchanged; every CLI flag above still
+present in `pi --help`; `pi` bin moved to `dist/bundle/cli.js` (nothing hardcodes it).
+**One RPC break, handled:** from 0.84 `message_update` `toolcall_start` carries `id` /
+`toolName` directly and no longer ships `partial` — `zoe_core_client._toolcall_block_from_amev`
+accepts both shapes (#1719). `pi_intent_classifier` and omnigent's `inner/pi_executor.py`
+read only `text_*`/`message_end`/`tool_execution_*` frames and are unaffected. zoe-core
+`npm test` 65/65 on 0.85.1.
 
 **Cursor 2026.01.28 → 2026.07.23-e383d2b coupled-surface review (2026-07-30):** the
 five-month jump was reviewed against the THREE surfaces omnigent 0.7.0 actually couples to
@@ -287,7 +297,7 @@ installed in the image; a worker is "available" only if its binary is on PATH (`
 in `GET /v1/hosts → configured_harnesses`).
 
 `pi` here is a **separate, vanilla install** of the same upstream agent as `services/zoe-core`'s
-brain — pinned to `0.82.1` to match core, but with **no** Zoe extensions / Gemma provider / soul.
+brain — pinned to `0.85.1` to match core, but with **no** Zoe extensions / Gemma provider / soul.
 It does not share state or creds with core's Pi.
 
 `pi` is wired to **OpenRouter** (default model `minimax/minimax-m3` — tool-calling + 1M context,
