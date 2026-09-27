@@ -113,7 +113,18 @@ alignment:
 - keepRecent is 2048 rather than 4096 so that system prompt headroom (~2k) + summary
   (≤0.8 × reserve) + kept turns stays below the 6144 trigger. Otherwise every turn
   would re-compact.
-- All of this is pinned in `tests/unit/test_llama_server_unit_flags.py`. Under budget the prompt is byte-identical to before
+- All of this is pinned in `tests/unit/test_llama_server_unit_flags.py`.
+
+The legacy `zoe_agent.py` lane (not live) windows its initial messages to 5500
+(chars/4). Each tool round then appends a result of up to 6000 chars
+(`deep_web_research` / `web_browse`) and asks for `max_tokens` more. Both append sites
+now pass the result through `_fit_tool_result_to_slot()`:
+- room = `ZOE_BRAIN_SLOT_TOKENS` (8192) − `max_tokens` − estimate(messages) − 256
+- the tool text is counted at chars/2, fail closed
+- a trimmed result gets an explicit `…[truncated to fit the context window]` marker
+
+Portrait trimming also fails closed if `/tokenize` dies mid-trim. The ratio measured on
+the untrimmed text is not reused; the chars/2 bound applies. Under budget the prompt is byte-identical to before
 (`services/zoe-data/tests/test_user_portrait_prompt_budget.py`). p99 is 40 % of 8192, so
 **8192 is adopted**.
 `tests/unit/test_llama_server_unit_flags.py` pins per-slot ctx ≥ the Flue window, so the

@@ -197,8 +197,14 @@ async def build_portrait_prompt(
             prompt, c = _fit_by_estimate(facts, insights, journal, int(budget / max(ratio, 1e-6)))
             clipped += c
             recount = await counter(prompt)
-            if recount is None:  # tokenizer died mid-trim: stay on the calibrated result
-                count_after = int(_estimate_tokens(prompt) * ratio)
+            if recount is None:
+                # Tokenizer died mid-trim. The ratio above was measured on text that
+                # trimming has since removed, so it proves nothing about what is left:
+                # fail CLOSED on the density-independent chars/2 bound instead.
+                source = "tokenizer->chars/2"
+                prompt, c = _fit_by_estimate(facts, insights, journal, budget // _FALLBACK_TOKENS_PER_EST)
+                clipped += c
+                count_after = _estimate_tokens(prompt) * _FALLBACK_TOKENS_PER_EST
                 break
             count_after = recount
             if count_after <= budget:

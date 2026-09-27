@@ -217,3 +217,24 @@ async def test_real_tokenize_endpoint_down_warns_once_and_falls_back(monkeypatch
     assert second == _pre_budget_prompt(["- small"], [], [])
     warns = [r for r in caplog.records if r.levelno == logging.WARNING and "/tokenize" in r.getMessage()]
     assert len(warns) == 1
+
+
+@pytest.mark.asyncio
+async def test_tokenizer_lost_mid_trim_fails_closed_on_chars_over_2(caplog):
+    """/tokenize answers the first count, then dies on the recount. The ratio measured
+    on the untrimmed text must NOT be reused for what is left: chars/2 bounds it."""
+    facts, insights, journal = _big_fixture()
+    calls = []
+
+    async def flaky(text):
+        calls.append(len(text))
+        return (len(text) // 4) * 3 // 2 if len(calls) == 1 else None  # low ratio, then gone
+
+    caplog.set_level(logging.INFO, logger="user_portrait")
+    prompt = await build_portrait_prompt(facts, insights, journal, user_id="demo-user", count_tokens=flaky)
+
+    assert len(calls) == 2
+    assert _est(prompt) * 2 <= user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS
+    assert prompt.startswith(INSTRUCTIONS) and "FACT000" in prompt
+    msg = [r.getMessage() for r in caplog.records if "trimmed" in r.getMessage()][0]
+    assert "counter=tokenizer->chars/2" in msg

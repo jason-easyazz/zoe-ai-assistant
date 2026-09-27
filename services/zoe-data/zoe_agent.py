@@ -2938,6 +2938,52 @@ _AMBIENT_TRANSCRIPT   = env_int("ZOE_CAP_AMBIENT_TRANSCRIPT", 150)
 _MEMORY_LIST_MAX_ROWS = env_int("ZOE_CAP_MEMORY_LIST_ROWS", 25)
 
 
+# ── Second-round envelope (B6.6) ──────────────────────────────────────────────
+# llama-server serves ONE --ctx-size 8192 slot (scripts/setup/systemd/
+# llama-server.service). The initial messages are windowed to
+# ZOE_CONTEXT_TOKEN_BUDGET (5500, chars/4), but each tool round then APPENDS a
+# result (deep_web_research / web_browse cap at 6000 chars) and asks for up to
+# max_tokens more — 5500 + 6000 chars + 1024 can exceed 8192, and llama-server
+# refuses the whole request. So every appended tool result is also fitted to what
+# the slot has left. The tool text itself is counted at chars/2 (fail closed:
+# scraped pages, JSON and URLs are token-dense); the already-windowed messages
+# keep the chars/4 estimate their budget was computed with.
+_BRAIN_SLOT_TOKENS = env_int("ZOE_BRAIN_SLOT_TOKENS", 8192)
+_ENVELOPE_MARGIN_TOKENS = 256
+_TOOL_RESULT_MIN_CHARS = 400
+_TRUNCATION_MARKER = " …[truncated to fit the context window]"
+
+
+def _messages_est_tokens(messages: list[dict]) -> int:
+    chars = 0
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            chars += len(content)
+        elif content:
+            chars += len(json.dumps(content))
+        if m.get("tool_calls"):
+            chars += len(json.dumps(m["tool_calls"]))
+    return chars // 4 + 4 * len(messages)  # + per-message chat-template overhead
+
+
+def _fit_tool_result_to_slot(content: str, messages: list[dict], max_tokens: int) -> str:
+    """Trim an (already per-tool-capped) tool result so the NEXT llm call fits.
+
+    Room = slot - max_tokens - estimate(messages so far) - margin, and the tool
+    text may use 2 chars per token of that room. Unchanged when it fits.
+    """
+    room_tokens = _BRAIN_SLOT_TOKENS - max(0, max_tokens) - _messages_est_tokens(messages) - _ENVELOPE_MARGIN_TOKENS
+    max_chars = max(_TOOL_RESULT_MIN_CHARS, room_tokens * 2)
+    if len(content) <= max_chars:
+        return content
+    keep = max(0, max_chars - len(_TRUNCATION_MARKER))
+    logger.info(
+        "zoe_agent: tool result trimmed to fit the %d-token slot: %d -> %d chars",
+        _BRAIN_SLOT_TOKENS, len(content), keep,
+    )
+    return content[:keep] + _TRUNCATION_MARKER
+
 def _cap_tool_result(tool_name: str, result: str) -> str:
     """Cap noisy MCP tool results before they enter the LLM context window.
 
@@ -3938,7 +3984,8 @@ async def run_zoe_agent(
             messages.append({
                 "role": "tool",
                 "tool_call_id": f"call_{iteration}",
-                "content": _cap_tool_result(tool_name, tool_result),
+                "content": _fit_tool_result_to_slot(
+                    _cap_tool_result(tool_name, tool_result), messages, budget),
             })
         else:
             # No tool call (or max iterations reached) — final response.
@@ -4415,7 +4462,8 @@ async def run_zoe_agent_streaming(
             messages.append({
                 "role": "tool",
                 "tool_call_id": f"call_{iteration}",
-                "content": _cap_tool_result(tool_name, tool_result),
+                "content": _fit_tool_result_to_slot(
+                    _cap_tool_result(tool_name, tool_result), messages, token_budget),
             })
             # Subsequent iterations always use "auto" — model should now produce text
             payload = _make_payload(messages, tool_choice="auto")
