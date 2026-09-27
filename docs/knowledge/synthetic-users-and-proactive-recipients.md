@@ -1,14 +1,14 @@
 ---
 type: Reference
 title: Synthetic users, proactive recipients and kiosk presence (2026-09-27)
-description: Who the nightly memory passes and the proactive triggers treat as a real user — the is_synthetic_user rule and its allowlist flag, the household recipient rule that replaced "created a chat session in 7 days", guest-owned kiosk presence, the nightly purge of probe chat sessions, and why the spoken morning brief was silent from 08-16.
-tags: [memory, dreaming, proactive, morning-brief, presence, test-data, zoe-data]
+description: Who the nightly memory passes and the proactive triggers treat as a real user — the is_synthetic_user rule and its allowlist flag, the household recipient rule that replaced "created a chat session in 7 days", guest-owned kiosk presence, the flag-dark brief-on-arrival, the nightly purge of probe chat sessions, and why the spoken morning brief was silent from 08-16.
+tags: [memory, dreaming, proactive, morning-brief, brief-on-arrival, presence, test-data, zoe-data]
 timestamp: 2026-09-27T12:00:00Z
 ---
 
 # Synthetic users, proactive recipients and kiosk presence
 
-Tracker rows: B3.2 and "Speaks first" in [the program](../architecture/beat-the-bar-2026-program.md).
+Tracker rows: B3.2, B2.1 and "Speaks first" in [the program](../architecture/beat-the-bar-2026-program.md).
 
 ## Synthetic users are filtered at read time
 
@@ -55,6 +55,35 @@ per turn in `routers/voice_tts.py` and kept only as an in-memory session binding
 carries across rollovers. So they do not raise a panel to `owner`; wiring them in is a
 voice-path change and needs the replay gate.
 
+## Brief on arrival (B2.1, flag-dark)
+
+`proactive/arrival.py` speaks a missed 07:30 brief once, when its member turns up.
+It needs `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL=1` and the master `ZOE_PROACTIVE_SPOKEN=1`;
+both default off, and with either off nothing is read or queued.
+
+- **Trigger:** a foreground `POST /api/ui/panel/bind` or `/api/ui/state/sync` from the
+  member's own session (`routers/ui_actions.py::_note_owner_presence`). Guests and
+  device tokens never count. The check runs as a background task, at most every 30 s
+  per member. No voice-path file is involved; face and voice claims will join once
+  they have a server-side record (see above).
+- **Speaks** the stored `proactive_pending` text of today's brief, through the same
+  two lanes as the 07:30 brief, on the panel where the member was seen.
+- **Only if all hold:** 07:00–11:00 local; not quiet hours; tier `owner` on that
+  panel; not a synthetic or guest id; a brief exists today and was not opened in
+  chat; the full text was not delivered and is not still queued (a delivered
+  `bound_guest` teaser does not count as heard); no user turn from the member in
+  the last 2 minutes.
+- **Once per member per local day:** the `proactive_responses` claim row
+  (migration `0030`, `UNIQUE (user_id, trigger_type, local_date)`) decides it, not
+  process memory. A failed speak is not retried.
+- **Log:** `PROACTIVE_SPOKEN trigger=morning_checkin_arrival user= panel= outcome=
+  daemon_queue= tier=owner missed=absent|guest_teaser|expired`.
+- **Response signal (for B2.2):** the slow loop sets `outcome` on each claim row once
+  its window has passed. `accepted` means a user turn within
+  `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` (default 120 s) of the daemon playing it;
+  otherwise `ignored`, or `undelivered` if it never played. Each is logged as
+  `PROACTIVE_RESPONSE`.
+
 ## Probe chat rows are purged nightly
 
 The leaked rows come from probes that call the live `/api/chat` as a fixed identity and do
@@ -83,6 +112,8 @@ must be added there as an exact, anchored id, or tear its sessions down with
   - Panel on (kiosk idle as guest): `panel=<id> outcome=enqueued` and a new
     `voice_announcements` row.
 - **No wait:** `POST /api/proactive/trigger-morning` as the bound member with the panel on.
+- **Arrival (flag on):** `grep -E "morning_checkin_arrival|PROACTIVE_RESPONSE" ~/.zoe-logs/zoe-data.app.log`
+  and `SELECT local_date, missed, outcome, responded FROM proactive_responses ORDER BY created_at DESC`.
 - **Skip counts** (read-only, live DB, 2026-09-27):
 
   | pass | kept | skipped |
