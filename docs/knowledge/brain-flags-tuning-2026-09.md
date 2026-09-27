@@ -93,10 +93,27 @@ per item. `user_portrait.run_portrait_synthesis()` did not cap its total: up to 
 `build_portrait_prompt()` with a 5500-token budget (`PORTRAIT_PROMPT_BUDGET_TOKENS`).
 The budget is counted with llama-server's own `POST /tokenize`. Plain chars/4
 undercounts token-dense text: a CJK fixture read 2171 by chars/4 and 4909 real tokens.
-chars/4 is only the fallback when `/tokenize` is down. Trimming drops the lowest-ranked
-facts and the oldest journal entries first, and never touches the instructions.
-zoe-core's `local-gemma` Pi provider (`provider-local-gemma.ts`) had declared 32768 /
-2048 and now declares 8192 / 1024, pinned against the unit. Under budget the prompt is byte-identical to before
+When `/tokenize` is down, the budget fails closed on a chars/2 bound and logs a WARNING
+once. Trimming drops the lowest-ranked facts and the oldest journal entries first, and
+never touches the instructions.
+
+zoe-core (the Pi `core` brain lane, default backend, not live today) needed the same
+alignment:
+- `provider-local-gemma.ts` declared 32768 context / 2048 output. It now declares
+  8192 / 2048: p99 prompt ~3.3k + 2048 fits.
+- Pi 0.82.1's compaction defaults are reserve 16384 / keep 20000. `shouldCompact()`
+  compares usage to `contextWindow − reserve`, which is negative at 8192.
+  `services/zoe-core/.pi/settings.json` now sets reserve 2048, keepRecent 2048 and
+  branchSummary reserve 2048.
+- A project `settings.json` is a trust-requiring resource, so the RPC spawn
+  (`zoe_core_client._rpc_command`) passes `--approve`. Otherwise Pi ignores the file
+  and falls back to the defaults. Verified with Pi 0.82.1: trusted → 2048/2048,
+  untrusted → 16384/20000. A real `--mode rpc` spawn reports contextWindow 8192 /
+  maxTokens 2048.
+- keepRecent is 2048 rather than 4096 so that system prompt headroom (~2k) + summary
+  (≤0.8 × reserve) + kept turns stays below the 6144 trigger. Otherwise every turn
+  would re-compact.
+- All of this is pinned in `tests/unit/test_llama_server_unit_flags.py`. Under budget the prompt is byte-identical to before
 (`services/zoe-data/tests/test_user_portrait_prompt_budget.py`). p99 is 40 % of 8192, so
 **8192 is adopted**.
 `tests/unit/test_llama_server_unit_flags.py` pins per-slot ctx ≥ the Flue window, so the

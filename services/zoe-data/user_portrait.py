@@ -39,7 +39,7 @@ _MIN_MEMORIES_FOR_PORTRAIT = int(os.environ.get("PORTRAIT_MIN_MEMORIES", "5"))
 # or llama-server refuses the request ("exceeds the available context size") and
 # the portrait silently never regenerates. 5500 + 600 + chat-template overhead
 # leaves ~2k tokens of headroom. Counted EXACTLY with llama-server's /tokenize;
-# chars/4 (the repo convention) is only the fallback when that endpoint is down.
+# when that endpoint is down it fails closed on a chars/2 bound.
 PORTRAIT_PROMPT_BUDGET_TOKENS = int(os.environ.get("PORTRAIT_PROMPT_BUDGET_TOKENS", "5500"))
 _PORTRAIT_MAX_FACTS = 120
 _PORTRAIT_MAX_INSIGHTS = 30
@@ -83,6 +83,11 @@ def _estimate_tokens(text: str) -> int:
 
 
 _TOKENIZE_TIMEOUT_S = 5.0
+# Without /tokenize the budget is enforced on chars/2, i.e. 2x the chars/4
+# estimate (fail closed). Measured on this model: CJK memory text ran ~2.3x
+# chars/4, so even this bound is not exact for the densest text — it only has to
+# keep the prompt + 600-token reply under the 8192 slot with the ~2k headroom.
+_FALLBACK_TOKENS_PER_EST = 2
 _tokenize_warned = False
 
 
@@ -90,7 +95,7 @@ async def _tokenize_count(text: str) -> int | None:
     """Exact token count from llama-server's own tokenizer (POST /tokenize).
 
     Returns None when the endpoint is unreachable or answers badly; callers then
-    fall back to the chars/4 estimate. The failure is logged at WARNING once per
+    fall back to a conservative chars/2 bound. The failure is logged at WARNING once per
     process (a down brain would otherwise log on every portrait).
     """
     global _tokenize_warned
@@ -103,7 +108,8 @@ async def _tokenize_count(text: str) -> int | None:
         if not _tokenize_warned:
             _tokenize_warned = True
             logger.warning(
-                "portrait: /tokenize unavailable (%s) — budgeting with the chars/4 estimate", type(exc).__name__
+                "portrait: /tokenize unavailable (%s) — budgeting on a conservative chars/2 bound",
+                type(exc).__name__,
             )
         return None
 
@@ -160,8 +166,8 @@ async def build_portrait_prompt(
     emoji, identifiers) several-fold, so it is only a trimming heuristic: the
     real count calibrates it (effective estimate budget = budget x est/real),
     and the trimmed prompt is re-counted, up to 4 rounds. If the tokenizer is
-    unavailable the chars/4 estimate is used as-is. Under budget the output is
-    byte-identical to the pre-budget prompt.
+    unavailable the budget fails CLOSED on a chars/2 bound (WARNING once). A
+    prompt already under budget is byte-identical to the pre-budget prompt.
     """
     budget = PORTRAIT_PROMPT_BUDGET_TOKENS if budget_tokens is None else budget_tokens
     counter = count_tokens or _tokenize_count
@@ -172,15 +178,17 @@ async def build_portrait_prompt(
 
     prompt = _render_portrait_prompt(facts, insights, journal)
     real = await counter(prompt)
-    source = "tokenizer" if real is not None else "chars/4"
-    count_before = real if real is not None else _estimate_tokens(prompt)
+    source = "tokenizer" if real is not None else "chars/2"
+    # Fail CLOSED without the tokenizer: chars/2 (= 2x the chars/4 estimate) is a
+    # conservative bound, so token-dense text still fits the slot.
+    count_before = real if real is not None else _estimate_tokens(prompt) * _FALLBACK_TOKENS_PER_EST
     if count_before <= budget:
         return prompt
 
     clipped = 0
     if real is None:
-        prompt, clipped = _fit_by_estimate(facts, insights, journal, budget)
-        count_after = _estimate_tokens(prompt)
+        prompt, clipped = _fit_by_estimate(facts, insights, journal, budget // _FALLBACK_TOKENS_PER_EST)
+        count_after = _estimate_tokens(prompt) * _FALLBACK_TOKENS_PER_EST
     else:
         count_after = real
         for _ in range(4):

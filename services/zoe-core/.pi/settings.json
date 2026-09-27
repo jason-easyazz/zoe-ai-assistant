@@ -1,0 +1,10 @@
+{
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 2048,
+    "keepRecentTokens": 2048
+  },
+  "branchSummary": {
+    "reserveTokens": 2048
+  }
+}

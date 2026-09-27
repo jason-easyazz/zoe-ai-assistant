@@ -27,7 +27,9 @@ couplings that fail at RUNTIME, not startup:
 * zoe-core's ``local-gemma`` Pi provider must not declare more context than
   one slot holds (``provider-local-gemma.ts`` defaults): Pi compacts against the
   declared window, so an oversized declaration lets sessions grow until the
-  server refuses them.
+  server refuses them. Its compaction thresholds (``services/zoe-core/.pi/
+  settings.json``) must fit that window, and the RPC spawn must ``--approve``
+  the project so Pi actually loads them.
 * ``--cache-ram`` must stay a positive cap. ``0`` disables the host prompt cache,
   and with one slot every chat turn then re-prefills its whole prompt (+4.1 s
   TTFT measured); ``-1`` is "no limit" on 15.6G unified memory.
@@ -164,4 +166,39 @@ def test_core_provider_context_fits_one_slot():
         f"zoe-core local-gemma declares a {ctx}-token context but llama-server serves {per_slot} per slot: "
         "Pi would not compact until the server already refuses the session"
     )
-    assert 0 < max_out <= ctx // 4, f"max output {max_out} leaves too little of the {ctx} window for the prompt"
+    # Half the window for the reply at most: measured p99 prompts are ~3.3k tokens
+    # (B6.6), so 3.3k + a full reply must still fit. 2048 of 8192 does.
+    assert 0 < max_out <= ctx // 2, f"max output {max_out} leaves too little of the {ctx} window for the prompt"
+
+
+CORE_PI_SETTINGS = ROOT / "services" / "zoe-core" / ".pi" / "settings.json"
+# Headroom for zoe-core's system prompt + tool schemas that survive compaction.
+_CORE_FIXED_PROMPT_HEADROOM = 2048
+
+
+def test_core_pi_compaction_fits_one_slot():
+    """Pi 0.82.1 defaults (reserve 16384 / keep 20000) assume a huge window: with an
+    8192 contextWindow, shouldCompact() compares usage to 8192 - 16384 (< 0) and
+    compaction can never make room. zoe-core must ship its own values."""
+    import json
+
+    settings = json.loads(CORE_PI_SETTINGS.read_text(encoding="utf-8"))
+    comp = settings["compaction"]
+    reserve, keep = int(comp["reserveTokens"]), int(comp["keepRecentTokens"])
+    ctx = _core_provider_default("ZOE_CORE_MODEL_CONTEXT")
+    max_out = _core_provider_default("ZOE_CORE_MODEL_MAXTOKENS")
+    assert comp.get("enabled", True) is True
+    assert reserve + keep < ctx, f"reserve {reserve} + keepRecent {keep} >= context {ctx}"
+    assert reserve >= max_out, "compaction must trigger early enough to leave room for a full reply"
+    # After compaction: fixed prompt + summary (Pi caps it at 0.8 x reserve) + kept
+    # recent turns must sit BELOW the trigger (ctx - reserve), or it re-compacts forever.
+    assert _CORE_FIXED_PROMPT_HEADROOM + int(0.8 * reserve) + keep <= ctx - reserve
+    assert int(settings["branchSummary"]["reserveTokens"]) < ctx
+
+
+def test_core_rpc_spawn_trusts_the_project_settings():
+    # A project .pi/settings.json is a trust-requiring resource in Pi 0.82.1; a
+    # non-interactive RPC spawn without --approve would ignore it.
+    src = (ROOT / "services" / "zoe-data" / "zoe_core_client.py").read_text(encoding="utf-8")
+    body = src[src.index("def _rpc_command"): src.index("def _data_url")]
+    assert '"--approve"' in body

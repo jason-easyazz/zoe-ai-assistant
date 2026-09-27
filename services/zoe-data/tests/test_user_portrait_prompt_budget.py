@@ -1,8 +1,8 @@
 """The portrait synthesis prompt must fit the brain's context (B6.6, PR #1716).
 
-Counted with llama-server's own tokenizer (POST /tokenize); chars/4 is only the
-fallback when that endpoint is down, and the fallback is byte-identical to the
-first (estimate-only) version of this budget.
+Counted with llama-server's own tokenizer (POST /tokenize). When that endpoint is
+down the budget fails CLOSED on a conservative chars/2 bound; prompts already under
+budget are byte-identical to the pre-budget prompt either way.
 
 run_portrait_synthesis() calls llama-server DIRECTLY (gemma_base()), not through
 the Flue client that windows chat turns to 8192 tokens, and it used to pass up to
@@ -48,14 +48,20 @@ def _scaled_tokenizer(factor, calls=None):
     return count
 
 
-def _estimate_only(facts, insights, journal, budget=None):
-    """The first (chars/4-only) version of the budget, as a fixed reference."""
+def _fallback_reference(facts, insights, journal):
+    """What the tokenizer-less path must send: trimmed until chars/2 <= budget."""
     f, i, j = list(facts[:120]), list(insights[:30]), list(journal)
     prompt = user_portrait._render_portrait_prompt(f, i, j)
-    b = user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS if budget is None else budget
-    if _est(prompt) <= b:
+    b = user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS
+    if _est(prompt) * 2 <= b:
         return prompt
-    return _fit_by_estimate(f, i, j, b)[0]
+    return _fit_by_estimate(f, i, j, b // 2)[0]
+
+
+def _chars4_only(facts, insights, journal):
+    """The first (chars/4-only) version of the budget — what a 3x-dense text overflows."""
+    f, i, j = list(facts[:120]), list(insights[:30]), list(journal)
+    return _fit_by_estimate(f, i, j, user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS)[0]
 
 
 def _big_fixture():
@@ -90,7 +96,7 @@ async def test_oversize_prompt_fits_budget_and_keeps_instructions(caplog):
 
     prompt = await build_portrait_prompt(facts, insights, journal, user_id="demo-user", count_tokens=_no_tokenizer)
 
-    assert _est(prompt) <= user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS
+    assert _est(prompt) * 2 <= user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS  # fail-closed chars/2 bound
     assert prompt.startswith(INSTRUCTIONS)
     for header in ("[MEMORY FACTS", "[SYNTHESIZED INSIGHTS", "[RECENT JOURNAL ENTRIES"):
         assert header in prompt
@@ -108,7 +114,7 @@ async def test_oversize_prompt_fits_budget_and_keeps_instructions(caplog):
 @pytest.mark.asyncio
 async def test_single_giant_item_is_clipped_under_budget():
     prompt = await build_portrait_prompt(["- " + "x" * 60000], [], [], count_tokens=_no_tokenizer)
-    assert _est(prompt) <= user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS
+    assert _est(prompt) * 2 <= user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS
     assert prompt.startswith(INSTRUCTIONS)
     assert "…" in prompt
 
@@ -171,7 +177,7 @@ async def test_token_dense_text_trims_to_the_real_count(caplog):
 
     budget = user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS
     assert _est(prompt) * 3 <= budget  # the real (fake-tokenizer) count fits
-    estimate_only = _estimate_only(facts, insights, journal)
+    estimate_only = _chars4_only(facts, insights, journal)
     assert _est(estimate_only) * 3 > budget  # what chars/4 alone would have sent overflows
     assert len(prompt) < len(estimate_only)
     assert prompt.startswith(INSTRUCTIONS) and "FACT000" in prompt
@@ -181,10 +187,17 @@ async def test_token_dense_text_trims_to_the_real_count(caplog):
 
 
 @pytest.mark.asyncio
-async def test_tokenizer_failure_falls_back_byte_identical_to_estimate_budget():
+async def test_tokenizer_failure_fails_closed_on_chars_over_2():
     facts, insights, journal = _big_fixture()
     got = await build_portrait_prompt(facts, insights, journal, count_tokens=_no_tokenizer)
-    assert got == _estimate_only(facts, insights, journal)
+    budget = user_portrait.PORTRAIT_PROMPT_BUDGET_TOKENS
+    assert len(got) // 2 <= budget  # chars/2 bound holds
+    assert _est(_chars4_only(facts, insights, journal)) * 2 > budget  # chars/4 alone would not
+    assert got == _fallback_reference(facts, insights, journal)
+    assert got.startswith(INSTRUCTIONS) and "FACT000" in got
+    # small prompts are unchanged on the fallback path
+    small = (["- likes tea"], ["- values quiet mornings"], ["[2026-09-01] Day: fine"])
+    assert await build_portrait_prompt(*small, count_tokens=_no_tokenizer) == _pre_budget_prompt(*small)
 
 
 @pytest.mark.asyncio
@@ -200,7 +213,7 @@ async def test_real_tokenize_endpoint_down_warns_once_and_falls_back(monkeypatch
     first = await build_portrait_prompt(facts, insights, journal)
     second = await build_portrait_prompt(["- small"], [], [])
 
-    assert first == _estimate_only(facts, insights, journal)
+    assert first == _fallback_reference(facts, insights, journal)
     assert second == _pre_budget_prompt(["- small"], [], [])
     warns = [r for r in caplog.records if r.levelno == logging.WARNING and "/tokenize" in r.getMessage()]
     assert len(warns) == 1

@@ -64,6 +64,13 @@ pointing at the host model server (`GEMMA_SERVER_URL`, default
 dependency and the extension manifest; `tsconfig.json` type-checks the extension
 (Pi loads `.ts` directly via jiti — no build step).
 
+The declared window defaults to **8192 context / 2048 output**, which is one
+llama-server slot (`ZOE_CORE_MODEL_CONTEXT` / `ZOE_CORE_MODEL_MAXTOKENS` override).
+Pi's compaction thresholds for that window live in `.pi/settings.json`: reserve 2048
+and keep 2048 (Pi's defaults of 16384 / 20000 assume a far larger window). A project
+settings file only loads when the project is trusted, so spawns must pass
+`--approve`, as `zoe_core_client` does.
+
 Smoke test (integration; skips if `pi` or the model server are unavailable):
 
 ```bash
