@@ -398,10 +398,6 @@ async def acknowledge_reminder(
     if dict(row).get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Not authorised to acknowledge this reminder")
 
-    # B2: an acknowledged reminder is done — cancel the pending job BEFORE the
-    # state change auto-commits so it can't still fire; the in-job obligation
-    # re-read also aborts a sub-second in-flight job.
-    await _cancel_reminder_jobs_safe(reminder_id)
     recurring = _is_rrule(dict(row).get("recurring_pattern"))
     if recurring:
         # A recurring (RRULE) reminder is done for THIS occurrence only: the row
@@ -409,12 +405,19 @@ async def acknowledge_reminder(
         # Stopping the series is delete / is_active=false, never "Complete".
         # Clear a pending snooze (it would re-alert this occurrence) and bump the
         # generation so a job already running for it self-voids at fire time.
+        # The bump lands BEFORE the cancel (below, after commit): a scan racing
+        # the cancel then sees the old unfired job or the NEW generation, never
+        # leaves a stale-generation job that would self-void and skip the next one.
         await db.execute(
             "UPDATE reminders SET snoozed_until = NULL, updated_at = NOW(), "
             "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
             [reminder_id],
         )
     else:
+        # B2: an acknowledged reminder is done — cancel the pending job BEFORE the
+        # state change auto-commits so it can't still fire; the in-job obligation
+        # re-read also aborts a sub-second in-flight job.
+        await _cancel_reminder_jobs_safe(reminder_id)
         await db.execute(
             "UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?",
             [reminder_id],
@@ -429,6 +432,7 @@ async def acknowledge_reminder(
     )
     await db.commit()
     if recurring:
+        await _cancel_reminder_jobs_safe(reminder_id)
         await _reschedule_reminder_due_safe(db, reminder_id)
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])

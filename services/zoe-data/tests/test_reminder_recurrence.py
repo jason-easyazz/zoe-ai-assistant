@@ -602,6 +602,8 @@ async def test_acknowledging_a_recurring_reminder_keeps_the_series(monkeypatch):
         async def execute(self, sql, params=()):
             if sql.lstrip().upper().startswith(("UPDATE", "INSERT")):
                 writes.append(" ".join(sql.split()))
+                if sql.lstrip().upper().startswith("UPDATE"):
+                    calls.append(("update", reminder_id_of(params)))
 
             class _C:
                 async def fetchone(self_inner):
@@ -610,6 +612,9 @@ async def test_acknowledging_a_recurring_reminder_keeps_the_series(monkeypatch):
 
         async def commit(self):
             pass
+
+    def reminder_id_of(params):
+        return list(params)[-1]
 
     async def noop(*_a, **_k):
         return None
@@ -629,7 +634,10 @@ async def test_acknowledging_a_recurring_reminder_keeps_the_series(monkeypatch):
     row["snoozed_until"] = "2026-09-28T00:00:00Z"
     await rr.acknowledge_reminder("r1", user={"user_id": "jason"}, db=_Db())
     assert not any("acknowledged = 1" in w for w in writes)
-    assert calls == [("cancel", "r1"), ("reschedule", "r1")]
+    # The generation bump lands BEFORE the cancel: a scan racing the cancel then
+    # either still sees the old unfired job, or schedules with the NEW generation
+    # — never a stale-generation job that would self-void and skip an occurrence.
+    assert calls == [("update", "r1"), ("cancel", "r1"), ("reschedule", "r1")]
     ack = next(w for w in writes if w.startswith("UPDATE reminders"))
     # A pending snooze must not re-alert the occurrence just marked done, and a
     # job already running must self-void (generation check at fire time).
@@ -641,4 +649,4 @@ async def test_acknowledging_a_recurring_reminder_keeps_the_series(monkeypatch):
     row["recurring_pattern"] = None
     await rr.acknowledge_reminder("r1", user={"user_id": "jason"}, db=_Db())
     assert any("SET acknowledged = 1" in w for w in writes)
-    assert calls == [("cancel", "r1")]
+    assert calls == [("cancel", "r1"), ("update", "r1")]  # B2 order, unchanged
