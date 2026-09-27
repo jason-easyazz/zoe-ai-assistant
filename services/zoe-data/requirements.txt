@@ -40,7 +40,7 @@ fastapi==0.141.1
 # WebSocket implementation underneath the live voice path with no code diff.
 # Verified on-box (py3.10): 0.49.0 still resolves `auto` -> websockets_impl.
 # Moving to >=0.50 is a deliberate, replay-gated change, not a currency bump.
-uvicorn[standard]==0.49.0
+uvicorn[standard]==0.53.0
 pydantic==2.13.5
 aiosqlite==0.22.1
 asyncpg==0.31.0
@@ -88,7 +88,7 @@ python-json-logger>=4.1.0
 # export and confirm `memory_recall_probe` still self-recalls. Not in place.
 #
 # Live-verified combination (2026-08-02, 3507 drawers + 17686 audit rows):
-mempalace==3.3.1
+mempalace==3.10.0
 chromadb==0.6.3
 
 # ── Voice dependencies (Jetson/server-side) ───────────────────────────────
@@ -96,7 +96,7 @@ chromadb==0.6.3
 # part of a voice-only change. Jetson torch/ctranslate2 wheels fail at runtime
 # on NumPy 2.x, AND chromadb 0.6.3 declares a bare unbounded `numpy`, so this
 # ceiling is the only thing stopping a memory-store install from pulling NumPy
-# 2.x (verified 2026-08-02: `mempalace==3.3.1 chromadb==0.6.3` alone resolves to
+# 2.x (verified 2026-08-02: `mempalace==3.10.0 chromadb==0.6.3` alone resolves to
 # numpy 2.2.6; adding this line pins it back to 1.26.4). NumPy 2 is a C-ABI
 # break, and the packages compiled against 1.x here are kokoro, moonshine-voice,
 # chroma-hnswlib, ctranslate2, soundfile, soxr and Resemblyzer — i.e. both
@@ -111,7 +111,7 @@ numpy<2
 # being load-bearing on the voice path; pinned to the live Orin's version.
 # 1.23.2 is the LAST onnxruntime release with a cp310 wheel (1.24+ requires
 # Python >=3.11), so this pin cannot move until the zoe-data 3.12 venv (B0.7).
-onnxruntime==1.23.2
+onnxruntime==1.30.0
 # Cloud TTS fallback (fast, AU Neural voice)
 edge-tts>=6.1.12
 # Primary offline TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py,
@@ -145,12 +145,12 @@ transformers==5.17.0
 # HELD at 0.8.0: 0.9.x changes the default ONNX provider/model-cache layout and
 # was not part of the 2026-09-26 gated batch. Bump deliberately, with the router
 # shadow report (`scripts/maintenance/router_shadow2_report.py`) unchanged.
-fastembed==0.8.0
+fastembed==0.8.1
 # SetFit router head (shadow mode, ZOE_ROUTER_HEAD): loads
 # models/router_head_logreg.joblib — pins MUST match the versions the artifact
 # was trained with (labs/setfit-router/requirements.txt).
-scikit-learn==1.7.2
-joblib==1.5.3
+scikit-learn==1.9.1
+joblib==1.6.0
 # Speaker diarization for ambient memory (Jetson CUDA only)
 # VAD for barge-in and ambient capture (server-side copy; Pi uses same package)
 # Proactive engine scheduler.
@@ -171,7 +171,7 @@ joblib==1.5.3
 #
 # Upgrading means draining/re-registering the jobstore (or keeping pytz
 # installed explicitly) and re-pinning tzlocal in validate.yml. Not in place.
-APScheduler==3.10.4
+APScheduler==3.11.3
 # tzlocal is a DIRECT requirement of the pinned APScheduler and was previously
 # undeclared (arrived transitively). Declared so the 2.x/3.x split above is visible
 # here and not only in the workflows. Box: 2.1.
@@ -197,7 +197,7 @@ livekit>=1.1.8
 # `livekit_aiortc.py` imports `livekit.protocol`, a SEPARATE distribution that
 # `livekit` does not pull in — it only ever arrived via the unused livekit-agents
 # (validate.yml already hand-installs it). Declared 2026-09-26 (B0.7 import scan).
-livekit-protocol==1.1.8
+livekit-protocol==1.1.27
 # aiortc and av move TOGETHER: aiortc 1.14.0 caps `av<17`, so av cannot advance
 # without it (1.15.0 widens the cap to `av<18`).
 # av is held at 17.1.0 because 18.0.0 requires Python >=3.11 (host is 3.10.12).
@@ -211,7 +211,7 @@ av==17.1.0
 # ddgs floor raised to the version verified on the box 2026-09-26 (9.16.0); the
 # 6.x/7.x line predates the current DuckDuckGo challenge handling.
 ddgs>=9.16
-cloakbrowser>=0.3.28
+cloakbrowser>=0.5.10
 PyYAML>=6.0
 # CloakBrowser — stealth Chromium for bot-blocked web search fallback (optional).
 # Install with: pip install cloakbrowser
