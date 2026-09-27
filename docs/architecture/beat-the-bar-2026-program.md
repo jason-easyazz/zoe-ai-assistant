@@ -51,7 +51,7 @@ status: 🔨 active — NEXT ACTION is always §0
 |---|---|---|---|
 | Fully local, offline-capable, nothing leaves the house | ✅ | Apple: personal context on-device but reasoning may go to PCC/Gemini; Google/Amazon: cloud | `test_canonical_invariants.py`; replay gate |
 | Per-panel voice + face identity, consented, local | ✅ (flags) | Amazon Omnisense (cloud); Apple: single-user Siri | biometric retention policy |
-| Speaks first (spoken morning brief, presence-gated) | ✅ | Gemini Daily Brief is text; Alexa+ nudges | W2 record |
+| Speaks first (spoken morning brief, presence-gated) | 🔨 silent since 08-16 (guest-owned kiosk presence + session-created recipient rule); fix on `fix/synthetic-user-filter`, verify at 07:30 | Gemini Daily Brief is text; Alexa+ nudges | W2 record; [recipients record](../knowledge/synthetic-users-and-proactive-recipients.md) |
 | Per-stage latency budget + said-vs-did replay gate | ✅ | nobody publishes one | `voice_regression_probe.py` |
 | Self-evolution harness (edits her own code behind a PR gate) | ✅ (paused) | none | Multica/Flue executor |
 | HA + Music Assistant as hidden organs | ✅ | Gemini for Home needs a $10/mo sub | — |
@@ -521,7 +521,7 @@ status: 🔨 active — NEXT ACTION is always §0
   `ExecStart` to `%h/.zoe/venvs/zoe-data-py312/bin/python
   /home/zoe/assistant/scripts/maintenance/zoe-nightly-dreaming.py` + `daemon-reload`; imports
   (chromadb, db_pool, memory_digest) verified to resolve under the venv 2026-09-27; verify the
-  Mon 2026-09-28 02:31 AWST run log. ⬜ It also iterates ~24 users incl. test/probe ids.
+  Mon 2026-09-28 02:31 AWST run log. ✅ It also iterated ~24 users incl. test/probe ids: now filtered by `user_filters.is_synthetic_user` (dreaming, consolidation, music, portrait, proactive triggers; `ZOE_SYNTHETIC_USER_ALLOWLIST`), and the leaking probe chat sessions are purged nightly (branch `fix/synthetic-user-filter`; [record](../knowledge/synthetic-users-and-proactive-recipients.md)).
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,

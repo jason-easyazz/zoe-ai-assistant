@@ -17,6 +17,7 @@ import time
 import zoneinfo
 from datetime import datetime
 
+from proactive.recipients import admins_only, proactive_recipients
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 log = logging.getLogger(__name__)
@@ -46,18 +47,13 @@ class EvolutionWeeklyDigestTrigger(ProactiveTrigger):
         if week_number == self._last_fired_week:
             return []
 
-        # Get active users (anyone who chatted in last 7 days)
-        try:
-            async with db.execute(
-                """SELECT DISTINCT cs.user_id, u.name AS username
-                   FROM chat_sessions cs
-                   LEFT JOIN users u ON u.id = cs.user_id
-                   WHERE cs.created_at::timestamptz > (CURRENT_TIMESTAMP - INTERVAL '7 days')"""
-            ) as cur:
-                users = [(row[0], row[1] or "") async for row in cur]
-        except Exception as exc:
-            log.warning("EvolutionWeeklyDigest: failed to fetch users: %s", exc)
-            users = []
+        # Same recipient rule as the morning brief (proactive/recipients.py):
+        # household members + recent turn owners, minus guest/synthetic ids.
+        # The helper never raises; a failed arm just contributes nobody.
+        # ADMINS ONLY: the digest carries proposal titles + approve/defer links,
+        # and those actions are `Depends(require_admin)` (routers/system.py).
+        users = await admins_only(
+            db, await proactive_recipients(db, pass_name="evolution_weekly_digest"))
 
         if not users:
             return []

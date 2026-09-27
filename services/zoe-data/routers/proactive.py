@@ -118,7 +118,9 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user), db=Depen
     Useful for testing Phase 3.4 without waiting for the 7:30am schedule.
     """
     await require_feature_access(db, user, feature="proactive", action="trigger")
-    from proactive.triggers.morning_checkin import _build_morning_context, _compose_morning_message
+    from proactive.triggers.morning_checkin import (
+        _build_morning_context, _compose_morning_message, guest_safe_morning_line,
+    )
     from proactive.engine import fire_notification
 
     user_id = user["user_id"]
@@ -144,6 +146,7 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user), db=Depen
     ctx["day"] = day_str
 
     message = _compose_morning_message(ctx, username, day_str)
+    ctx["spoken_guest_safe"] = guest_safe_morning_line(username)
 
     await fire_notification(
         user_id=user_id,
