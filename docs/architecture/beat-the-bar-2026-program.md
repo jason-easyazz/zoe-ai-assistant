@@ -94,7 +94,8 @@ status: 🔨 active — NEXT ACTION is always §0
   **2026-09-26 batch:** transformers 5.17.0, mcp 1.30.0, pydantic 2.13.5, alembic 1.20.0,
   PyJWT 2.15.0, pywebpush 2.5.0, livekit 1.1.20, ddgs 9.16.0, SQLAlchemy 2.0.54 installed
   (dry-run first; fastembed held at 0.8.0); zoe-data restarted (`/readyz` all ok, no new
-  errors); Silero VAD file v6.2.1 in place; `ci_safe` lane 442 passed locally; **replay gate
+  errors); Silero VAD file v6.2.1 put in place — **reverted 2026-09-27, it detected no speech
+  (see B1.4)**; `ci_safe` lane 442 passed locally; **replay gate
   PASS #2** (13/13 scoreable, 7 EMPTY as baseline; medians stt 406 / brain 1962 / e2e
   1753 ms). Two pip-declared conflicts are pre-existing and belong to packages zoe-data
   does not import (`livekit-agents` 1.5.10 wants livekit 1.1.8; `memu-py` wants
@@ -312,17 +313,29 @@ status: 🔨 active — NEXT ACTION is always §0
   Smart Turn "incomplete" score to play a soft "mm-hm" after ≥0.7 s of speech, 2.5 s
   cooldown. Add "interruptions per conversation" and "silence before first audio" to the
   replay harness.
+  **2026-09-27 — v6.2.1 file REVERTED; VAD now replay-gated.** The v6.2.1 export put in place
+  on 09-26 (B0.2) loaded cleanly but scored ~0.001 on real speech (0/12 clips ≥ 0.5 vs 12/12 on
+  v6.0): barge-in / idle listening were silently off for a day. Live file restored to **v6.0**
+  (md5 `00bdd414…`; the bad one kept as `silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927`).
+  Permanent gate: `voice_regression_probe.py` VAD stage (real `voice_vad` over the newest 24
+  clips, FAIL < 60 %, also on the memory-skip path) + `voice_gate_check.py` `vad` block +
+  `voice_vad.py`/`voice_turn.py`/`*silero*` in `VOICE_PATH_PATTERNS` — [voice-pipeline.md →
+  The VAD stage](../knowledge/voice-pipeline.md), runbook §8. **Any future Silero file = run
+  the stage against it (`ZOE_SILERO_VAD_MODEL=<candidate>`) before the swap.** The v6.2.x
+  streaming file stays ⬜ until it passes that bar; the paragraph below predates the revert.
   **2026-09-26 (§12; wording per #1705):** the Silero v6.2.1 file is already in place (B0.2).
   Silero v6.2.2's `silero_vad_16k_sequence.onnx` (GIL-releasing, `sequence=True`) is an
   OFFLINE whole-utterance graph — **NOT a live drop-in**: `services/zoe-data/voice_vad.py`
   runs the streaming model in 512-sample hops with a `(2,1,128)` recurrent state, and a file
   swap would NOT fall back to RMS (RMS is chosen only when the model fails to load; a model
   that loads but rejects streaming inputs makes `process_hops` swallow the error and report
-  no speech — a silent failure). Live VAD stays on streaming v6.2.1; evaluate the sequence
+  no speech — a silent failure). Live VAD stays on the streaming model (v6.0 since the
+  09-27 revert); evaluate the sequence
   model for the replay/lab path only (whole clip in hand). Validation for ANY live VAD change
-  = the VAD unit lanes (`test_livekit_vad_segmentation.py`, `test_voice_barge_in.py`) + a
-  live barge-in count on the panel with Kokoro playing (B1.3 metric) — the replay harness
-  starts at STT and never exercises VAD or barge-in. New lab item (small, B1/B5): **Parakeet
+  = the probe's VAD stage (above) + the VAD unit lanes (`test_livekit_vad_segmentation.py`,
+  `test_voice_barge_in.py`) + a live barge-in count on the panel with Kokoro playing (B1.3
+  metric) — the replay itself starts at STT, and the VAD stage scores detection, not
+  barge-in behaviour. New lab item (small, B1/B5): **Parakeet
   Redux** (Moondream 2026-09-22; 178 MB / 149M ternary encoder, CPU, streaming, CC-BY-4.0)
   WER + per-file ms vs Moonshine 0.0.62 on the replay corpus — a benchmark, not a rock swap.
 - B1.5 ⬜ **Acknowledge-while-thinking + async tools**: fast tier emits a first clause or
@@ -697,6 +710,10 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 — B1.4: Silero v6.2.1 file reverted to v6.0 (it detected no speech — barge-in /
+  idle listening silently off for a day); permanent gate = the probe's VAD stage + the gate
+  check's `vad` block + `voice_vad.py`/`voice_turn.py`/`*silero*` voice-path patterns
+  (fix/vad-real-model-gate); B0.2's "v6.2.1 in place" annotated; runbook §8.
 - 2026-09-27 — B6.6 added: resident-memory audit of zoe-data imports (speaker ID cached + CPU-pinned, import-hygiene test) and Music Assistant (no action, re-measure rule).
 - 2026-09-26 (pm, fold) — ecosystem-watch 2026-09-26 (#1703; B1.4 wording per #1705) folded
   into the rows: B0.4 b11194 gate (#25522 dropped), B0.7 two-interpreter split, B0.8 migrate

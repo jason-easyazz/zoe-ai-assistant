@@ -3,7 +3,7 @@ type: Reference
 title: Zoe Voice Pipeline
 description: The end-to-end voice path (STT → brain → TTS), how it's measured, and the regression corpus — plus the load-bearing caveat that the warm replay harness understates real live latency.
 tags: [voice, stt, tts, performance, testing]
-timestamp: 2026-07-16T00:00:00Z
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # Zoe Voice Pipeline
@@ -196,8 +196,17 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
    "said_vs_did_regressions": ["FUNCTION: …"], "per_stage_speed_deltas": {"stt_ms": {"cur_ms": …, "baseline_ms": …, "delta_ms": …, "ratio": …}, …},
    "baseline_ref": {"path": "…", "created_at": "…Z", "ok_rate": …},
    "reason": "…", "summary": {"n_samples": …, "ok_rate": …, "medians_ms": {…}},
-   "non_pass_streak": 0, "non_pass_alert_after": 3, "non_pass_alert": false}
+   "non_pass_streak": 0, "non_pass_alert_after": 3, "non_pass_alert": false,
+   "vad_stage": true,
+   "vad": {"status": "pass|fail|skip|error", "clips": 24, "speech_detected": 23,
+           "pass_frac": 0.958, "min_pass_frac": 0.6, "threshold": 0.5,
+           "min_max_prob": [0.36, 0.96], "median_max_prob": 0.81,
+           "model": {"path": "/home/zoe/models/silero_vad.onnx", "md5": "00bdd414…"},
+           "reason": ""}}
   ```
+
+  `vad_stage` / `vad` are the VAD stage (see *The VAD stage* below). An artifact without `vad_stage` predates
+  the stage and is **no opinion** on VAD — older artifacts keep clearing the checker.
 
   A **skip** (box too tight), **timeout**, or **error** (harness couldn't run) MUST still write an
   artifact with `status != "pass"` — an *absent* file is never "nothing wrong". `summary` +
@@ -240,7 +249,50 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   heavy Kokoro harness** (that would OOM the box under flock) — it only reads the artifact the gate
   produced. Standing rule: *any mandatory loop/gate/job must emit a heartbeat that something checks.*
   Pinned by `tests/unit/test_voice_gate_check.py` (missing → block, stale → block, fresh pass →
-  allow; skip/error/baseline-drift all block).
+  allow; skip/error/baseline-drift all block). Also gated since 2026-09-27: `voice_vad.py`,
+  `voice_turn.py` and `*silero*` (see the VAD stage below).
+
+### The VAD stage — what gates a VAD model swap (2026-09-27)
+
+**Incident, two lines:** on 2026-09-26 `/home/zoe/models/silero_vad.onnx` was replaced with the
+Silero v6.2.1 export; `voice_vad.py` loaded it without error but scored ~0.001 on real speech
+(0/12 corpus clips ≥ 0.5 vs 12/12 on v6.0), so barge-in / idle listening were silently off for a
+day. The replay starts at STT and never ran VAD, and the only real-model test is host-only.
+
+**What gates it now** — `voice_regression_probe.py --vad-check` (default **on**;
+`--no-vad-check` / `ZOE_VOICE_PROBE_VAD_CHECK=0` records a disabled skip):
+- imports the **service's own** `voice_vad.py` from `--service-dir` (the code under test) and loads
+  the model file the service would load (`ZOE_SILERO_VAD_MODEL` or `/home/zoe/models/silero_vad.onnx`);
+- scores the newest `--vad-clips` (default 24) **usable** corpus clips — newest by capture time,
+  top-level only (same semantics as `replay_samples._select`), 16 kHz mono int16, fed as 20 ms
+  frames with fresh recurrent state per clip, exactly as the live frame loop does;
+- **FAILS the run when fewer than 60 %** of clips peak at/above `voice_vad.speech_threshold()` — the
+  bar of `test_voice_barge_in.py::test_silero_real_model_detects_speech_across_corpus`. A model file
+  that exists but makes `create_vad()` return None is also a FAIL (the service would silently fall
+  back to RMS);
+- **skips with a recorded reason** when the model file is absent or fewer than 8 usable clips exist —
+  "no opinion", never a pass;
+- records aggregates only (counts, fractions, peak-probability range, model path + md5) — no clip
+  names, nothing from the household corpus;
+- costs ~70 MB peak RSS and ~1 s, runs **after** the replay (never overlapping its peak), and also
+  runs on the memory-**skip** path (≥ 400 MB free): a dead VAD turns that run `fail`, not `skip` —
+  the tight-box days are how this incident stayed invisible.
+
+`voice_gate_check.py` (the deploy gate and the PR gate) blocks any artifact
+that claims the stage (`vad_stage: true`) and carries a missing, malformed, `fail` or `error` `vad`
+block, and **re-derives** a `pass` from the counts against its own 60 % floor rather than trusting the
+label. Pinned by `tests/unit/test_voice_probe_vad_stage.py` (incl. the 0.001-everywhere negative
+control) and `tests/unit/test_voice_gate_check.py`. Measured on the box 2026-09-27: v6.0 file
+23/24 → pass; the incompatible file 0/24 (highest clip peak 0.026) → fail.
+
+**The model file is outside git** — no diff can show a swap, so no `VOICE_PATH_PATTERNS` entry can
+catch one; the **nightly** probe run is what does. Before swapping the file by hand, run the stage (or
+the real-model test) against the candidate via `ZOE_SILERO_VAD_MODEL=<candidate>`.
+
+**Files:** the compatible model is **v6.0**, md5 `00bdd41445da13fe3d52a5a074013aa1`, at
+`/home/zoe/models/silero_vad.onnx` (backup `silero_vad.onnx.v6.0.bak-20260926`). The incompatible
+v6.2.1 export (md5 `302cb198…`) is kept beside it as `silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927`
+for forensics — do not restore it.
 
 ### The gated set is NOT all equally evidenced — the LiveKit/WebRTC lane (read before believing a green)
 
