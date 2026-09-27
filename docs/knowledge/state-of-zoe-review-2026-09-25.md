@@ -580,7 +580,6 @@ the 2026-09-25 plan, kept with ✓ marks.
    - Revoke the Telegram token; rotate the Postgres password.
    - The Gemma re-upload swap (B6.2).
 2. **Panel on.**
-   - Redeploy the Pi provisioning helper (#1741).
    - One real `/ws/voice/` turn on uvicorn 0.53 (#1743).
    - B1.1: Pi proof → head-bound replay → operator flag-on week.
 3. **Verify.** The 2026-09-28 07:30 morning brief (#1726) and the Monday 02:31 dreaming run

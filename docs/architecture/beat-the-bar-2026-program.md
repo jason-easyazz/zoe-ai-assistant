@@ -32,7 +32,10 @@ State as of **2026-09-28 02:30 AWST**:
      it has **not been executed**. The agent's first window step (stop zoe-data and the four
      timers) was refused by the permission system. The box is unchanged: old palace, venv on
      chromadb 0.6.3 / mempalace 3.3.1. Run
-     [`chroma-1-5-migration.md`](../knowledge/chroma-1-5-migration.md) §5 in order.
+     [`chroma-1-5-migration.md`](../knowledge/chroma-1-5-migration.md) §5 in order. Age note:
+     #1745 adopts `mempalace==3.10.0` (14-day rule clears 2026-09-30); Jason's 2026-09-27
+     "do them all now, don't worry about the age rule" covers this batch — record the waiver
+     in the PR when the window runs, or wait until 09-30.
    - **B0.12 apply.** #1727 is files only. Live is still `0.0.0.0:5432` (`pgvector:pg17` =
      17.10) and `0.0.0.0:8007`. Run the PR's apply sequence: rebuild the bridge, then recreate
      Postgres on the pinned 17.11 digest.
@@ -42,9 +45,10 @@ State as of **2026-09-28 02:30 AWST**:
      `music-ytdlp-js-runtime.md`.
    - **Secrets.** Revoke the Telegram token and vacuum the journal (B0.3). Rotate the Postgres
      password (B0.14).
-   - **Needs the panel on.** Redeploy the Pi provisioning helper (`provision-server.py`, the
-     #1741 poll secret). Make one real `/ws/voice/` turn (the last B0.7 item, and the uvicorn 0.53
-     websockets-sansio proof for #1743).
+   - **Needs the panel on.** Make one real `/ws/voice/` turn (the last B0.7 item, and the uvicorn
+     0.53 websockets-sansio proof for #1743). (The Pi provisioning helper is NOT deployed on the
+     live panel — `scripts/setup/touchscreen/README.md` — so #1741's poll secret applies only
+     to panels provisioned in future; re-align those helpers as a set before the next pairing.)
    - **Brain.** Swap in the verified Gemma re-upload (B6.2). Only the template changed, and
      the files are staged and checksummed. Do it in its own window so the brain change stays
      separately attributable, then run one replay gate.
@@ -60,8 +64,9 @@ State as of **2026-09-28 02:30 AWST**:
      - Prune old MemPalace snapshots.
      - `ggshield install --mode global --force` (B0.10 c).
 2. **Verify today:** the **07:30 morning brief** is the first run after #1726:
-   `grep -E "T07:[0-5][0-9].*(morning_checkin|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`
-   (the trigger can fire anywhere in the 07:30–07:59 window).
+   `grep -E "T23:[3-5][0-9].*(morning_checkin: users kept|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`
+   — the app log is stamped in UTC, so 07:30–07:59 AWST is 23:30–23:59 UTC of the previous
+   date (the trigger can fire anywhere in that window).
    - The brief's own path logs `PROACTIVE_SPOKEN trigger=morning_checkin user=jason …` — that
      line is the proof; the recipient helper's `users kept=N` line precedes it. Do not rely on
      the autopilot `fired for N user(s)` line, which comes from a different path.
