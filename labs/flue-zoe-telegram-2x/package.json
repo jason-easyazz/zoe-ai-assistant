@@ -18,8 +18,8 @@
   },
   "dependencies": {
     "@flue/runtime": "2.1.1",
-    "grammy": "1.44.0",
-    "hono": "^4.13.7",
+    "grammy": "1.46.0",
+    "hono": "^4.13.9",
     "valibot": "^1.1.0"
   },
   "devDependencies": {
@@ -27,6 +27,6 @@
     "@flue/vite": "2.1.1",
     "@types/node": "22.20.1",
     "typescript": "5.7.2",
-    "vite": "^8.1.2"
+    "vite": "^8.3.1"
   }
 }
