@@ -23,6 +23,7 @@ import music_service
 import music_setup
 import setup_qr
 import smart_home_setup
+from routers import handoff as handoff_router
 from routers import music_setup as music_router
 from routers import smart_home_setup as home_router
 
@@ -38,14 +39,30 @@ def client(monkeypatch):
     return TestClient(app)
 
 
-@pytest.mark.parametrize("router", [music_router.router, home_router.router],
-                         ids=["music", "home"])
+@pytest.mark.parametrize("router", [music_router.router, home_router.router, handoff_router.router],
+                         ids=["music", "home", "handoff"])
 def test_no_setup_route_accepts_the_token_as_a_query_param(router):
     for route in router.routes:
         names = {p.name for p in route.dependant.query_params}
         names |= {getattr(p, "alias", None) or p.name for p in route.dependant.query_params}
         assert "token" not in names, f"{route.path} takes the setup token in its query string"
         assert "t" not in names, route.path
+
+
+def test_handoff_routes_take_no_query_params_at_all():
+    """The handoff routes carry ids/handles in the PATH and bodies in JSON —
+    nothing the access log could leak. Negative control: add a query param to
+    any of them and this goes red."""
+    for route in handoff_router.router.routes:
+        assert not route.dependant.query_params, (route.path, route.dependant.query_params)
+    assert "/api/handoff/{handoff_id}/qr/{handle}" in {r.path for r in handoff_router.router.routes}
+
+
+def test_handoff_qr_paths_never_contain_the_token():
+    link = music_setup.handoff_link("spotify", "jason")
+    assert link["token"] not in "/api/handoff/x/qr/" + setup_qr.issue("handoff", handoff_id="x")
+    assert link["path"].startswith("/setup-music.html#") and "?" not in link["path"]
+    assert link["ref"] == music_setup.verify(link["token"])["n"]
 
 
 def test_qr_routes_take_an_opaque_handle():
@@ -91,13 +108,15 @@ def test_home_qr_handle_is_single_use_and_kind_bound(client):
 
 
 def test_touch_card_renews_a_spent_handle_via_start():
-    """A redraw/failed load renews through /start — no reusable URL needed."""
+    """A redraw/failed load renews through /start ONCE — no reusable URL needed.
+    (The music QR view now lives in the shared authCard, B7.5.)"""
     from pathlib import Path
     home = (Path(__file__).resolve().parents[2] / "zoe-ui/dist/touch/home.html").read_text()
-    i = home.index("function startProviderConnect(")
-    body = home[i:home.index("function _qmsg(", i)]
-    assert "qi.onerror" in body and "renewed" in body
-    assert body.count("apiJson('POST','/api/music/setup/start'") == 2
+    i = home.index("function _acOpen(")
+    body = home[i:home.index("function _acTick(", i)]
+    assert "qi.onerror" in body and "if(renewed)return;renewed=true;" in body
+    assert body.count("_acStart(o)") == 1
+    assert "apiJson('POST','/api/handoff/start'" in home[home.index("function _acStart("):i]
 
 
 def test_phone_form_reads_the_token_from_the_header(client, monkeypatch):

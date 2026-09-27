@@ -556,6 +556,10 @@
   .srcnote{color:var(--ink-faint);padding:12px 4px;font-size:16px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
   .estmc .srcqr{display:flex;justify-content:center;padding:8px 0 4px}
   .estmc .srcqr img{width:220px;height:220px;background:#fff;border-radius:14px;padding:8px}
+  .estmc .acst{text-align:center;font-size:21px;font-weight:600;margin:10px 0 4px;min-height:28px}
+  .estmc .acst.done{color:#7be0a4}
+  .estmc .acst.error{color:#ffbf6b}
+  .estmc .accd{text-align:center;margin-bottom:0}
   /* ---- Recent tab: a grid of rectangle tiles (fits more) ---- */
   .mqlist.recent{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;align-content:start}
   .rtile{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.05);cursor:pointer}
@@ -2122,28 +2126,76 @@
     host.onclick=function(e){var b=e.target.closest('button[data-src]');if(!b)return;
       startProviderConnect(b.getAttribute('data-src'),b.textContent.trim(),b.getAttribute('data-name')||b.getAttribute('data-src'));};
   }
-  // Launch the existing QR setup flow: the panel mints a one-time link + QR, the
-  // owner scans it on their phone and signs in (their password only touches the
-  // provider). Free providers connect immediately with no phone step.
-  // qr_path is an opaque SINGLE-USE handle (never the setup token, which nginx
-  // would log): the first image fetch spends it. If the image fails or needs a
-  // re-fetch, renew it ONCE by re-POSTing /start — bounded, so a dead backend
-  // can't loop the panel.
+  // Connect/Reconnect a music source through the shared authCard (free
+  // providers connect at once, no phone step).
   function startProviderConnect(domain,label,name){
-    apiJson('POST','/api/music/setup/start',{provider:domain}).then(function(r){
-      if(r&&r.immediate){toast('Connected');loadQueue();return;}
-      if(!(r&&r.ok&&r.qr_path)){toast('Sign in first to manage music');if(window.__showAuthCard)window.__showAuthCard();return;}
-      estOpen('<h3>'+esc((label||'Connect')+' '+(name||domain))+'</h3>'
-        +'<div class="srcqr"><img alt="Scan to sign in" src="'+esc(r.qr_path)+'"></div>'
-        +'<div class="spkhint">Scan with your phone to sign in — the link is private to your network and expires shortly.</div>'
-        +'<div class="btns"><button data-x="cancel">Done</button></div>');
-      var m=document.getElementById('estModal');
-      m.querySelector('[data-x="cancel"]').onclick=function(){estClose();loadQueue();};
-      var qi=m.querySelector('.srcqr img'),renewed=false;
-      if(qi)qi.onerror=function(){if(renewed)return;renewed=true;
-        apiJson('POST','/api/music/setup/start',{provider:domain}).then(function(n){if(n&&n.ok&&n.qr_path)qi.src=n.qr_path;}).catch(function(){});};
-    }).catch(function(){toast('Sign in first to manage music');if(window.__showAuthCard)window.__showAuthCard();});
+    authCard({kind:'music',provider:domain,title:(label||'Connect')+' '+(name||domain),onDone:loadQueue});
   }
+  // ---- authCard: THE panel card for connecting an app or account (B7.5) ----
+  // VISION principle 8 — voice first, touch second, no keyboard: a QR to scan,
+  // "Send to my phone" only when the member has a linked Telegram, and a live
+  // status line. Status arrives by PUSH (the handoff_update ui_action, relayed by
+  // touch-ui-executor as a 'zoe:handoff' event); a slow /status poll is only the
+  // fallback for a missed push. Done = toast + auto-close (no static Done).
+  // qr_path is an opaque SINGLE-USE handle (never the phone token): if the image
+  // fails, renew ONCE by re-POSTing /start — bounded, so a dead backend can't
+  // loop the panel. Never add a text input here.
+  var _ac=null,_acT=null;
+  var AC_TXT={pending:'Scan with your phone to sign in',awaiting_phone:'Finish on your phone',
+    completing:'Connecting…',done:'Connected',error:'That didn’t work — try again'};
+  function _acStart(o){return apiJson('POST','/api/handoff/start',{kind:o.kind,provider:o.provider,panel_id:_panelDevId()});}
+  function authCard(o){
+    _acStart(o).then(function(r){
+      if(r&&r.immediate){toast(r.ok?'Connected':'Couldn’t connect');if(o.onDone)o.onDone();return;}
+      if(!(r&&r.ok&&r.qr_path)){toast('Sign in first to connect');if(window.__showAuthCard)window.__showAuthCard();return;}
+      _acOpen(r,o);
+    }).catch(function(){toast('Sign in first to connect');if(window.__showAuthCard)window.__showAuthCard();});
+  }
+  function _acStop(){if(_acT){clearInterval(_acT);_acT=null;}_ac=null;}
+  function _acLive(){var m=document.getElementById('estModal');return !!(_ac&&m&&m.classList.contains('on')&&m.querySelector('.acst[data-h="'+_ac.id+'"]'));}
+  function _acOpen(r,o){
+    _acStop();
+    var phone=(r.channels||[]).indexOf('telegram')>=0;
+    estOpen('<h3>'+esc(o.title||'Connect')+'</h3>'
+      +'<div class="srcqr"><img alt="Scan to sign in" src="'+esc(r.qr_path)+'"></div>'
+      +'<div class="acst" role="status" aria-live="polite" data-h="'+esc(r.id)+'"></div>'
+      +'<div class="spkhint accd"></div>'
+      +'<div class="btns">'+(phone?'<button data-x="phone">Send to my phone</button>':'')+'<button data-x="close">Close</button></div>');
+    var m=document.getElementById('estModal');
+    _ac={id:r.id,o:o,exp:Date.now()+1000*(r.expires_in||0),n:0,m:m};
+    _acPaint({id:r.id,status:r.status||'pending',detail:''});
+    m.querySelector('[data-x="close"]').onclick=function(){_acStop();estClose();if(o.onDone)o.onDone();};
+    var pb=m.querySelector('[data-x="phone"]');
+    if(pb)pb.onclick=function(){if(!_ac)return;pb.disabled=true;
+      apiJson('POST','/api/handoff/'+encodeURIComponent(_ac.id)+'/send-to-phone').then(function(x){
+        toast(x&&x.ok?'Sent to your phone':((x&&x.detail)||'Couldn’t send — scan the code'));
+        if(x&&x.status==='unavailable')pb.remove();else pb.disabled=false;
+      }).catch(function(){pb.disabled=false;toast('Couldn’t send — scan the code');});};
+    var qi=m.querySelector('.srcqr img'),renewed=false;
+    if(qi)qi.onerror=function(){if(renewed)return;renewed=true;
+      _acStart(o).then(function(n){if(n&&n.ok&&n.qr_path&&_acLive()){qi.src=n.qr_path;_ac.id=n.id;
+        m.querySelector('.acst').setAttribute('data-h',n.id);_ac.exp=Date.now()+1000*(n.expires_in||0);}}).catch(function(){});};
+    _acT=setInterval(_acTick,1000);
+  }
+  function _acTick(){
+    if(!_acLive()){_acStop();return;}
+    var left=Math.max(0,Math.round((_ac.exp-Date.now())/1000)),cd=_ac.m.querySelector('.accd');
+    if(cd)cd.textContent=left?('The code works for '+Math.floor(left/60)+':'+('0'+left%60).slice(-2)+' — private to your home network.'):'';
+    if(++_ac.n%10===0||left===0){var id=_ac.id;
+      apiGet('/api/handoff/'+encodeURIComponent(id)+'/status').then(function(v){if(v&&_ac&&v.id===_ac.id)_acPaint(v);}).catch(function(){});}
+  }
+  function _acPaint(v){
+    if(!_acLive()||v.id!==_ac.id)return;
+    var st=_ac.m.querySelector('.acst'),ag=_ac.m.querySelector('[data-x="again"]');st.className='acst '+(v.status||'');
+    if(ag&&v.status!=='error')ag.remove();
+    st.textContent=v.detail||AC_TXT[v.status]||'';
+    if(v.status==='done'){var o=_ac.o;toast(v.detail||'Connected');_acStop();
+      setTimeout(function(){var m=document.getElementById('estModal');if(m&&m.querySelector('.acst.done'))estClose();if(o.onDone)o.onDone();},2500);}
+    else if(v.status==='error'){var o2=_ac.o,b=_ac.m.querySelector('.btns');if(v.reason==='expired')_acStop();
+      if(b&&!b.querySelector('[data-x="again"]')){var again=document.createElement('button');again.setAttribute('data-x','again');
+        again.textContent='Try again';again.onclick=function(){_acStop();authCard(o2);};b.insertBefore(again,b.firstChild);}}
+  }
+  window.addEventListener('zoe:handoff',function(e){var v=(e&&e.detail)||{};if(_ac&&v.id===_ac.id)_acPaint(v);});
   function _qmsg(t){return '<div class="mqmsg" style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _qempty(t){return '<div style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}
   function _thumb(u){return (u&&/^https?:/.test(u))?'<img class="qthumb" alt="" src="'+esc(u)+'">':'<span class="qthumb ph"></span>';}
@@ -2695,8 +2747,11 @@
     var qr=document.getElementById('mQRCode');
     if(qr&&!qr.dataset.done){qr.dataset.done='1';
       var url=location.origin+'/jukebox.html';
-      var sc=document.createElement('script');sc.src='/js/qrcode.min.js';
-      sc.onload=function(){try{new QRCode(qr,{text:url,width:74,height:74,correctLevel:QRCode.CorrectLevel.M});}catch(e){}};
+      // The ONE client QR library (node-qrcode, also used by chat); the panel's
+      // secret-bearing QRs are server SVGs by single-use handle, never this.
+      var sc=document.createElement('script');sc.src='/lib/qrcode/qrcode.min.js';
+      sc.onload=function(){try{var cv=document.createElement('canvas');qr.appendChild(cv);
+        QRCode.toCanvas(cv,url,{width:74,margin:0,errorCorrectionLevel:'M'});}catch(e){}};
       document.head.appendChild(sc);}
     // Speaker picker: list Music Assistant players, tap to move playback there.
     var spk=document.getElementById('mSpk');
@@ -4461,6 +4516,6 @@
     }).catch(function(){});}catch(e){}
 })();
 </script>
-<script src="/js/touch-ui-executor.js?v=estate-2"></script>
+<script src="/js/touch-ui-executor.js?v=estate-3"></script>
 </body>
 </html>

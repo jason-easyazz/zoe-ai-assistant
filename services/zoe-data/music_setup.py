@@ -99,3 +99,12 @@ def qr_path(token: str, provider: str) -> str:
     import setup_qr
 
     return f"/api/music/setup/qr/{setup_qr.issue('music', token=token, provider=provider)}"
+
+
+def handoff_link(provider: str, user_id: str = "") -> dict[str, Any]:
+    """The phone link for an ``auth_handoff`` of kind ``music``: a fresh setup
+    token, its nonce as the handoff's ``ref``, and the fragment-only phone path."""
+    minted = mint(provider, user_id)
+    nonce = json.loads(_b64d(minted["token"].split(".", 1)[0]))["n"]
+    return {"token": minted["token"], "ref": nonce, "ttl": minted["expires_in"],
+            "path": f"/setup-music.html#provider={provider}&t={minted['token']}"}

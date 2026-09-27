@@ -4,7 +4,9 @@
  * "have you set up something that would tell a user and then allow them to fix
  *  it?" — the Sources tab lists music services; one that's configured but not
  *  loaded (YouTube Music failing its Premium check) shows amber "Reconnect",
- *  which mints the existing QR setup flow so the owner signs in on their phone.
+ *  which opens the shared authCard (B7.5): QR, "Send to my phone" only for a
+ *  member with a linked Telegram, and a LIVE status line fed by the
+ *  handoff_update push (delivered here through the real touch-ui-executor).
  *
  * WHY A REAL BROWSER: which POST a tap makes, the amber needs-attention state,
  * the guest→sign-in fallback, and the QR modal are DOM/behaviour claims.
@@ -60,14 +62,18 @@ async function open(browser, ctx) {
       if (ctx.guest) return json({ detail: 'auth required' }, 401);
       return json({ providers: CATALOGUE });
     }
-    if (u.includes('/api/music/setup/start')) {
+    if (u.includes('/api/handoff/start')) {
       if (ctx.guest) return json({ detail: 'auth required' }, 401);
       const body = JSON.parse(route.request().postData() || '{}');
-      ctx.starts.push(body.provider);
+      ctx.starts.push(body.provider); ctx.startBodies = (ctx.startBodies || []).concat([body]);
       if (body.provider === 'radiobrowser') return json({ ok: true, immediate: true, provider: body.provider });
-      return json({ ok: true, provider: body.provider, auth: 'browser', qr_path: '/api/music/setup/qr/opaque-handle-' + body.provider, setup_url: 'https://x/setup', expires_in: 300 });
+      return json({ ok: true, id: 'h1', kind: 'music', provider: body.provider, status: 'pending', auth: 'browser',
+        qr_path: '/api/handoff/h1/qr/opaque-handle-' + body.provider, expires_in: 900,
+        channels: ctx.telegram ? ['qr', 'telegram'] : ['qr'] });
     }
-    if (u.includes('/api/music/setup/qr')) return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220"><rect width="220" height="220" fill="#fff"/></svg>' });
+    if (u.includes('/api/handoff/h1/send-to-phone')) { ctx.sends = (ctx.sends || 0) + 1; return json({ ok: true, status: 'sent', detail: 'Sent to your phone' }); }
+    if (u.includes('/api/handoff/h1/status')) return json({ ok: true, id: 'h1', status: ctx.status || 'pending', detail: ctx.detail || '', expires_in: 800 });
+    if (u.includes('/qr/')) return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220"><rect width="220" height="220" fill="#fff"/></svg>' });
     if (route.request().method() === 'POST') return json({ ok: true });
     if (u.includes('/api/music/now-playing')) return json({ available: true, now_playing: { state: 'idle' } });
     if (u.includes('/api/music/queue/')) return json({ available: true, items: [] });
@@ -122,17 +128,67 @@ async function t(name, fn) {
     await page.close();
   });
 
-  await t('tapping Reconnect starts the setup flow and shows the QR', async () => {
+  await t('tapping Reconnect opens the authCard: handoff started, QR shown, no keyboard, no phone button without Telegram', async () => {
     const ctx = { base, starts: [] }; const page = await open(browser, ctx);
     await page.click('.srcrow.warn .srcbtn');
     await page.waitForTimeout(500);
-    assert.deepStrictEqual(ctx.starts, ['ytmusic'], `setup/start not called for ytmusic: ${JSON.stringify(ctx.starts)}`);
+    assert.deepStrictEqual(ctx.starts, ['ytmusic'], `handoff/start not called for ytmusic: ${JSON.stringify(ctx.starts)}`);
+    assert.deepStrictEqual(ctx.startBodies[0], { kind: 'music', provider: 'ytmusic', panel_id: 'zoe-touch-pi' });
     const qr = await page.$('.estmc .srcqr img');
     assert.ok(qr, 'the QR modal did not open');
     const src = await qr.getAttribute('src');
-    assert.ok(/setup\/qr/.test(src), `QR img src wrong: ${src}`);
-    assert.ok(!/token=/.test(src), `the setup token leaked into the QR img URL: ${src}`);
+    assert.ok(/^\/api\/handoff\/h1\/qr\//.test(src), `QR img src wrong: ${src}`);
+    assert.ok(!/token=|\?/.test(src), `a secret/query leaked into the QR img URL: ${src}`);
+    assert.strictEqual(await page.$$eval('#estModal input, #estModal textarea', (e) => e.length), 0, 'the card has a text input');
+    assert.ok(!(await page.$('#estModal [data-x="phone"]')), '"Send to my phone" shown without a linked Telegram');
+    assert.ok(!(await page.$('#estModal [data-x="cancel"]')), 'the old static Done button is back');
+    assert.match(await page.$eval('#estModal .acst', (e) => e.textContent), /Scan with your phone/);
     await page.screenshot({ path: '/tmp/claude-1000/-home-zoe-assistant--claude-worktrees-pedantic-maxwell-3f9763/0c7881cf-ed4b-478f-b5d3-49a70e000628/scratchpad/sources_qr.png' });
+    await page.close();
+  });
+
+  await t('the card follows the handoff_update push live, then closes itself on done', async () => {
+    const ctx = { base, starts: [] }; const page = await open(browser, ctx);
+    await page.click('.srcrow.warn .srcbtn');
+    await page.waitForSelector('#estModal .acst');
+    const push = (status, detail) => page.evaluate(([s, d]) => window._zoeExecuteAction({ id: 'push_handoff_h1_' + s,
+      action_type: 'handoff_update', panel_id: 'zoe-touch-pi', payload: { id: 'h1', status: s, detail: d } }), [status, detail]);
+    await page.evaluate(() => window._zoeExecuteAction({ id: 'push_handoff_other_1', action_type: 'handoff_update',
+      panel_id: 'zoe-touch-pi', payload: { id: 'other', status: 'done', detail: 'NOT OURS' } }));
+    await push('completing', 'Signing in on your phone…');
+    await page.waitForTimeout(150);
+    assert.strictEqual(await page.$eval('#estModal .acst', (e) => e.textContent), 'Signing in on your phone…');
+    await push('error', 'Sign-in was cancelled.');
+    await page.waitForTimeout(150);
+    assert.ok(await page.$('#estModal .acst.error'), 'error not painted');
+    assert.ok(await page.$('#estModal [data-x="again"]'), 'no Try again after a failed sign-in');
+    await push('done', 'YouTube Music is connected');
+    await page.waitForTimeout(150);
+    assert.strictEqual(await page.$eval('#estModal .acst', (e) => e.textContent), 'YouTube Music is connected');
+    assert.ok(!(await page.$('#estModal [data-x="again"]')), 'Try again survived success');
+    await page.waitForTimeout(2800);
+    assert.ok(!(await page.$('#estModal .acst')), 'the card did not close itself after done');
+    assert.strictEqual(ctx.errs.length, 0, 'page errors: ' + ctx.errs.join(' | '));
+    await page.close();
+  });
+
+  await t('"Send to my phone" appears for a linked member and sends', async () => {
+    const ctx = { base, starts: [], telegram: true }; const page = await open(browser, ctx);
+    await page.click('.srcrow.warn .srcbtn');
+    await page.waitForSelector('#estModal [data-x="phone"]', { timeout: 2000 });
+    await page.click('#estModal [data-x="phone"]');
+    await page.waitForTimeout(300);
+    assert.strictEqual(ctx.sends, 1, 'send-to-phone not called');
+    await page.close();
+  });
+
+  await t('a missed push is caught by the fallback status poll', async () => {
+    const ctx = { base, starts: [], status: 'done', detail: 'Spotify is connected' }; const page = await open(browser, ctx);
+    await page.click('.srcrow.warn .srcbtn');
+    await page.waitForTimeout(10800);  // the poll runs every 10 s (push is primary)
+    assert.strictEqual(await page.$eval('#estModal .acst', (e) => e.textContent), 'Spotify is connected');
+    await page.waitForTimeout(2800);
+    assert.ok(!(await page.$('#estModal .acst')), 'the fallback poll did not complete the card');
     await page.close();
   });
 

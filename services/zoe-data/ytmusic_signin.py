@@ -418,6 +418,33 @@ async def _run_watcher(session: dict[str, Any]) -> None:
     finally:
         # The browser NEVER outlives the session — torn down on every exit path.
         await _teardown(session)
+        await _report(session)
+
+
+async def _report(session: dict[str, Any]) -> None:
+    """Tell a ``watch``er how the session ended, exactly once (watcher exit or
+    explicit cancel, whichever comes first)."""
+    on_done = session.pop("on_done", None)
+    if on_done is None:
+        return
+    ok = session.get("state") == "connected"
+    try:
+        await on_done(ok, "" if ok else (session.get("error") or "Sign-in didn't complete."))
+    except Exception as exc:  # noqa: BLE001 — reporting never affects the sign-in
+        logger.info("ytmusic sign-in: completion report failed: %s", exc)
+
+
+def watch(session_id: str, on_done: Any) -> None:
+    """Register ``on_done(ok, detail)`` for the live session (auth_handoff's
+    reporter). A session that already ended reports at once; any other id is a
+    no-op."""
+    session = _SESSION
+    if session is None or not session_id or session.get("id") != session_id:
+        return
+    session["on_done"] = on_done
+    watcher = session.get("watcher")
+    if session.get("state") in _TERMINAL_STATES and (watcher is None or watcher.done()):
+        session["report_task"] = asyncio.create_task(_report(session))
 
 
 # ── public API ───────────────────────────────────────────────────────────────
@@ -488,6 +515,9 @@ async def cancel_session(session_id: str) -> dict[str, Any]:
     # reaches its finally. _teardown is idempotent (pops context/procs), so a
     # double call after the watcher already tore down is a harmless no-op.
     await _teardown(session)
+    if session.get("state") not in _TERMINAL_STATES:
+        session["state"], session["error"] = "error", "Sign-in was cancelled."
+    await _report(session)
     return {"ok": True, "state": session.get("state")}
 
 

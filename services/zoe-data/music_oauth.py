@@ -259,7 +259,7 @@ async def start_oauth(provider: str) -> dict[str, Any]:
     flow: dict[str, Any] = {"state": "pending", "auth_url": None, "provider": provider,
                             "error": None, "created": time.time(), "event": asyncio.Event()}
     _flows[oauth_id] = flow
-    flow["task"] = asyncio.create_task(_run_flow(oauth_id, provider))
+    flow["task"] = asyncio.create_task(_run_and_report(oauth_id, provider))
     try:
         await asyncio.wait_for(flow["event"].wait(), timeout=_URL_WAIT_S)
     except asyncio.TimeoutError:
@@ -268,6 +268,41 @@ async def start_oauth(provider: str) -> dict[str, Any]:
     return {"oauth_id": oauth_id, "auth_url": flow.get("auth_url"),
             "state": flow["state"] if flow.get("auth_url") else "failed",
             "error": flow.get("error")}
+
+
+async def _run_and_report(oauth_id: str, provider: str) -> None:
+    flow = _flows[oauth_id]  # held locally: _prune pops the entry before cancelling
+    try:
+        await _run_flow(oauth_id, provider)
+    finally:
+        await _report(flow)
+
+
+async def _report(flow: dict[str, Any]) -> None:
+    """Tell a ``watch``er how the attempt ended, exactly once — on EVERY exit,
+    including a cancel by ``_prune``, so a panel card never waits on an attempt
+    that is gone. A callback failure never affects the attempt."""
+    on_done = flow.pop("on_done", None)
+    if on_done is None:
+        return
+    ok = flow.get("state") == "connected"
+    try:
+        await on_done(ok, "" if ok else (flow.get("error") or "Sign-in didn't complete — please try again."))
+    except Exception as exc:  # noqa: BLE001
+        logger.info("music oauth completion report failed: %s", exc)
+
+
+def watch(oauth_id: str, on_done: Any) -> None:
+    """Register ``on_done(ok, detail)`` for an attempt (auth_handoff's reporter).
+    An attempt that already ended reports at once; an unknown id is a no-op."""
+    flow = _flows.get(oauth_id)
+    if flow is None:
+        return
+    flow["on_done"] = on_done
+    task = flow.get("task")
+    if task is None or task.done():
+        report = asyncio.create_task(_report(flow))
+        flow["report_task"] = report  # hold a reference until it runs
 
 
 def oauth_status(oauth_id: str) -> dict[str, Any]:
