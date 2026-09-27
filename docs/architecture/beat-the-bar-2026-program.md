@@ -176,8 +176,12 @@ status: 🔨 active — NEXT ACTION is always §0
   **Two-interpreter split (2026-09-26, §10):** system 3.10 = CUDA consumers from `jp6/cu126`
   (cp310-only: torch, onnxruntime-gpu 1.23/1.24; last upload 2026-04-01) — after EOL frozen
   at ORT 1.23.2, numpy 2.2.6, av 17.1.0, sklearn 1.7.2, websockets 16.1.1 (all dropped cp310
-  on PyPI); venv 3.12 = zoe-data (ORT 1.30, numpy 2.5, av 18, chromadb 1.5.9 abi3, CPU torch
-  2.14). Needs a per-interpreter `requirements.txt` (markers or two files) + a voice-gate
+  on PyPI); venv 3.12 = zoe-data (ORT 1.30, numpy 2.5, av 18, CPU torch 2.14). The memory
+  store does NOT move with the venv: it carries the hard-held `chromadb==0.6.3` +
+  `mempalace==3.3.1` (both py3-none-any; `chroma-hnswlib 0.7.6` ships cp312 aarch64) until
+  B0.8's copy migration + reconciliation pass — a 1.5.x client on the live 0.6.x palace is
+  the silent drawer-write-drop failure. chromadb 1.5.9 (abi3) is B0.8's target, not B0.7's.
+  Needs a per-interpreter `requirements.txt` (markers or two files) + a voice-gate
   probe re-baseline pointed at the interpreter that runs STT (the probe never installs
   requirements — see `reference_voice_gate_instrument_facts`).
 - B0.8 ⬜ MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7); reconcile row
@@ -211,10 +215,14 @@ status: 🔨 active — NEXT ACTION is always §0
     so the default rule (GA changelog 2026-09-17, evaluate mode now) auto-enforces on 11-02
     and both workflows FAIL with `Event 'pull_request_target' is not allowed …` (a failed
     run, not a skip). UI: Settings → Actions → Policies → new rule, type
-    `restrict_action_events`, `allowed_events: [pull_request_target]`, `include` the two
-    workflow paths, enforcement `evaluate` first → `active` (a community thread says a
-    user-created rule enforces immediately, so verify in the Actions tab filtered on
-    `event:pull_request_target` before flipping). API: `POST
+    `restrict_action_events`, `allowed_events: [pull_request_target, workflow_dispatch]`,
+    `include` the two workflow paths, enforcement `evaluate` first → `active`. Both
+    workflows also trigger on `workflow_dispatch` (break-glass's manual PR+reason run is its
+    documented outage path), and an event rule controls "which events are permitted" — so
+    listing only `pull_request_target` would plausibly block manual runs of the included
+    paths (docs do not say outright; UNVERIFIED). A community thread says a user-created
+    rule enforces immediately, so in `evaluate` confirm BOTH events in the Actions tab
+    (`event:pull_request_target`, `event:workflow_dispatch`) before flipping. API: `POST
     /repos/{owner}/{repo}/actions/policies` via `gh api -X POST … --input body.json` (no `gh`
     subcommand; read the REST page for field names); `GET/PUT/DELETE …/policies/{id}`.
   - (c) ⬜ `ggshield-action` v1.53.0 → v1.55.0 in `validate.yml` (1.55.0 2026-09-24; no
@@ -429,8 +437,11 @@ status: 🔨 active — NEXT ACTION is always §0
   `https://pypi.jetson-ai-lab.io/jp6/cu126/` (verified 09-26; PyPI ships no aarch64 GPU wheel,
   so it lives on system 3.10 beside llama-server, not in the B0.7 venv). The `[gpu]` extra is
   x86_64-only — install `kokoro-onnx` plain and bring ORT-GPU; pin numpy to the ORT wheel's
-  ABI (kokoro-onnx wants 2.x, the Jetson wheel was built on 1.x). No Kokoro weights since
-  2025-04 and no published Jetson RAM numbers — the 2.3 GB → ~0.6–1 GB claim is a hypothesis:
+  ABI. The jp6/cu126 **1.24.0** wheel is **numpy-2-header-built** (scanner evidence in
+  `docs/knowledge/numpy2-jetson-migration.md`), so numpy 2.x satisfies both it and
+  kokoro-onnx; the NVIDIA-forum "built on numpy 1.x" trap is about 1.23.0 and predates 1.24.0
+  (an actual `import onnxruntime` under numpy 2 is still undone — first step of the window).
+  No Kokoro weights since 2025-04 and no published Jetson RAM numbers — the 2.3 GB → ~0.6–1 GB claim is a hypothesis:
   **measure with a CPU-EP control** (same graph on the CPU provider), gate RTF < 0.3 + the
   replay corpus. CPU fallback if the sidecar ever loses CUDA: Moonshine 0.1.5's two-stage
   Kokoro ORT graph (~100–200 MB).
@@ -544,8 +555,9 @@ from outside, hence B9.0.
   **Protocol facts (2026-09-26, §8, read from `sdks/device/PROTOCOL.md` + the app — the
   docs.omi.me Protocol page is stale, no codec 21):** codec ids **0 = PCM16, 1 = PCM8,
   20 = Opus 160-sample/10 ms (DevKit), 21 = Opus FS320 320-sample/20 ms (CV1)**; **3-byte
-  header** (u16 LE packet number + u8 index) then Opus; CV1 = 32 kbps VBR, ~16 kB/s on the
-  wire, PCM16 mono 16 kHz out; UUIDs as in `omi_bridge.py`. Ring protocol needs firmware
+  header** (u16 LE packet number + u8 index) then Opus; CV1 = 32 kbps VBR ≈ 4 kB/s of Opus
+  (50 pkt/s × ~80 B + 3 B header ≈ 4.2 kB/s on the wire; matches `omi-integration-plan.md`),
+  PCM16 mono 16 kHz out; UUIDs as in `omi_bridge.py`. Ring protocol needs firmware
   **≥3.0.20** — 🧑 confirm via DIS `2A26` before relying on it (CV1 config reports 3.0.21;
   `0x10 INFO` / `0x11 READ` / `0x12 ADVANCE` / `0x13 CLEAR` / `0x03 STOP`, big-endian ints,
   444-byte records = 4-byte timestamp + 440 audio; storage UUID UNVERIFIED). No local STT
