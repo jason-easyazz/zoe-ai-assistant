@@ -80,18 +80,32 @@ def _values_from_entries(result: Any) -> dict[str, Any]:
 _FLOW_POLL_S = 2.0
 
 
-async def _connected_after_flow_closed(provider: str, existing: Optional[str]) -> bool:
-    """MA drops a flow from its registry the moment it ends, so a poll that races
-    the OAuth callback gets an error, not the FINISH step. Read the outcome from
-    the provider config instead: a first connect created an instance; a re-auth
-    cleared the instance's last_error (MA does that on a successful reconfigure)."""
-    for cfg in (await music_service._ma("config/providers") or []):
-        if not isinstance(cfg, dict) or cfg.get("domain") != provider:
-            continue
-        iid = cfg.get("instance_id") or cfg.get("id")
-        if existing is None or iid == existing:
-            return existing is None or not cfg.get("last_error")
-    return False
+# A failed `config/flows/get` is NOT an outcome: MA may be restarting, or the
+# request timed out. Retry with backoff; only a provider-state TRANSITION seen
+# during this attempt (below) may stand in for the FINISH step.
+_POLL_FAIL_MAX = 6
+_POLL_BACKOFF_MAX_S = 15.0
+
+
+async def _provider_state(provider: str) -> Optional[dict[str, Any]]:
+    """{instance_id: last_error} for the provider's instances, or None if MA
+    could not be read (so an unreadable config is never mistaken for a change)."""
+    cfgs = await music_service._ma("config/providers")
+    if not isinstance(cfgs, list):
+        return None
+    return {(c.get("instance_id") or c.get("id")): c.get("last_error")
+            for c in cfgs if isinstance(c, dict) and c.get("domain") == provider}
+
+
+def _completed_by_transition(before: dict[str, Any], now: dict[str, Any], existing: Optional[str]) -> bool:
+    """Did the provider visibly change the way a successful sign-in changes it?
+    First connect: an instance that did not exist before appeared. Re-auth: the
+    instance's last_error was SET before this attempt and is clear now (MA clears
+    it on a successful reconfigure). A healthy instance shows no transition, so
+    for it only an observed FINISH step counts."""
+    if existing is None:
+        return bool(set(now) - set(before))
+    return bool(before.get(existing)) and existing in now and not now[existing]
 
 
 async def _run_setup_flow(oauth_id: str, provider: str) -> None:
@@ -100,9 +114,11 @@ async def _run_setup_flow(oauth_id: str, provider: str) -> None:
     flow_id = None
     try:
         existing = await music_service.provider_instance_id(provider)
+        before = await _provider_state(provider) or {}
         step = await music_service._start_provider_flow(provider, existing)
         deadline = time.time() + OAUTH_ATTEMPT_TTL_S
         forms = 0
+        poll_failures = 0
         while step is not None and time.time() < deadline:
             flow_id = step.get("flow_id") or flow_id
             kind = step.get("type")
@@ -128,10 +144,24 @@ async def _run_setup_flow(oauth_id: str, provider: str) -> None:
                     flow_id=flow_id, values={})
                 continue
             await asyncio.sleep(_FLOW_POLL_S)
-            step = await music_service._ma_flow_step("config/flows/get", flow_id=flow_id)
-            if step is None and flow.get("auth_url") and await _connected_after_flow_closed(provider, existing):
-                flow["state"] = "connected"
-                return
+            polled = await music_service._ma_flow_step("config/flows/get", flow_id=flow_id)
+            while polled is None and time.time() < deadline:
+                # The flow may have ended (MA drops it from its registry at once)
+                # or MA/the network hiccupped. Only a transition decides.
+                now = await _provider_state(provider)
+                if now is not None and _completed_by_transition(before, now, existing):
+                    flow["state"] = "connected"
+                    return
+                poll_failures += 1
+                if poll_failures >= _POLL_FAIL_MAX:
+                    logger.info("music oauth flow %s (%s): %d failed polls, no completion seen",
+                                flow_id, provider, poll_failures)
+                    flow.update(state="failed", error="couldn't confirm the sign-in — please try again")
+                    return
+                await asyncio.sleep(min(_POLL_BACKOFF_MAX_S, _FLOW_POLL_S * 2 ** poll_failures))
+                polled = await music_service._ma_flow_step("config/flows/get", flow_id=flow_id)
+            poll_failures = 0
+            step = polled
         flow.update(state="failed", error="sign-in timed out" if step is not None else "sign-in didn't complete")
         await music_service._abort_setup_flow(flow_id)
     except Exception as exc:  # noqa: BLE001 — a failed attempt must never crash the app
@@ -142,7 +172,7 @@ async def _run_setup_flow(oauth_id: str, provider: str) -> None:
 
 
 async def _run_flow(oauth_id: str, provider: str) -> None:
-    if await music_service._ma_is_210_plus():
+    if await music_service._ma_is_210_plus(fresh=True):
         await _run_setup_flow(oauth_id, provider)
         return
     flow = _flows[oauth_id]

@@ -152,7 +152,12 @@ The last stage (added 2026-09-27) compares the **PO-token plugin** version insid
 MA with the **server** version from `/ping` — fetched from *inside* the MA
 container, so it also proves `127.0.0.1:4416` is reachable from MA's network
 namespace — and fails on a **major** mismatch. It runs after the JS verdict and
-says the engine is fine, so the two failure classes are never confused.
+says the engine is fine, so the two failure classes are never confused. If
+either version **cannot be read** (plugin not installed, server down) it exits
+`2` CANNOT CHECK, never HEALTHY. Server URL override: `ZOE_YTMUSIC_POTOKEN_URL`
+(default `http://127.0.0.1:4416`); `ZOE_YTMUSIC_POTOKEN_URL=http://127.0.0.1:1`
+is the no-touch negative control (verified exit 2 on live and on a candidate,
+2026-09-27; a candidate with the plugin uninstalled also exits 2).
 
 ```
 $ scripts/maintenance/music_jsruntime_probe.sh          # live, 2026-09-27

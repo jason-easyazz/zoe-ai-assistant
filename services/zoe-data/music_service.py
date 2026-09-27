@@ -219,11 +219,18 @@ async def _ma_info() -> Optional[dict[str, Any]]:
         return None
 
 
-async def ma_server_version() -> Optional[tuple[int, ...]]:
-    """The connected MA server's version (cached; see the block comment above)."""
+async def ma_server_version(fresh: bool = False) -> Optional[tuple[int, ...]]:
+    """The connected MA server's version (cached; see the block comment above).
+
+    `fresh=True` bypasses the cache: every version-SENSITIVE write (connect,
+    re-auth, OAuth, the setup form) re-reads /info on entry, because MA can be
+    re-created on a new image without zoe-data seeing a single failed call, and
+    a stale 2.8 answer there is the silent-no-op reconnect. The cache is only
+    for read-only hot paths (the "for you" shelf)."""
     global _ma_version_cache
     now = time.monotonic()
-    if _ma_version_cache is not None and now - _ma_version_cache[1] < _MA_VERSION_TTL_S:
+    if (not fresh and _ma_version_cache is not None
+            and now - _ma_version_cache[1] < _MA_VERSION_TTL_S):
         return _ma_version_cache[0]
     ver = _parse_ma_version(await _ma_info())
     # Only a successful read is cached: a failure must not pin the legacy path.
@@ -231,8 +238,8 @@ async def ma_server_version() -> Optional[tuple[int, ...]]:
     return ver
 
 
-async def _ma_is_210_plus() -> bool:
-    ver = await ma_server_version()
+async def _ma_is_210_plus(fresh: bool = False) -> bool:
+    ver = await ma_server_version(fresh)
     return ver is not None and ver[:2] >= _MA_FLOW_API_MIN
 
 
@@ -1501,7 +1508,7 @@ async def provider_setup_form(provider: str) -> Optional[dict[str, Any]]:
     meta = next((p for p in _SETUP_CATALOGUE if p["domain"] == provider), None)
     if meta is None:
         return None
-    if await _ma_is_210_plus():
+    if await _ma_is_210_plus(fresh=True):
         entries = await _setup_flow_form_entries(provider, meta.get("auth"))
     else:
         entries = await _ma("config/providers/get_entries", provider_domain=provider)
@@ -1640,7 +1647,7 @@ async def save_provider(provider: str, values: dict[str, Any],
     Pass ``instance_id`` to UPDATE that existing instance in place (MA otherwise
     mints a new instance on every save — which duplicates the provider on a
     re-connect or a cookie refresh)."""
-    if await _ma_is_210_plus():
+    if await _ma_is_210_plus(fresh=True):
         return await _save_provider_via_flow(provider, values, instance_id)
     # Base to merge the caller's values over. On a FIRST connect that's MA's
     # defaults. On a RECONNECT (instance_id) it's the EXISTING instance's current

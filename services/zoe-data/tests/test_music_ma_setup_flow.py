@@ -445,7 +445,7 @@ async def test_legacy_path_against_210_is_a_silent_noop(monkeypatch):
     fake = Fake210().install(monkeypatch)
     iid = _ytmusic_instance(fake)
 
-    async def pre210():
+    async def pre210(fresh=False):
         return False
     monkeypatch.setattr(music_service, "_ma_is_210_plus", pre210)
 
@@ -546,4 +546,75 @@ async def test_210_oauth_reauth_is_in_place(monkeypatch):
     assert list(fake.instances) == ["spotify--EX"], "OAuth re-auth minted a duplicate"
     assert fake.instances["spotify--EX"]["setup_data"]["refresh_token"] == "tok"
     assert fake.sent("config/providers/reconfigure") == [{"instance_id": "spotify--EX"}]
+    music_oauth._flows.pop(res["oauth_id"], None)
+
+
+# ── review fixes: fresh version on writes; a failed poll is not completion ───
+
+@pytest.mark.asyncio
+async def test_write_path_rereads_version_despite_warm_cache(monkeypatch):
+    """MA re-created 2.8.7 -> 2.10.3 with no failed call in between: the warm
+    cache still says 2.8.7, but a reconnect must re-read /info and take the
+    2.10 path (the cached answer is the silent-no-op reconnect)."""
+    fake = Fake210().install(monkeypatch)
+    iid = _ytmusic_instance(fake)
+
+    async def old_info():
+        return {"server_version": "2.8.7", "schema_version": 29}
+    monkeypatch.setattr(music_service, "_ma_info", old_info)
+    assert await music_service.ma_server_version() == (2, 8, 7)  # cache primed
+    monkeypatch.setattr(music_service, "_ma_info", fake.info)     # ...MA is now 2.10.3
+
+    await music_service.save_provider("ytmusic", {"username": "jason", "cookie": "FRESH"}, instance_id=iid)
+
+    assert fake.instances[iid]["setup_data"]["cookie"] == "FRESH", "reconnect used the stale cached version"
+
+
+async def _run_oauth(monkeypatch, fake, provider="spotify"):
+    monkeypatch.setattr(music_oauth, "_FLOW_POLL_S", 0)
+    res = await music_oauth.start_oauth(provider)
+    await music_oauth._flows[res["oauth_id"]]["task"]
+    return res
+
+
+@pytest.mark.asyncio
+async def test_210_oauth_failed_polls_are_not_completion(monkeypatch):
+    """flows/get failing (MA restarting, timeouts) with no provider-state change
+    must end as an error — never 'connected' — and must not spend the token."""
+    fake = Fake210().install(monkeypatch)
+    fake.oauth_url = "https://accounts.spotify.com/authorize?x=3"
+    fake.cmd_config__flows__get = lambda flow_id: _ERR  # every poll fails; flow still alive
+
+    res = await _run_oauth(monkeypatch, fake)
+    st = music_oauth.oauth_status(res["oauth_id"])
+    assert st["state"] != "connected" and st["error"], st
+    assert not fake.instances
+
+    consumed = []
+    monkeypatch.setattr(music_setup, "verify", lambda t: {"p": "spotify"})
+    monkeypatch.setattr(music_setup, "consume", lambda t: consumed.append(t))
+    r = await ms_router.oauth_status(oauth_id=res["oauth_id"], token="tok")
+    assert r["state"] != "connected" and consumed == [], "setup token spent on an unconfirmed sign-in"
+    music_oauth._flows.pop(res["oauth_id"], None)
+
+
+@pytest.mark.asyncio
+async def test_210_oauth_healthy_reauth_vanished_flow_is_not_completion(monkeypatch):
+    """A healthy instance (no last_error) shows no transition, so a flow that
+    disappears without reporting FINISH (e.g. it was aborted) is not success."""
+    fake = Fake210().install(monkeypatch)
+    fake.instances["spotify--EX"] = {"instance_id": "spotify--EX", "domain": "spotify",
+                                     "name": "Spotify", "values": dict(_OPTIONS),
+                                     "setup_data": {"refresh_token": "old"}, "last_error": None}
+    fake.oauth_url = "https://accounts.spotify.com/authorize?x=4"
+    real_get = fake.cmd_config__flows__get
+
+    def get_after_abort(flow_id):
+        fake.flows.pop(flow_id, None)  # the flow ended WITHOUT finishing
+        return real_get(flow_id)
+    fake.cmd_config__flows__get = get_after_abort
+
+    res = await _run_oauth(monkeypatch, fake)
+    assert music_oauth.oauth_status(res["oauth_id"])["state"] != "connected"
+    assert fake.instances["spotify--EX"]["setup_data"]["refresh_token"] == "old"
     music_oauth._flows.pop(res["oauth_id"], None)

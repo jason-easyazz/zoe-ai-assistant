@@ -31,7 +31,11 @@
 # Usage:  music_jsruntime_probe.sh [--engine-only] [container]
 #           default container: zoe-music-assistant
 # Exit:   0 healthy, 1 unhealthy (JS engine, or a PO-token plugin/server major
-#         mismatch -- the message says which), 2 could not run the check at all.
+#         mismatch -- the message says which), 2 CANNOT CHECK (could not run a
+#         check at all, INCLUDING an unreadable plugin or server version).
+# Env:    ZOE_YTMUSIC_POTOKEN_URL -- PO-token server base URL, default
+#         http://127.0.0.1:4416. Negative control without touching live:
+#           ZOE_YTMUSIC_POTOKEN_URL=http://127.0.0.1:1 music_jsruntime_probe.sh   # -> exit 2
 #
 # --engine-only stops after the deno check. It exists for the DIGEST-BUMP
 # candidate, which is deliberately started with NO volumes from live and
@@ -64,6 +68,11 @@ PROBE_URL="https://www.youtube.com/watch?v=aqz-KE-bpKQ"
 # moved aside. When YouTube breaks this client too, pick another challenged one
 # (tv_simply and mweb also solved that day, but both mint a PO token).
 PROBE_CLIENT="web_embedded"
+# The PO-token server the plugin/server check pings, as seen from INSIDE the MA
+# container (host network). Same override zoe-data uses; point it at a closed
+# port to exercise the CANNOT CHECK branch without stopping anything live.
+POTOKEN_URL="${ZOE_YTMUSIC_POTOKEN_URL:-http://127.0.0.1:4416}"
+POTOKEN_URL="${POTOKEN_URL%/}"
 
 fail()  { echo "UNHEALTHY: $*" >&2; exit 1; }
 skip()  { echo "CANNOT CHECK: $*" >&2; exit 2; }
@@ -192,10 +201,19 @@ ok "resolved a challenged (nsig-signed) stream URL"
 #    restart), so bumping the server image alone strands the old plugin.
 #    The ping runs from INSIDE the MA container, so it also proves the
 #    127.0.0.1:4416 publish is reachable from MA's (host) network namespace.
+#    Either version UNREADABLE is CANNOT CHECK (exit 2), never HEALTHY: a plugin
+#    that is missing or a server that is down is exactly the unknown this stage
+#    exists to rule out.
 plugin_v=$(docker exec "$CONTAINER" "$PY" -c 'import importlib.metadata as m; print(m.version("bgutil-ytdlp-pot-provider"))' 2>/dev/null)
-server_v=$(docker exec "$CONTAINER" "$PY" -c 'import json, urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=5))["version"])' 2>/dev/null)
-if [ -z "$plugin_v" ] || [ -z "$server_v" ]; then
-    echo "WARN: could not compare the PO-token plugin/server versions (plugin='${plugin_v}', server='${server_v}') -- is zoe-ytmusic-potoken up?" >&2
+server_v=$(docker exec -e "PING_URL=${POTOKEN_URL}/ping" "$CONTAINER" "$PY" -c 'import json, os, urllib.request; print(json.load(urllib.request.urlopen(os.environ["PING_URL"], timeout=5))["version"])' 2>/dev/null)
+if [ -z "$plugin_v" ]; then
+    skip "the JS engine is FINE (see above), but the PO-token plugin version could not be
+  read inside ${CONTAINER} (bgutil-ytdlp-pot-provider not installed?) -- the
+  plugin/server pairing is unproven."
+elif [ -z "$server_v" ]; then
+    skip "the JS engine is FINE (see above), but the PO-token server version could not be
+  read from ${POTOKEN_URL}/ping (inside ${CONTAINER}) -- is zoe-ytmusic-potoken up?
+  The plugin/server pairing is unproven."
 elif [ "${plugin_v%%.*}" != "${server_v%%.*}" ]; then
     fail "PO-token plugin ${plugin_v} (inside ${CONTAINER}) and server ${server_v}
   (zoe-ytmusic-potoken) differ in MAJOR version -- bgutil refuses the pairing and
