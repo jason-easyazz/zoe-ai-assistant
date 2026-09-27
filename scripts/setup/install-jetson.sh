@@ -57,7 +57,7 @@ OPTIONAL_UNITS=(flue-executor flue-zoe-brain-2x)
 # stale copy in ~/.config/systemd/user pointing at a deleted WorkingDirectory — a
 # boot-time restart loop if it was left enabled. Clean these on every install.
 RETIRED_UNITS=(flue-zoe-brain)
-LLAMA_BIN="${HOME}/llama.cpp/build-jetson-new/bin/llama-server"
+LLAMA_BIN="${HOME}/llama.cpp-b11194/build-jetson/bin/llama-server"  # = llama-server.service ExecStart (B0.4)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

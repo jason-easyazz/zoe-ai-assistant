@@ -39,8 +39,10 @@ status: 🔨 active — NEXT ACTION is always §0
    it also goes green on the espeak/edge fallback or on a CPU-mode Kokoro) frees ~2 GB and is
    what made today's runs possible under the 700 MB floor. Hold the
    other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again.
-3. **B0.4 llama.cpp rebuild** (brain-stop window, ~1 h compile) — after the Gemma swap has
-   its own replay gate, so the two changes are attributable separately.
+3. **B0.4 llama.cpp b11194 — built + replay-gated 2026-09-27, apply pending:** install the
+   tracked `llama-server.service` template in a Kokoro-paused window and re-run the replay gate
+   (recipe + rollback in voice-pipeline.md). Keep it separate from the Gemma swap so the two
+   changes stay separately attributable.
 
 ## 1. Where Zoe already beats the bar (protect these)
 
@@ -136,9 +138,24 @@ status: 🔨 active — NEXT ACTION is always §0
   builder lane only. Any question about the production brain on new hardware is a separate,
   deliberate CANONICAL decision for Jason, out of scope here.
 - B0.3 🧑 Telegram token rotation (BotFather) + `journalctl --rotate && --vacuum-time=1s`.
-- B0.4 ⬜ **llama.cpp rebuild at b11194** and re-enable `--flash-attn on` +
+- B0.4 🔨 **llama.cpp rebuild at b11194** and re-enable `--flash-attn on` +
   `--cache-type-v q8_0` with MTP (upstream fix PR #25148, 2026-06-30). Keep `--fit off`.
   Gate: 20-turn multi-prompt replay under `flock`; RSS/TTFT vs baseline.
+  **2026-09-27: built + replay-gated, template adopted, APPLY PENDING.** Build at
+  `~/llama.cpp-b11194/build-jetson` (`9f70b2cec`; CUDA=ON, arch 87, `GGML_CUDA_FA=ON`,
+  `GGML_CUDA_GRAPHS=ON`, NATIVE, Release). Two brain windows, E4B-QAT + MTP, FA on:
+  **(A) K q8_0 / V q8_0 → PASS 11/11 scoreable, 0 fail, brain median 1754 ms, 0 error lines;
+  (B) K q8_0 / V f16 → PASS 11/11, 1752.5 ms, 0 errors.** Adopted **A** (same latency,
+  smaller KV; q8_0/q8_0 is also a default `GGML_CUDA_FA_QUANTS` pair, which settles gate
+  item (1) below). Flag renames: `--mlock` → `--load-mode mmap+mlock`, `enable_thinking`
+  kwargs → `--reasoning off`. Tracked template + apply/rollback recipe:
+  `scripts/setup/systemd/llama-server.service`, [voice-pipeline.md](../knowledge/voice-pipeline.md)
+  ("Brain build + flags — B0.4"). The live unit stays on b9733 / FA off until the coordinator
+  installs it in a Kokoro-paused window and re-runs the replay gate. **Still open against the
+  gate items below:** the unit keeps `--parallel 2` (the replay is single-stream, so #28286
+  cross-slot draft contamination is not exercised by it); `--fit` is not set and defaults
+  to `on` at b11194 (it adjusts only unset args, and ctx/ngl/parallel are all set). Confirm both
+  before closing B0.4.
   **2026-09-26 (ecosystem-watch §1):** b11194 ≡ b11178 for this build — 16 commits
   b11178→b11194, none touching CUDA arch 87 / FA / MTP / Gemma / jinja (only cpp-httplib
   0.58.0, #29407); source build stays mandatory (prebuilt arm64 asset is CUDA 13.4).
