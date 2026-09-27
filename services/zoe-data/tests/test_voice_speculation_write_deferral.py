@@ -575,7 +575,9 @@ def test_same_user_dispatch_from_another_session_runs_at_once(monkeypatch):
         "the chat-session write must run immediately, before the voice verdict"
 
 
-def test_late_dispatch_after_the_gate_closed_follows_the_recorded_verdict():
+def test_late_dispatch_after_the_gate_closed_follows_the_recorded_verdict(monkeypatch):
+    monkeypatch.setenv(vs.FLAG, "1")
+
     async def _run():
         out = {}
         for tid, action in (("late-commit", "commit"), ("late-cancel", "cancel")):
@@ -587,15 +589,46 @@ def test_late_dispatch_after_the_gate_closed_follows_the_recorded_verdict():
         out["read"] = await vs.hold_speculative_dispatch("late-cancel", "list_show")
         return out
 
-    assert asyncio.run(_run()) == {"late-commit": True, "late-cancel": False,
-                                   "never-seen": True, "read": True}
+    assert asyncio.run(_run()) == {"late-commit": None, "late-cancel": "speculative_turn_cancelled",
+                                   "never-seen": "speculative_turn_unknown", "read": None}
+
+
+def test_unknown_turn_id_is_refused_and_a_known_committed_one_executes(monkeypatch):
+    """Greptile #1742: after a zoe-data restart the gate and its verdict are gone;
+    a dispatch carrying that UNKNOWN id must be refused (a cancelled turn's write
+    must not run), while a known committed id executes and a dispatch without an
+    id is unaffected."""
+    monkeypatch.setenv(vs.FLAG, "1")
+    calls: list[dict] = []
+    state: dict = {}
+    app = _dispatch_app(monkeypatch, calls, state)
+    with TestClient(app) as client:
+        unknown = _dispatch(client, speculative_turn_id="lost-in-restart")
+
+        async def _committed():
+            gate = vs.open_gate("known-committed")
+            gate.resolve("commit")
+            vs.close_gate(gate)
+            return gate
+        state["gate"] = client.portal.call(_committed)
+        known = _dispatch(client, speculative_turn_id="known-committed")
+        plain = _dispatch(client)
+    assert unknown.json() == {"intent": "list_add", "ok": False, "result": "",
+                              "reason": "speculative_turn_unknown"}
+    assert known.json()["ok"] is True and plain.json()["ok"] is True
+    assert len(calls) == 2, calls
+
+
+def test_unknown_turn_id_with_the_flag_off_is_not_speculative(monkeypatch):
+    monkeypatch.delenv(vs.FLAG, raising=False)
+    assert asyncio.run(vs.hold_speculative_dispatch("anything", "list_add")) is None
 
 
 def test_negative_control_unkeyed_dispatch_hold_is_caught(monkeypatch):
     """Break the fix: ignore the turn id → the originating turn's write runs before
     its verdict and on a cancel."""
     async def _no_hold(turn_id, intent_name):
-        return True
+        return None
     monkeypatch.setattr(vs, "hold_speculative_dispatch", _no_hold)
     calls: list[dict] = []
     state: dict = {}

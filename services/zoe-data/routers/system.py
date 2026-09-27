@@ -2814,8 +2814,9 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     # never run — when the verdict drops it. Any other caller (no id: another
     # session, channel or a normal turn) runs at once.
     import voice_speculation as _vs
-    if not await _vs.hold_speculative_dispatch(body.speculative_turn_id.strip() or None, intent_name):
-        return {"intent": intent_name, "ok": False, "result": ""}
+    _refused = await _vs.hold_speculative_dispatch(body.speculative_turn_id.strip() or None, intent_name)
+    if _refused:
+        return {"intent": intent_name, "ok": False, "result": "", "reason": _refused}
     try:
         from intent_router import Intent, execute_intent
 

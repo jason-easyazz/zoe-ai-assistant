@@ -281,7 +281,7 @@ def bound_turn_id() -> Optional[str]:
     return gate.turn_id
 
 
-async def hold_speculative_dispatch(turn_id: Optional[str], intent_name: str) -> bool:
+async def hold_speculative_dispatch(turn_id: Optional[str], intent_name: str) -> Optional[str]:
     """Brain-lane hold for ``POST /api/system/intent-dispatch``.
 
     A speculative chat turn's brain runs before the verdict, and its write tools
@@ -289,23 +289,34 @@ async def hold_speculative_dispatch(turn_id: Optional[str], intent_name: str) ->
     Flue sidecar echoes the turn id it was sent (``speculative_turn_id``), so the
     hold is keyed on the ORIGINATING turn: only that turn's non-read dispatches
     wait for its verdict. No id (every other session, channel or lane) → runs at
-    once. Returns False when the verdict dropped the turn (the caller answers
-    ``ok: false``; the cancelled stream is never heard). An id this process has no
-    record of → True (not a speculative turn here, e.g. across a restart).
+    once.
+
+    Returns None to proceed, or the refusal reason (the caller answers
+    ``ok: false``; a cancelled stream is never heard):
+      ``speculative_turn_cancelled`` — the turn's verdict dropped it;
+      ``speculative_turn_unknown``   — flag on, but this process has neither the
+        gate nor a recorded outcome for the id (e.g. zoe-data restarted mid-turn,
+        taking the verdict with it). FAIL-CLOSED: permitting it would let a
+        cancelled turn's write execute. The user hears nothing from a turn whose
+        stream died with the restart, and the daemon re-runs the full recording.
     """
     if not turn_id or intent_is_speculation_safe(intent_name):
-        return True
+        return None
     gate = _GATES.get(turn_id)
     if gate is not None:
         try:
             await await_commit(f"brain-tool:{intent_name}", gate)
         except SpeculativeTurnCancelled:
-            return False
-        return True
+            return "speculative_turn_cancelled"
+        return None
     verdict = _RECENT_VERDICTS.get(turn_id)
     if verdict is None:
-        return True
-    return verdict in RELEASED_VERDICTS
+        if not speculative_turn_enabled():
+            return None  # flag off: nothing here is speculative any more
+        logger.warning("intent-dispatch refused %s: speculative turn_id=%s unknown to this process "
+                       "(no gate, no recorded verdict) — fail-closed", intent_name, turn_id)
+        return "speculative_turn_unknown"
+    return None if verdict in RELEASED_VERDICTS else "speculative_turn_cancelled"
 
 
 def defer_until_commit(coro, what: str = "background"):
