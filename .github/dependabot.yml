@@ -1,0 +1,77 @@
+# Dependabot version updates — batched, rate-limited, rocks held.
+#
+# Why this shape: every PR costs review spend and, with branch protection
+# `strict`, every merge pushes the other open PRs behind (AGENTS.md "Serialise").
+# So: one grouped minor+patch PR per directory per week, majors as their own PRs
+# (they need a human read), and at most 2 open PRs per directory.
+#
+# HELD dependencies are ignored outright — the rocks and what they are built on
+# (docs/CANONICAL.md; tests/AGENTS.md on the numpy<2 / chromadb ceilings). A
+# held pin moves only through a deliberate, replay-gated PR, never a bot bump.
+#
+# VOICE PATH: scripts/maintenance/voice_gate_check.py classifies the manifests
+# of labs/flue-zoe-brain-2x (the LIVE brain lane) and services/zoe-core (the
+# dormant fallback brain) as voice path, and deploy.yml rebuilds + restarts the
+# brain sidecar whenever labs/flue-zoe-brain-2x/ changes. A bump there must be
+# landed with the voice replay (scripts/maintenance/voice_regression_probe.py
+# against the PR head) — a green `validate` is not enough.
+# labs/flue-zoe-telegram-2x is a front-door channel, not voice path, but
+# deploy.yml also rebuilds + restarts it on change: check the bot after merge.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /services/zoe-core
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies]
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /labs/flue-zoe-brain-2x
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies]
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Flue majors are a harness migration (1.x -> 2.x was a program of its
+      # own), not a dependency bump.
+      - dependency-name: "@flue/*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /labs/flue-zoe-telegram-2x
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies]
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "@flue/*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: pip
+    directory: /services/zoe-data
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies]
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Held — see docs/CANONICAL.md. No update of any kind.
+      - dependency-name: "chromadb"         # 0.6.3: the memory vector store's on-disk format
+      - dependency-name: "moonshine-voice"  # STT rock (Moonshine v2 Medium)
+      - dependency-name: "torch*"           # torch/torchaudio/torchvision: Jetson/CUDA wheels
+      # numpy<2 is a C-ABI ceiling for chromadb + both voice rocks (tests/AGENTS.md).
+      - dependency-name: "numpy"
+        update-types: ["version-update:semver-major"]
