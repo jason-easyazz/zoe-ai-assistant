@@ -395,30 +395,28 @@ async def load_portrait(user_id: str, db=None) -> str:
 
 
 async def run_portrait_synthesis_for_all(db=None) -> list[dict]:
-    """Run portrait synthesis for all users who have approved memories.
+    """Run portrait synthesis for every real user who owns a chat session.
 
-    Called as part of the Sunday weekly dreaming cycle.
+    Called as part of the Sunday weekly dreaming cycle. Users = chat-session
+    owners minus synthetic ids (the old ``svc.list_users()`` call was dead code).
     """
-    from memory_service import get_memory_service  # type: ignore[import]
-    svc = get_memory_service()
+    from user_filters import drop_synthetic_users  # type: ignore[import]
     try:
-        user_ids = await svc.list_users()
-    except AttributeError:
-        try:
-            from db_pool import get_db_ctx  # type: ignore[import]
-            sql = "SELECT DISTINCT user_id FROM chat_sessions"
-            if db is not None:
-                rows = await (await db.execute(sql)).fetchall()
-            else:
-                # Short-lived pooled acquire for the listing only — the bare
-                # `async for db in get_db(): break` form leaves the generator
-                # suspended at the yield, closing the connection mid-query.
-                async with get_db_ctx() as _db:
-                    rows = await (await _db.execute(sql)).fetchall()
-            user_ids = [r[0] for r in rows if r[0]]
-        except Exception as exc:
-            logger.error("portrait: could not list users: %s", exc)
-            return []
+        from db_pool import get_db_ctx  # type: ignore[import]
+        sql = "SELECT DISTINCT user_id FROM chat_sessions"
+        if db is not None:
+            rows = await (await db.execute(sql)).fetchall()
+        else:
+            # Short-lived pooled acquire for the listing only — the bare
+            # `async for db in get_db(): break` form leaves the generator
+            # suspended at the yield, closing the connection mid-query.
+            async with get_db_ctx() as _db:
+                rows = await (await _db.execute(sql)).fetchall()
+        user_ids = [r[0] for r in rows if r[0]]
+    except Exception as exc:
+        logger.error("portrait: could not list users: %s", exc)
+        return []
+    user_ids = drop_synthetic_users(user_ids, pass_name="portrait", log=logger)
 
     results = []
     for uid in user_ids:

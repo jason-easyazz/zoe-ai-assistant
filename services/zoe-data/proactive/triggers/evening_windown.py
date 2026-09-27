@@ -3,6 +3,7 @@ import os
 import zoneinfo
 from datetime import datetime
 
+from proactive.recipients import proactive_recipients
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 _ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
@@ -26,12 +27,13 @@ class EveningWindDownTrigger(ProactiveTrigger):
         ) as cur:
             already_fired = {row[0] async for row in cur}
 
-        # Get active users (anyone who chatted in last 7 days)
-        async with db.execute(
-            "SELECT DISTINCT user_id FROM chat_sessions "
-            "WHERE created_at::timestamptz > (CURRENT_TIMESTAMP - INTERVAL '7 days')"
-        ) as cur:
-            users = [row[0] async for row in cur]
+        # Active users only (a user turn in the last 7 days), minus guest and
+        # synthetic ids. Unlike the morning brief, a quiet household member is
+        # not nudged here — the evening prompt is for people actively talking.
+        users = [
+            uid for uid, _name in await proactive_recipients(
+                db, pass_name="evening_windown", include_panel_members=False)
+        ]
 
         results = []
         for user_id in users:

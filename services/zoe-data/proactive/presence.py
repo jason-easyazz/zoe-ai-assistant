@@ -44,37 +44,63 @@ def _presence_window_s() -> int:
     return value if value > 0 else _DEFAULT_PRESENCE_WINDOW_S
 
 
-async def panel_presence(user_id: str, within_s: int | None = None) -> str | None:
-    """Return the panel_id of a panel this user is plausibly near, else None.
+TIER_OWNER = "owner"              # the member's own fresh panel session: full brief
+TIER_BOUND_GUEST = "bound_guest"  # guest-held panel whose default member is the user
+TIER_ABSENT = "absent"
 
-    A hit is a ``ui_panel_sessions`` row for ``user_id`` with
-    ``is_foreground = 1`` whose ``last_seen_at`` is within ``within_s``
-    seconds. When several qualify, the most recently seen panel wins.
 
-    ``within_s`` defaults to ``ZOE_PRESENCE_WINDOW_S`` (900 s) when not
-    passed explicitly. A non-positive ``within_s`` falls back the same way:
-    0 makes the window zero-width and a negative value inverts the SQL
-    arithmetic — both would silently always return ``None``, which is the
-    same validation the env path already applies (Greptile, PR #1412).
+async def panel_presence_tier(
+    user_id: str, within_s: int | None = None,
+) -> tuple[str, str | None]:
+    """Return ``(tier, panel_id)`` for how plausibly ``user_id`` is at a panel.
+
+    Only fresh (``within_s``) ``is_foreground = 1`` ``ui_panel_sessions`` rows count.
+
+    * ``owner`` — a row owned by the user. A member row is written only by a
+      member sign-in / PIN verification and kept fresh by that member's own
+      turns (``_touch_panel_session`` refreshes a still-fresh session, never a
+      lapsed one), so it is the server's identity-confirmed state.
+    * ``bound_guest`` — a row owned by the kiosk ``guest`` on a panel whose
+      ``default`` ``panel_user_bindings`` row names the user. The kiosk reclaims
+      the row as ``guest`` 300 s after the owner goes quiet, so this is "the
+      member's panel is on", NOT "the member is there": callers must speak only
+      a non-sensitive line on this tier.
+    * ``absent`` — otherwise, and on any error.
+
+    An ``owner`` row beats a ``bound_guest`` one; within a tier the freshest
+    panel wins. ``within_s`` defaults to ``ZOE_PRESENCE_WINDOW_S`` (900 s); a
+    non-positive value falls back the same way (Greptile, PR #1412).
     """
     if within_s is None or within_s <= 0:
         within_s = _presence_window_s()
     try:
         async with _get_compat_db() as db:
             async with db.execute(
-                """SELECT panel_id FROM ui_panel_sessions
-                   WHERE user_id = ?
-                     AND is_foreground = 1
-                     AND last_seen_at::timestamptz
+                """SELECT s.panel_id, s.user_id FROM ui_panel_sessions s
+                   LEFT JOIN panel_user_bindings b
+                     ON b.panel_id = s.panel_id AND b.binding_type = 'default'
+                   WHERE (s.user_id = ? OR (s.user_id = 'guest' AND b.user_id = ?))
+                     AND s.is_foreground = 1
+                     AND s.last_seen_at::timestamptz
                          >= CURRENT_TIMESTAMP - (?::int * INTERVAL '1 second')
-                   ORDER BY last_seen_at::timestamptz DESC
-                   LIMIT 1""",
-                (user_id, int(within_s)),
+                   ORDER BY s.last_seen_at::timestamptz DESC""",
+                (user_id, user_id, int(within_s)),
             ) as cur:
-                row = await cur.fetchone()
-        return row["panel_id"] if row else None
+                rows = await cur.fetchall()
+        for row in rows:
+            if row["user_id"] == user_id:
+                return TIER_OWNER, row["panel_id"]
+        if rows:
+            return TIER_BOUND_GUEST, rows[0]["panel_id"]
+        return TIER_ABSENT, None
     except Exception as exc:
         log.warning(
             "panel_presence(user=%s) failed; treating as absent: %s", user_id, exc
         )
-        return None
+        return TIER_ABSENT, None
+
+
+async def panel_presence(user_id: str, within_s: int | None = None) -> str | None:
+    """The panel_id where ``user_id`` is present as the OWNER, else None."""
+    tier, panel_id = await panel_presence_tier(user_id, within_s)
+    return panel_id if tier == TIER_OWNER else None

@@ -51,7 +51,7 @@ status: 🔨 active — NEXT ACTION is always §0
 |---|---|---|---|
 | Fully local, offline-capable, nothing leaves the house | ✅ | Apple: personal context on-device but reasoning may go to PCC/Gemini; Google/Amazon: cloud | `test_canonical_invariants.py`; replay gate |
 | Per-panel voice + face identity, consented, local | ✅ (flags) | Amazon Omnisense (cloud); Apple: single-user Siri | biometric retention policy |
-| Speaks first (spoken morning brief, presence-gated) | ✅ | Gemini Daily Brief is text; Alexa+ nudges | W2 record |
+| Speaks first (spoken morning brief, presence-gated) | 🔨 silent since 08-16 (guest-owned kiosk presence + session-created recipient rule); fix on `fix/synthetic-user-filter`, verify at 07:30 | Gemini Daily Brief is text; Alexa+ nudges | W2 record; [recipients record](../knowledge/synthetic-users-and-proactive-recipients.md) |
 | Per-stage latency budget + said-vs-did replay gate | ✅ | nobody publishes one | `voice_regression_probe.py` |
 | Self-evolution harness (edits her own code behind a PR gate) | ✅ (paused) | none | Multica/Flue executor |
 | HA + Music Assistant as hidden organs | ✅ | Gemini for Home needs a $10/mo sub | — |
@@ -347,6 +347,16 @@ status: 🔨 active — NEXT ACTION is always §0
   zoe-data → stopped store backup → re-create on 2.10.3 → full probe → panel re-auth →
   Sendspin re-pair / "Zoe Panel" AirPlay mode check. Recipe + API table:
   `docs/knowledge/music-ytdlp-js-runtime.md`.
+  **Network hardening (2026-09-27, draft PR `fix/loopback-postgres-ha-bridge`, operator
+  apply):** `zoe-database` → `127.0.0.1:5432` + `pgvector/pgvector:0.8.6-pg17@sha256:cf134a76…`
+  (PostgreSQL 17.10 → 17.11, ~25 CVEs; minor = same data dir; `vector` 0.8.2 → 0.8.6 update
+  scripts are no-ops, no hnsw/ivfflat index exists); `multica-backend` → `zoe-database:5432`
+  (was `host.docker.internal`, unreachable once loopback-bound) and re-pinned to the digest it
+  actually runs (v0.3.1 — #1562's pin was never deployed); HA bridge → `127.0.0.1:8007`, exact
+  pins (starlette 1.6.0, anyio 4.15.1, idna 3.19, click 8.5.0 …) on
+  `python:3.11.16-slim-bookworm@sha256`, rebuild required; CD/in-app updater `compose up` now
+  `--no-deps` so a deploy cannot recreate Postgres. Guard: `tests/unit/test_compose_loopback_binds.py`
+  (`LAN_LEDGER`). Apply sequence in the PR body.
 - B0.13 ⬜ JetPack 7.2.x reflash window — only after B0.7/B0.8 and when the J401 BSP + an
   Orin wheel index exist.
 
@@ -528,7 +538,7 @@ status: 🔨 active — NEXT ACTION is always §0
   `ExecStart` to `%h/.zoe/venvs/zoe-data-py312/bin/python
   /home/zoe/assistant/scripts/maintenance/zoe-nightly-dreaming.py` + `daemon-reload`; imports
   (chromadb, db_pool, memory_digest) verified to resolve under the venv 2026-09-27; verify the
-  Mon 2026-09-28 02:31 AWST run log. ⬜ It also iterates ~24 users incl. test/probe ids.
+  Mon 2026-09-28 02:31 AWST run log. ✅ It also iterated ~24 users incl. test/probe ids: now filtered by `user_filters.is_synthetic_user` (dreaming, consolidation, music, portrait, proactive triggers; `ZOE_SYNTHETIC_USER_ALLOWLIST`), and the leaking probe chat sessions are purged nightly (branch `fix/synthetic-user-filter`; [record](../knowledge/synthetic-users-and-proactive-recipients.md)).
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -834,6 +844,8 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (eve) — B0.12 network hardening drafted (loopback Postgres + HA bridge, PG 17.11,
+  bridge deps patched, `--no-deps` on automated compose ups); operator apply pending.
 - 2026-09-27 (late) — B1.4 correction: the Silero "v6.2.1 incompatible" verdict was a loader
   bug — `voice_vad.py` lacked upstream's 64-sample context (fix/vad-64-sample-context); v6.0
   stays live pending a false-trigger A/B; probe VAD-stage numbers re-baseline.
