@@ -46,6 +46,17 @@ These run as **user systemd** units (`systemctl --user`), straight on the host:
 The brain, TTS, router/flue sidecars, and zoe-data are **host-native, not containers** — don't look
 for them in `docker ps`.
 
+**Published ports are loopback-only unless they are on the LAN ledger.** `zoe-database` publishes
+`127.0.0.1:5432` and `homeassistant-mcp-bridge` (no inbound auth) `127.0.0.1:8007` — host-native
+clients use `localhost`/`127.0.0.1`, containers use the `zoe-network` service name
+(`zoe-database:5432`, `homeassistant-mcp-bridge:8007`). A container must **not** reach a
+loopback-bound port through `host.docker.internal` (that is the docker0 gateway, not loopback).
+The deliberate LAN-facing ports (UI 80/443, HA 8123, LiveKit, zoe-auth 8002, Multica 3000/8080, …)
+are listed with their reason in `tests/unit/test_compose_loopback_binds.py` (`LAN_LEDGER`); adding one
+is a reviewed edit there. Postgres image/port changes are an **operator** step (pg_dumpall first,
+then recreate `zoe-database`, then `multica-backend`): CD's zoe-auth reconcile is `--no-deps` so a
+deploy never recreates the database as a side effect.
+
 ## The touch panel
 
 A **separate Raspberry Pi**, hostname `zoe-touch` at **192.168.1.61**, user `pi`. `zoe-kiosk.service`

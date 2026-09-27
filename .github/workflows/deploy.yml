@@ -235,6 +235,16 @@ jobs:
           # config forever if compose edits don't trip this check. It needs no
           # --build though — a light `up -d` reconciles container config against
           # the compose file — so it takes the cheap branch, not the heavy gate.
+          #
+          # EVERY `up` here is `--no-deps`. Without it, compose also converges
+          # zoe-auth's depends_on target, so ANY edit to the zoe-database block
+          # (image bump, port bind) made CD recreate Postgres as a side effect of
+          # reconciling zoe-auth — measured 2026-09-27 with `docker compose
+          # --dry-run up -d zoe-auth` against the loopback/17.11 compose: "Container
+          # zoe-database Recreate". A database upgrade needs a pg_dumpall first and
+          # ordered consumer recreates (multica-backend lives in another compose
+          # file), so it is an OPERATOR step, never a deploy side effect. Pinned by
+          # tests/unit/test_compose_loopback_binds.py.
           if [ -n "${OLD_SHA:-}" ] \
              && git diff --quiet "${OLD_SHA}" HEAD -- services/zoe-auth/; then
             if git diff --quiet "${OLD_SHA}" HEAD -- docker-compose.yml; then
@@ -250,7 +260,7 @@ jobs:
             if [ "${COMPOSE_CHANGED}" -eq 1 ]; then
               # Compose-level config drift: reconcile without the heavy build bar.
               echo "zoe-auth source unchanged but docker-compose.yml changed since ${OLD_SHA} — light up -d to apply new container config."
-              docker compose up -d zoe-auth
+              docker compose up -d --no-deps zoe-auth
               for attempt in {1..12}; do
                 curl -sf http://localhost:8002/health > /dev/null && exit 0
                 sleep 5
@@ -261,7 +271,7 @@ jobs:
             # Unchanged code but container down/unhealthy: a light up (no
             # --build) restores it without the heavy-build memory bar.
             echo "zoe-auth unchanged since ${OLD_SHA} but unhealthy — light restart (no --build)."
-            docker compose up -d zoe-auth
+            docker compose up -d --no-deps zoe-auth
           else
             echo "zoe-auth changed since ${OLD_SHA:-<unknown>} (or first deploy) — rebuilding."
             # Heavy-build sub-gate: the base 250MB gate admits the light deploy
@@ -282,7 +292,7 @@ jobs:
               echo "::error::refusing heavy build at ${AVAIL_MB}MB (< 350MB) — free memory and re-run the deploy."
               exit 1
             fi
-            docker compose up -d --build zoe-auth
+            docker compose up -d --no-deps --build zoe-auth
           fi
           for attempt in {1..12}; do
             curl -sf http://localhost:8002/health > /dev/null && exit 0

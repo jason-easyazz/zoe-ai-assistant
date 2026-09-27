@@ -330,6 +330,16 @@ status: 🔨 active — NEXT ACTION is always §0
   (aiosendspin 9.1.1, PIN-pairing breaking at 9.0.0), the panel's shairport-sync 5.1 in
   PTP/Automatic mode (support #6243 pattern — pin the streaming mode if silent), and the
   bgutil 2.0.0 localhost bind reachable from MA's namespace (`127.0.0.1:4416`).
+  **Network hardening (2026-09-27, draft PR `fix/loopback-postgres-ha-bridge`, operator
+  apply):** `zoe-database` → `127.0.0.1:5432` + `pgvector/pgvector:0.8.6-pg17@sha256:cf134a76…`
+  (PostgreSQL 17.10 → 17.11, ~25 CVEs; minor = same data dir; `vector` 0.8.2 → 0.8.6 update
+  scripts are no-ops, no hnsw/ivfflat index exists); `multica-backend` → `zoe-database:5432`
+  (was `host.docker.internal`, unreachable once loopback-bound) and re-pinned to the digest it
+  actually runs (v0.3.1 — #1562's pin was never deployed); HA bridge → `127.0.0.1:8007`, exact
+  pins (starlette 1.6.0, anyio 4.15.1, idna 3.19, click 8.5.0 …) on
+  `python:3.11.16-slim-bookworm@sha256`, rebuild required; CD/in-app updater `compose up` now
+  `--no-deps` so a deploy cannot recreate Postgres. Guard: `tests/unit/test_compose_loopback_binds.py`
+  (`LAN_LEDGER`). Apply sequence in the PR body.
 - B0.13 ⬜ JetPack 7.2.x reflash window — only after B0.7/B0.8 and when the J401 BSP + an
   Orin wheel index exist.
 
@@ -817,6 +827,8 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (eve) — B0.12 network hardening drafted (loopback Postgres + HA bridge, PG 17.11,
+  bridge deps patched, `--no-deps` on automated compose ups); operator apply pending.
 - 2026-09-27 (late) — B1.4 correction: the Silero "v6.2.1 incompatible" verdict was a loader
   bug — `voice_vad.py` lacked upstream's 64-sample context (fix/vad-64-sample-context); v6.0
   stays live pending a false-trigger A/B; probe VAD-stage numbers re-baseline.

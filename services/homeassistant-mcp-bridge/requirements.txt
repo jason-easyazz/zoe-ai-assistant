@@ -1,6 +1,36 @@
-# Zoe Home Assistant MCP Bridge Dependencies
-fastapi>=0.104.0
-uvicorn>=0.24.0
-pydantic>=2.5.0
-httpx>=0.25.0
-
+# Zoe Home Assistant MCP Bridge — EXACT pins (was unbounded `>=`, which froze whatever
+# PyPI served on the day the image was built: 2025-11-13, starlette 0.49.3 et al.).
+# Every version here is >=14 days old (the repo's supply-chain rule) and OSV-clean on
+# 2026-09-27. Transitive deps are pinned too, so a rebuild is reproducible.
+#
+# Advisories closed vs the 2025-11-13 image:
+#   starlette 0.49.3 -> 1.6.0 : GHSA-82w8-qh3p-5jfq (High, form-limit DoS, fixed 1.3.1),
+#     GHSA-wqp7-x3pw-xc5r (High, StaticFiles UNC SSRF — Windows only, fixed 1.1.0),
+#     GHSA-86qp-5c8j-p5mr (Mod, Host-header path poisoning, fixed 1.0.1),
+#     GHSA-x746-7m8f-x49c (Mod, HTTPEndpoint method dispatch, fixed 1.1.0),
+#     GHSA-jp82-jpqv-5vv3 (Low, path->authority poisoning, fixed 1.3.0)
+#   anyio 4.11.0 -> 4.15.1    : GHSA-82r6-8w77-94w6 (Critical, TLSStream IDNA-2003 cert
+#     spoofing), GHSA-5p39-cfhj-2xmp (Mod, process-pool stderr hang), both fixed 4.14.2
+#   idna 3.11 -> 3.19         : GHSA-65pc-fj4g-8rjx (Mod, idna.encode() bypass, fixed 3.15)
+#   click 8.3.0 -> 8.5.0      : PYSEC-2026-2132 / CVE-2026-7246 (click.edit() command
+#     injection, fixed 8.3.3; uvicorn CLI dep, the bridge never calls click.edit)
+#
+# Floors are pinned by tests/unit/test_ha_bridge_requirements_pinned.py. The image must be
+# REBUILT for any change here to take effect (the code is volume-mounted; deps are not).
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.4
+pydantic==2.13.5
+pydantic-core==2.46.5
+httpx==0.28.1
+httpcore==1.0.9
+anyio==4.15.1
+idna==3.19
+h11==0.16.0
+click==8.5.0
+certifi==2026.7.22
+sniffio==1.3.1
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+annotated-types==0.8.0
+annotated-doc==0.0.5
