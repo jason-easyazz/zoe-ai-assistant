@@ -334,6 +334,10 @@ status: 🔨 active — NEXT ACTION is always §0
   on the next release with the same engine-only A/B. 2026-09-26 (§2): upstream is silent since
   0.1.5 (zero commits, no perf issue filed by anyone); watch moonshine #229 (shared Silero VAD
   across concurrent streams); the issue draft is in ecosystem-watch §2.
+  2026-09-27 (runbook §9): cause found — 0.1.5 hard-codes `DisableCpuMemArena` (~34 ms/step)
+  + `disable_prepacking` (~6 ms/step) on the streaming sessions (upstream `4a7f85c`); no option
+  or env var reverts them; best config-only mitigation (glibc `MALLOC_*`) is still ~30 % slower
+  per step, so HOLD stands. Next: pin-0.1.3 A/B in a memory window + upstream issue naming the flags.
 - B1.11 ⏸ PARKED 2026-09-26 — Flue 2.1.1 (`@flue/*` 2.0.1 → 2.1.1 in both 2x sidecars; hono /
   nanoid advisories cleared, `npm audit` 0; 209/209 + 44/44 tests; store format unchanged, one
   fold-checkpoint re-fold on first start). Draft **PR #1694** was proven the way the contract
