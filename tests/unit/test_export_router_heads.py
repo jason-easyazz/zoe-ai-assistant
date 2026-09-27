@@ -9,6 +9,8 @@ negative control, rename) runs in the slim CI lane.
 * The export is atomic across BOTH heads: if the second head fails parity, the
   first head's served files are byte- and inode-identical and no staging file
   is left behind. Control: when both pass, both served pairs ARE replaced.
+* Publication is all-or-none: a rename failing after the first one succeeded
+  rolls every served file back, and a fixture-write failure publishes nothing.
 """
 import importlib.util
 import shutil
@@ -138,3 +140,54 @@ def test_control_both_heads_passing_replace_both_pairs(exporter, models):
         assert after[name][1:] != before[name][1:], f"{name} was not replaced"
     # the npz bytes are deterministic: a faithful re-export is byte-identical
     assert after["router_head_mlp.npz"][0] == before["router_head_mlp.npz"][0]
+
+
+# ── publication is all-or-none (rename rollback, fixture staged first) ─────
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4])  # 4 served files; >=2 = after a publish
+def test_rename_failure_after_first_publish_rolls_everything_back(exporter, models, fail_at):
+    real = exporter._replace
+    n = {"calls": 0}
+
+    def flaky(src, dst):
+        n["calls"] += 1
+        if n["calls"] == fail_at:
+            raise OSError("disk full (injected)")
+        return real(src, dst)
+
+    exporter._replace = flaky
+    before = _snapshot(models)
+    with pytest.raises(OSError, match="injected"):
+        exporter.main(["--models-dir", str(models), "--random", "20"])
+    assert n["calls"] == fail_at
+    assert _snapshot(models) == before  # restored, same inodes; no tmp/bak left
+
+
+def test_fixture_write_failure_publishes_nothing(exporter, models, tmp_path):
+    real = exporter.write_npz
+    fixture = tmp_path / "fx.npz"
+
+    def failing(path, arrays):
+        if Path(path).name.startswith("fx"):
+            raise OSError("fixture write failed (injected)")
+        return real(path, arrays)
+
+    exporter.write_npz = failing
+    before = _snapshot(models)
+    with pytest.raises(OSError, match="injected"):
+        exporter.main(["--models-dir", str(models), "--random", "20",
+                       "--corpus", "--fixture", str(fixture)])
+    assert _snapshot(models) == before
+    assert list(tmp_path.glob("fx*")) == []
+
+
+def test_control_fixture_is_published_with_the_heads(exporter, models, tmp_path):
+    fixture = tmp_path / "fx.npz"
+    before = _snapshot(models)
+    assert exporter.main(["--models-dir", str(models), "--random", "20",
+                          "--corpus", "--fixture", str(fixture)]) == 0
+    with np.load(fixture, allow_pickle=False) as z:
+        assert z["vectors"].shape == (50, 384) and "proba_mlp" in z.files
+    after = _snapshot(models)
+    assert set(after) == set(before)
+    assert after["router_head_mlp.npz"][1] != before["router_head_mlp.npz"][1]

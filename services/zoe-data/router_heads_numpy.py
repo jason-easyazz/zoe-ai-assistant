@@ -18,8 +18,10 @@ and measured at 0.0).
 Backend flag (one-release escape hatch):
   ZOE_ROUTER_HEADS_BACKEND = numpy (default) | joblib
     numpy   read `<head>.npz` + `<head>.json` next to the `.joblib` path; a
-            custom `.joblib` path with NO export beside it falls back to
-            joblib for that head only (warning logged) instead of disabling it
+            CUSTOM `.joblib` path (outside models/) with NO export beside it
+            falls back to joblib for that head only (warning logged) instead of
+            disabling it. A shipped head with a missing export is an ERROR:
+            the head is disabled, sklearn is never imported for it.
     joblib  the pre-2026-09-27 path: joblib.load the pickled sklearn estimator
             (needs scikit-learn/joblib at the training pins)
 
@@ -209,6 +211,16 @@ def load_npz(path: str) -> LogRegHead | MLPHead:
     return head
 
 
+# The committed heads live here; every file in it is tracked (see .gitignore).
+SHIPPED_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+
+
+def is_shipped(path: str) -> bool:
+    """True when `path` is inside the shipped models dir (symlinks resolved)."""
+    return (os.path.dirname(os.path.realpath(path))
+            == os.path.realpath(SHIPPED_MODELS_DIR))
+
+
 def load_head(path: str) -> Any:
     """Load a stage-1 router head through the configured backend. Raises on failure.
 
@@ -221,12 +233,21 @@ def load_head(path: str) -> Any:
         return _load_joblib(path)
     npz_path, json_path = sidecar_paths(path)
     missing = [p for p in (npz_path, json_path) if not os.path.exists(p)]
+    if missing and is_shipped(path):
+        # The SHIPPED heads always carry their export in git. A missing file here
+        # is a broken deploy/checkout, not a custom head: fail visibly (the caller
+        # disables the head) and never pull sklearn into the live process for it.
+        logger.error("shipped router head export missing: %s — head disabled; "
+                     "restore it from git or re-run "
+                     "scripts/maintenance/export_router_heads.py", ", ".join(missing))
+        raise FileNotFoundError(f"shipped router head export missing: {', '.join(missing)}")
     if missing and path.endswith(".joblib") and os.path.exists(path):
-        # A custom ZOE_ROUTER_HEAD_PATH / ZOE_ROUTER_HEAD_MLP_PATH that predates
-        # the numpy exports: keep that head WORKING (the two-stage router would
-        # otherwise drop to similarity routing for the life of the process) by
-        # loading it through joblib — for this head only, and loudly. Only a
-        # MISSING export falls back; a stale/tampered one still refuses (above).
+        # A CUSTOM ZOE_ROUTER_HEAD_PATH / ZOE_ROUTER_HEAD_MLP_PATH (outside the
+        # shipped models dir) that predates the numpy exports: keep that head
+        # WORKING (the two-stage router would otherwise drop to similarity routing
+        # for the life of the process) by loading it through joblib — for this
+        # head only, and loudly. Only a MISSING export falls back; a
+        # stale/tampered one still refuses (load_npz).
         logger.warning(
             "router head %s has no numpy export (%s missing) — loading it via joblib "
             "(imports scikit-learn). Export it with "

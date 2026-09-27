@@ -180,6 +180,54 @@ def negative_control(est, head, X: np.ndarray, tol: float) -> float:
     return diff
 
 
+_replace = os.replace  # indirection: tests inject a failure mid-publication
+
+
+def _staging(dst: Path) -> Path:
+    """Staging name next to `dst` (same directory, so the rename is atomic)."""
+    return dst.with_name(dst.stem + ".export-tmp" + dst.suffix)
+
+
+def publish(pairs: list[tuple[Path, Path]]) -> None:
+    """Rename every staged file onto its destination — all of them or none.
+
+    Each existing destination is first hard-linked (copied if links are not
+    supported) to `<dst>.export-bak`, so the served file stays in place until
+    its own rename. If ANY rename fails, every destination already replaced is
+    restored from its backup (or removed if it did not exist before) and the
+    error propagates: the served set is always the complete old one or the
+    complete new one.
+    """
+    import shutil
+
+    backups: list[tuple[Path, Path | None]] = []
+    try:
+        for tmp, dst in pairs:
+            bak = None
+            if dst.exists():
+                bak = dst.with_name(dst.name + ".export-bak")
+                bak.unlink(missing_ok=True)
+                try:
+                    os.link(dst, bak)
+                except OSError:
+                    shutil.copy2(dst, bak)
+            backups.append((dst, bak))
+            _replace(tmp, dst)
+    except BaseException:
+        for dst, bak in reversed(backups):
+            if bak is not None:
+                os.replace(bak, dst)
+                # rename() is a no-op when bak and dst are hard links to the same
+                # inode (the entry whose own rename failed): drop the leftover link
+                bak.unlink(missing_ok=True)
+            else:
+                dst.unlink(missing_ok=True)
+        raise
+    for _, bak in backups:
+        if bak is not None:
+            bak.unlink(missing_ok=True)
+
+
 def _tmp_stem(npz: Path) -> Path:
     """Staging name for an export: `<stem>.export-tmp` (+ .npz / .json)."""
     return npz.with_name(npz.stem + ".export-tmp")
@@ -218,11 +266,13 @@ def main(argv: list[str] | None = None) -> int:
         "heads": {}}
     fixture: dict[str, np.ndarray] = {}
     failed = False
-    # ALL-OR-NOTHING: every head is staged to `<stem>.export-tmp.{npz,json}` and
-    # verified (parity + a round trip through the runtime loader) before ANY
-    # served file is replaced. One failing head leaves every served file as it was
-    # — a mixed pair of heads is never written.
-    staged: list[tuple[Path, Path, Path, Path]] = []
+    # ALL-OR-NOTHING: every output (both heads' npz + json, and the fixture if
+    # requested) is staged next to its destination as `*.export-tmp.*` and every
+    # head verified (parity + a round trip through the runtime loader) BEFORE
+    # anything is published; publish() then renames them all or restores all.
+    # A failing head, a failed fixture write or a failed rename leaves the served
+    # set exactly as it was — a mixed pair of heads is never left behind.
+    staged: list[tuple[Path, Path]] = []
     try:
         for name in args.heads.split(","):
             src = args.models_dir / f"router_head_{name}.joblib"
@@ -244,10 +294,10 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 stem = _tmp_stem(npz)
                 tmp_npz, tmp_js = stem.with_name(stem.name + ".npz"), stem.with_name(stem.name + ".json")
+                staged += [(tmp_npz, npz), (tmp_js, js)]  # registered first: cleanup
                 write_npz(tmp_npz, arrays)
                 meta["npz_sha256"] = _sha256(tmp_npz)
                 tmp_js.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-                staged.append((tmp_npz, npz, tmp_js, js))
                 # the staged pair, through the RUNTIME loader (sha256 check included)
                 head = rhn.load_npz(str(stem) + ".joblib")
             res = compare(est, head, sets)
@@ -269,27 +319,23 @@ def main(argv: list[str] | None = None) -> int:
                 fixture["texts"] = np.asarray([texts[i] for i in idx])
                 fixture[f"proba_{name}"] = est.predict_proba(sets["corpus"][idx])
                 fixture[f"source_sha256_{name}"] = np.asarray(meta["source_sha256"])
-    except BaseException:
-        # a refusal mid-run (unsupported head, blind negative control) must not
-        # leave staged files behind; served files were never touched
-        for tmp_npz, _, tmp_js, _ in staged:
-            tmp_npz.unlink(missing_ok=True)
-            tmp_js.unlink(missing_ok=True)
-        raise
-    for tmp_npz, npz, tmp_js, js in staged:
-        if failed:
-            tmp_npz.unlink(missing_ok=True)
-            tmp_js.unlink(missing_ok=True)
-        else:
-            os.replace(tmp_npz, npz)
-            os.replace(tmp_js, js)
-            print(f"     wrote {npz} + {js.name}")
+        if not failed and not args.check:
+            if args.fixture:
+                staged.append((_staging(args.fixture), args.fixture))  # before: cleanup
+                write_npz(_staging(args.fixture), fixture)
+            publish(staged)
+            for _, dst in staged:
+                print(f"     wrote {dst}")
+    finally:
+        # whatever happened, no staging file survives (after a successful
+        # publish they have all been renamed away already)
+        for tmp, _ in staged:
+            tmp.unlink(missing_ok=True)
     if staged and failed:
         print("     nothing written: every head must pass before any served file is replaced")
-    if args.fixture and not failed:
-        write_npz(args.fixture, fixture)
-        print(f"     wrote fixture {args.fixture}")
     if args.report:
+        # diagnostics only (never a served file); written on failure too, since
+        # that is when it is most useful. --check refuses it (read-only).
         args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     return 1 if failed else 0
 

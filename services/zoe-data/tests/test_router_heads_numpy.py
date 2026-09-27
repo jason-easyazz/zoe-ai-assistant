@@ -195,6 +195,43 @@ def test_fallback_is_only_for_a_missing_export(monkeypatch, tmp_path):
         rhn.load_head(str(tmp_path / "router_head_mlp.joblib"))
 
 
+def test_shipped_head_paths_are_recognised(tmp_path):
+    assert rhn.is_shipped(str(MODELS / "router_head_mlp.joblib"))
+    assert rhn.is_shipped(str(MODELS / "router_head_logreg.joblib"))
+    assert not rhn.is_shipped(str(tmp_path / "router_head_mlp.joblib"))
+
+
+@pytest.mark.parametrize("gone", [".npz", ".json"])
+def test_shipped_head_with_missing_export_fails_visibly(monkeypatch, tmp_path, caplog, gone):
+    """A partial deploy of a SHIPPED head is an error, never a silent sklearn import."""
+    monkeypatch.delenv("ZOE_ROUTER_HEADS_BACKEND", raising=False)
+    calls = _fake_joblib(monkeypatch)
+    for ext in (".joblib", ".npz", ".json"):
+        shutil.copy(MODELS / f"router_head_mlp{ext}", tmp_path / f"router_head_mlp{ext}")
+    monkeypatch.setattr(rhn, "SHIPPED_MODELS_DIR", str(tmp_path))
+    (tmp_path / f"router_head_mlp{gone}").unlink()
+    with caplog.at_level("ERROR", logger="router_heads_numpy"):
+        with pytest.raises(FileNotFoundError, match=f"router_head_mlp{gone}"):
+            rhn.load_head(str(tmp_path / "router_head_mlp.joblib"))
+    assert calls == []
+    assert f"router_head_mlp{gone}" in caplog.text and "head disabled" in caplog.text
+
+
+def test_live_two_stage_loader_disables_a_broken_shipped_head(monkeypatch, tmp_path):
+    router_two_stage = pytest.importorskip("router_two_stage")
+    monkeypatch.delenv("ZOE_ROUTER_HEADS_BACKEND", raising=False)
+    calls = _fake_joblib(monkeypatch)
+    for ext in (".joblib", ".json"):  # .npz missing
+        shutil.copy(MODELS / f"router_head_mlp{ext}", tmp_path / f"router_head_mlp{ext}")
+    monkeypatch.setattr(rhn, "SHIPPED_MODELS_DIR", str(tmp_path))
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_MLP_PATH", str(tmp_path / "router_head_mlp.joblib"))
+    monkeypatch.setattr(router_two_stage, "_HEAD", None)
+    monkeypatch.setattr(router_two_stage, "_HEAD_FAILED", False)
+    assert router_two_stage._ensure_head() is None
+    assert router_two_stage._HEAD_FAILED is True
+    assert calls == []
+
+
 def test_live_two_stage_loader_keeps_a_custom_joblib_head(monkeypatch, tmp_path):
     router_two_stage = pytest.importorskip("router_two_stage")
     monkeypatch.delenv("ZOE_ROUTER_HEADS_BACKEND", raising=False)
