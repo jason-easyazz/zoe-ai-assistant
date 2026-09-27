@@ -60,7 +60,7 @@ jobs:
             fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
             "ag-ui-protocol==0.1.19" "websockets==16.1.1" python-jose passlib \
-            python-multipart "uvicorn[standard]==0.49.0" prometheus-client "python-json-logger>=4.1.0" \
+            python-multipart "uvicorn[standard]==0.49.0" "prometheus-client==0.25.0" "python-json-logger>=4.1.0" \
             pyyaml
 
       - name: Validate project structure
@@ -334,11 +334,20 @@ jobs:
           scripts/setup/build_py312_venv.sh --dry-run
           # negative control: the same uv resolve must reject a contradiction
           printf 'numpy<2\nnumpy>=2.1\n' > /tmp/known-bad-py312.txt
+          # -o a real file: uv writes via a temp file beside its output, so -o /dev/null
+          # fails with "Permission denied" — which would satisfy this control vacuously.
+          # Require the RESOLVER's refusal, by message, not just any non-zero exit.
           if uv pip compile /tmp/known-bad-py312.txt --python-version 3.12 \
-               --python-platform aarch64-manylinux_2_31 --quiet -o /dev/null; then
+               --python-platform aarch64-manylinux_2_31 --quiet -o /tmp/known-bad-py312.out \
+               2>/tmp/known-bad-py312.err; then
             echo "::error::uv RESOLVED a contradictory manifest — the py312 resolve is not guarding"
             exit 1
           fi
+          grep -q "unsatisfiable" /tmp/known-bad-py312.err || {
+            cat /tmp/known-bad-py312.err
+            echo "::error::uv failed for a reason other than unsatisfiability — the control proved nothing"
+            exit 1
+          }
           echo "negative control OK: uv rejects the known-unsatisfiable fixture"
 
       - name: Negative control — the guard must still be able to fail

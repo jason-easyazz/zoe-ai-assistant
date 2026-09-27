@@ -130,6 +130,19 @@ case "$MODE" in
     else
       die "manifest does NOT resolve for cp$PY_VERSION $PLATFORM — see docs/knowledge/python-312-venv-migration.md"
     fi
+    # Phase 2 is not in the manifest, so the resolve above never sees it; resolve it
+    # on its own, --no-deps, for the same target — otherwise an unavailable pin
+    # passes this dry-run (and CI's deps-resolvable) and fails the real build (#1706).
+    step "resolving phase 2 (--no-deps) for cp$PY_VERSION / $PLATFORM"
+    # (-o a real file, not /dev/null: uv writes via a temp file BESIDE its output.)
+    p2="$(mktemp)"; p2_out="$(mktemp)"; trap 'rm -f "$tmp" "$p2" "$p2_out"' EXIT
+    printf '%s\n' "${PHASE2_NO_DEPS[@]}" >"$p2"
+    if "${NICE[@]}" "$UV" pip compile "$p2" --no-deps --python-version "$PY_VERSION" --python-platform "$PLATFORM" \
+         --no-header --quiet -o "$p2_out"; then
+      ok "phase 2 resolvable: ${PHASE2_NO_DEPS[*]}"
+    else
+      die "phase 2 (${PHASE2_NO_DEPS[*]}) does NOT resolve for cp$PY_VERSION $PLATFORM"
+    fi
     ;;
   check)
     step "check"
