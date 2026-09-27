@@ -214,6 +214,9 @@ status: 🔨 active — NEXT ACTION is always §0
   moved:** the pin must equal the router heads' training pin (`labs/setfit-router/requirements.txt`,
   `services/zoe-data/AGENTS.md`) and 1.6.0 adds a `cloudpickle>=3.0` dependency; both heads
   load and predict identically under 1.6.0, so it can ride the sklearn 1.9 re-export PR.
+  (Since B6.6(e) the runtime serves numpy exports, so this hold now protects only the
+  one-release `ZOE_ROUTER_HEADS_BACKEND=joblib` fallback; after it is removed the pin is a
+  plain librosa-transitive pin.)
 - B0.7 ✅ **Python 3.12 venv for zoe-data only** (Kokoro + llama-server stay on 3.10/CUDA 12.6).
   **✅ CUTOVER LIVE 2026-09-27 16:13** — #1706 + #1717 MERGED, drop-in installed; zoe-data's
   MainPID exe is uv CPython 3.12.13 (`~/.zoe/venvs/zoe-data-py312`); `/readyz` ready,
@@ -251,18 +254,43 @@ status: 🔨 active — NEXT ACTION is always §0
   Needs a per-interpreter `requirements.txt` (two files: #1706) + a voice-gate
   probe re-baseline pointed at the interpreter that runs STT (the probe never installs
   requirements — see `reference_voice_gate_instrument_facts`).
-- B0.8 ⬜ MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7); reconcile row
+- B0.8 🔨 MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7); reconcile row
   counts against `export_memory_store.py`; self-recall probe.
-  **2026-09-26 (§11):** target chromadb **1.5.9** (#6953 preserves legacy `hnsw:` keys —
-  MemPalace's `hnsw:space=cosine`; cp39-abi3 aarch64, works on 3.10 and 3.12) + mempalace
-  **3.10.0**. Run `mempalace migrate` on the copy — it does the copy
-  (`<palace>.pre-migrate.<ts>`, `max_backups=10`), reads drawers from `chroma.sqlite3`,
-  probes a write round-trip (0.6→1.5 stores can stay readable while writes silently no-op),
-  rebuilds + `os.replace`-swaps with rollback, and prints the reconciliation
-  (`Drawers migrated: N` / `WARNING: Expected X, got Y`); then cross-check
-  `export_memory_store.py` counts + `memory_recall_probe`. Chroma has no 0.6→1.x tool of its
-  own (first open migrates; `chroma-migrate` is 0.4-only). 3.10's `get_collection()` rejects
-  names other than the drawers collection — audit callers for `_skip_name_check=True`. Fix the
+  **Recipe (2026-09-27): per-collection rebuild, NOT `mempalace migrate`.** mempalace 3.10's
+  `extract_drawers_from_sqlite()` (`migrate.py`) selects every embedding in `chroma.sqlite3`
+  with no collection filter and adds them all to a fresh `mempalace_drawers`. Zoe's palace is
+  ~98% audit rows (live 2026-09-27: drawers 365, `mempalace_audit` 21,389, plus 9 leftover
+  `mempalace_audit_sec_*` test collections with 11 rows). So the tool would push every audit
+  summary into recall as a drawer, re-embed ~21k rows, and drop the audit collection. Its happy
+  path is worse: it does nothing, and the 1.5 client's first open migrates the 0.6 sysdb in
+  place, forward-only. Instead, `scripts/maintenance/chroma_migrate_rehearsal.py run` works on
+  a copy only. It rsyncs the segments and takes a SQLite online-backup snapshot, then exports
+  each collection straight from the copy's SQLite without loading the 0.6.3 HNSW. In a
+  throwaway uv venv (`chromadb==1.5.9`, ORT/numpy/tokenizers pinned to the zoe-data venv's) it
+  builds a NEW store:
+  - drawers are re-embedded with the same MiniLM (archive SHA `913d7300…` asserted, identical
+    in 0.6.3 and 1.5.9)
+  - audit rows get `memory_service`'s constant vector
+  - the `_sec_` leftovers are skipped and listed
+  - the effective HNSW settings are kept: **the live drawers are `l2`, resize 2.0** since the
+    09-25 rebuild, not `cosine`. Distances feed the `1/(1+dist)` blend, so the space must not change silently.
+  - `config.json` gets `embedding_model: minilm`
+
+  **Rehearsed 2026-09-27, all 10 proofs PASS**, each in its own subprocess:
+  - counts via API and export-SQL, with the HNSW config kept
+  - per-id metadata hash, plus a negative control that catches a single mutated row
+  - write round-trip on each collection across 3 fresh processes
+  - embedding cosine over 200 drawers: min 1.0000, plus a mis-pairing negative control
+  - demo-user recall: top-10 identical for 20/20 queries
+  - a 0.6.3 client on the migrated copy fails loudly (`KeyError '_type'`)
+
+  Peak RSS was 372 MB (the rebuild) and the whole run took 4.4 min. Runbook, measured table
+  and cutover/rollback: [docs/knowledge/chroma-1-5-migration.md](../knowledge/chroma-1-5-migration.md).
+  **Remaining = the 🧑 cutover window.** mempalace **3.10.0** was uploaded 2026-09-16, so it
+  passes the 14-day rule on 2026-09-30. The rehearsal needs no mempalace (its EF's `name()` is
+  `"default"`, the same identity the rebuild persists). chromadb 1.5.9 (#6953 legacy `hnsw:`
+  keys; cp39-abi3 aarch64) is the target. 3.10's `get_collection()` rejects names other than
+  the drawers collection, so audit callers for `_skip_name_check=True`. Fix the
   `requirements.txt` comment (~line 82): the chromadb bound flipped at mempalace **3.4.0**
   (2026-06-06), not 3.6.0 (`migrate.py`'s docstring is wrong the same way).
 - B0.9 ⬜ APScheduler 3.11.3 via `export_jobs`/`import_jobs` with pytz present; `tzlocal>=3`
@@ -705,6 +733,17 @@ status: 🔨 active — NEXT ACTION is always §0
   −400 to −800 MB did not happen: the "arena bloat" was mostly live data. Details and table:
   [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro sidecar memory). ⬜ The remaining
   Kokoro RAM lever is a dedicated venv without scikit-learn/pandas (~−100 MB).
+  (e) 🔨 **Router heads on numpy — no scikit-learn/scipy in zoe-data** (draft PR
+  `feat/router-heads-numpy`, voice path → operator lands it with the replay). Both stage-1
+  heads (logreg 13×384; MLP 384→256 relu→13 softmax) are exported to `.npz` + JSON by
+  `scripts/maintenance/export_router_heads.py` and served by `router_heads_numpy.py`
+  (`ZOE_ROUTER_HEADS_BACKEND=numpy` default, `joblib` = one-release fallback). Parity vs
+  sklearn 1.7.2 `predict_proba`: **max-abs 0.0** (bit-identical) on 1,291 embedded corpus
+  utterances + 1,000 unit + 1,000 Gaussian random vectors; negative control (one weight
+  +1e-2) goes red. Head load in a fresh capped interpreter: **+72.7 MB / 1.23 s / 815 modules
+  → +1.7 MB / 0.012 s / 7 modules**; `import main` unchanged (heads were already lazy). The
+  scikit-learn/joblib pins stay (librosa, via Resemblyzer, declares them), held at the
+  training pins until the fallback is removed; scipy stays (Resemblyzer imports it).
 
 - B6.6 🔨 **Brain flags tuning** (2026-09-27, two replay-gated brain windows on b11194, one
   flag vs the live set per run, same-session control; evidence in
@@ -874,6 +913,16 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (night) — voice memory packet lazy on the Flue lane (draft PR): the live sidecar
+  never reads `history` / `db_memory_context` / `portrait`, so the ~500 ms gather measured after
+  #1725 is built only on a core/legacy failover hop (`ZOE_VOICE_MEMORY_PACKET_LAZY`, default on;
+  `VOICE TIMING … packet=skipped`). Voice path: operator lands with the replay gate.
+- 2026-09-27 (night) — B6.6(e) router heads on numpy (draft PR): sklearn/scipy/joblib no
+  longer imported by zoe-data; parity 0.0 on corpus + random; head load +72.7 → +1.7 MB.
+- 2026-09-27 (night) — B0.8 rehearsal done on a copy. The recipe changed from `mempalace migrate`,
+  which would merge ~21k audit rows into drawers and drop the audit collection, to a
+  per-collection rebuild (`chroma_migrate_rehearsal.py`). All 10 proofs pass; peak RSS 372 MB;
+  4.4 min. Cutover is 🧑 (runbook `chroma-1-5-migration.md`).
 - 2026-09-27 (eve) — B7.5 added: app-connection handoff engine (QR + send-to-phone), from VISION principle 8 (panel voice first / touch second / phone for keyboards; app connections via QR).
 - 2026-09-27 (eve) — B6.6 (d): Kokoro `MALLOC_ARENA_MAX=2` drop-in applied live. Measured −113 to −125 MB anon, not the predicted −400 to −800 MB, with latency within noise (ABAB).
 - 2026-09-27 (eve) — B0.6 safe-now Python train: psycopg2-binary 2.9.13 + prometheus-client

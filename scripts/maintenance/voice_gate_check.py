@@ -136,8 +136,10 @@ VOICE_PATH_PATTERNS = (
     # and nothing else (the offline TRAINING copies live in
     # labs/setfit-router/artifacts/ and stay ungated). Anything dropped in here
     # is model material and gates by default. router_head_logreg.joblib is
-    # covered by the same glob on purpose: it is joblib.load()-ed into the live
-    # zoe-data process on every non-`off` mode (semantic_router.py:317-341) and
+    # covered by the same glob on purpose: it is loaded into the live
+    # zoe-data process on every non-`off` mode (semantic_router.py
+    # _ensure_head_loaded; since 2026-09-27 as its numpy export
+    # router_head_logreg.npz/.json, same directory, same glob) and
     # is one flag value (ZOE_ROUTER_HEAD=shadow) from being the head whose
     # predictions are logged and then mined into the ratchet's training
     # candidates — preventive for the same reason services/zoe-core/package.json
@@ -311,6 +313,11 @@ VOICE_PATH_PATTERNS = (
     "scripts/setup/systemd/functiongemma-router.service",
     "services/zoe-data/router_two_stage.py",
     "services/zoe-data/semantic_router.py",
+    # The stage-1 heads' INFERENCE (numpy replay of sklearn predict_proba). An
+    # edit here re-scores every turn exactly like swapping a models/* artifact.
+    # Per the base-ref rule above it gates the NEXT PR that touches it; the PR
+    # adding it is gated anyway by semantic_router.py + models/*.
+    "services/zoe-data/router_heads_numpy.py",
     # THE LIVEKIT / WebRTC INGEST LANE — and the ONLY entries in this tuple the
     # replay corpus cannot exercise AT ALL. Read the evidence statement below
     # before you read a green gate on one of these as verification.

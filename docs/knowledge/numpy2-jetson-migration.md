@@ -274,6 +274,10 @@ be carried by it, and any of them that later needs numpy 2 must be handled separ
 the repo), `.github/workflows/validate.yml:153` (CI mirror — must match or CI lies), and
 `labs/setfit-router/requirements.txt` (`numpy==1.26.4` — artifact-training pin; the committed
 `router_head_logreg.joblib` needs re-validation under numpy 2, not necessarily retraining).
+Since 2026-09-27 zoe-data serves the heads' numpy `.npz` exports (`router_heads_numpy.py`,
+`allow_pickle=False`), so the served path re-validates by running
+`services/zoe-data/tests/test_router_heads_numpy.py` under numpy 2; only the one-release
+`ZOE_ROUTER_HEADS_BACKEND=joblib` fallback still unpickles the `.joblib` files.
 
 **Hard-hold through the bump (data-loss, not ABI):** `chromadb==0.6.3` + `mempalace==3.3.1`
 (moving chromadb risks the documented silent drawer-write drops), `scikit-learn==1.7.2` /
