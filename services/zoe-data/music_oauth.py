@@ -19,11 +19,15 @@ expires. No secret ever leaves the LAN — Zoe only relays the URL and the token
 goes straight into MA.
 
 MA 2.10+ (music_service.ma_server_version): the `auth` action above is gone.
-OAuth is a SETUP FLOW over plain HTTP — `config/providers/setup` (first connect)
-or `config/providers/reconfigure` (re-auth, in place), whose EXTERNAL step
-carries the authorize URL; MA's own callback advances the flow, and Zoe polls
-`config/flows/get` until FINISH/ABORT. Form steps before/after the sign-in are
-answered with their own prefilled/default values (bounded).
+OAuth is a SETUP FLOW — `config/providers/setup` (first connect) or
+`config/providers/reconfigure` (re-auth, in place) — whose EXTERNAL step carries
+the authorize URL; MA's own callback advances the flow. Completion is read from
+MA's `setup_flow_updated` WS events for THIS flow_id (the FINISH/ABORT step is
+pushed there). Polling `config/flows/get` cannot see it: MA drops a flow from its
+registry the moment it ends, so a poll after the callback just errors, and
+provider state (new instance, cleared last_error) is shared and ambiguous. No
+terminal event (socket lost, timeout) = failure + best-effort abort, never a
+guess. Form steps are answered with their own prefilled/default values (bounded).
 """
 from __future__ import annotations
 
@@ -76,105 +80,98 @@ def _values_from_entries(result: Any) -> dict[str, Any]:
     return values
 
 
-# MA 2.10+ setup-flow OAuth: how often to re-read the flow while the user signs in.
-_FLOW_POLL_S = 2.0
-
-
-# A failed `config/flows/get` is NOT an outcome: MA may be restarting, or the
-# request timed out. Retry with backoff; only a provider-state TRANSITION seen
-# during this attempt (below) may stand in for the FINISH step.
-_POLL_FAIL_MAX = 6
-_POLL_BACKOFF_MAX_S = 15.0
-
-
-async def _provider_state(provider: str) -> Optional[dict[str, Any]]:
-    """{instance_id: last_error} for the provider's instances, or None if MA
-    could not be read (so an unreadable config is never mistaken for a change)."""
-    cfgs = await music_service._ma("config/providers")
-    if not isinstance(cfgs, list):
-        return None
-    return {(c.get("instance_id") or c.get("id")): c.get("last_error")
-            for c in cfgs if isinstance(c, dict) and c.get("domain") == provider}
-
-
-def _completed_by_transition(before: dict[str, Any], now: dict[str, Any], existing: Optional[str]) -> bool:
-    """Did the provider visibly change the way a successful sign-in changes it?
-    First connect: an instance that did not exist before appeared. Re-auth: the
-    instance's last_error was SET before this attempt and is clear now (MA clears
-    it on a successful reconfigure). A healthy instance shows no transition, so
-    for it only an observed FINISH step counts."""
-    if existing is None:
-        return bool(set(now) - set(before))
-    return bool(before.get(existing)) and existing in now and not now[existing]
+async def _ws_auth(ws: Any) -> bool:
+    """Read the server-info greeting and authenticate (events are only sent to
+    an authenticated client). True on success."""
+    await ws.recv()  # server info
+    token = os.environ.get("MUSIC_ASSISTANT_TOKEN", "")
+    if not token:
+        return True
+    await ws.send(json.dumps({"command": "auth", "message_id": "auth", "args": {"token": token}}))
+    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=6))
+    return not ack.get("error_code")
 
 
 async def _run_setup_flow(oauth_id: str, provider: str) -> None:
     """The MA 2.10+ OAuth path (see the module docstring)."""
     flow = _flows[oauth_id]
-    flow_id = None
+    flow_id: Optional[str] = None
+    import websockets  # local import: only needed when an OAuth attempt runs
     try:
-        existing = await music_service.provider_instance_id(provider)
-        before = await _provider_state(provider) or {}
-        step = await music_service._start_provider_flow(provider, existing)
-        deadline = time.time() + OAUTH_ATTEMPT_TTL_S
-        forms = 0
-        poll_failures = 0
-        while step is not None and time.time() < deadline:
-            flow_id = step.get("flow_id") or flow_id
-            kind = step.get("type")
-            if kind == "finish":
-                flow["state"] = "connected"
+        # Unreadable provider config is NOT "no instance": starting a first-connect
+        # setup for an already-configured provider would mint a duplicate.
+        cfgs = await music_service._ma("config/providers")
+        if not isinstance(cfgs, list):
+            flow.update(state="failed", error="couldn't reach the music engine")
+            return
+        existing = next((c.get("instance_id") or c.get("id") for c in cfgs
+                         if isinstance(c, dict) and c.get("domain") == provider), None)
+        async with websockets.connect(_ma_ws_url(), open_timeout=8, max_size=2 ** 22) as ws:
+            if not await _ws_auth(ws):
+                flow.update(state="failed", error="music engine auth failed")
                 return
-            if kind == "abort":
-                logger.info("music oauth flow aborted (%s): %s", provider, step.get("reason"))
-                flow.update(state="failed", error="sign-in didn't complete")
-                return
-            if kind == "external" and step.get("url"):
-                if flow.get("auth_url") != step["url"]:
+            start_id = "zoe-flow-" + secrets.token_hex(4)
+            command, args = (("config/providers/reconfigure", {"instance_id": existing}) if existing
+                             else ("config/providers/setup", {"provider_domain": provider}))
+            await ws.send(json.dumps({"command": command, "message_id": start_id, "args": args}))
+            pending_ids = {start_id}
+            early: dict[str, dict[str, Any]] = {}  # flow events seen before we knew our flow_id
+            forms = 0
+            deadline = time.time() + OAUTH_ATTEMPT_TTL_S
+            while time.time() < deadline:
+                try:
+                    m = json.loads(await asyncio.wait_for(ws.recv(), timeout=8))
+                except asyncio.TimeoutError:
+                    continue
+                step: Optional[dict[str, Any]] = None
+                if m.get("message_id") in pending_ids:  # a command's own reply
+                    pending_ids.discard(m.get("message_id"))
+                    if m.get("error_code"):
+                        logger.info("music oauth flow command failed (%s): %s", provider, m.get("details"))
+                        break
+                    step = m.get("result") if isinstance(m.get("result"), dict) else None
+                    if step and flow_id is None:
+                        flow_id = step.get("flow_id")
+                        step = early.pop(str(flow_id), None) or step
+                elif m.get("event") == "setup_flow_updated" and isinstance(m.get("data"), dict):
+                    if flow_id is None:
+                        early[str(m.get("object_id"))] = m["data"]
+                        continue
+                    if m.get("object_id") != flow_id:
+                        continue  # someone else's flow
+                    step = m["data"]
+                if not step:
+                    continue
+                kind = step.get("type")
+                if kind == "finish":
+                    flow["state"] = "connected"
+                    return
+                if kind == "abort":
+                    logger.info("music oauth flow aborted (%s): %s", provider, step.get("reason"))
+                    flow.update(state="failed", error="sign-in didn't complete")
+                    return
+                if kind == "external" and step.get("url") and flow.get("auth_url") != step["url"]:
                     flow["auth_url"] = step["url"]
                     flow["event"].set()  # release start_oauth to return the URL
-            elif kind == "form":
-                forms += 1
-                if forms > music_service._FLOW_MAX_FORMS or step.get("errors"):
+                elif kind == "form" and not step.get("errors") and forms < music_service._FLOW_MAX_FORMS:
+                    forms += 1
+                    sub_id = "zoe-flow-" + secrets.token_hex(4)
+                    pending_ids.add(sub_id)
+                    await ws.send(json.dumps({"command": "config/flows/submit", "message_id": sub_id,
+                                              "args": {"flow_id": flow_id, "values": {}}}))
+                elif kind == "form":
                     logger.info("music oauth flow form not completable (%s): %s",
                                 provider, step.get("errors") or step.get("step_id"))
                     break
-                step = await music_service._ma_flow_step(
-                    "config/flows/submit", timeout_s=music_service._FLOW_SUBMIT_TIMEOUT_S,
-                    flow_id=flow_id, values={})
-                continue
-            await asyncio.sleep(_FLOW_POLL_S)
-            polled = await music_service._ma_flow_step("config/flows/get", flow_id=flow_id)
-            while polled is None and time.time() < deadline:
-                # The flow may have ended (MA drops it from its registry at once)
-                # or MA/the network hiccupped. Only a transition decides.
-                now = await _provider_state(provider)
-                # A transition is shared provider state, so it only speaks for
-                # THIS attempt while it is the newest one for the provider (MA
-                # itself allows one flow per target and aborts the older one).
-                if (not flow.get("superseded") and now is not None
-                        and _completed_by_transition(before, now, existing)):
-                    flow["state"] = "connected"
-                    return
-                poll_failures += 1
-                if poll_failures >= _POLL_FAIL_MAX:
-                    logger.info("music oauth flow %s (%s): %d failed polls, no completion seen",
-                                flow_id, provider, poll_failures)
-                    flow.update(state="failed", error="couldn't confirm the sign-in — please try again")
-                    # MA may still hold the flow; a late callback must not
-                    # complete an attempt the phone was told had failed.
-                    await music_service._abort_setup_flow(flow_id)
-                    return
-                await asyncio.sleep(min(_POLL_BACKOFF_MAX_S, _FLOW_POLL_S * 2 ** poll_failures))
-                polled = await music_service._ma_flow_step("config/flows/get", flow_id=flow_id)
-            poll_failures = 0
-            step = polled
-        flow.update(state="failed", error="sign-in timed out" if step is not None else "sign-in didn't complete")
-        await music_service._abort_setup_flow(flow_id)
+        flow.update(state="failed", error="couldn't confirm the sign-in — please try again")
     except Exception as exc:  # noqa: BLE001 — a failed attempt must never crash the app
         logger.info("music oauth flow failed (%s): %s", provider, exc)
         flow.update(state="failed", error="couldn't reach the music engine")
     finally:
+        if flow.get("state") != "connected":
+            # MA may still hold the flow; a late callback must not complete an
+            # attempt the phone was told had failed.
+            await music_service._abort_setup_flow(flow_id)
         flow["event"].set()
 
 
@@ -253,11 +250,6 @@ async def start_oauth(provider: str) -> dict[str, Any]:
     oauth_id = secrets.token_urlsafe(12)
     flow: dict[str, Any] = {"state": "pending", "auth_url": None, "provider": provider,
                             "error": None, "created": time.time(), "event": asyncio.Event()}
-    # A newer attempt for the same provider supersedes older pending ones: their
-    # provider-state evidence could be THIS attempt's success (see _run_setup_flow).
-    for other in _flows.values():
-        if other.get("provider") == provider and other.get("state") == "pending":
-            other["superseded"] = True
     _flows[oauth_id] = flow
     flow["task"] = asyncio.create_task(_run_flow(oauth_id, provider))
     try:

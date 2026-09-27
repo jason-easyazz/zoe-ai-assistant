@@ -27,7 +27,10 @@ that failure mode pinned permanently.
 from __future__ import annotations
 
 import itertools
+import json
 import logging
+import sys
+import types
 
 import pytest
 
@@ -255,7 +258,7 @@ class Fake210(_FakeMA):
 
     def complete_oauth(self, flow_id):
         """MA's hosted callback arrived: the flow finishes server-side."""
-        self._finish(self.flows[flow_id], {"refresh_token": "tok"})
+        return self._finish(self.flows[flow_id], {"refresh_token": "tok"}).json()
 
 
 def _ytmusic_instance(fake, *, cookie="STALE", last_error="No stream formats found"):
@@ -496,60 +499,7 @@ async def test_287_recommendations_still_served(monkeypatch):
     assert fake.sent("music/recommendations")
 
 
-# ── 2.10 OAuth (music_oauth) ─────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_210_oauth_surfaces_url_and_connects_after_callback(monkeypatch):
-    fake = Fake210().install(monkeypatch)
-    fake.oauth_url = "https://accounts.spotify.com/authorize?x=1"
-    monkeypatch.setattr(music_oauth, "_FLOW_POLL_S", 0)
-
-    polls = {"n": 0}
-    real_get = fake.cmd_config__flows__get
-
-    def get_then_callback(flow_id):
-        polls["n"] += 1
-        if polls["n"] == 2:  # the user finished signing in on the phone
-            fake.complete_oauth(flow_id)
-        return real_get(flow_id)
-    fake.cmd_config__flows__get = get_then_callback
-
-    res = await music_oauth.start_oauth("spotify")
-    assert res["auth_url"] == fake.oauth_url
-    await music_oauth._flows[res["oauth_id"]]["task"]
-    st = music_oauth.oauth_status(res["oauth_id"])
-    assert st["state"] == "connected", st
-    assert [i["domain"] for i in fake.instances.values()] == ["spotify"]
-    music_oauth._flows.pop(res["oauth_id"], None)
-
-
-@pytest.mark.asyncio
-async def test_210_oauth_reauth_is_in_place(monkeypatch):
-    fake = Fake210().install(monkeypatch)
-    fake.instances["spotify--EX"] = {"instance_id": "spotify--EX", "domain": "spotify",
-                                     "name": "Spotify", "values": dict(_OPTIONS),
-                                     "setup_data": {"refresh_token": "old"},
-                                     "last_error": "token expired"}
-    fake.oauth_url = "https://accounts.spotify.com/authorize?x=2"
-    monkeypatch.setattr(music_oauth, "_FLOW_POLL_S", 0)
-    real_get = fake.cmd_config__flows__get
-
-    def get_then_callback(flow_id):
-        if flow_id in fake.flows:
-            fake.complete_oauth(flow_id)
-        return real_get(flow_id)
-    fake.cmd_config__flows__get = get_then_callback
-
-    res = await music_oauth.start_oauth("spotify")
-    await music_oauth._flows[res["oauth_id"]]["task"]
-    assert music_oauth.oauth_status(res["oauth_id"])["state"] == "connected"
-    assert list(fake.instances) == ["spotify--EX"], "OAuth re-auth minted a duplicate"
-    assert fake.instances["spotify--EX"]["setup_data"]["refresh_token"] == "tok"
-    assert fake.sent("config/providers/reconfigure") == [{"instance_id": "spotify--EX"}]
-    music_oauth._flows.pop(res["oauth_id"], None)
-
-
-# ── review fixes: fresh version on writes; a failed poll is not completion ───
+# ── review fixes: fresh version on writes; unknown version / lost submit ────
 
 @pytest.mark.asyncio
 async def test_write_path_rereads_version_despite_warm_cache(monkeypatch):
@@ -568,57 +518,6 @@ async def test_write_path_rereads_version_despite_warm_cache(monkeypatch):
     await music_service.save_provider("ytmusic", {"username": "jason", "cookie": "FRESH"}, instance_id=iid)
 
     assert fake.instances[iid]["setup_data"]["cookie"] == "FRESH", "reconnect used the stale cached version"
-
-
-async def _run_oauth(monkeypatch, fake, provider="spotify"):
-    monkeypatch.setattr(music_oauth, "_FLOW_POLL_S", 0)
-    res = await music_oauth.start_oauth(provider)
-    await music_oauth._flows[res["oauth_id"]]["task"]
-    return res
-
-
-@pytest.mark.asyncio
-async def test_210_oauth_failed_polls_are_not_completion(monkeypatch):
-    """flows/get failing (MA restarting, timeouts) with no provider-state change
-    must end as an error — never 'connected' — and must not spend the token."""
-    fake = Fake210().install(monkeypatch)
-    fake.oauth_url = "https://accounts.spotify.com/authorize?x=3"
-    fake.cmd_config__flows__get = lambda flow_id: _ERR  # every poll fails; flow still alive
-
-    res = await _run_oauth(monkeypatch, fake)
-    st = music_oauth.oauth_status(res["oauth_id"])
-    assert st["state"] != "connected" and st["error"], st
-    assert not fake.instances
-    assert fake.sent("config/flows/abort"), "gave up polling but left MA's flow open"
-
-    consumed = []
-    monkeypatch.setattr(music_setup, "verify", lambda t: {"p": "spotify"})
-    monkeypatch.setattr(music_setup, "consume", lambda t: consumed.append(t))
-    r = await ms_router.oauth_status(oauth_id=res["oauth_id"], token="tok")
-    assert r["state"] != "connected" and consumed == [], "setup token spent on an unconfirmed sign-in"
-    music_oauth._flows.pop(res["oauth_id"], None)
-
-
-@pytest.mark.asyncio
-async def test_210_oauth_healthy_reauth_vanished_flow_is_not_completion(monkeypatch):
-    """A healthy instance (no last_error) shows no transition, so a flow that
-    disappears without reporting FINISH (e.g. it was aborted) is not success."""
-    fake = Fake210().install(monkeypatch)
-    fake.instances["spotify--EX"] = {"instance_id": "spotify--EX", "domain": "spotify",
-                                     "name": "Spotify", "values": dict(_OPTIONS),
-                                     "setup_data": {"refresh_token": "old"}, "last_error": None}
-    fake.oauth_url = "https://accounts.spotify.com/authorize?x=4"
-    real_get = fake.cmd_config__flows__get
-
-    def get_after_abort(flow_id):
-        fake.flows.pop(flow_id, None)  # the flow ended WITHOUT finishing
-        return real_get(flow_id)
-    fake.cmd_config__flows__get = get_after_abort
-
-    res = await _run_oauth(monkeypatch, fake)
-    assert music_oauth.oauth_status(res["oauth_id"])["state"] != "connected"
-    assert fake.instances["spotify--EX"]["setup_data"]["refresh_token"] == "old"
-    music_oauth._flows.pop(res["oauth_id"], None)
 
 
 @pytest.mark.asyncio
@@ -650,42 +549,183 @@ async def test_lost_submit_response_aborts_the_flow(monkeypatch):
     assert not fake.flows
 
 
+# ── 2.10 OAuth (music_oauth): completion comes from WS flow events ──────────
+
+class _FakeWS:
+    """MA's WS for one OAuth attempt, backed by a Fake210. Commands are answered
+    from the same handlers; every step a command produces is ALSO pushed as a
+    `setup_flow_updated` event (MA publishes each step), and the event arrives
+    BEFORE the command reply, as it can on the real server. `script` runs when
+    the queue is empty (the user acting on the phone); when it is exhausted the
+    socket drops."""
+
+    def __init__(self, fake, script):
+        self.fake, self.script = fake, list(script)
+        self.queue = [{"server_version": "2.10.3"}]
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    def push_event(self, step):
+        self.queue.append({"event": "setup_flow_updated", "object_id": step["flow_id"], "data": step})
+
+    async def send(self, raw):
+        msg = json.loads(raw)
+        if msg["command"] == "auth":
+            self.queue.append({"message_id": "auth", "result": {"authenticated": True}})
+            return
+        resp = await self.fake.response(msg["command"], **msg.get("args", {}))
+        if resp.status_code != 200:
+            self.queue.append({"message_id": msg["message_id"], "error_code": 999, "details": resp.text})
+            return
+        step = resp.json()
+        if isinstance(step, dict) and step.get("flow_id"):
+            self.push_event(step)
+        self.queue.append({"message_id": msg["message_id"], "result": step})
+
+    async def recv(self):
+        while not self.queue:
+            if not self.script:
+                raise ConnectionError("socket closed")
+            self.script.pop(0)(self)
+        return json.dumps(self.queue.pop(0))
+
+
+def _install_ws(monkeypatch, fake, *script):
+    mod = types.ModuleType("websockets")
+    mod.connect = lambda *a, **k: _FakeWS(fake, script)
+    monkeypatch.setitem(sys.modules, "websockets", mod)
+
+
+def _user_completes(ws):
+    """MA's hosted callback arrived: the flow finishes server-side and MA pushes
+    the FINISH step (then drops the flow from its registry)."""
+    (flow_id,) = list(ws.fake.flows)
+    ws.push_event(ws.fake.complete_oauth(flow_id))
+
+
+def _replaced_by_another_start(ws):
+    """Another sign-in for the same target started: MA aborts ours."""
+    (flow_id,) = list(ws.fake.flows)
+    ws.fake.flows.pop(flow_id)
+    ws.push_event({"flow_id": flow_id, "step_id": "abort", "type": "abort", "reason": "replaced"})
+
+
+def _spotify(fake, *, last_error=None):
+    fake.instances["spotify--EX"] = {"instance_id": "spotify--EX", "domain": "spotify", "name": "Spotify",
+                                     "values": dict(_OPTIONS), "setup_data": {"refresh_token": "old"},
+                                     "last_error": last_error}
+
+
+async def _oauth(provider="spotify"):
+    res = await music_oauth.start_oauth(provider)
+    await music_oauth._flows[res["oauth_id"]]["task"]
+    st = music_oauth.oauth_status(res["oauth_id"])
+    music_oauth._flows.pop(res["oauth_id"], None)
+    return res, st
+
+
 @pytest.mark.asyncio
-async def test_210_oauth_superseded_attempt_ignores_shared_state_change(monkeypatch):
-    """Attempt A's polls fail while a NEWER attempt for the same provider
-    succeeds: the provider transition is B's, not A's — A must not connect."""
+async def test_210_oauth_first_connect_via_finish_event(monkeypatch):
+    fake = Fake210().install(monkeypatch)
+    fake.oauth_url = "https://accounts.spotify.com/authorize?x=1"
+    _install_ws(monkeypatch, fake, _user_completes)
+
+    res, st = await _oauth()
+
+    assert res["auth_url"] == fake.oauth_url
+    assert st["state"] == "connected", st
+    assert [i["domain"] for i in fake.instances.values()] == ["spotify"]
+
+
+@pytest.mark.asyncio
+async def test_210_oauth_healthy_reauth_confirmed_by_finish_event(monkeypatch):
+    """A healthy instance (no last_error) has no state transition to observe;
+    the FINISH event is the positive signal, and the re-auth is in place."""
+    fake = Fake210().install(monkeypatch)
+    _spotify(fake, last_error=None)
+    fake.oauth_url = "https://accounts.spotify.com/authorize?x=2"
+    _install_ws(monkeypatch, fake, _user_completes)
+
+    _, st = await _oauth()
+
+    assert st["state"] == "connected", st
+    assert list(fake.instances) == ["spotify--EX"], "OAuth re-auth minted a duplicate"
+    assert fake.instances["spotify--EX"]["setup_data"]["refresh_token"] == "tok"
+    assert fake.sent("config/providers/reconfigure") == [{"instance_id": "spotify--EX"}]
+
+
+@pytest.mark.asyncio
+async def test_210_oauth_socket_loss_is_not_completion(monkeypatch):
+    """No terminal event (socket dropped mid sign-in) -> failure, the MA flow is
+    aborted, and the setup token is not spent — even if the provider state would
+    have looked 'fixed' (last_error cleared by someone else)."""
+    fake = Fake210().install(monkeypatch)
+    _spotify(fake, last_error="token expired")
+    fake.oauth_url = "https://accounts.spotify.com/authorize?x=3"
+
+    def someone_else_fixes_it(ws):
+        fake.instances["spotify--EX"]["last_error"] = None
+    _install_ws(monkeypatch, fake, someone_else_fixes_it)  # then the socket drops
+
+    res, st = await _oauth()
+
+    assert st["state"] != "connected" and st["error"], st
+    assert fake.sent("config/flows/abort"), "gave up but left MA's flow open"
+    consumed = []
+    music_oauth._flows[res["oauth_id"]] = {"state": st["state"], "provider": "spotify",
+                                           "error": st["error"], "created": 9e18}
+    monkeypatch.setattr(music_setup, "verify", lambda t: {"p": "spotify"})
+    monkeypatch.setattr(music_setup, "consume", lambda t: consumed.append(t))
+    r = await ms_router.oauth_status(oauth_id=res["oauth_id"], token="tok")
+    music_oauth._flows.pop(res["oauth_id"], None)
+    assert r["state"] != "connected" and consumed == [], "setup token spent on an unconfirmed sign-in"
+
+
+@pytest.mark.asyncio
+async def test_210_oauth_replaced_flow_is_not_completion(monkeypatch):
+    """Another sign-in for the same provider replaces ours (MA aborts it) and
+    succeeds: its success is not ours."""
+    fake = Fake210().install(monkeypatch)
+    _spotify(fake, last_error="token expired")
+    fake.oauth_url = "https://accounts.spotify.com/authorize?x=4"
+
+    def other_attempt_wins(ws):
+        _replaced_by_another_start(ws)
+        fake.instances["spotify--EX"]["last_error"] = None
+    _install_ws(monkeypatch, fake, other_attempt_wins)
+
+    _, st = await _oauth()
+    assert st["state"] != "connected", st
+
+
+@pytest.mark.asyncio
+async def test_210_oauth_ignores_other_flows_events(monkeypatch):
     fake = Fake210().install(monkeypatch)
     fake.oauth_url = "https://accounts.spotify.com/authorize?x=5"
-    state = {"a": None}
 
-    def get_while_b_wins(flow_id):
-        if state["a"] and not music_oauth._flows[state["a"]].get("superseded"):
-            music_oauth._flows[state["a"]]["superseded"] = True  # B started...
-            fake._create("spotify", {"refresh_token": "b"})        # ...and succeeded
-        return _ERR
-    fake.cmd_config__flows__get = get_while_b_wins
-    monkeypatch.setattr(music_oauth, "_FLOW_POLL_S", 0)
+    def unrelated_finish(ws):
+        ws.push_event({"flow_id": "someone-else", "step_id": "finish", "type": "finish",
+                       "result": {"instance_id": "x"}})
+    _install_ws(monkeypatch, fake, unrelated_finish)
 
-    res = await music_oauth.start_oauth("spotify")
-    state["a"] = res["oauth_id"]
-    await music_oauth._flows[res["oauth_id"]]["task"]
-    assert music_oauth.oauth_status(res["oauth_id"])["state"] != "connected"
-    music_oauth._flows.pop(res["oauth_id"], None)
+    _, st = await _oauth()
+    assert st["state"] != "connected", st
 
 
 @pytest.mark.asyncio
-async def test_start_oauth_supersedes_older_pending_attempt(monkeypatch):
+async def test_210_oauth_unreadable_provider_config_starts_nothing(monkeypatch):
+    """config/providers unreadable must not read as 'no instance' — that would
+    start a first-connect setup and mint a duplicate."""
     fake = Fake210().install(monkeypatch)
+    _spotify(fake, last_error="token expired")
     fake.oauth_url = "https://accounts.spotify.com/authorize?x=6"
-    monkeypatch.setattr(music_oauth, "_FLOW_POLL_S", 0)
-    music_oauth._flows["older"] = {"state": "pending", "provider": "spotify", "created": 9e18}
-    music_oauth._flows["other"] = {"state": "pending", "provider": "tidal", "created": 9e18}
-    res = await music_oauth.start_oauth("spotify")
-    try:
-        assert music_oauth._flows["older"].get("superseded") is True
-        assert not music_oauth._flows["other"].get("superseded")
-    finally:
-        task = music_oauth._flows[res["oauth_id"]]["task"]
-        task.cancel()
-        for k in ("older", "other", res["oauth_id"]):
-            music_oauth._flows.pop(k, None)
+    fake.cmd_config__providers = lambda **_: _ERR
+    _install_ws(monkeypatch, fake, _user_completes)
+
+    _, st = await _oauth()
+    assert st["state"] != "connected"
+    assert not fake.sent("config/providers/setup") and not fake.sent("config/providers/reconfigure")
