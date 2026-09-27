@@ -49,6 +49,14 @@ A requirement line may carry a trailing ``# drift-optional: <reason>`` comment.
 That declares the package genuinely optional (the importing code degrades
 instead of failing), so "not installed" is recorded as INFO rather than drift.
 It never excuses a VERSION mismatch — an installed optional still has to match.
+
+Direct-URL pins
+---------------
+``name @ https://…/name-X.Y-….whl`` pins an exact ARTIFACT (the zoe-data 3.12
+manifest pins the CPU torch wheel this way so no index can swap in the CUDA
+bundle). It is checked twice: the installed version must equal the wheel
+filename's version, and the distribution's PEP 610 ``direct_url.json`` must name
+the same URL — an index install of a same-numbered build is still drift.
 """
 from __future__ import annotations
 
@@ -56,8 +64,9 @@ import argparse
 import json
 import re
 import sys
-from importlib.metadata import PackageNotFoundError, version as installed_version
+from importlib.metadata import PackageNotFoundError, distribution, version as installed_version
 from typing import Iterable, NamedTuple, Optional
+from urllib.parse import unquote, urlsplit
 
 # name[extras] followed by zero or more comma-joined specifiers.
 _REQ_RE = re.compile(
@@ -127,6 +136,46 @@ def satisfies(have: str, operator: str, want: str) -> Optional[bool]:
     return None
 
 
+def wheel_url_version(url: str) -> Optional[str]:
+    """Version encoded in a wheel URL's filename (PEP 427), else None.
+
+    ``…/torch-2.14.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl -> "2.14.0+cpu"``.
+    An sdist or VCS URL makes no parseable version claim and returns None.
+    """
+    filename = unquote(urlsplit(url).path.rsplit("/", 1)[-1])
+    if not filename.endswith(".whl"):
+        return None
+    parts = filename[: -len(".whl")].split("-")
+    return parts[1] if len(parts) >= 5 else None
+
+
+def installed_direct_url(name: str) -> Optional[str]:
+    """URL a distribution was installed from (PEP 610 ``direct_url.json``), else None."""
+    try:
+        raw = distribution(name).read_text("direct_url.json")
+    except PackageNotFoundError:
+        return None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw).get("url")
+    except (ValueError, AttributeError):
+        return None
+
+
+def _check_direct_url(name: str, spec: str, have: str) -> "Finding":
+    url = spec[1:].strip()
+    want = wheel_url_version(url)
+    if want is not None and have.strip() != want:
+        return Finding(name, spec, have, "MISMATCH",
+                       f"installed {have} is not the pinned wheel's {want}")
+    source = installed_direct_url(name)
+    if source != url:
+        return Finding(name, spec, have, "MISMATCH",
+                       f"installed from {source or 'an index (no direct_url.json)'}, not the pinned URL")
+    return Finding(name, spec, have, "match", "")
+
+
 def iter_requirements(text: str) -> Iterable[tuple[str, str, bool]]:
     """Yield ``(name, spec, optional)`` for each requirement line.
 
@@ -170,6 +219,10 @@ def check(text: str) -> list[Finding]:
                 )
             continue
 
+        if spec.startswith("@"):
+            findings.append(_check_direct_url(name, spec, have))
+            continue
+
         constraints = _SPEC_RE.findall(spec)
         if not constraints:
             findings.append(Finding(name, "", have, "unpinned",
@@ -205,7 +258,7 @@ def render(findings: list[Finding], quiet: bool = False) -> str:
     out.append("-" * (width + 48))
     for f in rows:
         out.append(
-            f"{f.name.ljust(width)}{(f.spec or '(unpinned)').ljust(16)}"
+            f"{f.name.ljust(width)}{(f.spec or '(unpinned)').ljust(15)} "
             f"{(f.installed or '-').ljust(16)}{f.verdict}"
         )
     drift = [f for f in findings if f.is_drift]

@@ -161,8 +161,8 @@ status: 🔨 active — NEXT ACTION is always §0
   `livekit-protocol` were undeclared direct imports. **av 18 is capped by aiortc, not Python.**
   Step-ups (onnxruntime 1.30, websockets 17.1, numpy 2, sklearn 1.9 + head re-export) each
   resolve and follow one at a time, replay-gated. 🧑 Remaining: replay probe with the venv
-  interpreter, drop-in + restart, `/readyz` + `memory_recall_probe`, replay `--stt remote`,
-  re-point `deploy.yml`'s pip step. Target: before 2026-10-31 (3.10 EOL).
+  interpreter, drop-in + restart, `/readyz` + `memory_recall_probe`, replay `--stt remote` (HTTP STT only),
+  one real `/ws/voice/` turn, re-point `deploy.yml`'s pip step. Target: before 2026-10-31 (3.10 EOL).
 - B0.8 ⬜ MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7); reconcile row
   counts against `export_memory_store.py`; self-recall probe.
 - B0.9 ⬜ APScheduler 3.11.3 via `export_jobs`/`import_jobs` with pytz present; `tzlocal>=3`

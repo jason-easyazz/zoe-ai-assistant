@@ -144,6 +144,56 @@ def test_extras_and_unpinned_and_markers_parse() -> None:
     assert _verdicts("segno\n")["segno"] in {"unpinned", "MISSING"}
 
 
+# ── direct-URL pins (`name @ URL`) ──────────────────────────────────────────
+# requirements-py312.txt pins the CPU torch build by wheel URL. A URL carries no
+# comparison operator, so before #1706 it fell through to "unpinned" — a CUDA
+# torch, or any other build, reported clean (Greptile/Codex, #1706).
+
+_WHEEL = "https://download.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl"
+
+
+def test_wheel_url_version_is_read_from_the_filename() -> None:
+    assert drift.wheel_url_version(_WHEEL) == "2.14.0+cpu"
+    assert drift.wheel_url_version("https://x/pkg-1.0.tar.gz") is None      # sdist: no version claim
+    assert drift.wheel_url_version("git+https://x/pkg.git@v1") is None
+
+
+def test_direct_url_pin_matches_only_the_exact_artifact(monkeypatch) -> None:
+    have = version("pytest")
+    url = f"https://files.example/pytest-{have}-py3-none-any.whl"
+    monkeypatch.setattr(drift, "installed_direct_url", lambda name: url)
+    assert _verdicts(f"pytest @ {url}\n") == {"pytest": "match"}
+
+
+def test_negative_control_direct_url_pin_catches_another_version(monkeypatch) -> None:
+    """NEGATIVE CONTROL: a different version must be MISMATCH, not "unpinned"."""
+    url = "https://files.example/pytest-0.0.0-py3-none-any.whl"
+    monkeypatch.setattr(drift, "installed_direct_url", lambda name: url)
+    findings = drift.check(f"pytest @ {url}\n")
+    assert [f.verdict for f in findings] == ["MISMATCH"]
+    assert findings[0].is_drift is True
+
+
+def test_negative_control_direct_url_pin_catches_an_index_install(monkeypatch) -> None:
+    """Same version, but installed from an index (no direct_url.json) or from a
+    different URL: the pin promised an exact ARTIFACT, so that is drift too — it
+    is how a same-numbered CUDA build would slip past a version-only check."""
+    have = version("pytest")
+    url = f"https://files.example/pytest-{have}-py3-none-any.whl"
+    monkeypatch.setattr(drift, "installed_direct_url", lambda name: None)
+    assert _verdicts(f"pytest @ {url}\n") == {"pytest": "MISMATCH"}
+    monkeypatch.setattr(drift, "installed_direct_url", lambda name: url.replace("example", "other"))
+    assert _verdicts(f"pytest @ {url}\n") == {"pytest": "MISMATCH"}
+
+
+def test_py312_manifest_torch_line_is_a_checked_url_pin() -> None:
+    """Vacuity guard on the real manifest: the torch line must parse as a URL pin."""
+    text = (ROOT / "services" / "zoe-data" / "requirements-py312.txt").read_text(encoding="utf-8")
+    specs = {name: spec for name, spec, _ in drift.iter_requirements(text)}
+    assert specs["torch"].startswith("@ "), specs.get("torch")
+    assert drift.wheel_url_version(specs["torch"][1:].strip()) == "2.14.0+cpu"
+
+
 # ── the parser must actually see the tracked file ───────────────────────────
 
 def test_tracked_requirements_file_parses_completely() -> None:

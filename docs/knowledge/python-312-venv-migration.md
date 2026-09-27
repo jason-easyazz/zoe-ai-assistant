@@ -19,7 +19,9 @@ Python 3.10 / CUDA 12.6 stack; nothing here touches them, `/usr`, or
 
 **Status 2026-09-26: venv BUILT and import-verified in a worktree; NOT applied to the service.**
 Everything in §1–§3 is measured on the Orin (uv 0.10.11, uv-managed CPython 3.12.13 aarch64,
-glibc 2.35). §5 gates 1–2 ran; gates 3–5 need the operator restart.
+glibc 2.35). §5 gate 1 ran. Gate 2 is next and needs the probe from #1706 (it now launches
+`measure_voice` with its own interpreter — before that, a venv-launched probe replayed on 3.10);
+gates 3–5 need the operator restart.
 
 ## 0. What was measured, and how (re-derivable)
 
@@ -83,7 +85,7 @@ separately; not a 3.12 matter.
 # inside a worktree (never the live checkout for git; the venv lives OUTSIDE the repo)
 scripts/setup/build_py312_venv.sh --dry-run   # prints the plan + resolves the manifest, installs nothing
 scripts/setup/build_py312_venv.sh             # ~/.zoe/venvs/zoe-data-py312, ~1.9 GB, ~1 min warm cache
-scripts/setup/build_py312_venv.sh --check     # interpreter, drift check against the manifest, import smoke
+scripts/setup/build_py312_venv.sh --check     # interpreter, drift vs the manifest (any MISMATCH fails), import smoke
 ```
 
 What it does, in order: `uv python install 3.12` (uv-managed CPython under
@@ -159,7 +161,7 @@ the cutover PR, not before: until the drop-in is live it would be a wish.
 1. **ci_safe lanes in the venv, under CI's conditions** (network-blocked, `TZ=UTC`) — from a
    worktree, never the live checkout:
    ```bash
-   V=~/.zoe/venvs/zoe-data-py312/bin/python
+   export V=~/.zoe/venvs/zoe-data-py312/bin/python   # EXPORTED: the single-quoted bash -c below reads it
    uv pip install --python $V "pytest==8.3.5" "pytest-asyncio==1.3.0"
    unshare -rn --map-root-user bash -c 'ip link set lo up; TZ=UTC ZOE_DATA_DB=":memory:" \
      ZOE_MEMORY_STARTUP_STRICT=false PYTHONPATH=$PWD/services/zoe-data $V -m pytest \
@@ -181,7 +183,9 @@ the cutover PR, not before: until the drop-in is live it would be a wish.
 2. **Replay gate with THIS interpreter, service untouched.** The probe defaults to
    `--stt inprocess`, i.e. Moonshine + onnxruntime + numpy load in the probe's own process — so
    running it with the venv python measures the venv's STT stack against the LIVE brain without a
-   restart (`measure_voice` re-invokes `sys.executable`, so the interpreter propagates):
+   restart. The interpreter propagates on BOTH hops — the probe launches `measure_voice.py` with
+   its own `sys.executable` (a PATH `python3` until #1706, which silently fell back to 3.10), and
+   `measure_voice` launches the replay with its own:
    ```bash
    flock /tmp/zoe-voice-harness.lock ~/.zoe/venvs/zoe-data-py312/bin/python \
      scripts/maintenance/voice_regression_probe.py --service-dir /home/zoe/assistant/services/zoe-data --stt inprocess
@@ -191,12 +195,18 @@ the cutover PR, not before: until the drop-in is live it would be a wish.
 3. **Drop-in + restart** (§4) → `/readyz` all `ok`, including `dependencies.stt` and the
    **`memory_recall_probe`** result the startup runs (it self-recalls one real stored row through
    the venv's chromadb + hnswlib; "search returns" is not the bar, "returns the RIGHT row" is).
-4. **Replay gate against the live path**: same command with `--stt remote` (STT via the restarted
-   service, no second Moonshine load) — the only run that exercises the venv's uvicorn/websockets
-   `/ws/voice/` path end to end.
-5. Watch one idle→first-utterance cycle and `journalctl --user -u zoe-data` for
+4. **Replay gate against the live service**: same command with `--stt remote` — STT goes over
+   HTTP to the restarted service's `POST /api/voice/transcribe` (its in-process Moonshine, now on
+   the venv), no second Moonshine load. It does **not** touch `/ws/voice/`: the replay harness has
+   no WebSocket client, so a green run here says nothing about the venv's `websockets` stack.
+5. **The `/ws/voice/` lane — the only gate that exercises it.** Speak one idle→first-utterance
+   turn through a `/ws/voice/` client (`voice.html` / `touch/voice.html` — the in-repo clients)
+   and confirm a reply plays; the build smoke only proves `--ws auto` *selects* the legacy
+   websockets impl, and gates 2 and 4 never open a WebSocket.
+   Watch `journalctl --user -u zoe-data` (and `~/.zoe-logs/`) through it for WebSocket errors and
    `InconsistentVersionWarning`/`DeprecationWarning` floods; then run
-   `requirements_drift_check.py` with the venv interpreter (0 MISMATCH expected).
+   `requirements_drift_check.py` with the venv interpreter (0 MISMATCH expected — it also checks
+   that torch is the pinned CPU wheel URL, not an index build).
 
 Then, one at a time, each its own PR + replay gate: websockets 17.1 → onnxruntime 1.30.0 →
 numpy 2.x (re-export the router head with sklearn 1.9 in the same PR) → B0.8 (chromadb 1.5.x +

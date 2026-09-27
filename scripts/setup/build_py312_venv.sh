@@ -130,11 +130,13 @@ case "$MODE" in
     [[ -x "$VENV_PY" ]] || die "no venv at $VENV_DIR (run without --check to build it)"
     v="$(venv_version)"; [[ "$v" == "$PY_VERSION" ]] || die "venv is Python $v, expected $PY_VERSION"
     ok "interpreter $("$VENV_PY" -c 'import sys; print(sys.version.split()[0], sys.executable)')"
+    # Drift is FATAL here: most smoke imports assert no version, so a warning would
+    # let --check certify a knowingly drifted venv right before cutover (#1706).
+    # The checker also verifies the torch direct-URL pin (version + PEP 610 source).
     drift="$REPO_ROOT/scripts/maintenance/requirements_drift_check.py"
-    if [[ -f "$drift" ]]; then
-      log "drift (manifest vs venv):"
-      "${NICE[@]}" "$VENV_PY" "$drift" "$REQ_FILE" || warn "drift check reported mismatches (see above)"
-    fi
+    [[ -f "$drift" ]] || die "drift checker missing: $drift"
+    log "drift (manifest vs venv):"
+    "${NICE[@]}" "$VENV_PY" "$drift" "$REQ_FILE" || die "drift check reported mismatches (see above) — rebuild (no args) to converge"
     log "import smoke:"
     smoke && ok "smoke passed" || die "smoke FAILED"
     ;;
