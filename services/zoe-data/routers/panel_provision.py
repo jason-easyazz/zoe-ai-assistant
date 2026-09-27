@@ -307,6 +307,16 @@ async def provision_poll(code: str, request: Request, db=Depends(get_db)):
             await db.commit()
             if getattr(cleared, "rowcount", 0) == 1:
                 return {"status": "confirmed", "token": token, "panel_id": row["panel_id"]}
+            # Our clear matched nothing. If the expiry sweep won the race it
+            # marked the attempt expired and revoked the token: say so, so the
+            # Pi requests a fresh code instead of stalling on a tokenless
+            # "confirmed". If another poll of this device collected it, the row
+            # is still confirmed.
+            now = await (await db.execute(
+                "SELECT status FROM panel_provision_codes WHERE code = ?", (code,)
+            )).fetchone()
+            if not now or now["status"] != "confirmed":
+                return {"status": "expired"}
         # Token already delivered to an earlier poll (or rotated out from under us).
         return {"status": "confirmed"}
 

@@ -555,6 +555,9 @@ class _ProvisionRaceDB:
             # and both observe the still-present token before the conditional clear.
             snapshot = dict(self.row)
             return _SleepingExecResult([snapshot])
+        if s.startswith("SELECT STATUS FROM PANEL_PROVISION_CODES"):
+            # The loser's re-read: still confirmed (another poll collected it).
+            return _ExecResult([{"status": self.row["status"]}])
         if s.startswith("UPDATE PANEL_PROVISION_CODES SET TOKEN = NULL"):
             # Atomic conditional clear modeled by a single non-yielding step. The
             # query matches the EXACT token the poll observed (WHERE token = ?), so

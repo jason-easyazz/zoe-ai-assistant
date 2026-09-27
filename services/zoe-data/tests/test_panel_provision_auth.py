@@ -383,3 +383,36 @@ async def test_sweep_then_poll_the_poll_gets_expired_and_the_token_is_revoked(cl
     assert await _sweep(db_path) == 1
     assert _poll(client, code, secret=started["poll_secret"]).json() == {"status": "expired"}
     assert _revoked(db_path) == 1
+
+
+async def test_poll_that_loses_its_clear_to_the_sweep_reports_expired(client, db_path, monkeypatch):
+    """The poll read `confirmed` + token, then the sweep cleared the row before
+    the poll's conditional clear ran (rowcount 0). The Pi must be told
+    `expired` so it requests a new code, never a tokenless `confirmed`."""
+    started = _start(client)
+    code = started["code"]
+    assert _confirm(client, code, headers={"X-Session-ID": "sess-member"}).status_code == 200
+    raw = _row(db_path, code)["token"]
+
+    conn = await aiosqlite.connect(db_path)
+    conn.row_factory = aiosqlite.Row
+    real_execute = conn.execute
+
+    def racing_execute(sql, params=()):
+        if sql.startswith("UPDATE panel_provision_codes SET token = NULL WHERE code = ?"):
+            async def _sweep_first_then_clear():
+                assert await pp._expire_uncollected_token(conn, code, raw) is True
+                return await real_execute(sql, params)
+            return _sweep_first_then_clear()
+        return real_execute(sql, params)
+
+    monkeypatch.setattr(conn, "execute", racing_execute)
+
+    class _Req:
+        headers = {"X-Provision-Secret": started["poll_secret"]}
+
+    try:
+        assert await pp.provision_poll(code, request=_Req(), db=conn) == {"status": "expired"}
+    finally:
+        await conn.close()
+    assert _revoked(db_path) == 1
