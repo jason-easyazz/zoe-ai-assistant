@@ -1,7 +1,7 @@
 ---
 type: Runbook
 title: Music path yt-dlp JavaScript runtime
-description: How the live Music Assistant container solves YouTube's nsig/sig JS challenge (MA bakes deno; we only pin the image), the sh -lc PATH artifact that produced a false "no JS runtime" diagnosis, the read-only probe (JS solve + PO-token plugin/server major match), the 2026-09-25 bgutil mismatch outage and the recreate rule, the MA 2.10 setup-flow API break that blocks the 2.10.3 pin, and the apply/rollback procedure with the YouTube Music re-auth risk.
+description: How the live Music Assistant container solves YouTube's nsig/sig JS challenge (MA bakes deno; we only pin the image), the sh -lc PATH artifact that produced a false "no JS runtime" diagnosis, the read-only probe (JS solve + PO-token plugin/server major match), the 2026-09-25 bgutil mismatch outage and the recreate rule, the MA 2.10 setup-flow API break and zoe-data's version switch, the canonical B0.12 recipe (interim step 0, then 2.10.3 adoption), and the apply/rollback procedure with the YouTube Music re-auth risk.
 tags: [music, music-assistant, yt-dlp, youtube, deno, bgutil, po-token, docker, operations]
 timestamp: 2026-09-27T00:00:00Z
 ---
@@ -189,9 +189,9 @@ account cookies are no longer valid`, so **a re-auth is needed whatever is fixed
 `zoe-music-assistant`** (or aligning the plugin by hand) in the same change, then
 running the FULL probe, which now checks the major match.
 
-**Fix without the MA bump** (keeps the 2.8.7 image and the panel reconnect path;
-verified on a throwaway 2.8.7 container 2026-09-27: `web_music` solve + PO token +
-stream URL, plugin 2.0.0 matched):
+**Fix without the MA bump** = step 0 of the B0.12 recipe below (keeps the 2.8.7
+image and the panel reconnect path; verified on a throwaway 2.8.7 container
+2026-09-27: `web_music` solve + PO token + stream URL, plugin 2.0.0 matched):
 
 ```bash
 docker exec zoe-music-assistant uv pip install --no-cache \
@@ -206,43 +206,92 @@ PyPI has then — which is the behaviour you want, as long as the server major s
 matches. Undo: the same command with `yt-dlp[default]==2026.7.4`
 `bgutil-ytdlp-pot-provider==1.3.1`.
 
-## MA 2.10.x — pinned, but BLOCKED on zoe-data (read before re-creating)
+## MA 2.10.x — pinned; adopt ONLY via the B0.12 recipe below
 
 The compose pin is **2.10.3** (`sha256:885872224fa5…`, released 2026-09-11, ≥14 d
 old; 2.10.4 clears the 14-day rule on 2026-10-02). It closes the three advisories
 against 2.8.7 — GHSA-5fch-fp25-3g2p (OAuth-callback XSS + bearer-token theft,
 fixed 2.9.9), GHSA-m6c2-h3pf-84q7, GHSA-j369-4c4w-7qmq — which matter because
 `network_mode: host` puts :8095 on the LAN. Stage 1 (`--engine-only`) is green
-(deno 2.9.5). **It must not be adopted until zoe-data is updated**, because 2.10
-changed the provider-config API that zoe-data's `music_service` drives (all read
-from the 2.10.3 image source, diffed command-by-command against 2.8.7):
+(deno 2.9.5).
 
-| zoe-data call | 2.8.7 | 2.10.3 | effect |
+2.10 changed the provider-config API zoe-data drives (read from the 2.10.3 image
+source, diffed command-by-command against 2.8.7). zoe-data now picks the API by
+the server version it reads from MA's `/info` (`music_service.ma_server_version()`,
+cached per process, re-read after any transport failure); an unknown version takes
+the pre-2.10 path unchanged. **The pin must still not be adopted before that
+zoe-data is DEPLOYED** — an older zoe-data against 2.10 has exactly the breakage in
+the third column:
+
+| zoe-data call | 2.8.7 | 2.10.3, old zoe-data | zoe-data on ≥2.10 now |
 |---|---|---|---|
-| `config/providers/save` with `instance_id` (panel **Reconnect**) | writes `cookie` into `values` | `ProviderConfig.update` skips keys that are not declared entries; ytmusic's `cookie`/`username`/`po_token_server_url` are now setup-flow-owned and read via `get_setup_value`, which prefers `setup_data` | **silent no-op**: reports success, the stale cookie stays |
-| `config/providers/save` without `instance_id` (first connect) | creates the instance | `ValueError: Adding a provider is only possible through the setup flow` | first connect fails |
-| `config/providers/get_entries(provider_domain=…)` | ok | now `get_entries(instance_id)` only | error → zoe-data falls back to `[]` |
-| `music/recommendations` | ok | removed | "for you" shelves empty (best-effort path) |
-| `player_queues/play_media` | has `username` | `username` removed | none — zoe-data does not pass it |
+| panel **Reconnect** / cookie refresh (`save_provider` with `instance_id`) | `config/providers/save` writes `cookie` into `values` | **silent no-op**: `ProviderConfig.update` skips undeclared keys, `get_setup_value` prefers `setup_data` — reports success, stale cookie stays | `config/providers/reconfigure(instance_id)` → `config/flows/submit`; merges `setup_data` only, so the instance's settings are untouched; a rejected cookie re-serves the form with errors → reported as failure, flow aborted, MA restores the old `setup_data` |
+| first connect (`save_provider` without `instance_id`) | creates the instance | `ValueError: … only possible through the setup flow` | `config/providers/setup(provider_domain)` → submit; zero-input providers (radio) FINISH immediately |
+| phone form fields (`provider_setup_form`) | `get_entries(provider_domain=…)` | `get_entries` takes `instance_id` only → error | the setup flow's first FORM step's entries (flow started, read, aborted); free/OAuth providers start no flow — a zero-input `setup` would CREATE the instance |
+| OAuth sign-in (`music_oauth`) | WS `get_entries(action="auth")` | action gone | setup/reconfigure flow; the EXTERNAL step's `url` goes to the phone; `config/flows/get` polled until FINISH/ABORT (a flow that already ended reads its outcome from the provider config) |
+| "for you" shelves (`get_recommendations`) | `music/recommendations` | 400 `Invalid Command` | not sent; empty shelf + one log line per process |
+| `player_queues/play_media` | has `username` | `username` removed | none — zoe-data never passed it |
 
-The 2.10 equivalents are `config/providers/setup(provider_domain)` /
-`config/providers/reconfigure(instance_id)` → `config/flows/submit(flow_id, values)`.
-Also on first start 2.10 **migrates `settings.json` one way**
+On first start 2.10 **migrates `settings.json` one way**
 (`migrate_provider_setup_data` moves those keys into encrypted `setup_data`), so
-**rolling back to 2.8.7 needs the store restored from a backup**, not just the
-old digest.
+**rolling back to 2.8.7 needs the store restored from a backup**, not just the old
+digest.
 
-Other 2.10 surfaces to check on the day (not yet exercised live): Sendspin moves
-aiosendspin 4.4.0 → 9.1.1 (PIN pairing changed at 9.0.0 — expect re-pairing);
-the AirPlay provider swapped libraop for a new backend with explicit streaming
-modes (`auto` / `ap2_ptp` / `ap2_ntp` / `ap2_compat` / `raop`) — if the "Zoe Panel"
-AirPlay-2 output (shairport-sync 5.1) goes silent, pin its streaming mode;
-music-assistant-models 1.1.115 → 1.1.205.
+## B0.12 recipe — getting YouTube Music back, then onto 2.10.3
 
-**Order:** (1) zoe-data PR moving `save_provider` / the ytmusic sign-in / the
-OAuth path to the setup/reconfigure flow API, deployed; (2) stop-and-back-up the
-store; (3) re-create on this digest; (4) FULL probe; (5) panel re-auth, then the
-Sendspin / AirPlay checks above.
+**Step 0 — today, on 2.8.7 (no image change).** Fixes the plugin mismatch and the
+stale yt-dlp; keeps the pre-2.10 reconnect path the live zoe-data already speaks.
+
+```bash
+docker exec zoe-music-assistant uv pip install --no-cache \
+    'yt-dlp[default]==2026.8.19' 'bgutil-ytdlp-pot-provider==2.0.0'
+docker restart zoe-music-assistant                 # yt-dlp is imported once per process
+scripts/maintenance/music_jsruntime_probe.sh       # HEALTHY, incl. "PO-token plugin 2.0.0 matches server 2.0.0"
+```
+
+Then re-auth on the panel (the cookies have rotated): **Music → Browse → Sources →**
+amber **Reconnect** on YouTube Music → scan the QR → sign in to Google on the phone.
+
+**Steps 1–6 — the 2.10.3 adoption** (a planned window; YouTube Music re-auth is
+needed again at the end):
+
+1. **Deploy zoe-data carrying the version switch** (#1723): sync the live checkout
+   (`git merge --ff-only origin/main`) and restart zoe-data; poll `/health`.
+   While MA is still 2.8.7 nothing changes (`/info` says 2.8.7).
+2. **Stopped store backup** — consistent SQLite, and root-only files readable:
+   ```bash
+   docker stop zoe-music-assistant
+   docker run --rm -v /home/zoe/.zoe:/z --entrypoint sh ghcr.io/music-assistant/server:2.10.3 \
+     -c 'tar -C /z -czf /z/music-assistant.backup-$(date +%Y%m%d-%H%M).tgz music-assistant'
+   ```
+3. **Re-create on the pinned digest**, replacing (not duplicating) the container in
+   compose project `assistant`:
+   ```bash
+   docker compose -p assistant --project-directory /home/zoe/assistant \
+     --env-file /home/zoe/assistant/.env -f docker-compose.modules.yml \
+     up -d --force-recreate music-assistant
+   docker ps --filter name=zoe-music-assistant --format '{{.Status}}'   # wait for (healthy)
+   docker logs zoe-music-assistant 2>&1 | grep -i "setup_data\|migrat"  # the one-way migration ran
+   ```
+   The fresh container installs the current yt-dlp + bgutil plugin from PyPI when
+   the ytmusic provider loads.
+4. **FULL probe** — `scripts/maintenance/music_jsruntime_probe.sh` must be HEALTHY,
+   including the plugin/server major line.
+5. **Panel re-auth** — same panel steps as step 0. Now it runs the 2.10
+   reconfigure flow: it must end **Connected**, and a search must return results.
+   An amber row that stays amber after a "success" means zoe-data was not
+   restarted (step 1).
+6. **Players** — Sendspin moves aiosendspin 4.4.0 → 9.1.1 (PIN pairing changed at
+   9.0.0): re-pair each Sendspin player that shows as needing setup. The AirPlay
+   provider has a new backend with explicit streaming modes (`auto` / `ap2_ptp` /
+   `ap2_ntp` / `ap2_compat` / `raop`): play to **"Zoe Panel"** (shairport-sync 5.1,
+   AirPlay 2) — if it is silent, set that player's streaming mode (try `ap2_ptp`,
+   then `ap2_ntp`) and retest. music-assistant-models moves 1.1.115 → 1.1.205.
+
+**Rollback** (if playback cannot be restored): stop MA, move
+`~/.zoe/music-assistant` aside, untar the step-2 backup into `~/.zoe`, restore
+the 2.8.7 digest (`sha256:eef3ee78…`) in compose, re-create as in step 3, then
+step 0. zoe-data needs nothing — it follows `/info` back to the pre-2.10 path.
 
 ## ⚠ Re-auth risk — read before restarting Music Assistant
 
@@ -280,7 +329,7 @@ There is **no urgency** — the live path is green. Apply at a convenient moment
 
 > **2026-09-27:** the pin is now 2.10.3 and the box still runs 2.8.7, so the
 > "pin changes nothing live" premise below no longer holds — a re-create **adopts
-> 2.10.3**. Read *MA 2.10.x — pinned, but BLOCKED on zoe-data* first.
+> 2.10.3**. Use the *B0.12 recipe* above instead of this section.
 
 **Original procedure (2026-08-04, when the pin equalled the running image).** The
 pinned digest *was* the image already running, so the pin changed nothing live.

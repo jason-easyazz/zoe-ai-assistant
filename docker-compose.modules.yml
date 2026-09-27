@@ -49,17 +49,17 @@ services:
     # matters because network_mode:host puts :8095 on the LAN). Previous pin:
     # 2.8.7 @ sha256:eef3ee7810d0e4702afa4a0ff55b10bbbfcaa16c98a277fe1b7f4cb6d5d426b4.
     #
-    # DO NOT RECREATE ONTO THIS DIGEST until zoe-data speaks MA's setup-flow API.
+    # ADOPT ONLY VIA THE B0.12 RECIPE (runbook below): DEPLOY zoe-data first.
     # 2.10 moved provider credentials (ytmusic cookie/username/po_token_server_url)
     # out of config `values` into encrypted `setup_data` (one-way settings.json
-    # migration on first start), and changed the API zoe-data's music_service
-    # uses: `config/providers/save` silently IGNORES the cookie (it is no longer a
-    # declared entry) and refuses a new instance outright (setup flow only);
-    # `config/providers/get_entries` now takes `instance_id`; `music/recommendations`
-    # is gone. Re-auth is `config/providers/reconfigure` + `config/flows/submit`.
-    # Read from the 2.10.3 source (not yet exercised live): the panel's Reconnect
-    # would report success and leave the stale cookie in place.
-    # Runbook: docs/knowledge/music-ytdlp-js-runtime.md (2.10 section).
+    # migration on first start, so rollback = restore the store backup), and
+    # changed the provider-config API: `config/providers/save` silently IGNORES a
+    # cookie and refuses a new instance; `get_entries` takes `instance_id` only;
+    # `music/recommendations` is gone. zoe-data's music_service switches to the
+    # setup/reconfigure-flow API by the version MA reports on /info -- but a
+    # zoe-data that predates that switch would make the panel's Reconnect report
+    # success and leave the stale cookie in place.
+    # Runbook: docs/knowledge/music-ytdlp-js-runtime.md (B0.12 recipe).
     image: ghcr.io/music-assistant/server@sha256:885872224fa541c0faefc936625c939ba705a00e89c180f89e877f58448ea5d5
     container_name: zoe-music-assistant
     network_mode: host

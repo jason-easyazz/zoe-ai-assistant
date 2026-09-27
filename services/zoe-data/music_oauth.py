@@ -17,6 +17,13 @@ Flow per attempt:
 Everything is best-effort and time-bounded; a stalled/abandoned attempt just
 expires. No secret ever leaves the LAN — Zoe only relays the URL and the token
 goes straight into MA.
+
+MA 2.10+ (music_service.ma_server_version): the `auth` action above is gone.
+OAuth is a SETUP FLOW over plain HTTP — `config/providers/setup` (first connect)
+or `config/providers/reconfigure` (re-auth, in place), whose EXTERNAL step
+carries the authorize URL; MA's own callback advances the flow, and Zoe polls
+`config/flows/get` until FINISH/ABORT. Form steps before/after the sign-in are
+answered with their own prefilled/default values (bounded).
 """
 from __future__ import annotations
 
@@ -69,7 +76,75 @@ def _values_from_entries(result: Any) -> dict[str, Any]:
     return values
 
 
+# MA 2.10+ setup-flow OAuth: how often to re-read the flow while the user signs in.
+_FLOW_POLL_S = 2.0
+
+
+async def _connected_after_flow_closed(provider: str, existing: Optional[str]) -> bool:
+    """MA drops a flow from its registry the moment it ends, so a poll that races
+    the OAuth callback gets an error, not the FINISH step. Read the outcome from
+    the provider config instead: a first connect created an instance; a re-auth
+    cleared the instance's last_error (MA does that on a successful reconfigure)."""
+    for cfg in (await music_service._ma("config/providers") or []):
+        if not isinstance(cfg, dict) or cfg.get("domain") != provider:
+            continue
+        iid = cfg.get("instance_id") or cfg.get("id")
+        if existing is None or iid == existing:
+            return existing is None or not cfg.get("last_error")
+    return False
+
+
+async def _run_setup_flow(oauth_id: str, provider: str) -> None:
+    """The MA 2.10+ OAuth path (see the module docstring)."""
+    flow = _flows[oauth_id]
+    flow_id = None
+    try:
+        existing = await music_service.provider_instance_id(provider)
+        step = await music_service._start_provider_flow(provider, existing)
+        deadline = time.time() + OAUTH_ATTEMPT_TTL_S
+        forms = 0
+        while step is not None and time.time() < deadline:
+            flow_id = step.get("flow_id") or flow_id
+            kind = step.get("type")
+            if kind == "finish":
+                flow["state"] = "connected"
+                return
+            if kind == "abort":
+                logger.info("music oauth flow aborted (%s): %s", provider, step.get("reason"))
+                flow.update(state="failed", error="sign-in didn't complete")
+                return
+            if kind == "external" and step.get("url"):
+                if flow.get("auth_url") != step["url"]:
+                    flow["auth_url"] = step["url"]
+                    flow["event"].set()  # release start_oauth to return the URL
+            elif kind == "form":
+                forms += 1
+                if forms > music_service._FLOW_MAX_FORMS or step.get("errors"):
+                    logger.info("music oauth flow form not completable (%s): %s",
+                                provider, step.get("errors") or step.get("step_id"))
+                    break
+                step = await music_service._ma_flow_step(
+                    "config/flows/submit", timeout_s=music_service._FLOW_SUBMIT_TIMEOUT_S,
+                    flow_id=flow_id, values={})
+                continue
+            await asyncio.sleep(_FLOW_POLL_S)
+            step = await music_service._ma_flow_step("config/flows/get", flow_id=flow_id)
+            if step is None and flow.get("auth_url") and await _connected_after_flow_closed(provider, existing):
+                flow["state"] = "connected"
+                return
+        flow.update(state="failed", error="sign-in timed out" if step is not None else "sign-in didn't complete")
+        await music_service._abort_setup_flow(flow_id)
+    except Exception as exc:  # noqa: BLE001 — a failed attempt must never crash the app
+        logger.info("music oauth flow failed (%s): %s", provider, exc)
+        flow.update(state="failed", error="couldn't reach the music engine")
+    finally:
+        flow["event"].set()
+
+
 async def _run_flow(oauth_id: str, provider: str) -> None:
+    if await music_service._ma_is_210_plus():
+        await _run_setup_flow(oauth_id, provider)
+        return
     flow = _flows[oauth_id]
     import websockets  # local import: only needed when an OAuth attempt runs
     token = os.environ.get("MUSIC_ASSISTANT_TOKEN", "")
