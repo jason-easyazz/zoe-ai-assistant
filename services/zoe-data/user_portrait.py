@@ -32,6 +32,18 @@ PORTRAIT_MAX_INJECT_CHARS = int(os.environ.get("PORTRAIT_MAX_INJECT_CHARS", "600
 # Portrait generation only runs when the user has at least this many approved memories.
 _MIN_MEMORIES_FOR_PORTRAIT = int(os.environ.get("PORTRAIT_MIN_MEMORIES", "5"))
 
+# Token budget for the assembled synthesis prompt (instructions + facts + insights +
+# journal). This call goes STRAIGHT to llama-server (gemma_base(), not the Flue
+# client), so nothing else windows it: the prompt plus max_tokens (600) plus the
+# system line must fit the brain's per-slot context (--ctx-size 8192 since B6.6)
+# or llama-server refuses the request ("exceeds the available context size") and
+# the portrait silently never regenerates. 5500 leaves ~2k tokens of slack for
+# the chars/4 estimate undercounting. Estimate = chars/4, the repo convention
+# (zoe_agent.py, background_runner.py); there is no tokenizer in-process.
+PORTRAIT_PROMPT_BUDGET_TOKENS = int(os.environ.get("PORTRAIT_PROMPT_BUDGET_TOKENS", "5500"))
+_PORTRAIT_MAX_FACTS = 120
+_PORTRAIT_MAX_INSIGHTS = 30
+
 PORTRAIT_SYNTHESIS_PROMPT = """\
 You are building a deep, warm understanding of a person based on everything they \
 have shared with their AI companion Zoe over time.
@@ -64,6 +76,75 @@ into real understanding.
 [RECENT JOURNAL ENTRIES — if available]:
 {journal_entries}
 """
+
+
+def _estimate_tokens(text: str) -> int:
+    return len(text) // 4
+
+
+def _render_portrait_prompt(facts: list[str], insights: list[str], journal: list[str]) -> str:
+    return PORTRAIT_SYNTHESIS_PROMPT.format(
+        memory_facts="\n".join(facts) if facts else "(none yet)",
+        insights="\n".join(insights) if insights else "(none yet)",
+        journal_entries="\n\n".join(journal) if journal else "(none)",
+    )
+
+
+def build_portrait_prompt(
+    fact_lines: list[str],
+    insight_lines: list[str],
+    journal_entries: list[str],
+    *,
+    user_id: str = "",
+    budget_tokens: int | None = None,
+) -> str:
+    """Assemble the synthesis prompt, trimmed to ``budget_tokens`` (chars/4).
+
+    Inputs arrive best-first: facts/insights in load_for_prompt()'s importance
+    x recency order, journal newest-first. So trimming always drops from the
+    TAIL = the lowest-ranked fact / oldest journal entry. Order of sacrifice:
+    journal down to 3, facts down to 20, insights down to 5, then journal, facts
+    (to 1) and insights (to 0). A single item too big on its own is finally
+    clipped. The instruction block (PORTRAIT_SYNTHESIS_PROMPT) is never touched.
+    Under budget the output is byte-identical to the pre-budget prompt.
+    """
+    budget = PORTRAIT_PROMPT_BUDGET_TOKENS if budget_tokens is None else budget_tokens
+    facts = list(fact_lines[:_PORTRAIT_MAX_FACTS])
+    insights = list(insight_lines[:_PORTRAIT_MAX_INSIGHTS])
+    journal = list(journal_entries)
+    before = (len(facts), len(insights), len(journal))
+
+    prompt = _render_portrait_prompt(facts, insights, journal)
+    est_before = _estimate_tokens(prompt)
+    if est_before <= budget:
+        return prompt
+
+    for section, floor in ((journal, 3), (facts, 20), (insights, 5), (journal, 0), (facts, 1), (insights, 0)):
+        while len(section) > floor and _estimate_tokens(prompt) > budget:
+            section.pop()
+            prompt = _render_portrait_prompt(facts, insights, journal)
+
+    clipped = 0
+    if _estimate_tokens(prompt) > budget:
+        # Only oversized single items remain: clip every remaining line to an
+        # equal share of what the instruction block leaves free.
+        fixed = _estimate_tokens(_render_portrait_prompt([], [], [])) * 4
+        items = [*facts, *insights, *journal]
+        share = max(40, (budget * 4 - fixed) // max(1, len(items)) - 2)
+        for section in (facts, insights, journal):
+            for i, line in enumerate(section):
+                if len(line) > share:
+                    section[i] = line[: share - 1] + "…"
+                    clipped += 1
+        prompt = _render_portrait_prompt(facts, insights, journal)
+
+    logger.info(
+        "portrait: prompt trimmed to budget user=%s est_tokens=%d->%d budget=%d "
+        "facts=%d->%d insights=%d->%d journal=%d->%d clipped=%d",
+        user_id, est_before, _estimate_tokens(prompt), budget,
+        before[0], len(facts), before[1], len(insights), before[2], len(journal), clipped,
+    )
+    return prompt
 
 
 async def run_portrait_synthesis(user_id: str, db=None) -> dict:
@@ -101,11 +182,8 @@ async def run_portrait_synthesis(user_id: str, db=None) -> dict:
             else:
                 fact_lines.append(f"- {text}")
 
-        memory_facts = "\n".join(fact_lines[:120]) if fact_lines else "(none yet)"
-        insights = "\n".join(insight_lines[:30]) if insight_lines else "(none yet)"
-
-        # Load recent journal entries
-        journal_text = "(none)"
+        # Load recent journal entries (newest first)
+        journal_entries: list[str] = []
         try:
             from db_pool import get_db_ctx  # type: ignore[import]
             jsql = """SELECT title, content, mood, created_at
@@ -128,15 +206,11 @@ async def run_portrait_synthesis(user_id: str, db=None) -> dict:
                     mood = f" [{row[2]}]" if row[2] else ""
                     date = (row[3] or "")[:10]
                     entries.append(f"[{date}{mood}] {title}: {content}")
-                journal_text = "\n\n".join(entries)
+                journal_entries = entries
         except Exception as je:
             logger.debug("portrait: journal load failed (non-fatal): %s", je)
 
-        prompt = PORTRAIT_SYNTHESIS_PROMPT.format(
-            memory_facts=memory_facts,
-            insights=insights,
-            journal_entries=journal_text,
-        )
+        prompt = build_portrait_prompt(fact_lines, insight_lines, journal_entries, user_id=user_id)
 
         portrait_text = await _call_llm_for_portrait(prompt)
         if not portrait_text:

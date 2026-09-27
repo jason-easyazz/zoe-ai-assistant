@@ -86,8 +86,14 @@ bounds:
 2. 8192 per slot is what the brain served from 2026-07-21 until B0.4 (`16384 / --parallel 2`),
    with no context-overflow line in the retained journal.
 
-The direct zoe-data callers (`memory_digest`, `user_portrait`, `contact_backfill`, …) cap
-their inputs; the largest is the portrait batch at ≤120 facts. p99 is 40 % of 8192, so
+Some zoe-data callers (`memory_digest`, `user_portrait`, `contact_backfill`, …) call
+llama-server **directly**, so the Flue window does not cover them. Most cap their inputs
+per item. `user_portrait.run_portrait_synthesis()` did not cap its total: up to 120 facts,
+30 insights and 10 journal entries could exceed 8192. It now assembles its prompt through
+`build_portrait_prompt()` with a 5500-token budget (`PORTRAIT_PROMPT_BUDGET_TOKENS`,
+chars/4). Trimming drops the lowest-ranked facts and the oldest journal entries first,
+and never touches the instructions. Under budget the prompt is byte-identical to before
+(`services/zoe-data/tests/test_user_portrait_prompt_budget.py`). p99 is 40 % of 8192, so
 **8192 is adopted**.
 `tests/unit/test_llama_server_unit_flags.py` pins per-slot ctx ≥ the Flue window, so the
 two cannot drift apart. The residual risk is a turn that fills the client's estimate
