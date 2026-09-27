@@ -28,12 +28,32 @@ durable, machine-readable result to --results (default
 
     {status: pass|fail|skip|error, timestamp, said_vs_did_regressions,
      per_stage_speed_deltas, baseline_ref, reason, summary,
-     non_pass_streak, non_pass_alert_after, non_pass_alert}
+     non_pass_streak, non_pass_alert_after, non_pass_alert,
+     vad_stage: true, vad: {status, clips, speech_detected, pass_frac,
+                            min_pass_frac, threshold, min_max_prob,
+                            median_max_prob, model: {path, md5}, reason}}
 
 A skip/timeout/error MUST leave an artifact with status != "pass" — never an
 ABSENT file that a downstream checker could misread as "nothing wrong". The
 deploy-path checker scripts/maintenance/voice_gate_check.py reads exactly this
 contract to decide whether a voice-path deploy is allowed to proceed.
+
+VAD STAGE (--vad-check, default ON): the replay starts at STT, so it never ran
+the service's Silero VAD — and on 2026-09-26 a model-file swap (Silero v6.2.1
+export over the v6.0 file) loaded without error but scored ~0.001 on real
+speech, silently disabling barge-in / idle listening for a day with every gate
+green. This stage runs the service's REAL ``voice_vad.SileroVAD`` (imported from
+--service-dir, so it is the code under test, against the model file the service
+would load) over the newest N usable corpus clips, and the run FAILS when fewer
+than 60% of them reach the speech threshold (the bar of
+services/zoe-data/tests/test_voice_barge_in.py::
+test_silero_real_model_detects_speech_across_corpus). It records aggregates only
+— counts, fractions, peak probabilities, the model path + md5 — never a clip
+name or anything else from the household corpus. It SKIPS (recorded, with a
+reason) when the model file is absent or the corpus is too thin; a skip is "no
+opinion", not a pass. It is cheap (~100 MB, a few seconds), so it also runs on
+the memory-skip path: a known VAD failure turns that run's status into "fail"
+instead of hiding behind "skip".
 
 SKIP-STREAK ALARM ("a gate that can skip forever under green timers is not a
 gate"): every run records `non_pass_streak` — the count of consecutive runs
@@ -54,6 +74,9 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import glob
+import hashlib
+import importlib.util
 import json
 from datetime import datetime, timezone
 import os
@@ -79,6 +102,26 @@ DEFAULT_BASELINE = Path.home() / ".cache" / "zoe" / "voice_regression_baseline.j
 DEFAULT_RESULTS = Path.home() / ".cache" / "zoe" / "voice_regression_last.json"
 DEFAULT_TREND = Path.home() / ".cache" / "zoe" / "voice_regression_trend.jsonl"
 RATIO_FLOOR_MS = 100.0  # below this absolute delta, a high ratio is treated as noise
+# Same default + env override as the replay harness (replay_samples.py main()).
+DEFAULT_SAMPLE_DIR = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
+
+# ── VAD stage ────────────────────────────────────────────────────────────────
+# The bar is the real-model test's (test_voice_barge_in.py _SPEECH_MIN_PASS_FRAC):
+# measured 0.894 corpus-wide on the v6.0 model, 0.795 worst stride phase — the
+# 60% floor sits well under both so corpus churn cannot redden a healthy model,
+# while the 2026-09-26 incompatible file scored 0/12. voice_gate_check.py holds
+# the same floor (VAD_MIN_PASS_FRAC there) and re-derives it from the counts.
+VAD_MIN_PASS_FRAC = 0.60
+VAD_DEFAULT_CLIPS = 24
+# Below this many usable clips the fraction is not a signal (test: 20 of 48;
+# here the newest-N slice is smaller, so the floor scales with it).
+VAD_MIN_USABLE = 8
+# Newest-first scan budget: off-format members (24 kHz resamples, non-RIFF) are
+# skipped, so look past N — but boundedly, never the whole 1000+ file corpus.
+VAD_SCAN_FACTOR = 4
+VAD_FRAME_BYTES = 640            # 20 ms of int16 @16 kHz — the live frame size
+VAD_DEFAULT_MODEL_PATH = "/home/zoe/models/silero_vad.onnx"  # mirrors voice_vad
+VAD_STAGE_MIN_MEM_MB = 400       # the stage peaks ~100 MB; never OOM the box for it
 
 
 def mem_available_mb() -> int:
@@ -335,6 +378,181 @@ def stage_speed_deltas(summary: dict[str, Any], baseline: dict[str, Any]) -> dic
     return out
 
 
+# ── VAD stage ────────────────────────────────────────────────────────────────
+def _vad_block(status: str, reason: str = "", **fields: Any) -> dict[str, Any]:
+    """One artifact shape for every VAD outcome, so a reader never branches on
+    which path wrote it. Aggregates only — no clip names, no household data."""
+    block: dict[str, Any] = {
+        "status": status,            # pass | fail | skip | error
+        "reason": reason,
+        "clips": 0,                  # usable clips actually scored
+        "speech_detected": 0,        # clips whose peak prob reached the threshold
+        "pass_frac": None,
+        "min_pass_frac": VAD_MIN_PASS_FRAC,
+        "threshold": None,
+        # [lowest, highest] per-clip PEAK speech probability. The highest is the
+        # tell for a dead model: when even the best clip peaks at ~0.001 the model
+        # is not detecting speech at all (the 2026-09-26 signature).
+        "min_max_prob": None,
+        "median_max_prob": None,
+        "model": None,               # {path, md5} of the file the service would load
+    }
+    block.update(fields)
+    return block
+
+
+def _md5(path: str) -> str | None:
+    try:
+        h = hashlib.md5()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _load_service_vad(service_dir: str):
+    """Import THE SERVICE'S voice_vad.py from --service-dir under a private
+    module name — the code under test, not a copy, and not whatever
+    `voice_vad` happens to be importable in this interpreter."""
+    path = Path(service_dir) / "voice_vad.py"
+    if not path.is_file():
+        raise FileNotFoundError(f"voice_vad.py not found in service dir {service_dir}")
+    spec = importlib.util.spec_from_file_location("_zoe_probe_voice_vad", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+def _vad_model_path(vad_mod: Any) -> str:
+    """The model path the SERVICE would load (its own resolver when present)."""
+    resolver = getattr(vad_mod, "_model_path", None)
+    if callable(resolver):
+        try:
+            return str(resolver())
+        except Exception:
+            pass
+    return os.environ.get("ZOE_SILERO_VAD_MODEL", "").strip() or VAD_DEFAULT_MODEL_PATH
+
+
+def _newest_usable_clips(sample_dir: str, n: int) -> list[bytes]:
+    """PCM of the newest `n` USABLE corpus clips (16 kHz mono int16), newest first.
+
+    Newest by capture time (mtime, name tiebreak) and TOP-LEVEL only — the same
+    selection semantics as replay_samples._select, so quarantine-*/ captures
+    never re-enter. Off-format members are skipped, not failed: they are a
+    known corpus fact (24 kHz resamples, non-RIFF), not a VAD bug."""
+    import wave
+
+    paths = glob.glob(os.path.join(sample_dir, "*.wav"))
+    rows = []
+    for p in paths:
+        try:
+            rows.append((os.stat(p).st_mtime, os.path.basename(p), p))
+        except OSError:
+            continue
+    rows.sort(reverse=True)
+    out: list[bytes] = []
+    for _, _, p in rows[: max(n, n * VAD_SCAN_FACTOR)]:
+        if len(out) >= n:
+            break
+        try:
+            with wave.open(p, "rb") as w:
+                if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (16000, 1, 2):
+                    continue
+                out.append(w.readframes(w.getnframes()))
+        except (wave.Error, OSError, EOFError):
+            # NARROW on purpose: an unreadable member is corpus hygiene; a broad
+            # except would also swallow a real failure and shrink the sample.
+            continue
+    return out
+
+
+def run_vad_check(service_dir: str, sample_dir: str, clips: int, *,
+                  vad_mod: Any = None,
+                  min_usable: int = VAD_MIN_USABLE) -> dict[str, Any]:
+    """Run the service's REAL Silero VAD over the newest `clips` corpus clips.
+
+    Never raises: every outcome is a block with a status. `vad_mod` is injectable
+    for tests (a fake with create_vad/speech_threshold/_model_path); in a real
+    run it is the service's own voice_vad.py.
+
+      pass  — >= VAD_MIN_PASS_FRAC of usable clips peak at/above the threshold
+      fail  — below that floor, OR the model file exists but create_vad() returned
+              None (the service would silently fall back to RMS energy VAD)
+      skip  — model file absent, or fewer than `min_usable` usable clips
+              (recorded with a reason; "no opinion", never a pass)
+      error — the stage itself could not run (voice_vad import failed)
+    """
+    if vad_mod is None:
+        try:
+            vad_mod = _load_service_vad(service_dir)
+        except Exception as exc:
+            return _vad_block("error", f"could not import the service's voice_vad: {exc}")
+    model_path = _vad_model_path(vad_mod)
+    if not os.path.isfile(model_path):
+        return _vad_block("skip", f"Silero model not present at {model_path} — VAD stage "
+                          "not run (the service would use the RMS energy fallback)",
+                          model={"path": model_path, "md5": None})
+    model = {"path": model_path, "md5": _md5(model_path)}
+    try:
+        threshold = float(vad_mod.speech_threshold())
+    except Exception:
+        threshold = 0.5
+    pcm = _newest_usable_clips(sample_dir, clips)
+    if len(pcm) < min_usable:
+        return _vad_block("skip", f"only {len(pcm)} usable 16k mono clips in the newest "
+                          f"slice of {sample_dir} (< {min_usable}) — corpus too thin "
+                          "to judge the model", clips=len(pcm), threshold=threshold,
+                          model=model)
+    peaks: list[float] = []
+    for raw in pcm:
+        vad = vad_mod.create_vad()      # fresh recurrent state per clip, as live
+        if vad is None:
+            return _vad_block("fail", f"model present at {model_path} but create_vad() "
+                              "returned None — the service would silently fall back to "
+                              "RMS energy VAD", threshold=threshold, model=model)
+        peak = 0.0
+        for i in range(0, len(raw), VAD_FRAME_BYTES):   # 20 ms frames, streaming state
+            peak = max(peak, float(vad.process(raw[i:i + VAD_FRAME_BYTES])))
+        peaks.append(peak)
+    # `>=` matches the live frame loop's comparison (max(probs) >= threshold).
+    detected = sum(1 for p in peaks if p >= threshold)
+    frac = detected / len(peaks)
+    ordered = sorted(peaks)
+    fields = dict(clips=len(peaks), speech_detected=detected, pass_frac=round(frac, 3),
+                  threshold=threshold,
+                  min_max_prob=[round(ordered[0], 4), round(ordered[-1], 4)],
+                  median_max_prob=round(ordered[len(ordered) // 2], 4), model=model)
+    if frac >= VAD_MIN_PASS_FRAC:
+        return _vad_block("pass", "", **fields)
+    return _vad_block(
+        "fail",
+        f"speech detected in {detected}/{len(peaks)} newest clips ({frac:.0%}) < "
+        f"{VAD_MIN_PASS_FRAC:.0%} floor — the Silero model at {model_path} "
+        f"(md5 {model['md5']}) is not detecting real speech (highest clip peak "
+        f"{ordered[-1]:.3f}); barge-in / idle listening would be silently off",
+        **fields)
+
+
+def vad_not_run(reason: str) -> dict[str, Any]:
+    return _vad_block("skip", reason)
+
+
+def fold_vad_status(status: str, vad: dict[str, Any] | None) -> str:
+    """Fold the VAD verdict into the run status. Only ever TIGHTENS:
+    a VAD fail makes the run "fail" (even a memory-"skip" run — a known failure
+    beats "we did not look"); a VAD error makes a passing run "error" (unknown is
+    not a pass). A VAD skip changes nothing."""
+    vs = (vad or {}).get("status")
+    if vs == "fail" and status in ("pass", "skip"):
+        return "fail"
+    if vs == "error" and status == "pass":
+        return "error"
+    return status
+
+
 # Skip/error paths never reach summarize(); this keeps the artifact SHAPE identical so
 # a reader never has to branch on which path wrote it. ok_rate stays 0.0 rather than
 # None purely for back-compat with existing consumers of the skip/error artifact —
@@ -400,7 +618,8 @@ def service_revision(service_dir: Any) -> dict[str, Any] | None:
 
 def emit_result(args, *, status: str, summary: dict[str, Any],
                 said_vs_did: list[str], speed_deltas: dict[str, Any],
-                baseline: dict[str, Any], reason: str = "") -> dict[str, Any]:
+                baseline: dict[str, Any], reason: str = "",
+                vad: dict[str, Any] | None = None) -> dict[str, Any]:
     """Write the durable, machine-readable RESULT ARTIFACT — on EVERY exit path.
 
     This is the whole point of the gate's hardening: a skip / timeout / error
@@ -437,6 +656,14 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         "non_pass_streak": streak,              # consecutive runs with status != "pass"
         "non_pass_alert_after": alert_after,
         "non_pass_alert": streak >= alert_after,
+        # THE VAD STAGE. `vad_stage: true` is this artifact's CLAIM that it was
+        # written by a probe that runs the stage; voice_gate_check.py then
+        # requires a well-formed `vad` block and blocks on a failed one. Every
+        # exit path writes the block (a stage that did not run says so, as a
+        # skip with a reason) — an older artifact without the claim is read as
+        # "no opinion on VAD", so pre-stage artifacts keep working.
+        "vad_stage": True,
+        "vad": vad if isinstance(vad, dict) else vad_not_run("VAD stage not run on this exit path"),
     }
     write_json(args.results, payload)
     try:
@@ -657,6 +884,25 @@ def resolve_min_mem(stt: str) -> int:
     return 700 if stt == "remote" else 1500
 
 
+def _vad_stage(args) -> dict[str, Any]:
+    if not getattr(args, "vad_check", True):
+        return vad_not_run("disabled (--no-vad-check / ZOE_VOICE_PROBE_VAD_CHECK=0)")
+    try:
+        return run_vad_check(args.service_dir, args.sample_dir, args.vad_clips)
+    except Exception as exc:  # the stage must never take the artifact down with it
+        return _vad_block("error", f"VAD stage crashed: {type(exc).__name__}: {exc}")
+
+
+def _print_vad(vad: dict[str, Any]) -> None:
+    if vad.get("status") in ("pass", "fail") and vad.get("clips"):
+        print(f"  VAD: {vad['speech_detected']}/{vad['clips']} newest clips >= "
+              f"{vad['threshold']} (floor {vad['min_pass_frac']:.0%}), per-clip peak "
+              f"range {vad['min_max_prob']}, model md5 {(vad.get('model') or {}).get('md5')} "
+              f"-> {vad['status'].upper()}")
+    else:
+        print(f"  VAD: {str(vad.get('status')).upper()} — {vad.get('reason')}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Zoe voice regression + speed probe.")
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
@@ -688,6 +934,17 @@ def main() -> int:
                     default=int(os.environ.get("ZOE_VOICE_ALERT_NON_PASS_RUNS", "3")),
                     help="consecutive non-pass runs before the skip path exits non-zero "
                          "(4) so the systemd timer goes visibly red instead of green-skipping forever")
+    ap.add_argument("--vad-check", action=argparse.BooleanOptionalAction,
+                    default=os.environ.get("ZOE_VOICE_PROBE_VAD_CHECK", "1") not in ("0", "false", "no"),
+                    help="run the service's real Silero VAD over the newest corpus clips and "
+                         "FAIL the run below a 60%% speech-detection floor (default on; skips "
+                         "with a recorded reason when the model file is absent)")
+    ap.add_argument("--vad-clips", type=int,
+                    default=int(os.environ.get("ZOE_VOICE_PROBE_VAD_CLIPS", str(VAD_DEFAULT_CLIPS))),
+                    help="newest N usable corpus clips the VAD stage scores")
+    ap.add_argument("--sample-dir", default=DEFAULT_SAMPLE_DIR,
+                    help="voice corpus dir for the VAD stage (default: ZOE_VOICE_SAMPLE_DIR "
+                         "or ~zoe/.zoe-voice-samples — the replay harness's own default)")
     ap.add_argument("--no-cleanup", action="store_true",
                     help="skip the post-run replay-artifact cleanup (soft-delete of rows created during the replay window)")
     args = ap.parse_args()
@@ -713,8 +970,24 @@ def main() -> int:
         reason = (f"available memory {avail}MB < {args.min_mem_mb}MB threshold — "
                   "deferring to avoid OOM on the live box")
         print(f"SKIP: {reason}.")
-        payload = emit_result(args, status="skip", summary=dict(EMPTY_SUMMARY),
-                              said_vs_did=[], speed_deltas={}, baseline=baseline, reason=reason)
+        # The VAD stage is ~100 MB, not a replay: still run it when it fits, so a
+        # box that is too tight for the replay for days (exactly how the
+        # 2026-09-26 model swap went unseen) still reports a dead VAD model.
+        if avail >= VAD_STAGE_MIN_MEM_MB:
+            vad = _vad_stage(args)
+        else:
+            vad = vad_not_run(f"available memory {avail}MB < {VAD_STAGE_MIN_MEM_MB}MB — "
+                              "VAD stage not run either")
+        status = fold_vad_status("skip", vad)
+        if status != "skip":
+            reason = f"{reason}; VAD: {vad.get('reason')}"
+        payload = emit_result(args, status=status, summary=dict(EMPTY_SUMMARY),
+                              said_vs_did=[], speed_deltas={}, baseline=baseline, reason=reason,
+                              vad=vad)
+        if status == "fail":
+            print(f"FAIL: VAD stage — {vad.get('reason')}", file=sys.stderr)
+            print(f"Results: {args.results}  (status=fail)")
+            return 1
         print(f"Results: {args.results}  (status=skip — a skip is NOT a pass)")
         if payload.get("non_pass_alert"):
             # Skip-streak alarm: N consecutive runs without a real pass. Exit
@@ -733,8 +1006,12 @@ def main() -> int:
     except Exception as exc:
         reason = f"voice probe could not run: {exc}"
         print(f"ERROR: {reason}", file=sys.stderr)
+        vad = _vad_stage(args)   # cheap, and still evidence when the replay could not run
+        if vad.get("status") == "fail":
+            reason = f"{reason}; VAD: {vad.get('reason')}"
         emit_result(args, status="error", summary=dict(EMPTY_SUMMARY),
-                    said_vs_did=[], speed_deltas={}, baseline=baseline, reason=reason)
+                    said_vs_did=[], speed_deltas={}, baseline=baseline, reason=reason,
+                    vad=vad)
         cleanup_replay_artifacts(run_started_utc, args)   # even a failed run may have executed turns
         return 2
 
@@ -766,17 +1043,26 @@ def main() -> int:
 
     cleanup_ok = cleanup_replay_artifacts(run_started_utc, args)
 
+    # AFTER the replay, so the stage's ~100 MB never overlaps the replay's peak.
+    vad = _vad_stage(args)
+    _print_vad(vad)
+
     # a failed sweep is a warning-level exit: results are valid but the
     # calendar/lists are dirty and the systemd unit shows non-zero.
-    status = "pass" if (not warnings and cleanup_ok) else "fail"
+    status = fold_vad_status("pass" if (not warnings and cleanup_ok) else "fail", vad)
     reason_parts = list(warnings)
     if not cleanup_ok:
         reason_parts.append("replay-artifact cleanup FAILED (calendar/lists may be dirty)")
+    if vad.get("status") in ("fail", "error"):
+        reason_parts.append(f"VAD {vad['status'].upper()}: {vad.get('reason')}")
     emit_result(args, status=status, summary=summary, said_vs_did=said_vs_did,
-                speed_deltas=speed_deltas, baseline=baseline, reason="; ".join(reason_parts))
+                speed_deltas=speed_deltas, baseline=baseline, reason="; ".join(reason_parts),
+                vad=vad)
 
     print(f"Results: {args.results}  Trend: {args.trend}  (status={status})")
-    return 1 if (warnings or not cleanup_ok) else 0
+    if status == "error":
+        return 2
+    return 0 if status == "pass" else 1
 
 
 if __name__ == "__main__":

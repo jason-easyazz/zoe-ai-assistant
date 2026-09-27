@@ -39,8 +39,10 @@ status: 🔨 active — NEXT ACTION is always §0
    it also goes green on the espeak/edge fallback or on a CPU-mode Kokoro) frees ~2 GB and is
    what made today's runs possible under the 700 MB floor. Hold the
    other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again.
-3. **B0.4 llama.cpp rebuild** (brain-stop window, ~1 h compile) — after the Gemma swap has
-   its own replay gate, so the two changes are attributable separately.
+3. **B0.4 llama.cpp b11194 — built + replay-gated 2026-09-27, apply pending:** install the
+   tracked `llama-server.service` template in a Kokoro-paused window and re-run the replay gate
+   (recipe + rollback in voice-pipeline.md). Keep it separate from the Gemma swap so the two
+   changes stay separately attributable.
 
 ## 1. Where Zoe already beats the bar (protect these)
 
@@ -92,7 +94,8 @@ status: 🔨 active — NEXT ACTION is always §0
   **2026-09-26 batch:** transformers 5.17.0, mcp 1.30.0, pydantic 2.13.5, alembic 1.20.0,
   PyJWT 2.15.0, pywebpush 2.5.0, livekit 1.1.20, ddgs 9.16.0, SQLAlchemy 2.0.54 installed
   (dry-run first; fastembed held at 0.8.0); zoe-data restarted (`/readyz` all ok, no new
-  errors); Silero VAD file v6.2.1 in place; `ci_safe` lane 442 passed locally; **replay gate
+  errors); Silero VAD file v6.2.1 put in place — **reverted 2026-09-27, it detected no speech
+  (see B1.4)**; `ci_safe` lane 442 passed locally; **replay gate
   PASS #2** (13/13 scoreable, 7 EMPTY as baseline; medians stt 406 / brain 1962 / e2e
   1753 ms). Two pip-declared conflicts are pre-existing and belong to packages zoe-data
   does not import (`livekit-agents` 1.5.10 wants livekit 1.1.8; `memu-py` wants
@@ -136,9 +139,26 @@ status: 🔨 active — NEXT ACTION is always §0
   builder lane only. Any question about the production brain on new hardware is a separate,
   deliberate CANONICAL decision for Jason, out of scope here.
 - B0.3 🧑 Telegram token rotation (BotFather) + `journalctl --rotate && --vacuum-time=1s`.
-- B0.4 ⬜ **llama.cpp rebuild at b11194** and re-enable `--flash-attn on` +
+- B0.4 🔨 **llama.cpp rebuild at b11194** and re-enable `--flash-attn on` +
   `--cache-type-v q8_0` with MTP (upstream fix PR #25148, 2026-06-30). Keep `--fit off`.
   Gate: 20-turn multi-prompt replay under `flock`; RSS/TTFT vs baseline.
+  **2026-09-27: built + replay-gated, template adopted, APPLY PENDING.** Build at
+  `~/llama.cpp-b11194/build-jetson` (`9f70b2cec`; CUDA=ON, arch 87, `GGML_CUDA_FA=ON`,
+  `GGML_CUDA_GRAPHS=ON`, NATIVE, Release). Two brain windows, E4B-QAT + MTP, FA on:
+  **(A) K q8_0 / V q8_0 → PASS 11/11 scoreable, 0 fail, brain median 1754 ms, 0 error lines;
+  (B) K q8_0 / V f16 → PASS 11/11, 1752.5 ms, 0 errors.** Adopted **A** (same latency,
+  smaller KV; q8_0/q8_0 is also a default `GGML_CUDA_FA_QUANTS` pair, which settles gate
+  item (1) below). Flag renames: `--mlock` → `--load-mode mmap+mlock`, `enable_thinking`
+  kwargs → `--reasoning off`. Tracked template + apply/rollback recipe:
+  `scripts/setup/systemd/llama-server.service`, [voice-pipeline.md](../knowledge/voice-pipeline.md)
+  ("Brain build + flags — B0.4"). The live unit stays on b9733 / FA off until the coordinator
+  installs it in a Kokoro-paused window and re-runs the replay gate. **Gate items (2) and "keep
+  `--fit off`" are satisfied in the template.** It runs `--parallel 1`, because #28286 (open) leaks
+  content between concurrent draft-MTP requests with no garbage-token signature, and the live
+  unit's `--parallel 2` has been exposed to it. Concurrent requests now queue, and ctx 16384
+  belongs to the one slot. `--fit off` is explicit, since b11194 defaults it to `on`. Both are
+  pinned in `tests/unit/test_llama_server_unit_flags.py`. They were added after the two windows,
+  so the apply-window replay is what measures the exact committed config.
   **2026-09-26 (ecosystem-watch §1):** b11194 ≡ b11178 for this build — 16 commits
   b11178→b11194, none touching CUDA arch 87 / FA / MTP / Gemma / jinja (only cpp-httplib
   0.58.0, #29407); source build stays mandatory (prebuilt arm64 asset is CUDA 13.4).
@@ -303,17 +323,29 @@ status: 🔨 active — NEXT ACTION is always §0
   Smart Turn "incomplete" score to play a soft "mm-hm" after ≥0.7 s of speech, 2.5 s
   cooldown. Add "interruptions per conversation" and "silence before first audio" to the
   replay harness.
+  **2026-09-27 — v6.2.1 file REVERTED; VAD now replay-gated.** The v6.2.1 export put in place
+  on 09-26 (B0.2) loaded cleanly but scored ~0.001 on real speech (0/12 clips ≥ 0.5 vs 12/12 on
+  v6.0): barge-in / idle listening were silently off for a day. Live file restored to **v6.0**
+  (md5 `00bdd414…`; the bad one kept as `silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927`).
+  Permanent gate: `voice_regression_probe.py` VAD stage (real `voice_vad` over the newest 24
+  clips, FAIL < 60 %, also on the memory-skip path) + `voice_gate_check.py` `vad` block +
+  `voice_vad.py`/`voice_turn.py`/`*silero*` in `VOICE_PATH_PATTERNS` — [voice-pipeline.md →
+  The VAD stage](../knowledge/voice-pipeline.md), runbook §8. **Any future Silero file = run
+  the stage against it (`ZOE_SILERO_VAD_MODEL=<candidate>`) before the swap.** The v6.2.x
+  streaming file stays ⬜ until it passes that bar; the paragraph below predates the revert.
   **2026-09-26 (§12; wording per #1705):** the Silero v6.2.1 file is already in place (B0.2).
   Silero v6.2.2's `silero_vad_16k_sequence.onnx` (GIL-releasing, `sequence=True`) is an
   OFFLINE whole-utterance graph — **NOT a live drop-in**: `services/zoe-data/voice_vad.py`
   runs the streaming model in 512-sample hops with a `(2,1,128)` recurrent state, and a file
   swap would NOT fall back to RMS (RMS is chosen only when the model fails to load; a model
   that loads but rejects streaming inputs makes `process_hops` swallow the error and report
-  no speech — a silent failure). Live VAD stays on streaming v6.2.1; evaluate the sequence
+  no speech — a silent failure). Live VAD stays on the streaming model (v6.0 since the
+  09-27 revert); evaluate the sequence
   model for the replay/lab path only (whole clip in hand). Validation for ANY live VAD change
-  = the VAD unit lanes (`test_livekit_vad_segmentation.py`, `test_voice_barge_in.py`) + a
-  live barge-in count on the panel with Kokoro playing (B1.3 metric) — the replay harness
-  starts at STT and never exercises VAD or barge-in. New lab item (small, B1/B5): **Parakeet
+  = the probe's VAD stage (above) + the VAD unit lanes (`test_livekit_vad_segmentation.py`,
+  `test_voice_barge_in.py`) + a live barge-in count on the panel with Kokoro playing (B1.3
+  metric) — the replay itself starts at STT, and the VAD stage scores detection, not
+  barge-in behaviour. New lab item (small, B1/B5): **Parakeet
   Redux** (Moondream 2026-09-22; 178 MB / 149M ternary encoder, CPU, streaming, CC-BY-4.0)
   WER + per-file ms vs Moonshine 0.0.62 on the replay corpus — a benchmark, not a rock swap.
 - B1.5 ⬜ **Acknowledge-while-thinking + async tools**: fast tier emits a first clause or
@@ -327,7 +359,12 @@ status: 🔨 active — NEXT ACTION is always §0
   recognition for confirmations and menus (HA assist_satellite + speech-to-phrase).
 - B1.9 ⬜ Template fast path for the router's top-20 highest-precision intents (zero brain
   call; TTS-safe phonetic normaliser) — axiom-voice-agent.
-- B1.10 ⏸ HELD 2026-09-26 — Moonshine 0.1.5 passes said-vs-did (13/13 OK in-process off/on
+- B1.10 ✅ 0.1.3 ADOPTED 2026-09-27 — `moonshine-voice==0.1.3` live on the box (bundle
+  `quantized_26_07_30`) and pinned: replays 13/13 OK / 7 EMPTY (in-process keyterms off 326 ms,
+  on 351 ms, remote live 357 ms); engine A/B 299/306 vs 0.0.62's 302/328 ms median, decoder
+  step 23–25 ms. Keyterms are available: the operator sets `ZOE_MOONSHINE_KEYTERMS` in the live
+  `.env` (never committed), verified by `/readyz` `keyterms.applied`. Runbook §10. The 0.1.5
+  history follows. 0.1.5 ⏸ HELD 2026-09-26 — Moonshine 0.1.5 passes said-vs-did (13/13 OK in-process off/on
   keyterms and remote; 7 EMPTY = baseline) but the STT stage is ~1.9× slower per file on the
   Orin. **Root-caused** with the per-session ONNX log (`options={"log_ort_run": True}`):
   encoder / adapter / cross-KV runs identical (~50 ms), same 8 decoder steps, same input
@@ -344,6 +381,10 @@ status: 🔨 active — NEXT ACTION is always §0
   on the next release with the same engine-only A/B. 2026-09-26 (§2): upstream is silent since
   0.1.5 (zero commits, no perf issue filed by anyone); watch moonshine #229 (shared Silero VAD
   across concurrent streams); the issue draft is in ecosystem-watch §2.
+  2026-09-27 (runbook §9): cause found — 0.1.5 hard-codes `DisableCpuMemArena` (~34 ms/step)
+  + `disable_prepacking` (~6 ms/step) on the streaming sessions (upstream `4a7f85c`); no option
+  or env var reverts them; best config-only mitigation (glibc `MALLOC_*`) is still ~30 % slower
+  per step, so HOLD stands. Next: pin-0.1.3 A/B in a memory window + upstream issue naming the flags.
 - B1.11 ⏸ PARKED 2026-09-26 — Flue 2.1.1 (`@flue/*` 2.0.1 → 2.1.1 in both 2x sidecars; hono /
   nanoid advisories cleared, `npm audit` 0; 209/209 + 44/44 tests; store format unchanged, one
   fold-checkpoint re-fold on first start). Draft **PR #1694** was proven the way the contract
@@ -532,6 +573,18 @@ status: 🔨 active — NEXT ACTION is always §0
   (failover suite green → replay PASS with the flag exported → live stop-the-sidecar drill
   read from `BRAIN_LANE`) is now spelled out in `services/zoe-data/.env.example` (B1 in the
   register).
+- B6.6 🔨 **Resident-memory hygiene** — measured 2026-09-27
+  ([resident-memory-hygiene-2026-09-27.md](../knowledge/resident-memory-hygiene-2026-09-27.md)).
+  zoe-data's `import main` loads no heavy library (~64 MB); the ~1.2 GB is the hot-path set
+  (Moonshine, router head, fastembed, Chroma). Speaker ID was already lazy; its first use costs
+  +568 MB / 6 s and still blocks the event loop while it loads. Done (draft PR): cached, CPU-pinned `VoiceEncoder`
+  + a fresh-interpreter test that `import main` stays free of resemblyzer/torch/transformers.
+  ⬜ Follow-ups (voice-gated, each needs its own replay gate): `asyncio.to_thread` around the
+  two embedding calls in `routers/voice_tts.py`; replace Smart Turn's
+  `WhisperFeatureExtractor` (drags in torch, +360 MB on the first LiveKit turn) with a numpy
+  log-mel + parity test. Music Assistant (~1.0 GB RSS+swap, flat): **no action** — no
+  `mem_limit`, no restart timer (re-auth risk); ⬜ re-measure RSS+swap in a few days on the
+  same container start, and add a weekly restart timer only if it grows > ~100 MB/day.
 
 ### B7 — Window into Zoe (UI)
 - B7.1 ⬜ AG-UI 1.0 (`ACTIVITY_SNAPSHOT/DELTA`) + a fixed A2UI-style component catalog as the
@@ -609,12 +662,22 @@ from outside, hence B9.0.
   → `WebFallbackOutcome` recorded in the package as `web_lookup` + an honest card row,
   `ZOE_WEB_FALLBACK_PROVIDER` (auto = Tavily-first when keyed | duckduckgo | off), one INFO line
   per lookup (query length, never text); mutation-checked negative controls. Voice-gate scope CLEAR.
-- B10.1 ⬜ Re-land the Python core of the web-search spike (PR #1610, now closed: DDG/Wikipedia/
-  HN scrapers, block detection, consensus merge, ≤350-token voice packet; 44 offline fixture
-  tests) as a ≤300-line PR behind the approved research/delegation seam (the cut-list cut a
-  direct `web_search` tool on purpose); Tavily stays the opt-in primary. B10.2 ⬜ Wire a `web_search`
-  tool into the Flue brain lane behind a flag; "are you sure?" triggers a backed re-answer.
-  Gate: fixture tests + replay corpus unchanged + 20 live lookups scored by hand.
+- B10.1 🔨 **Flag-dark `web_search` brain tool over the B10.0 lookup** — draft PR #1702.
+  Not the #1610 spike (DDG/Wikipedia/HN scrapers, consensus merge — no new scraping, no new
+  HTTP client): `ZOE_WEB_SEARCH_TOOL=1` (default 0 = byte-identical) serves
+  `POST /api/system/web-search` (= `fetch_web_fallback`, ≤5 title/url/snippet rows, outcome
+  `status` verbatim, same `require_intent_dispatch_auth` gate as intent-dispatch, query never
+  logged) and the Flue sidecar registers a thin `web_search` wrapper under its OWN copy of the
+  flag (`optionalZoeTools()`; the 21-tool `zoeTools` set untouched, ungrouped = always
+  disclosed). `/api/system/status` `web_lookup.tool_enabled`; capability prose advertises it
+  only under the flag AND once the sidecar confirms it on `/health` (B0.14 test flag-aware). Seam:
+  the sidecar's tools are static TS `defineTool`s wrapping zoe-data endpoints — there is no
+  HTTP tool catalogue. Voice-gate scope VOICE via the three sidecar `src/` files (flag-dark).
+  Cut-list item 10 tension stated in the PR (the `research`→`delegate-sync` seam it preferred
+  is broken; this is the tracker's B10.2 tool, dark by default). Tavily stays the opt-in
+  primary. B10.2 ⬜ now = flip it live: both `.env`s on, 20 live lookups scored by hand,
+  "are you sure?" triggers a backed re-answer; then decide whether the `research` seam is
+  still needed. Gate: fixture tests + replay corpus unchanged + the 20 scored lookups.
 
 ## 4. Sequencing (dependencies)
 
@@ -662,6 +725,11 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 — B1.4: Silero v6.2.1 file reverted to v6.0 (it detected no speech — barge-in /
+  idle listening silently off for a day); permanent gate = the probe's VAD stage + the gate
+  check's `vad` block + `voice_vad.py`/`voice_turn.py`/`*silero*` voice-path patterns
+  (fix/vad-real-model-gate); B0.2's "v6.2.1 in place" annotated; runbook §8.
+- 2026-09-27 — B6.6 added: resident-memory audit of zoe-data imports (speaker ID cached + CPU-pinned, import-hygiene test) and Music Assistant (no action, re-measure rule).
 - 2026-09-26 (pm, fold) — ecosystem-watch 2026-09-26 (#1703; B1.4 wording per #1705) folded
   into the rows: B0.4 b11194 gate (#25522 dropped), B0.7 two-interpreter split, B0.8 migrate
   recipe + 3.4.0 correction, B0.10 split into dated 🧑 sub-items (Copilot Lite 09-28, Actions

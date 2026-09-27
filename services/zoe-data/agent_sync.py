@@ -83,10 +83,54 @@ async def _collect_ui_pages() -> list[str]:
     return sorted(pages)
 
 
+# B10.1: the web-lookup line is advertised ONLY when every half is live —
+# zoe-data's ZOE_WEB_SEARCH_TOOL, the Flue lane actually SELECTED as the brain
+# (`brain_dispatch.use_flue_brain()`, ZOE_BRAIN_BACKEND=flue — a healthy sidecar
+# behind the default `core` lane is never asked, Codex #1702), AND that sidecar
+# confirming it registered `web_search` (`live`). Any one alone is a partial
+# rollout that must not claim the tool. Flag off (default) → no probe, prose
+# byte-identical to B0.14. Guard: test_capabilities_honest + test_web_search_tool.
+async def _brain_registers_web_search() -> bool:
+    """Is the Flue lane selected AND does the RUNNING sidecar's /health list
+    `web_search` in `optional_tools`? Fail closed: other lane, down/slow/older
+    sidecar → no claim until the next agent sync."""
+    from brain_dispatch import use_flue_brain
+    from research_evidence import web_search_tool_enabled
+
+    if not web_search_tool_enabled() or not use_flue_brain():
+        return False
+    try:
+        import httpx
+
+        from zoe_flue_client import _base_url
+
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{_base_url()}/health")
+        if resp.status_code != 200:
+            return False
+        body = resp.json()
+        return isinstance(body, dict) and "web_search" in (body.get("optional_tools") or [])
+    except Exception as exc:  # noqa: BLE001 - an unreachable brain is "not confirmed"
+        logger.warning("agent_sync: brain web_search confirmation failed: %s", type(exc).__name__)
+        return False
+
+
+def _web_search_tool_lines(*, escalation: bool, live: bool) -> list[str]:
+    from research_evidence import web_search_tool_enabled
+
+    if not (live and web_search_tool_enabled()):
+        return []
+    if escalation:
+        return ["0. `web_search` — live facts, current prices/news, backing a claim when asked \"are you sure?\" (ZOE_WEB_SEARCH_TOOL=1; ≤5 title/url/snippet rows, honest status)"]
+    return ["- **Web lookup**: `web_search` tool (ZOE_WEB_SEARCH_TOOL=1) — bounded live lookup + claim backing via research_evidence.fetch_web_fallback"]
+
+
 def _build_zoe_self_md(
     mcp_tools: list[str],
     skills: list[str],
     ui_pages: list[str],
+    *,
+    web_search_live: bool = False,
 ) -> str:
     """Build the full ZOE_SELF.md content, capped at _MAX_ZOE_SELF_CHARS."""
     lines = [
@@ -133,8 +177,10 @@ def _build_zoe_self_md(
         "- Builder skills: zoe-widget-builder, zoe-page-builder, zoe-capability-extender",
         "- Hermes engineering loop: source context → small feature → cleanup pass → review/test",
         "- Agent sync: POST /api/system/agent-sync updates this file",
+        *_web_search_tool_lines(escalation=False, live=web_search_live),
         "",
         "## Escalation Guide",
+        *_web_search_tool_lines(escalation=True, live=web_search_live),
         "- escalate_to_hermes: default for complex tasks, engineering, architecture, code review, planning, board repair, and Greptile loops",
         "- escalate_to_openclaw: available as an explicit/manual fallback; Hermes is the default escalation path",
         "",
@@ -292,6 +338,8 @@ def _build_capabilities_md(
     mcp_tools: list[str],
     skills: list[str],
     ui_pages: list[str],
+    *,
+    web_search_live: bool = False,
 ) -> str:
     """Build a human-readable CAPABILITIES.md at the project root."""
     lines = [
@@ -334,14 +382,17 @@ def _build_capabilities_md(
         "- **Self-improvement**: intent-miss review → Hermes/Multica proposal workflow (`self_improve` intent)",
         "- **Hermes engineering loop**: source context → small feature → cleanup pass → review/test",
         "- **Agent sync**: POST /api/system/agent-sync regenerates this file and all agent docs",
+        *_web_search_tool_lines(escalation=False, live=web_search_live),
         "",
         "## Escalation Guide",
-        # Web lookup is NOT listed: the live Flue brain registers no web_search /
-        # web_browse tool (2026-09-25 audit §2.6). The MCP Tools section above is
-        # mcp_server's own registry and stays factual; this prose is what the
-        # brain/prompt is TOLD it can do, so it must not claim a tool it cannot
-        # call. Re-add when program item B10 registers one — the guard is
+        # Web lookup is listed ONLY while ZOE_WEB_SEARCH_TOOL=1 AND the running
+        # brain confirmed registering it (B10.1) — the live Flue brain
+        # registers no web_search / web_browse tool otherwise
+        # (2026-09-25 audit §2.6). The MCP Tools section above is mcp_server's
+        # own registry and stays factual; this prose is what the brain/prompt is
+        # TOLD it can do, so it must not claim a tool it cannot call. Guard:
         # tests/test_capabilities_honest.py.
+        *_web_search_tool_lines(escalation=True, live=web_search_live),
         "1. `escalate_to_hermes` — default for complex tasks, engineering, architecture, code review, planning, board repair, and Greptile loops",
         "2. `escalate_to_openclaw` — explicit/manual fallback; Hermes remains the default route",
     ]
@@ -363,9 +414,10 @@ async def run_agent_sync() -> dict:
         _collect_ui_pages(),
     )
 
-    zoe_self = _build_zoe_self_md(mcp_tools, skills, ui_pages)
+    web_search_live = await _brain_registers_web_search()
+    zoe_self = _build_zoe_self_md(mcp_tools, skills, ui_pages, web_search_live=web_search_live)
     compact = _build_compact(mcp_tools, skills)
-    capabilities = _build_capabilities_md(mcp_tools, skills, ui_pages)
+    capabilities = _build_capabilities_md(mcp_tools, skills, ui_pages, web_search_live=web_search_live)
 
     results: dict = {
         "mcp_tools": len(mcp_tools),

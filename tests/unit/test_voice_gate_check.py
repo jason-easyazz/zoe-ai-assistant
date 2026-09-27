@@ -1045,3 +1045,159 @@ def test_livekit_patterns_are_literal_paths_not_a_wildcard():
                     "services/livekit/config.yaml"):
         assert literal in pats
     assert not any("*livekit*" in p or p == "services/livekit/*" for p in pats)
+
+
+# --- the VAD stage block (2026-09-26 Silero model-swap incident) -------------
+# A Silero v6.2.1 export replaced the v6.0 model file, loaded cleanly and scored
+# ~0.001 on real speech — barge-in / idle listening silently off for a day, every
+# gate green (the replay starts at STT). The probe now runs the real VAD and
+# records a `vad` block; the checker blocks on a failed or missing one for any
+# artifact that CLAIMS the stage, and is agnostic for older artifacts.
+def vad_artifact(vad=None, *, claim=True, **kw):
+    art = artifact(**kw)
+    if claim:
+        art["vad_stage"] = True
+    if vad is not None:
+        art["vad"] = vad
+    return art
+
+
+def _vad(status="pass", clips=24, detected=23, **extra):
+    return {"status": status, "clips": clips, "speech_detected": detected,
+            "min_pass_frac": 0.6, "threshold": 0.5, "reason": extra.pop("reason", ""),
+            **extra}
+
+
+def test_passing_vad_block_clears_and_is_reported():
+    ok, why = vgc.evaluate(vad_artifact(_vad()), now_epoch=NOW, max_age_s=DAY)
+    assert ok, why
+    assert "VAD 23/24" in why
+
+
+def test_failed_vad_block_blocks_even_when_status_says_pass():
+    """Defence in depth: the run status is folded by the probe, but the checker
+    must not depend on that — a failed VAD block blocks on its own."""
+    ok, why = vgc.evaluate(vad_artifact(_vad("fail", detected=0,
+                                             reason="speech detected in 0/24")),
+                           now_epoch=NOW, max_age_s=DAY)
+    assert ok is False
+    assert "VAD stage fail" in why and "0/24" in why
+
+
+def test_errored_vad_block_blocks():
+    ok, why = vgc.evaluate(vad_artifact(_vad("error", clips=0, detected=0)),
+                           now_epoch=NOW, max_age_s=DAY)
+    assert ok is False and "VAD stage error" in why
+
+
+def test_claimed_but_missing_vad_block_blocks():
+    ok, why = vgc.evaluate(vad_artifact(None), now_epoch=NOW, max_age_s=DAY)
+    assert ok is False and "no `vad` block" in why
+
+
+@pytest.mark.parametrize("bad", ["garbage", ["pass"], 7])
+def test_malformed_vad_block_blocks(bad):
+    art = vad_artifact(None)
+    art["vad"] = bad
+    ok, _ = vgc.evaluate(art, now_epoch=NOW, max_age_s=DAY)
+    assert ok is False
+
+
+def test_unknown_vad_status_blocks():
+    ok, why = vgc.evaluate(vad_artifact(_vad("maybe")), now_epoch=NOW, max_age_s=DAY)
+    assert ok is False and "unrecognised" in why
+
+
+@pytest.mark.parametrize("clips,detected", [
+    (24, 14),        # 58% — the label says pass, the counts say fail
+    (0, 0),          # nothing scored
+    (10, 11),        # impossible counts
+    ("24", 23),      # wrong types
+    (True, True),
+])
+def test_pass_label_is_re_derived_from_the_counts(clips, detected):
+    """The producer does not grade its own homework: a `pass` whose counts do
+    not clear the checker's own 60% floor is not a pass."""
+    ok, why = vgc.evaluate(vad_artifact(_vad("pass", clips=clips, detected=detected)),
+                           now_epoch=NOW, max_age_s=DAY)
+    assert ok is False, why
+
+
+def test_pass_at_exactly_the_floor_clears():
+    ok, why = vgc.evaluate(vad_artifact(_vad("pass", clips=10, detected=6)),
+                           now_epoch=NOW, max_age_s=DAY)
+    assert ok, why
+
+
+def test_lowered_min_pass_frac_in_the_artifact_does_not_lower_the_bar():
+    ok, _ = vgc.evaluate(vad_artifact(_vad("pass", clips=10, detected=2, min_pass_frac=0.1)),
+                         now_epoch=NOW, max_age_s=DAY)
+    assert ok is False
+
+
+def test_skipped_vad_is_no_opinion_but_surfaced():
+    ok, why = vgc.evaluate(vad_artifact(_vad("skip", clips=0, detected=0,
+                                             reason="Silero model not present at /m")),
+                           now_epoch=NOW, max_age_s=DAY)
+    assert ok, why
+    assert "VAD stage skipped" in why and "not present" in why
+
+
+def test_pre_vad_artifact_is_no_opinion_backward_compat():
+    """An artifact written before the stage existed carries neither the claim nor
+    the block: no opinion on VAD, so it still clears (and says nothing about VAD)."""
+    art = artifact()
+    assert "vad_stage" not in art and "vad" not in art
+    ok, why = vgc.evaluate(art, now_epoch=NOW, max_age_s=DAY)
+    assert ok, why
+    assert "VAD" not in why
+
+
+def test_unclaimed_failed_block_is_ignored_only_without_the_claim():
+    """The claim is what makes the block binding; with it, the same block blocks."""
+    bad = _vad("fail", detected=0)
+    assert vgc.evaluate(vad_artifact(bad, claim=False), now_epoch=NOW, max_age_s=DAY)[0] is True
+    assert vgc.evaluate(vad_artifact(bad, claim=True), now_epoch=NOW, max_age_s=DAY)[0] is False
+
+
+def test_probe_always_claims_the_vad_stage(tmp_path):
+    """Every artifact the CURRENT probe writes claims the stage and carries a
+    block — even on a path that passed none (recorded as a skip with a reason)."""
+    import json as _json
+    args = _Args(tmp_path)
+    vrp.emit_result(args, status="skip", summary=dict(vrp.EMPTY_SUMMARY),
+                    said_vs_did=[], speed_deltas={}, baseline={}, reason="tight")
+    payload = _json.loads(args.results.read_text())
+    assert payload["vad_stage"] is True
+    assert payload["vad"]["status"] == "skip" and payload["vad"]["reason"]
+
+
+def test_checker_floor_matches_the_probe_floor():
+    assert vgc.VAD_MIN_PASS_FRAC == vrp.VAD_MIN_PASS_FRAC == 0.60
+
+
+@pytest.mark.parametrize("path", [
+    "services/zoe-data/voice_vad.py",
+    "services/zoe-data/voice_turn.py",
+    # *silero*: any tracked file that fetches / pins / points at the model.
+    "scripts/setup/fetch_silero_vad.sh",
+    "config/silero_vad.sha256",
+])
+def test_vad_modules_and_model_material_are_voice_path(path):
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files([path, "docs/PLANS.md"], pats) == [path]
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is True and hits == [path]
+
+
+@pytest.mark.parametrize("path", [
+    # Co-located tests never run inside a voice turn — same rule as every entry.
+    "services/zoe-data/tests/test_voice_turn.py",
+    "services/zoe-data/tests/test_voice_barge_in.py",
+    "services/zoe-data/tests/test_livekit_vad_segmentation.py",
+    # Literal-exactness: near-miss module names do not gate.
+    "services/zoe-data/voice_vad_old.py",
+    "services/zoe-data/voice_turns.py",
+])
+def test_vad_non_runtime_paths_do_not_gate(path):
+    assert vgc.touched_voice_files([path], vgc.voice_path_patterns()) == []

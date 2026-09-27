@@ -1,18 +1,20 @@
 ---
 type: Runbook
-title: Moonshine 0.1.5 upgrade (B1.10) — HELD after measurement; API deltas, keyterms, install/replay/rollback
+title: Moonshine upgrade (B1.10) — 0.1.3 ADOPTED, 0.1.5 HELD; API deltas, keyterms, install/replay/rollback
 description: What changes for Zoe's STT call sites when moonshine-voice goes 0.0.62 → 0.1.5 (rock unchanged — still Moonshine v2 Medium / MEDIUM_STREAMING), the ZOE_MOONSHINE_KEYTERMS biasing flag, and the box-first install + replay-gate + rollback sequence.
 tags: [voice, stt, moonshine, upgrade, runbook, b1-10]
-timestamp: 2026-09-26T12:00:00Z
+timestamp: 2026-09-27T12:00:00Z
 ---
 
-# Moonshine 0.1.5 upgrade (B1.10) — HELD
+# Moonshine upgrade (B1.10) — 0.1.3 ADOPTED, 0.1.5 HELD
 
-> **Status 2026-09-26: HELD, box rolled back to 0.0.62.** The runbook below was executed the same
+> **Status 2026-09-27: 0.1.3 ADOPTED — live on the box and pinned (§10). 0.1.5 remains HELD.**
+>
+> **2026-09-26: 0.1.5 HELD, box rolled back to 0.0.62.** The runbook below was executed the same
 > day: 0.1.5 passes said-vs-did but **fails the per-stage speed rule** (+43 % median STT, ~1.9× on
-> every non-trivial file, Orin CPU). Numbers, method and retest conditions are in §8. Everything
+> every non-trivial file, Orin CPU). Numbers, method and retest conditions are in §8; the root cause (two hard-coded ONNX session flags that no config reverts) is in §9. Everything
 > else on this page stands as the readiness record — the `ZOE_MOONSHINE_KEYTERMS` plumbing is
-> merged dormant, `requirements.txt` pins the version the box actually runs (0.0.62).
+> merged, and `requirements.txt` pins the version the box actually runs (0.1.3 since §10).
 
 **API verdict (2026-09-26, measured in a throwaway venv on the Orin, aarch64 / Python 3.10):
 compatible.** Every call Zoe makes into `moonshine_voice` has the same signature and return
@@ -273,3 +275,201 @@ was still in `…/quantized/` so no download; `/readyz` reports `stt.loaded: tru
 
 The engine-only A/B is the instrument for all three: same 20 files, 2 passes, warm, per-file ms,
 compare medians and the per-file ratios — a median alone hides a bimodal result.
+
+## 9. Configuration research 2026-09-27 — root cause found; no config makes 0.1.5 as fast as 0.0.62
+
+The question was: did §8 miss a configuration that makes 0.1.5 fast? **No — but the cause is now
+known exactly, and it is not in the decode loop.** Read the source at the tags (not strings),
+then measured the one ONNX session in isolation.
+
+### 9.1 What changed — two session flags, both new to the streaming model in 0.1.5
+
+The decoder-run code (`run_decoder_with_cross_kv`) is **line-for-line the same** at v0.0.62 and
+v0.1.5 (same tensors, same copies, same output handling). What changed is how the sessions are
+created:
+
+- **v0.0.62**, `core/moonshine-streaming-model.cpp:164-165`: the only session option is
+  `SetSessionGraphOptimizationLevel(ORT_ENABLE_ALL)`. ONNX Runtime defaults apply otherwise:
+  CPU memory arena **on**, weight prepacking **on**. v0.1.0–v0.1.3 are identical here
+  (`ORT_ENABLE_ALL` only, checked at each tag).
+- **v0.1.5**, `core/moonshine-streaming-model.cpp:211-212` now calls
+  `ort_configure_ort_file_session()` (`core/ort-utils/ort-utils.cpp:125-142`), which sets
+  `ORT_ENABLE_EXTENDED`, `session.use_ort_model_bytes_directly=1`,
+  `session.use_env_allocators=1`, **`session.disable_prepacking=1`** and
+  **`DisableCpuMemArena()`**. It arrived in upstream commit `4a7f85c` "Address slow loading
+  times on mobile and Pi" (2026-08-21) — the 0.1.5 changelog line "Streaming speech-to-text
+  models open faster by reusing mapped `.ort` bytes … matching the non-streaming path". The
+  non-streaming `MoonshineModel` has had these flags since the initial import; 0.1.5 applied
+  them to the streaming model too. It is a **load-time** optimisation that costs **run time**.
+  Upstream `main` is still identical to v0.1.5 for these files.
+
+Why it hurts the decoder and not the encoder: an ORT profile of the decoder session shows one
+node, `t_DequantizeLinear`, dominating — the int8 output-projection matrix is dequantised to
+fp32 on **every** step (vocab 32768 × decoder_dim 640 × 4 B ≈ 84 MB, inferred from the config,
+not dumped). With the arena on, that 84 MB output buffer is reused step to step (11 ms/run in
+the profile); with the arena off it is a fresh allocation every step — glibc serves anything
+over 32 MB with a new `mmap`, so every step first-touches ~20 k pages (36 ms/run). The encoder
+runs once per utterance, so it barely notices. Losing prepacking adds a smaller per-step cost
+(the int8 `DynamicQuantizeMatMul` / `MatMulIntegerToFloat` weights are re-packed per call
+instead of once at load).
+
+### 9.2 Knobs: every option and environment variable the 0.1.5 library reads
+
+- **Transcriber options** (`parse_transcriber_options`, `core/moonshine-c-api.cpp:129-197`, full
+  list): `skip_transcription, transcription_interval, vad_threshold, save_input_wav_path,
+  log_api_calls, log_ort_run, vad_window_duration, vad_hop_size, vad_look_behind_sample_count,
+  vad_max_segment_duration, max_tokens_per_second, use_speculative_decoding,
+  decode_incomplete_lines, keyterms, keyterm_boost, context, context_max_terms,
+  identify_speakers, diarization_*, return_audio_data, log_output_text, word_timestamps,
+  spelling_model_path, ort_providers, coreml_cache_dir`. **None reaches the session flags
+  above.** Anything else throws "Unknown transcriber option".
+- **Execution providers:** `ort_providers` accepts only `cpu`, `coreml` (Apple builds only) and
+  `nnapi` (Android builds only) (`core/ort-utils/ort-utils-ep.cpp`). There is **no CUDA path**
+  for STT; the `use_cuda` strings in the library belong to the bundled TTS (the Arabic
+  diacritiser). Upstream's `docs/execution-providers.md` says CPU-only by design.
+- **Environment:** the only `MOONSHINE_*` variable is `MOONSHINE_ORT_SINGLE_THREAD`
+  (a ThreadSanitizer aid per its header comment; §8 measured it at 1010 ms median). The bundled
+  ORT's own variables (`ORT_BEAM_SEARCH_USE_FAST_TOPK`, `ORT_DISABLE_DECODER_ATTENTION`,
+  `ORT_DISABLE_FLASH_ATTENTION`, `ORT_LOAD_CONFIG_FROM_MODEL`) are for other kernels or ONNX
+  protobuf models, not `.ort`. **No option or variable can turn the arena or prepacking back on.**
+- The remaining lever is **glibc's allocator**, via environment variables (below).
+
+### 9.3 Measurements — decoder session only, ORT 1.23.2
+
+**Why decoder-only.** The full-pipeline bisect (`stt_bench` per version) **did not run**. At the
+live steady state (brain + Kokoro + zoe-data up) the box has ~850–1000 MiB available. A
+full-model bench peaks at 700 MB RSS on 0.1.5 and 1 GB on 0.0.62, which pushes
+MemAvailable below 350 MiB. Every attempt was killed by the harness's memory guard before
+it produced a number.
+
+The instrument used instead:
+
+- **Session:** one `decoder_kv.ort` session (0.1.5 bundle `quantized_26_08_21`) in an isolated
+  venv with pip `onnxruntime==1.23.2`, the same version the wheel bundles.
+- **Workload:** 8 decoder steps (self-KV cache 0→7, cross length 56). That is the §8 hard
+  file's shape.
+- **Runs:** 2 warm sequences, then 40 timed steps; each variant ran twice, interleaved.
+  `nice -n 15`.
+- **Guard:** kill the run if MemAvailable < 350 MiB, if a voice window starts, or if the brain's
+  `/health` fails. Brain health stayed `ok` throughout.
+- **Memory:** runs dipped MemAvailable to 333–590 MiB, below the ~600 MiB guidance. The 0.1.5
+  exact-flags variant was killed at 333–415 MiB on 3 of 4 attempts.
+
+| Session flags (ms per decoder step, median of 40; two runs) | step |
+|---|---|
+| 0.0.62's: `ORT_ENABLE_ALL`, arena on, prepack on | **21.4 / 22.5** |
+| 0.1.5's exact set (EXTENDED + bytes-direct + no prepack + no arena) | **62.9** (reproduces §8's 57–70) |
+| only `DisableCpuMemArena` | 61.7 / 62.5 |
+| only `disable_prepacking` | 27.8 / 29.2 |
+| only `ORT_ENABLE_EXTENDED` | 21.6 |
+| only `use_ort_model_bytes_directly` | 22.5 |
+| 0.1.5's set but arena kept | 28.0 / 28.0 |
+| 0.1.5's set + `MALLOC_MMAP_MAX_=0 MALLOC_TRIM_THRESHOLD_=1073741824 MALLOC_TOP_PAD_=134217728` | 27.9 / 28.6 |
+| arena off + the same three `MALLOC_*` | 21.7 / 22.8 |
+
+Allocator variants that did **not** help with the arena off:
+
+| Variant | step (ms) |
+|---|---|
+| `MALLOC_MMAP_THRESHOLD_=32 MB` (glibc's maximum; the buffer is larger) | 55 |
+| `MALLOC_TOP_PAD_` alone | 64 |
+| `GLIBC_TUNABLES=glibc.malloc.hugetlb=1` (THP is already `always` here) | 56 |
+| `MALLOC_MMAP_MAX_=0` without `TOP_PAD`: median 47, max 243 | erratic |
+
+The ~40 ms per step splits into **~34 ms from `DisableCpuMemArena`** and **~6 ms from
+`disable_prepacking`**. The other two flags cost nothing.
+
+### 9.4 Bisect
+
+**By source:** v0.1.0, 0.1.1, 0.1.2 and 0.1.3 all create the streaming sessions the 0.0.62 way.
+The flags first appear in **0.1.5** (there is no 0.1.4 release), so 0.1.3 is the last version
+expected to decode at 0.0.62 speed.
+
+**By measurement:** not confirmed. Venvs for 0.1.0–0.1.3 are built, but their full-pipeline runs
+were blocked by memory (§9.3). Two confounders a real run must settle: 0.1.1–0.1.3 download
+their own `quantized_26_07_30` bundle, and 0.1.2+ ship a different ORT binary (sha `29f74af7…`,
+the build-type change in 0.1.2's changelog).
+
+### 9.5 Conclusion
+
+- **Nothing makes 0.1.5 match 0.0.62 on this box.** The two flags are hard-coded, with no option
+  or variable for either. The best configuration-only mitigation is the three `MALLOC_*`
+  variables. They recover the arena's share (~63 → ~28 ms per step) but not prepacking's, so
+  0.1.5 would still decode about 30 % slower per step than 0.0.62's ~21 ms. That still fails
+  the speed rule, and it is not measured end to end.
+- **The glibc route is not an adoption path either.** It is process-wide in zoe-data:
+  large allocations would never return to the OS, which works against the
+  `MALLOC_ARENA_MAX=2` memory tuning. It is also unverified off the main thread. File it as a
+  diagnostic only.
+- **The fix belongs upstream, and it is small:** keep the CPU arena and prepacking on for the
+  streaming decoder session (or expose them as transcriber options). An LD_PRELOAD diagnostic
+  shim that re-enables both inside the real 0.1.5 library has been built but not run end to
+  end, for the same memory reason. The §8 issue draft should now name the two flags,
+  commit `4a7f85c`, and the table above.
+- **Candidate to evaluate in a memory window:** pin **0.1.3**. It has the 0.0.62 session setup
+  plus `set_keyterms` (0.1.2+). Retest it with the engine-only A/B, then §5, when a Kokoro-stopped
+  window gives ≥ 1.5 GiB available: run the per-version and LD_PRELOAD rows back to back
+  against a 0.0.62 control. It still ships the #216/#217 mmap leak, which is harmless for
+  Zoe's singleton transcriber.
+- **Retest conditions (unchanged from §8):** 0.1.5 stays held. Nothing measured here beats
+  0.0.62's 284 ms median or ~21 ms decoder step.
+
+## 10. Adopted 0.1.3 (2026-09-27)
+
+§9 predicted from source that 0.1.3 is the last release with 0.0.62's session setup: arena on,
+prepacking on. It is also the first release after keyterms landed in 0.1.2. The coordinator
+trialled it box first, the §5 way. Here it passed both rules.
+
+**Install:**
+
+- `pip3 install --user moonshine-voice==0.1.3` on the host.
+- Its bundle was pre-downloaded before the restart. It lives in
+  `~/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30/`
+  (291 MB): `adapter.ort, cross_kv.ort, decoder_kv.ort, encoder.ort, frontend.ort,
+  streaming_config.json, tokenizer.bin`.
+- zoe-data was restarted. `/readyz` then showed `stt.loaded: true` and
+  `keyterms.supported: true`.
+
+**Replay gate:** all runs came back 13/13 OK, 7 EMPTY, identical to baseline.
+
+| Replay | STT stage |
+|---|---|
+| in-process, keyterms OFF | 326 ms |
+| in-process, keyterms ON (`ZOE_MOONSHINE_KEYTERMS=Zoe`) | 351 ms |
+| remote, through the live service | 357 ms |
+| 0.0.62 (the same replay, earlier runs) | 302–406 ms |
+
+**Engine-only A/B:** Kokoro was paused for headroom. Same 20 files, two passes, per-file ms.
+
+| Version | median (pass 1 / pass 2) | decoder step |
+|---|---|---|
+| 0.0.62 | 302 / 328 ms | ~21 ms (§8/§9) |
+| **0.1.3** | **299 / 306 ms** | **23–25 ms** |
+
+Both rules hold: said-vs-did did not regress, and speed is at parity. 0.1.3 is the pin. 0.1.5 stays
+held on the §9 regression. Re-open 0.1.5 only when upstream keeps the arena and prepacking on for
+streaming sessions; the retest conditions from §8 still apply.
+
+**Keyterms guidance (the feature this buys):**
+
+- The operator sets `ZOE_MOONSHINE_KEYTERMS` in the **live** `services/zoe-data/.env` and
+  restarts zoe-data. The list is **never committed**: it names the household.
+- Keep it short and comma-free per term: household first names plus `Zoe`. Tens of terms, not
+  hundreds (§4 limits). Capitalise exactly as the transcript should read.
+- Verify with `GET /readyz` → `dependencies.stt.keyterms`:
+  - `supported: true`, and `applied == configured`.
+  - `error: null`. A refused list logs a WARNING and decoding stays unbiased.
+- Grow the list only on evidence. The ON replay above cost +25 ms (326 → 351) for a one-term list,
+  so re-run the replay after each change to the list and watch the `stt` stage.
+
+**Rollback:**
+
+1. Run `pip3 install --user moonshine-voice==0.0.62`.
+2. Unset `ZOE_MOONSHINE_KEYTERMS`. On 0.0.62 it is logged as unsupported and ignored anyway.
+3. Run `systemctl --user restart zoe-data`, then poll `/health` and `/readyz` until
+   `stt.loaded: true`.
+4. Set `requirements.txt` back to `==0.0.62` (box first, file second).
+
+The 0.0.62 bundle (`…/quantized/`) is still on disk, so the rollback downloads nothing. Keep both
+`quantized/` and `quantized_26_07_30/` until 0.1.3 has run a few quiet days. `quantized_26_08_21/`
+(0.1.5) can be deleted any time; it is only needed for a 0.1.5 retest.
