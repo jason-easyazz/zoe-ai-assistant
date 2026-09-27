@@ -32,15 +32,38 @@ services:
 
   # ── Database ───────────────────────────────────────────────────────────────
   # PostgreSQL is required by zoe-auth and host-native zoe-data.
+  #
+  # IMAGE: pinned by DIGEST to pgvector/pgvector:0.8.6-pg17 (built 2026-08-13 =
+  # PostgreSQL 17.11 + pgvector 0.8.6). Was the floating `pg17` tag, which on the box
+  # was a 2026-05-15 image carrying PostgreSQL 17.10 — 17.11 (2026-08-13) closes ~25
+  # CVEs, several CVSS 8.8 code-execution bugs that need only a login (e.g.
+  # CVE-2026-14662/-14664/-14669/-14680/-15742/-16239, CVE-2026-14679).
+  # 17.10 → 17.11 is a MINOR upgrade: same on-disk format, so recreating the container on
+  # the existing zoe-database-data volume is the whole upgrade (no dump/restore, no
+  # pg_upgrade). pgvector 0.8.2 → 0.8.6: the new shared library loads on start; the
+  # 0.8.2→0.8.6 extension update scripts are catalog-only no-ops, so
+  # `ALTER EXTENSION vector UPDATE;` (in `multica`, the only database with `vector`)
+  # merely bumps extversion — run it for bookkeeping, nothing depends on it. The
+  # HNSW-vacuum corruption fixes in 0.8.3/0.8.4 do not apply here: no hnsw/ivfflat index
+  # exists in any database (checked 2026-09-27). TO BUMP: `docker pull` the new tag, read
+  # `docker image inspect --format '{{index .RepoDigests 0}}'`, update the line below.
+  # Stay on pg17 — a major version needs dump/restore or pg_upgrade.
   zoe-database:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:0.8.6-pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
     container_name: zoe-database
     environment:
     - POSTGRES_DB=zoe
     - POSTGRES_USER=zoe
     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    # LOOPBACK ONLY. A bare "5432:5432" publishes on 0.0.0.0 + [::], and pg_hba allows
+    # `host all all all scram-sha-256`, so every LAN host could attempt a login. Nothing
+    # needs the LAN: host-native zoe-data (and every other host-side client) connects via
+    # localhost:5432, which on this box resolves to 127.0.0.1 only; containers use the
+    # Docker network name `zoe-database:5432` (zoe-auth, multica-backend). A container
+    # must NOT use host.docker.internal:5432 — that is the docker0 gateway, not loopback,
+    # and cannot reach this publish. Pinned by tests/unit/test_compose_loopback_binds.py.
     ports:
-    - "5432:5432"
+    - "127.0.0.1:5432:5432"
     volumes:
     - zoe-database-data:/var/lib/postgresql/data
     networks:
@@ -102,8 +125,15 @@ services:
     build: ./services/homeassistant-mcp-bridge
     container_name: homeassistant-mcp-bridge
     restart: unless-stopped
+    # LOOPBACK ONLY. The bridge has NO inbound auth — on 0.0.0.0 any LAN host could drive
+    # Home Assistant through it. Every consumer is host-local or on zoe-network:
+    # zoe-data uses ZOE_HA_BRIDGE_URL=http://127.0.0.1:8007; Home Assistant calls
+    # http://homeassistant-mcp-bridge:8007 over zoe-network (configuration.yaml,
+    # custom_components/zoe_conversation), which never touches the published port; the
+    # healthcheck runs inside the container. Pinned by
+    # tests/unit/test_compose_loopback_binds.py.
     ports:
-    - 8007:8007
+    - "127.0.0.1:8007:8007"
     volumes:
     - ./services/homeassistant-mcp-bridge:/app
     environment:

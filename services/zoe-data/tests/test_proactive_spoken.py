@@ -115,11 +115,12 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(engine, "compose_message", fake_compose)
 
-    async def fake_panel_presence(user_id, within_s=None):
+    async def fake_panel_presence_tier(user_id, within_s=None):
         state["presence_calls"].append(user_id)
-        return state["presence_result"]
+        panel = state["presence_result"]
+        return (state.get("presence_tier", "owner"), panel) if panel else ("absent", None)
 
-    monkeypatch.setattr(presence_mod, "panel_presence", fake_panel_presence)
+    monkeypatch.setattr(presence_mod, "panel_presence_tier", fake_panel_presence_tier)
 
     async def fake_enqueue(db, **kwargs):
         if state["enqueue_error"] is not None:
@@ -200,7 +201,48 @@ async def test_presence_raising_push_still_sent(harness, monkeypatch):
     async def exploding_presence(user_id, within_s=None):
         raise RuntimeError("presence query died")
 
-    monkeypatch.setattr(presence_mod, "panel_presence", exploding_presence)
+    monkeypatch.setattr(presence_mod, "panel_presence_tier", exploding_presence)
+    await _fire()
+    assert harness["enqueues"] == []
+    assert len(harness["pushes"]) == 1
+
+
+# --------------------------------------------------------------------------- #
+# bound_guest tier: the member's panel is on but held by the kiosk guest
+# --------------------------------------------------------------------------- #
+from proactive.triggers.morning_checkin import (  # noqa: E402
+    _compose_morning_message, guest_safe_morning_line,
+)
+
+_SENSITIVE_CTX = {
+    "calendar": [{"title": "Oncology follow-up", "start": "3pm"}],
+    "open_loops": [{"hint": "the settlement paperwork", "text": "settlement"}],
+    "emotional_moments": ["was anxious about the biopsy results"],
+}
+
+
+async def test_bound_guest_speaks_only_the_guest_safe_line(harness, monkeypatch):
+    """Negative control: speak ``message`` on this tier and this goes red."""
+    monkeypatch.setenv("ZOE_PROACTIVE_SPOKEN", "true")
+    harness["presence_tier"] = "bound_guest"
+    full = _compose_morning_message(_SENSITIVE_CTX, "Alex Smith", "Monday")
+    assert "Oncology" in full  # the brief really does carry the sensitive fields
+    await engine.fire_notification(
+        user_id="member-a", message=full, trigger_type="morning_checkin",
+        context={"force_send": True, **_SENSITIVE_CTX,
+                 "spoken_guest_safe": guest_safe_morning_line("Alex Smith")},
+    )
+    spoken = [e["payload"]["message"] for e in harness["enqueues"]]
+    assert spoken == ["Good morning Alex — your brief is ready when you are."]
+    for word in ("Oncology", "3pm", "settlement", "biopsy", "anxious", "Smith"):
+        assert word not in spoken[0]
+    # The full brief still reaches the member's own channel (push → chat).
+    assert harness["pushes"][0]["message"] == full
+
+
+async def test_bound_guest_without_safe_line_speaks_nothing(harness, monkeypatch):
+    monkeypatch.setenv("ZOE_PROACTIVE_SPOKEN", "true")
+    harness["presence_tier"] = "bound_guest"
     await _fire()
     assert harness["enqueues"] == []
     assert len(harness["pushes"]) == 1

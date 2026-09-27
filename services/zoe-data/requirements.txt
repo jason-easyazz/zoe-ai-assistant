@@ -45,7 +45,7 @@ pydantic==2.13.5
 aiosqlite==0.22.1
 asyncpg==0.31.0
 alembic==1.20.0
-psycopg2-binary==2.9.12
+psycopg2-binary==2.9.13
 python-multipart==0.0.32
 httpx==0.28.1
 aiohttp==3.14.3
@@ -104,8 +104,8 @@ chromadb==0.6.3
 # "no matching wheel" and a dead voice path.
 numpy<2
 # ONNX Runtime is a DIRECT dependency, not merely a transitive one: `voice_vad.py`
-# and `voice_turn.py` both `import onnxruntime` to run the Silero VAD .onnx (v6.2.1
-# on the box since 2026-09-26; the file is ~/models/silero_vad.onnx, not a wheel)
+# and `voice_turn.py` both `import onnxruntime` to run the Silero VAD .onnx (v6.0
+# live on the box; the file is ~/models/silero_vad.onnx, not a wheel)
 # (there is deliberately no `silero-vad` PyPI pin — the model file is the
 # dependency, not the wrapper). It was undeclared here until 2026-08-06 while
 # being load-bearing on the voice path; pinned to the live Orin's version.
@@ -184,8 +184,8 @@ py-vapid==1.9.4
 # Imported UNGUARDED at module level by memory_metrics.py, voice_metrics.py and
 # guest_policy.py, yet declared nowhere until 2026-09-26 (found by the B0.7 AST
 # import scan, docs/knowledge/python-312-venv-migration.md) — it only ever
-# arrived transitively. Pinned to the box.
-prometheus-client==0.25.0
+# arrived transitively. 0.25.0 -> 0.26.0 on 2026-09-27 (feature release, 07-24).
+prometheus-client==0.26.0
 # Speaker identification (voice enrollment and identify endpoints)
 resemblyzer>=0.1.3
 # LiveKit WebRTC server-side agent (joins room, STT+LLM+TTS, publishes audio)

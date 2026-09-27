@@ -152,7 +152,10 @@ async def fire_notification(
     # P-W2.2 spoken delivery — ADDITIVE, never a replacement: the push below is
     # always sent regardless of what happens in here, and the adapter never
     # raises (any spoken-path failure must not block the push).
-    await _maybe_speak_notification(user_id=user_id, message=message, trigger_type=trigger_type)
+    await _maybe_speak_notification(
+        user_id=user_id, message=message, trigger_type=trigger_type,
+        guest_safe_message=ctx.get("spoken_guest_safe"),
+    )
 
     deep_link = f"/chat.html?p={pid}"
     subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
@@ -215,7 +218,9 @@ def _spoken_triggers() -> set[str]:
     return {t.strip() for t in raw.split(",") if t.strip()}
 
 
-async def _maybe_speak_notification(user_id: str, message: str, trigger_type: str) -> None:
+async def _maybe_speak_notification(
+    user_id: str, message: str, trigger_type: str, guest_safe_message: str | None = None,
+) -> None:
     """P-W2.2/P-W2.3 spoken-delivery adapter: if the flag is ON, the trigger is
     allowlisted, and the user has a fresh foreground panel session
     (proactive.presence.panel_presence), deliver the composed message to BOTH
@@ -237,6 +242,11 @@ async def _maybe_speak_notification(user_id: str, message: str, trigger_type: st
         mandatory push path — and the other lane — is untouched.
       * Flag OFF is byte-identical behaviour: immediate return, no DB access,
         no imports.
+      * Presence TIER picks the payload: ``owner`` speaks ``message``;
+        ``bound_guest`` (the member's panel is on but held by the kiosk guest,
+        so the member is not confirmed there) speaks ONLY the trigger's
+        non-sensitive ``guest_safe_message`` — or nothing if it has none; the
+        full brief stays in the push + proactive_pending for the member's chat.
     """
     try:
         if not _spoken_enabled():
@@ -247,8 +257,14 @@ async def _maybe_speak_notification(user_id: str, message: str, trigger_type: st
         # (ui_orchestrator pulls in push.broadcaster, same reason _send_push
         # defers routers.push).
         import proactive.presence as _presence
-        panel_id = await _presence.panel_presence(user_id)
-        if not panel_id:
+        tier, panel_id = await _presence.panel_presence_tier(user_id)
+        if tier == _presence.TIER_BOUND_GUEST:
+            if not guest_safe_message:
+                log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s tier=%s "
+                         "outcome=no_guest_safe_text", trigger_type, user_id, panel_id, tier)
+                return
+            message = guest_safe_message
+        elif tier != _presence.TIER_OWNER or not panel_id:
             log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=none outcome=absent",
                      trigger_type, user_id)
             return
@@ -283,8 +299,8 @@ async def _maybe_speak_notification(user_id: str, message: str, trigger_type: st
                 )
         except Exception as exc:
             daemon_outcome = f"error:{exc}"
-        log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s",
-                 trigger_type, user_id, panel_id, panel_outcome, daemon_outcome)
+        log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s tier=%s",
+                 trigger_type, user_id, panel_id, panel_outcome, daemon_outcome, tier)
     except Exception as exc:
         log.warning("PROACTIVE_SPOKEN trigger=%s user=%s outcome=error err=%s",
                     trigger_type, user_id, exc)
