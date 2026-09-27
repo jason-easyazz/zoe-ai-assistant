@@ -304,9 +304,35 @@ async def test_brain_probe_is_never_made_while_zoe_data_flag_is_off(monkeypatch)
 )
 async def test_brain_probe_confirms_only_a_reported_tool(monkeypatch, reply, expected):
     monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", "flue")
     monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", "http://127.0.0.1:3579/")
     seen = _fake_brain_health(monkeypatch, reply)
     assert await agent_sync._brain_registers_web_search() is expected
+    assert seen == ["http://127.0.0.1:3579/health"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", [None, "core", "", "FLUE-ish"])
+async def test_no_claim_unless_the_flue_lane_is_the_selected_brain(monkeypatch, backend):
+    """Codex #1702: a healthy sidecar that registered web_search is NOT enough —
+    with ZOE_BRAIN_BACKEND on `core` (the default, or a rollback) the brain that
+    answers cannot call it, so no claim and no probe."""
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", backend) if backend is not None else monkeypatch.delenv("ZOE_BRAIN_BACKEND", raising=False)
+    seen = _fake_brain_health(monkeypatch, (200, {"ok": True, "optional_tools": ["web_search"]}))
+    assert await agent_sync._brain_registers_web_search() is False
+    assert seen == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["flue", " FLUE "])
+async def test_flue_lane_selected_and_healthy_sidecar_claims(monkeypatch, backend):
+    """Control: the same healthy sidecar IS confirmed once the flue lane is selected."""
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setenv("ZOE_BRAIN_BACKEND", backend)
+    monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", "http://127.0.0.1:3579/")
+    seen = _fake_brain_health(monkeypatch, (200, {"ok": True, "optional_tools": ["web_search"]}))
+    assert await agent_sync._brain_registers_web_search() is True
     assert seen == ["http://127.0.0.1:3579/health"]
 
 

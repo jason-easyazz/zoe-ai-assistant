@@ -83,17 +83,21 @@ async def _collect_ui_pages() -> list[str]:
     return sorted(pages)
 
 
-# B10.1: the web-lookup line is advertised ONLY when BOTH halves are live —
-# zoe-data's ZOE_WEB_SEARCH_TOOL AND the separately configured Flue sidecar
-# confirming it registered `web_search` (`live`). Either alone is a partial
+# B10.1: the web-lookup line is advertised ONLY when every half is live —
+# zoe-data's ZOE_WEB_SEARCH_TOOL, the Flue lane actually SELECTED as the brain
+# (`brain_dispatch.use_flue_brain()`, ZOE_BRAIN_BACKEND=flue — a healthy sidecar
+# behind the default `core` lane is never asked, Codex #1702), AND that sidecar
+# confirming it registered `web_search` (`live`). Any one alone is a partial
 # rollout that must not claim the tool. Flag off (default) → no probe, prose
 # byte-identical to B0.14. Guard: test_capabilities_honest + test_web_search_tool.
 async def _brain_registers_web_search() -> bool:
-    """Does the RUNNING sidecar's /health list `web_search` in `optional_tools`?
-    Fail closed: down/slow/older sidecar → no claim until the next agent sync."""
+    """Is the Flue lane selected AND does the RUNNING sidecar's /health list
+    `web_search` in `optional_tools`? Fail closed: other lane, down/slow/older
+    sidecar → no claim until the next agent sync."""
+    from brain_dispatch import use_flue_brain
     from research_evidence import web_search_tool_enabled
 
-    if not web_search_tool_enabled():
+    if not web_search_tool_enabled() or not use_flue_brain():
         return False
     try:
         import httpx

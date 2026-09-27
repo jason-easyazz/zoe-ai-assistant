@@ -97,6 +97,7 @@ import {
   isTurnUntrusted,
   markTurnUntrusted,
   neutraliseUntrustedText,
+  untrustedSearchRefusal,
   untrustedWriteRefusal,
 } from '../untrusted-content.ts';
 import { ACTIVATOR_TOOL_NAME, GROUP_NAMES, GROUP_SUMMARY, TOOL_GROUPS } from './tool-groups.ts';
@@ -1105,7 +1106,7 @@ const activateAbilities = defineTool({
  * They are returned FENCED (src/untrusted-content.ts: fixed preamble + delimited
  * data block, markup / control tokens / role markers neutralised, fields capped,
  * http(s) links only), and once results have been returned every state-changing
- * tool refuses for the rest of the turn. No-result outcomes return no
+ * tool AND web_search itself refuse for the rest of the turn. No-result outcomes return no
  * third-party text and do not taint the turn.
  */
 export function webSearchToolEnabled(): boolean {
@@ -1143,6 +1144,9 @@ const webSearch = defineTool({
   run: async ({ data, signal }) => {
     const query = String(data?.query ?? '').trim().slice(0, 300);
     if (!query) return 'I need something to search for.';
+    // W15 tier (Codex #1702): a search sends text OFF the box, so a turn that
+    // already holds untrusted web content may not search again — no HTTP call.
+    if (isTurnUntrusted(signal)) return untrustedSearchRefusal();
     try {
       const res = await fetch(new URL('/api/system/web-search', zoeDataUrl()), {
         method: 'POST',
