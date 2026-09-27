@@ -522,6 +522,18 @@ status: 🔨 active — NEXT ACTION is always §0
   (failover suite green → replay PASS with the flag exported → live stop-the-sidecar drill
   read from `BRAIN_LANE`) is now spelled out in `services/zoe-data/.env.example` (B1 in the
   register).
+- B6.6 🔨 **Resident-memory hygiene** — measured 2026-09-27
+  ([resident-memory-hygiene-2026-09-27.md](../knowledge/resident-memory-hygiene-2026-09-27.md)).
+  zoe-data's `import main` loads no heavy library (~64 MB); the ~1.2 GB is the hot-path set
+  (Moonshine, router head, fastembed, Chroma). Speaker ID was already lazy; its first use costs
+  +568 MB / 6 s and still blocks the event loop while it loads. Done (draft PR): cached, CPU-pinned `VoiceEncoder`
+  + a fresh-interpreter test that `import main` stays free of resemblyzer/torch/transformers.
+  ⬜ Follow-ups (voice-gated, each needs its own replay gate): `asyncio.to_thread` around the
+  two embedding calls in `routers/voice_tts.py`; replace Smart Turn's
+  `WhisperFeatureExtractor` (drags in torch, +360 MB on the first LiveKit turn) with a numpy
+  log-mel + parity test. Music Assistant (~1.0 GB RSS+swap, flat): **no action** — no
+  `mem_limit`, no restart timer (re-auth risk); ⬜ re-measure RSS+swap in a few days on the
+  same container start, and add a weekly restart timer only if it grows > ~100 MB/day.
 
 ### B7 — Window into Zoe (UI)
 - B7.1 ⬜ AG-UI 1.0 (`ACTIVITY_SNAPSHOT/DELTA`) + a fixed A2UI-style component catalog as the
@@ -652,6 +664,7 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 — B6.6 added: resident-memory audit of zoe-data imports (speaker ID cached + CPU-pinned, import-hygiene test) and Music Assistant (no action, re-measure rule).
 - 2026-09-26 (pm, fold) — ecosystem-watch 2026-09-26 (#1703; B1.4 wording per #1705) folded
   into the rows: B0.4 b11194 gate (#25522 dropped), B0.7 two-interpreter split, B0.8 migrate
   recipe + 3.4.0 correction, B0.10 split into dated 🧑 sub-items (Copilot Lite 09-28, Actions
