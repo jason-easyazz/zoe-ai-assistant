@@ -3,12 +3,15 @@
 This module is on the LIVE VOICE PATH, so the contract has two halves and the
 first one matters more:
 
-  1. WIRE 1 IS UNCHANGED. With the flag unset (or set to anything that is not
-     exactly ``'2'``) the client must emit the same bytes it emitted before the
-     switch existed. ``fixtures/flue_wire1_golden_requests.json`` was RECORDED
-     from ``origin/main``'s copy of the module — same recorder, same fake
+  1. WIRE 1 IS UNCHANGED WHEN SELECTED. With ``ZOE_FLUE_WIRE=1`` the client
+     must emit the same bytes it emitted before the switch existed.
+     ``fixtures/flue_wire1_golden_requests.json`` was RECORDED from
+     ``origin/main``'s copy of the module — same recorder, same fake
      transport, same inputs — so the golden test below is a genuine
-     before/after comparison, not a restatement of the current code.
+     before/after comparison, not a restatement of the current code. Since
+     B6.5 the DEFAULT (flag unset, empty, or unrecognised) is wire 2 — the
+     wire the live :3579 sidecar speaks — so the golden replay selects wire 1
+     explicitly, and section 0 pins the defaults themselves.
 
   2. WIRE 2 SPEAKS THE MEASURED 2.x SHAPES. No ``wait`` param (Flue 2.x
      REJECTS any), a top-level ``{"kind": "user", "body": …}`` DeliveredMessage
@@ -153,6 +156,8 @@ async def test_wire1_requests_are_byte_identical_to_main(wire_env, monkeypatch):
     """
     golden = json.loads(_GOLDEN.read_text())
     ndjson_lines = [json.dumps("hello "), json.dumps("world"), json.dumps({"done": True})]
+    # Wire 1 is opt-in since B6.5 (default 2); the recording IS the wire-1 contract.
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
 
     for name, expected in sorted(golden.items()):
         monkeypatch.setenv(
@@ -172,22 +177,68 @@ async def test_wire1_requests_are_byte_identical_to_main(wire_env, monkeypatch):
         assert got == expected["yields"], f"{name}: yields drifted from main"
 
 
-@pytest.mark.asyncio
-async def test_wire_flag_unset_is_provably_wire_one(wire_env, monkeypatch):
-    """The default is not merely 'documented as 1' — it puts ?wait=result on the wire."""
+# ── 0. The DEFAULTS match live reality (B6.5) ────────────────────────────────
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_default_base_url_is_the_live_2x_sidecar(monkeypatch, value):
+    """A missing (or empty) ZOE_FLUE_BRAIN_URL lands on the live :3579 sidecar.
+
+    Negative control: the pre-B6.5 default was :3578 — the 1.x lane, stopped
+    and source-removed in #1678. Nothing listens there, so a deploy that forgot
+    the env var failed every brain turn while the code "worked".
+    """
+    if value is None:
+        monkeypatch.delenv("ZOE_FLUE_BRAIN_URL", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", value)
     monkeypatch.delenv("ZOE_FLUE_WIRE", raising=False)
+    assert zoe_flue_client._base_url() == "http://127.0.0.1:3579"
+    assert zoe_flue_client._base_url() != "http://127.0.0.1:3578"
+    assert zoe_flue_client._endpoint("s1") == "http://127.0.0.1:3579/agents/zoe/s1"
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+@pytest.mark.asyncio
+async def test_wire_flag_unset_is_provably_wire_two(wire_env, monkeypatch, value):
+    """The default is not merely 'documented as 2' — it puts the 2.x shape on the wire.
+
+    Negative control: the pre-B6.5 default (wire 1) sent ``?wait=result`` with a
+    ``{"message": …}`` body, which the live 2.x sidecar rejects with HTTP 400.
+    Neither may appear here.
+    """
+    if value is None:
+        monkeypatch.delenv("ZOE_FLUE_WIRE", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_FLUE_WIRE", value)
     monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "0")
-    wire_env.post_response = _FakePostResponse({"result": {"text": "classic"}})
+    wire_env.stream_response = _FakeStreamResponse(
+        lines=[json.dumps("live"), json.dumps({"done": True})]
+    )
 
     out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
 
-    assert out == ["classic"]
+    assert out == ["live"]
+    assert zoe_flue_client._wire_version() == 2
+    (call,) = wire_env.calls
+    assert call["kind"] == "stream", "wire 2 has no ?wait=result POST"
+    assert "wait" not in call["url"]
+    body = json.loads(call["body"])
+    assert body == {"kind": "user", "body": " zoe-uid:jason\nhi"}
+    assert "message" not in body
+
+
+def test_env_override_still_wins_over_both_defaults(monkeypatch):
+    """The defaults are fallbacks only: an explicit URL + wire are honoured verbatim."""
+    monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", "http://10.0.0.7:4000/")
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
+    assert zoe_flue_client._base_url() == "http://10.0.0.7:4000"
     assert zoe_flue_client._wire_version() == 1
-    assert wire_env.calls[0]["url"].endswith("?wait=result")
-    assert json.loads(wire_env.calls[0]["body"]) == {"message": " zoe-uid:jason\nhi"}
+    assert zoe_flue_client._endpoint("s1") == "http://10.0.0.7:4000/agents/zoe/s1?wait=result"
+    assert zoe_flue_client._request_payload("hi") == b'{"message": "hi"}'
 
 
-@pytest.mark.parametrize("value", ["", "1", " 1 "])
+@pytest.mark.parametrize("value", ["1", " 1 "])
 @pytest.mark.asyncio
 async def test_wire_one_values(wire_env, monkeypatch, value):
     monkeypatch.setenv("ZOE_FLUE_WIRE", value)
@@ -198,18 +249,24 @@ async def test_wire_one_values(wire_env, monkeypatch, value):
 
 
 @pytest.mark.asyncio
-async def test_unknown_wire_value_degrades_to_wire_one_loudly(wire_env, monkeypatch, caplog):
-    """A typo must fall back to the DEPLOYED wire, and must say so."""
+async def test_unknown_wire_value_degrades_to_wire_two_loudly(wire_env, monkeypatch, caplog):
+    """A typo must fall back to the DEPLOYED wire (2 since B6.5), and must say so."""
     monkeypatch.setenv("ZOE_FLUE_WIRE", "v2")
     monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "0")
-    wire_env.post_response = _FakePostResponse({"result": {"text": "classic"}})
+    wire_env.stream_response = _FakeStreamResponse(
+        lines=[json.dumps("live"), json.dumps({"done": True})]
+    )
 
     with caplog.at_level(logging.ERROR, logger="zoe_flue_client"):
         out = await _collect(zoe_flue_client.run_flue_brain_streaming("hi", "s1", "jason"))
 
-    assert out == ["classic"]
-    assert wire_env.calls[0]["url"].endswith("?wait=result")
-    assert any("not a known Flue wire version" in r.message for r in caplog.records)
+    assert out == ["live"]
+    assert zoe_flue_client._wire_version() == 2
+    assert "wait" not in wire_env.calls[0]["url"]
+    assert any(
+        "not a known Flue wire version" in r.message and "using wire 2" in r.message
+        for r in caplog.records
+    )
 
 
 # ── 2. Wire 2 speaks the measured 2.x shapes ─────────────────────────────────
@@ -239,14 +296,16 @@ def test_wire2_endpoint_never_carries_a_wait_param(monkeypatch, stream):
 )
 def test_wire1_endpoint_is_unchanged(monkeypatch, stream, expected):
     monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", "http://127.0.0.1:3578")
-    monkeypatch.delenv("ZOE_FLUE_WIRE", raising=False)
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
     assert zoe_flue_client._endpoint("s1", stream=stream) == expected
 
 
 def test_request_payload_per_wire(monkeypatch):
-    monkeypatch.delenv("ZOE_FLUE_WIRE", raising=False)
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
     assert zoe_flue_client._request_payload("hi") == b'{"message": "hi"}'
     monkeypatch.setenv("ZOE_FLUE_WIRE", "2")
+    assert zoe_flue_client._request_payload("hi") == b'{"kind": "user", "body": "hi"}'
+    monkeypatch.delenv("ZOE_FLUE_WIRE", raising=False)  # default = wire 2 (B6.5)
     assert zoe_flue_client._request_payload("hi") == b'{"kind": "user", "body": "hi"}'
 
 

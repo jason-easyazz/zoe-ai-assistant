@@ -22,6 +22,14 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe  # zoe_flue_client is slim (json/logging/os/re)
 
+
+@pytest.fixture(autouse=True)
+def _wire1_doubles(monkeypatch):
+    """The httpx doubles in this file are post-only wire-1 (?wait=result)
+    doubles. Wire 1 is opt-in since B6.5 (the client defaults to wire 2), so
+    select it explicitly rather than relying on the old default."""
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
+
 import zoe_flue_client as zc
 
 LOCKER_Q = "what's my locker code?"
