@@ -913,6 +913,10 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (night) — voice memory packet lazy on the Flue lane (draft PR): the live sidecar
+  never reads `history` / `db_memory_context` / `portrait`, so the ~500 ms gather measured after
+  #1725 is built only on a core/legacy failover hop (`ZOE_VOICE_MEMORY_PACKET_LAZY`, default on;
+  `VOICE TIMING … packet=skipped`). Voice path: operator lands with the replay gate.
 - 2026-09-27 (night) — B6.6(e) router heads on numpy (draft PR): sklearn/scipy/joblib no
   longer imported by zoe-data; parity 0.0 on corpus + random; head load +72.7 → +1.7 MB.
 - 2026-09-27 (night) — B0.8 rehearsal done on a copy. The recipe changed from `mempalace migrate`,
