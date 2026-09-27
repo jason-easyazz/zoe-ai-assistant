@@ -626,9 +626,15 @@ async def test_acknowledging_a_recurring_reminder_keeps_the_series(monkeypatch):
     monkeypatch.setattr(rr, "_create_notification", noop)
     monkeypatch.setattr(rr.broadcaster, "broadcast", noop)
 
+    row["snoozed_until"] = "2026-09-28T00:00:00Z"
     await rr.acknowledge_reminder("r1", user={"user_id": "jason"}, db=_Db())
     assert not any("acknowledged = 1" in w for w in writes)
     assert calls == [("cancel", "r1"), ("reschedule", "r1")]
+    ack = next(w for w in writes if w.startswith("UPDATE reminders"))
+    # A pending snooze must not re-alert the occurrence just marked done, and a
+    # job already running must self-void (generation check at fire time).
+    assert "snoozed_until = NULL" in ack
+    assert "schedule_generation = COALESCE(schedule_generation, 0) + 1" in ack
 
     # Negative control: a one-off is still acknowledged for good, exactly as before.
     writes.clear(), calls.clear()

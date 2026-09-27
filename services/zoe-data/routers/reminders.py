@@ -407,7 +407,13 @@ async def acknowledge_reminder(
         # A recurring (RRULE) reminder is done for THIS occurrence only: the row
         # stays live and the next occurrence is scheduled (strictly after now).
         # Stopping the series is delete / is_active=false, never "Complete".
-        await db.execute("UPDATE reminders SET updated_at = NOW() WHERE id = ?", [reminder_id])
+        # Clear a pending snooze (it would re-alert this occurrence) and bump the
+        # generation so a job already running for it self-voids at fire time.
+        await db.execute(
+            "UPDATE reminders SET snoozed_until = NULL, updated_at = NOW(), "
+            "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
+            [reminder_id],
+        )
     else:
         await db.execute(
             "UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?",
