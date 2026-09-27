@@ -122,6 +122,17 @@ now pass the result through `_fit_tool_result_to_slot()`:
 - room = `ZOE_BRAIN_SLOT_TOKENS` (8192) − `max_tokens` − estimate(messages) − 256
 - the tool text is counted at chars/2, fail closed
 - a trimmed result gets an explicit `…[truncated to fit the context window]` marker
+- tool results already in the conversation are re-counted at chars/2 on every round
+- the serialized tool schemas (~12k chars for the full set) are reserved at chars/4. The
+  initial 5500 history window, computed separately in both agent entry points, does not
+  reserve them. With a full tool set and a full history, the first request can still
+  overflow on this non-live lane.
+
+`memory_digest._synthesis_pass()` (weekly insight synthesis) also posts straight to
+llama-server, with up to ten unbounded stored documents. `_build_synthesis_prompt()` caps
+the prompt at `_SYNTHESIS_PROMPT_BUDGET_TOKENS` = 2/3 of `ZOE_BRAIN_SLOT_TOKENS` (5461),
+counted at chars/2. Each document gets an equal share, and the truncation is logged with
+counts only.
 
 Portrait trimming also fails closed if `/tokenize` dies mid-trim. The ratio measured on
 the untrimmed text is not reused; the chars/2 bound applies. Under budget the prompt is byte-identical to before

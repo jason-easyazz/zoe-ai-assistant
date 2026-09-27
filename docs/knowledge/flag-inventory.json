@@ -419,10 +419,12 @@
       },
       "ZOE_BRAIN_SLOT_TOKENS": {
         "defaults": [
+          "'8192'",
           "8192"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/memory_digest.py",
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": true

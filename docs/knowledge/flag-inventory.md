@@ -58,7 +58,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BRAIN_FAILOVER` | `'0'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | `'45'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
-| `ZOE_BRAIN_SLOT_TOKENS` | `8192` | yes | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_BRAIN_SLOT_TOKENS` | `'8192'`, `8192` | yes | NO | `services/zoe-data/memory_digest.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_BRAIN_STARTUP_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_BRAIN_TOKEN` | `-` | no | NO | `scripts/perf/measure_tts_cadence.py`<br>`services/zoe-data/zoe_flue_client.py` |
 | `ZOE_BRAIN_UNIT` | `'llama-server.service'` | no | NO | `scripts/maintenance/router_selftrain.py`<br>`services/zoe-data/main.py` |

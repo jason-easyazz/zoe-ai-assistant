@@ -44,9 +44,7 @@ def test_near_budget_context_trims_tool_result_with_marker():
     assert _envelope_tokens(messages + [{"role": "tool", "content": fitted}], 1024) <= SLOT
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tool", ["deep_web_research", "web_browse"])
-async def test_second_round_of_a_near_budget_tool_turn_fits_the_slot(monkeypatch, tool):
+def _patch_context(monkeypatch, tools):
     async def none_async(*args, **kwargs):
         return ""
 
@@ -55,39 +53,88 @@ async def test_second_round_of_a_near_budget_tool_turn_fits_the_slot(monkeypatch
         monkeypatch.setattr(zoe_agent, name, none_async)
     monkeypatch.setattr(zoe_agent, "_check_fast_response", lambda *_: None)
     monkeypatch.setattr(zoe_agent, "_select_skills", lambda *_: set())
-    monkeypatch.setattr(zoe_agent, "_build_tools", lambda *_: [])
+    monkeypatch.setattr(zoe_agent, "_build_tools", lambda *_: tools)
     monkeypatch.setattr(zoe_agent, "_classify_tone", lambda *_: "")
     monkeypatch.setattr(zoe_agent, "_fire_memory_capture", lambda *_, **__: None)
 
     async def fake_dispatch(name, args, user_id=""):
         return "x" * 20000  # per-tool cap brings this to 6000 first
 
-    calls = []
-
-    async def fake_llm_call(messages, *, max_tokens=256, **kwargs):
-        calls.append(([dict(m) for m in messages], max_tokens))
-        if len(calls) == 1:
-            return "", tool, {"query": "prices"}
-        return "Here is what I found.", None, None
-
     monkeypatch.setattr(zoe_agent, "_dispatch_tool", fake_dispatch)
-    monkeypatch.setattr(zoe_agent, "_llm_call", fake_llm_call)
-    # A long conversation: the history window fills its 5500-token budget.
-    history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i} " + "w" * 1500}
-               for i in range(40)]
 
+
+def _fake_llm(calls, tool, rounds):
+    async def fake_llm_call(messages, *, max_tokens=256, tools_override=None, **kwargs):
+        calls.append(([dict(m) for m in messages], max_tokens, tools_override))
+        if len(calls) <= rounds:
+            return "", tool, {"query": f"prices {len(calls)}"}
+        return "Here is what I found.", None, None
+    return fake_llm_call
+
+
+def _history(n_msgs, chars):
+    return [{"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i} " + "w" * chars}
+            for i in range(n_msgs)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["deep_web_research", "web_browse"])
+async def test_second_round_of_a_near_budget_tool_turn_fits_the_slot(monkeypatch, tool):
+    _patch_context(monkeypatch, [])
+    calls = []
+    monkeypatch.setattr(zoe_agent, "_llm_call", _fake_llm(calls, tool, rounds=1))
+    # A long conversation: the history window fills its 5500-token budget.
     out = await zoe_agent.run_zoe_agent("find prices", "test-session", user_id="test-user",
-                                        history=history, max_tokens_override=1024)
+                                        history=_history(40, 1500), max_tokens_override=1024)
 
     assert out.endswith("Here is what I found.")
-    second_messages, max_tokens = calls[1]
+    second_messages, max_tokens, _ = calls[1]
     tool_msg = second_messages[-1]
     assert tool_msg["role"] == "tool"
     assert tool_msg["content"].endswith(zoe_agent._TRUNCATION_MARKER)
     assert _envelope_tokens(second_messages, max_tokens) <= SLOT
 
 
+@pytest.mark.asyncio
+async def test_two_large_tool_rounds_on_near_budget_history_fit_the_slot(monkeypatch):
+    """The FIRST tool result was admitted at chars/2; the second round must count it
+    at chars/2 too, or it over-allocates the second result."""
+    _patch_context(monkeypatch, [])
+    calls = []
+    monkeypatch.setattr(zoe_agent, "_llm_call", _fake_llm(calls, "deep_web_research", rounds=2))
+    await zoe_agent.run_zoe_agent("find prices", "test-session", user_id="test-user",
+                                  history=_history(40, 1500), max_tokens_override=1024)
+
+    assert len(calls) == 3
+    for msgs, max_tokens, _ in calls[1:]:
+        assert _envelope_tokens(msgs, max_tokens) <= SLOT  # ALL tool text at chars/2
+
+
+def _tools_tokens(tools):
+    import json
+    return len(json.dumps(tools)) // 4 if tools else 0
+
+
+@pytest.mark.asyncio
+async def test_tool_round_with_the_full_tool_list_fits_the_slot(monkeypatch):
+    full = list(zoe_agent._TOOLS)
+    assert _tools_tokens(full) > 2500  # the full serialized schema set really is large
+    _patch_context(monkeypatch, full)
+    calls = []
+    monkeypatch.setattr(zoe_agent, "_llm_call", _fake_llm(calls, "web_browse", rounds=1))
+    # History that fits the 5500 window together with the schemas (the initial
+    # window does not reserve them — see the zoe_agent comment).
+    await zoe_agent.run_zoe_agent("find prices", "test-session", user_id="test-user",
+                                  history=_history(12, 1200), max_tokens_override=1024)
+
+    msgs, max_tokens, tools = calls[1]
+    assert tools == full
+    assert _envelope_tokens(msgs, max_tokens) + _tools_tokens(tools) <= SLOT
+
+
 def test_both_tool_append_sites_fit_the_slot():
     # run_zoe_agent AND run_zoe_agent_streaming append tool results; both must fit.
     src = open(zoe_agent.__file__, encoding="utf-8").read()
     assert src.count("_fit_tool_result_to_slot(\n                    _cap_tool_result(tool_name, tool_result)") == 2
+    assert src.count("messages, budget, active_tools)") == 1
+    assert src.count("messages, token_budget, active_tools)") == 1
