@@ -317,6 +317,7 @@ STEP=kokoro-health
 kokoro_back
 
 STEP=redeploy             # only now: re-run the SPECIFIC refused #1745 deploy (captured in block A)
+exec 8>&- 2>/dev/null || true     # release the deploy lock taken in block A (same shell) — the rerun needs it
 gh run rerun "$DEPLOY_ID"
 sleep 20
 gh run watch "$DEPLOY_ID" --exit-status              # blocks until the deploy finishes; non-zero = failed
