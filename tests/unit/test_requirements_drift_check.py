@@ -186,6 +186,22 @@ def test_negative_control_direct_url_pin_catches_an_index_install(monkeypatch) -
     assert _verdicts(f"pytest @ {url}\n") == {"pytest": "MISMATCH"}
 
 
+def test_direct_url_compares_the_decoded_url_not_the_raw_string(monkeypatch) -> None:
+    """uv can record PEP 610 `direct_url.json` with the path percent-DECODED
+    (`torch-2.14.0+cpu-…`) while the manifest carries `%2B`. Same artifact, so it
+    must match — `--check` treats any MISMATCH as fatal (Codex, #1706)."""
+    have = version("pytest")
+    manifest = f"https://files.example/pytest-{have}%2Bx-py3-none-any.whl"
+    recorded = f"https://FILES.example/pytest-{have}+x-py3-none-any.whl"
+    monkeypatch.setattr(drift, "installed_version", lambda name: f"{have}+x")
+    monkeypatch.setattr(drift, "installed_direct_url", lambda name: recorded)
+    assert _verdicts(f"pytest @ {manifest}\n") == {"pytest": "match"}
+    # negative control: normalisation must not blur a genuinely different artifact
+    monkeypatch.setattr(drift, "installed_direct_url",
+                        lambda name: recorded.replace("+x-py3", "+y-py3"))
+    assert _verdicts(f"pytest @ {manifest}\n") == {"pytest": "MISMATCH"}
+
+
 def test_py312_manifest_torch_line_is_a_checked_url_pin() -> None:
     """Vacuity guard on the real manifest: the torch line must parse as a URL pin."""
     text = (ROOT / "services" / "zoe-data" / "requirements-py312.txt").read_text(encoding="utf-8")

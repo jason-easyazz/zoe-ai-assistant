@@ -31,6 +31,11 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 VENV_DIR="${ZOE_PY312_VENV:-$HOME/.zoe/venvs/zoe-data-py312}"
 PY_VERSION="${ZOE_PY312_PYTHON:-3.12}"
+# venv_version reports MAJOR.MINOR, so compare against the selector's MAJOR.MINOR:
+# an exact selector like 3.12.13 must not make every later build/--check refuse
+# the venv it just created (#1706). A non-numeric selector is compared as given.
+PY_MM="$(sed -nE 's/^([0-9]+\.[0-9]+)(\.[0-9]+)?$/\1/p' <<<"$PY_VERSION")"
+PY_MM="${PY_MM:-$PY_VERSION}"
 MIN_MEM_MB="${ZOE_PY312_MIN_MEM_MB:-500}"
 REQ_FILE="$REPO_ROOT/services/zoe-data/requirements-py312.txt"
 # Phase 2 (see header). Keep in step with the Resemblyzer block of the manifest.
@@ -128,7 +133,7 @@ case "$MODE" in
   check)
     step "check"
     [[ -x "$VENV_PY" ]] || die "no venv at $VENV_DIR (run without --check to build it)"
-    v="$(venv_version)"; [[ "$v" == "$PY_VERSION" ]] || die "venv is Python $v, expected $PY_VERSION"
+    v="$(venv_version)"; [[ "$v" == "$PY_MM" ]] || die "venv is Python $v, expected $PY_MM"
     ok "interpreter $("$VENV_PY" -c 'import sys; print(sys.version.split()[0], sys.executable)')"
     # Drift is FATAL here: most smoke imports assert no version, so a warning would
     # let --check certify a knowingly drifted venv right before cutover (#1706).
@@ -137,6 +142,12 @@ case "$MODE" in
     [[ -f "$drift" ]] || die "drift checker missing: $drift"
     log "drift (manifest vs venv):"
     "${NICE[@]}" "$VENV_PY" "$drift" "$REQ_FILE" || die "drift check reported mismatches (see above) — rebuild (no args) to converge"
+    # Phase 2 is installed from PHASE2_NO_DEPS, not the manifest, so the manifest
+    # check cannot see it; the smoke only imports it. Check its pins too (#1706).
+    phase2_req="$(mktemp)"; trap 'rm -f "$phase2_req"' EXIT
+    printf '%s\n' "${PHASE2_NO_DEPS[@]}" >"$phase2_req"
+    log "drift (phase 2 vs venv):"
+    "${NICE[@]}" "$VENV_PY" "$drift" "$phase2_req" || die "phase-2 drift (${PHASE2_NO_DEPS[*]}) — rebuild (no args) to converge"
     log "import smoke:"
     smoke && ok "smoke passed" || die "smoke FAILED"
     ;;
@@ -146,10 +157,10 @@ case "$MODE" in
     (( avail >= MIN_MEM_MB )) || die "only ${avail} MB available (< ${MIN_MEM_MB}); not installing on a starved box (ZOE_PY312_MIN_MEM_MB overrides)"
     log "ensuring uv-managed CPython $PY_VERSION"
     "${NICE[@]}" "$UV" python install "$PY_VERSION"
-    if [[ "$(venv_version)" == "$PY_VERSION" ]]; then
-      ok "venv present at $VENV_DIR (Python $PY_VERSION) — converging packages"
+    if [[ "$(venv_version)" == "$PY_MM" ]]; then
+      ok "venv present at $VENV_DIR (Python $PY_MM) — converging packages"
     else
-      [[ -e "$VENV_DIR" ]] && die "$VENV_DIR exists but is not a Python $PY_VERSION venv — remove it deliberately first"
+      [[ -e "$VENV_DIR" ]] && die "$VENV_DIR exists but is not a Python $PY_MM venv — remove it deliberately first"
       mkdir -p "$(dirname "$VENV_DIR")"
       "${NICE[@]}" "$UV" venv "$VENV_DIR" --python "$PY_VERSION"
       ok "created $VENV_DIR"

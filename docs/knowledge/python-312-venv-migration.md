@@ -85,7 +85,7 @@ separately; not a 3.12 matter.
 # inside a worktree (never the live checkout for git; the venv lives OUTSIDE the repo)
 scripts/setup/build_py312_venv.sh --dry-run   # prints the plan + resolves the manifest, installs nothing
 scripts/setup/build_py312_venv.sh             # ~/.zoe/venvs/zoe-data-py312, ~1.9 GB, ~1 min warm cache
-scripts/setup/build_py312_venv.sh --check     # interpreter, drift vs the manifest (any MISMATCH fails), import smoke
+scripts/setup/build_py312_venv.sh --check     # interpreter, drift vs manifest + phase-2 pins (any MISMATCH fails), smoke
 ```
 
 What it does, in order: `uv python install 3.12` (uv-managed CPython under
@@ -231,6 +231,7 @@ is not part of rollback — they describe the box on 3.10 too.
 - Operator: gates 3–5 (restart), then flip `deploy.yml`'s pip step (§4 caveat) in the cutover PR.
 - `docs/knowledge/numpy2-jetson-migration.md` assumed an on-box `onnxruntime-gpu` story; for
   zoe-data the venv makes that moot (CPU wheels), which shrinks that WIP to Kokoro's stack.
-- `validate.yml`'s "Resolve every requirements manifest" job runs on 3.10 and does not know
-  `requirements-py312.txt`; add it under a 3.12 matrix entry when the cutover lands (it needs the
-  `--no-deps` phase expressed, e.g. a `--dry-run` of the build script).
+- Closed in #1706: `validate.yml`'s `deps-resolvable` job resolves `requirements-py312.txt` for cp312 /
+  aarch64-manylinux_2_31 on every PR (the build script's `--dry-run`, uv 0.10.11, with a uv
+  negative control), so a conflicting pin, a missing cp312 wheel or a dead torch URL fails CI
+  rather than the operator's build. The pip loop beside it still resolves the 3.10 manifests.

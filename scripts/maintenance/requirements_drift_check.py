@@ -163,6 +163,18 @@ def installed_direct_url(name: str) -> Optional[str]:
         return None
 
 
+def _normalized_url(url: Optional[str]) -> Optional[tuple]:
+    """Comparable form of a URL: scheme/host case-folded, path percent-DECODED.
+
+    The manifest spells torch's local version `%2Bcpu`; an installer may record
+    the same artifact in ``direct_url.json`` as `+cpu`. Same wheel, same verdict.
+    """
+    if not url:
+        return None
+    parts = urlsplit(url.strip())
+    return (parts.scheme.lower(), parts.netloc.lower(), unquote(parts.path), unquote(parts.query))
+
+
 def _check_direct_url(name: str, spec: str, have: str) -> "Finding":
     url = spec[1:].strip()
     want = wheel_url_version(url)
@@ -170,7 +182,7 @@ def _check_direct_url(name: str, spec: str, have: str) -> "Finding":
         return Finding(name, spec, have, "MISMATCH",
                        f"installed {have} is not the pinned wheel's {want}")
     source = installed_direct_url(name)
-    if source != url:
+    if source is None or _normalized_url(source) != _normalized_url(url):
         return Finding(name, spec, have, "MISMATCH",
                        f"installed from {source or 'an index (no direct_url.json)'}, not the pinned URL")
     return Finding(name, spec, have, "match", "")
