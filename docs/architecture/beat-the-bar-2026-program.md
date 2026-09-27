@@ -698,6 +698,13 @@ status: 🔨 active — NEXT ACTION is always §0
   `~/.cache/zoe/llama-server.service.pre-b6-6`. ⬜ Stale comment:
   `labs/flue-zoe-brain-2x/src/context-window.ts` still says `--ctx-size 16384 --parallel 2`
   (fix in a labs PR, not here).
+  (d) ✅ **Kokoro glibc arena cap APPLIED 2026-09-27**. The tracked drop-in
+  `scripts/setup/systemd/kokoro-tts.service.d/40-memory-tuning.conf` sets `MALLOC_ARENA_MAX=2` +
+  `MALLOC_TRIM_THRESHOLD_=131072`. Measured in a same-age controlled A/B: **−113 to −125 MB anon**
+  (VmRSS −73 to −112 MB), with synth p50/p95 within noise over two ABAB rounds. The predicted
+  −400 to −800 MB did not happen: the "arena bloat" was mostly live data. Details and table:
+  [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro sidecar memory). ⬜ The remaining
+  Kokoro RAM lever is a dedicated venv without scikit-learn/pandas (~−100 MB).
 
 - B6.6 🔨 **Brain flags tuning** (2026-09-27, two replay-gated brain windows on b11194, one
   flag vs the live set per run, same-session control; evidence in
@@ -851,6 +858,7 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (eve) — B6.6 (d): Kokoro `MALLOC_ARENA_MAX=2` drop-in applied live. Measured −113 to −125 MB anon, not the predicted −400 to −800 MB, with latency within noise (ABAB).
 - 2026-09-27 (eve) — B0.6 safe-now Python train: psycopg2-binary 2.9.13 + prometheus-client
   0.26.0 (both manifests + CI/deploy lists); joblib 1.6.0 held on the router-head training-pin contract.
 - 2026-09-27 (eve) — B0.12 network hardening drafted (loopback Postgres + HA bridge, PG 17.11,
