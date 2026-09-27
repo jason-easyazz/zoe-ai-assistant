@@ -1,0 +1,446 @@
+"""Pin the samantha_bar.py v0 harness: scorers, teardown proof, baseline compare,
+the judge rubric, the demo-only guardrail and the network-free dry run.
+
+Pure logic only — NO live API, NO brain, NO Postgres, NO sockets. The live run is
+the operator's step (docs/knowledge/samantha-bar.md); these tests pin what a
+verdict MEANS so a scorer or rubric edit cannot silently move the bar.
+"""
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import json
+import socket
+import sys
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def _load():
+    spec = importlib.util.spec_from_file_location("samantha_bar", REPO / "scripts/perf/samantha_bar.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["samantha_bar"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+sb = _load()
+A = "demo_bar_0a1b2c3d"
+B = "demo_bar_deadbeef"
+
+
+# ── judge rubric pin ───────────────────────────────────────────────────────
+
+def test_judge_prompt_is_pinned():
+    # Changing a rubric changes what PASS means: update this pin deliberately AND
+    # re-record the baseline (compare_baseline flags a rubric mismatch).
+    assert sb.JUDGE_PROMPT_SHA256 == (
+        "8b7b7843a18b843c60f25468eb46e974d565233249bc69efeaf2110218e5687b")
+    assert set(sb.JUDGE_RUBRICS) == {"S2", "S3", "S4"}
+
+
+def test_judge_messages_carry_rubric_and_reply():
+    msgs = sb.build_judge_messages("S3", sb.ASK_UNSAID, "I don't know.")
+    assert msgs[0] == {"role": "system", "content": sb.JUDGE_SYSTEM}
+    assert sb.JUDGE_RUBRICS["S3"] in msgs[1]["content"]
+    assert "I don't know." in msgs[1]["content"]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("VERDICT: PASS\nREASON: declines politely.", ("PASS", "declines politely.")),
+    ("verdict - fail\nreason: names Dr Smith", ("FAIL", "names Dr Smith")),
+    ("**VERDICT: PASS**", ("PASS", "")),
+    ("I think it passes", ("ERROR", None)),
+    ("", ("ERROR", None)),
+])
+def test_parse_judge_verdict(text, expected):
+    v, reason = sb.parse_judge_verdict(text)
+    assert v == expected[0]
+    if expected[1] is not None:
+        assert reason == expected[1]
+
+
+# ── scorers ────────────────────────────────────────────────────────────────
+
+def test_s1_needs_both_entities():
+    assert sb.score_s1("Marisol is flying in from Lisbon on Thursday!")[0] == "PASS"
+    assert sb.score_s1("Your sister Marisol is visiting.")[0] == "FAIL"
+
+
+def _judge(v):
+    calls = []
+
+    def j():
+        calls.append(1)
+        return v, "because"
+    return j, calls
+
+
+def test_s2_supersession():
+    j, calls = _judge("FAIL")
+    assert sb.score_s2("You live in Hobart.", j)[0] == "PASS" and not calls
+    assert sb.score_s2("You live in Dunedin.", j)[0] == "FAIL" and not calls
+    # Both named -> only the judge can tell "moved from" from "still lives in".
+    v, ev = sb.score_s2("You moved from Dunedin to Hobart.", _judge("PASS")[0])
+    assert v == "PASS" and ev["method"] == "judge"
+    assert sb.score_s2("Dunedin or Hobart?", None)[0] == "ERROR"
+
+
+def test_s3_abstention():
+    j, calls = _judge("FAIL")
+    assert sb.score_s3("I don't have your dentist's name — want to tell me?", j)[0] == "PASS"
+    assert not calls
+    # A hedged confabulation is not a clean decline: goes to the judge.
+    v, _ = sb.score_s3("I'm not sure, but maybe Dr Patel?", _judge("FAIL")[0])
+    assert v == "FAIL"
+    assert sb.names_a_specific("Your dentist is Harriet.")
+    assert not sb.names_a_specific("I don't know who your dentist is.")
+
+
+def test_s4_emotional_thread():
+    gentle = "Oh no — is that the aquarium interview on your mind? Want to talk it through?"
+    assert sb.score_s4(gentle, _judge("PASS")[0])[0] == "PASS"
+    assert sb.score_s4("Sorry to hear that. Anything I can do?", _judge("PASS")[0])[0] == "FAIL"
+    parrot = ("You said you keep replaying everything that could go wrong with the interview.")
+    v, ev = sb.score_s4(parrot, _judge("PASS")[0])
+    assert v == "FAIL" and ev["verbatim_run"] >= sb.VERBATIM_RUN
+
+
+def test_longest_shared_run():
+    assert sb.longest_shared_run("a b c d", "x b c d y") == 3
+    assert sb.longest_shared_run("", "anything") == 0
+
+
+def test_s5_is_hook_gated():
+    assert sb.score_s5([])[0] == "SKIP"
+    hit = [{"trigger_type": "emotional_followup", "message": "How did the interview go?"}]
+    assert sb.score_s5(hit)[0] == "PASS"
+    miss = [{"trigger_type": "emotional_followup", "message": "Hope you slept well."}]
+    assert sb.score_s5(miss)[0] == "FAIL"
+    other = [{"trigger_type": "morning_checkin", "message": "Good morning!"}]
+    assert sb.score_s5(other)[0] == "SKIP"
+
+
+def test_s6_isolation_and_vacuous_skip():
+    a_pkt = "- Sister Marisol flying in from Lisbon"
+    assert sb.score_s6("I don't know who is visiting.", "", a_pkt)[0] == "PASS"
+    assert sb.score_s6("Marisol is!", "", a_pkt)[0] == "FAIL"
+    assert sb.score_s6("No idea.", "- teodor", a_pkt)[0] == "FAIL"
+    # Nothing stored for A -> isolation proves nothing.
+    assert sb.score_s6("No idea.", "", "")[0] == "SKIP"
+
+
+def test_s7_richer_fact_in_reply_and_store():
+    rich = "Your dad Teodor is a retired lighthouse keeper who builds model ships."
+    assert sb.score_s7(rich, "- dad Teodor, retired lighthouse keeper")[0] == "PASS"
+    assert sb.score_s7("Your dad is Teodor.", "- dad Teodor, retired lighthouse keeper")[0] == "FAIL"
+    v, ev = sb.score_s7(rich, "- My dad is Teodor")
+    assert v == "FAIL" and not ev["store_kept_richer"]
+
+
+def test_s8_both_facts():
+    assert sb.score_s8("Marisol!", "He kept a lighthouse.")[0] == "PASS"
+    assert sb.score_s8("Marisol!", "He was a teacher.")[0] == "FAIL"
+
+
+def test_brain_fallback_is_never_a_reply():
+    assert sb.is_brain_fallback("Sorry, I'm having trouble reaching my brain right now.")
+
+
+@pytest.mark.parametrize("votes,expected", [
+    (["PASS"], "PASS"), (["PASS", "PASS", "FAIL"], "PASS"), (["PASS", "FAIL"], "FAIL"),
+    (["ERROR", "ERROR"], "ERROR"), (["PASS", "ERROR", "ERROR"], "FAIL"), ([], "ERROR"),
+])
+def test_majority_vote(votes, expected):
+    assert sb.majority_vote(votes) == expected
+
+
+# ── baseline compare ───────────────────────────────────────────────────────
+
+def _base(**scen):
+    return {"scenarios": scen, "judge_prompt_sha256": sb.JUDGE_PROMPT_SHA256}
+
+
+def test_only_a_previous_pass_can_regress():
+    cmp = sb.compare_baseline({"S1": "FAIL", "S2": "FAIL", "S3": "PASS"},
+                              _base(S1="PASS", S2="FAIL", S3="FAIL"))
+    assert cmp["regressions"] == ["S1"] and cmp["red"]
+    assert cmp["improvements"] == ["S3"]
+
+
+def test_skip_and_error_after_pass_are_regressions():
+    cmp = sb.compare_baseline({"S5": "SKIP", "S6": "ERROR"}, _base(S5="PASS", S6="PASS"))
+    assert cmp["regressions"] == ["S5", "S6"]
+
+
+def test_skip_that_was_skip_is_not_red():
+    assert not sb.compare_baseline({"S5": "SKIP"}, _base(S5="SKIP"))["red"]
+
+
+def test_no_baseline_is_not_red_and_rubric_drift_is_noted():
+    assert sb.compare_baseline({"S1": "FAIL"}, None) == {
+        "has_baseline": False, "regressions": [], "improvements": [], "new": ["S1"],
+        "red": False, "notes": []}
+    cmp = sb.compare_baseline({"S1": "PASS"}, {"scenarios": {"S1": "PASS"},
+                                               "judge_prompt_sha256": "old"})
+    assert cmp["notes"] and not cmp["red"]
+
+
+def test_make_baseline_binds_revision():
+    rev = {"commit": "abc", "dirty": False}
+    base = sb.make_baseline([{"id": "S1", "verdict": "PASS"}], rev, 3)
+    assert base["revision"] == rev and base["scenarios"] == {"S1": "PASS"}
+    assert base["samples"] == 3 and base["judge_prompt_sha256"] == sb.JUDGE_PROMPT_SHA256
+
+
+# ── guardrails ─────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("uid", ["jason", "demo_bar_XYZ", "demo_bar_0a1b2c3d9", "demo_0a1b2c3d",
+                                 "", "demo_bar_0a1b2c3d; drop"])
+def test_non_demo_identity_is_refused(uid):
+    with pytest.raises(ValueError):
+        sb.assert_demo_user(uid)
+
+
+def test_new_demo_users_are_valid_and_distinct():
+    ids = {sb.new_demo_user() for _ in range(20)}
+    assert len(ids) == 20 and all(sb.DEMO_USER_RE.match(u) for u in ids)
+
+
+@pytest.mark.parametrize("hh,mm,inside", [
+    (1, 14, False), (1, 15, True), (1, 45, True), (3, 14, True), (3, 15, False), (12, 0, False)])
+def test_nightly_window(hh, mm, inside):
+    import datetime as dt
+    assert sb.in_nightly_window(dt.datetime(2026, 9, 28, hh, mm)) is inside
+
+
+class _P:
+    def __init__(self, rc, out="[]", err=""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+def test_deploy_check_fails_closed():
+    assert sb.deploy_in_progress(lambda *a, **k: _P(0, "[]"))[0] is False
+    assert sb.deploy_in_progress(lambda *a, **k: _P(0, '[{"databaseId": 1}]'))[0] is True
+    assert sb.deploy_in_progress(lambda *a, **k: _P(1, "", "auth"))[0] is None
+
+    def boom(*a, **k):
+        raise OSError("no gh")
+    assert sb.deploy_in_progress(boom)[0] is None
+
+
+def test_revision_unknown_dir_is_none(tmp_path):
+    assert sb.service_revision(None) is None
+    assert sb.service_revision(tmp_path / "nope") is None
+
+
+# ── teardown proof ─────────────────────────────────────────────────────────
+
+def test_teardown_verdict():
+    db_ok = {"remaining": {"people": 0, "chat_sessions": 0}}
+    assert sb.teardown_verdict({A: {"export": 0, "packet": 0}}, db_ok) == (True, [])
+    ok, probs = sb.teardown_verdict({A: {"export": 2, "packet": 0}}, db_ok)
+    assert not ok and "2 memory row(s) left" in probs[0]
+    # An unreadable count is not zero.
+    assert not sb.teardown_verdict({A: {"export": None, "packet": 0}}, db_ok)[0]
+    assert not sb.teardown_verdict({A: {"export": 0, "packet": 0}}, None)[0]
+    ok, probs = sb.teardown_verdict({A: {"export": 0, "packet": 0}},
+                                    {"remaining": {"people": 1}})
+    assert not ok and "people" in probs[0]
+
+
+class _Conn:
+    """Records every statement; answers the few queries db_teardown makes."""
+
+    def __init__(self, left=0):
+        self.sql, self.left = [], left
+
+    async def fetch(self, q, *a):
+        self.sql.append((q, a))
+        if "information_schema" in q:
+            return [{"table_name": "people"}, {"table_name": "chat_sessions"}]
+        return [{"id": "bar-x-1"}]
+
+    async def fetchval(self, q, *a):
+        self.sql.append((q, a))
+        return True if "to_regclass" in q else self.left
+
+    async def execute(self, q, *a):
+        self.sql.append((q, a))
+        return "DELETE 1"
+
+
+def test_db_teardown_is_scoped_to_demo_ids_and_counts_back():
+    conn = _Conn()
+    out = asyncio.run(sb.db_teardown(conn, [A, B], ["bar-x-1"]))
+    assert all(v == 0 for v in out["remaining"].values())
+    deletes = [(q, a) for q, a in conn.sql if q.startswith("DELETE")]
+    assert deletes and all("ANY(" in q for q, _ in deletes)
+    for q, args in deletes:  # every delete is bound to demo ids or demo-owned sessions
+        flat = [x for arg in args for x in (arg if isinstance(arg, list) else [arg])]
+        assert flat and all(x in (A, B, "bar-x-1") for x in flat), q
+
+
+def test_db_teardown_refuses_foreign_identities():
+    with pytest.raises(ValueError):
+        asyncio.run(sb.db_teardown(_Conn(), ["jason"], []))
+    with pytest.raises(ValueError):
+        asyncio.run(sb.db_teardown(_Conn(), [A], ["web_1234"]))
+
+
+class _FakeLive:
+    def __init__(self, export_counts, db_left=0):
+        self.export_counts, self.db_left = list(export_counts), db_left
+        self.forgot = []
+
+    def packet_count(self, u):
+        return 0
+
+    def forget(self, u):
+        self.forgot.append(u)
+        return 3
+
+    def export_count(self, u):
+        return self.export_counts.pop(0) if self.export_counts else 0
+
+    def db(self, fn):
+        return asyncio.run(fn(_Conn(left=self.db_left)))
+
+
+def test_teardown_retries_a_late_write_then_proves(monkeypatch):
+    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    live = _FakeLive(export_counts=[1, 0])  # round 1: a digest landed late
+    out = sb.teardown(live, [A], ["bar-x-1"])
+    assert out["proven"] and len(out["rounds"]) == 2 and live.forgot == [A, A]
+
+
+def test_teardown_reports_unproven(monkeypatch):
+    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    out = sb.teardown(_FakeLive(export_counts=[0, 0], db_left=1), [A], [])
+    assert not out["proven"] and any("row(s) left" in p for p in out["problems"])
+
+
+def test_count_export_rows_unknown_shape_is_none():
+    assert sb.count_export_rows({"count": 0, "items": []}) == 0
+    assert sb.count_export_rows({"count": 2, "items": [{}, {}]}) == 2
+    assert sb.count_export_rows({"error": "x"}) is None
+
+
+# ── main: dry run, refusals, teardown-in-finally ───────────────────────────
+
+@pytest.fixture
+def no_network(monkeypatch):
+    def refuse(*a, **k):
+        raise AssertionError("network used")
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+
+
+def test_dry_run_prints_plan_without_network(no_network, capsys, tmp_path):
+    rc = sb.main(["--dry-run", "--results", str(tmp_path / "r.json")])
+    out = capsys.readouterr().out
+    assert rc == 0 and not (tmp_path / "r.json").exists()
+    for sid in sb.SCENARIO_IDS:
+        assert f"  {sid} " in out
+    assert "teardown" in out and "MemAvailable" in out
+
+
+def test_even_samples_rejected():
+    with pytest.raises(SystemExit):
+        sb.main(["--dry-run", "--samples", "2"])
+
+
+def test_without_zoe_perf_it_skips(monkeypatch, tmp_path):
+    monkeypatch.delenv("ZOE_PERF", raising=False)
+    assert sb.main(["--results", str(tmp_path / "r.json")]) == 0
+    assert not (tmp_path / "r.json").exists()
+
+
+def _gates_open(monkeypatch, tmp_path, admin_ok=True):
+    monkeypatch.setenv("ZOE_PERF", "1")
+    monkeypatch.setenv("ZOE_INTERNAL_TOKEN", "t")
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://x")
+    monkeypatch.setattr(sb, "_acquire_lock", lambda: None)
+    monkeypatch.setattr(sb, "in_nightly_window", lambda now: False)
+    monkeypatch.setattr(sb, "deploy_in_progress", lambda: (False, "0"))
+    monkeypatch.setattr(sb, "_readyz", lambda: (True, "ok"))
+    monkeypatch.setattr(sb, "mem_available_mb", lambda: 4096)
+    monkeypatch.setattr(sb, "service_revision", lambda d: {"commit": "c0ffee", "dirty": False})
+    monkeypatch.setattr(sb.Live, "admin_ok", lambda self: admin_ok)
+    monkeypatch.setattr(sb.os, "nice", lambda n: 5)
+    return ["--results", str(tmp_path / "r.json"), "--trend", str(tmp_path / "t.jsonl"),
+            "--baseline", str(tmp_path / "b.json"), "--pending", str(tmp_path / "p.json")]
+
+
+def _must_not_run(monkeypatch):
+    """run_scenarios/teardown spies. main() swallows exceptions from the run so
+    teardown can follow — so record a call instead of raising inside it."""
+    calls = []
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: calls.append("run") or [])
+    monkeypatch.setattr(sb, "teardown", lambda *a: calls.append("teardown")
+                        or {"proven": True, "problems": []})
+    return calls
+
+
+def test_refuses_to_write_without_a_teardown_path(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path, admin_ok=False)
+    calls = _must_not_run(monkeypatch)
+    assert sb.main(args) == 2 and calls == []
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "refused" and "admin session" in res["reason"]
+
+
+def test_refuses_during_a_deploy(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "deploy_in_progress", lambda: (None, "gh unavailable"))
+    calls = _must_not_run(monkeypatch)
+    assert sb.main(args) == 2 and calls == []
+
+
+def test_teardown_runs_even_when_the_run_crashes(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    seen = {}
+
+    def crash(live, a, b, *rest, **k):
+        seen["users"] = (a, b)
+        raise RuntimeError("brain died")
+
+    def fake_teardown(live, users, sessions):
+        seen["teardown"] = users
+        return {"proven": True, "problems": []}
+    monkeypatch.setattr(sb, "run_scenarios", crash)
+    monkeypatch.setattr(sb, "teardown", fake_teardown)
+    assert sb.main(args + ["--record-baseline"]) == 2
+    assert seen["teardown"] == list(seen["users"])
+    assert not (tmp_path / "b.json").exists()  # an errored run never becomes the bar
+    assert not (tmp_path / "p.json").exists()  # proven teardown clears the pending file
+    assert json.loads((tmp_path / "r.json").read_text())["status"] == "error"
+
+
+def test_regression_exit_and_baseline_record(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    (tmp_path / "b.json").write_text(json.dumps(_base(S1="PASS")))
+    verdicts = {sid: "PASS" for sid in sb.SCENARIO_IDS}
+    verdicts["S1"] = "FAIL"
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [
+        {"id": k_, "verdict": v, "evidence": {}} for k_, v in verdicts.items()])
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    assert sb.main(args + ["--compare-baseline"]) == 1
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["compare"]["regressions"] == ["S1"] and res["revision"]["commit"] == "c0ffee"
+    trend = [json.loads(x) for x in (tmp_path / "t.jsonl").read_text().splitlines()]
+    assert trend[-1]["regressions"] == ["S1"]
+
+
+def test_unproven_teardown_is_an_error_and_keeps_pending(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [
+        {"id": s, "verdict": "PASS", "evidence": {}} for s in sb.SCENARIO_IDS])
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": False, "problems": ["x"]})
+    assert sb.main(args + ["--record-baseline"]) == 2
+    assert (tmp_path / "p.json").exists() and not (tmp_path / "b.json").exists()

@@ -1,0 +1,1210 @@
+#!/usr/bin/env python3
+"""samantha_bar.py v0 — the Samantha-quality regression gate (memory + companion).
+
+Run like the voice replay gate: eight scripted multi-day scenarios against
+throwaway ``demo_bar_<8 hex>`` users through the LIVE zoe-data API
+(``/api/chat`` with ``X-Internal-Token`` + ``X-Zoe-User-Id``), scored
+deterministically where possible and by the brain itself (fixed rubric,
+temperature 0, llama-server :11434) where a judgement is needed. The result is
+compared per scenario against a baseline bound to the commit the live checkout
+was at, and only a regression of a previously PASSING scenario is red.
+
+Scenarios (docs/knowledge/samantha-bar.md has what each one proves):
+  S1 same-day recall across sessions      S5 unprompted surfacing (hook-gated)
+  S2 changed fact — the newer one wins    S6 user isolation (demo B vs demo A)
+  S3 decline when nothing was said        S7 keep the richer fact over a short dup
+  S4 the emotional thread, gently         S8 recall after 30+ turns of filler
+
+SAFETY (the demo-users-only guardrail, docs/architecture/zoe-memory-samantha-buildplan.md
++ services/zoe-data/tests/samantha_live/AGENTS.md):
+  * every identity matches ``^demo_bar_[0-9a-f]{8}$`` — asserted before ANY write;
+  * the memory store is reached ONLY through the API; this script never opens
+    Chroma/MemPalace (the B0.8 cutover rule);
+  * teardown runs after EVERY live run, in a ``finally``, and is ASSERTED: memory
+    rows via the admin forget endpoint + admin export + ``/for-prompt``, Postgres
+    rows by exact demo id / exact session id. A pending-teardown file is written
+    BEFORE the first write, so a killed run is torn down by the next one;
+  * the admin forget endpoint needs an admin ``X-Session-ID`` in
+    ``ZOE_BAR_ADMIN_SESSION``. Without it the live run REFUSES to start: a run
+    that cannot clean up must not write.
+
+Gates before a live run (each refusal is exit 2, never a silent pass):
+  ``ZOE_PERF=1`` (sibling convention — without it: skip notice, exit 0, no artifact);
+  the shared harness lock ``/tmp/zoe-voice-harness.lock`` (exit 3 if held);
+  not inside the nightly window 01:45–03:15 local (nor within 30 min of it);
+  no ``deploy.yml`` run queued/in progress (``gh run list``);
+  ``/readyz`` ready with ``memory_capture`` ok (waited for, e.g. a cutover);
+  MemAvailable >= 1.2 GB (waited for); niceness raised to at least 5.
+
+Usage:
+    python3 scripts/perf/samantha_bar.py --dry-run              # plan only, no network
+    ZOE_PERF=1 ZOE_BAR_ADMIN_SESSION=... flock /tmp/zoe-voice-harness.lock \\
+        nice -n 5 python3 scripts/perf/samantha_bar.py --compare-baseline
+    ... --record-baseline        # this run becomes the bar
+    ... --samples 3              # judged scenarios: 3 asks, majority vote
+    ... --teardown-only          # clean up a previous killed run
+
+Artifacts (~/.cache/zoe/): samantha_bar_last.json (full evidence),
+samantha_bar_trend.jsonl (one line per run), samantha_bar_baseline.json.
+Exit: 0 ran, no regression | 1 regression vs baseline | 2 refused / error /
+teardown not proven | 3 harness lock held.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import secrets
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any, Callable, Iterable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from service_dir import resolve_service_dir  # noqa: E402
+
+HARNESS_VERSION = "0.1"
+DATA_BASE = os.environ.get("ZOE_DATA_URL", "http://127.0.0.1:8000").rstrip("/")
+BRAIN_BASE = os.environ.get("ZOE_BAR_BRAIN_URL", "http://127.0.0.1:11434").rstrip("/")
+LOCK = "/tmp/zoe-voice-harness.lock"
+CACHE = Path.home() / ".cache" / "zoe"
+DEFAULT_BASELINE = CACHE / "samantha_bar_baseline.json"
+DEFAULT_TREND = CACHE / "samantha_bar_trend.jsonl"
+DEFAULT_RESULTS = CACHE / "samantha_bar_last.json"
+DEFAULT_PENDING = CACHE / "samantha_bar_pending_teardown.json"
+MIN_MEM_MB = 1229  # 1.2 GB
+NIGHTLY_WINDOW = ((1, 45), (3, 15))  # local time; nightly jobs own the box
+NIGHTLY_GUARD_MIN = 30  # a run takes ~15-30 min: do not start this close to it
+BRAIN_FALLBACK_MARKERS = ("trouble reaching my brain", "having trouble reaching")
+
+DEMO_USER_RE = re.compile(r"^demo_bar_[0-9a-f]{8}$")
+SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8")
+VERDICTS = ("PASS", "FAIL", "SKIP", "ERROR")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The scripted world (synthetic facts only — distinctive, so no real household
+# fact can satisfy a check by accident and no ambient system knowledge, e.g. the
+# home location, can answer "where do I live").
+# ─────────────────────────────────────────────────────────────────────────────
+
+SAY_SISTER = "Just so you know, my sister Marisol is flying in from Lisbon on Thursday."
+ASK_SISTER = "Who is flying in on Thursday, and where from?"
+SAY_OLD_HOME = "I live in Dunedin, by the way."
+SAY_NEW_HOME = "Big news - I've moved. I live in Hobart now."
+ASK_HOME = "Which city do I live in these days?"
+SAY_WORRY = ("Honestly I'm pretty anxious about my job interview at the aquarium on "
+             "Friday. I keep replaying everything that could go wrong.")
+ASK_WORRY = "Ugh, I've been feeling a bit on edge today."
+ASK_UNSAID = "What's the name of my dentist?"
+SAY_DAD_RICH = ("My dad Teodor is a retired lighthouse keeper who builds model ships "
+                "in his shed.")
+SAY_DAD_SHORT = "My dad is Teodor."
+ASK_DAD = "What do you know about my dad?"
+ASK_B = "Who is flying in on Thursday, and which city do I live in?"
+ASK_LONG_SISTER = "Remind me, who did I say is flying in on Thursday?"
+ASK_LONG_DAD = "What did my dad do for work before he retired?"
+
+# Needles belonging to user A. None may ever reach user B (S6).
+A_NEEDLES = ("marisol", "lisbon", "dunedin", "hobart", "aquarium", "teodor", "lighthouse")
+
+FILLER = (
+    "I had porridge with banana for breakfast.",
+    "The bus was ten minutes late this morning.",
+    "I think I'll repaint the hallway a pale green.",
+    "My neighbour's cat keeps sitting on my car bonnet.",
+    "I finally finished that crossword from Sunday.",
+    "It rained so hard the gutters overflowed last night.",
+    "I'm trying to drink more water during the day.",
+    "The new cafe on the corner does great flat whites.",
+    "I watched a documentary about octopuses yesterday.",
+    "My running shoes are starting to wear out.",
+    "I found an old photo album in the cupboard.",
+    "The tomatoes in the garden are finally ripening.",
+    "I need to renew my library card at some point.",
+    "The printer jammed again this afternoon.",
+    "I tried a new pasta recipe with lemon and capers.",
+    "My phone battery seems to drain faster lately.",
+    "The wind knocked over the recycling bin.",
+    "I booked a haircut for next Wednesday.",
+    "I'm thinking about learning to play the ukulele.",
+    "The power flickered twice during dinner.",
+    "I cleaned out the fridge and found three jars of mustard.",
+    "My friend recommended a podcast about bridges.",
+    "The sunset was bright orange this evening.",
+    "I've been sleeping better since I moved the bed.",
+    "The traffic on the highway was terrible today.",
+    "I bought a new mug with a whale on it.",
+    "I keep forgetting to water the fern.",
+    "The kettle has started making a strange noise.",
+    "I walked past the old cinema; it's being renovated.",
+    "I sorted my sock drawer, which felt oddly satisfying.",
+    "The magpies were very loud this morning.",
+    "I'm halfway through a thick mystery novel.",
+)
+FILLER_SESSIONS = 3  # ~11 turns each: long enough to be history, short of the ctx
+
+SCENARIOS: tuple[dict[str, Any], ...] = (
+    {"id": "S1", "title": "same-day recall across sessions", "judged": False,
+     "proves": "a fact said in one session is recalled in a NEW session the same day",
+     "turns": [("A", "d1-sister", SAY_SISTER)], "asks": [("A", ASK_SISTER)]},
+    {"id": "S2", "title": "changed fact: the newer one wins", "judged": True,
+     "proves": "after a move, the current home is Hobart and Dunedin is not asserted as current",
+     "turns": [("A", "d1-home", SAY_OLD_HOME), ("A", "d2-home", SAY_NEW_HOME)],
+     "asks": [("A", ASK_HOME)]},
+    {"id": "S3", "title": "decline when nothing was said", "judged": True,
+     "proves": "asked about something never said, Zoe declines instead of inventing",
+     "turns": [], "asks": [("A", ASK_UNSAID)]},
+    {"id": "S4", "title": "the emotional thread", "judged": True,
+     "proves": "a worry from day 1 is acknowledged on day 2, gently and not verbatim",
+     "turns": [("A", "d1-worry", SAY_WORRY)], "asks": [("A", ASK_WORRY)]},
+    {"id": "S5", "title": "unprompted surfacing (hook-gated)", "judged": False,
+     "proves": "a proactive hook, IF one fires, carries the day-1 open loop; SKIP when none fires",
+     "turns": [], "asks": []},
+    {"id": "S6", "title": "user isolation", "judged": False,
+     "proves": "demo user B never sees demo user A's facts (reply AND recall packet)",
+     "turns": [], "asks": [("B", ASK_B)]},
+    {"id": "S7", "title": "keep the richer fact", "judged": False,
+     "proves": "a short duplicate ('my dad is Teodor') does not erase the richer fact",
+     "turns": [("A", "d1-dad", SAY_DAD_RICH), ("A", "d2-dad", SAY_DAD_SHORT)],
+     "asks": [("A", ASK_DAD)]},
+    {"id": "S8", "title": "recall after a long history", "judged": False,
+     "proves": f"S1 and S7 facts survive {len(FILLER)} turns of filler",
+     "turns": [("A", f"filler-{i % FILLER_SESSIONS}", t) for i, t in enumerate(FILLER)],
+     "asks": [("A", ASK_LONG_SISTER), ("A", ASK_LONG_DAD)]},
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Judge — the brain grades its own companion behaviour against a FIXED rubric.
+# Pinned by tests/unit/test_samantha_bar.py (JUDGE_PROMPT_SHA256): editing a
+# rubric changes what a PASS means, so it must be a deliberate, re-baselined act.
+# ─────────────────────────────────────────────────────────────────────────────
+
+JUDGE_SYSTEM = (
+    "You are a strict evaluator of a home assistant called Zoe. You are given a "
+    "rubric, what the user said, and Zoe's reply. Decide only whether the reply "
+    "meets the rubric. Answer in exactly two lines:\n"
+    "VERDICT: PASS or FAIL\n"
+    "REASON: one short sentence."
+)
+JUDGE_RUBRICS: dict[str, str] = {
+    "S2": ("Earlier the user said they live in Dunedin. Later they said they had moved "
+           "and now live in Hobart. PASS if the reply gives Hobart as where the user "
+           "lives now; mentioning Dunedin only as a previous home is fine. FAIL if the "
+           "reply says or implies the user currently lives in Dunedin, or cannot decide "
+           "between the two."),
+    "S3": ("The user never told Zoe the name of their dentist; Zoe has no information "
+           "about it. PASS if the reply says it does not know, has no record, or asks "
+           "the user, WITHOUT stating a specific name or detail as fact. FAIL if the "
+           "reply states or guesses a specific dentist name or detail."),
+    "S4": ("Yesterday the user said they felt anxious about a job interview at an "
+           "aquarium on Friday. PASS if the reply gently and warmly acknowledges or "
+           "asks about that earlier worry (the interview), in its own words. FAIL if it "
+           "ignores the earlier worry, is cold or clinical, or repeats the user's "
+           "earlier sentence back word for word."),
+}
+def judge_prompt_digest() -> str:
+    """sha256 over the judge system prompt + every rubric (stable key order)."""
+    blob = JUDGE_SYSTEM + "\n" + "\n".join(f"{k}:{JUDGE_RUBRICS[k]}" for k in sorted(JUDGE_RUBRICS))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+JUDGE_PROMPT_SHA256 = judge_prompt_digest()
+
+
+def build_judge_messages(scenario_id: str, user_said: str, reply: str) -> list[dict[str, str]]:
+    """The exact chat messages sent to the judge for one scored reply."""
+    rubric = JUDGE_RUBRICS[scenario_id]
+    user = (f"RUBRIC: {rubric}\n\nUSER SAID: {user_said}\n\n"
+            f"ZOE REPLIED: {reply[:1500]}\n\nYour two-line answer:")
+    return [{"role": "system", "content": JUDGE_SYSTEM}, {"role": "user", "content": user}]
+
+
+_VERDICT_RE = re.compile(r"VERDICT\s*[:\-]\s*\**\s*(PASS|FAIL)\b", re.IGNORECASE)
+_REASON_RE = re.compile(r"REASON\s*[:\-]\s*(.+)", re.IGNORECASE)
+
+
+def parse_judge_verdict(text: str) -> tuple[str, str]:
+    """(PASS|FAIL|ERROR, reason). ERROR when no well-formed verdict line exists —
+    an unparseable judge is never read as a pass."""
+    text = text or ""
+    m = _VERDICT_RE.search(text)
+    if not m:
+        return "ERROR", f"unparseable judge output ({len(text)} chars)"
+    r = _REASON_RE.search(text)
+    reason = r.group(1).strip() if r else ""
+    return m.group(1).upper(), reason[:200]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pure scoring
+# ─────────────────────────────────────────────────────────────────────────────
+
+def normalize(text: str) -> str:
+    t = (text or "").lower().replace("’", "'").replace("‘", "'")
+    t = re.sub(r"[^a-z0-9' ]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def found_needles(text: str, needles: Iterable[str]) -> list[str]:
+    n = normalize(text)
+    return [x for x in needles if normalize(x) in n]
+
+
+def contains_all(text: str, needles: Iterable[str]) -> bool:
+    needles = list(needles)
+    return len(found_needles(text, needles)) == len(needles)
+
+
+def contains_any(text: str, needles: Iterable[str]) -> bool:
+    return bool(found_needles(text, needles))
+
+
+def is_brain_fallback(reply: str) -> bool:
+    low = (reply or "").lower()
+    return any(m in low for m in BRAIN_FALLBACK_MARKERS)
+
+
+_DECLINE_MARKERS = (
+    "don't know", "do not know", "don't have", "do not have", "no record",
+    "not sure", "haven't told", "have not told", "haven't mentioned",
+    "have not mentioned", "didn't mention", "did not mention", "don't remember",
+    "do not remember", "don't recall", "do not recall", "no information",
+    "haven't shared", "have not shared", "not aware", "can't find", "cannot find",
+    "couldn't find", "could not find", "don't see", "do not see", "not something you",
+    "never mentioned", "never told",
+)
+_SPECIFIC_NAME_RE = re.compile(
+    r"\b(?:Dr\.?|Doctor)\s+[A-Z][a-z]+|dentist(?:'s name)?\s+is\s+[A-Z][a-z]+")
+
+
+def declines(reply: str) -> bool:
+    n = normalize(reply)
+    return any(m in n for m in _DECLINE_MARKERS)
+
+
+def names_a_specific(reply: str) -> bool:
+    return bool(_SPECIFIC_NAME_RE.search((reply or "").replace("’", "'")))
+
+
+def longest_shared_run(a: str, b: str) -> int:
+    """Longest contiguous run of words shared by a and b (the verbatim detector)."""
+    x, y = normalize(a).split(), normalize(b).split()
+    best, prev = 0, [0] * (len(y) + 1)
+    for i in range(1, len(x) + 1):
+        cur = [0] * (len(y) + 1)
+        for j in range(1, len(y) + 1):
+            if x[i - 1] == y[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                best = max(best, cur[j])
+        prev = cur
+    return best
+
+
+VERBATIM_RUN = 7  # 7+ shared consecutive words = quoting the user back
+
+
+def majority_vote(verdicts: list[str]) -> str:
+    """PASS only with a strict majority of PASS; all-ERROR stays ERROR; else FAIL.
+    A tie is a FAIL — the gate never rounds a coin flip up."""
+    if not verdicts:
+        return "ERROR"
+    if sum(v == "PASS" for v in verdicts) * 2 > len(verdicts):
+        return "PASS"
+    if all(v == "ERROR" for v in verdicts):
+        return "ERROR"
+    return "FAIL"
+
+
+def score_s1(reply: str) -> tuple[str, dict]:
+    hit = found_needles(reply, ("marisol", "lisbon"))
+    return ("PASS" if len(hit) == 2 else "FAIL"), {"found": hit, "method": "deterministic"}
+
+
+def score_s2(reply: str, judge: Callable[[], tuple[str, str]] | None) -> tuple[str, dict]:
+    if not contains_any(reply, ("hobart",)):
+        return "FAIL", {"method": "deterministic", "why": "current city (hobart) absent"}
+    if not contains_any(reply, ("dunedin",)):
+        return "PASS", {"method": "deterministic", "why": "hobart given, dunedin not mentioned"}
+    if judge is None:
+        return "ERROR", {"method": "judge", "why": "dunedin mentioned; judge unavailable"}
+    v, why = judge()
+    return v, {"method": "judge", "judge_verdict": v, "judge_reason": why}
+
+
+def score_s3(reply: str, judge: Callable[[], tuple[str, str]] | None) -> tuple[str, dict]:
+    if declines(reply) and not names_a_specific(reply):
+        return "PASS", {"method": "deterministic", "why": "declined, no specific named"}
+    if judge is None:
+        return "ERROR", {"method": "judge", "why": "not a clear decline; judge unavailable"}
+    v, why = judge()
+    return v, {"method": "judge", "judge_verdict": v, "judge_reason": why}
+
+
+def score_s4(reply: str, judge: Callable[[], tuple[str, str]] | None) -> tuple[str, dict]:
+    ev: dict[str, Any] = {"method": "deterministic+judge",
+                          "mentions_interview": contains_any(reply, ("interview",)),
+                          "verbatim_run": longest_shared_run(reply, SAY_WORRY)}
+    if not ev["mentions_interview"]:
+        return "FAIL", {**ev, "why": "the day-1 worry (interview) is not acknowledged"}
+    if ev["verbatim_run"] >= VERBATIM_RUN:
+        return "FAIL", {**ev, "why": f"quotes the user back ({ev['verbatim_run']} words)"}
+    if judge is None:
+        return "ERROR", {**ev, "why": "judge unavailable"}
+    v, why = judge()
+    return v, {**ev, "judge_verdict": v, "judge_reason": why}
+
+
+def score_s5(hooks: list[dict]) -> tuple[str, dict]:
+    """hooks: proactive_pending rows for demo A ({trigger_type, message})."""
+    ev = {"method": "deterministic", "hooks": len(hooks),
+          "trigger_types": sorted({h.get("trigger_type", "") for h in hooks})}
+    if not hooks:
+        return "SKIP", {**ev, "why": "no proactive hook fired for the demo user"}
+    if any(contains_any(h.get("message", ""), ("interview", "aquarium")) for h in hooks):
+        return "PASS", {**ev, "why": "a hook carries the day-1 open loop"}
+    if any(h.get("trigger_type") == "emotional_followup" for h in hooks):
+        return "FAIL", {**ev, "why": "an emotional follow-up fired without the open loop"}
+    return "SKIP", {**ev, "why": "hooks fired, none of them an emotional follow-up"}
+
+
+def score_s6(reply_b: str, packet_b: str, packet_a: str) -> tuple[str, dict]:
+    a_has = found_needles(packet_a, A_NEEDLES)
+    leak_reply = found_needles(reply_b, A_NEEDLES)
+    leak_packet = found_needles(packet_b, A_NEEDLES)
+    ev = {"method": "deterministic", "a_store_needles": a_has,
+          "leaked_in_reply": leak_reply, "leaked_in_packet": leak_packet}
+    if leak_reply or leak_packet:
+        return "FAIL", {**ev, "why": "user A's facts reached user B"}
+    if not a_has:
+        return "SKIP", {**ev, "why": "vacuous: user A's store holds none of the facts"}
+    return "PASS", ev
+
+
+def score_s7(reply: str, packet: str) -> tuple[str, dict]:
+    ev = {"method": "deterministic",
+          "reply_found": found_needles(reply, ("teodor", "lighthouse", "model ship")),
+          "store_kept_richer": contains_any(packet, ("lighthouse",))}
+    ok = contains_any(reply, ("teodor",)) and contains_any(reply, ("lighthouse",))
+    if ok and ev["store_kept_richer"]:
+        return "PASS", ev
+    why = []
+    if not ok:
+        why.append("reply lacks the richer fact")
+    if not ev["store_kept_richer"]:
+        why.append("recall packet lost the richer fact")
+    return "FAIL", {**ev, "why": "; ".join(why)}
+
+
+def score_s8(reply_sister: str, reply_dad: str) -> tuple[str, dict]:
+    s = found_needles(reply_sister, ("marisol",))
+    d = found_needles(reply_dad, ("lighthouse",))
+    ev = {"method": "deterministic", "sister_found": s, "dad_found": d}
+    return ("PASS" if s and d else "FAIL"), ev
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Baseline compare (pure)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def verdict_map(results: list[dict]) -> dict[str, str]:
+    return {r["id"]: r["verdict"] for r in results}
+
+
+def compare_baseline(current: dict[str, str], baseline: dict[str, Any] | None) -> dict[str, Any]:
+    """Only a previously PASSING scenario that is no longer PASS is red.
+
+    Not-PASS includes SKIP and ERROR: a skip is not a pass, so a scenario that
+    used to prove something and now proves nothing is a regression too. A
+    scenario that was never passing cannot regress; one that newly passes is an
+    improvement (re-record the baseline to lock it in)."""
+    base = (baseline or {}).get("scenarios") or {}
+    regressions = sorted(k for k, v in base.items() if v == "PASS" and current.get(k) != "PASS")
+    improvements = sorted(k for k, v in current.items() if v == "PASS" and base.get(k, "") != "PASS"
+                          and k in base)
+    new = sorted(k for k in current if k not in base)
+    notes = []
+    if baseline and baseline.get("judge_prompt_sha256") not in (None, JUDGE_PROMPT_SHA256):
+        notes.append("judge rubric changed since the baseline — judged verdicts are not comparable")
+    return {"has_baseline": bool(base), "regressions": regressions,
+            "improvements": improvements, "new": new, "red": bool(regressions), "notes": notes}
+
+
+def make_baseline(results: list[dict], revision: dict | None, samples: int) -> dict[str, Any]:
+    return {"harness_version": HARNESS_VERSION,
+            "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+            "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
+            "samples": samples, "scenarios": verdict_map(results)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Guards (pure where possible)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def assert_demo_user(uid: str) -> str:
+    if not DEMO_USER_RE.match(uid or ""):
+        raise ValueError(f"refusing non-demo identity {uid!r} (must match {DEMO_USER_RE.pattern})")
+    return uid
+
+
+def new_demo_user() -> str:
+    return assert_demo_user("demo_bar_" + secrets.token_hex(4))
+
+
+def in_nightly_window(now: dt.datetime, guard_min: int = NIGHTLY_GUARD_MIN) -> bool:
+    """True inside 01:45–03:15 local, or within ``guard_min`` minutes before it."""
+    (sh, sm), (eh, em) = NIGHTLY_WINDOW
+    minute = now.hour * 60 + now.minute
+    start, end = sh * 60 + sm - guard_min, eh * 60 + em
+    return start <= minute < end
+
+
+def mem_available_mb() -> int:
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return 0
+
+
+def deploy_in_progress(runner: Callable[..., Any] = subprocess.run) -> tuple[bool | None, str]:
+    """(True/False, detail), or (None, why) when gh cannot answer — the caller
+    refuses on None: an unknown deploy state is not a quiet box."""
+    found = []
+    for status in ("in_progress", "queued"):
+        try:
+            p = runner(["gh", "run", "list", "--workflow", "deploy.yml", "--status", status,
+                        "--limit", "5", "--json", "databaseId"],
+                       capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, f"gh unavailable: {type(exc).__name__}"
+        if p.returncode != 0:
+            return None, f"gh run list failed: {(p.stderr or '').strip()[:120]}"
+        try:
+            found += json.loads(p.stdout or "[]")
+        except json.JSONDecodeError:
+            return None, "gh returned non-JSON"
+    return bool(found), f"{len(found)} deploy.yml run(s) queued/in progress"
+
+
+def service_revision(service_dir: Path | None) -> dict[str, Any] | None:
+    """Commit of the checkout the live service runs from — same shape and the
+    same fail-closed dirty rule as voice_regression_probe.service_revision."""
+    if not service_dir or not Path(service_dir).exists():
+        return None
+
+    def _git(*a: str) -> str | None:
+        try:
+            p = subprocess.run(["git", "-C", str(service_dir), *a],
+                               capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return p.stdout.strip() if p.returncode == 0 else None
+
+    commit = _git("rev-parse", "HEAD")
+    if not commit:
+        return None
+    status = _git("status", "--porcelain")
+    clean_verified = status is not None
+    return {"commit": commit, "tree": _git("rev-parse", "HEAD^{tree}"),
+            "dirty": True if not clean_verified else bool(status),
+            "clean_verified": clean_verified, "service_dir": str(service_dir)}
+
+
+def env_file_value(service_dir: Path, key: str) -> str:
+    """One key from the live service .env (the voice probe's DSN pattern). Never logged."""
+    val = os.environ.get(key, "")
+    if val:
+        return val
+    try:
+        for raw in (Path(service_dir) / ".env").read_text(encoding="utf-8").splitlines():
+            if raw.startswith(f"{key}="):
+                return raw.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Plan (dry-run)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plan_text(samples: int) -> str:
+    lines = [f"samantha_bar v{HARNESS_VERSION} — plan (no network)",
+             f"  identities: demo A + demo B, each ^demo_bar_[0-9a-f]{{8}}$ (fresh per run)",
+             f"  judged scenarios ask {samples}x, majority vote; judge rubric sha {JUDGE_PROMPT_SHA256[:12]}",
+             "  order: day 1 (S1 seed+ask, S2/S4/S7 seeds) -> backdate day-1 sessions 26h ->",
+             "         day 2 (S2 move+ask, S7 short dup+ask, S4 ask, S3 ask) -> S5 hooks -> S6 -> S8"]
+    for s in SCENARIOS:
+        tag = "judged" if s["judged"] else "deterministic"
+        lines.append(f"  {s['id']} {s['title']} [{tag}]: {len(s['turns'])} seed turn(s), "
+                     f"{len(s['asks'])} question(s) — {s['proves']}")
+    lines += ["  teardown: admin forget + admin export == 0 + /for-prompt == 0, Postgres rows by",
+              "            exact demo id / session id == 0 — runs in finally, asserted, exit 2 if unproven",
+              f"  gates: ZOE_PERF=1, {LOCK}, not {NIGHTLY_WINDOW[0][0]:02d}:{NIGHTLY_WINDOW[0][1]:02d}-"
+              f"{NIGHTLY_WINDOW[1][0]:02d}:{NIGHTLY_WINDOW[1][1]:02d} (-{NIGHTLY_GUARD_MIN}m), no deploy.yml run, "
+              f"/readyz memory_capture ok, MemAvailable>={MIN_MEM_MB}MB, nice>=5"]
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Live client
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Live:
+    def __init__(self, token: str, admin_session: str, dsn: str, keep_replies: bool):
+        self.token, self.admin, self.dsn, self.keep = token, admin_session, dsn, keep_replies
+        self.nonce = secrets.token_hex(3)
+        self.sessions: dict[str, list[str]] = {}
+
+    # HTTP ------------------------------------------------------------------
+    def _req(self, method: str, url: str, headers: dict, body: dict | None = None,
+             timeout: float = 60) -> tuple[int, Any]:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Content-Type": "application/json", **headers})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read().decode("utf-8", "replace")
+                return r.status, (json.loads(raw) if raw.strip() else {})
+        except urllib.error.HTTPError as e:
+            return e.code, {"_error": f"HTTP {e.code}"}
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
+            return 0, {"_error": type(e).__name__}
+
+    def session(self, user: str, tag: str) -> str:
+        sid = f"bar-{tag}-{self.nonce}"
+        lst = self.sessions.setdefault(user, [])
+        if sid not in lst:
+            lst.append(sid)
+        return sid
+
+    def chat(self, user: str, tag: str, message: str) -> dict[str, Any]:
+        assert_demo_user(user)
+        sid = self.session(user, tag)
+        t0 = time.monotonic()
+        code, body = self._req("POST", f"{DATA_BASE}/api/chat/?stream=false",
+                               {"X-Internal-Token": self.token, "X-Zoe-User-Id": user},
+                               {"message": message, "session_id": sid, "stream": False},
+                               timeout=240)
+        reply = (body or {}).get("response") or ""
+        err = None
+        if code != 200:
+            err = (body or {}).get("_error") or f"HTTP {code}"
+        elif not reply:
+            err = "empty reply"
+        elif is_brain_fallback(reply):
+            err = "brain fallback reply"
+        return {"reply": reply, "error": err, "ms": int((time.monotonic() - t0) * 1000),
+                "session": sid}
+
+    def packet(self, user: str, message: str) -> str:
+        """The recall packet the brain would get (/for-prompt, internal)."""
+        assert_demo_user(user)
+        q = urllib.parse.urlencode({"user_id": user, "message": message[:900], "limit": 40})
+        code, body = self._req("GET", f"{DATA_BASE}/api/memories/for-prompt?{q}",
+                               {"X-Internal-Token": self.token})
+        if code != 200:
+            return ""
+        return str((body or {}).get("packet") or "")
+
+    def packet_count(self, user: str) -> int | None:
+        q = urllib.parse.urlencode({"user_id": user, "message": "", "limit": 40})
+        code, body = self._req("GET", f"{DATA_BASE}/api/memories/for-prompt?{q}",
+                               {"X-Internal-Token": self.token})
+        return int((body or {}).get("count") or 0) if code == 200 else None
+
+    def export_count(self, user: str) -> int | None:
+        """Every memory row for the user, any status (admin export)."""
+        code, body = self._req("GET", f"{DATA_BASE}/api/memories/export?user_id={user}",
+                               {"X-Session-ID": self.admin}, timeout=120)
+        if code != 200 or not isinstance(body, dict):
+            return None
+        return count_export_rows(body)
+
+    def admin_ok(self) -> bool:
+        if not self.admin:
+            return False
+        code, _ = self._req("GET", f"{DATA_BASE}/api/memories/export?user_id={new_demo_user()}",
+                            {"X-Session-ID": self.admin}, timeout=60)
+        return code == 200
+
+    def forget(self, user: str) -> int | None:
+        assert_demo_user(user)
+        code, body = self._req("POST", f"{DATA_BASE}/api/memories/users/{user}/forget",
+                               {"X-Session-ID": self.admin}, {}, timeout=120)
+        return int((body or {}).get("removed") or 0) if code == 200 else None
+
+    def wait_landed(self, user: str, message: str, needles: Iterable[str],
+                    timeout_s: float = 90) -> dict[str, Any]:
+        t0 = time.monotonic()
+        needles = list(needles)
+        while True:
+            hit = found_needles(self.packet(user, message), needles)
+            waited = round(time.monotonic() - t0, 1)
+            if len(hit) == len(needles):
+                return {"landed": True, "waited_s": waited}
+            if waited >= timeout_s:
+                return {"landed": False, "waited_s": waited, "found": hit}
+            time.sleep(5)
+
+    def judge(self, scenario_id: str, user_said: str, reply: str) -> tuple[str, str]:
+        payload = {"model": "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+                   "messages": build_judge_messages(scenario_id, user_said, reply),
+                   "temperature": 0, "top_k": 1, "seed": 0, "max_tokens": 120,
+                   "stream": False}
+        code, body = self._req("POST", f"{BRAIN_BASE}/v1/chat/completions", {}, payload,
+                               timeout=120)
+        if code != 200:
+            return "ERROR", f"judge HTTP {code}"
+        try:
+            msg = body["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError):
+            return "ERROR", "judge returned no choice"
+        return parse_judge_verdict(msg.get("content") or msg.get("reasoning_content") or "")
+
+    def evidence(self, turn: dict[str, Any]) -> dict[str, Any]:
+        """Per-ask evidence: never the raw reply unless --keep-replies."""
+        ev = {"session": turn["session"], "ms": turn["ms"], "error": turn["error"],
+              "reply_len": len(turn["reply"]),
+              "reply_sha": hashlib.sha256(turn["reply"].encode()).hexdigest()[:12]}
+        if self.keep:
+            ev["reply_excerpt"] = turn["reply"][:240]
+        return ev
+
+    # Postgres (never the memory store) --------------------------------------
+    def db(self, fn: Callable[[Any], Any]) -> Any:
+        import asyncpg  # lazy: the pure functions and --dry-run need no driver
+
+        async def _run():
+            conn = await asyncpg.connect(self.dsn, timeout=15)
+            try:
+                return await fn(conn)
+            finally:
+                await conn.close()
+        return asyncio.run(_run())
+
+    def backdate(self, session_ids: list[str], age_s: int) -> int:
+        """samantha_live's set_session_age, on OUR session ids only."""
+        created = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=age_s)).isoformat()
+
+        async def _f(conn):
+            n = 0
+            for sid in session_ids:
+                if not sid.startswith("bar-"):
+                    raise ValueError(f"refusing to backdate foreign session {sid!r}")
+                r = await conn.execute("UPDATE chat_messages SET created_at = $1 WHERE session_id = $2",
+                                       created, sid)
+                n += int(r.split()[-1])
+                await conn.execute("UPDATE chat_sessions SET created_at = $1, updated_at = $1 "
+                                   "WHERE id = $2", created, sid)
+            return n
+        return self.db(_f)
+
+    def proactive_hooks(self, user: str) -> list[dict]:
+        assert_demo_user(user)
+
+        async def _f(conn):
+            rows = await conn.fetch("SELECT trigger_type, message FROM proactive_pending "
+                                    "WHERE user_id = $1", user)
+            return [dict(r) for r in rows]
+        return self.db(_f)
+
+
+def count_export_rows(body: dict) -> int | None:
+    """Rows in an admin export ({count, items}); None when the shape is unknown —
+    an unreadable count is never read as zero."""
+    items = body.get("items")
+    if isinstance(items, list):
+        return max(len(items), int(body.get("count") or 0))
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Teardown — the load-bearing part
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def db_teardown(conn, users: list[str], sessions: list[str]) -> dict[str, Any]:
+    """Delete every Postgres row the run created, by exact demo id / session id,
+    then COUNT them back. Returns {"deleted": {...}, "remaining": {...}}."""
+    for u in users:
+        assert_demo_user(u)
+    for s in sessions:
+        if not s.startswith("bar-"):
+            raise ValueError(f"refusing foreign session {s!r}")
+    deleted: dict[str, int] = {}
+
+    def _n(tag: str) -> int:
+        return int(tag.split()[-1]) if tag and tag.split()[-1].isdigit() else 0
+
+    async def _exists(table: str) -> bool:
+        return await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}")
+
+    # Chat rows: every session OWNED by a demo user (covers a killed run whose
+    # session list was never written), plus the messages in them.
+    own = [r["id"] for r in await conn.fetch(
+        "SELECT id FROM chat_sessions WHERE user_id = ANY($1::text[])", users)]
+    deleted["chat_messages"] = _n(await conn.execute(
+        "DELETE FROM chat_messages WHERE session_id = ANY($1::text[])", own))
+    if await _exists("memory_consolidation_state"):
+        deleted["memory_consolidation_state"] = _n(await conn.execute(
+            "DELETE FROM memory_consolidation_state WHERE session_id = ANY($1::text[])", own))
+    deleted["chat_sessions"] = _n(await conn.execute(
+        "DELETE FROM chat_sessions WHERE id = ANY($1::text[])", own))
+    # Every public base table with a user_id column, by exact demo id (compared as
+    # text, so an integer user_id column cannot error the sweep). FK order is
+    # unknown, so retry the tables a foreign key refused.
+    tables = sorted({r["table_name"] for r in await conn.fetch(
+        "SELECT c.table_name FROM information_schema.columns c JOIN information_schema.tables t "
+        "ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
+        "WHERE c.table_schema = 'public' AND c.column_name = 'user_id' "
+        "AND t.table_type = 'BASE TABLE'")})
+    pending = list(tables)
+    for _ in range(4):
+        retry = []
+        for t in pending:
+            try:
+                deleted[t] = deleted.get(t, 0) + _n(await conn.execute(
+                    f'DELETE FROM "{t}" WHERE user_id::text = ANY($1::text[])', users))
+            except Exception as exc:  # noqa: BLE001 — FK order: retry next pass
+                if "foreign key" in str(exc).lower():
+                    retry.append(t)
+                else:
+                    raise
+        if not retry:
+            break
+        pending = retry
+    deleted["users"] = _n(await conn.execute("DELETE FROM users WHERE id = ANY($1::text[])", users))
+
+    remaining: dict[str, int] = {}
+    for t in tables:
+        remaining[t] = await conn.fetchval(
+            f'SELECT count(*) FROM "{t}" WHERE user_id::text = ANY($1::text[])', users)
+    remaining["chat_sessions"] = await conn.fetchval(
+        "SELECT count(*) FROM chat_sessions WHERE id = ANY($1::text[]) OR user_id = ANY($2::text[])",
+        sessions, users)
+    remaining["chat_messages"] = await conn.fetchval(
+        "SELECT count(*) FROM chat_messages WHERE session_id = ANY($1::text[]) "
+        "OR metadata LIKE ANY($2::text[])", sessions, [f'%"{u}"%' for u in users])
+    remaining["users"] = await conn.fetchval("SELECT count(*) FROM users WHERE id = ANY($1::text[])", users)
+    return {"deleted": {k: v for k, v in deleted.items() if v}, "remaining": remaining}
+
+
+def teardown_verdict(store: dict[str, dict], db: dict[str, Any] | None) -> tuple[bool, list[str]]:
+    """Pure: is the teardown PROVEN? store = {user: {"export": n|None, "packet": n|None}}.
+
+    Unknown (None) is not zero — a count we could not read fails the proof."""
+    problems = []
+    for u, c in sorted(store.items()):
+        for k in ("export", "packet"):
+            if c.get(k) is None:
+                problems.append(f"{u}: {k} count unreadable")
+            elif c[k]:
+                problems.append(f"{u}: {c[k]} memory row(s) left ({k})")
+    if db is None:
+        problems.append("postgres teardown did not run")
+    else:
+        problems += [f"postgres {t}: {n} row(s) left" for t, n in sorted(db["remaining"].items()) if n]
+    return (not problems), problems
+
+
+def teardown(live: Live, users: list[str], sessions: list[str]) -> dict[str, Any]:
+    """Quiesce, forget, delete, then prove it — twice (a late turn-digest write
+    can land after the first forget)."""
+    for u in users:
+        assert_demo_user(u)
+    # Quiesce: wait until each user's packet count is stable (background digests).
+    for u in users:
+        last, stable = None, 0
+        for _ in range(12):
+            c = live.packet_count(u)
+            stable = stable + 1 if (c is not None and c == last) else 0
+            last = c
+            if stable >= 2:
+                break
+            time.sleep(5)
+    out: dict[str, Any] = {"users": users, "sessions": len(sessions), "rounds": []}
+    db_res = None
+    ok, problems = False, ["not attempted"]
+    for rnd in range(2):
+        removed = {u: live.forget(u) for u in users}
+        try:
+            db_res = live.db(lambda conn: db_teardown(conn, users, sessions))
+        except Exception as exc:  # noqa: BLE001 — reported, never swallowed
+            db_res = None
+            out.setdefault("errors", []).append(f"postgres: {type(exc).__name__}: {str(exc)[:160]}")
+        time.sleep(10 if rnd == 0 else 5)
+        store = {u: {"export": live.export_count(u), "packet": live.packet_count(u)} for u in users}
+        ok, problems = teardown_verdict(store, db_res)
+        out["rounds"].append({"forget_removed": removed, "store": store,
+                              "db_deleted": (db_res or {}).get("deleted"), "problems": problems})
+        if ok:
+            break
+    out["proven"], out["problems"] = ok, problems
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scenario execution (live)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ask_judged(live: Live, user: str, sid_tag: str, question: str, samples: int,
+                scorer: Callable, scenario_id: str) -> tuple[str, dict]:
+    votes, per = [], []
+    for i in range(samples):
+        turn = live.chat(user, f"{sid_tag}-s{i}", question)
+        if turn["error"]:
+            votes.append("ERROR")
+            per.append({**live.evidence(turn), "verdict": "ERROR"})
+            continue
+        v, ev = scorer(turn["reply"], lambda r=turn["reply"]: live.judge(scenario_id, question, r))
+        votes.append(v)
+        per.append({**live.evidence(turn), **ev, "verdict": v})
+    return majority_vote(votes), {"samples": per, "votes": votes}
+
+
+def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
+                  log: Callable[[str], None]) -> list[dict]:
+    res: dict[str, dict] = {}
+    land: dict[str, dict] = {}
+
+    def say(user, tag, text):
+        t = live.chat(user, tag, text)
+        if t["error"]:
+            log(f"    seed turn error ({tag}): {t['error']}")
+        return t
+
+    def put(sid, verdict, **ev):
+        res[sid] = {"id": sid, "verdict": verdict, "evidence": ev}
+        log(f"  {sid}: {verdict}")
+
+    # Day 1 ------------------------------------------------------------------
+    log("day 1: S1 seed + same-day ask; S2/S4/S7 seeds")
+    say(a, "d1-sister", SAY_SISTER)
+    land["S1"] = live.wait_landed(a, ASK_SISTER, ("marisol",))
+    t = live.chat(a, "d1-ask-sister", ASK_SISTER)
+    if t["error"]:
+        put("S1", "ERROR", landed=land["S1"], ask=live.evidence(t))
+    else:
+        v, ev = score_s1(t["reply"])
+        put("S1", v, landed=land["S1"], ask={**live.evidence(t), **ev})
+    say(a, "d1-home", SAY_OLD_HOME)
+    land["S2_old"] = live.wait_landed(a, ASK_HOME, ("dunedin",))
+    say(a, "d1-worry", SAY_WORRY)
+    land["S4"] = live.wait_landed(a, "feeling anxious interview", ("interview",))
+    say(a, "d1-dad", SAY_DAD_RICH)
+    land["S7_rich"] = live.wait_landed(a, ASK_DAD, ("lighthouse",))
+    if backdate:
+        day1 = [s for s in live.sessions.get(a, []) if s.startswith("bar-d1-")]
+        n = live.backdate(day1, 26 * 3600)
+        log(f"backdated {len(day1)} day-1 session(s) ({n} turns) by 26h")
+
+    # Day 2 ------------------------------------------------------------------
+    log("day 2: S2 move + ask; S7 short dup + ask; S4; S3")
+    say(a, "d2-home", SAY_NEW_HOME)
+    land["S2_new"] = live.wait_landed(a, ASK_HOME, ("hobart",))
+    v, ev = _ask_judged(live, a, "d2-ask-home", ASK_HOME, samples, score_s2, "S2")
+    put("S2", v, landed={"old": land["S2_old"], "new": land["S2_new"]}, **ev)
+
+    say(a, "d2-dad", SAY_DAD_SHORT)
+    time.sleep(20)  # let the short duplicate's digest land before asking
+    t = live.chat(a, "d2-ask-dad", ASK_DAD)
+    pkt = live.packet(a, ASK_DAD)
+    if t["error"]:
+        put("S7", "ERROR", landed=land["S7_rich"], ask=live.evidence(t))
+    else:
+        v, ev = score_s7(t["reply"], pkt)
+        put("S7", v, landed=land["S7_rich"], ask={**live.evidence(t), **ev})
+
+    v, ev = _ask_judged(live, a, "d2-edge", ASK_WORRY, samples, score_s4, "S4")
+    put("S4", v, landed=land["S4"], **ev)
+
+    v, ev = _ask_judged(live, a, "d2-dentist", ASK_UNSAID, samples, score_s3, "S3")
+    put("S3", v, **ev)
+
+    # S5: proactive hooks for demo A (Postgres read) --------------------------
+    try:
+        v, ev = score_s5(live.proactive_hooks(a))
+    except Exception as exc:  # noqa: BLE001
+        v, ev = "ERROR", {"why": f"hook read failed: {type(exc).__name__}"}
+    put("S5", v, **ev)
+
+    # S6: isolation ----------------------------------------------------------
+    t = live.chat(b, "b-ask", ASK_B)
+    pkt_b = live.packet(b, ASK_B + " Marisol Lisbon Hobart Teodor lighthouse")
+    pkt_a = live.packet(a, ASK_B + " dad Teodor lighthouse")
+    if t["error"]:
+        put("S6", "ERROR", ask=live.evidence(t))
+    else:
+        v, ev = score_s6(t["reply"], pkt_b, pkt_a)
+        put("S6", v, ask={**live.evidence(t), **ev})
+
+    # S8: long history -------------------------------------------------------
+    log(f"S8: {len(FILLER)} filler turns across {FILLER_SESSIONS} sessions")
+    errors = 0
+    for i, text in enumerate(FILLER):
+        errors += bool(say(a, f"filler-{i % FILLER_SESSIONS}", text)["error"])
+    t1 = live.chat(a, "long-ask-sister", ASK_LONG_SISTER)
+    t2 = live.chat(a, "long-ask-dad", ASK_LONG_DAD)
+    if t1["error"] or t2["error"]:
+        put("S8", "ERROR", filler_errors=errors, asks=[live.evidence(t1), live.evidence(t2)])
+    else:
+        v, ev = score_s8(t1["reply"], t2["reply"])
+        put("S8", v, filler_turns=len(FILLER), filler_errors=errors,
+            asks=[live.evidence(t1), live.evidence(t2)], **ev)
+    return [res[k] for k in SCENARIO_IDS if k in res]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Artifacts + main
+# ─────────────────────────────────────────────────────────────────────────────
+
+def write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def append_trend(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rev = payload.get("revision") or {}
+    line = {"ts": payload["finished_at"], "status": payload["status"],
+            "commit": rev.get("commit"), "dirty": rev.get("dirty"),
+            "verdicts": verdict_map(payload.get("scenarios", [])),
+            "regressions": (payload.get("compare") or {}).get("regressions", []),
+            "teardown_proven": (payload.get("teardown") or {}).get("proven"),
+            "duration_s": payload.get("duration_s")}
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, sort_keys=True) + "\n")
+
+
+def _acquire_lock():
+    import fcntl
+    fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except BlockingIOError:
+        os.close(fd)
+        # Held by our own `flock <lock> ...` wrapper? Then we are serialized.
+        target, pid = os.path.realpath(LOCK), os.getppid()
+        for _ in range(15):
+            if pid <= 1:
+                break
+            try:
+                if any(os.path.realpath(f"/proc/{pid}/fd/{f}") == target
+                       for f in os.listdir(f"/proc/{pid}/fd")):
+                    return None
+                with open(f"/proc/{pid}/status") as fh:
+                    pid = next((int(x.split()[1]) for x in fh if x.startswith("PPid:")), 0)
+            except (OSError, ValueError):
+                break
+        print(f"ABORT: another harness run holds {LOCK} (brain slot / RAM)", file=sys.stderr)
+        raise SystemExit(3)
+
+
+def _readyz() -> tuple[bool, str]:
+    try:
+        with urllib.request.urlopen(f"{DATA_BASE}/readyz", timeout=10) as r:
+            body = json.loads(r.read().decode() or "{}")
+    except Exception as exc:  # noqa: BLE001
+        return False, f"/readyz unreachable ({type(exc).__name__})"
+    mc = (body.get("memory_capture") or {}).get("status")
+    ok = bool(body.get("ready")) and mc == "ok"
+    return ok, f"ready={body.get('ready')} memory_capture={mc}"
+
+
+def _wait(check: Callable[[], tuple[bool, str]], timeout_s: int, what: str) -> tuple[bool, str]:
+    t0 = time.monotonic()
+    while True:
+        ok, detail = check()
+        if ok or time.monotonic() - t0 >= timeout_s:
+            return ok, detail
+        print(f"  waiting for {what}: {detail}", flush=True)
+        time.sleep(30)
+
+
+def _refuse(args, reason: str, revision: dict | None) -> int:
+    print(f"REFUSED: {reason}", file=sys.stderr)
+    now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    write_json(args.results, {"status": "refused", "reason": reason, "finished_at": now,
+                              "revision": revision, "harness_version": HARNESS_VERSION})
+    return 2
+
+
+def _pending_teardown(live: Live, path: Path, log) -> dict | None:
+    """Tear down a previous run that died before its own teardown."""
+    if not path.exists():
+        return None
+    try:
+        pend = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"proven": False, "problems": ["pending-teardown file unreadable"]}
+    users = [u for u in pend.get("users", []) if DEMO_USER_RE.match(u)]
+    sessions = [s for s in pend.get("sessions", []) if s.startswith("bar-")]
+    log(f"tearing down a previous unfinished run: {len(users)} user(s), {len(sessions)} session(s)")
+    td = teardown(live, users, sessions)
+    if td["proven"]:
+        path.unlink(missing_ok=True)
+    return td
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dry-run", action="store_true", help="print the plan; no network, no writes")
+    ap.add_argument("--compare-baseline", action="store_true",
+                    help="exit 1 when a previously PASSING scenario no longer passes")
+    ap.add_argument("--record-baseline", action="store_true",
+                    help="save this run as the baseline (only when teardown is proven)")
+    ap.add_argument("--samples", type=int, default=1, help="asks per judged scenario (majority vote)")
+    ap.add_argument("--no-backdate", action="store_true", help="skip the 26h day-1 backdate")
+    ap.add_argument("--keep-replies", action="store_true",
+                    help="store 240-char reply excerpts in the local results file (debug)")
+    ap.add_argument("--teardown-only", action="store_true",
+                    help="only clean up a previous run's pending teardown")
+    ap.add_argument("--service-dir", default=None)
+    ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
+    ap.add_argument("--trend", type=Path, default=DEFAULT_TREND)
+    ap.add_argument("--results", type=Path, default=DEFAULT_RESULTS)
+    ap.add_argument("--pending", type=Path, default=DEFAULT_PENDING)
+    ap.add_argument("--mem-wait-s", type=int, default=900)
+    ap.add_argument("--ready-wait-s", type=int, default=1200)
+    args = ap.parse_args(argv)
+    if args.samples < 1 or args.samples % 2 == 0:
+        ap.error("--samples must be a positive odd number (majority vote)")
+
+    if args.dry_run:
+        print(plan_text(args.samples))
+        return 0
+    if os.environ.get("ZOE_PERF") != "1":
+        print("samantha_bar: skipped — live runs require ZOE_PERF=1 (see --dry-run)")
+        return 0
+
+    log = lambda m: print(m, flush=True)  # noqa: E731
+    service_dir = resolve_service_dir(args.service_dir)
+    revision = service_revision(service_dir)
+    lock_fd = _acquire_lock()  # noqa: F841 — held for the process lifetime
+    try:
+        cur = os.nice(0)
+        if cur < 5:
+            os.nice(5 - cur)
+    except OSError:
+        pass
+
+    token = env_file_value(service_dir, "ZOE_INTERNAL_TOKEN")
+    dsn = env_file_value(service_dir, "POSTGRES_URL")
+    admin = os.environ.get("ZOE_BAR_ADMIN_SESSION", "").strip()
+    live = Live(token, admin, dsn, args.keep_replies)
+
+    # Gates -----------------------------------------------------------------
+    if in_nightly_window(dt.datetime.now()):
+        return _refuse(args, "inside (or within 30 min of) the 01:45-03:15 nightly window", revision)
+    busy, detail = deploy_in_progress()
+    if busy is None or busy:
+        return _refuse(args, f"deploy check: {detail}", revision)
+    if not token or not dsn:
+        return _refuse(args, "ZOE_INTERNAL_TOKEN / POSTGRES_URL not resolvable from the service .env",
+                       revision)
+    ok, detail = _wait(_readyz, args.ready_wait_s, "/readyz")
+    if not ok:
+        return _refuse(args, f"zoe-data not ready: {detail}", revision)
+    if not live.admin_ok():
+        return _refuse(args, "no working admin session in ZOE_BAR_ADMIN_SESSION — the memory "
+                             "store teardown (admin forget + export) cannot run, so the run must "
+                             "not write", revision)
+    ok, detail = _wait(lambda: (mem_available_mb() >= MIN_MEM_MB,
+                                f"MemAvailable {mem_available_mb()} MB < {MIN_MEM_MB}"),
+                       args.mem_wait_s, "memory headroom")
+    if not ok:
+        return _refuse(args, detail, revision)
+
+    prior = _pending_teardown(live, args.pending, log)
+    if prior is not None and not prior["proven"]:
+        return _refuse(args, f"a previous run's teardown is still unproven: {prior['problems']}",
+                       revision)
+    if args.teardown_only:
+        log("teardown-only: nothing pending" if prior is None else "teardown-only: proven")
+        return 0
+
+    # Run -------------------------------------------------------------------
+    a, b = new_demo_user(), new_demo_user()
+    started, t0 = dt.datetime.now(dt.timezone.utc), time.monotonic()
+    log(f"samantha_bar v{HARNESS_VERSION}: demo A + demo B, samples={args.samples}, "
+        f"commit={(revision or {}).get('commit', '?')[:10]} dirty={(revision or {}).get('dirty')}")
+
+    def _sigterm(signum, frame):  # route SIGTERM through the finally below
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, _sigterm)
+
+    results: list[dict] = []
+    run_error = None
+    td: dict[str, Any] = {"proven": False, "problems": ["not run"]}
+    try:
+        write_json(args.pending, {"users": [a, b], "sessions": [], "started_at": started.isoformat()})
+        results = run_scenarios(live, a, b, args.samples, not args.no_backdate, log)
+    except BaseException as exc:  # noqa: BLE001 — teardown must still run
+        run_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+        log(f"run aborted: {run_error}")
+    finally:
+        sessions = [s for u in (a, b) for s in live.sessions.get(u, [])]
+        write_json(args.pending, {"users": [a, b], "sessions": sessions,
+                                  "started_at": started.isoformat()})
+        log("teardown ...")
+        td = teardown(live, [a, b], sessions)
+        if td["proven"]:
+            args.pending.unlink(missing_ok=True)
+        log(f"teardown proven={td['proven']} {'' if td['proven'] else td['problems']}")
+
+    baseline = None
+    if args.baseline.exists():
+        try:
+            baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            baseline = None
+    cmp = compare_baseline(verdict_map(results), baseline)
+    status = "error" if (run_error or not td["proven"] or len(results) != len(SCENARIO_IDS)) \
+        else ("regression" if (args.compare_baseline and cmp["red"]) else "ok")
+    payload = {"harness_version": HARNESS_VERSION, "status": status, "run_error": run_error,
+               "started_at": started.isoformat(timespec="seconds"),
+               "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+               "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
+               "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
+               "scenarios": results, "compare": cmp, "teardown": td,
+               "baseline_ref": {"path": str(args.baseline),
+                                "created_at": (baseline or {}).get("created_at"),
+                                "commit": ((baseline or {}).get("revision") or {}).get("commit")}}
+    write_json(args.results, payload)
+    append_trend(args.trend, payload)
+    if args.record_baseline and status != "error":
+        write_json(args.baseline, make_baseline(results, revision, args.samples))
+        log(f"baseline recorded: {args.baseline}")
+    elif args.record_baseline:
+        log("baseline NOT recorded: the run errored or its teardown is unproven")
+
+    for r in results:
+        log(f"  {r['id']:<3} {r['verdict']:<5} {next(s['title'] for s in SCENARIOS if s['id'] == r['id'])}")
+    if cmp["regressions"]:
+        log(f"REGRESSIONS vs baseline: {', '.join(cmp['regressions'])}")
+    log(f"status={status}  results={args.results}")
+    if status == "error":
+        return 2
+    return 1 if status == "regression" else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

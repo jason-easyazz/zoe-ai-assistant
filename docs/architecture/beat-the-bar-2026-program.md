@@ -98,7 +98,7 @@ State as of **2026-09-28 02:30 AWST**:
    1. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).
    2. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
       week).
-   3. The `samantha_bar` harness.
+   3. The `samantha_bar` harness — v0 built (B3.11 🔨); first baseline needs the operator admin session.
    4. **B3.2/B3.3** on the new store, after the B0.8 cutover.
    5. Brief-on-arrival (**B2.1**).
    6. A Kokoro venv without scikit-learn/pandas (B6.6 d).
@@ -708,6 +708,7 @@ State as of **2026-09-28 02:30 AWST**:
   /home/zoe/assistant/scripts/maintenance/zoe-nightly-dreaming.py` + `daemon-reload`; imports
   (chromadb, db_pool, memory_digest) verified to resolve under the venv 2026-09-27; verify the
   Mon 2026-09-28 02:31 AWST run log. ✅ It also iterated ~24 users incl. test/probe ids: now filtered by `user_filters.is_synthetic_user` (dreaming, consolidation, music, portrait, proactive triggers; `ZOE_SYNTHETIC_USER_ALLOWLIST`), and the leaking probe chat sessions are purged nightly (#1726 MERGED; `emotional_followup` joined in #1731; [record](../knowledge/synthetic-users-and-proactive-recipients.md)).
+- B3.11 🔨 **Samantha bar harness v0** (`scripts/perf/samantha_bar.py`, [record](../knowledge/samantha-bar.md)): 8 multi-day scenarios (same-day recall, supersession, abstention, emotional thread, hook-gated unprompted surfacing, isolation, richer fact, 32-turn history) on throwaway `demo_bar_*` users via the live API; brain-as-judge at temperature 0 with a pinned rubric; head-bound baseline, only a previous PASS can regress; asserted teardown. ⬜ First live run + baseline: needs an operator admin session (`ZOE_BAR_ADMIN_SESSION`) for the memory-store forget — the run refuses to write without it.
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -1077,6 +1078,7 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-28 — B3.11 Samantha bar harness v0 (`samantha_bar.py`, draft PR): 8-scenario memory/companion regression gate with baseline; live preflight verified on the box (gates pass, refuses at the admin-session check); first baseline waits on the operator admin session.
 - 2026-09-27/28 (overnight refresh, state as of 2026-09-28 02:30 AWST) — **the 09-27 wave
   landed: 24 PRs.** In merge order:
   - #1718: tracker.
