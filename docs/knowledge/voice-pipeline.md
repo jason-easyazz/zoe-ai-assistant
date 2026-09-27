@@ -436,6 +436,131 @@ foreground timeout killed it with the brain already stopped — silent Zoe, no b
 and if a `trap` restarts the brain on exit, do not also call `start` explicitly — the race
 produces a "Job failed" that looks like a hard failure while the service is actually mid-load.
 
+## Brain build + flags — B0.4: llama.cpp b11194, FlashAttention on, q8_0 K+V (2026-09-27)
+
+The tracked template `scripts/setup/systemd/llama-server.service` targets **llama.cpp b11194**
+(`~/llama.cpp-b11194/build-jetson`, commit `9f70b2cec`; built `GGML_CUDA=ON`,
+`CMAKE_CUDA_ARCHITECTURES=87`, `GGML_CUDA_FA=ON`, `GGML_CUDA_GRAPHS=ON`, `GGML_NATIVE=ON`,
+Release) with `--flash-attn on --cache-type-k q8_0 --cache-type-v q8_0` beside the MTP drafter.
+On the previous build (b9733, `~/llama.cpp/build-jetson-new`) FA crashed with `draft-mtp`
+(fixed upstream in #25148), which forced FA off and therefore V at f16. Measured in two
+replay-gated brain windows on 2026-09-27, same rock, same other flags:
+
+| candidate | KV cache | replay | brain median | error lines |
+|---|---|---|---|---|
+| **A (adopted)** | K q8_0 / V q8_0 | PASS 11/11 scoreable, 0 fail | 1754 ms | 0 |
+| B | K q8_0 / V f16 | PASS 11/11 scoreable, 0 fail | 1752.5 ms | 0 |
+
+A wins on memory at equal latency. The single-stream replay results carry over to the adopted
+template's `--parallel 1` and `--fit off`, which were added after both windows. The apply window's
+replay gate is the measurement of the exact committed config. `tests/unit/test_llama_server_unit_flags.py` pins the
+couplings that would otherwise only fail at brain startup.
+
+**Build** (source only: the prebuilt arm64 asset targets CUDA 13.x, not JetPack's 12.6). This is the
+configuration measured on the box (`CMakeCache.txt` of `~/llama.cpp-b11194/build-jetson`). Build
+it in a brain-stop window, because the compile is RAM-hungry. The installer refuses to install the
+unit until this binary exists.
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp-b11194
+git -C ~/llama.cpp-b11194 checkout b11194
+cmake -S ~/llama.cpp-b11194 -B ~/llama.cpp-b11194/build-jetson -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=87 -DGGML_CUDA_FA=ON -DGGML_CUDA_GRAPHS=ON -DGGML_NATIVE=ON
+cmake --build ~/llama.cpp-b11194/build-jetson --target llama-server -j 4
+~/llama.cpp-b11194/build-jetson/bin/llama-server --version   # -> build 11194 (9f70b2cec)
+```
+
+**Flag renames in b11194** (an old spelling on the new binary is an unknown-flag startup failure,
+and a new spelling on b9733 is the same failure in reverse):
+
+- `--mlock` is **removed** → `--load-mode mmap+mlock`.
+- `--chat-template-kwargs '{"enable_thinking":false}'` is **deprecated** → `--reasoning off`.
+- `--fit` defaults to **on** in b11194 (and in b9733). The unit sets **`--fit off`** explicitly, so
+  the written config is the served config.
+
+**Single slot: `--parallel 1` (correctness over concurrency).** Upstream
+[ggml-org/llama.cpp#28286](https://github.com/ggml-org/llama.cpp/issues/28286) (open, filed
+2026-09-03) reports that draft-MTP with `--parallel` > 1 leaks content between concurrent
+requests' prompts and completions, with no garbage-token signature to catch it by. The unit ran
+`--parallel 2` from 2026-07-21 until B0.4, so the live brain has been exposed. With one slot,
+concurrent requests (voice and chat) queue rather than run side by side, and the full
+`--ctx-size 16384` belongs to that slot. The `--cache-ram 2048` host prompt cache is what softens
+prefix eviction between them. The test pins `draft-mtp` ⇒ `--parallel 1`. Raise it only once #28286
+is fixed upstream and replay-gated here.
+
+**Apply** (operator/coordinator only, in a Kokoro-paused brain window, after the PR merges and
+the live checkout is fast-forwarded):
+
+```bash
+# 0. Preconditions: the binary is the gated build, the box has >= 2 GB quiet headroom, and no
+#    other voice harness is running.
+~/llama.cpp-b11194/build-jetson/bin/llama-server --version   # -> build 11194 (9f70b2cec)
+
+# 1. Keep the running unit for rollback (outside the systemd search path), then install the
+#    template. The drop-ins in ~/.config/systemd/user/llama-server.service.d/ (memory.conf,
+#    priority.conf) are separate files, and copying the unit file leaves them in place.
+#    The rollback copy is made ONCE and never overwritten. A repeat apply (after B0.4 is already
+#    installed) must not replace the known-good b9733 unit with the b11194 one.
+RB=~/.cache/zoe/llama-server.service.b9733
+mkdir -p ~/.cache/zoe
+if [ -e "$RB" ]; then
+  echo "rollback copy already exists — not overwriting"
+elif grep -q 'llama.cpp/build-jetson-new/bin/llama-server' ~/.config/systemd/user/llama-server.service; then
+  cp -n ~/.config/systemd/user/llama-server.service "$RB"
+else
+  echo "installed unit is not the b9733 build and no rollback copy exists — stop"; exit 1
+fi
+grep -q 'llama.cpp/build-jetson-new/bin/llama-server' "$RB" || { echo "rollback copy is not b9733 — stop"; exit 1; }
+install -m 644 ~/assistant/scripts/setup/systemd/llama-server.service ~/.config/systemd/user/llama-server.service
+# The template overwrites any host-specific edit in the installed unit, so read the diff: only
+# the B0.4 lines (binary + LD_LIBRARY_PATH, --flash-attn, --cache-type-v, --load-mode,
+# --reasoning, --parallel 1, --fit off) and comments may differ. On 2026-09-27 the installed
+# ExecStart matched the pre-B0.4 template exactly, including --host 127.0.0.1. Carry any other
+# difference into the new copy.
+diff "$RB" ~/.config/systemd/user/llama-server.service
+systemctl --user daemon-reload
+systemctl --user show llama-server -p DropInPaths -p MemorySwapMax   # both drop-ins listed, MemorySwapMax=0
+
+# 2. Kokoro-paused restart. ExecStartPost blocks until /health is ok, for up to 120 s.
+systemctl --user stop kokoro-tts.service
+systemctl --user restart llama-server.service
+curl -sf http://127.0.0.1:11434/health | grep -q ok || { echo "brain down: roll back"; exit 1; }
+ps -o args= -C llama-server | grep 11194            # the new binary, with --flash-attn on and q8_0 V
+journalctl --user -u llama-server -n 300 | grep -Ei 'error|fail|abort'   # expect nothing
+
+# 3. Replay gate while Kokoro is still paused (frees ~2 GB). The probe takes the shared
+#    harness flock itself, so do not wrap it in another flock.
+python3 ~/assistant/scripts/maintenance/voice_regression_probe.py --stt remote
+
+# 4. Kokoro back, then verify it is the real CUDA sidecar and not a fallback.
+systemctl --user start kokoro-tts.service
+curl -s http://localhost:10201/health   # pipeline_loaded: true AND device: cuda
+# and /readyz dependencies.tts must name the kokoro-sidecar provider (tts.ok alone is not enough)
+```
+
+**Rollback** is any error line, a replay FAIL, or a brain-median regression:
+
+```bash
+RB=~/.cache/zoe/llama-server.service.b9733
+# Verify the saved copy is still the b9733 unit BEFORE installing it.
+grep -q 'llama.cpp/build-jetson-new/bin/llama-server' "$RB" || { echo "rollback copy missing or not b9733 — stop"; exit 1; }
+systemctl --user stop kokoro-tts.service
+cp "$RB" ~/.config/systemd/user/llama-server.service
+sed -i 's/--parallel 2 \\/--parallel 1 \\/; s/^  --cont-batching \\$/  --cont-batching \\\n  --fit off \\/' \
+  ~/.config/systemd/user/llama-server.service   # keep one slot + fit off on rollback (#28286)
+grep -E -- '--parallel|--fit' ~/.config/systemd/user/llama-server.service
+systemctl --user daemon-reload && systemctl --user restart llama-server.service
+# then poll /health, start kokoro-tts, and verify it as in step 4
+```
+
+The saved copy is the b9733 configuration: binary and `LD_LIBRARY_PATH` at
+`%h/llama.cpp/build-jetson-new/bin`, `--flash-attn off`, no `--cache-type-v` (V must be f16 when
+FA is off, or startup throws), `--mlock`, and the `enable_thinking` kwargs line. **It also carries
+`--parallel 2`, which re-exposes #28286.** Before the `daemon-reload`, edit it to `--parallel 1` and
+add `--fit off`. #28286 does not depend on the build, and b9733 accepts both flags. The template
+header lists the same rollback. The `functiongemma-router` unit still runs the b9733 binary and is
+not touched by B0.4.
+
 ## Failure modes that are easy to misdiagnose (2026-07-14 / -15)
 
 All were reported as "the wake word gets the first use wrong" or "the voice is choppy / broken into

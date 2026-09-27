@@ -54,6 +54,8 @@ Do both; they compound.
 
 ## 1. KV-cache quantization — and the hard FA constraint
 
+> **Superseded 2026-09-27 (B0.4):** the FA-off constraint below belongs to the b9733 build. llama.cpp b11194 runs FA **on** with `draft-mtp` (upstream #25148), and the tracked unit now sets `--cache-type-v q8_0`, replay-gated. See `docs/knowledge/voice-pipeline.md` ("Brain build + flags — B0.4"). The rest of this record is historical research.
+
 ### The load-bearing source fact
 
 With **flash-attn OFF** (your build needs FA off for MTP), llama.cpp **forbids a
@@ -217,6 +219,8 @@ for any of the caching above to pay off.**
 ---
 
 ## 3. flash-attn + MTP coexistence
+
+> **Superseded 2026-09-27 (B0.4):** the FA-off constraint below belongs to the b9733 build. llama.cpp b11194 runs FA **on** with `draft-mtp` (upstream #25148), and the tracked unit now sets `--cache-type-v q8_0`, replay-gated. See `docs/knowledge/voice-pipeline.md` ("Brain build + flags — B0.4"). The rest of this record is historical research.
 
 Today MTP requires FA **off** on this build (KV stays f16-V, no fast FA kernels). Whether
 a newer llama.cpp lets FA + draft-mtp coexist is the unlock for (a) quantized V cache and

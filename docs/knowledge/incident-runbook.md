@@ -160,7 +160,9 @@ in [`scripts/setup/systemd/README.md`](../../scripts/setup/systemd/README.md)
   RSS. `MemorySwapMax=0` is what actually keeps the brain resident.
 - **Apply via a drop-in, never `cp` the template** over a live unit — the tracked
   template binds `--host 127.0.0.1` while the live brain binds `0.0.0.0`, so a
-  copy silently changes the bind address alongside the memory fix.
+  copy silently changes the bind address alongside the memory fix. (By 2026-09-27
+  the installed unit's ExecStart matched the template, `127.0.0.1` included. Diff
+  before any copy anyway; the B0.4 apply recipe in `voice-pipeline.md` does.)
 - **Never add `Nice=-N` / `OOMScoreAdjust=-N` to a `--user` unit.** systemd
   accepts it, the service starts, status is success — and the value is *silently
   dropped* (`ulimit -e` is 0). It documents a guarantee that does not exist.

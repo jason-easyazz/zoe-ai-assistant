@@ -404,7 +404,8 @@ all: `VmRSS` **411.7 MB** against `VmSwap` **156.9 MB** (27.6% out), `VmHWM`
 
 Two things worth knowing before changing these:
 
-- **`--mlock` is not sufficient on Tegra.** llama-server sets `--mlock` with
+- **`--mlock` is not sufficient on Tegra.** llama-server sets `--mlock` (spelled
+  `--load-mode mmap+mlock` since the b11194 build, B0.4) with
   `LimitMEMLOCK=infinity`, yet `VmLck` held only 1.95 GB of a 5.6 GB RSS — mlock
   covers the mapped model, not every CUDA/unified allocation around it.
   `MemorySwapMax=0` is what closes the gap. `MemoryLow` is *soft* (reclaim
