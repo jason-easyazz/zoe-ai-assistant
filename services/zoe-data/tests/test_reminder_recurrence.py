@@ -509,15 +509,18 @@ class _TodayDb:
 async def test_today_view_keeps_recurring_reminders_after_their_anchor(monkeypatch):
     import routers.reminders as rr
 
-    class _Sunday(date):
+    class _ServerSaturday(date):
         @classmethod
         def today(cls):
-            return date(2026, 9, 27)
+            return date(2026, 9, 26)  # the server's own date must NOT be used
 
     async def allow(*_a, **_k):
         return None
 
-    monkeypatch.setattr(rr, "date", _Sunday)
+    # Household clock (ZOE_TIMEZONE): Sunday 2026-09-27 00:30 in Perth.
+    monkeypatch.setattr(rr, "date", _ServerSaturday)
+    monkeypatch.setattr(scan, "_ZOE_TZ", PERTH)
+    monkeypatch.setattr(scan, "zoe_now", lambda now_utc=None: datetime(2026, 9, 27, 0, 30, tzinfo=PERTH))
     monkeypatch.setattr(rr, "require_feature_access", allow)
     rows = [
         {"id": "daily", "due_date": "2026-09-21", "due_time": "07:00", "recurring_pattern": "FREQ=DAILY"},
@@ -582,3 +585,54 @@ async def test_clearing_a_recurring_reminders_date_re_anchors_it(monkeypatch):
     row["recurring_pattern"] = None
     await rr.update_reminder("r1", ReminderUpdate(due_date=None), user={"user_id": "jason"}, db=_Db())
     assert updates[0][1][0] is None
+
+
+@pytest.mark.asyncio
+async def test_acknowledging_a_recurring_reminder_keeps_the_series(monkeypatch):
+    # "Complete" on Monday's pills must not end every later weekday: for an RRULE
+    # row, acknowledge means done for THIS occurrence and the next is scheduled.
+    import routers.reminders as rr
+
+    row = {"id": "r1", "user_id": "jason", "title": "pills", "due_date": "2026-09-21", "due_time": "07:00",
+           "recurring_pattern": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", "is_active": 1, "acknowledged": 0,
+           "deleted": 0, "visibility": "personal"}
+    writes, calls = [], []
+
+    class _Db:
+        async def execute(self, sql, params=()):
+            if sql.lstrip().upper().startswith(("UPDATE", "INSERT")):
+                writes.append(" ".join(sql.split()))
+
+            class _C:
+                async def fetchone(self_inner):
+                    return row
+            return _C()
+
+        async def commit(self):
+            pass
+
+    async def noop(*_a, **_k):
+        return None
+
+    async def cancel(rid):
+        calls.append(("cancel", rid))
+
+    async def resched(_db, rid):
+        calls.append(("reschedule", rid))
+
+    monkeypatch.setattr(rr, "require_feature_access", noop)
+    monkeypatch.setattr(rr, "_cancel_reminder_jobs_safe", cancel)
+    monkeypatch.setattr(rr, "_reschedule_reminder_due_safe", resched)
+    monkeypatch.setattr(rr, "_create_notification", noop)
+    monkeypatch.setattr(rr.broadcaster, "broadcast", noop)
+
+    await rr.acknowledge_reminder("r1", user={"user_id": "jason"}, db=_Db())
+    assert not any("acknowledged = 1" in w for w in writes)
+    assert calls == [("cancel", "r1"), ("reschedule", "r1")]
+
+    # Negative control: a one-off is still acknowledged for good, exactly as before.
+    writes.clear(), calls.clear()
+    row["recurring_pattern"] = None
+    await rr.acknowledge_reminder("r1", user={"user_id": "jason"}, db=_Db())
+    assert any("SET acknowledged = 1" in w for w in writes)
+    assert calls == [("cancel", "r1")]

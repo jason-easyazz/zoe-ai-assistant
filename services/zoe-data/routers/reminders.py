@@ -142,7 +142,11 @@ async def list_today_reminders(
     """Get today's reminders (active, due today)."""
     await require_feature_access(db, user, feature="reminders", action="read")
     user_id = user["user_id"]
-    today_d = date.today()
+    # "Today" is the HOUSEHOLD day (ZOE_TIMEZONE, the clock the scan fires
+    # against), never the server's local date.
+    from proactive.triggers import reminder_scan
+
+    today_d = reminder_scan.zoe_now().date()
     today = today_d.isoformat()
     # A recurring reminder's due_date is its ANCHOR (first occurrence), not the
     # day it is due, so rows with a pattern and an anchor on/before today are
@@ -398,10 +402,17 @@ async def acknowledge_reminder(
     # state change auto-commits so it can't still fire; the in-job obligation
     # re-read also aborts a sub-second in-flight job.
     await _cancel_reminder_jobs_safe(reminder_id)
-    await db.execute(
-        "UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?",
-        [reminder_id],
-    )
+    recurring = _is_rrule(dict(row).get("recurring_pattern"))
+    if recurring:
+        # A recurring (RRULE) reminder is done for THIS occurrence only: the row
+        # stays live and the next occurrence is scheduled (strictly after now).
+        # Stopping the series is delete / is_active=false, never "Complete".
+        await db.execute("UPDATE reminders SET updated_at = NOW() WHERE id = ?", [reminder_id])
+    else:
+        await db.execute(
+            "UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?",
+            [reminder_id],
+        )
     await _create_notification(
         db,
         user_id=user_id,
@@ -411,6 +422,8 @@ async def acknowledge_reminder(
         data={"reminder_id": reminder_id},
     )
     await db.commit()
+    if recurring:
+        await _reschedule_reminder_due_safe(db, reminder_id)
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
