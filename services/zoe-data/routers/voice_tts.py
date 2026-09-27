@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import quote_plus
 
 import httpx
@@ -425,18 +425,94 @@ async def _voice_brain_context(
     return history or [], db_memory, portrait, domain_ctx, timings
 
 
-def _observe_pre_brain_stages(pre_brain_s: float, ctx_timings: dict[str, float]) -> None:
-    """Record the pre-brain stages on ``zoe_voice_stage_seconds``.
+def _voice_memory_packet_lazy() -> bool:
+    """True when this turn's memory packet is built LAZILY (not before dispatch).
 
-    ``pre_brain`` = command start -> the brain branch (router, identity, fast
-    tiers, scope gate); ``memory_packet`` = the concurrent context gather
-    above. ``llm_first_token`` is still measured from the brain branch, so it
-    INCLUDES ``memory_packet``. Best-effort: metrics must never fail a turn.
+    The live Flue lane (``ZOE_BRAIN_BACKEND=flue``) never reads ``history`` /
+    ``db_memory_context`` / ``portrait`` — the sidecar owns its own memory and
+    history — so awaiting ``_voice_brain_context`` before the brain call was
+    ~500 ms of dead work on every voice turn. On that lane the packet is handed
+    to dispatch as a ``context_loader`` that only a lane which reads it (a
+    core/legacy failover hop) ever calls. Other lanes consume it, so they keep
+    the eager build unchanged. ``ZOE_VOICE_MEMORY_PACKET_LAZY=false`` is the
+    kill switch back to always-eager. Read per turn.
     """
+    if (os.environ.get("ZOE_VOICE_MEMORY_PACKET_LAZY", "true") or "").strip().lower() in {
+        "0", "false", "no", "off",
+    }:
+        return False
+    try:
+        from brain_dispatch import use_flue_brain
+
+        return use_flue_brain()
+    except Exception:  # unknown lane → the safe (eager) side
+        return False
+
+
+async def _voice_brain_kwargs(
+    session_id: str,
+    user_id: str,
+    text: str,
+    router_decision: Optional[dict],
+) -> tuple[dict[str, Any], dict[str, float], str]:
+    """The lane-context kwargs for a voice brain turn.
+
+    Returns ``(brain_kwargs, ctx_timings, packet_mode)``:
+
+    * ``eager`` — the packet (history + memory + domain, gathered concurrently
+      by ``_voice_brain_context``) is built now and passed as
+      ``history`` / ``db_memory_context`` / ``portrait``.
+    * ``lazy`` — the live Flue lane: nothing is built now; ``brain_kwargs`` is
+      ``{"context_loader": ...}`` and ``brain_dispatch`` calls it only if the
+      turn is dispatched to a lane that reads it. ``ctx_timings`` is filled in
+      (and ``memory_packet`` observed) if and when that happens.
+    """
+    timings: dict[str, float] = {}
+
+    async def _load() -> dict[str, Any]:
+        history, db_memory, portrait, domain_ctx, t = await _voice_brain_context(
+            session_id, user_id, text, router_decision
+        )
+        timings.update(t)
+        _observe_memory_packet_stage(t)
+        return {
+            "history": history or None,
+            "db_memory_context": _merge_brain_context(db_memory, domain_ctx),
+            "portrait": portrait,
+        }
+
+    if _voice_memory_packet_lazy():
+        return {"context_loader": _load}, timings, "lazy"
+    return await _load(), timings, "eager"
+
+
+def _voice_packet_state(packet_mode: str, ctx_timings: dict[str, float]) -> str:
+    """``eager`` / ``lazy`` (built on a failover hop) / ``skipped`` (never built)."""
+    if packet_mode == "eager":
+        return "eager"
+    return "lazy" if "memory_packet" in ctx_timings else "skipped"
+
+
+def _observe_pre_brain_stages(pre_brain_s: float) -> None:
+    """Record ``pre_brain`` on ``zoe_voice_stage_seconds``: command start -> the
+    brain branch (router, identity, fast tiers, scope gate). Best-effort:
+    metrics must never fail a turn."""
     try:
         from voice_metrics import voice_stage_seconds
 
         voice_stage_seconds.labels(stage="pre_brain").observe(max(0.0, pre_brain_s))
+    except Exception:
+        pass
+
+
+def _observe_memory_packet_stage(ctx_timings: dict[str, float]) -> None:
+    """Record ``memory_packet`` (the concurrent context gather) — only when it
+    actually ran. Eager: before dispatch, so ``llm_first_token`` INCLUDES it.
+    Lazy: only on a failover hop, inside the brain call. A skipped packet
+    records nothing. Best-effort: metrics must never fail a turn."""
+    try:
+        from voice_metrics import voice_stage_seconds
+
         voice_stage_seconds.labels(stage="memory_packet").observe(
             max(0.0, ctx_timings.get("memory_packet", 0.0))
         )
@@ -453,12 +529,16 @@ def _log_voice_timing(
     ctx_timings: dict[str, float],
     brain_ttft_s: Optional[float],
     llm_first_token_s: Optional[float],
+    packet_mode: str = "eager",
 ) -> None:
     """One ``VOICE TIMING`` INFO line per voice brain turn (ms; -1 = no token).
 
     Read it with the same session's ``FLUE_PROMPT_CACHE`` line: a high
     ``brain_ttft_ms`` next to a large ``first_prompt_n`` is a llama-server
-    prompt-cache miss, not a slow model.
+    prompt-cache miss, not a slow model. ``packet=`` says whether the memory
+    packet was built before dispatch (``eager``), only on a failover hop
+    (``lazy`` — then it is inside ``brain_ttft_ms``), or never (``skipped`` —
+    the Flue lane; the ``memory_packet_ms`` fields are then 0).
     """
     def _ms(v: Optional[float]) -> int:
         return int(round(v * 1000)) if v is not None else -1
@@ -466,11 +546,12 @@ def _log_voice_timing(
     try:
         logger.info(
             "VOICE TIMING turn=%s session=%s path=%s pre_brain_ms=%d memory_packet_ms=%d "
-            "(history=%d memory=%d domain=%d) brain_ttft_ms=%d llm_first_token_ms=%d",
+            "(history=%d memory=%d domain=%d) brain_ttft_ms=%d llm_first_token_ms=%d packet=%s",
             turn, session_id, path, _ms(pre_brain_s),
-            _ms(ctx_timings.get("memory_packet")), _ms(ctx_timings.get("history")),
-            _ms(ctx_timings.get("memory")), _ms(ctx_timings.get("domain")),
+            _ms(ctx_timings.get("memory_packet", 0.0)), _ms(ctx_timings.get("history", 0.0)),
+            _ms(ctx_timings.get("memory", 0.0)), _ms(ctx_timings.get("domain", 0.0)),
             _ms(brain_ttft_s), _ms(llm_first_token_s),
+            _voice_packet_state(packet_mode, ctx_timings),
         )
     except Exception:  # instrumentation must never fail a turn
         pass
@@ -4099,10 +4180,12 @@ async def voice_command(
                 token_buf = ""
                 full_reply_parts: list[str] = []
                 _t_first_audio: Optional[float] = None
-                # Set once the context gather ran: the VOICE TIMING line is
-                # emitted in the finally below for every turn that reached the
-                # brain, including ones that errored or were disconnected.
+                # Set once the brain kwargs were prepared (the packet itself
+                # may be lazy — see _voice_brain_kwargs): the VOICE TIMING line
+                # is emitted in the finally below for every turn that reached
+                # the brain, including ones that errored or were disconnected.
                 _v_ctx_timings: Optional[dict[str, float]] = None
+                _v_packet_mode = "eager"
                 _t_brain_dispatch: Optional[float] = None
                 _filler_emitted = False  # at most one tool-turn filler per turn
                 # The processing-ack path yields audio bytes directly (without going
@@ -4220,16 +4303,16 @@ async def voice_command(
                     except Exception as ack_exc:
                         logger.debug("voice/command stream processing acknowledgement failed: %s", ack_exc)
 
+                    # Flue lane: the packet is LAZY (never built unless a
+                    # failover hop lands on a lane that reads it).
                     (
-                        _voice_history, _v_db_memory, _v_portrait, _v_domain_ctx, _v_ctx_timings,
-                    ) = await _voice_brain_context(session_id, effective_user, text, _router_decision)
-                    _observe_pre_brain_stages(t_chat_start - _t_cmd_start, _v_ctx_timings)
+                        _v_brain_kwargs, _v_ctx_timings, _v_packet_mode,
+                    ) = await _voice_brain_kwargs(session_id, effective_user, text, _router_decision)
+                    _observe_pre_brain_stages(t_chat_start - _t_cmd_start)
                     _t_brain_dispatch = time.monotonic()
                     async for delta in brain_streaming(
                         text, session_id, user_id=effective_user,
-                        voice_mode=True, history=_voice_history or None,
-                        db_memory_context=_merge_brain_context(_v_db_memory, _v_domain_ctx),
-                        portrait=_v_portrait,
+                        voice_mode=True, **_v_brain_kwargs,
                     ):
                         if not delta:
                             continue
@@ -4341,6 +4424,7 @@ async def voice_command(
                                 if _t_first_token is not None else None
                             ),
                             llm_first_token_s=_t_first_token,
+                            packet_mode=_v_packet_mode,
                         )
                     # Persist whatever the user actually HEARD — the streaming
                     # lane never reaches voice_command's tail save, and a
@@ -4364,11 +4448,12 @@ async def voice_command(
 
         collected: list[str] = []
 
+        # Flue lane: the packet is LAZY (never built unless a failover hop
+        # lands on a lane that reads it).
         (
-            _voice_history_nc, _v_db_memory_nc, _v_portrait_nc, _v_domain_ctx_nc, _v_ctx_timings_nc,
-        ) = await _voice_brain_context(session_id, effective_user, text, _router_decision)
-        _v_db_memory_nc = _merge_brain_context(_v_db_memory_nc, _v_domain_ctx_nc)
-        _observe_pre_brain_stages(t_chat_start - _t_cmd_start, _v_ctx_timings_nc)
+            _v_brain_kwargs_nc, _v_ctx_timings_nc, _v_packet_mode_nc,
+        ) = await _voice_brain_kwargs(session_id, effective_user, text, _router_decision)
+        _observe_pre_brain_stages(t_chat_start - _t_cmd_start)
         _t_brain_dispatch_nc = time.monotonic()
 
         async def _stream_collect() -> None:
@@ -4378,9 +4463,7 @@ async def voice_command(
                 session_id,
                 user_id=effective_user,
                 voice_mode=True,
-                history=_voice_history_nc or None,
-                db_memory_context=_v_db_memory_nc,
-                portrait=_v_portrait_nc,
+                **_v_brain_kwargs_nc,
             ):
                 if not delta:
                     continue
@@ -4437,6 +4520,7 @@ async def voice_command(
                 if _t_first_token is not None else None
             ),
             llm_first_token_s=_t_first_token,
+            packet_mode=_v_packet_mode_nc,
         )
 
         # ── Fix 3: If an action form is still open, try to extract field-fill

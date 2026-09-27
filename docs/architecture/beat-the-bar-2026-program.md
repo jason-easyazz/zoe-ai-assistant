@@ -858,6 +858,10 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (night) — voice memory packet lazy on the Flue lane (draft PR): the live sidecar
+  never reads `history` / `db_memory_context` / `portrait`, so the ~500 ms gather measured after
+  #1725 is built only on a core/legacy failover hop (`ZOE_VOICE_MEMORY_PACKET_LAZY`, default on;
+  `VOICE TIMING … packet=skipped`). Voice path: operator lands with the replay gate.
 - 2026-09-27 (eve) — B6.6 (d): Kokoro `MALLOC_ARENA_MAX=2` drop-in applied live. Measured −113 to −125 MB anon, not the predicted −400 to −800 MB, with latency within noise (ABAB).
 - 2026-09-27 (eve) — B0.6 safe-now Python train: psycopg2-binary 2.9.13 + prometheus-client
   0.26.0 (both manifests + CI/deploy lists); joblib 1.6.0 held on the router-head training-pin contract.

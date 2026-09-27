@@ -140,7 +140,8 @@ def _stage_count(stage: str) -> float:
 
 def test_pre_brain_and_memory_packet_stage_keys_are_recorded():
     before = {s: _stage_count(s) for s in ("pre_brain", "memory_packet")}
-    vt._observe_pre_brain_stages(0.123, {"memory_packet": 0.045, "history": 0.01})
+    vt._observe_pre_brain_stages(0.123)
+    vt._observe_memory_packet_stage({"memory_packet": 0.045, "history": 0.01})
     for stage in ("pre_brain", "memory_packet"):
         assert _stage_count(stage) == before[stage] + 1, stage
 
@@ -159,14 +160,38 @@ def test_voice_timing_log_line(caplog):
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("VOICE TIMING")]
     assert lines[0] == (
         "VOICE TIMING turn=t1 session=voice-panel-abc path=stream pre_brain_ms=123 "
-        "memory_packet_ms=50 (history=10 memory=50 domain=2) brain_ttft_ms=210 llm_first_token_ms=270"
+        "memory_packet_ms=50 (history=10 memory=50 domain=2) brain_ttft_ms=210 llm_first_token_ms=270 "
+        "packet=eager"
     )
     assert "brain_ttft_ms=-1 llm_first_token_ms=-1" in lines[1]
 
 
+def test_voice_timing_log_line_lazy_packet(caplog):
+    """Lazy (Flue lane): a never-built packet logs 0 ms + ``packet=skipped``; one
+    built on a failover hop logs its real cost + ``packet=lazy``."""
+    with caplog.at_level(logging.INFO, logger=vt.logger.name):
+        vt._log_voice_timing(
+            turn="t3", session_id="s", path="stream", pre_brain_s=0.05,
+            ctx_timings={}, brain_ttft_s=0.2, llm_first_token_s=0.2, packet_mode="lazy",
+        )
+        vt._log_voice_timing(
+            turn="t4", session_id="s", path="stream", pre_brain_s=0.05,
+            ctx_timings={"memory_packet": 0.5, "history": 0.0, "memory": 0.5, "domain": 0.0},
+            brain_ttft_s=0.9, llm_first_token_s=0.9, packet_mode="lazy",
+        )
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("VOICE TIMING")]
+    assert "memory_packet_ms=0 (history=0 memory=0 domain=0)" in lines[0]
+    assert lines[0].endswith("packet=skipped")
+    assert "memory_packet_ms=500 (history=0 memory=500 domain=0)" in lines[1]
+    assert lines[1].endswith("packet=lazy")
+
+
 def test_voice_command_uses_the_concurrent_gather_in_both_lanes():
     src = inspect.getsource(vt.voice_command)
-    assert src.count("await _voice_brain_context(") == 2, "stream + non-stream lanes"
+    # Both lanes go through _voice_brain_kwargs, whose loader is the concurrent
+    # gather (eager, or lazy on the Flue lane).
+    assert src.count("await _voice_brain_kwargs(") == 2, "stream + non-stream lanes"
+    assert "await _voice_brain_context(" in inspect.getsource(vt._voice_brain_kwargs)
     assert src.count("_observe_pre_brain_stages(") == 2
     assert src.count("_log_voice_timing(") == 2
     for serial in ("await _load_voice_history(", "await _voice_brain_memory(", "await _voice_domain_context("):
