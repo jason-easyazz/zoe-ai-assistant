@@ -124,6 +124,42 @@ def _is_expired_by(expires_at: str, grace_s: int) -> bool:
         return True
 
 
+# The table's shape, created on first use. The live database never had it
+# (0005's CREATE did not land there — the 2026-09-27 deploy of 0029 failed on
+# `relation "panel_provision_codes" does not exist`), so the router must not
+# depend on alembic having built it. Keep in lockstep with alembic 0005 + 0029.
+_TABLE_DDL = (
+    """CREATE TABLE IF NOT EXISTS panel_provision_codes (
+        code             TEXT PRIMARY KEY,
+        device_id        TEXT NOT NULL,
+        status           TEXT NOT NULL DEFAULT 'pending',
+        panel_id         TEXT,
+        token            TEXT,
+        created_at       TEXT,
+        expires_at       TEXT NOT NULL,
+        confirmed_by     TEXT,
+        poll_secret_hash TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_provision_codes_device ON panel_provision_codes (device_id)",
+    "CREATE INDEX IF NOT EXISTS idx_provision_codes_status ON panel_provision_codes (status)",
+    "CREATE INDEX IF NOT EXISTS idx_provision_codes_expires ON panel_provision_codes (expires_at)",
+)
+_TABLE_READY = False
+
+
+async def _ensure_table(db) -> None:
+    """Create ``panel_provision_codes`` (with ``poll_secret_hash``) if absent.
+    Idempotent; once per process. A table that predates 0029 gets the column
+    from the migration, not from here."""
+    global _TABLE_READY
+    if _TABLE_READY:
+        return
+    for stmt in _TABLE_DDL:
+        await db.execute(stmt)
+    await db.commit()
+    _TABLE_READY = True
+
+
 @router.post("/request")
 async def provision_request(payload: dict, request: Request, db=Depends(get_db)):
     """
@@ -137,6 +173,7 @@ async def provision_request(payload: dict, request: Request, db=Depends(get_db))
     ``poll_secret`` goes to THIS caller only (the pairing device) and must be
     sent as ``X-Provision-Secret`` on every status poll. Only its sha256 is kept.
     """
+    await _ensure_table(db)
     device_id = str(payload.get("device_id") or "").strip().lower()
     if not device_id:
         raise HTTPException(status_code=400, detail="device_id is required")
@@ -221,6 +258,7 @@ async def sweep_uncollected_tokens(db=None) -> int:
 
         async with get_db_ctx() as conn:
             return await sweep_uncollected_tokens(conn)
+    await _ensure_table(db)
     rows = await (await db.execute(
         "SELECT code, token, expires_at FROM panel_provision_codes "
         "WHERE status = 'confirmed' AND token IS NOT NULL"
@@ -253,6 +291,7 @@ async def provision_poll(code: str, request: Request, db=Depends(get_db)):
     started THIS attempt with the ``poll_secret`` from ``/request``, sent as the
     ``X-Provision-Secret`` header (never a query param — nginx logs those).
     """
+    await _ensure_table(db)
     row = await (await db.execute(
         "SELECT code, status, token, panel_id, expires_at, poll_secret_hash "
         "FROM panel_provision_codes WHERE code = ?",
@@ -329,6 +368,7 @@ async def provision_public_info(code: str, db=Depends(get_db)):
     Phone reads this after scanning QR to show what's connecting.
     No authentication required.
     """
+    await _ensure_table(db)
     row = await (await db.execute(
         "SELECT code, device_id, status, token, expires_at FROM panel_provision_codes WHERE code = ?",
         (code,),
@@ -361,6 +401,7 @@ async def provision_confirm(
 
     Body: { "name": "Living Room", "location": "Living Room", "panel_id": "living-room-panel" }
     """
+    await _ensure_table(db)
     user_id = user.get("user_id") or user.get("sub")
     if not user_id:
         raise HTTPException(status_code=403, detail="Sign in to pair a panel")

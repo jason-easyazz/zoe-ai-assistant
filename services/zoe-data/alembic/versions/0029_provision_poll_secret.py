@@ -11,6 +11,12 @@ Additive and nullable. Rows written before this migration have no hash and are
 refused by the poll; they expire within ``ZOE_PROVISION_CODE_TTL_S`` (5 min)
 and the pairing device simply requests a fresh code.
 
+The table itself may be ABSENT: the live database never had it (0005's
+CREATE did not land there), so the 2026-09-27 deploy failed on a bare
+``ALTER TABLE``. Both directions are therefore ``ALTER TABLE IF EXISTS``; when
+the table is missing this migration is a no-op and ``routers/panel_provision``
+creates it on first use WITH the column (``_ensure_table``).
+
 ``ADD COLUMN IF NOT EXISTS`` is PostgreSQL (production) and SQLite 3.35+ only,
 so the SQLite branch probes ``PRAGMA table_info`` instead — the split 0026 uses.
 """
@@ -26,6 +32,12 @@ depends_on = None
 _COLUMN = "poll_secret_hash"
 
 
+def _sqlite_table_exists(bind) -> bool:
+    return bind.exec_driver_sql(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'panel_provision_codes'"
+    ).first() is not None
+
+
 def _sqlite_existing_columns(bind) -> set[str]:
     rows = bind.exec_driver_sql("PRAGMA table_info(panel_provision_codes)").fetchall()
     return {str(r[1]) for r in rows}
@@ -34,14 +46,14 @@ def _sqlite_existing_columns(bind) -> set[str]:
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
-        op.execute(f"ALTER TABLE panel_provision_codes ADD COLUMN IF NOT EXISTS {_COLUMN} TEXT")
-    elif _COLUMN not in _sqlite_existing_columns(bind):
+        op.execute(f"ALTER TABLE IF EXISTS panel_provision_codes ADD COLUMN IF NOT EXISTS {_COLUMN} TEXT")
+    elif _sqlite_table_exists(bind) and _COLUMN not in _sqlite_existing_columns(bind):
         op.add_column("panel_provision_codes", sa.Column(_COLUMN, sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
-        op.execute(f"ALTER TABLE panel_provision_codes DROP COLUMN IF EXISTS {_COLUMN}")
-    elif _COLUMN in _sqlite_existing_columns(bind):
+        op.execute(f"ALTER TABLE IF EXISTS panel_provision_codes DROP COLUMN IF EXISTS {_COLUMN}")
+    elif _sqlite_table_exists(bind) and _COLUMN in _sqlite_existing_columns(bind):
         op.drop_column("panel_provision_codes", _COLUMN)
