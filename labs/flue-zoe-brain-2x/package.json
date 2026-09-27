@@ -16,17 +16,17 @@
     "start": "node dist/server.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-ai": "0.87.1",
     "@flue/runtime": "2.1.1",
-    "hono": "^4.13.7",
-    "valibot": "^1.1.0"
+    "hono": "^4.13.9",
+    "valibot": "^1.5.0"
   },
   "devDependencies": {
     "@flue/cli": "2.1.1",
     "@flue/vite": "2.1.1",
     "@types/node": "22.20.1",
-    "@valibot/to-json-schema": "1.7.1",
+    "@valibot/to-json-schema": "1.8.0",
     "typescript": "5.7.2",
-    "vite": "^8.1.2"
+    "vite": "^8.3.1"
   }
 }
