@@ -337,6 +337,16 @@ status: 🔨 active — NEXT ACTION is always §0
   (aiosendspin 9.1.1, PIN-pairing breaking at 9.0.0), the panel's shairport-sync 5.1 in
   PTP/Automatic mode (support #6243 pattern — pin the streaming mode if silent), and the
   bgutil 2.0.0 localhost bind reachable from MA's namespace (`127.0.0.1:4416`).
+  **Network hardening (2026-09-27, draft PR `fix/loopback-postgres-ha-bridge`, operator
+  apply):** `zoe-database` → `127.0.0.1:5432` + `pgvector/pgvector:0.8.6-pg17@sha256:cf134a76…`
+  (PostgreSQL 17.10 → 17.11, ~25 CVEs; minor = same data dir; `vector` 0.8.2 → 0.8.6 update
+  scripts are no-ops, no hnsw/ivfflat index exists); `multica-backend` → `zoe-database:5432`
+  (was `host.docker.internal`, unreachable once loopback-bound) and re-pinned to the digest it
+  actually runs (v0.3.1 — #1562's pin was never deployed); HA bridge → `127.0.0.1:8007`, exact
+  pins (starlette 1.6.0, anyio 4.15.1, idna 3.19, click 8.5.0 …) on
+  `python:3.11.16-slim-bookworm@sha256`, rebuild required; CD/in-app updater `compose up` now
+  `--no-deps` so a deploy cannot recreate Postgres. Guard: `tests/unit/test_compose_loopback_binds.py`
+  (`LAN_LEDGER`). Apply sequence in the PR body.
 - B0.13 ⬜ JetPack 7.2.x reflash window — only after B0.7/B0.8 and when the J401 BSP + an
   Orin wheel index exist.
 
@@ -368,13 +378,27 @@ status: 🔨 active — NEXT ACTION is always §0
   **#1713 MERGED** adds the probe's `--vad-check` stage + the voice-gate check, so a dead VAD
   now FAILS replay **when the stage is scored** — it returns `skip` (no opinion, gate stays
   green) if the model file is absent, fewer usable 16 k clips than the minimum, or
-  MemAvailable < 400 MB; read the artifact's `vad` block, not just the verdict. ⬜ Nit: `services/zoe-data/voice_vad.py` docstring still says "v5".
+  MemAvailable < 400 MB; read the artifact's `vad` block, not just the verdict. ✅ Nit: `voice_vad.py` docstring said "v5" — fixed with the loader fix below.
+  **2026-09-27 (late) — CORRECTION: v6.2.1 was NOT incompatible; our loader was**
+  (fix/vad-64-sample-context). `voice_vad.py` fed bare 512-sample hops; upstream
+  `OnnxWrapper` prepends the previous 64 samples (576-sample input) and v6 models are
+  calibrated for it. With the context: v6.2.1 42/44 stride clips (was 0/44), probe stage
+  20/24 → pass; live v6.0 corpus-wide 95.9 % > 0.5 (was 94.0 %), median detection lag after
+  energy onset 0 ms (was 128 ms), noise floor 0.114 (was 0.434); probe stage newest-24 moved
+  23/24 → 19/24 (quiet recent captures; floor 60 % unchanged) — **VAD-stage numbers
+  re-baseline on merge**. Does not move live panel latency (the Pi daemon's torch.hub wrapper
+  already handles context; `voice_vad.py` serves the dormant LiveKit lane + the probe).
+  **v6.0 stays live.** ⬜ Follow-up: A/B v6.0 vs v6.2.x on TTS-echo/noise false triggers
+  (+ onset) at the barge threshold, re-check the barge knobs and the curator's 0.20
+  non-speech line/quarantine (all tuned on the context-less loader) —
+  [voice-pipeline.md → The VAD stage](../knowledge/voice-pipeline.md).
   Permanent gate: `voice_regression_probe.py` VAD stage (real `voice_vad` over the newest 24
   clips, FAIL < 60 %, also on the memory-skip path) + `voice_gate_check.py` `vad` block +
   `voice_vad.py`/`voice_turn.py`/`*silero*` in `VOICE_PATH_PATTERNS` — [voice-pipeline.md →
   The VAD stage](../knowledge/voice-pipeline.md), runbook §8. **Any future Silero file = run
   the stage against it (`ZOE_SILERO_VAD_MODEL=<candidate>`) before the swap.** The v6.2.x
-  streaming file stays ⬜ until it passes that bar; the paragraph below predates the revert.
+  streaming file now passes that bar (with the fixed loader) but stays ⬜ until the
+  false-trigger A/B above; the paragraph below predates the revert.
   **2026-09-26 (§12; wording per #1705):** the Silero v6.2.1 file is already in place (B0.2).
   Silero v6.2.2's `silero_vad_16k_sequence.onnx` (GIL-releasing, `sequence=True`) is an
   OFFLINE whole-utterance graph — **NOT a live drop-in**: `services/zoe-data/voice_vad.py`
@@ -812,6 +836,11 @@ a decision input.
 ## 6. Change log
 - 2026-09-27 (eve) — B0.6 safe-now Python train: psycopg2-binary 2.9.13 + prometheus-client
   0.26.0 (both manifests + CI/deploy lists); joblib 1.6.0 held on the router-head training-pin contract.
+- 2026-09-27 (eve) — B0.12 network hardening drafted (loopback Postgres + HA bridge, PG 17.11,
+  bridge deps patched, `--no-deps` on automated compose ups); operator apply pending.
+- 2026-09-27 (late) — B1.4 correction: the Silero "v6.2.1 incompatible" verdict was a loader
+  bug — `voice_vad.py` lacked upstream's 64-sample context (fix/vad-64-sample-context); v6.0
+  stays live pending a false-trigger A/B; probe VAD-stage numbers re-baseline.
 - 2026-09-27 (late) — B1.11 route (b) approved: `labs/AGENTS.md` allows in-place PATCH/MINOR
   bumps of the auto-deployed Flue trees with head-bound parallel-port proof; #1694 merged with
   main (hono 4.13.7 by the 14-day rule), final-head :3580 proof PASS, landing in place.
