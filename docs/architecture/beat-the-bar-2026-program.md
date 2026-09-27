@@ -16,22 +16,23 @@ status: 🔨 active — NEXT ACTION is always §0
 > Kokoro); everything here optimises around them. RAM is the ceiling on every line.
 >
 > **State key:** ⬜ not started · 🔨 in progress · ✅ done · ⛔ blocked (says on what) ·
-> 🧑 operator step (needs Jason or root on the box)
+> 🧑 operator step (needs Jason or root on the box) · ⏸ parked · ❌ measured, not a win
 
 ## 0. NEXT ACTION (keep this current)
 
-1. 🧑 **Root / operator window on the box (one sitting, ~30 min):** shrink zram (B0.1);
-   rotate the Telegram token + vacuum the journal (B0.3); rotate the Postgres password
+1. 🧑 **Root / operator window on the box (one sitting, ~30 min):** (zram shrink ✅ done
+   2026-09-27 — B0.1); rotate the Telegram token + vacuum the journal (B0.3); rotate the Postgres password
    (B0.14); set `ZOE_DEFAULT_MEDIA_PLAYER` to the real entity and turn `ZOE_MUSIC_DISCOVERY`
    off (§4b); **swap in the verified Gemma re-upload** (B6.2 — tensors are byte-identical,
    only the chat template changed; staged + checksummed, the swap itself was refused to the
    agent as a production deploy) and restart `llama-server`, then run one replay gate; move
    the ignored leftover `modules/zoe-music/` (root-owned `__pycache__`, retired in #1653) out
    of the live checkout — it makes `test_no_zoe_music_module` red locally while CI is green.
-2. **Queue state (2026-09-26 pm):** MERGED today — #1695 (B0.12 pt 1), #1698 (B0.6 deps
-   contract), #1696 (B1.10 hold + keyterms plumbing), #1693 (B9.1 Omi lab). Still queued:
-   #1691 (B10.0) and #1692 (B3.1 lab), each with ~10–30 review threads closed by
-   failing-test-first fixes. #1694 (B1.11) parked — see B1.11. Voice-scope PRs need a
+2. **Queue state (2026-09-27 pm):** MERGED since 09-26 — #1691 (B10.0), #1692 (B3.1 lab),
+   #1685 (B1.1, flag-dark), #1700 (B0.11), #1701 (B6.5), #1702 (B10.1, flag-dark), #1706 +
+   #1717 (B0.7), #1709 (B0.4), #1711 + #1712 (B6.6), #1713 (VAD gate), #1714 (B1.10). Landing:
+   #1716 (B6.6 ctx 8192, head-bound replay). Parked drafts: #1694 (B1.11), #1715 (B5.1
+   evidence). Voice-scope PRs need a
    head-bound probe after EVERY `update-branch` (strict mode); the Kokoro-paused window
    (`systemctl --user stop kokoro-tts` → probe with `--service-dir` → start → verify
    `curl http://localhost:10201/health` shows `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
@@ -39,10 +40,10 @@ status: 🔨 active — NEXT ACTION is always §0
    it also goes green on the espeak/edge fallback or on a CPU-mode Kokoro) frees ~2 GB and is
    what made today's runs possible under the 700 MB floor. Hold the
    other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again.
-3. **B0.4 llama.cpp b11194 — built + replay-gated 2026-09-27, apply pending:** install the
-   tracked `llama-server.service` template in a Kokoro-paused window and re-run the replay gate
-   (recipe + rollback in voice-pipeline.md). Keep it separate from the Gemma swap so the two
-   changes stay separately attributable.
+3. **B0.4 llama.cpp b11194 ✅ APPLIED 2026-09-27** (replay PASS 13/13) and **B0.7 py3.12 venv
+   ✅ LIVE 2026-09-27 16:13**. The Gemma swap (item 1) stays a separate window so the brain
+   changes remain separately attributable. B0.7's last item — one real `/ws/voice/` panel
+   turn — needs the panel on (🧑).
 
 ## 1. Where Zoe already beats the bar (protect these)
 
@@ -78,7 +79,9 @@ status: 🔨 active — NEXT ACTION is always §0
 ## 3. Program items
 
 ### B0 — Platform floor (everything else waits on this)
-- B0.1 🧑 **zram shrink** (root; with llama-server + kokoro-tts stopped): for each of
+- B0.1 ✅ 2026-09-27 — 8 × 244 MB zram persisted by the operator (`/ 8 /` in
+  `nvzramconfig.sh`); idle MemAvailable ≈ 2.5–2.7 GB (was ≈ 1.1 GB). Original recipe, kept
+  for a reflash: **zram shrink** (root; with llama-server + kokoro-tts stopped): for each of
   `/dev/zram0..7`: `swapoff`, then **`zramctl --reset /dev/zramN`** (a `disksize` write on an
   initialised device fails EBUSY), then `echo $((244*1024*1024)) > /sys/block/zramN/disksize`,
   `mkswap`, `swapon -p 5`; then change `/ 2 /` → `/ 8 /` in `/etc/systemd/nvzramconfig.sh` so it
@@ -139,10 +142,23 @@ status: 🔨 active — NEXT ACTION is always §0
   builder lane only. Any question about the production brain on new hardware is a separate,
   deliberate CANONICAL decision for Jason, out of scope here.
 - B0.3 🧑 Telegram token rotation (BotFather) + `journalctl --rotate && --vacuum-time=1s`.
-- B0.4 🔨 **llama.cpp rebuild at b11194** and re-enable `--flash-attn on` +
+- B0.4 ✅ **llama.cpp rebuild at b11194** and re-enable `--flash-attn on` +
   `--cache-type-v q8_0` with MTP (upstream fix PR #25148, 2026-06-30). Keep `--fit off`.
   Gate: 20-turn multi-prompt replay under `flock`; RSS/TTFT vs baseline.
-  **2026-09-27: built + replay-gated, template adopted, APPLY PENDING.** Build at
+  **✅ APPLIED 2026-09-27** (#1709; the live unit also carries B6.6's `--ctx-size 8192`,
+  whose template change is #1716): the live `~/.config/systemd/user/llama-server.service` runs
+  `%h/llama.cpp-b11194/build-jetson/bin/llama-server` with `--flash-attn on --cache-type-k q8_0
+  --cache-type-v q8_0 --parallel 1 --fit off --reasoning off --load-mode mmap+mlock
+  --cache-ram 2048`. Brain RSS 7.3 → 5.7 GB; replay median brain ≈ 1.5–1.8 s (was ≈ 2.0+);
+  replay **PASS 13/13** after apply. `--parallel 1` is deliberate (#28286, open: draft-MTP +
+  parallel > 1 leaks content between slots). `--cache-ram 512` loses prompt-cache hits and 0
+  gives ~5 s TTFT — keep 2048. Rollback backup: `~/.cache/zoe/llama-server.service.b9733`.
+  ⬜ Follow-ups: a `--ctx-checkpoints` trial; a 24 h `--cache-ram` occupancy measurement.
+  After a llama.cpp/docker build, CUDA can fail to allocate (`NvMap … error 12`) with
+  MemAvailable high — recovery without root is in [voice-pipeline.md → "Stopping the brain
+  does NOT guarantee it restarts"](../knowledge/voice-pipeline.md) (stop Kokoro, restart the
+  brain first — `reset-failed` if it crash-looped — then start Kokoro).
+  **Build history (2026-09-27, before the apply):** Build at
   `~/llama.cpp-b11194/build-jetson` (`9f70b2cec`; CUDA=ON, arch 87, `GGML_CUDA_FA=ON`,
   `GGML_CUDA_GRAPHS=ON`, NATIVE, Release). Two brain windows, E4B-QAT + MTP, FA on:
   **(A) K q8_0 / V q8_0 → PASS 11/11 scoreable, 0 fail, brain median 1754 ms, 0 error lines;
@@ -151,12 +167,14 @@ status: 🔨 active — NEXT ACTION is always §0
   item (1) below). Flag renames: `--mlock` → `--load-mode mmap+mlock`, `enable_thinking`
   kwargs → `--reasoning off`. Tracked template + apply/rollback recipe:
   `scripts/setup/systemd/llama-server.service`, [voice-pipeline.md](../knowledge/voice-pipeline.md)
-  ("Brain build + flags — B0.4"). The live unit stays on b9733 / FA off until the coordinator
-  installs it in a Kokoro-paused window and re-runs the replay gate. **Gate items (2) and "keep
+  ("Brain build + flags — B0.4"). ⚠ Until #1716 lands, the tracked template still says
+  `--ctx-size 16384` while the live unit runs 8192 (B6.6) — installing the template from
+  `main` before then undoes the B6.6 setting; apply from the #1716 branch or re-add the flag.
+  **Gate items (2) and "keep
   `--fit off`" are satisfied in the template.** It runs `--parallel 1`, because #28286 (open) leaks
   content between concurrent draft-MTP requests with no garbage-token signature, and the live
-  unit's `--parallel 2` has been exposed to it. Concurrent requests now queue, and ctx 16384
-  belongs to the one slot. `--fit off` is explicit, since b11194 defaults it to `on`. Both are
+  unit's `--parallel 2` was exposed to it. Concurrent requests now queue, and the whole ctx
+  (8192 since B6.6) belongs to the one slot. `--fit off` is explicit, since b11194 defaults it to `on`. Both are
   pinned in `tests/unit/test_llama_server_unit_flags.py`. They were added after the two windows,
   so the apply-window replay is what measures the exact committed config.
   **2026-09-26 (ecosystem-watch §1):** b11194 ≡ b11178 for this build — 16 commits
@@ -189,8 +207,14 @@ status: 🔨 active — NEXT ACTION is always §0
   corrected (1.23.2 is the last cp310 wheel — moves only with B0.7). Not adopted:
   `pip install -r` in deploy — it would make every deploy a 39-package resolve on the live
   box, which is exactly the class of unobserved runtime change the header forbids.
-- B0.7 🔨 **Python 3.12 venv for zoe-data only** (Kokoro + llama-server stay on 3.10/CUDA 12.6).
-  Draft **PR #1706**: every pin MEASURED to resolve on cp312/aarch64 (`requirements-py312.txt`,
+- B0.7 ✅ **Python 3.12 venv for zoe-data only** (Kokoro + llama-server stay on 3.10/CUDA 12.6).
+  **✅ CUTOVER LIVE 2026-09-27 16:13** — #1706 + #1717 MERGED, drop-in installed; zoe-data's
+  MainPID exe is uv CPython 3.12.13 (`~/.zoe/venvs/zoe-data-py312`); `/readyz` ready,
+  brain/stt/tts ok, `memory_capture` self-recall ok; replay `--stt remote` with the venv python
+  **PASS 13/13** (medians STT 378 / brain 1825 / e2e 1578 ms, relative), VAD stage pass_frac
+  0.958; requirements drift 0 problems. Rollback = delete the drop-in + `daemon-reload` +
+  restart. 🧑 Remaining: one real `/ws/voice/` panel turn (needs the panel on).
+  **PR #1706**: every pin MEASURED to resolve on cp312/aarch64 (`requirements-py312.txt`,
   pins identical to the box wherever a cp312 wheel exists), `scripts/setup/build_py312_venv.sh`
   (uv, idempotent, `--dry-run`/`--check`), runbook `docs/knowledge/python-312-venv-migration.md`
   (drop-in switch, gates, rollback); venv built + import-verified in a worktree, `ci_safe`
@@ -199,16 +223,15 @@ status: 🔨 active — NEXT ACTION is always §0
   PyPI aarch64 torch is a CUDA-13 bundle → exact CPU wheel); `prometheus-client` +
   `livekit-protocol` were undeclared direct imports. **av 18 is capped by aiortc, not Python.**
   Step-ups (onnxruntime 1.30, websockets 17.1, numpy 2, sklearn 1.9 + head re-export) each
-  resolve and follow one at a time, replay-gated. 🔨 **Cutover PR #1717** (draft): tracked drop-in
+  resolve and follow one at a time, replay-gated. **Cutover PR #1717** (merged): tracked drop-in
   `scripts/setup/systemd/zoe-data.service.d/60-py312-venv.conf` (empty `ExecStart=` reset + the
   template's exact uvicorn args on the venv python); `deploy.yml` reads the interpreter back from
   systemd (`scripts/deploy/zoe_data_python.sh`) — venv → `build_py312_venv.sh --refresh`
   (`--offline` first), 3.10 → the old `pip3 --user` list — and runs Alembic with it, so the
   drop-in alone is the switch and deleting it is the rollback; a both-manifests exact-pin parity
-  test keeps the py312 manifest on the box's pins (e.g. `moonshine-voice==0.1.3`, #1714). 🧑 Remaining (runbook §8, after merge): build
-  + `--check`, replay `--stt inprocess` with the venv, drop-in + restart, `/readyz` +
-  `memory_recall_probe`, replay `--stt remote`, drift check with the venv, one real `/ws/voice/` turn.
-  Target: before 2026-10-31 (3.10 EOL).
+  test keeps the py312 manifest on the box's pins (e.g. `moonshine-voice==0.1.3`, #1714).
+  Runbook §8 steps done 2026-09-27 except the real `/ws/voice/` turn (above). Target was
+  before 2026-10-31 (3.10 EOL).
   **Two-interpreter split (2026-09-26, §10):** system 3.10 = CUDA consumers from `jp6/cu126`
   (cp310-only: torch, onnxruntime-gpu 1.23/1.24; last upload 2026-04-01) — after EOL frozen
   at ORT 1.23.2, numpy 2.2.6, av 17.1.0, sklearn 1.7.2, websockets 16.1.1 (all dropped cp310
@@ -279,7 +302,7 @@ status: 🔨 active — NEXT ACTION is always §0
     (label) + Copilot; the deterministic gate is unchanged.
 - B0.11 🔨 Omnigent: bake the `url=` Serena entry into the image (patched live 2026-09-25 in
   `/root/.codex/config.toml`; a container recreate reverts it); renew the Claude login before
-  2026-10-11; move the polly lane off `claude-sdk` OAuth (policy). Draft PR #1700: the file
+  2026-10-11; move the polly lane off `claude-sdk` OAuth (policy). PR #1700 (merged): the file
   lives in the `omnigent-codex` VOLUME with no tracked owner — now a tracked template
   (`modules/omnigent/codex-mcp.toml`) baked into the image and seeded idempotently by
   `entrypoint.sh` on every boot (hooks.state kept); renewal steps + the polly-lane policy note
@@ -311,7 +334,7 @@ status: 🔨 active — NEXT ACTION is always §0
   Orin wheel index exist.
 
 ### B1 — Turn-taking that feels like a person (beats GPT-Live locally)
-- B1.1 🔨 **Speculative turn-start with a speculation gate** — draft PR #1685 (flag-dark
+- B1.1 🔨 **Speculative turn-start with a speculation gate** — PR #1685 MERGED (flag-dark
   `ZOE_SPECULATIVE_*`, server-side gate + daemon verdict, 30 tests, break-the-fix controls;
   stays dark until phase 2 defers write side-effects to commit; needs the panel on + a replay
   gate bound to its head — the 2026-09-25 attempt skipped on the 700 MB floor, so it waits
@@ -334,6 +357,11 @@ status: 🔨 active — NEXT ACTION is always §0
   on 09-26 (B0.2) loaded cleanly but scored ~0.001 on real speech (0/12 clips ≥ 0.5 vs 12/12 on
   v6.0): barge-in / idle listening were silently off for a day. Live file restored to **v6.0**
   (md5 `00bdd414…`; the bad one kept as `silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927`).
+  The incident silently killed barge-in for ~1 day and was caught only by a manual probe;
+  **#1713 MERGED** adds the probe's `--vad-check` stage + the voice-gate check, so a dead VAD
+  now FAILS replay **when the stage is scored** — it returns `skip` (no opinion, gate stays
+  green) if the model file is absent, fewer usable 16 k clips than the minimum, or
+  MemAvailable < 400 MB; read the artifact's `vad` block, not just the verdict. ⬜ Nit: `services/zoe-data/voice_vad.py` docstring still says "v5".
   Permanent gate: `voice_regression_probe.py` VAD stage (real `voice_vad` over the newest 24
   clips, FAIL < 60 %, also on the memory-skip path) + `voice_gate_check.py` `vad` block +
   `voice_vad.py`/`voice_turn.py`/`*silero*` in `VOICE_PATH_PATTERNS` — [voice-pipeline.md →
@@ -391,7 +419,8 @@ status: 🔨 active — NEXT ACTION is always §0
   2026-09-27 (runbook §9): cause found — 0.1.5 hard-codes `DisableCpuMemArena` (~34 ms/step)
   + `disable_prepacking` (~6 ms/step) on the streaming sessions (upstream `4a7f85c`); no option
   or env var reverts them; best config-only mitigation (glibc `MALLOC_*`) is still ~30 % slower
-  per step, so HOLD stands. Next: pin-0.1.3 A/B in a memory window + upstream issue naming the flags.
+  per step, so HOLD stands (decoder step 63 ms vs 21 ms; runbook §8–§10). The 0.1.3 A/B is
+  done (adopted, above). Next: 🧑 the upstream issue naming the flags — Jason's call.
 - B1.11 ⏸ PARKED 2026-09-26 — Flue 2.1.1 (`@flue/*` 2.0.1 → 2.1.1 in both 2x sidecars; hono /
   nanoid advisories cleared, `npm audit` 0; 209/209 + 44/44 tests; store format unchanged, one
   fold-checkpoint re-fold on first start). Draft **PR #1694** was proven the way the contract
@@ -438,7 +467,7 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ### B3 — Memory that is sound and visible (beats Siri Recap / ChatGPT Dreaming)
 - B3.1 🔨 **Bi-temporal supersession + "keep the richer fact"** at idle — lab spike in
-  draft PR #1692 (flag-dark `ZOE_BITEMPORAL_SUPERSEDE`, no prod wiring): `valid_from /
+  PR #1692 (merged) (flag-dark `ZOE_BITEMPORAL_SUPERSEDE`, no prod wiring): `valid_from /
   valid_until / expired_at / superseded_by` on the fact rows (Chroma metadata keys) and
   `person_relationships` (Alembic plan, not applied); contradiction only if intervals
   overlap (Graphiti `edge_operations.py`); reconciliation with mem0's update prompt,
@@ -453,6 +482,18 @@ status: 🔨 active — NEXT ACTION is always §0
   own verdict vocabulary, counts on the status endpoint) (≥N new facts, ≥H hours,
   idle ≥M min, cancel on speech) + a hard brain-call budget per window + a 40-line profile
   cap (Honcho, Memobase). Explains the 44 zero-effect digests; make them explainable.
+  ⬜ **Dreaming-cycle scheduling (checked 2026-09-27):** an agent reported the weekly
+  dreaming/portrait cycle unscheduled; the box contradicts that — the `--user` timer
+  `zoe-dreaming.timer` (02:30 AWST nightly) runs `scripts/maintenance/zoe-nightly-dreaming.py`
+  → `run_dreaming_for_all`, whose weekly phases (consolidation, synthesis, portrait, agent sync)
+  gate on a **UTC** Sunday = the Monday 02:30 AWST run; last weekly pass 2026-09-21 (portrait
+  `ok` for jason, 66 memories). Follow-ups: 🧑 `zoe-dreaming.service` (box-only unit, no repo
+  template under `scripts/setup/systemd/`) still runs `/usr/bin/python3` (3.10); operator step
+  = add drop-in `~/.config/systemd/user/zoe-dreaming.service.d/60-py312-venv.conf` overriding
+  `ExecStart` to `%h/.zoe/venvs/zoe-data-py312/bin/python
+  /home/zoe/assistant/scripts/maintenance/zoe-nightly-dreaming.py` + `daemon-reload`; imports
+  (chromadb, db_pool, memory_digest) verified to resolve under the venv 2026-09-27; verify the
+  Mon 2026-09-28 02:31 AWST run log. ⬜ It also iterates ~24 users incl. test/probe ids.
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -487,7 +528,10 @@ status: 🔨 active — NEXT ACTION is always §0
   zero-CPU presence signal; HA device presence (Phase 2.5).
 
 ### B5 — Voice quality and expressiveness
-- B5.1 ⬜ **Kokoro on ONNX Runtime CUDA** (same model, same voices): 2.3 GB → ~0.6–1 GB;
+- B5.1 ❌ ⏸ **Kokoro on ONNX Runtime CUDA — NOT A WIN, parked 2026-09-27** (evidence in
+  draft PR #1715): fp16 on GPU saves only ~0.5–1 GB (not the hoped 1.3–1.7), is slower on new
+  text and returns silent NaN output on 9 % of runs; CPU RTF 0.70. **Keep PyTorch CUDA Kokoro.**
+  Original goal (same model, same voices): 2.3 GB → ~0.6–1 GB;
   RTF < 0.3 required; jetson-containers `kokoro-tts-onnx` recipe.
   **Recipe (2026-09-26, §3):** `kokoro-onnx==0.6.1` (2026-08-19; PR #198 re-export with
   `speed`/duration outputs, **fp16 164 MB / int8 114 MB** graphs in release `model-files-v1.1`
@@ -573,7 +617,7 @@ status: 🔨 active — NEXT ACTION is always §0
   ``` B6.3 ⬜ Domain-prefixed tool
   names (`ha__`, `ma__`, `memory__`). B6.4 ⬜ Consider an E2B "fast/cheap turn" lane only
   if RAM allows after B0.1/B5.1 (AICore's variant-by-task split) — not a rock change.
-- B6.5 🔨 Client defaults: `zoe_flue_client` → `:3579`/wire 2 — draft PR #1701 (both in-code
+- B6.5 ✅ Client defaults: `zoe_flue_client` → `:3579`/wire 2 — PR #1701 MERGED (both in-code
   defaults flipped + pinned with the retired `:3578`/wire-1 pair as negative control;
   `ZOE_FLUE_WIRE=1` stays opt-in for parity; voice-scope, head-bound replay gate before ready).
   `ZOE_BRAIN_FAILOVER=1` deliberately NOT flipped — default stays off; its three-step gate
@@ -585,7 +629,7 @@ status: 🔨 active — NEXT ACTION is always §0
   zoe-data's `import main` loads no heavy library (~64 MB); the ~1.2 GB is the hot-path set
   (Moonshine, router head, fastembed, Chroma). ✅ #1711: cached, CPU-pinned `VoiceEncoder` + a
   fresh-interpreter test that `import main` stays free of resemblyzer/torch/transformers.
-  🔨 Voice-gated follow-ups — draft PR (head-bound replay gate before ready): (a) Smart Turn
+  ✅ #1712 MERGED — voice-gated follow-ups: (a) Smart Turn
   features → pure-numpy log-mel (`voice_turn.log_mel_features`), bit-identical to transformers'
   numpy path, so torch/transformers are never loaded (fresh-process RSS 446–455 → 84 MB); old
   vs new on 302 corpus turns: median |Δp| 0, max 0.21, 0 decisions flipped at 0.5 (the model
@@ -596,6 +640,24 @@ status: 🔨 active — NEXT ACTION is always §0
   (~1.0 GB RSS+swap, flat): **no action** — no `mem_limit`, no restart timer (re-auth risk);
   ⬜ re-measure RSS+swap in a few days on the same container start, and add a weekly restart
   timer only if it grows > ~100 MB/day.
+  (c) **`--ctx-size 8192` APPLIED 2026-09-27 14:13** (p99 prompt observed 3280 tokens; the
+  Flue 2.x sidecar windows prompts to 8192); PR #1716 (unit template + Pi compaction + portrait
+  token budget + tool-result fitter) is **landing** via head-bound replay. Backup:
+  `~/.cache/zoe/llama-server.service.pre-b6-6`. ⬜ Stale comment:
+  `labs/flue-zoe-brain-2x/src/context-window.ts` still says `--ctx-size 16384 --parallel 2`
+  (fix in a labs PR, not here).
+
+- B6.6 🔨 **Brain flags tuning** (2026-09-27, two replay-gated brain windows on b11194, one
+  flag vs the live set per run, same-session control; evidence in
+  `docs/knowledge/brain-flags-tuning-2026-09.md`). **`--ctx-size 16384 → 8192` ADOPTED in the
+  template** (draft PR, apply pending in a Kokoro-paused window). It saves −170 MiB RSS at
+  load, replay PASS. 36 h of live traffic (630 turns): prompt+reply p99 3280 / max 3338. The
+  Flue client already windows to 8192. **`--cache-ram` stays 2048**: `0` = +4.1 s TTFT on every
+  repeat chat turn (one slot rotates ~5 prompts per turn), and `512` is unprovable because one
+  main-turn entry is ~170 MiB with SWA checkpoints. **Draft-MTP stays n-max 4 / p-min 0.6**:
+  3/6/8 and 0.5/0.7 are all within ~±3 % noise, and 6/8 are slightly worse, as upstream
+  #27210 predicts. Follow-up ⬜ `--ctx-checkpoints` (default 32 × ~10.6 MiB per cache entry)
+  + a 24 h live cache-occupancy read, before `--cache-ram` is revisited.
 
 ### B7 — Window into Zoe (UI)
 - B7.1 ⬜ AG-UI 1.0 (`ACTIVITY_SNAPSHOT/DELTA`) + a fixed A2UI-style component catalog as the
@@ -664,7 +726,7 @@ from outside, hence B9.0.
   the pendant lives during the day, retention, minors, who does the legal check).
 
 ### B10 — Web lookup + claim backing (Jason, 2026-07-24)
-- B10.0 🔨 **Make the existing chat fallback honest first** — draft PR #1691, pending review
+- B10.0 ✅ **Make the existing chat fallback honest first** — PR #1691 MERGED
   (found by the audit re-check 2026-09-26): `research_evidence.fetch_web_fallback_results` reaches DuckDuckGo with no brain
   tool, but DDG now answers scripted fetches with a challenge page (HTTP 202) and the function
   swallows it and returns `[]`, so a research turn silently degrades to placeholders. Surface
@@ -673,7 +735,7 @@ from outside, hence B9.0.
   → `WebFallbackOutcome` recorded in the package as `web_lookup` + an honest card row,
   `ZOE_WEB_FALLBACK_PROVIDER` (auto = Tavily-first when keyed | duckduckgo | off), one INFO line
   per lookup (query length, never text); mutation-checked negative controls. Voice-gate scope CLEAR.
-- B10.1 🔨 **Flag-dark `web_search` brain tool over the B10.0 lookup** — draft PR #1702.
+- B10.1 ✅ **Flag-dark `web_search` brain tool over the B10.0 lookup** — PR #1702 MERGED (dark).
   Not the #1610 spike (DDG/Wikipedia/HN scrapers, consensus merge — no new scraping, no new
   HTTP client): `ZOE_WEB_SEARCH_TOOL=1` (default 0 = byte-identical) serves
   `POST /api/system/web-search` (= `fetch_web_fallback`, ≤5 title/url/snippet rows, outcome
@@ -695,7 +757,8 @@ from outside, hence B9.0.
 ```
 B0.1 zram ─┬─> nightly gate PASS ─┬─> B0.4 FA rebuild ─> B6.*, B1.11
            │                      ├─> B1.1..B1.10 (each replay-gated)
-           │                      └─> B5.1 Kokoro ONNX ─> B5.2/B5.3/B5.5
+           │                      └─> B5.1 Kokoro ONNX ❌ parked (not a win) — no longer gates anything
+           B5.2 (prompt modifiers) / B5.3 (expressive bake-off) ─ independent; B5.5 (audio input) needs a RAM decision without the B5.1 saving
 B0.7 py3.12 venv ─> B0.8 Chroma/MemPalace ─> B3.1 (design against the new store)
 B3.2 dream gating ─> B3.3 reflection ─> B2.2 delivery policy ─> B2.1/B2.3/B2.4
 B4.3 face decision ─> B4.1/B4.2 shadow week (Pi on) ─> B3.9
@@ -736,6 +799,16 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (pm) — live-reality refresh: B0.1 ✅ (zram 8 × 244 MB persisted); B0.4 ✅ applied
+  (b11194, FA on, q8_0 KV, RSS 7.3 → 5.7 GB, replay 13/13); B0.7 ✅ cutover live (#1706 + #1717,
+  CPython 3.12.13, replay 13/13); B5.1 ❌ parked (#1715); B6.6 ctx 8192 applied, #1712 merged,
+  #1716 landing; B1.4 VAD gate (#1713); B1.10 0.1.5 hold cause recorded; B3.2 dreaming-timer
+  check; merged-PR annotations on B1.1/B3.1/B0.11/B6.5/B10.0/B10.1. Process: Codex code-review
+  quota exhausted since 2026-09-26 (fallback Greptile + Copilot); voice PRs land strictly
+  serially — `~/.cache/zoe/voice_regression_last.json` is one slot bound to `revision.commit`,
+  so every push/`update-branch` needs a fresh probe + gate rerun; never probe during a
+  `deploy.yml` restart (collision → ERROR verdicts; landing scripts use a `wait_deploy` guard +
+  `/tmp/zoe-brain-window.lock`); post-build NvMap error 12 recovery → B0.4 row.
 - 2026-09-27 — B6.6 follow-ups (draft PR): Smart Turn numpy log-mel (no torch in zoe-data from LiveKit) + speaker embedding off the event loop.
 - 2026-09-27 — B1.4: Silero v6.2.1 file reverted to v6.0 (it detected no speech — barge-in /
   idle listening silently off for a day); permanent gate = the probe's VAD stage + the gate

@@ -536,8 +536,10 @@ and a new spelling on b9733 is the same failure in reverse):
 requests' prompts and completions, with no garbage-token signature to catch it by. The unit ran
 `--parallel 2` from 2026-07-21 until B0.4, so the live brain has been exposed. With one slot,
 concurrent requests (voice and chat) queue rather than run side by side, and the full
-`--ctx-size 16384` belongs to that slot. The `--cache-ram 2048` host prompt cache is what softens
-prefix eviction between them. The test pins `draft-mtp` ⇒ `--parallel 1`. Raise it only once #28286
+`--ctx-size` belongs to that slot (8192 from B6.6, the Flue client's window; see
+[brain-flags-tuning-2026-09.md](brain-flags-tuning-2026-09.md)). The `--cache-ram 2048` host
+prompt cache is what keeps the prefixes warm between them. It is load-bearing with one slot:
+`--cache-ram 0` measured +4.1 s TTFT on every repeat chat turn. The test pins `draft-mtp` ⇒ `--parallel 1`. Raise it only once #28286
 is fixed upstream and replay-gated here.
 
 **Apply** (operator/coordinator only, in a Kokoro-paused brain window, after the PR merges and
