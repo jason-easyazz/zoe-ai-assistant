@@ -25,10 +25,16 @@ if [[ -z "${POSTGRES_URL:-}" ]]; then
   exit 1
 fi
 
-echo "Applying zoe-data Alembic migrations..."
+# Alembic imports the app's DB stack (SQLAlchemy/psycopg2/asyncpg), so it runs
+# under the interpreter the zoe-data SERVICE runs: deploy.yml resolves that from
+# systemd (scripts/deploy/zoe_data_python.sh) and passes it as ZOE_DATA_PYTHON —
+# the Python 3.12 venv after the B0.7 cutover, /usr/bin/python3 before it or
+# after a rollback. Unset (a fresh install, a manual run) keeps `python3`.
+ZOE_DATA_PYTHON="${ZOE_DATA_PYTHON:-python3}"
+echo "Applying zoe-data Alembic migrations (${ZOE_DATA_PYTHON})..."
 (
   cd "${ZOE_DATA_DIR}"
-  POSTGRES_URL="${POSTGRES_URL}" python3 -m alembic upgrade head
+  POSTGRES_URL="${POSTGRES_URL}" "${ZOE_DATA_PYTHON}" -m alembic upgrade head
 )
 
 mapfile -t PG_PARTS < <(python3 - <<'PY'

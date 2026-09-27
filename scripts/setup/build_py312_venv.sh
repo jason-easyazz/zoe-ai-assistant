@@ -20,6 +20,7 @@
 #   scripts/setup/build_py312_venv.sh --dry-run    # print the plan, resolve only, install nothing
 #   scripts/setup/build_py312_venv.sh              # build / converge the venv (idempotent; sync removes strays)
 #   scripts/setup/build_py312_venv.sh --check      # verify an existing venv: interpreter, drift (incl. extraneous), imports
+#   scripts/setup/build_py312_venv.sh --refresh    # deploy.yml: additive install of both phases into an EXISTING venv only
 # Env: ZOE_PY312_VENV (venv dir), ZOE_PY312_PYTHON (default 3.12),
 #      ZOE_PY312_MIN_MEM_MB (refuse to install below this MemAvailable; default 500).
 set -euo pipefail
@@ -48,8 +49,9 @@ for arg in "$@"; do
   case "$arg" in
     --dry-run) MODE="dry-run" ;;
     --check)   MODE="check" ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) die "unknown argument: $arg (use --dry-run, --check, or none)" ;;
+    --refresh) MODE="refresh" ;;
+    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument: $arg (use --dry-run, --check, --refresh, or none)" ;;
   esac
 done
 
@@ -166,6 +168,41 @@ case "$MODE" in
       || die "venv drift (MISMATCH / MISSING / EXTRANEOUS / DAMAGED above) — rebuild (no args) to converge"
     log "import smoke:"
     smoke && ok "smoke passed" || die "smoke FAILED"
+    ;;
+  refresh)
+    # The deploy path (.github/workflows/deploy.yml, once the service runs this
+    # venv): the same two install phases as a build, ADDITIVE (`uv pip install`,
+    # not the build's freeze→compile→sync), and nothing else. Additive on purpose:
+    # a deploy installs or moves the manifest's pins but never uninstalls from the
+    # live interpreter — pruning strays is the operator's build (no args), whose
+    # sync + damaged-file repair is not something to run unattended per merge. No
+    # `uv python install` and no venv creation — a missing or wrong-version venv
+    # under a service that points at it is an operator problem, not something a
+    # deploy should paper over by building 1.9 GB. No memory floor — the deploy
+    # job's own headroom gate owns that, and an already-satisfied manifest is a
+    # no-op audit. No import smoke — the deploy's /health loop after the restart
+    # is the runtime proof, and the smoke's torch/chromadb imports are a memory
+    # transient the live box should not pay on every deploy.
+    step "refresh (deploy)"
+    [[ -x "$VENV_PY" ]] || die "no venv at $VENV_DIR — build it first (no args); --refresh never creates one"
+    v="$(venv_version)"; [[ "$v" == "$PY_MM" ]] || die "venv is Python $v, expected $PY_MM"
+    # --offline FIRST, measured: without it uv re-fetches the torch direct-URL
+    # wheel on every run even when that exact wheel is already installed (a dead
+    # network fails an otherwise no-op deploy), while --offline audits the
+    # installed set in milliseconds. Only when the offline pass cannot satisfy
+    # the pins (a real bump, wheel not in uv's cache) does it go to the network —
+    # the same pinned set either way, so the fallback changes where bytes come
+    # from, never what gets installed.
+    refresh_phase() {
+      "${NICE[@]}" "$UV" pip install --offline --python "$VENV_PY" "$@" \
+        || { log "offline pass could not satisfy the pins — installing from the network"
+             "${NICE[@]}" "$UV" pip install --python "$VENV_PY" "$@"; }
+    }
+    log "phase 1: manifest"
+    refresh_phase -r "$REQ_FILE"
+    log "phase 2: ${PHASE2_NO_DEPS[*]} --no-deps"
+    refresh_phase --no-deps "${PHASE2_NO_DEPS[@]}"
+    ok "venv refreshed: $VENV_PY"
     ;;
   build)
     step "build"

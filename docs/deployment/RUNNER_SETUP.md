@@ -42,8 +42,10 @@ on the self-hosted runner.
 
 After pushing to `main`, watch the Actions tab. The deploy job will:
 1. `git reset --hard origin/main` in `/home/zoe/assistant`
-2. `pip3 install --user` the pinned deps
-3. Apply Zoe data/auth database migrations
+2. Refresh zoe-data's deps for the interpreter the unit runs (`scripts/deploy/zoe_data_python.sh`):
+   the Python 3.12 venv → `build_py312_venv.sh --refresh` from `requirements-py312.txt`;
+   system 3.10 → `pip3 install --user` the pinned list
+3. Apply Zoe data/auth database migrations (Alembic under that same interpreter)
 4. Rebuild/restart `zoe-auth`
 5. `systemctl --user restart zoe-data.service`
 6. Wait 6s then hit the push and proactive health endpoints
