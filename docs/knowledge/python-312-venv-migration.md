@@ -85,16 +85,26 @@ separately; not a 3.12 matter.
 # inside a worktree (never the live checkout for git; the venv lives OUTSIDE the repo)
 scripts/setup/build_py312_venv.sh --dry-run   # prints the plan + resolves the manifest, installs nothing
 scripts/setup/build_py312_venv.sh             # ~/.zoe/venvs/zoe-data-py312, ~1.9 GB, ~1 min warm cache
-scripts/setup/build_py312_venv.sh --check     # interpreter, drift vs manifest + phase-2 pins (any MISMATCH fails), smoke
+scripts/setup/build_py312_venv.sh --check     # interpreter, drift vs manifest + phase-2 pins, extraneous + damaged dists (any fails), smoke
 ```
 
 What it does, in order: `uv python install 3.12` (uv-managed CPython under
 `~/.local/share/uv/python`, no sudo) → `uv venv <dir> --python 3.12` (skipped when a 3.12 venv is
-already there) → `uv pip install -r services/zoe-data/requirements-py312.txt` (phase 1) →
-`uv pip install --no-deps resemblyzer==0.1.4` (phase 2, §3 blocker 1) → import smoke (fails the
+already there) → phase 1: `uv pip compile` the manifest for the venv's interpreter (installed pins
+preferred, so a rerun changes nothing unless the manifest moved) and `uv pip sync` to that lock —
+sync REMOVES anything outside it, so a dropped or leftover package cannot keep importing (never sync
+the bare manifest: sync installs its input literally, without dependencies) → reinstall any
+distribution that lost files to a removal (shared paths; the `webrtcvad` sdist and
+`webrtcvad-wheels` both ship `webrtcvad.py`) → `uv pip install --no-deps resemblyzer==0.1.4`
+(phase 2, §3 blocker 1; AFTER the sync, which would strip it) → import smoke (fails the
 build if any load-bearing import fails; asserts `--ws auto` still resolves to the legacy impl and
 that torch has no CUDA). It refuses to install when `MemAvailable` < 500 MB (`ZOE_PY312_MIN_MEM_MB`)
 and runs everything under `nice -n 15`.
+
+Interpreter patch level: `ZOE_PY312_PYTHON` goes to uv in full, so a fresh build gets exactly that
+patch, but reuse and `--check` compare MAJOR.MINOR — a uv venv points at uv's minor-version symlink
+(`cpython-3.12-linux-aarch64-gnu`), which `uv python upgrade` moves in place. An exact-patch
+guarantee = `rm -rf` the venv and rebuild.
 
 **The manifest is the installer here** — the inverse of `requirements.txt`'s box-first rule, and
 deliberately so: a fresh interpreter has no site-packages to reconcile *to*. Drift is still
@@ -162,12 +172,14 @@ the cutover PR, not before: until the drop-in is live it would be a wish.
    worktree, never the live checkout:
    ```bash
    export V=~/.zoe/venvs/zoe-data-py312/bin/python   # EXPORTED: the single-quoted bash -c below reads it
-   uv pip install --python $V "pytest==8.3.5" "pytest-asyncio==1.3.0"
+   # pytest goes in an OVERLAY, never the service venv: --check fails on extraneous distributions
+   export T=~/.cache/zoe/py312-pytest-overlay
+   uv pip install --python $V --target $T "pytest==8.3.5" "pytest-asyncio==1.3.0"
    unshare -rn --map-root-user bash -c 'ip link set lo up; TZ=UTC ZOE_DATA_DB=":memory:" \
-     ZOE_MEMORY_STARTUP_STRICT=false PYTHONPATH=$PWD/services/zoe-data $V -m pytest \
+     ZOE_MEMORY_STARTUP_STRICT=false PYTHONPATH=$T:$PWD/services/zoe-data $V -m pytest \
      services/zoe-data/tests -m ci_safe --ignore=services/zoe-data/tests/samantha_live -q \
      --override-ini=asyncio_mode=auto'
-   unshare -rn --map-root-user bash -c 'ip link set lo up; TZ=UTC PYTHONPATH=$PWD:$PWD/services/zoe-data \
+   unshare -rn --map-root-user bash -c 'ip link set lo up; TZ=UTC PYTHONPATH=$T:$PWD:$PWD/services/zoe-data \
      $V -m pytest tests/unit -m ci_safe -q --override-ini=asyncio_mode=auto'
    ```
    The first attempt is what found blocker 2 (`livekit.protocol`): a collection error, not a

@@ -18,8 +18,8 @@
 #
 # Usage:
 #   scripts/setup/build_py312_venv.sh --dry-run    # print the plan, resolve only, install nothing
-#   scripts/setup/build_py312_venv.sh              # build / converge the venv (idempotent)
-#   scripts/setup/build_py312_venv.sh --check      # verify an existing venv: interpreter, drift, imports
+#   scripts/setup/build_py312_venv.sh              # build / converge the venv (idempotent; sync removes strays)
+#   scripts/setup/build_py312_venv.sh --check      # verify an existing venv: interpreter, drift (incl. extraneous), imports
 # Env: ZOE_PY312_VENV (venv dir), ZOE_PY312_PYTHON (default 3.12),
 #      ZOE_PY312_MIN_MEM_MB (refuse to install below this MemAvailable; default 500).
 set -euo pipefail
@@ -118,7 +118,8 @@ case "$MODE" in
     echo "  would run:"
     echo "    $UV python install $PY_VERSION"
     echo "    $UV venv $VENV_DIR --python $PY_VERSION            # only if absent or not $PY_VERSION"
-    echo "    $UV pip install --python $VENV_PY -r $REQ_FILE"
+    echo "    $UV pip compile $REQ_FILE --python $VENV_PY -o <lock>   # resolved closure, installed pins preferred"
+    echo "    $UV pip sync --python $VENV_PY <lock>                  # converge: removes anything not in the lock"
     echo "    $UV pip install --python $VENV_PY --no-deps ${PHASE2_NO_DEPS[*]}"
     echo "  then the import smoke, then (operator, separately) the systemd drop-in."
     step "resolving the manifest for cp$PY_VERSION / $PLATFORM (wheel metadata only)"
@@ -140,14 +141,16 @@ case "$MODE" in
     # The checker also verifies the torch direct-URL pin (version + PEP 610 source).
     drift="$REPO_ROOT/scripts/maintenance/requirements_drift_check.py"
     [[ -f "$drift" ]] || die "drift checker missing: $drift"
-    log "drift (manifest vs venv):"
-    "${NICE[@]}" "$VENV_PY" "$drift" "$REQ_FILE" || die "drift check reported mismatches (see above) — rebuild (no args) to converge"
-    # Phase 2 is installed from PHASE2_NO_DEPS, not the manifest, so the manifest
-    # check cannot see it; the smoke only imports it. Check its pins too (#1706).
+    # Phase 2 is installed from PHASE2_NO_DEPS, not the manifest, so it is passed as
+    # --no-deps: version-checked, allowed, its declared deps NOT walked (#1706).
+    # --extraneous: anything installed that neither phase asks for is drift too —
+    # a leftover (e.g. the un-importable webrtcvad sdist, or pytest from gate 1)
+    # would otherwise be certified, since the smoke cannot see it (#1706).
     phase2_req="$(mktemp)"; trap 'rm -f "$phase2_req"' EXIT
     printf '%s\n' "${PHASE2_NO_DEPS[@]}" >"$phase2_req"
-    log "drift (phase 2 vs venv):"
-    "${NICE[@]}" "$VENV_PY" "$drift" "$phase2_req" || die "phase-2 drift (${PHASE2_NO_DEPS[*]}) — rebuild (no args) to converge"
+    log "drift (manifest + phase 2 vs venv, extraneous included):"
+    "${NICE[@]}" "$VENV_PY" "$drift" "$REQ_FILE" --no-deps "$phase2_req" --extraneous --quiet \
+      || die "venv drift (MISMATCH / MISSING / EXTRANEOUS / DAMAGED above) — rebuild (no args) to converge"
     log "import smoke:"
     smoke && ok "smoke passed" || die "smoke FAILED"
     ;;
@@ -165,8 +168,32 @@ case "$MODE" in
       "${NICE[@]}" "$UV" venv "$VENV_DIR" --python "$PY_VERSION"
       ok "created $VENV_DIR"
     fi
-    log "phase 1: manifest"
-    "${NICE[@]}" "$UV" pip install --python "$VENV_PY" -r "$REQ_FILE"
+    # Phase 1 CONVERGES, it does not just add: `uv pip install -r` never removes a
+    # distribution, so a package dropped from the manifest (or left by an earlier
+    # experiment) would keep importing. `uv pip sync` removes everything not in its
+    # input — but sync installs its input LITERALLY (no dependency resolution), so
+    # it must be given the fully resolved closure, never the manifest itself
+    # (measured: syncing the bare manifest would uninstall ~124 transitive deps).
+    # So: freeze -> compile with the freeze as preferences (a rerun keeps what is
+    # installed unless the manifest moved) -> sync that lock.
+    lock="$(mktemp)"; trap 'rm -f "$lock"' EXIT
+    "${NICE[@]}" "$UV" pip freeze --python "$VENV_PY" >"$lock"
+    log "phase 1: resolve the manifest for this interpreter, then sync to it"
+    "${NICE[@]}" "$UV" pip compile "$REQ_FILE" --python "$VENV_PY" --no-header --quiet -o "$lock"
+    "${NICE[@]}" "$UV" pip sync --python "$VENV_PY" "$lock"
+    # Removing a distribution deletes every path in ITS RECORD — including paths
+    # another distribution also installed. Measured on #1706: syncing away the stale
+    # `webrtcvad` sdist deleted `webrtcvad.py`/`_webrtcvad*.so`, which
+    # `webrtcvad-wheels` ships at the same paths; its metadata survived, so sync saw
+    # nothing to do. Reinstall whatever lost files (a no-op on a clean venv).
+    mapfile -t damaged < <("${NICE[@]}" "$VENV_PY" "$REPO_ROOT/scripts/maintenance/requirements_drift_check.py" --list-damaged)
+    if (( ${#damaged[@]} )); then
+      warn "files missing from: ${damaged[*]} (shared paths of a removed distribution) — reinstalling"
+      reinstall=(); for d in "${damaged[@]}"; do reinstall+=(--reinstall-package "$d"); done
+      "${NICE[@]}" "$UV" pip sync --python "$VENV_PY" "${reinstall[@]}" "$lock"
+    fi
+    # ORDER MATTERS: phase 2 goes in AFTER the sync, because sync removes anything
+    # outside the lock — including resemblyzer itself.
     log "phase 2: ${PHASE2_NO_DEPS[*]} --no-deps"
     "${NICE[@]}" "$UV" pip install --python "$VENV_PY" --no-deps "${PHASE2_NO_DEPS[@]}"
     log "import smoke:"

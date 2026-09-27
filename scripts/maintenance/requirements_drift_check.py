@@ -57,14 +57,34 @@ manifest pins the CPU torch wheel this way so no index can swap in the CUDA
 bundle). It is checked twice: the installed version must equal the wheel
 filename's version, and the distribution's PEP 610 ``direct_url.json`` must name
 the same URL — an index install of a same-numbered build is still drift.
+
+Extraneous distributions (``--extraneous``)
+-------------------------------------------
+For an environment the manifest BUILDS (the zoe-data 3.12 venv), anything
+installed that nothing asks for is drift as well: a leftover from an earlier
+install keeps importing. Allowed = the manifest's dependency closure (installed
+``Requires-Dist``, extras and markers honoured) plus the names in any
+``--no-deps FILE`` — allowed but NOT walked, because they are installed without
+their declared dependencies on purpose. Never use it on zoe-data's 3.10
+``requirements.txt``: that site-packages is shared and hand-managed.
+
+The same mode reports DAMAGED distributions: metadata says installed, but files
+its RECORD lists are gone — what uninstalling one distribution does to another
+that shipped the same paths (measured on #1706: removing the stale ``webrtcvad``
+sdist deleted ``webrtcvad-wheels``' module). ``--list-damaged`` prints just their
+names, for the build script to reinstall.
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import os
 import re
 import sys
-from importlib.metadata import PackageNotFoundError, distribution, version as installed_version
+from importlib.metadata import (
+    PackageNotFoundError, distribution, distributions, version as installed_version,
+)
 from typing import Iterable, NamedTuple, Optional
 from urllib.parse import unquote, urlsplit
 
@@ -76,7 +96,7 @@ _SPEC_RE = re.compile(r"(==|!=|>=|<=|~=|>|<)\s*([^,\s]+)")
 _OPTIONAL_RE = re.compile(r"#\s*drift-optional\b")
 
 # Verdicts. Only these two mean "the file is lying about this package".
-DRIFT_VERDICTS = frozenset({"MISMATCH", "MISSING"})
+DRIFT_VERDICTS = frozenset({"MISMATCH", "MISSING", "EXTRANEOUS", "DAMAGED"})
 
 
 class Finding(NamedTuple):
@@ -261,6 +281,92 @@ def check(text: str) -> list[Finding]:
     return findings
 
 
+def canonical_name(name: str) -> str:
+    """PEP 503 normalised project name."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def installed_distributions() -> dict[str, list[str]]:
+    """``{canonical name: Requires-Dist lines}`` for this interpreter's environment."""
+    out: dict[str, list[str]] = {}
+    for dist in distributions():
+        name = dist.metadata["Name"]
+        if name:
+            out.setdefault(canonical_name(name), list(dist.requires or []))
+    return out
+
+
+def _roots(text: str) -> Iterable[tuple[str, frozenset]]:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith("-"):
+            continue
+        match = _REQ_RE.match(line.split("#", 1)[0].split(";", 1)[0].strip())
+        if match:
+            extras = (match.group("extras") or "").strip("[]")
+            yield match.group("name"), frozenset(
+                canonical_name(e) for e in extras.split(",") if e.strip())
+
+
+def extraneous(text: str, no_deps: Iterable[str] = (),
+               dists: Optional[dict[str, list[str]]] = None) -> list[Finding]:
+    """Installed distributions required by neither ``text`` nor ``no_deps``."""
+    from packaging.requirements import Requirement  # lazy: only this mode needs it
+
+    dists = installed_distributions() if dists is None else {
+        canonical_name(k): v for k, v in dists.items()}
+    extras_seen: dict[str, set[str]] = {}
+    stack = [(canonical_name(n), set(e)) for n, e in _roots(text)]
+    while stack:
+        name, extras = stack.pop()
+        known = extras_seen.get(name)
+        if known is not None and extras <= known:
+            continue
+        extras_seen[name] = (known or set()) | extras
+        active = [""] + sorted(extras_seen[name])
+        for raw in dists.get(name, []):
+            req = Requirement(raw)
+            if req.marker is None or any(req.marker.evaluate({"extra": e}) for e in active):
+                stack.append((canonical_name(req.name), {canonical_name(e) for e in req.extras}))
+    allowed = set(extras_seen) | {canonical_name(n) for n in no_deps}
+    findings = []
+    for name in sorted(set(dists) - allowed):
+        try:
+            have = installed_version(name)
+        except PackageNotFoundError:
+            have = None
+        findings.append(Finding(name, "", have, "EXTRANEOUS",
+                                "installed, but required by neither the manifest nor the --no-deps list"))
+    return findings
+
+
+def damaged_distributions(dists: Optional[Iterable] = None) -> dict[str, list[str]]:
+    """``{canonical name: [missing RECORD paths]}`` for distributions with files gone.
+
+    Reads RECORD directly: on Python 3.12 ``Distribution.files`` silently drops
+    paths that do not exist, which is exactly the evidence needed here. Bytecode
+    caches are not required files and are ignored.
+    """
+    out: dict[str, list[str]] = {}
+    for dist in (distributions() if dists is None else dists):
+        name = dist.metadata["Name"]
+        record = dist.read_text("RECORD")
+        if not name or not record:
+            continue
+        missing = []
+        for row in csv.reader(record.splitlines()):
+            if not row or not row[0]:
+                continue
+            rel = row[0]
+            if rel.endswith(".pyc") or "__pycache__" in rel:
+                continue
+            if not os.path.exists(dist.locate_file(rel)):
+                missing.append(rel)
+        if missing:
+            out[canonical_name(name)] = missing
+    return out
+
+
 def render(findings: list[Finding], quiet: bool = False) -> str:
     rows = [f for f in findings if not quiet or f.verdict not in ("match", "unpinned")]
     if not rows:
@@ -270,7 +376,7 @@ def render(findings: list[Finding], quiet: bool = False) -> str:
     out.append("-" * (width + 48))
     for f in rows:
         out.append(
-            f"{f.name.ljust(width)}{(f.spec or '(unpinned)').ljust(15)} "
+            f"{f.name.ljust(width)}{(f.spec or ('(not declared)' if f.verdict == 'EXTRANEOUS' else '(unpinned)')).ljust(15)} "
             f"{(f.installed or '-').ljust(16)}{f.verdict}"
         )
     drift = [f for f in findings if f.is_drift]
@@ -283,19 +389,47 @@ def render(findings: list[Finding], quiet: bool = False) -> str:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("requirements", help="path to the requirements file")
+    parser.add_argument("requirements", nargs="?", help="path to the requirements file")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--quiet", action="store_true", help="print only non-matching rows")
+    parser.add_argument("--no-deps", action="append", default=[], metavar="FILE",
+                        help="requirements installed with --no-deps: version-checked, "
+                             "allowed by --extraneous, their dependencies NOT walked")
+    parser.add_argument("--extraneous", action="store_true",
+                        help="also flag installed distributions nothing requires "
+                             "(only for an environment the manifest builds)")
+    parser.add_argument("--list-damaged", action="store_true",
+                        help="print the names of distributions with RECORD files missing, "
+                             "one per line, and exit 0")
     args = parser.parse_args(argv)
+
+    if args.list_damaged:
+        for name in sorted(damaged_distributions()):
+            print(name)
+        return 0
+    if not args.requirements:
+        parser.error("the requirements file is required (except with --list-damaged)")
 
     try:
         with open(args.requirements, encoding="utf-8") as handle:
             text = handle.read()
+        no_deps_texts = []
+        for path in args.no_deps:
+            with open(path, encoding="utf-8") as handle:
+                no_deps_texts.append(handle.read())
     except OSError as exc:
-        print(f"cannot read {args.requirements}: {exc}", file=sys.stderr)
+        print(f"cannot read: {exc}", file=sys.stderr)
         return 2
 
     findings = check(text)
+    for extra_text in no_deps_texts:
+        findings += check(extra_text)
+    if args.extraneous:
+        no_deps_names = [n for t in no_deps_texts for n, _ in _roots(t)]
+        findings += extraneous(text, no_deps_names)
+        for name, missing in sorted(damaged_distributions().items()):
+            findings.append(Finding(name, "", None, "DAMAGED",
+                                    f"{len(missing)} RECORD file(s) missing, e.g. {missing[0]}"))
     drift = [f for f in findings if f.is_drift]
 
     if args.json:
