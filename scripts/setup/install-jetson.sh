@@ -76,6 +76,30 @@ done
 export ASSUME_YES
 
 # docker compose v2 (subcommand) with a fallback to legacy docker-compose.
+# Decide whether the brain unit template may be copied into ~/.config/systemd/user.
+# Prints ONE of: install | skip-missing-binary | keep-existing.
+#   skip-missing-binary: the llama-server binary the template's ExecStart names (with %h
+#     resolved) is not executable. Installing the unit anyway would leave an enabled
+#     unit pointing at a missing executable, which fails on the next restart or boot.
+#   keep-existing: an installed unit already exists and differs from the template. The
+#     brain's build/flags are the voice path, so a change there is applied only in a
+#     gated window (saved rollback copy, Kokoro paused, replay gate), never by
+#     re-running the installer. See docs/knowledge/voice-pipeline.md, "Brain build +
+#     flags — B0.4".
+# Pinned by tests/unit/test_install_jetson_brain_unit_guard.py.
+llama_unit_install_mode() { # <template> <installed-unit> <home>
+  local tpl="$1" dst="$2" home="$3" bin
+  bin="$(sed -n 's/^ExecStart=\([^[:space:]]*\).*/\1/p' "$tpl" | head -n 1)"
+  bin="${bin//%h/$home}"
+  if [[ -z "$bin" || ! -x "$bin" ]]; then
+    echo skip-missing-binary
+  elif [[ -e "$dst" ]] && ! cmp -s "$tpl" "$dst"; then
+    echo keep-existing
+  else
+    echo install
+  fi
+}
+
 compose() {
   if docker compose version >/dev/null 2>&1; then docker compose "$@";
   else docker-compose "$@"; fi
@@ -181,7 +205,25 @@ fi
 if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   step "Host-native services (systemd --user)"
   mkdir -p "${HOME}/.config/systemd/user"
-  cp "${ROOT_DIR}"/scripts/setup/systemd/*.service "${HOME}/.config/systemd/user/"
+  llama_tpl="${ROOT_DIR}/scripts/setup/systemd/llama-server.service"
+  llama_dst="${HOME}/.config/systemd/user/llama-server.service"
+  llama_mode="$(llama_unit_install_mode "$llama_tpl" "$llama_dst" "$HOME")"
+  case "$llama_mode" in
+    skip-missing-binary)
+      warn "NOT installing llama-server.service: the binary its ExecStart names is missing."
+      warn "Build llama.cpp b11194 first (recipe: docs/knowledge/voice-pipeline.md,"
+      warn "  \"Brain build + flags — B0.4\"), then re-run this installer." ;;
+    keep-existing)
+      warn "NOT replacing the installed llama-server.service: it differs from the template."
+      warn "Brain build/flag changes are applied in a gated window (rollback copy, Kokoro"
+      warn "  paused, replay gate): docs/knowledge/voice-pipeline.md, \"Brain build + flags — B0.4\"." ;;
+  esac
+  for unit_file in "${ROOT_DIR}"/scripts/setup/systemd/*.service; do
+    if [[ "$unit_file" == "$llama_tpl" && "$llama_mode" != "install" ]]; then
+      continue
+    fi
+    cp "$unit_file" "${HOME}/.config/systemd/user/"
+  done
   cp "${ROOT_DIR}"/scripts/setup/systemd/*.timer "${HOME}/.config/systemd/user/" 2>/dev/null || true
   # Remove units whose source template was retired, so a re-install on an
   # established host does not leave an orphaned unit pointing at a deleted tree.
@@ -198,7 +240,7 @@ if [[ "$SKIP_SYSTEMD" == "0" ]]; then
   ok "unit templates installed"
 
   enable_units=("${SYSTEMD_SPINE[@]}")
-  if [[ ! -x "$LLAMA_BIN" ]]; then
+  if [[ ! -x "$LLAMA_BIN" || ! -e "$llama_dst" ]]; then
     warn "llama-server binary not found at $LLAMA_BIN."
     warn "Build llama.cpp for your platform and edit"
     warn "  ~/.config/systemd/user/llama-server.service (--model / --model-draft / binary path),"

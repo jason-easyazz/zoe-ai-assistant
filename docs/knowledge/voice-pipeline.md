@@ -456,6 +456,20 @@ template's `--parallel 1` and `--fit off`, which were added after both windows. 
 replay gate is the measurement of the exact committed config. `tests/unit/test_llama_server_unit_flags.py` pins the
 couplings that would otherwise only fail at brain startup.
 
+**Build** (source only: the prebuilt arm64 asset targets CUDA 13.x, not JetPack's 12.6). This is the
+configuration measured on the box (`CMakeCache.txt` of `~/llama.cpp-b11194/build-jetson`). Build
+it in a brain-stop window, because the compile is RAM-hungry. The installer refuses to install the
+unit until this binary exists.
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp-b11194
+git -C ~/llama.cpp-b11194 checkout b11194
+cmake -S ~/llama.cpp-b11194 -B ~/llama.cpp-b11194/build-jetson -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=87 -DGGML_CUDA_FA=ON -DGGML_CUDA_GRAPHS=ON -DGGML_NATIVE=ON
+cmake --build ~/llama.cpp-b11194/build-jetson --target llama-server -j 4
+~/llama.cpp-b11194/build-jetson/bin/llama-server --version   # -> build 11194 (9f70b2cec)
+```
+
 **Flag renames in b11194** (an old spelling on the new binary is an unknown-flag startup failure,
 and a new spelling on b9733 is the same failure in reverse):
 
@@ -485,14 +499,25 @@ the live checkout is fast-forwarded):
 # 1. Keep the running unit for rollback (outside the systemd search path), then install the
 #    template. The drop-ins in ~/.config/systemd/user/llama-server.service.d/ (memory.conf,
 #    priority.conf) are separate files, and copying the unit file leaves them in place.
-mkdir -p ~/.cache/zoe && cp ~/.config/systemd/user/llama-server.service ~/.cache/zoe/llama-server.service.b9733
+#    The rollback copy is made ONCE and never overwritten. A repeat apply (after B0.4 is already
+#    installed) must not replace the known-good b9733 unit with the b11194 one.
+RB=~/.cache/zoe/llama-server.service.b9733
+mkdir -p ~/.cache/zoe
+if [ -e "$RB" ]; then
+  echo "rollback copy already exists — not overwriting"
+elif grep -q 'llama.cpp/build-jetson-new/bin/llama-server' ~/.config/systemd/user/llama-server.service; then
+  cp -n ~/.config/systemd/user/llama-server.service "$RB"
+else
+  echo "installed unit is not the b9733 build and no rollback copy exists — stop"; exit 1
+fi
+grep -q 'llama.cpp/build-jetson-new/bin/llama-server' "$RB" || { echo "rollback copy is not b9733 — stop"; exit 1; }
 install -m 644 ~/assistant/scripts/setup/systemd/llama-server.service ~/.config/systemd/user/llama-server.service
 # The template overwrites any host-specific edit in the installed unit, so read the diff: only
 # the B0.4 lines (binary + LD_LIBRARY_PATH, --flash-attn, --cache-type-v, --load-mode,
 # --reasoning, --parallel 1, --fit off) and comments may differ. On 2026-09-27 the installed
 # ExecStart matched the pre-B0.4 template exactly, including --host 127.0.0.1. Carry any other
 # difference into the new copy.
-diff ~/.cache/zoe/llama-server.service.b9733 ~/.config/systemd/user/llama-server.service
+diff "$RB" ~/.config/systemd/user/llama-server.service
 systemctl --user daemon-reload
 systemctl --user show llama-server -p DropInPaths -p MemorySwapMax   # both drop-ins listed, MemorySwapMax=0
 
@@ -516,8 +541,11 @@ curl -s http://localhost:10201/health   # pipeline_loaded: true AND device: cuda
 **Rollback** is any error line, a replay FAIL, or a brain-median regression:
 
 ```bash
+RB=~/.cache/zoe/llama-server.service.b9733
+# Verify the saved copy is still the b9733 unit BEFORE installing it.
+grep -q 'llama.cpp/build-jetson-new/bin/llama-server' "$RB" || { echo "rollback copy missing or not b9733 — stop"; exit 1; }
 systemctl --user stop kokoro-tts.service
-cp ~/.cache/zoe/llama-server.service.b9733 ~/.config/systemd/user/llama-server.service
+cp "$RB" ~/.config/systemd/user/llama-server.service
 sed -i 's/--parallel 2 \\/--parallel 1 \\/; s/^  --cont-batching \\$/  --cont-batching \\\n  --fit off \\/' \
   ~/.config/systemd/user/llama-server.service   # keep one slot + fit off on rollback (#28286)
 grep -E -- '--parallel|--fit' ~/.config/systemd/user/llama-server.service
