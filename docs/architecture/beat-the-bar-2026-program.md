@@ -283,6 +283,19 @@ status: 🔨 active — NEXT ACTION is always §0
 
   Peak RSS was 372 MB (the rebuild) and the whole run took 4.4 min. Runbook, measured table
   and cutover/rollback: [docs/knowledge/chroma-1-5-migration.md](../knowledge/chroma-1-5-migration.md).
+  **Cutover prepared 2026-09-27, NOT executed** (PR #1745). The PR pins `chromadb==1.5.9` +
+  `mempalace==3.10.0` in `requirements-py312.txt`; the 3.10 lane keeps 0.6.3 and must never
+  open the palace. It also:
+  - moves zoe-data onto its own raw-chromadb opener with a cached MiniLM EF (1.x's default EF
+    reloads ONNX on every query: 0.4–0.9 s vs 0.2 s)
+  - adds a format guard to zoe-data and to every script opener (a 1.x client would migrate the
+    0.6 rollback snapshot in place)
+  - ports the tombstone report to 1.x pickles
+
+  `~/bin/nightly-training-cycle.sh` already runs its store blocks on the venv. The agent's
+  window was refused at "stop zoe-data" by the permission system, so the box is unchanged (old
+  store + old client). The operator sequence is in the runbook §5: merge, window, swap, venv
+  refresh, ff the live tree, `/readyz`, replay, re-run the deploy.
   **Remaining = the 🧑 cutover window.** mempalace **3.10.0** was uploaded 2026-09-16, so it
   passes the 14-day rule on 2026-09-30. The rehearsal needs no mempalace (its EF's `name()` is
   `"default"`, the same identity the rebuild persists). chromadb 1.5.9 (#6953 legacy `hnsw:`

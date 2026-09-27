@@ -112,73 +112,111 @@ Re-run with `python3 scripts/maintenance/chroma_migrate_rehearsal.py run --fresh
 gate stopped the proofs, use `run --prove-only`. The script waits up to `--wait-mem-s` (900 s)
 for `MemAvailable ≥ --min-avail-mb` (1200) before each heavy step, then refuses.
 
-## 4. Every program that opens the store
+## 4. Every program that opens the store (as of the cutover PR)
 
-All of these must move to chromadb 1.5.x **in the same window**. A 0.6.3 client left behind
-fails loudly on the migrated store (proof f). It is still an outage for that program.
+The code, the client and the store switch **together**, because the format change is one-way.
+Two guards make a mismatch loud instead of destructive; both read the format from SQLite
+(`mode=ro`: sysdb migration 00010 exists only in 1.x) before chromadb touches the file.
+- `memory_service._check_palace_format` in zoe-data
+- `scripts/lib/palace_client.py` for the scripts
 
-| program | how it opens | interpreter today | when | cutover action |
+A 1.x client on a 0.6 palace would migrate it **in place**, which would destroy the rollback
+snapshot. A 0.6.3 client on the 1.x palace dies anyway.
+
+| program | how it opens | interpreter | when | state after the cutover PR |
 |---|---|---|---|---|
-| zoe-data (`memory_service.py`: `mempalace.palace.get_collection` + a raw `chromadb.PersistentClient` for audit; `zoe_agent.py`; `mcp_server.py` via MemoryService) | chromadb + mempalace | py3.12 venv `~/.zoe/venvs/zoe-data-py312` | always | install 1.5.9 (+ mempalace 3.10.0) into the venv |
-| `zoe-nightly-dreaming.py` (own `PersistentClient` for the quality snapshot) | chromadb | py3.12 venv (drop-in `60-py312-venv.conf`) | `zoe-dreaming.timer` ~02:33 | same venv, nothing extra |
-| `export_memory_store.py` | **SQLite only** | `/usr/bin/python3` (3.10) | `zoe-memory-export.timer` ~02:41 | none: proof a ran its SQL on the 1.x sqlite |
-| `check_memory_tombstones.py` | reads `index_metadata.pickle` + SQLite; `--execute` uses chromadb | `/usr/bin/python3` (3.10), same unit, behind `-` | ~02:41 | **port before trusting it.** On the migrated copy it reports `mempalace_audit added 0 live 0 → ok` and does not list drawers (1.5 writes no drawer pickle yet). Its report is silently wrong on 1.x |
-| `~/bin/nightly-training-cycle.sh` (inline `chromadb.PersistentClient('/home/zoe/.mempalace')`, off-repo) | chromadb | `/usr/bin/python3` (3.10) | `zoe-training.timer` ~02:05 | re-point to the venv python, or stop the timer until it is |
-| `~/scripts/maintenance/mempalace-nightly-backup.sh` / `zoe-backup-verify.sh` (off-repo) | SQLite only (online backup; `COUNT(*) FROM embeddings`) | `python3` (3.10) | `zoe-backup.timer` ~02:34, verify weekly | none (the `embeddings` table persists in 1.x). The pre-cutover tarball is a 0.6 palace, so label it |
-| `check_emotional_thread.py`, `remediate_ownerless_memories.py` (hand-run) | chromadb | `#!/usr/bin/env python3` → 3.10 | manual | run them with the venv python after cutover |
-| `mempalace_baseline.py`, `zoe_memory_prompt_packet_measure.py` | via zoe-data modules | venv when run from zoe-data | manual | none |
-| `~/bin/zoe-memory-mcp.py` (off-repo) | chromadb | 3.10 | referenced only by retired Hermes config backups | leave dead; do not revive |
+| zoe-data (`memory_service.get_drawers_collection` + audit; `zoe_agent.migrate_mempalace_legacy_records`; `mcp_server.py`/recall via MemoryService) | **raw chromadb** (no mempalace wrapper), one cached client per resolved dir, one cached MiniLM EF named `"default"`, format guard | py3.12 venv | always | pins `chromadb==1.5.9`, `mempalace==3.10.0` in `requirements-py312.txt` (mempalace is installed but not imported by the runtime) |
+| `zoe-nightly-dreaming.py` | `palace_client.open_palace_client` | py3.12 venv (drop-in `60-py312-venv.conf`) | `zoe-dreaming.timer` ~02:33 | guarded |
+| `~/bin/nightly-training-cycle.sh` §10.5–10.7 (quality snapshot, dreaming, music digest; off-repo) | chromadb / MemoryService | **moved to the venv 2026-09-27** (`ZOE_PALACE_PY`; backup `~/bin/nightly-training-cycle.sh.pre-b08-20260927`) | `zoe-training.timer` ~02:05 | done (works with either format, since the venv carries the matching client) |
+| `export_memory_store.py` | SQLite only | `/usr/bin/python3` (3.10) | `zoe-memory-export.timer` ~02:41 | none needed (proof a ran its SQL on 1.x) |
+| `check_memory_tombstones.py` report | pickle + SQLite, no chromadb | `/usr/bin/python3` (3.10) | same unit | **ported**: reads 1.x's dict pickle (it used to report 0/0 "ok"), lists segments with no persisted index metadata yet; `--execute` goes through the guard |
+| `check_emotional_thread.py`, `remediate_ownerless_memories.py` (hand-run) | `palace_client` guard | run them with `~/.zoe/venvs/zoe-data-py312/bin/python` | manual | under 3.10 they now refuse with that instruction |
+| `mempalace-nightly-backup.sh` / `zoe-backup-verify.sh` (off-repo) | SQLite only | 3.10 | `zoe-backup.timer` ~02:34 | none (the `embeddings` table persists in 1.x) |
+| `~/scripts/maintenance/mempalace-wing-migration.py` (off-repo, one-shot 2026-04) | `mempalace.palace.get_collection` | 3.10 | never scheduled | leave; it must not be re-run |
+| `~/bin/zoe-memory-mcp.py` (off-repo) | chromadb | 3.10 | retired Hermes config backups only | leave dead |
 
-**Both interpreters move together.** Prefer re-pointing the 3.10 callers at the venv python over
-installing chromadb 1.5.9 into the system 3.10 user-site. That user-site also carries Kokoro's
-CUDA `onnxruntime-gpu`, and a pip resolve that pulls CPU `onnxruntime` next to it can break TTS.
-If 3.10 must carry 1.5.9, install it with a constraints file that pins the current ORT/numpy,
-then import-check Kokoro before restarting anything. That path is unrehearsed.
+The system 3.10 user site keeps chromadb 0.6.3. It hosts Kokoro's CUDA `onnxruntime-gpu`, and
+nothing on 3.10 may open the palace. Moving zoe-data back to 3.10 (the B0.7 rollback) now
+requires the B0.8 rollback as well.
 
-## 5. Cutover checklist (🧑, one window, outside 01:45–03:15)
+## 5. Cutover sequence (🧑 operator, one window, outside 01:45–03:15)
 
-Preconditions:
-- mempalace **3.10.0** is ≥14 days old (on or after 2026-09-30), or the operator accepts the risk.
-- A fresh `run --fresh` rehearsal passes 10/10 on the same day.
-- MemAvailable is ≥ 1.2 GB.
+**Status (2026-09-27 22:20): NOT executed.** The agent's first window step (stop the timers and
+zoe-data) was refused by the permission system. The box was left unchanged: old store, old
+client, everything running. Everything else is prepared: the cutover PR, the moved 3.10 opener,
+and the rehearsal (10/10).
 
-1. Stop the writers and every timer that opens the store:
-   `systemctl --user stop zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer`,
-   then `systemctl --user stop zoe-data`. Confirm no opener is running:
-   `pgrep -af "chromadb|zoe-nightly-dreaming|check_memory|nightly-training"` prints nothing.
-2. Final copy + rebuild from the **stopped** store:
-   `python3 scripts/maintenance/chroma_migrate_rehearsal.py run --fresh --date cutover-$(date +%F)`.
-   Nothing writes during the copy, so the counts are final. All 10 proofs must PASS.
-3. Snapshot and swap:
-   `mv ~/.mempalace ~/.mempalace.pre-b08-$(date +%Y%m%d-%H%M%S)`, then
-   `cp -a ~/.zoe/chroma-migration-rehearsal/cutover-<date>/dst ~/.mempalace`.
-   Copy the store rather than moving it, so the rehearsal copy stays pristine. Leave
-   `export/` and `manifest.json` where they are.
-4. Install into the venv:
-   `~/.local/bin/uv pip install --python ~/.zoe/venvs/zoe-data-py312/bin/python chromadb==1.5.9 mempalace==3.10.0`.
-   Constrain numpy/onnxruntime/tokenizers to their current pins. Update
-   `services/zoe-data/requirements-py312.txt` in the same PR: pins, the ~line 82 comment, and the
-   `_skip_name_check=True` audit of `get_collection()` callers. Re-point the 3.10 callers (§4).
-5. Record the embedder identity. mempalace 3.10 warns on a populated collection with no recorded
-   identity (`EmbedderIdentityUnknownWarning`) and resolves it with
-   `mempalace palace set-embedder`. Check the exact CLI with `--help` first; this step is
-   **unrehearsed**.
-6. `systemctl --user start zoe-data`. Poll `/readyz` (`is-active` lies) until `status` is ok **and**
-   `memory_capture` says `self-recall ok`. That check runs `memory_recall_probe.run_self_recall_check`
-   on the new client.
-7. Verify:
-   - `/health` recall `ok`
-   - `check_emotional_thread.py` under the venv python
-   - one real chat turn that recalls a known fact
-   - zoe-data RSS before and after (1.5's Rust core replaces `chroma-hnswlib`; expected about neutral, unmeasured)
-8. Re-enable the timers and watch the next dreaming and memory-export logs.
+Why the order matters. The live checkout's code, the venv pins and the store must all flip while
+zoe-data is down:
+- **New code + old store** → the guard refuses to open (loud; memory is down, the data is safe).
+- **Old code + new pins** → zoe-data runs mempalace 3.10's untested wrapper.
+
+The deploy gate also refuses the merged PR until a fresh replay artifact exists, because
+`requirements-py312.txt` is on the voice path. Refused means blocked *before* the reset, so the
+live tree stays at `prev`. The replay needs the new stack running, so the order is: merge, then
+the window, then the replay, then re-run the deploy.
+
+```bash
+# 0. Merge #1732 then #1745 (squash). The deploy for #1745 will be REFUSED by the voice gate:
+#    live tree untouched. That is expected.
+exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9          # no replay/deploy window overlaps
+WT=/home/zoe/.worktrees/b0-8-cutover                        # or any checkout of the merged main
+D=cutover-$(date +%F)
+
+# 1. Stop every writer/opener
+systemctl --user stop zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer
+systemctl --user stop zoe-data
+fuser ~/.mempalace/chroma.sqlite3                          # must print nothing
+
+# 2. Final copy + rebuild from the STOPPED store. 10/10 must PASS.
+#    If not: systemctl --user start zoe-data, re-enable the timers, stop here.
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py run --date $D
+
+# 3. Swap (the old dir becomes the rollback; nothing opens it)
+TS=$(date +%Y%m%d-%H%M%S)
+mv ~/.mempalace ~/.mempalace.pre-b08-$TS
+cp -a ~/.zoe/chroma-migration-rehearsal/$D/dst ~/.mempalace && chmod 700 ~/.mempalace
+
+# 4. New client into the live venv: the exact deploy path, additive
+ZOE_PY312_VENV=$HOME/.zoe/venvs/zoe-data-py312 bash $WT/scripts/setup/build_py312_venv.sh --refresh
+~/.zoe/venvs/zoe-data-py312/bin/python -c 'import chromadb; print(chromadb.__version__)'   # 1.5.9
+
+# 5. Live code to merged main
+cd /home/zoe/assistant && git fetch origin main && git merge --ff-only origin/main
+
+# 6. Start + readiness (is-active lies; poll)
+systemctl --user start zoe-data
+for i in $(seq 1 36); do curl -sf localhost:8000/readyz >/dev/null && break; sleep 5; done
+curl -s localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], d["memory_capture"])'
+#    must be: ok {'status': 'ok', 'detail': '... self-recall ok'}
+
+# 7. Verify
+~/.zoe/venvs/zoe-data-py312/bin/python $WT/scripts/maintenance/chroma_migrate_rehearsal.py probe recall \
+  --store <scratch copy of ~/.mempalace> --demo-user <recall_demo_user from $D/manifest.json> --out-file /tmp/b08_live_top.json
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py compare-recall \
+  --old ~/.zoe/chroma-migration-rehearsal/$D/recall-parity/old_top.json --new /tmp/b08_live_top.json   # PASS = identical order
+/usr/bin/python3 $WT/scripts/maintenance/check_memory_tombstones.py                                    # 1.x-aware report
+grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value zoe-data)/status              # before: 1028 MB RSS, 0 swap
+
+# 8. Replay gate (writes the artifact the deploy gate needs)
+#    Stop Kokoro for its duration, then restart it and health-check it.
+set -a; . ~/.hermes/.env; set +a
+ZOE_VOICE_REPLAY_STT=remote flock /tmp/zoe-voice-harness.lock nice -n 5 ~/.zoe/venvs/zoe-data-py312/bin/python \
+  $WT/scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote --service-dir /home/zoe/assistant/services/zoe-data
+gh run rerun <refused deploy run id>          # now passes; no-op reset + restart
+
+# 9. Re-arm the timers
+systemctl --user start zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer
+```
 
 ## 6. Rollback
 
 Stop zoe-data and the timers. Then:
 - `mv ~/.mempalace ~/.mempalace.b08-failed-<ts>`
 - `mv ~/.mempalace.pre-b08-<ts> ~/.mempalace`
-- reinstall `chromadb==0.6.3 mempalace==3.3.1` in the venv
+- reinstall the old pair: `~/.local/bin/uv pip install --offline --python ~/.zoe/venvs/zoe-data-py312/bin/python chromadb==0.6.3 mempalace==3.3.1`
+- revert the cutover PR (the pins and the opener move back with the store). The format guard
+  will otherwise refuse the 0.6 store under 1.5.9, and it will refuse the 1.x store under 0.6.3.
 - start and poll `/readyz`
 
 **Restore the directory. Never just re-pin**: 0.6.3 cannot open the 1.x sysdb (proof f). Writes
@@ -186,6 +224,21 @@ made after cutover live only in the 1.x store. Export them first with `export_me
 which reads both formats.
 
 ## 7. Known facts and traps
+
+- **chromadb 1.x's `DefaultEmbeddingFunction` rebuilds the ONNX session on EVERY call.**
+  Measured per query on the migrated copy:
+
+  | client | per query |
+  |---|---|
+  | 1.5.9 with no EF passed | 0.42–0.89 s |
+  | 1.5.9 with one cached `ONNXMiniLM_L6_V2` named `"default"` | 0.18–0.27 s |
+  | 0.6.3 | 0.11–0.22 s |
+
+  zoe-data therefore opens the drawers with its own cached EF. It must be named `"default"`:
+  any other name raises "Embedding function conflict" against the persisted identity.
+- **`mempalace` 3.3.1 must not run against a 1.x palace.** Its backend runs `_fix_blob_seq_ids`
+  (a raw SQLite UPDATE) on every new client. The rebuilt store has no BLOB `seq_id`s, so it
+  would no-op, but it is unsupported, so the runtime no longer imports mempalace at all.
 
 - **The EF call size sets RSS.** chroma's MiniLM tokenizer pads every text to 256 tokens, and
   ORT's arena keeps the peak. Measured on the 333-drawer export (ORT 1.23.2):
