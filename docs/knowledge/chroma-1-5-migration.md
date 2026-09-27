@@ -255,7 +255,8 @@ STAGE=client-installed
 # 5. Live code to the merged main (it must carry the new opener)
 cd /home/zoe/assistant
 git fetch origin main
-git merge --ff-only origin/main
+test "$(git rev-parse origin/main)" = "$MERGE_SHA"   # main must still be exactly the cutover commit (no later PR landed unverified)
+git merge --ff-only "$MERGE_SHA"                     # advance to the verified commit, never to a newer main
 grep -q "def get_drawers_collection" services/zoe-data/memory_service.py
 STAGE=code-ff
 
