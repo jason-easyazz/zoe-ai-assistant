@@ -756,6 +756,12 @@ def test_ordinary_non_rename_diff_is_unaffected(tmp_path):
     # Loaded into the live zoe-data process on every non-`off` mode, and one
     # flag value from being the head whose predictions feed the ratchet's miner.
     "services/zoe-data/models/router_head_logreg.joblib",
+    # The numpy exports zoe-data actually SERVES (ZOE_ROUTER_HEADS_BACKEND=numpy):
+    # the weights and the sidecar that names their sha256.
+    "services/zoe-data/models/router_head_mlp.npz",
+    "services/zoe-data/models/router_head_mlp.json",
+    "services/zoe-data/models/router_head_logreg.npz",
+    "services/zoe-data/models/router_head_logreg.json",
 ])
 def test_live_router_head_artifacts_are_voice_path(path):
     pats = vgc.voice_path_patterns()
@@ -851,6 +857,9 @@ def test_router_sidecar_unit_is_voice_path():
 @pytest.mark.parametrize("path", [
     "services/zoe-data/router_two_stage.py",
     "services/zoe-data/semantic_router.py",
+    # the stage-1 heads' inference: an edit here re-scores every turn exactly
+    # like swapping a models/* artifact would
+    "services/zoe-data/router_heads_numpy.py",
 ])
 def test_router_decision_modules_are_voice_path(path):
     pats = vgc.voice_path_patterns()

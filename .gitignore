@@ -372,12 +372,19 @@ labs/flue-zoe-telegram/
 !labs/functiongemma-feasibility/zoe_tools.json
 !labs/functiongemma-feasibility/results/*.json
 
-# SetFit router head (shadow mode): the 38 KB logreg artifact is tracked
-# deliberately; the runtime shadow log is not.
+# Stage-1 router heads: tracked deliberately; the runtime shadow log is not.
+# The .joblib files are the TRAINING artefacts; zoe-data serves the numpy
+# export (.npz + .json sidecar, scripts/maintenance/export_router_heads.py).
+# An un-whitelisted export would be silently left out of a commit and the head
+# would fail to load (router falls back to similarity) — list every file.
 !services/zoe-data/models/
 services/zoe-data/models/*
 !services/zoe-data/models/router_head_logreg.joblib
 !services/zoe-data/models/router_head_mlp.joblib
+!services/zoe-data/models/router_head_logreg.npz
+!services/zoe-data/models/router_head_logreg.json
+!services/zoe-data/models/router_head_mlp.npz
+!services/zoe-data/models/router_head_mlp.json
 services/zoe-data/data/router_head_shadow.jsonl
 
 # Router self-training loop — miner (labs/router-selftrain/) + orchestrator

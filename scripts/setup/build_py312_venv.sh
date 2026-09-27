@@ -66,8 +66,9 @@ mem_available_mb() { awk '/MemAvailable/ {printf "%d", $2/1024}' /proc/meminfo; 
 
 smoke() {
   # Import the load-bearing stack. No model loads (Moonshine/Kokoro are the
-  # replay gate's job); the router head + Silero VAD are small enough to prove
-  # sklearn/joblib and onnxruntime actually run, not just import.
+  # replay gate's job); the router heads + Silero VAD are small enough to prove
+  # the numpy head backend (what zoe-data runs), the joblib fallback and
+  # onnxruntime actually run, not just import.
   "${NICE[@]}" "$VENV_PY" - "$REPO_ROOT" <<'PY'
 import importlib, os, sys, warnings
 warnings.filterwarnings("ignore")
@@ -96,7 +97,17 @@ def head():
     import joblib, numpy as np
     h = joblib.load(os.path.join(root, "services/zoe-data/models/router_head_logreg.joblib"))
     return f"{len(h.classes_)} classes, predict_proba ok" if h.predict_proba(np.zeros((1, h.coef_.shape[1]), dtype="float32")).shape[0] == 1 else "?"
-step("router head joblib", head)
+step("router head joblib (ZOE_ROUTER_HEADS_BACKEND=joblib fallback)", head)
+def heads_numpy():
+    sys.path.insert(0, os.path.join(root, "services/zoe-data"))
+    import numpy as np, router_heads_numpy as rhn
+    out = []
+    for n in ("logreg", "mlp"):
+        h = rhn.load_npz(os.path.join(root, f"services/zoe-data/models/router_head_{n}.joblib"))
+        assert h.predict_proba(np.zeros((1, h.n_features_in_), dtype="float32")).shape == (1, len(h.classes_))
+        out.append(f"{n} {len(h.classes_)} classes")
+    return ", ".join(out)
+step("router heads numpy (the served backend)", heads_numpy)
 def vad():
     import onnxruntime as ort
     p = os.path.expanduser("~/models/silero_vad.onnx")

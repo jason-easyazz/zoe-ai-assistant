@@ -3656,6 +3656,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_ROUTER_HEADS_BACKEND": {
+        "defaults": [
+          "'numpy'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/router_heads_numpy.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_ROUTER_HEAD_LOG": {
         "defaults": [
           "dynamic"
