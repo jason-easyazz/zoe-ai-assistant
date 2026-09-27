@@ -3713,6 +3713,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         direct_result = await _execute_reminder_create_direct(intent, user_id)
         if direct_result:
             return direct_result
+        if (intent.slots or {}).get("recurrence"):
+            # The MCP writer below has no recurrence argument: falling through
+            # would store a ONE-OFF for "every weekday". Fail honestly instead.
+            return ("I couldn't set that repeating reminder just now, so I haven't saved anything. "
+                    "Please try again in a moment.")
 
     if intent.name == "reminder_list":
         direct_result = await _execute_reminder_list_direct(intent, user_id)

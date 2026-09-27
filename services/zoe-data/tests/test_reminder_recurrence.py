@@ -395,3 +395,190 @@ def test_chat_skips_the_one_off_form_for_recurring_reminders():
     assert _shows_form("reminder_create", {"title": "pills", "recurrence": "FREQ=DAILY"}) is False
     assert _shows_form("reminder_create", {"unsupported_recurrence": "every hour"}) is False
     assert _shows_form("calendar_create", {"recurrence": "FREQ=DAILY"}) is True
+
+
+# --------------------------------------------------------------------------- #
+# 7. review round 2 (#1708: Greptile, Codex, shepherd review)
+# --------------------------------------------------------------------------- #
+def test_empty_byday_entries_are_rejected_not_dropped():
+    # `BYDAY=,` used to parse as "no BYDAY" → weekly on the anchor's weekday.
+    for bad in ("FREQ=WEEKLY;BYDAY=,", "FREQ=WEEKLY;BYDAY=MO,,TU", "FREQ=WEEKLY;BYDAY=MO,"):
+        assert parse_rrule(bad) is None, bad
+    assert parse_rrule("FREQ=WEEKLY;BYDAY=MO,TU") is not None
+
+
+@pytest.mark.parametrize("text, rrule, rest", [
+    # Month-first word order used to drop the weekday: "every month" matched alone
+    # and stored a day-of-month rule, leaving "on the first monday" in the title.
+    ("remind me every month on the first monday to check the boiler", "FREQ=MONTHLY;BYDAY=1MO",
+     "remind me to check the boiler"),
+    ("remind me each month on the last friday to pay rent", "FREQ=MONTHLY;BYDAY=-1FR",
+     "remind me to pay rent"),
+    ("remind me every month on the last day to review the budget", "FREQ=MONTHLY;BYMONTHDAY=-1",
+     "remind me to review the budget"),
+    # Each day may carry its own "every".
+    ("remind me every monday and every friday at 9 to stretch", "FREQ=WEEKLY;BYDAY=MO,FR",
+     "remind me at 9 to stretch"),
+])
+def test_more_spoken_schedules(text, rrule, rest):
+    assert extract_recurrence(text) == (rrule, rest)
+
+
+@pytest.mark.parametrize("text, cue", [
+    # A modifier the rule cannot express must refuse, never schedule the excluded day.
+    ("remind me to take pills every weekday except friday at 7am", "every weekday except friday"),
+    ("remind me every day at 7am until friday to stretch", "every day until friday"),
+    ("remind me every day to walk for 2 weeks", "every day for 2 weeks"),
+    # A second, unsupported repeat after a supported one is not silently dropped.
+    ("remind me every monday to drink water every hour", "every hour"),
+])
+def test_repeat_modifiers_are_refused_not_half_honoured(text, cue):
+    from reminder_recurrence import find_unsupported_recurrence
+
+    assert extract_recurrence(text) is None
+    assert find_unsupported_recurrence(text) == cue
+
+
+@pytest.mark.parametrize("text", [
+    "remind me on tues to call the bank",           # singular abbreviation, one-off
+    "remind me on weds to call",
+    "remind me to water every plant tomorrow morning",
+    "remind me to check every single window at 5pm",
+])
+def test_one_off_phrasing_is_not_recurring_or_refused(text):
+    from reminder_recurrence import find_unsupported_recurrence
+
+    assert extract_recurrence(text) is None
+    assert find_unsupported_recurrence(text) is None
+
+
+def test_ambiguous_fall_back_time_never_returns_a_past_instant():
+    # Sydney 2026-04-05 03:00 AEDT → 02:00 AEST: 02:30 happens twice. RFC 5545
+    # takes the FIRST (15:30Z). At 16:10Z that has passed, so the next fire is
+    # the following night — never the already-past 15:30Z (wall-clock compare).
+    sydney = ZoneInfo("Australia/Sydney")
+    after = datetime(2026, 4, 4, 16, 10, tzinfo=timezone.utc)
+    hit = next_occurrence(parse_rrule("FREQ=DAILY"), date(2026, 4, 1), 2, 30, after, sydney)
+    assert hit > after
+    assert hit.astimezone(timezone.utc) == datetime(2026, 4, 5, 16, 30, tzinfo=timezone.utc)
+
+
+def test_nonexistent_spring_forward_time_follows_rfc5545():
+    # Sydney 2026-10-04 02:00 → 03:00: 02:30 does not exist. RFC 5545 §3.3.5
+    # interprets it with the offset BEFORE the gap (→ 03:30 AEDT), so a daily
+    # reminder still fires that day rather than being skipped.
+    sydney = ZoneInfo("Australia/Sydney")
+    after = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+    hit = next_occurrence(parse_rrule("FREQ=DAILY"), date(2026, 10, 1), 2, 30, after, sydney)
+    assert hit.astimezone(timezone.utc) == datetime(2026, 10, 3, 16, 30, tzinfo=timezone.utc)
+    assert hit.astimezone(sydney).hour == 3
+
+
+@pytest.mark.asyncio
+async def test_recurring_reminder_never_falls_back_to_a_one_off_writer(monkeypatch):
+    import intent_router
+
+    async def direct_unavailable(_intent, _uid):
+        return None
+
+    async def no_mcporter(*_a, **_k):
+        raise AssertionError("the MCP writer has no recurrence — it must not be used")
+
+    monkeypatch.setattr(intent_router, "_execute_reminder_create_direct", direct_unavailable)
+    monkeypatch.setattr(intent_router, "_run_mcporter", no_mcporter)
+    slots = {"title": "take my pills", "time": "07:00", "recurrence": "FREQ=DAILY"}
+    reply = await intent_router.execute_intent(intent_router.Intent("reminder_create", slots), "jason")
+    assert reply and "haven't" in reply
+
+
+class _TodayDb:
+    def __init__(self, rows):
+        self.rows, self.sql = rows, []
+
+    async def execute(self, sql, params=()):
+        self.sql.append(sql)
+        rows = self.rows
+
+        class _C:
+            async def fetchall(self_inner):
+                return rows
+        return _C()
+
+
+@pytest.mark.asyncio
+async def test_today_view_keeps_recurring_reminders_after_their_anchor(monkeypatch):
+    import routers.reminders as rr
+
+    class _Sunday(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 9, 27)
+
+    async def allow(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(rr, "date", _Sunday)
+    monkeypatch.setattr(rr, "require_feature_access", allow)
+    rows = [
+        {"id": "daily", "due_date": "2026-09-21", "due_time": "07:00", "recurring_pattern": "FREQ=DAILY"},
+        {"id": "sundays", "due_date": "2026-09-20", "due_time": "08:00", "recurring_pattern": "FREQ=WEEKLY;BYDAY=SU"},
+        {"id": "thursdays", "due_date": "2026-09-24", "due_time": "08:00", "recurring_pattern": "FREQ=WEEKLY;BYDAY=TH"},
+        {"id": "one-off", "due_date": "2026-09-27", "due_time": "09:00", "recurring_pattern": None},
+        {"id": "time-only", "due_date": None, "due_time": "10:00", "recurring_pattern": None},
+        {"id": "future-anchor", "due_date": "2026-10-04", "due_time": "08:00", "recurring_pattern": "FREQ=DAILY"},
+    ]
+    db = _TodayDb(rows)
+    out = await rr.list_today_reminders(user={"user_id": "jason"}, db=db)
+    assert [r["id"] for r in out["reminders"]] == ["daily", "sundays", "one-off", "time-only"]
+    assert "recurring_pattern" in db.sql[0]
+
+
+@pytest.mark.asyncio
+async def test_clearing_a_recurring_reminders_date_re_anchors_it(monkeypatch):
+    # A NULL anchor made the scan anchor to "today" every cycle, so a monthly or
+    # every-3-days rule fired DAILY. Clearing the date must re-anchor instead.
+    import routers.reminders as rr
+    from models import ReminderUpdate
+
+    row = {"id": "r1", "user_id": "jason", "title": "t", "due_date": "2026-01-15", "due_time": "09:00",
+           "recurring_pattern": "FREQ=MONTHLY", "is_active": 1, "acknowledged": 0, "deleted": 0}
+    updates = []
+
+    class _Db:
+        async def execute(self, sql, params=()):
+            if sql.lstrip().upper().startswith("UPDATE"):
+                updates.append((sql, list(params)))
+
+            class _C:
+                async def fetchone(self_inner):
+                    return row
+            return _C()
+
+        async def commit(self):
+            pass
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(rr, "require_feature_access", noop)
+    monkeypatch.setattr(rr, "_cancel_reminder_jobs_safe", noop)
+    monkeypatch.setattr(rr, "_reschedule_reminder_due_safe", noop)
+    monkeypatch.setattr(rr.broadcaster, "broadcast", noop)
+
+    await rr.update_reminder("r1", ReminderUpdate(due_date=None), user={"user_id": "jason"}, db=_Db())
+    sql, params = updates[0]
+    anchor = params[0]
+    assert "due_date = ?" in sql and anchor is not None
+    assert date.fromisoformat(anchor) >= date(2026, 9, 26)  # the next occurrence, never NULL
+
+    # Re-sending the stored (past) anchor from an edit form keeps it — no 422.
+    updates.clear()
+    await rr.update_reminder("r1", ReminderUpdate(due_date="2026-01-15", title="t2"),
+                             user={"user_id": "jason"}, db=_Db())
+    assert "due_date" not in updates[0][0]
+
+    # Negative control: a one-off row's date still clears to NULL, as before.
+    updates.clear()
+    row["recurring_pattern"] = None
+    await rr.update_reminder("r1", ReminderUpdate(due_date=None), user={"user_id": "jason"}, db=_Db())
+    assert updates[0][1][0] is None

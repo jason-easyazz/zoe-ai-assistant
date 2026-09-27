@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import calendar
 import re
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import date, datetime, timedelta, timezone, tzinfo
 
 WEEKDAY_CODES = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
 _DAY_WORDS = {
@@ -72,7 +72,10 @@ def parse_rrule(value: str) -> dict | None:
     if not 1 <= interval <= 52:
         return None
     byday: list[tuple[int | None, int]] = []
-    for item in filter(None, parts.pop("BYDAY", "").split(",")):
+    raw_byday = parts.pop("BYDAY", None)
+    for item in raw_byday.split(",") if raw_byday is not None else ():
+        # An empty entry ("BYDAY=," / "MO,,TU") is malformed — refuse it rather
+        # than drop it, which would silently turn the rule into "anchor weekday".
         m = re.fullmatch(r"(-1|[1-4])?(MO|TU|WE|TH|FR|SA|SU)", item)
         if not m:
             return None
@@ -195,14 +198,27 @@ def _candidate_dates(rule: dict, anchor: date, start: date, interval: int):
 def next_occurrence(rule: dict, anchor: date, hour: int, minute: int, after: datetime,
                     tz: tzinfo, *, use_interval: bool = True) -> datetime | None:
     """First local fire time strictly after `after` (aware) that the rule
-    produces, never before `anchor`. None only if the rule can never fire."""
-    after_local = after.astimezone(tz)
+    produces, never before `anchor`. None only if the rule can never fire.
+
+    DST follows RFC 5545 §3.3.5: a wall time that does not exist (spring
+    forward) is read with the offset BEFORE the gap, so 02:30 in a 02:00→03:00
+    gap fires at 03:30 — the occurrence is shifted, never skipped; an ambiguous
+    wall time (fall back) is its FIRST instance. Candidates are compared as UTC
+    instants (same-tzinfo datetimes compare by wall clock, which is wrong across
+    a fall-back hour) and returned round-tripped through UTC, so the local time
+    returned is one that actually exists."""
+    after_utc = after.astimezone(timezone.utc)
     interval = rule["interval"] if use_interval else 1
-    for day in _candidate_dates(rule, anchor, max(anchor, after_local.date()), interval):
-        candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz)
-        if candidate > after_local:
-            return candidate
+    for day in _candidate_dates(rule, anchor, max(anchor, after_utc.astimezone(tz).date()), interval):
+        candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz).astimezone(timezone.utc)
+        if candidate > after_utc:
+            return candidate.astimezone(tz)
     return None
+
+
+def occurs_on(rule: dict, anchor: date, day: date) -> bool:
+    """Does the rule (anchored at `anchor`) produce an occurrence on `day`?"""
+    return day >= anchor and _day_matches(rule, anchor, day)
 
 
 def first_occurrence_date(rule: dict, start: date, hour: int, minute: int,
@@ -256,7 +272,10 @@ def _ordinal_suffix(n: int) -> str:
 # ── Words → RRULE ────────────────────────────────────────────────────────────
 
 _DAY_ALT = "|".join(sorted(_DAY_WORDS, key=len, reverse=True))
-_DAY_LIST = rf"(?:{_DAY_ALT})s?(?:\s*(?:,|and|&)\s*(?:{_DAY_ALT})s?)*"
+_DAY_LIST = rf"(?:{_DAY_ALT})s?(?:\s*(?:,|and|&)\s*(?:(?:every|each)\s+)?(?:{_DAY_ALT})s?)*"
+# "on mondays" is a schedule; "on tues" / "on weds" are ONE day, abbreviated —
+# so the plural-without-"every" form only accepts full day names.
+_FULL_DAY_ALT = "|".join(calendar.day_name).lower()
 # A bare adverb ("daily", "weekly", …) only counts as recurrence at the END of
 # the request or right before its time — "buy the daily paper" and "the monthly
 # report" are titles, not schedules.
@@ -287,12 +306,16 @@ def _rule(freq: str, interval: int = 1, byday=None, bymonthday=None) -> dict:
 
 
 @_phrase(rf"\b(?:on\s+)?(?:the\s+)?(?P<ord>first|second|third|fourth|last|1st|2nd|3rd|4th)\s+"
-         rf"(?P<day>{_DAY_ALT})\s+of\s+(?:every|each|the)\s+month\b")
+         rf"(?P<day>{_DAY_ALT})\s+of\s+(?:every|each|the)\s+month\b"
+         rf"|\b(?:every|each)\s+month\s+on\s+the\s+(?P<ord2>first|second|third|fourth|last|1st|2nd|3rd|4th)\s+"
+         rf"(?P<day2>{_DAY_ALT})\b")
 def _nth_weekday_of_month(m):
-    return _rule("MONTHLY", byday=[(_ORDINALS[m["ord"].lower()], _DAY_WORDS[m["day"].lower()])]), ""
+    ordinal, day = (m["ord"] or m["ord2"]).lower(), (m["day"] or m["day2"]).lower()
+    return _rule("MONTHLY", byday=[(_ORDINALS[ordinal], _DAY_WORDS[day])]), ""
 
 
-@_phrase(r"\b(?:on\s+)?the\s+last\s+day\s+of\s+(?:every|each|the)\s+month\b")
+@_phrase(r"\b(?:on\s+)?the\s+last\s+day\s+of\s+(?:every|each|the)\s+month\b"
+         r"|\b(?:every|each)\s+month\s+on\s+the\s+last\s+day\b")
 def _last_day_of_month(m):
     return _rule("MONTHLY", bymonthday=-1), ""
 
@@ -330,7 +353,8 @@ def _weekends(m):
     return _rule("WEEKLY", byday=[(None, 5), (None, 6)]), ""
 
 
-@_phrase(rf"\b(?:every|each)\s+(?P<days>{_DAY_LIST})\b|\bon\s+(?P<plural>(?:{_DAY_ALT})s(?:\s*(?:,|and|&)\s*(?:{_DAY_ALT})s)*)\b")
+@_phrase(rf"\b(?:every|each)\s+(?P<days>{_DAY_LIST})\b"
+         rf"|\bon\s+(?P<plural>(?:{_FULL_DAY_ALT})s(?:\s*(?:,|and|&)\s*(?:{_FULL_DAY_ALT})s)*)\b")
 def _weekly_days(m):
     return _rule("WEEKLY", byday=_days(m["days"] or m["plural"])), ""
 
@@ -361,14 +385,8 @@ def _yearly(m):
     return _rule("YEARLY"), ""
 
 
-def extract_recurrence(text: str) -> tuple[str, str] | None:
-    """Find a recurrence phrase in `text`.
-
-    Returns ``(rrule_string, text_without_the_phrase)`` or None. The remainder
-    keeps everything else verbatim (title, clock time) for the normal slot
-    parsers; only the recurrence words are removed."""
-    if not text:
-        return None
+def _match_recurrence(text: str) -> tuple[re.Match, dict, str] | None:
+    """(match, rule, text_without_the_phrase) for the first supported phrase."""
     for pattern, build in _PHRASES:
         m = pattern.search(text)
         if not m:
@@ -378,9 +396,25 @@ def extract_recurrence(text: str) -> tuple[str, str] | None:
             continue
         rule, replacement = built
         rest = (text[:m.start()] + (" " + replacement + " " if replacement else " ") + text[m.end():])
-        rest = re.sub(r"\s+", " ", rest).strip(" ,.")
-        return format_rrule(rule), rest
+        return m, rule, re.sub(r"\s+", " ", rest).strip(" ,.")
     return None
+
+
+def extract_recurrence(text: str) -> tuple[str, str] | None:
+    """Find a recurrence phrase in `text`.
+
+    Returns ``(rrule_string, text_without_the_phrase)`` or None. The remainder
+    keeps everything else verbatim (title, clock time) for the normal slot
+    parsers; only the recurrence words are removed. None too when the remainder
+    still modifies the schedule ("except friday", "until june", a second
+    "every hour") — the rule alone would not be what was asked for, and
+    `find_unsupported_recurrence` then names the phrase to refuse."""
+    if not text:
+        return None
+    hit = _match_recurrence(text)
+    if hit is None or _residual_modifier(hit[2]):
+        return None
+    return format_rrule(hit[1]), hit[2]
 
 
 def normalize_recurrence(raw: object) -> str | None:
@@ -402,17 +436,46 @@ def normalize_recurrence(raw: object) -> str | None:
 
 _UNIT_WORDS = (r"(?:minute|hour|day|night|morning|evening|afternoon|arvo|week|weekday|weekend|"
                rf"fortnight|month|quarter|year|{_DAY_ALT})s?")
+# Words that can sit between "every" and its unit in a real schedule ("every 53
+# days", "every third monday", "every couple of weeks") — NOT arbitrary nouns,
+# so "water every plant tomorrow morning" stays a one-off.
+_QUANTITY = (r"(?:\d+|other|single|few|couple|of|one|two|three|four|five|six|seven|eight|nine|ten|"
+             r"eleven|twelve|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)")
 _UNSUPPORTED_CUE = re.compile(
-    rf"\b(?:every|each)\s+(?:(?:\d+|[a-z]+)\s+){{0,2}}?{_UNIT_WORDS}\b"
+    rf"\b(?:every|each)\s+(?:{_QUANTITY}\s+){{0,2}}?{_UNIT_WORDS}\b"
     rf"|\b(?:hourly|quarterly|fortnightly|nightly|daily|weekly|monthly|yearly|annually)\b{_ADVERB_END}",
     re.IGNORECASE,
 )
 
 
+# Schedule modifiers the RRULE subset cannot carry (exceptions, end bounds).
+_MODIFIER = re.compile(
+    rf"\b(?:except|excluding|but\s+not|apart\s+from|other\s+than|skipping)\s+(?:on\s+)?(?:the\s+)?\w+"
+    rf"|\buntil\s+(?:the\s+)?\w+"
+    rf"|\bfor\s+(?:the\s+next\s+)?(?:\d+|a|one|two|three|four|five|six)\s+(?:days?|weeks?|months?|years?)\b",
+    re.IGNORECASE,
+)
+
+
+def _residual_modifier(rest: str) -> str | None:
+    """Text left after the recurrence phrase that would change the schedule."""
+    m = _MODIFIER.search(rest) or _UNSUPPORTED_CUE.search(rest)
+    return m.group(0) if m else None
+
+
 def find_unsupported_recurrence(text: str) -> str | None:
     """A recurrence cue `extract_recurrence` could NOT turn into a supported rule
-    ("every 53 days", "every hour", "every third monday"). Callers must refuse it
-    rather than store a one-off — silently dropping the repeat is the bug this
-    module exists to fix. Call only after `extract_recurrence` returned None."""
-    m = _UNSUPPORTED_CUE.search(text or "")
+    ("every 53 days", "every hour", "every third monday", "every weekday except
+    friday"). Callers must refuse it rather than store a one-off — silently
+    dropping the repeat, or a modifier on it, is the bug this module exists to
+    fix. Call only after `extract_recurrence` returned None."""
+    text = text or ""
+    hit = _match_recurrence(text)
+    if hit is not None:
+        residual = _residual_modifier(hit[2])
+        if residual:
+            if _UNSUPPORTED_CUE.fullmatch(residual):
+                return residual  # a second, unsupported repeat: name that one
+            return f"{hit[0].group(0).strip()} {residual}"
+    m = _UNSUPPORTED_CUE.search(text)
     return m.group(0) if m else None

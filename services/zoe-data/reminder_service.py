@@ -211,7 +211,7 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
         title="Reminder Created",
         message=f"Reminder added: {payload.title}",
         data={"reminder_id": reminder_id, "due_date": due_date, "due_time": due_time,
-              "recurring_pattern": recurring_pattern},
+              **({"recurring_pattern": recurring_pattern} if recurring_pattern else {})},
     )
     await db.commit()
 
