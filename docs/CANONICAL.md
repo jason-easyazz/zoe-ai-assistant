@@ -49,7 +49,11 @@ rocks:
     sidecar_service: "functiongemma-router.service"
     sidecar_port: "11436"
     flag: "ZOE_ROUTER_HEAD"
-    stage1_artifact: "services/zoe-data/models/router_head_mlp.joblib"
+    # The SERVED stage-1 artifact: the numpy export (router_heads_numpy.py, no
+    # sklearn in zoe-data since 2026-09-27) of router_head_mlp.joblib, the
+    # training artefact committed beside it. Re-export on every retrain:
+    # scripts/maintenance/export_router_heads.py (parity <= 1e-6, measured 0.0).
+    stage1_artifact: "services/zoe-data/models/router_head_mlp.npz"
     stage2_artifact_dir: "~/models/functiongemma-router"
     # Stage 2 ONLY. The ratchet never touches stage1_artifact: router_selftrain.py
     # has no reference to a router/SetFit head, an MLP, or a .joblib in its 1095

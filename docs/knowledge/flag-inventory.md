@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-461 flags; 459 not documented in `.env.example`.
+462 flags; 460 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -377,6 +377,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_BASE_HF` | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_ENABLED` | `'1'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEAD` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_HEADS_BACKEND` | `'numpy'` | no | NO | `services/zoe-data/router_heads_numpy.py` |
 | `ZOE_ROUTER_HEAD_LOG` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEAD_MLP_PATH` | `dynamic` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_HEAD_PATH` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |

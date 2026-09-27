@@ -1,0 +1,36 @@
+{
+  "classes": [
+    "calendar",
+    "chat",
+    "journal",
+    "lists",
+    "memory",
+    "music",
+    "notes",
+    "people",
+    "reminders",
+    "smart_home",
+    "time",
+    "timers",
+    "weather"
+  ],
+  "decision": "softmax(X @ coef.T + intercept)",
+  "dtypes": {
+    "coef": "float64",
+    "intercept": "float64"
+  },
+  "estimator": "sklearn.linear_model.LogisticRegression",
+  "exported_with": {
+    "joblib": "1.5.3",
+    "numpy": "1.26.4",
+    "sklearn": "1.7.2"
+  },
+  "format": "zoe-router-head/1",
+  "input": "BAAI/bge-small-en-v1.5 embedding, float32, L2-normalised (semantic_router)",
+  "kind": "logreg",
+  "n_features_in": 384,
+  "npz_sha256": "9cadf37a2027405acfd42f9fc037d775b6c17396303a10294b5207ba40d459ff",
+  "preprocessing": [],
+  "source": "router_head_logreg.joblib",
+  "source_sha256": "e29ef82b16f36f681348571602704474799526afc7e9220cee6d32b9d4e864bd"
+}
