@@ -337,6 +337,23 @@ status: 🔨 active — NEXT ACTION is always §0
   (aiosendspin 9.1.1, PIN-pairing breaking at 9.0.0), the panel's shairport-sync 5.1 in
   PTP/Automatic mode (support #6243 pattern — pin the streaming mode if silent), and the
   bgutil 2.0.0 localhost bind reachable from MA's namespace (`127.0.0.1:4416`).
+  **MA 2.10.3 pt (2026-09-27, draft PR):** YouTube Music DOWN since 09-25 18:16 — bgutil
+  plugin 1.3.1 inside MA vs server 2.0.0 (major mismatch; MA installs the plugin only on
+  container CREATE, never on restart) + stale yt-dlp 2026.07.04 + rotated cookies. Pin moved
+  to 2.10.3 (`sha256:88587222…`, closes the 3 MA advisories), stage 1 green (deno 2.9.5);
+  probe now forces `web_embedded` (`tv` broken upstream) and fails on a PO plugin/server
+  major mismatch (red on live, green on a fresh 2.10.3 container). 2.10 moved provider
+  credentials to setup-flow `setup_data` (one-way settings migration): the old
+  `save_provider` Reconnect is a silent no-op there, first connect errors,
+  `get_entries(provider_domain)` + `music/recommendations` are gone. Same PR: zoe-data
+  reads MA's version from `/info` and on ≥2.10 drives `config/providers/reconfigure` /
+  `setup` + `config/flows/submit` (reconnect in place, first connect, phone form, OAuth);
+  empty "for you" shelf + one log line; the 2.8 path unchanged. **Canonical recipe** (🧑,
+  live not touched by the agent): step 0 today = in-place `uv pip install` yt-dlp
+  2026.8.19 + plugin 2.0.0, `docker restart`, full probe, panel re-auth; then deploy
+  zoe-data → stopped store backup → re-create on 2.10.3 → full probe → panel re-auth →
+  Sendspin re-pair / "Zoe Panel" AirPlay mode check. Recipe + API table:
+  `docs/knowledge/music-ytdlp-js-runtime.md`.
   **Network hardening (2026-09-27, draft PR `fix/loopback-postgres-ha-bridge`, operator
   apply):** `zoe-database` → `127.0.0.1:5432` + `pgvector/pgvector:0.8.6-pg17@sha256:cf134a76…`
   (PostgreSQL 17.10 → 17.11, ~25 CVEs; minor = same data dir; `vector` 0.8.2 → 0.8.6 update
@@ -681,6 +698,13 @@ status: 🔨 active — NEXT ACTION is always §0
   `~/.cache/zoe/llama-server.service.pre-b6-6`. ⬜ Stale comment:
   `labs/flue-zoe-brain-2x/src/context-window.ts` still says `--ctx-size 16384 --parallel 2`
   (fix in a labs PR, not here).
+  (d) ✅ **Kokoro glibc arena cap APPLIED 2026-09-27**. The tracked drop-in
+  `scripts/setup/systemd/kokoro-tts.service.d/40-memory-tuning.conf` sets `MALLOC_ARENA_MAX=2` +
+  `MALLOC_TRIM_THRESHOLD_=131072`. Measured in a same-age controlled A/B: **−113 to −125 MB anon**
+  (VmRSS −73 to −112 MB), with synth p50/p95 within noise over two ABAB rounds. The predicted
+  −400 to −800 MB did not happen: the "arena bloat" was mostly live data. Details and table:
+  [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro sidecar memory). ⬜ The remaining
+  Kokoro RAM lever is a dedicated venv without scikit-learn/pandas (~−100 MB).
 
 - B6.6 🔨 **Brain flags tuning** (2026-09-27, two replay-gated brain windows on b11194, one
   flag vs the live set per run, same-session control; evidence in
@@ -834,6 +858,7 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (eve) — B6.6 (d): Kokoro `MALLOC_ARENA_MAX=2` drop-in applied live. Measured −113 to −125 MB anon, not the predicted −400 to −800 MB, with latency within noise (ABAB).
 - 2026-09-27 (eve) — B0.6 safe-now Python train: psycopg2-binary 2.9.13 + prometheus-client
   0.26.0 (both manifests + CI/deploy lists); joblib 1.6.0 held on the router-head training-pin contract.
 - 2026-09-27 (eve) — B0.12 network hardening drafted (loopback Postgres + HA bridge, PG 17.11,
@@ -854,6 +879,7 @@ a decision input.
   so every push/`update-branch` needs a fresh probe + gate rerun; never probe during a
   `deploy.yml` restart (collision → ERROR verdicts; landing scripts use a `wait_deploy` guard +
   `/tmp/zoe-brain-window.lock`); post-build NvMap error 12 recovery → B0.4 row.
+- 2026-09-27 — B0.12 MA pt: YouTube Music outage root-caused (bgutil plugin/server major mismatch), MA pin → 2.10.3 (draft PR), probe fixed + PO-major check; zoe-data MA-version switch (2.10 setup-flow API) in the same PR; operator recipe: step 0 on 2.8.7 today, then deploy → backup → re-create.
 - 2026-09-27 — B6.6 follow-ups (draft PR): Smart Turn numpy log-mel (no torch in zoe-data from LiveKit) + speaker embedding off the event loop.
 - 2026-09-27 — B1.4: Silero v6.2.1 file reverted to v6.0 (it detected no speech — barge-in /
   idle listening silently off for a day); permanent gate = the probe's VAD stage + the gate
