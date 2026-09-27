@@ -17,6 +17,17 @@ Flow per attempt:
 Everything is best-effort and time-bounded; a stalled/abandoned attempt just
 expires. No secret ever leaves the LAN — Zoe only relays the URL and the token
 goes straight into MA.
+
+MA 2.10+ (music_service.ma_server_version): the `auth` action above is gone.
+OAuth is a SETUP FLOW — `config/providers/setup` (first connect) or
+`config/providers/reconfigure` (re-auth, in place) — whose EXTERNAL step carries
+the authorize URL; MA's own callback advances the flow. Completion is read from
+MA's `setup_flow_updated` WS events for THIS flow_id (the FINISH/ABORT step is
+pushed there). Polling `config/flows/get` cannot see it: MA drops a flow from its
+registry the moment it ends, so a poll after the callback just errors, and
+provider state (new instance, cleared last_error) is shared and ambiguous. No
+terminal event (socket lost, timeout) = failure + best-effort abort, never a
+guess. Form steps are answered with their own prefilled/default values (bounded).
 """
 from __future__ import annotations
 
@@ -69,7 +80,118 @@ def _values_from_entries(result: Any) -> dict[str, Any]:
     return values
 
 
+async def _ws_auth(ws: Any) -> bool:
+    """Read the server-info greeting and authenticate (events are only sent to
+    an authenticated client). True on success."""
+    await ws.recv()  # server info
+    token = os.environ.get("MUSIC_ASSISTANT_TOKEN", "")
+    if not token:
+        return True
+    await ws.send(json.dumps({"command": "auth", "message_id": "auth", "args": {"token": token}}))
+    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=6))
+    return not ack.get("error_code")
+
+
+async def _run_setup_flow(oauth_id: str, provider: str) -> None:
+    """The MA 2.10+ OAuth path (see the module docstring)."""
+    flow = _flows[oauth_id]
+    flow_id: Optional[str] = None
+    import websockets  # local import: only needed when an OAuth attempt runs
+    try:
+        # Unreadable provider config is NOT "no instance": starting a first-connect
+        # setup for an already-configured provider would mint a duplicate.
+        cfgs = await music_service._ma("config/providers")
+        if not isinstance(cfgs, list):
+            flow.update(state="failed", error="couldn't reach the music engine")
+            return
+        existing = next((c.get("instance_id") or c.get("id") for c in cfgs
+                         if isinstance(c, dict) and c.get("domain") == provider), None)
+        async with websockets.connect(_ma_ws_url(), open_timeout=8, max_size=2 ** 22) as ws:
+            if not await _ws_auth(ws):
+                flow.update(state="failed", error="music engine auth failed")
+                return
+            start_id = "zoe-flow-" + secrets.token_hex(4)
+            command, args = (("config/providers/reconfigure", {"instance_id": existing}) if existing
+                             else ("config/providers/setup", {"provider_domain": provider}))
+            await ws.send(json.dumps({"command": command, "message_id": start_id, "args": args}))
+            pending_ids = {start_id}
+            early: dict[str, dict[str, Any]] = {}  # flow events seen before we knew our flow_id
+            forms = 0
+            # MA publishes each step as an event AND returns it as the command's
+            # reply, in either order: handle every distinct step exactly once, or
+            # a form would be submitted twice.
+            seen_steps: set[str] = set()
+            deadline = time.time() + OAUTH_ATTEMPT_TTL_S
+            while time.time() < deadline:
+                try:
+                    m = json.loads(await asyncio.wait_for(ws.recv(), timeout=8))
+                except asyncio.TimeoutError:
+                    continue
+                step: Optional[dict[str, Any]] = None
+                if m.get("message_id") in pending_ids:  # a command's own reply
+                    pending_ids.discard(m.get("message_id"))
+                    if m.get("error_code"):
+                        logger.info("music oauth flow command failed (%s): %s", provider, m.get("details"))
+                        break
+                    step = m.get("result") if isinstance(m.get("result"), dict) else None
+                    if step and flow_id is None:
+                        flow_id = step.get("flow_id")
+                        step = early.pop(str(flow_id), None) or step
+                elif m.get("event") == "setup_flow_updated" and isinstance(m.get("data"), dict):
+                    if flow_id is None:
+                        early[str(m.get("object_id"))] = m["data"]
+                        continue
+                    if m.get("object_id") != flow_id:
+                        continue  # someone else's flow
+                    step = m["data"]
+                if not step:
+                    continue
+                step_key = json.dumps(step, sort_keys=True, default=str)
+                if step_key in seen_steps:
+                    continue
+                seen_steps.add(step_key)
+                kind = step.get("type")
+                if kind == "finish":
+                    flow["state"] = "connected"
+                    return
+                if kind == "abort":
+                    logger.info("music oauth flow aborted (%s): %s", provider, step.get("reason"))
+                    flow.update(state="failed", error="sign-in didn't complete")
+                    return
+                if kind == "external" and step.get("url") and flow.get("auth_url") != step["url"]:
+                    flow["auth_url"] = step["url"]
+                    flow["event"].set()  # release start_oauth to return the URL
+                elif kind == "form" and not step.get("errors") and forms < music_service._FLOW_MAX_FORMS:
+                    forms += 1
+                    sub_id = "zoe-flow-" + secrets.token_hex(4)
+                    pending_ids.add(sub_id)
+                    await ws.send(json.dumps({"command": "config/flows/submit", "message_id": sub_id,
+                                              "args": {"flow_id": flow_id, "values": {}}}))
+                elif kind == "form":
+                    logger.info("music oauth flow form not completable (%s): %s",
+                                provider, step.get("errors") or step.get("step_id"))
+                    break
+        flow.update(state="failed", error="couldn't confirm the sign-in — please try again")
+    except Exception as exc:  # noqa: BLE001 — a failed attempt must never crash the app
+        logger.info("music oauth flow failed (%s): %s", provider, exc)
+        flow.update(state="failed", error="couldn't reach the music engine")
+    finally:
+        if flow.get("state") != "connected":
+            # MA may still hold the flow; a late callback must not complete an
+            # attempt the phone was told had failed.
+            await music_service._abort_setup_flow(flow_id)
+        flow["event"].set()
+
+
 async def _run_flow(oauth_id: str, provider: str) -> None:
+    api = await music_service._ma_api_for_write()
+    if api is None:
+        _flows[oauth_id].update(state="failed", error="couldn't reach the music engine")
+        _flows[oauth_id]["event"].set()
+        return
+    if api:
+        await _run_setup_flow(oauth_id, provider)
+        return
     flow = _flows[oauth_id]
     import websockets  # local import: only needed when an OAuth attempt runs
     token = os.environ.get("MUSIC_ASSISTANT_TOKEN", "")

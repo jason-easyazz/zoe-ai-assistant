@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -99,6 +100,9 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
             return await c.post(f"{_ma_url()}/api", json=payload, headers=_ma_headers())
     except Exception as exc:  # noqa: BLE001 — MA is optional; never break Zoe
         logger.debug("MA %s unreachable: %s", command, exc)
+        # A transport failure is the only sign zoe-data gets that MA went away —
+        # possibly to be re-created on a different version. Re-read /info next time.
+        _invalidate_ma_version()
         return None
 
 
@@ -160,6 +164,96 @@ async def _ma_ok(command: str, timeout_s: float = _TIMEOUT_S, **args: Any) -> bo
         logger.debug("MA %s -> HTTP %s", command, r.status_code)
         return False
     return True
+
+
+# ── MA server version: which provider-config API to speak ─────────────────────
+#
+# Music Assistant 2.10 replaced the provider-config API zoe-data drives. On 2.10+
+# provider credentials are owned by a per-provider SETUP FLOW and stored in
+# encrypted `setup_data`; `config/providers/save` only edits the options entries,
+# so a cookie sent through it is silently dropped (the panel's Reconnect would
+# "succeed" and change nothing), and it refuses to create an instance at all.
+# There, connect = `config/providers/setup`, re-auth = `config/providers/reconfigure`,
+# both driven with `config/flows/submit`. `get_entries` takes `instance_id` only
+# and `music/recommendations` is gone. Read from the 2.10.3 image source; see
+# docs/knowledge/music-ytdlp-js-runtime.md (MA 2.10.x section).
+#
+# The version comes from MA's unauthenticated `/info`, cached per process for
+# _MA_VERSION_TTL_S and dropped on any transport failure (MA restarted, maybe
+# re-created on a new image); credential WRITES bypass the cache and re-read
+# /info every time (_ma_api_for_write), and REFUSE when it is unreadable rather
+# than guess. Read-only paths with an unknown version take the pre-2.10 path.
+_MA_FLOW_API_MIN = (2, 10)
+_MA_FLOW_API_MIN_SCHEMA = 32  # ServerInfoMessage: internal_url etc. "added in schema 32 (MA v2.10)"
+_MA_VERSION_TTL_S = 300.0
+_ma_version_cache: Optional[tuple[tuple[int, ...], float]] = None
+
+
+def _invalidate_ma_version() -> None:
+    global _ma_version_cache
+    _ma_version_cache = None
+
+
+def _parse_ma_version(info: Any) -> Optional[tuple[int, ...]]:
+    """(major, minor, patch) from MA's /info, or None if it can't be read.
+    A version that does not parse (or a 0.x dev build) falls back to the schema version."""
+    if not isinstance(info, dict):
+        return None
+    m = re.match(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?", str(info.get("server_version") or ""))
+    ver = tuple(int(g or 0) for g in m.groups()) if m else None
+    if ver and ver[0] > 0:
+        return ver
+    schema = info.get("schema_version")
+    if isinstance(schema, int):
+        return (2, 10, 0) if schema >= _MA_FLOW_API_MIN_SCHEMA else (2, 8, 0)
+    return None
+
+
+async def _ma_info() -> Optional[dict[str, Any]]:
+    """GET MA's /info (no auth needed). None on any failure. Never raises."""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as c:
+            r = await c.get(f"{_ma_url()}/info")
+        return r.json() if r.status_code == 200 else None
+    except Exception as exc:  # noqa: BLE001 — MA is optional; never break Zoe
+        logger.debug("MA /info unreachable: %s", exc)
+        return None
+
+
+async def ma_server_version(fresh: bool = False) -> Optional[tuple[int, ...]]:
+    """The connected MA server's version (cached; see the block comment above).
+
+    `fresh=True` bypasses the cache: every version-SENSITIVE write (connect,
+    re-auth, OAuth, the setup form) re-reads /info on entry, because MA can be
+    re-created on a new image without zoe-data seeing a single failed call, and
+    a stale 2.8 answer there is the silent-no-op reconnect. The cache is only
+    for read-only hot paths (the "for you" shelf)."""
+    global _ma_version_cache
+    now = time.monotonic()
+    if (not fresh and _ma_version_cache is not None
+            and now - _ma_version_cache[1] < _MA_VERSION_TTL_S):
+        return _ma_version_cache[0]
+    ver = _parse_ma_version(await _ma_info())
+    # Only a successful read is cached: a failure must not pin the legacy path.
+    _ma_version_cache = (ver, now) if ver is not None else None
+    return ver
+
+
+async def _ma_api_for_write() -> Optional[bool]:
+    """For a credential WRITE: True = 2.10+ flow API, False = pre-2.10 API,
+    None = MA's version is unreadable right now. A write must not guess: on 2.10
+    the pre-2.10 save 'succeeds' and drops the cookie, so an unknown version fails
+    the write instead of taking the old path."""
+    ver = await ma_server_version(fresh=True)
+    if ver is None:
+        logger.info("MA version unreadable (/info) — refusing a provider write rather than guess the API")
+        return None
+    return ver[:2] >= _MA_FLOW_API_MIN
+
+
+async def _ma_is_210_plus(fresh: bool = False) -> bool:
+    ver = await ma_server_version(fresh)
+    return ver is not None and ver[:2] >= _MA_FLOW_API_MIN
 
 
 def _as_list(data: Any) -> list[dict[str, Any]]:
@@ -1078,10 +1172,25 @@ async def set_dont_stop_the_music(enabled: bool, player_id: str = "") -> bool:
                         dont_stop_the_music_enabled=bool(enabled))
 
 
+_recs_absent_logged = False
+
+
 async def get_recommendations() -> dict[str, Any]:
     """MA's native recommendation shelves ("Listen again", "Mixed for you", …)
     from providers with RECOMMENDATIONS, normalized to the flat search-hit shape
-    the touch page already renders. Best-effort — never raises."""
+    the touch page already renders. Best-effort — never raises.
+
+    MA 2.10 removed `music/recommendations`; there the shelf is simply empty
+    (one log line per process), never an error to the panel."""
+    global _recs_absent_logged
+    if await _ma_is_210_plus():
+        # Known absent on 2.10+: don't send a command MA answers with a 400 (and
+        # an ERROR line in its own log) on every panel refresh.
+        if not _recs_absent_logged:
+            _recs_absent_logged = True
+            logger.info("MA %s has no music/recommendations — 'for you' shelves stay empty",
+                        ".".join(map(str, await ma_server_version() or ())))
+        return {"available": False, "folders": []}
     folders = await _ma("music/recommendations")
     if isinstance(folders, dict):  # some shim responses wrap the list
         folders = folders.get("result") or folders.get("folders") or folders.get("items") or []
@@ -1412,7 +1521,13 @@ async def provider_setup_form(provider: str) -> Optional[dict[str, Any]]:
     meta = next((p for p in _SETUP_CATALOGUE if p["domain"] == provider), None)
     if meta is None:
         return None
-    entries = await _ma("config/providers/get_entries", provider_domain=provider)
+    api = await _ma_api_for_write()
+    if api is None:
+        return None
+    if api:
+        entries = await _setup_flow_form_entries(provider, meta.get("auth"))
+    else:
+        entries = await _ma("config/providers/get_entries", provider_domain=provider)
     if entries is None:
         return None
     fields = _clean_entries(entries)
@@ -1433,6 +1548,119 @@ async def provider_instance_id(provider: str) -> Optional[str]:
     return None
 
 
+# ── MA 2.10+ setup flows (connect / re-auth) ──────────────────────────────────
+
+# Enough for a provider whose FINISH installs requirements and loads it (MA waits
+# up to 120 s for the next step itself).
+_FLOW_SUBMIT_TIMEOUT_S = 150.0
+# A connect is at most a couple of forms; a bounded loop is the termination rule.
+_FLOW_MAX_FORMS = 4
+_FLOW_UI_ONLY_TYPES = {"label", "divider", "alert", "action"}
+
+
+async def _ma_flow_step(command: str, timeout_s: float = _TIMEOUT_S, **args: Any) -> Optional[dict[str, Any]]:
+    """One setup-flow command -> the SetupFlowStep dict, or None on any failure."""
+    r = await _ma_response(command, timeout_s=timeout_s, **args)
+    if r is None or r.status_code != 200:
+        logger.info("MA %s failed: %s", command,
+                    "unreachable" if r is None else f"HTTP {r.status_code} {(r.text or '')[:160]}")
+        return None
+    step = r.json()
+    return step if isinstance(step, dict) and step.get("flow_id") else None
+
+
+async def _abort_setup_flow(flow_id: Any) -> None:
+    if flow_id:
+        await _ma_response("config/flows/abort", flow_id=flow_id)
+
+
+async def _start_provider_flow(provider: str, instance_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """Re-auth an existing instance IN PLACE (reconfigure merges only setup_data,
+    so the instance's other settings are untouched), else start a new setup."""
+    if instance_id:
+        return await _ma_flow_step("config/providers/reconfigure", instance_id=instance_id)
+    return await _ma_flow_step("config/providers/setup", provider_domain=provider)
+
+
+def _flow_form_answers(entries: Any, values: dict[str, Any]) -> dict[str, Any]:
+    """The caller's values for THIS form's fields. Fields we have no value for are
+    left out: MA then uses the step's own (prefilled / default) value, and it
+    strips prefilled SECRETS, so a required secret we didn't supply is rejected
+    rather than silently kept."""
+    keys = {e.get("key") for e in entries if isinstance(e, dict)} if isinstance(entries, list) else set()
+    return {k: v for k, v in values.items() if k in keys}
+
+
+async def _drive_setup_flow(step: Optional[dict[str, Any]], values: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Answer the flow's FORM steps from `values` until FINISH -> its result
+    ({"instance_id": ...}), or None. A step that needs the user elsewhere
+    (EXTERNAL / PROGRESS) cannot be completed from here and is aborted; so is a
+    form MA re-serves with errors (a rejected cookie, a missing field)."""
+    submitted: set[str] = set()
+    last_flow_id = None
+    for _ in range(_FLOW_MAX_FORMS + 1):
+        if step is None:
+            # A submit whose response was lost: MA may still hold (or have
+            # advanced) the flow, so clean it up before reporting failure.
+            await _abort_setup_flow(last_flow_id)
+            return None
+        kind, flow_id = step.get("type"), step.get("flow_id")
+        last_flow_id = flow_id or last_flow_id
+        if kind == "finish":
+            return step.get("result") or {}
+        if kind == "abort":
+            logger.info("MA setup flow aborted: %s", step.get("reason"))
+            return None
+        if kind != "form":
+            logger.info("MA setup flow needs a %s step (%s) — not completable here",
+                        kind, step.get("step_id"))
+            await _abort_setup_flow(flow_id)
+            return None
+        step_id = str(step.get("step_id") or "")
+        if step.get("errors") and step_id in submitted:
+            logger.info("MA rejected the %s form: %s", step_id, step.get("errors"))
+            await _abort_setup_flow(flow_id)
+            return None
+        submitted.add(step_id)
+        step = await _ma_flow_step("config/flows/submit", timeout_s=_FLOW_SUBMIT_TIMEOUT_S,
+                                   flow_id=flow_id, values=_flow_form_answers(step.get("entries"), values))
+    await _abort_setup_flow((step or {}).get("flow_id"))
+    return None
+
+
+async def _save_provider_via_flow(provider: str, values: dict[str, Any],
+                                  instance_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """save_provider() for MA 2.10+: a setup (first connect) or reconfigure
+    (re-auth, in place) flow. Returns the instance's config, or None."""
+    answers = {k: v for k, v in (values or {}).items() if v is not None}
+    if provider == _YTMUSIC_DOMAIN:
+        answers[_YTMUSIC_POTOKEN_KEY] = _ytmusic_potoken_url()
+    result = await _drive_setup_flow(await _start_provider_flow(provider, instance_id), answers)
+    if result is None:
+        return None
+    iid = result.get("instance_id") or instance_id
+    cfg = await _ma("config/providers/get", instance_id=iid) if iid else None
+    return cfg if isinstance(cfg, dict) else {"instance_id": iid, "domain": provider}
+
+
+async def _setup_flow_form_entries(provider: str, auth: Any) -> Optional[list[dict[str, Any]]]:
+    """MA 2.10+: the provider's credential fields = the entries of its setup
+    flow's first FORM step (a flow is started, read, and aborted). Account-free
+    and OAuth providers render no fields, so no flow is started for them — a
+    zero-input setup would CREATE the instance just by being asked."""
+    if auth in ("free", "oauth"):
+        return []
+    step = await _ma_flow_step("config/providers/setup", provider_domain=provider)
+    if step is not None and step.get("type") == "abort":
+        # not multi-instance and already configured: read the re-auth form instead
+        step = await _start_provider_flow(provider, await provider_instance_id(provider))
+    if step is None:
+        return None
+    await _abort_setup_flow(step.get("flow_id"))
+    entries = step.get("entries") if step.get("type") == "form" else []
+    return [e for e in entries or [] if isinstance(e, dict) and e.get("type") not in _FLOW_UI_ONLY_TYPES]
+
+
 async def save_provider(provider: str, values: dict[str, Any],
                         instance_id: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Persist a provider instance in MA. Returns the saved config or None.
@@ -1440,6 +1668,11 @@ async def save_provider(provider: str, values: dict[str, Any],
     Pass ``instance_id`` to UPDATE that existing instance in place (MA otherwise
     mints a new instance on every save — which duplicates the provider on a
     re-connect or a cookie refresh)."""
+    api = await _ma_api_for_write()
+    if api is None:
+        return None
+    if api:
+        return await _save_provider_via_flow(provider, values, instance_id)
     # Base to merge the caller's values over. On a FIRST connect that's MA's
     # defaults. On a RECONNECT (instance_id) it's the EXISTING instance's current
     # values — so a cookie/OAuth refresh preserves the user's other settings
