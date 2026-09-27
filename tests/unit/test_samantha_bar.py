@@ -243,13 +243,13 @@ def test_revision_unknown_dir_is_none(tmp_path):
 
 def test_teardown_verdict():
     db_ok = {"remaining": {"people": 0, "chat_sessions": 0}}
-    assert sb.teardown_verdict({A: {"export": 0, "packet": 0}}, db_ok) == (True, [])
-    ok, probs = sb.teardown_verdict({A: {"export": 2, "packet": 0}}, db_ok)
+    assert sb.teardown_verdict({A: {"residual": 0, "packet": 0}}, db_ok) == (True, [])
+    ok, probs = sb.teardown_verdict({A: {"residual": 2, "packet": 0}}, db_ok)
     assert not ok and "2 memory row(s) left" in probs[0]
     # An unreadable count is not zero.
-    assert not sb.teardown_verdict({A: {"export": None, "packet": 0}}, db_ok)[0]
-    assert not sb.teardown_verdict({A: {"export": 0, "packet": 0}}, None)[0]
-    ok, probs = sb.teardown_verdict({A: {"export": 0, "packet": 0}},
+    assert not sb.teardown_verdict({A: {"residual": None, "packet": 0}}, db_ok)[0]
+    assert not sb.teardown_verdict({A: {"residual": 0, "packet": 0}}, None)[0]
+    ok, probs = sb.teardown_verdict({A: {"residual": 0, "packet": 0}},
                                     {"remaining": {"people": 1}})
     assert not ok and "people" in probs[0]
 
@@ -305,7 +305,7 @@ class _FakeLive:
         self.forgot.append(u)
         return 3
 
-    def export_count(self, u):
+    def residual_count(self, u):
         return self.export_counts.pop(0) if self.export_counts else 0
 
     def db(self, fn):
@@ -361,7 +361,7 @@ def test_without_zoe_perf_it_skips(monkeypatch, tmp_path):
     assert not (tmp_path / "r.json").exists()
 
 
-def _gates_open(monkeypatch, tmp_path, admin_ok=True):
+def _gates_open(monkeypatch, tmp_path, forget_ok=True):
     monkeypatch.setenv("ZOE_PERF", "1")
     monkeypatch.setenv("ZOE_INTERNAL_TOKEN", "t")
     monkeypatch.setenv("POSTGRES_URL", "postgresql://x")
@@ -371,7 +371,7 @@ def _gates_open(monkeypatch, tmp_path, admin_ok=True):
     monkeypatch.setattr(sb, "_readyz", lambda: (True, "ok"))
     monkeypatch.setattr(sb, "mem_available_mb", lambda: 4096)
     monkeypatch.setattr(sb, "service_revision", lambda d: {"commit": "c0ffee", "dirty": False})
-    monkeypatch.setattr(sb.Live, "admin_ok", lambda self: admin_ok)
+    monkeypatch.setattr(sb.Live, "forget_ok", lambda self: forget_ok)
     monkeypatch.setattr(sb.os, "nice", lambda n: 5)
     return ["--results", str(tmp_path / "r.json"), "--trend", str(tmp_path / "t.jsonl"),
             "--baseline", str(tmp_path / "b.json"), "--pending", str(tmp_path / "p.json")]
@@ -388,11 +388,11 @@ def _must_not_run(monkeypatch):
 
 
 def test_refuses_to_write_without_a_teardown_path(monkeypatch, tmp_path):
-    args = _gates_open(monkeypatch, tmp_path, admin_ok=False)
+    args = _gates_open(monkeypatch, tmp_path, forget_ok=False)
     calls = _must_not_run(monkeypatch)
     assert sb.main(args) == 2 and calls == []
     res = json.loads((tmp_path / "r.json").read_text())
-    assert res["status"] == "refused" and "admin session" in res["reason"]
+    assert res["status"] == "refused" and "teardown unavailable" in res["reason"]
 
 
 def test_refuses_during_a_deploy(monkeypatch, tmp_path):
@@ -444,3 +444,53 @@ def test_unproven_teardown_is_an_error_and_keeps_pending(monkeypatch, tmp_path):
     monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": False, "problems": ["x"]})
     assert sb.main(args + ["--record-baseline"]) == 2
     assert (tmp_path / "p.json").exists() and not (tmp_path / "b.json").exists()
+
+
+# ── forget path selection (synthetic by default, admin when a session is given) ──
+
+class _RecLive(sb.Live):
+    def __init__(self, admin=""):
+        super().__init__("tok", admin, "postgresql://x", False)
+        self.calls = []
+
+    def _req(self, method, url, headers, body=None, timeout=60):
+        self.calls.append((method, url, dict(headers)))
+        if url.endswith("/forget-synthetic") or url.endswith("/forget"):
+            return 200, {"removed": 0}
+        if "/export" in url:
+            return 200, {"count": 0, "items": []}
+        return 404, {}
+
+
+def test_synthetic_mode_uses_the_internal_route_and_token():
+    live = _RecLive()
+    assert live.forget_mode == "synthetic"
+    assert live.forget(A) == 0
+    method, url, headers = live.calls[-1]
+    assert method == "POST" and url.endswith(f"/api/memories/users/{A}/forget-synthetic")
+    assert headers == {"X-Internal-Token": "tok"}
+    # Residual proof = a second forget (removed 0 means nothing was left).
+    assert live.residual_count(A) == 0 and live.calls[-1][1].endswith("/forget-synthetic")
+
+
+def test_forget_preflight_probes_a_fresh_demo_id():
+    live = _RecLive()
+    assert live.forget_ok()
+    probed = live.calls[-1][1].split("/users/")[1].split("/")[0]
+    assert sb.DEMO_USER_RE.match(probed)
+
+
+def test_admin_mode_when_a_session_is_given():
+    live = _RecLive(admin="sess")
+    assert live.forget_mode == "admin"
+    live.forget(A)
+    assert live.calls[-1][1].endswith(f"/users/{A}/forget")
+    assert live.calls[-1][2] == {"X-Session-ID": "sess"}
+    assert live.residual_count(A) == 0 and "/export" in live.calls[-1][1]
+
+
+def test_forget_refuses_a_non_demo_id_before_any_request():
+    live = _RecLive()
+    with pytest.raises(ValueError):
+        live.forget("jason")
+    assert live.calls == []

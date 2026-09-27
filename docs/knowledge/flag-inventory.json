@@ -321,6 +321,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_BAR_ADMIN_SESSION": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/samantha_bar.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BAR_BRAIN_URL": {
+        "defaults": [
+          "'http://127.0.0.1:11434'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/samantha_bar.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BASE_URL": {
         "defaults": [
           "'http://localhost:8000'",
@@ -892,6 +912,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/check_emotional_thread.py",
+          "scripts/perf/samantha_bar.py",
           "services/zoe-data/zoe_core_client.py"
         ],
         "typed_env": false
@@ -2900,7 +2921,8 @@
         "readers": [
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",
-          "scripts/perf/measure_voice.py"
+          "scripts/perf/measure_voice.py",
+          "scripts/perf/samantha_bar.py"
         ],
         "typed_env": false
       },

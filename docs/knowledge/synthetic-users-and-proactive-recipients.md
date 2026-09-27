@@ -73,6 +73,9 @@ a turn whose metadata names another owner. The nightly `self-hosted-tests` run (
 executes it. On 2026-09-27, 130 sessions and 343 messages matched. A new probe identity
 must be added there as an exact, anchored id, or tear its sessions down with
 `DELETE /api/chat/sessions/{id}`.
+A harness's MEMORY rows for a `demo_`/`test_` id are hard-deleted through the internal-token
+`POST /api/memories/users/{id}/forget-synthetic` ([contract](samantha-bar.md)); allowlisted ids are
+treated as real and refused there.
 
 ## Verify
 

@@ -17,10 +17,15 @@ import os
 import re
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from auth import get_current_user, require_admin, require_internal_token
+from auth import (
+    _has_valid_internal_token,
+    get_current_user,
+    require_admin,
+    require_internal_token,
+)
 from database import get_db
 from guest_policy import require_feature_access
 from memory_service import (
@@ -868,6 +873,41 @@ async def forget_user(
     except MemoryServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"user_id": target_user, "removed": removed}
+
+
+@router.post("/users/{target_user}/forget-synthetic")
+async def forget_synthetic_user(target_user: str, request: Request):
+    """Hard-forget a SYNTHETIC test user's memory rows — harness teardown.
+
+    Same deletion as the admin ``/forget`` (``MemoryService.delete_user``: every
+    row owned by the id, any status, plus its audit rows; idempotent, a second
+    call returns ``removed: 0``). Differences, all fail-closed:
+      * auth is the internal token ONLY (``X-Internal-Token`` == ``ZOE_INTERNAL_TOKEN``)
+        — loopback alone is not enough; missing header 401, wrong/unprovisioned 403;
+      * the id must pass ``user_filters.synthetic_forget_refusal`` — ``^(demo|test)[-_]``,
+        not allowlisted, never a guest sentinel — else 403 with the reason.
+    Every call that reaches the id check logs one ``MEMORY_FORGET_SYNTHETIC`` line
+    naming the id and the outcome.
+    """
+    from user_filters import synthetic_forget_refusal
+
+    if not request.headers.get("X-Internal-Token"):
+        raise HTTPException(status_code=401, detail="forget-synthetic requires X-Internal-Token")
+    if not _has_valid_internal_token(request):
+        raise HTTPException(
+            status_code=403,
+            detail="forget-synthetic: invalid X-Internal-Token (or ZOE_INTERNAL_TOKEN unprovisioned)",
+        )
+    refusal = synthetic_forget_refusal(target_user)
+    if refusal:
+        logger.warning("MEMORY_FORGET_SYNTHETIC refused user=%r reason=%s", target_user, refusal)
+        raise HTTPException(status_code=403, detail=f"forget-synthetic refused: {refusal}")
+    try:
+        removed = await _svc().delete_user(target_user, actor="internal:forget-synthetic")
+    except MemoryServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    logger.warning("MEMORY_FORGET_SYNTHETIC user=%s removed=%d", target_user, removed)
+    return {"user_id": target_user, "removed": removed, "mode": "synthetic"}
 
 
 @router.post("/link-preview")

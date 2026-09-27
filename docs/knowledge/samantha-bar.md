@@ -21,7 +21,7 @@ passed before and does not pass now.
 
 ```bash
 python3 scripts/perf/samantha_bar.py --dry-run                 # the plan; no network, no writes
-ZOE_PERF=1 ZOE_BAR_ADMIN_SESSION=<admin X-Session-ID> \
+ZOE_PERF=1 \
   flock /tmp/zoe-voice-harness.lock nice -n 5 \
   python3 scripts/perf/samantha_bar.py --compare-baseline      # exit 1 on a regression
 ... --record-baseline      # this run becomes the bar (refused if it errored or teardown is unproven)
@@ -98,30 +98,59 @@ routed through it. Teardown then has to be proven:
 
 1. **Quiesce.** Wait until each user's packet count is stable. The per-turn digest writes in
    the background.
-2. **Memory store, through the API only.** Call `POST /api/memories/users/{demo}/forget`. This
-   is `MemoryService.delete_user`, which also removes the audit rows.
+2. **Memory store, through the API only.** Call
+   `POST /api/memories/users/{demo}/forget-synthetic` with the internal token (see the route
+   contract below). If `ZOE_BAR_ADMIN_SESSION` holds an admin `X-Session-ID`, the admin
+   `/forget` is used instead. Both call `MemoryService.delete_user`, which removes every row
+   the id owns, in any status, plus its audit rows.
 3. **Postgres, by exact id.** Delete every session owned by a demo user, together with its
    `chat_messages` and `memory_consolidation_state`. Delete every public base table's rows
    where `user_id::text` is a demo id; foreign-key refusals are retried. Delete the
    `users` row that `/api/chat` created.
-4. **Prove it.** The admin export (all statuses) must be 0, the `/for-prompt` count must be 0,
+4. **Prove it.** The residual must be 0. In synthetic mode the residual is a second
+   `forget-synthetic` call, whose `removed` count covers every status; a late row gets
+   deleted rather than leaked. In admin mode it is the admin export. The `/for-prompt` count
+   must also be 0,
    and a count-back of every one of those Postgres tables must be 0. A count that cannot be
    read is not treated as zero. If any check fails, the whole sequence runs once more, which
    catches a late digest write. If it is still unproven, the status is `error`, the exit
    code is 2, the pending file is kept, and the next run refuses to start until
    `--teardown-only` proves it.
 
-The harness never opens Chroma or MemPalace itself. Hard-deleting memory rows is admin-only
-in the API (`require_admin`). The internal token grants only `role: user`, and
-`DELETE /api/chat/sessions/{id}` ignores `X-Zoe-User-Id`. **So a live run needs
-`ZOE_BAR_ADMIN_SESSION`, an admin zoe-auth `X-Session-ID`. Without one it refuses before
-writing anything.** A run that cannot clean up must not write.
+The harness never opens Chroma or MemPalace itself. Before any write it checks that the
+forget path works, by calling it on a fresh, unused demo id; that call deletes nothing. If
+the check fails (the route is not deployed, the token is refused, or the admin session is
+bad), the run refuses. A run that cannot clean up must not write.
+`DELETE /api/chat/sessions/{id}` ignores `X-Zoe-User-Id`, which is why chat rows are
+removed in Postgres.
+
+### Route contract: `POST /api/memories/users/{id}/forget-synthetic`
+
+- **Auth:** the internal token only (`X-Internal-Token` == `ZOE_INTERNAL_TOKEN`). Loopback
+  alone is not enough, and neither is an admin session.
+  - A missing header returns **401**.
+  - A wrong token, or no token provisioned on the host, returns **403**.
+- **Id rule:** `user_filters.synthetic_forget_refusal`.
+  - The id must match `^(demo|test)[-_]`. The match is case-sensitive and narrower than the
+    batch filter: `probe`/`ci`/`e2e`/`bench` ids are refused.
+  - The id must have no surrounding whitespace.
+  - The id must not be a guest sentinel.
+  - The id must not be in `ZOE_SYNTHETIC_USER_ALLOWLIST`. An allowlisted id is treated as a
+    real user, so only the admin `/forget` can erase it.
+  - A refused id gets **403** with the reason, and nothing is deleted.
+- **Effect:** the same `MemoryService.delete_user` as the admin forget, with
+  `actor="internal:forget-synthetic"`. It is idempotent. The response is
+  `{"user_id", "removed", "mode": "synthetic"}`.
+- **Audit:** every call that reaches the id check logs one WARNING line,
+  `MEMORY_FORGET_SYNTHETIC user=<id> removed=<n>` or `MEMORY_FORGET_SYNTHETIC refused
+  user=<id> reason=…`, to the zoe-data app log.
+- **Tests:** `services/zoe-data/tests/test_memory_forget_synthetic.py`, including a
+  negative control that loosens the pattern.
 
 ## Known limits (v0)
 
-- **Operator credential.** A live run needs an admin session supplied by the operator; see
-  the teardown section. An internal-token, synthetic-id-only forget endpoint would remove
-  this dependency. It is not built, because it is an auth-surface change.
+- **Needs the route deployed.** The live zoe-data must serve `forget-synthetic`. Until it
+  does, the preflight refuses unless an admin session is supplied.
 - **Multi-day is approximated.** Backdating moves only the Postgres chat rows. Memory-store
   `added_at` stays "now", so recency ranking sees everything as same-day.
 - **S5 is structurally SKIP for demo users today.** `emotional_followup` and the other

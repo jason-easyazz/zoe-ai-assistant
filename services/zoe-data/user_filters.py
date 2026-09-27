@@ -67,6 +67,34 @@ def drop_synthetic_users(
     return kept
 
 
+# The ONLY ids an internal (non-admin) caller may hard-forget through
+# ``POST /api/memories/users/{id}/forget-synthetic``. Deliberately NARROWER than
+# SYNTHETIC_USER_RE: case-sensitive and ``demo``/``test`` only — ``probe``/``ci``/
+# ``e2e``/``bench`` ids are filtered from the batch passes but are not erasable
+# without an admin. Pinned by tests/test_memory_forget_synthetic.py.
+FORGET_SYNTHETIC_RE = re.compile(r"^(demo|test)[-_]")
+
+
+def synthetic_forget_refusal(user_id: str | None) -> str | None:
+    """Why ``user_id`` may NOT be hard-forgotten by an internal caller, or None.
+
+    Refuses guest sentinels, anything outside ``^(demo|test)[-_]``, ids with
+    surrounding whitespace, and ids the operator re-admitted through
+    ``ZOE_SYNTHETIC_USER_ALLOWLIST`` — an allowlisted id is treated as a real
+    user, so only an admin can erase it.
+    """
+    uid = user_id or ""
+    if uid.strip() in GUEST_USERS:
+        return "guest sentinel ids are never erasable"
+    if uid != uid.strip():
+        return "id has surrounding whitespace"
+    if not FORGET_SYNTHETIC_RE.match(uid):
+        return "not a synthetic demo_/test_ id — real users need the admin forget"
+    if not is_synthetic_user(uid):
+        return "id is allowlisted (ZOE_SYNTHETIC_USER_ALLOWLIST) and treated as a real user"
+    return None
+
+
 def message_owner_expr() -> str:
     """SQL expression for the owner of a ``chat_messages cm JOIN chat_sessions cs`` row.
 

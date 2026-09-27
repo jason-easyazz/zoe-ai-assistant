@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-464 flags; 462 not documented in `.env.example`.
+466 flags; 464 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -49,6 +49,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BACKUP_DIR` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
 | `ZOE_BARGE_MIN_MS` | `'192'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_BARGE_SPEECH_THRESHOLD` | `'0.30'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
+| `ZOE_BAR_ADMIN_SESSION` | `''` | no | NO | `scripts/perf/samantha_bar.py` |
+| `ZOE_BAR_BRAIN_URL` | `'http://127.0.0.1:11434'` | no | NO | `scripts/perf/samantha_bar.py` |
 | `ZOE_BASE_URL` | `'http://localhost:8000'`, `'http://zoe.local'`, `'https://192.168.1.218'` | no | NO | `services/zoe-auth/oidc/startup.py`<br>`services/zoe-data/routers/panel_provision.py`<br>`services/zoe-data/routers/system.py` |
 | `ZOE_BENCHMARK_OUTPUT` | `dynamic` | no | NO | `scripts/utilities/gemma4_trial_benchmark.py` |
 | `ZOE_BENCH_REPEATS` | `'3'` | no | NO | `services/zoe-core/bench/pi_brain_latency.py` |
@@ -104,7 +106,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DAILY_BRIEFING_CACHE_MAX_USERS` | `'64'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS` | `'120'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DATA_DB` | `dynamic` | no | NO | `services/zoe-data/database.py` |
-| `ZOE_DATA_URL` | `'http://127.0.0.1:8000'`, `-` | no | NO | `scripts/maintenance/check_emotional_thread.py`<br>`services/zoe-data/zoe_core_client.py` |
+| `ZOE_DATA_URL` | `'http://127.0.0.1:8000'`, `-` | no | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/perf/samantha_bar.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_DB_ACQUIRE_TIMEOUT_S` | `''` | no | NO | `services/zoe-data/db_pool.py` |
 | `ZOE_DB_CONTAINER` | `'zoe-database'` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
 | `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
@@ -301,7 +303,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_ALLOWED_HOSTS` | `''` | no | NO | `services/zoe-data/agent_safety.py` |
 | `ZOE_PANEL_ID` | `'post-merge-probe'`, `'zoe-touch-pi'` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_PERF` | `-` | no | NO | `scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py` |
+| `ZOE_PERF` | `-` | no | NO | `scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/samantha_bar.py` |
 | `ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED` | `''` | no | NO | `services/zoe-data/person_extractor.py` |
 | `ZOE_PERSON_DOSSIER_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_memory_compose.py` |
 | `ZOE_PERSON_LLM_CONFIDENCE_GATE` | `''` | no | NO | `services/zoe-data/person_extractor_llm.py` |

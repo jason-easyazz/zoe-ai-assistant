@@ -21,12 +21,15 @@ SAFETY (the demo-users-only guardrail, docs/architecture/zoe-memory-samantha-bui
   * the memory store is reached ONLY through the API; this script never opens
     Chroma/MemPalace (the B0.8 cutover rule);
   * teardown runs after EVERY live run, in a ``finally``, and is ASSERTED: memory
-    rows via the admin forget endpoint + admin export + ``/for-prompt``, Postgres
+    rows via the internal ``forget-synthetic`` endpoint (or the admin forget) +
+    a residual count + ``/for-prompt``, Postgres
     rows by exact demo id / exact session id. A pending-teardown file is written
     BEFORE the first write, so a killed run is torn down by the next one;
-  * the admin forget endpoint needs an admin ``X-Session-ID`` in
-    ``ZOE_BAR_ADMIN_SESSION``. Without it the live run REFUSES to start: a run
-    that cannot clean up must not write.
+  * memory rows are hard-deleted through ``POST /api/memories/users/{id}/forget-synthetic``
+    (internal token, ``^(demo|test)[-_]`` ids only). If ``ZOE_BAR_ADMIN_SESSION`` holds an
+    admin ``X-Session-ID`` the admin ``/forget`` + ``/export`` path is used instead. If
+    neither path answers, the live run REFUSES to start: a run that cannot clean up
+    must not write.
 
 Gates before a live run (each refusal is exit 2, never a silent pass):
   ``ZOE_PERF=1`` (sibling convention — without it: skip notice, exit 0, no artifact);
@@ -38,7 +41,7 @@ Gates before a live run (each refusal is exit 2, never a silent pass):
 
 Usage:
     python3 scripts/perf/samantha_bar.py --dry-run              # plan only, no network
-    ZOE_PERF=1 ZOE_BAR_ADMIN_SESSION=... flock /tmp/zoe-voice-harness.lock \\
+    ZOE_PERF=1 flock /tmp/zoe-voice-harness.lock \\
         nice -n 5 python3 scripts/perf/samantha_bar.py --compare-baseline
     ... --record-baseline        # this run becomes the bar
     ... --samples 3              # judged scenarios: 3 asks, majority vote
@@ -552,7 +555,7 @@ def plan_text(samples: int) -> str:
         tag = "judged" if s["judged"] else "deterministic"
         lines.append(f"  {s['id']} {s['title']} [{tag}]: {len(s['turns'])} seed turn(s), "
                      f"{len(s['asks'])} question(s) — {s['proves']}")
-    lines += ["  teardown: admin forget + admin export == 0 + /for-prompt == 0, Postgres rows by",
+    lines += ["  teardown: forget-synthetic (or admin forget) + residual == 0 + /for-prompt == 0, Postgres rows by",
               "            exact demo id / session id == 0 — runs in finally, asserted, exit 2 if unproven",
               f"  gates: ZOE_PERF=1, {LOCK}, not {NIGHTLY_WINDOW[0][0]:02d}:{NIGHTLY_WINDOW[0][1]:02d}-"
               f"{NIGHTLY_WINDOW[1][0]:02d}:{NIGHTLY_WINDOW[1][1]:02d} (-{NIGHTLY_GUARD_MIN}m), no deploy.yml run, "
@@ -627,6 +630,27 @@ class Live:
                                {"X-Internal-Token": self.token})
         return int((body or {}).get("count") or 0) if code == 200 else None
 
+    @property
+    def forget_mode(self) -> str:
+        return "admin" if self.admin else "synthetic"
+
+    def residual_count(self, user: str) -> int | None:
+        """Memory rows (any status) still owned by the user after the forget.
+
+        admin mode: the admin export. synthetic mode: a SECOND forget-synthetic —
+        ``delete_user`` lists every row owned by the id, so ``removed == 0`` proves
+        nothing was left (and a late row is removed rather than leaked)."""
+        if self.forget_mode == "admin":
+            return self.export_count(user)
+        return self.forget(user)
+
+    def forget_ok(self) -> bool:
+        """Preflight: can this run erase memory rows? Probes with a fresh, unused
+        demo id, so the call deletes nothing."""
+        if self.forget_mode == "admin":
+            return self.admin_ok()
+        return self.forget(new_demo_user()) == 0
+
     def export_count(self, user: str) -> int | None:
         """Every memory row for the user, any status (admin export)."""
         code, body = self._req("GET", f"{DATA_BASE}/api/memories/export?user_id={user}",
@@ -644,8 +668,12 @@ class Live:
 
     def forget(self, user: str) -> int | None:
         assert_demo_user(user)
-        code, body = self._req("POST", f"{DATA_BASE}/api/memories/users/{user}/forget",
-                               {"X-Session-ID": self.admin}, {}, timeout=120)
+        if self.forget_mode == "admin":
+            code, body = self._req("POST", f"{DATA_BASE}/api/memories/users/{user}/forget",
+                                   {"X-Session-ID": self.admin}, {}, timeout=120)
+        else:
+            code, body = self._req("POST", f"{DATA_BASE}/api/memories/users/{user}/forget-synthetic",
+                                   {"X-Internal-Token": self.token}, {}, timeout=120)
         return int((body or {}).get("removed") or 0) if code == 200 else None
 
     def wait_landed(self, user: str, message: str, needles: Iterable[str],
@@ -804,12 +832,12 @@ async def db_teardown(conn, users: list[str], sessions: list[str]) -> dict[str, 
 
 
 def teardown_verdict(store: dict[str, dict], db: dict[str, Any] | None) -> tuple[bool, list[str]]:
-    """Pure: is the teardown PROVEN? store = {user: {"export": n|None, "packet": n|None}}.
+    """Pure: is the teardown PROVEN? store = {user: {"residual": n|None, "packet": n|None}}.
 
     Unknown (None) is not zero — a count we could not read fails the proof."""
     problems = []
     for u, c in sorted(store.items()):
-        for k in ("export", "packet"):
+        for k in ("residual", "packet"):
             if c.get(k) is None:
                 problems.append(f"{u}: {k} count unreadable")
             elif c[k]:
@@ -836,7 +864,8 @@ def teardown(live: Live, users: list[str], sessions: list[str]) -> dict[str, Any
             if stable >= 2:
                 break
             time.sleep(5)
-    out: dict[str, Any] = {"users": users, "sessions": len(sessions), "rounds": []}
+    out: dict[str, Any] = {"users": users, "sessions": len(sessions), "rounds": [],
+                           "forget_mode": getattr(live, "forget_mode", "?")}
     db_res = None
     ok, problems = False, ["not attempted"]
     for rnd in range(2):
@@ -847,7 +876,7 @@ def teardown(live: Live, users: list[str], sessions: list[str]) -> dict[str, Any
             db_res = None
             out.setdefault("errors", []).append(f"postgres: {type(exc).__name__}: {str(exc)[:160]}")
         time.sleep(10 if rnd == 0 else 5)
-        store = {u: {"export": live.export_count(u), "packet": live.packet_count(u)} for u in users}
+        store = {u: {"residual": live.residual_count(u), "packet": live.packet_count(u)} for u in users}
         ok, problems = teardown_verdict(store, db_res)
         out["rounds"].append({"forget_removed": removed, "store": store,
                               "db_deleted": (db_res or {}).get("deleted"), "problems": problems})
@@ -1123,9 +1152,10 @@ def main(argv: list[str] | None = None) -> int:
     ok, detail = _wait(_readyz, args.ready_wait_s, "/readyz")
     if not ok:
         return _refuse(args, f"zoe-data not ready: {detail}", revision)
-    if not live.admin_ok():
-        return _refuse(args, "no working admin session in ZOE_BAR_ADMIN_SESSION — the memory "
-                             "store teardown (admin forget + export) cannot run, so the run must "
+    if not live.forget_ok():
+        return _refuse(args, f"memory-store teardown unavailable ({live.forget_mode} mode: "
+                             "forget-synthetic not deployed / token refused, or the admin session "
+                             "in ZOE_BAR_ADMIN_SESSION does not work) — the run must "
                              "not write", revision)
     ok, detail = _wait(lambda: (mem_available_mb() >= MIN_MEM_MB,
                                 f"MemAvailable {mem_available_mb()} MB < {MIN_MEM_MB}"),
