@@ -177,7 +177,13 @@ D=cutover-$(date +%F-%H%M%S); TS=""; STAGE=preflight    # unique per attempt: a 
 TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
 fail() {
   echo "!! B0.8 cutover FAILED at stage=$STAGE (line $1)." >&2
-  if [ -n "${MY_HOLDER:-}" ]; then kill "$MY_HOLDER" 2>/dev/null || true; rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired; fi   # release ONLY this attempt's holder
+  case $STAGE in
+    preflight|pre-stop|stopped|rebuilt)   # nothing swapped: safe to let deploys run again
+      if [ -n "${MY_HOLDER:-}" ]; then kill "$MY_HOLDER" 2>/dev/null || true; rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired; fi ;;
+    *)                                    # store already swapped: KEEP the deploy lock until §6 rollback is done
+      echo "!! deploy lock KEPT (holder pid ${MY_HOLDER:-?}) so no deploy can reset/restart mid-inconsistency." >&2
+      echo "   after the §6 rollback: kill ${MY_HOLDER:-\$(cat /tmp/zoe-b08-deploy-lock-holder.pid)}; rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired" >&2 ;;
+  esac
   case $STAGE in
     preflight)
       echo "!! Preflight only: NOTHING was stopped or changed." >&2 ;;
@@ -218,7 +224,7 @@ test "$(gh run list --workflow deploy.yml --limit 3 --json status --jq '[.[]|sel
 # An ACTIVE holder from another cutover attempt means that attempt is between its blocks: REFUSE
 # (never kill it). A genuinely abandoned holder is released by the explicit recovery below, by hand.
 if [ -f /tmp/zoe-b08-deploy-lock-holder.pid ] && kill -0 "$(cat /tmp/zoe-b08-deploy-lock-holder.pid)" 2>/dev/null \
-   && grep -q zoe-deploy.lock "/proc/$(cat /tmp/zoe-b08-deploy-lock-holder.pid)/cmdline" 2>/dev/null; then
+   && grep -q zoe-b08-deploy-lock-holder "/proc/$(cat /tmp/zoe-b08-deploy-lock-holder.pid)/cmdline" 2>/dev/null; then   # argv[0] set by exec -a
   echo "!! another cutover attempt still holds the deploy lock (pid $(cat /tmp/zoe-b08-deploy-lock-holder.pid)). Finish or abandon it first:" >&2
   echo "   abandoned for sure?  kill \$(cat /tmp/zoe-b08-deploy-lock-holder.pid); rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired" >&2
   false
@@ -335,6 +341,7 @@ STEP=kokoro-health
 kokoro_back
 
 STEP=redeploy             # only now: re-run the SPECIFIC refused #1745 deploy (captured in block A)
+test "$(git -C /home/zoe/assistant fetch -q origin main && git -C /home/zoe/assistant rev-parse origin/main)" = "$(git -C /home/zoe/assistant rev-parse HEAD)"   # main still == the deployed cutover commit (no unverified PR landed meanwhile)
 kill "$(cat /tmp/zoe-b08-deploy-lock-holder.pid 2>/dev/null)" 2>/dev/null || true   # release the deploy lock held since block A
 rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired
 gh run rerun "$DEPLOY_ID"
