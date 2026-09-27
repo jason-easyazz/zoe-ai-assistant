@@ -929,11 +929,46 @@ def make_venv(venv: Path, uv: str, exclude_newer: str, constraints: dict | None 
                                                   "chroma-hnswlib", "pydantic")}}
 
 
+_DATE_DIR_RE = re.compile(r"(?:[a-z][a-z0-9]*-)?\d{4}-\d{2}-\d{2}")
+REHEARSAL_MARKER = ".b08-rehearsal"
+
+
+def rehearsal_dir(base: Path | str, date: str, live: Path | str) -> Path:
+    """The one directory a run may create or (with --fresh) delete, validated before any use.
+
+    `date` must be `[prefix-]YYYY-MM-DD` (no separators, no `..`), the result must resolve to a
+    DIRECT child of the resolved base (no symlink escape), and it must neither be, contain, nor
+    sit inside the live palace.
+    """
+    if not _DATE_DIR_RE.fullmatch(date or ""):
+        raise SystemExit(f"REFUSED: --date {date!r} must look like [prefix-]YYYY-MM-DD")
+    base_r = _real(base)
+    root = _real(base_r / date)
+    if root.parent != base_r:
+        raise SystemExit(f"REFUSED: {root} is not a direct child of the rehearsal root {base_r}")
+    lv = _real(live)
+    if root == lv or lv in root.parents or root in lv.parents or base_r == lv or base_r in lv.parents:
+        raise SystemExit(f"REFUSED: {root} overlaps the live store {lv}")
+    return root
+
+
+def assert_replaceable(root: Path) -> None:
+    """--fresh may only delete a directory this tool created (marker, or our manifest schema)."""
+    if (root / REHEARSAL_MARKER).is_file():
+        return
+    man = root / "manifest.json"
+    try:
+        if man.is_file() and json.loads(man.read_text()).get("schema", "").startswith("zoe.b08."):
+            return
+    except (OSError, ValueError):
+        pass
+    raise SystemExit(f"REFUSED: {root} was not created by this tool (no {REHEARSAL_MARKER}); not deleting it")
+
+
 def cmd_run(args) -> int:
     live = _real(args.copy_from)
     date = args.date or _dt.date.today().isoformat()
-    root = _real(args.rehearsal_root) / date
-    refuse_live(root, live)
+    root = rehearsal_dir(args.rehearsal_root, date, live)
     src, exp, dst, scratch = root / "src", root / "export", root / "dst", root / "scratch"
     venv = root / ".lab-venv"
     prior: dict = {}
@@ -948,8 +983,10 @@ def cmd_run(args) -> int:
     elif root.exists() and any(root.iterdir()):
         if not args.fresh:
             raise SystemExit(f"REFUSED: {root} exists; pass --fresh to replace this date's rehearsal")
+        assert_replaceable(root)
         shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (root / REHEARSAL_MARKER).touch()
     os.chmod(root, 0o700)
     os.chmod(root.parent, 0o700)
     log: list = [r for r in prior.get("steps", []) if not r["step"].startswith(("proof.", "vectors.", "recall."))]
@@ -1133,8 +1170,15 @@ def cmd_compare_recall(args) -> int:
     identical = sum(1 for q in old if old[q] == new.get(q))
     top1 = sum(1 for q in old if old[q][:1] == new.get(q, [])[:1])
     worst = min(per.values()) if per else 0.0
-    ok = len(per) == len(DEMO_QUERIES) and all(v >= RECALL_JACCARD_FLOOR for v in per.values())
-    data = {"queries": len(per), "identical_order": identical, "top1_equal": top1, "min_jaccard": worst}
+    complete = len(per) == len(DEMO_QUERIES) and set(new) >= set(old)
+    if args.parity_tolerance:
+        # Opt-in tolerance: every query keeps its top-1 AND its top-10 set within the Jaccard floor.
+        ok = complete and top1 == len(per) and all(v >= RECALL_JACCARD_FLOOR for v in per.values())
+    else:
+        # Default: ranking ORDER must be identical for every query (the measured bar, 20/20).
+        ok = complete and identical == len(per)
+    data = {"queries": len(per), "identical_order": identical, "top1_equal": top1, "min_jaccard": worst,
+            "mode": "tolerance" if args.parity_tolerance else "identical-order"}
     return _out(ok, "recall_parity", json.dumps(data, sort_keys=True), data)
 
 
@@ -1209,6 +1253,8 @@ def main(argv: list[str] | None = None) -> int:
     cr = sub.add_parser("compare-recall")
     cr.add_argument("--old", required=True)
     cr.add_argument("--new", required=True)
+    cr.add_argument("--parity-tolerance", action="store_true",
+                    help="accept top-1 equal + top-10 Jaccard >= 0.9 instead of identical order")
 
     args = ap.parse_args(argv)
     if args.cmd == "run":

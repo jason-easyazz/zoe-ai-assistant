@@ -297,3 +297,64 @@ def test_proof_table_negative_control_semantics():
     assert m._proof_table([silent])[0]["verdict"] == "FAIL"
     normal = {"step": "proof.y", "rc": 0, "verdicts": ["PASS y"], "wall_s": 0, "peak_rss_mb": 1}
     assert m._proof_table([normal])[0]["verdict"] == "PASS"
+
+
+def test_recall_parity_requires_identical_order_by_default(tmp_path):
+    top = {q: [f"id{i}" for i in range(10)] for q in m.DEMO_QUERIES}
+    swapped = dict(top)
+    swapped[m.DEMO_QUERIES[3]] = ["id0", "id2", "id1"] + [f"id{i}" for i in range(3, 10)]
+    (tmp_path / "old.json").write_text(json.dumps(top))
+    (tmp_path / "swapped.json").write_text(json.dumps(swapped))
+    argv = ["compare-recall", "--old", str(tmp_path / "old.json"), "--new", str(tmp_path / "swapped.json")]
+    assert m.main(argv) == 1  # same ids, different order -> FAIL by default
+    assert m.main([*argv, "--parity-tolerance"]) == 0  # top-1 kept, set identical -> opt-in PASS
+    top1_moved = dict(top)
+    top1_moved[m.DEMO_QUERIES[0]] = ["id1", "id0"] + [f"id{i}" for i in range(2, 10)]
+    (tmp_path / "top1.json").write_text(json.dumps(top1_moved))
+    assert m.main(["compare-recall", "--old", str(tmp_path / "old.json"), "--new", str(tmp_path / "top1.json"),
+                   "--parity-tolerance"]) == 1  # tolerance never forgives a changed top-1
+    missing = {q: v for q, v in top.items() if q != m.DEMO_QUERIES[5]}
+    (tmp_path / "missing.json").write_text(json.dumps(missing))
+    assert m.main(["compare-recall", "--old", str(tmp_path / "old.json"), "--new", str(tmp_path / "missing.json")]) == 1
+
+
+def test_rehearsal_dir_validation(tmp_path):
+    base = tmp_path / "rehearsals"
+    base.mkdir()
+    live = tmp_path / "live-palace"
+    live.mkdir()
+    assert m.rehearsal_dir(base, "2026-09-27", live) == (base / "2026-09-27").resolve()
+    assert m.rehearsal_dir(base, "cutover-2026-09-27", live).name == "cutover-2026-09-27"
+    for bad in ("..", "../2026-09-27", "2026-09-27/..", "x/2026-09-27", "", "2026-9-27", "/tmp"):
+        with pytest.raises(SystemExit, match="REFUSED"):
+            m.rehearsal_dir(base, bad, live)
+    # the run root must never be, contain, or sit inside the live palace
+    inner_live = base / "2026-09-27" / "palace"
+    inner_live.mkdir(parents=True)
+    with pytest.raises(SystemExit, match="overlaps the live store"):
+        m.rehearsal_dir(base, "2026-09-27", inner_live)
+    with pytest.raises(SystemExit, match="overlaps the live store"):
+        m.rehearsal_dir(live, "2026-09-27", live)
+    # a symlinked date dir that escapes the base is refused
+    (base / "2026-01-01").symlink_to(tmp_path)
+    with pytest.raises(SystemExit, match="REFUSED"):
+        m.rehearsal_dir(base, "2026-01-01", live)
+
+
+def test_fresh_only_deletes_directories_this_tool_made(tmp_path):
+    foreign = tmp_path / "2026-09-27"
+    foreign.mkdir()
+    (foreign / "precious.txt").write_text("x")
+    with pytest.raises(SystemExit, match="not created by this tool"):
+        m.assert_replaceable(foreign)
+    (foreign / m.REHEARSAL_MARKER).touch()
+    m.assert_replaceable(foreign)
+    legacy = tmp_path / "2026-09-26"
+    legacy.mkdir()
+    (legacy / "manifest.json").write_text(json.dumps({"schema": "zoe.b08.chroma-migration-rehearsal/1"}))
+    m.assert_replaceable(legacy)
+    # end to end: `run --fresh --date ..` refuses before touching anything
+    with pytest.raises(SystemExit, match="REFUSED"):
+        m.main(["run", "--fresh", "--date", "..", "--rehearsal-root", str(tmp_path),
+                "--copy-from", str(tmp_path / "live")])
+    assert (foreign / "precious.txt").exists()

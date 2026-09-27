@@ -106,7 +106,9 @@ Kept at `~/.zoe/chroma-migration-rehearsal/2026-09-27/` (0700): `src/` is the co
   - proofs about 100 s
 - **Disk:** copy 181 MB, migrated store 94 MB, export 24 MB.
 
-Re-run with `python3 scripts/maintenance/chroma_migrate_rehearsal.py run --fresh`. If the RAM
+Proof e's verdict requires the **identical top-10 order** for every query. The opt-in `compare-recall --parity-tolerance` accepts an unchanged top-1 plus a top-10 Jaccard ≥ 0.9 instead; it is off by default.
+
+Re-run with `python3 scripts/maintenance/chroma_migrate_rehearsal.py run --fresh`. `--date` must be `[prefix-]YYYY-MM-DD`, and the run dir must be a direct child of the rehearsal root that does not overlap the live palace. `--fresh` only deletes a directory carrying the tool's `.b08-rehearsal` marker, or its manifest schema. If the RAM
 gate stopped the proofs, use `run --prove-only`. The script waits up to `--wait-mem-s` (900 s)
 for `MemAvailable ≥ --min-avail-mb` (1200) before each heavy step, then refuses.
 
