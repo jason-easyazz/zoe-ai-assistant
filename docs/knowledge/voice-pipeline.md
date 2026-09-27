@@ -451,7 +451,9 @@ replay-gated brain windows on 2026-09-27, same rock, same other flags:
 | **A (adopted)** | K q8_0 / V q8_0 | PASS 11/11 scoreable, 0 fail | 1754 ms | 0 |
 | B | K q8_0 / V f16 | PASS 11/11 scoreable, 0 fail | 1752.5 ms | 0 |
 
-A wins on memory at equal latency. `tests/unit/test_llama_server_unit_flags.py` pins the
+A wins on memory at equal latency. The single-stream replay results carry over to the adopted
+template's `--parallel 1` and `--fit off`, which were added after both windows. The apply window's
+replay gate is the measurement of the exact committed config. `tests/unit/test_llama_server_unit_flags.py` pins the
 couplings that would otherwise only fail at brain startup.
 
 **Flag renames in b11194** (an old spelling on the new binary is an unknown-flag startup failure,
@@ -459,8 +461,18 @@ and a new spelling on b9733 is the same failure in reverse):
 
 - `--mlock` is **removed** → `--load-mode mmap+mlock`.
 - `--chat-template-kwargs '{"enable_thinking":false}'` is **deprecated** → `--reasoning off`.
-- `--fit` defaults to **on** in b11194. It only adjusts arguments left *unset*; the unit sets
-  `--ctx-size`, `--n-gpu-layers` and `--parallel` explicitly.
+- `--fit` defaults to **on** in b11194 (and in b9733). The unit sets **`--fit off`** explicitly, so
+  the written config is the served config.
+
+**Single slot: `--parallel 1` (correctness over concurrency).** Upstream
+[ggml-org/llama.cpp#28286](https://github.com/ggml-org/llama.cpp/issues/28286) (open, filed
+2026-09-03) reports that draft-MTP with `--parallel` > 1 leaks content between concurrent
+requests' prompts and completions, with no garbage-token signature to catch it by. The unit ran
+`--parallel 2` from 2026-07-21 until B0.4, so the live brain has been exposed. With one slot,
+concurrent requests (voice and chat) queue rather than run side by side, and the full
+`--ctx-size 16384` belongs to that slot. The `--cache-ram 2048` host prompt cache is what softens
+prefix eviction between them. The test pins `draft-mtp` ⇒ `--parallel 1`. Raise it only once #28286
+is fixed upstream and replay-gated here.
 
 **Apply** (operator/coordinator only, in a Kokoro-paused brain window, after the PR merges and
 the live checkout is fast-forwarded):
@@ -477,8 +489,9 @@ mkdir -p ~/.cache/zoe && cp ~/.config/systemd/user/llama-server.service ~/.cache
 install -m 644 ~/assistant/scripts/setup/systemd/llama-server.service ~/.config/systemd/user/llama-server.service
 # The template overwrites any host-specific edit in the installed unit, so read the diff: only
 # the B0.4 lines (binary + LD_LIBRARY_PATH, --flash-attn, --cache-type-v, --load-mode,
-# --reasoning) and comments may differ. On 2026-09-27 the installed ExecStart matched the pre-B0.4
-# template exactly, including --host 127.0.0.1. Carry any other difference into the new copy.
+# --reasoning, --parallel 1, --fit off) and comments may differ. On 2026-09-27 the installed
+# ExecStart matched the pre-B0.4 template exactly, including --host 127.0.0.1. Carry any other
+# difference into the new copy.
 diff ~/.cache/zoe/llama-server.service.b9733 ~/.config/systemd/user/llama-server.service
 systemctl --user daemon-reload
 systemctl --user show llama-server -p DropInPaths -p MemorySwapMax   # both drop-ins listed, MemorySwapMax=0
@@ -505,13 +518,18 @@ curl -s http://localhost:10201/health   # pipeline_loaded: true AND device: cuda
 ```bash
 systemctl --user stop kokoro-tts.service
 cp ~/.cache/zoe/llama-server.service.b9733 ~/.config/systemd/user/llama-server.service
+sed -i 's/--parallel 2 \\/--parallel 1 \\/; s/^  --cont-batching \\$/  --cont-batching \\\n  --fit off \\/' \
+  ~/.config/systemd/user/llama-server.service   # keep one slot + fit off on rollback (#28286)
+grep -E -- '--parallel|--fit' ~/.config/systemd/user/llama-server.service
 systemctl --user daemon-reload && systemctl --user restart llama-server.service
 # then poll /health, start kokoro-tts, and verify it as in step 4
 ```
 
 The saved copy is the b9733 configuration: binary and `LD_LIBRARY_PATH` at
 `%h/llama.cpp/build-jetson-new/bin`, `--flash-attn off`, no `--cache-type-v` (V must be f16 when
-FA is off, or startup throws), `--mlock`, and the `enable_thinking` kwargs line. The template
+FA is off, or startup throws), `--mlock`, and the `enable_thinking` kwargs line. **It also carries
+`--parallel 2`, which re-exposes #28286.** Before the `daemon-reload`, edit it to `--parallel 1` and
+add `--fit off`. #28286 does not depend on the build, and b9733 accepts both flags. The template
 header lists the same rollback. The `functiongemma-router` unit still runs the b9733 binary and is
 not touched by B0.4.
 

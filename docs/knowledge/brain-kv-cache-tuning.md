@@ -26,7 +26,7 @@ after the Gemma `--swa-full` fix (#22288, 2026-04-24) and has `--cache-ram`.
 
 | Change | Why |
 |---|---|
-| `--ctx-size 16384 --parallel 2` | two 8192 slots; voice+chat keep separate warm prefixes and no longer queue |
+| `--ctx-size 16384 --parallel 2` | two 8192 slots; voice+chat keep separate warm prefixes and no longer queue. **Reverted to `--parallel 1` by B0.4 (2026-09-27):** upstream llama.cpp#28286 (open) leaks content between concurrent draft-MTP requests. See [voice-pipeline.md](voice-pipeline.md). |
 | V-quant **NOT applied**; K stays q8 | FA on **crashes with the MTP draft on this build** (documented at the #810 template sync), and q8 V requires FA (issue #10378) — so V stays f16 while MTP is in use. Cost: only the ~4 global layers, ~64MB at 16384. Revisit only if MTP is ever dropped or the crash is fixed upstream. **Update 2026-09-27 (B0.4):** fixed upstream (#25148); the template now targets llama.cpp b11194 with FA on and V at q8_0, replay-gated. See [voice-pipeline.md](voice-pipeline.md) ("Brain build + flags — B0.4"). |
 | `--cache-ram 2048` | Oct-2025 host prompt cache (PR #16391): similarity hot-swap of whole cached prompts, **SWA-compatible** — the real replacement for prefix eviction. **Capped** because the 8192 MiB default is an OOM hazard on 15.6G unified memory. The running server today has NO cap — latent hazard until this deploys. |
 | `--cache-reuse 256` **removed** | Post-#22288 (2026-04-24, in our build @ f449e0553) shifting IS available for Gemma — but only with `--swa-full`, which grows the SWA KV cache ~50× (~1.5GB): unaffordable here, so removal is a RAM-budget choice, not an upstream limitation. Prefix stability (#1612) + `--cache-ram` are the strategy. |

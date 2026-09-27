@@ -10,6 +10,10 @@ break the brain at STARTUP rather than in any test, so they are pinned here:
 * b11194 REMOVED ``--mlock`` (now ``--load-mode mmap+mlock``) and deprecated
   ``--chat-template-kwargs '{"enable_thinking":false}'`` (now ``--reasoning off``).
   An old spelling on the new binary is an unknown-flag startup failure.
+* draft-MTP with ``--parallel`` > 1 leaks content between concurrent requests
+  (upstream ggml-org/llama.cpp#28286, OPEN) with no garbage-token signature, so a
+  draft-mtp unit must run ONE slot. And ``--fit`` defaults ON, so ``--fit off``
+  must be explicit for the written config to be the served config.
 * ExecStart and LD_LIBRARY_PATH must name the SAME build — mixing b9733 libs
   with the b11194 binary (or vice versa) is an ABI mismatch.
 """
@@ -76,3 +80,16 @@ def test_binary_and_libs_come_from_the_same_build():
     assert binary == f"{lib.group(1).rstrip('/')}/llama-server", (
         f"ExecStart binary {binary} and LD_LIBRARY_PATH {lib.group(1)} name different builds"
     )
+
+
+def test_draft_mtp_implies_single_slot():
+    cmd = _exec_start()
+    if _flag(cmd, "--spec-type") == "draft-mtp":
+        assert _flag(cmd, "--parallel") == "1", (
+            f"--spec-type draft-mtp with --parallel {_flag(cmd, '--parallel')!r}: upstream "
+            "llama.cpp#28286 leaks content between concurrent requests. Keep --parallel 1."
+        )
+
+
+def test_fit_is_explicitly_off():
+    assert _flag(_exec_start(), "--fit") == "off", "--fit defaults ON; the B0.4 gate keeps it off explicitly"

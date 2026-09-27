@@ -20,12 +20,24 @@
 #     A is adopted: same latency, smaller KV cache = more headroom on 15.6G unified memory.
 #   - Flag renames in this build: `--mlock` is GONE -> `--load-mode mmap+mlock`;
 #     `--chat-template-kwargs '{"enable_thinking":false}'` is deprecated -> `--reasoning off`.
+#   - SINGLE SLOT (--parallel 1) — correctness over concurrency. Upstream
+#     ggml-org/llama.cpp#28286 (OPEN, filed 2026-09-03): draft-MTP with --parallel > 1
+#     leaks content BETWEEN concurrent requests' prompts/completions, with no
+#     garbage-token signature to detect it by. The unit ran --parallel 2 before B0.4,
+#     so the live brain has been exposed. With one slot, concurrent requests queue
+#     instead of running side by side, and the whole --ctx-size 16384 belongs to that
+#     one slot. Do NOT raise --parallel while --spec-type draft-mtp is set, until
+#     #28286 is fixed AND replay-gated here.
+#   - --fit off is explicit: b11194 (and b9733) default --fit ON, which adjusts unset
+#     arguments to fit device memory. The B0.4 gate keeps it off, so the serving
+#     config is exactly what is written below.
 #
 # ROLLBACK (to the b9733 build, FA off): point ExecStart AND LD_LIBRARY_PATH back at
 #   %h/llama.cpp/build-jetson-new/bin, set `--flash-attn off`, DROP `--cache-type-v`
 #   (V must be f16 with FA off), replace `--load-mode mmap+mlock` with `--mlock`, and
 #   replace `--reasoning off` with `--chat-template-kwargs '{"enable_thinking":false}'`
-#   (b9733 has neither --load-mode nor --reasoning). Then daemon-reload + restart in a
+#   (b9733 has neither --load-mode nor --reasoning). KEEP --parallel 1 and --fit off on
+#   rollback (#28286 is build-independent; b9733 accepts both). Then daemon-reload + restart in a
 #   Kokoro-paused window. Full recipe: docs/knowledge/voice-pipeline.md.
 [Unit]
 Description=llama.cpp Server for Zoe (Gemma 4 E4B-QAT + MTP — live voice brain)
@@ -76,9 +88,12 @@ Environment=LD_LIBRARY_PATH=%h/llama.cpp-b11194/build-jetson/bin
 # 0.0.0.0 ONLY because it is fronted by Cloudflare Access + host firewalling. Do NOT
 # expose 0.0.0.0 without equivalent auth/firewalling.
 # KV-cache tuning (2026-07-21, evidence in docs/knowledge/brain-kv-cache-tuning.md):
-#  --ctx-size 16384 --parallel 2  = two 8192 slots, so voice + chat each keep a
-#    warm prefix instead of evicting each other (~5s reprocess per eviction,
-#    measured live). Near-free on gemma3n: the SWA-aware cache sizes the 20
+#  --ctx-size 16384 --parallel 1  = ONE 16384 slot (B0.4). The 2026-07-21 tuning ran
+#    --parallel 2 (two 8192 slots, so voice + chat kept separate warm prefixes;
+#    ~5s reprocess per eviction, measured live). It was dropped for correctness:
+#    #28286 (header above). The --cache-ram host prompt cache below is what now
+#    softens prefix eviction between voice and chat. Ctx is near-free on
+#    gemma3n: the SWA-aware cache sizes the 20
 #    sliding-window layers by the 512-token window, NOT by ctx (llama.cpp
 #    PR #13194); only ~4 global layers scale, halved again by q8 V-quant.
 #  --cache-ram 2048  = the Oct-2025 host-memory prompt cache (PR #16391),
@@ -111,12 +126,13 @@ ExecStart=%h/llama.cpp-b11194/build-jetson/bin/llama-server \
   --host 127.0.0.1 \
   --port 11434 \
   --ctx-size 16384 \
-  --parallel 2 \
+  --parallel 1 \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \
   --cache-ram 2048 \
   --n-gpu-layers 99 \
   --cont-batching \
+  --fit off \
   --flash-attn on \
   --temp 0.7 \
   --top-k 64 \

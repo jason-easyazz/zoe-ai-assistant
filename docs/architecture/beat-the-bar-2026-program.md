@@ -151,11 +151,13 @@ status: 🔨 active — NEXT ACTION is always §0
   kwargs → `--reasoning off`. Tracked template + apply/rollback recipe:
   `scripts/setup/systemd/llama-server.service`, [voice-pipeline.md](../knowledge/voice-pipeline.md)
   ("Brain build + flags — B0.4"). The live unit stays on b9733 / FA off until the coordinator
-  installs it in a Kokoro-paused window and re-runs the replay gate. **Still open against the
-  gate items below:** the unit keeps `--parallel 2` (the replay is single-stream, so #28286
-  cross-slot draft contamination is not exercised by it); `--fit` is not set and defaults
-  to `on` at b11194 (it adjusts only unset args, and ctx/ngl/parallel are all set). Confirm both
-  before closing B0.4.
+  installs it in a Kokoro-paused window and re-runs the replay gate. **Gate items (2) and "keep
+  `--fit off`" are satisfied in the template.** It runs `--parallel 1`, because #28286 (open) leaks
+  content between concurrent draft-MTP requests with no garbage-token signature, and the live
+  unit's `--parallel 2` has been exposed to it. Concurrent requests now queue, and ctx 16384
+  belongs to the one slot. `--fit off` is explicit, since b11194 defaults it to `on`. Both are
+  pinned in `tests/unit/test_llama_server_unit_flags.py`. They were added after the two windows,
+  so the apply-window replay is what measures the exact committed config.
   **2026-09-26 (ecosystem-watch §1):** b11194 ≡ b11178 for this build — 16 commits
   b11178→b11194, none touching CUDA arch 87 / FA / MTP / Gemma / jinja (only cpp-httplib
   0.58.0, #29407); source build stays mandatory (prebuilt arm64 asset is CUDA 13.4).
