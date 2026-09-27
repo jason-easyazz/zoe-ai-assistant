@@ -237,8 +237,12 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: st
         # AND manual) timed out at ~17 min. The gate never once succeeded.
         # Args are passed WITHOUT a shell, so paths with spaces/metachars are
         # safe; ZOE_PERF goes via env, not a shell prefix.
+        # sys.executable, not a PATH "python3": measure_voice re-invokes ITS own
+        # sys.executable for the replay, so this hop decides which interpreter's
+        # STT stack the whole run measures (B0.7 gate 2 launches the probe with the
+        # zoe-data 3.12 venv python; "python3" silently fell back to 3.10).
         cmd = [
-            "python3", str(MEASURE),
+            sys.executable, str(MEASURE),
             "--last", str(samples), "--user", user,
             "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
             "--stt", stt,

@@ -536,6 +536,27 @@ def test_zoe_data_requirements_is_voice_path():
     assert needs is True and hits == ["services/zoe-data/requirements.txt"]
 
 
+def test_zoe_data_py312_manifest_and_installer_are_voice_path():
+    """B0.7 (#1706): `requirements-py312.txt` is the INSTALLER of the zoe-data 3.12
+    venv — it pins moonshine-voice, onnxruntime, numpy and the CPU torch wheel —
+    and `build_py312_venv.sh` decides what else goes in (the `--no-deps` phase).
+    A diff touching ONLY either must gate like `requirements.txt` does. voice-gate
+    classifies with the BASE ref's tuple, so this must be on main before any PR
+    that makes the venv the service interpreter (Codex P1, #1706)."""
+    from voice_gate_check import scope_verdict, touched_voice_files, voice_path_patterns
+    pats = voice_path_patterns()
+    changed = ["services/zoe-data/requirements-py312.txt",
+               "scripts/setup/build_py312_venv.sh",
+               "docs/knowledge/python-312-venv-migration.md"]
+    assert touched_voice_files(changed, pats) == changed[:2]
+    for f in changed[:2]:
+        needs, hits, _ = scope_verdict([f], pats)
+        assert needs is True and hits == [f]
+    # negative control: an unrelated setup script / manifest stays CLEAR
+    assert touched_voice_files(["scripts/setup/pi-requirements.txt",
+                                "services/zoe-auth/requirements.txt"], pats) == []
+
+
 def test_zoe_core_lockfile_is_voice_path():
     """A Pi/transitive-dep bump can be regenerated into package-lock.json WITHOUT
     touching package.json, so a diff touching ONLY the lockfile must still require

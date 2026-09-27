@@ -83,6 +83,12 @@ VOICE_PATH_PATTERNS = (
     # (Retiring the in-process ONNX TTS dep from it should have been replay-gated by
     # the manifest itself, not only by the *kokoro* code globs.)
     "services/zoe-data/requirements.txt",
+    # ...and its Python 3.12 sibling (B0.7), which is the INSTALLER of the venv
+    # rather than a description of it, plus the script that decides what else goes
+    # in (Resemblyzer's --no-deps phase). Both are the base-ref classifier's to
+    # know BEFORE the venv becomes the service interpreter (Codex P1, #1706).
+    "services/zoe-data/requirements-py312.txt",
+    "scripts/setup/build_py312_venv.sh",
     "*kokoro*",
     "*moonshine*",
     # THE LIVE ROUTER'S MODEL ARTIFACTS — the stage-1 checkpoint of the two-stage
