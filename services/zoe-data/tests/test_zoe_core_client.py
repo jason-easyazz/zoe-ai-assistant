@@ -485,6 +485,52 @@ async def test_terminal_event_carrying_assistant_field_still_terminates():
     assert out == ["Answer"]  # terminates cleanly; the stray "x" is not emitted
 
 
+# ── Pi >= 0.86 transcript system messages on the RPC stream ──────────────────
+# Since 0.86 Pi records the prompt and tool set as `role: "system"` messages and
+# streams them as message_start/message_end frames (captured from
+# @earendil-works/pi-coding-agent@0.87.1 driven exactly like _rpc_command: one
+# pair before the first user turn, another whenever setActiveTools changes the
+# set — `toolsAdded`/`toolsRemoved`, `sections` holding Pi's default prompt text).
+# None of it may reach the user: not as speech, not as a tool sentinel.
+
+
+def _system_message(etype, rid="req-1", **fields):
+    msg = {"role": "system", "content": "", "timestamp": 1, **fields}
+    return {"type": etype, "id": rid, "message": msg}
+
+
+_V087_SYSTEM_FRAMES = [
+    _system_message("message_start", sections={"preamble": "You are an expert coding assistant"}),
+    _system_message("message_end", sections={"preamble": "You are an expert coding assistant"}),
+    _system_message("message_start", toolsAdded=[{"name": "calendar", "parameters": {"type": "object"}}]),
+    _system_message("message_end", toolsAdded=[{"name": "calendar", "parameters": {"type": "object"}}]),
+    # A system message may also carry TextContent[] content — still never spoken.
+    _system_message("message_end", content=[{"type": "text", "text": "SOUL: You are Zoe."}]),
+]
+
+
+@pytest.mark.asyncio
+async def test_pi087_system_message_frames_are_never_spoken():
+    out = await _run_read_turn([_accept(), *_V087_SYSTEM_FRAMES, _delta("Hi"), _delta(" there"), _agent_end()])
+    assert out == ["Hi", " there"]
+
+
+@pytest.mark.asyncio
+async def test_pi087_system_frames_before_a_non_streamed_answer():
+    """No text_delta streamed: the whole-message fallback must pick the ASSISTANT
+    message out of agent_end.messages, never a system entry."""
+    out = await _run_read_turn([
+        _accept(), *_V087_SYSTEM_FRAMES,
+        _agent_end(messages=[
+            {"role": "system", "content": [{"type": "text", "text": "SOUL: You are Zoe."}]},
+            {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hello!"}]},
+            {"role": "system", "content": "", "toolsRemoved": [{"name": "calendar"}]},
+        ]),
+    ])
+    assert out == ["Hello!"]
+
+
 # ── Unit tests for _read_turn: tool-activity / thinking sentinels ─────────────
 # These feed the verified Pi RPC tool-turn frames (captured live 2026-06-23) into
 # _read_turn and assert the __TOOL__/__THINKING__ sentinels surface in order while
