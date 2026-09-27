@@ -555,52 +555,54 @@ async def test_background_dedup():
 # 9. Timeout safety — Chroma unavailable → all functions return gracefully
 # ---------------------------------------------------------------------------
 
+def _break_chroma(monkeypatch) -> list:
+    """Make zoe-data's REAL drawers opener fail like a Chroma outage (B0.8: the store is
+    opened by ``memory_service.get_drawers_collection``, not mempalace). Returns a call log
+    so each test can prove the outage was actually hit, not short-circuited upstream."""
+    import memory_service as _ms_mod
+
+    calls: list = []
+
+    def _broken(path):
+        calls.append(path)
+        raise RuntimeError("Chroma crashed!")
+
+    monkeypatch.setattr(_ms_mod, "get_drawers_collection", _broken)
+    return calls
+
+
 @pytest.mark.asyncio
-async def test_load_user_facts_tolerates_error():
+async def test_load_user_facts_tolerates_error(monkeypatch):
     """If Chroma raises, _mempalace_load_user_facts must return '' not crash."""
-    orig_get = sys.modules["mempalace.palace"].get_collection
-
-    def _broken_get(_path):
-        raise RuntimeError("Chroma crashed!")
-
-    sys.modules["mempalace.palace"].get_collection = _broken_get
-    try:
-        result = await _mempalace_load_user_facts("jason")
-        assert result == "", f"Expected empty string on error, got: {result!r}"
-    finally:
-        sys.modules["mempalace.palace"].get_collection = orig_get
+    import zoe_agent as _za
+    await _mempalace_add("User's favourite colour is teal", user_id="jason")
+    _za._USER_FACTS_CACHE.clear()
+    assert "teal" in await _mempalace_load_user_facts("jason")  # positive control: healthy read
+    _za._USER_FACTS_CACHE.clear()
+    calls = _break_chroma(monkeypatch)
+    result = await _mempalace_load_user_facts("jason")
+    assert calls, "the outage was never reached — the test would pass without exercising it"
+    assert result == "", f"Expected empty string on error, got: {result!r}"
 
 
 @pytest.mark.asyncio
-async def test_mempalace_add_tolerates_error():
+async def test_mempalace_add_tolerates_error(monkeypatch):
     """If Chroma raises, _mempalace_add must return False not crash."""
-    orig_get = sys.modules["mempalace.palace"].get_collection
-
-    def _broken_get(_path):
-        raise RuntimeError("Chroma crashed!")
-
-    sys.modules["mempalace.palace"].get_collection = _broken_get
-    try:
-        ok = await _mempalace_add("some fact", user_id="jason")
-        assert ok is False
-    finally:
-        sys.modules["mempalace.palace"].get_collection = orig_get
+    # A fact the write-quality gate ACCEPTS, so the call reaches the store.
+    assert await _mempalace_add("User's favourite colour is teal", user_id="jason") is True
+    calls = _break_chroma(monkeypatch)
+    ok = await _mempalace_add("User's favourite film is a space documentary", user_id="jason")
+    assert calls, "the outage was never reached — the quality gate short-circuited the add"
+    assert ok is False
 
 
 @pytest.mark.asyncio
-async def test_mempalace_search_tolerates_error():
+async def test_mempalace_search_tolerates_error(monkeypatch):
     """If Chroma raises, _mempalace_search must return [] not crash."""
-    orig_search = sys.modules["mempalace.searcher"].search_memories
-
-    def _broken_search(*args, **kwargs):
-        raise RuntimeError("Chroma crashed!")
-
-    sys.modules["mempalace.searcher"].search_memories = _broken_search
-    try:
-        results = await _mempalace_search("some query", user_id="jason")
-        assert results == []
-    finally:
-        sys.modules["mempalace.searcher"].search_memories = orig_search
+    calls = _break_chroma(monkeypatch)
+    results = await _mempalace_search("what colour do I like", user_id="jason")
+    assert calls, "the outage was never reached"
+    assert results == []
 
 
 # ---------------------------------------------------------------------------
