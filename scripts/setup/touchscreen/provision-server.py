@@ -258,6 +258,30 @@ class WiFiSetupHandler(BaseHTTPRequestHandler):
 PROVISION_HTML = STATIC_DIR / "provision.html"
 QRCODE_JS      = STATIC_DIR / "qrcode.min.js"
 
+# Per-attempt poll secrets from /api/panels/provision/request, keyed by code.
+# Zoe releases the device token only to a poll carrying the secret for THAT
+# attempt, so it never leaves this process: it is stripped from the response
+# handed to provision.html and added here as a header on each status poll.
+_POLL_SECRETS: dict[str, str] = {}
+_POLL_SECRETS_MAX = 8
+
+
+def _keep_poll_secret(body: bytes) -> bytes:
+    """Remember the attempt's poll secret and strip it from what the page sees."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return body
+    if not isinstance(data, dict):
+        return body
+    secret = data.pop("poll_secret", None)
+    code = str(data.get("code") or "").upper()
+    if secret and code:
+        _POLL_SECRETS[code] = secret
+        while len(_POLL_SECRETS) > _POLL_SECRETS_MAX:
+            _POLL_SECRETS.pop(next(iter(_POLL_SECRETS)))
+    return json.dumps(data).encode()
+
 
 class ProvisionHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -301,7 +325,11 @@ class ProvisionHandler(BaseHTTPRequestHandler):
         elif path.startswith("/proxy/provision/") and not path.endswith("/request"):
             # /proxy/provision/{code} — poll status
             code = path.split("/")[-1]
-            self._proxy_get(f"/api/panels/provision/{code}")
+            secret = _POLL_SECRETS.get(code.upper(), "")
+            self._proxy_get(
+                f"/api/panels/provision/{code}",
+                headers={"X-Provision-Secret": secret} if secret else None,
+            )
         elif path == "/discover":
             self._discover()
         else:
@@ -312,7 +340,10 @@ class ProvisionHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body_bytes = self.rfile.read(length) if length else b"{}"
         if path == "/proxy/provision/request":
-            self._proxy_post("/api/panels/provision/request", body_bytes)
+            self._proxy_post(
+                "/api/panels/provision/request", body_bytes,
+                transform=_keep_poll_secret,
+            )
         elif path == "/save-token":
             self._save_token(json.loads(body_bytes))
         else:
@@ -341,7 +372,7 @@ class ProvisionHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"found": False, "error": str(exc)})
 
-    def _proxy_get(self, api_path: str):
+    def _proxy_get(self, api_path: str, headers: dict | None = None):
         cfg = _read_config()
         server_url = cfg.get("server_url", "")
         if not server_url:
@@ -349,7 +380,7 @@ class ProvisionHandler(BaseHTTPRequestHandler):
             return
         url = server_url.rstrip("/") + api_path
         try:
-            req = urllib.request.Request(url)
+            req = urllib.request.Request(url, headers=headers or {})
             ctx = _ssl_ctx if url.startswith("https") else None
             with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
                 body = resp.read()
@@ -361,7 +392,7 @@ class ProvisionHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"error": str(exc)}, 502)
 
-    def _proxy_post(self, api_path: str, body_bytes: bytes):
+    def _proxy_post(self, api_path: str, body_bytes: bytes, transform=None):
         cfg = _read_config()
         server_url = cfg.get("server_url", "")
         if not server_url:
@@ -378,6 +409,8 @@ class ProvisionHandler(BaseHTTPRequestHandler):
             ctx = _ssl_ctx if url.startswith("https") else None
             with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
                 body = resp.read()
+            if transform is not None:
+                body = transform(body)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

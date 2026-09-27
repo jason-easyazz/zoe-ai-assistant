@@ -3275,6 +3275,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PROVISION_PICKUP_GRACE_S": {
+        "defaults": [
+          "'120'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/panel_provision.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PR_GUARD_ACTIVE_GREPTILE_STALE_SECONDS": {
         "defaults": [
           "dynamic"

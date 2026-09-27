@@ -101,9 +101,9 @@ GET  /api/panels/{id}/status               → live status
 POST /api/panels/{id}/token                → issue device token
 GET  /api/panels/{id}/bindings             → user bindings
 PUT  /api/panels/{id}/bindings             → set user bindings
-POST /api/panels/provision/request         → request pairing code (first-boot)
-GET  /api/panels/provision/{code}          → poll pairing status
-POST /api/panels/provision/{code}/confirm  → confirm pairing (from phone)
+POST /api/panels/provision/request         → request pairing code + per-attempt poll_secret (first-boot)
+GET  /api/panels/provision/{code}          → poll pairing status (X-Provision-Secret required)
+POST /api/panels/provision/{code}/confirm  → confirm pairing (signed-in member session required)
 ```
 
 ---

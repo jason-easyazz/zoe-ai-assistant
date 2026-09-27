@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-460 flags; 458 not documented in `.env.example`.
+461 flags; 459 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -339,6 +339,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PROACTIVE_SPOKEN` | `''` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN_TRIGGERS` | `'morning_checkin'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROVISION_CODE_TTL_S` | `'300'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
+| `ZOE_PROVISION_PICKUP_GRACE_S` | `'120'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
 | `ZOE_PR_GUARD_ACTIVE_GREPTILE_STALE_SECONDS` | `dynamic` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_AUTO_RESOLVE_THREADS` | `'0'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_AUTO_UPDATE_BRANCH` | `'0'` | no | NO | `services/zoe-data/greploop_guard.py` |
