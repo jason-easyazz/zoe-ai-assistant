@@ -430,14 +430,16 @@ def real_voice_vad(monkeypatch):
 #   - of the 1051 usable, 89.4% score >0.5 (median 0.829) — so ~11% genuinely
 #     are not speech (false wakes, near-silence, background TV).
 # So the real contract is a corpus-level property, not a single-file one: the
-# model must detect speech in most real recordings. The measured rate is 0.894
-# and the floor enforced below is 0.60 — deliberately well under the worst
-# stride phase (0.795) so corpus churn alone cannot redden it. That also makes
+# model must detect speech in most real recordings. The measured rate was 0.894
+# (worst stride phase 0.795) on the context-less loader; re-measured 2026-09-27
+# with upstream's 64-sample context over 1171 usable files: 0.959, worst stride
+# phase 0.889. The floor enforced below is 0.60 — deliberately well under the
+# worst phase so corpus churn alone cannot redden it. That also makes
 # this a stronger regression lock — one sample proves nothing about the model,
 # while a broken model or preprocessing collapses the whole distribution.
 _SPEECH_SAMPLE_COUNT = 48        # evenly strided across the sorted corpus
 _SPEECH_MIN_USABLE = 20          # below this the corpus isn't a real signal
-_SPEECH_MIN_PASS_FRAC = 0.60     # measured 0.894 corpus-wide; 0.795 worst stride phase
+_SPEECH_MIN_PASS_FRAC = 0.60     # 0.959 corpus-wide, 0.889 worst stride phase (with context, 2026-09-27)
 
 
 @_needs_model
@@ -445,7 +447,7 @@ def test_silero_real_model_detects_speech_across_corpus(real_voice_vad):
     """The real model, driven through voice_vad's real streaming path, must
     clear the 0.5 speech threshold on most real recordings.
 
-    "Most" is the enforced claim (>= 60%), not the measured one (89.4%): the
+    "Most" is the enforced claim (>= 60%), not the measured one (95.9%): the
     floor is set below the worst stride phase so a corpus change cannot redden
     a healthy model. A BROKEN one collapses the whole distribution — breaking
     voice_vad's int16 scaling drops the pass fraction to 0.044.
@@ -506,7 +508,8 @@ def test_silero_real_model_near_silence_stays_low(real_voice_vad):
     # to random gaussian noise spreads 0.19–0.48 across draws (measured 30
     # seeds: worst 0.425; CI caught 0.475 on 2026-07-07). A fixed seed keeps
     # the strict 0.4 threshold meaningful instead of racing the RNG (seed 0
-    # measures 0.234 with a wide margin).
+    # measured 0.234). Those were the context-less loader; with upstream's
+    # 64-sample context (2026-09-27) seed 0 measures 0.057, worst of 30 seeds 0.114.
     rng = np.random.default_rng(0)
     noise = (rng.standard_normal(16000) * 80).astype(np.int16).tobytes()
     max_prob = 0.0
