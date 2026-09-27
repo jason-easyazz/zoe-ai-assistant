@@ -326,7 +326,10 @@ def test_rehearsal_dir_validation(tmp_path):
     live.mkdir()
     assert m.rehearsal_dir(base, "2026-09-27", live) == (base / "2026-09-27").resolve()
     assert m.rehearsal_dir(base, "cutover-2026-09-27", live).name == "cutover-2026-09-27"
-    for bad in ("..", "../2026-09-27", "2026-09-27/..", "x/2026-09-27", "", "2026-9-27", "/tmp"):
+    # the runbook's unique per-attempt id: `cutover-$(date +%F-%H%M%S)`
+    assert m.rehearsal_dir(base, "cutover-2026-09-28-061530", live).name == "cutover-2026-09-28-061530"
+    for bad in ("..", "../2026-09-27", "2026-09-27/..", "x/2026-09-27", "", "2026-9-27", "/tmp",
+                "cutover-2026-09-28-0615", "cutover-2026-09-28-061530/..", "cutover-2026-09-28-061530-x"):
         with pytest.raises(SystemExit, match="REFUSED"):
             m.rehearsal_dir(base, bad, live)
     # the run root must never be, contain, or sit inside the live palace
@@ -438,3 +441,27 @@ def test_compare_recall_reads_the_resolved_baseline(tmp_path):
     keep.unlink()  # pointer gone: compare-recall still finds the complete pair
     assert m.main(["compare-recall", "--baseline", str(keep), "--new", str(new)]) == 0
     assert m.main(["compare-recall", "--baseline", str(tmp_path / "nothing"), "--new", str(new)]) == 1
+
+
+def test_check_date_preflight(tmp_path, capsys):
+    import subprocess
+    base = tmp_path / "r"
+    base.mkdir()
+    live = tmp_path / "live"
+    common = ["--rehearsal-root", str(base), "--copy-from", str(live)]
+    # the exact shape the runbook generates must pass
+    d = subprocess.run(["date", "+cutover-%F-%H%M%S"], capture_output=True, text=True).stdout.strip()
+    assert m.main(["check-date", d, *common]) == 0
+    with pytest.raises(SystemExit, match="REFUSED"):
+        m.main(["check-date", "cutover-28-09-2026", *common])
+    (base / d).mkdir()
+    (base / d / "x").touch()
+    with pytest.raises(SystemExit, match="already exists"):
+        m.main(["check-date", d, *common])
+    # --fresh on a timestamped id still only deletes a marker dir
+    foreign = base / "cutover-2026-09-28-061530"
+    foreign.mkdir()
+    (foreign / "keep.txt").write_text("x")
+    with pytest.raises(SystemExit, match="not created by this tool"):
+        m.main(["run", "--fresh", "--date", foreign.name, "--rehearsal-root", str(base), "--copy-from", str(live)])
+    assert (foreign / "keep.txt").exists()

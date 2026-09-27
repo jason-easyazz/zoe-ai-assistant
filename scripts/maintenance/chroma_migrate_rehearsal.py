@@ -929,19 +929,19 @@ def make_venv(venv: Path, uv: str, exclude_newer: str, constraints: dict | None 
                                                   "chroma-hnswlib", "pydantic")}}
 
 
-_DATE_DIR_RE = re.compile(r"(?:[a-z][a-z0-9]*-)?\d{4}-\d{2}-\d{2}")
+_DATE_DIR_RE = re.compile(r"(?:[a-z][a-z0-9]*-)?\d{4}-\d{2}-\d{2}(?:-\d{6})?")
 REHEARSAL_MARKER = ".b08-rehearsal"
 
 
 def rehearsal_dir(base: Path | str, date: str, live: Path | str) -> Path:
     """The one directory a run may create or (with --fresh) delete, validated before any use.
 
-    `date` must be `[prefix-]YYYY-MM-DD` (no separators, no `..`), the result must resolve to a
+    `date` must be `[prefix-]YYYY-MM-DD[-HHMMSS]` (no separators, no `..`); the result must resolve to a
     DIRECT child of the resolved base (no symlink escape), and it must neither be, contain, nor
     sit inside the live palace.
     """
     if not _DATE_DIR_RE.fullmatch(date or ""):
-        raise SystemExit(f"REFUSED: --date {date!r} must look like [prefix-]YYYY-MM-DD")
+        raise SystemExit(f"REFUSED: --date {date!r} must look like [prefix-]YYYY-MM-DD[-HHMMSS]")
     base_r = _real(base)
     root = _real(base_r / date)
     if root.parent != base_r:
@@ -963,6 +963,17 @@ def assert_replaceable(root: Path) -> None:
     except (OSError, ValueError):
         pass
     raise SystemExit(f"REFUSED: {root} was not created by this tool (no {REHEARSAL_MARKER}); not deleting it")
+
+
+def cmd_check_date(args) -> int:
+    """Preflight for the cutover script: validate a run id exactly as `run` will, before any
+    service is stopped. It must be a valid name and must not exist yet (`run` without --fresh
+    refuses an existing dir)."""
+    root = rehearsal_dir(args.rehearsal_root, args.date, _real(args.copy_from))
+    if root.exists() and any(root.iterdir()):
+        raise SystemExit(f"REFUSED: {root} already exists; use a new run id")
+    print(f"PASS check-date {root}")
+    return 0
 
 
 def cmd_run(args) -> int:
@@ -1332,6 +1343,11 @@ def main(argv: list[str] | None = None) -> int:
     cv.add_argument("--queue-db", required=True)
     cv.add_argument("--ids-file", required=True)
     cv.add_argument("--mispair", action="store_true", help="negative control: pair vectors with the wrong ids")
+    cd_ = sub.add_parser("check-date", help="preflight: validate a run id the way `run` will")
+    cd_.add_argument("date")
+    cd_.add_argument("--rehearsal-root", default=str(REHEARSAL_ROOT_DEFAULT))
+    cd_.add_argument("--copy-from", default=str(LIVE_STORE_DEFAULT))
+
     cr = sub.add_parser("compare-recall")
     cr.add_argument("--old", help="old top-10 file (or use --baseline)")
     cr.add_argument("--baseline", help="a recall-parity pointer dir; resolves the newest COMPLETE pair")
@@ -1355,6 +1371,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_probe(args)
     if args.cmd == "compare-vectors":
         return cmd_compare_vectors(args)
+    if args.cmd == "check-date":
+        return cmd_check_date(args)
     if args.cmd == "compare-recall":
         return cmd_compare_recall(args)
     return 2

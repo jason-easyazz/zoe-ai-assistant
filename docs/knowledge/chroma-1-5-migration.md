@@ -159,7 +159,7 @@ the window, then the replay, then re-run the deploy.
 Step 0: merge #1745 (squash). Its deploy will be REFUSED by the voice gate before the reset,
 so the live tree is untouched. That is expected; §B clears it.
 
-**A. The transition is ONE fail-closed script. Paste it whole.** It runs in its own
+**A. The transition is ONE fail-closed script. Paste it whole.** It starts with a PREFLIGHT that touches nothing. The run id `cutover-<date>-<HHMMSS>` must pass the tool's own `check-date` (the exact format `run` accepts, dir not taken), and the refused #1745 deploy run must exist and be finished; its id is captured by the merge commit sha. Only then does it take the lock and stop anything. At the end it prints `D=` and `DEPLOY_ID=` for block B. It runs in its own
 `bash -euo pipefail`, so `set -e` cannot kill your login shell. Any failure stops it **before**
 `systemctl --user start zoe-data`, and the ERR trap prints the exact next step for the stage it
 reached:
@@ -172,14 +172,15 @@ anyway, loudly).
 
 ```bash
 bash -euo pipefail <<'CUTOVER'
-exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay/deploy window overlaps
 WT=/home/zoe/.worktrees/b0-8-cutover                   # any checkout of the MERGED main
-D=cutover-$(date +%F-%H%M%S); TS=""; STAGE=pre-stop     # unique per attempt: a retry gets a NEW dir
+D=cutover-$(date +%F-%H%M%S); TS=""; STAGE=preflight    # unique per attempt: a retry gets a NEW dir
 TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
 fail() {
   echo "!! B0.8 cutover FAILED at stage=$STAGE (line $1)." >&2
   case $STAGE in
-    pre-stop|stopped|rebuilt)
+    preflight)
+      echo "!! Preflight only: NOTHING was stopped or changed." >&2 ;;
+    stopped|rebuilt)
       echo "!! Nothing was swapped: old store + old client intact. Restore service:" >&2
       echo "   systemctl --user start zoe-data $TIMERS" >&2 ;;
     started)
@@ -190,6 +191,19 @@ fail() {
   esac
 }
 trap 'fail $LINENO' ERR
+
+# 0. PREFLIGHT, before anything is stopped:
+#    (a) the run id passes the tool's own validation (the format `run` accepts, dir not taken);
+#    (b) the refused #1745 deploy run exists and has finished. Block B re-runs exactly that run.
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py check-date "$D"
+MERGE_SHA=$(gh pr view 1745 --json mergeCommit --jq .mergeCommit.oid)
+test -n "$MERGE_SHA"
+DEPLOY_ID=$(gh run list --workflow deploy.yml --limit 50 --json databaseId,headSha,status \
+  --jq "[.[] | select(.headSha==\"$MERGE_SHA\" and .status==\"completed\")][0].databaseId // empty")
+test -n "$DEPLOY_ID"                                    # empty = deploy not finished yet: wait, re-paste
+echo "preflight OK: D=$D DEPLOY_ID=$DEPLOY_ID (merge $MERGE_SHA)"
+exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay/deploy window overlaps
+STAGE=pre-stop
 
 # 1. Stop every writer/opener
 systemctl --user stop $TIMERS
@@ -226,12 +240,13 @@ STAGE=started
 for i in $(seq 1 36); do curl -sf localhost:8000/readyz >/dev/null && break; sleep 5; done
 curl -sf localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); mc=d["memory_capture"]; print(d["status"], mc); assert d["status"]=="ok" and "self-recall ok" in mc.get("detail","")'
 STAGE=live
-echo "B0.8 transition OK: TS=$TS D=$D (rollback dir ~/.mempalace.pre-b08-$TS)"
+echo "B0.8 transition OK: TS=$TS (rollback dir ~/.mempalace.pre-b08-$TS)"
+echo "FOR BLOCK B:  D=$D DEPLOY_ID=$DEPLOY_ID"
 CUTOVER
 ```
 
 **B. Verify, replay, re-deploy, re-arm: also ONE fail-closed script.** Run it only after A
-printed `B0.8 transition OK`, and paste the `D=` value A printed. Every step must succeed: the
+printed `B0.8 transition OK`, and paste the `D=` and `DEPLOY_ID=` A printed; it refuses if either is empty. It re-runs exactly that refused deploy. Its EXIT trap restarts and health-checks `kokoro-tts` whenever the block stopped it, including on Ctrl-C, TERM or HUP. Every step must succeed: the
 live snapshot copy, the recall probe, the order-exact parity check against the published
 baseline, and the replay. The tombstone report may exit **3** (a count is UNKNOWN until 1.x
 persists the drawers' index metadata); the script accepts that with a printed warning. Exit 2
@@ -243,10 +258,21 @@ The script leaves the timers STOPPED, changes nothing, and prints the §6 pointe
 between a fix-forward and the §6 rollback.
 
 ```bash
-D=<the D= value block A printed> bash -euo pipefail <<'VERIFY'
+D=<from block A> DEPLOY_ID=<from block A> bash -euo pipefail <<'VERIFY'
+: "${D:?paste D= from block A}" "${DEPLOY_ID:?paste DEPLOY_ID= from block A}"   # refuse if empty
 WT=/home/zoe/.worktrees/b0-8-cutover; R=~/.zoe/chroma-migration-rehearsal/$D; STEP=start
 TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
-SCR=$(mktemp -d); trap 'rm -rf "$SCR"' EXIT
+SCR=$(mktemp -d); KOKORO_STOPPED=0
+kokoro_back() { systemctl --user start kokoro-tts; for i in $(seq 1 60); do curl -sf localhost:10201/health | grep -q '"device":"cuda"' && { KOKORO_STOPPED=0; return 0; }; sleep 2; done; return 1; }
+cleanup() {                    # runs on EVERY exit: success, failure, Ctrl-C, kill (TERM/HUP)
+  rm -rf "$SCR"
+  if [ "$KOKORO_STOPPED" = 1 ]; then
+    echo "!! restoring kokoro-tts (this block stopped it)" >&2
+    kokoro_back || echo "!! kokoro-tts did NOT come back healthy: check it NOW" >&2
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
 fail() {
   echo "!! B0.8 verification FAILED at step=$STEP (line $1)." >&2
   echo "!! The new store is ALREADY LIVE; zoe-data is still running on it. The timers stay STOPPED." >&2
@@ -274,16 +300,15 @@ grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value zoe-data
 
 STEP=replay               # writes the artifact the deploy gate needs; Kokoro stopped for its duration
 set -a; . ~/.hermes/.env; set +a
-systemctl --user stop kokoro-tts
-kokoro_back() { systemctl --user start kokoro-tts; for i in $(seq 1 60); do curl -sf localhost:10201/health | grep -q '"device":"cuda"' && return 0; sleep 2; done; return 1; }
+KOKORO_STOPPED=1; systemctl --user stop kokoro-tts      # the EXIT trap restores it on any exit
 ZOE_VOICE_REPLAY_STT=remote flock /tmp/zoe-voice-harness.lock nice -n 5 ~/.zoe/venvs/zoe-data-py312/bin/python \
   $WT/scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote \
-  --service-dir /home/zoe/assistant/services/zoe-data || { kokoro_back || true; false; }
+  --service-dir /home/zoe/assistant/services/zoe-data
 STEP=kokoro-health
 kokoro_back
 
-STEP=redeploy             # only now: the refused deploy passes the gate (no-op reset + restart)
-gh run rerun "$(gh run list --workflow deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+STEP=redeploy             # only now: re-run the SPECIFIC refused #1745 deploy (captured in block A)
+gh run rerun "$DEPLOY_ID"
 STEP=rearm
 systemctl --user start $TIMERS
 echo "B0.8 verified; deploy re-run; timers re-armed"
