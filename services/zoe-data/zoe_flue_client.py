@@ -5,8 +5,8 @@ selected ONLY when ``ZOE_BRAIN_BACKEND == 'flue'`` (see ``brain_dispatch`` /
 ``routers.chat``); with the env unset or ``'core'`` this module is never reached
 and the live brain path is byte-identical to today.
 
-Wire 1 — this client's in-code default, formerly served by the retired 1.x
-sidecar (``labs/flue-zoe-brain``) — is::
+Wire 1 — the retired Flue 1.x beta wire (``labs/flue-zoe-brain`` on :3578),
+still selectable with ``ZOE_FLUE_WIRE=1`` — is::
 
     POST {base}/agents/zoe/<session>?wait=result
     body: {"message": "..."}
@@ -16,13 +16,15 @@ Its route fails closed unless ``ZOE_BRAIN_OPEN=1`` or a matching
 ``Authorization: Bearer <ZOE_BRAIN_TOKEN>`` is presented, so this client sends
 the bearer token from ``ZOE_BRAIN_TOKEN`` when set.
 
-Wire versions — ``ZOE_FLUE_WIRE`` (default ``1``)
+Wire versions — ``ZOE_FLUE_WIRE`` (default ``2``)
 -------------------------------------------------
 The block above is the **Flue 1.x (beta.6)** wire, which the retired sidecar on
-:3578 spoke and which this client still sends by default (a rollback leftover).
-``ZOE_FLUE_WIRE=2`` switches to the **Flue 2.x** wire served by the LIVE sidecar
-in ``labs/flue-zoe-brain-2x`` on :3579 (PR #1616) — the wire the box runs. Three
-things change, and only these three::
+:3578 spoke; it is opt-in (``ZOE_FLUE_WIRE=1``) and kept byte-identical for
+parity. The DEFAULT — unset, empty, or anything unrecognised — is the **Flue
+2.x** wire served by the LIVE sidecar in ``labs/flue-zoe-brain-2x`` on :3579
+(PR #1616), which is also ``ZOE_FLUE_BRAIN_URL``'s default (B6.5: a missing env
+var lands on the live sidecar, never on the retired port). Three things change
+between the wires, and only these three::
 
     wire 1                                  wire 2
     ─────────────────────────────────────   ─────────────────────────────────────
@@ -152,7 +154,10 @@ def _is_transport_failure(exc: BaseException) -> bool:
 # Read lazily (NOT at import) so a .env value bootstrapped after import is honored
 # — bootstrap_runtime_env() populates os.environ in lifespan startup, which runs
 # after this module is imported.
-_DEFAULT_BASE_URL = "http://127.0.0.1:3578"
+# The LIVE Flue 2.x sidecar (`flue-zoe-brain-2x.service`). The 1.x lane on :3578
+# was stopped and source-removed (#1678), so a fresh deploy that forgets the env
+# var must land HERE — a default of :3578 would fail every brain turn (B6.5).
+_DEFAULT_BASE_URL = "http://127.0.0.1:3579"
 _DEFAULT_TIMEOUT_S = 180.0
 
 # Graceful, user-facing fallback emitted whenever a flue turn cannot produce a
@@ -221,16 +226,19 @@ def _timeout_s() -> float:
         return _DEFAULT_TIMEOUT_S
 
 
-# ── Wire version (ZOE_FLUE_WIRE, default 1) ──────────────────────────────────
+# ── Wire version (ZOE_FLUE_WIRE, default 2) ──────────────────────────────────
 #
-# 1 = the deployed Flue 1.x beta wire (?wait=result + {"message": …}).
+# 1 = the retired Flue 1.x beta wire (?wait=result + {"message": …}) — opt-in.
 # 2 = the Flue 2.x wire served by labs/flue-zoe-brain-2x (no wait param,
 #     top-level DeliveredMessage body, stream-read for the non-streaming turn).
 #
-# DEFAULT 1 IS LOAD-BEARING: this module is on the live voice path, so an
-# unset/garbage flag must produce byte-identical requests to the pre-change
-# client. Pinned by tests/test_flue_client_wire.py::test_wire1_* (golden
-# request fixtures) — do not "simplify" the default away.
+# DEFAULT 2 IS LOAD-BEARING: this module is on the live voice path and the box
+# runs the 2.x sidecar, so an unset/empty/garbage flag must land on the wire the
+# live sidecar speaks — the retired wire 400s every turn. Wire 1 stays
+# byte-identical WHEN SELECTED (tests/test_flue_client_wire.py::test_wire1_*
+# replay the golden request fixtures under ZOE_FLUE_WIRE=1); the default itself
+# is pinned by test_wire_flag_unset_is_provably_wire_two — do not "simplify"
+# either away.
 _WIRE_ENV = "ZOE_FLUE_WIRE"
 _WIRE_1 = 1
 _WIRE_2 = 2
@@ -240,10 +248,10 @@ _THINKING_SENTINEL_PREFIX = "__THINKING__:"
 
 
 def _wire_version() -> int:
-    """The Flue wire this client speaks. Per-call env read; 1 unless '2'.
+    """The Flue wire this client speaks. Per-call env read; 2 unless '1'.
 
     Anything other than '1'/'2' (including a typo like 'v2') logs loudly and
-    falls back to 1 — a mis-set flag must degrade to the deployed wire, never to
+    falls back to 2 — a mis-set flag must degrade to the deployed wire, never to
     an undefined one, and must never do so silently.
     """
     # The flag name is spelled as a LITERAL here on purpose: tools/audit/
@@ -251,15 +259,15 @@ def _wire_version() -> int:
     # _WIRE_ENV constant would leave ZOE_FLUE_WIRE out of the generated
     # inventory — registered nowhere, invisible to the CI pin.
     raw = (os.environ.get("ZOE_FLUE_WIRE") or "").strip()
-    if not raw or raw == "1":
-        return _WIRE_1
-    if raw == "2":
+    if not raw or raw == "2":
         return _WIRE_2
+    if raw == "1":
+        return _WIRE_1
     logger.error(
-        "%s=%r is not a known Flue wire version (expected '1' or '2'); using wire 1",
+        "%s=%r is not a known Flue wire version (expected '1' or '2'); using wire 2",
         _WIRE_ENV, raw,
     )
-    return _WIRE_1
+    return _WIRE_2
 
 
 def _endpoint(session_id: str, *, stream: bool = False) -> str:
