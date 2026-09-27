@@ -48,9 +48,18 @@ PyJWT==2.15.0
 ag-ui-protocol==0.1.19
 python-json-logger==4.2.0
 
-# ── Vector memory store (unchanged pair; B0.8 moves them together) ─────────
-mempalace==3.3.1
-chromadb==0.6.3
+# ── Vector memory store (B0.8, 2026-09-27: moved TOGETHER with the palace) ──
+# The on-disk palace was rebuilt for chromadb 1.5.x one collection at a time
+# (scripts/maintenance/chroma_migrate_rehearsal.py; runbook
+# docs/knowledge/chroma-1-5-migration.md). The format change is ONE-WAY: 0.6.3
+# cannot open the migrated store (KeyError '_type'), so these pins and the store
+# only ever move together, and rollback = restore the pre-B0.8 directory AND
+# re-pin 0.6.3/3.3.1. zoe-data opens the store with raw chromadb
+# (memory_service.get_drawers_collection), NOT mempalace's wrapper. mempalace is
+# kept at the release whose own code understands 1.x: 3.3.1's backend runs
+# `_fix_blob_seq_ids` against the SQLite on every new client.
+mempalace==3.10.0
+chromadb==1.5.9
 
 # ── Voice dependencies ────────────────────────────────────────────────────
 # numpy is pinned EXACTLY here (not `<2`): on 3.12 nothing in this set declares

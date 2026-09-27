@@ -37,6 +37,14 @@ WARN_RATIO = 0.25
 CRITICAL_RATIO = 0.40
 
 
+def _meta_field(meta, name: str, default):
+    """chromadb 0.6 pickles a PersistentData OBJECT; 1.x (Rust) pickles a plain DICT with the
+    same keys. getattr() on the dict silently read 0/0 for every 1.x segment (B0.8)."""
+    if isinstance(meta, dict):
+        return meta.get(name, default)
+    return getattr(meta, name, default)
+
+
 def _segment_stats(palace: str) -> list[dict]:
     db = os.path.join(palace, "chroma.sqlite3")
     if not os.path.exists(db):
@@ -52,7 +60,15 @@ def _segment_stats(palace: str) -> list[dict]:
         seg_id = os.path.basename(d.rstrip("/"))
         pkl = os.path.join(d, "index_metadata.pickle")
         if not os.path.exists(pkl):
-            continue  # metadata-only segment: no HNSW index, nothing to compact
+            if os.path.exists(os.path.join(d, "header.bin")):
+                # chromadb 1.x writes index_metadata.pickle only once a segment reaches its
+                # sync threshold, so a small HNSW index can exist without one. Report it
+                # instead of silently dropping the collection from the table.
+                _, col = seg2col.get(seg_id, ("?", "?"))
+                out.append({"name": names.get(col, f"<orphan segment {seg_id[:8]}>"),
+                            "segment": seg_id, "path": d, "pending": True, "added": 0,
+                            "live": 0, "tombstones": 0, "ratio": 0.0, "bytes": 0})
+            continue  # otherwise a metadata-only segment: no HNSW index, nothing to compact
         try:
             with open(pkl, "rb") as fh:
                 meta = pickle.load(fh)
@@ -60,8 +76,8 @@ def _segment_stats(palace: str) -> list[dict]:
             out.append({"name": f"<unreadable {seg_id[:8]}>", "error": str(exc)})
             continue
         _, col = seg2col.get(seg_id, ("?", "?"))
-        total = int(getattr(meta, "total_elements_added", 0) or 0)
-        live = len(getattr(meta, "id_to_label", {}) or {})
+        total = int(_meta_field(meta, "total_elements_added", 0) or 0)
+        live = len(_meta_field(meta, "id_to_label", {}) or {})
         out.append({
             "name": names.get(col, f"<orphan segment {seg_id[:8]}>"),
             "segment": seg_id,
@@ -86,6 +102,10 @@ def report(palace: str, warn: float, critical: float) -> int:
     for s in sorted(stats, key=lambda x: -x.get("ratio", 0)):
         if "error" in s:
             print(f"{s['name']:34s} {'':>7s} {'':>7s} {'':>6s} {'':>7s}  UNREADABLE: {s['error']}")
+            continue
+        if s.get("pending"):
+            print(f"{s['name'][:34]:34s} {'':>7s} {'':>7s} {'':>6s} {'':>7s}  "
+                  "ok (index metadata not persisted yet)")
             continue
         ratio = s["ratio"]
         worst = max(worst, ratio)
@@ -150,8 +170,11 @@ def compact(palace: str, collection: str, *, assume_yes: bool) -> int:
             print("aborted.")
             return 1
 
-    import chromadb  # imported late: the read-only path must not need it
-    client = chromadb.PersistentClient(path=palace)
+    # imported late: the read-only path must not need chromadb. The guard refuses a client
+    # whose major version disagrees with the palace format (B0.8: one-way migration).
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+    from palace_client import open_palace_client
+    client = open_palace_client(palace)
     col = client.get_collection(collection)
     data = col.get(include=["documents", "metadatas"])
     ids, docs, metas = data["ids"], data["documents"], data["metadatas"]

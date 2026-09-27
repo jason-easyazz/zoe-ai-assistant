@@ -209,6 +209,11 @@ def fresh_collection(monkeypatch):
     _reset_collection()
     # Keep the audit trail off disk (see _FakeAuditCollection).
     monkeypatch.setattr(MemoryService, "_audit_collection", lambda self: _AUDIT_COLLECTION)
+    # B0.8: the drawers opener is Zoe's own (memory_service.get_drawers_collection), not
+    # mempalace.palace — route it to the in-memory collection too, or every test here
+    # would open a REAL chromadb client at MEMPALACE_DATA_DIR (the live palace).
+    import memory_service as _ms_mod
+    monkeypatch.setattr(_ms_mod, "get_drawers_collection", _fake_get_collection)
     try:
         import memory_service as _ms
         _ms._service_singleton = None
