@@ -193,3 +193,77 @@ def test_chat_pred_is_anchored_grouped_and_guards_foreign_turns():
     # The second rail: a session with any turn naming a different owner is kept.
     assert "NOT EXISTS" in pred and "m.session_id = cs.id" in pred
     assert "<> cs.user_id" in pred
+
+
+# --------------------------------------------------------------------------- #
+# Chat arm: verified backup BEFORE the hard delete (fake conn, no database)
+# --------------------------------------------------------------------------- #
+class _FakeConn:
+    def __init__(self, delete_count=None):
+        self.sessions = [{"id": "s1", "user_id": "test-route-probe"},
+                         {"id": "s2", "user_id": "test-sec-b-4f9c0c"}]
+        self.messages = [{"id": "m1", "session_id": "s1", "content": "octopus fact"},
+                         {"id": "m2", "session_id": "s1", "content": "again"},
+                         {"id": "m3", "session_id": "s2", "content": "sec probe"}]
+        self.runs = [{"id": "r1", "session_id": "s1"}]
+        self.deletes = []
+        self.delete_count = delete_count
+
+    async def fetch(self, sql, *args):
+        if "FROM chat_sessions" in sql:
+            return self.sessions
+        if "FROM chat_messages" in sql:
+            return self.messages
+        if "FROM chat_ag_ui_runs" in sql:
+            return self.runs
+        raise AssertionError(sql)
+
+    async def execute(self, sql, *args):
+        assert sql.startswith("DELETE FROM chat_sessions")
+        assert purge.chat_session_pred("cs") in sql  # still scoped by the predicate
+        self.deletes.append(list(args[0]))
+        n = len(args[0]) if self.delete_count is None else self.delete_count
+        return f"DELETE {n}"
+
+
+def test_chat_purge_writes_verified_backup_then_deletes_exactly_it(tmp_path):
+    import asyncio
+    import json
+
+    conn = _FakeConn()
+    path, deleted = asyncio.run(purge.purge_chat(conn, str(tmp_path / "purge"), "2026-09-28"))
+    back = json.loads(open(path).read())
+    assert path.endswith("2026-09-28-chat.json")
+    assert [len(back[t]) for t in ("chat_sessions", "chat_messages", "chat_ag_ui_runs")] == [2, 3, 1]
+    assert conn.deletes == [["s1", "s2"]] and deleted == 2
+
+
+def test_chat_purge_refuses_delete_when_backup_fails(tmp_path):
+    import asyncio
+
+    blocker = tmp_path / "purge"
+    blocker.write_text("a FILE where the backup dir should be")  # makedirs fails
+    conn = _FakeConn()
+    with pytest.raises(OSError):
+        asyncio.run(purge.purge_chat(conn, str(blocker), "2026-09-28"))
+    assert conn.deletes == []  # nothing deleted without a backup
+
+
+def test_chat_purge_raises_when_delete_count_differs_from_backup(tmp_path):
+    import asyncio
+
+    with pytest.raises(RuntimeError, match="backed up 2"):
+        asyncio.run(purge.purge_chat(_FakeConn(delete_count=1), str(tmp_path), "x"))
+
+
+def test_backup_prunes_files_older_than_14_days(tmp_path):
+    import os
+    import time
+
+    old = tmp_path / "2026-09-01-chat.json"
+    old.write_text("{}")
+    os.utime(old, (time.time() - 15 * 86400,) * 2)
+    keep = tmp_path / "2026-09-20-chat.json"
+    keep.write_text("{}")
+    purge.write_verified_backup({"chat_sessions": []}, str(tmp_path), "2026-09-28")
+    assert not old.exists() and keep.exists()

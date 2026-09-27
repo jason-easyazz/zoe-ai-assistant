@@ -36,10 +36,22 @@ had it, so the chat-owner fallback query was already what ran every night.
 - Synthetic ids are removed from both.
 
 It replaced "created a `chat_sessions` row in 7 days". Telegram turns reach `chat_messages`
-through `/api/chat`, but they reuse one session per chat. `proactive/presence.py` also
-counts a fresh foreground `guest`-owned panel row for the user that panel's `default`
-binding names. The kiosk reclaims the row as `guest` 300 s after the owner goes quiet, so
-the brief was refused `panel=none` from 08-16 and not created at all from 09-11.
+through `/api/chat`, but they reuse one session per chat.
+
+`proactive/presence.py::panel_presence_tier` returns a tier. The kiosk reclaims the panel
+row as `guest` 300 s after the owner goes quiet, so from 08-16 the brief was refused
+`panel=none` even with the panel on. It was not created at all from 09-11.
+
+| tier | condition | what is spoken |
+|---|---|---|
+| `owner` | a fresh foreground row owned by the member (written by sign-in or PIN, kept fresh by their own turns) | the full brief |
+| `bound_guest` | a fresh `guest`-owned row on a panel whose `default` binding names the member | only the trigger's `spoken_guest_safe` line (first name, no calendar, loops or memories); the full brief stays in push and `proactive_pending` |
+| `absent` | anything else | nothing |
+
+Face-ID and voice-ID claims have no timestamped server-side record yet. They are accepted
+per turn in `routers/voice_tts.py` and kept only as an in-memory session binding that
+carries across rollovers. So they do not raise a panel to `owner`; wiring them in is a
+voice-path change and needs the replay gate.
 
 ## Probe chat rows are purged nightly
 
@@ -50,7 +62,9 @@ not delete their sessions:
 - `test-sec-b-<6 hex>`: the Flue parity security gate (2026-07-07).
 
 `scripts/maintenance/purge_orphaned_test_data.py` hard-deletes the `chat_sessions` those
-exact ids own; messages and AG-UI runs go with them by FK cascade. It keeps any session with
+exact ids own; messages and AG-UI runs go with them by FK cascade. Before the delete it
+writes a re-parsed, count-verified JSON backup to `~/.zoe/backups/purge/<stamp>-chat.json`
+(kept 14 days). It then deletes exactly the backed-up ids, and aborts on any mismatch. It keeps any session with
 a turn whose metadata names another owner. The nightly `self-hosted-tests` run (00:30 AWST)
 executes it. On 2026-09-27, 130 sessions and 343 messages matched. A new probe identity
 must be added there as an exact, anchored id, or tear its sessions down with

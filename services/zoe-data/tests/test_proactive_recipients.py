@@ -180,6 +180,8 @@ async def test_morning_checkin_briefs_the_household_not_the_probe(monkeypatch):
     results = await mc.MorningCheckInTrigger().check(db)
     assert [r.user_id for r in results] == ["member-a"]
     assert results[0].message.startswith("Good morning Alex")
+    assert results[0].context["spoken_guest_safe"] == (
+        "Good morning Alex — your brief is ready when you are.")
 
 
 async def test_evening_windown_skips_synthetic(monkeypatch):

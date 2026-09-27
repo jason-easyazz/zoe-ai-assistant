@@ -34,8 +34,11 @@ works without manually sourcing anything.
 """
 import argparse
 import asyncio
+import datetime
+import json
 import os
 import sys
+import time
 from urllib.parse import urlsplit
 
 # asyncpg is imported lazily inside main(), not here: the predicate constants
@@ -118,6 +121,71 @@ def chat_session_pred(alias: str = "cs") -> str:
         "AND substring(m.metadata from '\"user_id\"\\s*:\\s*\"([^\"]+)\"') "
         f"<> {alias}.user_id))"
     )
+
+
+BACKUP_DIR = os.path.expanduser("~/.zoe/backups/purge")
+BACKUP_KEEP_DAYS = 14
+
+
+async def fetch_chat_candidates(conn) -> dict:
+    """Snapshot every row the chat hard-delete would remove (incl. FK cascades)."""
+    pred = chat_session_pred("cs")
+    sessions = await conn.fetch(f"SELECT cs.* FROM chat_sessions cs WHERE {pred} ORDER BY cs.id")
+    ids = [r["id"] for r in sessions]
+    messages = await conn.fetch(
+        "SELECT * FROM chat_messages WHERE session_id = ANY($1::text[]) ORDER BY id", ids)
+    runs = await conn.fetch(
+        "SELECT * FROM chat_ag_ui_runs WHERE session_id = ANY($1::text[])", ids)
+    return {"chat_sessions": [dict(r) for r in sessions],
+            "chat_messages": [dict(r) for r in messages],
+            "chat_ag_ui_runs": [dict(r) for r in runs]}
+
+
+def write_verified_backup(snapshot: dict, backup_dir: str = BACKUP_DIR, stamp: str = "") -> str:
+    """Write ``snapshot`` as JSON, re-parse it, check every count, prune old files.
+
+    Raises on ANY failure — the caller must not delete what was not backed up.
+    """
+    os.makedirs(backup_dir, exist_ok=True)
+    stamp = stamp or datetime.datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    path = os.path.join(backup_dir, f"{stamp}-chat.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(snapshot, fh, default=str)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+    with open(path, encoding="utf-8") as fh:
+        back = json.load(fh)
+    for table, rows in snapshot.items():
+        if len(back.get(table, [])) != len(rows):
+            raise RuntimeError(f"backup {path}: {table} count mismatch")
+    cutoff = time.time() - BACKUP_KEEP_DAYS * 86400
+    for name in os.listdir(backup_dir):
+        old = os.path.join(backup_dir, name)
+        if name.endswith("-chat.json") and os.path.getmtime(old) < cutoff:
+            os.remove(old)
+    return path
+
+
+async def purge_chat(conn, backup_dir: str = BACKUP_DIR, stamp: str = "") -> tuple[str, int]:
+    """Back up, then hard-delete EXACTLY the backed-up probe sessions.
+
+    Run inside the caller's transaction: a failed backup raises before any
+    DELETE, and a delete count that differs from the backup raises (rollback).
+    """
+    snapshot = await fetch_chat_candidates(conn)
+    ids = [r["id"] for r in snapshot["chat_sessions"]]
+    if not ids:
+        return "", 0
+    path = write_verified_backup(snapshot, backup_dir, stamp)
+    status = await conn.execute(
+        f"DELETE FROM chat_sessions cs WHERE cs.id = ANY($1::text[]) AND {chat_session_pred('cs')}",
+        ids)
+    deleted = int(str(status).split()[-1])
+    if deleted != len(ids):
+        raise RuntimeError(f"deleted {deleted} chat_sessions but backed up {len(ids)}")
+    return path, deleted
 
 
 EVENT_PRED = owner_pred("user_id")
@@ -239,10 +307,14 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
         for r in rows:
             print(f"    {r['c']:>4}  {r['user_id']:<20} {r['title']!r}")
         print(f"list_items to soft-delete: {li_n}")
-        chat_n = await conn.fetchval(
-            f"SELECT count(*) FROM chat_sessions cs WHERE {chat_session_pred('cs')}"
-        )
-        print(f"chat_sessions to hard-delete (messages cascade): {chat_n}")
+        chat_ids = [r["id"] for r in await conn.fetch(
+            f"SELECT cs.id FROM chat_sessions cs WHERE {chat_session_pred('cs')} ORDER BY cs.id"
+        )]
+        chat_n = len(chat_ids)
+        print(f"chat_sessions to hard-delete (messages cascade; backed up first to "
+              f"{BACKUP_DIR}): {chat_n}")
+        for sid in chat_ids:  # synthetic probe sessions only — safe to print
+            print(f"    {sid}")
 
         if not execute:
             print("\nDRY-RUN — nothing changed. Re-run with --execute to apply.")
@@ -270,11 +342,9 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
                 "WHERE deleted = 0 AND list_id IN "
                 f"(SELECT id FROM lists WHERE {LIST_OWNER_PRED})"
             )
-            chat_done = await conn.execute(
-                f"DELETE FROM chat_sessions cs WHERE {chat_session_pred('cs')}"
-            )
+            backup_path, chat_done = await purge_chat(conn)
         print(f"\nAPPLIED to {target} — events: {ev_done}, list_items: {li_done}, "
-              f"chat_sessions: {chat_done}")
+              f"chat_sessions: {chat_done} (backup: {backup_path or 'none needed'})")
         return 0
     finally:
         await conn.close()

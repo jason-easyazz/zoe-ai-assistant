@@ -189,6 +189,12 @@ def _compose_morning_message(ctx: dict, user_name: str, day_str: str) -> str:
     return " ".join(parts)
 
 
+def guest_safe_morning_line(username: str) -> str:
+    """The only brief text that may be spoken on a ``bound_guest`` panel."""
+    first = (username or "").strip().split(" ")[0]
+    return f"Good morning{' ' + first if first else ''} — your brief is ready when you are."
+
+
 class MorningCheckInTrigger(ProactiveTrigger):
     trigger_type = "morning_checkin"
 
@@ -222,6 +228,9 @@ class MorningCheckInTrigger(ProactiveTrigger):
             ctx["user_id"] = user_id
 
             message = _compose_morning_message(ctx, username, now.strftime("%A, %B %d"))
+            # Spoken on a guest-held panel, where the member is not confirmed:
+            # first name only, nothing from ctx (no calendar/loops/memories).
+            ctx["spoken_guest_safe"] = guest_safe_morning_line(username)
 
             results.append(
                 TriggerResult(
