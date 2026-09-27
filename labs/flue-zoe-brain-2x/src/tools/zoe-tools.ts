@@ -1092,10 +1092,11 @@ export function webSearchToolEnabled(): boolean {
 }
 
 /**
- * web_search's fetch deadline FLOOR (over ZOE_BRAIN_TOOL_TIMEOUT_MS). zoe-data's
- * worst case is Tavily + DDG at research_evidence.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S
- * (3s each); this must outlast it, or the tool says "unreachable" while the
- * lookup still runs. Pinned by services/zoe-data/tests/test_web_search_tool.py.
+ * web_search's fetch deadline FLOOR (over ZOE_BRAIN_TOOL_TIMEOUT_MS). zoe-data
+ * answers within ONE end-to-end budget, research_evidence.WEB_SEARCH_TOOL_DEADLINE_S
+ * (6s, shared across Tavily + DDG); this must outlast it, or the tool says
+ * "unreachable" while the lookup still runs. Pinned by
+ * services/zoe-data/tests/test_web_search_tool.py.
  */
 const WEB_SEARCH_TIMEOUT_FLOOR_MS = 8000;
 

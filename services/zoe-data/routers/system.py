@@ -23,8 +23,11 @@ from auth import (
 from database import get_db
 from hermes_http import hermes_auth_headers
 from research_evidence import (
+    WEB_LOOKUP_ERROR,
+    WEB_SEARCH_TOOL_DEADLINE_S,
     WEB_SEARCH_TOOL_MAX_RESULTS,
     WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S,
+    WebFallbackOutcome,
     fetch_web_fallback,
     web_lookup_status,
     web_search_tool_enabled,
@@ -2851,12 +2854,30 @@ async def web_search(body: _WebSearchBody, _: None = Depends(require_intent_disp
         raise HTTPException(status_code=400, detail="query required")
     max_results = max(1, min(int(body.max_results or WEB_SEARCH_TOOL_MAX_RESULTS), WEB_SEARCH_TOOL_MAX_RESULTS))
     # Blocking urllib/httpx under the hood — keep it off the event loop.
-    # Short per-provider timeouts + no per-row page fetches (the payload drops
-    # `price`) so the lookup ends inside the sidecar's fetch deadline (Codex
-    # #1702: the B10.0 defaults could run ~38s past an 8s client abort).
-    outcome = await asyncio.to_thread(
-        fetch_web_fallback, query, max_results, WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S, enrich_prices=False
-    )
+    # ONE end-to-end budget (Greptile + Codex #1702): the per-provider timeout
+    # only bounds each socket wait, so the lookup also shares a monotonic
+    # deadline across Tavily → DDG (the second provider gets what is left and
+    # is never started once it is spent), and this endpoint answers honestly at
+    # that deadline instead of waiting on a slow-drip provider. No per-row page
+    # fetches (the payload drops `price`). A thread cannot be killed, so an
+    # in-flight provider call may still finish in the background, bounded by its
+    # own (remaining-budget) socket timeout — but nothing new is started.
+    try:
+        outcome = await asyncio.wait_for(
+            asyncio.to_thread(
+                fetch_web_fallback,
+                query,
+                max_results,
+                WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S,
+                enrich_prices=False,
+                deadline_s=WEB_SEARCH_TOOL_DEADLINE_S,
+            ),
+            timeout=WEB_SEARCH_TOOL_DEADLINE_S,
+        )
+    except asyncio.TimeoutError:
+        outcome = WebFallbackOutcome(
+            WEB_LOOKUP_ERROR, "none", [], f"timeout: lookup exceeded {WEB_SEARCH_TOOL_DEADLINE_S:g}s deadline"
+        )
     return web_search_tool_payload(outcome)
 
 

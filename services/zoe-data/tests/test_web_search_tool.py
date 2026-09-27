@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -373,14 +374,93 @@ async def test_endpoint_runs_the_lookup_on_the_tool_budget(monkeypatch, _no_netw
     calls: list[tuple] = []
     monkeypatch.setattr(system, "fetch_web_fallback", lambda *a, **k: calls.append((a, k)) or WebFallbackOutcome(WEB_LOOKUP_RESULTS, "tavily", _rows(1)))
     await system.web_search(_body(), None)
-    assert calls == [((QUERY, 5, re_mod.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S), {"enrich_prices": False})]
+    assert calls == [
+        (
+            (QUERY, 5, re_mod.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S),
+            {"enrich_prices": False, "deadline_s": re_mod.WEB_SEARCH_TOOL_DEADLINE_S},
+        )
+    ]
+
+
+# ── one end-to-end deadline (Greptile + Codex #1702) ─────────────────────────
+# The per-provider timeout is a per-OPERATION socket timeout, and Tavily + DDG
+# run in sequence, so a slow-drip provider could outlast the sidecar. One
+# monotonic budget is shared across both attempts and the endpoint answers
+# honestly when it is spent. Real (short) sleeps, patched-down budgets.
+
+
+def _timed_provider_harness(monkeypatch, *, tavily_sleep: float, ddg_sleep: float = 0.0):
+    monkeypatch.setattr(re_mod, "web_fallback_provider", lambda: "auto")
+    monkeypatch.setattr(re_mod, "_tavily_configured", lambda: True)
+    seen: dict[str, dict] = {}
+
+    def _provider(name, status, sleep_s):
+        def _fetch(q, n, timeout_s, **kw):
+            seen[name] = {"timeout_s": timeout_s, **kw}
+            time.sleep(sleep_s)
+            return WebFallbackOutcome(status, name, _rows(1) if status == WEB_LOOKUP_RESULTS else [])
+
+        return _fetch
+
+    monkeypatch.setattr(re_mod, "_fetch_tavily", _provider("tavily", WEB_LOOKUP_ERROR, tavily_sleep))
+    monkeypatch.setattr(re_mod, "_fetch_ddg", _provider("ddg", WEB_LOOKUP_RESULTS, ddg_sleep))
+    return seen
+
+
+def test_spent_budget_skips_the_second_provider_and_says_so(monkeypatch):
+    seen = _timed_provider_harness(monkeypatch, tavily_sleep=0.4)
+    t0 = time.monotonic()
+    out = re_mod.fetch_web_fallback(QUERY, 5, 3.0, enrich_prices=False, deadline_s=0.3)
+    assert time.monotonic() - t0 < 1.0
+    assert "ddg" not in seen, "DDG must not start once the shared budget is spent"
+    assert out.status == WEB_LOOKUP_ERROR and out.results == []
+    assert "deadline" in out.detail and out.provider == "tavily"
+
+
+def test_second_provider_gets_only_the_remaining_budget(monkeypatch):
+    seen = _timed_provider_harness(monkeypatch, tavily_sleep=0.3)
+    out = re_mod.fetch_web_fallback(QUERY, 5, 3.0, enrich_prices=False, deadline_s=1.5)
+    assert out.status == WEB_LOOKUP_RESULTS
+    assert seen["tavily"]["timeout_s"] <= 1.5
+    assert 0 < seen["ddg"]["timeout_s"] <= 1.5 - 0.3 + 0.05
+
+
+def test_fast_providers_are_unchanged_by_the_deadline(monkeypatch):
+    """Control: well inside the budget both providers get the full per-op timeout."""
+    seen = _timed_provider_harness(monkeypatch, tavily_sleep=0.0)
+    out = re_mod.fetch_web_fallback(QUERY, 5, 3.0, enrich_prices=False, deadline_s=re_mod.WEB_SEARCH_TOOL_DEADLINE_S)
+    assert out.status == WEB_LOOKUP_RESULTS and out.provider == "ddg"
+    assert seen["tavily"]["timeout_s"] == 3.0 and seen["ddg"]["timeout_s"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_endpoint_answers_within_the_deadline_when_a_provider_hangs(monkeypatch, _no_network):
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setattr(system, "WEB_SEARCH_TOOL_DEADLINE_S", 0.3)
+    monkeypatch.setattr(system, "fetch_web_fallback", lambda *a, **k: time.sleep(1.0) or WebFallbackOutcome(WEB_LOOKUP_RESULTS, "tavily", _rows(1)))
+    t0 = time.monotonic()
+    out = await system.web_search(_body(), None)
+    assert time.monotonic() - t0 < 0.8
+    assert out["status"] == WEB_LOOKUP_ERROR and out["results"] == [] and out["result_count"] == 0
+    assert "timeout" in out["detail"]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_returns_a_fast_lookup_untouched(monkeypatch, _no_network):
+    """Control: a lookup inside the budget is returned verbatim, no timeout."""
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setattr(system, "WEB_SEARCH_TOOL_DEADLINE_S", 0.5)
+    _fake_lookup(monkeypatch, WebFallbackOutcome(WEB_LOOKUP_RESULTS, "tavily", _rows(2)))
+    out = await system.web_search(_body(), None)
+    assert out["status"] == WEB_LOOKUP_RESULTS and out["result_count"] == 2 and out["detail"] == ""
 
 
 def test_brain_tool_deadline_outlasts_the_backend_worst_case():
     """Cross-language pin: the sidecar's web_search deadline floor must exceed
-    Tavily + DDG at the tool timeout (+ slow-drip margin), or the brain says
+    the backend's end-to-end deadline (+ margin), or the brain says
     "unreachable" while the lookup still runs."""
     ts = (Path(__file__).resolve().parents[3] / "labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts").read_text()
     m = re.search(r"const WEB_SEARCH_TIMEOUT_FLOOR_MS = (\d+);", ts)
-    assert m and int(m.group(1)) >= (2 * re_mod.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S + 1.5) * 1000
+    assert m and int(m.group(1)) >= (re_mod.WEB_SEARCH_TOOL_DEADLINE_S + 1.5) * 1000
+    assert re_mod.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S <= re_mod.WEB_SEARCH_TOOL_DEADLINE_S
     assert "fetchSignal(signal, Math.max(httpTimeoutMs(), WEB_SEARCH_TIMEOUT_FLOOR_MS))" in ts

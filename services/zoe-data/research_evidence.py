@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -78,10 +79,22 @@ _WEB_FALLBACK_PROVIDERS = ("auto", "duckduckgo", "off")
 # register the tool (labs/flue-zoe-brain-2x/.env); both must be on.
 WEB_SEARCH_TOOL_ENV = "ZOE_WEB_SEARCH_TOOL"
 WEB_SEARCH_TOOL_MAX_RESULTS = 5
-# Per-provider timeout for the brain tool: worst case Tavily + DDG = 6s, inside
-# the sidecar's fetch deadline (WEB_SEARCH_TIMEOUT_FLOOR_MS in zoe-tools.ts, 8s)
-# — pinned by tests/test_web_search_tool.py. B10.0 callers keep 8s/provider.
+# Per-provider (per-OPERATION: connect/read) timeout for the brain tool. It
+# bounds each socket wait, not a whole request, so it cannot on its own keep
+# Tavily + DDG inside the sidecar's fetch deadline. B10.0 callers keep 8s.
 WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S = 3.0
+# ONE end-to-end monotonic budget for the brain tool's lookup, shared across
+# the sequential Tavily and DDG attempts (Greptile + Codex #1702): the second
+# provider only gets what is left, and is not started once the budget is spent;
+# the endpoint answers `error`/timeout at this deadline rather than waiting on a
+# slow-drip provider. Below the sidecar's WEB_SEARCH_TIMEOUT_FLOOR_MS (8s,
+# zoe-tools.ts) with margin — pinned by tests/test_web_search_tool.py.
+WEB_SEARCH_TOOL_DEADLINE_S = 6.0
+# A provider is not started with less than this left: a sub-quarter-second
+# socket timeout cannot complete a TLS handshake + search, so it would only
+# spend a thread (and, for Tavily, possibly a credit) to report a timeout.
+_MIN_PROVIDER_BUDGET_S = 0.25
+WEB_LOOKUP_DEADLINE_DETAIL = "deadline exhausted"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 WEB_LOOKUP_MESSAGES = {
@@ -662,7 +675,12 @@ def _tavily_configured() -> bool:
 
 
 def fetch_web_fallback(
-    query: str, max_results: int = 5, timeout_s: float = 8.0, *, enrich_prices: bool = True
+    query: str,
+    max_results: int = 5,
+    timeout_s: float = 8.0,
+    *,
+    enrich_prices: bool = True,
+    deadline_s: float | None = None,
 ) -> WebFallbackOutcome:
     """Web lookup with an HONEST outcome: rows plus status + provider.
 
@@ -670,10 +688,25 @@ def fetch_web_fallback(
     not a scrape), then DuckDuckGo HTML. A blocked/error DDG answer is reported
     as such — never as "no results". One INFO line per lookup; the query text is
     never logged (it can carry personal data), only its length.
+
+    ``deadline_s`` (the brain tool passes ``WEB_SEARCH_TOOL_DEADLINE_S``) is ONE
+    monotonic budget shared by both attempts: each provider's ``timeout_s`` is
+    capped at what remains, and a provider is not started once less than
+    ``_MIN_PROVIDER_BUDGET_S`` is left — the outcome then says so in ``detail``.
+    ``None`` (B10.0 chat callers) keeps the plain per-provider timeout.
     """
     q = (query or "").strip()
     if not q:
         return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "none", [], "empty query")
+    deadline_at = None if deadline_s is None else time.monotonic() + deadline_s
+
+    def _budget() -> float | None:
+        """Timeout for the next provider, or None when the budget is spent."""
+        if deadline_at is None:
+            return timeout_s
+        remaining = deadline_at - time.monotonic()
+        return min(timeout_s, remaining) if remaining >= _MIN_PROVIDER_BUDGET_S else None
+
     provider = web_fallback_provider()
     if provider == "off":
         outcome = WebFallbackOutcome(WEB_LOOKUP_OFF, "none", [], f"{WEB_FALLBACK_PROVIDER_ENV}=off")
@@ -681,13 +714,26 @@ def fetch_web_fallback(
         attempted: list[str] = []
         tavily: WebFallbackOutcome | None = None
         if provider == "auto" and _tavily_configured():
-            attempted.append("tavily")
-            tavily = _fetch_tavily(q, max_results, timeout_s, enrich_prices=enrich_prices)
+            budget = _budget()
+            if budget is not None:
+                attempted.append("tavily")
+                tavily = _fetch_tavily(q, max_results, budget, enrich_prices=enrich_prices)
         if tavily is not None and tavily.status == WEB_LOOKUP_RESULTS:
             outcome = tavily
+        elif (ddg_budget := _budget()) is None:
+            # Budget spent: do not start DDG. Tavily's completed `no_results`
+            # stays a real answer; anything else is an honest error.
+            if tavily is not None and tavily.status == WEB_LOOKUP_NO_RESULTS:
+                outcome = tavily
+            else:
+                outcome = WebFallbackOutcome(WEB_LOOKUP_ERROR, "none", [])
+            why = f"{WEB_LOOKUP_DEADLINE_DETAIL} after {deadline_s:g}s"
+            outcome.detail = f"tavily={tavily.status}; duckduckgo=skipped ({why})" if tavily is not None else why
+            if not attempted:
+                attempted.append("none")
         else:
             attempted.append("duckduckgo")
-            ddg = _fetch_ddg(q, max_results, timeout_s, enrich_prices=enrich_prices)
+            ddg = _fetch_ddg(q, max_results, ddg_budget, enrich_prices=enrich_prices)
             if tavily is None:
                 outcome = ddg
             else:
