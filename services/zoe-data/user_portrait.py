@@ -37,9 +37,9 @@ _MIN_MEMORIES_FOR_PORTRAIT = int(os.environ.get("PORTRAIT_MIN_MEMORIES", "5"))
 # client), so nothing else windows it: the prompt plus max_tokens (600) plus the
 # system line must fit the brain's per-slot context (--ctx-size 8192 since B6.6)
 # or llama-server refuses the request ("exceeds the available context size") and
-# the portrait silently never regenerates. 5500 leaves ~2k tokens of slack for
-# the chars/4 estimate undercounting. Estimate = chars/4, the repo convention
-# (zoe_agent.py, background_runner.py); there is no tokenizer in-process.
+# the portrait silently never regenerates. 5500 + 600 + chat-template overhead
+# leaves ~2k tokens of headroom. Counted EXACTLY with llama-server's /tokenize;
+# chars/4 (the repo convention) is only the fallback when that endpoint is down.
 PORTRAIT_PROMPT_BUDGET_TOKENS = int(os.environ.get("PORTRAIT_PROMPT_BUDGET_TOKENS", "5500"))
 _PORTRAIT_MAX_FACTS = 120
 _PORTRAIT_MAX_INSIGHTS = 30
@@ -82,6 +82,32 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+_TOKENIZE_TIMEOUT_S = 5.0
+_tokenize_warned = False
+
+
+async def _tokenize_count(text: str) -> int | None:
+    """Exact token count from llama-server's own tokenizer (POST /tokenize).
+
+    Returns None when the endpoint is unreachable or answers badly; callers then
+    fall back to the chars/4 estimate. The failure is logged at WARNING once per
+    process (a down brain would otherwise log on every portrait).
+    """
+    global _tokenize_warned
+    try:
+        async with httpx.AsyncClient(timeout=_TOKENIZE_TIMEOUT_S) as client:
+            resp = await client.post(f"{gemma_base()}/tokenize", json={"content": text})
+            resp.raise_for_status()
+            return len(resp.json()["tokens"])
+    except Exception as exc:
+        if not _tokenize_warned:
+            _tokenize_warned = True
+            logger.warning(
+                "portrait: /tokenize unavailable (%s) — budgeting with the chars/4 estimate", type(exc).__name__
+            )
+        return None
+
+
 def _render_portrait_prompt(facts: list[str], insights: list[str], journal: list[str]) -> str:
     return PORTRAIT_SYNTHESIS_PROMPT.format(
         memory_facts="\n".join(facts) if facts else "(none yet)",
@@ -90,58 +116,90 @@ def _render_portrait_prompt(facts: list[str], insights: list[str], journal: list
     )
 
 
-def build_portrait_prompt(
-    fact_lines: list[str],
-    insight_lines: list[str],
-    journal_entries: list[str],
-    *,
-    user_id: str = "",
-    budget_tokens: int | None = None,
-) -> str:
-    """Assemble the synthesis prompt, trimmed to ``budget_tokens`` (chars/4).
+def _fit_by_estimate(facts: list[str], insights: list[str], journal: list[str], est_budget: int) -> tuple[str, int]:
+    """Trim the lists IN PLACE until chars/4 of the prompt is <= ``est_budget``.
 
-    Inputs arrive best-first: facts/insights in load_for_prompt()'s importance
-    x recency order, journal newest-first. So trimming always drops from the
-    TAIL = the lowest-ranked fact / oldest journal entry. Order of sacrifice:
-    journal down to 3, facts down to 20, insights down to 5, then journal, facts
-    (to 1) and insights (to 0). A single item too big on its own is finally
-    clipped. The instruction block (PORTRAIT_SYNTHESIS_PROMPT) is never touched.
-    Under budget the output is byte-identical to the pre-budget prompt.
+    Inputs are best-first (facts/insights in load_for_prompt() importance x
+    recency order, journal newest-first), so every drop is from the TAIL. Order
+    of sacrifice: journal to 3, facts to 20, insights to 5, then journal to 0,
+    facts to 1, insights to 0; a single item still too big is finally clipped.
+    The instruction block is never touched. Returns (prompt, items_clipped).
     """
-    budget = PORTRAIT_PROMPT_BUDGET_TOKENS if budget_tokens is None else budget_tokens
-    facts = list(fact_lines[:_PORTRAIT_MAX_FACTS])
-    insights = list(insight_lines[:_PORTRAIT_MAX_INSIGHTS])
-    journal = list(journal_entries)
-    before = (len(facts), len(insights), len(journal))
-
     prompt = _render_portrait_prompt(facts, insights, journal)
-    est_before = _estimate_tokens(prompt)
-    if est_before <= budget:
-        return prompt
-
     for section, floor in ((journal, 3), (facts, 20), (insights, 5), (journal, 0), (facts, 1), (insights, 0)):
-        while len(section) > floor and _estimate_tokens(prompt) > budget:
+        while len(section) > floor and _estimate_tokens(prompt) > est_budget:
             section.pop()
             prompt = _render_portrait_prompt(facts, insights, journal)
-
     clipped = 0
-    if _estimate_tokens(prompt) > budget:
-        # Only oversized single items remain: clip every remaining line to an
-        # equal share of what the instruction block leaves free.
+    if _estimate_tokens(prompt) > est_budget:
         fixed = _estimate_tokens(_render_portrait_prompt([], [], [])) * 4
         items = [*facts, *insights, *journal]
-        share = max(40, (budget * 4 - fixed) // max(1, len(items)) - 2)
+        share = max(40, (est_budget * 4 - fixed) // max(1, len(items)) - 2)
         for section in (facts, insights, journal):
             for i, line in enumerate(section):
                 if len(line) > share:
                     section[i] = line[: share - 1] + "…"
                     clipped += 1
         prompt = _render_portrait_prompt(facts, insights, journal)
+    return prompt, clipped
+
+
+async def build_portrait_prompt(
+    fact_lines: list[str],
+    insight_lines: list[str],
+    journal_entries: list[str],
+    *,
+    user_id: str = "",
+    budget_tokens: int | None = None,
+    count_tokens=None,
+) -> str:
+    """Assemble the synthesis prompt so its REAL token count is <= the budget.
+
+    The prompt is counted with llama-server's tokenizer (``count_tokens``,
+    default :func:`_tokenize_count`). chars/4 undercounts token-dense text (CJK,
+    emoji, identifiers) several-fold, so it is only a trimming heuristic: the
+    real count calibrates it (effective estimate budget = budget x est/real),
+    and the trimmed prompt is re-counted, up to 4 rounds. If the tokenizer is
+    unavailable the chars/4 estimate is used as-is. Under budget the output is
+    byte-identical to the pre-budget prompt.
+    """
+    budget = PORTRAIT_PROMPT_BUDGET_TOKENS if budget_tokens is None else budget_tokens
+    counter = count_tokens or _tokenize_count
+    facts = list(fact_lines[:_PORTRAIT_MAX_FACTS])
+    insights = list(insight_lines[:_PORTRAIT_MAX_INSIGHTS])
+    journal = list(journal_entries)
+    before = (len(facts), len(insights), len(journal))
+
+    prompt = _render_portrait_prompt(facts, insights, journal)
+    real = await counter(prompt)
+    source = "tokenizer" if real is not None else "chars/4"
+    count_before = real if real is not None else _estimate_tokens(prompt)
+    if count_before <= budget:
+        return prompt
+
+    clipped = 0
+    if real is None:
+        prompt, clipped = _fit_by_estimate(facts, insights, journal, budget)
+        count_after = _estimate_tokens(prompt)
+    else:
+        count_after = real
+        for _ in range(4):
+            # tokens per chars/4-unit, measured on the text actually being sent
+            ratio = count_after / max(1, _estimate_tokens(prompt))
+            prompt, c = _fit_by_estimate(facts, insights, journal, int(budget / max(ratio, 1e-6)))
+            clipped += c
+            recount = await counter(prompt)
+            if recount is None:  # tokenizer died mid-trim: stay on the calibrated result
+                count_after = int(_estimate_tokens(prompt) * ratio)
+                break
+            count_after = recount
+            if count_after <= budget:
+                break
 
     logger.info(
-        "portrait: prompt trimmed to budget user=%s est_tokens=%d->%d budget=%d "
+        "portrait: prompt trimmed to budget user=%s counter=%s tokens=%d->%d budget=%d "
         "facts=%d->%d insights=%d->%d journal=%d->%d clipped=%d",
-        user_id, est_before, _estimate_tokens(prompt), budget,
+        user_id, source, count_before, count_after, budget,
         before[0], len(facts), before[1], len(insights), before[2], len(journal), clipped,
     )
     return prompt
@@ -210,7 +268,7 @@ async def run_portrait_synthesis(user_id: str, db=None) -> dict:
         except Exception as je:
             logger.debug("portrait: journal load failed (non-fatal): %s", je)
 
-        prompt = build_portrait_prompt(fact_lines, insight_lines, journal_entries, user_id=user_id)
+        prompt = await build_portrait_prompt(fact_lines, insight_lines, journal_entries, user_id=user_id)
 
         portrait_text = await _call_llm_for_portrait(prompt)
         if not portrait_text:

@@ -24,6 +24,10 @@ couplings that fail at RUNTIME, not startup:
   window the Flue brain client budgets for (``DEFAULT_CONTEXT_WINDOW_TOKENS`` in
   ``labs/flue-zoe-brain-2x/src/context-window.ts``). Below it, a long session
   the client considers in-budget is refused by the server — every such turn fails.
+* zoe-core's ``local-gemma`` Pi provider must not declare more context than
+  one slot holds (``provider-local-gemma.ts`` defaults): Pi compacts against the
+  declared window, so an oversized declaration lets sessions grow until the
+  server refuses them.
 * ``--cache-ram`` must stay a positive cap. ``0`` disables the host prompt cache,
   and with one slot every chat turn then re-prefills its whole prompt (+4.1 s
   TTFT measured); ``-1`` is "no limit" on 15.6G unified memory.
@@ -138,3 +142,26 @@ def test_host_prompt_cache_is_a_positive_cap():
         f"--cache-ram {cram}: 0 disables the host prompt cache (one slot -> full re-prefill on "
         "every chat turn, +4.1 s TTFT measured) and -1 is unbounded on unified memory"
     )
+
+
+CORE_PROVIDER = ROOT / "services" / "zoe-core" / "extensions" / "provider-local-gemma.ts"
+
+
+def _core_provider_default(env_name: str) -> int:
+    m = re.search(
+        rf"Number\(process\.env\.{env_name}\)\s*\|\|\s*([0-9_]+)", CORE_PROVIDER.read_text(encoding="utf-8")
+    )
+    assert m, f"provider-local-gemma.ts lost its {env_name} default — re-point this pin"
+    return int(m.group(1).replace("_", ""))
+
+
+def test_core_provider_context_fits_one_slot():
+    cmd = _exec_start()
+    per_slot = int(_flag(cmd, "--ctx-size") or 0) // int(_flag(cmd, "--parallel") or 1)
+    ctx = _core_provider_default("ZOE_CORE_MODEL_CONTEXT")
+    max_out = _core_provider_default("ZOE_CORE_MODEL_MAXTOKENS")
+    assert ctx <= per_slot, (
+        f"zoe-core local-gemma declares a {ctx}-token context but llama-server serves {per_slot} per slot: "
+        "Pi would not compact until the server already refuses the session"
+    )
+    assert 0 < max_out <= ctx // 4, f"max output {max_out} leaves too little of the {ctx} window for the prompt"

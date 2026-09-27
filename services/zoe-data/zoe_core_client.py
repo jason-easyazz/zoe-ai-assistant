@@ -63,10 +63,10 @@ _MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf
 _TIMEOUT_S = float(os.environ.get("ZOE_CORE_TIMEOUT_S", "180"))
 # Generation-length cap for VOICE turns only. The provider extension
 # (provider-local-gemma.ts) registers the model's maxTokens from
-# ZOE_CORE_MODEL_MAXTOKENS at spawn (default 2048) — there is NO per-request
+# ZOE_CORE_MODEL_MAXTOKENS at spawn (default 1024) — there is NO per-request
 # override in the Pi RPC `prompt` message, so the only safe lever is the worker's
 # spawn env. Voice replies are 1-2 spoken sentences (see _VOICE_BREVITY); a chatty
-# turn that runs to the full 2048-token budget adds a long generation tail and
+# turn that runs to the full 1024-token budget adds a long generation tail and
 # delays first audio for nothing. We bound voice generations to this cap (~512
 # tokens ≈ far more than 2 sentences, so it never clips a real spoken answer) and
 # leave non-voice (chat) turns at the provider default. 0/negative disables the cap.

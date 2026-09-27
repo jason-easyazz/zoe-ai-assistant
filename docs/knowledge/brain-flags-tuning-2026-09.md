@@ -90,9 +90,13 @@ Some zoe-data callers (`memory_digest`, `user_portrait`, `contact_backfill`, …
 llama-server **directly**, so the Flue window does not cover them. Most cap their inputs
 per item. `user_portrait.run_portrait_synthesis()` did not cap its total: up to 120 facts,
 30 insights and 10 journal entries could exceed 8192. It now assembles its prompt through
-`build_portrait_prompt()` with a 5500-token budget (`PORTRAIT_PROMPT_BUDGET_TOKENS`,
-chars/4). Trimming drops the lowest-ranked facts and the oldest journal entries first,
-and never touches the instructions. Under budget the prompt is byte-identical to before
+`build_portrait_prompt()` with a 5500-token budget (`PORTRAIT_PROMPT_BUDGET_TOKENS`).
+The budget is counted with llama-server's own `POST /tokenize`. Plain chars/4
+undercounts token-dense text: a CJK fixture read 2171 by chars/4 and 4909 real tokens.
+chars/4 is only the fallback when `/tokenize` is down. Trimming drops the lowest-ranked
+facts and the oldest journal entries first, and never touches the instructions.
+zoe-core's `local-gemma` Pi provider (`provider-local-gemma.ts`) had declared 32768 /
+2048 and now declares 8192 / 1024, pinned against the unit. Under budget the prompt is byte-identical to before
 (`services/zoe-data/tests/test_user_portrait_prompt_budget.py`). p99 is 40 % of 8192, so
 **8192 is adopted**.
 `tests/unit/test_llama_server_unit_flags.py` pins per-slot ctx ≥ the Flue window, so the
