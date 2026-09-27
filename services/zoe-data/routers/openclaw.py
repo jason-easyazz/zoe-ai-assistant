@@ -13,24 +13,21 @@ Endpoints:
   POST   /api/openclaw/skills/{name}/update        → update workspace skill
   DELETE /api/openclaw/skills/{name}              → remove workspace skill
 
-  POST   /api/openclaw/telegram/setup             → save bot token + enable Telegram channel
-  GET    /api/openclaw/telegram/status            → check Telegram connection status
+The OpenClaw Telegram bot-token endpoints (/telegram/setup, /telegram/status)
+were removed 2026-09-27 (auth audit): OpenClaw is retired and nothing consumed
+the token. Zoe's live Telegram bot keeps its token in its own unit env.
 
 Note on route ordering: static paths (/skills, /skills/search) are registered BEFORE
 parameterised paths (/skills/{name}/...) so FastAPI doesn't swallow "search" as a name.
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
-import re
-from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Depends, Request, Query
+from fastapi import APIRouter, HTTPException, Depends, Query
 from auth import get_current_user, require_admin
 from openclaw_manager import (
     install_plugin, list_plugins, remove_plugin,
@@ -41,7 +38,6 @@ from openclaw_manager import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/openclaw", tags=["openclaw"])
 
-_OPENCLAW_JSON = Path(os.environ.get("OPENCLAW_DIR", Path.home() / ".openclaw")) / "openclaw.json"
 _OPENCLAW_GATEWAY = os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:18789").rstrip("/")
 
 
@@ -157,134 +153,3 @@ async def remove_skill_endpoint(name: str, _user: dict = Depends(require_admin))
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
-
-# ── Telegram setup ────────────────────────────────────────────────────────────
-
-_TOKEN_RE = re.compile(r"^\d{8,12}:[A-Za-z0-9_-]{35,}$")
-
-
-async def _validate_bot_token(token: str) -> dict:
-    """Call Telegram Bot API to verify the token and return bot info."""
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            r = await client.get(f"https://api.telegram.org/bot{token}/getMe")
-            data = r.json()
-            if data.get("ok"):
-                return data["result"]
-            raise ValueError(data.get("description", "Invalid token"))
-    except httpx.TimeoutException:
-        raise ValueError("Telegram API timed out — check internet connection")
-    except ValueError:
-        raise
-    except Exception as exc:
-        raise ValueError(f"Could not reach Telegram: {exc}")
-
-
-def _save_telegram_token(token: str) -> None:
-    """Write the bot token into openclaw.json and enable the Telegram channel."""
-    with open(_OPENCLAW_JSON) as f:
-        cfg = json.load(f)
-
-    cfg.setdefault("channels", {})
-    cfg["channels"]["telegram"] = {
-        "enabled": True,
-        "botToken": token,
-        "dmPolicy": "pairing",
-        "groups": {"*": {"requireMention": True}},
-    }
-
-    with open(_OPENCLAW_JSON, "w") as f:
-        json.dump(cfg, f, indent=2)
-
-
-async def _restart_openclaw_gateway() -> None:
-    """Attempt to restart the OpenClaw gateway service (best effort)."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "systemctl", "--user", "restart", "openclaw-gateway",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await asyncio.wait_for(proc.wait(), timeout=10)
-    except Exception as exc:
-        logger.warning("openclaw gateway restart failed (non-fatal): %s", exc)
-
-
-@router.post("/telegram/setup")
-async def telegram_setup(request: Request, _user: dict = Depends(require_admin)):
-    """
-    Validate a Telegram bot token, write it to openclaw.json, and restart the gateway.
-
-    Body: {"bot_token": "123456:ABC..."}
-    """
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-
-    token = (body.get("bot_token") or "").strip()
-    if not token:
-        raise HTTPException(status_code=400, detail="bot_token is required")
-
-    # Basic format check before hitting Telegram API
-    if not _TOKEN_RE.match(token):
-        raise HTTPException(
-            status_code=400,
-            detail="Token format looks wrong. It should look like: 123456789:ABCdefGHIjklMNOpqrSTUvwxYZ",
-        )
-
-    # Verify with Telegram
-    try:
-        bot_info = await _validate_bot_token(token)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    bot_name = bot_info.get("first_name", "your bot")
-    bot_username = bot_info.get("username", "")
-
-    # Persist to config
-    try:
-        _save_telegram_token(token)
-    except Exception as exc:
-        logger.exception("Failed to save telegram token")
-        raise HTTPException(status_code=500, detail="Could not save Telegram configuration")
-
-    # Restart gateway so it picks up the new channel
-    asyncio.ensure_future(_restart_openclaw_gateway())
-
-    return {
-        "status": "connected",
-        "bot_name": bot_name,
-        "bot_username": bot_username,
-        "message": (
-            f"✅ Connected to @{bot_username} ({bot_name})! "
-            f"Now open Telegram and send a message to @{bot_username} to start chatting with Zoe."
-        ),
-    }
-
-
-@router.get("/telegram/status")
-async def telegram_status(_user: dict = Depends(get_current_user)):
-    """Return Telegram connection status."""
-    try:
-        with open(_OPENCLAW_JSON) as f:
-            cfg = json.load(f)
-        tg = cfg.get("channels", {}).get("telegram", {})
-        enabled = tg.get("enabled", False)
-        token = tg.get("botToken", "")
-        if enabled and token:
-            # Quick token check
-            try:
-                bot_info = await _validate_bot_token(token)
-                return {
-                    "connected": True,
-                    "bot_name": bot_info.get("first_name"),
-                    "bot_username": bot_info.get("username"),
-                }
-            except Exception:
-                return {"connected": False, "reason": "Token invalid or Telegram unreachable"}
-        return {"connected": False, "reason": "Not configured"}
-    except Exception as exc:
-        return {"connected": False, "reason": str(exc)}

@@ -216,6 +216,24 @@ async function init() {
   }
 }
 
+// The confirm must carry a SIGNED-IN member session: the server refuses an
+// anonymous or guest caller (401/403) and we send the user to sign in, then
+// back here. Reads the same `zoe_session` record /js/auth.js writes; a guest
+// session is not sent (it would only be refused).
+function memberSessionId() {
+  try {
+    const s = JSON.parse(localStorage.getItem('zoe_session') || 'null');
+    if (!s || !s.session_id) return '';
+    if (s.expires_at && new Date() >= new Date(s.expires_at)) return '';
+    const role = String(s.role || (s.user_info && s.user_info.role) || '').toLowerCase();
+    return role === 'guest' ? '' : s.session_id;
+  } catch (e) { return ''; }
+}
+
+function goSignIn() {
+  window.location.href = '/auth.html?redirect=' + encodeURIComponent(window.location.pathname + window.location.search);
+}
+
 async function confirmPairing() {
   const name = document.getElementById('panel-name').value.trim();
   const location = document.getElementById('panel-location').value.trim();
@@ -223,6 +241,9 @@ async function confirmPairing() {
 
   if (!name) { setMsg('Please give the panel a name', 'error'); return; }
   if (!panelId) { setMsg('Panel ID is required', 'error'); return; }
+
+  const sid = memberSessionId();
+  if (!sid) { goSignIn(); return; }
 
   const btn = document.getElementById('confirm-btn');
   btn.disabled = true;
@@ -232,13 +253,13 @@ async function confirmPairing() {
     const r = await fetch(`/api/panels/provision/${encodeURIComponent(CODE)}/confirm`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid },
       body: JSON.stringify({ name, location, panel_id: panelId }),
     });
 
     if (r.status === 401 || r.status === 403) {
-      // Not logged in — redirect to auth, come back after
-      window.location.href = '/auth.html?redirect=' + encodeURIComponent(window.location.pathname + window.location.search);
+      // Not signed in as a household member — sign in, then come back here.
+      goSignIn();
       return;
     }
 
