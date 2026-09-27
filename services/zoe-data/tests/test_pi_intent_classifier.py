@@ -991,7 +991,7 @@ async def test_detect_and_extract_intent_uses_pi_when_slot_extraction_fails(tmp_
 
     from intent_router import detect_and_extract_intent
 
-    intent = await detect_and_extract_intent("remind me to call mum every Monday")
+    intent = await detect_and_extract_intent("remind me to call mum at noon")
 
     assert intent is not None
     assert intent.name == "reminder_create"
