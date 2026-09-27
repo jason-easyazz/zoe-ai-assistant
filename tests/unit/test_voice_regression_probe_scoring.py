@@ -145,3 +145,26 @@ def test_no_verdicts_at_all_is_also_no_evidence():
     summary = vrp.summarize(_report())
     assert summary["ok_rate"] is None
     assert summary["scoreable"] == 0
+
+
+def test_measure_runs_under_the_probes_own_interpreter(monkeypatch):
+    """The replay must use the interpreter the probe was launched with.
+
+    B0.7 gate 2 launches the probe with the zoe-data 3.12 venv python to measure
+    THAT stack's in-process STT; a bare "python3" here resolved via PATH to the
+    system 3.10 instead, and measure_voice then re-invoked ITS sys.executable, so
+    the whole replay silently measured the wrong stack (Greptile, #1706). Every
+    existing caller launches the probe with python3 already, so for them this is
+    the same interpreter."""
+    seen: dict[str, Any] = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        out = cmd[cmd.index("--json") + 1]
+        Path(out).write_text('{"aggregate_ms": {}}')
+        return type("P", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr(vrp.subprocess, "run", fake_run)
+    vrp.run_measure(1, "/nonexistent", "u", 5, "inprocess")
+    assert seen["cmd"][0] == sys.executable
+    assert seen["cmd"][0] != "python3"   # negative control: the PATH lookup is gone

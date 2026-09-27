@@ -189,19 +189,29 @@ status: 🔨 active — NEXT ACTION is always §0
   corrected (1.23.2 is the last cp310 wheel — moves only with B0.7). Not adopted:
   `pip install -r` in deploy — it would make every deploy a 39-package resolve on the live
   box, which is exactly the class of unobserved runtime change the header forbids.
-- B0.7 ⬜ **Python 3.12 venv for zoe-data only** (Kokoro + llama-server stay on 3.10/CUDA 12.6);
-  CPU torch for Resemblyzer, onnxruntime 1.30, websockets 17, av 18, numpy 2, sklearn 1.9
-  (re-export the router head). Gate: full `ci_safe` lanes in the venv + replay gate +
-  `memory_recall_probe`. Target: before 2026-10-31 (3.10 EOL).
+- B0.7 🔨 **Python 3.12 venv for zoe-data only** (Kokoro + llama-server stay on 3.10/CUDA 12.6).
+  Draft **PR #1706**: every pin MEASURED to resolve on cp312/aarch64 (`requirements-py312.txt`,
+  pins identical to the box wherever a cp312 wheel exists), `scripts/setup/build_py312_venv.sh`
+  (uv, idempotent, `--dry-run`/`--check`), runbook `docs/knowledge/python-312-venv-migration.md`
+  (drop-in switch, gates, rollback); venv built + import-verified in a worktree, `ci_safe`
+  zoe-data lane 6445 passed on 3.12. Blockers solved in-manifest: Resemblyzer needs a
+  `--no-deps` phase (webrtcvad sdist fails to import on setuptools 84 → `webrtcvad-wheels`;
+  PyPI aarch64 torch is a CUDA-13 bundle → exact CPU wheel); `prometheus-client` +
+  `livekit-protocol` were undeclared direct imports. **av 18 is capped by aiortc, not Python.**
+  Step-ups (onnxruntime 1.30, websockets 17.1, numpy 2, sklearn 1.9 + head re-export) each
+  resolve and follow one at a time, replay-gated. 🧑 Remaining: replay probe with the venv
+  interpreter, drop-in + restart, `/readyz` + `memory_recall_probe`, replay `--stt remote` (HTTP STT only),
+  one real `/ws/voice/` turn, re-point `deploy.yml`'s pip step. Target: before 2026-10-31 (3.10 EOL).
   **Two-interpreter split (2026-09-26, §10):** system 3.10 = CUDA consumers from `jp6/cu126`
   (cp310-only: torch, onnxruntime-gpu 1.23/1.24; last upload 2026-04-01) — after EOL frozen
   at ORT 1.23.2, numpy 2.2.6, av 17.1.0, sklearn 1.7.2, websockets 16.1.1 (all dropped cp310
-  on PyPI); venv 3.12 = zoe-data (ORT 1.30, numpy 2.5, av 18, CPU torch 2.14). The memory
+  on PyPI); venv 3.12 = zoe-data (end state ORT 1.30, numpy 2.5, av 18 once aiortc lifts `av<18`, CPU torch
+  2.14; #1706's cut 1 holds the box pins). The memory
   store does NOT move with the venv: it carries the hard-held `chromadb==0.6.3` +
   `mempalace==3.3.1` (both py3-none-any; `chroma-hnswlib 0.7.6` ships cp312 aarch64) until
   B0.8's copy migration + reconciliation pass — a 1.5.x client on the live 0.6.x palace is
   the silent drawer-write-drop failure. chromadb 1.5.9 (abi3) is B0.8's target, not B0.7's.
-  Needs a per-interpreter `requirements.txt` (markers or two files) + a voice-gate
+  Needs a per-interpreter `requirements.txt` (two files: #1706) + a voice-gate
   probe re-baseline pointed at the interpreter that runs STT (the probe never installs
   requirements — see `reference_voice_gate_instrument_facts`).
 - B0.8 ⬜ MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7); reconcile row
