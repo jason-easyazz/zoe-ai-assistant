@@ -92,6 +92,13 @@ import * as v from 'valibot';
 // bundles .ts specifiers fine.
 import { currentUserId } from '../request-identity.ts';
 import { isReplayTurn } from '../replay-mode.ts';
+import {
+  fenceWebResults,
+  isTurnUntrusted,
+  markTurnUntrusted,
+  neutraliseUntrustedText,
+  untrustedWriteRefusal,
+} from '../untrusted-content.ts';
 import { ACTIVATOR_TOOL_NAME, GROUP_NAMES, GROUP_SUMMARY, TOOL_GROUPS } from './tool-groups.ts';
 
 // ── Configuration, read PER CALL ─────────────────────────────────────────────
@@ -241,6 +248,10 @@ async function runWrite(
       `ZOE_BRAIN_ALLOW_WRITES=true to enable writes). Tell the user you can't do that yet — ` +
       `do NOT claim it was done.`;
   }
+  // W15 PER-SOURCE TOOL TIER — untrusted web content was returned into this turn,
+  // so nothing may change state until the turn ends (src/untrusted-content.ts).
+  // Ahead of replay isolation: a tainted turn must refuse, not fake a success.
+  if (isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem);
   // REPLAY ISOLATION — this turn came from the replay gate, so report the write as
   // done and commit nothing. Checked AFTER the ALLOW_WRITES gate on purpose: a lab
   // build with writes off keeps its loud "WRITE DISABLED" honesty, and this branch
@@ -519,6 +530,9 @@ const setTimer = defineTool({
         `lab build; set ZOE_BRAIN_ALLOW_WRITES=true to enable writes). Tell the user you ` +
         `can't do that yet — do NOT claim it was done.`;
     }
+    // W15 tier: set_timer does not route through runWrite, so it carries the
+    // untrusted-content gate inline too (see runWrite).
+    if (isTurnUntrusted(signal)) return untrustedWriteRefusal(`a ${minutes} minute timer${named}`);
     // REPLAY ISOLATION — set_timer is the ONE write that does not route through
     // runWrite (it has its own inline gate above), so it needs the check here too;
     // without it, timer_create would still dispatch on every replay turn.
@@ -1086,6 +1100,13 @@ const activateAbilities = defineTool({
  * appends it only when the flag is on, so the default brain is unchanged. It
  * is deliberately ungrouped in tool-groups.ts — an ungrouped tool is ALWAYS
  * disclosed, which is what "are you sure?" needs.
+ *
+ * TRUST BOUNDARY (W15, Codex #1702): results are untrusted third-party text.
+ * They are returned FENCED (src/untrusted-content.ts: fixed preamble + delimited
+ * data block, markup / control tokens / role markers neutralised, fields capped,
+ * http(s) links only), and once results have been returned every state-changing
+ * tool refuses for the rest of the turn. No-result outcomes return no
+ * third-party text and do not taint the turn.
  */
 export function webSearchToolEnabled(): boolean {
   return ['1', 'true', 'yes', 'on'].includes((process.env.ZOE_WEB_SEARCH_TOOL ?? '0').trim().toLowerCase());
@@ -1135,15 +1156,12 @@ const webSearch = defineTool({
       const status = String(body.status ?? 'error');
       const rows = Array.isArray(body.results) ? body.results.slice(0, 5) : [];
       if (status === 'results' && rows.length > 0) {
-        const lines = rows.map((r, i) => {
-          const title = String(r.title ?? '').trim() || '(untitled)';
-          const url = String(r.url ?? '').trim();
-          const snippet = String(r.snippet ?? '').trim().slice(0, 300);
-          return `${i + 1}. ${title} — ${url}${snippet ? `\n   ${snippet}` : ''}`;
-        });
-        return `Web results (${String(body.provider ?? 'web')}):\n${lines.join('\n')}`;
+        // W15: third-party text — fenced + neutralised, and from here on this
+        // turn may not change state (runWrite / set_timer refuse).
+        markTurnUntrusted(signal, 'web');
+        return fenceWebResults(body.provider, rows);
       }
-      const why = String(body.detail ?? '').trim();
+      const why = neutraliseUntrustedText(body.detail, 120);
       if (status === 'no_results') return 'Web lookup found nothing for that — say so rather than guessing.';
       if (status === 'blocked') return `Web lookup was BLOCKED by the search provider${why ? ` (${why})` : ''} — I could not check; say so.`;
       if (status === 'off') return 'Web lookup is switched off on this box, so I could not check.';
