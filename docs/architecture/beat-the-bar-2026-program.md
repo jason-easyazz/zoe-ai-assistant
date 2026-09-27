@@ -59,12 +59,12 @@ State as of **2026-09-28 02:30 AWST**:
      - Omnigent Claude re-login **before 2026-10-11** (B0.11).
      - Actions event policy **before 2026-11-02** (B0.10 b).
      - Dismiss the chromadb Dependabot alert (the pin is held until B0.8).
-     - L4T 36.5; HA `auth_oidc` 1.2.0.
+     - L4T 36.5; HA `auth_oidc` 1.2.1.
      - Add the nvm bin to the self-hosted runner's `PATH`; set `vm.page-cluster`.
      - Prune old MemPalace snapshots.
      - `ggshield install --mode global --force` (B0.10 c).
 2. **Verify today:** the **07:30 morning brief** is the first run after #1726:
-   `grep -E "T(07:[3-5][0-9]\+0800|23:[3-5][0-9]\+0000).*(morning_checkin: users kept|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`
+   `grep -E "T(07:[3-5][0-9]:[0-9]{2}\+0800|23:[3-5][0-9]:[0-9]{2}\+0000).*(morning_checkin: users kept|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`
    — the app log carries its UTC offset; lines are `+0800` (AWST, `T07:3x`) when the service
    runs with the box's local zone and `+0000` (`T23:3x` of the previous date) when it runs in
    UTC, so the pattern matches both (the trigger can fire anywhere in the 07:30–07:59 window).

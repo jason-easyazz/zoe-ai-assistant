@@ -597,7 +597,7 @@ the 2026-09-25 plan, kept with ✓ marks.
    - Omnigent Claude re-login before 2026-10-11.
    - The Actions event policy before 2026-11-02.
    - Dismiss the chromadb alert.
-   - L4T 36.5; HA `auth_oidc` 1.2.0.
+   - L4T 36.5; HA `auth_oidc` 1.2.1.
    - The runner's PATH gets the nvm bin; `vm.page-cluster`.
    - MemPalace snapshot prune.
 
