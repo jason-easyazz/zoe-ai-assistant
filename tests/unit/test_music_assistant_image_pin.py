@@ -4,7 +4,7 @@ The MA image is not just a music server to us -- it is where the LIVE YouTube
 path's JavaScript engine comes from. YouTube signs stream URLs with an
 obfuscated `n`/`sig` parameter recoverable only by executing YouTube's player
 JS; yt-dlp does that through the yt_dlp_ejs solver, which needs a JS runtime.
-MA supplies one (ytmusic manifest: `deno==2.7.4`, baked at /app/venv/bin/deno).
+MA supplies one (ytmusic manifest pins a `deno` version, baked at /app/venv/bin/deno).
 
 The failure mode this guards is SILENT, which is the whole point. With no JS
 runtime yt-dlp raises no dependency error -- it falls back to player clients

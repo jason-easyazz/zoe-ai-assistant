@@ -1,9 +1,9 @@
 ---
 type: Runbook
 title: Music path yt-dlp JavaScript runtime
-description: How the live Music Assistant container solves YouTube's nsig/sig JS challenge (MA bakes deno; we only pin the image), the sh -lc PATH artifact that produced a false "no JS runtime" diagnosis, the read-only probe, and the apply/rollback procedure with the YouTube Music re-auth risk.
-tags: [music, music-assistant, yt-dlp, youtube, deno, docker, operations]
-timestamp: 2026-08-04T00:00:00Z
+description: How the live Music Assistant container solves YouTube's nsig/sig JS challenge (MA bakes deno; we only pin the image), the sh -lc PATH artifact that produced a false "no JS runtime" diagnosis, the read-only probe (JS solve + PO-token plugin/server major match), the 2026-09-25 bgutil mismatch outage and the recreate rule, the MA 2.10 setup-flow API break that blocks the 2.10.3 pin, and the apply/rollback procedure with the YouTube Music re-auth risk.
+tags: [music, music-assistant, yt-dlp, youtube, deno, bgutil, po-token, docker, operations]
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # Music path yt-dlp JavaScript runtime
@@ -27,10 +27,11 @@ The live chain, verified end to end on 2026-08-04:
 
 | piece | where it comes from | durability |
 |---|---|---|
-| `deno` 2.7.4 | **baked into the MA image** at `/app/venv/bin/deno`; declared in MA's ytmusic provider manifest as `deno==2.7.4` | survives container recreate — it is in the image layers |
+| `deno` (2.7.4 on MA 2.8.7, 2.9.5 on 2.10.3) | **baked into the MA image** at `/app/venv/bin/deno`; declared in MA's ytmusic provider manifest | survives container recreate — it is in the image layers |
 | `yt_dlp_ejs` 0.8.0 solver scripts | pulled in with yt-dlp | as below |
 | `yt-dlp` 2026.07.04 | **installed dynamically** by MA at ytmusic provider load (`uv pip install yt-dlp[default] bgutil-ytdlp-pot-provider`) into the container's writable layer | **lost on container recreate**, reinstalled from PyPI on next provider load — needs network |
-| PO tokens | `zoe-ytmusic-potoken` (bgutil) on `127.0.0.1:4416` | separate container, `restart: unless-stopped` |
+| `bgutil-ytdlp-pot-provider` (the PO-token **client plugin**) | installed by MA in the same `uv pip install`, unpinned | same as yt-dlp — and **only on a fresh container** (see the mismatch section) |
+| PO tokens (the **server**) | `zoe-ytmusic-potoken` (bgutil) on `127.0.0.1:4416`, image-pinned in compose | separate container, `restart: unless-stopped` |
 
 MA installs yt-dlp dynamically on purpose — its own code comment: *"Google breaks
 things quite often which requires us to update some packages very frequently.
@@ -41,6 +42,12 @@ you would guess.
 `/app/venv/bin` is first on the container's real `PATH`, and yt-dlp enables deno
 by default (`js_runtimes` defaults to `{'deno': {}}`), resolving a bare `deno`
 through `PATH`. No yt-dlp option, no MA setting, no `PATH` edit is required.
+
+**"Dynamically installed" does NOT mean "kept current".** MA's `install_package`
+is `uv pip install --no-cache <pkg>` with no `--upgrade`, so once a version is in
+the container's writable layer every later provider load is a no-op. A **restart**
+keeps the old packages; only a **re-create** (fresh writable layer) pulls the
+current yt-dlp and plugin from PyPI.
 
 ## TRAP — `docker exec ... sh -lc` hides the runtime
 
@@ -86,7 +93,7 @@ were both demonstrably fine — `JS runtimes: deno-2.7.4`, and
 `Retrieved a gvs PO Token for web client` from the bgutil container. "No video
 formats found" is a generic error; read the `-v` trace, never infer a cause.
 
-**Use `player_client=tv` (TVHTML5) instead** — it returns nsig/sig-challenged
+**Use a challenged client instead** (was `player_client=tv` (TVHTML5); see the 2026-09-27 update below) — it returns nsig/sig-challenged
 URLs, so it actually exercises the solver:
 
 ```
@@ -102,6 +109,15 @@ from the vendored `yt_dlp_ejs` scripts. No network fetch of solver code.
 Some videos return `This video is DRM protected` on the `tv` client. That is a
 property of the video, and it happens *after* a successful solve — not a JS
 failure.
+
+**Update 2026-09-27 — `tv` is now broken too.** Every video returns `ERROR: The
+page needs to be reloaded.` on the `tv` client, on yt-dlp 2026.07.04 *and*
+2026.08.19, so the probe could only exit 2. It now forces **`web_embedded`**:
+challenged URLs (`n=` + `sig=`), solved by deno, and **no PO token needed**, so it
+is independent of the bgutil container as well as of the YouTube login. Measured
+that day on a fresh 2.10.3 container: `tv_simply`, `mweb`, `web_embedded` and MA's
+own `web_music` (on a real YT Music track) all solved; `tv` and `android_vr`
+(needs a GVS PO token) did not.
 
 ## Why the silent-regression risk is real
 
@@ -132,19 +148,101 @@ Verified in both directions on 2026-08-04 — green against live, and **red**
 against a throwaway candidate container (same image, no volumes) with
 `/app/venv/bin/deno` moved aside. A probe that has never gone red proves nothing.
 
+The last stage (added 2026-09-27) compares the **PO-token plugin** version inside
+MA with the **server** version from `/ping` — fetched from *inside* the MA
+container, so it also proves `127.0.0.1:4416` is reachable from MA's network
+namespace — and fails on a **major** mismatch. It runs after the JS verdict and
+says the engine is fine, so the two failure classes are never confused.
+
 ```
-$ scripts/maintenance/music_jsruntime_probe.sh
+$ scripts/maintenance/music_jsruntime_probe.sh          # live, 2026-09-27
 OK: JS runtime present -- deno 2.7.4 (stable, release, aarch64-unknown-linux-gnu)
 OK: yt-dlp 2026.07.04
 OK: yt-dlp registers a runtime -- JS runtimes: deno-2.7.4
 OK: EJS solver executed -- [jsc:deno] Solving JS challenges using deno
 OK: resolved a challenged (nsig-signed) stream URL
-HEALTHY: zoe-music-assistant can solve YouTube JS challenges (tv client).
+UNHEALTHY: PO-token plugin 1.3.1 (inside zoe-music-assistant) and server 2.0.0
+  (zoe-ytmusic-potoken) differ in MAJOR version -- ...
 ```
+
+and green on a fresh 2.10.3 container (yt-dlp 2026.08.19, plugin 2.0.0):
+`OK: PO-token plugin 2.0.0 matches server 2.0.0 (major 2)` /
+`HEALTHY: ... (web_embedded client).`
 
 Static counterpart in CI: `tests/unit/test_music_assistant_image_pin.py` asserts
 the digest pin and that the bump procedure still points at the probe. It needs no
 Docker or network; the live behaviour is the probe's job.
+
+## Incident 2026-09-25 — PO-token plugin/server major mismatch
+
+YouTube Music went down at 2026-09-25 18:16 and stayed down: MA logged
+`Error loading provider … ytmusic: No stream formats found` ~29×/h, preceded by
+`[pot:bgutil:http] Plugin and HTTP server major versions are mismatched`. The
+`zoe-ytmusic-potoken` server had been bumped to **2.0.0** (GHSA-qpv9-8xfj-xx9m),
+while the plugin inside MA was still **1.3.1**, installed when the container was
+created on 2026-08-03. The compose comment then claimed the plugin "floats to
+2.x" — it does not (see *"Dynamically installed" does NOT mean "kept current"*).
+yt-dlp 2026.07.04 was stale as well. The logs also showed `The provided YouTube
+account cookies are no longer valid`, so **a re-auth is needed whatever is fixed**.
+
+**The rule:** moving the bgutil **server** across a major means **re-creating
+`zoe-music-assistant`** (or aligning the plugin by hand) in the same change, then
+running the FULL probe, which now checks the major match.
+
+**Fix without the MA bump** (keeps the 2.8.7 image and the panel reconnect path;
+verified on a throwaway 2.8.7 container 2026-09-27: `web_music` solve + PO token +
+stream URL, plugin 2.0.0 matched):
+
+```bash
+docker exec zoe-music-assistant uv pip install --no-cache \
+    'yt-dlp[default]==2026.8.19' 'bgutil-ytdlp-pot-provider==2.0.0'
+docker restart zoe-music-assistant      # yt-dlp is imported once per process
+scripts/maintenance/music_jsruntime_probe.sh   # must be HEALTHY incl. the PO line
+# then re-auth on the panel (next section): the cookies have rotated
+```
+
+It lives in the writable layer, so a later re-create replaces it with whatever
+PyPI has then — which is the behaviour you want, as long as the server major still
+matches. Undo: the same command with `yt-dlp[default]==2026.7.4`
+`bgutil-ytdlp-pot-provider==1.3.1`.
+
+## MA 2.10.x — pinned, but BLOCKED on zoe-data (read before re-creating)
+
+The compose pin is **2.10.3** (`sha256:885872224fa5…`, released 2026-09-11, ≥14 d
+old; 2.10.4 clears the 14-day rule on 2026-10-02). It closes the three advisories
+against 2.8.7 — GHSA-5fch-fp25-3g2p (OAuth-callback XSS + bearer-token theft,
+fixed 2.9.9), GHSA-m6c2-h3pf-84q7, GHSA-j369-4c4w-7qmq — which matter because
+`network_mode: host` puts :8095 on the LAN. Stage 1 (`--engine-only`) is green
+(deno 2.9.5). **It must not be adopted until zoe-data is updated**, because 2.10
+changed the provider-config API that zoe-data's `music_service` drives (all read
+from the 2.10.3 image source, diffed command-by-command against 2.8.7):
+
+| zoe-data call | 2.8.7 | 2.10.3 | effect |
+|---|---|---|---|
+| `config/providers/save` with `instance_id` (panel **Reconnect**) | writes `cookie` into `values` | `ProviderConfig.update` skips keys that are not declared entries; ytmusic's `cookie`/`username`/`po_token_server_url` are now setup-flow-owned and read via `get_setup_value`, which prefers `setup_data` | **silent no-op**: reports success, the stale cookie stays |
+| `config/providers/save` without `instance_id` (first connect) | creates the instance | `ValueError: Adding a provider is only possible through the setup flow` | first connect fails |
+| `config/providers/get_entries(provider_domain=…)` | ok | now `get_entries(instance_id)` only | error → zoe-data falls back to `[]` |
+| `music/recommendations` | ok | removed | "for you" shelves empty (best-effort path) |
+| `player_queues/play_media` | has `username` | `username` removed | none — zoe-data does not pass it |
+
+The 2.10 equivalents are `config/providers/setup(provider_domain)` /
+`config/providers/reconfigure(instance_id)` → `config/flows/submit(flow_id, values)`.
+Also on first start 2.10 **migrates `settings.json` one way**
+(`migrate_provider_setup_data` moves those keys into encrypted `setup_data`), so
+**rolling back to 2.8.7 needs the store restored from a backup**, not just the
+old digest.
+
+Other 2.10 surfaces to check on the day (not yet exercised live): Sendspin moves
+aiosendspin 4.4.0 → 9.1.1 (PIN pairing changed at 9.0.0 — expect re-pairing);
+the AirPlay provider swapped libraop for a new backend with explicit streaming
+modes (`auto` / `ap2_ptp` / `ap2_ntp` / `ap2_compat` / `raop`) — if the "Zoe Panel"
+AirPlay-2 output (shairport-sync 5.1) goes silent, pin its streaming mode;
+music-assistant-models 1.1.115 → 1.1.205.
+
+**Order:** (1) zoe-data PR moving `save_provider` / the ytmusic sign-in / the
+OAuth path to the setup/reconfigure flow API, deployed; (2) stop-and-back-up the
+store; (3) re-create on this digest; (4) FULL probe; (5) panel re-auth, then the
+Sendspin / AirPlay checks above.
 
 ## ⚠ Re-auth risk — read before restarting Music Assistant
 
@@ -180,10 +278,13 @@ non-Premium account will not restore search** — MA requires Premium.
 
 There is **no urgency** — the live path is green. Apply at a convenient moment.
 
-**Recommended (zero-risk, no restart).** The pinned digest *is* the image already
-running, so the pin changes nothing live. Merge it and let it take effect the next
-time the container is recreated for any other reason. The pin's job is to govern
-the **next pull**, not to change what is running now.
+> **2026-09-27:** the pin is now 2.10.3 and the box still runs 2.8.7, so the
+> "pin changes nothing live" premise below no longer holds — a re-create **adopts
+> 2.10.3**. Read *MA 2.10.x — pinned, but BLOCKED on zoe-data* first.
+
+**Original procedure (2026-08-04, when the pin equalled the running image).** The
+pinned digest *was* the image already running, so the pin changed nothing live.
+The pin's job is to govern the **next pull**, not to change what is running now.
 
 ```bash
 # 0. Confirm the pin matches what is actually RUNNING.
@@ -234,8 +335,8 @@ scripts/maintenance/music_jsruntime_probe.sh
 ## Bump the pin
 
 ```bash
-docker pull ghcr.io/music-assistant/server:stable
-docker image inspect ghcr.io/music-assistant/server:stable \
+docker pull ghcr.io/music-assistant/server:<version>     # explicit tag, >=14 d old
+docker image inspect ghcr.io/music-assistant/server:<version> \
   --format '{{index .RepoDigests 0}}'     # <- new digest into docker-compose.modules.yml
 ```
 
@@ -263,10 +364,19 @@ protects the **image-baked deno**, and yt-dlp is installed dynamically and is
 explicitly not what the pin controls. Green here means the new image still ships
 the engine, which is the whole claim the pin makes.
 
-**Stage 2 — the live container, AFTER recreating it on the new digest.**
+**Stage 2 — the live container, AFTER recreating it on the new digest.** Back
+up the store first, with MA stopped (some files are root-owned and 0600, so tar
+from a container, and a stopped MA gives consistent SQLite files). The live
+container belongs to compose project `assistant` (working dir
+`/home/zoe/assistant`); pass `-p assistant` or compose creates a duplicate.
 
 ```bash
-docker compose -f docker-compose.modules.yml up -d music-assistant
+docker stop zoe-music-assistant
+docker run --rm -v /home/zoe/.zoe:/z --entrypoint sh <image> -c \
+  'tar -C /z -czf /z/music-assistant.backup-$(date +%Y%m%d-%H%M).tgz music-assistant'
+docker compose -p assistant --project-directory /home/zoe/assistant \
+  --env-file /home/zoe/assistant/.env -f docker-compose.modules.yml \
+  up -d --force-recreate music-assistant
 scripts/maintenance/music_jsruntime_probe.sh          # FULL probe, must be green
 ```
 
@@ -287,7 +397,9 @@ scripts/maintenance/music_jsruntime_probe.sh
 
 **Same ⚠ re-auth caveat** — a rollback that changes the image *does* recreate the
 container, so budget for the reconnect procedure and verify the provider is
-connected afterwards.
+connected afterwards. **Rolling back from 2.10.x to 2.8.7 also needs the store
+restored** from the pre-bump backup (2.10 migrates `settings.json` one way — see
+the 2.10 section); stop MA, move the store aside, untar the backup, then re-create.
 
 ## What was NOT done, and why
 

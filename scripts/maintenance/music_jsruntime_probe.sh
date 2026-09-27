@@ -12,7 +12,7 @@
 # just "no formats". This probe makes the difference observable BEFORE that.
 #
 # Music Assistant supplies the engine itself: its ytmusic provider manifest
-# declares `deno==2.7.4`, and the upstream image bakes the binary into
+# declares `deno` (2.7.4 in MA 2.8.7, 2.9.5 in 2.10.3), and the upstream image bakes the binary into
 # /app/venv/bin/deno. We add nothing. This probe guards that upstream property
 # so a future MA image that drops it fails loudly here instead of silently in
 # playback months later. See docs/knowledge/music-ytdlp-js-runtime.md.
@@ -30,7 +30,8 @@
 #
 # Usage:  music_jsruntime_probe.sh [--engine-only] [container]
 #           default container: zoe-music-assistant
-# Exit:   0 healthy, 1 unhealthy, 2 could not run the check at all.
+# Exit:   0 healthy, 1 unhealthy (JS engine, or a PO-token plugin/server major
+#         mismatch -- the message says which), 2 could not run the check at all.
 #
 # --engine-only stops after the deno check. It exists for the DIGEST-BUMP
 # candidate, which is deliberately started with NO volumes from live and
@@ -50,11 +51,19 @@ PY=/app/venv/bin/python
 # The check is deliberately AUTH-INDEPENDENT: it must pass without MA's YouTube
 # session, so a failure means the JS engine, never an expired login.
 PROBE_URL="https://www.youtube.com/watch?v=aqz-KE-bpKQ"
-# `tv` (TVHTML5) is the point of the probe: it returns nsig/sig-CHALLENGED URLs,
-# so a green result proves the solver actually ran. The default client chain
-# (ANDROID_VR) returns pre-signed URLs and would pass with NO JS engine at all,
-# which is precisely the blind spot this exists to close.
-PROBE_CLIENT="tv"
+# The forced client is the point of the probe: it must return nsig/sig-CHALLENGED
+# URLs, so a green result proves the solver actually ran. The default client
+# chain (ANDROID_VR) returns pre-signed URLs and would pass with NO JS engine at
+# all, which is precisely the blind spot this exists to close.
+# `web_embedded`, not `tv`: by 2026-09-27 the `tv` (TVHTML5) client failed for
+# every video with "The page needs to be reloaded" on current AND older yt-dlp,
+# so the probe could only ever exit 2. web_embedded still returns challenged
+# URLs (n= + sig=), solves them with deno, and needs NO PO token -- so it stays
+# independent of the bgutil container as well as of MA's YouTube login. Verified
+# 2026-09-27: green on the MA 2.8.7 and 2.10.3 images, red (exit 1) with deno
+# moved aside. When YouTube breaks this client too, pick another challenged one
+# (tv_simply and mweb also solved that day, but both mint a PO token).
+PROBE_CLIENT="web_embedded"
 
 fail()  { echo "UNHEALTHY: $*" >&2; exit 1; }
 skip()  { echo "CANNOT CHECK: $*" >&2; exit 2; }
@@ -69,7 +78,7 @@ fi
 # 1. Is a JS runtime binary present and executable at all?
 if ! deno_version=$(docker exec "$CONTAINER" deno --version 2>&1 | head -1); then
     fail "no working 'deno' on PATH inside $CONTAINER.
-  Music Assistant is expected to supply it (ytmusic manifest: deno==2.7.4,
+  Music Assistant is expected to supply it (ytmusic manifest: deno==<pinned>,
   baked at /app/venv/bin/deno). If an MA image update dropped it, yt-dlp has
   no way to solve YouTube's nsig challenge and playback depends entirely on
   YouTube continuing to serve pre-signed URLs.
@@ -157,7 +166,7 @@ ok "EJS solver executed -- ${solver#*] }"
 # `n=` is the nsig challenge output and `sig=`/`signature=` the cipher output —
 # they are the actual product of the JS solve, so requiring them makes this a
 # check on the ENGINE rather than on YouTube having returned some URL
-# (cross-review, #1635). The solver-ran assertion above and the forced `tv`
+# (cross-review, #1635). The solver-ran assertion above and the forced challenged
 # client already made this operationally sound; this makes it say what it means.
 if ! grep -qE '^https://[^ ]*googlevideo\.com/videoplayback[^ ]*[?&]n=' <<<"$out" \
    || ! grep -qE '^https://[^ ]*googlevideo\.com/videoplayback[^ ]*[?&](sig|signature)=' <<<"$out"; then
@@ -173,5 +182,28 @@ if ! grep -qE '^https://[^ ]*googlevideo\.com/videoplayback[^ ]*[?&]n=' <<<"$out
 $(tail -5 <<<"$out")"
 fi
 ok "resolved a challenged (nsig-signed) stream URL"
+
+# 5. PO-token plugin <-> server MAJOR versions must match. Checked LAST, after
+#    the JS verdict above, because it is not a JS fault -- but it is the same
+#    class of silent YouTube outage: bgutil refuses a cross-major pairing and MA
+#    only logs "No stream formats found" (2026-09-25 -> 09-27: plugin 1.3.1
+#    inside MA, server 2.0.0). MA installs the plugin UNPINNED but only when the
+#    container is CREATED (`uv pip install` without --upgrade is a no-op on a
+#    restart), so bumping the server image alone strands the old plugin.
+#    The ping runs from INSIDE the MA container, so it also proves the
+#    127.0.0.1:4416 publish is reachable from MA's (host) network namespace.
+plugin_v=$(docker exec "$CONTAINER" "$PY" -c 'import importlib.metadata as m; print(m.version("bgutil-ytdlp-pot-provider"))' 2>/dev/null)
+server_v=$(docker exec "$CONTAINER" "$PY" -c 'import json, urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=5))["version"])' 2>/dev/null)
+if [ -z "$plugin_v" ] || [ -z "$server_v" ]; then
+    echo "WARN: could not compare the PO-token plugin/server versions (plugin='${plugin_v}', server='${server_v}') -- is zoe-ytmusic-potoken up?" >&2
+elif [ "${plugin_v%%.*}" != "${server_v%%.*}" ]; then
+    fail "PO-token plugin ${plugin_v} (inside ${CONTAINER}) and server ${server_v}
+  (zoe-ytmusic-potoken) differ in MAJOR version -- bgutil refuses the pairing and
+  YouTube Music fails with 'No stream formats found'. The JS engine is FINE (see
+  above). Re-create ${CONTAINER} so MA reinstalls the current plugin, or align
+  the two versions by hand. Runbook: docs/knowledge/music-ytdlp-js-runtime.md"
+else
+    ok "PO-token plugin ${plugin_v} matches server ${server_v} (major ${server_v%%.*})"
+fi
 
 echo "HEALTHY: ${CONTAINER} can solve YouTube JS challenges (${PROBE_CLIENT} client)."

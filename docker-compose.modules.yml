@@ -14,20 +14,25 @@ services:
     # Why the JS engine matters: YouTube signs stream URLs with an obfuscated
     # `n`/`sig` parameter recoverable only by EXECUTING YouTube's player JS.
     # yt-dlp does that via the yt_dlp_ejs solver, which needs a JS runtime. MA
-    # supplies one itself -- its ytmusic provider manifest declares `deno==2.7.4`
-    # and the image bakes the binary at /app/venv/bin/deno (verified present and
-    # solving nsig challenges on the live box, 2026-08-04). We add nothing; we
-    # only stop the thing we depend on from changing unobserved.
+    # supplies one itself -- its ytmusic provider manifest declares `deno` (2.7.4
+    # in 2.8.7, 2.9.5 in 2.10.3) and the image bakes the binary at
+    # /app/venv/bin/deno (verified solving nsig challenges on both images,
+    # 2026-09-27). We add nothing; we only stop the thing we depend on from
+    # changing unobserved.
     #
     # Without a runtime yt-dlp does NOT error -- it quietly falls back to player
     # clients that serve PRE-SIGNED URLs (ANDROID_VR today). That keeps working
     # until YouTube withdraws it, then playback dies with "no formats" and no
     # dependency error to point at. Exactly the silent regression a digest pin
     # is for. Note MA installs yt-dlp itself DYNAMICALLY at provider load
-    # (uv pip install yt-dlp[default]) -- that part is deliberately unpinned
-    # upstream and is not ours to control; the ENGINE is what the pin protects.
+    # (uv pip install yt-dlp[default] bgutil-ytdlp-pot-provider) -- deliberately
+    # unpinned upstream and not ours to control; the ENGINE is what the pin
+    # protects. That install runs WITHOUT --upgrade, so it only takes effect on a
+    # FRESH container: a restart keeps whatever the writable layer already holds.
+    # See the ytmusic-potoken block for what that did on 2026-09-25.
     #
-    # TO BUMP: `docker pull ghcr.io/music-assistant/server:stable`, read the new
+    # TO BUMP: `docker pull ghcr.io/music-assistant/server:<version>` (an explicit
+    # release tag, >=14 days old -- not `:stable`), read the new
     # digest from `docker image inspect --format '{{index .RepoDigests 0}}'`,
     # update the line below, then prove it in TWO stages -- the unqualified probe
     # defaults to the LIVE container, which is still on the OLD image at that
@@ -39,10 +44,23 @@ services:
     # Require both GREEN. Runbook (incl. the YouTube Music
     # re-auth risk on restart): docs/knowledge/music-ytdlp-js-runtime.md
     #
-    # Digest of ghcr.io/music-assistant/server:stable as of 2026-08-04, which is
-    # the image already running on the box -- so this pin changes nothing that
-    # is live and needs no restart to adopt.
-    image: ghcr.io/music-assistant/server@sha256:eef3ee7810d0e4702afa4a0ff55b10bbbfcaa16c98a277fe1b7f4cb6d5d426b4
+    # Digest of ghcr.io/music-assistant/server:2.10.3 (released 2026-09-11; closes
+    # GHSA-5fch-fp25-3g2p, GHSA-m6c2-h3pf-84q7, GHSA-j369-4c4w-7qmq on 2.8.7, which
+    # matters because network_mode:host puts :8095 on the LAN). Previous pin:
+    # 2.8.7 @ sha256:eef3ee7810d0e4702afa4a0ff55b10bbbfcaa16c98a277fe1b7f4cb6d5d426b4.
+    #
+    # DO NOT RECREATE ONTO THIS DIGEST until zoe-data speaks MA's setup-flow API.
+    # 2.10 moved provider credentials (ytmusic cookie/username/po_token_server_url)
+    # out of config `values` into encrypted `setup_data` (one-way settings.json
+    # migration on first start), and changed the API zoe-data's music_service
+    # uses: `config/providers/save` silently IGNORES the cookie (it is no longer a
+    # declared entry) and refuses a new instance outright (setup flow only);
+    # `config/providers/get_entries` now takes `instance_id`; `music/recommendations`
+    # is gone. Re-auth is `config/providers/reconfigure` + `config/flows/submit`.
+    # Read from the 2.10.3 source (not yet exercised live): the panel's Reconnect
+    # would report success and leave the stale cookie in place.
+    # Runbook: docs/knowledge/music-ytdlp-js-runtime.md (2.10 section).
+    image: ghcr.io/music-assistant/server@sha256:885872224fa541c0faefc936625c939ba705a00e89c180f89e877f58448ea5d5
     container_name: zoe-music-assistant
     network_mode: host
     volumes:
@@ -94,9 +112,18 @@ services:
     # README) — verified 2026-09-25 on this box with a throwaway 2.0.0 container:
     # in-container listener 0.0.0.0:4416, `/ping` → 200 through the published port,
     # Origin POST → 403, text/plain POST → 415. So the 127.0.0.1:4416 publish is what
-    # keeps it host-local, exactly as before. Music Assistant installs the matching
-    # client plugin unpinned at provider load, so it already floats to 2.x. Run
-    # scripts/maintenance/music_jsruntime_probe.sh after the container is recreated.
+    # keeps it host-local, exactly as before.
+    #
+    # The CLIENT plugin (bgutil-ytdlp-pot-provider, inside music-assistant) must be
+    # the SAME MAJOR version as this server -- bgutil refuses a cross-major pairing
+    # ("Plugin and HTTP server major versions are mismatched") and MA only logs
+    # "No stream formats found". MA installs that plugin unpinned but ONLY when its
+    # container is CREATED; a restart does not reinstall it. So the plugin does NOT
+    # float: bumping this image across a major strands the old plugin until
+    # music-assistant is re-created (or the plugin is aligned by hand). That is what
+    # took YouTube Music down on 2026-09-25 (plugin 1.3.1 vs this 2.0.0). Moving
+    # this major = re-create music-assistant too, then run the FULL
+    # scripts/maintenance/music_jsruntime_probe.sh -- it checks the major match.
     image: brainicism/bgutil-ytdlp-pot-provider:2.0.0
     container_name: zoe-ytmusic-potoken
     init: true
