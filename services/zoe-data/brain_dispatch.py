@@ -488,11 +488,33 @@ async def _streaming_with_loaded_context(
     loader: Any, message: str, session_id: str, user_id: str, kwargs: dict[str, Any]
 ) -> AsyncIterator[str]:
     kwargs = await _resolve_context_loader(loader, kwargs)
-    async for delta in _fallback_streaming(message, session_id, user_id, **kwargs):
+    async for delta in _fallback_streaming_unheld(message, session_id, user_id, **kwargs):
+        yield delta
+
+
+async def _held_for_speculation(factory: Any, gate: Any) -> AsyncIterator[str]:
+    import voice_speculation as _vs
+
+    await _vs.await_commit("brain:non-echoing-lane", gate)
+    async for delta in factory():
         yield delta
 
 
 def _fallback_streaming(message: str, session_id: str, user_id: str, **kwargs: Any) -> AsyncIterator[str]:
+    """Non-Flue lanes. B1.1: these lanes cannot echo a speculative turn id back on
+    their tool writes (only the Flue sidecar does), so a speculative voice turn
+    that lands here — configured lane or runtime failover — waits for the verdict
+    before the brain starts, and never runs on a cancel. No-op otherwise."""
+    import voice_speculation as _vs
+
+    gate = _vs.bound_gate()
+    if gate is not None:
+        return _held_for_speculation(
+            lambda: _fallback_streaming_unheld(message, session_id, user_id, **kwargs), gate)
+    return _fallback_streaming_unheld(message, session_id, user_id, **kwargs)
+
+
+def _fallback_streaming_unheld(message: str, session_id: str, user_id: str, **kwargs: Any) -> AsyncIterator[str]:
     _drop_flue_only_kwargs(kwargs)
     loader = kwargs.pop(_CONTEXT_LOADER_KWARG, None)
     if loader is not None:
@@ -510,6 +532,10 @@ def _fallback_streaming(message: str, session_id: str, user_id: str, **kwargs: A
 
 
 async def _fallback_oneshot(message: str, session_id: str, user_id: str, **kwargs: Any) -> str:
+    import voice_speculation as _vs
+
+    if _vs.bound_gate() is not None:  # see _fallback_streaming: no turn-id echo here
+        await _vs.await_commit("brain:non-echoing-lane")
     _drop_flue_only_kwargs(kwargs)
     loader = kwargs.pop(_CONTEXT_LOADER_KWARG, None)
     if loader is not None:

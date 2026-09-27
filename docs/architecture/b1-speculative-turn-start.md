@@ -133,12 +133,13 @@ the task). Every task created beneath inherits it; nothing else ever sees it.
 
 | Where | What waits | Classification used (fail-closed) |
 |---|---|---|
-| `voice_command`, right after the router decision | the WHOLE turn — before any pending confirmation, history row, intent or brain call | `turn_is_speculation_safe`: regex `detect_intent` ∈ `SPECULATION_SAFE_INTENTS`, Skybridge (domain, action) read-only, routed domain ∈ {chat, weather, time}. No router decision → hold |
+| `voice_command`, right after the router decision | the WHOLE turn — before any pending confirmation, history row, intent or brain call | `turn_is_speculation_safe`: held if regex `detect_intent` is a non-read intent, the Skybridge (domain, action) is not read-only, or the routed domain is outside {chat, weather, time}. A MISSING routed domain (router off — its default) is neutral |
 | `intent_router.execute_intent` | every non-read intent (the shared write funnel: fast tiers, quick intents, confirmations, music, smart home, timers) | `SPECULATION_SAFE_INTENTS` (a superset of `fast_tiers._TIER0_READ_INTENTS`, pinned) |
 | `skybridge_service.resolve_skybridge_request` | non-read Skybridge actions (it has its own list/calendar/people INSERTs) | domain ∈ {clock, weather} or action ∈ {show, status, overview, forecast, identity} |
 | `expert_dispatch.dispatch` | write / memory-store kinds, BEFORE the slot-extraction LLM call | the dispatcher's own `kind` |
-| `routers/voice_tts._spawn_bg` | every background side effect — user/assistant history rows, memory passes, escalations — queued in spawn order | all of them |
-| `POST /api/system/intent-dispatch` | brain **tool** writes (Flue sidecar / zoe-core → a separate request the ContextVar cannot reach) | non-read intent AND the acting user has an unresolved speculative turn (`note_turn_user`) |
+| `routers/voice_tts._spawn_bg` | every background side effect — user/assistant history rows, memory passes, escalations — run in spawn order, each starting only after the previous one COMPLETED (60 s cap against a wedged one, logged) | all of them |
+| `POST /api/system/intent-dispatch` | brain **tool** writes from the speculative turn itself (a separate request the ContextVar cannot reach) | non-read intent carrying that turn's `speculative_turn_id`: the seam sends the id on an outermost ` zoe-spec:<id>` line (Flue wire 2), the sidecar binds it per turn and echoes it on every dispatch. Other sessions' writes (no id) run at once; a dispatch after the gate closed follows the recorded verdict |
+| `brain_dispatch` non-Flue lanes, Flue wire 1, a non-wire-safe turn id | the whole brain call | these cannot echo the turn id, so the brain waits for the verdict |
 
 A dropped inline effect raises `SpeculativeTurnCancelled` — a `CancelledError` on purpose:
 every write site sits under `except Exception` handlers that would otherwise swallow it
@@ -158,11 +159,6 @@ overlap.
   prefix user message when the speculative call is cancelled mid-generation — the next
   turn's context carries both the prefix and the full utterance.
 - In-memory panel session touch (`_touch_panel_session`) runs for read/chat prefixes.
-- The brain-tool hold is keyed by **user**, not turn (the sidecar does not forward a turn
-  id): a same-user write from ANOTHER channel inside the ≤ max-hold window waits for the
-  verdict, and on a cancel is refused with `ok: false` — the brain says it could not
-  confirm (loud), never a silent loss. Forwarding the turn id through the sidecar envelope
-  would remove this and is the follow-up if it ever bites.
 
 Pinned by `services/zoe-data/tests/test_voice_speculation_write_deferral.py` (`ci_safe`):
 held-then-once-on-commit / dropped-on-cancel / dropped-on-hold-timeout / equivalent and
@@ -311,8 +307,9 @@ All of these, in order; any miss keeps the flag dark:
   `tests/unit/test_voice_daemon_speculation.py`.
 - **B1.1 groundwork** — Phase 2 (`voice_speculation` binding + holds; hooks in
   `intent_router.execute_intent`, `skybridge_service`, `expert_dispatch`,
-  `routers/voice_tts` (`_spawn_bg`, the turn-level hold, `note_turn_user`),
-  `routers/system.py` intent-dispatch); `scripts/perf/measure_endpointing.py
+  `routers/voice_tts` (`_spawn_bg`, the turn-level hold), `routers/system.py`
+  intent-dispatch, `brain_dispatch` non-echoing lanes, the `zoe_flue_client` ` zoe-spec:`
+  envelope and its sidecar half `labs/flue-zoe-brain-2x/src/speculative-turn.ts`); `scripts/perf/measure_endpointing.py
   --speculative-ms/--smart-turn-veto`; `scripts/perf/measure_moonshine_vad_threshold.py`;
   tests `services/zoe-data/tests/test_voice_speculation_write_deferral.py`.
 

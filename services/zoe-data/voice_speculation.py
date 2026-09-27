@@ -34,6 +34,7 @@ import json
 import logging
 import re
 import time
+from collections import OrderedDict
 from typing import AsyncIterator, Optional
 
 from typed_env import env_bool, env_int
@@ -116,9 +117,6 @@ class SpeculationGate:
         self._loop = asyncio.get_running_loop()
         # Tail of this turn's deferred background side effects (FIFO chain).
         self._side_effect_tail: Optional[asyncio.Future] = None
-        # The acting user once voice_command resolved it (``note_turn_user``):
-        # keys the brain-tool hold, whose writes arrive on another request.
-        self.user_id: Optional[str] = None
 
     @property
     def resolved(self) -> bool:
@@ -153,6 +151,11 @@ _GATES: dict[str, SpeculationGate] = {}
 
 # Verdicts under which the speculative turn's work is kept (and so its side effects run).
 RELEASED_VERDICTS = ("commit", "equivalent")
+
+# Safety cap on how long a deferred background effect waits for the previous one
+# of the same turn (history row, then memory passes). Ordering is by completion;
+# this only bounds a wedged predecessor.
+_SIDE_EFFECT_ORDER_CAP_S = 60.0
 
 # ── Phase 2: side effects wait for the verdict ─────────────────────────────
 #
@@ -211,15 +214,20 @@ def turn_is_speculation_safe(intent_name: Optional[str], routed_domain: Optional
                              skybridge: Optional[tuple] = None) -> tuple[bool, str]:
     """Whole-turn classification for a speculative turn, from the intent layer's
     own cheap classifiers (regex ``detect_intent``, the semantic router's
-    ``routed`` domain, Skybridge's ``classify_skybridge_intent``). Safe only when
-    EVERY signal says read/chat; ``(False, reason)`` otherwise. No router
-    decision (router off / failed) is NOT safe — fail-closed."""
+    ``routed`` domain, Skybridge's ``classify_skybridge_intent``).
+
+    Any signal that says WRITE holds the turn: a non-read intent, a non-read
+    Skybridge action, or a routed domain outside {chat, weather, time}. A MISSING
+    routed domain (router off — its default — or failed) is NEUTRAL, not a write:
+    the verdict then rests on the regex read-allowlist and the Skybridge pair, and
+    a brain turn that later reaches for a write tool is still held at the
+    intent-dispatch seam (turn-id echo) or the non-echoing lane hold."""
     if intent_name and not intent_is_speculation_safe(intent_name):
         return False, f"intent:{intent_name}"
     if skybridge is not None and not skybridge_intent_is_speculation_safe(*skybridge):
         return False, f"skybridge:{skybridge[0]}:{skybridge[1]}"
-    if (routed_domain or "") not in SPECULATION_SAFE_ROUTED_DOMAINS:
-        return False, f"domain:{routed_domain or 'unrouted'}"
+    if routed_domain and routed_domain not in SPECULATION_SAFE_ROUTED_DOMAINS:
+        return False, f"domain:{routed_domain}"
     return True, "read_or_chat"
 
 
@@ -253,34 +261,51 @@ async def await_commit(what: str, gate: Optional[SpeculationGate] = None) -> Non
     raise SpeculativeTurnCancelled(f"{what}: speculative turn {gate.turn_id} {verdict}")
 
 
-def note_turn_user(user_id: Optional[str]) -> None:
-    """Record the bound speculative turn's acting user (no-op when none bound)."""
+# Verdicts of recently CLOSED gates, so a brain-tool dispatch that arrives just
+# after its turn's stream ended still gets the right answer (released → run,
+# dropped → refuse). Bounded; oldest evicted first.
+_RECENT_VERDICTS: "OrderedDict[str, str]" = OrderedDict()
+_RECENT_VERDICTS_MAX = 256
+
+# The daemon mints turn ids as hex; anything else is never forwarded to the brain.
+_TURN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def bound_turn_id() -> Optional[str]:
+    """The bound speculative turn's id when it is safe to put on the wire, else None.
+    The brain seam forwards it (``zoe_flue_client``) so the sidecar echoes it back on
+    every intent-dispatch the turn's tools make."""
     gate = _BOUND.get()
-    if gate is not None and user_id:
-        gate.user_id = user_id
+    if gate is None or not _TURN_ID_RE.match(gate.turn_id or ""):
+        return None
+    return gate.turn_id
 
 
-async def hold_brain_tool_write(user_id: str, intent_name: str) -> bool:
+async def hold_speculative_dispatch(turn_id: Optional[str], intent_name: str) -> bool:
     """Brain-lane hold for ``POST /api/system/intent-dispatch``.
 
     A speculative chat turn's brain runs before the verdict, and its write tools
-    reach zoe-data as a SEPARATE request (the Flue sidecar → intent-dispatch), so
-    the ContextVar cannot follow them. This keys on the acting user instead: while
-    that user has an unresolved speculative turn, a non-read intent waits for its
-    verdict. Returns False when the verdict dropped it — the caller answers
-    ``ok: false`` (the brain says it could not confirm; the cancelled stream is
-    never heard). Cost of keying by user rather than turn: a same-user write from
-    ANOTHER channel inside that ≤ max-hold window waits too, and on a cancel is
-    refused loudly (never silently lost). No speculative turn pending → True at once.
+    reach zoe-data as a SEPARATE request, which the ContextVar cannot follow. The
+    Flue sidecar echoes the turn id it was sent (``speculative_turn_id``), so the
+    hold is keyed on the ORIGINATING turn: only that turn's non-read dispatches
+    wait for its verdict. No id (every other session, channel or lane) → runs at
+    once. Returns False when the verdict dropped the turn (the caller answers
+    ``ok: false``; the cancelled stream is never heard). An id this process has no
+    record of → True (not a speculative turn here, e.g. across a restart).
     """
-    if intent_is_speculation_safe(intent_name):
+    if not turn_id or intent_is_speculation_safe(intent_name):
         return True
-    for gate in [g for g in list(_GATES.values()) if not g.resolved and g.user_id == user_id]:
+    gate = _GATES.get(turn_id)
+    if gate is not None:
         try:
             await await_commit(f"brain-tool:{intent_name}", gate)
         except SpeculativeTurnCancelled:
             return False
-    return True
+        return True
+    verdict = _RECENT_VERDICTS.get(turn_id)
+    if verdict is None:
+        return True
+    return verdict in RELEASED_VERDICTS
 
 
 def defer_until_commit(coro, what: str = "background"):
@@ -307,7 +332,14 @@ def defer_until_commit(coro, what: str = "background"):
                 _close_unstarted(coro)
                 return None
             if prev is not None and not prev.done():
-                await asyncio.wait({prev}, timeout=max_hold_seconds())
+                # Spawn order: start only once the PREVIOUS effect has finished.
+                # The cap is a safety valve against a wedged effect, not a
+                # schedule — hitting it is a bug worth a WARNING.
+                _done, _pending = await asyncio.wait({prev}, timeout=_SIDE_EFFECT_ORDER_CAP_S)
+                if _pending:
+                    logger.warning("voice/turn_stream speculation: %s waited %.0fs for the previous "
+                                   "side effect of turn_id=%s; running it out of order",
+                                   what, _SIDE_EFFECT_ORDER_CAP_S, gate.turn_id)
             return await coro
         finally:
             if not done.done():
@@ -347,6 +379,10 @@ def close_gate(gate: SpeculationGate) -> None:
         _GATES.pop(gate.turn_id, None)
     if not gate.resolved:
         gate.resolve("cancel", reason="closed")
+    _RECENT_VERDICTS[gate.turn_id] = gate.verdict()
+    _RECENT_VERDICTS.move_to_end(gate.turn_id)
+    while len(_RECENT_VERDICTS) > _RECENT_VERDICTS_MAX:
+        _RECENT_VERDICTS.popitem(last=False)
 
 
 def ack_frame(gate: SpeculationGate) -> bytes:

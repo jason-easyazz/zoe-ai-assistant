@@ -3209,10 +3209,6 @@ async def voice_command(
             )
             effective_user = _panel_bound_user
 
-    # B1.1 phase 2: key the brain-tool write hold (intent-dispatch arrives on a
-    # separate request) to this speculative turn's acting user. No-op unless bound.
-    _speculation.note_turn_user(effective_user)
-
     logger.info(
         "voice/command panel=%s session=%s user=%s len=%d "
         "[identity: identified=%s bound=%s panel_recent=%s panel_default=%s scope_user=%s has_scope=%s]",
