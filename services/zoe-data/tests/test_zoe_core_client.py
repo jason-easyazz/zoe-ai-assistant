@@ -508,6 +508,18 @@ def _toolcall_start(tc_id, name, rid="req-1", content_index=0):
             }}
 
 
+def _toolcall_start_v084(tc_id, name, rid="req-1", content_index=0):
+    """Pi >= 0.84.0 RPC shape: id/toolName on the frame, NO partial (verified
+    against @earendil-works/pi-coding-agent@0.85.1 dist/modes/json-event.js)."""
+    return {"type": "message_update", "id": rid,
+            "assistantMessageEvent": {
+                "type": "toolcall_start",
+                "contentIndex": content_index,
+                "id": tc_id,
+                "toolName": name,
+            }}
+
+
 def _toolcall_end(rid="req-1"):
     return {"type": "message_update", "id": rid,
             "assistantMessageEvent": {"type": "toolcall_end"}}
@@ -563,6 +575,69 @@ async def test_toolcall_start_emits_start_sentinel():
     ])
     tools = [_parse_tool(s) for s in out if s.startswith("__TOOL__:")]
     assert tools == [{"phase": "start", "id": "tc-1", "name": "list_add"}]
+
+
+# ── Dual-shape toolcall_start parsing (Pi 0.82.1 legacy vs Pi >= 0.84.0) ────
+
+
+def test_toolcall_block_legacy_partial_shape_unchanged():
+    """Legacy (Pi <= 0.83) frame: the block is returned exactly as before — the
+    same object from partial.content[contentIndex]."""
+    import zoe_core_client as zc
+    amev = _toolcall_start("tc-1", "list_add", content_index=0)["assistantMessageEvent"]
+    block = zc._toolcall_block_from_amev(amev)
+    assert block is amev["partial"]["content"][0]
+    assert (block["id"], block["name"]) == ("tc-1", "list_add")
+
+
+def test_toolcall_block_v084_shape_reads_id_and_tool_name():
+    """Pi >= 0.84 frame (no partial): id + toolName are normalised to id/name."""
+    import zoe_core_client as zc
+    amev = _toolcall_start_v084("call_abc123", "web_search", content_index=1)["assistantMessageEvent"]
+    assert "partial" not in amev
+    block = zc._toolcall_block_from_amev(amev)
+    assert block is not None
+    assert (block["id"], block["name"]) == ("call_abc123", "web_search")
+
+
+@pytest.mark.parametrize("amev", [
+    {"type": "toolcall_start"},
+    {"type": "toolcall_start", "contentIndex": 0},
+    {"type": "toolcall_start", "id": "", "toolName": ""},
+    {"type": "toolcall_start", "id": 7, "toolName": None},
+    {"type": "toolcall_start", "partial": "nope"},
+    {"type": "toolcall_start", "partial": {"content": [{"type": "text", "text": "x"}]}},
+])
+def test_toolcall_block_missing_both_shapes_is_none(amev):
+    import zoe_core_client as zc
+    assert zc._toolcall_block_from_amev(amev) is None
+
+
+def test_toolcall_block_v084_non_string_id_is_dropped_not_passed_through():
+    """A valid toolName with a non-string id must yield id=None (name-tracked),
+    never the invalid id — the reader would otherwise wait on an id that no
+    tool_execution_end frame can clear (Greptile, #1719)."""
+    import zoe_core_client as zc
+    block = zc._toolcall_block_from_amev({"type": "toolcall_start", "id": 7, "toolName": "web_search"})
+    assert block == {"type": "toolCall", "id": None, "name": "web_search"}
+
+
+@pytest.mark.asyncio
+async def test_toolcall_start_v084_emits_start_and_result_sentinels():
+    """End-to-end on the Pi >= 0.84 wire: the start sentinel carries id/name and
+    the matching tool_execution_end is recognised (tracked by id)."""
+    out = await _run_read_turn([
+        _accept(),
+        _toolcall_start_v084("tc-1", "list_add"),
+        _toolcall_end(),
+        _tool_exec_end(tc_id="tc-1", result="Added bread."),
+        _agent_end(),
+    ])
+    tools = [_parse_tool(s) for s in out if s.startswith("__TOOL__:")]
+    assert tools == [
+        {"phase": "start", "id": "tc-1", "name": "list_add"},
+        {"phase": "result", "id": "tc-1", "result": "Added bread."},
+    ]
 
 
 @pytest.mark.asyncio
@@ -703,12 +778,16 @@ async def _run_read_turn_streamed(batches, *, request_id="req-1", timeout_s=5.0)
 
 
 @pytest.mark.asyncio
-async def test_slow_tool_gap_does_not_truncate(monkeypatch):
+@pytest.mark.parametrize("start_frame", [_toolcall_start, _toolcall_start_v084],
+                         ids=["pi-legacy-partial", "pi-0.84-id-toolName"])
+async def test_slow_tool_gap_does_not_truncate(monkeypatch, start_frame):
     """A >idle-window gap WHILE a tool is outstanding must NOT trigger the idle
     timeout: the turn waits out the slow tool and streams the full answer.
 
     Without the fix the idle timeout fires during the gap (streamed_any +
-    saw_turn_end) and _read_turn returns the pre-tool fragment as complete."""
+    saw_turn_end) and _read_turn returns the pre-tool fragment as complete.
+    Parametrised over both Pi RPC toolcall_start shapes: on Pi >= 0.84 an
+    unparsed start frame would leave the tool untracked and truncate here."""
     import zoe_core_client as zc
     monkeypatch.setattr(zc, "_IDLE_TIMEOUT_S", 0.05)
 
@@ -717,7 +796,7 @@ async def test_slow_tool_gap_does_not_truncate(monkeypatch):
             (0.0, [
                 _accept(),
                 _delta("Let me search"),
-                _toolcall_start("tc-1", "web_search"),
+                start_frame("tc-1", "web_search"),
                 _message_end_toolcall("tc-1", "web_search", {"query": "weekend weather"}),
                 {"type": "turn_end", "id": "req-1"},
             ]),

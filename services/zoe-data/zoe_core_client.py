@@ -161,11 +161,34 @@ def _worker_env(user_id: str, *, voice_mode: bool = False) -> dict[str, str]:
 def _toolcall_block_from_amev(amev: Mapping) -> "Mapping | None":
     """Pull the toolCall block out of a toolcall_start amev frame.
 
-    Schema (verified live): amev.partial.content[contentIndex] == {type:"toolCall",
-    id, name, arguments, ...}. We index by contentIndex when present; otherwise we
-    scan partial.content for the first toolCall block. Returns None (skip the
-    sentinel) on any missing/odd shape rather than raising.
+    Accepts BOTH Pi RPC shapes, because the global ``pi`` on the box and the
+    version pinned in services/zoe-core/package.json can differ during an upgrade:
+
+    * **Pi >= 0.84.0** (delta-only ``message_update``): the frame carries the call
+      identity directly — ``{type:"toolcall_start", contentIndex, id, toolName}`` —
+      and NO ``partial``. Field names verified against the installed
+      @earendil-works/pi-coding-agent@0.85.1: ``dist/modes/json-event.js``
+      ``toJsonAssistantMessageEvent`` returns ``{...deltaEvent, id: toolCall.id,
+      toolName: toolCall.name}`` with ``partial`` stripped (``docs/rpc.md``
+      "message_update (Streaming)"). Arguments are NOT on this frame (they stream
+      as ``toolcall_delta``; ``message_end`` stays authoritative for full args).
+    * **Pi <= 0.83.x** (legacy, verified live on 0.82.1):
+      ``amev.partial.content[contentIndex] == {type:"toolCall", id, name,
+      arguments, ...}``. We index by contentIndex when present; otherwise we scan
+      partial.content for the first toolCall block.
+
+    The new shape is normalised to the legacy block's keys (``id``/``name``) so
+    every consumer (_remember_tool_start, the start sentinel) is shape-agnostic.
+    Returns None (skip the sentinel) on any missing/odd shape rather than raising.
     """
+    tc_id = amev.get("id")
+    tc_name = amev.get("toolName")
+    # Validate each field independently: a non-string id must never be passed
+    # through, or the reader would track an id no tool-end frame can clear.
+    tc_id = tc_id if isinstance(tc_id, str) and tc_id else None
+    tc_name = tc_name if isinstance(tc_name, str) and tc_name else None
+    if tc_id or tc_name:
+        return {"type": "toolCall", "id": tc_id, "name": tc_name}
     partial = amev.get("partial")
     if not isinstance(partial, Mapping):
         return None
