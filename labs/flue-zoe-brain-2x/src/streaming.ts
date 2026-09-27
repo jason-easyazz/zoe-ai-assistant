@@ -229,7 +229,8 @@ export function newSeamAState(): SeamAState {
  * `state`. Mirrors zoe_core_client._read_turn's mapping of the SAME underlying
  * pi-agent-core activity, defensively (a malformed event maps to nothing):
  *
- * EVENT VOCABULARY RE-VERIFIED ON @flue/runtime 2.0.1 (docs/reference/events.md):
+ * EVENT VOCABULARY RE-VERIFIED ON @flue/runtime 2.0.1 AND 2.1.1 (docs/reference/events.md;
+ * the only 2.0.1→2.1.1 diff is `contextCompacted` now being populated, unused here):
  * every case below survives the 2.x redesign with the same field names —
  * `{ type: 'text_delta'; text }`, `{ type: 'thinking_end'; content }`,
  * `{ type: 'message_end'; message }`, `{ type: 'tool_start'; toolName;

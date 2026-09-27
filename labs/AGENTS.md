@@ -49,9 +49,17 @@ with its own README/RUNBOOK and is self-contained.
   flue-zoe-brain-2x.service` on the Jetson — the live voice brain (retargeted to
   2.x in #1675 when the 1.x `labs/flue-zoe-brain/` lane was retired). A merged
   commit touching one line under that path reaches production without any further
-  decision. So: **breaking or version-bumping work goes in a SIBLING directory**,
+  decision. So: **breaking or MAJOR-version work goes in a SIBLING directory**,
   never in place, and the deployed path stays byte-identical to `main` on such a
-  branch. Verify before committing with
+  branch (route (a), sibling + cutover — how #1675 took 1.x → 2.x). **Narrow exception
+  (operator decision 2026-09-27, B1.11):** an in-place PATCH/MINOR dependency bump of
+  `flue-zoe-brain-2x/` or `flue-zoe-telegram-2x/` — same major, no source change beyond
+  comments and version pins — may land in place ONLY when the PR carries (i) parallel-port
+  proof: the PR-head build run as a second sidecar on another port with an isolated
+  `ZOE_BRAIN_DB` store, and `voice_regression_probe.py` (`--service-dir` on the PR worktree,
+  `ZOE_FLUE_BRAIN_URL` at that port, remote STT) PASSING against it, posted on the PR with
+  the head sha; and (ii) the normal head-bound voice-gate replay at land time. For sibling
+  work, verify before committing with
   `git diff origin/main --stat -- labs/flue-zoe-brain-2x/` — it must print nothing.
   A sibling name does NOT match that pathspec (git treats the trailing slash as an
   exact directory component), which is what makes the pattern safe; re-verify if a
@@ -132,7 +140,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   pins the omnigent session-id shell guard (`assertSafeSessionId` — the third call
   site of the docker-exec kick, agreeing with `omnigent_issue_executor.py` and
   `cross_review.sh`) with a behavioural negative control.
-- `flue-zoe-brain-2x/` — **THE LIVE BRAIN.** Flue 2.0.1-hosted Pi `Agent` on the
+- `flue-zoe-brain-2x/` — **THE LIVE BRAIN.** Flue 2.1.1-hosted Pi `Agent` on the
   local Gemma brain (the `flue` lane behind the `run_zoe_core` seam, per
   `docs/architecture/zoe-flue-integration.md`), cut over 2026-08-09 from the
   retired 1.x `flue-zoe-brain/` beta lane (stopped, disabled and source-removed
@@ -239,7 +247,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   MemAvailable ≥ 2 GB, never resident, never prod-wired. Weights stay at
   `/home/zoe/models/lab/`.
 - `flue-zoe-telegram-2x/` — the **LIVE Telegram bot since the 2026-08-09 cutover**
-  (Flue 2.0.1). `flue-zoe-telegram.service` runs THIS directory on `:3582` (via the
+  (Flue 2.1.1). `flue-zoe-telegram.service` runs THIS directory on `:3582` (via the
   operator drop-in; the tracked template also points here), and `deploy.yml`
   rebuilds + restarts the unit on any diff under `labs/flue-zoe-telegram-2x/` —
   this subtree is production-deployed, treat changes accordingly. The 1.x beta

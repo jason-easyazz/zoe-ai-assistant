@@ -31,8 +31,8 @@ status: 🔨 active — NEXT ACTION is always §0
 2. **Queue state (2026-09-27 pm):** MERGED since 09-26 — #1691 (B10.0), #1692 (B3.1 lab),
    #1685 (B1.1, flag-dark), #1700 (B0.11), #1701 (B6.5), #1702 (B10.1, flag-dark), #1706 +
    #1717 (B0.7), #1709 (B0.4), #1711 + #1712 (B6.6), #1713 (VAD gate), #1714 (B1.10). Landing:
-   #1716 (B6.6 ctx 8192, head-bound replay). Parked drafts: #1694 (B1.11), #1715 (B5.1
-   evidence). Voice-scope PRs need a
+   #1716 (B6.6 ctx 8192, head-bound replay). Parked draft: #1715 (B5.1
+   evidence); #1694 (B1.11) lands in place per decision (b) 2026-09-27. Voice-scope PRs need a
    head-bound probe after EVERY `update-branch` (strict mode); the Kokoro-paused window
    (`systemctl --user stop kokoro-tts` → probe with `--service-dir` → start → verify
    `curl http://localhost:10201/health` shows `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
@@ -421,15 +421,19 @@ status: 🔨 active — NEXT ACTION is always §0
   or env var reverts them; best config-only mitigation (glibc `MALLOC_*`) is still ~30 % slower
   per step, so HOLD stands (decoder step 63 ms vs 21 ms; runbook §8–§10). The 0.1.3 A/B is
   done (adopted, above). Next: 🧑 the upstream issue naming the flags — Jason's call.
-- B1.11 ⏸ PARKED 2026-09-26 — Flue 2.1.1 (`@flue/*` 2.0.1 → 2.1.1 in both 2x sidecars; hono /
-  nanoid advisories cleared, `npm audit` 0; 209/209 + 44/44 tests; store format unchanged, one
-  fold-checkpoint re-fold on first start). Draft **PR #1694** was proven the way the contract
-  intends — the 2.1.1 build from the PR worktree ran on a parallel port :3580 with an isolated
-  store and the head-bound replay PASSED twice — but the branch upgrades the auto-deployed trees
-  IN PLACE and `labs/AGENTS.md` mandates a SIBLING directory for version bumps. 🧑 Jason
-  decides: (a) the two-PR sibling + cutover route (as #1675 did for 1.x → 2.x), or (b) amend
-  the contract to allow in-place patch/minor dependency bumps that carry head-bound
-  parallel-port evidence. Then 2.2.0 for the llama.cpp tool-call fixes.
+- B1.11 🔨 LANDING IN PLACE per operator decision (b) 2026-09-27 — Flue 2.1.1 (`@flue/*`
+  2.0.1 → 2.1.1 in both 2x sidecars; `pi-ai` held at 0.83.0; `hono` pinned 4.13.7, the newest
+  release ≥14 days old — 4.13.8/4.13.9 are too young; nanoid advisories cleared; `npm audit
+  --omit=dev` 0 in both trees; 231/231 brain + 44/44 telegram tests, typecheck, build and both
+  built smokes green on the merged tree; store format unchanged, one fold-checkpoint re-fold on
+  first start). `labs/AGENTS.md` amended the same day: in-place PATCH/MINOR bumps of the two
+  auto-deployed Flue trees are allowed with head-bound parallel-port proof + the land-time
+  voice-gate replay; majors still take route (a), sibling + cutover. Draft **PR #1694**: the
+  final-head build ran as a second sidecar on :3580 with an isolated `ZOE_BRAIN_DB` store and
+  the head-bound replay (`--service-dir` on the PR worktree, remote STT) PASSED — sha, OK count,
+  medians and VAD in the PR's evidence comment (a commit cannot carry numbers measured on
+  itself). Remaining: the land-time head-bound voice-gate replay. Then 2.2.0 for the llama.cpp
+  tool-call fixes.
   **Flue 2.2.0 is NOT drop-in (2026-09-26, §4):** it exists only as `2.2.0-next.1` on npm
   (2026-09-25; no 2.1.2, no 2.2.0 final) and bumps Pi to 0.87.1. Pi ≥0.86 changes the
   `ProviderStreams` input from `Context` to `TranscriptContext` (system prompt + tools travel
@@ -799,6 +803,9 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (late) — B1.11 route (b) approved: `labs/AGENTS.md` allows in-place PATCH/MINOR
+  bumps of the auto-deployed Flue trees with head-bound parallel-port proof; #1694 merged with
+  main (hono 4.13.7 by the 14-day rule), final-head :3580 proof PASS, landing in place.
 - 2026-09-27 (pm) — live-reality refresh: B0.1 ✅ (zram 8 × 244 MB persisted); B0.4 ✅ applied
   (b11194, FA on, q8_0 KV, RSS 7.3 → 5.7 GB, replay 13/13); B0.7 ✅ cutover live (#1706 + #1717,
   CPython 3.12.13, replay 13/13); B5.1 ❌ parked (#1715); B6.6 ctx 8192 applied, #1712 merged,

@@ -16,7 +16,9 @@ its state is disposable, and every contract it depends on is plain HTTP. It is
 the pathfinder for the brain sidecar (`labs/flue-zoe-brain-2x/`, PR #1616),
 whose cutover is the one that can take the voice path down.
 
-Ported to `@flue/runtime` **2.0.1** (`@flue/cli`/`@flue/vite` 2.0.1, `vite` 8).
+Ported to `@flue/runtime` **2.0.1** (`@flue/cli`/`@flue/vite` 2.0.1, `vite` 8); on
+**2.1.1** since B1.11 (`@flue/*@2.1.1`, `hono` ≥4.13.5, `nanoid` ≥3.3.18 — no API
+change; the fold checkpoint re-folds once from the event log, `FLUE_FORMAT_VERSION` stays 1).
 Same external behaviour, same four zoe-data contracts, same `/health` semantics,
 same URL shape.
 

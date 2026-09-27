@@ -1,4 +1,4 @@
-# flue-zoe-brain-2x — Zoe's live Gemma brain (Flue 2.0.1, sole brain since the 2026-08-09 cutover)
+# flue-zoe-brain-2x — Zoe's live Gemma brain (Flue 2.1.1, sole brain since the 2026-08-09 cutover)
 
 > ## ⚠ This directory IS the live voice brain
 >
@@ -36,6 +36,22 @@
 > changed the POST body shape, so the flip was a coordinated change on both sides
 > (the `ZOE_FLUE_WIRE=2` selector in `services/zoe-data/zoe_flue_client.py`, and
 > `parity/flue_wire.py` as the reference implementation of the new wire).
+
+> **Flue 2.1.1 (B1.11, upgraded from 2.0.1).** `@flue/{runtime,cli,vite}@2.1.1`,
+> `pi-ai` still pinned **0.83.0** (2.1.1 declares `^0.83.0`; 0.84+ changes the
+> provider stream contract — do not bump it here). Verified against the packed
+> 2.1.1 dist, not the changelog: `FLUE_FORMAT_VERSION` stays 1 (no store reset);
+> the fold-checkpoint format went 1 → 3, which the runtime handles by re-folding
+> once from the event log ("folding from the origin instead" warning on first
+> use of each conversation); the sqlite DDL is identical; the event vocabulary in
+> `src/streaming.ts` is unchanged (`contextCompacted` is now populated, unused
+> here); `MAX_FOLLOWUPS = 32` and the `while (true)` loop are unchanged, so
+> **`ZOE_BRAIN_MAX_TOOL_ITERS` in `src/providers/capped-completions.ts` remains
+> the only tool-round cap**. New in 2.1: `defineTool({ timeoutMs })` +
+> `ToolTimeoutError` — not adopted, because every tool in `src/tools/zoe-tools.ts`
+> already bounds its own fetch with `AbortSignal.timeout(ZOE_BRAIN_TOOL_TIMEOUT_MS)`.
+> The 2.0.2 sandbox-type renames are deprecated aliases and this app imports no
+> sandbox symbol. Advisories cleared: `hono` ≥4.13.5, `nanoid` ≥3.3.18 (dev-only).
 
 A Flue-hosted Pi `Agent` on Zoe's local Gemma brain.
 
