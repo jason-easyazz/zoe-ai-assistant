@@ -72,8 +72,6 @@ USER_SCOPED_INTENTS: frozenset[str] = frozenset({
     "music_setup",
     # Panel setup/auth flows.
     "panel_confirm_code", "panel_list", "panel_setup", "panel_status",
-    # External integrations requiring user credentials.
-    "connect_chatgpt",
 })
 
 

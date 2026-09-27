@@ -24,6 +24,7 @@ import pytest
 from db_pool import _adapt_params
 
 import proactive.recipients as rcp
+import proactive.triggers.emotional_followup as efu
 import proactive.triggers.evening_windown as ew
 import proactive.triggers.morning_checkin as mc
 import proactive.triggers.evolution_weekly_digest as ed
@@ -61,7 +62,8 @@ def test_pg_interval_survives_compat_shim():
 
 @pytest.mark.parametrize(
     "trigger_cls",
-    [ew.EveningWindDownTrigger, mc.MorningCheckInTrigger, ed.EvolutionWeeklyDigestTrigger],
+    [ew.EveningWindDownTrigger, mc.MorningCheckInTrigger, ed.EvolutionWeeklyDigestTrigger,
+     efu.EmotionalFollowUpTrigger],
 )
 def test_triggers_never_keep_a_private_session_window(trigger_cls):
     """The recipient window must not drift back into a trigger as its own

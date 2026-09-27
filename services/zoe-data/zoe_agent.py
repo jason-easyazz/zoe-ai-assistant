@@ -221,7 +221,7 @@ TOOL ROUTING — call proactively, don't ask for clarification first:
 - show_chart — a chart/graph or data to visualise. Render it, don't describe it.
 - show_action_menu — to offer 2-5 next steps after a multi-step task or at a decision point. Not after simple one-shot answers.
 - open_touch_page — "open/show/bring up" a Zoe page (weather, calendar, reminders, lists).
-- setup_telegram — set up/connect Telegram. list_openclaw_plugins — plugins/add-ons/extensions.
+- list_openclaw_plugins — plugins/add-ons/extensions.
 - list_openclaw_skills — skills, capabilities, "what can you do". When you can't do something a skill would enable, call it with highlight=<skill-name> (never omit highlight) and say so — e.g. "send me a Discord notification" → list_openclaw_skills(highlight="discord"), "I can't yet — the Discord skill would enable it."
 
 SELF-BUILDING: For a NEW widget/page/capability, don't refuse — call list_openclaw_skills with the builder highlight ("zoe-widget-builder", "zoe-page-builder", or "zoe-capability-extender"), then offer to escalate to Hermes to build it. Before saying "I can't do X", check the ZOE_SELF context below for what Zoe actually has.
@@ -383,19 +383,42 @@ def _zoe_soul(username: str = "", user_id: str = "", voice_mode: bool = False) -
     """Build the Zoe Agent system prompt with live datetime and user identity stamped in.
 
     The static base is placed FIRST so the llama-server KV cache can reuse the
-    large static prefix across turns.  The small dynamic header (datetime + user,
-    ~20 tokens) is appended at the end — only those tokens need reprocessing per
-    turn instead of the full ~3 000-token base.
+    large static prefix. CAVEAT: Gemma's template renders the tool block and the
+    history AFTER the system text, so this per-minute header still invalidates
+    both — the live voice path uses ``_build_voice_prompt`` (header in the user
+    message) instead.
     """
+    base = _ZOE_SOUL_VOICE if voice_mode else _ZOE_SOUL_STATIC
+    return f"{base}\n\n{_soul_header(username=username, user_id=user_id)}"
+
+
+def _soul_header(username: str = "", user_id: str = "") -> str:
+    """The per-turn ``[datetime]`` + logged-in-user header (changes every minute)."""
     import datetime
     now = datetime.datetime.now()
     dt_line = now.strftime("%A, %d %B %Y — %I:%M %p")
     user_line = f"The logged-in user is {username} (user_id: {user_id})." if username else (
         f"The logged-in user_id is {user_id}." if user_id else ""
     )
-    header = f"[{dt_line}]\n{user_line}".strip()
-    base = _ZOE_SOUL_VOICE if voice_mode else _ZOE_SOUL_STATIC
-    return f"{base}\n\n{header}"
+    return f"[{dt_line}]\n{user_line}".strip()
+
+
+def _build_voice_prompt(message: str, *, user_id: str, extras: list) -> tuple[str, str]:
+    """Voice-mode ``(system_prompt, user_message)`` — KV-prefix-friendly.
+
+    The system prompt is the byte-identical ``_ZOE_SOUL_VOICE``; everything that
+    varies per turn (the datetime/user header from ``_soul_header`` and the
+    portrait / facts / recall / offer extras) rides in the LATEST user message,
+    ahead of the user's words. Gemma's template renders system text, then the
+    tool block, then the history, so per-turn content in the system prompt (the
+    old ``_zoe_soul(voice_mode=True) + extras`` layout) re-prefilled the tool
+    block AND every history message on every turn. The text is unchanged — it is
+    only relocated, mirroring what chat mode already does via ``_build_prompt``.
+    """
+    context = "\n\n".join(
+        filter(None, [_soul_header(user_id=user_id), *[e for e in extras if e]])
+    )
+    return _ZOE_SOUL_VOICE, (f"{context}\n\n{message}" if context else message)
 
 # OpenAI-compatible tool definitions sent in the API request.
 # llama.cpp routes these through delta.tool_calls, completely separate from text content.
@@ -809,14 +832,6 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "setup_telegram",
-            "description": "Show the Telegram setup wizard in chat so the user can connect their Telegram bot to Zoe. Use when the user asks to set up, connect, or configure Telegram.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "proactive_schedule",
             "description": (
                 "Schedule a proactive push notification at a future time (notify/remind/message later). "
@@ -902,7 +917,7 @@ _SKILL_TOOLS: dict[str, list[str]] = {
     "touch":      ["open_touch_page"],
     "bash":       ["bash"],
     "visual":     ["show_map", "show_chart"],
-    "discovery":  ["list_openclaw_plugins", "list_openclaw_skills", "setup_telegram", "show_action_menu"],
+    "discovery":  ["list_openclaw_plugins", "list_openclaw_skills", "show_action_menu"],
     "openclaw-fallback": ["escalate_to_openclaw"],
 }
 
@@ -3206,13 +3221,6 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "guest") -> 
         }
         return f"__UI__:{json.dumps(payload)}"
 
-    if tool_name == "setup_telegram":
-        payload = {
-            "component": "telegram_setup",
-            "props": {},
-        }
-        return f"__UI__:{json.dumps(payload)}"
-
     if tool_name == "list_openclaw_plugins":
         try:
             async with httpx.AsyncClient(timeout=5) as client:
@@ -3863,15 +3871,15 @@ async def run_zoe_agent(
     memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx, enhance_ctx]))
 
     if voice_mode:
-        # Voice: keep datetime+user in system prompt (voice has no history window, latency
-        # budget is already tight — portrait goes into extras rather than the prompt header).
-        extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx, pending_offers]))
-        system_prompt = (
-            f"{_zoe_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
-            if extras else _zoe_soul(user_id=user_id, voice_mode=True)
+        # Voice: stable system prompt; datetime/user + portrait/memory extras ride
+        # in the latest user message so the KV prefix (soul + tools + history) is
+        # reused across turns — see _build_voice_prompt.
+        system_prompt, user_message = _build_voice_prompt(
+            message,
+            user_id=user_id,
+            extras=[user_portrait, mp_facts, db_memory_context, memory_ctx, pending_offers],
         )
         active_tools = _build_voice_tools(_voice_needs_tools(message))
-        user_message = message
         _first_turn_choice = "auto"
     else:
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
@@ -4254,14 +4262,14 @@ async def run_zoe_agent_streaming(
     memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx, enhance_ctx]))
 
     if voice_mode:
-        # Voice: portrait goes into extras alongside memory (system prompt, no history window).
-        extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx, pending_offers]))
-        system_prompt = (
-            f"{_zoe_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
-            if extras else _zoe_soul(user_id=user_id, voice_mode=True)
+        # Voice: stable system prompt; per-turn context rides in the latest user
+        # message (KV-prefix reuse) — see _build_voice_prompt.
+        system_prompt, user_message = _build_voice_prompt(
+            message,
+            user_id=user_id,
+            extras=[user_portrait, mp_facts, db_memory_context, memory_ctx, pending_offers],
         )
         active_tools = _build_voice_tools(_voice_needs_tools(message))
-        user_message = message
         _first_turn_choice = "auto"
     else:
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.

@@ -3,7 +3,9 @@
 The proven 90.1% config from labs/router-90-campaign (results/r2-gb-mlp-g0.5):
 
   Stage 1  MLP head (models/router_head_mlp.joblib, trained in
-           labs/setfit-router on the SAME frozen bge-small embedding
+           labs/setfit-router, served from its numpy export
+           router_head_mlp.npz via router_heads_numpy.py; trained
+           on the SAME frozen bge-small embedding
            semantic_router already computes per turn) → top-3 non-chat
            domain shortlist + chat gate 0.5 (top==chat OR conf<gate → no
            tool call, fall to the brain).
@@ -28,6 +30,8 @@ Env (defaults = the proven config):
   ZOE_ROUTER_TWO_STAGE_GATE       0.5
   ZOE_ROUTER_TWO_STAGE_TIMEOUT_S  1.5   (strict client timeout → brain)
   ZOE_ROUTER_HEAD_MLP_PATH        services/zoe-data/models/router_head_mlp.joblib
+                                  (numpy backend reads the .npz/.json beside it)
+  ZOE_ROUTER_HEADS_BACKEND        numpy (default) | joblib (one-release fallback)
 """
 from __future__ import annotations
 
@@ -135,14 +139,16 @@ def _ensure_head():
         if _HEAD is not None or _HEAD_FAILED:
             return _HEAD
         try:
-            import joblib
+            # numpy backend by default (no sklearn/scipy in this process);
+            # ZOE_ROUTER_HEADS_BACKEND=joblib is the one-release fallback.
+            import router_heads_numpy
 
-            head = joblib.load(_head_path())
+            head = router_heads_numpy.load_head(_head_path())
             if not (hasattr(head, "predict_proba") and hasattr(head, "classes_")):
                 raise TypeError(f"unexpected head artifact {type(head)!r}")
             _HEAD = head
-            logger.info("two_stage head loaded %s (%d classes)",
-                        _head_path(), len(head.classes_))
+            logger.info("two_stage head loaded %s (%d classes, backend=%s)",
+                        _head_path(), len(head.classes_), router_heads_numpy.backend())
         except Exception as exc:
             _HEAD_FAILED = True
             logger.warning("two_stage head load failed (two-stage disabled, "

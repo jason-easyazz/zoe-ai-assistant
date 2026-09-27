@@ -298,8 +298,6 @@ def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
     if intent is not None:
         if intent.name == "ha_full_setup":
             return HA_FULL_SETUP_OPENCLAW_MESSAGE
-        if intent.name == "connect_chatgpt":
-            return _CONNECT_CHATGPT_OPENCLAW_MSG
         if intent.name == "build_widget":
             return f"{_BUILD_WIDGET_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
         if intent.name == "build_page":
@@ -343,31 +341,6 @@ _TIME_MATH_CLARIFICATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-
-_CONNECT_CHATGPT_RE = re.compile(
-    r"^(?:can you |please |could you )?(?:connect|link|auth(?:orize|orise|)?|set\s*up|add|enable)\b"
-    r".*\b(?:chatgpt|openai|codex|gpt)\b",
-    re.IGNORECASE,
-)
-_CONNECT_CHATGPT_OPENCLAW_MSG = (
-    "[ZOE_CONNECT: chatgpt_oauth]\n"
-    "The user wants to connect ChatGPT / OpenAI Codex to Zoe via OAuth.\n"
-    "Run: openclaw onboard --non-interactive 2>/dev/null || openclaw gateway call system.providers_status\n"
-    "1. Get the OAuth authorization URL from openclaw (use: openclaw onboard --print-url 2>/dev/null or parse gateway output).\n"
-    "2. Emit exactly ONE :::zoe-ui block with a qr_code component and a link_preview for the URL, plus a status poll:\n"
-    "   :::zoe-ui\n"
-    '   {"type":"qr_code","title":"Connect ChatGPT to Zoe","message":"Scan to authorise — or tap the link below.","url":"<oauth_url>","id":"chatgpt-auth"}\n'
-    "   :::\n"
-    "   :::zoe-ui\n"
-    '   {"type":"status","title":"Waiting for authorisation…","poll_endpoint":"/api/voice/chatgpt-auth-status","poll_interval_ms":3000,"id":"chatgpt-auth-status"}\n'
-    "   :::\n"
-    "3. Your verbal reply must be ≤2 short sentences, e.g.: \"Scan the QR code or tap the link to connect your ChatGPT account. I'll update you when it's done.\"\n"
-    "4. When openclaw confirms auth success (poll or event), emit:\n"
-    "   :::zoe-ui\n"
-    '   {"type":"status","title":"ChatGPT Pro connected ✓","message":"Builder skills now use ChatGPT for code generation.","id":"chatgpt-auth-status"}\n'
-    "   :::\n"
-    "5. NEVER include tokens, keys, or credentials in the chat reply."
-)
 
 _BUILD_VERB = r"(?:add|build|create|make|scaffold|generate|put|design|code)"
 # Broad match: build-verb at start + the word 'widget' appearing later in the sentence.
@@ -706,13 +679,6 @@ def detect_intent(
         return Intent("portrait_reveal", {})
     if _PORTRAIT_REFRESH_RE.search(t):
         return Intent("portrait_refresh", {})
-
-    # Connect ChatGPT / OpenAI to OpenClaw — admin-gated, handled via AG-UI OAuth flow.
-    if _CONNECT_CHATGPT_RE.match(t):
-        # Delegation intent — no structured slots to extract; empty dict bypasses
-        # the nlu_extractor path in detect_and_extract_intent so it returns the
-        # intent directly instead of trying (and failing) to extract slots.
-        return Intent("connect_chatgpt", {})
 
     # Zoe self-extension — always routes to OpenClaw (admin-gated in the skill).
     # Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.
@@ -2943,12 +2909,6 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             return "I need the actual times before I can work that out."
         return "What time do you need to arrive?"
 
-    if intent.name == "connect_chatgpt":
-        # Handled directly by chat.py via _chatgpt_connect_flow() — which runs
-        # the full device-code OAuth flow inline in the SSE stream.  Return None
-        # here so execute_intent does not produce a static text reply.
-        return None
-
     # Contact-offer replies (QA review F5): a surfaced "add X as a contact?"
     # offer answered off-panel with a plain yes/no. Accept goes through the
     # sanctioned pending_suggestions.execute_suggestion path (same as the panel
@@ -4058,51 +4018,50 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
         return None
 
 
-async def _execute_music_setup(user_id: str) -> str:
+async def _execute_music_setup(user_id: str) -> str:  # noqa: ARG001 — dispatch signature
+    """Reply for "set up music": point at the panel's Music → Browse → Sources
+    card, where **Connect** shows a QR the owner finishes on their phone.
+
+    Never a Music Assistant URL (the user never sees MA, and a ``localhost``
+    link is useless from a phone) and only the services Zoe actually offers —
+    both read from ``music_service.provider_catalogue()``, the sole MA client.
+    From a panel, chat also navigates it straight to that card
+    (``_INTENT_PANEL_NAV["music_setup"]`` in routers/chat.py).
     """
-    Return a rich markdown response for the music_setup intent.
-    Fetches live status from MA so the reply reflects what is actually configured.
-    """
-    ma_url = os.environ.get("MUSIC_ASSISTANT_URL", "http://localhost:8095")
-    ma_token = os.environ.get("MUSIC_ASSISTANT_TOKEN", "")
-    hdrs: dict[str, str] = {"Content-Type": "application/json"}
-    if ma_token:
-        hdrs["Authorization"] = f"Bearer {ma_token}"
-
-    version_str = ""
-    providers_str = "No streaming services connected yet."
-
+    connected: list[str] = []
+    attention: list[str] = []
+    offered: list[str] = []
     try:
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=4.0) as c:
-            r = await c.get(f"{ma_url}/info", headers=hdrs)
-            if r.status_code == 200:
-                info = r.json()
-                version_str = f" v{info.get('version', '')}"
-    except Exception:
-        pass
+        import music_service
 
-    try:
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=5.0) as c:
-            r = await c.post(f"{ma_url}/api", json={"command": "music/providers"}, headers=hdrs)
-            if r.status_code == 200:
-                data = r.json()
-                providers = data if isinstance(data, list) else (data.get("items") or [])
-                if providers:
-                    names = [p.get("name") or p.get("domain") or p.get("id", "?") for p in providers]
-                    providers_str = "Connected services: **" + "**, **".join(names) + "**."
-    except Exception:
-        pass
+        for p in await music_service.provider_catalogue():
+            name = str(p.get("name") or p.get("domain") or "").strip()
+            if not name:
+                continue
+            if p.get("needs_attention"):
+                attention.append(name)
+            elif p.get("connected"):
+                connected.append(name)
+            else:
+                offered.append(name)
+    except Exception as exc:  # noqa: BLE001 — the reply must never fail on a status read
+        logger.debug("music_setup: provider catalogue unavailable: %s", exc)
 
-    return (
-        f"🎵 **Music Assistant{version_str} Setup**\n\n"
-        f"{providers_str}\n\n"
-        f"To connect music services (Spotify, YouTube Music, Apple Music, Deezer and more), "
-        f"open the **[Music page](/music.html)** — it shows a setup wizard with Connect buttons "
-        f"for each provider.\n\n"
-        f"Or open Music Assistant directly: [{ma_url}]({ma_url})"
+    parts = []
+    if connected:
+        parts.append("Connected: **" + "**, **".join(connected) + "**.")
+    else:
+        parts.append("No music services are connected yet.")
+    if attention:
+        parts.append("**" + "**, **".join(attention) + "** needs reconnecting.")
+    parts.append(
+        "To add or reconnect one, open **Music** on your Zoe panel, go to "
+        "**Browse → Sources** and tap **Connect** — then scan the code with your "
+        "phone to sign in."
     )
+    if offered:
+        parts.append("Available to add: " + ", ".join(offered) + ".")
+    return "\n\n".join(parts)
 
 
 async def _music_top_recent_genre(user_id: str) -> Optional[str]:

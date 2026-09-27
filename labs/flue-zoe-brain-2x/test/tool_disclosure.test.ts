@@ -3,7 +3,10 @@
  *
  * Proves the wire-level active-set derivation in src/tools/tool-groups.ts:
  *   - a plain turn discloses ONLY the always-on core;
- *   - keyword relevance on the last user message pre-discloses matching groups;
+ *   - keyword relevance on the session's user messages pre-discloses matching
+ *     groups (session-sticky; ZOE_BRAIN_STICKY_DISCLOSURE=false → last message);
+ *   - the disclosed tool block is APPEND-ONLY across a session's turns (the
+ *     llama-server prompt-cache contract), in activation order;
  *   - an `activate_abilities` tool call in the transcript discloses its group
  *     on the next model request (the within-turn unlock path);
  *   - a previously-used grouped tool keeps its group disclosed (sticky);
@@ -22,6 +25,7 @@ import type { Context, Message, Tool } from '@earendil-works/pi-ai';
 
 const {
   activeToolNames,
+  groupActivationOrder,
   discloseTools,
   stripCodingBuiltins,
   CORE_TOOL_NAMES,
@@ -93,12 +97,124 @@ test('keyword relevance pre-discloses the matching group', () => {
   assert.ok(!active.has('create_note'));
 });
 
-test('keyword relevance matches the LAST user message, not earlier ones', () => {
+test('keyword relevance is session-sticky: an earlier user message keeps its group', () => {
   const active = activeToolNames([
     userMsg('what is the weather like?'),
     userMsg('thanks. how do I poach an egg?'),
   ]);
-  assert.ok(!active.has('get_weather'));
+  assert.ok(active.has('get_weather'));
+});
+
+test('ZOE_BRAIN_STICKY_DISCLOSURE=false restores last-user-message-only matching', () => {
+  process.env.ZOE_BRAIN_STICKY_DISCLOSURE = 'false';
+  try {
+    const active = activeToolNames([
+      userMsg('what is the weather like?'),
+      userMsg('thanks. how do I poach an egg?'),
+    ]);
+    assert.ok(!active.has('get_weather'));
+  } finally {
+    delete process.env.ZOE_BRAIN_STICKY_DISCLOSURE;
+  }
+});
+
+test('groupActivationOrder lists groups in the order they first became active', () => {
+  const order = groupActivationOrder([
+    userMsg('set a timer for ten minutes'),
+    assistantToolCall('set_timer'),
+    toolResult('set_timer', 'Timer set.'),
+    userMsg('can you check something for me?'),
+    assistantToolCall('activate_abilities', { group: 'calendar' }),
+    toolResult('activate_abilities', 'Activated.'),
+    userMsg('and what is the weather tomorrow? also any timers left?'),
+  ]);
+  assert.deepEqual(order, ['timers', 'calendar', 'weather']);
+});
+
+// ─── prompt-cache stability: the tool block is append-only per session ───────
+
+/**
+ * A realistic multi-turn voice session: each entry is the transcript as the
+ * provider sees it at the START of that turn (the new user message is last).
+ * Domains arrive, recur and go quiet — the shape that made the old
+ * last-message-only disclosure retract and re-insert groups.
+ */
+const SESSION_TURNS: Message[][] = (() => {
+  const script: Array<Message[]> = [
+    [userMsg('hey zoe, how are you?'), { role: 'assistant', content: [{ type: 'text', text: 'Good!' }] } as unknown as Message],
+    [userMsg('what is the weather like today?'), assistantToolCall('get_weather'), toolResult('get_weather', 'Sunny.')],
+    [userMsg('nice. tell me a joke'), { role: 'assistant', content: [{ type: 'text', text: 'Ha.' }] } as unknown as Message],
+    // A keyword turn the model answered WITHOUT a tool call: nothing makes the
+    // group sticky except the keyword itself — the retraction case.
+    [userMsg('play something relaxing'), { role: 'assistant', content: [{ type: 'text', text: 'Sure.' }] } as unknown as Message],
+    [userMsg('add milk to my shopping list'), assistantToolCall('shopping_list_add'), toolResult('shopping_list_add', 'Added.')],
+    [userMsg('set a timer for 5 minutes'), assistantToolCall('set_timer'), toolResult('set_timer', 'Set.')],
+    [userMsg('how do I poach an egg?'), { role: 'assistant', content: [{ type: 'text', text: 'Simmer.' }] } as unknown as Message],
+    [userMsg('is it going to rain?')],
+  ];
+  const turns: Message[][] = [];
+  let transcript: Message[] = [];
+  for (const [user, ...rest] of script) {
+    transcript = [...transcript, user];
+    turns.push(transcript); // what the FIRST model call of this turn sees
+    transcript = [...transcript, ...rest];
+  }
+  return turns;
+})();
+
+/** The rendered tool-block order the model sees on the first call of each turn. */
+function toolBlocks(disclose: (c: Context) => Context): string[][] {
+  return SESSION_TURNS.map((messages) => (disclose(ctx(messages)).tools ?? []).map((t) => t.name));
+}
+
+function assertAppendOnly(blocks: string[][]): void {
+  for (let i = 1; i < blocks.length; i++) {
+    const prev = blocks[i - 1];
+    const next = blocks[i];
+    assert.deepEqual(
+      next.slice(0, prev.length),
+      prev,
+      `turn ${i}: tool block must extend turn ${i - 1}'s (cached prefix), got\n  ${prev.join(',')}\n→ ${next.join(',')}`,
+    );
+  }
+}
+
+test('the tool block is append-only across consecutive turns of one session', () => {
+  const blocks = toolBlocks((c) => discloseTools(c));
+  assertAppendOnly(blocks);
+  // Not vacuous: the session really did grow the block.
+  assert.ok(blocks[blocks.length - 1].length > blocks[0].length);
+});
+
+test('via applyPolicies too (the real wire path), with the same append-only block', () => {
+  assertAppendOnly(toolBlocks((c) => applyPolicies(c)));
+});
+
+test('NEGATIVE CONTROL: last-message-only matching retracts groups and breaks the prefix', () => {
+  process.env.ZOE_BRAIN_STICKY_DISCLOSURE = 'false';
+  try {
+    assert.throws(() => assertAppendOnly(toolBlocks((c) => discloseTools(c))));
+  } finally {
+    delete process.env.ZOE_BRAIN_STICKY_DISCLOSURE;
+  }
+});
+
+test('NEGATIVE CONTROL: registration-order emission inserts a new group mid-block', () => {
+  // The pre-fix emission order: filter the registry in place. A group whose
+  // tools sit EARLY in the registry (lists) arriving after a later one
+  // (timers) lands in the middle and shifts every tool after it.
+  const registrationOrder = (c: Context): Context => {
+    const active = new Set((discloseTools(c).tools ?? []).map((t) => t.name));
+    return { ...c, tools: (c.tools ?? []).filter((t) => active.has(t.name)) };
+  };
+  const reordered: Message[][] = [
+    [userMsg('set a timer for 5 minutes')],
+    [userMsg('set a timer for 5 minutes'), assistantToolCall('set_timer'), toolResult('set_timer', 'Set.'), userMsg('add eggs to my shopping list')],
+  ];
+  const legacy = reordered.map((m) => (registrationOrder(ctx(m)).tools ?? []).map((t) => t.name));
+  assert.throws(() => assertAppendOnly(legacy));
+  const fixed = reordered.map((m) => (discloseTools(ctx(m)).tools ?? []).map((t) => t.name));
+  assertAppendOnly(fixed);
 });
 
 test('activate_abilities call in the transcript unlocks its group', () => {

@@ -545,6 +545,7 @@ class _ProvisionRaceDB:
             "token": "raw-device-token",
             "panel_id": "living-room",
             "expires_at": future,
+            "poll_secret_hash": panel_provision._hash_secret("pairing-device-secret"),
         }
 
     def execute(self, sql, params=None):
@@ -554,6 +555,9 @@ class _ProvisionRaceDB:
             # and both observe the still-present token before the conditional clear.
             snapshot = dict(self.row)
             return _SleepingExecResult([snapshot])
+        if s.startswith("SELECT STATUS FROM PANEL_PROVISION_CODES"):
+            # The loser's re-read: still confirmed (another poll collected it).
+            return _ExecResult([{"status": self.row["status"]}])
         if s.startswith("UPDATE PANEL_PROVISION_CODES SET TOKEN = NULL"):
             # Atomic conditional clear modeled by a single non-yielding step. The
             # query matches the EXACT token the poll observed (WHERE token = ?), so
@@ -583,8 +587,12 @@ class _SleepingExecResult(_ExecResult):
 async def test_provision_token_delivered_once_under_concurrency():
     """Exactly one of N concurrent polls receives the raw token (P2)."""
     db = _ProvisionRaceDB()
+
+    class _Req:  # the pairing device's poll, carrying its per-attempt secret
+        headers = {"X-Provision-Secret": "pairing-device-secret"}
+
     results = await asyncio.gather(
-        *[panel_provision.provision_poll("ABC123", db=db) for _ in range(8)]
+        *[panel_provision.provision_poll("ABC123", request=_Req(), db=db) for _ in range(8)]
     )
     with_token = [r for r in results if r.get("token")]
     assert len(with_token) == 1, f"token delivered {len(with_token)} times, expected 1"

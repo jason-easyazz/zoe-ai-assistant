@@ -100,8 +100,10 @@ TIGHT_CEILING_OK = {
     ),
     "functiongemma-router.service": (
         "Same bounded-model-server class as kokoro-tts: llama.cpp serving a "
-        "fixed 270M Q8_0 GGUF with a fixed --ctx-size 4096 KV cache and "
-        "--parallel 1, so everything large is allocated at startup and does not "
+        "fixed 270M Q8_0 GGUF with a fixed --ctx-size 1024 KV cache, "
+        "--parallel 1 and the prompt cache capped at --cache-ram 64 (the 8 GiB "
+        "default would outgrow the 1G ceiling), so everything large is "
+        "allocated at startup and does not "
         "grow with load (VmHWM 598.8 MB, only 1.05x VmRSS+VmSwap — a settled "
         "working set, not a starved lower bound). The 3x rule targets runtimes "
         "whose UNCOVERED allocation scales with load (V8 external buffers); "

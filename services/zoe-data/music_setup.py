@@ -91,3 +91,11 @@ def consume(token: str) -> Optional[dict[str, Any]]:
         return None
     _consumed[payload["n"]] = int(payload.get("exp", time.time() + SETUP_TTL_S))
     return payload
+
+
+def qr_path(token: str, provider: str) -> str:
+    """The panel's QR image path for a minted token: an opaque single-use handle
+    (``setup_qr``), never the token — nginx logs query strings."""
+    import setup_qr
+
+    return f"/api/music/setup/qr/{setup_qr.issue('music', token=token, provider=provider)}"

@@ -576,6 +576,43 @@ async def _recall_context_block(message: str, user_id: str) -> str:
     return f"{_RECALL_BLOCK_OPEN}\n{packet}\n{_RECALL_BLOCK_CLOSE}"
 
 
+def _log_prompt_cache(session_id: str, terminal: dict) -> None:
+    """Log llama-server prompt-cache reuse for one brain turn, if reported.
+
+    The 2.x sidecar puts ``prompt_cache: [{"prompt_n", "cache_n"}, ...]`` — one
+    entry per model call (tool round), in order — on its ``{"done": true}``
+    NDJSON terminal (labs/flue-zoe-brain-2x src/streaming.ts). ``prompt_n`` is
+    the tokens RE-PREFILLED for that call and ``cache_n`` the tokens reused from
+    llama-server's KV/prompt cache. The FIRST round is what gates time-to-first-
+    token: tens of tokens is a cache hit (~200 ms); hundreds is a miss (~1.7 ms
+    per token of extra prefill). Pair with the same session's ``VOICE TIMING``
+    line. Absent field (older sidecar) → nothing logged. Never raises.
+    """
+    try:
+        rounds = terminal.get("prompt_cache")
+        if not isinstance(rounds, list) or not rounds:
+            return
+        pairs: list[tuple[int, int]] = []
+        for entry in rounds:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                pairs.append((int(entry.get("prompt_n") or 0), int(entry.get("cache_n") or 0)))
+            except (TypeError, ValueError):
+                continue
+        if not pairs:
+            return
+        first_prompt, first_cache = pairs[0]
+        logger.info(
+            "FLUE_PROMPT_CACHE session=%s rounds=%d first_prompt_n=%d first_cache_n=%d "
+            "total_prompt_n=%d per_round=%s",
+            session_id, len(pairs), first_prompt, first_cache,
+            sum(p for p, _ in pairs), ",".join(f"{p}/{c}" for p, c in pairs),
+        )
+    except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+        pass
+
+
 def _text_from_body(body: Any) -> str:
     """Pull the reply text out of the sidecar's {result:{text}} envelope.
 
@@ -731,6 +768,7 @@ async def _run_turn_aggregated_wire2(
                     if isinstance(chunk, dict):
                         if chunk.get("done"):
                             done_seen = True
+                            _log_prompt_cache(session_id, chunk)
                             break
                         if "error" in chunk:
                             error_terminal = str(chunk["error"])[:200]
@@ -945,6 +983,7 @@ async def run_flue_brain_streaming(
                                 if chunk.get("done"):
                                     finished = True
                                     done_ok = True
+                                    _log_prompt_cache(session_id, chunk)
                                     break
                                 if "error" in chunk:
                                     logger.warning("flue stream reported error: %s", str(chunk["error"])[:200])

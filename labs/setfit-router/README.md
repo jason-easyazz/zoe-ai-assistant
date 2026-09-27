@@ -36,6 +36,9 @@ stick that in" → calendar) plus notes↔memory boundary confusion — see
 
 - 5-fold CV on the training set: logreg 0.904 ± 0.026, mlp 0.906 ± 0.020.
 - Artifacts: `artifacts/head_logreg.joblib` (38 KB), `artifacts/head_mlp.joblib` (1.5 MB) — both committed.
+  zoe-data does NOT unpickle these at runtime (since 2026-09-27): after copying a head into
+  `services/zoe-data/models/`, re-export it with `scripts/maintenance/export_router_heads.py`
+  (numpy `.npz` + `.json`, sklearn parity ≤ 1e-6) — so these pins now bind the export, not prod.
 
 ## Label set (13 classes)
 
