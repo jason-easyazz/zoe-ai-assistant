@@ -724,6 +724,22 @@ status: 🔨 active — NEXT ACTION is always §0
 - B7.2 ⬜ Ask-card conversation mode (PR-1a) → retire `voice.html`.
 - B7.3 ⬜ Voice-authored automations via HA (Gemini for Home) — later.
 - B7.4 ⬜ "Ask about what you see" via the panel camera, one-shot.
+- B7.5 ⬜ **App-connection handoff engine (QR + send-to-phone)** — VISION principle 8 (Jason,
+  2026-09-27): app/account sign-ins show a QR on the panel and finish on the phone, and the
+  panel card reflects completion live. Today the music QR (the reference flow) never learns it
+  finished, and the token/QR mechanics are copied three times (`music_setup`, `smart_home_setup`,
+  `telegram_link`). Plan, in order:
+  (a) shared `auth_handoff` backend (`mint` → `pending|opened|completed|failed|expired`,
+  QR fetched by id so the token stays out of URLs/logs) + `routers/handoff.py` + one panel
+  `authCard` with a countdown and live state from a `handoff_update` ui_action (auto-close +
+  toast, replacing the static **Done**); migrate music flows first (YouTube Music, Spotify/Tidal/
+  Deezer OAuth, Qobuz form), and point the chat/voice "set up music" reply at the Sources card
+  instead of Music Assistant;
+  (b) Telegram "send to my phone" button on the card for members with a linked Telegram
+  (zero-scan, works with the panel asleep); guests always get the QR;
+  (c) QR onboarding for new members — admin taps "Add person" → QR/Telegram carrying the setup
+  token → phone page sets password + PIN (replaces the WARNING-log bootstrap token).
+  Security fixes on these flows are tracked in their own PR, not here.
 
 ### B8 — Self-evolution (nobody else has it)
 - B8.1 ⬜ Rebuild the executor on Flue 2 (`init()` handles + `durable: true` tools);
@@ -858,6 +874,7 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (eve) — B7.5 added: app-connection handoff engine (QR + send-to-phone), from VISION principle 8 (panel voice first / touch second / phone for keyboards; app connections via QR).
 - 2026-09-27 (eve) — B6.6 (d): Kokoro `MALLOC_ARENA_MAX=2` drop-in applied live. Measured −113 to −125 MB anon, not the predicted −400 to −800 MB, with latency within noise (ABAB).
 - 2026-09-27 (eve) — B0.6 safe-now Python train: psycopg2-binary 2.9.13 + prometheus-client
   0.26.0 (both manifests + CI/deploy lists); joblib 1.6.0 held on the router-head training-pin contract.
