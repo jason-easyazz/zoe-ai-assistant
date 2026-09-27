@@ -337,6 +337,23 @@ status: 🔨 active — NEXT ACTION is always §0
   (aiosendspin 9.1.1, PIN-pairing breaking at 9.0.0), the panel's shairport-sync 5.1 in
   PTP/Automatic mode (support #6243 pattern — pin the streaming mode if silent), and the
   bgutil 2.0.0 localhost bind reachable from MA's namespace (`127.0.0.1:4416`).
+  **MA 2.10.3 pt (2026-09-27, draft PR):** YouTube Music DOWN since 09-25 18:16 — bgutil
+  plugin 1.3.1 inside MA vs server 2.0.0 (major mismatch; MA installs the plugin only on
+  container CREATE, never on restart) + stale yt-dlp 2026.07.04 + rotated cookies. Pin moved
+  to 2.10.3 (`sha256:88587222…`, closes the 3 MA advisories), stage 1 green (deno 2.9.5);
+  probe now forces `web_embedded` (`tv` broken upstream) and fails on a PO plugin/server
+  major mismatch (red on live, green on a fresh 2.10.3 container). 2.10 moved provider
+  credentials to setup-flow `setup_data` (one-way settings migration): the old
+  `save_provider` Reconnect is a silent no-op there, first connect errors,
+  `get_entries(provider_domain)` + `music/recommendations` are gone. Same PR: zoe-data
+  reads MA's version from `/info` and on ≥2.10 drives `config/providers/reconfigure` /
+  `setup` + `config/flows/submit` (reconnect in place, first connect, phone form, OAuth);
+  empty "for you" shelf + one log line; the 2.8 path unchanged. **Canonical recipe** (🧑,
+  live not touched by the agent): step 0 today = in-place `uv pip install` yt-dlp
+  2026.8.19 + plugin 2.0.0, `docker restart`, full probe, panel re-auth; then deploy
+  zoe-data → stopped store backup → re-create on 2.10.3 → full probe → panel re-auth →
+  Sendspin re-pair / "Zoe Panel" AirPlay mode check. Recipe + API table:
+  `docs/knowledge/music-ytdlp-js-runtime.md`.
   **Network hardening (2026-09-27, draft PR `fix/loopback-postgres-ha-bridge`, operator
   apply):** `zoe-database` → `127.0.0.1:5432` + `pgvector/pgvector:0.8.6-pg17@sha256:cf134a76…`
   (PostgreSQL 17.10 → 17.11, ~25 CVEs; minor = same data dir; `vector` 0.8.2 → 0.8.6 update
@@ -862,6 +879,7 @@ a decision input.
   so every push/`update-branch` needs a fresh probe + gate rerun; never probe during a
   `deploy.yml` restart (collision → ERROR verdicts; landing scripts use a `wait_deploy` guard +
   `/tmp/zoe-brain-window.lock`); post-build NvMap error 12 recovery → B0.4 row.
+- 2026-09-27 — B0.12 MA pt: YouTube Music outage root-caused (bgutil plugin/server major mismatch), MA pin → 2.10.3 (draft PR), probe fixed + PO-major check; zoe-data MA-version switch (2.10 setup-flow API) in the same PR; operator recipe: step 0 on 2.8.7 today, then deploy → backup → re-create.
 - 2026-09-27 — B6.6 follow-ups (draft PR): Smart Turn numpy log-mel (no torch in zoe-data from LiveKit) + speaker embedding off the event loop.
 - 2026-09-27 — B1.4: Silero v6.2.1 file reverted to v6.0 (it detected no speech — barge-in /
   idle listening silently off for a day); permanent gate = the probe's VAD stage + the gate

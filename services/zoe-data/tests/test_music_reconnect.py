@@ -19,6 +19,19 @@ from routers import music_setup as music_setup_router
 pytestmark = pytest.mark.ci_safe
 
 
+@pytest.fixture(autouse=True)
+def _pin_ma_287(monkeypatch):
+    """These tests stub MA's pre-2.10 API. Pin the version gate to 2.8.7 so they
+    stay hermetic once the box's real MA (reachable from the Jetson lane) is on
+    2.10+; the 2.10 paths are covered in test_music_ma_setup_flow.py."""
+    async def info():
+        return {"server_version": "2.8.7", "schema_version": 29}
+    monkeypatch.setattr(music_service, "_ma_info", info)
+    music_service._invalidate_ma_version()
+    yield
+    music_service._invalidate_ma_version()
+
+
 def _ma_stub(monkeypatch, *, configs, providers):
     async def fake_ma(command, **args):
         if command == "config/providers":
