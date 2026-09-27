@@ -576,6 +576,18 @@ status: 🔨 active — NEXT ACTION is always §0
   `mem_limit`, no restart timer (re-auth risk); ⬜ re-measure RSS+swap in a few days on the
   same container start, and add a weekly restart timer only if it grows > ~100 MB/day.
 
+- B6.6 🔨 **Brain flags tuning** (2026-09-27, two replay-gated brain windows on b11194, one
+  flag vs the live set per run, same-session control; evidence in
+  `docs/knowledge/brain-flags-tuning-2026-09.md`). **`--ctx-size 16384 → 8192` ADOPTED in the
+  template** (draft PR, apply pending in a Kokoro-paused window). It saves −170 MiB RSS at
+  load, replay PASS. 36 h of live traffic (630 turns): prompt+reply p99 3280 / max 3338. The
+  Flue client already windows to 8192. **`--cache-ram` stays 2048**: `0` = +4.1 s TTFT on every
+  repeat chat turn (one slot rotates ~5 prompts per turn), and `512` is unprovable because one
+  main-turn entry is ~170 MiB with SWA checkpoints. **Draft-MTP stays n-max 4 / p-min 0.6**:
+  3/6/8 and 0.5/0.7 are all within ~±3 % noise, and 6/8 are slightly worse, as upstream
+  #27210 predicts. Follow-up ⬜ `--ctx-checkpoints` (default 32 × ~10.6 MiB per cache entry)
+  + a 24 h live cache-occupancy read, before `--cache-ram` is revisited.
+
 ### B7 — Window into Zoe (UI)
 - B7.1 ⬜ AG-UI 1.0 (`ACTIVITY_SNAPSHOT/DELTA`) + a fixed A2UI-style component catalog as the
   carrier for brain-built cards (never raw HTML from the 4B).

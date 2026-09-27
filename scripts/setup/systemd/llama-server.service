@@ -25,8 +25,8 @@
 #     leaks content BETWEEN concurrent requests' prompts/completions, with no
 #     garbage-token signature to detect it by. The unit ran --parallel 2 before B0.4,
 #     so the live brain has been exposed. With one slot, concurrent requests queue
-#     instead of running side by side, and the whole --ctx-size 16384 belongs to that
-#     one slot. Do NOT raise --parallel while --spec-type draft-mtp is set, until
+#     instead of running side by side, and the whole --ctx-size belongs to that one
+#     slot. Do NOT raise --parallel while --spec-type draft-mtp is set, until
 #     #28286 is fixed AND replay-gated here.
 #   - --fit off is explicit: b11194 (and b9733) default --fit ON, which adjusts unset
 #     arguments to fit device memory. The B0.4 gate keeps it off, so the serving
@@ -88,22 +88,32 @@ Environment=LD_LIBRARY_PATH=%h/llama.cpp-b11194/build-jetson/bin
 # 0.0.0.0 ONLY because it is fronted by Cloudflare Access + host firewalling. Do NOT
 # expose 0.0.0.0 without equivalent auth/firewalling.
 # KV-cache tuning (2026-07-21, evidence in docs/knowledge/brain-kv-cache-tuning.md):
-#  --ctx-size 16384 --parallel 1  = ONE 16384 slot (B0.4). The 2026-07-21 tuning ran
-#    --parallel 2 (two 8192 slots, so voice + chat kept separate warm prefixes;
-#    ~5s reprocess per eviction, measured live). It was dropped for correctness:
-#    #28286 (header above). The --cache-ram host prompt cache below is what now
-#    softens prefix eviction between voice and chat. Ctx is near-free on
-#    gemma3n: the SWA-aware cache sizes the 20
-#    sliding-window layers by the 512-token window, NOT by ctx (llama.cpp
-#    PR #13194); only ~4 global layers scale, halved again by q8 V-quant.
+#  --ctx-size 8192 --parallel 1  = ONE 8192 slot (B6.6, 2026-09-27). 8192 is the
+#    per-slot size the brain served from 2026-07-21 to B0.4 (16384 / --parallel 2),
+#    and it is the window the Flue brain client already budgets for
+#    (labs/flue-zoe-brain-2x/src/context-window.ts DEFAULT_CONTEXT_WINDOW_TOKENS =
+#    8192 incl. a 1536-token reply reserve) — a 16384 slot bought nothing it can use.
+#    Measured 36 h of live traffic (630 turns): prompt+reply p50 2852 / p99 3280 /
+#    max 3338 tokens. Saves ~170 MiB RSS at load (~120 MiB after traffic), replay
+#    PASS; evidence in docs/knowledge/brain-flags-tuning-2026-09.md. Never set it
+#    below the Flue window (tests/unit/test_llama_server_unit_flags.py pins that).
+#    The 2026-07-21 tuning ran --parallel 2 (two 8192 slots, so voice + chat kept
+#    separate warm prefixes); it was dropped for correctness: #28286 (header above).
+#    The --cache-ram host prompt cache below is what now keeps every prefix warm.
 #  --cache-ram 2048  = the Oct-2025 host-memory prompt cache (PR #16391),
 #    similarity hot-swap of whole cached prompts; SWA-compatible. Default is
 #    8192 MiB — on this 15.6G UNIFIED-memory box that default is an OOM
-#    hazard, so it is capped. Never remove the cap.
+#    hazard, so it is capped. Never remove the cap. It is a CAP, not a
+#    reservation: entries are allocated lazily and evicted oldest-first at the
+#    cap. With ONE slot it is load-bearing — every chat turn rotates ~5 prompts
+#    (main turn + aux one-shots) through the slot, and --cache-ram 0 measured
+#    +4.1 s TTFT on every repeat chat turn (B6.6). Do not lower it without a
+#    24 h occupancy measurement (entries carry up to 32 SWA checkpoints of
+#    ~10.6 MiB each, so one ~2.8k-token turn is ~170 MiB).
 #  --flash-attn on + K AND V at q8_0 (B0.4, b11194): FA with the MTP draft is
 #    fixed upstream (#25148) and replay-gated here (header above). FA on is the
 #    precondition for the quantized V cache; V at q8_0 halves the ~4 global
-#    layers' V cost vs f16 (~64MB at 16384 -> ~32MB). If FA must go OFF again
+#    layers' V cost vs f16 (~32MB at 8192 -> ~16MB). If FA must go OFF again
 #    (rollback), V MUST go back to f16 (drop --cache-type-v) or startup throws.
 #  --cache-reuse OMITTED BY CHOICE — not because it would be ignored (corrected
 #    2026-08-03). Upstream #21468 was closed as fixed by #22288 (2026-04-24) and
@@ -125,7 +135,7 @@ ExecStart=%h/llama.cpp-b11194/build-jetson/bin/llama-server \
   --spec-draft-ngl 99 \
   --host 127.0.0.1 \
   --port 11434 \
-  --ctx-size 16384 \
+  --ctx-size 8192 \
   --parallel 1 \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \

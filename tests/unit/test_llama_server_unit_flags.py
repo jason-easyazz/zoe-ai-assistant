@@ -16,6 +16,17 @@ break the brain at STARTUP rather than in any test, so they are pinned here:
   must be explicit for the written config to be the served config.
 * ExecStart and LD_LIBRARY_PATH must name the SAME build — mixing b9733 libs
   with the b11194 binary (or vice versa) is an ABI mismatch.
+
+B6.6 (2026-09-27, docs/knowledge/brain-flags-tuning-2026-09.md) adds two sizing
+couplings that fail at RUNTIME, not startup:
+
+* The per-slot context (``--ctx-size`` / ``--parallel``) must be at least the
+  window the Flue brain client budgets for (``DEFAULT_CONTEXT_WINDOW_TOKENS`` in
+  ``labs/flue-zoe-brain-2x/src/context-window.ts``). Below it, a long session
+  the client considers in-budget is refused by the server — every such turn fails.
+* ``--cache-ram`` must stay a positive cap. ``0`` disables the host prompt cache,
+  and with one slot every chat turn then re-prefills its whole prompt (+4.1 s
+  TTFT measured); ``-1`` is "no limit" on 15.6G unified memory.
 """
 
 from __future__ import annotations
@@ -93,3 +104,37 @@ def test_draft_mtp_implies_single_slot():
 
 def test_fit_is_explicitly_off():
     assert _flag(_exec_start(), "--fit") == "off", "--fit defaults ON; the B0.4 gate keeps it off explicitly"
+
+
+FLUE_WINDOW = ROOT / "labs" / "flue-zoe-brain-2x" / "src" / "context-window.ts"
+
+
+def _flue_default_window() -> int:
+    m = re.search(r"DEFAULT_CONTEXT_WINDOW_TOKENS\s*=\s*([0-9_]+)", FLUE_WINDOW.read_text(encoding="utf-8"))
+    assert m, "context-window.ts lost DEFAULT_CONTEXT_WINDOW_TOKENS — re-point this pin"
+    return int(m.group(1).replace("_", ""))
+
+
+def test_slot_context_covers_the_flue_brain_window():
+    cmd = _exec_start()
+    ctx = int(_flag(cmd, "--ctx-size") or 0)
+    parallel = int(_flag(cmd, "--parallel") or 1)
+    window = _flue_default_window()
+    assert ctx // parallel >= window, (
+        f"per-slot context {ctx}//{parallel} = {ctx // parallel} is below the Flue brain's "
+        f"{window}-token window: turns the client thinks fit would be refused by llama-server"
+    )
+
+
+def test_adopted_b6_6_context_size():
+    # 8192 = the Flue window exactly; measured p99 prompt+reply 3280 tokens (B6.6).
+    assert _flag(_exec_start(), "--ctx-size") == "8192"
+
+
+def test_host_prompt_cache_is_a_positive_cap():
+    cram = _flag(_exec_start(), "--cache-ram")
+    assert cram is not None, "--cache-ram missing: the llama.cpp default is 8192 MiB (OOM hazard here)"
+    assert int(cram) > 0, (
+        f"--cache-ram {cram}: 0 disables the host prompt cache (one slot -> full re-prefill on "
+        "every chat turn, +4.1 s TTFT measured) and -1 is unbounded on unified memory"
+    )
