@@ -321,3 +321,123 @@ async def test_browser_status_does_not_consume_while_pending(monkeypatch):
     st = await ms_router.browser_status("sid", tok)
     assert st["state"] == "awaiting_login"
     assert music_setup.verify(tok) is not None  # still valid until connected
+
+
+# ── the LAN viewer is locked to a per-session secret (auth audit 2026-09-27) ──
+# Before: x11vnc -nopw behind a websockify that routed EVERY connection to the
+# local VNC port — for ~5 min any LAN client could watch or drive the browser
+# the user was typing their Google password into.
+
+def test_websockify_has_no_fixed_target_only_the_token_file(tmp_path):
+    argv = ys._websockify_argv("192.168.1.9", tmp_path / "tok", web="/usr/share/novnc")
+    assert argv[argv.index("--token-plugin") + 1] == "TokenFile"
+    assert argv[argv.index("--token-source") + 1] == str(tmp_path / "tok")
+    # A positional target would route token-less connections straight to VNC.
+    assert f"127.0.0.1:{ys._VNC_PORT}" not in argv
+    assert argv[-1] == f"192.168.1.9:{ys._NOVNC_PORT}"
+
+
+def test_view_url_carries_the_secret_only_in_the_fragment():
+    from urllib.parse import parse_qs, unquote, urlsplit
+    url = ys._view_url("192.168.1.9", "s3cr3t-Value_x")
+    parts = urlsplit(url)
+    assert "s3cr3t" not in parts.path and parts.query == ""  # nothing in the request line
+    frag = parse_qs(parts.fragment)
+    assert unquote(frag["path"][0]) == "websockify?token=s3cr3t-Value_x"
+    assert frag["autoconnect"] == ["1"]
+
+
+def test_viewer_token_file_is_private_and_removed(monkeypatch, tmp_path):
+    import os
+    import stat
+    monkeypatch.setattr(ys, "SECRET_DIR", tmp_path)
+    monkeypatch.setattr(ys, "_VIEWER_TOKEN_FILE", tmp_path / "viewer-token")
+    path = ys._write_viewer_token("abc123")
+    assert path.read_text() == f"abc123: 127.0.0.1:{ys._VNC_PORT}\n"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    ys._clear_viewer_token()
+    assert not path.exists()
+    ys._clear_viewer_token()  # idempotent
+
+
+async def test_bring_up_mints_a_fresh_secret_and_teardown_revokes_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(ys, "SECRET_DIR", tmp_path)
+    monkeypatch.setattr(ys, "_VIEWER_TOKEN_FILE", tmp_path / "viewer-token")
+    monkeypatch.setattr(ys, "_require_binaries", lambda: [])
+    monkeypatch.setattr(ys, "_lan_ip", lambda: "192.168.1.9")
+    seen = {}
+
+    def fake_stack(bind, token_file):
+        seen["token_file"] = token_file
+        return [_FakeProc()]
+
+    async def fake_launch(headless=False):
+        return _FakeContext(BAD_COOKIES)
+
+    monkeypatch.setattr(ys, "_start_display_stack", fake_stack)
+    monkeypatch.setattr(ys, "_launch_browser", fake_launch)
+
+    urls = []
+    for _ in range(2):
+        session = {}
+        await ys._bring_up_rig(session)
+        secret = session["view_url"].rsplit("token%3D", 1)[1]
+        assert seen["token_file"].read_text().startswith(secret + ": ")
+        urls.append(session["view_url"])
+        await ys._teardown(session)
+        assert not seen["token_file"].exists()
+        assert session["view_url"] is None
+    assert urls[0] != urls[1]  # per-session, never reused
+
+
+def _websockify_upgrade_status(port: int, query: str) -> str:
+    """Send a WebSocket upgrade and return the status line ('' if refused)."""
+    import socket
+    req = (f"GET /websockify{query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+           "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
+           "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as s:
+        s.sendall(req.encode())
+        try:
+            data = s.recv(256)
+        except (ConnectionResetError, socket.timeout):
+            data = b""
+    return data.split(b"\r\n", 1)[0].decode(errors="replace")
+
+
+def test_real_websockify_refuses_a_viewer_without_the_secret(monkeypatch, tmp_path):
+    """End to end against the real websockify, with the argv and token file the
+    rig uses: no secret / a wrong secret gets no WebSocket upgrade (the
+    connection is dropped before any 101); the right secret is upgraded.
+    Skips where websockify or loopback is unavailable (CI's slim venv,
+    `unshare -rn`); run it on the box for the live proof."""
+    import shutil
+    import socket
+    import subprocess
+    import time
+    if shutil.which("websockify") is None:
+        pytest.skip("websockify not installed")
+    try:
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+    except OSError:
+        pytest.skip("no loopback in this namespace")
+    monkeypatch.setattr(ys, "SECRET_DIR", tmp_path)
+    monkeypatch.setattr(ys, "_VIEWER_TOKEN_FILE", tmp_path / "viewer-token")
+    monkeypatch.setattr(ys, "_NOVNC_PORT", port)
+    token_file = ys._write_viewer_token("right-secret")
+    proc = subprocess.Popen(ys._websockify_argv("127.0.0.1", token_file),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        if not ys._wait_port("127.0.0.1", port, timeout=10):
+            pytest.skip("websockify did not start")
+        assert "101" not in _websockify_upgrade_status(port, "")
+        assert "101" not in _websockify_upgrade_status(port, "?token=wrong")
+        assert "101" in _websockify_upgrade_status(port, "?token=right-secret")
+        ys._clear_viewer_token()  # teardown revokes even a running websockify
+        assert "101" not in _websockify_upgrade_status(port, "?token=right-secret")
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
