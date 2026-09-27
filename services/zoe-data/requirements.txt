@@ -104,8 +104,8 @@ chromadb==0.6.3
 # "no matching wheel" and a dead voice path.
 numpy<2
 # ONNX Runtime is a DIRECT dependency, not merely a transitive one: `voice_vad.py`
-# and `voice_turn.py` both `import onnxruntime` to run the Silero VAD .onnx (v6.2.1
-# on the box since 2026-09-26; the file is ~/models/silero_vad.onnx, not a wheel)
+# and `voice_turn.py` both `import onnxruntime` to run the Silero VAD .onnx (v6.0
+# live on the box; the file is ~/models/silero_vad.onnx, not a wheel)
 # (there is deliberately no `silero-vad` PyPI pin — the model file is the
 # dependency, not the wrapper). It was undeclared here until 2026-08-06 while
 # being load-bearing on the voice path; pinned to the live Orin's version.
