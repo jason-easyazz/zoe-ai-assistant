@@ -209,9 +209,13 @@ test "$LIVE_HEAD" != "$MERGE_SHA"                       # live checkout must NOT
 test "$(gh run view "$DEPLOY_ID" --json conclusion --jq .conclusion)" = failure   # the refused run
 echo "preflight OK: D=$D DEPLOY_ID=$DEPLOY_ID (merge $MERGE_SHA; live tree at ${LIVE_HEAD:0:8})"
 exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay window overlaps
-exec 8>/tmp/zoe-deploy.lock;       flock -w 7200 8     # deploy.yml takes THIS lock before it resets the
-                                                       # live checkout: hold it until block B has finished
-                                                       # (a concurrent push cannot restart zoe-data mid-cutover)
+# Deploy exclusion across BOTH blocks: deploy.yml takes /tmp/zoe-deploy.lock before it resets the
+# live checkout. Blocks A and B are separate shells, so the lock is held by a small background
+# holder whose lifetime spans both; block B kills it right before the deploy rerun. Preflight also
+# refuses if a deploy is already in progress (one past its checkout step cannot be excluded by the lock).
+test "$(gh run list --workflow deploy.yml --limit 3 --json status --jq '[.[]|select(.status!="completed")]|length')" = 0
+( flock -w 7200 8 && sleep 14400 ) 8>/tmp/zoe-deploy.lock & echo $! > /tmp/zoe-b08-deploy-lock-holder.pid
+sleep 2; kill -0 "$(cat /tmp/zoe-b08-deploy-lock-holder.pid)"   # holder alive = lock held
 STAGE=pre-stop
 
 # 1. Stop every writer/opener
@@ -317,7 +321,8 @@ STEP=kokoro-health
 kokoro_back
 
 STEP=redeploy             # only now: re-run the SPECIFIC refused #1745 deploy (captured in block A)
-exec 8>&- 2>/dev/null || true     # release the deploy lock taken in block A (same shell) — the rerun needs it
+kill "$(cat /tmp/zoe-b08-deploy-lock-holder.pid 2>/dev/null)" 2>/dev/null || true   # release the deploy lock held since block A
+rm -f /tmp/zoe-b08-deploy-lock-holder.pid
 gh run rerun "$DEPLOY_ID"
 sleep 20
 gh run watch "$DEPLOY_ID" --exit-status              # blocks until the deploy finishes; non-zero = failed
