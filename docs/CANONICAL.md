@@ -79,7 +79,9 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
   replay gate:
   - **`flue`** (LIVE on this deployment) — the Flue 2.x Pi-Agent sidecar
     `labs/flue-zoe-brain-2x` on `:3579` (systemd user unit `flue-zoe-brain-2x.service`,
-    token auth, `ZOE_FLUE_WIRE=2`), reached via `ZOE_BRAIN_BACKEND=flue`. (The 1.x
+    token auth, wire 2 — since B6.5 also the client's in-code default, so
+    `ZOE_FLUE_BRAIN_URL`/`ZOE_FLUE_WIRE` unset already mean `:3579`/wire 2),
+    reached via `ZOE_BRAIN_BACKEND=flue`. (The 1.x
     `labs/flue-zoe-brain` sidecar on `:3578` was retired 2026-08-10 — stopped,
     disabled and source-removed after the 2.x parity cutover.) It reimplements
     Zoe's persona + ability slot-shapes
@@ -99,7 +101,11 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
   (`ZOE_ROUTER_SELFTRAIN`, default OFF) can mine → retrain → ratchet-promote. See [`PLANS.md`](PLANS.md).
 - **`zoe-database`** — PostgreSQL (asyncpg, `$1` placeholders). Relational + temporal memory.
 - **Chroma / MemPalace** — vector store for memory (raw-first).
-- **`llama-server`** (host-native, `:11434`) — serves the brain rock above.
+- **`llama-server`** (host-native, `:11434`) — serves the brain rock above. Tracked unit
+  `scripts/setup/systemd/llama-server.service` targets **llama.cpp b11194** (`9f70b2cec`) with
+  `--flash-attn on` + q8_0 K/V cache beside the MTP drafter (B0.4, replay-gated 2026-09-27).
+  **Apply pending:** until the coordinator installs it, the box still runs b9733 with FA off,
+  so check `ps -o args= -C llama-server` for what is live. The build and flags can change; the rock does not.
 - **`services/zoe-ui`** — the touch/web UI. The **estate** (`dist/touch/home.html`) is the
   panel chrome; the old Skybridge front-end (`skybridge.html` + its JS/CSS) is **retired** (a
   compat redirect stub remains). The server-side Skybridge resolve/timers engine (`/api/skybridge/*`,

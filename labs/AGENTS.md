@@ -49,9 +49,17 @@ with its own README/RUNBOOK and is self-contained.
   flue-zoe-brain-2x.service` on the Jetson — the live voice brain (retargeted to
   2.x in #1675 when the 1.x `labs/flue-zoe-brain/` lane was retired). A merged
   commit touching one line under that path reaches production without any further
-  decision. So: **breaking or version-bumping work goes in a SIBLING directory**,
+  decision. So: **breaking or MAJOR-version work goes in a SIBLING directory**,
   never in place, and the deployed path stays byte-identical to `main` on such a
-  branch. Verify before committing with
+  branch (route (a), sibling + cutover — how #1675 took 1.x → 2.x). **Narrow exception
+  (operator decision 2026-09-27, B1.11):** an in-place PATCH/MINOR dependency bump of
+  `flue-zoe-brain-2x/` or `flue-zoe-telegram-2x/` — same major, no source change beyond
+  comments and version pins — may land in place ONLY when the PR carries (i) parallel-port
+  proof: the PR-head build run as a second sidecar on another port with an isolated
+  `ZOE_BRAIN_DB` store, and `voice_regression_probe.py` (`--service-dir` on the PR worktree,
+  `ZOE_FLUE_BRAIN_URL` at that port, remote STT) PASSING against it, posted on the PR with
+  the head sha; and (ii) the normal head-bound voice-gate replay at land time. For sibling
+  work, verify before committing with
   `git diff origin/main --stat -- labs/flue-zoe-brain-2x/` — it must print nothing.
   A sibling name does NOT match that pathspec (git treats the trailing slash as an
   exact directory component), which is what makes the pattern safe; re-verify if a
@@ -174,8 +182,8 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   **The wire contract changed and is NOT backward-compatible**: `?wait=result` is
   actively rejected, and the POST body is a top-level DeliveredMessage
   (`{"kind":"user","body":"…"}`). The live `services/zoe-data/zoe_flue_client.py`
-  speaks it via `ZOE_FLUE_WIRE=2` in zoe-data's env (its in-code DEFAULT is still
-  the retired beta wire — a rollback leftover to be cleaned up with the client).
+  speaks it BY DEFAULT since B6.5 (`ZOE_FLUE_WIRE` unset = 2, `ZOE_FLUE_BRAIN_URL`
+  unset = `:3579`); `ZOE_FLUE_WIRE=1` opts back into the retired beta wire for parity only.
   `parity/flue_wire.py` is the reference implementation of the wire
   (fire-and-forget admission + NDJSON stream read).
   Also carries a prompt-prefix stability fix absent from the retired beta lane: the
@@ -212,7 +220,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   and makes `runWrite` return its success text without dispatching
   (`src/replay-mode.ts`, `test/replay_isolation.test.ts`). `set_timer` needs its
   own check — it does not route through `runWrite`.
-  Regression net (hand-run, not CI-wired): `npm test` — 21 `test/*.test.ts` files
+  Regression net (hand-run, not CI-wired): `npm test` — 24 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a
@@ -305,6 +313,38 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   held-out-guarded). Hand-run only, memory-gated (500 MB non-prod floor),
   never prod-wired. Best measured so far: hybrid 75.3%; verdict: grammar is
   hygiene (~0–1.5 pts), sibling training data is the 90% lever.
+- `b3-1-supersession/` — B3.1 lab: **bi-temporal supersession + keep-the-richer-fact
+  reconciliation**, pure Python, no model, no I/O, flag-dark
+  (`ZOE_BITEMPORAL_SUPERSEDE`, default off, read by nothing in prod). Graphiti's
+  overlap rule (contradiction only when validity intervals overlap; invalidate by
+  `valid_until = new.valid_from` + `expired_at = now`, never delete), mem0's
+  ADD/UPDATE/SUPERSEDE/NONE controller with integer-id candidates and an injectable
+  LLM `judge` (fake in tests; a judge naming an unseen id degrades to ADD), the
+  `attribute_key` normalisation that closes the M7 "works at X" gap, and the
+  richer-fact rule. 50-pair SYNTHETIC fixture (Person A/B/C, invented employers —
+  never household data) + `run_fixture.py` scorer with both negative controls.
+  Design + schema/migration PLAN + prod wiring:
+  `docs/architecture/b3-1-bitemporal-supersession.md`. Regression net
+  `test_supersession_lab.py` lives INSIDE the lab dir (hand-run:
+  `nice -n 15 python3 -m pytest labs/b3-1-supersession -q -p no:cacheprovider`) —
+  `pytest.ini` `testpaths` and both CI lanes never collect `labs/`, so nothing in
+  CI imports it. README is a record, not a contract.
+- `omi-receiver/` — **B9.1 Omi lab receive** (P0 of
+  `docs/architecture/omi-integration-plan.md`): a hand-run, OFF-Orin BLE receiver
+  for the Omi CV1 pendant — `omi_bridge.py` (bleak 0.22.3 → 3-byte-header framer
+  with gap/wrap/fragment/resync accounting → opuslib decode → rolling 16 kHz WAVs;
+  registers its own `disconnected_callback` because the official SDK never sees
+  drops, #13290; prints the P0 numbers: gaps %, reconnects, battery drop/h),
+  `wer.py` + `split_on_silence.py` for the Moonshine WER comparison, and the
+  README's manual protocol + gate + open questions for Jason. Wire format verified
+  against the firmware's `push_to_gatt()` (id advances per NOTIFICATION; CV1
+  reports codec **21**, not the plan's 20). Regression net (hand-run, slim-venv
+  green, `ci_safe`-marked but NOT in production CI by this contract):
+  `pytest labs/omi-receiver/tests -q -x -p no:cacheprovider` — includes a
+  negative control on the gap detector and a real opuslib round trip that SKIPS
+  with a reason when libopus is absent. Scaffold + fixtures only until the pendant
+  is run: no live result is claimed. Never wired into the Pi daemon, `zoe-data`,
+  or CI (that is B9.2, flag-dark).
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%

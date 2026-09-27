@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-09-26T00:00:00Z
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-09-26T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-09-26. The table body is deterministic (sorted, no
+Last generated: 2026-09-27. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-450 flags; 449 not documented in `.env.example`.
+459 flags; 457 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -58,6 +58,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BRAIN_FAILOVER` | `'0'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | `'45'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
+| `ZOE_BRAIN_SLOT_TOKENS` | `'8192'`, `8192` | yes | NO | `services/zoe-data/memory_digest.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_BRAIN_STARTUP_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_BRAIN_TOKEN` | `-` | no | NO | `scripts/perf/measure_tts_cadence.py`<br>`services/zoe-data/zoe_flue_client.py` |
 | `ZOE_BRAIN_UNIT` | `'llama-server.service'` | no | NO | `scripts/maintenance/router_selftrain.py`<br>`services/zoe-data/main.py` |
@@ -255,6 +256,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MERGE_QUEUE_MAX_CANDIDATES` | `'50'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MIRROR_INTENTS_TO_OPENCLAW` | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'`, `'v2'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_MOONSHINE_KEYTERMS` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MULTICA` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES` | `-` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES_FOR` | `-` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
@@ -400,7 +402,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SEARCH_HOTNESS_WEIGHT` | `'0.05'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_SEARCH_PROVIDER` | `'auto'` | yes | yes | `services/zoe-data/web_search_provider.py` |
 | `ZOE_SESSION_LOCK_TIMEOUT_S` | `'5'` | no | NO | `services/zoe-data/routers/chat.py` |
-| `ZOE_SILERO_VAD_MODEL` | `''` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`services/zoe-data/voice_vad.py` |
+| `ZOE_SILERO_VAD_MODEL` | `''` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/voice_vad.py` |
 | `ZOE_SKYBRIDGE_ONLY` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_SKYBRIDGE_TIMEZONE` | `-` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SMART_TURN_ENABLED` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
@@ -408,6 +410,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SMART_TURN_THREADS` | `'1'` | no | NO | `services/zoe-data/voice_turn.py` |
 | `ZOE_SMART_TURN_THRESHOLD` | `'0.5'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SPEAKER_ID_THRESHOLD` | `'0.82'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_SPECULATIVE_MAX_HOLD_MS` | `5000` | yes | NO | `services/zoe-data/voice_speculation.py` |
+| `ZOE_SPECULATIVE_TAIL_MS` | `320` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_SPECULATIVE_TURN` | `'false'`, `False` | yes | NO | `scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/voice_speculation.py` |
 | `ZOE_STT_BACKEND` | `'moonshine'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_SUBPROCESS_QUEUE_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/async_subprocess.py` |
@@ -450,10 +455,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_PROBE_SAMPLES` | `'20'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_TIMEOUT_S` | `'900'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROBE_USER` | `'jason'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
+| `ZOE_VOICE_PROBE_VAD_CHECK` | `'1'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
+| `ZOE_VOICE_PROBE_VAD_CLIPS` | `dynamic` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_PROFILE` | `'zoe_au_natural_v1'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_REPLAY_STT` | `'inprocess'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_RESULTS` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
-| `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`services/zoe-data/routers/voice_tts.py` |
+| `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_STITCH_ENABLED` | `'0'` | no | NO | `services/zoe-data/main.py`<br>`services/zoe-data/voice_stitch.py` |
 | `ZOE_VOICE_STREAM` | `'1'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -467,6 +474,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_WAKE_ACK_PHRASE` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_WEATHER_CACHE_TTL_S` | `'600'` | no | NO | `services/zoe-data/routers/weather.py` |
 | `ZOE_WEB_BROWSE_MAX_HTML` | `1500000` | yes | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_WEB_FALLBACK_PROVIDER` | `'auto'` | no | NO | `services/zoe-data/research_evidence.py` |
+| `ZOE_WEB_SEARCH_TOOL` | `'0'` | no | yes | `services/zoe-data/research_evidence.py` |
 | `ZOE_WORKTREE_PRUNE_INTERVAL_S` | `86400.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_WORKTREE_ROOT` | `''` | no | NO | `services/zoe-data/worktree_bootstrap.py` |
 | `ZOE_WS_IDLE_TIMEOUT_SECONDS` | `120.0` | yes | NO | `services/zoe-data/main.py` |
@@ -479,10 +488,11 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Lab flags (`labs/` — not prod)
 
-7 flags; 7 not documented in `.env.example`.
+8 flags; 8 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
+| `ZOE_BITEMPORAL_SUPERSEDE` | `-` | no | NO | `labs/b3-1-supersession/bitemporal.py` |
 | `ZOE_BRAIN_TOKEN` | `''` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py` |
 | `ZOE_BRAIN_URL` | `'http://127.0.0.1:3579'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py` |
 | `ZOE_KOKORO_VOICES` | `'/home/zoe/models/voices-v1.0.bin'` | no | NO | `labs/kokoro-voice-blend/blend_zoe_voices.py` |

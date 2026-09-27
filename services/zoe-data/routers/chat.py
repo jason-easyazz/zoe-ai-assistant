@@ -364,7 +364,7 @@ from research_evidence import (
     build_package,
     classify_query,
     default_source_for_query,
-    fetch_web_fallback_results,
+    fetch_web_fallback,
     missing_brief_fields,
     package_needs_web_fallback,
 )
@@ -434,6 +434,17 @@ _FORM_INTENTS: frozenset[str] = frozenset({
     "reminder_create",
     "timer_create",
 })
+
+
+def _shows_form(intent_name: str, slots: dict) -> bool:
+    """A recurring reminder skips the form and executes directly: the reminder
+    form carries only title/date/time, so confirming it would silently store a
+    one-off (and an unsupported recurrence has no title to pre-fill). The direct
+    executor's reply states the schedule, or why nothing was set."""
+    if intent_name == "reminder_create" and (slots.get("recurrence") or slots.get("unsupported_recurrence")):
+        return False
+    return intent_name in _FORM_INTENTS
+
 
 # Intents that deliberately do not have a direct `execute_intent` handler
 # because they're designed to be expanded via openclaw_user_message() and
@@ -1496,17 +1507,31 @@ async def _build_research_package(
 ) -> dict:
     """Build research package and attach screenshot evidence when possible."""
     fallback_rows: list[dict] = []
+    web_lookup: dict = {}
     pkg = build_package(query=query, response_text=response_text, backend=backend)
     if package_needs_web_fallback(pkg):
-        fallback_rows = await asyncio.to_thread(fetch_web_fallback_results, query)
-        if fallback_rows:
-            pkg = build_package(
-                query=query,
-                response_text=response_text,
-                backend=backend,
-                web_fallback_results=fallback_rows,
-            )
+        # B10.0: the outcome says WHY rows may be empty (blocked / error / off /
+        # nothing found) so the package is honest instead of placeholder-shaped.
+        outcome = await asyncio.to_thread(fetch_web_fallback, query)
+        fallback_rows = outcome.results
+        web_lookup = outcome.as_dict()
+        pkg = build_package(
+            query=query,
+            response_text=response_text,
+            backend=backend,
+            web_fallback_results=fallback_rows,
+            web_lookup=web_lookup,
+        )
     source = (pkg.get("sources") or [""])[0]
+    if not source:
+        # Nothing to photograph: the lookup was off / blocked / errored / empty
+        # AND the reply cited no source of its own. `_capture_research_screenshot`
+        # would otherwise fall back to a duckduckgo.com search URL — so `off`
+        # would still send the query out, and a search-page capture would be
+        # shown as "evidence" beside the failure message. A source the reply
+        # itself cites is still captured regardless of the lookup outcome: that
+        # outcome governs the honest row, not evidence the reply already has.
+        return pkg
     image_b64, screenshot_url = await _capture_research_screenshot(
         query=query,
         candidate_source=str(source or ""),
@@ -1521,6 +1546,7 @@ async def _build_research_package(
             screenshot_b64=image_b64,
             screenshot_url=screenshot_url,
             web_fallback_results=fallback_rows,
+            web_lookup=web_lookup,
         )
     return pkg
 
@@ -2036,7 +2062,7 @@ async def chat_stream_generator(
             yield emit(ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id=tool_call_id))
 
             # ── Form-based intents: show a generative UI tile instead of silently executing ──
-            if intent.name in _FORM_INTENTS:
+            if _shows_form(intent.name, slots):
                 logger.info("intent_outcome=matched_form intent=%s", intent.name)
                 _comp_name, _prop_builder = _FORM_COMPONENT_MAP[intent.name]
                 _form_props = _prop_builder(slots)

@@ -27,16 +27,22 @@ ROOT = Path(__file__).resolve().parents[2]
 MCP_JSON = ROOT / ".mcp.json"
 CODEX_TOML = ROOT / ".codex" / "config.toml"
 CAPPED = "scripts/maintenance/codebase_memory_capped.sh"
+OMNIGENT_CODEX_TOML = ROOT / "modules" / "omnigent" / "codex-mcp.toml"
+OMNIGENT_MCP_JSON = ROOT / "modules" / "omnigent" / ".mcp.json"
 SHARED_SERENA = "http://127.0.0.1:9121/mcp"
 
 
-def _codex_servers() -> dict:
+def _load_toml_servers(path: Path) -> dict:
     try:
         import tomllib as toml_mod  # py3.11+
     except ModuleNotFoundError:
         import tomli as toml_mod  # py3.10
-    with CODEX_TOML.open("rb") as fh:
+    with path.open("rb") as fh:
         return toml_mod.load(fh).get("mcp_servers", {})
+
+
+def _codex_servers() -> dict:
+    return _load_toml_servers(CODEX_TOML)
 
 
 def _claude_servers() -> dict:
@@ -93,3 +99,20 @@ def test_launcher_falls_back_rather_than_failing_closed():
     launch, not break code-intel entirely."""
     body = (ROOT / CAPPED).read_text()
     assert "launching uncapped" in body
+
+
+def test_omnigent_container_codex_serena_attaches_by_url():
+    """The zoe-omnigent container's Codex config is the SAME hazard one hop away:
+    /root/.codex/config.toml lives in a volume nothing tracked used to own, was
+    hand-patched live on 2026-09-25 (two private ~700MB Serenas measured), and a
+    volume reset silently brought the stdio spawn back. The tracked template
+    (baked into the image, seeded by the entrypoint) must attach by url — the
+    zoe-codeintel gateway, not loopback, which inside the container is the
+    container itself — and must agree with the container's Claude config."""
+    entry = _load_toml_servers(OMNIGENT_CODEX_TOML)["serena"]
+    assert "command" not in entry, (
+        "modules/omnigent/codex-mcp.toml spawns a per-session Serena again"
+    )
+    claude_entry = json.loads(OMNIGENT_MCP_JSON.read_text())["mcpServers"]["serena"]
+    assert entry.get("url") == claude_entry["url"]
+    assert not entry["url"].startswith("http://127."), entry["url"]

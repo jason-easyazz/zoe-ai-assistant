@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.80.0'; // Browse -> Sources tab: reconnect a music provider (YouTube Music "needs attention" -> Reconnect -> QR sign-in on phone); provider health surfaced
+const SW_VERSION = '4.81.0'; // chat.html (precached): honest web-lookup status on the Research Evidence card (B10.0, #1691) — blocked/error/off/nothing-found is said plainly instead of an empty ranked table
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

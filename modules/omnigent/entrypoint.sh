@@ -111,6 +111,99 @@ else
   echo "[entrypoint] gh CLI or ~/.config/gh/hosts.yml missing — workers cannot push/open PRs"
 fi
 
+# Codex MCP config seed — the Codex counterpart of the bind-mounted /workspace/.mcp.json.
+# /root/.codex/config.toml lives in the persisted omnigent-codex VOLUME and nothing in the
+# repo used to own it: it was hand-patched live on 2026-09-25 (serena `command =` stdio
+# spawn -> shared-server `url =`), so a volume reset silently reverted to a private ~700 MB
+# Serena per Codex session. This rewrites ONLY the managed [mcp_servers.<name>] tables from
+# the baked template (see codex-mcp.toml) and keeps everything else in the file — Codex's
+# own hooks.state trusted hashes, any other server — verbatim. Idempotent: an already-current
+# file is not touched. NON-FATAL by design: an unparseable file, a bad template or a merge
+# that would not round-trip leaves the file alone with a warning; the server still boots.
+# The two overrides exist only so tests can exercise this hermetically (same pattern as
+# the CURSOR_* seams above); the container never sets them.
+CODEX_CONFIG_PATH="${CODEX_CONFIG_PATH:-${HOME}/.codex/config.toml}" \
+CODEX_MCP_TEMPLATE="${CODEX_MCP_TEMPLATE:-/usr/local/share/zoe-omnigent/codex-mcp.toml}" \
+python3 - <<'PYEOF' || echo "[entrypoint] codex mcp seed skipped (python error)" >&2
+import os, re, shutil, sys, time
+try:
+    import tomllib
+except ModuleNotFoundError:  # py<3.11 — hermetic tests on a 3.10 host; the image is 3.12
+    import tomli as tomllib
+
+cfg_path = os.environ["CODEX_CONFIG_PATH"]
+tpl_path = os.environ["CODEX_MCP_TEMPLATE"]
+TAG = "[entrypoint] codex mcp seed:"
+
+
+def bail(msg):  # never fatal: the omnigent server must still boot
+    print(f"{TAG} {msg}", file=sys.stderr)
+    sys.exit(0)
+
+
+try:
+    with open(tpl_path, encoding="utf-8") as fh:
+        tpl_text = fh.read()
+    want = tomllib.loads(tpl_text)["mcp_servers"]
+except Exception as exc:  # noqa: BLE001
+    bail(f"template {tpl_path} unusable ({exc}) — leaving {cfg_path} untouched")
+serena = want.get("serena", {})
+if "command" in serena or "url" not in serena:
+    bail("template must attach serena by url with no command — refusing to seed")
+
+try:
+    with open(cfg_path, encoding="utf-8") as fh:
+        cur_text = fh.read()
+except FileNotFoundError:
+    cur_text = ""
+try:
+    have = tomllib.loads(cur_text).get("mcp_servers", {})
+except Exception as exc:  # noqa: BLE001
+    bail(f"{cfg_path} does not parse ({exc}) — leaving it untouched; fix it by hand")
+
+if all(have.get(name) == body for name, body in want.items()):
+    print(f"{TAG} already current ({', '.join(want)})")
+    sys.exit(0)
+
+# Drop every managed table (and any sub-table of it) textually; keep every other line.
+# The name must match EXACTLY, bare (`serena`, `serena.env` = its sub-table) or quoted
+# (`"serena"`): a quoted key such as `"serena.debug"` is a DIFFERENT server, not a
+# sub-table, and must survive (Greptile, #1700).
+names = "|".join(re.escape(n) for n in want)
+managed = re.compile(
+    r'^\s*\[\s*mcp_servers\s*\.\s*(?:(?:' + names + r')|"(?:' + names + r')")\s*(?:\.[^\]]*)?\]'
+)
+any_header = re.compile(r"^\s*\[")
+kept, skipping = [], False
+for line in cur_text.splitlines(keepends=True):
+    if any_header.match(line):
+        skipping = bool(managed.match(line))
+    if not skipping:
+        kept.append(line)
+new_text = "".join(kept).rstrip("\n")
+new_text = (new_text + "\n\n" if new_text else "") + tpl_text.rstrip("\n") + "\n"
+
+try:
+    got = tomllib.loads(new_text).get("mcp_servers", {})
+except Exception as exc:  # noqa: BLE001
+    bail(f"merged config would not parse ({exc}) — leaving {cfg_path} untouched")
+if not all(got.get(name) == body for name, body in want.items()):
+    bail(f"merged config does not carry the managed servers verbatim — leaving {cfg_path} untouched")
+unmanaged_before = {n: b for n, b in have.items() if n not in want}
+unmanaged_after = {n: b for n, b in got.items() if n not in want}
+if unmanaged_before != unmanaged_after:
+    bail(f"merge would alter an unmanaged server ({sorted(set(unmanaged_before) ^ set(unmanaged_after)) or 'body changed'}) — leaving {cfg_path} untouched")
+
+os.makedirs(os.path.dirname(cfg_path) or ".", exist_ok=True)
+if cur_text:
+    shutil.copy2(cfg_path, f"{cfg_path}.bak-{time.strftime('%Y%m%d%H%M%S')}")
+tmp = f"{cfg_path}.tmp-{os.getpid()}"
+with open(tmp, "w", encoding="utf-8") as fh:
+    fh.write(new_text)
+os.replace(tmp, cfg_path)
+print(f"{TAG} rewrote managed [mcp_servers.*] tables in {cfg_path} ({', '.join(want)})")
+PYEOF
+
 # Default-workspace patch: Omnigent defaults a session's workspace to the host's HOME
 # (/root) when the UI doesn't specify one, and the UI doesn't always let you change it.
 # Redirect home-defaulted sessions to OMNIGENT_RUNNER_WORKSPACE (/workspace = the repo).

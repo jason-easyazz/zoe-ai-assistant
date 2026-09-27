@@ -18,7 +18,15 @@ const BASE_URL =
 // non-empty one.
 const API_KEY = process.env.ZOE_CORE_MODEL_API_KEY ?? "local";
 const DEFAULT_MODEL_ID = process.env.ZOE_CORE_MODEL_ID ?? "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
-const CONTEXT_WINDOW = Number(process.env.ZOE_CORE_MODEL_CONTEXT) || 32768;
+// Must match what llama-server can actually serve: ONE slot of --ctx-size 8192
+// (scripts/setup/systemd/llama-server.service, B6.6). Pi compacts against this
+// window, so declaring more than the server holds lets sessions grow until the
+// server refuses them. Max output stays 2048: measured p99 prompts are ~3.3k
+// tokens, so prompt + a full 2048-token reply (~5.3k) still fits the slot.
+// Compaction thresholds for this window live in ../.pi/settings.json (reserve
+// 2048 = this max output); Pi's defaults (reserve 16384 / keep 20000) assume a
+// far larger window. tests/unit/test_llama_server_unit_flags.py pins all of it.
+const CONTEXT_WINDOW = Number(process.env.ZOE_CORE_MODEL_CONTEXT) || 8192;
 const MAX_TOKENS = Number(process.env.ZOE_CORE_MODEL_MAXTOKENS) || 2048;
 
 async function discoverModelIds(): Promise<string[]> {

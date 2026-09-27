@@ -43,6 +43,23 @@ systemctl --user daemon-reload
 systemctl --user enable --now llama-server zoe-data kokoro-tts
 ```
 
+## Tracked drop-ins (`<unit>.service.d/`)
+
+A change that must reach an INSTALLED unit ships as a drop-in, never as a template
+copy (installed units carry host edits and their own untracked drop-ins). The
+`*.service` glob above does not match these directories — install each one by hand:
+
+| Drop-in | What it changes | Runbook |
+|---------|-----------------|---------|
+| `zoe-data.service.d/60-py312-venv.conf` | zoe-data's interpreter: `/usr/bin/python3` (3.10) → `~/.zoe/venvs/zoe-data-py312/bin/python` (B0.7). Build the venv FIRST. | `docs/knowledge/python-312-venv-migration.md` §8 |
+
+```bash
+mkdir -p ~/.config/systemd/user/zoe-data.service.d
+cp scripts/setup/systemd/zoe-data.service.d/60-py312-venv.conf ~/.config/systemd/user/zoe-data.service.d/
+systemctl --user daemon-reload && systemctl --user restart zoe-data   # poll /readyz
+# rollback: rm the file, daemon-reload, restart
+```
+
 ## Shared Serena MCP server (`serena-mcp.service`)
 
 Dev tooling, not part of the voice stack — enable it on hosts where the agent
@@ -404,7 +421,8 @@ all: `VmRSS` **411.7 MB** against `VmSwap` **156.9 MB** (27.6% out), `VmHWM`
 
 Two things worth knowing before changing these:
 
-- **`--mlock` is not sufficient on Tegra.** llama-server sets `--mlock` with
+- **`--mlock` is not sufficient on Tegra.** llama-server sets `--mlock` (spelled
+  `--load-mode mmap+mlock` since the b11194 build, B0.4) with
   `LimitMEMLOCK=infinity`, yet `VmLck` held only 1.95 GB of a 5.6 GB RSS — mlock
   covers the mapped model, not every CUDA/unified allocation around it.
   `MemorySwapMax=0` is what closes the gap. `MemoryLow` is *soft* (reclaim

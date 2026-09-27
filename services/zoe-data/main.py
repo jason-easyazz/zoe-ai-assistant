@@ -156,6 +156,10 @@ async def _check_stt_ready() -> dict:
             "engine": "moonshine",
             "arch": voice_tts.moonshine_arch(),
             "loaded": loaded,
+            # ZOE_MOONSHINE_KEYTERMS visibility: configured/applied/supported, so a
+            # biasing list that the installed moonshine-voice cannot apply is seen
+            # here rather than inferred from a transcript.
+            "keyterms": voice_tts.moonshine_keyterms_state(),
             **({"error": load_error} if load_error else {}),
         }
     except Exception as exc:

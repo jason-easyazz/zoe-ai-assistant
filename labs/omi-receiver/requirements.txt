@@ -1,0 +1,14 @@
+# labs/omi-receiver — lab-only, hand-installed on the receiving box (laptop or the Pi
+# panel), NEVER on the Orin and never into zoe-data's venv.
+#
+#   python3 -m pip install --user -r labs/omi-receiver/requirements.txt
+#   sudo apt install libopus0          # opuslib is a ctypes wrapper; it needs the system libopus
+#
+# bleak 0.22.3 is the version the official Omi Python SDK pins (sdks/python); it
+# runs on BlueZ (Linux) and its wheel is pure Python. opuslib 3.0.1 is the last
+# release (2018, pure Python, py3-none-any) — the same binding the SDK uses; it
+# loads libopus via ctypes.util.find_library("opus"), so on aarch64/Pi the apt
+# package is the only native piece. pyogg was rejected: no aarch64 Linux binary in
+# its wheels, so it would fall back to the same system library and add nothing.
+bleak==0.22.3
+opuslib==3.0.1

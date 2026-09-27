@@ -198,6 +198,9 @@ credentials/
 # not silently ignored too.
 !services/zoe-ui/dist/manifest.json
 !services/zoe-ui/dist/js/widgets/widget-manifest.json
+# zoe-core's Pi project settings: compaction sized for ONE 8192-token llama-server
+# slot (Pi 0.82.1 defaults reserve 16384 / keep 20000 assume a 128k+ window).
+!services/zoe-core/.pi/settings.json
 # generated flag inventory (tools/audit/flag_inventory.py) — no secrets, names+defaults only
 !docs/knowledge/flag-inventory.json
 # zoe-data test fixtures: golden recordings replayed by ci_safe tests. Contract

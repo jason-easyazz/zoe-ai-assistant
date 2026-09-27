@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from agent_safety import SSRFBlocked, assert_panel_host, is_allowed_panel_host
 from auth import (
+    GUEST_USER_ID,
     get_current_user,
     require_admin,
     require_signed_in,
@@ -21,6 +22,17 @@ from auth import (
 )
 from database import get_db
 from hermes_http import hermes_auth_headers
+from research_evidence import (
+    WEB_LOOKUP_ERROR,
+    WEB_SEARCH_TOOL_DEADLINE_S,
+    WEB_SEARCH_TOOL_MAX_RESULTS,
+    WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S,
+    WebFallbackOutcome,
+    fetch_web_fallback,
+    web_lookup_status,
+    web_search_tool_enabled,
+    web_search_tool_payload,
+)
 from openclaw_maintenance import (
     fetch_gateway_status,
     fetch_npm_latest_version,
@@ -220,7 +232,24 @@ async def get_system_status(
             "online_panels_30s": panels_online,
         },
         "pi_hybrid_production": _pi_hybrid_production_public_status(),
+        # B10.0: web-lookup configuration + last outcome (never the query/key).
+        "web_lookup": _web_lookup_block_for(user),
     }
+
+
+def _web_lookup_block_for(user: dict) -> dict[str, Any]:
+    """Config fields for everyone; `last_outcome` only for a signed-in member.
+
+    `get_current_user` resolves a credential-less request to the fail-closed
+    GUEST principal rather than rejecting it, and the last outcome is
+    process-wide — another household member's activity (its timestamp and
+    disposition). Same predicate as `auth.require_signed_in`, minus the raise.
+    """
+    block = web_lookup_status()
+    is_guest = user.get("role") in (None, "guest") or user.get("user_id") in (None, GUEST_USER_ID)
+    if is_guest:
+        block["last_outcome"] = None
+    return block
 
 
 @router.get("/memory-router/status")
@@ -2794,6 +2823,64 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     return {"intent": intent_name, "ok": result is not None, "result": result or ""}
 
 
+# ─── Web search for the brain's flag-gated web_search tool (B10.1) ────────────
+#
+# The Flue sidecar's `web_search` tool (labs/flue-zoe-brain-2x/src/tools/
+# zoe-tools.ts, registered only under its own ZOE_WEB_SEARCH_TOOL=1) is a thin
+# wrapper over this endpoint, which is itself just `research_evidence.
+# fetch_web_fallback` (B10.0: provider-aware, bounded, honest status). No new
+# HTTP client, no scraping beyond B10.0. Absent (404) unless zoe-data's
+# ZOE_WEB_SEARCH_TOOL=1, so the default box is byte-identical to before.
+# Same internal gate as intent-dispatch: the model can spend Tavily credits and
+# reach the network through it, so it is loopback / X-Internal-Token only.
+# The query text is never logged here or below (fetch_web_fallback logs only
+# its length).
+
+
+class _WebSearchBody(BaseModel):
+    query: str
+    max_results: int = WEB_SEARCH_TOOL_MAX_RESULTS
+
+
+@router.post("/web-search")
+async def web_search(body: _WebSearchBody, _: None = Depends(require_intent_dispatch_auth)):
+    """One bounded web lookup for the brain: ≤5 rows of title/url/snippet plus
+    the B10.0 outcome (`status` ∈ results/no_results/blocked/error/off) verbatim.
+    Fails closed (404) while ZOE_WEB_SEARCH_TOOL is off."""
+    if not web_search_tool_enabled():
+        raise HTTPException(status_code=404, detail="web search tool disabled (ZOE_WEB_SEARCH_TOOL=1 to enable)")
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query required")
+    max_results = max(1, min(int(body.max_results or WEB_SEARCH_TOOL_MAX_RESULTS), WEB_SEARCH_TOOL_MAX_RESULTS))
+    # Blocking urllib/httpx under the hood — keep it off the event loop.
+    # ONE end-to-end budget (Greptile + Codex #1702): the per-provider timeout
+    # only bounds each socket wait, so the lookup also shares a monotonic
+    # deadline across Tavily → DDG (the second provider gets what is left and
+    # is never started once it is spent), and this endpoint answers honestly at
+    # that deadline instead of waiting on a slow-drip provider. No per-row page
+    # fetches (the payload drops `price`). A thread cannot be killed, so an
+    # in-flight provider call may still finish in the background, bounded by its
+    # own (remaining-budget) socket timeout — but nothing new is started.
+    try:
+        outcome = await asyncio.wait_for(
+            asyncio.to_thread(
+                fetch_web_fallback,
+                query,
+                max_results,
+                WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S,
+                enrich_prices=False,
+                deadline_s=WEB_SEARCH_TOOL_DEADLINE_S,
+            ),
+            timeout=WEB_SEARCH_TOOL_DEADLINE_S,
+        )
+    except asyncio.TimeoutError:
+        outcome = WebFallbackOutcome(
+            WEB_LOOKUP_ERROR, "none", [], f"timeout: lookup exceeded {WEB_SEARCH_TOOL_DEADLINE_S:g}s deadline"
+        )
+    return web_search_tool_payload(outcome)
+
+
 # Synchronous delegation targets the zoe-core brain may invoke in-turn. Hermes
 # only: it owns web browsing / Telegram / the harness, and returns a completion
 # we can fold into the chat answer. OpenClaw stays explicit-opt-in (see the
@@ -2912,7 +2999,8 @@ async def consume_telegram_link_token(
     so a token can only ever link the redeemer's own Telegram account.
     """
     import telegram_link
-    from routers.user_profile import _TELEGRAM_ID_RE, _read_prefs, _write_prefs
+    from routers.user_profile import _TELEGRAM_ID_RE
+    from user_prefs import delete_pref, set_pref
 
     token = (body.token or "").strip()
     # verify_link_token validates AND atomically RESERVES the token (single-use).
@@ -2942,15 +3030,12 @@ async def consume_telegram_link_token(
                WHERE prefs::jsonb ->> 'telegram_id' = ? AND user_id != ?""",
             (tid, user_id),
         )
+        # Atomic + conditional key ops (see user_prefs): never a stale full-copy
+        # write that could drop a concurrent change to another key.
         for row in await cursor.fetchall():
-            other_prefs = await _read_prefs(db, row["user_id"])
-            if other_prefs.get("telegram_id") == tid:
-                other_prefs.pop("telegram_id", None)
-                await _write_prefs(db, row["user_id"], other_prefs)
+            await delete_pref(row["user_id"], "telegram_id", db=db, only_if=tid)
 
-        prefs = await _read_prefs(db, user_id)
-        prefs["telegram_id"] = tid
-        await _write_prefs(db, user_id, prefs)
+        await set_pref(user_id, "telegram_id", tid, db=db)
     except BaseException:
         # Failure before commit → free the reservation so the user can re-scan.
         # BaseException (not Exception) so asyncio.CancelledError — raised when

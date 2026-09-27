@@ -1,6 +1,16 @@
 {
   "flags": {
     "lab": {
+      "ZOE_BITEMPORAL_SUPERSEDE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/b3-1-supersession/bitemporal.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BRAIN_TOKEN": {
         "defaults": [
           "''"
@@ -404,6 +414,18 @@
         "readers": [
           "services/zoe-data/routers/voice_livekit.py",
           "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_BRAIN_SLOT_TOKENS": {
+        "defaults": [
+          "'8192'",
+          "8192"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_digest.py",
+          "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": true
       },
@@ -2415,6 +2437,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_MOONSHINE_KEYTERMS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MULTICA": {
         "defaults": [
           "'false'"
@@ -3881,6 +3913,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/curate_voice_corpus.py",
+          "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/voice_vad.py"
         ],
         "typed_env": false
@@ -3954,6 +3987,38 @@
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": false
+      },
+      "ZOE_SPECULATIVE_MAX_HOLD_MS": {
+        "defaults": [
+          "5000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_speculation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPECULATIVE_TAIL_MS": {
+        "defaults": [
+          "320"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SPECULATIVE_TURN": {
+        "defaults": [
+          "'false'",
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py",
+          "services/zoe-data/voice_speculation.py"
+        ],
+        "typed_env": true
       },
       "ZOE_STT_BACKEND": {
         "defaults": [
@@ -4398,6 +4463,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_VOICE_PROBE_VAD_CHECK": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_PROBE_VAD_CLIPS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_VOICE_PROFILE": {
         "defaults": [
           "'zoe_au_natural_v1'"
@@ -4436,6 +4521,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/curate_voice_corpus.py",
+          "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": false
@@ -4570,6 +4656,26 @@
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": true
+      },
+      "ZOE_WEB_FALLBACK_PROVIDER": {
+        "defaults": [
+          "'auto'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/research_evidence.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_WEB_SEARCH_TOOL": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": true,
+        "readers": [
+          "services/zoe-data/research_evidence.py"
+        ],
+        "typed_env": false
       },
       "ZOE_WORKTREE_PRUNE_INTERVAL_S": {
         "defaults": [

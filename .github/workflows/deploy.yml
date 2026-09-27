@@ -148,8 +148,12 @@ jobs:
             echo "::error::REFUSING TO DEPLOY: ${prev:0:7}..${target:0:7} changes the voice runtime path without a fresh passing replay-gate result (see above)."
             echo "Live tree stays at ${prev} — nothing was deployed or restarted."
             echo "To unwedge, on the Jetson as user zoe:"
+            # The probe's in-process STT must load the SERVICE's stack (B0.7:
+            # the 3.12 venv after cutover). Resolved from the PRE-reset tree, so
+            # an older tree without the resolver falls back to python3.
+            ZPY="$(bash scripts/deploy/zoe_data_python.sh 2>/dev/null || echo python3)"
             echo "  flock /tmp/zoe-voice-harness.lock \\"
-            echo "    python3 scripts/maintenance/voice_regression_probe.py \\"
+            echo "    ${ZPY} scripts/maintenance/voice_regression_probe.py \\"
             echo "      --samples 20 --service-dir /home/zoe/assistant/services/zoe-data"
             echo "then re-run this workflow. See docs/knowledge/merge-and-deploy.md"
             echo "\"The CD path enforces the voice replay-gate\"."
@@ -176,17 +180,42 @@ jobs:
       # migrations on the live box and gets no floating upgrades either.
       # Bump here and in requirements.txt in the same pass, or neither
       # (`scripts/maintenance/requirements_drift_check.py` reports divergence).
+      #
+      # B0.7 (Python 3.12 venv): the list above feeds the SYSTEM 3.10 interpreter
+      # only. Which interpreter to feed is read from systemd — what the service
+      # will exec on the restart below — never from "does the venv exist" (it is
+      # built before the cutover drop-in and survives a rollback, so presence says
+      # nothing about what runs). Service on the venv → refresh the venv (additive) from
+      # services/zoe-data/requirements-py312.txt, which IS the installer there
+      # (both phases, --offline first; see scripts/setup/build_py312_venv.sh).
+      # Service on 3.10 → the list above, unchanged. An unresolvable interpreter
+      # FAILS the deploy before anything restarts. The chosen interpreter is
+      # exported for the migrate step so Alembic runs under the same Python.
+      # Runbook: docs/knowledge/python-312-venv-migration.md §4/§8.
       - name: Install / refresh Python deps
         run: |
-          pip3 install --quiet --user \
-            "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
-            "alembic==1.18.5" "asyncpg==0.31.0" "psycopg2-binary==2.9.12" \
-            "pywebpush==2.3.0" "py-vapid==1.9.4" "segno==1.6.6"
+          cd /home/zoe/assistant
+          ZOE_DATA_PYTHON="$(bash scripts/deploy/zoe_data_python.sh)" || exit 1
+          ZOE_DATA_VENV="$(bash scripts/deploy/zoe_data_python.sh --venv-dir)" || exit 1
+          echo "ZOE_DATA_PYTHON=${ZOE_DATA_PYTHON}" >> "$GITHUB_ENV"
+          if [ -n "${ZOE_DATA_VENV}" ]; then
+            echo "zoe-data runs the venv at ${ZOE_DATA_VENV} — converging it from requirements-py312.txt"
+            ZOE_PY312_VENV="${ZOE_DATA_VENV}" bash scripts/setup/build_py312_venv.sh --refresh
+          else
+            echo "zoe-data runs ${ZOE_DATA_PYTHON} (system) — refreshing its --user packages"
+            pip3 install --quiet --user \
+              "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
+              "alembic==1.20.0" "asyncpg==0.31.0" "psycopg2-binary==2.9.12" \
+              "pywebpush==2.5.0" "py-vapid==1.9.4" "segno==1.6.6"
+          fi
 
       - name: Apply database migrations
         run: |
           cd /home/zoe/assistant
-          bash scripts/deploy/migrate.sh
+          # ZOE_DATA_PYTHON (exported by the deps step) = the service's interpreter.
+          # Refuse rather than let migrate.sh default to PATH python3 under a venv service.
+          [ -n "${ZOE_DATA_PYTHON:-}" ] || { echo "::error::ZOE_DATA_PYTHON unset — the deps step did not resolve the service interpreter"; exit 1; }
+          ZOE_DATA_PYTHON="${ZOE_DATA_PYTHON}" bash scripts/deploy/migrate.sh
 
       - name: Rebuild / restart zoe-auth (if changed)
         run: |
@@ -269,6 +298,10 @@ jobs:
         run: |
           export XDG_RUNTIME_DIR="/run/user/$(id -u)"
           systemctl --user restart zoe-data.service
+          # Record which interpreter actually came up (B0.7: venv 3.12 vs system
+          # 3.10) — what RUNS, read from the process, not the unit. Informational.
+          PID="$(systemctl --user show -p MainPID --value zoe-data.service)"
+          echo "zoe-data MainPID ${PID}: $(readlink -f "/proc/${PID}/exe" 2>/dev/null || echo 'exe unreadable (still starting?)')"
 
       # The Flue brain sidecar is the production brain when ZOE_BRAIN_BACKEND=flue.
       # It runs a pre-built dist/ and `flue build` externalizes deps, so a change to

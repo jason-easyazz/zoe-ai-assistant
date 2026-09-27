@@ -83,6 +83,12 @@ VOICE_PATH_PATTERNS = (
     # (Retiring the in-process ONNX TTS dep from it should have been replay-gated by
     # the manifest itself, not only by the *kokoro* code globs.)
     "services/zoe-data/requirements.txt",
+    # ...and its Python 3.12 sibling (B0.7), which is the INSTALLER of the venv
+    # rather than a description of it, plus the script that decides what else goes
+    # in (Resemblyzer's --no-deps phase). Both are the base-ref classifier's to
+    # know BEFORE the venv becomes the service interpreter (Codex P1, #1706).
+    "services/zoe-data/requirements-py312.txt",
+    "scripts/setup/build_py312_venv.sh",
     "*kokoro*",
     "*moonshine*",
     # THE LIVE ROUTER'S MODEL ARTIFACTS — the stage-1 checkpoint of the two-stage
@@ -412,7 +418,54 @@ VOICE_PATH_PATTERNS = (
     "services/zoe-data/livekit_aiortc.py",
     "services/zoe-data/routers/voice_livekit.py",
     "services/livekit/config.yaml",
+    # THE VAD + END-OF-TURN MODULES that routers/voice_livekit.py (gated above)
+    # imports on every frame: voice_vad.py (Silero speech probability — drives
+    # IDLE->LISTENING and barge-in) and voice_turn.py (Smart Turn end-of-turn
+    # scorer, consulted at the silence window). Both degrade SILENTLY by design
+    # (a load failure returns None and the caller falls back to RMS / fixed
+    # silence), so a regression here raises nothing and logs one warning.
+    #
+    # EVIDENCE, stated per file because they differ:
+    #   - voice_vad.py IS exercised by the artifact: the probe's VAD stage imports
+    #     the service's own voice_vad.py from --service-dir and runs the real model
+    #     over the newest corpus clips, failing below a 60% speech-detection floor
+    #     (`vad` block, checked in vad_block_ok() below). A green artifact certifies
+    #     it — the first entry from the frame-loop family that it does certify.
+    #   - voice_turn.py is NOT exercised by any probe stage. For it the gate is a
+    #     forcing function only, the same bargain as the ingest entries above.
+    #     Its verification is services/zoe-data/tests/test_voice_turn.py, which is
+    #     NOT ci_safe (it importorskips numpy, absent on hosted runners) and so
+    #     runs only in the Jetson full-directory lane — verified by grep, not
+    #     assumed. Same for test_voice_barge_in.py's real-model VAD tests.
+    #
+    # THE MODEL FILE ITSELF CANNOT BE GATED HERE, and this is the incident class
+    # that motivated the entries: on 2026-09-26 /home/zoe/models/silero_vad.onnx
+    # was replaced with a Silero v6.2.1 export that loaded cleanly and scored
+    # ~0.001 on real speech (0/12 clips vs 12/12), so barge-in / idle listening
+    # were off for a day with every gate green. The model lives OUTSIDE git — no
+    # diff can ever show a swap, so no pattern here can see one. What catches it
+    # is the probe's VAD stage on its NIGHTLY run (a failed stage turns the run —
+    # even a memory-skip run — to status "fail", and records the model md5 in the
+    # artifact), plus the host-only real-model test in test_voice_barge_in.py.
+    # The model PATH handling lives in voice_vad.py (_model_path /
+    # ZOE_SILERO_VAD_MODEL), covered by its literal; `*silero*` catches any
+    # tracked file that fetches, pins or points at the model (none today — a
+    # preventive glob, same shape as *kokoro* / *moonshine*).
+    #
+    # STAGED ROLLOUT (see "A PATTERN CANNOT GATE THE PR THAT ADDS IT" above):
+    # these entries do not gate the PR that adds them, nor the deploy that carries
+    # them. Land this, wait for its deploy to go green, and only then merge a
+    # change to voice_vad.py / voice_turn.py expecting it to be gated.
+    "services/zoe-data/voice_vad.py",
+    "services/zoe-data/voice_turn.py",
+    "*silero*",
 )
+# The VAD stage's floor — the same bar as voice_regression_probe.VAD_MIN_PASS_FRAC
+# and test_voice_barge_in.py's real-model test. The checker RE-DERIVES the
+# verdict from the recorded counts against THIS floor rather than trusting the
+# artifact's own `status` label or `min_pass_frac`: the producer does not get to
+# lower the bar it is judged against.
+VAD_MIN_PASS_FRAC = 0.60
 DEFAULT_MAX_AGE_H = float(os.environ.get("ZOE_VOICE_GATE_MAX_AGE_H", "24"))
 
 
@@ -512,14 +565,59 @@ def baseline_matches(artifact: dict[str, Any], baseline: dict[str, Any] | None) 
     return True, ""
 
 
+def vad_block_ok(artifact: dict[str, Any]) -> tuple[bool, str]:
+    """The VAD stage verdict. Returns (ok, note).
+
+    BACKWARD COMPATIBILITY: an artifact without `vad_stage: true` was written by a
+    probe that predates the VAD stage — that is NO OPINION on VAD, not a failure,
+    so older artifacts still clear (returns ok with an empty note).
+
+    An artifact that CLAIMS the stage (`vad_stage: true`) must carry a well-formed
+    `vad` block:
+      - missing / not a dict / unknown status        -> block (claimed, not shown)
+      - status "fail" or "error"                     -> block
+      - status "pass" whose counts do not clear VAD_MIN_PASS_FRAC -> block
+        (the label is re-derived, never trusted)
+      - status "skip" (model absent / corpus thin / disabled) -> no opinion; the
+        reason is surfaced in the note so a green gate does not hide it
+    """
+    if artifact.get("vad_stage") is not True:
+        return True, ""
+    vad = artifact.get("vad")
+    if not isinstance(vad, dict):
+        return False, ("artifact claims the VAD stage (vad_stage: true) but carries no "
+                       "`vad` block — the stage's result is missing, which is NOT a pass")
+    vs = vad.get("status")
+    if vs == "skip":
+        return True, f"VAD stage skipped: {vad.get('reason') or 'no reason recorded'}"
+    if vs in ("fail", "error"):
+        return False, (f"VAD stage {vs}: {vad.get('reason') or 'no reason recorded'} — a "
+                       "Silero model that does not detect real speech silently disables "
+                       "barge-in / idle listening")
+    if vs != "pass":
+        return False, f"VAD stage has unrecognised status {vs!r} — not a pass"
+    clips, detected = vad.get("clips"), vad.get("speech_detected")
+    if (not isinstance(clips, int) or isinstance(clips, bool) or clips <= 0
+            or not isinstance(detected, int) or isinstance(detected, bool)
+            or not 0 <= detected <= clips):
+        return False, (f"VAD stage says pass but its counts are malformed "
+                       f"(clips={clips!r}, speech_detected={detected!r}) — not a pass")
+    if detected / clips < VAD_MIN_PASS_FRAC:
+        return False, (f"VAD stage says pass but only {detected}/{clips} clips reached the "
+                       f"threshold (< {VAD_MIN_PASS_FRAC:.0%} floor) — not a pass")
+    return True, f"VAD {detected}/{clips}"
+
+
 def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: float,
              baseline: dict[str, Any] | None = None,
              expect_revision: str | None = None) -> tuple[bool, str]:
     """The heartbeat check, pure and unit-testable. Returns (allowed, reason).
 
     Blocks unless the artifact exists, has status == "pass", is fresh (within
-    max_age_s), was produced against the current baseline, and — when
-    `expect_revision` is given — was produced by exercising that exact revision."""
+    max_age_s), was produced against the current baseline, was produced by
+    exercising `expect_revision` when one is given, and — when it claims the VAD
+    stage — carries a passing (or skipped) VAD
+    block (vad_block_ok)."""
     if artifact is None:
         return False, ("no voice replay-gate result artifact — the gate never ran "
                        "(a missing artifact is NOT a pass)")
@@ -543,11 +641,15 @@ def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: fl
     ok, why = revision_matches(artifact, expect_revision)
     if not ok:
         return False, why
+    ok, vad_note = vad_block_ok(artifact)
+    if not ok:
+        return False, vad_note
     bound = ""
     if expect_revision:
         bound = f", bound to {expect_revision[:8]}"
+    vad_part = f", {vad_note}" if vad_note else ""
     return True, (f"voice replay-gate PASS ({age_s / 3600:.1f}h old, "
-                  f"n={((artifact.get('summary') or {}).get('n_samples'))}{bound})")
+                  f"n={((artifact.get('summary') or {}).get('n_samples'))}{bound}{vad_part})")
 
 
 def load_json(path: Path) -> dict[str, Any] | None:

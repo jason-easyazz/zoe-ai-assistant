@@ -28,6 +28,9 @@ pytestmark = pytest.mark.ci_safe
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MCP_JSON = REPO_ROOT / "modules" / "omnigent" / ".mcp.json"
 COMPOSE = REPO_ROOT / "modules" / "omnigent" / "docker-compose.module.yml"
+CODEX_TOML = REPO_ROOT / "modules" / "omnigent" / "codex-mcp.toml"
+DOCKERFILE = REPO_ROOT / "modules" / "omnigent" / "Dockerfile"
+ENTRYPOINT = REPO_ROOT / "modules" / "omnigent" / "entrypoint.sh"
 SYSTEMD_SYSTEM = REPO_ROOT / "scripts" / "setup" / "systemd" / "system"
 BRIDGE_SOCKET = SYSTEMD_SYSTEM / "serena-bridge.socket"
 BRIDGE_SERVICE = SYSTEMD_SYSTEM / "serena-bridge.service"
@@ -44,6 +47,16 @@ SHARED_SERENA_PORT = 9121
 def _mcp_servers() -> dict:
     data = json.loads(MCP_JSON.read_text())
     return data["mcpServers"]
+
+
+def _codex_servers() -> dict:
+    """The container's Codex MCP config (the Codex counterpart of .mcp.json)."""
+    try:
+        import tomllib as toml_mod  # py3.11+
+    except ModuleNotFoundError:
+        import tomli as toml_mod  # py3.10
+    with CODEX_TOML.open("rb") as fh:
+        return toml_mod.load(fh)["mcp_servers"]
 
 
 def _gateway() -> str:
@@ -98,6 +111,44 @@ def test_other_mcp_servers_are_untouched():
     # codebase-memory is a small in-container binary from the read-only host
     # bin mount; it is deliberately NOT moved behind the bridge.
     assert servers["codebase-memory"]["command"] == "/home/zoe/.local/bin/codebase-memory-mcp"
+
+
+def test_omnigent_codex_serena_is_the_same_shared_server():
+    """Codex in the container must attach exactly where Claude Code does.
+
+    THE REGRESSION: /root/.codex/config.toml sits in the omnigent-codex VOLUME
+    and nothing tracked owned it, so it kept a per-session stdio spawn long
+    after .mcp.json was migrated — two private ~700 MB Serenas measured
+    2026-09-25, patched live, and lost again on any volume reset. The template
+    is what the entrypoint now enforces on every boot.
+    """
+    serena = _codex_servers()["serena"]
+    assert "command" not in serena, (
+        "modules/omnigent/codex-mcp.toml spawns its own Serena again; attach to "
+        "the shared server by url"
+    )
+    assert "stdio" not in json.dumps(serena)
+    assert serena == {"url": _mcp_servers()["serena"]["url"]}
+
+
+def test_omnigent_codex_codebase_memory_matches_claude_config():
+    codex, claude = _codex_servers(), _mcp_servers()
+    assert set(codex) == set(claude) == {"serena", "codebase-memory"}
+    assert codex["codebase-memory"] == claude["codebase-memory"]
+
+
+def test_codex_template_is_baked_and_seeded_by_the_entrypoint():
+    """A template nothing applies is documentation. The image must carry it
+    and the entrypoint must default to that same baked path — otherwise the
+    seed step silently runs against a file that is not there."""
+    copy = re.search(r"^COPY codex-mcp\.toml (\S+)$", DOCKERFILE.read_text(), re.MULTILINE)
+    assert copy, "Dockerfile no longer COPYs codex-mcp.toml into the image"
+    baked = copy.group(1)
+    entry = ENTRYPOINT.read_text()
+    assert f'CODEX_MCP_TEMPLATE="${{CODEX_MCP_TEMPLATE:-{baked}}}"' in entry, (
+        f"entrypoint.sh must default CODEX_MCP_TEMPLATE to the baked copy {baked}"
+    )
+    assert 'CODEX_CONFIG_PATH="${CODEX_CONFIG_PATH:-${HOME}/.codex/config.toml}"' in entry
 
 
 def test_bridge_socket_listens_on_the_url_the_container_uses():

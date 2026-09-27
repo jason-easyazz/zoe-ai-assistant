@@ -978,14 +978,16 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
             if _text_overlap(text, keeper.text) >= 0.85:
                 # Supersede the weaker row with the keeper's existing id.
                 try:
-                    await svc.review(
+                    # review() returns None when the edit was refused (the
+                    # memory opt-out wall) — count only edits that happened.
+                    if await svc.review(
                         ref.id,
                         decision="edit",
                         edits=keeper.text,
                         actor="consolidation",
                         note="weekly: merged near-duplicate",
-                    )
-                    merged += 1
+                    ) is not None:
+                        merged += 1
                 except Exception as exc:
                     logger.debug(
                         "consolidation: merge skipped id=%s: %s", ref.id, exc
@@ -1029,14 +1031,14 @@ async def _resolve_contradictions(svc, user_id: str, max_pairs: int = 50) -> int
             if not await _is_contradiction(newer.text, older.text):
                 continue
             try:
-                await svc.review(
+                if await svc.review(
                     older.id,
                     decision="edit",
                     edits=newer.text,
                     actor="consolidation",
                     note="weekly: contradicted by newer fact",
-                )
-                resolved += 1
+                ) is not None:       # None = refused by the opt-out wall
+                    resolved += 1
             except Exception as exc:
                 logger.debug(
                     "consolidation: supersede skipped id=%s: %s", older.id, exc
@@ -1478,6 +1480,36 @@ Facts:
 """
 
 
+# The synthesis prompt goes STRAIGHT to llama-server, whose single slot is
+# --ctx-size 8192 (B6.6, scripts/setup/systemd/llama-server.service). Ten full
+# stored documents (MemoryService.ingest() has no length limit) can exceed it,
+# and the refused request silently skips the insight. So the prompt is budgeted
+# to 2/3 of the slot (5461 tokens at 8192; the rest covers max_tokens=120, the
+# chat template and estimator slack), counted fail-closed at chars/2.
+_BRAIN_SLOT_TOKENS = int(os.environ.get("ZOE_BRAIN_SLOT_TOKENS", "8192") or 8192)
+_SYNTHESIS_PROMPT_BUDGET_TOKENS = _BRAIN_SLOT_TOKENS * 2 // 3
+
+
+def _build_synthesis_prompt(tag: str, sample: list[tuple[str, str]]) -> str:
+    """Format _SYNTHESIS_PROMPT with every sampled doc, each capped to an equal
+    share of the chars/2 budget left after the instruction text. Unchanged when
+    the whole prompt already fits."""
+    facts_text = "\n".join(f"- {doc}" for _, doc in sample)
+    prompt = _SYNTHESIS_PROMPT.format(n=len(sample), tag=tag, facts=facts_text)
+    budget_chars = _SYNTHESIS_PROMPT_BUDGET_TOKENS * 2
+    if len(prompt) <= budget_chars or not sample:
+        return prompt
+    fixed = len(_SYNTHESIS_PROMPT.format(n=len(sample), tag=tag, facts=""))
+    per_doc = max(40, (budget_chars - fixed) // len(sample) - 4)  # "- " + "\n" + "…"
+    docs = [(doc if len(doc) <= per_doc else doc[:per_doc] + "…") for _, doc in sample]
+    prompt = _SYNTHESIS_PROMPT.format(n=len(sample), tag=tag, facts="\n".join(f"- {d}" for d in docs))
+    logger.info(
+        "synthesis: prompt truncated to budget tag_len=%d docs=%d truncated=%d chars=%d budget_tokens=%d",
+        len(tag), len(sample), sum(1 for _, d in sample if len(d) > per_doc), len(prompt),
+        _SYNTHESIS_PROMPT_BUDGET_TOKENS,
+    )
+    return prompt
+
 async def _synthesis_pass(user_id: str) -> dict:
     """Synthesis pass: cluster approved memories by concept tag; synthesize patterns.
 
@@ -1517,8 +1549,7 @@ async def _synthesis_pass(user_id: str) -> dict:
                 continue
             # Take the 10 most relevant
             sample = members[:10]
-            facts_text = "\n".join(f"- {doc}" for _, doc in sample)
-            prompt = _SYNTHESIS_PROMPT.format(n=len(sample), tag=tag, facts=facts_text)
+            prompt = _build_synthesis_prompt(tag, sample)
 
             try:
                 async with httpx.AsyncClient(timeout=20.0) as client:

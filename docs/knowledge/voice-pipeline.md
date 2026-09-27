@@ -3,7 +3,7 @@ type: Reference
 title: Zoe Voice Pipeline
 description: The end-to-end voice path (STT → brain → TTS), how it's measured, and the regression corpus — plus the load-bearing caveat that the warm replay harness understates real live latency.
 tags: [voice, stt, tts, performance, testing]
-timestamp: 2026-07-16T00:00:00Z
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # Zoe Voice Pipeline
@@ -21,6 +21,11 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    helpers remain defined for offline tooling but never run on a live turn. `_run_moonshine` also runs
    a `_strip_wake_word` pass removing the "Hey Zoe" wake bleed (Moonshine emits the wake on its own
    line; greeting-prefixed homophones like "hey joey" strip, bare real names like "Joe" are kept).
+   Package upgrade to `moonshine-voice` 0.1.5 (speculative decoding, `set_keyterms` biasing behind
+   `ZOE_MOONSHINE_KEYTERMS`, default off) is B1.10 — **HELD 2026-09-26**: call sites are unchanged
+   and said-vs-did passed, but STT ran +43 % median / ~1.9× per file slower on the Orin CPU, so the
+   box stays on 0.0.62; numbers, method and retest conditions in
+   [moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md).
 2. **Brain — Gemma 4 E4B-QAT + MTP**, host-native `llama-server` on `:11434`. Since **#1322 a
    two-stage router runs as a fast-tier FRONT** for the brain (`ZOE_ROUTER_HEAD=active`, live-verified):
    a SetFit/MLP head (`models/router_head_mlp.joblib`) shortlists the top-3 domains + a chat gate,
@@ -191,8 +196,17 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
    "said_vs_did_regressions": ["FUNCTION: …"], "per_stage_speed_deltas": {"stt_ms": {"cur_ms": …, "baseline_ms": …, "delta_ms": …, "ratio": …}, …},
    "baseline_ref": {"path": "…", "created_at": "…Z", "ok_rate": …},
    "reason": "…", "summary": {"n_samples": …, "ok_rate": …, "medians_ms": {…}},
-   "non_pass_streak": 0, "non_pass_alert_after": 3, "non_pass_alert": false}
+   "non_pass_streak": 0, "non_pass_alert_after": 3, "non_pass_alert": false,
+   "vad_stage": true,
+   "vad": {"status": "pass|fail|skip|error", "clips": 24, "speech_detected": 23,
+           "pass_frac": 0.958, "min_pass_frac": 0.6, "threshold": 0.5,
+           "min_max_prob": [0.36, 0.96], "median_max_prob": 0.81,
+           "model": {"path": "/home/zoe/models/silero_vad.onnx", "md5": "00bdd414…"},
+           "reason": ""}}
   ```
+
+  `vad_stage` / `vad` are the VAD stage (see *The VAD stage* below). An artifact without `vad_stage` predates
+  the stage and is **no opinion** on VAD — older artifacts keep clearing the checker.
 
   A **skip** (box too tight), **timeout**, or **error** (harness couldn't run) MUST still write an
   artifact with `status != "pass"` — an *absent* file is never "nothing wrong". `summary` +
@@ -235,7 +249,50 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   heavy Kokoro harness** (that would OOM the box under flock) — it only reads the artifact the gate
   produced. Standing rule: *any mandatory loop/gate/job must emit a heartbeat that something checks.*
   Pinned by `tests/unit/test_voice_gate_check.py` (missing → block, stale → block, fresh pass →
-  allow; skip/error/baseline-drift all block).
+  allow; skip/error/baseline-drift all block). Also gated since 2026-09-27: `voice_vad.py`,
+  `voice_turn.py` and `*silero*` (see the VAD stage below).
+
+### The VAD stage — what gates a VAD model swap (2026-09-27)
+
+**Incident, two lines:** on 2026-09-26 `/home/zoe/models/silero_vad.onnx` was replaced with the
+Silero v6.2.1 export; `voice_vad.py` loaded it without error but scored ~0.001 on real speech
+(0/12 corpus clips ≥ 0.5 vs 12/12 on v6.0), so barge-in / idle listening were silently off for a
+day. The replay starts at STT and never ran VAD, and the only real-model test is host-only.
+
+**What gates it now** — `voice_regression_probe.py --vad-check` (default **on**;
+`--no-vad-check` / `ZOE_VOICE_PROBE_VAD_CHECK=0` records a disabled skip):
+- imports the **service's own** `voice_vad.py` from `--service-dir` (the code under test) and loads
+  the model file the service would load (`ZOE_SILERO_VAD_MODEL` or `/home/zoe/models/silero_vad.onnx`);
+- scores the newest `--vad-clips` (default 24) **usable** corpus clips — newest by capture time,
+  top-level only (same semantics as `replay_samples._select`), 16 kHz mono int16, fed as 20 ms
+  frames with fresh recurrent state per clip, exactly as the live frame loop does;
+- **FAILS the run when fewer than 60 %** of clips peak at/above `voice_vad.speech_threshold()` — the
+  bar of `test_voice_barge_in.py::test_silero_real_model_detects_speech_across_corpus`. A model file
+  that exists but makes `create_vad()` return None is also a FAIL (the service would silently fall
+  back to RMS);
+- **skips with a recorded reason** when the model file is absent or fewer than 8 usable clips exist —
+  "no opinion", never a pass;
+- records aggregates only (counts, fractions, peak-probability range, model path + md5) — no clip
+  names, nothing from the household corpus;
+- costs ~70 MB peak RSS and ~1 s, runs **after** the replay (never overlapping its peak), and also
+  runs on the memory-**skip** path (≥ 400 MB free): a dead VAD turns that run `fail`, not `skip` —
+  the tight-box days are how this incident stayed invisible.
+
+`voice_gate_check.py` (the deploy gate and the PR gate) blocks any artifact
+that claims the stage (`vad_stage: true`) and carries a missing, malformed, `fail` or `error` `vad`
+block, and **re-derives** a `pass` from the counts against its own 60 % floor rather than trusting the
+label. Pinned by `tests/unit/test_voice_probe_vad_stage.py` (incl. the 0.001-everywhere negative
+control) and `tests/unit/test_voice_gate_check.py`. Measured on the box 2026-09-27: v6.0 file
+23/24 → pass; the incompatible file 0/24 (highest clip peak 0.026) → fail.
+
+**The model file is outside git** — no diff can show a swap, so no `VOICE_PATH_PATTERNS` entry can
+catch one; the **nightly** probe run is what does. Before swapping the file by hand, run the stage (or
+the real-model test) against the candidate via `ZOE_SILERO_VAD_MODEL=<candidate>`.
+
+**Files:** the compatible model is **v6.0**, md5 `00bdd41445da13fe3d52a5a074013aa1`, at
+`/home/zoe/models/silero_vad.onnx` (backup `silero_vad.onnx.v6.0.bak-20260926`). The incompatible
+v6.2.1 export (md5 `302cb198…`) is kept beside it as `silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927`
+for forensics — do not restore it.
 
 ### The gated set is NOT all equally evidenced — the LiveKit/WebRTC lane (read before believing a green)
 
@@ -431,6 +488,133 @@ foreground timeout killed it with the brain already stopped — silent Zoe, no b
 and if a `trap` restarts the brain on exit, do not also call `start` explicitly — the race
 produces a "Job failed" that looks like a hard failure while the service is actually mid-load.
 
+## Brain build + flags — B0.4: llama.cpp b11194, FlashAttention on, q8_0 K+V (2026-09-27)
+
+The tracked template `scripts/setup/systemd/llama-server.service` targets **llama.cpp b11194**
+(`~/llama.cpp-b11194/build-jetson`, commit `9f70b2cec`; built `GGML_CUDA=ON`,
+`CMAKE_CUDA_ARCHITECTURES=87`, `GGML_CUDA_FA=ON`, `GGML_CUDA_GRAPHS=ON`, `GGML_NATIVE=ON`,
+Release) with `--flash-attn on --cache-type-k q8_0 --cache-type-v q8_0` beside the MTP drafter.
+On the previous build (b9733, `~/llama.cpp/build-jetson-new`) FA crashed with `draft-mtp`
+(fixed upstream in #25148), which forced FA off and therefore V at f16. Measured in two
+replay-gated brain windows on 2026-09-27, same rock, same other flags:
+
+| candidate | KV cache | replay | brain median | error lines |
+|---|---|---|---|---|
+| **A (adopted)** | K q8_0 / V q8_0 | PASS 11/11 scoreable, 0 fail | 1754 ms | 0 |
+| B | K q8_0 / V f16 | PASS 11/11 scoreable, 0 fail | 1752.5 ms | 0 |
+
+A wins on memory at equal latency. The single-stream replay results carry over to the adopted
+template's `--parallel 1` and `--fit off`, which were added after both windows. The apply window's
+replay gate is the measurement of the exact committed config. `tests/unit/test_llama_server_unit_flags.py` pins the
+couplings that would otherwise only fail at brain startup.
+
+**Build** (source only: the prebuilt arm64 asset targets CUDA 13.x, not JetPack's 12.6). This is the
+configuration measured on the box (`CMakeCache.txt` of `~/llama.cpp-b11194/build-jetson`). Build
+it in a brain-stop window, because the compile is RAM-hungry. The installer refuses to install the
+unit until this binary exists.
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp-b11194
+git -C ~/llama.cpp-b11194 checkout b11194
+cmake -S ~/llama.cpp-b11194 -B ~/llama.cpp-b11194/build-jetson -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=87 -DGGML_CUDA_FA=ON -DGGML_CUDA_GRAPHS=ON -DGGML_NATIVE=ON
+cmake --build ~/llama.cpp-b11194/build-jetson --target llama-server -j 4
+~/llama.cpp-b11194/build-jetson/bin/llama-server --version   # -> build 11194 (9f70b2cec)
+```
+
+**Flag renames in b11194** (an old spelling on the new binary is an unknown-flag startup failure,
+and a new spelling on b9733 is the same failure in reverse):
+
+- `--mlock` is **removed** → `--load-mode mmap+mlock`.
+- `--chat-template-kwargs '{"enable_thinking":false}'` is **deprecated** → `--reasoning off`.
+- `--fit` defaults to **on** in b11194 (and in b9733). The unit sets **`--fit off`** explicitly, so
+  the written config is the served config.
+
+**Single slot: `--parallel 1` (correctness over concurrency).** Upstream
+[ggml-org/llama.cpp#28286](https://github.com/ggml-org/llama.cpp/issues/28286) (open, filed
+2026-09-03) reports that draft-MTP with `--parallel` > 1 leaks content between concurrent
+requests' prompts and completions, with no garbage-token signature to catch it by. The unit ran
+`--parallel 2` from 2026-07-21 until B0.4, so the live brain has been exposed. With one slot,
+concurrent requests (voice and chat) queue rather than run side by side, and the full
+`--ctx-size` belongs to that slot (8192 from B6.6, the Flue client's window; see
+[brain-flags-tuning-2026-09.md](brain-flags-tuning-2026-09.md)). The `--cache-ram 2048` host
+prompt cache is what keeps the prefixes warm between them. It is load-bearing with one slot:
+`--cache-ram 0` measured +4.1 s TTFT on every repeat chat turn. The test pins `draft-mtp` ⇒ `--parallel 1`. Raise it only once #28286
+is fixed upstream and replay-gated here.
+
+**Apply** (operator/coordinator only, in a Kokoro-paused brain window, after the PR merges and
+the live checkout is fast-forwarded):
+
+```bash
+# 0. Preconditions: the binary is the gated build, the box has >= 2 GB quiet headroom, and no
+#    other voice harness is running.
+~/llama.cpp-b11194/build-jetson/bin/llama-server --version   # -> build 11194 (9f70b2cec)
+
+# 1. Keep the running unit for rollback (outside the systemd search path), then install the
+#    template. The drop-ins in ~/.config/systemd/user/llama-server.service.d/ (memory.conf,
+#    priority.conf) are separate files, and copying the unit file leaves them in place.
+#    The rollback copy is made ONCE and never overwritten. A repeat apply (after B0.4 is already
+#    installed) must not replace the known-good b9733 unit with the b11194 one.
+RB=~/.cache/zoe/llama-server.service.b9733
+mkdir -p ~/.cache/zoe
+if [ -e "$RB" ]; then
+  echo "rollback copy already exists — not overwriting"
+elif grep -q 'llama.cpp/build-jetson-new/bin/llama-server' ~/.config/systemd/user/llama-server.service; then
+  cp -n ~/.config/systemd/user/llama-server.service "$RB"
+else
+  echo "installed unit is not the b9733 build and no rollback copy exists — stop"; exit 1
+fi
+grep -q 'llama.cpp/build-jetson-new/bin/llama-server' "$RB" || { echo "rollback copy is not b9733 — stop"; exit 1; }
+install -m 644 ~/assistant/scripts/setup/systemd/llama-server.service ~/.config/systemd/user/llama-server.service
+# The template overwrites any host-specific edit in the installed unit, so read the diff: only
+# the B0.4 lines (binary + LD_LIBRARY_PATH, --flash-attn, --cache-type-v, --load-mode,
+# --reasoning, --parallel 1, --fit off) and comments may differ. On 2026-09-27 the installed
+# ExecStart matched the pre-B0.4 template exactly, including --host 127.0.0.1. Carry any other
+# difference into the new copy.
+diff "$RB" ~/.config/systemd/user/llama-server.service
+systemctl --user daemon-reload
+systemctl --user show llama-server -p DropInPaths -p MemorySwapMax   # both drop-ins listed, MemorySwapMax=0
+
+# 2. Kokoro-paused restart. ExecStartPost blocks until /health is ok, for up to 120 s.
+systemctl --user stop kokoro-tts.service
+systemctl --user restart llama-server.service
+curl -sf http://127.0.0.1:11434/health | grep -q ok || { echo "brain down: roll back"; exit 1; }
+ps -o args= -C llama-server | grep 11194            # the new binary, with --flash-attn on and q8_0 V
+journalctl --user -u llama-server -n 300 | grep -Ei 'error|fail|abort'   # expect nothing
+
+# 3. Replay gate while Kokoro is still paused (frees ~2 GB). The probe takes the shared
+#    harness flock itself, so do not wrap it in another flock.
+python3 ~/assistant/scripts/maintenance/voice_regression_probe.py --stt remote
+
+# 4. Kokoro back, then verify it is the real CUDA sidecar and not a fallback.
+systemctl --user start kokoro-tts.service
+curl -s http://localhost:10201/health   # pipeline_loaded: true AND device: cuda
+# and /readyz dependencies.tts must name the kokoro-sidecar provider (tts.ok alone is not enough)
+```
+
+**Rollback** is any error line, a replay FAIL, or a brain-median regression:
+
+```bash
+RB=~/.cache/zoe/llama-server.service.b9733
+# Verify the saved copy is still the b9733 unit BEFORE installing it.
+grep -q 'llama.cpp/build-jetson-new/bin/llama-server' "$RB" || { echo "rollback copy missing or not b9733 — stop"; exit 1; }
+systemctl --user stop kokoro-tts.service
+cp "$RB" ~/.config/systemd/user/llama-server.service
+sed -i 's/--parallel 2 \\/--parallel 1 \\/; s/^  --cont-batching \\$/  --cont-batching \\\n  --fit off \\/' \
+  ~/.config/systemd/user/llama-server.service   # keep one slot + fit off on rollback (#28286)
+grep -E -- '--parallel|--fit' ~/.config/systemd/user/llama-server.service
+systemctl --user daemon-reload && systemctl --user restart llama-server.service
+# then poll /health, start kokoro-tts, and verify it as in step 4
+```
+
+The saved copy is the b9733 configuration: binary and `LD_LIBRARY_PATH` at
+`%h/llama.cpp/build-jetson-new/bin`, `--flash-attn off`, no `--cache-type-v` (V must be f16 when
+FA is off, or startup throws), `--mlock`, and the `enable_thinking` kwargs line. **It also carries
+`--parallel 2`, which re-exposes #28286.** Before the `daemon-reload`, edit it to `--parallel 1` and
+add `--fit off`. #28286 does not depend on the build, and b9733 accepts both flags. The template
+header lists the same rollback. The `functiongemma-router` unit still runs the b9733 binary and is
+not touched by B0.4.
+
 ## Failure modes that are easy to misdiagnose (2026-07-14 / -15)
 
 All were reported as "the wake word gets the first use wrong" or "the voice is choppy / broken into
@@ -570,3 +754,32 @@ Rollback: set `ZOE_VAD_TAIL_MS=0` and
 `systemctl --user restart zoe-voice` — behaviour is byte-identical to pre-flag. Corpus evidence
 (#1573): −160 ms median tail on ~80 % of turns, +2.7 pt false-cut upper bound; the probe
 (`scripts/perf/measure_endpointing.py`) can exercise old and new behaviour for before/after.
+
+## Smart Turn v3 end-of-turn scorer (LiveKit lane)
+
+`services/zoe-data/voice_turn.py` wraps pipecat's `smart-turn-v3.2-cpu.onnx`
+(`/home/zoe/models/`, override `ZOE_SMART_TURN_MODEL`): input `input_features` float32
+`[1, 80, 800]` — a Whisper log-mel of the last 8 s at 16 kHz, front-padded with zeros when
+shorter — output the probability the speaker has finished. `routers/voice_livekit.py` consults
+it at the silence window when `ZOE_SMART_TURN_ENABLED=1` (threshold `ZOE_SMART_TURN_THRESHOLD`,
+0.5; at most `ZOE_SMART_TURN_MAX_CHECKS` extensions; any load failure → the fixed-silence
+endpoint). Inference runs in `asyncio.to_thread`.
+
+**Features are pure numpy (2026-09-27, B6.6 follow-up).** `log_mel_features` replaced
+`transformers.WhisperFeatureExtractor(chunk_length=8)(…, do_normalize=True)`, because in
+transformers 5.x that import pulls torch in unconditionally: **+~360 MB resident for the life of
+zoe-data** from the first LiveKit turn, to compute one spectrogram. Measured in a fresh
+interpreter (detector + one scoring call): **446–455 MB → 84 MB RSS**, torch and transformers no
+longer loaded; feature extraction ~7–14 ms.
+
+- **Parity is bit-exact, on purpose.** The output is bit-identical to transformers' own numpy
+  path (mel bank, complex64 STFT storage, float32 clamp/rescale — all reproduced), pinned by
+  `tests/test_voice_turn_logmel_parity.py` (host-only: needs transformers). Against the torch
+  path that ran live before, features differ by ≤ 2.4e-5 (float32 `torch.stft` rounding).
+- **The model is sharply sensitive to that rounding on some turns.** A float64 clamp (1-ULP
+  feature change) moved one corpus clip from 0.44 to 0.19. Old (torch-path) vs new on 302 corpus
+  turns (every 8th clip, full + half-truncated): median |Δp| 0, p90 4e-3, p99 0.11, max 0.21,
+  **zero decisions flipped at 0.5**, mean p 0.7623 → 0.7627. The same spread exists between
+  transformers' own torch and numpy paths — it is not introduced by the port.
+- `tests/test_voice_turn_no_torch.py` (`ci_safe`) pins that `voice_turn` imports no
+  torch/transformers (AST check + a fresh-interpreter run of the real scoring path).

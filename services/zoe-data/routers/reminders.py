@@ -142,17 +142,51 @@ async def list_today_reminders(
     """Get today's reminders (active, due today)."""
     await require_feature_access(db, user, feature="reminders", action="read")
     user_id = user["user_id"]
-    today = date.today().isoformat()
+    # "Today" is the HOUSEHOLD day (ZOE_TIMEZONE, the clock the scan fires
+    # against), never the server's local date.
+    from proactive.triggers import reminder_scan
+
+    today_d = reminder_scan.zoe_now().date()
+    today = today_d.isoformat()
+    # A recurring reminder's due_date is its ANCHOR (first occurrence), not the
+    # day it is due, so rows with a pattern and an anchor on/before today are
+    # fetched too and kept only when the rule fires today (reminder_recurrence).
     sql = """
         SELECT * FROM reminders
         WHERE (visibility = 'family' OR user_id = ?) AND deleted = 0
-          AND is_active = 1 AND (due_date = ? OR due_date IS NULL)
+          AND is_active = 1
+          AND (due_date = ? OR due_date IS NULL
+               OR (recurring_pattern IS NOT NULL AND recurring_pattern != '' AND due_date <= ?))
         ORDER BY due_time, created_at
     """
-    cursor = await db.execute(sql, [user_id, today])
+    cursor = await db.execute(sql, [user_id, today, today])
     rows = await cursor.fetchall()
-    reminders = [row_to_dict(r) for r in rows]
+    reminders = [r for r in (row_to_dict(row) for row in rows) if _due_today(r, today_d)]
     return {"reminders": reminders}
+
+
+def _is_rrule(pattern) -> bool:
+    from reminder_recurrence import parse_rrule
+
+    return bool(pattern) and parse_rrule(str(pattern)) is not None
+
+
+def _due_today(reminder: dict, today: date) -> bool:
+    """One-off rows: due_date is today or unset (unchanged). RRULE rows: the
+    rule has an occurrence today. Legacy free-text patterns keep the old test."""
+    due_date = reminder.get("due_date")
+    if not due_date or str(due_date) == today.isoformat():
+        return True
+    from reminder_recurrence import occurs_on, parse_rrule
+
+    rule = parse_rrule(reminder.get("recurring_pattern") or "")
+    if rule is None:
+        return False
+    try:
+        anchor = date.fromisoformat(str(due_date))
+    except ValueError:
+        return False
+    return occurs_on(rule, anchor, today)
 
 
 @router.put("/{reminder_id}", response_model=dict)
@@ -186,6 +220,23 @@ async def update_reminder(
     data = payload.model_dump(exclude_unset=True)
     if not is_owner:
         data.pop("visibility", None)
+    existing = dict(row)
+    if "due_date" in data and _is_rrule(existing.get("recurring_pattern")):
+        # A recurring row's due_date is the rule's ANCHOR, not a due day.
+        if data["due_date"] is not None and str(data["due_date"]) == str(existing.get("due_date")):
+            # An edit form re-sending the stored (usually past) anchor is not a
+            # date change: keep the anchor and the rule's phase, never 422 it.
+            data.pop("due_date")
+        else:
+            # Re-anchor to the first occurrence on/after the new date (today when
+            # cleared). A NULL anchor would make the scan re-anchor to "today"
+            # every cycle, so a monthly or every-3-days rule would fire DAILY.
+            from reminder_service import normalize_recurrence_fields
+
+            due_time = normalize_due_time(data["due_time"]) if "due_time" in data else existing.get("due_time")
+            _, data["due_date"] = normalize_recurrence_fields(
+                existing["recurring_pattern"], normalize_due_date(data["due_date"]), due_time
+            )
     for key, value in data.items():
         if key == "is_active":
             updates.append("is_active = ?")
@@ -347,14 +398,30 @@ async def acknowledge_reminder(
     if dict(row).get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Not authorised to acknowledge this reminder")
 
-    # B2: an acknowledged reminder is done — cancel the pending job BEFORE the
-    # state change auto-commits so it can't still fire; the in-job obligation
-    # re-read also aborts a sub-second in-flight job.
-    await _cancel_reminder_jobs_safe(reminder_id)
-    await db.execute(
-        "UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?",
-        [reminder_id],
-    )
+    recurring = _is_rrule(dict(row).get("recurring_pattern"))
+    if recurring:
+        # A recurring (RRULE) reminder is done for THIS occurrence only: the row
+        # stays live and the next occurrence is scheduled (strictly after now).
+        # Stopping the series is delete / is_active=false, never "Complete".
+        # Clear a pending snooze (it would re-alert this occurrence) and bump the
+        # generation so a job already running for it self-voids at fire time.
+        # The bump lands BEFORE the cancel (below, after commit): a scan racing
+        # the cancel then sees the old unfired job or the NEW generation, never
+        # leaves a stale-generation job that would self-void and skip the next one.
+        await db.execute(
+            "UPDATE reminders SET snoozed_until = NULL, updated_at = NOW(), "
+            "schedule_generation = COALESCE(schedule_generation, 0) + 1 WHERE id = ?",
+            [reminder_id],
+        )
+    else:
+        # B2: an acknowledged reminder is done — cancel the pending job BEFORE the
+        # state change auto-commits so it can't still fire; the in-job obligation
+        # re-read also aborts a sub-second in-flight job.
+        await _cancel_reminder_jobs_safe(reminder_id)
+        await db.execute(
+            "UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?",
+            [reminder_id],
+        )
     await _create_notification(
         db,
         user_id=user_id,
@@ -364,6 +431,9 @@ async def acknowledge_reminder(
         data={"reminder_id": reminder_id},
     )
     await db.commit()
+    if recurring:
+        await _cancel_reminder_jobs_safe(reminder_id)
+        await _reschedule_reminder_due_safe(db, reminder_id)
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
