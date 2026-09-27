@@ -335,6 +335,37 @@ test('middleware falls back to the complete assistant text when no deltas stream
   assert.deepEqual(await bodyLines(h.ctx.res), ['Whole answer.', { done: true }]);
 });
 
+test('done terminal carries per-call llama-server prompt-cache usage from turn events', async () => {
+  const h = fakeHarness({ accept: NDJSON_CONTENT_TYPE });
+  const mw = seamAStreamingMiddleware({ observeFn: h.observeFn, timeoutMs: 5_000 });
+  await mw(h.ctx as never, h.next);
+  const sid = 'sess-1';
+  h.emit({ type: 'operation_start', operationKind: 'prompt', operationId: 'op-1', instanceId: sid });
+  // Round 1 (tool call): a prompt-cache MISS — 762 re-prefilled, 2400 cached.
+  h.emit({
+    type: 'turn', purpose: 'agent', instanceId: sid,
+    response: { usage: { input: 762, output: 12, cacheRead: 2400, cacheWrite: 0, totalTokens: 3174 } },
+  });
+  // A compaction call is not a conversation round — never reported.
+  h.emit({
+    type: 'turn', purpose: 'compaction', instanceId: sid,
+    response: { usage: { input: 999, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1000 } },
+  });
+  // Round 2 (answer): a HIT — only the tool result re-prefilled.
+  h.emit({
+    type: 'turn', purpose: 'agent', instanceId: sid,
+    response: { usage: { input: 18, output: 30, cacheRead: 3174, cacheWrite: 0, totalTokens: 3222 } },
+  });
+  // A call with no usage reported (pi-ai's all-zero default) adds nothing.
+  h.emit({ type: 'turn', purpose: 'agent', instanceId: sid, response: { usage: { input: 0, cacheRead: 0 } } });
+  h.emit({ type: 'text_delta', text: 'Done.', instanceId: sid });
+  h.emit({ type: 'operation', operationKind: 'prompt', operationId: 'op-1', isError: false, instanceId: sid });
+  assert.deepEqual(await bodyLines(h.ctx.res), [
+    'Done.',
+    { done: true, prompt_cache: [{ prompt_n: 762, cache_n: 2400 }, { prompt_n: 18, cache_n: 3174 }] },
+  ]);
+});
+
 test('middleware surfaces a failed prompt operation as {"error": ...}', async () => {
   const h = fakeHarness({ accept: NDJSON_CONTENT_TYPE });
   const mw = seamAStreamingMiddleware({ observeFn: h.observeFn, timeoutMs: 5_000 });

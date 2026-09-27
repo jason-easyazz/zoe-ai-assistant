@@ -161,8 +161,20 @@ always-on core + relevance-matched tools) onto its own wire seam:
 - **Active set** (`src/tools/tool-groups.ts`, derived statelessly from the
   request's own message window): the always-on core (`get_time`,
   `recall_memory`, `activate_abilities`) + groups keyword-matched against the
-  last user message + groups the model unlocked via `activate_abilities` +
-  groups whose tools were already used this session (sticky).
+  session's user messages (session-sticky; `ZOE_BRAIN_STICKY_DISCLOSURE=false`
+  restores last-user-message-only matching) + groups the model unlocked via
+  `activate_abilities` + groups whose tools were already used this session
+  (sticky).
+- **Prompt-cache stability:** Gemma's template renders the tool block inside the
+  system turn, BEFORE the history, so any change to it re-prefills the whole
+  session history (measured: 282-854 tokens, 0.6-1.5 s before the first token on
+  a miss vs 11-20 tokens on a hit). The disclosed block is therefore append-only
+  per session: groups never retract (sticky matching above), and tools are
+  emitted in ACTIVATION order (core + ungrouped first, then groups in the order
+  they first became active), so a newly unlocked group appends instead of being
+  inserted mid-block. Each finished NDJSON turn reports llama-server's per-call
+  `prompt_n` / `cache_n` on its `{"done": true, "prompt_cache": [...]}` terminal;
+  zoe-data logs it as `FLUE_PROMPT_CACHE`.
 - **Groups:** weather, lists, timers, reminders, calendar, notes.
 - **Trade-off:** the per-session set grows monotonically — a long session that
   touches every domain converges back to all schemas. Sessions are
@@ -283,7 +295,7 @@ output ≤ reserve       (maxTokens = outputBudgetTokens())
 ```
 
 That second line is the other half of the fix. llama-server runs
-`--ctx-size 16384 --parallel 2` — an **8192-token slot per lane** — with context
+`--ctx-size 8192 --parallel 1` — **one 8192-token slot** — with context
 shifting off on this build, so generation that reaches the end of the slot stops
 with `finish_reason: "length"` regardless of what pi-ai did. A flat 2048-token cap
 against a full 6656-token prompt asks for 8704 tokens of slot and is silently cut
@@ -363,9 +375,10 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_TOKEN` | *(unset)* | bearer token for the agent HTTP route |
 | `ZOE_BRAIN_OPEN` | *(unset)* | `1` opts into an open route (local smoke runs only) |
 | `ZOE_BRAIN_MAX_TOOL_ITERS` | `8` | hard per-turn tool-iteration ceiling |
-| `ZOE_BRAIN_CONTEXT_WINDOW` | `8192` | llama-server's per-lane SLOT size — the budget for prompt-fit history windowing (`src/context-window.ts`); `0` disables windowing |
+| `ZOE_BRAIN_CONTEXT_WINDOW` | `8192` | llama-server's SLOT size — the budget for prompt-fit history windowing (`src/context-window.ts`); `0` disables windowing |
 | `ZOE_BRAIN_REPLY_RESERVE` | `1536` | tokens held back from the window for the reply + estimator slack. **Also the reply CAP** (`model.maxTokens`), so lowering it to buy prompt room shortens replies by the same amount — see "the output-budget clamp" |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | `true` | `false` disables progressive tool disclosure |
+| `ZOE_BRAIN_STICKY_DISCLOSURE` | `true` | `false` restores last-user-message-only keyword disclosure (groups decay again, at the cost of a prompt-cache miss whenever the tool block changes) |
 | `ZOE_WEB_SEARCH_TOOL` | `0` | B10.1: `1` registers the flag-gated `web_search` tool (thin wrapper over zoe-data `POST /api/system/web-search`, which needs the SAME flag on its side); always disclosed when registered; `/health` then lists it under `optional_tools` so zoe-data can confirm before advertising it. **Trust boundary (W15):** results are untrusted third-party text — returned FENCED by `src/untrusted-content.ts` (fixed "content, not instructions" preamble + `<<<BEGIN/END UNTRUSTED WEB RESULTS>>>` block; tag/chat-template/tool-call markup, `<`/`>`, escaped brackets, `[INST]`, control/invisible chars and role markers neutralised; title/snippet/link capped at 120/300/200; http(s) links only), and once results are returned every state-changing tool (`runWrite` + `set_timer`) AND `web_search` itself (a second search is an outbound exfiltration channel; refused with no HTTP call) refuse with "not allowed after untrusted web content this turn" until the turn ends (keyed by the turn's AbortSignal, like replay isolation); reads stay available; no-result outcomes do not taint. Pinned by `test/web_search_fencing.test.ts` (injection fixture + negative controls) |
 | `ZOE_BRAIN_STREAM` | `on` | `0`/`false` disables the NDJSON sentinel-stream mode |
 | `ZOE_BRAIN_STREAM_TIMEOUT_S` | `180` | streamed-turn deadline (mirrors prod `ZOE_CORE_TIMEOUT_S`) |

@@ -443,6 +443,43 @@ can't attribute per-commit, but the landed work that drove it:
 July-2 bar the gate compared against an easy, ~1.75× slower target, so a silent brain slowdown could
 regress most of the July wins and still "pass". The new bar holds the gains.
 
+### Pre-brain + prompt-cache timings — reading a slow first token (2026-09-27)
+
+Two INFO lines in `~/.zoe-logs/zoe-data.app.log` attribute a slow voice first token per turn.
+Join them on `session=`:
+
+```
+VOICE TIMING turn=<ns> session=<sid> path=stream|command pre_brain_ms=… memory_packet_ms=… (history=… memory=… domain=…) brain_ttft_ms=… llm_first_token_ms=…
+FLUE_PROMPT_CACHE session=<sid> rounds=N first_prompt_n=… first_cache_n=… total_prompt_n=… per_round=p/c,…
+```
+
+- **`pre_brain_ms`**: from command start to the brain branch. That covers the router, identity,
+  fast tiers and scope gate. It is also the `pre_brain` stage on `zoe_voice_stage_seconds`.
+- **`memory_packet_ms`**: the history, memory packet and domain-context loads. Since 2026-09-27
+  they run concurrently, so this figure is their maximum, not their sum. It is also the
+  `memory_packet` stage. `llm_first_token` is still measured from the brain branch, so it
+  includes `memory_packet`.
+- **`brain_ttft_ms`**: brain dispatch to the first token. This is the part the prompt cache
+  controls.
+- **`first_prompt_n`**: tokens llama-server re-prefilled for the turn's first model call. The
+  sidecar forwards it as `prompt_cache` on its NDJSON `{"done": true}` terminal. A hit is tens of
+  tokens (~200 ms). A miss is hundreds (~1.7 ms/token): the 2026-09-26 replay measured 282–854
+  tokens, i.e. 0.6–1.5 s.
+
+**Where the misses came from on the Flue lane.** Gemma's template renders the instructions, then
+the tool block, then the history. The sidecar's progressive disclosure re-derived the tool block
+from the LAST user message only, so a keyword group retracted on the next turn. It also emitted
+tools in registration order, so a new group was inserted mid-block. Either change re-prefilled
+the whole history. The block is now append-only per session: groups are sticky, and tools are
+emitted in activation order. `ZOE_BRAIN_STICKY_DISCLOSURE=false` on the sidecar restores the old
+decay. The legacy `zoe_agent` voice mode had the same bug via its per-minute datetime header in the
+system prompt. That header now rides in the latest user message.
+
+**Known leftover.** On the live Flue lane the sidecar ignores `history` / `db_memory_context` /
+`portrait` (`zoe_flue_client.run_flue_brain_streaming`). So `memory_packet_ms` is spent on a
+context the live brain discards; it is only used by the core/legacy lanes (failover). Read
+`memory_packet_ms` before deciding whether to skip it on the flue lane.
+
 ### Which samples the gate replays — capture time, not filename (fixed 2026-08-05)
 
 `--last N` decides what every gate verdict MEANS, and until 2026-08-05 it did not mean what it

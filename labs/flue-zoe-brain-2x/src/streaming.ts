@@ -29,7 +29,8 @@
  * Wire framing (this sidecar's choice — the seam doc leaves it to us):
  * newline-delimited JSON (`application/x-ndjson`). Each line is either
  *   - a JSON string: exactly one Seam-A chunk (text delta or sentinel), or
- *   - {"done": true}: the turn completed (always the last line on success), or
+ *   - {"done": true}: the turn completed (always the last line on success),
+ *     optionally carrying `prompt_cache` — see `PromptCacheRound` — or
  *   - {"error": "<message>"}: the turn failed (always the last line on error).
  * JSON-encoding each chunk keeps chunk boundaries exact (deltas may contain
  * newlines) and is trivial for the Python consumer to map onto the
@@ -211,6 +212,24 @@ function stringifyCompact(value: unknown): string {
 
 // ── Flue-event → Seam-A chunk reducer ────────────────────────────────────────
 
+/**
+ * llama-server prompt-cache accounting for ONE model call (one tool round) of
+ * the turn, from the Flue `turn` event's `response.usage` (the documented
+ * per-call `PromptUsage`, @flue/runtime docs/reference/events.md): llama-server reports
+ * `usage.prompt_tokens_details.cached_tokens` and pi-ai maps it to
+ * `usage.cacheRead`, with `usage.input = prompt_tokens - cached`. So
+ * `prompt_n` is the tokens RE-PREFILLED this call (llama-server's
+ * `timings.prompt_n`) and `cache_n` the tokens served from the KV/prompt cache
+ * (`timings.cache_n`). A small `prompt_n` on the first round is a cache hit; a
+ * few hundred is a miss that costs ~1.7 ms/token before the first token.
+ * Forwarded on the `{"done": true}` terminal so zoe-data can log it per turn;
+ * the consumer ignores unknown terminal fields, so this is additive.
+ */
+export interface PromptCacheRound {
+  prompt_n: number;
+  cache_n: number;
+}
+
 export interface SeamAState {
   /** tool-call ids whose phase=start sentinel has been emitted (dedupe). */
   startedToolIds: Set<string>;
@@ -218,10 +237,30 @@ export interface SeamAState {
   streamedText: boolean;
   /** complete text of the last assistant message — the no-deltas fallback. */
   lastAssistantText: string;
+  /** per-model-call prompt-cache accounting, in round order (see above). */
+  promptCache: PromptCacheRound[];
 }
 
 export function newSeamAState(): SeamAState {
-  return { startedToolIds: new Set(), streamedText: false, lastAssistantText: '' };
+  return {
+    startedToolIds: new Set(),
+    streamedText: false,
+    lastAssistantText: '',
+    promptCache: [],
+  };
+}
+
+/** The call's prompt-cache numbers, or null when the response carries no usage. */
+export function promptCacheRound(response: unknown): PromptCacheRound | null {
+  if (!response || typeof response !== 'object') return null;
+  const usage = (response as Record<string, unknown>).usage as Record<string, unknown> | undefined;
+  if (!usage || typeof usage !== 'object') return null;
+  const input = usage.input;
+  const cacheRead = usage.cacheRead;
+  if (typeof input !== 'number' || !Number.isFinite(input)) return null;
+  const cache = typeof cacheRead === 'number' && Number.isFinite(cacheRead) ? cacheRead : 0;
+  if (input <= 0 && cache <= 0) return null; // no usage reported (all-zero default)
+  return { prompt_n: input, cache_n: cache };
 }
 
 /**
@@ -252,6 +291,8 @@ export function newSeamAState(): SeamAState {
  *   tool_start                  → phase=start (only if message_end didn't —
  *                                 defensive against message-shape drift)
  *   tool                        → phase=result
+ *   turn (purpose=agent)        → no chunk; records the call's prompt-cache
+ *                                 usage for the `{"done": true}` terminal
  *
  * Thinking is mapped at thinking_end (one complete block), not per delta: the
  * consumer renders the payload as a one-shot activity label
@@ -304,6 +345,13 @@ export function seamAFrames(event: Record<string, unknown>, state: SeamAState): 
     case 'tool': {
       const sentinel = toolResultSentinel(event);
       return sentinel === null ? [] : [sentinel];
+    }
+    case 'turn': {
+      // One model call (one tool round). Accounting only — never a chunk.
+      if (event.purpose !== undefined && event.purpose !== 'agent') return [];
+      const round = promptCacheRound(event.response);
+      if (round) state.promptCache.push(round);
+      return [];
     }
     default:
       return [];
@@ -424,7 +472,11 @@ function openTurnStream(instanceId: string, observeFn: ObserveFn, timeoutMs: num
     if (!finished && !state.streamedText && state.lastAssistantText) {
       push(ndjsonLine(state.lastAssistantText));
     }
-    finish({ done: true });
+    finish(
+      state.promptCache.length > 0
+        ? { done: true, prompt_cache: state.promptCache }
+        : { done: true },
+    );
   };
 
   timer = setTimeout(() => finish({ error: 'brain turn timed out' }), timeoutMs);
