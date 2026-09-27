@@ -180,7 +180,7 @@ fail() {
   case $STAGE in
     preflight)
       echo "!! Preflight only: NOTHING was stopped or changed." >&2 ;;
-    stopped|rebuilt)
+    pre-stop|stopped|rebuilt)
       echo "!! Nothing was swapped: old store + old client intact. Restore service:" >&2
       echo "   systemctl --user start zoe-data $TIMERS" >&2 ;;
     started)
@@ -201,7 +201,13 @@ test -n "$MERGE_SHA"
 DEPLOY_ID=$(gh run list --workflow deploy.yml --limit 50 --json databaseId,headSha,status \
   --jq "[.[] | select(.headSha==\"$MERGE_SHA\" and .status==\"completed\")][0].databaseId // empty")
 test -n "$DEPLOY_ID"                                    # empty = deploy not finished yet: wait, re-paste
-echo "preflight OK: D=$D DEPLOY_ID=$DEPLOY_ID (merge $MERGE_SHA)"
+#    (c) that run must have been REFUSED before the checkout reset: the live tree must still be
+#        on the pre-merge commit (old opener). If the live HEAD already equals the merge commit,
+#        the deploy went through — stop here and follow §6 (the order code→store is broken).
+LIVE_HEAD=$(git -C /home/zoe/assistant rev-parse HEAD)
+test "$LIVE_HEAD" != "$MERGE_SHA"                       # live checkout must NOT be on the merged main yet
+test "$(gh run view "$DEPLOY_ID" --json conclusion --jq .conclusion)" = failure   # the refused run
+echo "preflight OK: D=$D DEPLOY_ID=$DEPLOY_ID (merge $MERGE_SHA; live tree at ${LIVE_HEAD:0:8})"
 exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay/deploy window overlaps
 STAGE=pre-stop
 
@@ -309,6 +315,10 @@ kokoro_back
 
 STEP=redeploy             # only now: re-run the SPECIFIC refused #1745 deploy (captured in block A)
 gh run rerun "$DEPLOY_ID"
+sleep 20
+gh run watch "$DEPLOY_ID" --exit-status              # blocks until the deploy finishes; non-zero = failed
+for i in $(seq 1 36); do curl -sf localhost:8000/readyz >/dev/null && break; sleep 5; done
+curl -s localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ready") and d["memory_capture"]["status"]=="ok", d'
 STEP=rearm
 systemctl --user start $TIMERS
 echo "B0.8 verified; deploy re-run; timers re-armed"
