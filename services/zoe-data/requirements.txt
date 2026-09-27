@@ -160,7 +160,7 @@ joblib==1.5.3
 # each job's trigger. Under 3.10.4 (+ tzlocal 2.x) those triggers carry **pytz**
 # tzinfo objects. 3.11 deprecates pytz timezones and drops pytz from its
 # dependencies entirely (it also moves to `tzlocal>=3.0`, which is why
-# .github/workflows/validate.yml pins `tzlocal>=2,<3` alongside this line — the
+# .github/workflows/validate.yml pins `tzlocal>=5.4.4,<6` alongside this line — the
 # two move together or CI installs an unsatisfiable pair).
 #
 # The failure is SILENT AND DESTRUCTIVE: jobstores/sqlalchemy.py `_get_jobs()`
@@ -175,7 +175,7 @@ APScheduler==3.10.4
 # tzlocal is a DIRECT requirement of the pinned APScheduler and was previously
 # undeclared (arrived transitively). Declared so the 2.x/3.x split above is visible
 # here and not only in the workflows. Box: 2.1.
-tzlocal>=2,<3
+tzlocal>=5.4.4,<6
 # 2.0.54 on the box (2026-09-26); the range stays so a patch release is not drift.
 SQLAlchemy>=2.0,<3.0
 # Push notifications

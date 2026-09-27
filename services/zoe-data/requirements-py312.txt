@@ -74,7 +74,7 @@ fastembed==0.8.0
 scikit-learn==1.7.2
 joblib==1.5.3
 APScheduler==3.10.4
-tzlocal==2.1
+tzlocal==5.4.4
 SQLAlchemy==2.0.54
 pywebpush==2.5.0
 py-vapid==1.9.4
