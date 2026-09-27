@@ -978,14 +978,16 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
             if _text_overlap(text, keeper.text) >= 0.85:
                 # Supersede the weaker row with the keeper's existing id.
                 try:
-                    await svc.review(
+                    # review() returns None when the edit was refused (the
+                    # memory opt-out wall) — count only edits that happened.
+                    if await svc.review(
                         ref.id,
                         decision="edit",
                         edits=keeper.text,
                         actor="consolidation",
                         note="weekly: merged near-duplicate",
-                    )
-                    merged += 1
+                    ) is not None:
+                        merged += 1
                 except Exception as exc:
                     logger.debug(
                         "consolidation: merge skipped id=%s: %s", ref.id, exc
@@ -1029,14 +1031,14 @@ async def _resolve_contradictions(svc, user_id: str, max_pairs: int = 50) -> int
             if not await _is_contradiction(newer.text, older.text):
                 continue
             try:
-                await svc.review(
+                if await svc.review(
                     older.id,
                     decision="edit",
                     edits=newer.text,
                     actor="consolidation",
                     note="weekly: contradicted by newer fact",
-                )
-                resolved += 1
+                ) is not None:       # None = refused by the opt-out wall
+                    resolved += 1
             except Exception as exc:
                 logger.debug(
                     "consolidation: supersede skipped id=%s: %s", older.id, exc

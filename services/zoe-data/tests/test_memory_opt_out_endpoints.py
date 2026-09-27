@@ -34,6 +34,18 @@ from database import get_db  # noqa: E402
 USER = {"user_id": "u-optout", "role": "user", "display_name": "Opt Out"}
 
 
+@pytest.fixture(autouse=True)
+def _isolated_opt_out_cache():
+    """user_prefs caches opt-out answers module-wide for 30 s. Without this, a
+    test here that opts "u1" in/out leaks that verdict into every later test in
+    the same process that ingests for "u1" (the ci_safe lane is ONE process)."""
+    import user_prefs
+
+    user_prefs.clear_pref_cache()
+    yield
+    user_prefs.clear_pref_cache()
+
+
 class _Cursor:
     def __init__(self, row):
         self._row = row
@@ -77,6 +89,42 @@ class _FakeDb:
 
     async def commit(self):
         self.commits += 1
+
+
+class _InMemoryCollection:
+    """The two collection calls ingest/review make (upsert + get-by-id), in a dict.
+
+    The real store is mempalace/chromadb, which the slim GitHub ``-m ci_safe``
+    lane does not install — so these tests exercise the REAL MemoryService
+    ingest/review logic against this fake rather than silently skipping."""
+
+    def __init__(self):
+        self.rows: dict[str, tuple[str, dict]] = {}
+
+    def upsert(self, *, ids, documents, metadatas):
+        for i, d, m in zip(ids, documents, metadatas):
+            self.rows[i] = (d, dict(m))
+
+    def get(self, *, ids=None, include=None, **_kw):
+        hits = [i for i in (ids or []) if i in self.rows]
+        return {"ids": hits,
+                "documents": [self.rows[i][0] for i in hits],
+                "metadatas": [self.rows[i][1] for i in hits]}
+
+
+def _isolated_memory_service():
+    """A real MemoryService whose store + audit lane never touch mempalace/chromadb."""
+    from memory_service import MemoryService
+
+    svc = MemoryService(data_dir="/nonexistent/zoe-test-memory-optout")
+    col = _InMemoryCollection()
+    svc._collection = lambda: col
+
+    async def _no_audit(**_kw):
+        return None
+
+    svc._append_audit = _no_audit
+    return svc, col
 
 
 @pytest.fixture
@@ -251,20 +299,14 @@ async def test_memory_service_chokepoint_drops_all_automatic_sources(monkeypatch
     person extractors; the digest/consolidation lanes run later. Guarding one
     extractor is not enough — MemoryService.ingest is the single write chokepoint."""
     import user_prefs
-    from memory_service import MemoryService
 
     async def opted_out(user_id, *, db=None):
         return user_id == "u-optout"
 
     monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_out)
-    svc = MemoryService(data_dir="/tmp/zoe-test-memory-optout")
+    svc, _col = _isolated_memory_service()
     written: list[tuple[str, str]] = []
     svc._write_row = lambda mem_id, text, metadata: written.append((metadata["source"], text))
-
-    async def _audit(**kw):
-        return None
-
-    svc._append_audit = _audit
 
     automatic = ["chat_regex", "turn_digest", "conversation", "digest", "consolidation", "synthesis"]
     for i, src in enumerate(automatic):
@@ -312,17 +354,16 @@ async def test_opt_out_cache_never_restores_a_value_invalidated_mid_read(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_review_edit_by_automatic_actor_honours_opt_out(tmp_path, monkeypatch):
+async def test_review_edit_by_automatic_actor_honours_opt_out(monkeypatch):
     """reconcile_for_ingest's UPDATE path supersedes via review(decision="edit"),
     not ingest — an automatic actor must hit the same opt-out wall."""
     import user_prefs
-    from memory_service import MemoryService
 
     async def opted_out(user_id, *, db=None):
         return user_id == "u-optout"
 
     monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_out)
-    svc = MemoryService(data_dir=str(tmp_path))
+    svc, _col = _isolated_memory_service()
     ref = await svc.ingest("Jason's dentist is on Friday.", user_id="u-optout",
                            source="brain_tool", status="approved")   # explicit teach: stored
     assert ref is not None
@@ -335,3 +376,58 @@ async def test_review_edit_by_automatic_actor_honours_opt_out(tmp_path, monkeypa
     # An explicit reviewer still edits.
     new_ref = await svc.review(ref.id, decision="edit", edits="Jason's dentist is on Saturday.", actor="review_ui")
     assert new_ref is not None and "Saturday" in new_ref.text
+
+
+# ── Greptile #1704 round 3: consolidation must not count skipped edits ───────
+
+class _SkippingReviewSvc:
+    """Consolidation's svc surface; review() returns None like the opt-out wall."""
+
+    def __init__(self, rows, review_result=None):
+        self._rows = {r.id: r for r in rows}
+        self._review_result = review_result
+        self.review_calls = 0
+
+    async def list_by_status(self, *, user_id, status, limit):
+        return list(self._rows.values())
+
+    async def get(self, mem_id):
+        return self._rows.get(mem_id)
+
+    async def review(self, mem_id, **_kw):
+        self.review_calls += 1
+        return self._review_result
+
+
+def _approved(mem_id, text, added_at):
+    from memory_service import MemoryRef
+
+    return MemoryRef(id=mem_id, text=text, metadata={
+        "status": "approved", "confidence": 0.9, "added_at": added_at})
+
+
+@pytest.mark.asyncio
+async def test_consolidation_does_not_count_edits_the_opt_out_wall_skipped(monkeypatch):
+    """review() returns None for an opted-out user's automatic edit; the weekly
+    summary must not report merges / resolved contradictions that never happened."""
+    import memory_digest
+
+    dupes = [_approved("a", "Jason loves Italian food a lot", "2026-09-01"),
+             _approved("b", "Jason loves Italian food a lot really", "2026-09-02")]
+    svc = _SkippingReviewSvc(dupes)
+    assert await memory_digest._merge_near_duplicates(svc, "u-optout") == 0
+    assert svc.review_calls == 1                      # the edit WAS attempted …
+
+    async def always_contradicts(a, b):
+        return True
+
+    monkeypatch.setattr(memory_digest, "_is_contradiction", always_contradicts)
+    pair = [_approved("n", "Jason's dentist is on Saturday", "2026-09-02"),
+            _approved("o", "Jason's dentist is on Friday", "2026-09-01")]
+    svc = _SkippingReviewSvc(pair)
+    assert await memory_digest._resolve_contradictions(svc, "u-optout") == 0
+    assert svc.review_calls == 1                      # … and skipped, not counted
+
+    # A real edit still counts.
+    svc = _SkippingReviewSvc(pair, review_result=object())
+    assert await memory_digest._resolve_contradictions(svc, "u-optout") == 1
