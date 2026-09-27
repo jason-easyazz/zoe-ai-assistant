@@ -64,9 +64,10 @@ State as of **2026-09-28 02:30 AWST**:
      - Prune old MemPalace snapshots.
      - `ggshield install --mode global --force` (B0.10 c).
 2. **Verify today:** the **07:30 morning brief** is the first run after #1726:
-   `grep -E "T23:[3-5][0-9].*(morning_checkin: users kept|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`
-   — the app log is stamped in UTC, so 07:30–07:59 AWST is 23:30–23:59 UTC of the previous
-   date (the trigger can fire anywhere in that window).
+   `grep -E "T(07:[3-5][0-9]\+0800|23:[3-5][0-9]\+0000).*(morning_checkin: users kept|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`
+   — the app log carries its UTC offset; lines are `+0800` (AWST, `T07:3x`) when the service
+   runs with the box's local zone and `+0000` (`T23:3x` of the previous date) when it runs in
+   UTC, so the pattern matches both (the trigger can fire anywhere in the 07:30–07:59 window).
    - The brief's own path logs `PROACTIVE_SPOKEN trigger=morning_checkin user=jason …` — that
      line is the proof; the recipient helper's `users kept=N` line precedes it. Do not rely on
      the autopilot `fired for N user(s)` line, which comes from a different path.

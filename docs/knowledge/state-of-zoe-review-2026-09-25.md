@@ -575,8 +575,11 @@ the 2026-09-25 plan, kept with ✓ marks.
    - The B0.8 Chroma 1.5 cutover. #1745 is prepared but not executed; follow
      `chroma-1-5-migration.md` §5.
    - Apply #1727: loopback Postgres 17.11, and rebuild the HA bridge.
-   - Music Assistant: YouTube Music re-auth (the cookies have rotated and the provider does
-     not load), then the MA 2.10.3 re-create.
+   - Music Assistant: YouTube Music re-auth on the panel (the cookies have rotated and the
+     provider does not load), then the MA 2.10.3 re-create per `music-ytdlp-js-runtime.md`
+     steps 1–6 — which includes a SECOND panel re-auth + search check after the re-create
+     (the 2.10 upgrade migrates `setup_data` one way, so the pre-recreate reconnect only
+     restores 2.8.7).
    - Revoke the Telegram token; rotate the Postgres password.
    - The Gemma re-upload swap (B6.2).
 2. **Panel on.**
