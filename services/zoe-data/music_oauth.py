@@ -117,6 +117,10 @@ async def _run_setup_flow(oauth_id: str, provider: str) -> None:
             pending_ids = {start_id}
             early: dict[str, dict[str, Any]] = {}  # flow events seen before we knew our flow_id
             forms = 0
+            # MA publishes each step as an event AND returns it as the command's
+            # reply, in either order: handle every distinct step exactly once, or
+            # a form would be submitted twice.
+            seen_steps: set[str] = set()
             deadline = time.time() + OAUTH_ATTEMPT_TTL_S
             while time.time() < deadline:
                 try:
@@ -142,6 +146,10 @@ async def _run_setup_flow(oauth_id: str, provider: str) -> None:
                     step = m["data"]
                 if not step:
                     continue
+                step_key = json.dumps(step, sort_keys=True, default=str)
+                if step_key in seen_steps:
+                    continue
+                seen_steps.add(step_key)
                 kind = step.get("type")
                 if kind == "finish":
                     flow["state"] = "connected"

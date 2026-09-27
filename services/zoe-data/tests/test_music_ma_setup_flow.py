@@ -729,3 +729,42 @@ async def test_210_oauth_unreadable_provider_config_starts_nothing(monkeypatch):
     _, st = await _oauth()
     assert st["state"] != "connected"
     assert not fake.sent("config/providers/setup") and not fake.sent("config/providers/reconfigure")
+
+
+class _FakeFormsThenOAuth(Fake210):
+    """An OAuth provider whose flow opens with TWO consecutive FORMs (e.g.
+    Spotify's options, then its playback method) before the EXTERNAL sign-in."""
+
+    def cmd_config__providers__setup(self, provider_domain):
+        flow = self._new_flow(provider_domain)
+        return self._step(flow, type="form", step_id="options",
+                          entries=[{"key": "use_developer_key", "type": "boolean",
+                                    "required": False, "default_value": False, "value": False}])
+
+    def cmd_config__flows__submit(self, flow_id, values):
+        flow = self.flows.get(flow_id)
+        if flow is None or flow["step"]["type"] != "form":
+            return _ERR  # MA: "The setup flow is not awaiting form input"
+        if flow["step"]["step_id"] == "options":
+            return self._step(flow, type="form", step_id="playback",
+                              entries=[{"key": "playback_auth_method", "type": "string",
+                                        "required": False, "default_value": "spotify_app",
+                                        "value": "spotify_app"}])
+        return self._step(flow, type="external", step_id="authorize", url=self.oauth_url)
+
+
+@pytest.mark.asyncio
+async def test_210_oauth_form_delivered_as_event_and_reply_is_submitted_once(monkeypatch):
+    """_FakeWS delivers every step twice — as a `setup_flow_updated` event and
+    as the command's reply — exactly as MA can. The SECOND form (produced by a
+    submit, so its event and its reply both arrive once our flow_id is known)
+    must be submitted once: two forms -> exactly two submits."""
+    fake = _FakeFormsThenOAuth().install(monkeypatch)
+    fake.oauth_url = "https://accounts.spotify.com/authorize?x=7"
+    _install_ws(monkeypatch, fake, _user_completes)
+
+    res, st = await _oauth()
+
+    assert len(fake.sent("config/flows/submit")) == 2, "a form step was submitted twice"
+    assert res["auth_url"] == fake.oauth_url
+    assert st["state"] == "connected", st
