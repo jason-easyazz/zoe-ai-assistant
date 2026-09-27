@@ -172,7 +172,12 @@ async def _run_setup_flow(oauth_id: str, provider: str) -> None:
 
 
 async def _run_flow(oauth_id: str, provider: str) -> None:
-    if await music_service._ma_is_210_plus(fresh=True):
+    api = await music_service._ma_api_for_write()
+    if api is None:
+        _flows[oauth_id].update(state="failed", error="couldn't reach the music engine")
+        _flows[oauth_id]["event"].set()
+        return
+    if api:
         await _run_setup_flow(oauth_id, provider)
         return
     flow = _flows[oauth_id]

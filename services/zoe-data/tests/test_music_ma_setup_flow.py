@@ -19,7 +19,7 @@ zoe-data's own assumptions:
   with errors when the provider fails to load; a finished flow is dropped from
   the registry, so flows/get on it errors.
 
-Negative control (run by hand, recorded in the PR): force `_ma_is_210_plus` to
+Negative control (run by hand, recorded in the PR): force `_ma_api_for_write` to
 False in `test_210_reconnect_applies_fresh_cookie_in_place` and it goes red on
 the cookie assertion -- `test_legacy_path_against_210_is_a_silent_noop` keeps
 that failure mode pinned permanently.
@@ -445,9 +445,9 @@ async def test_legacy_path_against_210_is_a_silent_noop(monkeypatch):
     fake = Fake210().install(monkeypatch)
     iid = _ytmusic_instance(fake)
 
-    async def pre210(fresh=False):
+    async def pre210():
         return False
-    monkeypatch.setattr(music_service, "_ma_is_210_plus", pre210)
+    monkeypatch.setattr(music_service, "_ma_api_for_write", pre210)
 
     saved = await music_service.save_provider(
         "ytmusic", {"username": "jason", "cookie": "FRESH"}, instance_id=iid)
@@ -618,3 +618,32 @@ async def test_210_oauth_healthy_reauth_vanished_flow_is_not_completion(monkeypa
     assert music_oauth.oauth_status(res["oauth_id"])["state"] != "connected"
     assert fake.instances["spotify--EX"]["setup_data"]["refresh_token"] == "old"
     music_oauth._flows.pop(res["oauth_id"], None)
+
+
+@pytest.mark.asyncio
+async def test_write_with_unreadable_version_fails_instead_of_guessing(monkeypatch):
+    """/info unreadable: a reconnect must fail, not fall back to the pre-2.10
+    save (which 'succeeds' on 2.10 and drops the cookie)."""
+    fake = Fake210().install(monkeypatch)
+    iid = _ytmusic_instance(fake)
+
+    async def no_info():
+        return None
+    monkeypatch.setattr(music_service, "_ma_info", no_info)
+
+    saved = await music_service.save_provider("ytmusic", {"username": "j", "cookie": "FRESH"}, instance_id=iid)
+    assert saved is None
+    assert not fake.sent("config/providers/save") and not fake.sent("config/providers/reconfigure")
+    assert await music_service.provider_setup_form("ytmusic") is None
+
+
+@pytest.mark.asyncio
+async def test_lost_submit_response_aborts_the_flow(monkeypatch):
+    fake = Fake210().install(monkeypatch)
+    iid = _ytmusic_instance(fake)
+    fake.cmd_config__flows__submit = lambda flow_id, values: _ERR  # response lost
+
+    saved = await music_service.save_provider("ytmusic", {"username": "j", "cookie": "FRESH"}, instance_id=iid)
+    assert saved is None
+    assert fake.sent("config/flows/abort"), "a flow MA may still hold was left running"
+    assert not fake.flows

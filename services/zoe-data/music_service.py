@@ -180,8 +180,9 @@ async def _ma_ok(command: str, timeout_s: float = _TIMEOUT_S, **args: Any) -> bo
 #
 # The version comes from MA's unauthenticated `/info`, cached per process for
 # _MA_VERSION_TTL_S and dropped on any transport failure (MA restarted, maybe
-# re-created on a new image), so a reconnect re-reads it. Unknown version (MA
-# down, odd /info) => the pre-2.10 path, which is what the live box ran first.
+# re-created on a new image); credential WRITES bypass the cache and re-read
+# /info every time (_ma_api_for_write), and REFUSE when it is unreadable rather
+# than guess. Read-only paths with an unknown version take the pre-2.10 path.
 _MA_FLOW_API_MIN = (2, 10)
 _MA_FLOW_API_MIN_SCHEMA = 32  # ServerInfoMessage: internal_url etc. "added in schema 32 (MA v2.10)"
 _MA_VERSION_TTL_S = 300.0
@@ -236,6 +237,18 @@ async def ma_server_version(fresh: bool = False) -> Optional[tuple[int, ...]]:
     # Only a successful read is cached: a failure must not pin the legacy path.
     _ma_version_cache = (ver, now) if ver is not None else None
     return ver
+
+
+async def _ma_api_for_write() -> Optional[bool]:
+    """For a credential WRITE: True = 2.10+ flow API, False = pre-2.10 API,
+    None = MA's version is unreadable right now. A write must not guess: on 2.10
+    the pre-2.10 save 'succeeds' and drops the cookie, so an unknown version fails
+    the write instead of taking the old path."""
+    ver = await ma_server_version(fresh=True)
+    if ver is None:
+        logger.info("MA version unreadable (/info) — refusing a provider write rather than guess the API")
+        return None
+    return ver[:2] >= _MA_FLOW_API_MIN
 
 
 async def _ma_is_210_plus(fresh: bool = False) -> bool:
@@ -1508,7 +1521,10 @@ async def provider_setup_form(provider: str) -> Optional[dict[str, Any]]:
     meta = next((p for p in _SETUP_CATALOGUE if p["domain"] == provider), None)
     if meta is None:
         return None
-    if await _ma_is_210_plus(fresh=True):
+    api = await _ma_api_for_write()
+    if api is None:
+        return None
+    if api:
         entries = await _setup_flow_form_entries(provider, meta.get("auth"))
     else:
         entries = await _ma("config/providers/get_entries", provider_domain=provider)
@@ -1581,10 +1597,15 @@ async def _drive_setup_flow(step: Optional[dict[str, Any]], values: dict[str, An
     (EXTERNAL / PROGRESS) cannot be completed from here and is aborted; so is a
     form MA re-serves with errors (a rejected cookie, a missing field)."""
     submitted: set[str] = set()
+    last_flow_id = None
     for _ in range(_FLOW_MAX_FORMS + 1):
         if step is None:
+            # A submit whose response was lost: MA may still hold (or have
+            # advanced) the flow, so clean it up before reporting failure.
+            await _abort_setup_flow(last_flow_id)
             return None
         kind, flow_id = step.get("type"), step.get("flow_id")
+        last_flow_id = flow_id or last_flow_id
         if kind == "finish":
             return step.get("result") or {}
         if kind == "abort":
@@ -1647,7 +1668,10 @@ async def save_provider(provider: str, values: dict[str, Any],
     Pass ``instance_id`` to UPDATE that existing instance in place (MA otherwise
     mints a new instance on every save — which duplicates the provider on a
     re-connect or a cookie refresh)."""
-    if await _ma_is_210_plus(fresh=True):
+    api = await _ma_api_for_write()
+    if api is None:
+        return None
+    if api:
         return await _save_provider_via_flow(provider, values, instance_id)
     # Base to merge the caller's values over. On a FIRST connect that's MA's
     # defaults. On a RECONNECT (instance_id) it's the EXISTING instance's current
