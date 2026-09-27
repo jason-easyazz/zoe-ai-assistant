@@ -32,6 +32,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+from user_prefs import MEMORY_OPT_OUT_SOURCES
 import logging
 import math
 import os
@@ -499,6 +500,17 @@ def scrub_pii(text: str) -> tuple[str, Optional[str]]:
     return redacted, None
 
 
+async def _user_opted_out(user_id: str) -> bool:
+    """Per-user ``memory_opt_out`` preference. Fail-open: a lookup failure (no
+    pool in tests, DB blip) returns False — a preference read must never lose a fact."""
+    try:
+        import user_prefs
+        return await user_prefs.is_memory_opted_out(user_id)
+    except Exception as exc:
+        logger.debug("memory opt-out lookup failed (%s) — treating as opted in", exc)
+        return False
+
+
 class MemoryServiceError(Exception):
     """Raised for operational failures."""
 
@@ -550,7 +562,11 @@ class MemoryService:
         if not text or not text.strip():
             raise MemoryServiceError("empty text")
 
-        if opt_out and source in {"chat_regex", "ambient", "digest", "consolidation"}:
+        # Opt-out is enforced HERE, the one durable-write chokepoint, so every
+        # automatic writer (per-turn extractor, turn digest, person extractors,
+        # idle/nightly digest, consolidation, synthesis) honours it without each
+        # caller remembering to. Explicit teach sources are never dropped.
+        if source in MEMORY_OPT_OUT_SOURCES and (opt_out or await _user_opted_out(user_id)):
             self._bump("opt_out", source)
             return None
 
@@ -887,8 +903,15 @@ class MemoryService:
         actor: str,
         edits: Optional[str] = None,
         note: Optional[str] = None,
-    ) -> MemoryRef:
-        """Approve / reject / edit a pending memory."""
+    ) -> Optional[MemoryRef]:
+        """Approve / reject / edit a pending memory.
+
+        Returns None only when an AUTOMATIC actor (``MEMORY_OPT_OUT_SOURCES``)
+        tries to ``edit`` an opted-out user's memory — the reconcile UPDATE
+        path supersedes via this method instead of ``ingest``, so it must hit
+        the same opt-out wall. Every such caller already treats None as
+        "supersede failed" and falls through to ``ingest``, which drops.
+        """
         decision = decision.lower().strip()
         if decision not in {"approve", "reject", "archive", "edit"}:
             raise MemoryServiceError(
@@ -899,6 +922,13 @@ class MemoryService:
             raise MemoryServiceError(f"memory {mem_id} not found")
         user_id = current.metadata.get("user_id") or current.metadata.get("wing")
         self._require(user_id, "reviewed row is missing user_id metadata")
+        if (
+            decision == "edit"
+            and actor in MEMORY_OPT_OUT_SOURCES
+            and await _user_opted_out(user_id)
+        ):
+            self._bump("opt_out", actor)
+            return None
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
