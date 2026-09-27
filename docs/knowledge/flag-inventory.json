@@ -1538,9 +1538,8 @@
         "readers": [
           "scripts/maintenance/check_emotional_thread.py",
           "services/zoe-data/auth.py",
+          "services/zoe-data/auth_handoff.py",
           "services/zoe-data/mcp_server.py",
-          "services/zoe-data/music_setup.py",
-          "services/zoe-data/smart_home_setup.py",
           "services/zoe-data/zoe_core_client.py"
         ],
         "typed_env": true
@@ -3464,8 +3463,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/auth_handoff.py",
-          "services/zoe-data/routers/smart_home_setup.py"
+          "services/zoe-data/auth_handoff.py"
         ],
         "typed_env": false
       },

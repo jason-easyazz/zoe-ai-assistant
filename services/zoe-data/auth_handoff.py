@@ -28,7 +28,11 @@ Rules that are load-bearing:
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import importlib
+import json
 import logging
 import os
 import secrets
@@ -42,6 +46,101 @@ logger = logging.getLogger(__name__)
 STATUSES = ("pending", "awaiting_phone", "completing", "done", "error")
 _RANK = {s: i for i, s in enumerate(STATUSES)}
 _KEEP_S = 24 * 3600  # finished rows are swept after a day
+
+# ── one-time signed tokens: the ONE copy of the mechanics (was three) ─────────
+# ``music_setup``, ``smart_home_setup`` and ``telegram_link`` each carried their
+# own HMAC + base64 + single-use ledger. They are now thin adapters over these,
+# with their wire formats unchanged (pinned by tests/test_handoff_token_dedupe.py).
+
+
+def b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def b64d(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+class SingleUseLedger:
+    """In-process single-use bookkeeping: keys RESERVED by an in-flight
+    redemption (``pending``) or SPENT for good (``spent``), each with its expiry
+    so the ledger self-cleans. zoe-data is one process and TTLs are short."""
+
+    def __init__(self) -> None:
+        self.pending: dict[Any, float] = {}
+        self.spent: dict[Any, float] = {}
+
+    def prune(self, now: float) -> None:
+        for store in (self.pending, self.spent):
+            for key in [k for k, exp in store.items() if exp < now]:
+                store.pop(key, None)
+
+    def claimed(self, key: Any) -> bool:
+        return key in self.pending or key in self.spent
+
+    def reserve(self, key: Any, exp: float) -> None:
+        self.pending[key] = exp
+
+    def spend(self, key: Any, exp: float) -> None:
+        self.pending.pop(key, None)
+        self.spent[key] = exp
+
+    def release(self, key: Any) -> None:
+        self.pending.pop(key, None)
+
+
+class SignedTokens:
+    """``<b64url JSON claims>.<b64url HMAC-SHA256>`` — short-TTL, single-use.
+
+    The key comes from ``read_secret()`` (the flow's own env var, read by the
+    ADAPTER so the flag inventory still sees it), else ``ZOE_INTERNAL_TOKEN``,
+    else a per-process random written back to ``secret_env`` (tokens then die
+    with the process — fail safe, never a predictable or empty key)."""
+
+    def __init__(self, secret_env: str, read_secret: Callable[[], Optional[str]]) -> None:
+        self.secret_env = secret_env
+        self.read_secret = read_secret
+        self.ledger = SingleUseLedger()
+
+    def _secret(self) -> bytes:
+        s = self.read_secret() or os.environ.get("ZOE_INTERNAL_TOKEN") or ""
+        if not s:
+            s = secrets.token_hex(32)
+            os.environ[self.secret_env] = s
+        return s.encode()
+
+    def _sign(self, body: str) -> str:
+        return b64(hmac.new(self._secret(), body.encode(), hashlib.sha256).digest())
+
+    def mint(self, claims: dict[str, Any], ttl_s: int) -> str:
+        payload = {**claims, "exp": int(time.time()) + int(ttl_s), "n": secrets.token_urlsafe(9)}
+        body = b64(json.dumps(payload, separators=(",", ":")).encode())
+        return f"{body}.{self._sign(body)}"
+
+    def verify(self, token: str) -> Optional[dict[str, Any]]:
+        """Signature + TTL + not yet spent. Does NOT consume."""
+        try:
+            body, sig = str(token).split(".", 1)
+            if not hmac.compare_digest(sig, self._sign(body)):
+                return None
+            payload = json.loads(b64d(body))
+        except Exception:
+            return None
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        self.ledger.prune(time.time())
+        if self.ledger.claimed(str(payload.get("n"))):
+            return None
+        return payload
+
+    def consume(self, token: str) -> Optional[dict[str, Any]]:
+        """Verify AND spend (single use). A second consume returns None."""
+        payload = self.verify(token)
+        if payload is None:
+            return None
+        self.ledger.spend(str(payload.get("n")), float(payload.get("exp", time.time())))
+        return payload
+
 
 # kind -> (module, function) returning {"token", "ref", "path", "ttl"} for a new
 # phone link. Explicit table, no import-time registration.

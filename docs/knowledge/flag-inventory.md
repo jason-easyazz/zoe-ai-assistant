@@ -167,7 +167,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_IDLE_CONSOLIDATION_LOOKBACK_S` | `3600` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
 | `ZOE_IDLE_CONSOLIDATION_MIN_TURNS` | `2` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
 | `ZOE_INTENT_DISPATCH_REQUIRE_TOKEN` | `''` | no | NO | `services/zoe-data/auth.py` |
-| `ZOE_INTERNAL_TOKEN` | `''`, `-` | yes | NO | `scripts/maintenance/check_emotional_thread.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/music_setup.py`<br>`services/zoe-data/smart_home_setup.py`<br>`services/zoe-data/zoe_core_client.py` |
+| `ZOE_INTERNAL_TOKEN` | `''`, `-` | yes | NO | `scripts/maintenance/check_emotional_thread.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/auth_handoff.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_KANBAN_BACKEND` | `'executor'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_BOARD` | `'default'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET` | `'2'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
@@ -357,7 +357,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PR_GUARD_STATE_DIR` | `'/home/zoe/assistant/.cursor/tmp/pr_guard'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_TRIGGER_COOLDOWN_SECONDS` | `'900'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_PR_GUARD_UPDATE_BRANCH_COOLDOWN_SECONDS` | `'300'` | no | NO | `services/zoe-data/greploop_guard.py` |
-| `ZOE_PUBLIC_URL` | `''` | no | NO | `services/zoe-data/auth_handoff.py`<br>`services/zoe-data/routers/smart_home_setup.py` |
+| `ZOE_PUBLIC_URL` | `''` | no | NO | `services/zoe-data/auth_handoff.py` |
 | `ZOE_QUIET_END_HOUR` | `'7'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_QUIET_START_HOUR` | `'22'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_READINESS_CACHE_TTL_S` | `3.0` | yes | NO | `services/zoe-data/main.py` |

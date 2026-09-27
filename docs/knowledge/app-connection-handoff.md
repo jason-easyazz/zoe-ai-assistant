@@ -101,6 +101,18 @@ the existing `instance_id`, and the MA 2.10 `reconfigure` flow does not change.
 A token minted by the legacy `POST /api/music/setup/start` has no handoff and
 reports nothing.
 
+## Shared token mechanics
+
+`music_setup`, `smart_home_setup` and `telegram_link` used to carry three copies
+of the HMAC + base64 + single-use ledger. They are now thin adapters over
+`auth_handoff.SignedTokens` (the `<b64 JSON claims>.<b64 HMAC>` format, with the
+key from `<FLOW>_SECRET` → `ZOE_INTERNAL_TOKEN` → a per-process random),
+`SingleUseLedger` (reserve / spend / release) and `b64`/`b64d`. Every wire format
+is unchanged. `telegram_link` keeps its compact deep-link codec and its own key.
+`tests/test_handoff_token_dedupe.py` pins byte equality against the pre-dedupe
+algorithms. `phone_base_url()` is also the one copy of the LAN-origin helper
+that both setup routers use.
+
 ## Adding a new kind
 
 1. Add a phone-link minter `(provider, user_id) -> {token, ref, path, ttl}` next

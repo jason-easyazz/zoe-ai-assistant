@@ -21,7 +21,6 @@ implies. Tokens are single-use in practice (short TTL) and cannot be forged
 without the secret.
 """
 
-import base64
 import hashlib
 import hmac
 import logging
@@ -29,6 +28,8 @@ import os
 import secrets
 import time
 from typing import Optional
+
+import auth_handoff
 
 logger = logging.getLogger(__name__)
 
@@ -55,15 +56,10 @@ _SIG_BYTES = 12  # 96-bit truncated HMAC — ample for a 10-minute single-use to
 #   _consumed_sigs — permanently redeemed (moved here after the link write commits).
 # A token whose sig is in EITHER set is rejected. On a failed write the caller
 # calls release_token() to drop the reservation so the user can just re-scan.
-_pending_sigs: dict[bytes, int] = {}
-_consumed_sigs: dict[bytes, int] = {}
-
-
-def _prune(now: int) -> None:
-    for store in (_pending_sigs, _consumed_sigs):
-        for k, exp in list(store.items()):
-            if exp < now:
-                del store[k]
+# The ledger is auth_handoff's shared one; the two names stay as aliases.
+_LEDGER = auth_handoff.SingleUseLedger()
+_pending_sigs = _LEDGER.pending
+_consumed_sigs = _LEDGER.spent
 
 
 def make_link_token(user_id: str, ttl: int = LINK_TOKEN_TTL_S) -> str:
@@ -77,8 +73,7 @@ def make_link_token(user_id: str, ttl: int = LINK_TOKEN_TTL_S) -> str:
     sig = hmac.new(_LINK_SECRET, payload, hashlib.sha256).digest()[:_SIG_BYTES]
     # Fixed-length sig appended with NO separator — a byte separator could collide
     # with a 0x2E in the binary signature. sig is always the last _SIG_BYTES bytes.
-    raw = payload + sig
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return auth_handoff.b64(payload + sig)
 
 
 def _decode_raw(token: str):
@@ -88,8 +83,7 @@ def _decode_raw(token: str):
     if not token or len(token) > 128:
         return None
     try:
-        pad = "=" * (-len(token) % 4)
-        raw = base64.urlsafe_b64decode(token + pad)
+        raw = auth_handoff.b64d(token)
         if len(raw) <= _SIG_BYTES:
             return None
         payload, sig = raw[:-_SIG_BYTES], raw[-_SIG_BYTES:]
@@ -116,11 +110,10 @@ def verify_link_token(token: str) -> Optional[str]:
     if not decoded:
         return None
     user_id, sig, exp = decoded
-    now = int(time.time())
-    _prune(now)
-    if sig in _pending_sigs or sig in _consumed_sigs:
+    _LEDGER.prune(int(time.time()))
+    if _LEDGER.claimed(sig):
         return None  # already claimed by a concurrent request, or already redeemed
-    _pending_sigs[sig] = exp  # reserve — synchronous, no await before this point
+    _LEDGER.reserve(sig, exp)  # synchronous, no await before this point
     return user_id
 
 
@@ -130,8 +123,7 @@ def mark_token_consumed(token: str) -> None:
     decoded = _decode_raw(token)
     if decoded:
         _, sig, exp = decoded
-        _pending_sigs.pop(sig, None)
-        _consumed_sigs[sig] = exp
+        _LEDGER.spend(sig, exp)
 
 
 def release_token(token: str) -> None:
@@ -140,7 +132,7 @@ def release_token(token: str) -> None:
     leave the user with a dead QR."""
     decoded = _decode_raw(token)
     if decoded:
-        _pending_sigs.pop(decoded[1], None)
+        _LEDGER.release(decoded[1])
 
 
 # ── Bot identity (self-registered by the Telegram bot at startup) ──────────────
