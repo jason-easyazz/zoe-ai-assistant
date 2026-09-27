@@ -2849,10 +2849,25 @@ def _is_guest_identity(user_id: str | None) -> bool:
     return u in ("", "guest", "voice-guest") or u.startswith("guest-")
 
 
+async def _speculative_side_effect_barrier(intent_name: str) -> None:
+    """B1.1 phase 2: on a SPECULATIVE voice turn (transcript of a prefix, verdict
+    pending) hold every non-read intent until the daemon's verdict — run it on
+    commit, drop it on cancel (``SpeculativeTurnCancelled`` propagates on
+    purpose). A no-op for every other turn: nothing is bound."""
+    try:
+        import voice_speculation as _vs
+    except Exception:  # pragma: no cover - module is in-tree
+        return
+    if _vs.bound_gate() is None or _vs.intent_is_speculation_safe(intent_name):
+        return
+    await _vs.await_commit(f"intent:{intent_name}")
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
     #   user_id; this default is defense-in-depth for future forgetful callers.
+    await _speculative_side_effect_barrier(intent.name)
     if _is_guest_identity(user_id) and intent.name.startswith(_GUEST_GATED_INTENTS):
         # Same posture as voice (which challenges for who+PIN): personal data
         # needs a signed-in identity. Chat has no PIN pad, so answer with the

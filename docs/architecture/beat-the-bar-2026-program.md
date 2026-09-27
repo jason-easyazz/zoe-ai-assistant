@@ -353,9 +353,20 @@ status: 🔨 active — NEXT ACTION is always §0
 ### B1 — Turn-taking that feels like a person (beats GPT-Live locally)
 - B1.1 🔨 **Speculative turn-start with a speculation gate** — PR #1685 MERGED (flag-dark
   `ZOE_SPECULATIVE_*`, server-side gate + daemon verdict, 30 tests, break-the-fix controls;
-  stays dark until phase 2 defers write side-effects to commit; needs the panel on + a replay
+  stays dark until the flip criteria below are met; needs the panel on + a replay
   gate bound to its head — the 2026-09-25 attempt skipped on the 700 MB floor, so it waits
-  for B0.1 or a quiet nightly): fire the brain on Smart Turn's
+  for B0.1 or a quiet nightly). **2026-09-27 groundwork PR (draft, voice path — lands with the
+  replay):** phase 2 DONE in code — every side effect of a speculative turn waits for the
+  verdict (turn-level hold + `execute_intent` / Skybridge / expert funnels + `_spawn_bg`
+  queue + the brain-tool intent-dispatch hold; once on commit, dropped on cancel; negative
+  controls). Offline over 1171 corpus recordings at the live 640 ms close: tail 320 →
+  **14.3 % cancels (upper bound), 320 ms median saving**; 400 → 9.3 % / 240 ms; 480 →
+  5.0 % / 160 ms; 560 → 2.3 % / 80 ms; 640 inert. Smart Turn veto: NOT a win (−1 pt cancels,
+  −70–100 ms mean saving/turn). Moonshine `vad_threshold`: keep default (4 of 6 always-EMPTY
+  clips are empty even with VAD off; at most 1 command-shaped recovery at 0.0, +0.7 s wall;
+  engine output not deterministic across loads). Remaining before flip: Pi proof, head-bound
+  replay PASS, RAM flat, operator flag-on week (< 30 % live cancels, ≥ 250 ms median saving,
+  zero double-speak / duplicate writes). Original plan: fire the brain on Smart Turn's
   first "complete" (or a short VAD stop), hold TTS frames until the turn is confirmed,
   drop on cancel, keep if the final transcript is equivalent. Source: HF
   `speech-to-speech --speculative_reopen_ms`, Pipecat `speculation_gate.py`, LiveKit

@@ -2806,6 +2806,13 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
         raise HTTPException(status_code=400, detail="user_id required")
     if intent_name not in _DISPATCHABLE_INTENTS:
         raise HTTPException(status_code=400, detail=f"intent not dispatchable: {intent_name}")
+    # B1.1 phase 2: a brain tool write for a user whose SPECULATIVE voice turn is
+    # still unresolved waits for that verdict and is refused (never run) when the
+    # verdict drops the turn. No speculative turn pending (flag off, every normal
+    # turn) → no-op.
+    import voice_speculation as _vs
+    if not await _vs.hold_brain_tool_write(user_id, intent_name):
+        return {"intent": intent_name, "ok": False, "result": ""}
     try:
         from intent_router import Intent, execute_intent
 
