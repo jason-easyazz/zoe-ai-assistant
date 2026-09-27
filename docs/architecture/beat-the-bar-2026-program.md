@@ -207,6 +207,13 @@ status: 🔨 active — NEXT ACTION is always §0
   corrected (1.23.2 is the last cp310 wheel — moves only with B0.7). Not adopted:
   `pip install -r` in deploy — it would make every deploy a 39-package resolve on the live
   box, which is exactly the class of unobserved runtime change the header forbids.
+  **Safe-now train 2026-09-27** (ecosystem-watch 09-27 §7(a)1; draft PR, voice-gated because
+  both manifests are): psycopg2-binary 2.9.12 → 2.9.13 + prometheus-client 0.25.0 → 0.26.0 in
+  both manifests, `validate.yml`'s slim list and `deploy.yml`'s 3.10 fallback list. Proven in a
+  throwaway 3.12.13 venv (build + `--check` no drift, ci_safe offline green). **joblib 1.6.0 NOT
+  moved:** the pin must equal the router heads' training pin (`labs/setfit-router/requirements.txt`,
+  `services/zoe-data/AGENTS.md`) and 1.6.0 adds a `cloudpickle>=3.0` dependency; both heads
+  load and predict identically under 1.6.0, so it can ride the sklearn 1.9 re-export PR.
 - B0.7 ✅ **Python 3.12 venv for zoe-data only** (Kokoro + llama-server stay on 3.10/CUDA 12.6).
   **✅ CUTOVER LIVE 2026-09-27 16:13** — #1706 + #1717 MERGED, drop-in installed; zoe-data's
   MainPID exe is uv CPython 3.12.13 (`~/.zoe/venvs/zoe-data-py312`); `/readyz` ready,
@@ -827,6 +834,8 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (eve) — B0.6 safe-now Python train: psycopg2-binary 2.9.13 + prometheus-client
+  0.26.0 (both manifests + CI/deploy lists); joblib 1.6.0 held on the router-head training-pin contract.
 - 2026-09-27 (eve) — B0.12 network hardening drafted (loopback Postgres + HA bridge, PG 17.11,
   bridge deps patched, `--no-deps` on automated compose ups); operator apply pending.
 - 2026-09-27 (late) — B1.4 correction: the Silero "v6.2.1 incompatible" verdict was a loader
