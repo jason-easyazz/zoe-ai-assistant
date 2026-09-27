@@ -189,6 +189,14 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
                        domain, score, intent_name, kind, (time.monotonic() - t0) * 1000.0)
         return None
 
+    # B1.1 phase 2: on a speculative voice turn a write / memory-store waits for
+    # the verdict (dropped on cancel) — BEFORE the slot-extraction LLM call, so a
+    # cancelled prefix costs nothing. No-op when no speculative turn is bound.
+    if kind != "read":
+        import voice_speculation as _vs
+        if _vs.bound_gate() is not None:
+            await _vs.await_commit(f"expert:{domain}:{intent_name}")
+
     # 3) ACTIVE: fulfill via the existing path.
     try:
         if kind == "expert":

@@ -52,8 +52,14 @@ _BG_TASKS: set = set()
 
 
 def _spawn_bg(coro) -> None:
-    """Schedule a background coroutine with a strong reference (see _BG_TASKS)."""
+    """Schedule a background coroutine with a strong reference (see _BG_TASKS).
+
+    Inside a SPECULATIVE turn (B1.1, verdict pending) every background side
+    effect — history rows, memory passes, escalations — is queued until the
+    verdict and dropped on cancel (``voice_speculation.defer_until_commit``);
+    otherwise ``coro`` is scheduled unchanged."""
     try:
+        coro = _speculation.defer_until_commit(coro, "background")
         t = asyncio.ensure_future(coro)
     except Exception as exc:  # no running loop — run inline best-effort
         logger.warning("_spawn_bg could not schedule task: %s", exc)
@@ -3040,6 +3046,31 @@ async def voice_command(
     except Exception as _rexc:
         logger.debug("semantic router shadow failed: %s", _rexc)
 
+    # ── B1.1 phase 2: a SPECULATIVE turn (daemon verdict pending) runs now only
+    # if the intent layer calls it a read or chat. Anything write-capable —
+    # a write intent, a Skybridge action, a write-capable routed domain (whose
+    # brain turn may call a write tool) — waits HERE for the verdict, before any
+    # side effect (pending confirmation, history, intent, brain) can start;
+    # dropped on cancel. The write funnels (execute_intent, Skybridge, expert
+    # dispatch, _spawn_bg) hold again for anything this misjudges. No-op unless a
+    # speculative turn is bound (flag ON + a speculative payload).
+    if _speculation.bound_gate() is not None:
+        _spec_safe, _spec_why = False, "classify_failed"
+        try:
+            from intent_router import detect_intent as _detect_spec
+            from skybridge_service import classify_skybridge_intent as _sky_spec
+            _spec_intent = _detect_spec(text, log_miss=False)
+            _spec_sky = _sky_spec(text, None)
+            _spec_safe, _spec_why = _speculation.turn_is_speculation_safe(
+                _spec_intent.name if _spec_intent else None,
+                (_router_decision or {}).get("routed"),
+                (_spec_sky.domain, _spec_sky.action) if _spec_sky else None,
+            )
+        except Exception as _spec_exc:
+            logger.debug("voice/command speculation classify failed (holding turn): %s", _spec_exc)
+        if not _spec_safe:
+            await _speculation.await_commit(f"turn:{_spec_why}")
+
     # Classify identity source for Pass 3 observability (Pass 1 is measurement-only).
     try:
         from voice_metrics import voice_identity_source_count
@@ -5117,7 +5148,14 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # with the stream only starting afterwards). Racing it as a task lets the response
     # begin immediately — and lets the thinking filler actually speak while the
     # brain is still working, instead of timing an already-finished wait.
-    sub_task = asyncio.ensure_future(voice_command(command_payload, caller=caller, stream=True, db=db))
+    # B1.1 phase 2: bind the gate for voice_command's task tree so its side
+    # effects wait for the verdict (the task copies the context at creation).
+    _spec_token = _speculation.bind(_spec_gate) if _spec_gate is not None else None
+    try:
+        sub_task = asyncio.ensure_future(voice_command(command_payload, caller=caller, stream=True, db=db))
+    finally:
+        if _spec_token is not None:
+            _speculation.unbind(_spec_token)
 
     def _filler_enabled() -> bool:
         return env_bool("ZOE_VOICE_FILLER_ENABLED", default=False)
