@@ -24,8 +24,8 @@ Which libraries the LIVE process holds was read from `/proc/<pid>/maps` (zero co
 | `resemblyzer` | **375 MB** | torch, librosa, scipy | no |
 | `torch` (2.8.0, CUDA 12.6 build) | **358 MB** | numpy | no |
 | `transformers.WhisperFeatureExtractor` | **360 MB** | **torch** (unconditional in 5.17: `if is_torch_available(): import torch`; `USE_TORCH=0` does not stop it) | no — see §2 |
-| `sklearn` | 130 MB | scipy, pandas, pyarrow | **yes** (router MLP head, `joblib.load`) |
-| `pandas` | 81 MB | pyarrow | yes (via sklearn) |
+| `sklearn` | 130 MB | scipy, pandas, pyarrow | was yes (router heads, `joblib.load`) — **no since B6.6(d)**: heads served by `router_heads_numpy.py` |
+| `pandas` | 81 MB | pyarrow | was via sklearn only (not mapped in the live py3.12 process, 2026-09-27) |
 | `chromadb` / `mempalace.palace` | 70–76 MB | onnxruntime, tokenizers | yes (memory) |
 | `fastembed` | 69 MB | onnxruntime, tokenizers, PIL | yes (semantic router) |
 | `pyarrow` | 43 MB | numpy | yes (via pandas) |
@@ -39,7 +39,8 @@ Which libraries the LIVE process holds was read from `/proc/<pid>/maps` (zero co
 - `import main` loads **no** heavy library at all — numpy, torch, resemblyzer, sklearn and
   the ONNX stack are all already deferred to lifespan warm-up or first use. The ~1.2 GB live
   RSS is the lifespan/first-use set: Moonshine models + ORT arenas, the fastembed router, the
-  sklearn router head (live `ZOE_ROUTER_HEAD=active` — every chat turn), Chroma. Every one of
+  router heads (live `ZOE_ROUTER_HEAD=active` — every chat turn; numpy since B6.6(d), which
+  took the head load from +72.7 MB / 1.23 s / 815 modules to +1.7 MB / 0.012 s), Chroma. Every one of
   those is on a hot or routine path, so none is a lazy-load candidate.
 - **Speaker ID was already lazy** — `voice_speaker_id._compute_resemblyzer_embedding`
   imported resemblyzer inside the function — so lazy-loading it saves **0 MB at startup**

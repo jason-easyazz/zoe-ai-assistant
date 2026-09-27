@@ -214,6 +214,9 @@ status: 🔨 active — NEXT ACTION is always §0
   moved:** the pin must equal the router heads' training pin (`labs/setfit-router/requirements.txt`,
   `services/zoe-data/AGENTS.md`) and 1.6.0 adds a `cloudpickle>=3.0` dependency; both heads
   load and predict identically under 1.6.0, so it can ride the sklearn 1.9 re-export PR.
+  (Since B6.6(d) the runtime serves numpy exports, so this hold now protects only the
+  one-release `ZOE_ROUTER_HEADS_BACKEND=joblib` fallback; after it is removed the pin is a
+  plain librosa-transitive pin.)
 - B0.7 ✅ **Python 3.12 venv for zoe-data only** (Kokoro + llama-server stay on 3.10/CUDA 12.6).
   **✅ CUTOVER LIVE 2026-09-27 16:13** — #1706 + #1717 MERGED, drop-in installed; zoe-data's
   MainPID exe is uv CPython 3.12.13 (`~/.zoe/venvs/zoe-data-py312`); `/readyz` ready,
@@ -681,6 +684,17 @@ status: 🔨 active — NEXT ACTION is always §0
   `~/.cache/zoe/llama-server.service.pre-b6-6`. ⬜ Stale comment:
   `labs/flue-zoe-brain-2x/src/context-window.ts` still says `--ctx-size 16384 --parallel 2`
   (fix in a labs PR, not here).
+  (d) 🔨 **Router heads on numpy — no scikit-learn/scipy in zoe-data** (draft PR
+  `feat/router-heads-numpy`, voice path → operator lands it with the replay). Both stage-1
+  heads (logreg 13×384; MLP 384→256 relu→13 softmax) are exported to `.npz` + JSON by
+  `scripts/maintenance/export_router_heads.py` and served by `router_heads_numpy.py`
+  (`ZOE_ROUTER_HEADS_BACKEND=numpy` default, `joblib` = one-release fallback). Parity vs
+  sklearn 1.7.2 `predict_proba`: **max-abs 0.0** (bit-identical) on 1,291 embedded corpus
+  utterances + 1,000 unit + 1,000 Gaussian random vectors; negative control (one weight
+  +1e-2) goes red. Head load in a fresh capped interpreter: **+72.7 MB / 1.23 s / 815 modules
+  → +1.7 MB / 0.012 s / 7 modules**; `import main` unchanged (heads were already lazy). The
+  scikit-learn/joblib pins stay (librosa, via Resemblyzer, declares them), held at the
+  training pins until the fallback is removed; scipy stays (Resemblyzer imports it).
 
 - B6.6 🔨 **Brain flags tuning** (2026-09-27, two replay-gated brain windows on b11194, one
   flag vs the live set per run, same-session control; evidence in
@@ -834,6 +848,8 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 (night) — B6.6(d) router heads on numpy (draft PR): sklearn/scipy/joblib no
+  longer imported by zoe-data; parity 0.0 on corpus + random; head load +72.7 → +1.7 MB.
 - 2026-09-27 (eve) — B0.6 safe-now Python train: psycopg2-binary 2.9.13 + prometheus-client
   0.26.0 (both manifests + CI/deploy lists); joblib 1.6.0 held on the router-head training-pin contract.
 - 2026-09-27 (eve) — B0.12 network hardening drafted (loopback Postgres + HA bridge, PG 17.11,

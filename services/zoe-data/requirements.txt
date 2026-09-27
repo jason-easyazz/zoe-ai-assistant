@@ -146,9 +146,14 @@ transformers==5.17.0
 # was not part of the 2026-09-26 gated batch. Bump deliberately, with the router
 # shadow report (`scripts/maintenance/router_shadow2_report.py`) unchanged.
 fastembed==0.8.0
-# SetFit router head (shadow mode, ZOE_ROUTER_HEAD): loads
-# models/router_head_logreg.joblib — pins MUST match the versions the artifact
-# was trained with (labs/setfit-router/requirements.txt).
+# NOT imported by zoe-data at runtime since 2026-09-27: the stage-1 router heads
+# are served by router_heads_numpy.py from models/router_head_*.npz (numpy only).
+# Still pinned because librosa (pulled in by resemblyzer, below) declares both as
+# install requirements, so they are installed either way — the pin only stops
+# them floating. Held AT the training pins (labs/setfit-router/requirements.txt)
+# while the one-release ZOE_ROUTER_HEADS_BACKEND=joblib fallback exists, since
+# that fallback unpickles the .joblib artefacts; once it is removed these become
+# plain librosa-transitive pins.
 scikit-learn==1.7.2
 joblib==1.5.3
 # Speaker diarization for ambient memory (Jetson CUDA only)
