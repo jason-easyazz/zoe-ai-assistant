@@ -298,8 +298,6 @@ def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
     if intent is not None:
         if intent.name == "ha_full_setup":
             return HA_FULL_SETUP_OPENCLAW_MESSAGE
-        if intent.name == "connect_chatgpt":
-            return _CONNECT_CHATGPT_OPENCLAW_MSG
         if intent.name == "build_widget":
             return f"{_BUILD_WIDGET_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
         if intent.name == "build_page":
@@ -343,31 +341,6 @@ _TIME_MATH_CLARIFICATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-
-_CONNECT_CHATGPT_RE = re.compile(
-    r"^(?:can you |please |could you )?(?:connect|link|auth(?:orize|orise|)?|set\s*up|add|enable)\b"
-    r".*\b(?:chatgpt|openai|codex|gpt)\b",
-    re.IGNORECASE,
-)
-_CONNECT_CHATGPT_OPENCLAW_MSG = (
-    "[ZOE_CONNECT: chatgpt_oauth]\n"
-    "The user wants to connect ChatGPT / OpenAI Codex to Zoe via OAuth.\n"
-    "Run: openclaw onboard --non-interactive 2>/dev/null || openclaw gateway call system.providers_status\n"
-    "1. Get the OAuth authorization URL from openclaw (use: openclaw onboard --print-url 2>/dev/null or parse gateway output).\n"
-    "2. Emit exactly ONE :::zoe-ui block with a qr_code component and a link_preview for the URL, plus a status poll:\n"
-    "   :::zoe-ui\n"
-    '   {"type":"qr_code","title":"Connect ChatGPT to Zoe","message":"Scan to authorise — or tap the link below.","url":"<oauth_url>","id":"chatgpt-auth"}\n'
-    "   :::\n"
-    "   :::zoe-ui\n"
-    '   {"type":"status","title":"Waiting for authorisation…","poll_endpoint":"/api/voice/chatgpt-auth-status","poll_interval_ms":3000,"id":"chatgpt-auth-status"}\n'
-    "   :::\n"
-    "3. Your verbal reply must be ≤2 short sentences, e.g.: \"Scan the QR code or tap the link to connect your ChatGPT account. I'll update you when it's done.\"\n"
-    "4. When openclaw confirms auth success (poll or event), emit:\n"
-    "   :::zoe-ui\n"
-    '   {"type":"status","title":"ChatGPT Pro connected ✓","message":"Builder skills now use ChatGPT for code generation.","id":"chatgpt-auth-status"}\n'
-    "   :::\n"
-    "5. NEVER include tokens, keys, or credentials in the chat reply."
-)
 
 _BUILD_VERB = r"(?:add|build|create|make|scaffold|generate|put|design|code)"
 # Broad match: build-verb at start + the word 'widget' appearing later in the sentence.
@@ -706,13 +679,6 @@ def detect_intent(
         return Intent("portrait_reveal", {})
     if _PORTRAIT_REFRESH_RE.search(t):
         return Intent("portrait_refresh", {})
-
-    # Connect ChatGPT / OpenAI to OpenClaw — admin-gated, handled via AG-UI OAuth flow.
-    if _CONNECT_CHATGPT_RE.match(t):
-        # Delegation intent — no structured slots to extract; empty dict bypasses
-        # the nlu_extractor path in detect_and_extract_intent so it returns the
-        # intent directly instead of trying (and failing) to extract slots.
-        return Intent("connect_chatgpt", {})
 
     # Zoe self-extension — always routes to OpenClaw (admin-gated in the skill).
     # Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.
@@ -2927,12 +2893,6 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if intent.slots.get("kind") == "time_math":
             return "I need the actual times before I can work that out."
         return "What time do you need to arrive?"
-
-    if intent.name == "connect_chatgpt":
-        # Handled directly by chat.py via _chatgpt_connect_flow() — which runs
-        # the full device-code OAuth flow inline in the SSE stream.  Return None
-        # here so execute_intent does not produce a static text reply.
-        return None
 
     # Contact-offer replies (QA review F5): a surfaced "add X as a contact?"
     # offer answered off-panel with a plain yes/no. Accept goes through the
