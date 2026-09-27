@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -69,6 +70,32 @@ _BLOCKED_STATUSES = frozenset({202, 401, 403, 407, 429, 451, 503})
 # a flip needs no restart.
 WEB_FALLBACK_PROVIDER_ENV = "ZOE_WEB_FALLBACK_PROVIDER"
 _WEB_FALLBACK_PROVIDERS = ("auto", "duckduckgo", "off")
+# ``ZOE_WEB_SEARCH_TOOL`` (B10.1): ``1`` serves the brain-callable
+# ``POST /api/system/web-search`` endpoint behind the same lookup, so the Flue
+# sidecar's flag-gated ``web_search`` tool can back a claim or do a live
+# lookup. Default ``0`` = the endpoint is absent (404) and the capability prose
+# says nothing about a web tool. Read per call so a flip needs no restart. The
+# sidecar reads its OWN copy of the same variable to decide whether to
+# register the tool (labs/flue-zoe-brain-2x/.env); both must be on.
+WEB_SEARCH_TOOL_ENV = "ZOE_WEB_SEARCH_TOOL"
+WEB_SEARCH_TOOL_MAX_RESULTS = 5
+# Per-provider (per-OPERATION: connect/read) timeout for the brain tool. It
+# bounds each socket wait, not a whole request, so it cannot on its own keep
+# Tavily + DDG inside the sidecar's fetch deadline. B10.0 callers keep 8s.
+WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S = 3.0
+# ONE end-to-end monotonic budget for the brain tool's lookup, shared across
+# the sequential Tavily and DDG attempts (Greptile + Codex #1702): the second
+# provider only gets what is left, and is not started once the budget is spent;
+# the endpoint answers `error`/timeout at this deadline rather than waiting on a
+# slow-drip provider. Below the sidecar's WEB_SEARCH_TIMEOUT_FLOOR_MS (8s,
+# zoe-tools.ts) with margin — pinned by tests/test_web_search_tool.py.
+WEB_SEARCH_TOOL_DEADLINE_S = 6.0
+# A provider is not started with less than this left: a sub-quarter-second
+# socket timeout cannot complete a TLS handshake + search, so it would only
+# spend a thread (and, for Tavily, possibly a credit) to report a timeout.
+_MIN_PROVIDER_BUDGET_S = 0.25
+WEB_LOOKUP_DEADLINE_DETAIL = "deadline exhausted"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 WEB_LOOKUP_MESSAGES = {
     WEB_LOOKUP_RESULTS: "",
@@ -392,6 +419,31 @@ def _read_bounded_response(resp: Any, max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
+def web_search_tool_enabled() -> bool:
+    """Is the brain-callable web-search endpoint served (``ZOE_WEB_SEARCH_TOOL``)?"""
+    raw = (os.environ.get("ZOE_WEB_SEARCH_TOOL", "0") or "0").strip().lower()
+    return raw in _TRUTHY
+
+
+def web_search_tool_payload(outcome: WebFallbackOutcome) -> dict[str, Any]:
+    """The wire shape the brain's ``web_search`` tool receives: the honest
+    outcome fields verbatim (``status``/``provider``/``message``/``detail``)
+    plus at most ``WEB_SEARCH_TOOL_MAX_RESULTS`` rows of title/url/snippet.
+    Nothing else from a row (no page text, no price scrape) crosses the seam."""
+    rows = [
+        {
+            "title": str(r.get("title", "") or ""),
+            "url": str(r.get("url", "") or ""),
+            "snippet": str(r.get("snippet", "") or ""),
+        }
+        for r in outcome.results[:WEB_SEARCH_TOOL_MAX_RESULTS]
+    ]
+    payload = outcome.as_dict()
+    payload["result_count"] = len(rows)
+    payload["results"] = rows
+    return payload
+
+
 def web_fallback_provider() -> str:
     """Selected fallback provider: auto|duckduckgo|off (unknown values → auto)."""
     raw = (os.environ.get("ZOE_WEB_FALLBACK_PROVIDER", "auto") or "auto").strip().lower()
@@ -474,8 +526,12 @@ def _fallback_row(*, title: str, url: str, snippet: str) -> dict[str, str]:
     }
 
 
-def _verify_rows(query: str, rows: list[dict[str, str]], timeout_s: float) -> list[dict[str, str]]:
-    """Relevance + best-effort price enrichment from destination pages."""
+def _verify_rows(
+    query: str, rows: list[dict[str, str]], timeout_s: float, *, enrich_prices: bool = True
+) -> list[dict[str, str]]:
+    """Relevance + best-effort price enrichment from destination pages.
+    ``enrich_prices=False`` skips the sequential per-row page fetches (callers
+    that drop ``price``, i.e. the brain's web_search payload)."""
     for row in rows:
         if not _looks_relevant(
             query,
@@ -486,7 +542,7 @@ def _verify_rows(query: str, rows: list[dict[str, str]], timeout_s: float) -> li
             row["price"] = ""
             row["verified"] = "false"
             continue
-        if row.get("price"):
+        if row.get("price") or not enrich_prices:
             row["verified"] = "true"
             continue
         row["price"] = _fetch_page_price(row.get("url", ""), timeout_s=min(4.5, timeout_s))
@@ -502,7 +558,7 @@ def _verify_rows(query: str, rows: list[dict[str, str]], timeout_s: float) -> li
     return filtered or rows
 
 
-def _fetch_ddg(query: str, max_results: int, timeout_s: float) -> WebFallbackOutcome:
+def _fetch_ddg(query: str, max_results: int, timeout_s: float, *, enrich_prices: bool = True) -> WebFallbackOutcome:
     url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
@@ -531,13 +587,13 @@ def _fetch_ddg(query: str, max_results: int, timeout_s: float) -> WebFallbackOut
         if verdict == WEB_LOOKUP_ERROR and 200 <= status < 300:
             detail = f"{DDG_UNRECOGNISED_PAGE} (HTTP {status})"
         return WebFallbackOutcome(verdict, "duckduckgo", [], detail or f"HTTP {status}")
-    rows = _verify_rows(query, _parse_ddg_results(body, max_results), timeout_s)
+    rows = _verify_rows(query, _parse_ddg_results(body, max_results), timeout_s, enrich_prices=enrich_prices)
     if not rows:
         return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "duckduckgo", [], "no http result targets")
     return WebFallbackOutcome(WEB_LOOKUP_RESULTS, "duckduckgo", rows)
 
 
-def _fetch_tavily(query: str, max_results: int, timeout_s: float) -> WebFallbackOutcome:
+def _fetch_tavily(query: str, max_results: int, timeout_s: float, *, enrich_prices: bool = True) -> WebFallbackOutcome:
     # Lazy import: web_search_provider pulls typed_env/httpx; the classifier half
     # of this module stays stdlib-only for the slim CI lane.
     from web_search_provider import tavily_search_outcome
@@ -553,7 +609,7 @@ def _fetch_tavily(query: str, max_results: int, timeout_s: float) -> WebFallback
         )
         for i, r in enumerate(raw[:max_results], start=1)
     ]
-    rows = _verify_rows(query, rows, timeout_s)
+    rows = _verify_rows(query, rows, timeout_s, enrich_prices=enrich_prices)
     if not rows:
         return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "tavily", [])
     return WebFallbackOutcome(WEB_LOOKUP_RESULTS, "tavily", rows)
@@ -591,7 +647,8 @@ def web_lookup_status() -> dict[str, Any]:
     (``auto`` collapses to ``tavily`` when keyed and not switched off, else
     ``duckduckgo``); ``configured`` is the raw ``ZOE_WEB_FALLBACK_PROVIDER``
     value. ``tavily_key_present`` says whether a key exists — the key itself is
-    never exposed. ``last_outcome`` is ``None`` until a lookup has run.
+    never exposed. ``tool_enabled`` is ``ZOE_WEB_SEARCH_TOOL`` (B10.1: the
+    brain-callable endpoint). ``last_outcome`` is ``None`` until a lookup has run.
     """
     configured = web_fallback_provider()
     if configured == "auto":
@@ -602,6 +659,8 @@ def web_lookup_status() -> dict[str, Any]:
         "provider": resolved,
         "configured": configured,
         "tavily_key_present": _tavily_key_present(),
+        # B10.1: whether zoe-data serves the brain's web_search endpoint.
+        "tool_enabled": web_search_tool_enabled(),
         "last_outcome": dict(_LAST_WEB_LOOKUP) or None,
     }
 
@@ -615,17 +674,39 @@ def _tavily_configured() -> bool:
         return False
 
 
-def fetch_web_fallback(query: str, max_results: int = 5, timeout_s: float = 8.0) -> WebFallbackOutcome:
+def fetch_web_fallback(
+    query: str,
+    max_results: int = 5,
+    timeout_s: float = 8.0,
+    *,
+    enrich_prices: bool = True,
+    deadline_s: float | None = None,
+) -> WebFallbackOutcome:
     """Web lookup with an HONEST outcome: rows plus status + provider.
 
     Provider order under ``auto``: Tavily when a key is configured (a real API,
     not a scrape), then DuckDuckGo HTML. A blocked/error DDG answer is reported
     as such — never as "no results". One INFO line per lookup; the query text is
     never logged (it can carry personal data), only its length.
+
+    ``deadline_s`` (the brain tool passes ``WEB_SEARCH_TOOL_DEADLINE_S``) is ONE
+    monotonic budget shared by both attempts: each provider's ``timeout_s`` is
+    capped at what remains, and a provider is not started once less than
+    ``_MIN_PROVIDER_BUDGET_S`` is left — the outcome then says so in ``detail``.
+    ``None`` (B10.0 chat callers) keeps the plain per-provider timeout.
     """
     q = (query or "").strip()
     if not q:
         return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "none", [], "empty query")
+    deadline_at = None if deadline_s is None else time.monotonic() + deadline_s
+
+    def _budget() -> float | None:
+        """Timeout for the next provider, or None when the budget is spent."""
+        if deadline_at is None:
+            return timeout_s
+        remaining = deadline_at - time.monotonic()
+        return min(timeout_s, remaining) if remaining >= _MIN_PROVIDER_BUDGET_S else None
+
     provider = web_fallback_provider()
     if provider == "off":
         outcome = WebFallbackOutcome(WEB_LOOKUP_OFF, "none", [], f"{WEB_FALLBACK_PROVIDER_ENV}=off")
@@ -633,13 +714,26 @@ def fetch_web_fallback(query: str, max_results: int = 5, timeout_s: float = 8.0)
         attempted: list[str] = []
         tavily: WebFallbackOutcome | None = None
         if provider == "auto" and _tavily_configured():
-            attempted.append("tavily")
-            tavily = _fetch_tavily(q, max_results, timeout_s)
+            budget = _budget()
+            if budget is not None:
+                attempted.append("tavily")
+                tavily = _fetch_tavily(q, max_results, budget, enrich_prices=enrich_prices)
         if tavily is not None and tavily.status == WEB_LOOKUP_RESULTS:
             outcome = tavily
+        elif (ddg_budget := _budget()) is None:
+            # Budget spent: do not start DDG. Tavily's completed `no_results`
+            # stays a real answer; anything else is an honest error.
+            if tavily is not None and tavily.status == WEB_LOOKUP_NO_RESULTS:
+                outcome = tavily
+            else:
+                outcome = WebFallbackOutcome(WEB_LOOKUP_ERROR, "none", [])
+            why = f"{WEB_LOOKUP_DEADLINE_DETAIL} after {deadline_s:g}s"
+            outcome.detail = f"tavily={tavily.status}; duckduckgo=skipped ({why})" if tavily is not None else why
+            if not attempted:
+                attempted.append("none")
         else:
             attempted.append("duckduckgo")
-            ddg = _fetch_ddg(q, max_results, timeout_s)
+            ddg = _fetch_ddg(q, max_results, ddg_budget, enrich_prices=enrich_prices)
             if tavily is None:
                 outcome = ddg
             else:

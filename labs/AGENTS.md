@@ -212,7 +212,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   and makes `runWrite` return its success text without dispatching
   (`src/replay-mode.ts`, `test/replay_isolation.test.ts`). `set_timer` needs its
   own check — it does not route through `runWrite`.
-  Regression net (hand-run, not CI-wired): `npm test` — 21 `test/*.test.ts` files
+  Regression net (hand-run, not CI-wired): `npm test` — 24 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a
