@@ -287,3 +287,65 @@ def test_codes_come_from_secrets_not_random():
     assert "secrets." in src and "random." not in src
     code = pp._generate_code()
     assert len(code) == 6 and set(code) <= set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+
+
+# ── server-side expiry: no poll needed (Greptile, #1741) ─────────────────────
+
+def _age(db_path, code, seconds_past_expiry):
+    ts = (datetime.now(tz=timezone.utc) - timedelta(seconds=seconds_past_expiry)
+          ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    con = sqlite3.connect(db_path)
+    con.execute("UPDATE panel_provision_codes SET expires_at = ? WHERE code = ?", (ts, code))
+    con.commit()
+    con.close()
+
+
+def _revoked(db_path):
+    con = sqlite3.connect(db_path)
+    try:
+        return con.execute("SELECT revoked FROM device_tokens").fetchone()[0]
+    finally:
+        con.close()
+
+
+async def _sweep(db_path):
+    conn = await aiosqlite.connect(db_path)
+    conn.row_factory = aiosqlite.Row
+    try:
+        return await pp.sweep_uncollected_tokens(conn)
+    finally:
+        await conn.close()
+
+
+async def test_sweep_revokes_an_abandoned_pairing_without_any_poll(client, db_path):
+    code = _start(client)["code"]
+    assert _confirm(client, code, headers={"X-Session-ID": "sess-member"}).status_code == 200
+    assert await _sweep(db_path) == 0          # still inside the pickup window
+    assert _revoked(db_path) == 0 and _row(db_path, code)["token"]
+
+    _age(db_path, code, pp._PICKUP_GRACE_S + 5)  # clock past grace; the Pi never polls again
+    assert await _sweep(db_path) == 1
+    assert _row(db_path, code)["token"] is None
+    assert _revoked(db_path) == 1
+
+
+async def test_sweep_expires_stale_pending_codes(client, db_path):
+    code = _start(client)["code"]
+    _age(db_path, code, 5)
+    await _sweep(db_path)
+    assert _row(db_path, code)["status"] == "expired"
+
+
+def test_any_later_request_revokes_a_stale_token(client, db_path):
+    code = _start(client)["code"]
+    assert _confirm(client, code, headers={"X-Session-ID": "sess-member"}).status_code == 200
+    _age(db_path, code, pp._PICKUP_GRACE_S + 5)
+    assert client.get(f"/api/panels/provision/{code}/public").status_code == 200
+    assert _row(db_path, code)["token"] is None and _revoked(db_path) == 1
+
+
+def test_sweep_is_scheduled_at_startup():
+    from pathlib import Path
+    main_src = (Path(__file__).resolve().parents[1] / "main.py").read_text()
+    assert "_panel_provision.sweep_uncollected_tokens" in main_src
+    assert 'id="panel_provision_token_sweep"' in main_src

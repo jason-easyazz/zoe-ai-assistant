@@ -266,6 +266,19 @@ _POLL_SECRETS: dict[str, str] = {}
 _POLL_SECRETS_MAX = 8
 
 
+def _is_loopback(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(str(host).split("%", 1)[0]).is_loopback
+    except ValueError:
+        return str(host).lower() == "localhost"
+
+
+def _provision_bind_allowed(host: str, allow_lan: bool) -> bool:
+    """The provision proxy holds the attempt's poll secret, so it is the pairing
+    device itself: loopback only unless the operator explicitly opts in."""
+    return allow_lan or _is_loopback(host)
+
+
 def _keep_poll_secret(body: bytes) -> bytes:
     """Remember the attempt's poll secret and strip it from what the page sees."""
     try:
@@ -324,6 +337,12 @@ class ProvisionHandler(BaseHTTPRequestHandler):
             self._get_config()
         elif path.startswith("/proxy/provision/") and not path.endswith("/request"):
             # /proxy/provision/{code} — poll status
+            # Only this device's own kiosk page may poll: the proxy attaches the
+            # attempt's poll secret, so a LAN caller who read the code off the
+            # screen must never reach it (even under --allow-lan).
+            if not _is_loopback(self.client_address[0]):
+                self._send_json({"error": "polling is local to the pairing device"}, 403)
+                return
             code = path.split("/")[-1]
             secret = _POLL_SECRETS.get(code.upper(), "")
             self._proxy_get(
@@ -453,6 +472,8 @@ def main():
     parser.add_argument("--mode", choices=["wifi-setup", "provision"], required=True)
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--allow-lan", action="store_true",
+                        help="provision mode: allow a non-loopback --host (polls stay loopback-only)")
     args = parser.parse_args()
 
     if args.mode == "wifi-setup":
@@ -462,6 +483,8 @@ def main():
         log.info("Starting WiFi setup portal on %s:%d", host, port)
     else:
         host = args.host or "127.0.0.1"
+        if not _provision_bind_allowed(host, args.allow_lan):
+            parser.error(f"refusing to serve provisioning on non-loopback {host!r} without --allow-lan")
         port = args.port or 8888
         handler = ProvisionHandler
         log.info("Starting provision server on %s:%d", host, port)

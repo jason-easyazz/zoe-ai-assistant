@@ -2125,8 +2125,9 @@
   // Launch the existing QR setup flow: the panel mints a one-time link + QR, the
   // owner scans it on their phone and signs in (their password only touches the
   // provider). Free providers connect immediately with no phone step.
-  // qr_path is an opaque SINGLE-USE handle (never the setup token, which nginx
-  // would log): render the <img> once; a retry re-POSTs /start for a fresh one.
+  // qr_path is an opaque handle that lives ~2 min (never the setup token, which
+  // nginx would log). If the image fails (handle expired), renew it ONCE by
+  // re-POSTing /start — bounded, so a dead backend can't loop the panel.
   function startProviderConnect(domain,label,name){
     apiJson('POST','/api/music/setup/start',{provider:domain}).then(function(r){
       if(r&&r.immediate){toast('Connected');loadQueue();return;}
@@ -2137,6 +2138,9 @@
         +'<div class="btns"><button data-x="cancel">Done</button></div>');
       var m=document.getElementById('estModal');
       m.querySelector('[data-x="cancel"]').onclick=function(){estClose();loadQueue();};
+      var qi=m.querySelector('.srcqr img'),renewed=false;
+      if(qi)qi.onerror=function(){if(renewed)return;renewed=true;
+        apiJson('POST','/api/music/setup/start',{provider:domain}).then(function(n){if(n&&n.ok&&n.qr_path)qi.src=n.qr_path;}).catch(function(){});};
     }).catch(function(){toast('Sign in first to manage music');if(window.__showAuthCard)window.__showAuthCard();});
   }
   function _qmsg(t){return '<div class="mqmsg" style="color:var(--ink-faint);padding:8px 4px">'+esc(t)+'</div>';}

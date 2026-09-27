@@ -94,7 +94,7 @@ def consume(token: str) -> Optional[dict[str, Any]]:
 
 
 def qr_path(token: str, provider: str) -> str:
-    """The panel's QR image path for a minted token: an opaque single-use handle
+    """The panel's QR image path for a minted token: an opaque short-lived handle
     (``setup_qr``), never the token — nginx logs query strings."""
     import setup_qr
 

@@ -48,6 +48,7 @@ _BASE_URL = os.environ.get("ZOE_BASE_URL", "https://192.168.1.218")
 # rather than leave a raw credential sitting in the table.
 _PICKUP_GRACE_S = int(os.environ.get("ZOE_PROVISION_PICKUP_GRACE_S", "120"))
 _POLL_SECRET_HEADER = "X-Provision-Secret"
+_SWEEP_INTERVAL_S = 300  # sweep_uncollected_tokens cadence (main.py)
 
 # In-memory rate limit: device_id → list of request timestamps
 _rate_limit: dict[str, list[float]] = {}
@@ -200,6 +201,38 @@ async def _expire_uncollected_token(db, code: str, token: str) -> None:
     logger.warning("provision_poll: code=%s token not collected in time — revoked", code)
 
 
+async def sweep_uncollected_tokens(db=None) -> int:
+    """Server-side expiry that does NOT depend on a poll: revoke every confirmed
+    token still uncollected past its grace (the pairing device went away), and
+    mark stale pending codes expired. Scheduled by main.py every
+    ``_SWEEP_INTERVAL_S``; returns how many tokens it revoked."""
+    if db is None:
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as conn:
+            return await sweep_uncollected_tokens(conn)
+    rows = await (await db.execute(
+        "SELECT code, token, expires_at FROM panel_provision_codes "
+        "WHERE status = 'confirmed' AND token IS NOT NULL"
+    )).fetchall()
+    revoked = 0
+    for row in rows:
+        if _is_expired_by(row["expires_at"], _PICKUP_GRACE_S):
+            await _expire_uncollected_token(db, row["code"], row["token"])
+            revoked += 1
+    pending = await (await db.execute(
+        "SELECT code, expires_at FROM panel_provision_codes WHERE status = 'pending'"
+    )).fetchall()
+    for row in pending:
+        if _is_expired(row["expires_at"]):
+            await db.execute(
+                "UPDATE panel_provision_codes SET status = 'expired' WHERE code = ? AND status = 'pending'",
+                (row["code"],),
+            )
+    await db.commit()
+    return revoked
+
+
 @router.get("/{code}")
 async def provision_poll(code: str, request: Request, db=Depends(get_db)):
     """
@@ -277,7 +310,7 @@ async def provision_public_info(code: str, db=Depends(get_db)):
     No authentication required.
     """
     row = await (await db.execute(
-        "SELECT code, device_id, status, expires_at FROM panel_provision_codes WHERE code = ?",
+        "SELECT code, device_id, status, token, expires_at FROM panel_provision_codes WHERE code = ?",
         (code,),
     )).fetchone()
     if not row:
@@ -286,6 +319,8 @@ async def provision_public_info(code: str, db=Depends(get_db)):
     status = row["status"]
     if status == "pending" and _is_expired(row["expires_at"]):
         status = "expired"
+    if status == "confirmed" and row["token"] and _is_expired_by(row["expires_at"], _PICKUP_GRACE_S):
+        await _expire_uncollected_token(db, code, row["token"])  # any later request revokes
 
     return {
         "code": code,
