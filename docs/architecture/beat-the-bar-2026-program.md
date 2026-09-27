@@ -482,8 +482,13 @@ status: 🔨 active — NEXT ACTION is always §0
   `zoe-dreaming.timer` (02:30 AWST nightly) runs `scripts/maintenance/zoe-nightly-dreaming.py`
   → `run_dreaming_for_all`, whose weekly phases (consolidation, synthesis, portrait, agent sync)
   gate on a **UTC** Sunday = the Monday 02:30 AWST run; last weekly pass 2026-09-21 (portrait
-  `ok` for jason, 66 memories). Follow-ups: the unit runs `/usr/bin/python3` (3.10) against the
-  live checkout, not the B0.7 venv; it iterates ~24 users incl. test/probe ids.
+  `ok` for jason, 66 memories). Follow-ups: 🧑 `zoe-dreaming.service` (box-only unit, no repo
+  template under `scripts/setup/systemd/`) still runs `/usr/bin/python3` (3.10); operator step
+  = add drop-in `~/.config/systemd/user/zoe-dreaming.service.d/60-py312-venv.conf` overriding
+  `ExecStart` to `%h/.zoe/venvs/zoe-data-py312/bin/python
+  /home/zoe/assistant/scripts/maintenance/zoe-nightly-dreaming.py` + `daemon-reload`; imports
+  (chromadb, db_pool, memory_digest) verified to resolve under the venv 2026-09-27; verify the
+  Mon 2026-09-28 02:31 AWST run log. ⬜ It also iterates ~24 users incl. test/probe ids.
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
