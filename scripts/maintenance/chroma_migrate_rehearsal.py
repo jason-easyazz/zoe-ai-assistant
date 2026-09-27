@@ -1078,29 +1078,70 @@ def _step_passed(rec: dict | None) -> bool:
         v.startswith("PASS") for v in rec["verdicts"])
 
 
+PARITY_FILES = ("old_top.json", "new_top.json")
+PARITY_COMPLETE = "COMPLETE"
+PARITY_KEEP_VERSIONS = 3
+
+
+def _parity_version_complete(d: Path) -> bool:
+    return d.is_dir() and (d / PARITY_COMPLETE).is_file() and all((d / f).is_file() for f in PARITY_FILES)
+
+
 def retain_parity_baseline(records: list, old_top: Path, new_top: Path, keep: Path) -> bool:
     """Publish the (old_top, new_top) pair as the post-cutover parity baseline, ALL OR NOTHING.
 
-    Only when both recall probes AND the parity proof passed, and both files exist. The pair is
-    staged in a sibling directory and swapped in by rename, so `keep` is always either the
-    previous complete pair or the new complete pair, never a half pair. On any failure the
-    previous pair is left untouched and False is returned.
+    Only when both recall probes AND the parity proof passed, and both files exist.
+    1. Write a NEW versioned dir `<keep>.<ts>`: both files first, the `COMPLETE` marker last.
+    2. Swap the `<keep>` symlink to it atomically: `os.replace` of a temp link.
+    A kill at any point therefore leaves the pointer on the previous complete version, or
+    leaves an incomplete version without a marker, which readers ignore. `resolve_parity_baseline`
+    falls back to the newest complete version if the pointer itself is missing or dangling.
+    The previous versions stay on disk (the newest `PARITY_KEEP_VERSIONS` are kept).
     """
     if not all(_step_passed(r) for r in records) or not (old_top.is_file() and new_top.is_file()):
         return False
-    stage = keep.with_name(keep.name + f".staging-{os.getpid()}")
-    if stage.exists():
-        shutil.rmtree(stage)
-    stage.mkdir(mode=0o700, parents=True)
+    base = keep.parent
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if keep.is_dir() and not keep.is_symlink():
+        # a pre-versioning real directory: adopt it as a version (marker only if it is complete)
+        legacy = keep.with_name(f"{keep.name}.00000000T000000-legacy")
+        os.rename(keep, legacy)
+        if all((legacy / f).is_file() for f in PARITY_FILES):
+            (legacy / PARITY_COMPLETE).touch()
+    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    version = keep.with_name(f"{keep.name}.{ts}-{os.getpid()}")
+    version.mkdir(mode=0o700)
     for f in (old_top, new_top):
-        shutil.copy2(f, stage / f.name)
-    retired = keep.with_name(keep.name + f".previous-{os.getpid()}")
-    if keep.exists():
-        os.rename(keep, retired)
-    os.rename(stage, keep)
-    if retired.exists():
-        shutil.rmtree(retired, ignore_errors=True)
+        shutil.copy2(f, version / f.name)
+    for f in PARITY_FILES:
+        with open(version / f, "rb") as fh:
+            os.fsync(fh.fileno())
+    (version / PARITY_COMPLETE).touch()
+    tmp_link = keep.with_name(f".{keep.name}.link-{os.getpid()}")
+    if tmp_link.is_symlink() or tmp_link.exists():
+        tmp_link.unlink()
+    os.symlink(version.name, tmp_link)
+    os.replace(tmp_link, keep)  # atomic pointer swap
+    for old in _parity_versions(keep)[PARITY_KEEP_VERSIONS:]:
+        if old != version:
+            shutil.rmtree(old, ignore_errors=True)
     return True
+
+
+def _parity_versions(keep: Path) -> list[Path]:
+    """Complete versioned dirs for `keep`, newest first (names sort by their UTC timestamp)."""
+    cands = [d for d in keep.parent.glob(f"{keep.name}.*") if _parity_version_complete(d)]
+    return sorted(cands, key=lambda d: d.name, reverse=True)
+
+
+def resolve_parity_baseline(keep: Path) -> Path | None:
+    """The directory holding a COMPLETE parity pair: the pointer if it resolves to a complete
+    version (or a legacy complete real dir), otherwise the newest complete version, else None."""
+    if keep.exists() and (_parity_version_complete(keep) or
+                          (not keep.is_symlink() and all((keep / f).is_file() for f in PARITY_FILES))):
+        return keep
+    versions = _parity_versions(keep)
+    return versions[0] if versions else None
 
 
 def _scratch_copy(src: Path, dst: Path) -> Path:
@@ -1198,6 +1239,13 @@ def cmd_compare_vectors(args) -> int:
 
 
 def cmd_compare_recall(args) -> int:
+    if args.baseline:
+        base = resolve_parity_baseline(Path(args.baseline))
+        if base is None:
+            return _out(False, "recall_parity", f"no complete parity baseline under {args.baseline}")
+        args.old = str(base / "old_top.json")
+    if not args.old:
+        return _out(False, "recall_parity", "need --old or --baseline")
     old = json.loads(Path(args.old).read_text())
     new = json.loads(Path(args.new).read_text())
     per = {q: jaccard(old[q], new.get(q, [])) for q in old}
@@ -1285,7 +1333,8 @@ def main(argv: list[str] | None = None) -> int:
     cv.add_argument("--ids-file", required=True)
     cv.add_argument("--mispair", action="store_true", help="negative control: pair vectors with the wrong ids")
     cr = sub.add_parser("compare-recall")
-    cr.add_argument("--old", required=True)
+    cr.add_argument("--old", help="old top-10 file (or use --baseline)")
+    cr.add_argument("--baseline", help="a recall-parity pointer dir; resolves the newest COMPLETE pair")
     cr.add_argument("--new", required=True)
     cr.add_argument("--parity-tolerance", action="store_true",
                     help="accept top-1 equal + top-10 Jaccard >= 0.9 instead of identical order")

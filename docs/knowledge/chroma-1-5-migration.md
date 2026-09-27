@@ -174,7 +174,7 @@ anyway, loudly).
 bash -euo pipefail <<'CUTOVER'
 exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay/deploy window overlaps
 WT=/home/zoe/.worktrees/b0-8-cutover                   # any checkout of the MERGED main
-D=cutover-$(date +%F); TS=""; STAGE=pre-stop
+D=cutover-$(date +%F-%H%M%S); TS=""; STAGE=pre-stop     # unique per attempt: a retry gets a NEW dir
 TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
 fail() {
   echo "!! B0.8 cutover FAILED at stage=$STAGE (line $1)." >&2
@@ -230,31 +230,68 @@ echo "B0.8 transition OK: TS=$TS D=$D (rollback dir ~/.mempalace.pre-b08-$TS)"
 CUTOVER
 ```
 
-**B. Verify, replay, re-deploy, re-arm.** Run this only after A printed `B0.8 transition OK`.
-Use the same calendar day as A (it re-derives `D`).
+**B. Verify, replay, re-deploy, re-arm: also ONE fail-closed script.** Run it only after A
+printed `B0.8 transition OK`, and paste the `D=` value A printed. Every step must succeed: the
+live snapshot copy, the recall probe, the order-exact parity check against the published
+baseline, and the replay. The tombstone report may exit **3** (a count is UNKNOWN until 1.x
+persists the drawers' index metadata); the script accepts that with a printed warning. Exit 2
+(over the warn threshold) or 1 fails. Only when everything passed does it re-run the refused
+deploy and re-arm the timers.
+
+**On failure the store is ALREADY LIVE**: zoe-data keeps running on the new store and client.
+The script leaves the timers STOPPED, changes nothing, and prints the §6 pointer. Decide
+between a fix-forward and the §6 rollback.
 
 ```bash
-WT=/home/zoe/.worktrees/b0-8-cutover; D=cutover-$(date +%F); R=~/.zoe/chroma-migration-rehearsal/$D
+D=<the D= value block A printed> bash -euo pipefail <<'VERIFY'
+WT=/home/zoe/.worktrees/b0-8-cutover; R=~/.zoe/chroma-migration-rehearsal/$D; STEP=start
+TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
+SCR=$(mktemp -d); trap 'rm -rf "$SCR"' EXIT
+fail() {
+  echo "!! B0.8 verification FAILED at step=$STEP (line $1)." >&2
+  echo "!! The new store is ALREADY LIVE; zoe-data is still running on it. The timers stay STOPPED." >&2
+  echo "!! Nothing was re-deployed. Fix forward, or roll back per runbook §6 (restore ~/.mempalace.pre-b08-<TS>)." >&2
+}
+trap 'fail $LINENO' ERR
+
+STEP=live-copy
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py copy --copy-from ~/.mempalace --copy-to $SCR/store
+STEP=probe
 DEMO=$(python3 -c "import json;print(json.load(open('$R/manifest.json'))['run']['recall_demo_user'])")
-SCR=$(mktemp -d)
-python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py copy --copy-from ~/.mempalace --copy-to $SCR/store  # consistent snapshot
 ~/.zoe/venvs/zoe-data-py312/bin/python $WT/scripts/maintenance/chroma_migrate_rehearsal.py probe recall \
   --store $SCR/store --demo-user $DEMO --out-file $SCR/live_top.json
-python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py compare-recall \
-  --old $R/recall-parity/old_top.json --new $SCR/live_top.json            # PASS = identical order
-rm -rf $SCR
-/usr/bin/python3 $WT/scripts/maintenance/check_memory_tombstones.py; echo "tombstones rc=$?"  # 3 = UNKNOWN until 1.x persists drawers metadata
-grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value zoe-data)/status     # before: 1028 MB RSS, 0 swap
+STEP=compare-recall        # exit 1 unless the top-10 ORDER is identical for all 20 queries
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py compare-recall --baseline $R/recall-parity --new $SCR/live_top.json
+STEP=tombstones
+rc=0; /usr/bin/python3 $WT/scripts/maintenance/check_memory_tombstones.py || rc=$?
+case $rc in
+  0) ;;
+  3) echo "WARN: tombstone count UNKNOWN for a 1.x segment with no persisted index metadata yet (expected right after the rebuild)" >&2 ;;
+  *) echo "tombstone report rc=$rc" >&2; false ;;
+esac
+STEP=rss
+grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value zoe-data)/status   # before: 1028 MB RSS, 0 swap
 
-# Replay gate (writes the artifact the deploy gate needs). Stop Kokoro for its duration,
-# then restart it and health-check it.
+STEP=replay               # writes the artifact the deploy gate needs; Kokoro stopped for its duration
 set -a; . ~/.hermes/.env; set +a
+systemctl --user stop kokoro-tts
+kokoro_back() { systemctl --user start kokoro-tts; for i in $(seq 1 60); do curl -sf localhost:10201/health | grep -q '"device":"cuda"' && return 0; sleep 2; done; return 1; }
 ZOE_VOICE_REPLAY_STT=remote flock /tmp/zoe-voice-harness.lock nice -n 5 ~/.zoe/venvs/zoe-data-py312/bin/python \
-  $WT/scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote --service-dir /home/zoe/assistant/services/zoe-data
-gh run rerun <refused deploy run id>          # now passes; no-op reset + restart
+  $WT/scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote \
+  --service-dir /home/zoe/assistant/services/zoe-data || { kokoro_back || true; false; }
+STEP=kokoro-health
+kokoro_back
 
-systemctl --user start zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer
+STEP=redeploy             # only now: the refused deploy passes the gate (no-op reset + restart)
+gh run rerun "$(gh run list --workflow deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+STEP=rearm
+systemctl --user start $TIMERS
+echo "B0.8 verified; deploy re-run; timers re-armed"
+VERIFY
 ```
+Kokoro is the `kokoro-tts` user unit on `:10201` (`KOKORO_SIDECAR_PORT`, checked 2026-09-28).
+The health check requires `"device":"cuda"`, not just `status ok`: a CPU fallback means choppy
+TTS.
 
 ## 6. Rollback
 

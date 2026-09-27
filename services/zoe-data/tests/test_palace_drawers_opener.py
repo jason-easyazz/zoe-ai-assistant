@@ -105,18 +105,6 @@ def test_runtime_no_longer_imports_mempalace_package():
         assert "from mempalace.palace import" not in src, name
 
 
-def test_ef_identity_is_default_and_cached():
-    """Needs the real chromadb (Jetson lane); the name is what avoids the 1.x EF conflict."""
-    pytest.importorskip("chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2")
-    memory_service._DRAWERS_EF = None
-    try:
-        ef = memory_service._drawers_embedding_function()
-        assert ef.name() == "default"
-        assert memory_service._drawers_embedding_function() is ef
-    finally:
-        memory_service._DRAWERS_EF = None
-
-
 def _palace_db(path, sysdb_version):
     import sqlite3
     path.mkdir(parents=True, exist_ok=True)

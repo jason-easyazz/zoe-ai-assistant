@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
 import shutil
 import sqlite3
 import stat
@@ -364,27 +365,76 @@ def _rec(ok: bool) -> dict:
     return {"rc": 0 if ok else 1, "verdicts": ["PASS x"] if ok else ["FAIL x"]}
 
 
+
+
+def _pair(tmp_path, tag):
+    old, new = tmp_path / "old_top.json", tmp_path / "new_top.json"
+    old.write_text(f"{tag}-OLD")
+    new.write_text(f"{tag}-NEW")
+    return old, new
+
+
+def _read(keep):
+    base = m.resolve_parity_baseline(keep)
+    return None if base is None else ((base / "old_top.json").read_text(), (base / "new_top.json").read_text())
+
+
 def test_parity_baseline_is_retained_only_after_every_step_passes(tmp_path):
     keep = tmp_path / "recall-parity"
-    keep.mkdir()
-    (keep / "old_top.json").write_text("PREVIOUS-OLD")
-    (keep / "new_top.json").write_text("PREVIOUS-NEW")
-    old, new = tmp_path / "old_top.json", tmp_path / "new_top.json"
-    old.write_text("NEXT-OLD")
-    new.write_text("NEXT-NEW")
-    # failing parity proof (or either probe, or a killed step) -> previous pair untouched
+    assert m.retain_parity_baseline([_rec(True)] * 3, *_pair(tmp_path, "FIRST"), keep) is True
+    assert keep.is_symlink() and _read(keep) == ("FIRST-OLD", "FIRST-NEW")
+    old, new = _pair(tmp_path, "NEXT")
     for records in ([_rec(True), _rec(True), _rec(False)], [_rec(False), _rec(True), _rec(True)],
                     [_rec(True), {"rc": -9, "verdicts": []}, _rec(True)]):
         assert m.retain_parity_baseline(records, old, new, keep) is False
-        assert (keep / "old_top.json").read_text() == "PREVIOUS-OLD"
-        assert (keep / "new_top.json").read_text() == "PREVIOUS-NEW"
-    # a missing half is never published
-    new.unlink()
+        assert _read(keep) == ("FIRST-OLD", "FIRST-NEW")
+    new.unlink()  # a missing half is never published
     assert m.retain_parity_baseline([_rec(True)] * 3, old, new, keep) is False
-    assert (keep / "new_top.json").read_text() == "PREVIOUS-NEW"
-    # all passed -> the complete new pair replaces the old one, no staging leftovers
+    assert _read(keep) == ("FIRST-OLD", "FIRST-NEW")
     new.write_text("NEXT-NEW")
     assert m.retain_parity_baseline([_rec(True)] * 3, old, new, keep) is True
-    assert (keep / "old_top.json").read_text() == "NEXT-OLD"
-    assert (keep / "new_top.json").read_text() == "NEXT-NEW"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["new_top.json", "old_top.json", "recall-parity"]
+    assert _read(keep) == ("NEXT-OLD", "NEXT-NEW")
+    assert not list(tmp_path.glob(".recall-parity.link-*"))
+
+
+def test_parity_baseline_survives_a_kill_between_steps(tmp_path):
+    keep = tmp_path / "recall-parity"
+    assert m.retain_parity_baseline([_rec(True)] * 3, *_pair(tmp_path, "GOOD"), keep)
+    good = m.resolve_parity_baseline(keep).resolve()
+    # killed after writing a newer version's files but BEFORE its COMPLETE marker + pointer swap
+    half = tmp_path / "recall-parity.99991231T235959999999-1"
+    half.mkdir()
+    (half / "old_top.json").write_text("HALF-OLD")
+    (half / "new_top.json").write_text("HALF-NEW")
+    assert _read(keep) == ("GOOD-OLD", "GOOD-NEW")  # pointer still on the complete version
+    keep.unlink()  # pointer lost entirely
+    assert m.resolve_parity_baseline(keep).resolve() == good  # newest COMPLETE version, never the unmarked one
+    os.symlink("recall-parity.missing", keep)  # dangling pointer
+    assert _read(keep) == ("GOOD-OLD", "GOOD-NEW")
+
+
+def test_legacy_real_dir_is_adopted_not_lost(tmp_path):
+    keep = tmp_path / "recall-parity"
+    keep.mkdir()
+    (keep / "old_top.json").write_text("LEGACY-OLD")
+    (keep / "new_top.json").write_text("LEGACY-NEW")
+    assert _read(keep) == ("LEGACY-OLD", "LEGACY-NEW")
+    old, new = _pair(tmp_path, "NEW")
+    assert m.retain_parity_baseline([_rec(False)] * 3, old, new, keep) is False
+    assert _read(keep) == ("LEGACY-OLD", "LEGACY-NEW")
+    assert m.retain_parity_baseline([_rec(True)] * 3, old, new, keep) is True
+    assert _read(keep) == ("NEW-OLD", "NEW-NEW")
+    keep.unlink()
+    assert _read(keep) == ("NEW-OLD", "NEW-NEW")
+
+
+def test_compare_recall_reads_the_resolved_baseline(tmp_path):
+    top = {q: [f"id{i}" for i in range(10)] for q in m.DEMO_QUERIES}
+    old, new = tmp_path / "old_top.json", tmp_path / "new_top.json"
+    old.write_text(json.dumps(top))
+    new.write_text(json.dumps(top))
+    keep = tmp_path / "recall-parity"
+    assert m.retain_parity_baseline([_rec(True)] * 3, old, new, keep)
+    keep.unlink()  # pointer gone: compare-recall still finds the complete pair
+    assert m.main(["compare-recall", "--baseline", str(keep), "--new", str(new)]) == 0
+    assert m.main(["compare-recall", "--baseline", str(tmp_path / "nothing"), "--new", str(new)]) == 1
