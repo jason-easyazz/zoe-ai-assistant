@@ -167,3 +167,29 @@ test('empty query makes no request; dead backend is a calm line, not a throw', a
   process.env.ZOE_DATA_URL = 'http://127.0.0.1:9';
   assert.equal(await theTool().run(ctx({ query: 'x' })), "I couldn't reach web search right now.");
 });
+
+test('a 1.2s lookup outlives the 500ms per-tool timeout: web_search floors its deadline over the backend worst case (Codex #1702)', async () => {
+  const server: Server = createServer((_req, res) => {
+    setTimeout(() => res.end(JSON.stringify({ status: 'no_results', results: [] })), 1200);
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    process.env.ZOE_DATA_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    assert.match(String(await theTool().run(ctx({ query: 'slow one' }))), /found nothing/);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test('/health reports optional_tools only when a flag-gated tool is registered', async () => {
+  const { createApp } = await import('../src/app.ts');
+  const app = createApp();
+  delete process.env.ZOE_WEB_SEARCH_TOOL;
+  const off = (await (await app.fetch(new Request('http://brain.test/health'))).json()) as Record<string, unknown>;
+  // Negative control: the default body keeps its exact key set.
+  assert.deepEqual(Object.keys(off).sort(), ['at', 'ok', 'service']);
+  process.env.ZOE_WEB_SEARCH_TOOL = '1';
+  const on = (await (await app.fetch(new Request('http://brain.test/health'))).json()) as Record<string, unknown>;
+  assert.deepEqual(on.optional_tools, ['web_search']);
+  assert.equal(on.ok, true);
+});

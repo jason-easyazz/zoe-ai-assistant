@@ -24,6 +24,7 @@ from database import get_db
 from hermes_http import hermes_auth_headers
 from research_evidence import (
     WEB_SEARCH_TOOL_MAX_RESULTS,
+    WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S,
     fetch_web_fallback,
     web_lookup_status,
     web_search_tool_enabled,
@@ -2850,7 +2851,12 @@ async def web_search(body: _WebSearchBody, _: None = Depends(require_intent_disp
         raise HTTPException(status_code=400, detail="query required")
     max_results = max(1, min(int(body.max_results or WEB_SEARCH_TOOL_MAX_RESULTS), WEB_SEARCH_TOOL_MAX_RESULTS))
     # Blocking urllib/httpx under the hood — keep it off the event loop.
-    outcome = await asyncio.to_thread(fetch_web_fallback, query, max_results)
+    # Short per-provider timeouts + no per-row page fetches (the payload drops
+    # `price`) so the lookup ends inside the sidecar's fetch deadline (Codex
+    # #1702: the B10.0 defaults could run ~38s past an 8s client abort).
+    outcome = await asyncio.to_thread(
+        fetch_web_fallback, query, max_results, WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S, enrich_prices=False
+    )
     return web_search_tool_payload(outcome)
 
 

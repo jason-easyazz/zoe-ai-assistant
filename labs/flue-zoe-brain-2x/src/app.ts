@@ -33,6 +33,7 @@ import { Zoe } from './agents/zoe.ts';
 import { requireBrainToken } from './auth.ts';
 import { createZoeProvider } from './providers/capped-completions.ts';
 import { seamAStreamingMiddleware } from './streaming.ts';
+import { optionalZoeTools } from './tools/zoe-tools.ts';
 
 /**
  * Build the sidecar's HTTP app, registering the `zoe` provider as a side effect.
@@ -57,9 +58,17 @@ export function createApp(): Hono {
   // Liveness probe for the lab sidecar (not part of Flue's agent API). Mounted
   // before the auth gate on purpose: /health must answer without a token so an
   // operator and systemd can tell a wedged process from a mis-tokened one.
-  app.get('/health', (c) =>
-    c.json({ ok: true, service: 'flue-zoe-brain', at: new Date().toISOString() }),
-  );
+  // B10.1: `optional_tools` = the flag-gated tools this process registers, so
+  // zoe-data confirms before advertising one. Omitted when none (body unchanged).
+  app.get('/health', (c) => {
+    const optional = optionalZoeTools().map((t) => t.name);
+    return c.json({
+      ok: true,
+      service: 'flue-zoe-brain',
+      at: new Date().toISOString(),
+      ...(optional.length ? { optional_tools: optional } : {}),
+    });
+  });
 
   // FAIL-CLOSED AUTH — first thing on the agent path space. Registered before the
   // agent router so nothing (not admission, not payload validation) runs for an

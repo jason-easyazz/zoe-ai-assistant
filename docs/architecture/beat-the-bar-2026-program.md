@@ -445,9 +445,9 @@ from outside, hence B9.0.
   logged) and the Flue sidecar registers a thin `web_search` wrapper under its OWN copy of the
   flag (`optionalZoeTools()`; the 21-tool `zoeTools` set untouched, ungrouped = always
   disclosed). `/api/system/status` `web_lookup.tool_enabled`; capability prose advertises it
-  only under the flag (B0.14 honesty test made flag-aware + structural gate check). Seam found:
+  only under the flag AND once the sidecar confirms it on `/health` (B0.14 test flag-aware). Seam:
   the sidecar's tools are static TS `defineTool`s wrapping zoe-data endpoints — there is no
-  HTTP tool catalogue. Voice-gate scope VOICE via the two sidecar `src/` files (flag-dark).
+  HTTP tool catalogue. Voice-gate scope VOICE via the three sidecar `src/` files (flag-dark).
   Cut-list item 10 tension stated in the PR (the `research`→`delegate-sync` seam it preferred
   is broken; this is the tracker's B10.2 tool, dark by default). Tavily stays the opt-in
   primary. B10.2 ⬜ now = flip it live: both `.env`s on, 20 live lookups scored by hand,

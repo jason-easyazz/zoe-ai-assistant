@@ -133,8 +133,8 @@ function httpTimeoutMs(): number {
 // FIRST of {turn aborted, timeout}, so a stuck endpoint is bounded at 8s while the
 // turn can still cancel earlier. (AbortSignal.any is available on Node >= 20.3;
 // this lab targets Node >= 22.)
-function fetchSignal(signal: AbortSignal | undefined): AbortSignal {
-  const timeout = AbortSignal.timeout(httpTimeoutMs());
+function fetchSignal(signal: AbortSignal | undefined, timeoutMs: number = httpTimeoutMs()): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
@@ -1091,6 +1091,14 @@ export function webSearchToolEnabled(): boolean {
   return ['1', 'true', 'yes', 'on'].includes((process.env.ZOE_WEB_SEARCH_TOOL ?? '0').trim().toLowerCase());
 }
 
+/**
+ * web_search's fetch deadline FLOOR (over ZOE_BRAIN_TOOL_TIMEOUT_MS). zoe-data's
+ * worst case is Tavily + DDG at research_evidence.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S
+ * (3s each); this must outlast it, or the tool says "unreachable" while the
+ * lookup still runs. Pinned by services/zoe-data/tests/test_web_search_tool.py.
+ */
+const WEB_SEARCH_TIMEOUT_FLOOR_MS = 8000;
+
 type WebSearchPayload = {
   status?: string;
   provider?: string;
@@ -1118,7 +1126,7 @@ const webSearch = defineTool({
         method: 'POST',
         headers: internalHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ query, max_results: 5 }),
-        signal: fetchSignal(signal),
+        signal: fetchSignal(signal, Math.max(httpTimeoutMs(), WEB_SEARCH_TIMEOUT_FLOOR_MS)),
       });
       if (res.status === 404) return 'Web search is switched off on this box (ZOE_WEB_SEARCH_TOOL), so I can\'t look that up.';
       if (!res.ok) return "I couldn't reach web search right now.";

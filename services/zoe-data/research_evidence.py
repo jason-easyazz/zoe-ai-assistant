@@ -78,6 +78,10 @@ _WEB_FALLBACK_PROVIDERS = ("auto", "duckduckgo", "off")
 # register the tool (labs/flue-zoe-brain-2x/.env); both must be on.
 WEB_SEARCH_TOOL_ENV = "ZOE_WEB_SEARCH_TOOL"
 WEB_SEARCH_TOOL_MAX_RESULTS = 5
+# Per-provider timeout for the brain tool: worst case Tavily + DDG = 6s, inside
+# the sidecar's fetch deadline (WEB_SEARCH_TIMEOUT_FLOOR_MS in zoe-tools.ts, 8s)
+# — pinned by tests/test_web_search_tool.py. B10.0 callers keep 8s/provider.
+WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S = 3.0
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 WEB_LOOKUP_MESSAGES = {
@@ -509,8 +513,12 @@ def _fallback_row(*, title: str, url: str, snippet: str) -> dict[str, str]:
     }
 
 
-def _verify_rows(query: str, rows: list[dict[str, str]], timeout_s: float) -> list[dict[str, str]]:
-    """Relevance + best-effort price enrichment from destination pages."""
+def _verify_rows(
+    query: str, rows: list[dict[str, str]], timeout_s: float, *, enrich_prices: bool = True
+) -> list[dict[str, str]]:
+    """Relevance + best-effort price enrichment from destination pages.
+    ``enrich_prices=False`` skips the sequential per-row page fetches (callers
+    that drop ``price``, i.e. the brain's web_search payload)."""
     for row in rows:
         if not _looks_relevant(
             query,
@@ -521,7 +529,7 @@ def _verify_rows(query: str, rows: list[dict[str, str]], timeout_s: float) -> li
             row["price"] = ""
             row["verified"] = "false"
             continue
-        if row.get("price"):
+        if row.get("price") or not enrich_prices:
             row["verified"] = "true"
             continue
         row["price"] = _fetch_page_price(row.get("url", ""), timeout_s=min(4.5, timeout_s))
@@ -537,7 +545,7 @@ def _verify_rows(query: str, rows: list[dict[str, str]], timeout_s: float) -> li
     return filtered or rows
 
 
-def _fetch_ddg(query: str, max_results: int, timeout_s: float) -> WebFallbackOutcome:
+def _fetch_ddg(query: str, max_results: int, timeout_s: float, *, enrich_prices: bool = True) -> WebFallbackOutcome:
     url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
@@ -566,13 +574,13 @@ def _fetch_ddg(query: str, max_results: int, timeout_s: float) -> WebFallbackOut
         if verdict == WEB_LOOKUP_ERROR and 200 <= status < 300:
             detail = f"{DDG_UNRECOGNISED_PAGE} (HTTP {status})"
         return WebFallbackOutcome(verdict, "duckduckgo", [], detail or f"HTTP {status}")
-    rows = _verify_rows(query, _parse_ddg_results(body, max_results), timeout_s)
+    rows = _verify_rows(query, _parse_ddg_results(body, max_results), timeout_s, enrich_prices=enrich_prices)
     if not rows:
         return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "duckduckgo", [], "no http result targets")
     return WebFallbackOutcome(WEB_LOOKUP_RESULTS, "duckduckgo", rows)
 
 
-def _fetch_tavily(query: str, max_results: int, timeout_s: float) -> WebFallbackOutcome:
+def _fetch_tavily(query: str, max_results: int, timeout_s: float, *, enrich_prices: bool = True) -> WebFallbackOutcome:
     # Lazy import: web_search_provider pulls typed_env/httpx; the classifier half
     # of this module stays stdlib-only for the slim CI lane.
     from web_search_provider import tavily_search_outcome
@@ -588,7 +596,7 @@ def _fetch_tavily(query: str, max_results: int, timeout_s: float) -> WebFallback
         )
         for i, r in enumerate(raw[:max_results], start=1)
     ]
-    rows = _verify_rows(query, rows, timeout_s)
+    rows = _verify_rows(query, rows, timeout_s, enrich_prices=enrich_prices)
     if not rows:
         return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "tavily", [])
     return WebFallbackOutcome(WEB_LOOKUP_RESULTS, "tavily", rows)
@@ -653,7 +661,9 @@ def _tavily_configured() -> bool:
         return False
 
 
-def fetch_web_fallback(query: str, max_results: int = 5, timeout_s: float = 8.0) -> WebFallbackOutcome:
+def fetch_web_fallback(
+    query: str, max_results: int = 5, timeout_s: float = 8.0, *, enrich_prices: bool = True
+) -> WebFallbackOutcome:
     """Web lookup with an HONEST outcome: rows plus status + provider.
 
     Provider order under ``auto``: Tavily when a key is configured (a real API,
@@ -672,12 +682,12 @@ def fetch_web_fallback(query: str, max_results: int = 5, timeout_s: float = 8.0)
         tavily: WebFallbackOutcome | None = None
         if provider == "auto" and _tavily_configured():
             attempted.append("tavily")
-            tavily = _fetch_tavily(q, max_results, timeout_s)
+            tavily = _fetch_tavily(q, max_results, timeout_s, enrich_prices=enrich_prices)
         if tavily is not None and tavily.status == WEB_LOOKUP_RESULTS:
             outcome = tavily
         else:
             attempted.append("duckduckgo")
-            ddg = _fetch_ddg(q, max_results, timeout_s)
+            ddg = _fetch_ddg(q, max_results, timeout_s, enrich_prices=enrich_prices)
             if tavily is None:
                 outcome = ddg
             else:

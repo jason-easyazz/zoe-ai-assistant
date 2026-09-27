@@ -125,8 +125,9 @@ def test_generated_capabilities_prose_advertises_no_unregistered_web_tool(monkey
         monkeypatch.delenv("ZOE_WEB_SEARCH_TOOL", raising=False)
     registered = _registered_brain_tools()
     for builder in (
-        lambda: _build_capabilities_md(["web_search"], [], []),
-        lambda: _build_zoe_self_md(["web_search"], [], []),
+        # web_search_live=flag_on: brain confirmed (B10.1) → exercises the real claim path.
+        lambda: _build_capabilities_md(["web_search"], [], [], web_search_live=flag_on),
+        lambda: _build_zoe_self_md(["web_search"], [], [], web_search_live=flag_on),
     ):
         text = builder()
         advertised = _advertised_web_tools(_prose_sections(text))

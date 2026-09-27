@@ -17,6 +17,8 @@ leak IS caught). ci_safe: no sockets — the provider fetches are faked at
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -59,7 +61,7 @@ def _no_network(monkeypatch):
 def _fake_lookup(monkeypatch, outcome: WebFallbackOutcome):
     calls: list[tuple[str, int]] = []
 
-    def _fetch(query, max_results=5, timeout_s=8.0):
+    def _fetch(query, max_results=5, timeout_s=8.0, **kwargs):
         calls.append((query, max_results))
         return outcome
 
@@ -185,7 +187,7 @@ async def test_query_text_never_reaches_a_log_record(monkeypatch, caplog):
     monkeypatch.setenv(FLAG, "1")
     monkeypatch.setenv("ZOE_WEB_FALLBACK_PROVIDER", "duckduckgo")
     monkeypatch.setattr(
-        re_mod, "_fetch_ddg", lambda q, n, t: WebFallbackOutcome(WEB_LOOKUP_BLOCKED, "duckduckgo", [], "challenge page (HTTP 202)")
+        re_mod, "_fetch_ddg", lambda q, n, t, **kw: WebFallbackOutcome(WEB_LOOKUP_BLOCKED, "duckduckgo", [], "challenge page (HTTP 202)")
     )
     with caplog.at_level(logging.DEBUG):
         out = await system.web_search(_body(), None)
@@ -203,7 +205,7 @@ async def test_negative_control_the_log_tripwire_catches_a_leak(monkeypatch, cap
     """An injected leak IS caught, so the tripwire above is not vacuous."""
     monkeypatch.setenv(FLAG, "1")
 
-    def _leaky(query, max_results=5, timeout_s=8.0):
+    def _leaky(query, max_results=5, timeout_s=8.0, **kwargs):
         logging.getLogger("research_evidence").info("web_fallback: query=%s", query)
         return WebFallbackOutcome(WEB_LOOKUP_NO_RESULTS, "duckduckgo", [], "")
 
@@ -235,12 +237,150 @@ def test_off_prose_is_byte_identical_to_the_honest_b0_14_text(monkeypatch):
     assert sections(committed) == sections(generated)
 
 
+_LIVE_BUILDERS = (
+    lambda: agent_sync._build_capabilities_md([], [], [], web_search_live=True),
+    lambda: agent_sync._build_zoe_self_md([], [], [], web_search_live=True),
+)
+
+
 def test_on_prose_advertises_the_tool_and_names_the_flag(monkeypatch):
     monkeypatch.setenv(FLAG, "1")
-    for build in _BUILDERS:
+    for build in _LIVE_BUILDERS:
         text = build()
         assert "`web_search`" in text
         assert "ZOE_WEB_SEARCH_TOOL=1" in text
         # Advertised in BOTH the capability list and the escalation guide.
         core, guide = text.split("## Escalation Guide", 1)
         assert "web_search" in core and "web_search" in guide
+
+
+
+@pytest.mark.parametrize("zoe_data_on,brain_live", [(True, False), (False, True)])
+def test_partial_rollout_makes_no_claim(monkeypatch, zoe_data_on, brain_live):
+    """Greptile #1702: either half alone (zoe-data flag / sidecar confirmation)
+    is a partial rollout — no claim."""
+    monkeypatch.setenv(FLAG, "1") if zoe_data_on else monkeypatch.delenv(FLAG, raising=False)
+    assert "web_search" not in agent_sync._build_capabilities_md([], [], [], web_search_live=brain_live)
+    assert "web_search" not in agent_sync._build_zoe_self_md([], [], [], web_search_live=brain_live)
+
+
+def _fake_brain_health(monkeypatch, reply):
+    """Brain /health GET answers `reply` — (status, JSON body | raw bytes) — or raises it."""
+    import httpx
+
+    seen: list[str] = []
+
+    async def _get(self, url, *a, **k):
+        seen.append(url)
+        if isinstance(reply, Exception):
+            raise reply
+        status, body = reply
+        return httpx.Response(status, content=body) if isinstance(body, bytes) else httpx.Response(status, json=body)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _get)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_brain_probe_is_never_made_while_zoe_data_flag_is_off(monkeypatch):
+    monkeypatch.delenv(FLAG, raising=False)
+    seen = _fake_brain_health(monkeypatch, AssertionError("probed with the flag off"))
+    assert await agent_sync._brain_registers_web_search() is False and seen == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply,expected",
+    [
+        ((200, {"ok": True, "optional_tools": ["web_search"]}), True),
+        ((200, {"ok": True, "service": "flue-zoe-brain"}), False),  # sidecar flag off: field omitted
+        ((200, {"optional_tools": []}), False),
+        ((503, {"optional_tools": ["web_search"]}), False),
+        ((200, b"not json"), False),
+        ((200, ["web_search"]), False),
+        (OSError("connection refused"), False),
+    ],
+)
+async def test_brain_probe_confirms_only_a_reported_tool(monkeypatch, reply, expected):
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setenv("ZOE_FLUE_BRAIN_URL", "http://127.0.0.1:3579/")
+    seen = _fake_brain_health(monkeypatch, reply)
+    assert await agent_sync._brain_registers_web_search() is expected
+    assert seen == ["http://127.0.0.1:3579/health"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmed", [False, True])
+async def test_run_agent_sync_gates_the_written_claim_on_the_brain_probe(monkeypatch, tmp_path, confirmed):
+    monkeypatch.setenv(FLAG, "1")
+    for attr in ("_OPENCLAW_ZOE_SELF", "_HERMES_SOUL", "_ZOE_COMPACT", "_CAPABILITIES_MD"):
+        monkeypatch.setattr(agent_sync, attr, tmp_path / attr.strip("_"))
+
+    async def _const(value):
+        return value
+
+    for name in ("_collect_mcp_tools", "_collect_openclaw_skills", "_collect_ui_pages"):
+        monkeypatch.setattr(agent_sync, name, lambda: _const([]))
+    monkeypatch.setattr(agent_sync, "_brain_registers_web_search", lambda: _const(confirmed))
+    await agent_sync.run_agent_sync()
+    assert ("`web_search`" in (tmp_path / "CAPABILITIES_MD").read_text()) is confirmed
+
+
+# ── time budget (Codex #1702): the backend must finish inside the tool timeout ──
+
+def _provider_harness(monkeypatch):
+    """Tavily errors, DDG answers; each records the timeout + kwargs it got."""
+    monkeypatch.setattr(re_mod, "web_fallback_provider", lambda: "auto")
+    monkeypatch.setattr(re_mod, "_tavily_configured", lambda: True)
+    seen: dict[str, dict] = {}
+
+    def _provider(name, status):
+        def _fetch(q, n, timeout_s, **kw):
+            seen[name] = {"timeout_s": timeout_s, **kw}
+            return WebFallbackOutcome(status, name, _rows(1) if status == WEB_LOOKUP_RESULTS else [])
+
+        return _fetch
+
+    monkeypatch.setattr(re_mod, "_fetch_tavily", _provider("tavily", WEB_LOOKUP_ERROR))
+    monkeypatch.setattr(re_mod, "_fetch_ddg", _provider("ddg", WEB_LOOKUP_RESULTS))
+    return seen
+
+
+def test_tool_settings_reach_both_providers(monkeypatch):
+    seen = _provider_harness(monkeypatch)
+    re_mod.fetch_web_fallback(QUERY, 5, re_mod.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S, enrich_prices=False)
+    for name in ("tavily", "ddg"):
+        assert seen[name] == {"timeout_s": re_mod.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S, "enrich_prices": False}
+
+
+def test_default_callers_keep_the_b10_0_behaviour(monkeypatch):
+    """Negative control (chat's B10.0 path): full timeout per provider, prices on."""
+    seen = _provider_harness(monkeypatch)
+    re_mod.fetch_web_fallback(QUERY, 5)
+    for name in ("tavily", "ddg"):
+        assert seen[name]["timeout_s"] == 8.0 and seen[name].get("enrich_prices", True) is True
+
+
+def test_verify_rows_without_enrichment_never_fetches_a_page(monkeypatch):
+    monkeypatch.setattr(re_mod, "_fetch_page_price", lambda *a, **k: (_ for _ in ()).throw(AssertionError("page fetched")))
+    rows = [{"title": "Bali tickets", "url": "https://example.com/bali", "snippet": "tickets to Bali", "price": ""}]
+    assert [r["url"] for r in re_mod._verify_rows("tickets to Bali", rows, 8.0, enrich_prices=False)] == [rows[0]["url"]]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_runs_the_lookup_on_the_tool_budget(monkeypatch, _no_network):
+    monkeypatch.setenv(FLAG, "1")
+    calls: list[tuple] = []
+    monkeypatch.setattr(system, "fetch_web_fallback", lambda *a, **k: calls.append((a, k)) or WebFallbackOutcome(WEB_LOOKUP_RESULTS, "tavily", _rows(1)))
+    await system.web_search(_body(), None)
+    assert calls == [((QUERY, 5, re_mod.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S), {"enrich_prices": False})]
+
+
+def test_brain_tool_deadline_outlasts_the_backend_worst_case():
+    """Cross-language pin: the sidecar's web_search deadline floor must exceed
+    Tavily + DDG at the tool timeout (+ slow-drip margin), or the brain says
+    "unreachable" while the lookup still runs."""
+    ts = (Path(__file__).resolve().parents[3] / "labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts").read_text()
+    m = re.search(r"const WEB_SEARCH_TIMEOUT_FLOOR_MS = (\d+);", ts)
+    assert m and int(m.group(1)) >= (2 * re_mod.WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S + 1.5) * 1000
+    assert "fetchSignal(signal, Math.max(httpTimeoutMs(), WEB_SEARCH_TIMEOUT_FLOOR_MS))" in ts
