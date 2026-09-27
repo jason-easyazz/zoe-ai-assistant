@@ -68,6 +68,8 @@ _INTENT_PANEL_NAV = {
     "recipe_search":     (None,                   None),
     "reminder_create":   (None,                   None),  # handled as toast
     "lets_talk":         ("/touch/voice.html?conv=1", None),  # phone-call voice mode (still its own surface)
+    # "Set up music" → the panel's Browse → Sources card (Connect = phone QR).
+    "music_setup":       ("/touch/home.html?domain=music_sources", None),
 }
 
 # Intents that show a full-screen interactive action-form overlay on the touch panel

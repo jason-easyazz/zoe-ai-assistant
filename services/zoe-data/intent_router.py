@@ -4003,51 +4003,50 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
         return None
 
 
-async def _execute_music_setup(user_id: str) -> str:
+async def _execute_music_setup(user_id: str) -> str:  # noqa: ARG001 — dispatch signature
+    """Reply for "set up music": point at the panel's Music → Browse → Sources
+    card, where **Connect** shows a QR the owner finishes on their phone.
+
+    Never a Music Assistant URL (the user never sees MA, and a ``localhost``
+    link is useless from a phone) and only the services Zoe actually offers —
+    both read from ``music_service.provider_catalogue()``, the sole MA client.
+    From a panel, chat also navigates it straight to that card
+    (``_INTENT_PANEL_NAV["music_setup"]`` in routers/chat.py).
     """
-    Return a rich markdown response for the music_setup intent.
-    Fetches live status from MA so the reply reflects what is actually configured.
-    """
-    ma_url = os.environ.get("MUSIC_ASSISTANT_URL", "http://localhost:8095")
-    ma_token = os.environ.get("MUSIC_ASSISTANT_TOKEN", "")
-    hdrs: dict[str, str] = {"Content-Type": "application/json"}
-    if ma_token:
-        hdrs["Authorization"] = f"Bearer {ma_token}"
-
-    version_str = ""
-    providers_str = "No streaming services connected yet."
-
+    connected: list[str] = []
+    attention: list[str] = []
+    offered: list[str] = []
     try:
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=4.0) as c:
-            r = await c.get(f"{ma_url}/info", headers=hdrs)
-            if r.status_code == 200:
-                info = r.json()
-                version_str = f" v{info.get('version', '')}"
-    except Exception:
-        pass
+        import music_service
 
-    try:
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=5.0) as c:
-            r = await c.post(f"{ma_url}/api", json={"command": "music/providers"}, headers=hdrs)
-            if r.status_code == 200:
-                data = r.json()
-                providers = data if isinstance(data, list) else (data.get("items") or [])
-                if providers:
-                    names = [p.get("name") or p.get("domain") or p.get("id", "?") for p in providers]
-                    providers_str = "Connected services: **" + "**, **".join(names) + "**."
-    except Exception:
-        pass
+        for p in await music_service.provider_catalogue():
+            name = str(p.get("name") or p.get("domain") or "").strip()
+            if not name:
+                continue
+            if p.get("needs_attention"):
+                attention.append(name)
+            elif p.get("connected"):
+                connected.append(name)
+            else:
+                offered.append(name)
+    except Exception as exc:  # noqa: BLE001 — the reply must never fail on a status read
+        logger.debug("music_setup: provider catalogue unavailable: %s", exc)
 
-    return (
-        f"🎵 **Music Assistant{version_str} Setup**\n\n"
-        f"{providers_str}\n\n"
-        f"To connect music services (Spotify, YouTube Music, Apple Music, Deezer and more), "
-        f"open the **[Music page](/music.html)** — it shows a setup wizard with Connect buttons "
-        f"for each provider.\n\n"
-        f"Or open Music Assistant directly: [{ma_url}]({ma_url})"
+    parts = []
+    if connected:
+        parts.append("Connected: **" + "**, **".join(connected) + "**.")
+    else:
+        parts.append("No music services are connected yet.")
+    if attention:
+        parts.append("**" + "**, **".join(attention) + "** needs reconnecting.")
+    parts.append(
+        "To add or reconnect one, open **Music** on your Zoe panel, go to "
+        "**Browse → Sources** and tap **Connect** — then scan the code with your "
+        "phone to sign in."
     )
+    if offered:
+        parts.append("Available to add: " + ", ".join(offered) + ".")
+    return "\n\n".join(parts)
 
 
 async def _music_top_recent_genre(user_id: str) -> Optional[str]:

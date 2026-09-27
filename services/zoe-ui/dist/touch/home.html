@@ -2050,6 +2050,9 @@
   function musicSet(action,value){if(!_music.player_id)return;
     fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id,value:value})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
   var _qtab='recent';
+  // One-shot tab for the NEXT Browse render — set by a server navigation
+  // (?domain=music_sources, the "set up music" intent) to land on Sources.
+  var _qtabNext=null;
   function _qpost(path,body){return apiJson('POST','/api/music/'+path,body);}
   // The overlay is pure BROWSING now — Recent + Playlists. The queue itself is
   // the card (see the Cover Flow below), so there's no Queue tab to render.
@@ -2596,9 +2599,10 @@
   // outlives this surface — _music.player_id is kept fresh by whichever
   // now-playing poller is running, loadMusic here or paintDockMusic elsewhere).
   function wireBrowse(){
-    _qtab='recent';   // DOM rebuilds to the Recent tab each show(); keep state in sync
-    loadQueue();
+    _qtab=_qtabNext||'recent';_qtabNext=null;   // DOM rebuilds to the Recent tab each show(); keep state in sync
     var tabs=document.querySelector('.mqtabs');
+    if(tabs)tabs.querySelectorAll('button[data-qt]').forEach(function(x){x.classList.toggle('on',x.getAttribute('data-qt')===_qtab);});
+    loadQueue();
     if(tabs)tabs.onclick=function(e){var b=e.target.closest('button[data-qt]');if(!b)return;
       _qtab=b.getAttribute('data-qt');tabs.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});loadQueue();};
     var qs=document.getElementById('mQSave');
@@ -4419,6 +4423,8 @@
     // Domain → screen map first; a literal surface name (?domain=calendar
     // for the full calendar) also works so server navigations can be precise.
     var dest=DOMAIN_SCREEN[dom||'']||(FULL[dom]?dom:'home');
+    // "Set up music" lands on Browse → Sources, where Connect shows the phone QR.
+    if(dom==='music_sources'){_qtabNext='sources';dest='browse';}
     show(dest);
     // Chat answers land on the Ask surface; every other domain shows the
     // transcript then the spoken summary in the DOCK (never the old
