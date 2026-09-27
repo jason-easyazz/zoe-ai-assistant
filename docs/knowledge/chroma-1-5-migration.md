@@ -177,6 +177,8 @@ D=cutover-$(date +%F-%H%M%S); TS=""; STAGE=preflight    # unique per attempt: a 
 TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
 fail() {
   echo "!! B0.8 cutover FAILED at stage=$STAGE (line $1)." >&2
+  kill "$(cat /tmp/zoe-b08-deploy-lock-holder.pid 2>/dev/null)" 2>/dev/null || true   # release the deploy lock on any failure
+  rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired
   case $STAGE in
     preflight)
       echo "!! Preflight only: NOTHING was stopped or changed." >&2 ;;
@@ -214,8 +216,11 @@ exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay window overla
 # holder whose lifetime spans both; block B kills it right before the deploy rerun. Preflight also
 # refuses if a deploy is already in progress (one past its checkout step cannot be excluded by the lock).
 test "$(gh run list --workflow deploy.yml --limit 3 --json status --jq '[.[]|select(.status!="completed")]|length')" = 0
-( flock -w 7200 8 && sleep 14400 ) 8>/tmp/zoe-deploy.lock & echo $! > /tmp/zoe-b08-deploy-lock-holder.pid
-sleep 2; kill -0 "$(cat /tmp/zoe-b08-deploy-lock-holder.pid)"   # holder alive = lock held
+# a holder left by an abandoned attempt is released first; then the new holder must ACQUIRE (flock -n:
+# exits at once if the lock is busy) and prove it by writing an "acquired" marker before we proceed.
+kill "$(cat /tmp/zoe-b08-deploy-lock-holder.pid 2>/dev/null)" 2>/dev/null || true; rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired
+( flock -n 8 && echo acquired > /tmp/zoe-b08-deploy-lock.acquired && sleep 14400 ) 8>/tmp/zoe-deploy.lock & echo $! > /tmp/zoe-b08-deploy-lock-holder.pid
+sleep 2; test -f /tmp/zoe-b08-deploy-lock.acquired && kill -0 "$(cat /tmp/zoe-b08-deploy-lock-holder.pid)"   # lock OWNED (else: a deploy or old holder has it — do not proceed)
 STAGE=pre-stop
 
 # 1. Stop every writer/opener
@@ -254,6 +259,7 @@ for i in $(seq 1 36); do curl -sf localhost:8000/readyz >/dev/null && break; sle
 curl -sf localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); mc=d["memory_capture"]; print(d["status"], mc); assert d["status"]=="ok" and "self-recall ok" in mc.get("detail","")'
 STAGE=live
 echo "B0.8 transition OK: TS=$TS (rollback dir ~/.mempalace.pre-b08-$TS)"
+echo "If you abandon the cutover after block A, release the deploy lock: kill \$(cat /tmp/zoe-b08-deploy-lock-holder.pid)"
 echo "FOR BLOCK B:  D=$D DEPLOY_ID=$DEPLOY_ID"
 CUTOVER
 ```
@@ -322,7 +328,7 @@ kokoro_back
 
 STEP=redeploy             # only now: re-run the SPECIFIC refused #1745 deploy (captured in block A)
 kill "$(cat /tmp/zoe-b08-deploy-lock-holder.pid 2>/dev/null)" 2>/dev/null || true   # release the deploy lock held since block A
-rm -f /tmp/zoe-b08-deploy-lock-holder.pid
+rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired
 gh run rerun "$DEPLOY_ID"
 sleep 20
 gh run watch "$DEPLOY_ID" --exit-status              # blocks until the deploy finishes; non-zero = failed
