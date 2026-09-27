@@ -341,8 +341,8 @@ export const PI_AI_CONTEXT_SAFETY_TOKENS = 4096;
  * replacement, and it is a stronger one because it is computed from the same
  * budget the prompt is windowed to rather than from an estimate.
  *
- * Concretely: llama-server runs `--ctx-size 16384 --parallel 2`, i.e. an
- * 8192-token SLOT per lane, and context shifting is OFF on this build
+ * Concretely: llama-server runs `--ctx-size 8192 --parallel 1`, i.e. ONE
+ * 8192-token SLOT, and context shifting is OFF on this build
  * (`get_can_shift()` is false whenever the SWA and base caches differ in size,
  * which they do without `--swa-full` — see
  * scripts/setup/systemd/llama-server.service). Generation that reaches the end of

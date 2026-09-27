@@ -375,6 +375,107 @@ def _merge_brain_context(db_memory: Optional[str], domain_ctx: Optional[str]) ->
     return "\n\n".join(parts) if parts else None
 
 
+async def _voice_brain_context(
+    session_id: str,
+    user_id: str,
+    text: str,
+    router_decision: Optional[dict],
+) -> tuple[list[dict], Optional[str], Optional[str], Optional[str], dict[str, float]]:
+    """Load a brain turn's context — history, memory packet, domain context —
+    CONCURRENTLY, so the pre-brain wait is the slowest of the three rather than
+    their sum (they are independent reads; each opens its own pooled DB
+    connection).
+
+    Returns ``(history, db_memory, portrait, domain_ctx, timings)``. Error
+    semantics match the old serial awaits: each loader is best-effort and
+    already swallows its own failures, and anything that still escapes one
+    degrades to the same empty value that loader returns on failure (``[]`` /
+    ``(None, None)`` / ``None``) — one failing loader never fails the turn or
+    the other two. ``timings`` holds seconds for ``history`` / ``memory`` /
+    ``domain`` and the gather's wall time as ``memory_packet``.
+    """
+    timings: dict[str, float] = {}
+
+    async def _timed(name: str, coro):
+        t = time.monotonic()
+        try:
+            return await coro
+        finally:
+            timings[name] = time.monotonic() - t
+
+    t0 = time.monotonic()
+    results = await asyncio.gather(
+        _timed("history", _load_voice_history(session_id, limit=3)),
+        _timed("memory", _voice_brain_memory(user_id, text)),
+        _timed("domain", _voice_domain_context(router_decision, user_id)),
+        return_exceptions=True,
+    )
+    timings["memory_packet"] = time.monotonic() - t0
+    fallbacks = ([], (None, None), None)
+    names = ("history", "memory", "domain")
+    resolved = []
+    for name, result, fallback in zip(names, results, fallbacks):
+        if isinstance(result, BaseException):
+            if not isinstance(result, Exception):
+                raise result  # cancellation / interpreter exit — never swallowed
+            logger.warning("voice brain context: %s load failed (non-fatal): %s", name, result)
+            result = fallback
+        resolved.append(result)
+    history, (db_memory, portrait), domain_ctx = resolved
+    return history or [], db_memory, portrait, domain_ctx, timings
+
+
+def _observe_pre_brain_stages(pre_brain_s: float, ctx_timings: dict[str, float]) -> None:
+    """Record the pre-brain stages on ``zoe_voice_stage_seconds``.
+
+    ``pre_brain`` = command start -> the brain branch (router, identity, fast
+    tiers, scope gate); ``memory_packet`` = the concurrent context gather
+    above. ``llm_first_token`` is still measured from the brain branch, so it
+    INCLUDES ``memory_packet``. Best-effort: metrics must never fail a turn.
+    """
+    try:
+        from voice_metrics import voice_stage_seconds
+
+        voice_stage_seconds.labels(stage="pre_brain").observe(max(0.0, pre_brain_s))
+        voice_stage_seconds.labels(stage="memory_packet").observe(
+            max(0.0, ctx_timings.get("memory_packet", 0.0))
+        )
+    except Exception:
+        pass
+
+
+def _log_voice_timing(
+    *,
+    turn: str,
+    session_id: str,
+    path: str,
+    pre_brain_s: float,
+    ctx_timings: dict[str, float],
+    brain_ttft_s: Optional[float],
+    llm_first_token_s: Optional[float],
+) -> None:
+    """One ``VOICE TIMING`` INFO line per voice brain turn (ms; -1 = no token).
+
+    Read it with the same session's ``FLUE_PROMPT_CACHE`` line: a high
+    ``brain_ttft_ms`` next to a large ``first_prompt_n`` is a llama-server
+    prompt-cache miss, not a slow model.
+    """
+    def _ms(v: Optional[float]) -> int:
+        return int(round(v * 1000)) if v is not None else -1
+
+    try:
+        logger.info(
+            "VOICE TIMING turn=%s session=%s path=%s pre_brain_ms=%d memory_packet_ms=%d "
+            "(history=%d memory=%d domain=%d) brain_ttft_ms=%d llm_first_token_ms=%d",
+            turn, session_id, path, _ms(pre_brain_s),
+            _ms(ctx_timings.get("memory_packet")), _ms(ctx_timings.get("history")),
+            _ms(ctx_timings.get("memory")), _ms(ctx_timings.get("domain")),
+            _ms(brain_ttft_s), _ms(llm_first_token_s),
+        )
+    except Exception:  # instrumentation must never fail a turn
+        pass
+
+
 _VOICE_ESCALATION_MARKERS = ("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")
 
 
@@ -3998,6 +4099,11 @@ async def voice_command(
                 token_buf = ""
                 full_reply_parts: list[str] = []
                 _t_first_audio: Optional[float] = None
+                # Set once the context gather ran: the VOICE TIMING line is
+                # emitted in the finally below for every turn that reached the
+                # brain, including ones that errored or were disconnected.
+                _v_ctx_timings: Optional[dict[str, float]] = None
+                _t_brain_dispatch: Optional[float] = None
                 _filler_emitted = False  # at most one tool-turn filler per turn
                 # The processing-ack path yields audio bytes directly (without going
                 # through _emit_sentence), so _t_first_audio stays None even though
@@ -4114,9 +4220,11 @@ async def voice_command(
                     except Exception as ack_exc:
                         logger.debug("voice/command stream processing acknowledgement failed: %s", ack_exc)
 
-                    _voice_history = await _load_voice_history(session_id, limit=3)
-                    _v_db_memory, _v_portrait = await _voice_brain_memory(effective_user, text)
-                    _v_domain_ctx = await _voice_domain_context(_router_decision, effective_user)
+                    (
+                        _voice_history, _v_db_memory, _v_portrait, _v_domain_ctx, _v_ctx_timings,
+                    ) = await _voice_brain_context(session_id, effective_user, text, _router_decision)
+                    _observe_pre_brain_stages(t_chat_start - _t_cmd_start, _v_ctx_timings)
+                    _t_brain_dispatch = time.monotonic()
                     async for delta in brain_streaming(
                         text, session_id, user_id=effective_user,
                         voice_mode=True, history=_voice_history or None,
@@ -4224,6 +4332,16 @@ async def voice_command(
                     async for out_line in _emit_line({"error": "voice command stream failure"}):
                         yield out_line
                 finally:
+                    if _v_ctx_timings is not None and _t_brain_dispatch is not None:
+                        _log_voice_timing(
+                            turn=_turn_key, session_id=session_id, path="stream",
+                            pre_brain_s=t_chat_start - _t_cmd_start, ctx_timings=_v_ctx_timings,
+                            brain_ttft_s=(
+                                t_chat_start + _t_first_token - _t_brain_dispatch
+                                if _t_first_token is not None else None
+                            ),
+                            llm_first_token_s=_t_first_token,
+                        )
                     # Persist whatever the user actually HEARD — the streaming
                     # lane never reaches voice_command's tail save, and a
                     # client disconnect (GeneratorExit) or mid-stream error
@@ -4246,10 +4364,12 @@ async def voice_command(
 
         collected: list[str] = []
 
-        _voice_history_nc = await _load_voice_history(session_id, limit=3)
-        _v_db_memory_nc, _v_portrait_nc = await _voice_brain_memory(effective_user, text)
-        _v_domain_ctx_nc = await _voice_domain_context(_router_decision, effective_user)
+        (
+            _voice_history_nc, _v_db_memory_nc, _v_portrait_nc, _v_domain_ctx_nc, _v_ctx_timings_nc,
+        ) = await _voice_brain_context(session_id, effective_user, text, _router_decision)
         _v_db_memory_nc = _merge_brain_context(_v_db_memory_nc, _v_domain_ctx_nc)
+        _observe_pre_brain_stages(t_chat_start - _t_cmd_start, _v_ctx_timings_nc)
+        _t_brain_dispatch_nc = time.monotonic()
 
         async def _stream_collect() -> None:
             nonlocal _t_first_token
@@ -4308,6 +4428,15 @@ async def voice_command(
             "voice/command LLM first_token=%.2fs total=%.2fs reply=%d chars user=%s",
             (_t_first_token if _t_first_token is not None else -1.0),
             _t_llm_total, len(reply_text), effective_user,
+        )
+        _log_voice_timing(
+            turn=_turn_key, session_id=session_id, path="command",
+            pre_brain_s=t_chat_start - _t_cmd_start, ctx_timings=_v_ctx_timings_nc,
+            brain_ttft_s=(
+                t_chat_start + _t_first_token - _t_brain_dispatch_nc
+                if _t_first_token is not None else None
+            ),
+            llm_first_token_s=_t_first_token,
         )
 
         # ── Fix 3: If an action form is still open, try to extract field-fill

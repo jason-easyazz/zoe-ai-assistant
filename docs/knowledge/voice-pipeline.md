@@ -443,6 +443,43 @@ can't attribute per-commit, but the landed work that drove it:
 July-2 bar the gate compared against an easy, ~1.75× slower target, so a silent brain slowdown could
 regress most of the July wins and still "pass". The new bar holds the gains.
 
+### Pre-brain + prompt-cache timings — reading a slow first token (2026-09-27)
+
+Two INFO lines in `~/.zoe-logs/zoe-data.app.log` attribute a slow voice first token per turn.
+Join them on `session=`:
+
+```
+VOICE TIMING turn=<ns> session=<sid> path=stream|command pre_brain_ms=… memory_packet_ms=… (history=… memory=… domain=…) brain_ttft_ms=… llm_first_token_ms=…
+FLUE_PROMPT_CACHE session=<sid> rounds=N first_prompt_n=… first_cache_n=… total_prompt_n=… per_round=p/c,…
+```
+
+- **`pre_brain_ms`**: from command start to the brain branch. That covers the router, identity,
+  fast tiers and scope gate. It is also the `pre_brain` stage on `zoe_voice_stage_seconds`.
+- **`memory_packet_ms`**: the history, memory packet and domain-context loads. Since 2026-09-27
+  they run concurrently, so this figure is their maximum, not their sum. It is also the
+  `memory_packet` stage. `llm_first_token` is still measured from the brain branch, so it
+  includes `memory_packet`.
+- **`brain_ttft_ms`**: brain dispatch to the first token. This is the part the prompt cache
+  controls.
+- **`first_prompt_n`**: tokens llama-server re-prefilled for the turn's first model call. The
+  sidecar forwards it as `prompt_cache` on its NDJSON `{"done": true}` terminal. A hit is tens of
+  tokens (~200 ms). A miss is hundreds (~1.7 ms/token): the 2026-09-26 replay measured 282–854
+  tokens, i.e. 0.6–1.5 s.
+
+**Where the misses came from on the Flue lane.** Gemma's template renders the instructions, then
+the tool block, then the history. The sidecar's progressive disclosure re-derived the tool block
+from the LAST user message only, so a keyword group retracted on the next turn. It also emitted
+tools in registration order, so a new group was inserted mid-block. Either change re-prefilled
+the whole history. The block is now append-only per session: groups are sticky, and tools are
+emitted in activation order. `ZOE_BRAIN_STICKY_DISCLOSURE=false` on the sidecar restores the old
+decay. The legacy `zoe_agent` voice mode had the same bug via its per-minute datetime header in the
+system prompt. That header now rides in the latest user message.
+
+**Known leftover.** On the live Flue lane the sidecar ignores `history` / `db_memory_context` /
+`portrait` (`zoe_flue_client.run_flue_brain_streaming`). So `memory_packet_ms` is spent on a
+context the live brain discards; it is only used by the core/legacy lanes (failover). Read
+`memory_packet_ms` before deciding whether to skip it on the flue lane.
+
 ### Which samples the gate replays — capture time, not filename (fixed 2026-08-05)
 
 `--last N` decides what every gate verdict MEANS, and until 2026-08-05 it did not mean what it
@@ -476,6 +513,41 @@ name-sorted slice, and it stores only aggregates — no file list — so nothing
 zero overlap the next probe scores twenty entirely different recordings and any movement is the
 sample change, not a regression. **Run a fresh probe, read the diff as informational, then
 `--update-baseline` deliberately.** Do not treat the first post-change run as a regression signal.
+
+## Kokoro sidecar memory — glibc arena cap (B6.6, 2026-09-27)
+
+`kokoro-tts.service` (system python 3.10, PyTorch CUDA, 36 threads) ran with no `MALLOC_*` in its
+environment, so glibc gave it up to 8 × nproc malloc arenas. The tracked drop-in
+`scripts/setup/systemd/kokoro-tts.service.d/40-memory-tuning.conf` sets `MALLOC_ARENA_MAX=2` +
+`MALLOC_TRIM_THRESHOLD_=131072`, the same values as zoe-data's drop-in. It changes the allocator only.
+Inference is serialised by `_pipeline_lock`, so two arenas do not contend. **Applied live 2026-09-27.**
+
+**Measured result: about −120 MB, not the −400 to −800 MB that was predicted.** Each arm used a fresh
+process of the same age and the same workload: warm-up, 15 fixed synths, 50 novel synths, then 3 min
+to settle. `memory.current` is omitted because it swings ±500 MB with the model-load page cache.
+
+| | control (no drop-in) | `MALLOC_ARENA_MAX=2` | Δ |
+|---|---|---|---|
+| cgroup `anon`, 3 min after load | 1,405 MB | 1,280 MB | **−125 MB** |
+| VmRSS, 3 min after load | 2,547 MB | 2,474 MB | −73 MB |
+| arena-shaped 64 MB anon regions | 17 (843 MB) | 10 (340 MB) | — |
+| ABAB rounds ×2, cgroup `anon` after the bench | 1,385 / 1,382 MB | 1,269 / 1,272 MB | −113 MB |
+| ABAB rounds ×2, VmRSS after the bench | 2,660 / 2,620 MB | 2,540 / 2,516 MB | −112 MB |
+| 30 first-seen sentences, synth p50 / p95 | 330 / 362, 352 / 401 ms | 347 / 384, 347 / 384 ms | within noise |
+| 5 fixed sentences × 3, synth p50 / p95 | 304 / 357, 306 / 380 ms | 298 / 365, 297 / 357 ms | within noise |
+
+- **The 64 MB regions shrank by 500 MB, but total anon fell by only ~120 MB.** Most of what those
+  regions held was live data, and it moved into the two remaining arenas; very little was freed-but-retained
+  memory. The heap is therefore ~1.27 GB of real working set (the import stack plus the model), not bloat.
+  The other RAM levers are unchanged: a dedicated Kokoro venv without scikit-learn/pandas (~−100 MB)
+  and a one-shot `malloc_trim(0)` after `_load_pipeline()` (unmeasured).
+- **No numeric change.** Kokoro on CUDA is not bit-deterministic run to run. Control vs control
+  differs by a max |Δ| of 2.8k–4.2k int16, and treat vs control differs by 3.2k–5.7k int16 on the same
+  sentences, with identical sample counts. Latency was read over two alternating ABAB rounds because a
+  single round was misleading: one round showed a +14 % p95, while the control arm alone moved 10 %
+  between rounds.
+- Verify: `tr '\0' '\n' < /proc/$(systemctl --user show -p MainPID --value kokoro-tts)/environ | grep MALLOC`.
+  Rollback: remove the drop-in, `daemon-reload`, restart.
 
 ## Stopping the brain does NOT guarantee it restarts (2026-07-26)
 
@@ -581,6 +653,13 @@ concurrent requests (voice and chat) queue rather than run side by side, and the
 prompt cache is what keeps the prefixes warm between them. It is load-bearing with one slot:
 `--cache-ram 0` measured +4.1 s TTFT on every repeat chat turn. The test pins `draft-mtp` ⇒ `--parallel 1`. Raise it only once #28286
 is fixed upstream and replay-gated here.
+
+**MTP draft depth stays `--spec-draft-n-max 4 --spec-draft-p-min 0.6`.** The full 3×3 grid,
+n-max {3,4,6} × p-min {0.4,0.6,0.8}, was measured on 2026-09-27 (W3 in
+[brain-flags-tuning-2026-09.md](brain-flags-tuning-2026-09.md)) and produced no win.
+Total decode time is flat across arms. The replay probe's brain median moves with
+prefix-cache reuse, which speculation does not affect, so do not read an MTP gain off the
+probe median alone.
 
 **Apply** (operator/coordinator only, in a Kokoro-paused brain window, after the PR merges and
 the live checkout is fast-forwarded):
