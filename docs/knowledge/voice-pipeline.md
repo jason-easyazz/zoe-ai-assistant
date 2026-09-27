@@ -259,6 +259,44 @@ Silero v6.2.1 export; `voice_vad.py` loaded it without error but scored ~0.001 o
 (0/12 corpus clips ≥ 0.5 vs 12/12 on v6.0), so barge-in / idle listening were silently off for a
 day. The replay starts at STT and never ran VAD, and the only real-model test is host-only.
 
+**Correction (2026-09-27): v6.2.1 was NOT incompatible — the loader was.** Upstream's
+`OnnxWrapper.__call__` (silero-vad 6.2.1 `src/silero_vad/utils_vad.py` L66-87) prepends the
+previous call's last **64 samples** to every 512-sample hop, so the model sees **576** samples;
+`voice_vad.py` fed bare 512-sample hops. Both files have identical I/O. Fixed in `voice_vad.py`
+(per-stream context, zeroed on `reset()`), pinned by
+`services/zoe-data/tests/test_voice_vad_context.py` (`ci_safe` fake-session contract vs a numpy
+port of upstream + a host-only synthetic-vowel test with a strip-the-context negative control).
+Measured on the box (live v6.0 md5 `00bdd414…`, CPU, 20 ms frames):
+
+| | no context (before) | +64 context (after) |
+|---|---|---|
+| whole corpus, 1171 usable: peak > 0.5 / median peak | 94.0 % / 0.833 | 95.9 % / 0.967 |
+| 48-clip stride: median speech-hop fraction | 0.09 | 0.36 |
+| 48-clip stride: median detection lag after energy onset (p75) | 128 ms (480) | 0 ms (0) |
+| seeded gaussian noise, worst of 30 seeds | 0.434 | 0.114 |
+| probe VAD stage, newest 24 (`pass_frac`, peak range, median) | 23/24, [0.364, 0.955], 0.807 | 19/24, [0.077, 0.978], 0.871 |
+| v6.2.1 file, probe VAD stage | 0/24 → **fail** | 20/24, median 0.995 → pass |
+| v6.2.1 file, 48-clip stride peak > 0.5 | 0/44 | 42/44 |
+
+The newest-24 slice moved DOWN because the newest panel captures are quiet (5 clips, rms ≤ 0.017,
+now peak 0.08–0.47 where the context-less loader gave 0.36–0.79); across all 217 sliding
+newest-24 windows the fixed loader's worst is 0.79 (median 0.917), so the 60 % floor stands
+unchanged. **The VAD-stage numbers re-baselined when this landed** — compare artifacts from
+before/after the fix as different instruments. `ZOE_VAD_SPEECH_THRESHOLD` stays 0.5 (rationale in
+`voice_vad.speech_threshold()`); barge-in keeps its own lower 0.30 hop threshold.
+
+**Open follow-ups (v6.0 stays live until they are done):**
+- **A/B v6.0 vs v6.2.x on false triggers** — the corpus plus TTS-echo (Kokoro through the panel
+  speaker) and room-noise clips; compare onset lag and false-trigger rate at the barge threshold;
+  swap only if v6.2 does not lose on false triggers. Passing the VAD stage is necessary, not
+  sufficient — the stage now passes v6.2.1 too.
+- `curate_voice_corpus.py`'s 0.20 "clear non-speech" line and its `quarantine-nonspeech-20260804`
+  set were scored by the context-less loader: the fixed loader puts 8/50 of that set at ≥ 0.5
+  (20/50 at ≥ 0.3), and 10 top-level clips (was 2) now peak < 0.20. Re-run the curator DRY-RUN and
+  review both lists before any move.
+- The LiveKit barge knobs (`ZOE_BARGE_SPEECH_THRESHOLD` 0.30, `ZOE_BARGE_MIN_MS` 192) were tuned
+  on the context-less loader; re-check them in the same A/B.
+
 **What gates it now** — `voice_regression_probe.py --vad-check` (default **on**;
 `--no-vad-check` / `ZOE_VOICE_PROBE_VAD_CHECK=0` records a disabled skip):
 - imports the **service's own** `voice_vad.py` from `--service-dir` (the code under test) and loads
@@ -282,17 +320,19 @@ day. The replay starts at STT and never ran VAD, and the only real-model test is
 that claims the stage (`vad_stage: true`) and carries a missing, malformed, `fail` or `error` `vad`
 block, and **re-derives** a `pass` from the counts against its own 60 % floor rather than trusting the
 label. Pinned by `tests/unit/test_voice_probe_vad_stage.py` (incl. the 0.001-everywhere negative
-control) and `tests/unit/test_voice_gate_check.py`. Measured on the box 2026-09-27: v6.0 file
-23/24 → pass; the incompatible file 0/24 (highest clip peak 0.026) → fail.
+control) and `tests/unit/test_voice_gate_check.py`. Measured on the box 2026-09-27 with the
+context-less loader: v6.0 file 23/24 → pass; v6.2.1 0/24 (highest clip peak 0.026) → fail. With the
+fixed loader: v6.0 19/24 → pass, v6.2.1 20/24 → pass (table above).
 
 **The model file is outside git** — no diff can show a swap, so no `VOICE_PATH_PATTERNS` entry can
 catch one; the **nightly** probe run is what does. Before swapping the file by hand, run the stage (or
 the real-model test) against the candidate via `ZOE_SILERO_VAD_MODEL=<candidate>`.
 
-**Files:** the compatible model is **v6.0**, md5 `00bdd41445da13fe3d52a5a074013aa1`, at
-`/home/zoe/models/silero_vad.onnx` (backup `silero_vad.onnx.v6.0.bak-20260926`). The incompatible
-v6.2.1 export (md5 `302cb198…`) is kept beside it as `silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927`
-for forensics — do not restore it.
+**Files:** the live model is **v6.0**, md5 `00bdd41445da13fe3d52a5a074013aa1`, at
+`/home/zoe/models/silero_vad.onnx` (backup `silero_vad.onnx.v6.0.bak-20260926`). The v6.2.1 export
+(md5 `302cb198…`) is kept beside it as `silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927` — the name is
+historical (the loader, not the file, was incompatible); it is the A/B candidate above, not to be
+restored before that A/B.
 
 ### The gated set is NOT all equally evidenced — the LiveKit/WebRTC lane (read before believing a green)
 

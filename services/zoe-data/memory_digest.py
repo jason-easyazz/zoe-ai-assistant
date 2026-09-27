@@ -21,6 +21,7 @@ import uuid
 
 import httpx
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
+from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ def _digest_lookback_hours() -> int:
 
 
 _DIGEST_LOOKBACK_HOURS = _digest_lookback_hours()
-_GUEST_USERS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
+_GUEST_USERS = GUEST_USERS  # single source: user_filters.GUEST_USERS
 
 _LINK_RESOLVER_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -197,24 +198,8 @@ def _passes_quality_gate(text: str) -> bool:
         return True
 
 
-def _message_owner_expr() -> str:
-    guests = ", ".join("'" + user.replace("'", "''") + "'" for user in _GUEST_USERS)
-    # chat_messages.metadata is TEXT and legacy rows may contain non-JSON.
-    # Extract the simple {"user_id": "..."} field without a jsonb cast so one
-    # malformed row cannot fail discovery for every user.
-    metadata_user = (
-        "CASE WHEN cm.metadata ~ '^\\s*\\{' "
-        "THEN substring(cm.metadata from '\"user_id\"\\s*:\\s*\"([^\"]+)\"') "
-        "ELSE NULL END"
-    )
-    return (
-        "CASE "
-        f"WHEN COALESCE({metadata_user}, '') NOT IN ({guests}) "
-        f"THEN {metadata_user} "
-        f"WHEN COALESCE(cs.user_id, '') NOT IN ({guests}) "
-        "THEN cs.user_id "
-        "ELSE NULL END"
-    )
+# Moved to user_filters so proactive/ can share it without importing this module.
+_message_owner_expr = message_owner_expr
 
 
 def _message_owner_users_sql(*, today_only: bool, lookback_hours: int | None = None,
@@ -1098,21 +1083,19 @@ async def _list_user_ids(sql: str, params: tuple = (), *, db=None) -> list[str]:
 
 
 async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
-    """Run weekly consolidation for every user who has any approved memory."""
-    from memory_service import get_memory_service
-    svc = get_memory_service()
+    """Weekly consolidation for every chat-turn owner minus synthetic ids.
+
+    (MemoryService has no ``list_users``; the old call was dead code whose
+    AttributeError fallback — this query — was what always ran.)
+    """
     try:
-        user_ids = await svc.list_users()  # if this helper exists
-    except AttributeError:
-        # Fall back to chat-sessions table so we never silently process
-        # zero users when MemoryService hasn't exposed a list helper.
-        try:
-            user_ids = await _list_user_ids(
-                _message_owner_users_sql(today_only=False), db=db
-            )
-        except Exception as exc:
-            logger.error("consolidation: could not list users: %s", exc)
-            return []
+        user_ids = await _list_user_ids(
+            _message_owner_users_sql(today_only=False), db=db
+        )
+    except Exception as exc:
+        logger.error("consolidation: could not list users: %s", exc)
+        return []
+    user_ids = drop_synthetic_users(user_ids, pass_name="consolidation", log=logger)
     results = []
     for uid in user_ids:
         results.append(await run_weekly_consolidation(uid))
@@ -1775,20 +1758,16 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
 
 
 async def run_dreaming_for_all(db=None) -> list[dict]:
-    """Run dreaming cycle for all users who have approved memories."""
-    from memory_service import get_memory_service
-
-    svc = get_memory_service()
+    """Dreaming cycle for every chat-turn owner minus synthetic ids (same user
+    set as ``run_weekly_consolidation_for_all``)."""
     try:
-        user_ids = await svc.list_users()
-    except AttributeError:
-        try:
-            user_ids = await _list_user_ids(
-                _message_owner_users_sql(today_only=False), db=db
-            )
-        except Exception as exc:
-            logger.error("dreaming: could not list users: %s", exc)
-            return []
+        user_ids = await _list_user_ids(
+            _message_owner_users_sql(today_only=False), db=db
+        )
+    except Exception as exc:
+        logger.error("dreaming: could not list users: %s", exc)
+        return []
+    user_ids = drop_synthetic_users(user_ids, pass_name="dreaming", log=logger)
 
     results = []
     for idx, uid in enumerate(user_ids):
@@ -1966,6 +1945,7 @@ async def run_music_taste_digest_for_all(db=None) -> list[dict]:
     except Exception as exc:
         logger.error("music_taste_digest: could not list users: %s", exc)
         return []
+    user_ids = drop_synthetic_users(user_ids, pass_name="music_taste_digest", log=logger)
 
     for uid in user_ids:
         r = await run_music_taste_digest(uid)

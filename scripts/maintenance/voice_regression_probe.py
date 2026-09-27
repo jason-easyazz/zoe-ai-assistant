@@ -42,7 +42,9 @@ VAD STAGE (--vad-check, default ON): the replay starts at STT, so it never ran
 the service's Silero VAD — and on 2026-09-26 a model-file swap (Silero v6.2.1
 export over the v6.0 file) loaded without error but scored ~0.001 on real
 speech, silently disabling barge-in / idle listening for a day with every gate
-green. This stage runs the service's REAL ``voice_vad.SileroVAD`` (imported from
+green. (Root cause, found 2026-09-27: voice_vad.py fed bare 512-sample hops
+without upstream's 64-sample context; v6.2.1 needs it, v6.0 degrades without
+it. The stage measures THE LOADER + model together, which is why it caught it.) This stage runs the service's REAL ``voice_vad.SileroVAD`` (imported from
 --service-dir, so it is the code under test, against the model file the service
 would load) over the newest N usable corpus clips, and the run FAILS when fewer
 than 60% of them reach the speech threshold (the bar of
@@ -106,11 +108,15 @@ RATIO_FLOOR_MS = 100.0  # below this absolute delta, a high ratio is treated as 
 DEFAULT_SAMPLE_DIR = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
 
 # ── VAD stage ────────────────────────────────────────────────────────────────
-# The bar is the real-model test's (test_voice_barge_in.py _SPEECH_MIN_PASS_FRAC):
-# measured 0.894 corpus-wide on the v6.0 model, 0.795 worst stride phase — the
-# 60% floor sits well under both so corpus churn cannot redden a healthy model,
-# while the 2026-09-26 incompatible file scored 0/12. voice_gate_check.py holds
-# the same floor (VAD_MIN_PASS_FRAC there) and re-derives it from the counts.
+# The bar is the real-model test's (test_voice_barge_in.py _SPEECH_MIN_PASS_FRAC).
+# Re-measured 2026-09-27 after voice_vad.py gained upstream's 64-sample context
+# (the earlier 0.894 / 0.795 numbers were the context-less loader), live v6.0:
+# 0.959 corpus-wide, 0.889 worst stride phase; THIS stage's newest-24 slice
+# 19/24 (0.79 — the worst of 217 sliding newest-24 windows; median 0.917): the
+# newest panel captures are quiet and 5 now peak 0.08-0.47. The 60% floor still
+# sits under all of that, while a dead VAD collapses to 0/24 (the v6.2.1 file
+# through the context-less loader, highest peak 0.026). voice_gate_check.py
+# holds the same floor (VAD_MIN_PASS_FRAC there) and re-derives it from counts.
 VAD_MIN_PASS_FRAC = 0.60
 VAD_DEFAULT_CLIPS = 24
 # Below this many usable clips the fraction is not a signal (test: 20 of 48;
