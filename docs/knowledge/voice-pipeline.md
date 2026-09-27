@@ -752,3 +752,32 @@ Rollback: set `ZOE_VAD_TAIL_MS=0` and
 `systemctl --user restart zoe-voice` — behaviour is byte-identical to pre-flag. Corpus evidence
 (#1573): −160 ms median tail on ~80 % of turns, +2.7 pt false-cut upper bound; the probe
 (`scripts/perf/measure_endpointing.py`) can exercise old and new behaviour for before/after.
+
+## Smart Turn v3 end-of-turn scorer (LiveKit lane)
+
+`services/zoe-data/voice_turn.py` wraps pipecat's `smart-turn-v3.2-cpu.onnx`
+(`/home/zoe/models/`, override `ZOE_SMART_TURN_MODEL`): input `input_features` float32
+`[1, 80, 800]` — a Whisper log-mel of the last 8 s at 16 kHz, front-padded with zeros when
+shorter — output the probability the speaker has finished. `routers/voice_livekit.py` consults
+it at the silence window when `ZOE_SMART_TURN_ENABLED=1` (threshold `ZOE_SMART_TURN_THRESHOLD`,
+0.5; at most `ZOE_SMART_TURN_MAX_CHECKS` extensions; any load failure → the fixed-silence
+endpoint). Inference runs in `asyncio.to_thread`.
+
+**Features are pure numpy (2026-09-27, B6.6 follow-up).** `log_mel_features` replaced
+`transformers.WhisperFeatureExtractor(chunk_length=8)(…, do_normalize=True)`, because in
+transformers 5.x that import pulls torch in unconditionally: **+~360 MB resident for the life of
+zoe-data** from the first LiveKit turn, to compute one spectrogram. Measured in a fresh
+interpreter (detector + one scoring call): **446–455 MB → 84 MB RSS**, torch and transformers no
+longer loaded; feature extraction ~7–14 ms.
+
+- **Parity is bit-exact, on purpose.** The output is bit-identical to transformers' own numpy
+  path (mel bank, complex64 STFT storage, float32 clamp/rescale — all reproduced), pinned by
+  `tests/test_voice_turn_logmel_parity.py` (host-only: needs transformers). Against the torch
+  path that ran live before, features differ by ≤ 2.4e-5 (float32 `torch.stft` rounding).
+- **The model is sharply sensitive to that rounding on some turns.** A float64 clamp (1-ULP
+  feature change) moved one corpus clip from 0.44 to 0.19. Old (torch-path) vs new on 302 corpus
+  turns (every 8th clip, full + half-truncated): median |Δp| 0, p90 4e-3, p99 0.11, max 0.21,
+  **zero decisions flipped at 0.5**, mean p 0.7623 → 0.7627. The same spread exists between
+  transformers' own torch and numpy paths — it is not introduced by the port.
+- `tests/test_voice_turn_no_torch.py` (`ci_safe`) pins that `voice_turn` imports no
+  torch/transformers (AST check + a fresh-interpreter run of the real scoring path).
