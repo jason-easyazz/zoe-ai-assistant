@@ -167,7 +167,10 @@ status: 🔨 active — NEXT ACTION is always §0
   item (1) below). Flag renames: `--mlock` → `--load-mode mmap+mlock`, `enable_thinking`
   kwargs → `--reasoning off`. Tracked template + apply/rollback recipe:
   `scripts/setup/systemd/llama-server.service`, [voice-pipeline.md](../knowledge/voice-pipeline.md)
-  ("Brain build + flags — B0.4"). **Gate items (2) and "keep
+  ("Brain build + flags — B0.4"). ⚠ Until #1716 lands, the tracked template still says
+  `--ctx-size 16384` while the live unit runs 8192 (B6.6) — installing the template from
+  `main` before then undoes the B6.6 setting; apply from the #1716 branch or re-add the flag.
+  **Gate items (2) and "keep
   `--fit off`" are satisfied in the template.** It runs `--parallel 1`, because #28286 (open) leaks
   content between concurrent draft-MTP requests with no garbage-token signature, and the live
   unit's `--parallel 2` was exposed to it. Concurrent requests now queue, and the whole ctx
@@ -356,7 +359,9 @@ status: 🔨 active — NEXT ACTION is always §0
   (md5 `00bdd414…`; the bad one kept as `silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927`).
   The incident silently killed barge-in for ~1 day and was caught only by a manual probe;
   **#1713 MERGED** adds the probe's `--vad-check` stage + the voice-gate check, so a dead VAD
-  now FAILS replay. ⬜ Nit: `services/zoe-data/voice_vad.py` docstring still says "v5".
+  now FAILS replay **when the stage is scored** — it returns `skip` (no opinion, gate stays
+  green) if the model file is absent, fewer usable 16 k clips than the minimum, or
+  MemAvailable < 400 MB; read the artifact's `vad` block, not just the verdict. ⬜ Nit: `services/zoe-data/voice_vad.py` docstring still says "v5".
   Permanent gate: `voice_regression_probe.py` VAD stage (real `voice_vad` over the newest 24
   clips, FAIL < 60 %, also on the memory-skip path) + `voice_gate_check.py` `vad` block +
   `voice_vad.py`/`voice_turn.py`/`*silero*` in `VOICE_PATH_PATTERNS` — [voice-pipeline.md →
@@ -740,7 +745,8 @@ from outside, hence B9.0.
 ```
 B0.1 zram ─┬─> nightly gate PASS ─┬─> B0.4 FA rebuild ─> B6.*, B1.11
            │                      ├─> B1.1..B1.10 (each replay-gated)
-           │                      └─> B5.1 Kokoro ONNX (⏸ parked, not a win) ─> B5.2/B5.3/B5.5
+           │                      └─> B5.1 Kokoro ONNX ❌ parked (not a win) — no longer gates anything
+           B5.2 (prompt modifiers) / B5.3 (expressive bake-off) ─ independent; B5.5 (audio input) needs a RAM decision without the B5.1 saving
 B0.7 py3.12 venv ─> B0.8 Chroma/MemPalace ─> B3.1 (design against the new store)
 B3.2 dream gating ─> B3.3 reflection ─> B2.2 delivery policy ─> B2.1/B2.3/B2.4
 B4.3 face decision ─> B4.1/B4.2 shadow week (Pi on) ─> B3.9
