@@ -3901,6 +3901,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/curate_voice_corpus.py",
+          "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/voice_vad.py"
         ],
         "typed_env": false
@@ -4450,6 +4451,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_VOICE_PROBE_VAD_CHECK": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_PROBE_VAD_CLIPS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/voice_regression_probe.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_VOICE_PROFILE": {
         "defaults": [
           "'zoe_au_natural_v1'"
@@ -4488,6 +4509,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/curate_voice_corpus.py",
+          "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": false

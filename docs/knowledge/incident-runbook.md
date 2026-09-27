@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, and MemoryMax-without-MemorySwapMax being no cap at all. Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap]
-timestamp: 2026-07-20T00:00:00Z
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice]
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # Production Incident Runbook
@@ -297,3 +297,36 @@ declares it (`memory_metrics._IDLE_TOLERANT_LOOPS`) rather than having its
 alert threshold quietly raised for everyone — the declaration is reviewable,
 a tuned-away threshold is not. Pinned by
 `services/zoe-data/tests/test_memory_loop_observability.py`.
+
+## 8. Barge-in / idle listening silently off — a VAD model that loads but hears nothing (2026-09-26)
+
+**Signature.** Barge-in and idle (no-wake) listening on the panel stop triggering; nothing errors,
+`/health` is green, the replay gate is green. `voice_vad` logged `Silero VAD loaded from …` (no
+RMS-fallback warning). Scoring real corpus clips gives peak speech probabilities of ~0.001–0.03.
+
+**Diagnosis.** `/home/zoe/models/silero_vad.onnx` had been replaced with the Silero v6.2.1 export.
+It has the same I/O names and shapes, so `onnxruntime` loads it and `voice_vad.SileroVAD` runs it —
+but on the service's 512-sample streaming path it scores 0/12 corpus clips ≥ 0.5 (v6.0: 12/12).
+`create_vad()` only falls back to RMS when the model FAILS to load, so a model that loads and says
+"no speech" is a silent failure. Check the file first:
+
+```bash
+md5sum /home/zoe/models/silero_vad.onnx      # compatible v6.0 = 00bdd41445da13fe3d52a5a074013aa1
+jq .vad ~/.cache/zoe/voice_regression_last.json   # the probe's VAD stage (see Prevention)
+```
+
+**Fix.** Restore the v6.0 file (`/home/zoe/models/silero_vad.onnx.v6.0.bak-20260926`), then confirm
+with the real-model test (small, ~100 MB — no flock needed):
+`cd services/zoe-data && nice -n 15 python3 -m pytest -q tests/test_voice_barge_in.py -k silero_real_model`.
+zoe-data loads the session lazily and keeps it, so a restart is needed for the running service to
+pick the restored file up. Restored 2026-09-27; the bad file is kept as
+`silero_vad.onnx.v6.2.1-INCOMPATIBLE-20260927` for forensics.
+
+**Prevention.** `voice_regression_probe.py` now has a **VAD stage** (default on): it runs the
+service's real `voice_vad` over the newest 24 usable corpus clips and FAILS the run below 60 %
+speech detection — also on the memory-skip path — recording `vad: {clips, speech_detected,
+min_max_prob, model: {path, md5}, status}` in the artifact; `voice_gate_check.py` blocks on a failed
+or missing block. `voice_vad.py`, `voice_turn.py` and `*silero*` are in `VOICE_PATH_PATTERNS`. The
+model file lives outside git, so the **nightly** probe run is what catches a hand swap — before
+swapping, test the candidate with `ZOE_SILERO_VAD_MODEL=<candidate>`. Detail:
+[voice-pipeline.md](voice-pipeline.md) → *The VAD stage*.
