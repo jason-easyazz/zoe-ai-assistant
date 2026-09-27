@@ -208,7 +208,10 @@ LIVE_HEAD=$(git -C /home/zoe/assistant rev-parse HEAD)
 test "$LIVE_HEAD" != "$MERGE_SHA"                       # live checkout must NOT be on the merged main yet
 test "$(gh run view "$DEPLOY_ID" --json conclusion --jq .conclusion)" = failure   # the refused run
 echo "preflight OK: D=$D DEPLOY_ID=$DEPLOY_ID (merge $MERGE_SHA; live tree at ${LIVE_HEAD:0:8})"
-exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay/deploy window overlaps
+exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay window overlaps
+exec 8>/tmp/zoe-deploy.lock;       flock -w 7200 8     # deploy.yml takes THIS lock before it resets the
+                                                       # live checkout: hold it until block B has finished
+                                                       # (a concurrent push cannot restart zoe-data mid-cutover)
 STAGE=pre-stop
 
 # 1. Stop every writer/opener
@@ -317,8 +320,10 @@ STEP=redeploy             # only now: re-run the SPECIFIC refused #1745 deploy (
 gh run rerun "$DEPLOY_ID"
 sleep 20
 gh run watch "$DEPLOY_ID" --exit-status              # blocks until the deploy finishes; non-zero = failed
-for i in $(seq 1 36); do curl -sf localhost:8000/readyz >/dev/null && break; sleep 5; done
-curl -s localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ready") and d["memory_capture"]["status"]=="ok", d'
+# readiness can be 200 while the memory-capture probe is still warming (it retries ~45 s after
+# start): keep polling for memory_capture ok within the warm-up window, not just the first 200.
+ok=0; for i in $(seq 1 48); do curl -s -m 5 localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("ready") and d["memory_capture"]["status"]=="ok" and "self-recall ok" in (d["memory_capture"].get("detail") or "") else 1)' 2>/dev/null && { ok=1; break; }; sleep 5; done
+test "$ok" = 1                                          # memory self-recall must be ok after the redeploy
 STEP=rearm
 systemctl --user start $TIMERS
 echo "B0.8 verified; deploy re-run; timers re-armed"
