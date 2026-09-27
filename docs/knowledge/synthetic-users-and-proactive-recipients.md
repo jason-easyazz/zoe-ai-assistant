@@ -32,7 +32,9 @@ had it, so the chat-owner fallback query was already what ran every night.
 - **Active users** are owners of a user turn in `chat_messages` in the last 7 days. The
   evening wind-down uses only these.
 - **Household**, for the morning brief and the evolution digest, adds the users named by a
-  panel's `default` binding.
+  panel's `default` binding. The evolution digest then keeps admins only
+  (`recipients.admins_only`, `auth.is_admin_role`): its approve/defer links are
+  `require_admin`-gated.
 - Synthetic ids are removed from both.
 
 It replaced "created a `chat_sessions` row in 7 days". Telegram turns reach `chat_messages`
@@ -62,9 +64,11 @@ not delete their sessions:
 - `test-sec-b-<6 hex>`: the Flue parity security gate (2026-07-07).
 
 `scripts/maintenance/purge_orphaned_test_data.py` hard-deletes the `chat_sessions` those
-exact ids own; messages and AG-UI runs go with them by FK cascade. Before the delete it
-writes a re-parsed, count-verified JSON backup to `~/.zoe/backups/purge/<stamp>-chat.json`
-(kept 14 days). It then deletes exactly the backed-up ids, and aborts on any mismatch. It keeps any session with
+exact ids own, together with their messages and AG-UI runs. It first locks the candidate
+sessions, so no turn can land mid-purge. It then writes a re-parsed, count-verified JSON
+backup to `~/.zoe/backups/purge/<stamp>-chat.json`. Only then does it delete exactly the
+backed-up rows, checking the deleted count per table; any mismatch rolls back. Old backups
+are removed only by hand, with `--prune-backups` (see `scripts/AGENTS.md`). It keeps any session with
 a turn whose metadata names another owner. The nightly `self-hosted-tests` run (00:30 AWST)
 executes it. On 2026-09-27, 130 sessions and 343 messages matched. A new probe identity
 must be added there as an exact, anchored id, or tear its sessions down with

@@ -128,10 +128,18 @@ BACKUP_KEEP_DAYS = 14
 
 
 async def fetch_chat_candidates(conn) -> dict:
-    """Snapshot every row the chat hard-delete would remove (incl. FK cascades)."""
+    """LOCK the candidate sessions, then snapshot every row the delete removes.
+
+    ``FOR UPDATE`` on the sessions blocks a concurrent message / AG-UI-run insert
+    (its FK check takes KEY SHARE on the session) until this transaction ends,
+    so nothing can land in a candidate session between snapshot and delete.
+    Must run inside the caller's transaction.
+    """
     pred = chat_session_pred("cs")
-    sessions = await conn.fetch(f"SELECT cs.* FROM chat_sessions cs WHERE {pred} ORDER BY cs.id")
-    ids = [r["id"] for r in sessions]
+    locked = await conn.fetch(
+        f"SELECT cs.id FROM chat_sessions cs WHERE {pred} ORDER BY cs.id FOR UPDATE")
+    ids = [r["id"] for r in locked]
+    sessions = await conn.fetch("SELECT * FROM chat_sessions WHERE id = ANY($1::text[])", ids)
     messages = await conn.fetch(
         "SELECT * FROM chat_messages WHERE session_id = ANY($1::text[]) ORDER BY id", ids)
     runs = await conn.fetch(
@@ -142,9 +150,10 @@ async def fetch_chat_candidates(conn) -> dict:
 
 
 def write_verified_backup(snapshot: dict, backup_dir: str = BACKUP_DIR, stamp: str = "") -> str:
-    """Write ``snapshot`` as JSON, re-parse it, check every count, prune old files.
+    """Write ``snapshot`` as JSON, re-parse it and check every count.
 
     Raises on ANY failure — the caller must not delete what was not backed up.
+    Never removes anything (retention is the opt-in ``--prune-backups``).
     """
     os.makedirs(backup_dir, exist_ok=True)
     stamp = stamp or datetime.datetime.now().strftime("%Y-%m-%dT%H%M%S")
@@ -160,32 +169,43 @@ def write_verified_backup(snapshot: dict, backup_dir: str = BACKUP_DIR, stamp: s
     for table, rows in snapshot.items():
         if len(back.get(table, [])) != len(rows):
             raise RuntimeError(f"backup {path}: {table} count mismatch")
-    cutoff = time.time() - BACKUP_KEEP_DAYS * 86400
-    for name in os.listdir(backup_dir):
-        old = os.path.join(backup_dir, name)
-        if name.endswith("-chat.json") and os.path.getmtime(old) < cutoff:
-            os.remove(old)
     return path
 
 
-async def purge_chat(conn, backup_dir: str = BACKUP_DIR, stamp: str = "") -> tuple[str, int]:
-    """Back up, then hard-delete EXACTLY the backed-up probe sessions.
+def stale_backups(backup_dir: str = BACKUP_DIR) -> list[str]:
+    """Chat backups older than BACKUP_KEEP_DAYS (listed in preflight)."""
+    if not os.path.isdir(backup_dir):
+        return []
+    cutoff = time.time() - BACKUP_KEEP_DAYS * 86400
+    return sorted(
+        os.path.join(backup_dir, n) for n in os.listdir(backup_dir)
+        if n.endswith("-chat.json") and os.path.getmtime(os.path.join(backup_dir, n)) < cutoff
+    )
 
-    Run inside the caller's transaction: a failed backup raises before any
-    DELETE, and a delete count that differs from the backup raises (rollback).
+
+async def purge_chat(conn, backup_dir: str = BACKUP_DIR, stamp: str = "") -> tuple[str, int]:
+    """Lock + back up, then hard-delete EXACTLY the backed-up rows.
+
+    Children are deleted explicitly with RETURNING so every table's deleted
+    count is compared to the backup; any mismatch raises (caller's transaction
+    rolls back), as does a failed backup — before any DELETE runs.
     """
     snapshot = await fetch_chat_candidates(conn)
     ids = [r["id"] for r in snapshot["chat_sessions"]]
     if not ids:
         return "", 0
     path = write_verified_backup(snapshot, backup_dir, stamp)
-    status = await conn.execute(
-        f"DELETE FROM chat_sessions cs WHERE cs.id = ANY($1::text[]) AND {chat_session_pred('cs')}",
-        ids)
-    deleted = int(str(status).split()[-1])
-    if deleted != len(ids):
-        raise RuntimeError(f"deleted {deleted} chat_sessions but backed up {len(ids)}")
-    return path, deleted
+    for table, sql in (
+        ("chat_ag_ui_runs", "DELETE FROM chat_ag_ui_runs WHERE session_id = ANY($1::text[]) RETURNING 1"),
+        ("chat_messages", "DELETE FROM chat_messages WHERE session_id = ANY($1::text[]) RETURNING 1"),
+        ("chat_sessions", f"DELETE FROM chat_sessions cs WHERE cs.id = ANY($1::text[]) "
+                          f"AND {chat_session_pred('cs')} RETURNING 1"),
+    ):
+        deleted = len(await conn.fetch(sql, ids))
+        if deleted != len(snapshot[table]):
+            raise RuntimeError(
+                f"deleted {deleted} {table} but backed up {len(snapshot[table])}; rolled back")
+    return path, len(ids)
 
 
 EVENT_PRED = owner_pred("user_id")
@@ -233,7 +253,8 @@ def _redacted_target(dsn: str) -> str:
     return f"{db} on {host}{port} (as {who})"
 
 
-async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str) -> int:
+async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str,
+               prune_backups: bool = False) -> int:
     import asyncpg  # deferred: see the module-level note above
 
     dsn = _resolve_dsn()
@@ -315,12 +336,18 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
               f"{BACKUP_DIR}): {chat_n}")
         for sid in chat_ids:  # synthetic probe sessions only — safe to print
             print(f"    {sid}")
+        stale = stale_backups() if prune_backups else []
+        if prune_backups:
+            print(f"chat backups older than {BACKUP_KEEP_DAYS} days to remove "
+                  f"(only with --execute --yes --prune-backups): {len(stale)}")
+            for f in stale:
+                print(f"    {f}")
 
         if not execute:
             print("\nDRY-RUN — nothing changed. Re-run with --execute to apply.")
             return 0
 
-        if ev_n == 0 and li_n == 0 and chat_n == 0:
+        if ev_n == 0 and li_n == 0 and chat_n == 0 and not stale:
             print("\nNothing to do.")
             return 0
 
@@ -343,6 +370,10 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
                 f"(SELECT id FROM lists WHERE {LIST_OWNER_PRED})"
             )
             backup_path, chat_done = await purge_chat(conn)
+        if prune_backups and assume_yes:
+            for f in stale:  # the exact list printed in preflight
+                os.remove(f)
+            print(f"pruned {len(stale)} chat backup(s) older than {BACKUP_KEEP_DAYS} days")
         print(f"\nAPPLIED to {target} — events: {ev_done}, list_items: {li_done}, "
               f"chat_sessions: {chat_done} (backup: {backup_path or 'none needed'})")
         return 0
@@ -355,9 +386,13 @@ if __name__ == "__main__":
     ap.add_argument("--execute", action="store_true", help="apply the soft-delete (default is dry-run)")
     ap.add_argument("--yes", action="store_true",
                     help="skip the interactive confirmation (automation); requires --expect-db")
+    ap.add_argument("--prune-backups", action="store_true",
+                    help=f"list chat backups older than {BACKUP_KEEP_DAYS} days; remove them "
+                         "only together with --execute --yes (default OFF)")
     ap.add_argument("--expect-db", default="",
                     help="assert the resolved target DB name; required with --yes")
     ap.add_argument("--expect-host", default="",
                     help="assert the resolved target DB host, as host or host:port (port defaults to 5432); required with --yes")
     args = ap.parse_args()
-    sys.exit(asyncio.run(main(args.execute, args.yes, args.expect_db, args.expect_host)))
+    sys.exit(asyncio.run(main(args.execute, args.yes, args.expect_db, args.expect_host,
+                              args.prune_backups)))

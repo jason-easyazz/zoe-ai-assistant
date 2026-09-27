@@ -17,7 +17,7 @@ import time
 import zoneinfo
 from datetime import datetime
 
-from proactive.recipients import proactive_recipients
+from proactive.recipients import admins_only, proactive_recipients
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 log = logging.getLogger(__name__)
@@ -50,7 +50,10 @@ class EvolutionWeeklyDigestTrigger(ProactiveTrigger):
         # Same recipient rule as the morning brief (proactive/recipients.py):
         # household members + recent turn owners, minus guest/synthetic ids.
         # The helper never raises; a failed arm just contributes nobody.
-        users = await proactive_recipients(db, pass_name="evolution_weekly_digest")
+        # ADMINS ONLY: the digest carries proposal titles + approve/defer links,
+        # and those actions are `Depends(require_admin)` (routers/system.py).
+        users = await admins_only(
+            db, await proactive_recipients(db, pass_name="evolution_weekly_digest"))
 
         if not users:
             return []

@@ -78,3 +78,22 @@ async def proactive_recipients(
                 names[uid] = name
     kept = drop_synthetic_users(names, pass_name=pass_name, log=log)
     return [(uid, names[uid]) for uid in kept]
+
+
+async def admins_only(db, recipients: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Keep only admin recipients, by the same role predicate ``require_admin``
+    uses (``auth.is_admin_role``, which honours ``family-admin``). Fails CLOSED:
+    a failed role lookup drops that recipient."""
+    from auth import is_admin_role  # deferred: auth is heavy and already loaded in-process
+
+    kept = []
+    for uid, name in recipients:
+        try:
+            async with db.execute("SELECT role FROM users WHERE id = ?", (uid,)) as cur:
+                row = await cur.fetchone()
+        except Exception as exc:
+            log.warning("admins_only: role lookup failed, recipient dropped: %s", exc)
+            continue
+        if row and is_admin_role(row[0]):
+            kept.append((uid, name))
+    return kept

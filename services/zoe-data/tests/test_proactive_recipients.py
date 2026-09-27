@@ -15,6 +15,7 @@ pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m
 
 import proactive.recipients as rcp
 import proactive.triggers.evening_windown as ew
+import proactive.triggers.evolution_weekly_digest as ed
 import proactive.triggers.morning_checkin as mc
 
 GUESTS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
@@ -54,7 +55,8 @@ class _Exec:
 class HouseholdDB:
     """bindings (panel_id, user_id, type); messages dicts; names {user_id: name}."""
 
-    def __init__(self, bindings=(), messages=(), names=None, fail=()):
+    def __init__(self, bindings=(), messages=(), names=None, fail=(), roles=None):
+        self.roles = roles or {}
         self.bindings = list(bindings)
         self.messages = list(messages)
         self.names = names or {}
@@ -89,6 +91,9 @@ class HouseholdDB:
                 if owner and owner not in owners:
                     owners.append(owner)
             return _Cursor([(o, self.names.get(o)) for o in owners])
+        if norm.startswith("select role from users where id = ?"):
+            role = self.roles.get(params[0])
+            return _Cursor([(role,)] if role is not None else [])
         # proactive_pending, morning-context enrichment, ... → nothing
         return _Cursor([])
 
@@ -190,3 +195,30 @@ async def test_evening_windown_skips_synthetic(monkeypatch):
                      messages=[_msg("member-b"), _msg("test-route-probe")])
     results = await ew.EveningWindDownTrigger().check(db)
     assert [r.user_id for r in results] == ["member-b"]
+
+
+async def test_evolution_digest_goes_to_admins_only(monkeypatch):
+    """The digest carries approve/defer links that are ``require_admin``-gated:
+    a bound non-admin member must not get it; ``family-admin`` counts as admin.
+    Negative control: drop the ``admins_only`` call → member-a gets it → red."""
+    import contextlib
+
+    import db_pool
+
+    class _Pg:
+        async def fetch(self, sql, *args):
+            if "group by status" in sql.lower():
+                return [{"status": "pending", "cnt": 2}]
+            return [{"id": "p1", "title": "Tune the router", "type": "code"}]
+
+    @contextlib.asynccontextmanager
+    async def fake_ctx():
+        yield _Pg()
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", fake_ctx)
+    _pin_clock(monkeypatch, ed, 18, 5)
+    _FixedNow.fixed = datetime(2026, 10, 2, 18, 5, tzinfo=ed._ZOE_TZ)  # a Friday
+    db = HouseholdDB(bindings=KIOSK, messages=[_msg("member-b"), _msg("member-c")],
+                     roles={"member-a": "user", "member-b": "family-admin"})
+    results = await ed.EvolutionWeeklyDigestTrigger().check(db)
+    assert [r.user_id for r in results] == ["member-b"]  # member-c: no role row → dropped

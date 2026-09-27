@@ -199,31 +199,39 @@ def test_chat_pred_is_anchored_grouped_and_guards_foreign_turns():
 # Chat arm: verified backup BEFORE the hard delete (fake conn, no database)
 # --------------------------------------------------------------------------- #
 class _FakeConn:
-    def __init__(self, delete_count=None):
-        self.sessions = [{"id": "s1", "user_id": "test-route-probe"},
-                         {"id": "s2", "user_id": "test-sec-b-4f9c0c"}]
-        self.messages = [{"id": "m1", "session_id": "s1", "content": "octopus fact"},
-                         {"id": "m2", "session_id": "s1", "content": "again"},
-                         {"id": "m3", "session_id": "s2", "content": "sec probe"}]
-        self.runs = [{"id": "r1", "session_id": "s1"}]
+    """Rows keyed by table; ``late_message`` is inserted right after the
+    snapshot reads chat_messages (a turn landing mid-purge)."""
+
+    def __init__(self, late_message=False):
+        self.rows = {
+            "chat_sessions": [{"id": "s1", "user_id": "test-route-probe"},
+                              {"id": "s2", "user_id": "test-sec-b-4f9c0c"}],
+            "chat_messages": [{"id": "m1", "session_id": "s1"}, {"id": "m2", "session_id": "s1"},
+                              {"id": "m3", "session_id": "s2"}],
+            "chat_ag_ui_runs": [{"id": "r1", "session_id": "s1"}],
+        }
+        self.late_message = late_message
+        self.locked = False
         self.deletes = []
-        self.delete_count = delete_count
 
     async def fetch(self, sql, *args):
-        if "FROM chat_sessions" in sql:
-            return self.sessions
-        if "FROM chat_messages" in sql:
-            return self.messages
-        if "FROM chat_ag_ui_runs" in sql:
-            return self.runs
+        if sql.startswith("DELETE FROM "):
+            table = sql.split()[2]
+            assert table != "chat_sessions" or purge.chat_session_pred("cs") in sql
+            self.deletes.append(table)
+            gone, self.rows[table] = self.rows[table], []
+            return gone
+        if "FOR UPDATE" in sql:
+            self.locked = True
+            return [{"id": r["id"]} for r in self.rows["chat_sessions"]]
+        assert self.locked, "snapshot must come after the FOR UPDATE lock"
+        for table in ("chat_sessions", "chat_messages", "chat_ag_ui_runs"):
+            if f"FROM {table}" in sql:
+                out = list(self.rows[table])
+                if table == "chat_messages" and self.late_message:
+                    self.rows[table].append({"id": "m4", "session_id": "s1"})
+                return out
         raise AssertionError(sql)
-
-    async def execute(self, sql, *args):
-        assert sql.startswith("DELETE FROM chat_sessions")
-        assert purge.chat_session_pred("cs") in sql  # still scoped by the predicate
-        self.deletes.append(list(args[0]))
-        n = len(args[0]) if self.delete_count is None else self.delete_count
-        return f"DELETE {n}"
 
 
 def test_chat_purge_writes_verified_backup_then_deletes_exactly_it(tmp_path):
@@ -235,7 +243,7 @@ def test_chat_purge_writes_verified_backup_then_deletes_exactly_it(tmp_path):
     back = json.loads(open(path).read())
     assert path.endswith("2026-09-28-chat.json")
     assert [len(back[t]) for t in ("chat_sessions", "chat_messages", "chat_ag_ui_runs")] == [2, 3, 1]
-    assert conn.deletes == [["s1", "s2"]] and deleted == 2
+    assert conn.deletes == ["chat_ag_ui_runs", "chat_messages", "chat_sessions"] and deleted == 2
 
 
 def test_chat_purge_refuses_delete_when_backup_fails(tmp_path):
@@ -249,14 +257,16 @@ def test_chat_purge_refuses_delete_when_backup_fails(tmp_path):
     assert conn.deletes == []  # nothing deleted without a backup
 
 
-def test_chat_purge_raises_when_delete_count_differs_from_backup(tmp_path):
+def test_chat_purge_raises_when_a_turn_lands_after_the_snapshot(tmp_path):
+    """The deleted MESSAGE count is checked, not just sessions: a row missing
+    from the backup raises (→ the caller's transaction rolls back)."""
     import asyncio
 
-    with pytest.raises(RuntimeError, match="backed up 2"):
-        asyncio.run(purge.purge_chat(_FakeConn(delete_count=1), str(tmp_path), "x"))
+    with pytest.raises(RuntimeError, match="chat_messages but backed up 3"):
+        asyncio.run(purge.purge_chat(_FakeConn(late_message=True), str(tmp_path), "x"))
 
 
-def test_backup_prunes_files_older_than_14_days(tmp_path):
+def test_backups_are_never_removed_without_the_prune_flag(tmp_path):
     import os
     import time
 
@@ -266,4 +276,7 @@ def test_backup_prunes_files_older_than_14_days(tmp_path):
     keep = tmp_path / "2026-09-20-chat.json"
     keep.write_text("{}")
     purge.write_verified_backup({"chat_sessions": []}, str(tmp_path), "2026-09-28")
-    assert not old.exists() and keep.exists()
+    assert old.exists()  # writing a backup removes nothing
+    assert purge.stale_backups(str(tmp_path)) == [str(old)]  # only listed for --prune-backups
+    src = open(purge.__file__).read()
+    assert src.count("os.remove(") == 1 and "if prune_backups and assume_yes:" in src
