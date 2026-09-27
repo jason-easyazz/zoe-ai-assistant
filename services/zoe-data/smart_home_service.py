@@ -553,7 +553,7 @@ def _add_device_card() -> dict[str, Any]:
     the phone page walks the owner through it honestly (see routers/smart_home_setup)."""
     import smart_home_setup  # local import: keeps the bridge module import-light
     minted = smart_home_setup.mint()
-    qr_path = f"/api/home/setup/qr?token={minted['token']}"
+    qr_path = smart_home_setup.qr_path(minted["token"])
     return {
         "component": "smart_home",
         "props": {

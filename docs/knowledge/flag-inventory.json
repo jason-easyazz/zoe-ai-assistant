@@ -3916,6 +3916,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_SETUP_QR_HANDLE_TTL_S": {
+        "defaults": [
+          "'120'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/setup_qr.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_SILERO_VAD_MODEL": {
         "defaults": [
           "''"

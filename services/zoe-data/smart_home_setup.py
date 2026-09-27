@@ -89,3 +89,11 @@ def consume(token: str) -> Optional[dict[str, Any]]:
         return None
     _consumed[str(payload.get("n"))] = float(payload.get("exp", time.time()))
     return payload
+
+
+def qr_path(token: str) -> str:
+    """The panel's QR image path for a minted token: an opaque single-use handle
+    (``setup_qr``), never the token — nginx logs query strings."""
+    import setup_qr
+
+    return f"/api/home/setup/qr/{setup_qr.issue('home', token=token)}"

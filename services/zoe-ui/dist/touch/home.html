@@ -2122,6 +2122,8 @@
   // Launch the existing QR setup flow: the panel mints a one-time link + QR, the
   // owner scans it on their phone and signs in (their password only touches the
   // provider). Free providers connect immediately with no phone step.
+  // qr_path is an opaque SINGLE-USE handle (never the setup token, which nginx
+  // would log): render the <img> once; a retry re-POSTs /start for a fresh one.
   function startProviderConnect(domain,label,name){
     apiJson('POST','/api/music/setup/start',{provider:domain}).then(function(r){
       if(r&&r.immediate){toast('Connected');loadQueue();return;}

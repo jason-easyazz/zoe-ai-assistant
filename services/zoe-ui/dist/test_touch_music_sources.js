@@ -65,7 +65,7 @@ async function open(browser, ctx) {
       const body = JSON.parse(route.request().postData() || '{}');
       ctx.starts.push(body.provider);
       if (body.provider === 'radiobrowser') return json({ ok: true, immediate: true, provider: body.provider });
-      return json({ ok: true, provider: body.provider, auth: 'browser', qr_path: '/api/music/setup/qr?token=TOK&provider=' + body.provider, setup_url: 'https://x/setup', expires_in: 300 });
+      return json({ ok: true, provider: body.provider, auth: 'browser', qr_path: '/api/music/setup/qr/opaque-handle-' + body.provider, setup_url: 'https://x/setup', expires_in: 300 });
     }
     if (u.includes('/api/music/setup/qr')) return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220"><rect width="220" height="220" fill="#fff"/></svg>' });
     if (route.request().method() === 'POST') return json({ ok: true });
@@ -131,6 +131,7 @@ async function t(name, fn) {
     assert.ok(qr, 'the QR modal did not open');
     const src = await qr.getAttribute('src');
     assert.ok(/setup\/qr/.test(src), `QR img src wrong: ${src}`);
+    assert.ok(!/token=/.test(src), `the setup token leaked into the QR img URL: ${src}`);
     await page.screenshot({ path: '/tmp/claude-1000/-home-zoe-assistant--claude-worktrees-pedantic-maxwell-3f9763/0c7881cf-ed4b-478f-b5d3-49a70e000628/scratchpad/sources_qr.png' });
     await page.close();
   });

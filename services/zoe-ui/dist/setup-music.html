@@ -110,8 +110,11 @@
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 
   if (!provider || !token) { fail('This link is missing its setup code.'); return; }
+  // The one-time token rides in a HEADER on GETs (POSTs carry it in the body) —
+  // never a query string, which the server's access log records.
+  var TOKEN_HDR = { 'X-Setup-Token': token };
 
-  fetch('/api/music/setup/form?provider=' + encodeURIComponent(provider) + '&token=' + encodeURIComponent(token))
+  fetch('/api/music/setup/form?provider=' + encodeURIComponent(provider), { headers: TOKEN_HDR })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (!data.ok) { fail(data.reason || 'This setup link is no longer valid.'); return; }
@@ -217,8 +220,8 @@
       var tries = 0;
       var poll = setInterval(function () {
         tries++;
-        fetch('/api/music/setup/browser/status?session_id=' + encodeURIComponent(res.session_id) +
-              '&token=' + encodeURIComponent(token))
+        fetch('/api/music/setup/browser/status?session_id=' + encodeURIComponent(res.session_id),
+              { headers: TOKEN_HDR })
           .then(function (r) { return r.json(); }).then(function (s) {
             if (s.state === 'harvesting') { $('bStatus').textContent = 'Signed in — connecting to Zoe…'; }
             else if (s.state === 'connected') {
@@ -257,7 +260,7 @@
       var tries = 0;
       var poll = setInterval(function () {
         tries++;
-        fetch('/api/music/setup/oauth/status?oauth_id=' + encodeURIComponent(res.oauth_id) + '&token=' + encodeURIComponent(token))
+        fetch('/api/music/setup/oauth/status?oauth_id=' + encodeURIComponent(res.oauth_id), { headers: TOKEN_HDR })
           .then(function (r) { return r.json(); }).then(function (s) {
             if (s.state === 'connected') { clearInterval(poll); $('doneTitle').textContent = 'Signed in — connected!'; show('done'); }
             else if (s.state === 'failed' || s.state === 'unknown') { clearInterval(poll); btn.disabled = false; btn.textContent = 'Try again'; fail(s.error || 'Sign-in didn’t complete.'); }
