@@ -23,15 +23,16 @@ import pytest
 
 from db_pool import _adapt_params
 
+import proactive.recipients as rcp
 import proactive.triggers.evening_windown as ew
 import proactive.triggers.morning_checkin as mc
 import proactive.triggers.evolution_weekly_digest as ed
 
 
-@pytest.mark.parametrize(
-    "trigger_cls",
-    [ew.EveningWindDownTrigger, mc.MorningCheckInTrigger, ed.EvolutionWeeklyDigestTrigger],
-)
+# The morning / evolution / evening triggers select recipients through
+# proactive.recipients (its 7-day window lives there); the evening trigger
+# keeps its own 3-day journal window.
+@pytest.mark.parametrize("trigger_cls", [ew.EveningWindDownTrigger, rcp])
 def test_triggers_use_temporal_pg_interval(trigger_cls):
     src = inspect.getsource(trigger_cls)
     assert "datetime('now'" not in src, "SQLite datetime() must not survive"
@@ -56,6 +57,28 @@ def test_pg_interval_survives_compat_shim():
         "SELECT 1 FROM chat_sessions cs WHERE x = $1 AND "
         "cs.created_at::timestamptz > (CURRENT_TIMESTAMP - INTERVAL '7 days')"
     )
+
+
+@pytest.mark.parametrize(
+    "trigger_cls",
+    [ew.EveningWindDownTrigger, mc.MorningCheckInTrigger, ed.EvolutionWeeklyDigestTrigger],
+)
+def test_triggers_never_keep_a_private_session_window(trigger_cls):
+    """The recipient window must not drift back into a trigger as its own
+    ``chat_sessions.created_at`` query — that is the rule that silenced the
+    morning brief (a session's OPEN time is not activity)."""
+    src = inspect.getsource(trigger_cls)
+    assert "proactive_recipients(" in src
+    assert "INTERVAL '7 days'" not in src
+
+
+def test_recipient_sql_survives_compat_shim():
+    """The active-users SQL goes through the positional-compat layer: it must
+    carry no placeholder and no bare NOW() for the shim to mangle."""
+    for sql in (rcp._active_users_sql(), rcp._PANEL_MEMBERS_SQL):
+        adapted, _ = _adapt_params(sql, ())
+        assert adapted == sql
+        assert "NOW()" not in sql
 
 
 def test_bare_now_interval_would_be_mangled():

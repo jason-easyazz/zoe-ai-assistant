@@ -117,10 +117,11 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(engine, "compose_message", fake_compose)
 
-    async def fake_panel_presence(user_id, within_s=None):
-        return state["presence_result"]
+    async def fake_panel_presence_tier(user_id, within_s=None):
+        panel = state["presence_result"]
+        return (state.get("presence_tier", "owner"), panel) if panel else ("absent", None)
 
-    monkeypatch.setattr(presence_mod, "panel_presence", fake_panel_presence)
+    monkeypatch.setattr(presence_mod, "panel_presence_tier", fake_panel_presence_tier)
 
     async def fake_panel_enqueue(db, **kwargs):
         if state["panel_error"] is not None:
