@@ -101,7 +101,7 @@ State as of **2026-09-28 02:30 AWST**:
    3. The `samantha_bar` harness.
    4. **B3.2/B3.3** on the new store, after the B0.8 cutover.
    5. Brief-on-arrival (**B2.1**).
-   6. A Kokoro venv without scikit-learn/pandas (B6.6 d).
+   6. ~~A Kokoro venv without scikit-learn/pandas (B6.6 d)~~ — B5.7, applied live 2026-09-28 (draft PR).
    7. The 24 h `--cache-ram` occupancy measurement (B0.4/B6.6).
 
 ## 1. Where Zoe already beats the bar (protect these)
@@ -771,6 +771,14 @@ State as of **2026-09-28 02:30 AWST**:
 - B5.5 ⬜ Gemma 4 E4B **audio input** for paralinguistics on flagged turns only (BF16 mmproj
   costs RAM — after B0.1/B5.1).
 - B5.6 ⬜ Voxtral Realtime as an offline second-opinion ASR judge in the replay harness.
+- B5.7 ✅ **Kokoro dedicated venv without scikit-learn/pandas/pyarrow — APPLIED LIVE 2026-09-28**
+  (draft PR). `~/.zoe/venvs/kokoro-py310` is a `--system-site-packages` venv on the same system 3.10
+  (same CUDA torch wheel) plus a `.pth` import blocker; `build_kokoro_venv.sh` (+ `--check`), drift
+  manifest `requirements-kokoro.txt`, drop-in `kokoro-tts.service.d/60-kokoro-venv.conf`. Controlled
+  ABAB: **start → healthy −2.5 to −4.0 s**, VmRSS at healthy **−97 to −139 MB** (anon −44 to −59 MB),
+  441 → 0 sklearn/pandas/pyarrow files mapped, synth p95 within noise, CUDA kept. Head-bound replay:
+  see the PR. Details: [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro dedicated venv).
+  ⬜ scipy/librosa/matplotlib also ride in through transformers; each needs its own runtime proof.
 
 ### B6 — Brain headroom (optimise around the rock)
 - B6.1 = B0.4 (FA rebuild). B6.2 🔨 **Re-upload staged, swap is an operator step.** Downloaded
@@ -864,8 +872,8 @@ State as of **2026-09-28 02:30 AWST**:
   `MALLOC_TRIM_THRESHOLD_=131072`. Measured in a same-age controlled A/B: **−113 to −125 MB anon**
   (VmRSS −73 to −112 MB), with synth p50/p95 within noise over two ABAB rounds. The predicted
   −400 to −800 MB did not happen: the "arena bloat" was mostly live data. Details and table:
-  [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro sidecar memory). ⬜ The remaining
-  Kokoro RAM lever is a dedicated venv without scikit-learn/pandas (~−100 MB).
+  [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro sidecar memory). The dedicated venv
+  without scikit-learn/pandas followed as **B5.7** (−97 to −139 MB VmRSS, −2.5 to −4 s startup).
   (e) ✅ **Router heads on numpy — no scikit-learn/scipy in zoe-data** (#1730 MERGED, LIVE:
   the running zoe-data maps 0 sklearn/scipy files, checked 2026-09-28; −73 MB). Both stage-1
   heads (logreg 13×384; MLP 384→256 relu→13 softmax) are exported to `.npz` + JSON by
@@ -1077,6 +1085,9 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-28 — B5.7 Kokoro dedicated venv (draft PR), applied live under the brain-window lock: the
+  sidecar runs `~/.zoe/venvs/kokoro-py310` (system 3.10 + import blocker for sklearn/pandas/pyarrow).
+  ABAB: −2.5 to −4.0 s start → healthy, −97 to −139 MB VmRSS at healthy, p95 within noise, CUDA kept.
 - 2026-09-27/28 (overnight refresh, state as of 2026-09-28 02:30 AWST) — **the 09-27 wave
   landed: 24 PRs.** In merge order:
   - #1718: tracker.

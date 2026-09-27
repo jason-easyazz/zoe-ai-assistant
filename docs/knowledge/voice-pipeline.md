@@ -558,8 +558,8 @@ to settle. `memory.current` is omitted because it swings ±500 MB with the model
 - **The 64 MB regions shrank by 500 MB, but total anon fell by only ~120 MB.** Most of what those
   regions held was live data, and it moved into the two remaining arenas; very little was freed-but-retained
   memory. The heap is therefore ~1.27 GB of real working set (the import stack plus the model), not bloat.
-  The other RAM levers are unchanged: a dedicated Kokoro venv without scikit-learn/pandas (~−100 MB)
-  and a one-shot `malloc_trim(0)` after `_load_pipeline()` (unmeasured).
+  The dedicated venv lever has since landed (next section); a one-shot `malloc_trim(0)` after
+  `_load_pipeline()` remains unmeasured.
 - **No numeric change.** Kokoro on CUDA is not bit-deterministic run to run. Control vs control
   differs by a max |Δ| of 2.8k–4.2k int16, and treat vs control differs by 3.2k–5.7k int16 on the same
   sentences, with identical sample counts. Latency was read over two alternating ABAB rounds because a
@@ -567,6 +567,63 @@ to settle. `memory.current` is omitted because it swings ±500 MB with the model
   between rounds.
 - Verify: `tr '\0' '\n' < /proc/$(systemctl --user show -p MainPID --value kokoro-tts)/environ | grep MALLOC`.
   Rollback: remove the drop-in, `daemon-reload`, restart.
+
+## Kokoro dedicated venv — no scikit-learn/pandas/pyarrow (B5.7, 2026-09-28)
+
+transformers imports scikit-learn only because it is *installed*:
+`transformers.generation.candidate_generator` → `is_sklearn_available()` → `sklearn.metrics` →
+`sklearn.utils.fixes` → `pandas` → `pyarrow`. Kokoro uses only `AlbertModel`, so none of the chain is
+needed. The live sidecar mapped **441** sklearn/pandas/pyarrow files.
+
+**What it is.** `~/.zoe/venvs/kokoro-py310`, built by `scripts/setup/build_kokoro_venv.sh`, is a
+`--system-site-packages --without-pip` venv on `/usr/bin/python3` (3.10). It uses the same torch 2.8.0
+CUDA wheel, kokoro 0.9.4, misaki and transformers from `~/.local`, and installs nothing. The one
+addition is `scripts/setup/kokoro_import_block.py`, installed as `zoe_kokoro_import_block.py` plus a
+`.pth`. At start-up it sets `sys.modules[name] = None` for `sklearn`, `pandas` and `pyarrow`. That is
+the documented import stop: `import` raises `ModuleNotFoundError` and `find_spec` returns `None`, so
+transformers takes its no-sklearn branch.
+
+- The drop-in `scripts/setup/systemd/kokoro-tts.service.d/60-kokoro-venv.conf` changes only the
+  interpreter.
+- `scripts/setup/requirements-kokoro.txt` is a **verify-only** drift manifest. It holds exact pins of
+  the load-bearing distributions the sidecar imports. Build and `--check` fail on drift, because an
+  out-of-band `pip install --user` into the 3.10 site-packages now moves Kokoro as well.
+- `ZOE_KOKORO_IMPORT_BLOCK=0` disables the blocker for one run.
+
+**Why not a clean venv with its own torch.** The NVIDIA wheel is 1.8 GB installed and has no PEP 610
+`direct_url.json`, so there is no recorded source to reinstall it from offline. A no-system-packages
+venv would mean a network download of an unpinned artifact, and would duplicate 1.8 GB on disk for no
+runtime difference. fp16 and `torch.compile` were ruled out as wins beforehand, so they were not tried.
+
+**Measured 2026-09-28** in a controlled ABAB on the live Orin. Every arm was a fresh process, and all
+arms kept `40-memory-tuning.conf`. The workload was the #1724 bench: warm-up, then 5 fixed sentences
+× 3 through `/synthesize_stream`, then 60 s to settle.
+
+| | control (system python) ×2 | venv + blocker ×2 | Δ |
+|---|---|---|---|
+| sklearn/pandas/pyarrow files mapped | 441 / 441 | 0 / 0 | gone |
+| start → `/health` loaded on cuda | 16.6 / 16.9 s | 14.1 / 12.9 s | **−2.5 to −4.0 s** |
+| import phase (journal: startup → "Loading KPipeline") | 9.5 / 10.2 s | 6.8 / 6.7 s | −2.7 to −3.5 s |
+| VmRSS at healthy | 2,291 / 2,334 MB | 2,194 / 2,195 MB | **−97 to −139 MB** |
+| VmRSS after bench + 60 s | 2,237 / 2,463 MB | 2,207 / 2,340 MB | −30 to −123 MB (noisy) |
+| cgroup `anon` at healthy | 1,238 / 1,254 MB | 1,194 / 1,195 MB | −44 to −59 MB |
+| cgroup `anon` after bench + 60 s | 1,246 / 1,262 MB | 1,203 / 1,204 MB | −43 to −58 MB |
+| synth p50 / p95 (pooled, 30 each) | 309 / 372 ms | 317 / 390 ms | +2.5 % / +5.0 % |
+| synth p50 / p95, reps 2–3 only | 296 / 320 ms | 298 / 328 ms | +0.6 % / +2.4 % |
+
+- **What the saving is made of.** It is roughly half anon (the imported modules' heap) and half
+  file-backed pages (the mapped `.so`s). Offline, with no model, `import kokoro` measured 640 → 560 MB
+  RSS.
+- **Latency.** The pooled p95 is driven by one first-rep outlier in the first treat arm (427 ms). The
+  second treat arm matched control (369 vs 368 ms). #1724 showed a single control arm moving 10 %
+  between rounds, so this is within noise and inside the 10 % rollback bar.
+- **Verify the live process:**
+  `grep -cE '/(sklearn|pandas|pyarrow)/' /proc/$(systemctl --user show -p MainPID --value kokoro-tts)/maps`
+  should print `0`, and `ExecStart` should name `~/.zoe/venvs/kokoro-py310/bin/python`.
+- **Rollback:** remove `60-kokoro-venv.conf`, `daemon-reload`, then restart. Nothing was uninstalled.
+- **Follow-ups (unmeasured):** the same survey shows transformers also loads scipy (via
+  `transformers.loss.loss_for_object_detection`, ~0.2 s) plus librosa and matplotlib. scipy is not
+  blocked, because `spacy.scorer` references it. Each would need its own runtime proof.
 
 ## Stopping the brain does NOT guarantee it restarts (2026-07-26)
 
