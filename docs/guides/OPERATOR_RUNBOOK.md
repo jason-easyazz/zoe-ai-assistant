@@ -279,8 +279,9 @@ done
 | Port | Service | Who connects |
 |---|---|---|
 | 8000 | zoe-data | zoe-ui nginx, OpenClaw, Pi daemon |
+| 5432 | zoe-database (Postgres) — **127.0.0.1 only** | zoe-data (localhost); containers via `zoe-database:5432` |
 | 8002 | zoe-auth | zoe-data |
-| 8007 | homeassistant-mcp-bridge | zoe-data, OpenClaw |
+| 8007 | homeassistant-mcp-bridge — **127.0.0.1 only** (no inbound auth) | zoe-data (`127.0.0.1:8007`); HA via `homeassistant-mcp-bridge:8007` |
 | 8123 | Home Assistant | nginx (proxy to /ha/), OpenClaw browser |
 | 8642 | Hermes agent | zoe-data, background agent workflows |
 | 11434 | llama-server | zoe-data, Hermes |
