@@ -199,7 +199,7 @@ status: 🔨 active — NEXT ACTION is always §0
   PyPI aarch64 torch is a CUDA-13 bundle → exact CPU wheel); `prometheus-client` +
   `livekit-protocol` were undeclared direct imports. **av 18 is capped by aiortc, not Python.**
   Step-ups (onnxruntime 1.30, websockets 17.1, numpy 2, sklearn 1.9 + head re-export) each
-  resolve and follow one at a time, replay-gated. 🔨 **Cutover PR #CUTOVER_PR** (draft): tracked drop-in
+  resolve and follow one at a time, replay-gated. 🔨 **Cutover PR #1717** (draft): tracked drop-in
   `scripts/setup/systemd/zoe-data.service.d/60-py312-venv.conf` (empty `ExecStart=` reset + the
   template's exact uvicorn args on the venv python); `deploy.yml` reads the interpreter back from
   systemd (`scripts/deploy/zoe_data_python.sh`) — venv → `build_py312_venv.sh --refresh`
