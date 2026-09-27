@@ -118,12 +118,24 @@ jobs:
       # Read-only: it imports metadata, never installs or touches the live env.
       # Comparator logic is covered offline (with a negative control) by
       # tests/unit/test_requirements_drift_check.py.
+      #
+      # B0.7: compare against what the zoe-data SERVICE runs, read from systemd
+      # (scripts/deploy/zoe_data_python.sh) — the 3.12 venv against
+      # requirements-py312.txt after the cutover, system python3 against
+      # requirements.txt before it or after a rollback. Checking the 3.10
+      # site-packages once the service has left it would report drift in an
+      # environment nothing loads.
       - name: Dependency drift — declared vs installed (reporting-only)
         continue-on-error: true
         run: |
           cd "${{ github.workspace }}"
-          python3 scripts/maintenance/requirements_drift_check.py \
-            services/zoe-data/requirements.txt
+          if VENV="$(bash scripts/deploy/zoe_data_python.sh --venv-dir)" && [ -n "${VENV}" ]; then
+            "${VENV}/bin/python" scripts/maintenance/requirements_drift_check.py \
+              services/zoe-data/requirements-py312.txt
+          else
+            python3 scripts/maintenance/requirements_drift_check.py \
+              services/zoe-data/requirements.txt
+          fi
 
       # Host-only integration + e2e suites. Reporting-only: allowed to fail so a
       # red suite is visible in the summary without failing the workflow or

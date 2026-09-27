@@ -17,11 +17,10 @@ the last cp310 wheel, `websockets` 16.1.1 the last release for 3.10, `av` 18 nee
 Python 3.10 / CUDA 12.6 stack; nothing here touches them, `/usr`, or
 `~/.local/lib/python3.10/site-packages`.
 
-**Status 2026-09-26: venv BUILT and import-verified in a worktree; NOT applied to the service.**
+**Status 2026-09-27: cutover PR open (drop-in template + deploy wiring); NOT applied to the service.**
 Everything in §1–§3 is measured on the Orin (uv 0.10.11, uv-managed CPython 3.12.13 aarch64,
-glibc 2.35). §5 gate 1 ran. Gate 2 is next and needs the probe from #1706 (it now launches
-`measure_voice` with its own interpreter — before that, a venv-launched probe replayed on 3.10);
-gates 3–5 need the operator restart.
+glibc 2.35). §5 gate 1 ran. The exact apply order — build, check, replay, drop-in, restart,
+verify, rollback — is **§8**; the deploy path follows whichever interpreter the unit runs (§4).
 
 ## 0. What was measured, and how (re-derivable)
 
@@ -55,7 +54,7 @@ also resolves on 3.12, held for its own gated move.
 | chromadb | 0.6.3 | 0.6.3 | pure + chroma-hnswlib 0.7.6 cp312 `manylinux_2_17` | **PersistentClient add/query works on 3.12.** Its telemetry logs `capture() takes 1 positional argument` against posthog 7.x (box: 7.12.0, same class) — noise, not a failure. 1.5.9 (abi3 aarch64 wheel) is B0.8. |
 | numpy | 1.26.4 (`<2`) | **1.26.4 exact** | cp312 | **Nothing in the set declares `numpy<2` on 3.12** — the uncapped resolve picks 2.5.3, and chroma-hnswlib 0.7.6's cp312 wheel imports/adds/queries on 2.5.3. Held at 1.26.4 so the router-head training numpy and STT/embedding numerics are unchanged in cut 1; numpy 2 = step-up, own gate. |
 | onnxruntime | 1.23.2 | 1.23.2 | cp312 `2_27/2_28` | Silero VAD `.onnx` session builds. **Step-up 1.30.0** (latest; ≥3.11; cp312 `2_28`). fastembed 0.8.0 allows `>=1.17,!=1.20,!=1.24.0/1` on 3.12. |
-| moonshine-voice | 0.1.3 (#1714) | 0.1.3 | `py3-none-manylinux_2_31` / `_2_34_aarch64` | **ABI-independent wheel — the SAME file the 3.10 box runs.** Measured at 0.0.62 first (imports, `__version__ 0.1.0`); moved to 0.1.3 with the box (resolves for cp312). First load fetches the `quantized_26_07_30` bundle the box already uses. Model load left to the replay gate. |
+| moonshine-voice | 0.1.3 (#1714) | 0.1.3 | `py3-none-manylinux_2_31` / `_2_34_aarch64` | **ABI-independent wheel — the SAME file the 3.10 box runs.** Measured at 0.0.62 first (imports, `__version__ 0.1.0`); moved to 0.1.3 with the box (resolves for cp312). First load fetches the `quantized_26_07_30` bundle the box already uses. Model load left to the replay gate (§8 step 3). |
 | transformers | 5.17.0 | 5.17.0 | pure | `WhisperFeatureExtractor` imports |
 | fastembed | 0.8.0 | 0.8.0 | pure | imports; 0.8.1 latest |
 | scikit-learn / joblib | 1.7.2 / 1.5.3 | 1.7.2 / 1.5.3 | cp312 | **Head loads, `predict_proba` OK.** Step-up 1.9.1 (≥3.11): the 1.7.2 artifact loads with `InconsistentVersionWarning` and predicts **bit-identically** (max Δproba = 0.0 on probe vectors, numpy 2.5.3). Re-export is a CONTRACT matter (`services/zoe-data/AGENTS.md`: pins must equal training pins in `labs/setfit-router/requirements.txt`), not a correctness blocker — retrain/re-export in the same PR that moves the pin. |
@@ -160,11 +159,27 @@ Everything else in the unit is untouched and still applies: `EnvironmentFile`s, 
 `MemoryLow`/`MemorySwapMax=0`, `MALLOC_ARENA_MAX=2`. `sync_zoe_self.sh` (an `ExecStartPre`)
 runs no pip and is unaffected.
 
-**`deploy.yml` caveat.** Its "Install / refresh Python deps" step does `pip3 install --user …`
-into the 3.10 site-packages. After the switch that step is a no-op for the running service and
-must be pointed at the venv (`~/.zoe/venvs/zoe-data-py312/bin/python -m pip` — uv venvs ship no
-pip, so use `uv pip install --python …`) or dropped in favour of `build_py312_venv.sh`. Do this in
-the cutover PR, not before: until the drop-in is live it would be a wish.
+**The deploy path follows the unit, not the venv.** `deploy.yml`'s "Install / refresh Python
+deps" step asks systemd which interpreter the service will exec
+(`scripts/deploy/zoe_data_python.sh` → `systemctl --user show -p ExecStart`):
+
+- **service on the venv** (drop-in loaded) → `build_py312_venv.sh --refresh`: both install
+  phases from `requirements-py312.txt` into that venv, ADDITIVELY (`uv pip install`; it never
+  syncs or uninstalls — pruning strays stays the operator's full build, §2), `--offline` first (measured: without it
+  uv re-fetches the torch direct-URL wheel on EVERY run even when installed; with it an
+  already-converged venv audits in milliseconds with no network), network only when the pins
+  cannot be satisfied locally. It never creates the venv, never installs an interpreter, and
+  runs no smoke — the post-restart `/health` loop is the runtime proof;
+- **service on `/usr/bin/python3`** → the historical 9-package `pip3 install --user` list;
+- **unresolvable** (unit missing, two ExecStarts, not a Python) → the deploy fails before
+  anything installs or restarts.
+
+The resolved interpreter is exported as `ZOE_DATA_PYTHON` and `scripts/deploy/migrate.sh` runs
+`alembic upgrade head` with it. The venv's EXISTENCE never selects it: it is built before the
+drop-in lands and deliberately survives a rollback (§6), so a presence check would feed a venv
+nothing runs while starving the interpreter that does. The self-hosted drift check follows the
+same resolver. So installing or deleting the drop-in is the whole switch — no second flip.
+All of it is executed against stubs by `tests/unit/test_zoe_data_py312_cutover.py`.
 
 ## 5. Verification gates, in order
 
@@ -240,10 +255,70 @@ is not part of rollback — they describe the box on 3.10 too.
 
 ## 7. Open items
 
-- Operator: gates 3–5 (restart), then flip `deploy.yml`'s pip step (§4 caveat) in the cutover PR.
+- Operator/coordinator: run §8 once the cutover PR merges (the deploy wiring is inert until the
+  drop-in is loaded, so merging it changes nothing on the box).
+- A fresh host (`install-jetson.sh`) still installs the 3.10 unit only; adopting the venv there
+  is §8 steps 1–5 by hand until the installer grows a venv step.
 - `docs/knowledge/numpy2-jetson-migration.md` assumed an on-box `onnxruntime-gpu` story; for
   zoe-data the venv makes that moot (CPU wheels), which shrinks that WIP to Kokoro's stack.
 - Closed in #1706: `validate.yml`'s `deps-resolvable` job resolves `requirements-py312.txt` for cp312 /
   aarch64-manylinux_2_31 on every PR (the build script's `--dry-run`, uv 0.10.11, with a uv
   negative control), so a conflicting pin, a missing cp312 wheel or a dead torch URL fails CI
   rather than the operator's build. The pip loop beside it still resolves the 3.10 manifests.
+
+## 8. Cutover — exact apply order (coordinator)
+
+Run as user `zoe` on the Orin, **after the cutover PR has merged and deployed** (so the live
+checkout carries `--refresh`, the resolver and the drop-in template). Every step reads or
+writes outside git; nothing here is `git` in the live checkout. `L=/home/zoe/assistant`,
+`V=~/.zoe/venvs/zoe-data-py312/bin/python`. Stop at the first red step and roll back (step 9)
+if the service was already switched.
+
+```bash
+L=/home/zoe/assistant; V=$HOME/.zoe/venvs/zoe-data-py312/bin/python
+
+# 1. Build the venv (≈1 min warm cache, 1.9 GB; refuses below 500 MB MemAvailable).
+bash $L/scripts/setup/build_py312_venv.sh
+
+# 2. Verify it: interpreter, drift of BOTH phases (fatal), import smoke.
+bash $L/scripts/setup/build_py312_venv.sh --check
+
+# 3. Replay gate with the VENV's STT stack, service untouched (needs ≥2 GB quiet headroom).
+flock /tmp/zoe-voice-harness.lock $V $L/scripts/maintenance/voice_regression_probe.py \
+  --stt inprocess --service-dir $L/services/zoe-data
+#    said-vs-did must not regress; per-stage medians inside the baseline ratio.
+
+# 4. Install the drop-in and restart.
+mkdir -p ~/.config/systemd/user/zoe-data.service.d
+cp $L/scripts/setup/systemd/zoe-data.service.d/60-py312-venv.conf ~/.config/systemd/user/zoe-data.service.d/
+systemctl --user daemon-reload && systemctl --user restart zoe-data
+systemctl --user cat zoe-data | grep -n '^ExecStart'          # the venv line must be LAST
+bash $L/scripts/deploy/zoe_data_python.sh                      # -> .../zoe-data-py312/bin/python
+readlink -f /proc/$(systemctl --user show -p MainPID --value zoe-data)/exe   # -> .../cpython-3.12.*/bin/python3.12
+
+# 5. Readiness — poll, `is-active` lies. All deps ok AND the startup self-recall ran on the venv's chromadb.
+for i in $(seq 1 36); do curl -sf localhost:8000/readyz >/dev/null && break; sleep 5; done
+curl -s localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); \
+  print(d["status"], {k: v.get("ok") for k, v in d["dependencies"].items()}); print(d["memory_capture"])'
+#    expect: ok {brain: True, stt: True, tts: True} and memory_capture.detail "... self-recall ok"
+#    ("self-recall empty" = no rows to test, not a pass; "degraded" = roll back).
+
+# 6. Replay gate against the LIVE service (HTTP STT on the restarted venv process).
+flock /tmp/zoe-voice-harness.lock $V $L/scripts/maintenance/voice_regression_probe.py \
+  --stt remote --service-dir $L/services/zoe-data
+
+# 7. Drift with the venv interpreter — 0 MISMATCH (also checks the torch CPU wheel URL).
+$V $L/scripts/maintenance/requirements_drift_check.py $L/services/zoe-data/requirements-py312.txt
+
+# 8. The /ws/voice/ lane (§5 gate 5): one spoken idle→first-utterance turn on the panel,
+#    watching `journalctl --user -u zoe-data -f` and ~/.zoe-logs/ for WebSocket errors.
+
+# 9. ROLLBACK (any red after step 4) — the 3.10 site-packages was never touched.
+rm ~/.config/systemd/user/zoe-data.service.d/60-py312-venv.conf
+systemctl --user daemon-reload && systemctl --user restart zoe-data   # then poll /readyz as in step 5
+bash $L/scripts/deploy/zoe_data_python.sh                              # -> /usr/bin/python3
+```
+
+After step 4 the next deploy refreshes the venv and runs Alembic with it automatically (§4);
+after step 9 it goes back to the 3.10 list on its own. The venv may stay after a rollback
+(`rm -rf ~/.zoe/venvs/zoe-data-py312` reclaims 1.9 GB) — nothing selects it by presence.
