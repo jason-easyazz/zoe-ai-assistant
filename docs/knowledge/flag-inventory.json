@@ -4050,6 +4050,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_SYNTHETIC_USER_ALLOWLIST": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/user_filters.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_TASK_TIMEOUT_S": {
         "defaults": [
           "-",

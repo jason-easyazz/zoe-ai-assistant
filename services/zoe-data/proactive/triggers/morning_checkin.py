@@ -8,6 +8,7 @@ import os
 import zoneinfo
 from datetime import datetime, timedelta
 
+from proactive.recipients import proactive_recipients
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 log = logging.getLogger(__name__)
@@ -206,14 +207,10 @@ class MorningCheckInTrigger(ProactiveTrigger):
         ) as cur:
             already_fired = {row[0] async for row in cur}
 
-        # Get active users with their display names (anyone who chatted in last 7 days)
-        async with db.execute(
-            """SELECT DISTINCT cs.user_id, u.name AS username
-               FROM chat_sessions cs
-               LEFT JOIN users u ON u.id = cs.user_id
-               WHERE cs.created_at::timestamptz > (CURRENT_TIMESTAMP - INTERVAL '7 days')"""
-        ) as cur:
-            users = [(row[0], row[1] or "") async for row in cur]
+        # Household members (default panel binding) + anyone with a user turn in
+        # the last 7 days, minus guest/synthetic ids — see proactive/recipients.py
+        # for why "created a chat_session in 7 days" silenced the brief.
+        users = await proactive_recipients(db, pass_name="morning_checkin")
 
         results = []
         for user_id, username in users:

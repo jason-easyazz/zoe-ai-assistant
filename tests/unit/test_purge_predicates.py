@@ -153,3 +153,43 @@ def test_pred_is_a_single_or_group():
     bare OR-chain would bind wrong and widen the sweep to the whole table."""
     pred = purge.owner_pred()
     assert pred.startswith("(") and pred.endswith(")")
+
+
+# --------------------------------------------------------------------------- #
+# Chat arm — HARD delete, so the owner set is exact and closed.
+# --------------------------------------------------------------------------- #
+CHAT_JUNK_OWNERS = ["test-route-probe", "test-sec-b-4f9c0c", "test-sec-b-000000"]
+
+CHAT_KEEP_OWNERS = REAL_OWNERS + [
+    "guest",                      # shared kiosk: real household turns live here
+    "test-route-probe-2",         # unanchored tail
+    "xtest-route-probe",          # unanchored head
+    "test-sec-b-4F9C0C",          # token_hex is lowercase
+    "test-sec-b-4f9c0",           # 5 hex, not token_hex(3)
+    "test-sec-b-4f9c0c1",         # 7 hex
+    "test-sec-b-zzzzzz",          # not hex
+    "demo_isoA_1a2b",             # samantha_live demo users tear themselves down
+    "test_memory_1752624000",     # calendar/list junk, not a chat probe
+]
+
+
+@pytest.mark.parametrize("owner", CHAT_JUNK_OWNERS)
+def test_chat_regex_matches_probe_owners(owner):
+    assert re.match(purge.CHAT_OWNER_RE, owner)
+
+
+@pytest.mark.parametrize("owner", CHAT_KEEP_OWNERS)
+def test_chat_regex_never_matches_anything_else(owner):
+    assert not re.match(purge.CHAT_OWNER_RE, owner), (
+        f"{owner!r} MUST NOT match the chat purge -- it hard-deletes sessions."
+    )
+
+
+def test_chat_pred_is_anchored_grouped_and_guards_foreign_turns():
+    pred = purge.chat_session_pred("cs")
+    assert purge.CHAT_OWNER_RE.startswith("^") and purge.CHAT_OWNER_RE.endswith("$")
+    assert pred.startswith("(") and pred.endswith(")")
+    assert f"cs.user_id ~ '{purge.CHAT_OWNER_RE}'" in pred
+    # The second rail: a session with any turn naming a different owner is kept.
+    assert "NOT EXISTS" in pred and "m.session_id = cs.id" in pred
+    assert "<> cs.user_id" in pred

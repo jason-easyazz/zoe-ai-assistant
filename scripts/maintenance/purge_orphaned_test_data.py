@@ -9,12 +9,17 @@ the UI.
 Scope (deliberately narrow — never touches a real household user's data):
   * events    : owner matches TEST_OWNER_PRED
   * list_items: rows whose owning list's owner matches TEST_OWNER_PRED
+  * chat_sessions (+ their chat_messages / chat_ag_ui_runs by FK cascade):
+    session owner matches CHAT_OWNER_RE, and no turn in it names a different
+    owner in its metadata — see ``chat_session_pred()``
 
 See `owner_pred()` for the exact predicate and its safety argument. The patterns
 are pinned by tests/unit/test_purge_predicates.py so they cannot silently drift.
 
-It only sets deleted = 1 (reversible; the panel already hides deleted rows) and
-bumps updated_at so audit/sync paths that key off it don't miss the change.
+Events and list_items are only soft-deleted (deleted = 1, reversible; the panel
+already hides deleted rows) with updated_at bumped so audit/sync paths that key
+off it don't miss the change. Chat rows have no soft-delete column, so the chat
+arm is a HARD delete — which is why its owner set is an exact, closed list.
 Contacts (people) are intentionally NOT touched.
 
 Usage (run on the zoe-data host):
@@ -89,6 +94,29 @@ def owner_pred(col: str = "user_id") -> str:
         f"({col} = 'guest' "
         f"OR {col} LIKE 'test-sec-b-%' "
         f"OR {col} ~ '{TEST_OWNER_RE}')"
+    )
+
+
+# Chat sessions written to the LIVE DB by probes that call /api/chat as a fixed
+# identity and never delete them; every nightly memory pass and proactive trigger
+# enumerated them as users (docs/knowledge/synthetic-users-and-proactive-recipients.md).
+#   * `test-route-probe` — perf/route probes' X-Zoe-User-Id (brain-flags chat_check.py).
+#   * `test-sec-b-<6 hex>` — Flue parity security_gate.py's 2nd identity (token_hex(3)).
+# Fully anchored, closed alternation, exact hex width: nothing a person is called.
+CHAT_OWNER_RE = r"^(test-route-probe|test-sec-b-[0-9a-f]{6})$"
+
+
+def chat_session_pred(alias: str = "cs") -> str:
+    """Sessions owned by a CHAT_OWNER_RE id in which no turn claims another owner.
+
+    The NOT EXISTS rail keeps any session holding a turn whose metadata
+    ``user_id`` names someone else, so a person's words are never hard-deleted.
+    """
+    return (
+        f"({alias}.user_id ~ '{CHAT_OWNER_RE}' AND NOT EXISTS ("
+        f"SELECT 1 FROM chat_messages m WHERE m.session_id = {alias}.id "
+        "AND substring(m.metadata from '\"user_id\"\\s*:\\s*\"([^\"]+)\"') "
+        f"<> {alias}.user_id))"
     )
 
 
@@ -211,17 +239,22 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
         for r in rows:
             print(f"    {r['c']:>4}  {r['user_id']:<20} {r['title']!r}")
         print(f"list_items to soft-delete: {li_n}")
+        chat_n = await conn.fetchval(
+            f"SELECT count(*) FROM chat_sessions cs WHERE {chat_session_pred('cs')}"
+        )
+        print(f"chat_sessions to hard-delete (messages cascade): {chat_n}")
 
         if not execute:
             print("\nDRY-RUN — nothing changed. Re-run with --execute to apply.")
             return 0
 
-        if ev_n == 0 and li_n == 0:
+        if ev_n == 0 and li_n == 0 and chat_n == 0:
             print("\nNothing to do.")
             return 0
 
         if not assume_yes:
-            print(f"\nAbout to soft-delete {ev_n} events + {li_n} list_items in: {target}")
+            print(f"\nAbout to soft-delete {ev_n} events + {li_n} list_items and hard-delete "
+                  f"{chat_n} probe chat_sessions in: {target}")
             reply = input("Type 'yes' to proceed: ").strip().lower()
             if reply != "yes":
                 print("Aborted — nothing changed.")
@@ -237,7 +270,11 @@ async def main(execute: bool, assume_yes: bool, expect_db: str, expect_host: str
                 "WHERE deleted = 0 AND list_id IN "
                 f"(SELECT id FROM lists WHERE {LIST_OWNER_PRED})"
             )
-        print(f"\nAPPLIED to {target} — events: {ev_done}, list_items: {li_done}")
+            chat_done = await conn.execute(
+                f"DELETE FROM chat_sessions cs WHERE {chat_session_pred('cs')}"
+            )
+        print(f"\nAPPLIED to {target} — events: {ev_done}, list_items: {li_done}, "
+              f"chat_sessions: {chat_done}")
         return 0
     finally:
         await conn.close()

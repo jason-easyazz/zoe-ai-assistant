@@ -47,9 +47,16 @@ def _presence_window_s() -> int:
 async def panel_presence(user_id: str, within_s: int | None = None) -> str | None:
     """Return the panel_id of a panel this user is plausibly near, else None.
 
-    A hit is a ``ui_panel_sessions`` row for ``user_id`` with
-    ``is_foreground = 1`` whose ``last_seen_at`` is within ``within_s``
-    seconds. When several qualify, the most recently seen panel wins.
+    A hit is a ``ui_panel_sessions`` row with ``is_foreground = 1`` whose
+    ``last_seen_at`` is within ``within_s`` seconds, and which is EITHER owned
+    by ``user_id`` OR owned by the kiosk ``guest`` on a panel whose ``default``
+    binding in ``panel_user_bindings`` is ``user_id``. The second arm matters
+    because the touch panel's row is overwritten to ``guest`` whenever the kiosk
+    reclaims it (``_guest_conflict_guard``, 300 s after the owner goes quiet) —
+    so at 07:30, with nobody talking, the panel in the kitchen reads as
+    ``guest``'s and the member it belongs to looked absent (the spoken morning
+    brief was refused ``panel=none`` every day from 08-16). When several rows
+    qualify, the most recently seen panel wins.
 
     ``within_s`` defaults to ``ZOE_PRESENCE_WINDOW_S`` (900 s) when not
     passed explicitly. A non-positive ``within_s`` falls back the same way:
@@ -62,14 +69,16 @@ async def panel_presence(user_id: str, within_s: int | None = None) -> str | Non
     try:
         async with _get_compat_db() as db:
             async with db.execute(
-                """SELECT panel_id FROM ui_panel_sessions
-                   WHERE user_id = ?
-                     AND is_foreground = 1
-                     AND last_seen_at::timestamptz
+                """SELECT s.panel_id FROM ui_panel_sessions s
+                   LEFT JOIN panel_user_bindings b
+                     ON b.panel_id = s.panel_id AND b.binding_type = 'default'
+                   WHERE (s.user_id = ? OR (s.user_id = 'guest' AND b.user_id = ?))
+                     AND s.is_foreground = 1
+                     AND s.last_seen_at::timestamptz
                          >= CURRENT_TIMESTAMP - (?::int * INTERVAL '1 second')
-                   ORDER BY last_seen_at::timestamptz DESC
+                   ORDER BY s.last_seen_at::timestamptz DESC
                    LIMIT 1""",
-                (user_id, int(within_s)),
+                (user_id, user_id, int(within_s)),
             ) as cur:
                 row = await cur.fetchone()
         return row["panel_id"] if row else None
