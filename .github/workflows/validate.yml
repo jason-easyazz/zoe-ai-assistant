@@ -59,8 +59,8 @@ jobs:
             aiosqlite asyncpg psycopg2-binary alembic \
             fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
-            "ag-ui-protocol==0.1.19" "websockets==16.1.1" python-jose passlib \
-            python-multipart "uvicorn[standard]==0.49.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
+            "ag-ui-protocol==1.0.0" "websockets==16.1.1" python-jose passlib \
+            python-multipart "uvicorn[standard]==0.53.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
             pyyaml
 
       - name: Validate project structure
@@ -164,7 +164,7 @@ jobs:
           # with `pip download` when the pins moved).
           # test_livekit_ci_dep_guard.py FAILS this lane if they ever go missing,
           # so deleting this line cannot silently re-open the hole.
-          pip install --quiet "av==17.1.0" "aiortc==1.15.0" "livekit-protocol==1.1.8"
+          pip install --quiet "av==17.1.0" "aiortc==1.15.0" "livekit-protocol==1.1.27"
           # zoe-data slim-dep-green tests are selected by the `ci_safe` marker
           # (registered in pytest.ini), not a hand-enumerated file list — so a new
           # slim-safe test runs here just by adding a co-located

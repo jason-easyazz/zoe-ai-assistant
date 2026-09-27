@@ -28,11 +28,13 @@
 # aiortc/av moving together) are not repeated; they still apply.
 # ═══════════════════════════════════════════════════════════════════════════
 fastapi==0.141.1
-# 0.49.0: `--ws auto` -> uvicorn.protocols.websockets.websockets_impl (legacy
-# websockets server protocol). MEASURED on this interpreter with websockets 17.1
-# as well (the alias `websockets.server.WebSocketServerProtocol` survives in 17.x
-# as a deprecated lazy import), so the cap is about NOT crossing 0.50, unchanged.
-uvicorn[standard]==0.49.0
+# 0.53.0 since 2026-09-27 (voice path, replay-gated). From 0.50 `--ws auto`
+# resolves to uvicorn.protocols.websockets.websockets_sansio_impl — the SAME
+# `websockets` library (16.1.1 below; `wsproto` is NOT installed) driven through
+# its sans-I/O protocol instead of the deprecated legacy asyncio server. `--ws
+# websockets` restores the legacy impl with no code change (rollback lever). Why
+# it moved, and the real-socket A/B that proved it: see requirements.txt.
+uvicorn[standard]==0.53.0
 pydantic==2.13.5
 aiosqlite==0.22.1
 asyncpg==0.31.0
@@ -45,7 +47,8 @@ aiohttp==3.14.3
 websockets==16.1.1
 python-jose[cryptography]==3.5.0
 PyJWT==2.15.0
-ag-ui-protocol==0.1.19
+# 1.0.0 since 2026-09-27: emitted SSE is byte-identical to 0.1.19 (see requirements.txt).
+ag-ui-protocol==1.0.0
 python-json-logger==4.2.0
 
 # ── Vector memory store (unchanged pair; B0.8 moves them together) ─────────
@@ -70,7 +73,7 @@ edge-tts==7.2.8
 # (~/.cache/moonshine_voice/…/medium-streaming-en/) — the one the box already uses.
 moonshine-voice==0.1.3
 transformers==5.17.0
-fastembed==0.8.0
+fastembed==0.8.1
 scikit-learn==1.7.2
 joblib==1.5.3
 APScheduler==3.10.4
@@ -111,8 +114,8 @@ livekit==1.1.20
 # `livekit_aiortc.py` does `from livekit.protocol import rtc` — a SEPARATE
 # distribution (`livekit-protocol`) that `livekit` does not depend on; it only
 # ever arrived via the unused livekit-agents. CI already installs it by hand
-# (validate.yml). Box: 1.1.8.
-livekit-protocol==1.1.8
+# (validate.yml). 1.1.27 since 2026-09-27 (needs protobuf>=5; box has 7.x).
+livekit-protocol==1.1.27
 # aiortc 1.15.0 caps av<18, so av 18 (>=3.11) is BLOCKED by aiortc, not by Python.
 aiortc==1.15.0
 av==17.1.0

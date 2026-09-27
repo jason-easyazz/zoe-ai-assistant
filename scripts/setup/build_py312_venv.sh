@@ -86,9 +86,12 @@ for m in ("fastapi", "pydantic", "sqlalchemy", "apscheduler", "tzlocal", "pytz",
 def ws():
     from uvicorn.protocols.websockets.auto import AutoWebSocketsProtocol
     mod = AutoWebSocketsProtocol.__module__
-    assert mod.endswith("websockets_impl"), mod   # the 0.49 cap's whole point
+    # uvicorn >=0.50 + websockets installed (+ no wsproto) -> the sans-I/O impl,
+    # deliberately since 0.53.0 (requirements.txt). Any OTHER resolution (wsproto,
+    # legacy, none) is a silent transport swap under /ws/voice/ — fail the build.
+    assert mod.endswith("websockets_sansio_impl"), mod
     return mod
-step("uvicorn --ws auto -> legacy websockets impl", ws)
+step("uvicorn --ws auto -> websockets-sansio impl", ws)
 def torch_cpu():
     import torch; assert not torch.cuda.is_available(); return torch.__version__
 step("torch (CPU build, no CUDA)", torch_cpu)
