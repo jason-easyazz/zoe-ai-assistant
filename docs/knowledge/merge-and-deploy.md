@@ -66,12 +66,15 @@ with the mandatory gate never running — a gate that can silently not-run is no
   `services/zoe-data/models/*`, its `functiongemma-router.service` serving unit, and its
   `router_two_stage.py` + `semantic_router.py` decision modules — plus the **LiveKit/WebRTC ingest
   lane**: `livekit_aiortc.py` (the *selected* production backend, `ZOE_LK_USE_AIORTC=1` over a code
-  default of `0`), `routers/voice_livekit.py`, and `services/livekit/config.yaml` — but not the
+  default of `0`), `routers/voice_livekit.py`, and `services/livekit/config.yaml` — plus the VAD /
+  end-of-turn modules `voice_vad.py` + `voice_turn.py` and `*silero*` (2026-09-27) — but not the
   unmerged `-2x` port, the offline training copies under `labs/setfit-router/artifacts/`, the
   routers' tests, their offline eval/self-train tooling, or the vendored browser-side
   `livekit-client.umd.min.js`) **without** a fresh
   (<24h), passing, current-baseline artifact at `~/.cache/zoe/voice_regression_last.json`. Missing,
-  stale, skipped or failed all block — a skip is not a pass. **Non-voice diffs are a no-op pass**, so
+  stale, skipped or failed all block — a skip is not a pass. An artifact that claims the probe's
+  VAD stage (`vad_stage: true`) also blocks on a missing / `fail` / `error` `vad` block (the Silero
+  real-model check — [voice-pipeline.md](voice-pipeline.md) → *The VAD stage*). **Non-voice diffs are a no-op pass**, so
   ordinary deploys are frictionless. The check only *reads* the artifact; it never runs the ~2.3 GB
   Kokoro harness on the runner.
 - **Blocking happens before the reset**, so the live tree stays at `prev` — nothing is migrated or
