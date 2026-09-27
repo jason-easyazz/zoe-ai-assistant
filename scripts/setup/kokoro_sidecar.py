@@ -13,7 +13,12 @@ Usage:
 
 Endpoints:
     POST /synthesize  { "text": "...", "voice": "af_sky" }  → audio/wav bytes
+    POST /synthesize_stream (same body)                      → raw S16_LE 24 kHz PCM
     GET  /health                                             → {"status":"ok", ...}
+
+Backends: PyTorch KPipeline (default) or, with ZOE_KOKORO_BACKEND=onnx, the same
+model on ONNX Runtime (kokoro_onnx_backend.py, run from its own venv — see
+docs/knowledge/kokoro-onnx-migration.md). Endpoints, cache and /health are shared.
 
 Jetson CUDA notes
 -----------------
@@ -62,10 +67,18 @@ _PORT = int(os.environ.get("KOKORO_SIDECAR_PORT", "10201"))
 _VOICE = os.environ.get("KOKORO_VOICE", "af_sky").strip() or "af_sky"
 _SAMPLE_RATE = 24000  # Kokoro outputs 24 kHz
 
-# Backend: KPipeline on CUDA (~2.3GB, ~150ms), falling back to CPU on its own if
-# CUDA cannot load. PyTorch is the sole backend — the in-process ONNX/CPU path was
-# retired (it synthesized slower than real time and needed a separately-provisioned
-# model that no host actually installed).
+# Backend (ZOE_KOKORO_BACKEND):
+#   "pytorch" (DEFAULT) — KPipeline on CUDA (~2.3GB, ~150ms), falling back to CPU on
+#       its own if CUDA cannot load.
+#   "onnx" — the SAME model/voices on ONNX Runtime (kokoro_onnx_backend.py, B5.1):
+#       misaki G2P + KPipeline chunking for phoneme parity, CUDA EP with a bounded
+#       arena (ZOE_KOKORO_ONNX_* knobs). Needs the onnxruntime-gpu venv, so it is
+#       opt-in only; the default is unchanged. (Not the old in-process ONNX/CPU
+#       fallback retired in #1617 — that ran on CPU, slower than real time.)
+_BACKEND = (os.environ.get("ZOE_KOKORO_BACKEND") or "pytorch").strip().lower()
+if _BACKEND not in ("pytorch", "onnx"):
+    logger.warning("ZOE_KOKORO_BACKEND=%r unknown — using pytorch.", _BACKEND)
+    _BACKEND = "pytorch"
 
 # ─── Global state ─────────────────────────────────────────────────────────────
 
@@ -484,9 +497,27 @@ def _wait_for_brain_ready() -> None:
     )
 
 
+def _load_onnx_engine():
+    """ONNX Runtime backend (ZOE_KOKORO_BACKEND=onnx). Same brain-health wait as the
+    CUDA path — the ORT CUDA EP draws on the same unified memory as the brain."""
+    global _device, _degraded_reason
+    import kokoro_onnx_backend  # sibling module; imported lazily so pytorch never needs it
+
+    if kokoro_onnx_backend.config_from_env().provider == "cuda":
+        _wait_for_brain_ready()
+    engine = kokoro_onnx_backend.load_engine()
+    _device = engine.device
+    _degraded_reason = engine.degraded_reason
+    if _degraded_reason:
+        logger.error("DEGRADED: %s — ONNX Kokoro is running on CPU.", _degraded_reason)
+    return engine
+
+
 def _load_pipeline():
     """Load and return the Kokoro pipeline (blocking; run once in thread pool)."""
     global _device
+    if _BACKEND == "onnx":
+        return _load_onnx_engine()
 
     # ── PyTorch / CUDA (the sole backend) ─────────────────────────────────────
     global _degraded_reason
@@ -711,6 +742,13 @@ _MAX_OOM_RETRIES = 2  # 2 retries × 500ms sleep = max ~1.5s extra; HTTP conn st
 
 
 def _blocking_synthesize(text: str, voice: str, speed: float) -> bytes:
+    if _BACKEND == "onnx":
+        # ORT's CUDA EP arena is bounded at session creation; no empty_cache dance.
+        return _pipeline.synthesize_wav(text, voice, speed)
+    return _blocking_synthesize_pytorch(text, voice, speed)
+
+
+def _blocking_synthesize_pytorch(text: str, voice: str, speed: float) -> bytes:
     """Run Kokoro inference synchronously (called inside run_in_executor).
 
     Calls torch.cuda.empty_cache() before every attempt to release any
@@ -776,6 +814,7 @@ async def health():
         "status": "ok",
         "voice": _VOICE,
         "device": _device,
+        "backend": _BACKEND,
         "pipeline_loaded": _pipeline is not None,
     }
     if _degraded_reason:

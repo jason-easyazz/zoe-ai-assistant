@@ -1743,6 +1743,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_KOKORO_BACKEND": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_KOKORO_BRAIN_HEALTH_URL": {
         "defaults": [
           "'http://127.0.0.1:11434/health'"

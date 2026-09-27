@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-09-26T00:00:00Z
+timestamp: 2026-09-27T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-09-26T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-09-26. The table body is deterministic (sorted, no
+Last generated: 2026-09-27. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-455 flags; 454 not documented in `.env.example`.
+456 flags; 455 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -188,6 +188,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE` | `'3'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `ZOE_KANBAN_SKIP_SCOUT` | `''` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_TERMINAL_TOOL_GRACE` | `dynamic` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
+| `ZOE_KOKORO_BACKEND` | `-` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_BRAIN_HEALTH_URL` | `'http://127.0.0.1:11434/health'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_BRAIN_POLL_S` | `'2'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_BRAIN_WAIT_S` | `'180'` | no | NO | `scripts/setup/kokoro_sidecar.py` |

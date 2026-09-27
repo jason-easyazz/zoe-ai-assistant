@@ -25,7 +25,9 @@ related:
 >
 > **SUPERSEDED (2026-08-03):** the in-process ONNX/CPU Kokoro backend this analysis
 > centres on has since been **retired** — the Kokoro PyTorch sidecar is now the sole
-> backend, and there is no `ZOE_KOKORO_BACKEND` switch or `onnx` code default any more.
+> backend. (`ZOE_KOKORO_BACKEND` returned 2026-09-27 as an opt-in ONNX Runtime *CUDA* backend
+> for B5.1, default `pytorch` — a different thing from the CPU path measured here; see
+> `docs/knowledge/kokoro-onnx-migration.md`.)
 > The CPU-vs-CUDA first-chunk tradeoff below is kept as a historical measurement; the
 > live path runs PyTorch on CUDA (falling back to CPU only if CUDA cannot load).
 

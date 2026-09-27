@@ -429,22 +429,17 @@ status: 🔨 active — NEXT ACTION is always §0
   zero-CPU presence signal; HA device presence (Phase 2.5).
 
 ### B5 — Voice quality and expressiveness
-- B5.1 ⬜ **Kokoro on ONNX Runtime CUDA** (same model, same voices): 2.3 GB → ~0.6–1 GB;
-  RTF < 0.3 required; jetson-containers `kokoro-tts-onnx` recipe.
-  **Recipe (2026-09-26, §3):** `kokoro-onnx==0.6.1` (2026-08-19; PR #198 re-export with
-  `speed`/duration outputs, **fp16 164 MB / int8 114 MB** graphs in release `model-files-v1.1`
-  beside the 326 MB fp32) + `onnxruntime_gpu==1.24.0` cp310 aarch64 from
-  `https://pypi.jetson-ai-lab.io/jp6/cu126/` (verified 09-26; PyPI ships no aarch64 GPU wheel,
-  so it lives on system 3.10 beside llama-server, not in the B0.7 venv). The `[gpu]` extra is
-  x86_64-only — install `kokoro-onnx` plain and bring ORT-GPU; pin numpy to the ORT wheel's
-  ABI. The jp6/cu126 **1.24.0** wheel is **numpy-2-header-built** (scanner evidence in
-  `docs/knowledge/numpy2-jetson-migration.md`), so numpy 2.x satisfies both it and
-  kokoro-onnx; the NVIDIA-forum "built on numpy 1.x" trap is about 1.23.0 and predates 1.24.0
-  (an actual `import onnxruntime` under numpy 2 is still undone — first step of the window).
-  No Kokoro weights since 2025-04 and no published Jetson RAM numbers — the 2.3 GB → ~0.6–1 GB claim is a hypothesis:
-  **measure with a CPU-EP control** (same graph on the CPU provider), gate RTF < 0.3 + the
-  replay corpus. CPU fallback if the sidecar ever loses CUDA: Moonshine 0.1.5's two-stage
-  Kokoro ORT graph (~100–200 MB).
+- B5.1 🔨 **Kokoro on ONNX Runtime CUDA** — **measured 2026-09-27: NOT a win, no cutover.**
+  Opt-in backend merged (`ZOE_KOKORO_BACKEND=onnx`, default stays `pytorch`; misaki G2P +
+  KPipeline chunking give identical durations, log-mel similarity 0.978). Numbers vs the live
+  PyTorch sidecar: RAM **1.89 GB vs 2.1–3.0 GB** (both carry ~1.2–1.4 GB of CPU-side CUDA state —
+  the "~0.6–1 GB" hypothesis does not hold for any CUDA runtime); `measure_tts` cold first unit
+  **441 vs 235 ms** (slower on every novel reply); fp16 graph returns **NaN = silence on 3/32
+  phrases** on the CUDA EP; CPU EP is 0.78 GB but RTF 0.70 (fails < 0.3). Recipe verified:
+  `onnxruntime-gpu==1.24.0` (jp6/cu126, runs under numpy 2.2.6) + `kokoro-onnx==0.6.1 --no-deps`
+  in its own venv (`scripts/setup/install_kokoro_onnx.sh`). Re-measure only on a NaN-safe graph
+  or faster ORT; next CPU candidate = Moonshine 0.1.5's two-stage Kokoro graph. Runbook, gates
+  and apply/rollback: `docs/knowledge/kokoro-onnx-migration.md`.
 - B5.2 ⬜ Emotion → bounded, auditable prompt modifiers under immutable rules (GLaDOS
   constitution); Gemma emits one expression tag per sentence (OLV convention); a 48-dim
   emotion vector as the shared wire format (Hume schema).
@@ -652,6 +647,8 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-27 — B5.1 measured (ONNX Runtime backend, opt-in): not a win — RAM −0.2–1.1 GB
+  but slower first audio and fp16 NaN/silence; live stays PyTorch; runbook added.
 - 2026-09-26 (pm, fold) — ecosystem-watch 2026-09-26 (#1703; B1.4 wording per #1705) folded
   into the rows: B0.4 b11194 gate (#25522 dropped), B0.7 two-interpreter split, B0.8 migrate
   recipe + 3.4.0 correction, B0.10 split into dated 🧑 sub-items (Copilot Lite 09-28, Actions
