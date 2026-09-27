@@ -613,6 +613,15 @@ def test_toolcall_block_missing_both_shapes_is_none(amev):
     assert zc._toolcall_block_from_amev(amev) is None
 
 
+def test_toolcall_block_v084_non_string_id_is_dropped_not_passed_through():
+    """A valid toolName with a non-string id must yield id=None (name-tracked),
+    never the invalid id — the reader would otherwise wait on an id that no
+    tool_execution_end frame can clear (Greptile, #1719)."""
+    import zoe_core_client as zc
+    block = zc._toolcall_block_from_amev({"type": "toolcall_start", "id": 7, "toolName": "web_search"})
+    assert block == {"type": "toolCall", "id": None, "name": "web_search"}
+
+
 @pytest.mark.asyncio
 async def test_toolcall_start_v084_emits_start_and_result_sentinels():
     """End-to-end on the Pi >= 0.84 wire: the start sentinel carries id/name and

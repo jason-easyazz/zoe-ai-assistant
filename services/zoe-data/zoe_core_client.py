@@ -183,8 +183,12 @@ def _toolcall_block_from_amev(amev: Mapping) -> "Mapping | None":
     """
     tc_id = amev.get("id")
     tc_name = amev.get("toolName")
-    if (isinstance(tc_id, str) and tc_id) or (isinstance(tc_name, str) and tc_name):
-        return {"type": "toolCall", "id": tc_id or None, "name": tc_name or None}
+    # Validate each field independently: a non-string id must never be passed
+    # through, or the reader would track an id no tool-end frame can clear.
+    tc_id = tc_id if isinstance(tc_id, str) and tc_id else None
+    tc_name = tc_name if isinstance(tc_name, str) and tc_name else None
+    if tc_id or tc_name:
+        return {"type": "toolCall", "id": tc_id, "name": tc_name}
     partial = amev.get("partial")
     if not isinstance(partial, Mapping):
         return None
