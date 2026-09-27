@@ -17,8 +17,8 @@ Tracker rows: B3.2 and "Speaks first" in [the program](../architecture/beat-the-
 `^(test|probe|demo|ci|e2e|bench)[-_]` (case-insensitive; the separator keeps "Christine" or
 "testa" real). `ZOE_SYNTHETIC_USER_ALLOWLIST` (comma list, default empty) opts pattern ids
 back in for a lab, never a guest sentinel. It is applied in the dreaming, weekly
-consolidation, music-taste and portrait passes and in the morning, evening and
-evolution-digest triggers, each logging one `<pass>: users kept=N skipped_synthetic=M` line
+consolidation, music-taste and portrait passes and in the morning, evening,
+evolution-digest and emotional follow-up triggers, each logging one `<pass>: users kept=N skipped_synthetic=M` line
 (counts only). The 03:00 memory digest is deliberately **not** filtered: its selection must
 match its independent "was there input" probe, or a probe turn raises a false
 `no_eligible_users_despite_input` alert. The purge below covers it instead.
@@ -30,7 +30,7 @@ had it, so the chat-owner fallback query was already what ran every night.
 
 `proactive/recipients.py::proactive_recipients`:
 - **Active users** are owners of a user turn in `chat_messages` in the last 7 days. The
-  evening wind-down uses only these.
+  evening wind-down and the emotional follow-up use only these.
 - **Household**, for the morning brief and the evolution digest, adds the users named by a
   panel's `default` binding. The evolution digest then keeps admins only
   (`recipients.admins_only`, `auth.is_admin_role`): its approve/defer links are
