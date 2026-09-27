@@ -57,9 +57,19 @@ voice_failure_reason_count = Counter(
 )
 
 
+voice_speculation_count = Counter(
+    "zoe_voice_speculation_count",
+    "B1.1 speculative turn-start verdicts on /api/voice/turn_stream "
+    "(commit | equivalent | cancel | hold_timeout).",
+    ["outcome"],
+    registry=REGISTRY,
+)
+
+
 __all__ = [
     "voice_stage_seconds",
     "voice_turn_count",
+    "voice_speculation_count",
     "voice_intent_hit_count",
     "voice_identity_source_count",
     "voice_failure_reason_count",
