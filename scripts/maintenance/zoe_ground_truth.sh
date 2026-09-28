@@ -103,7 +103,8 @@ if [ -n "${zpid:-}" ] && [ -r "/proc/$zpid/environ" ]; then
   be=$(env_of ZOE_BRAIN_BACKEND); dim "zoe-data pid=$zpid"
   ok "ZOE_BRAIN_BACKEND=${be:-<unset→'core' default>}"
   for f in ZOE_ROUTER_HEAD ZOE_EXPERT_MODE ZOE_FLUE_STREAM_ENABLED ZOE_MULTICA \
-           ZOE_INTENT_DISPATCH_REQUIRE_TOKEN ZOE_SEAM_RECALL_INJECT ZOE_ROUTER_SELFTRAIN; do
+           ZOE_INTENT_DISPATCH_REQUIRE_TOKEN ZOE_SEAM_RECALL_INJECT ZOE_SEAM_CONTINUITY_INJECT \
+           ZOE_ROUTER_SELFTRAIN; do
     v=$(env_of "$f"); dim "$f=${v:-<unset>}"
   done
 else

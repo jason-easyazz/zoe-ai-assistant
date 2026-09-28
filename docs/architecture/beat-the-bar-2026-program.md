@@ -116,8 +116,12 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
       the chat lane (brain + recall packet), and the miss goes into the router self-train
       corpus. A misroute, not a memory failure.
       (b) **Emotional continuity.** S4: the day-1 worry (the interview) is not acknowledged
-      the next day, 3/3 samples. B3.3 (importance-sum reflection) is the designed carrier;
-      S4 is its acceptance test.
+      the next day, 3/3 samples. **Status: built, awaiting live compare** — Flue-lane
+      continuity injection (`ZOE_SEAM_CONTINUITY_INJECT`, default ON, kill switch
+      `false`): a first-person mood statement gets the recent-first memory packet
+      (root cause + design: [samantha-bar.md](../knowledge/samantha-bar.md) → *S4 root
+      cause*). Accept when a post-deploy `samantha_bar.py --compare-baseline` shows S4 PASS
+      with nothing regressing. B3.3 (importance-sum reflection) stays the longer-term carrier.
    2. **B7.5 (c)** QR onboarding for new members. (a)+(b) are merged and deployed (#1752);
       the live-panel check (push, `/wake`, a real Telegram send) waits for the Pi.
    3. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
