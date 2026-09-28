@@ -3237,6 +3237,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_PROACTIVE_ARRIVAL_RESPONSE_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/arrival.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PROACTIVE_BRIEF_ON_ARRIVAL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/arrival.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PROACTIVE_SLOW_LOOP_S": {
         "defaults": [
           "'300'"
@@ -4162,6 +4182,7 @@
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/memory_digest.py",
           "services/zoe-data/multica_autopilot_sync.py",
+          "services/zoe-data/proactive/arrival.py",
           "services/zoe-data/proactive/engine.py",
           "services/zoe-data/proactive/triggers/emotional_followup.py",
           "services/zoe-data/proactive/triggers/evening_windown.py",

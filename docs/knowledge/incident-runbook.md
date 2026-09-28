@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech. Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice]
-timestamp: 2026-09-27T00:00:00Z
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit). Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate]
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Production Incident Runbook
@@ -336,3 +336,84 @@ or missing block. `voice_vad.py`, `voice_turn.py` and `*silero*` are in `VOICE_P
 model file lives outside git, so the **nightly** probe run is what catches a hand swap — before
 swapping, test the candidate with `ZOE_SILERO_VAD_MODEL=<candidate>`. Detail:
 [voice-pipeline.md](voice-pipeline.md) → *The VAD stage*.
+
+## 9. B0.8 pins deployed ahead of the store (2026-09-28)
+
+**Signature.** Right after a merge that changes memory-client pins, `/readyz` reports
+`memory_capture: degraded` and the zoe-data log shows the palace **format guard** refusing to open
+the store (`memory_service._check_palace_format`: a 1.x client against a 0.6 sysdb). Voice and
+chat keep working; memory capture/recall is down. The Deploy run for the merge is **green**, and
+its voice-gate line reads `OK — voice replay-gate PASS (2.6h old …)` although nobody ran a
+replay for that commit.
+
+**Timeline (AWST).**
+- 08:13:45 — cutover PR #1745 merged as `d346aa90`. The runbook
+  ([chroma-1-5-migration.md](chroma-1-5-migration.md) §5) assumed its deploy would be REFUSED by
+  the voice gate (`requirements-py312.txt` is voice-path) and leave the live tree untouched.
+- 08:13:56 — Deploy run `36361425584`: `voice-gate: OK — voice replay-gate PASS (2.6h old, n=20,
+  VAD 19/24)`. The artifact was a fresh, passing probe run for a different commit.
+- 08:14 — the deploy moved the venv to `chromadb==1.5.9` + `mempalace==3.10.0`, reset the live
+  code to `d346aa90` and restarted zoe-data, while `~/.mempalace` was still the 0.6 store. The
+  format guard refused to open it → `memory_capture: degraded`.
+- 08:18–08:21 — the operator session completed the swap by hand (recovery below).
+- 08:21 — `/readyz` ready, `self-recall ok`. Memory was degraded ~7 min.
+
+**Root cause.** The deploy gate (`voice_gate_check.py`, called from `deploy.yml`) accepted any
+replay artifact that was **fresh and passing**. Nothing bound the evidence to the commit being
+deployed, so a probe run for another PR earlier that morning cleared the cutover merge.
+(`voice-gate.yml`'s PR-time check already passes `--expect-revision`; the deploy path did not.)
+
+**Why no stored data was lost.** The read-only format guard reads the sysdb format from SQLite
+(`mode=ro`) before chromadb touches the file, so the 1.x client never opened, and never
+migrated in place, the 0.6 store. The old store was unmodified from 07:30 (its last write) until
+the copy at 08:18.
+
+**New memories are a separate question.** While the guard refused, a turn's memory write would
+have failed with no durable retry, so captures in that window can be lost even though the store
+is intact. On 2026-09-28 the app log (`~/.zoe-logs/zoe-data.app.log`, 08:14–08:21) shows 11
+guard refusals, all from the startup and retry self-recall probes (08:14:05, 08:14:50, 08:19:50,
+08:20:18), and no chat or voice turn lines; the probe passed at 08:20:40. So nothing needs
+reprocessing this time. After any recurrence, grep that window for turns and replay their
+captures by hand.
+
+**Recovery (what was run).**
+1. Stop the timers and zoe-data; confirm nothing holds `~/.mempalace/chroma.sqlite3`.
+2. `chroma_migrate_rehearsal.py run --date cutover-2026-09-28-081803 --old-python /usr/bin/python3`.
+   The live venv no longer carried 0.6.x, so the system 3.10 interpreter (which keeps
+   chromadb 0.6.3) served as the old client. It opens only the copy and its scratch copies.
+   Result: PROOF TABLE **10/10**, peak RSS 379 MB, 102 s.
+3. Check the old store was not modified since the copy: `~/.mempalace/chroma.sqlite3` mtime
+   07:30 < copy 08:18.
+4. Swap: `~/.mempalace` → `~/.mempalace.pre-b08-20260928-082034` (the rollback), the migrated
+   `dst/` → `~/.mempalace`. Restart zoe-data, poll `/readyz` for `self-recall ok`, re-arm the
+   timers.
+5. Post-cutover replay PASS 13/13 (brain 1414 ms, VAD 0.792). The tombstone report had one
+   collection UNKNOWN (expected on a fresh 1.x index; non-fatal). zoe-data RSS 1.33 GB.
+
+**Lessons (the rules).**
+- **Merge a pins PR only inside the window that applies it.** A merge is a deploy unless the gate
+  provably refuses it, and "the gate will refuse" is an assumption that failed here. Stop the
+  services first, then merge.
+- **The deploy gate must bind evidence to the deployed tree**, not only freshness + `pass`. The
+  fix is in flight in a separate PR, "voice gate binds the replay artifact to the deployed tree".
+  Until it lands, a fresh passing artifact from any other commit clears any voice-path deploy.
+- **The rehearsal manifest's `proofs` is a LIST** of proof rows, not a dict. Read the PROOF TABLE
+  the run prints (or iterate the list); do not index it by proof name.
+- **`src/chroma.sqlite3` is an SQLite online-backup snapshot and is never byte-identical** to the
+  live file. To show the live store was untouched since the copy, compare **mtimes** (live store
+  < copy), not checksums.
+- **`run` needs `--old-python` once the live venv is on 1.x.** Its default old interpreter is the
+  live venv, and it refuses (`--old-python must carry chromadb 0.6.x`) after the deploy has
+  converged the venv. `/usr/bin/python3` (3.10, chromadb 0.6.3) is the fallback.
+
+**Live recall parity: PASS.** The first post-cutover `compare-recall` printed
+`no complete parity baseline` because it was given the wrong path: `--baseline <run dir>`
+instead of the run's `recall-parity` pointer. It was not a retention bug. The baseline was
+retained and complete: `cutover-2026-09-28-081803/recall-parity` →
+`recall-parity.20260928T001943894457-1679199`, with manifest
+`run.recall_parity_baseline_retained: true`. Re-run against that pointer on a copy of the live
+store (demo user `demo_b08_b9233229`), it passed: identical order 20/20, top-1 equal 20,
+min Jaccard 1.0. **Lesson:** `--baseline` takes `$R/recall-parity`, not `$R`; block B in
+[chroma-1-5-migration.md](chroma-1-5-migration.md) §5 already passes the right path. A
+`--demo-user` default read from the manifest's `run.recall_demo_user` would be a nice-to-have,
+not a fix.
