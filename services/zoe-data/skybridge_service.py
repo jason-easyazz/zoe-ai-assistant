@@ -1414,6 +1414,36 @@ def _router_agrees(intent: SkybridgeIntent, router_domain: str) -> bool | None:
     return router_domain in allowed
 
 
+# Words that make a reply a SENTENCE (hesitation, negation, a first-person or
+# pronoun clause, a finite/modal verb) rather than a name for a list.
+_NOT_A_NAME_WORDS = frozenset(
+    """
+    actually wait no nope nah never mind nevermind not cancel stop forget hmm um uh
+    maybe later sorry okay ok yes yeah
+    i i'm im i'd i'll i've me we we're we'll we'd let's lets you you're it it's its
+    he she they that's this that there
+    think should would could will can shall must might want need don't dont
+    is are was were be been am have has had do does did
+    """.split()
+)
+
+
+def _is_naming_prompt_reply(intent: SkybridgeIntent, context: dict[str, Any] | None) -> bool:
+    return (
+        intent.domain == "lists"
+        and intent.action == "create_list"
+        and _context_domain(context) == "lists"
+        and _context_action(context) == "create_list"
+    )
+
+
+def _looks_like_list_name(message: str) -> bool:
+    """A short noun phrase ("Groceries", "weekend jobs", "kids' stuff") — at most
+    four words and none of the sentence markers in ``_NOT_A_NAME_WORDS``."""
+    words = re.findall(r"[a-z0-9'&-]+", _clean_action_text(message).lower())
+    return 0 < len(words) <= 4 and not any(w in _NOT_A_NAME_WORDS for w in words)
+
+
 def skybridge_router_gate(
     message: str,
     intent: SkybridgeIntent,
@@ -1443,7 +1473,12 @@ def skybridge_router_gate(
         # know that context, so its verdict carries no information here.
         bare = classify_skybridge_intent(message, None)
         if bare is None or (bare.domain, bare.action) != (intent.domain, intent.action):
-            return "allow", "context_followup", router_domain, conf
+            # EXCEPT the new-list naming prompt: it takes the WHOLE reply as the
+            # name, so "Actually I think we should wait" would become a list. Only
+            # a name-shaped reply answers the prompt; anything else gets the
+            # router's verdict like any other turn (Greptile, #1757).
+            if not _is_naming_prompt_reply(intent, context) or _looks_like_list_name(message):
+                return "allow", "context_followup", router_domain, conf
     agrees = _router_agrees(intent, router_domain)
     if agrees is None:
         return "allow", "no_router_class", router_domain, conf

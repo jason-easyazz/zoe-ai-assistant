@@ -208,7 +208,8 @@ def resolved(monkeypatch):
     calls: list = []
 
     async def fake_resolve_with_db(intent, user_id, db, *, context=None):
-        calls.append((intent.domain, intent.action))
+        calls.append((intent.domain, intent.action) if intent.action != "create_list"
+                     else (intent.domain, intent.action, intent.list_name))
         return {"handled": True, "intent": {"domain": intent.domain, "action": intent.action},
                 "spoken_summary": "I found 0 contacts.", "cards": []}
 
@@ -286,6 +287,42 @@ async def test_route_on_demand_runs_the_router_only_for_a_claimed_turn(resolved,
     assert unclaimed["handled"] is False and seen == []
     vetoed = await sky.resolve_skybridge_request("show my family", "jason", router_decision=sky.ROUTE_ON_DEMAND)
     assert vetoed.get("vetoed") is True and seen == ["show my family"]
+
+
+# ── 3b. the new-list naming prompt: only a NAME answers it (Greptile, #1757) ──
+
+NAMING_CTX = {"intent": {"domain": "lists", "action": "create_list", "list_type": "personal"}, "cards": []}
+NOT_A_NAME = "Actually I think we should wait"
+
+
+def test_naming_prompt_sentence_reply_gets_the_router_verdict():
+    intent = sky.classify_skybridge_intent(NOT_A_NAME, NAMING_CTX)
+    assert intent is not None and intent.action == "create_list"  # the prompt still captures it…
+    decision, reason, *_ = sky.skybridge_router_gate(NOT_A_NAME, intent, _two_stage("chat"), context=NAMING_CTX)
+    assert (decision, reason) == ("veto", "router_chat")  # …but the router's chat wins
+
+
+@pytest.mark.parametrize("reply", ["not now", "never mind", "let's not", "cancel that", "I'll do it later"])
+def test_naming_prompt_non_names_are_not_exempt(reply):
+    intent = sky.SkybridgeIntent(domain="lists", action="create_list", list_name=reply)
+    decision, *_ = sky.skybridge_router_gate(reply, intent, _two_stage("chat"), context=NAMING_CTX)
+    assert decision == "veto", reply
+
+
+async def test_naming_prompt_sentence_reply_creates_no_list(resolved):
+    result = await sky.resolve_skybridge_request(
+        NOT_A_NAME, "jason", context=NAMING_CTX, router_decision=_two_stage("chat"))
+    assert result["handled"] is False and result["vetoed"] is True
+    assert resolved == [], "a list was created named after a conversational reply"
+
+
+@pytest.mark.parametrize("reply,name", [("Groceries", "Groceries"), ("weekend jobs", "weekend jobs"), ("Camping", "Camping")])
+async def test_naming_prompt_name_reply_still_creates_the_list(resolved, reply, name):
+    # the router cannot see the prompt, so its chat verdict on a bare name is noise
+    result = await sky.resolve_skybridge_request(
+        reply, "jason", context=NAMING_CTX, router_decision=_two_stage("chat"))
+    assert result["handled"] is True
+    assert resolved == [("lists", "create_list", name)]
 
 
 # ── 4. voice_command wiring: the veto hands the turn on toward the brain ────
@@ -394,3 +431,20 @@ async def test_voice_router_disabled_keeps_todays_behaviour(monkeypatch, resolve
     _wire_voice(monkeypatch, None)
     response = await _say("what's the weather")
     assert response["skybridge"] is True and resolved == [("weather", "current")]
+
+
+async def test_voice_naming_prompt_sentence_reply_goes_to_the_brain(monkeypatch, resolved):
+    _wire_voice(monkeypatch, _two_stage("chat"))
+    voice_tts._VOICE_SESSIONS["panel-veto"] = {"skybridge_context": NAMING_CTX}
+    with pytest.raises(_PastSkybridge):
+        await _say(NOT_A_NAME)
+    assert resolved == []
+
+
+async def test_voice_naming_prompt_name_reply_creates_the_list(monkeypatch, resolved):
+    _wire_voice(monkeypatch, _two_stage("chat"))
+    voice_tts._VOICE_SESSIONS["panel-veto"] = {"skybridge_context": NAMING_CTX}
+    monkeypatch.setattr(sky, "_is_guest_user", lambda _u: False)  # lists need a signed-in user
+    response = await _say("weekend jobs")
+    assert response["skybridge"] is True
+    assert resolved == [("lists", "create_list", "weekend jobs")]
