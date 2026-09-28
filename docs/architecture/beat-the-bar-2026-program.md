@@ -114,7 +114,15 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
       people/calendar/reminders) and it was answered deterministically in 488 ms; the brain and
       the recall packet were never consulted. Head decisions below ~0.6 should fall through to
       the chat lane (brain + recall packet), and the miss goes into the router self-train
-      corpus. A misroute, not a memory failure.
+      corpus. A misroute, not a memory failure. **Status: built, awaiting live compare** —
+      measured low-confidence floor `ZOE_ROUTER_HEAD_MIN_CONF` (default **0.70**, `0` = old
+      behaviour): a non-chat head top below it abstains to the chat lane, logged
+      `gated: true, reason: low_conf` (table + why 0.70:
+      [two-stage-router-rollout.md](../knowledge/two-stage-router-rollout.md) → *Low-confidence
+      floor*; 81-case 90.1% → 84.0%, chat-FP 0%). S1/S6/S8 asks committed to the stage-1
+      and stage-2 miss corpora (no retrain). Known gap: S6's ask is a CONFIDENT miss (calendar
+      @ 0.73) the floor does not catch — it waits on a retrain. Accept when a post-deploy
+      `samantha_bar.py --compare-baseline` shows S1 PASS with nothing regressing.
       (b) **Emotional continuity.** S4: the day-1 worry (the interview) is not acknowledged
       the next day, 3/3 samples. **Round 1 (#1756) is live but S4 still FAILs 3/3.** It adds
       Flue-lane continuity injection (`ZOE_SEAM_CONTINUITY_INJECT`, default ON, kill switch

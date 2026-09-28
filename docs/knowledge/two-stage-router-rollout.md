@@ -3,7 +3,7 @@ type: Runbook
 title: Two-stage router rollout
 description: Staged rollout of the two-stage router (SetFit shortlist head + FunctionGemma sidecar) behind ZOE_ROUTER_HEAD — stages, verification checklist, rollback, and where the numbers land.
 tags: [router, rollout, functiongemma, setfit, operations]
-timestamp: 2026-09-27T21:00:00Z
+timestamp: 2026-09-28T20:30:00Z
 ---
 
 # Two-stage router rollout
@@ -13,6 +13,9 @@ head, chat gate **0.5**, + FunctionGemma **functok-r2** Q8 GGUF on the :11436
 sidecar with the shortlist GBNF grammar — offline **90.1% / 100% canonical /
 0% chat-FP / 424 ms p50**, see `labs/router-90-campaign/HANDOFF.md`) from
 dark to live, behind the `ZOE_ROUTER_HEAD` flag in `services/zoe-data/.env`.
+Since 2026-09-28 a **low-confidence floor** (`ZOE_ROUTER_HEAD_MIN_CONF`, 0.70)
+sits on top of the 0.5 chat gate — see *Low-confidence floor* below; with it
+the offline 81-case number is **84.0%** (same 0% chat-FP).
 
 Driver: **`scripts/maintenance/router_rollout.sh`** — run it on the box from
 the live checkout. It pre-flights, flips the flag, restarts `zoe-data.service`,
@@ -95,6 +98,152 @@ Flag → `off`, restart, health-verified. Same instant-env-rollback pattern as
 the flue cutover. Any failure mid-stage triggers the same restore
 automatically via the script's trap. Roll back with the flag, never by
 uninstalling the sidecar mid-incident (it is inert when the flag is off).
+
+## Low-confidence floor (`ZOE_ROUTER_HEAD_MIN_CONF`)
+
+**Why.** Samantha bar S1 (2026-09-28 16:29, reproduced 19:37) asked *"Who is
+flying in on Thursday, and where from?"*. The head's top class was `people` at
+**0.5371**, with shortlist people/calendar/reminders. That passed the 0.5 chat
+gate, and the decoder picked `show_calendar`. The result was a deterministic
+calendar reply in 488 ms. The brain and the recall packet never saw a
+personal-recall question. The 0.5 gate only asks "is this chat?". Nothing asked
+"is the head sure enough to give this turn to a deterministic tool?".
+
+**Rule** (`router_two_stage.gate_reason`). If the head's top class is not chat
+and `gate <= head_conf < ZOE_ROUTER_HEAD_MIN_CONF`, the router abstains
+**before** the sidecar call. The decision is `tool=None, domain=chat,
+gated=true, reason=low_conf`, and the turn goes to the chat lane (brain +
+recall packet).
+
+- Every gated decision now carries `reason` (`chat_top` | `below_gate` |
+  `low_conf`). It appears in the decision dict and in the `router_two_stage` log
+  line and shadow JSONL.
+- Default **0.70**. **`0` restores the pre-2026-09-28 behaviour exactly.** An
+  unparseable, non-finite or out-of-range value (outside 0.0–1.0 — `1.70` would
+  abstain every tool decision) logs a WARNING and keeps 0.70.
+- The voice Skybridge router gate (`skybridge_service.skybridge_router_gate`)
+  treats a `low_conf` abstain as a chat verdict and **vetoes** the fast path;
+  only `below_gate` (the 0.5 gate) keeps its `router_unsure` allow. Otherwise
+  an S1-shaped ask with a calendar cue would get the deterministic calendar
+  reply back from Skybridge.
+- No per-domain overrides. No domain had enough low-confidence decisions (at
+  most 14 each) to justify its own number.
+- The downstream expert per-domain thresholds
+  (`expert_dispatch._DEFAULT_THRESHOLDS`, based on similarity score) are
+  unchanged.
+
+**Measurement** (2026-09-28, offline). This measures the ACTIVE decision: the
+head gate plus the live r2 sidecar decode, using the production grammar, prompt
+and parser. Nothing was retrained. Every input is held out:
+
+- the frozen 81-case needle corpus, scored by the SHIPPED head;
+- the 1,121-row SetFit train set, scored as **5-fold out-of-fold** predictions.
+  This uses the same MLP recipe as `labs/setfit-router/train.py` with
+  `StratifiedKFold(5, random_state=0)`, so each utterance is scored by a head
+  that never saw it;
+- the synthetic Samantha-bar asks.
+
+That gives 1,037 labelled tool decisions and 0 sidecar errors. The rig
+reproduces the campaign numbers exactly: 90.1% at floor 0.5 and 84.0% at 0.7.
+
+In the table below, "right" means the decoded tool's domain equals the label.
+People and memory count as one domain, because the stage-1 and stage-2 label
+sets disagree on person facts.
+
+| head_conf band | n | right | precision |
+|---|---|---|---|
+| 0.50–0.55 | 19 | 11 | 57.9% |
+| 0.55–0.60 | 15 | 9 | 60.0% |
+| 0.60–0.65 | 14 | 10 | 71.4% |
+| 0.65–0.70 | 15 | 9 | 60.0% |
+| 0.70–0.75 | 18 | 14 | 77.8% |
+| 0.75–0.80 | 21 | 19 | 90.5% |
+| 0.80–0.90 | 66 | 40 | 60.6% |
+| 0.90–0.95 | 61 | 47 | 77.0% |
+| 0.95–1.00 | 808 | 715 | 88.5% |
+
+Stage 1 on its own (head top == label, n = 1,089):
+
+- below 0.75: **47.8%** pooled;
+- 0.75–0.95: about 75–88%;
+- **0.95 and above: 96.7%**. This is the only band that clears 95%.
+
+The out-of-fold dip at 0.80–0.95 comes from the two stages' label sets
+disagreeing (e.g. timers "how long left" → `get_time`), not from confidence.
+
+Operating points below use the 81-case frozen corpus, which is the ratchet's
+ship metric. A gated tool case scores as a miss even though the brain still
+answers it.
+
+| floor | 81-case overall | chat-FP | tool decisions below the floor (pooled precision) | correct fast-tier calls handed to the brain |
+|---|---|---|---|---|
+| 0.50 (= off) | 90.1% | 0% | — | 0 |
+| 0.60 | 88.9% | 0% | 34 (58.8%) | 20 |
+| 0.65 | 87.7% | 0% | 48 (62.5%) | 30 |
+| **0.70 (default)** | **84.0%** | **0%** | **63 (61.9%)** | 39 |
+| 0.75 | 80.2% | 0% | 81 (65.4%) | 53 |
+| 0.95 (strict 95%) | 67.9% | 0% | — | — |
+
+**Why 0.70.** It is the knee in the table. Every band below it is right only
+58–71% of the time, so about 2 in 5 of those deterministic replies are wrong.
+The bands just above it jump to 78–90%. The cost of the floor is latency, not
+correctness: those turns reach the brain instead of the fast tier.
+
+**No band below 0.95 meets 95%.** A strict 95% floor would be 0.95, and it
+would cost 22 points of fast-tier coverage. That is an operator decision (set
+the env var), not this default.
+
+**Samantha-bar asks through the shipped head.** The embeddings are in the
+fixture `services/zoe-data/tests/fixtures/router_samantha_probe_vectors.json`.
+
+| ask | head top @ conf | old decision | floor 0.70 |
+|---|---|---|---|
+| S1 "Who is flying in on Thursday, and where from?" | people @ 0.537 | `show_calendar` ✗ | chat ✓ |
+| S2 "Which city do I live in these days?" | weather @ 0.593 | decoder chat escape | chat |
+| S6 "Who is flying in on Thursday, and which city do I live in?" | calendar @ 0.728 | `show_calendar` ✗ | **still `show_calendar`** (above the floor) |
+| S8 "Remind me, who did I say is flying in on Thursday?" | reminders @ 0.9996 | `recall_memory` (the decoder rescues it) | unchanged |
+
+The floor does not fix a CONFIDENT stage-1 miss: S6 is at 0.73 and S8 at
+0.9996, and no threshold can catch those. They go into the training data
+instead (below).
+
+**Feeding misses to training.** Real misroutes are committed to dedicated files.
+The dataset builders (`build_dataset.py`, `build_sibling_dataset.py`) regenerate
+the main training files, so they cannot overwrite these:
+
+- stage 1: `labs/setfit-router/data/misses.jsonl` (`{text, label}`), read by
+  `labs/setfit-router/train.py` alongside `data/train.jsonl`;
+- stage 2: `labs/functiongemma-finetune/data/train_misses.jsonl`
+  (`{text, tool, args}`), read by `router_selftrain.build_training_set`.
+
+Both files hold the three Samantha-bar asks above, labelled `memory` /
+`recall_memory`. That is where the label set already puts "what did I tell you"
+recall.
+
+**Nothing is retrained here.**
+
+- The stage-2 retrain is the multi-hour self-train job.
+- A stage-1 retrain is `train.py` plus the numpy re-export below. It is
+  replay-gated, because `models/*` is on the voice path.
+- Caveat: these rows use the Samantha bar's own wording. After a retrain,
+  S1/S6/S8 partly measure memorisation, so also score the router on
+  paraphrases.
+
+The self-train ratchet still compares like with like: incumbent and candidate
+are both measured through `route_two_stage` under the same floor. Its absolute
+81-case numbers read about 6 points lower than the pre-floor baselines quoted
+in [router-selftrain-loop.md](router-selftrain-loop.md).
+
+**Regenerating the table** after a head retrain:
+
+1. Embed the texts with fastembed `BAAI/bge-small-en-v1.5`.
+2. Score the needle corpus with the shipped head, and the SetFit train set with
+   5-fold out-of-fold MLPs.
+3. Decode every non-gated case through `router_two_stage` against a sidecar
+   (`build_grammar` → `_post_sidecar` → `parse_call` → `validate_call`).
+4. Bucket the results by `head_conf`.
+5. Re-derive the floor from the new table, not from the old default.
+6. Regenerate the probe fixture. Its parity test fails until you do.
 
 ## Stage-1 heads are numpy (since 2026-09-27)
 

@@ -527,9 +527,13 @@ def preflight(args, journal: dict, will_train: bool = True) -> tuple:
 
 def build_training_set(candidate_path: Path, stamp: str) -> Path:
     """Existing training sets + the new candidate → one merged jsonl."""
+    # train_misses.jsonl = hand-committed REAL misroutes (e.g. the Samantha-bar
+    # S1 ask) — its own file because build_sibling_dataset.py regenerates
+    # train_round2.jsonl and would silently drop them.
     sources = [FINETUNE / "data" / "train.jsonl",
                FINETUNE / "data" / "train_sibling.jsonl",
-               FINETUNE / "data" / "train_round2.jsonl"]
+               FINETUNE / "data" / "train_round2.jsonl",
+               FINETUNE / "data" / "train_misses.jsonl"]
     merged = SELFTRAIN_DIR / "work" / f"train_{stamp}.jsonl"
     merged.parent.mkdir(parents=True, exist_ok=True)
     n = 0

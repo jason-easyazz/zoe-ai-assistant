@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-472 flags; 470 not documented in `.env.example`.
+473 flags; 471 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -384,6 +384,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_HEAD` | `'off'` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEADS_BACKEND` | `'numpy'` | no | NO | `services/zoe-data/router_heads_numpy.py` |
 | `ZOE_ROUTER_HEAD_LOG` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
+| `ZOE_ROUTER_HEAD_MIN_CONF` | `'0.70'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_HEAD_MLP_PATH` | `dynamic` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_HEAD_PATH` | `dynamic` | no | NO | `services/zoe-data/semantic_router.py` |
 | `ZOE_ROUTER_HEAD_THRESHOLD` | `'0.4'` | no | NO | `services/zoe-data/semantic_router.py` |

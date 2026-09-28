@@ -3729,6 +3729,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_ROUTER_HEAD_MIN_CONF": {
+        "defaults": [
+          "'0.70'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/router_two_stage.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_ROUTER_HEAD_MLP_PATH": {
         "defaults": [
           "dynamic"
