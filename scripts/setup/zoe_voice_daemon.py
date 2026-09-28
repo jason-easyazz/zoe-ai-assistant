@@ -20,6 +20,7 @@ import itertools
 import uuid
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -72,15 +73,43 @@ def _int_env(name: str, default: int) -> int:
 
 
 def _float_env(name: str, default: float) -> float:
-    """Float twin of _int_env: a malformed value logs and keeps the default."""
+    """Float twin of _int_env: a malformed or non-finite value (nan, inf) logs
+    and keeps the default — float() accepts "nan", and every comparison against
+    NaN is False, which silently disables whatever the value gates."""
     raw = os.environ.get(name)
     if raw in (None, ""):
         return default
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
-        log.warning("Env %s=%r is not a number; using default %s", name, raw, default)
+        value = math.nan
+    if not math.isfinite(value):
+        log.warning("Env %s=%r is not a finite number; using default %s", name, raw, default)
         return default
+    return value
+
+
+def _prob_env(name: str, default: float, *, allow_zero: bool = True) -> float:
+    """A probability knob: finite and within [0, 1] ((0, 1] when ``allow_zero`` is
+    False). Anything else logs a WARNING naming the value and keeps the default —
+    e.g. BARGE_FAST_PROB=1.5 or nan would silently switch the fast path off."""
+    value = _float_env(name, default)
+    if not ((0.0 <= value if allow_zero else 0.0 < value) and value <= 1.0):
+        log.warning("Env %s=%r is outside %s0, 1]; using default %s", name,
+                    os.environ.get(name), "[" if allow_zero else "(", default)
+        return default
+    return value
+
+
+def _count_env(name: str, default: int, *, minimum: int) -> int:
+    """An int knob with a floor (a count or a duration). Malformed or below
+    ``minimum`` logs a WARNING naming the value and keeps the default."""
+    value = _int_env(name, default)
+    if value < minimum:
+        log.warning("Env %s=%r is below %d; using default %d", name,
+                    os.environ.get(name), minimum, default)
+        return default
+    return value
 
 
 # Optional persistent log file (e.g. ZOE_VOICE_LOG=/home/zoe/.zoe-voice/voice.log)
@@ -105,7 +134,7 @@ CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1280"))
 # 12s, was 8: 2 of 10 real panel turns on 2026-09-28 hit the 8s cap mid-sentence
 # (stop=max_duration) and were answered from a truncated transcript. STT costs
 # ~0.25s per second of clip, so only turns that are genuinely long pay for it.
-RECORD_SECONDS = _int_env("RECORD_SECONDS_MAX", 12)
+RECORD_SECONDS = _count_env("RECORD_SECONDS_MAX", 12, minimum=1)
 SILENCE_TIMEOUT_S = float(os.environ.get("SILENCE_TIMEOUT_S", "1.5"))
 RECORD_SILENCE_AMPLITUDE = int(os.environ.get("RECORD_SILENCE_AMPLITUDE", "300"))
 # ── VAD endpointing: close the turn on Silero speech-absence, not amplitude ──
@@ -234,8 +263,9 @@ SPEAKER_ID_SHADOW_LOG = os.environ.get(
     "SPEAKER_ID_SHADOW_LOG",
     os.path.expanduser("~/.zoe-voice/speaker_shadow_metrics.jsonl"),
 )
-# VAD probability threshold for barge-in detection (0.0-1.0).
-BARGE_IN_THRESHOLD = float(os.environ.get("BARGE_IN_THRESHOLD", "0.5"))
+# VAD probability threshold for barge-in detection, in (0, 1]; 0 would call
+# every chunk speech. The live panel overrides it (0.75) in .env.voice.
+BARGE_IN_THRESHOLD = _prob_env("BARGE_IN_THRESHOLD", 0.5, allow_zero=False)
 # Barge-in decision (_BargeDetector), anchored to the moment playback STARTS.
 # Self-interruption 2026-09-28 (docs/knowledge/incident-runbook.md): the old
 # trigger (2 of 5 chunks, window live since the monitor opened at turn START)
@@ -252,11 +282,14 @@ BARGE_IN_THRESHOLD = float(os.environ.get("BARGE_IN_THRESHOLD", "0.5"))
 #     the last BARGE_WINDOW_CHUNKS (~240ms of speech in ~480ms) ...
 #  4. ... or the fast path: BARGE_FAST_CHUNKS CONSECUTIVE chunks scoring
 #     >= BARGE_FAST_PROB (a loud, unambiguous interruption, ~160ms).
-BARGE_MIN_CHUNKS = _int_env("BARGE_MIN_CHUNKS", 3)
-BARGE_WINDOW_CHUNKS = _int_env("BARGE_WINDOW_CHUNKS", 6)
-BARGE_GRACE_MS = _int_env("BARGE_GRACE_MS", 800)
-BARGE_FAST_PROB = _float_env("BARGE_FAST_PROB", 0.95)
-BARGE_FAST_CHUNKS = _int_env("BARGE_FAST_CHUNKS", 2)  # <= 0 disables the fast path
+# Every knob is validated at import: out-of-range values log a WARNING and keep
+# the default, never a silently disabled guard. 0 is meaningful for the grace
+# (none) and the fast path (off); the window counts must be >= 1.
+BARGE_MIN_CHUNKS = _count_env("BARGE_MIN_CHUNKS", 3, minimum=1)
+BARGE_WINDOW_CHUNKS = _count_env("BARGE_WINDOW_CHUNKS", 6, minimum=1)
+BARGE_GRACE_MS = _count_env("BARGE_GRACE_MS", 800, minimum=0)
+BARGE_FAST_PROB = _prob_env("BARGE_FAST_PROB", 0.95)
+BARGE_FAST_CHUNKS = _count_env("BARGE_FAST_CHUNKS", 2, minimum=0)  # 0 disables the fast path
 # ── Ambient memory: always-on VAD captures room speech ────────────────────
 AMBIENT_CAPTURE_ENABLED = os.environ.get("AMBIENT_CAPTURE_ENABLED", "false").lower() in ("1", "true", "yes")
 AMBIENT_VAD_THRESHOLD = float(os.environ.get("AMBIENT_VAD_THRESHOLD", "0.4"))
@@ -282,7 +315,7 @@ AUDIO_OUTPUT_DEVICE = os.environ.get("AUDIO_OUTPUT_DEVICE", AUDIO_DEVICE).strip(
 # reopening the wake stream — so the wake word is scored no sooner than
 # ~0.75s + this after Zoe's last sample. 0.4s keeps ~1.15s of margin.
 # Conversation mode never reads it until the conversation has closed.
-POST_PLAY_COOLDOWN_S = _float_env("POST_PLAY_COOLDOWN_S", 0.4)
+POST_PLAY_COOLDOWN_S = max(0.0, _float_env("POST_PLAY_COOLDOWN_S", 0.4))
 # Extra settle time after playback before arming wake again (room reverb).
 POST_PLAY_TAIL_S = float(os.environ.get("POST_PLAY_TAIL_S", "0.4"))
 # ── Follow-up listening: after TTS, wait for speech without requiring wake word ──

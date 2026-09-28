@@ -170,8 +170,9 @@ def test_cooldown_and_cap_env_overrides(monkeypatch):
     assert mod.POST_PLAY_COOLDOWN_S == 1.5 and mod.RECORD_SECONDS == 8
 
 
-def test_malformed_cooldown_or_cap_keeps_the_default(monkeypatch):
-    monkeypatch.setenv("POST_PLAY_COOLDOWN_S", "soon")
-    monkeypatch.setenv("RECORD_SECONDS_MAX", "long")
+@pytest.mark.parametrize("cooldown,cap", [("soon", "long"), ("nan", "0"), ("inf", "-3")])
+def test_malformed_cooldown_or_cap_keeps_the_default(monkeypatch, cooldown, cap):
+    monkeypatch.setenv("POST_PLAY_COOLDOWN_S", cooldown)
+    monkeypatch.setenv("RECORD_SECONDS_MAX", cap)
     mod = _load("zoe_voice_daemon_dead_time_bad_test")
     assert mod.POST_PLAY_COOLDOWN_S == 0.4 and mod.RECORD_SECONDS == 12
