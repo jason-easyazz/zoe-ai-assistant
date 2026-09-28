@@ -52,6 +52,14 @@ EVENT_QUESTIONS = [
     "when are our parents arriving",
     "where is she flying from",
     "when does he land",
+    # bare present tense, no auxiliary (Greptile #1770)
+    "Who arrives on Thursday?",
+    "Who flies in on Thursday?",
+    "So who lands tomorrow?",
+    "Thanks. Who comes over on Friday?",
+    # a public event with the user's own people named still counts
+    "who is coming to the game with my brother on Friday",
+    "who is coming to the game with us on Friday",
 ]
 NOT_EVENT_QUESTIONS = [
     "who is the prime minister",
@@ -69,6 +77,13 @@ NOT_EVENT_QUESTIONS = [
     "when is the next full moon",
     "what time is it",
     "set a timer for 5 minutes",
+    # a public event / venue as the destination (Greptile #1770)
+    "Who is coming to the game on Friday?",
+    "who is coming to the concert tonight",
+    "who flies in for the match on Sunday",
+    "who is going to the Grand Prix on Sunday",
+    # a relative clause in a statement is not a question
+    "My cleaner, who comes on Friday, is great",
     # statements are not questions about the store
     SAY_SISTER,
 ]
@@ -189,16 +204,115 @@ async def test_flag_off_event_question_is_byte_identical(monkeypatch):
     assert fetched == []
 
 
-def test_recall_floor_owns_an_emotional_event_question(monkeypatch):
-    """Both triggers match → the recall floor owns the turn (never both
-    blocks), exactly as for personal questions."""
-    q = "I'm so anxious — who is flying in on Thursday?"
+EMOTIONAL_EVENT = "I'm anxious about who is flying in on Thursday"
+
+
+@pytest.mark.parametrize("q", [EMOTIONAL_EVENT, "I'm so anxious — who is flying in on Thursday?"])
+def test_continuity_owns_an_event_shape_inside_a_feeling(monkeypatch, q):
+    """Greptile #1770: an event phrase embedded in a first-person feeling is the
+    user SHARING a feeling — continuity owns it, the recall floor does not."""
     assert zc._CONTINUITY_RE.search(q) and is_event_question(q)
     monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
     monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
-    assert not zc.is_continuity_turn(q, "demo-a")
-    monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "0")
+    assert zc._recall_floor_shape(q) == ""
     assert zc.is_continuity_turn(q, "demo-a")
+    # continuity switched off → the recall floor still serves the event shape
+    monkeypatch.setenv("ZOE_SEAM_CONTINUITY_INJECT", "0")
+    assert zc._recall_floor_shape(q) == "event"
+
+
+def test_personal_question_inside_a_feeling_stays_recall(monkeypatch):
+    """The existing rule is unchanged: a my/I recall question is recall even
+    with a feeling beside it."""
+    q = "do you remember what I said? I'm so anxious"
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
+    assert zc._recall_floor_shape(q) == "personal"
+    assert not zc.is_continuity_turn(q, "demo-a")
+
+
+def test_plain_s1_ask_stays_recall(monkeypatch):
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
+    assert zc._recall_floor_shape(ASK_SISTER) == "event"
+    assert not zc.is_continuity_turn(ASK_SISTER, "demo-a")
+
+
+@pytest.mark.asyncio
+async def test_emotional_event_statement_gets_the_continuity_block_with_the_event(monkeypatch):
+    """End to end at the seam: the continuity block (not a bare recall block)
+    rides after the user's words, and the event bullet is in it."""
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
+    monkeypatch.delenv("ZOE_SEAM_OFFER_INJECT", raising=False)
+    monkeypatch.setattr(_Client, "captured", {})
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    calls = {"recall": 0, "continuity": []}
+
+    async def fake_recall(uid, msg):
+        calls["recall"] += 1
+        return PACKET
+
+    async def fake_continuity(uid, msg):
+        calls["continuity"].append(msg)
+        return {"packet": "## What I know about you\n"
+                          f"- (recent) {EVENT_FACT} [mem:bbbb2222]\n"}
+
+    async def fake_portrait(uid):
+        return ""
+
+    monkeypatch.setattr(zc, "_fetch_for_prompt_packet", fake_recall)
+    monkeypatch.setattr(zc, "_fetch_continuity_packet", fake_continuity)
+    monkeypatch.setattr(zc, "_fetch_portrait_line", fake_portrait)
+    out = [c async for c in zc.run_flue_brain_streaming(EMOTIONAL_EVENT, "s1", "demo-a")]
+    assert out == ["ok"]
+    msg = json.loads(_Client.captured["content"])["message"]
+    assert calls["recall"] == 0 and calls["continuity"] == [EMOTIONAL_EVENT]
+    assert zc._RECALL_BLOCK_OPEN not in msg
+    assert zc._CONTINUITY_BLOCK_OPEN in msg
+    body = msg.split(EMOTIONAL_EVENT, 1)[1]
+    assert body.lstrip().startswith(zc._CONTINUITY_BLOCK_OPEN)
+    assert "Marisol" in body and "Lisbon" in body
+
+
+@pytest.mark.asyncio
+async def test_continuity_packet_carries_the_event_as_a_search_hit(monkeypatch):
+    """The fold is real, not a stub: continuity mode runs the semantic search
+    on the user's words, so an event row that is NOT recent (outside the 72 h
+    pins) still reaches the continuity packet beside the recent rows."""
+    import datetime
+
+    import routers.memories as memories
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    def ref(rid, text, hours_ago):
+        return MemoryRef(id=rid, text=text, metadata={
+            "status": "approved", "memory_type": "fact",
+            "added_at": (now - datetime.timedelta(hours=hours_ago)).isoformat()})
+
+    event = ref("event001", EVENT_FACT, 24 * 5)
+    recent = [ref(f"rec{i:05d}", f"recent distinct thing {i} about topic{i}", 1 + i) for i in range(8)]
+
+    class _S:
+        async def load_for_prompt(self, user_id, *, limit):
+            return recent[:limit]
+
+        async def load_recent_for_prompt(self, user_id, *, window_s, limit, emotional_first=False):
+            return recent[:limit]
+
+        async def search(self, query, *, user_id, limit=6, **_):
+            return [event]
+
+    for k in ("ZOE_EMOTIONAL_RECALL_ENABLED", "ZOE_MEMORY_COMPOSE_ENABLED", "ZOE_PERSON_SUGGEST_ENABLED"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(memories, "_svc", lambda: _S())
+    res = await memories.memory_for_prompt(user_id="demo-a", message=EMOTIONAL_EVENT,
+                                           limit=12, mode="continuity", _=None)
+    assert EVENT_FACT in res["packet"]
 
 
 # ── (1) capture: the digest keeps who/where/when for the event ──────────────

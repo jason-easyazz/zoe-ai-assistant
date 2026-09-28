@@ -314,6 +314,18 @@ Fixes:
 Acceptance: after deploy, `--compare-baseline` shows S1 PASS with nothing regressing. Then
 re-record the bar.
 
+Follow-ups after the merge (Greptile on #1770), none of which changes a bar line. The bar's
+triggers are unchanged: `ASK_SISTER`/`ASK_B` go to recall, and `SAY_WORRY`/`ASK_WORRY` go to
+continuity.
+- The bare present tense now counts when it opens the question ("Who arrives on Thursday?",
+  "Who flies in on Thursday?"). A relative clause in a statement does not ("my cleaner, who
+  comes on Friday, …").
+- A public event or venue ("Who is coming to the game on Friday?") is not claimed unless the
+  user's own people are named too.
+- An event phrase inside a first-person feeling ("I'm anxious about who is flying in on
+  Thursday") is a continuity turn. Its packet still carries the event, because continuity mode
+  runs the semantic search on the user's words. A personal my/I question stays recall.
+
 Next targets, in order (tracker §0): (a) a **router confidence gate** — head decisions below
 ~0.6 fall through to the chat lane (brain + recall packet) instead of a deterministic tool,
 and the miss feeds the router self-train corpus; (b) **emotional continuity** for S4, with

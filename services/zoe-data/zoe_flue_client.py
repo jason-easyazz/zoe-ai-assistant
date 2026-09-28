@@ -486,7 +486,8 @@ def _recall_question_shape(message: str) -> str:
     "event" (an event-shaped question about the user's people/plans —
     ``memory_gate.is_event_question``: "Who is flying in on Thursday, and
     where from?", "where is she flying from" — Samantha bar S1 round 3), or ""
-    (not a recall question). Pure; the ONE predicate the floor, the continuity
+    (not a recall question). Pure. Ownership against continuity is decided by
+    ``_recall_floor_shape`` — the ONE predicate the floor, the continuity
     exclusivity check and the offer ager share."""
     msg = message or ""
     if _PERSONAL_QUESTION_RE.search(msg):
@@ -494,6 +495,26 @@ def _recall_question_shape(message: str) -> str:
     from memory_gate import is_event_question  # stdlib-only; keeps this module slim
 
     return "event" if is_event_question(msg) else ""
+
+
+def _recall_floor_shape(message: str) -> str:
+    """The shape the recall floor CLAIMS this turn with, or "" — the ownership
+    rule between the recall floor and continuity (pure, no I/O):
+
+    * a personal my/I question is always recall ("do you remember what I
+      said? I'm so anxious" keeps the recall block);
+    * an event shape inside a first-person feeling ("I'm anxious about who is
+      flying in on Thursday") is NOT claimed while continuity is on: the user is
+      sharing a feeling, not asking, so continuity owns the turn — and its
+      packet still carries the event, because continuity mode runs the same
+      semantic search on the user's words (Greptile #1770);
+    * a plain event question ("Who is flying in on Thursday, and where from?")
+      is recall."""
+    shape = _recall_question_shape(message)
+    if (shape == "event" and _continuity_inject_enabled()
+            and _CONTINUITY_RE.search(message or "")):
+        return ""
+    return shape
 
 _RECALL_BLOCK_OPEN = (
     "[MEMORY CONTEXT — Zoe's stored notes about this user; "
@@ -615,15 +636,16 @@ async def _recall_context_block(message: str, user_id: str) -> str:
     """The delimited memory block for this turn, or '' — NEVER raises.
 
     '' unless the flag is ON, a real user id is present, and the message
-    matches a conservative recall-question shape (``_recall_question_shape``:
-    a personal my/I question or an event-shaped question). A fetch failure logs
+    matches a conservative recall-question shape the floor claims
+    (``_recall_floor_shape``: a personal my/I question, or an event-shaped
+    question not embedded in a first-person feeling). A fetch failure logs
     and returns '' — the turn always proceeds, at worst without the floor.
     """
     if not _recall_inject_enabled():
         return ""
     if not (user_id or "").strip():
         return ""
-    shape = _recall_question_shape(message)
+    shape = _recall_floor_shape(message)
     if not shape:
         return ""
     try:
@@ -823,7 +845,7 @@ def is_continuity_turn(message: str, user_id: str) -> bool:
     if not uid or uid in ("guest", "voice-guest"):
         return False
     msg = message or ""
-    if _recall_inject_enabled() and _recall_question_shape(msg):
+    if _recall_inject_enabled() and _recall_floor_shape(msg):
         return False  # the recall floor owns recall-question turns
     return bool(_CONTINUITY_RE.search(msg))
 
@@ -840,7 +862,7 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
     msg = message or ""
     if not is_continuity_turn(msg, uid):
         if (_continuity_inject_enabled() and uid and uid not in ("guest", "voice-guest")
-                and not (_recall_inject_enabled() and _recall_question_shape(msg))):
+                and not (_recall_inject_enabled() and _recall_floor_shape(msg))):
             logger.info("SEAM_CONTINUITY user=%s matched=False bullets=0 chars=0", uid)
         return ""
     # Packet and portrait run concurrently but are awaited INDEPENDENTLY: the
