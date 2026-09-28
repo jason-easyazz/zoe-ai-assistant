@@ -213,6 +213,69 @@ ids only) logs the block and the reply for tracing.
 Acceptance is unchanged: a post-deploy `--compare-baseline` must show S4 PASS with nothing
 regressing.
 
+**S4 round 3 (#1762 + #1763 live, 1/3 — root cause three, fixed).** The digest now kept the
+feeling and the injection fired with a focus on every S4 ask, yet only sample 0 passed. A
+demo-user reproduction of the crowded bar flow (S1 seed + ask, S2/S4/S7 seeds, 26 h backdate,
+S2/S7 asks, then five back-to-back S4 asks end to end) gave the same shape twice: **1/5**,
+sample 0 PASS, samples 1-4 FAIL. The composer's focus, captured before each sample, showed why:
+
+1. **The focus flipped to today's mood.** The per-turn digest stores the S4 ask itself — "User
+   has been feeling a bit on edge today." — seconds after sample 0. That row is recent,
+   emotional and the NEWEST, so from sample 1 on it was the focus: "The user recently told
+   you: User has been feeling a bit on edge today…", and the brain asked how being on edge
+   was going (`zoe-data.app.log` for the live compare shows the same: `chars=1554` on sample 0,
+   `chars=1163` after the 23:20:00 digest line). The bench in round 2 used replay isolation
+   (no writes), so it never saw this. It is not only a harness artefact: a user who says
+   they are stressed twice in a day hits it too.
+2. **The contact offer competed.** The continuity packet carried the pending-contact fold
+   ("IMPORTANT: … ask the FIRST question below word-for-word … add Marisol as a contact?"),
+   and replies ended with that question.
+
+Fixes:
+- (e) A bare mood report is never the focus (`memory_digest.fact_has_topic`: it must name
+  something beyond feeling, time and filler words, past forms included — "User felt down
+  today" has no topic). The worry stays the focus.
+- (a) Offers are deferred on continuity turns. The continuity composer omits the fold, and
+  the seam skips the offer block and logs `SEAM_OFFER user=… deferred=1
+  reason=continuity`. A continuity turn is decided by the trigger
+  (`is_continuity_turn`), not by a packet coming back, so an empty or failed packet still
+  defers, and a core-brain packet built for a continuity turn defers too. The per-turn offer
+  ager skips a turn only when the offer was really hidden (a continuity turn with no offer
+  shown on any path), so a hidden offer never expires unseen and a shown one always ages.
+  The next non-emotional turn offers it.
+
+Variants, five samples each, sent to the sidecar directly (replay isolation) with the
+post-pollution packet (the on-edge row stored, the bar's two offers folded as the composer
+renders them), judged by the brain with the bar's rubric:
+
+| variant | S4 PASS | contact question in reply | median ms |
+|---|---|---|---|
+| live end to end, as merged (three separate runs) | 1/5, 1/5, 1/5 | — | — |
+| B0 prod block as merged (two runs) | 0/5, 0/5 | 5/5 | 1529 |
+| (e) focus skips bare-mood rows | **5/5** | 5/5 | 1817 |
+| (a) offer fold suppressed | 0/5 | 0/5 | 1195 |
+| (b) imperative bounded ask ("First, in one warm sentence…") | 1/5 | 3/5 | 1727 |
+| (c) focus + at most 4 bullets | 0/5 | 5/5 | 1410 |
+| **(e)+(a), shipped** | **5/5** | 0/5 | 1302 |
+| (e)+(a)+(b) | 5/5 | 0/5 | 1525 |
+| (e)+(a)+(c) | 5/5 | 0/5 | 1313 |
+| (e)+(a)+(b)+(c) | 4/5 | 0/5 | 1324 |
+| **AS CODED**: block built by this PR's client code (composer: no fold, topic focus) | **5/5** | 0/5 | 1190 |
+| control, before the mood row lands: B0 / AS CODED | 5/5 / 5/5 | 4/5 / 0/5 | — |
+
+Every live sample 0 passed and every later one failed, and the focus captured before each
+sample changed exactly at that point. The pre-pollution control scores 5/5 even with the
+offer present, so the offer was never what failed the bar; the mood row was. (e) is what
+moves the bar. (a) does not move it alone, but it takes the contact question off
+an emotional reply. (b) and (c) add nothing on top of (e)+(a), so they are not shipped: the
+ask wording and the 12-bullet packet stay as round 2 left them. (d), a per-turn system-role
+addendum, was skipped: the sidecar has no per-turn instruction seam (the agent's
+instructions are the static return value of `agents/zoe.ts`), and adding one would change
+the cached prefix. It was also not needed.
+
+Acceptance is unchanged: after deploy, `--compare-baseline` must show S4 PASS with nothing
+regressing. Samples 1-2 are the ones to watch, because they run after the day-2 mood row lands.
+
 Next targets, in order (tracker §0): (a) a **router confidence gate** — head decisions below
 ~0.6 fall through to the chat lane (brain + recall packet) instead of a deterministic tool,
 and the miss feeds the router self-train corpus; (b) **emotional continuity** for S4, with

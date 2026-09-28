@@ -1,0 +1,476 @@
+"""Samantha bar S4 round 3 — make the check-in reliable on the LIVE flow.
+
+After round 2 the bar went 1/3 live: sample 0 checked in about the interview,
+samples 1-2 did not. Two causes, both pinned here:
+
+  (e) the digest stores today's mood statement ("User has been feeling a bit on
+      edge today", felt anxious) seconds after the turn; it is the NEWEST
+      emotional row, so it displaced the interview as the continuity focus on the
+      next mood turn. A bare mood report is never the focus
+      (``memory_digest.fact_has_topic``).
+  (a) the continuity packet also carried the pending-contact fold ("IMPORTANT:
+      … ask … word-for-word … add Marisol as a contact?"), so the check-in
+      reply ended with a contact question. On a continuity turn the offer is
+      DEFERRED — the composer omits the fold, the seam skips the offer block and
+      logs ``SEAM_OFFER deferred=1 reason=continuity`` — and it is not surfaced,
+      so a not-yet-seen offer does not start aging.
+"""
+from __future__ import annotations
+
+import datetime
+import json
+import logging
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe  # fakes only — no DB, no model, no live service
+
+import memory_digest
+import pending_suggestions
+import routers.memories as memories
+import zoe_flue_client as zc
+from memory_service import MemoryRef
+
+ASK_WORRY = "Ugh, I've been feeling a bit on edge today."
+_REAL_OFFER_BLOCK = zc._pending_offer_block
+NOW = datetime.datetime.now(datetime.timezone.utc)
+
+
+def _ref(rid, text, hours_ago, **meta):
+    md = {"status": "approved", "memory_type": "fact",
+          "added_at": (NOW - datetime.timedelta(hours=hours_ago)).isoformat(), **meta}
+    return MemoryRef(id=rid, text=text, metadata=md)
+
+
+WORRY = _ref("worry001", "User is anxious about their job interview at the aquarium on Friday.",
+             26, candidate_affect="anxious")
+# What the digest stored from the previous S4 sample, seconds ago.
+MOOD_NOW = _ref("mood0001", "User has been feeling a bit on edge today.", 0.01,
+                candidate_affect="anxious")
+HOME = _ref("home0001", "User lives in Hobart.", 0.5)
+DAD = _ref("dad00001", "User's father is a retired lighthouse keeper.", 26)
+
+
+# ── (e) a bare mood report has no topic ─────────────────────────────────────
+
+@pytest.mark.parametrize("text, has_topic", [
+    ("User has been feeling a bit on edge today.", False),
+    ("User is stressed.", False),
+    ("User had a rough day.", False),
+    ("User feels overwhelmed lately.", False),
+    ("User is feeling very tired this week.", False),
+    ("User is anxious about their job interview at the aquarium on Friday.", True),
+    ("User has a job interview on Friday.", True),
+    ("User is worried about their mum's surgery.", True),
+    ("User is excited about the trip to Bali.", True),
+    ("User is stressed about the move.", True),
+    # past / perfect forms of a bare mood (Greptile #1768)
+    ("User felt down today.", False),
+    ("User has been feeling on edge.", False),
+    ("User was feeling a bit tense.", False),
+    ("User seemed stressed lately.", False),
+    ("User got overwhelmed this afternoon.", False),
+    ("User had a rough time this week.", False),
+    ("User felt anxious about their job interview at the aquarium.", True),
+])
+def test_fact_has_topic(text, has_topic):
+    assert memory_digest.fact_has_topic(text) is has_topic
+
+
+class _Svc:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def load_for_prompt(self, user_id, *, limit):
+        return self.rows[:limit]
+
+    async def load_recent_for_prompt(self, user_id, *, window_s, limit, emotional_first=False):
+        rows = sorted(self.rows, key=lambda r: memories._added_at_ts(r.metadata), reverse=True)
+        if emotional_first:
+            rows.sort(key=memories._is_emotional_row, reverse=True)
+        return rows[:limit]
+
+    async def search(self, *a, **k):
+        return []
+
+
+async def _compose(monkeypatch, rows, *, mode="continuity", suggest=False, surfaced=None,
+                   message=ASK_WORRY):
+    for flag in ("ZOE_EMOTIONAL_RECALL_ENABLED", "ZOE_MEMORY_COMPOSE_ENABLED"):
+        monkeypatch.delenv(flag, raising=False)
+    if suggest:
+        monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
+    else:
+        monkeypatch.delenv("ZOE_PERSON_SUGGEST_ENABLED", raising=False)
+
+    async def surface(user_id, *, limit=3):
+        if surfaced is not None:
+            surfaced.append(user_id)
+        return [{"id": "o1", "name": "Marisol", "relationship": "sister"}]
+
+    monkeypatch.setattr(pending_suggestions, "surface_pending_contacts_for_prompt", surface)
+    monkeypatch.setattr(memories, "_svc", lambda: _Svc(rows))
+    return await memories.memory_for_prompt(user_id="demo-a", message=message, limit=12,
+                                            mode=mode, _=None)
+
+
+@pytest.mark.asyncio
+async def test_todays_mood_row_never_displaces_the_worry_as_focus(monkeypatch):
+    res = await _compose(monkeypatch, [HOME, DAD, WORRY, MOOD_NOW])
+    assert res["continuity_focus"] == {
+        "text": "User is anxious about their job interview at the aquarium on Friday.",
+        "affect": "anxious"}
+    # the mood row is still in the packet as a (recent) bullet — only the focus skips it
+    assert "on edge" in res["packet"]
+
+
+@pytest.mark.parametrize("mood", [
+    "User felt down today.",
+    "User has been feeling on edge.",
+    "User had a rough day.",
+])
+@pytest.mark.asyncio
+async def test_past_tense_mood_row_never_takes_the_focus(monkeypatch, mood):
+    row = _ref("mood0002", mood, 0.01, candidate_affect="sad")
+    res = await _compose(monkeypatch, [HOME, DAD, WORRY, row])
+    assert res["continuity_focus"]["text"].startswith("User is anxious about their job interview")
+
+
+@pytest.mark.asyncio
+async def test_negative_control_without_the_topic_check_the_mood_row_wins(monkeypatch):
+    """Proves the test above measures the fix: drop the predicate and the newest
+    emotional row — today's mood statement — becomes the focus (the live bug)."""
+    monkeypatch.setattr(memory_digest, "fact_has_topic", lambda text: True)
+    res = await _compose(monkeypatch, [HOME, DAD, WORRY, MOOD_NOW])
+    assert res["continuity_focus"]["text"] == "User has been feeling a bit on edge today."
+
+
+@pytest.mark.asyncio
+async def test_only_bare_moods_means_no_focus(monkeypatch):
+    res = await _compose(monkeypatch, [HOME, MOOD_NOW])
+    assert "continuity_focus" not in res  # the seam falls back to the generic ask
+
+
+# ── (a) the offer is deferred on a continuity turn ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_continuity_packet_omits_the_offer_fold_and_does_not_surface(monkeypatch):
+    surfaced: list = []
+    res = await _compose(monkeypatch, [HOME, WORRY], suggest=True, surfaced=surfaced)
+    assert "[pending-contact]" not in res["packet"]
+    assert "word-for-word" not in res["packet"]
+    # not surfaced → turns_elapsed stays 0 → the per-user-turn ager never counts it
+    assert surfaced == []
+
+
+@pytest.mark.asyncio
+async def test_relevance_packet_still_folds_the_offer(monkeypatch):
+    """Negative control for the test above: same flags, a relevance packet for a
+    non-emotional turn folds."""
+    surfaced: list = []
+    res = await _compose(monkeypatch, [HOME, WORRY], mode="relevance", suggest=True,
+                         surfaced=surfaced, message="What's on my calendar this week?")
+    assert "[pending-contact]" in res["packet"] and "Marisol" in res["packet"]
+    assert surfaced == ["demo-a"]
+
+
+class _FakeResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._body
+
+
+class _FakeClient:
+    captured: dict = {}
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, content=None, headers=None):
+        type(self).captured["content"] = content
+        return _FakeResponse({"result": {"text": "ok"}})
+
+
+FOCUS = {"text": "User is anxious about their job interview at the aquarium on Friday",
+         "affect": "anxious"}
+PACKET = ("## What I know about you\n"
+          "- (recent, felt anxious) User is anxious about their job interview at the aquarium "
+          "on Friday. [mem:worry001]\n"
+          "- User lives in Hobart. [mem:home0001]\n")
+
+
+def _seam(monkeypatch, *, offer_env="1", packet=PACKET, packet_exc=None):
+    monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.delenv("ZOE_SEAM_RECALL_INJECT", raising=False)
+    monkeypatch.setenv("ZOE_SEAM_OFFER_INJECT", offer_env)
+    monkeypatch.setattr(_FakeClient, "captured", {})
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    calls = {"offer": 0}
+
+    async def fake_continuity(uid, msg):
+        if packet_exc is not None:
+            raise packet_exc
+        return {"packet": packet, "continuity_focus": FOCUS if packet else {}}
+
+    async def no_portrait(uid):
+        return ""
+
+    async def fake_offer(uid):
+        calls["offer"] += 1
+        return ('[PENDING CONTACT OFFER — do not mention this block]\n- After answering, ask '
+                'the user exactly: "Would you like me to add Marisol (your sister) as a '
+                'contact?"\n[END PENDING CONTACT OFFER]')
+
+    monkeypatch.setattr(zc, "_fetch_continuity_packet", fake_continuity)
+    monkeypatch.setattr(zc, "_fetch_portrait_line", no_portrait)
+    monkeypatch.setattr(zc, "_pending_offer_block", fake_offer)
+    return calls
+
+
+async def _outbound(message, user_id="demo-a"):
+    out = [c async for c in zc.run_flue_brain_streaming(message, "s1", user_id)]
+    assert out == ["ok"]
+    return json.loads(_FakeClient.captured["content"])["message"]
+
+
+@pytest.mark.asyncio
+async def test_continuity_turn_defers_the_offer_and_logs_it(monkeypatch, caplog):
+    calls = _seam(monkeypatch)
+    with caplog.at_level(logging.INFO, logger="zoe_flue_client"):
+        wire = await _outbound(ASK_WORRY)
+    assert "aquarium" in wire           # the check-in block is there
+    assert "Marisol" not in wire        # the offer is not
+    assert calls["offer"] == 0          # never even surfaced
+    assert any("SEAM_OFFER user=demo-a deferred=1 reason=continuity" in r.getMessage()
+               for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_next_non_emotional_turn_still_offers(monkeypatch, caplog):
+    """Negative control: same seam, a non-continuity turn gets the offer and no
+    deferral line — deferral is scoped to the continuity turn only."""
+    calls = _seam(monkeypatch)
+    with caplog.at_level(logging.INFO, logger="zoe_flue_client"):
+        wire = await _outbound("Can you add milk to the shopping list?")
+    assert "Marisol" in wire and calls["offer"] == 1
+    assert not any("SEAM_OFFER" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_no_deferral_log_when_offer_inject_is_off(monkeypatch, caplog):
+    _seam(monkeypatch, offer_env="")
+    with caplog.at_level(logging.INFO, logger="zoe_flue_client"):
+        await _outbound(ASK_WORRY)
+    assert not any("SEAM_OFFER" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("packet, exc", [("", None), (PACKET, RuntimeError("store down"))])
+@pytest.mark.asyncio
+async def test_emotional_turn_without_a_packet_still_defers_the_offer(monkeypatch, caplog,
+                                                                       packet, exc):
+    """Greptile #1768: the continuity TURN is decided by the trigger, not by a
+    block being built — an empty or failed packet must not let the offer through."""
+    calls = _seam(monkeypatch, packet=packet, packet_exc=exc)
+    with caplog.at_level(logging.INFO, logger="zoe_flue_client"):
+        wire = await _outbound(ASK_WORRY)
+    assert "[MEMORY CONTEXT" not in wire  # no block this turn
+    assert "Marisol" not in wire and calls["offer"] == 0
+    assert any("SEAM_OFFER user=demo-a deferred=1 reason=continuity" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_is_continuity_turn_predicate(monkeypatch):
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.delenv("ZOE_SEAM_RECALL_INJECT", raising=False)
+    assert zc.is_continuity_turn(ASK_WORRY, "demo-a")
+    assert not zc.is_continuity_turn("Add milk to the list", "demo-a")
+    assert not zc.is_continuity_turn(ASK_WORRY, "guest")
+    monkeypatch.setenv("ZOE_SEAM_CONTINUITY_INJECT", "false")
+    assert not zc.is_continuity_turn(ASK_WORRY, "demo-a")
+
+
+# ── deferred offers do not age (Greptile #1768) ─────────────────────────────
+
+class _OfferStore:
+    """In-memory model of pending_suggestions' aging: an offer surfaced once
+    (turns_elapsed=1) expires when turns_elapsed > expire_after_turns."""
+
+    def __init__(self, expire=2):
+        self.turns, self.expire, self.resolved = 1, expire, False
+
+    async def age(self, user_id):
+        if not self.resolved:
+            self.turns += 1
+            if self.turns > self.expire:
+                self.resolved = True
+        return int(self.resolved)
+
+    async def surface(self, user_id, *, limit=3):
+        return [] if self.resolved else [{"id": "o1", "name": "Marisol",
+                                          "relationship": "sister", "offer_phrase": ""}]
+
+
+async def _run_turns(monkeypatch, store, messages):
+    import latent_intent_detector as lid
+
+    monkeypatch.setattr(lid, "_person_enabled", lambda: True)
+
+    async def no_detect(*a, **k):
+        return []
+
+    monkeypatch.setattr(lid, "detect", no_detect)
+    monkeypatch.setattr(lid, "_deterministic_person_proposals", no_detect)
+    monkeypatch.setattr(pending_suggestions, "age_person_offers_on_user_turn", store.age)
+    monkeypatch.setattr(pending_suggestions, "surface_pending_contacts_for_prompt", store.surface)
+    monkeypatch.setattr(pending_suggestions, "person_suggestions_enabled", lambda: True)
+    wires = []
+    for msg in messages:
+        await lid.detect_and_store(msg, user_id="demo-a", session_id="s1")
+        wires.append(await _outbound(msg))
+    return wires
+
+
+@pytest.mark.asyncio
+async def test_offer_survives_a_run_of_continuity_turns(monkeypatch):
+    _seam(monkeypatch)
+    monkeypatch.setattr(zc, "_pending_offer_block", _REAL_OFFER_BLOCK)
+    store = _OfferStore(expire=2)
+    wires = await _run_turns(monkeypatch, store, [ASK_WORRY, "I'm so stressed", "Today was rough",
+                                                  "Can you add milk to the shopping list?"])
+    assert all("Marisol" not in w for w in wires[:3])  # deferred on every emotional turn
+    # never aged on the three emotional turns — only the neutral turn's own tick
+    assert not store.resolved and store.turns == 2
+    assert "Marisol" in wires[3]                         # offered on the neutral turn
+
+
+@pytest.mark.asyncio
+async def test_negative_control_aging_on_deferred_turns_expires_the_offer(monkeypatch):
+    """Proves the test above measures the fix: age on every turn and the same
+    three emotional turns expire the offer before the neutral turn."""
+    _seam(monkeypatch)
+    monkeypatch.setattr(zc, "_pending_offer_block", _REAL_OFFER_BLOCK)
+    monkeypatch.setattr(zc, "is_continuity_turn", lambda m, u: False)
+    store = _OfferStore(expire=2)
+    wires = await _run_turns(monkeypatch, store, [ASK_WORRY, "I'm so stressed", "Today was rough",
+                                                  "Can you add milk to the shopping list?"])
+    assert store.resolved and "Marisol" not in wires[3]
+
+
+# ── core (non-Flue) path: "shown" and "aged" are one fact (Greptile #1768) ──
+
+@pytest.fixture(autouse=True)
+def _clear_shown_marks():
+    pending_suggestions._SHOWN_SINCE_TICK.clear()
+    yield
+    pending_suggestions._SHOWN_SINCE_TICK.clear()
+
+
+class _FakeDb:
+    async def fetch(self, *a, **k):
+        return [{"id": "o1", "pre_filled_slots": json.dumps({"name": "Marisol",
+                                                            "relationship": "sister"}),
+                 "offer_phrase": "", "turns_elapsed": 1, "expire_after_turns": 6}]
+
+    async def execute(self, *a, **k):
+        return None
+
+
+def _real_surface_fake_db(monkeypatch):
+    """The REAL surface_pending_contacts_for_prompt (so its shown mark runs)
+    over a fake DB, and a counting ager + a silent detector."""
+    import contextlib
+
+    import latent_intent_detector as lid
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield _FakeDb()
+
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", ctx)
+    monkeypatch.setattr(lid, "_person_enabled", lambda: True)
+
+    async def no_detect(*a, **k):
+        return []
+
+    monkeypatch.setattr(lid, "detect", no_detect)
+    monkeypatch.setattr(lid, "_deterministic_person_proposals", no_detect)
+    aged: list = []
+
+    async def age(user_id):
+        aged.append(user_id)
+        return 0
+
+    monkeypatch.setattr(pending_suggestions, "age_person_offers_on_user_turn", age)
+    return lid, aged
+
+
+async def _core_packet(monkeypatch, message):
+    """The core brain's packet: zoe_core_client calls memory_for_prompt
+    in-process with the user's message and no mode (relevance)."""
+    for flag in ("ZOE_EMOTIONAL_RECALL_ENABLED", "ZOE_MEMORY_COMPOSE_ENABLED",
+                 "ZOE_SEAM_CONTINUITY_INJECT", "ZOE_SEAM_RECALL_INJECT"):
+        monkeypatch.delenv(flag, raising=False)
+    monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
+    monkeypatch.setattr(memories, "_svc", lambda: _Svc([HOME, WORRY]))
+    res = await memories.memory_for_prompt(user_id="demo-a", message=message, limit=12, _=None)
+    return res["packet"]
+
+
+@pytest.mark.asyncio
+async def test_core_path_emotional_turn_hides_the_offer_and_does_not_age_it(monkeypatch):
+    lid, aged = _real_surface_fake_db(monkeypatch)
+    packet = await _core_packet(monkeypatch, ASK_WORRY)
+    assert "Marisol" not in packet and "[pending-contact]" not in packet
+    await lid.detect_and_store(ASK_WORRY, user_id="demo-a", session_id="s1")
+    assert aged == []
+
+
+@pytest.mark.asyncio
+async def test_core_path_neutral_turn_shows_the_offer_and_ages_it(monkeypatch):
+    lid, aged = _real_surface_fake_db(monkeypatch)
+    msg = "What's on my calendar this week?"
+    packet = await _core_packet(monkeypatch, msg)
+    assert "Marisol" in packet and "[pending-contact]" in packet
+    await lid.detect_and_store(msg, user_id="demo-a", session_id="s1")
+    assert aged == ["demo-a"]
+
+
+@pytest.mark.asyncio
+async def test_offer_shown_on_an_emotional_turn_still_ages(monkeypatch):
+    """The invariant itself: if ANY builder showed the offer this turn (e.g. the
+    sidecar's recall_memory tool, whose query is not the user's words), the
+    turn ages it even though the user's message is a continuity statement."""
+    lid, aged = _real_surface_fake_db(monkeypatch)
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    assert await pending_suggestions.surface_pending_contacts_for_prompt("demo-a")
+    await lid.detect_and_store(ASK_WORRY, user_id="demo-a", session_id="s1")
+    assert aged == ["demo-a"]
+    # the mark is consumed: the next, hidden, emotional turn does not age
+    await lid.detect_and_store(ASK_WORRY, user_id="demo-a", session_id="s1")
+    assert aged == ["demo-a"]
+
+
+@pytest.mark.asyncio
+async def test_negative_control_without_the_shown_mark_a_shown_offer_stops_aging(monkeypatch):
+    """Proves the test above measures the fix: ignore the shown mark and an
+    offer shown on an emotional turn is not aged (the Greptile stale-offer bug)."""
+    lid, aged = _real_surface_fake_db(monkeypatch)
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.setattr(pending_suggestions, "consume_offer_shown_mark", lambda uid: False)
+    await pending_suggestions.surface_pending_contacts_for_prompt("demo-a")
+    await lid.detect_and_store(ASK_WORRY, user_id="demo-a", session_id="s1")
+    assert aged == []

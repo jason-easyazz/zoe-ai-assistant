@@ -135,12 +135,16 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
       Flue-lane continuity injection (`ZOE_SEAM_CONTINUITY_INJECT`, default ON, kill switch
       `false`). The injection fires, but the digest had dropped the feeling from the stored
       fact and the block's instruction was too soft.
-      **Round 2: built, awaiting live compare.**
-      - The feeling is kept in the digest and captured as `affect`.
-      - The block now sits after the user's words with one concrete ask.
-      - Measured 7/8 PASS on the reproduced flow, against 0/6 for round 1 as merged.
+      **Round 2 (#1762) is live: 1/3.** The feeling is kept and the block carries one
+      concrete ask, but after sample 0 the digest stores the day-2 mood itself, and that
+      row became the focus.
+      **Round 3: built, awaiting live compare.**
+      - A bare mood report is never the focus.
+      - The contact offer is deferred on continuity turns.
+      - Measured 5/5 on the reproduced post-pollution flow. Prod as merged scored 0/5 there
+        and 1/5 live end to end.
 
-      Record: [samantha-bar.md](../knowledge/samantha-bar.md) → *S4 round 2*. Accept when a
+      Record: [samantha-bar.md](../knowledge/samantha-bar.md) → *S4 round 3*. Accept when a
       post-deploy `samantha_bar.py --compare-baseline` shows S4 PASS with nothing
       regressing. B3.3 (importance-sum reflection) stays the longer-term carrier.
    2. **B7.5 (c)** QR onboarding for new members. (a)+(b) are merged and deployed (#1752);
