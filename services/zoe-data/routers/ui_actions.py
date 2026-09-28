@@ -68,6 +68,26 @@ def _guest_conflict_guard(user: dict) -> str:
     return f" WHERE ui_panel_sessions.user_id = 'guest' OR {_OWNER_STALE_SQL}"
 
 
+def _note_owner_presence(user: dict, panel_id: str, is_foreground: int) -> None:
+    """B2.1 brief-on-arrival hook (``ZOE_PROACTIVE_BRIEF_ON_ARRIVAL``, default OFF).
+
+    A foreground bind/sync by a member's OWN session is the moment the panel's
+    ``ui_panel_sessions`` row becomes member-owned — ``panel_presence_tier`` ==
+    ``owner``. Guests (the idle kiosk) and device tokens (a shared panel
+    credential, not a person) never count. The proactive module decides
+    everything else and returns at once when the flag is off; this never raises
+    and never delays the response (the check runs as a background task).
+    """
+    if not is_foreground or is_guest_user(user) or user.get("panel_id"):
+        return
+    try:
+        from proactive.arrival import schedule_on_owner_presence
+
+        schedule_on_owner_presence(str(user.get("user_id") or ""), str(panel_id))
+    except Exception as exc:
+        logger.warning("brief-on-arrival hook failed for panel=%s: %s", panel_id, exc)
+
+
 async def _authorize_panel(db, user: dict, panel_id: str) -> None:
     """Ensure the caller is allowed to act on ``panel_id``.
 
@@ -179,6 +199,7 @@ async def bind_panel(
         (panel_id, user_id, chat_session_id, page, ui_context, is_foreground),
     )
     await db.commit()
+    _note_owner_presence(user, panel_id, is_foreground)
     return {"status": "ok", "panel_id": panel_id, "is_foreground": bool(is_foreground)}
 
 
@@ -430,6 +451,7 @@ async def sync_ui_state(
         (panel_id, user_id, chat_session_id, page, ui_context, is_foreground),
     )
     await db.commit()
+    _note_owner_presence(user, panel_id, is_foreground)
     return {"status": "ok", "panel_id": panel_id}
 
 

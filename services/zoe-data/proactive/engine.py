@@ -67,8 +67,10 @@ def register_trigger(trigger: ProactiveTrigger) -> None:
     log.info("Registered trigger: %s", trigger.trigger_type)
 
 
-def _is_in_quiet_hours() -> bool:
-    hour = datetime.now(_ZOE_TZ).hour
+def _is_in_quiet_hours(now: datetime | None = None) -> bool:
+    """True inside the household quiet window. ``now`` (tz-aware) lets a caller
+    that already holds a clock reading (brief-on-arrival) judge the same instant."""
+    hour = (now.astimezone(_ZOE_TZ) if now is not None else datetime.now(_ZOE_TZ)).hour
     if _QUIET_START > _QUIET_END:
         # Spans midnight, e.g. 22–7.
         return hour >= _QUIET_START or hour < _QUIET_END
@@ -154,7 +156,7 @@ async def fire_notification(
     # raises (any spoken-path failure must not block the push).
     await _maybe_speak_notification(
         user_id=user_id, message=message, trigger_type=trigger_type,
-        guest_safe_message=ctx.get("spoken_guest_safe"),
+        guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
     )
 
     deep_link = f"/chat.html?p={pid}"
@@ -218,8 +220,78 @@ def _spoken_triggers() -> set[str]:
     return {t.strip() for t in raw.split(",") if t.strip()}
 
 
+async def _speak_on_panel(
+    *, user_id: str, panel_id: str, message: str, trigger_type: str,
+    claim_id: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Deliver ``message`` to BOTH spoken lanes for ``panel_id``; never raises.
+
+    Returns ``(panel_outcome, daemon_outcome, announcement_id)``. The lanes are
+    independent: a failure in one is reported in its outcome and never blocks
+    the other. Shared by the P-W2.2 adapter below and the B2.1
+    brief-on-arrival path (``proactive/arrival.py``), so both speak through
+    the same mechanics and log the same per-lane outcomes.
+
+    ``claim_id`` (a ``proactive_responses`` row, brief-on-arrival only): the
+    announcement insert and the claim's ``announcement_id`` link commit in ONE
+    transaction, so a queued brief is never left unlinked from its claim.
+    """
+    ann_id: str | None = None
+    # Lane 1: kiosk toast (panel_announce). Guarded separately so a
+    # failure here never blocks the daemon queue below (or vice versa).
+    panel_outcome = "enqueued"
+    try:
+        import ui_orchestrator as _ui_orchestrator
+        async with _get_compat_db() as db:
+            await _ui_orchestrator.enqueue_ui_action(
+                db,
+                user_id=user_id,
+                action_type="panel_announce",
+                payload={"message": message},
+                requested_by="proactive",
+                panel_id=panel_id,
+            )
+    except Exception as exc:
+        panel_outcome = f"error:{exc}"
+    # Lane 2: the daemon speaker queue (P-W2.3) — on its own pooled
+    # connection so a failed lane-1 transaction can't poison this insert.
+    daemon_outcome = "queued"
+    try:
+        import voice_announce as _voice_announce
+        async with _get_compat_db() as db:
+            if claim_id is None:
+                ann_id = await _voice_announce.enqueue_announcement(
+                    db,
+                    user_id=user_id,
+                    panel_id=panel_id,
+                    message=message,
+                    trigger_type=trigger_type,
+                )
+            else:
+                async with db.transaction():
+                    queued = await _voice_announce.enqueue_announcement(
+                        db,
+                        user_id=user_id,
+                        panel_id=panel_id,
+                        message=message,
+                        trigger_type=trigger_type,
+                        commit=False,
+                    )
+                    await db.execute(
+                        "UPDATE proactive_responses SET announcement_id = ?, spoken_at = ? "
+                        "WHERE id = ?",
+                        (queued, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                         claim_id),
+                    )
+                ann_id = queued
+    except Exception as exc:
+        daemon_outcome = f"error:{exc}"
+    return panel_outcome, daemon_outcome, ann_id
+
+
 async def _maybe_speak_notification(
     user_id: str, message: str, trigger_type: str, guest_safe_message: str | None = None,
+    pending_id: str | None = None,
 ) -> None:
     """P-W2.2/P-W2.3 spoken-delivery adapter: if the flag is ON, the trigger is
     allowlisted, and the user has a fresh foreground panel session
@@ -268,37 +340,25 @@ async def _maybe_speak_notification(
             log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=none outcome=absent",
                      trigger_type, user_id)
             return
-        # Lane 1: kiosk toast (panel_announce). Guarded separately so a
-        # failure here never blocks the daemon queue below (or vice versa).
-        panel_outcome = "enqueued"
-        try:
-            import ui_orchestrator as _ui_orchestrator
-            async with _get_compat_db() as db:
-                await _ui_orchestrator.enqueue_ui_action(
-                    db,
-                    user_id=user_id,
-                    action_type="panel_announce",
-                    payload={"message": message},
-                    requested_by="proactive",
-                    panel_id=panel_id,
-                )
-        except Exception as exc:
-            panel_outcome = f"error:{exc}"
-        # Lane 2: the daemon speaker queue (P-W2.3) — on its own pooled
-        # connection so a failed lane-1 transaction can't poison this insert.
-        daemon_outcome = "queued"
-        try:
-            import voice_announce as _voice_announce
-            async with _get_compat_db() as db:
-                await _voice_announce.enqueue_announcement(
-                    db,
-                    user_id=user_id,
-                    panel_id=panel_id,
-                    message=message,
-                    trigger_type=trigger_type,
-                )
-        except Exception as exc:
-            daemon_outcome = f"error:{exc}"
+        claim_id = None
+        if tier == _presence.TIER_OWNER and trigger_type == "morning_checkin":
+            # B2.1: with brief-on-arrival on, the full brief is spoken at most
+            # once per member per day by EITHER path — the same UNIQUE claim
+            # row (a no-op, no DB, with that flag off).
+            from proactive import arrival as _arrival
+            # A claim error fails CLOSED (outcome=claim_error): the push below
+            # in fire_notification is still sent, only the spoken lanes skip.
+            verdict, claim_id = await _arrival.claim_scheduled_brief(
+                user_id=user_id, panel_id=panel_id, pending_id=pending_id,
+            )
+            if verdict != "speak":
+                log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s tier=%s",
+                         trigger_type, user_id, panel_id, verdict, tier)
+                return
+        panel_outcome, daemon_outcome, _ann_id = await _speak_on_panel(
+            user_id=user_id, panel_id=panel_id, message=message, trigger_type=trigger_type,
+            claim_id=claim_id,
+        )
         log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s tier=%s",
                  trigger_type, user_id, panel_id, panel_outcome, daemon_outcome, tier)
     except Exception as exc:
@@ -363,6 +423,14 @@ async def _slow_loop() -> None:
                 except Exception as exc:
                     log.error("fire_notification failed for trigger result (user=%s, type=%s): %s",
                               getattr(r, "user_id", "?"), getattr(r, "trigger_type", "?"), exc)
+
+            # Step 3: B2.1 brief-on-arrival response signal. Flag-dark: an
+            # immediate no-op (no DB) unless ZOE_PROACTIVE_BRIEF_ON_ARRIVAL is on.
+            try:
+                from proactive.arrival import evaluate_pending_responses
+                await evaluate_pending_responses()
+            except Exception as exc:
+                log.warning("brief-on-arrival response sweep failed: %s", exc)
         except Exception as exc:
             # Covers connection-acquisition failures (e.g. transient pool
             # exhaustion / DB restart) that would otherwise escape this loop

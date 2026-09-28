@@ -105,7 +105,7 @@ State as of **2026-09-28 08:30 AWST**:
       week).
    3. The `samantha_bar` harness.
    4. **B3.2/B3.3** on the new store (B0.8 live 2026-09-28).
-   5. Brief-on-arrival (**B2.1**).
+   5. Brief-on-arrival (**B2.1**): built flag-dark; flip it once the panel is on.
    6. A Kokoro venv without scikit-learn/pandas (B6.6 d).
    7. The 24 h `--cache-ram` occupancy measurement (B0.4/B6.6).
 
@@ -678,9 +678,16 @@ State as of **2026-09-28 08:30 AWST**:
   `@mariozechner/*` (dead scope, last publish 0.73.1).
 
 ### B2 — Proactivity with judgement (beats Daily Brief / Alexa+ nudges)
-- B2.1 ⬜ **Presence-triggered routines**: emit `person_recognized(panel, person, ts)` from the
+- B2.1 🔨 **Presence-triggered routines**: emit `person_recognized(panel, person, ts)` from the
   panel ID path into the proactive engine; "Zoe speaks first" on first-recognition-of-the-day
   rather than a 07:30 timer (Omnisense).
+  - First slice built, flag-dark: **brief-on-arrival** (`ZOE_PROACTIVE_BRIEF_ON_ARRIVAL`, default
+    off). A 07:30 brief that was not heard is spoken once, at the member's first `owner`
+    presence 07:00–11:00. Presence comes from the kiosk bind/sync, not the voice path. It writes
+    one `proactive_responses` row per day, with accepted/ignored/undelivered as the B2.2 signal.
+    See the [recipients record](../knowledge/synthetic-users-and-proactive-recipients.md).
+  - Next: 🧑 flip the flag once the panel is back on. Then feed face/voice matches in as
+    `owner` presence. That is a voice-path change and needs the replay gate.
 - B2.2 ⬜ **Candidate-selection → delivery-gating split** for proactive turns with a
   three-valued verdict (Immediate / Delayed / Silent) scored by a cheap non-LLM trigger over
   structured events using When2Talk's four factors + a Frigate-style 0–2 salience level;
