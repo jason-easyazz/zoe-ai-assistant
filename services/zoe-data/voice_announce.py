@@ -28,7 +28,9 @@ token — the alias-mismatch class fixed panel-side in #817), and presence
 DEVICE id, so strict equality would silently deliver nothing. With a single
 household speaker, claim-any is correct; the atomic claim still guarantees
 exactly-once if a second daemon ever appears. Set `ZOE_ANNOUNCE_STRICT_PANEL`
-to require an exact panel match (multi-speaker future).
+to require an exact panel match (multi-speaker future). Rows of a
+`PANEL_SCOPED_TRIGGERS` trigger (a member's full brief spoken because they were
+seen on one panel) require the exact match in either mode.
 
 Timestamps are TEXT UTC (``%Y-%m-%dT%H:%M:%SZ``) matching the proactive
 tables; ISO-Z strings compare in time order. The claim response carries
@@ -46,6 +48,14 @@ log = logging.getLogger(__name__)
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _DEFAULT_TTL_S = 120
+# Triggers whose rows are ALWAYS panel-scoped, even in the default claim-any
+# mode: only a daemon whose device-token panel equals the row's ``panel_id`` may
+# claim them. Brief-on-arrival (``proactive/arrival.py``) speaks a member's FULL
+# brief because owner presence was seen on ONE panel — another panel's speaker
+# must never play it. arrival.py queues it only for a panel that holds a live
+# device token, so the ids match by construction.
+PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival",)
+
 # Hard cap per claim; the engine enqueues one row per spoken notification, so
 # anything larger than a handful means a backlog that should expire, not play.
 _CLAIM_LIMIT = 5
@@ -158,11 +168,13 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
             (now_s, panel_id, limit),
         )
     else:
+        scoped = ", ".join("?" for _ in PANEL_SCOPED_TRIGGERS)
         cursor = await db.execute(
-            """SELECT id, message, trigger_type, expires_at FROM voice_announcements
+            f"""SELECT id, message, trigger_type, expires_at FROM voice_announcements
                WHERE delivered_at IS NULL AND expired = 0 AND expires_at > ?
+                 AND (COALESCE(trigger_type, '') NOT IN ({scoped}) OR panel_id = ?)
                ORDER BY created_at ASC LIMIT ?""",
-            (now_s, limit),
+            (now_s, *PANEL_SCOPED_TRIGGERS, panel_id, limit),
         )
     rows = await cursor.fetchall()
 
