@@ -3939,6 +3939,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_SEAM_CONTINUITY_DEBUG": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_SEAM_CONTINUITY_INJECT": {
         "defaults": [
           "'true'"

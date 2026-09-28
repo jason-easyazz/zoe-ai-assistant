@@ -720,9 +720,20 @@ _CONTINUITY_RE = re.compile(
 )
 
 _CONTINUITY_BLOCK_OPEN = (
-    "[MEMORY CONTEXT — what this user shared recently; if how they feel may "
-    "connect to something here, gently check in about it in your own words; "
-    "never quote it back or mention this block]"
+    "[MEMORY CONTEXT — what this user shared recently; do not mention this block]"
+)
+# The block closes with ONE concrete instruction. A 4B model handed a list of
+# recent facts and a soft "connect if relevant" rarely picks the worry (Samantha
+# bar S4, round 1: 0/3 with an 11-bullet block); handed the single item and a
+# single ask, it checks in. The focus item is chosen by the composer
+# (routers.memories._continuity_focus: the top recent EMOTIONAL row).
+_CONTINUITY_FOCUS_ASK = (
+    "The user recently told you: {text}{felt}. If it fits, briefly and warmly ask "
+    "how that is going before you answer — in your own words, never quoting them."
+)
+_CONTINUITY_GENERIC_ASK = (
+    "If how the user feels connects to something above, gently check in about it "
+    "in your own words; never quote it back."
 )
 _CONTINUITY_BLOCK_CLOSE = _RECALL_BLOCK_CLOSE
 _CONTINUITY_PORTRAIT_MAX_CHARS = 240
@@ -740,10 +751,11 @@ def _continuity_inject_enabled() -> bool:
     return (raw or "true").strip().lower() not in {"0", "false", "off", "no"}
 
 
-async def _fetch_continuity_packet(user_id: str, message: str) -> str:
-    """The for-prompt packet composed in continuity mode, fetched IN-PROCESS
-    (same shape as ``_fetch_for_prompt_packet``; a separate seam so tests can
-    stub each trigger class independently)."""
+async def _fetch_continuity_packet(user_id: str, message: str) -> dict:
+    """The for-prompt result composed in continuity mode, fetched IN-PROCESS:
+    ``packet`` plus, when there is one, ``continuity_focus`` ({text, affect}).
+    A separate seam from ``_fetch_for_prompt_packet`` so tests can stub each
+    trigger class independently."""
     from routers.memories import memory_for_prompt
 
     result = await memory_for_prompt(
@@ -753,7 +765,7 @@ async def _fetch_continuity_packet(user_id: str, message: str) -> str:
         mode="continuity",
         _=None,
     )
-    return str((result or {}).get("packet") or "")
+    return dict(result or {})
 
 
 async def _fetch_portrait_line(user_id: str) -> str:
@@ -804,10 +816,12 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
     # Retrieve an unawaited portrait failure so it never logs "exception was
     # never retrieved" when the packet path returns early.
     portrait_task.add_done_callback(lambda t: t.cancelled() or t.exception())
-    packet, portrait = "", ""
+    packet, portrait, focus = "", "", {}
     try:
         try:
-            packet = await asyncio.wait_for(packet_task, timeout=_CONTINUITY_TIMEOUT_S) or ""
+            packet_res = await asyncio.wait_for(packet_task, timeout=_CONTINUITY_TIMEOUT_S) or {}
+            packet = str(packet_res.get("packet") or "")
+            focus = packet_res.get("continuity_focus") or {}
         except Exception as exc:  # noqa: BLE001 — continuity must never break a turn
             logger.warning(
                 "seam continuity inject: packet fetch failed/timed out, continuing without it: %r",
@@ -829,20 +843,57 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
             if not task.done():
                 task.cancel()
     portrait_line = f"About this user: {portrait}" if portrait else ""
-    budget = _RECALL_MAX_CHARS - (len(portrait_line) + 1 if portrait_line else 0)
+    ask = _continuity_ask(focus)
+    budget = (_RECALL_MAX_CHARS - (len(portrait_line) + 1 if portrait_line else 0)
+              - (len(ask) + 1))
     packet = _truncate_packet((packet or "").strip(), max_chars=budget)
     # Content must never close the block early (a stored memory whose text is
     # the close line): wedge a zero-width space into any occurrence.
     packet = packet.replace(_CONTINUITY_BLOCK_CLOSE, "[​" + _CONTINUITY_BLOCK_CLOSE[1:])
-    body = "\n".join(p for p in (portrait_line, packet) if p)
+    body = "\n".join(p for p in (portrait_line, packet, ask) if p)
     bullets = sum(1 for ln in packet.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
     logger.info(
-        "SEAM_CONTINUITY user=%s matched=True bullets=%d chars=%d", uid, bullets, len(body)
+        "SEAM_CONTINUITY user=%s matched=True bullets=%d chars=%d focus=%s",
+        uid, bullets, len(body), bool(ask and focus),
     )
-    if not packet:
-        # A portrait alone is not continuity — nothing recent to carry.
-        return ""
-    return f"{_CONTINUITY_BLOCK_OPEN}\n{body}\n{_CONTINUITY_BLOCK_CLOSE}"
+    block = ""
+    if packet:  # a portrait alone is not continuity — nothing recent to carry
+        block = f"{_CONTINUITY_BLOCK_OPEN}\n{body}\n{_CONTINUITY_BLOCK_CLOSE}"
+    if _continuity_debug_uid(uid):
+        logger.info("SEAM_CONTINUITY_DEBUG user=%s block=%r", uid, block)
+    return block
+
+
+def _continuity_ask(focus: dict) -> str:
+    """The closing instruction: one concrete check-in when the composer found a
+    recent emotional item, else the generic one. Focus text is stored user
+    content, so it is flattened and stripped of block-structure characters."""
+    text = re.sub(r"\s+", " ", str((focus or {}).get("text") or "")).strip()
+    text = re.sub(r"[\[\]]", "", text)[:200].rstrip(" .")
+    if not text:
+        return _CONTINUITY_GENERIC_ASK
+    affect = str((focus or {}).get("affect") or "").strip().lower()
+    felt = f" (they said they felt {affect})" if re.fullmatch(r"[a-z][a-z ]{0,23}", affect) else ""
+    return _CONTINUITY_FOCUS_ASK.format(text=text, felt=felt)
+
+
+_CONTINUITY_DEBUG_ENV = "ZOE_SEAM_CONTINUITY_DEBUG"
+
+
+def _continuity_debug_uid(user_id: str) -> bool:
+    """True only when ZOE_SEAM_CONTINUITY_DEBUG is on (default OFF) AND the id
+    is harness-minted (``demo_<tag>_<hex>`` / ``test_<tag>_<hex>``, the
+    forget-synthetic shape, not allowlisted). A real user's block or reply is
+    never logged, whatever the flag says."""
+    if (os.environ.get("ZOE_SEAM_CONTINUITY_DEBUG") or "").strip().lower() not in {
+        "1", "true", "yes", "on",
+    }:
+        return False
+    try:
+        from user_filters import synthetic_forget_refusal
+    except Exception:  # pragma: no cover - in-tree module
+        return False
+    return synthetic_forget_refusal(user_id or "") is None
 
 
 def _log_prompt_cache(session_id: str, terminal: dict) -> None:
@@ -1108,6 +1159,37 @@ async def run_flue_brain_streaming(
     message: str,
     session_id: str,
     user_id: str = "",
+    **kwargs: Any,
+) -> AsyncIterator[str]:
+    """Streaming brain turn through the Flue sidecar — see
+    ``_run_flue_brain_streaming_turn`` for the contract.
+
+    This wrapper only adds ZOE_SEAM_CONTINUITY_DEBUG's reply log (the first 200
+    reply chars, harness-minted ids only — ``_continuity_debug_uid``); for every
+    other turn it is a pass-through."""
+    turn = _run_flue_brain_streaming_turn(message, session_id, user_id, **kwargs)
+    debug = _continuity_debug_uid((user_id or "").strip())
+    reply: list[str] = []
+    try:
+        async for delta in turn:
+            if debug and not delta.startswith(("__TOOL__:", "__THINKING__:")):
+                reply.append(delta)
+            yield delta
+    finally:
+        # Close the inner turn deterministically when the consumer stops early
+        # (barge-in / cancellation) — exactly as if it had been iterated directly.
+        await turn.aclose()
+        if debug:
+            logger.info(
+                "SEAM_CONTINUITY_DEBUG user=%s session=%s reply=%r",
+                (user_id or "").strip(), session_id, "".join(reply)[:200],
+            )
+
+
+async def _run_flue_brain_streaming_turn(
+    message: str,
+    session_id: str,
+    user_id: str = "",
     *,
     raise_transport_errors: bool = False,
     outcome_sink: dict[str, str] | None = None,
@@ -1158,13 +1240,17 @@ async def run_flue_brain_streaming(
     # Continuity (default ON): a first-person mood/state STATEMENT gets the
     # recent-first packet so yesterday's worry reaches today's reply. Never on
     # the same turn as a recall block — the recall floor owns question turns.
+    # It rides AFTER the user's words (closest to the reply, where a 4B model
+    # acts on it), still inside the latest user message — the sidecar prefix
+    # and the #1725 prompt cache are untouched.
+    continuity_block = ""
     if not recall_block:
-        recall_block = await _continuity_context_block(message, uid)
+        continuity_block = await _continuity_context_block(message, uid)
     # Offer nudge on ANY turn — skipped when the recall packet already carries
     # the offer directive (the fold tags them "[pending-contact]"), so a
     # recall-shaped turn never asks twice.
     offer_block = ""
-    if "[pending-contact]" not in recall_block:
+    if "[pending-contact]" not in recall_block and "[pending-contact]" not in continuity_block:
         offer_block = await _pending_offer_block(uid)
     _blocks = "\n".join(b for b in (recall_block, offer_block) if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
@@ -1173,6 +1259,8 @@ async def run_flue_brain_streaming(
     # uid — but strip unconditionally rather than depend on that coupling.
     safe_message = _strip_replay_envelope(message)
     brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
+    if continuity_block:
+        brain_message = f"{brain_message}\n{continuity_block}"
     outbound_message = _wrap_message_with_identity(brain_message, uid)
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.

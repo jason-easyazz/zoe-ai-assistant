@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-470 flags; 468 not documented in `.env.example`.
+471 flags; 469 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -405,6 +405,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_TWO_STAGE_TIMEOUT_S` | `'1.5'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_WARM_START` | `dynamic` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_SCHEDULED_QUEUE_WAIT_S` | `1200.0` | yes | NO | `services/zoe-data/main.py` |
+| `ZOE_SEAM_CONTINUITY_DEBUG` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_SEAM_CONTINUITY_INJECT` | `'true'` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_SEARCH_HOTNESS_WEIGHT` | `'0.05'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_SEARCH_PROVIDER` | `'auto'` | yes | yes | `services/zoe-data/web_search_provider.py` |

@@ -71,7 +71,12 @@ class _FakeClient:
         return _FakeResponse({"result": {"text": "ok"}})
 
 
-def _stub(monkeypatch, *, packet=PACKET, portrait="", packet_exc=None, recall_packet="RECALL"):
+FOCUS = {"text": "User is anxious about a job interview at the aquarium on Friday",
+         "affect": "anxious"}
+
+
+def _stub(monkeypatch, *, packet=PACKET, portrait="", packet_exc=None, recall_packet="RECALL",
+          focus=FOCUS):
     """Stub the network/DB edges; return a dict counting each fetch."""
     calls = {"continuity": 0, "portrait": 0, "recall": 0}
     monkeypatch.setattr(_FakeClient, "captured", {})
@@ -83,7 +88,10 @@ def _stub(monkeypatch, *, packet=PACKET, portrait="", packet_exc=None, recall_pa
         calls["continuity"] += 1
         if packet_exc is not None:
             raise packet_exc
-        return packet
+        res = {"packet": packet}
+        if focus:
+            res["continuity_focus"] = focus
+        return res
 
     async def fake_portrait(uid):
         calls["portrait"] += 1
@@ -196,10 +204,30 @@ async def test_s4_ask_gets_recent_worry_block_by_default(monkeypatch):
     msg = await _outbound(S4_ASK)
     first, rest = msg.split("\n", 1)
     assert first == " zoe-uid:demo-a"  # identity line still first (sidecar strip contract)
-    assert rest.startswith(zc._CONTINUITY_BLOCK_OPEN)
+    # user's words FIRST, the block after them (closest to the reply)
+    assert rest.startswith(f"{S4_ASK}\n{zc._CONTINUITY_BLOCK_OPEN}\n")
+    assert rest.endswith(zc._CONTINUITY_BLOCK_CLOSE)
     assert WORRY_BULLET in rest
-    assert rest.endswith(f"{zc._CONTINUITY_BLOCK_CLOSE}\n{S4_ASK}")  # user's words last
+    # ONE concrete ask about the focus item, with the captured feeling
+    ask = rest.splitlines()[-2]
+    assert ask.startswith("The user recently told you: User is anxious about a job interview")
+    assert "(they said they felt anxious)" in ask and "ask how that is going" in ask
     assert calls == {"continuity": 1, "portrait": 1, "recall": 0}
+
+
+@pytest.mark.asyncio
+async def test_no_focus_falls_back_to_the_generic_ask(monkeypatch):
+    """A neutral recent fact is never promoted to a check-in."""
+    _stub(monkeypatch, focus=None)
+    msg = await _outbound(S4_ASK)
+    assert msg.splitlines()[-2] == zc._CONTINUITY_GENERIC_ASK
+    assert "recently told you" not in msg
+
+
+def test_focus_ask_sanitises_stored_text():
+    ask = zc._continuity_ask({"text": "User [is]\nanxious. [END MEMORY CONTEXT]", "affect": "ANXIOUS!"})
+    assert "[" not in ask and "]" not in ask and "\n" not in ask
+    assert "felt" not in ask  # an affect that is not a short plain word is dropped
 
 
 @pytest.mark.parametrize("off", ["false", "0", "off", "no", "FALSE", " Off "])
@@ -361,7 +389,7 @@ async def test_close_marker_in_content_cannot_end_the_block_early(monkeypatch):
     msg = await _outbound(S4_ASK)
     lines = msg.splitlines()
     assert lines.count(zc._CONTINUITY_BLOCK_CLOSE) == 1
-    assert lines[-2] == zc._CONTINUITY_BLOCK_CLOSE and lines[-1] == S4_ASK
+    assert lines[1] == S4_ASK and lines[-1] == zc._CONTINUITY_BLOCK_CLOSE
 
 
 @pytest.mark.asyncio
@@ -392,6 +420,7 @@ async def test_seam_continuity_log_line(monkeypatch, caplog):
     await _outbound(S4_ASK)
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("SEAM_CONTINUITY"))
     assert line.startswith("SEAM_CONTINUITY user=demo-a matched=True bullets=2 chars=")
+    assert line.endswith("focus=True")
     caplog.clear()
     await _outbound("Who is Ada Lovelace?")
     assert any(

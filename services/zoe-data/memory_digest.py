@@ -328,10 +328,33 @@ Return ONLY a JSON array (no preamble). Each item:
   "type": one of "profile" | "preference" | "habit" | "event" | "relationship" | "health" | "pet"
   "fact": a single concise sentence in third-person (max 120 chars, e.g. "User's dog is named Teddy")
 
+If the user said how they FEEL about it (anxious, worried, excited, sad, stressed, proud…), keep that feeling in the fact — e.g. "User is anxious about their job interview on Friday", not just "User has a job interview on Friday". Never add a feeling the user did not state.
+
 If nothing personal was stated, return: []
 
 User said: {user_message}
 """
+
+
+_AFFECT_STOPWORDS = frozenset({
+    "user", "users", "user's", "their", "they", "about", "with", "that", "this",
+    "have", "has", "will", "from", "into", "when", "what", "been", "being",
+    "honestly", "pretty", "really", "feel", "feels", "feeling", "keep",
+})
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9']+", (text or "").lower())
+            if len(t) > 3 and t not in _AFFECT_STOPWORDS}
+
+
+def _affect_for_fact(fact: str, affect: str, sentence: str) -> str:
+    """The turn's first-person feeling, if this fact came from the sentence that
+    carried it (shares a content word) — else "". A turn that says "I'm anxious
+    about my interview, and my sister lives in Lisbon" tags only the interview."""
+    if not affect or not sentence:
+        return ""
+    return affect if _content_tokens(fact) & _content_tokens(sentence) else ""
 
 
 async def run_turn_digest(
@@ -422,6 +445,12 @@ async def run_turn_digest(
 
         import hashlib as _hashlib
         base_turn_id = _hashlib.sha1(user_message.encode("utf-8", "ignore")).hexdigest()[:16]
+        # The digest model can flatten "I'm anxious about X" to "User has X".
+        # Read the feeling from the user's OWN words and store it beside the
+        # fact (metadata `affect`, stored as candidate_affect) so continuity can
+        # still say how they felt.
+        from memory_gate import extract_affect
+        turn_affect, affect_sentence = extract_affect(user_message)
 
         for idx, item in enumerate(facts):
             fact = (item.get("fact") or "").strip()
@@ -478,6 +507,7 @@ async def run_turn_digest(
                 except Exception as exc:
                     logger.warning("turn_digest: supersede failed (%s) — plain ingest", exc)
             try:
+                fact_affect = _affect_for_fact(fact, turn_affect, affect_sentence)
                 ref = await svc.ingest(
                     fact,
                     user_id=user_id,
@@ -488,6 +518,7 @@ async def run_turn_digest(
                     confidence=0.82,
                     status="approved",
                     tags=["turn_digest", "auto_extract"],
+                    metadata={"affect": fact_affect} if fact_affect else None,
                 )
                 if ref is not None:
                     result["new"] += 1

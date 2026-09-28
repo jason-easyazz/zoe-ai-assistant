@@ -546,12 +546,21 @@ class MemoryRef:
 _RECENT_SCAN_CAP = 300
 
 
+def memory_affect(ref: MemoryRef) -> str:
+    """The first-person feeling captured with this row (turn digest's
+    ``affect`` metadata, stored as ``candidate_affect``), or "". Sanitised to a
+    short lowercase word so it is safe to render inline."""
+    raw = str((ref.metadata or {}).get("candidate_affect") or "").strip().lower()
+    return raw if re.fullmatch(r"[a-z][a-z ]{0,23}", raw) else ""
+
+
 def is_emotional_memory(ref: MemoryRef) -> bool:
     """An `emotional_moment` row, or a row whose text carries an emotional cue
     ("I'm pretty anxious about…") — the 4B extractor often stores a worry as a
     plain fact, so the type alone would miss it. Single definition, shared with
     the for-prompt composer."""
-    if str((ref.metadata or {}).get("memory_type")) == "emotional_moment":
+    meta = ref.metadata or {}
+    if str(meta.get("memory_type")) == "emotional_moment" or memory_affect(ref):
         return True
     from memory_gate import message_needs_emotional_recall
 
