@@ -480,6 +480,21 @@ _PERSONAL_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+
+def _recall_question_shape(message: str) -> str:
+    """Which recall-floor shape this message is: "personal" (a my/I question),
+    "event" (an event-shaped question about the user's people/plans —
+    ``memory_gate.is_event_question``: "Who is flying in on Thursday, and
+    where from?", "where is she flying from" — Samantha bar S1 round 3), or ""
+    (not a recall question). Pure; the ONE predicate the floor, the continuity
+    exclusivity check and the offer ager share."""
+    msg = message or ""
+    if _PERSONAL_QUESTION_RE.search(msg):
+        return "personal"
+    from memory_gate import is_event_question  # stdlib-only; keeps this module slim
+
+    return "event" if is_event_question(msg) else ""
+
 _RECALL_BLOCK_OPEN = (
     "[MEMORY CONTEXT — Zoe's stored notes about this user; "
     "use them to answer; do not mention this block]"
@@ -600,14 +615,16 @@ async def _recall_context_block(message: str, user_id: str) -> str:
     """The delimited memory block for this turn, or '' — NEVER raises.
 
     '' unless the flag is ON, a real user id is present, and the message
-    matches the conservative personal-question shape. A fetch failure logs and
-    returns '' — the turn always proceeds, at worst without the floor.
+    matches a conservative recall-question shape (``_recall_question_shape``:
+    a personal my/I question or an event-shaped question). A fetch failure logs
+    and returns '' — the turn always proceeds, at worst without the floor.
     """
     if not _recall_inject_enabled():
         return ""
     if not (user_id or "").strip():
         return ""
-    if not _PERSONAL_QUESTION_RE.search(message or ""):
+    shape = _recall_question_shape(message)
+    if not shape:
         return ""
     try:
         packet = await _fetch_for_prompt_packet(user_id, message)
@@ -617,6 +634,9 @@ async def _recall_context_block(message: str, user_id: str) -> str:
         )
         return ""
     packet = _truncate_packet((packet or "").strip())
+    bullets = sum(1 for ln in packet.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
+    logger.info("SEAM_RECALL user=%s shape=%s bullets=%d chars=%d",
+                user_id, shape, bullets, len(packet))
     if not packet:
         return ""
     return f"{_RECALL_BLOCK_OPEN}\n{packet}\n{_RECALL_BLOCK_CLOSE}"
@@ -790,7 +810,7 @@ def is_continuity_turn(message: str, user_id: str) -> bool:
     """True when this turn is a CONTINUITY turn — decided by the trigger alone,
     never by whether a packet came back: the flag is on (default), the id is a
     real (non-guest) user, the recall floor does not own the turn (a personal
-    question with ZOE_SEAM_RECALL_INJECT on), and the message is a first-person
+    or event-shaped question with ZOE_SEAM_RECALL_INJECT on), and the message is a first-person
     emotional/state statement (``_CONTINUITY_RE``). Pure — no I/O.
 
     The seam defers pending-contact offers on every such turn (even when the
@@ -803,8 +823,8 @@ def is_continuity_turn(message: str, user_id: str) -> bool:
     if not uid or uid in ("guest", "voice-guest"):
         return False
     msg = message or ""
-    if _recall_inject_enabled() and _PERSONAL_QUESTION_RE.search(msg):
-        return False  # the recall floor owns personal-question turns
+    if _recall_inject_enabled() and _recall_question_shape(msg):
+        return False  # the recall floor owns recall-question turns
     return bool(_CONTINUITY_RE.search(msg))
 
 
@@ -820,7 +840,7 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
     msg = message or ""
     if not is_continuity_turn(msg, uid):
         if (_continuity_inject_enabled() and uid and uid not in ("guest", "voice-guest")
-                and not (_recall_inject_enabled() and _PERSONAL_QUESTION_RE.search(msg))):
+                and not (_recall_inject_enabled() and _recall_question_shape(msg))):
             logger.info("SEAM_CONTINUITY user=%s matched=False bullets=0 chars=0", uid)
         return ""
     # Packet and portrait run concurrently but are awaited INDEPENDENTLY: the
@@ -1265,8 +1285,8 @@ async def _run_flue_brain_streaming_turn(
     # Keep the format byte-for-byte in sync with that module. Omit empty/guest ids
     # so the sidecar's own fail-closed identity handling applies.
     uid = (user_id or "").strip()
-    # Deterministic recall floor (default OFF): on a personal-question turn,
-    # prepend the for-prompt packet so recall no longer depends on the model
+    # Deterministic recall floor (default OFF): on a personal- or event-shaped
+    # question turn, prepend the for-prompt packet so recall no longer depends on the model
     # electing to call its recall_memory tool. Placed BEFORE the identity wrap
     # so the block rides AFTER the identity line on the wire (the sidecar's
     # single-line strip regex is anchored at message start).

@@ -330,6 +330,8 @@ Return ONLY a JSON array (no preamble). Each item:
 
 If the user said how they FEEL about it (anxious, worried, excited, sad, stressed, proud…), keep that feeling in the fact — e.g. "User is anxious about their job interview on Friday", not just "User has a job interview on Friday". Never add a feeling the user did not state.
 
+If the user names a person AND says something is happening with them (a trip, visit, arrival, move, plan), return BOTH: one fact for who the person is, and one fact for the event that keeps who, what, where and when — e.g. for "my brother Tomás is driving down from Porto on Saturday": "User's brother is named Tomás" AND "User's brother Tomás is driving down from Porto on Saturday". Never drop the place or the day.
+
 If nothing personal was stated, return: []
 
 User said: {user_message}

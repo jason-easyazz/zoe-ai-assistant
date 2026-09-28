@@ -79,19 +79,85 @@ _QUESTION_SHAPE_RE = re.compile(
 _PROCEDURAL_HOW_RE = re.compile(r"^\s*how\s+(?:do|can|would|should|could)\s+(?:i|we|you)\b", re.IGNORECASE)
 
 
+# ── Event-shaped recall questions (Samantha bar S1 round 3) ──────────────────
+#
+# "Who is flying in on Thursday, and where from?" asks about something the user
+# TOLD Zoe ("my sister Marisol is flying in from Lisbon on Thursday"), yet it
+# carries no "my"/"I" — so neither the personal-question recall floor nor the
+# structural half of `message_needs_memory` saw it. These shapes are anchored
+# to the user's own life by a people-movement verb (someone arriving, visiting,
+# leaving) PLUS one of: a time cue (who + move + when), a relation word ("my
+# sister", "our parents"), or a he/she/they subject ("where is she flying
+# from"). General knowledge ("who is the prime minister", "who is playing on
+# Sunday", "when does the train leave", "what is the weather today") has none
+# of those pairings and never matches.
+_EVT_MOVE = (
+    r"(?:fly(?:ing|s)?|flown|com(?:e|es|ing)|arriv(?:e|es|ing)|land(?:s|ing)?|"
+    r"visit(?:s|ing)?|get(?:s|ting)?\s+in|stay(?:s|ing)?|leav(?:e|es|ing)|"
+    r"driv(?:e|es|ing)\s+(?:up|down|over|in|back)|"
+    r"head(?:s|ing)?\s+(?:over|home|back|down|up|in)|"
+    r"drop(?:s|ping)?\s+(?:by|in|over)|pop(?:s|ping)?\s+(?:by|in|over|round)|"
+    r"mov(?:e|es|ing)\s+in|turn(?:s|ing)?\s+up|show(?:s|ing)?\s+up|back)"
+)
+_EVT_DAY = r"(?:mon|tues|wednes|thurs|fri|satur|sun)day"
+_EVT_TIME = (
+    r"(?:today|tonight|tomorrow|this\s+(?:morning|afternoon|evening|week(?:end)?)|"
+    r"next\s+(?:week(?:end)?|month|" + _EVT_DAY + r")|(?:on\s+)?" + _EVT_DAY + r"|"
+    r"(?:at|over)\s+the\s+weekend|for\s+(?:christmas|easter|the\s+holidays))"
+)
+_EVT_REL = (
+    r"(?:mum|mom|mother|dad|father|parents?|sister|brother|siblings?|sons?|"
+    r"daughters?|kids?|children|wife|husband|partner|boyfriend|girlfriend|"
+    r"fianc[eé]e?|friends?|mates?|cousins?|aunt|auntie|uncle|nan|nana|gran|"
+    r"grandma|grandmother|grandpa|grandfather|grandparents|in-laws|niece|nephew|"
+    r"family|flatmate|roommate|housemate|neighbou?rs?|boss|colleagues?)"
+)
+_EVT_WH_AUX = (
+    r"(?:when|where|what\s+time|what\s+day|how\s+long)"
+    r"(?:['’]s|\s+(?:is|are|was|were|does|do|did|will))\s+"
+)
+EVENT_QUESTION_RE = re.compile(
+    r"(?:"
+    # who + movement + time cue: "who is flying in on Thursday", "who's coming
+    # over tonight", "who is staying with us this weekend"
+    r"\bwho(?:['’]s|\s+is|\s+are|\s+was|\s+will\s+be)\s+" + _EVT_MOVE +
+    r"\b[^.?!]{0,60}?\b" + _EVT_TIME + r"\b"
+    r"|"
+    # when/where/what time + my/our + relation: "where is my sister flying
+    # from", "what time does my dad land", "when are our parents arriving"
+    r"\b" + _EVT_WH_AUX + r"(?:my|our)\s+" + _EVT_REL + r"\b"
+    r"|"
+    # when/where/what time + he/she/they + movement: "where is she flying from",
+    # "when does he land"
+    r"\b" + _EVT_WH_AUX + r"(?:she|he|they)\s+" + _EVT_MOVE + r"\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_event_question(message: str) -> bool:
+    """True for an event-shaped question about the user's own people/plans
+    (see EVENT_QUESTION_RE). Pure str → bool."""
+    return bool(EVENT_QUESTION_RE.search(message or ""))
+
+
 def message_needs_memory(message: str) -> bool:
     """True when the message likely benefits from MemPalace semantic search.
 
     Fires on either (a) an explicit trigger word/phrase, or (b) a *structural*
-    signal: a self-reference in a question/recall shape. The structural rule
-    catches natural recall phrasings the keyword list misses ("where do I live",
-    "tell me about my mum", "what team do we support") while staying off
-    non-personal questions ("what's the weather") and procedural how-tos
-    ("how do I make pasta") that would waste the embed.
+    signal: a self-reference in a question/recall shape, or an event-shaped
+    question about the user's people/plans (``is_event_question``). The
+    structural rule catches natural recall phrasings the keyword list misses
+    ("where do I live", "tell me about my mum", "what team do we support",
+    "where is she flying from") while staying off non-personal questions
+    ("what's the weather") and procedural how-tos ("how do I make pasta") that
+    would waste the embed.
     """
     text = message or ""
     low = text.lower()
     if any(kw in low for kw in MEMORY_TRIGGER_WORDS):
+        return True
+    if is_event_question(text):
         return True
     is_question = bool(_QUESTION_SHAPE_RE.match(text)) or low.rstrip().endswith("?")
     if not is_question:
