@@ -4385,6 +4385,46 @@
         ],
         "typed_env": false
       },
+      "ZOE_VAD_CLEAN_FALL_CHUNKS": {
+        "defaults": [
+          "2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VAD_CLEAN_MIN_SPEECH_MS": {
+        "defaults": [
+          "480"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VAD_CLEAN_TAIL_MS": {
+        "defaults": [
+          "0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VAD_HESITATION_TAIL_MS": {
+        "defaults": [
+          "0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_VAD_SPEECH_THRESHOLD": {
         "defaults": [
           "'0.5'"

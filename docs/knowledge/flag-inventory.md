@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-09-28T00:00:00Z
+timestamp: 2026-09-29T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-09-28T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-09-28. The table body is deterministic (sorted, no
+Last generated: 2026-09-29. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-473 flags; 471 not documented in `.env.example`.
+477 flags; 475 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -447,6 +447,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_USE_CORE_BRAIN` | `'true'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_USE_OMNIGENT_EXECUTOR` | `'0'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_USE_PI_EXECUTOR` | `'false'` | no | NO | `services/zoe-data/pi_executor.py` |
+| `ZOE_VAD_CLEAN_FALL_CHUNKS` | `2` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VAD_CLEAN_MIN_SPEECH_MS` | `480` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VAD_CLEAN_TAIL_MS` | `0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VAD_HESITATION_TAIL_MS` | `0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_VAD_SPEECH_THRESHOLD` | `'0.5'` | no | NO | `services/zoe-data/voice_vad.py` |
 | `ZOE_VAD_TAIL_DEEP_PROB` | `'0.10'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_VAD_TAIL_MS` | `0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |

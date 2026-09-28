@@ -131,7 +131,10 @@ DEVICE_TOKEN = os.environ.get("DEVICE_TOKEN", "")
 AUDIO_DEVICE = _env("AUDIO_DEVICE", "default", "MIC_DEVICE_INDEX")
 SAMPLE_RATE = int(os.environ.get("SAMPLE_RATE", "16000"))
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1280"))
-RECORD_SECONDS = int(os.environ.get("RECORD_SECONDS_MAX", "8"))
+# 12s, was 8: 2 of 10 real panel turns on 2026-09-28 hit the 8s cap mid-sentence
+# (stop=max_duration) and were answered from a truncated transcript. STT costs
+# ~0.25s per second of clip, so only turns that are genuinely long pay for it.
+RECORD_SECONDS = _count_env("RECORD_SECONDS_MAX", 12, minimum=1)
 SILENCE_TIMEOUT_S = float(os.environ.get("SILENCE_TIMEOUT_S", "1.5"))
 RECORD_SILENCE_AMPLITUDE = int(os.environ.get("RECORD_SILENCE_AMPLITUDE", "300"))
 # ── VAD endpointing: close the turn on Silero speech-absence, not amplitude ──
@@ -164,6 +167,29 @@ VAD_ENDPOINT_THRESHOLD = float(os.environ.get("VAD_ENDPOINT_THRESHOLD", "0.35"))
 # _int_env, not int(): a malformed value (ZOE_VAD_TAIL_MS=off) must fall back
 # to disabled, never crash the daemon at import and take the panel's voice down.
 ZOE_VAD_TAIL_MS = _int_env("ZOE_VAD_TAIL_MS", 0)
+# ── Adaptive tail: a CLEAN stop closes sooner, a HESITATION waits longer ──
+# Both flag-dark (0 = off, behaviour unchanged). Measured 2026-09-28 on the live
+# 640/800 panel config: speech end -> recording closed is 720-880ms, because
+# Silero decays through the ambiguous band for 1-2 chunks before the 640ms of
+# deep quiet starts counting (docs/knowledge/voice-pipeline.md -> Panel per-turn
+# dead time).
+#  * ZOE_VAD_CLEAN_TAIL_MS: when the quiet since the last speech chunk is a
+#    CLEAN fall — at most ZOE_VAD_CLEAN_FALL_CHUNKS ambiguous decay chunks, then
+#    nothing but deep quiet — close once the whole quiet run reaches this many ms,
+#    provided the turn has at least ZOE_VAD_CLEAN_MIN_SPEECH_MS of speech. Never
+#    below _CLEAN_TAIL_FLOOR_MS. It cannot tell a finished sentence from a clean
+#    mid-sentence pause, so it trades a cut risk for speed: on 246 corpus turns
+#    560ms ended 124 earlier (median 160ms) and cut 5 mid-sentence (2%).
+#  * ZOE_VAD_HESITATION_TAIL_MS: when the quiet run went deep and then came back
+#    up into the ambiguous band (breath, "um", trailing voicing), the any-quiet
+#    limit becomes this (capped at _HESITATION_TAIL_CAP_MS) instead of
+#    VAD_ENDPOINT_SILENCE_S. A long deep run still closes on the deep tail.
+_CLEAN_TAIL_FLOOR_MS = 500
+_HESITATION_TAIL_CAP_MS = 1500
+ZOE_VAD_CLEAN_TAIL_MS = _int_env("ZOE_VAD_CLEAN_TAIL_MS", 0)
+ZOE_VAD_CLEAN_FALL_CHUNKS = max(0, _int_env("ZOE_VAD_CLEAN_FALL_CHUNKS", 2))
+ZOE_VAD_CLEAN_MIN_SPEECH_MS = max(0, _int_env("ZOE_VAD_CLEAN_MIN_SPEECH_MS", 480))
+ZOE_VAD_HESITATION_TAIL_MS = _int_env("ZOE_VAD_HESITATION_TAIL_MS", 0)
 # ── B1.1 speculative turn-start (flag-dark, default OFF) ─────────────────
 # With ZOE_SPECULATIVE_TURN on, the recorder fires the turn at its FIRST
 # end-of-turn verdict — ZOE_SPECULATIVE_TAIL_MS of consecutive DEEP quiet after
@@ -280,8 +306,16 @@ WAKE_BEEP_DURATION_MS = int(os.environ.get("WAKE_BEEP_DURATION_MS", "120"))
 WAKE_BEEP_VOLUME = float(os.environ.get("WAKE_BEEP_VOLUME", "0.22"))  # 0..1
 # Route playback explicitly (default to same ALSA device family as mic).
 AUDIO_OUTPUT_DEVICE = os.environ.get("AUDIO_OUTPUT_DEVICE", AUDIO_DEVICE).strip() or "default"
-# After TTS plays on the same speakerphone as the mic, ignore wake scores for this long (echo / Whisper "yes" loop).
-POST_PLAY_COOLDOWN_S = float(os.environ.get("POST_PLAY_COOLDOWN_S", "1.5"))
+# After a voice cycle or an announcement, ignore wake scores for this long.
+# It guards the WAKE detector (not barge-in): the speakerphone hears Zoe's own
+# TTS, and the 1.5s it used to be dates from the Whisper era, when echo of a
+# reply re-woke the panel and was transcribed as "yes" in a loop. What protects
+# that now: voice_command() ends with oww.reset() (wake model state cleared),
+# a reply is followed by POST_PLAY_TAIL_S, and the main loop sleeps 0.5s before
+# reopening the wake stream — so the wake word is scored no sooner than
+# ~0.75s + this after Zoe's last sample. 0.4s keeps ~1.15s of margin.
+# Conversation mode never reads it until the conversation has closed.
+POST_PLAY_COOLDOWN_S = max(0.0, _float_env("POST_PLAY_COOLDOWN_S", 0.4))
 # Extra settle time after playback before arming wake again (room reverb).
 POST_PLAY_TAIL_S = float(os.environ.get("POST_PLAY_TAIL_S", "0.4"))
 # ── Follow-up listening: after TTS, wait for speech without requiring wake word ──
@@ -510,6 +544,25 @@ class _Endpointer:
         self.speculation_fired = False
         self.resumed_after_speculation = False
         self._min_frames = int(0.5 * SAMPLE_RATE / CHUNK_SIZE)
+        # Adaptive tail (ZOE_VAD_CLEAN_TAIL_MS / ZOE_VAD_HESITATION_TAIL_MS):
+        # None = off. ceil like the fast tail — never earlier than configured.
+        def _ms_to_chunks(ms: int) -> int:
+            return max(1, -(-ms * SAMPLE_RATE // (1000 * CHUNK_SIZE)))
+        self._clean_max_silent = (
+            _ms_to_chunks(max(ZOE_VAD_CLEAN_TAIL_MS, _CLEAN_TAIL_FLOOR_MS))
+            if self.mode == "vad" and ZOE_VAD_CLEAN_TAIL_MS > 0 else None
+        )
+        self._clean_min_speech = (
+            -(-ZOE_VAD_CLEAN_MIN_SPEECH_MS * SAMPLE_RATE // (1000 * CHUNK_SIZE))
+        )
+        self._hes_max_silent = (
+            _ms_to_chunks(min(ZOE_VAD_HESITATION_TAIL_MS, _HESITATION_TAIL_CAP_MS))
+            if self.mode == "vad" and ZOE_VAD_HESITATION_TAIL_MS > 0 else None
+        )
+        self._speech_chunks = 0   # speech chunks heard so far this recording
+        self._fall = 0            # ambiguous decay chunks leading the current quiet run
+        self._hesitating = False  # the current quiet run went deep, then ambiguous again
+        self.tail_rule = ""       # which rule closed the recording (logged)
 
     def speculative_ready(self, n_frames: int) -> bool:
         """True exactly ONCE per recording: the first end-of-turn verdict
@@ -537,6 +590,9 @@ class _Endpointer:
                 self._spoke = True
                 self._quiet = 0
                 self._deep_quiet = 0
+                self._speech_chunks += 1
+                self._fall = 0
+                self._hesitating = False
                 return False
             self._quiet += 1
             # Borderline chunks (deep prob <= prob < speech threshold) count as
@@ -546,6 +602,11 @@ class _Endpointer:
             # opposite of evidence of silence.
             deep = 0.0 <= prob < ZOE_VAD_TAIL_DEEP_PROB
             self._deep_quiet = self._deep_quiet + 1 if deep else 0
+            if not deep:
+                if self._fall == self._quiet - 1:
+                    self._fall += 1          # still the decay straight after speech
+                else:
+                    self._hesitating = True  # back up after going quiet: not a clean stop
             if self.speculation_fired and not deep:
                 # Quiet continuation (soft speech that never crosses the speech
                 # threshold, or a VAD failure) after the first verdict: audio
@@ -555,11 +616,25 @@ class _Endpointer:
                 self.resumed_after_speculation = True
             if n_frames <= self._min_frames:
                 return False
+            if (self._spoke and self._clean_max_silent is not None
+                    and not self._hesitating
+                    and self._fall <= ZOE_VAD_CLEAN_FALL_CHUNKS
+                    and self._speech_chunks >= self._clean_min_speech
+                    and self._quiet >= self._clean_max_silent):
+                self.tail_rule = "clean"
+                return True
             if (self._spoke and self._deep_max_silent is not None
                     and self._deep_quiet >= self._deep_max_silent):
+                self.tail_rule = "deep"
                 return True
             limit = self._vad_max_silent if self._spoke else self._amp_max_silent
-            return self._quiet >= limit
+            if self._spoke and self._hesitating and self._hes_max_silent is not None:
+                limit = max(limit, self._hes_max_silent)
+            if self._quiet >= limit:
+                self.tail_rule = "hesitation" if limit != self._vad_max_silent and self._spoke else (
+                    "quiet" if self._spoke else "no_speech")
+                return True
+            return False
         amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
         if amplitude >= RECORD_SILENCE_AMPLITUDE:
             self._quiet = 0
@@ -1217,8 +1292,9 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
         speculation.recording_closed(resumed=endpointer.resumed_after_speculation)
     duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
     log.info(
-        "Recorded command: duration=%.2fs chunks=%d stop=%s endpoint=%s silence_timeout=%.2fs",
-        duration_s, len(frames), stop_reason, endpointer.mode, SILENCE_TIMEOUT_S,
+        "Recorded command: duration=%.2fs chunks=%d stop=%s endpoint=%s tail=%s silence_timeout=%.2fs",
+        duration_s, len(frames), stop_reason, endpointer.mode, endpointer.tail_rule or "-",
+        SILENCE_TIMEOUT_S,
     )
     if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
         log.info("Command too short, ignoring.")
@@ -2423,8 +2499,9 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None) -> byt
         stream.close()
         duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
         log.info(
-            "Recorded follow-up: duration=%.2fs chunks=%d stop=%s endpoint=%s silence_timeout=%.2fs",
-            duration_s, len(frames), stop_reason, endpointer.mode, SILENCE_TIMEOUT_S,
+            "Recorded follow-up: duration=%.2fs chunks=%d stop=%s endpoint=%s tail=%s silence_timeout=%.2fs",
+            duration_s, len(frames), stop_reason, endpointer.mode, endpointer.tail_rule or "-",
+            SILENCE_TIMEOUT_S,
         )
 
         if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):

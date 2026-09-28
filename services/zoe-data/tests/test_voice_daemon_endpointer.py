@@ -85,6 +85,14 @@ def _make_endpointer(vad_enabled, vad_probs=None, spoke=False, tail_ms=0):
         # fires and every case here stays on the pre-flag decision table.
         "ZOE_SPECULATIVE_TURN": False,
         "ZOE_SPECULATIVE_TAIL_MS": 320,
+        # Adaptive tail (2026-09-28): flag-dark, so every case here stays on
+        # the live 640/800 decision table.
+        "ZOE_VAD_CLEAN_TAIL_MS": 0,
+        "ZOE_VAD_CLEAN_FALL_CHUNKS": 2,
+        "ZOE_VAD_CLEAN_MIN_SPEECH_MS": 480,
+        "ZOE_VAD_HESITATION_TAIL_MS": 0,
+        "_CLEAN_TAIL_FLOOR_MS": 500,
+        "_HESITATION_TAIL_CAP_MS": 1500,
     }
     exec(compile(m.group(0), _DAEMON, "exec"), g)
     return g["_Endpointer"](spoke=spoke)
@@ -141,6 +149,9 @@ def test_vad_mode_falls_back_to_amplitude_without_silero():
         "CHUNK_SIZE": 1280,
         "_get_silero_vad": lambda: (None, None),  # model unavailable
         "_vad_prob": lambda model, chunk: 0.0,
+        "ZOE_VAD_CLEAN_TAIL_MS": 0,
+        "ZOE_VAD_CLEAN_MIN_SPEECH_MS": 480,
+        "ZOE_VAD_HESITATION_TAIL_MS": 0,
     }
     exec(compile(m.group(0), _DAEMON, "exec"), g)
     assert g["_Endpointer"]().mode == "amplitude"
