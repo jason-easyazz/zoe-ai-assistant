@@ -1131,7 +1131,7 @@ Barge-in detected during playback (monitor, prob=0.99, th=0.75, t+1120ms, window
 
 `th=` is the effective `BARGE_IN_THRESHOLD`. `t+` is measured from the first write to the player.
 `window=` gives hits/size, the probabilities, and which rule fired. Tune with the env knobs in `/home/pi/.zoe-voice/.env.voice`.
-`BARGE_IN_THRESHOLD=0.75` is live there. The VAD thresholds for normal listening
+`BARGE_IN_THRESHOLD=0.75` is live there. Every knob is validated at import. A probability must be finite and within [0, 1], and the threshold must be above 0. Counts must be ≥ 1, except the grace and the fast path, where 0 means off. Anything else logs a WARNING naming the value and keeps the default, so a typo can never silently disable a guard. The VAD thresholds for normal listening
 (`VAD_ENDPOINT_THRESHOLD`, `FOLLOW_UP_VAD_THRESHOLD`) are separate and unchanged.
 
 - **Reading the old log line.** `turn_stream TTFA=` is logged after playback drains, so its

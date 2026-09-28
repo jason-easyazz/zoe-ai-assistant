@@ -224,6 +224,53 @@ def test_malformed_env_keeps_defaults(monkeypatch):
     assert mod.BARGE_GRACE_MS == 800 and mod.BARGE_FAST_PROB == 0.95
 
 
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "1.5", "-0.1", "abc"])
+def test_invalid_probability_env_keeps_the_default(monkeypatch, caplog, bad):
+    """Greptile #1765: float("nan") parses, and every comparison against NaN is
+    False — BARGE_FAST_PROB=nan (or 1.5) would silently switch the fast path off."""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setenv("BARGE_FAST_PROB", bad)
+    monkeypatch.setenv("BARGE_IN_THRESHOLD", bad)
+    mod = _load_daemon("zoe_voice_daemon_barge_badprob_under_test")
+    assert mod.BARGE_FAST_PROB == 0.95 and mod.BARGE_IN_THRESHOLD == 0.5
+    warned = " ".join(r.getMessage() for r in caplog.records)
+    assert "BARGE_FAST_PROB" in warned and "BARGE_IN_THRESHOLD" in warned and bad in warned
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "abc"])
+def test_float_env_rejects_non_finite(daemon, monkeypatch, bad):
+    monkeypatch.setenv("ZOE_TEST_FLOAT_KNOB", bad)
+    assert daemon._float_env("ZOE_TEST_FLOAT_KNOB", 0.4) == 0.4
+
+
+def test_zero_threshold_is_rejected_but_zero_fast_prob_bounds_are_ok(monkeypatch):
+    monkeypatch.setenv("BARGE_IN_THRESHOLD", "0")   # would call every chunk speech
+    monkeypatch.setenv("BARGE_FAST_PROB", "1.0")    # edge of the range: allowed
+    mod = _load_daemon("zoe_voice_daemon_barge_edges_under_test")
+    assert mod.BARGE_IN_THRESHOLD == 0.5 and mod.BARGE_FAST_PROB == 1.0
+
+
+@pytest.mark.parametrize("name,bad,default", [
+    ("BARGE_MIN_CHUNKS", "0", 3), ("BARGE_MIN_CHUNKS", "-2", 3),
+    ("BARGE_WINDOW_CHUNKS", "0", 6), ("BARGE_WINDOW_CHUNKS", "abc", 6),
+    ("BARGE_GRACE_MS", "-100", 800), ("BARGE_GRACE_MS", "1.5", 800),
+    ("BARGE_FAST_CHUNKS", "-1", 2),
+])
+def test_invalid_count_env_keeps_the_default(monkeypatch, caplog, name, bad, default):
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setenv(name, bad)
+    mod = _load_daemon("zoe_voice_daemon_barge_badcount_under_test")
+    assert getattr(mod, name) == default
+    assert any(name in r.getMessage() for r in caplog.records)
+
+
+def test_zero_grace_and_zero_fast_chunks_are_valid_settings(monkeypatch):
+    monkeypatch.setenv("BARGE_GRACE_MS", "0")
+    monkeypatch.setenv("BARGE_FAST_CHUNKS", "0")
+    mod = _load_daemon("zoe_voice_daemon_barge_zero_under_test")
+    assert mod.BARGE_GRACE_MS == 0 and mod.BARGE_FAST_CHUNKS == 0
+
+
 # ── the pure detector ────────────────────────────────────────────────────────
 
 def test_detector_ignores_chunks_captured_before_playback(daemon):
