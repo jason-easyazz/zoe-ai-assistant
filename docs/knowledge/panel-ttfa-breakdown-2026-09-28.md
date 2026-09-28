@@ -221,16 +221,21 @@ would misattribute stage time and read the missing gap as a failed probe.
 
 1. Same log pull as above.
 2. Join `Recorded` → `:3579` POST → `VOICE TIMING` → first `10201/synthesize` → `t0 + TTFA`.
-   The `Speaker ID (shadow): … — logged, not acted on` line now lands **after** the POST
-   starts (#1760: background thread, one per turn, joined in order), so it is no longer a
-   stage — do not subtract it. Check only that exactly one such line and one
-   `speaker_shadow_metrics.jsonl` row exist per turn.
+   The `Speaker ID (shadow): … — logged, not acted on` line is no longer a stage (#1760:
+   the score runs on a background thread started just before the POST, one per turn,
+   joined in order) — do not subtract it, and do not read its position relative to the
+   POST as timing: a fast score can be logged before the POST line. Normally one such line
+   and one `speaker_shadow_metrics.jsonl` row exist per turn; a turn whose scorer had to
+   wait on a still-running predecessor logs `speaker shadow: skipped …` and has no row,
+   which is expected, not a failed measurement.
 3. For the Flue stream, read the sidecar's own line instead of timing deltas by hand:
    `journalctl --user -u flue-zoe-brain-2x | grep FLUE_EARLY_TEXT` gives `first_delta_ms`,
    `first_sentence_ms`, `deltas`, `deduped` per streamed turn (#1761, `ZOE_FLUE_EARLY_TEXT`
    on). Expect **no ~1 s gap**: first sentence − first delta is the model's own decode time
-   (post-deploy probe median 464 ms; first sentence median 749 ms warm). A `diverged=` field or
-   `deltas != deduped` is the thing to investigate, not the absence of the gap. With the flag
+   (post-deploy probe median 464 ms; first sentence median 749 ms warm). `deltas` counts text
+   frames forwarded early and `deduped` counts flushed copies the reconciler suppressed, so
+   the two can differ on a healthy turn; the thing to investigate is a `diverged=` field
+   (the early and flushed text disagreed), not a count mismatch or the absence of the gap. With the flag
    off (`enabled=0`) the historical gap returns — that is the negative control.
 4. Same bench rules as above. Also read the daemon's `Recorded …` line for `tail=` (#1766) and
    the barge-in lines for `t+<ms>` (#1765) if endpoint or interruption timing is in question.
