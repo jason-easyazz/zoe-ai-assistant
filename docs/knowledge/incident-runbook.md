@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset). Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel]
-timestamp: 2026-09-28T00:00:00Z
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, and the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag). Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing]
+timestamp: 2026-09-29T03:00:00+08:00
 ---
 
 # Production Incident Runbook
@@ -522,3 +522,104 @@ echo residual outlasts the grace, so raise `BARGE_GRACE_MS` in `.env.voice` and 
 **Prevention.** `tests/unit/test_voice_daemon_barge_in.py` (stale backlog, the user still talking
 at playback start, onset inside the grace, a real interruption 1 s in, env overrides) has negative
 controls for each guard.
+
+## 13. Editing a running landing script left Kokoro down for 5 minutes (2026-09-28)
+
+**Signature.** Kokoro is stopped and nothing restarts it. `journalctl --user -u kokoro-tts`
+shows `Stopping Kokoro TTS Sidecar` at **19:37:20** and the next `Started` only at
+**19:42:46** — a 5.4 min gap, where every other pause that day was 50–110 s (a probe window).
+Voice replies in the gap come from the fallback provider, not the CUDA sidecar; `/readyz`
+`dependencies.tts` no longer names `kokoro-sidecar`. Nothing alarms: `zoe-data` stays healthy
+and `tts.ok` stays true on the fallback.
+
+**Diagnosis.** The landing helper (`land_voice_pr.sh`, an operator scratch script) pauses
+Kokoro around the head-bound replay probe: `systemctl --user stop kokoro-tts` → probe →
+`systemctl --user start kokoro-tts`. The file was **edited while an instance of it was still
+running**. bash reads a script incrementally by byte offset, so an edit under a running
+instance makes it resume at a shifted offset: the running copy never reached its own `start`
+line and exited. The stop had happened; the start never did. Kokoro was started again at
+19:42:46.
+
+**Fix.** The helper installs the restore before the stop —
+`trap 'systemctl --user start kokoro-tts.service' EXIT` (the `kokoro-restore-trap` line) — so
+a crash, a `set -u` abort or a truncated script body still starts Kokoro. Its last step polls
+`:10201/health` for `pipeline_loaded: true` and prints it, so a run whose final line is not
+`kokoro back: … "device":"cuda"` is a run to inspect.
+
+**Prevention.**
+- Never edit a script that is running. Copy it to a new name and start the next run from the
+  copy, or wrap the body in a function called on the last line (`main "$@"`), which makes bash
+  parse the whole file before executing any of it.
+- Any window that stops Kokoro (or the brain) sets the restore `trap` **before** the stop, not
+  after — the same rule as the brain window in [voice-pipeline.md](voice-pipeline.md) →
+  *Stopping the brain does NOT guarantee it restarts*.
+- Check: `journalctl --user -u kokoro-tts --since today | grep -E 'Stopping|Started'` — a
+  stop without a start within ~90 s is this class.
+
+## 14. Auto-merge armed before the probe — a voice PR merged on an unprobed head (2026-09-28)
+
+**Signature.** A voice-path PR merges while its head-bound replay is still running. On #1757
+the review-fix push `e4a827c1` landed at 12:35:20Z, the PR **merged at 12:42:07Z**, and the
+probe for that head finished at **12:42:55Z** (`~/.cache/zoe/voice_regression_trend.jsonl`,
+commit `e4a827c1`) — 48 s after the merge. The deploy at 12:47 then found the artifact
+(`voice-gate: OK — … tree-identical to fe83ea3e (tree b7f31e22; artifact from e4a827c1)`), so
+the deploy gate was satisfied after the fact. Nothing was refused and the merged code was
+probed — but only by ordering luck; a failing probe would have found the code already on
+`main`.
+
+**Diagnosis.** `gh pr merge --squash --auto` had been armed on an earlier head. The fix push
+re-ran `validate` and `secret-scan`; auto-merge fires the moment the **required** set is
+green, and `voice-gate` is informational by design (root `AGENTS.md` → *voice-gate —
+INFORMATIONAL*), so it held nothing. Same property as #1587 in
+[merge-and-deploy.md](merge-and-deploy.md): a context that has not reported does not hold
+auto-merge. The PR-time gate cannot close this; the deploy gate is the real block, and it only
+refuses when no matching artifact exists at deploy time.
+
+**Fix.** The landing helper **disarms first** (`gh pr merge <n> --disable-auto` at the top of
+every run) and re-arms `--squash --auto` only after the head-bound probe has passed and the
+`voice-gate` run for that exact head has concluded `success`. A push to a voice PR therefore
+always means: disarm → probe the new head → gate green → arm.
+
+**Prevention.**
+- Never leave auto-merge armed across a push on a voice-path PR. Arming is the LAST step of a
+  landing, never the first.
+- Before arming, confirm the artifact is bound to the current head:
+  `python3 -c "import json;print(json.load(open('/home/zoe/.cache/zoe/voice_regression_last.json'))['revision']['commit'][:8])"`
+  must equal `gh pr view <n> --json headRefOid --jq '.headRefOid[:8]'`.
+- If a voice PR did merge unprobed, probe a checkout of the MERGED sha before its deploy (or
+  `gh run rerun` after) — merge-and-deploy.md → *Landing a voice-path PR*.
+
+## 15. Landing-chain hazards seen overnight (2026-09-28 → 09-29)
+
+Four smaller ones from the same night, each with its guard now in the landing helpers. None
+lost data on the box; one lost an agent's uncommitted edits.
+
+- **(a) GitHub created NO workflow run for a merge to `main`.** #1762 merged as `d46be79a`
+  at 22:30 and `gh run list --workflow deploy.yml` never gained a row for it (the deploy list
+  jumps from `53a6c209` 21:21 to `a1570765` 23:16); at the time the commit had 0 check-runs.
+  The deploy gate's own printed recipe (`deploy_with_probe.sh`: probe a detached worktree at
+  the merged sha with the live `.env` copied in, then `deploy_live.sh`) was run by hand; its
+  first three probes recorded `status=error` (`measure_voice failed before aggregation
+  (rc=1)` — the worktree's probe script under the venv interpreter; the live tree's script
+  with `/usr/bin/python3` and `--service-dir` is the form that works). `#1762`'s code reached
+  the box with the **#1763** deploy at 23:16 (reflog). A 2-minute watchdog
+  (`deploy_watchdog.sh`) now runs a local deploy when `origin/main` is ahead of the live
+  checkout with no deploy run after 6 min, outside the brain window and the 04:18–04:52
+  nightly-probe window. Consequence for evidence: the "post-#1762" Samantha compare at 22:38
+  ran against `53a6c209`, i.e. **before** #1762 was live — it says nothing about #1762.
+- **(b) The single replay-artifact slot was overwritten (22:34).** A stuck landing's probe
+  for another PR wrote `voice_regression_last.json` after #1762's head-bound probe (14:29Z,
+  `ac9fbd82`) and before its deploy; the deploy gate then had no artifact for that tree and
+  refused until a re-probe. Rule (unchanged, now enforced by the helpers' brain-window
+  `flock`): voice landings are strictly SERIAL, and the slot belongs to the PR being deployed
+  until its deploy has run.
+- **(c) `reset --hard` in a PR worktree wiped an agent's uncommitted edits (01:4x).** The
+  helper used to reset the agent's own worktree to `origin/<branch>` before probing. Landings
+  now use a private detached checkout per PR (`~/.worktrees/land-<pr>`) and push with an
+  explicit refspec; the agent's worktree is never touched.
+- **(d) The deploy run for a merge can be created ~4 min after the merge.** A probe started
+  in that gap (02:01) was killed by the deploy's zoe-data restart and recorded a spurious
+  `fail` (OK rate 0.5, 10 CANT_DO/ERROR — commit `1cdf275d`, land-1769). The helper now waits
+  for a **completed** deploy of `origin/main` HEAD (or 8 min of quiet) before it probes.
+  Corollary for readers of the trend file: a `fail` row during a deploy restart is not a
+  regression; the re-probe 20 min later passed 20/20.
