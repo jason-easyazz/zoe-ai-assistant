@@ -236,20 +236,26 @@ def test_switch_recipe_renders_the_drop_in_for_an_overridden_venv():
     """Greptile #1750: with ZOE_KOKORO_VENV set, a plain `cp` of the tracked drop-in
     would restart the sidecar on the DEFAULT interpreter (missing -> Restart=always
     loop, voice on fallback TTS). The build-mode recipe must render the drop-in for
-    the venv it actually built. The print sits behind the live smoke, so this pins
-    the rendering command itself and proves it on the tracked file."""
+    the venv it actually built, and the path must survive sed's replacement side
+    (\\ & and the # delimiter are special there). The print sits behind the live
+    smoke, so this pins the escaping + rendering commands and proves them on the
+    tracked file."""
     src = BUILD.read_text()
-    m = re.search(r"sed '(s#[^']+#\$VENV_DIR/bin/python#)' scripts/setup/systemd/kokoro-tts\.service\.d/60-kokoro-venv\.conf", src)
-    assert m, "override branch of the switch recipe not found"
     assert 'if [[ "$VENV_DIR" == "$HOME/.zoe/venvs/kokoro-py310" ]]' in src
-    override = "/srv/other/kokoro-venv"
-    expr = m.group(1).replace("$VENV_DIR", override)
+    esc = re.search(r"""venv_sed=\$\(printf '%s' "\$VENV_DIR" \| sed '([^']+)'\)""", src)
+    assert esc, "sed-escaping of the override path not found"
+    m = re.search(r"sed '(s#[^']+#\$venv_sed/bin/python#)' scripts/setup/systemd/kokoro-tts\.service\.d/60-kokoro-venv\.conf", src)
+    assert m, "override branch of the switch recipe not found"
+    # every character that is special on sed's replacement side, plus the delimiter
+    override = "/srv/we&they/#kokoro\\venv"
+    venv_sed = subprocess.run(["sed", esc.group(1)], input=override, capture_output=True,
+                              text=True, check=True).stdout
+    assert venv_sed != override, "escaping must change a path with special characters"
+    expr = m.group(1).replace("$venv_sed", venv_sed)
     r = subprocess.run(["sed", expr, str(DROP_IN)], capture_output=True, text=True, check=True)
     rendered = [ln.split("=", 1)[1] for ln in r.stdout.splitlines() if ln.startswith("ExecStart=")]
     assert rendered[0] == "" and len(rendered) == 2
-    interp, *args = shlex.split(rendered[1])
-    assert interp == f"{override}/bin/python"
-    assert args == ["%h/assistant/scripts/setup/kokoro_sidecar.py"]
+    assert rendered[1] == f"{override}/bin/python %h/assistant/scripts/setup/kokoro_sidecar.py"
     # negative control: the untouched tracked file still names the default
     assert shlex.split(_exec_lines(DROP_IN)[1])[0] == "%h/.zoe/venvs/kokoro-py310/bin/python"
 

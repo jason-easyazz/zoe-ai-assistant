@@ -214,8 +214,10 @@ if [[ "$MODE" == build ]]; then
     # ZOE_KOKORO_VENV override: the tracked drop-in's ExecStart names the DEFAULT venv, so a
     # plain copy would restart the sidecar on an interpreter that may not exist (Restart=always
     # loop, voice on fallback TTS). Render the drop-in for the venv that was actually built.
+    # sed-escape the path for the replacement side: \ & and the # delimiter are special there.
+    venv_sed=$(printf '%s' "$VENV_DIR" | sed 's/[\\&#]/\\&/g')
     echo "  # ZOE_KOKORO_VENV=$VENV_DIR — render the drop-in for THIS venv (the tracked file names the default):"
-    echo "  sed 's#%h/.zoe/venvs/kokoro-py310/bin/python#$VENV_DIR/bin/python#' scripts/setup/systemd/kokoro-tts.service.d/60-kokoro-venv.conf > ~/.config/systemd/user/kokoro-tts.service.d/60-kokoro-venv.conf"
+    echo "  sed 's#%h/.zoe/venvs/kokoro-py310/bin/python#$venv_sed/bin/python#' scripts/setup/systemd/kokoro-tts.service.d/60-kokoro-venv.conf > ~/.config/systemd/user/kokoro-tts.service.d/60-kokoro-venv.conf"
   fi
   echo "  systemctl --user daemon-reload && systemctl --user restart kokoro-tts   # poll :10201/health for pipeline_loaded + cuda"
 fi
