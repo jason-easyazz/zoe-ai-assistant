@@ -111,6 +111,60 @@ _INTENT_ROUTER_DOMAINS: dict[str, frozenset[str]] = {
     "music_volume": frozenset({"music", "smart_home"}),
     "set_volume": frozenset({"music", "smart_home"}),
     "smart_home": frozenset({"smart_home", "music"}),
+    "journal_prompt": frozenset({"journal", "notes"}),
+    "journal_streak": frozenset({"journal", "notes"}),
+    "memory_forget_entity": frozenset({"memory", "people"}),
+    "memory_forget_last": frozenset({"memory", "people"}),
+    "portrait_reveal": frozenset({"memory", "people"}),
+    "portrait_refresh": frozenset({"memory", "people"}),
+    "music_setup": frozenset({"music"}),
+}
+
+# Detector intents the gate deliberately does NOT consult the head on, and why.
+# Every intent the keyword detector can emit must be in exactly one of
+# `_INTENT_ROUTER_DOMAINS` or here (pinned by tests/test_intent_router_gate.py) —
+# a new detector intent that lands in neither silently bypasses the head.
+_INTENT_UNGATED: dict[str, str] = {
+    # no router class — the head's 13 labels have nothing to agree with
+    "calculate": "maths; no router class",
+    "recipe_search": "recipes; no router class",
+    "transaction_create": "money; no router class",
+    "transaction_summary": "money; no router class",
+    "time_planning_clarification": "asks a clarifying question; no router class",
+    # conversational micro-replies / the brief: the head labels them `chat`,
+    # which cannot tell them apart from a brain turn — gating would only add latency
+    "greeting": "conversational micro-reply",
+    "acknowledgement": "conversational micro-reply",
+    "lets_talk": "conversational micro-reply",
+    "good_morning": "morning brief trigger",
+    "good_evening": "evening brief trigger",
+    "daily_briefing": "brief trigger; spans several domains",
+    # replies to an offer Zoe just made: context the head (bare words) cannot see
+    "pending_offer_accept": "reply to a pending offer (context follow-up)",
+    "pending_offer_dismiss": "reply to a pending offer (context follow-up)",
+    # operator / system / engineering commands: explicit command syntax, no router class
+    "status_check": "system command",
+    "self_improve": "system command",
+    "extend_capability": "system command",
+    "evolution_proposals_review": "system command",
+    "user_issue_report": "system command",
+    "agent_tasks_status": "system command",
+    "board_status": "engineering command",
+    "board_heal": "engineering command",
+    "build_page": "engineering command",
+    "build_widget": "engineering command",
+    "engineering_dispatch_pause": "engineering command",
+    "engineering_dispatch_resume": "engineering command",
+    "engineering_task_create": "engineering command",
+    "engineering_task_status": "engineering command",
+    "engineering_ticket_list": "engineering command",
+    "engineering_ticket_move_todo": "engineering command",
+    "engineering_ticket_split": "engineering command",
+    "ha_full_setup": "setup flow",
+    "panel_setup": "panel command",
+    "panel_status": "panel command",
+    "panel_list": "panel command",
+    "panel_confirm_code": "panel pairing code",
 }
 
 
