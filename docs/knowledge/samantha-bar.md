@@ -157,6 +157,21 @@ router_two_stage {"actual_routed": "calendar", "gated": false, "head_conf": 0.53
 samples (`mentions_interview: false` on every sample; the worry had landed in the recall
 packet, `landed: true`).
 
+**S4 root cause + fix candidate (implemented, pending live compare).** On the Flue lane the
+sidecar does not consume the per-turn memory packet, so continuity rested on the 4B calling
+`recall_memory` (it under-fires) and on the seam recall floor (`ZOE_SEAM_RECALL_INJECT`),
+which fires only on personal-QUESTION shapes. The day-2 ask is a mood STATEMENT, so nothing
+carried the worry. Fix: a second trigger class in `zoe_flue_client.py` (`_CONTINUITY_RE`,
+first-person emotional/state statements) injects the for-prompt packet composed in
+`mode="continuity"` — facts captured in the last 72 h lead, emotional rows first, capped at
+6 of 12 bullets / 1600 chars — plus one capped portrait line, in the recall block's wire
+position. Flag `ZOE_SEAM_CONTINUITY_INJECT`, **default ON**, `false`/`0`/`off` is the kill
+switch; each turn logs `SEAM_CONTINUITY user=… matched=… bullets=… chars=…` to
+`~/.zoe-logs/zoe-data.app.log`. Acceptance: after deploy, `samantha_bar.py
+--compare-baseline` shows S4 PASS and no other scenario regressing; then re-record the bar.
+Only the two S4 turns in the whole harness script match the trigger (checked against every
+`SAY_*`/`ASK_*`/`FILLER` line), so no other scenario's outbound message changes.
+
 Next targets, in order (tracker §0): (a) a **router confidence gate** — head decisions below
 ~0.6 fall through to the chat lane (brain + recall packet) instead of a deterministic tool,
 and the miss feeds the router self-train corpus; (b) **emotional continuity** for S4, with

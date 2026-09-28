@@ -67,7 +67,7 @@ def _wire_voice_command_fakes(monkeypatch, *, panel_user: str | None):
     def fake_spawn_bg(coro):
         spawned.append(asyncio.ensure_future(coro))
 
-    async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
+    async def resolve_skybridge_request(text, user_id, *, context=None, db=None, **_kw):
         return {
             "handled": True,
             "spoken_summary": "Here is the calendar.",
