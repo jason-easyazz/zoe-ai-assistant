@@ -93,7 +93,7 @@ needs the provider token to be valid, and it only works on the home Wi-Fi.
 | `GET /form` succeeds | `awaiting_phone` |
 | `POST /save` (Qobuz form, YT Music cookie) | `completing`, then `done` / `error` from the save result |
 | `POST /oauth/start` (Spotify / Tidal / Deezer) | `completing`; `music_oauth.watch()` reports the attempt's end (MA 2.10 FINISH/ABORT event, 2.8.x `auth` action, socket loss, timeout or prune) |
-| `POST /browser/start` (YouTube Music) | `completing`; `ytmusic_signin.watch()` reports the session's end (connected, timeout, error, or `/browser/cancel`) |
+| `POST /browser/start` (YouTube Music) | `completing`; `ytmusic_signin.watch()` reports the session's end (connected, timeout, error, or `/browser/cancel`), and its `on_progress` re-marks `completing` with a "sign in again" detail when the profile's old sign-in had expired and was cleared (`stale_cookie_cleared`) |
 
 A free provider (Radio Browser, TuneIn) connects at once, with no handoff and no
 QR. Reconnect still happens **in place**: the router and `save_provider` pass

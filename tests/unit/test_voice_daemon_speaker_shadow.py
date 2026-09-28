@@ -22,6 +22,7 @@ import importlib.util
 import inspect
 import json
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -213,8 +214,11 @@ def test_stream_fallback_does_not_double_log_the_turn(daemon, monkeypatch, shado
     assert len(scored) == 1, "fallback re-scored a handed-over claim"
     assert len(_rows(shadow_log)) == 1, "fallback wrote a second shadow row"
 
-    # 3. Sentinel (no claim handed over) — scoring MUST run.
+    # 3. Sentinel (no claim handed over) — scoring MUST run. In shadow mode it
+    # runs on the background scorer (off the upload's critical path), so wait
+    # for it before counting.
     daemon._do_single_turn(None, b"wav")
+    daemon._shadow_score_last.join(timeout=5)
     assert len(scored) == 2, "sentinel path failed to score"
     assert len(_rows(shadow_log)) == 2
 
@@ -474,3 +478,264 @@ def test_n_profiles_counts_only_compared_rows(daemon, monkeypatch, shadow_log):
     daemon._record_speaker_shadow(claim)
     row = _rows(shadow_log)[-1]
     assert row["n_profiles"] == 1, f"skipped rows counted: {row['n_profiles']}"
+
+
+# ── the shadow score is OFF the first-audio critical path ───────────────────
+# Panel TTFA fix #1 (docs/knowledge/panel-ttfa-breakdown-2026-09-28.md): the
+# shadow claim is never attached, yet scoring it before the POST cost a median
+# 0.54 s (max 1.12 s) of dead air per turn. The upload must START before the
+# score completes, and the turn must still produce exactly one row + the same
+# journal line. Negative control: score synchronously again → these go red.
+
+class _FakeStreamResp:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def raise_for_status(self):
+        pass
+
+    def iter_lines(self, decode_unicode=False):  # noqa: ARG002
+        return iter(self._lines)
+
+
+def _gated_scorer(daemon, monkeypatch):
+    """A scorer that cannot finish until the test releases it (≤2 s, never hangs)."""
+    release = threading.Event()
+    done = threading.Event()
+
+    def _score(wav):  # noqa: ARG001
+        release.wait(timeout=2)
+        done.set()
+        return ("jason", 0.735)
+
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", _score)
+    return release, done
+
+
+def test_stream_upload_starts_before_the_shadow_score_completes(daemon, monkeypatch, shadow_log, caplog):
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    release, done = _gated_scorer(daemon, monkeypatch)
+    posted = []
+
+    def _post(url, **kw):  # noqa: ARG001
+        posted.append((kw["json"], done.is_set()))
+        release.set()  # the scorer may only finish once the upload is under way
+        return _FakeStreamResp([json.dumps({"transcript": "", "done": True, "reply": ""}).encode()])
+
+    monkeypatch.setattr(daemon.requests, "post", _post, raising=False)
+    monkeypatch.setattr(daemon, "_do_single_turn", lambda *a, **k: pytest.fail("unexpected blocking fallback"))
+
+    with caplog.at_level("INFO"):
+        daemon._do_single_turn_stream(None, b"RIFFwav", prompt_on_empty=False)
+        daemon._shadow_score_last.join(timeout=5)
+
+    assert len(posted) == 1
+    payload, scored_before_post = posted[0]
+    assert scored_before_post is False, "the POST waited for the shadow score (critical path)"
+    assert "voice_user_id" not in payload and "voice_score" not in payload  # shadow: never attached
+    rows = _rows(shadow_log)
+    assert len(rows) == 1 and rows[0]["user_id"] == "jason"
+    # Exact journal line the log-based tooling joins on.
+    msgs = [r.getMessage() for r in caplog.records]
+    assert "Speaker ID (shadow): jason (0.735) — logged, not acted on" in msgs
+
+
+def test_blocking_upload_starts_before_the_shadow_score_completes(daemon, monkeypatch, shadow_log):
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "VOICE_ROUTE_MODE", "direct")
+    release, done = _gated_scorer(daemon, monkeypatch)
+    posted = []
+
+    def _api_post(path, data, *a, **k):  # noqa: ARG001
+        posted.append((data, done.is_set()))
+        release.set()
+        return {"ok": True, "text": "", "reply": ""}
+
+    monkeypatch.setattr(daemon, "_api_post", _api_post)
+    daemon._do_single_turn(None, b"RIFFwav", prompt_on_empty=False)
+    daemon._shadow_score_last.join(timeout=5)
+
+    assert len(posted) == 1
+    payload, scored_before_post = posted[0]
+    assert scored_before_post is False, "the POST waited for the shadow score (critical path)"
+    assert "voice_user_id" not in payload
+    assert len(_rows(shadow_log)) == 1
+
+
+def test_active_mode_still_scores_inline_and_attaches_the_claim(daemon, monkeypatch, shadow_log):
+    # With shadow OFF the claim rides in the payload, so it MUST exist before
+    # the POST — there is no follow-up path to deliver a late claim.
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", False)
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", lambda wav: ("jason", 0.9))
+    monkeypatch.setattr(daemon, "_start_shadow_scoring",
+                        lambda wav: pytest.fail("active mode must not defer the attached claim"))
+    posted = []
+
+    def _post(url, **kw):  # noqa: ARG001
+        posted.append(kw["json"])
+        return _FakeStreamResp([json.dumps({"transcript": "", "done": True, "reply": ""}).encode()])
+
+    monkeypatch.setattr(daemon.requests, "post", _post, raising=False)
+    daemon._do_single_turn_stream(None, b"RIFFwav", prompt_on_empty=False)
+    assert posted[0]["voice_user_id"] == "jason" and posted[0]["voice_score"] == 0.9
+    assert not shadow_log.exists()
+
+
+def test_background_scorers_run_one_at_a_time_in_turn_order(daemon, monkeypatch, shadow_log):
+    # One resemblyzer inference in flight at a time (one model copy, flat
+    # memory), and rows land in the order the turns were spoken.
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    first_may_finish = threading.Event()
+    active = []
+    overlap = []
+
+    def _score(wav):
+        active.append(wav)
+        if len(active) > 1:
+            overlap.append(list(active))
+        if wav == b"turn-1":
+            first_may_finish.wait(timeout=2)
+        active.remove(wav)
+        return (wav.decode(), 0.8)
+
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", _score)
+    daemon._start_shadow_scoring(b"turn-1")
+    second = daemon._start_shadow_scoring(b"turn-2")
+    first_may_finish.set()
+    second.join(timeout=5)
+
+    assert overlap == [], "two speaker-ID inferences ran concurrently"
+    assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1", "turn-2"]
+
+
+# ── background scoring: shutdown drain + failed thread start ────────────────
+
+def test_orderly_shutdown_drains_a_mid_run_scorer(daemon, monkeypatch, shadow_log):
+    # Scorers are daemon threads: without the drain, a restart right after a
+    # turn exits before the row is written.
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    release = threading.Event()
+
+    def _score(wav):  # noqa: ARG001
+        release.wait(timeout=2)
+        return ("jason", 0.735)
+
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", _score)
+    daemon._start_shadow_scoring(b"turn")
+    threading.Timer(0.2, release.set).start()  # still mid-run when shutdown begins
+
+    assert daemon._drain_shadow_scoring(timeout=3.0) is True
+    assert len(_rows(shadow_log)) == 1, "shutdown returned before the pending row was written"
+
+
+def test_drain_is_bounded_and_reports_a_stuck_scorer(daemon, monkeypatch, shadow_log):
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    release = threading.Event()
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav",
+                        lambda wav: release.wait(timeout=5) and None)
+    t = daemon._start_shadow_scoring(b"turn")
+    try:
+        assert daemon._drain_shadow_scoring(timeout=0.1) is False  # a stop never hangs
+    finally:
+        release.set()
+        t.join(timeout=5)
+
+
+def test_main_shutdown_path_drains_pending_scorers(daemon):
+    # main() needs the mic and wake models, so pin the wiring structurally: the
+    # drain must sit in main()'s shutdown `finally`, which runs on SIGTERM/SIGINT
+    # (the handler only sets _shutdown, ending the loop) and on a crash.
+    import ast
+
+    tree = ast.parse(inspect.getsource(daemon.main))
+    finals = [n for n in ast.walk(tree) if isinstance(n, ast.Try) and n.finalbody]
+    called = {
+        c.func.id
+        for t in finals for stmt in t.finalbody for c in ast.walk(stmt)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+    }
+    assert "_drain_shadow_scoring" in called
+
+
+def test_failed_thread_start_scores_inline_and_later_turns_still_score(daemon, monkeypatch, shadow_log, caplog):
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", lambda wav: (wav.decode(), 0.8))
+
+    class _NoStartThread(threading.Thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    import types
+    fake_threading = types.SimpleNamespace(**vars(threading))
+    fake_threading.Thread = _NoStartThread
+    monkeypatch.setattr(daemon, "threading", fake_threading)
+    with caplog.at_level("WARNING"):
+        assert daemon._start_shadow_scoring(b"turn-1") is None
+    # The failed-start turn still got its row (scored inline) and said so.
+    assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1"]
+    assert any("failed to start" in r.getMessage() for r in caplog.records)
+    assert not isinstance(daemon._shadow_score_last, _NoStartThread), "an unstarted thread was published"
+
+    # The next turn's scorer runs normally — nothing unstarted to join.
+    monkeypatch.setattr(daemon, "threading", threading)
+    t = daemon._start_shadow_scoring(b"turn-2")
+    assert t is not None
+    t.join(timeout=5)
+    assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1", "turn-2"]
+
+
+def test_failed_start_skips_rather_than_overlaps_a_still_running_predecessor(daemon, monkeypatch, shadow_log, caplog):
+    # A failed start whose predecessor is STILL running after the bounded wait
+    # must not score inline: that would put two inferences on the one encoder
+    # and land this row ahead of the predecessor's. Skip it, loudly.
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "_SHADOW_INLINE_WAIT_S", 0.1)
+    release = threading.Event()
+    active = []
+    overlap = []
+
+    def _score(wav):
+        active.append(wav)
+        if len(active) > 1:
+            overlap.append(list(active))
+        if wav == b"turn-1":
+            release.wait(timeout=3)
+        active.remove(wav)
+        return (wav.decode(), 0.8)
+
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", _score)
+    first = daemon._start_shadow_scoring(b"turn-1")  # still running below
+
+    class _NoStartThread(threading.Thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    import types
+    fake_threading = types.SimpleNamespace(**vars(threading))
+    fake_threading.Thread = _NoStartThread
+    monkeypatch.setattr(daemon, "threading", fake_threading)
+    try:
+        with caplog.at_level("WARNING"):
+            assert daemon._start_shadow_scoring(b"turn-2") is None
+    finally:
+        monkeypatch.setattr(daemon, "threading", threading)
+        release.set()
+    first.join(timeout=5)
+
+    assert overlap == [], "inline fallback overlapped a still-running scorer"
+    assert any("speaker shadow: skipped (predecessor still running)" in r.getMessage()
+               for r in caplog.records)
+    assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1"]
+
+    # The next turn scores normally, in order.
+    third = daemon._start_shadow_scoring(b"turn-3")
+    third.join(timeout=5)
+    assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1", "turn-3"]

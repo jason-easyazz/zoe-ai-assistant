@@ -3604,10 +3604,16 @@ async def voice_command(
         # "connection has been released back to the pool" and the fast path
         # silently dies. resolve_skybridge_request acquires a fresh pooled
         # connection itself when db is omitted.
+        # router_decision: the fast path DEFERS to the two-stage router — when the
+        # router ran and said chat (or another domain), Skybridge may not claim
+        # the turn; it falls through to the brain. Logged as SKYBRIDGE_GATE.
+        # None (router off/failed) = no veto, today's behaviour. Flag:
+        # ZOE_SKYBRIDGE_ROUTER_VETO (default on). Live over-claim 2026-09-28.
         _skybridge_result = await resolve_skybridge_request(
             text,
             _skybridge_user,
             context=_skybridge_context,
+            router_decision=_router_decision,
         )
         _sky_t_resolve = time.monotonic() - _sky_t0
         if _skybridge_result and _skybridge_result.get("auth_required"):

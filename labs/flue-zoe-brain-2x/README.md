@@ -349,10 +349,25 @@ emits that exact contract via **content negotiation** on the existing route:
 Auth is unchanged (the streaming path upgrades the response only after the
 fail-closed route + admission succeed); identity binding and the write gate
 are tool-level and unaffected. Events come from the runtime's in-process
-`observe()` feed (the durable stream buffers deltas ~3 s — too slow for voice
-TTFT). Contract + framing details and known limits: `src/streaming.ts`;
+`observe()` feed (the durable stream is read back from storage — too slow for
+voice TTFT). Contract + framing details and known limits: `src/streaming.ts`;
 byte-pinned tests: `test/sentinel_stream.test.ts`. Kill switch:
 `ZOE_BRAIN_STREAM=0` restores pre-streaming behaviour entirely.
+
+**Model text does not wait for the store (early text, 2026-09-28).**
+`observe()` delivers `text_delta` only after @flue/runtime 2.1.1's batched
+storage write, which flushes at most once a second
+(`CANONICAL_FLUSH_DELAY_MS = 1e3`, module-private, no knob). That made every
+reply one early token, ~1 s of silence, then a burst. `src/early-text.ts`
+taps the provider stream through the runtime's supported `instrument()`
+execution interceptor and publishes each delta the moment the model yields it.
+The streaming middleware forwards that copy and drops the flushed `observe()`
+copy by per-model-call character offset, so no text is sent twice. The store,
+the canonical transcript, tool sentinels and the `done` terminal are unchanged.
+Kill switch: `ZOE_FLUE_EARLY_TEXT=0`. One `FLUE_EARLY_TEXT first_delta_ms=…
+first_sentence_ms=… deltas=… deduped=… enabled=…` line per streamed turn.
+Pinned by `test/early_text.test.ts` (real runtime, real flush, flag-off
+negative control). Measurements: docs/knowledge/voice-pipeline.md.
 
 ## Build / typecheck / test
 
@@ -381,6 +396,7 @@ npm test                   # offline unit tests (node --test, type-stripping)
 | `ZOE_BRAIN_STICKY_DISCLOSURE` | `true` | `false` restores last-user-message-only keyword disclosure (groups decay again, at the cost of a prompt-cache miss whenever the tool block changes) |
 | `ZOE_WEB_SEARCH_TOOL` | `0` | B10.1: `1` registers the flag-gated `web_search` tool (thin wrapper over zoe-data `POST /api/system/web-search`, which needs the SAME flag on its side); always disclosed when registered; `/health` then lists it under `optional_tools` so zoe-data can confirm before advertising it. **Trust boundary (W15):** results are untrusted third-party text — returned FENCED by `src/untrusted-content.ts` (fixed "content, not instructions" preamble + `<<<BEGIN/END UNTRUSTED WEB RESULTS>>>` block; tag/chat-template/tool-call markup, `<`/`>`, escaped brackets, `[INST]`, control/invisible chars and role markers neutralised; title/snippet/link capped at 120/300/200; http(s) links only), and once results are returned every state-changing tool (`runWrite` + `set_timer`) AND `web_search` itself (a second search is an outbound exfiltration channel; refused with no HTTP call) refuse with "not allowed after untrusted web content this turn" until the turn ends (keyed by the turn's AbortSignal, like replay isolation); reads stay available; no-result outcomes do not taint. Pinned by `test/web_search_fencing.test.ts` (injection fixture + negative controls) |
 | `ZOE_BRAIN_STREAM` | `on` | `0`/`false` disables the NDJSON sentinel-stream mode |
+| `ZOE_FLUE_EARLY_TEXT` | `on` | `0`/`false` stops forwarding model text ahead of the runtime's 1 s storage flush (`src/early-text.ts`); the stream then carries `observe()`'s flushed deltas only |
 | `ZOE_BRAIN_STREAM_TIMEOUT_S` | `180` | streamed-turn deadline (mirrors prod `ZOE_CORE_TIMEOUT_S`) |
 | `ZOE_BRAIN_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible brain endpoint |
 | `ZOE_BRAIN_API_KEY` | `local-no-key` | placeholder key for the completions client |

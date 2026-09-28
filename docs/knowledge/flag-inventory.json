@@ -4021,6 +4021,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_SKYBRIDGE_ROUTER_VETO": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_SKYBRIDGE_TIMEZONE": {
         "defaults": [
           "-"

@@ -31,6 +31,7 @@ import { createAgentRouter } from '@flue/runtime/routing';
 import { Hono } from 'hono';
 import { Zoe } from './agents/zoe.ts';
 import { requireBrainToken } from './auth.ts';
+import { installEarlyTextTap } from './early-text.ts';
 import { createZoeProvider } from './providers/capped-completions.ts';
 import { seamAStreamingMiddleware } from './streaming.ts';
 import { optionalZoeTools } from './tools/zoe-tools.ts';
@@ -52,6 +53,12 @@ export function createApp(): Hono {
   // `local-gemma` extension points at, wrapped by the capped wire handler that
   // imposes the per-turn tool-iteration ceiling and progressive tool disclosure.
   setProvider(createZoeProvider());
+
+  // Early text: an execution interceptor that publishes the provider's text
+  // deltas as the model yields them, ahead of @flue/runtime's 1 s batched store
+  // flush (src/early-text.ts). Idempotent; a pure pass-through until a
+  // streaming turn subscribes. Kill switch: ZOE_FLUE_EARLY_TEXT=0.
+  installEarlyTextTap();
 
   const app = new Hono();
 
