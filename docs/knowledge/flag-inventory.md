@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-470 flags; 468 not documented in `.env.example`.
+471 flags; 469 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -412,6 +412,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SETUP_QR_HANDLE_TTL_S` | `'120'` | no | NO | `services/zoe-data/setup_qr.py` |
 | `ZOE_SILERO_VAD_MODEL` | `''` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/voice_vad.py` |
 | `ZOE_SKYBRIDGE_ONLY` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_SKYBRIDGE_ROUTER_VETO` | `'1'` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SKYBRIDGE_TIMEZONE` | `-` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SMART_TURN_ENABLED` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_MAX_CHECKS` | `'2'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |

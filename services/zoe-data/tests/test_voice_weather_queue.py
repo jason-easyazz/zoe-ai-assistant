@@ -473,7 +473,7 @@ async def test_broadcast_skybridge_ui_skips_supersession_when_card_id_missing(mo
 async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, resolver_text, domain, reply) -> None:
     calls: dict[str, object] = {"broadcast": [], "events": []}
 
-    async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
+    async def resolve_skybridge_request(text, user_id, *, context=None, db=None, **_kw):
         calls["resolver"] = {
             "text": text,
             "user_id": user_id,
@@ -577,7 +577,7 @@ async def test_voice_command_emits_processing_cue_for_non_pi_fallback(monkeypatc
 
     calls: dict[str, object] = {"broadcast": [], "events": []}
 
-    async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
+    async def resolve_skybridge_request(text, user_id, *, context=None, db=None, **_kw):
         return {
             "handled": True,
             "spoken_summary": "Here is the calendar.",
@@ -665,7 +665,7 @@ async def test_voice_command_emits_processing_cue_for_non_pi_fallback(monkeypatc
 async def test_voice_skybridge_private_request_challenges_guest_before_cards(monkeypatch) -> None:
     calls: dict[str, object] = {"broadcast_called": False, "challenge_called": False}
 
-    async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
+    async def resolve_skybridge_request(text, user_id, *, context=None, db=None, **_kw):
         calls["resolver"] = {"text": text, "user_id": user_id, "context": context, "db": db}
         return {
             "handled": True,
@@ -734,7 +734,7 @@ async def test_voice_skybridge_private_request_challenges_guest_before_cards(mon
 async def test_voice_skybridge_auth_challenge_failure_does_not_fall_through(monkeypatch) -> None:
     calls: dict[str, object] = {"broadcast_called": False}
 
-    async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
+    async def resolve_skybridge_request(text, user_id, *, context=None, db=None, **_kw):
         return {
             "handled": True,
             "auth_required": True,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -1091,6 +1092,97 @@ _VOICE_SHOW_RE = re.compile(
 )
 
 
+# ── Command SHAPE for the people fast path ──────────────────────────────────
+# The people branches used to claim a turn from a BARE KEYWORD anywhere in the
+# utterance (" family", " friends", " person", " contact" …). Live 2026-09-28 the
+# panel heard "I go down and I spend the weekends with him and just get updates
+# from the family." and answered "I found 0 contacts." — a statement about
+# Jason's life, answered as a directory query. Same class as #1150 (the fast
+# path greedily claiming "add a journal entry"). These words are everyday
+# vocabulary, so the people fast path now claims ONLY a command or a question:
+# an imperative/interrogative anchored at the START of the utterance (after
+# wake-word / filler / politeness), with the people noun as the verb's OBJECT.
+# A declarative containing the word falls through to the brain.
+#
+# `_SHAPE_LEAD` eats what Moonshine actually puts in front of a command on the
+# panel ("Hey, Zoe.", "Yeah.", "Sorry.", "Thank you. Hey, Zoe."). `text` in the
+# classifier is lower-cased and space-padded with trailing punctuation stripped;
+# internal punctuation survives, hence the `[\s,.!?]*` separators.
+_SHAPE_LEAD = (
+    r"^\s*(?:(?:hey|hi|hello|ok|okay|so|and|um|uh|oh|well|yeah|yes|sorry|please"
+    r"|thanks|thank\s+you|bye|zoe|zoey)\b[\s,.!?]*)*"
+)
+_SHAPE_POLITE = (
+    r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?"
+    r"|please\s+"
+    r"|(?:can|could|may)\s+i\s+"
+    r"|i\s+(?:want|would\s+like)\s+to\s+|i'd\s+like\s+to\s+|i\s+wanna\s+"
+    r"|let\s+me\s+|let's\s+)?"
+)
+# The people nouns, as WHOLE words: `(?!')` keeps "my family's place" out, and
+# the trailing \b keeps "personal"/"persona"/"contacted" out (" person" used to
+# match "personal" as a substring).
+_PEOPLE_NOUN = (
+    r"(?:people|contacts?|contact\s+list|directory|address\s+book"
+    r"|family(?:\s+members)?|friends|person|profile)\b(?!')"
+)
+_PEOPLE_QUALIFIERS = r"(?:(?:work|personal|close|inner|best|old|new|other|family)\s+){0,2}"
+_PEOPLE_DETERMINER = r"(?:(?:all\s+(?:of\s+)?)?(?:my|our|the|your|zoe's)\s+|all\s+)?"
+# "see"/"get"/"go to"/"look at" are deliberately NOT here: "I want to see my
+# family this weekend" and "I need to go to my family's" are life statements.
+_PEOPLE_VERB = (
+    r"(?:show|showing|list|open|find|search(?:\s+for)?|look\s+up|pull\s+up"
+    r"|bring\s+up|display|view|browse|check|tell\s+me\s+about)"
+)
+_PEOPLE_DIRECTORY_ASK_RE = re.compile(
+    "|".join(
+        (
+            # imperative: "show my family", "open people", "can you tell me about the contacts"
+            _SHAPE_LEAD + _SHAPE_POLITE + _PEOPLE_VERB + r"\s+(?:(?:me|us)\s+)?"
+            + _PEOPLE_DETERMINER + _PEOPLE_QUALIFIERS + _PEOPLE_NOUN,
+            # bare noun phrase as the whole turn: "contacts", "my family", "people"
+            _SHAPE_LEAD + r"(?:my\s+|our\s+|the\s+)?" + _PEOPLE_QUALIFIERS + _PEOPLE_NOUN + r"\s*$",
+            # "who's in my family" / "who are my friends" / "who is in my contacts"
+            _SHAPE_LEAD + r"who(?:'s|\s+is|\s+are|\s+do\s+i\s+have)\s+(?:in\s+)?(?:my|our)\s+"
+            + _PEOPLE_QUALIFIERS + _PEOPLE_NOUN,
+            # "what contacts do I have" / "how many people are in my contacts"
+            _SHAPE_LEAD + r"(?:what|which|how\s+many)\s+" + _PEOPLE_QUALIFIERS + _PEOPLE_NOUN
+            + r"\s+(?:do|did|have|are|is)\b",
+            # "do I have any contacts"
+            _SHAPE_LEAD + r"(?:do|have)\s+(?:i|we)\s+(?:have|got)\s+(?:any\s+)?" + _PEOPLE_QUALIFIERS + _PEOPLE_NOUN,
+            # "what's in my contacts" / "what are my contacts" — noun must END the turn,
+            # so "what's my family doing this weekend" stays a conversation.
+            _SHAPE_LEAD + r"(?:what's|whats|what\s+is|what\s+are)\s+(?:in\s+|on\s+)?(?:my|our|the)\s+"
+            + _PEOPLE_QUALIFIERS + _PEOPLE_NOUN + r"\s*$",
+            # "what's my name in contacts" / "is sarah in my contacts" — a question
+            # that ENDS on the directory.
+            _SHAPE_LEAD + r"(?:what|what's|whats|who|who's|is|are|does|do|how)\b.*\bin\s+(?:my\s+|the\s+)?"
+            r"(?:contacts|contact\s+list|address\s+book|directory)\s*$",
+        )
+    )
+)
+# Person SEARCH by name ("find Sarah", "can you look up the plumber"): the verb
+# must OPEN the turn, and "show" with a pronoun object ("show me the kitchen",
+# "show you Tanika") is Zoe being shown something, not a contact search.
+_PEOPLE_NAME_SEARCH_RE = re.compile(
+    _SHAPE_LEAD + _SHAPE_POLITE
+    + r"(?:find|search\s+for|look\s+up|show)\s+(?!(?:me|us|you|them|him|her|it)\b)(?:my\s+)?[a-z][a-z .'-]{1,80}\b"
+)
+# "remember that Sarah likes flowers" WRITES a fact, so it gets the same shape
+# rule: a request to Zoe ("remember…", "can you remember…", "please remember…"),
+# never a first-person memory of the speaker's own ("I remember that Sam is…",
+# "I don't remember that Sarah has…").
+_PEOPLE_FACT_SHAPE_RE = re.compile(
+    _SHAPE_LEAD + r"(?:" + _SHAPE_POLITE + r"|i\s+(?:want|need)\s+you\s+to\s+)" + r"remember\b"
+)
+
+
+def _is_people_directory_ask(text: str) -> bool:
+    """True when ``text`` (classifier-normalised) is a command/question for the
+    people directory, not a sentence that merely contains a people word."""
+    return bool(_PEOPLE_DIRECTORY_ASK_RE.search(text))
+
+
 def classify_skybridge_intent(message: str, context: dict[str, Any] | None = None) -> SkybridgeIntent | None:
     """Classify only domains that Skybridge can resolve to real data cards."""
     raw_message = message or ""
@@ -1106,7 +1198,7 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     # already carried a local `[.!]*` workaround for this — fixing it at the
     # source is what makes the other twenty safe.
     text = f" {re.sub(r'[.!?,;:]+$', '', raw_message.lower().strip())} "
-    person_fact = _people_fact_from_text(raw_message)
+    person_fact = _people_fact_from_text(raw_message) if _PEOPLE_FACT_SHAPE_RE.search(text) else None
     if person_fact:
         name, fact, birthday = person_fact
         return SkybridgeIntent(domain="people", action="remember_fact", person_name=name, fact_text=fact, birthday=birthday)
@@ -1250,18 +1342,182 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         # "any contacts to add?" / "show contact suggestions" — surface the
         # pending person_create offers as tappable Add cards, not a directory.
         return SkybridgeIntent(domain="people", action="pending_offers")
-    if any(term in text for term in (" people", " contacts", " contact", " person", " profile", " family", " friends")):
+    if _is_people_directory_ask(text):
+        # Command/question SHAPE only — never a bare keyword inside a statement
+        # (see _PEOPLE_DIRECTORY_ASK_RE; live over-claim 2026-09-28).
         query, people_ctx, circle = _people_filters_from_text(text)
         if " family " in text and not query:
             query = "family"
         if " friends " in text and not query:
             query = "friend"
         return SkybridgeIntent(domain="people", action="show", query=query, context=people_ctx, circle=circle)
-    if re.search(r"\b(?:find|search for|look up|show)\s+(?:my\s+)?[a-z][a-z .'-]{1,80}\b", text):
+    if _PEOPLE_NAME_SEARCH_RE.search(text):
         query, people_ctx, circle = _people_filters_from_text(text)
         if query:
             return SkybridgeIntent(domain="people", action="show", query=query, context=people_ctx, circle=circle)
     return None
+
+
+# ── Router veto: the fast path defers to the two-stage router ───────────────
+# The skybridge classifier is regex; the two-stage router (router_two_stage,
+# ZOE_ROUTER_HEAD=active) is a trained domain head + grammar-constrained decoder.
+# When both ran for a turn and the router did NOT pick a domain compatible with
+# what Skybridge claimed — above all when it said `chat` — Skybridge must not
+# answer deterministically: the turn goes on to the brain. Live 2026-09-28 the
+# router said chat (head_conf 0.92, not gated) and the fast path still answered
+# "I found 0 contacts." to a statement about Jason's family.
+#
+# Sentinels for ``resolve_skybridge_request(router_decision=...)``:
+#   UNGATED          (default) the caller has no router turn — a touch tap, a card
+#                    button re-issuing a command, the brain-tool card builder. No
+#                    gate, no log. Behaviour unchanged.
+#   ROUTE_ON_DEMAND  the caller is a conversational turn that has not run the
+#                    router; it is run HERE, and only once Skybridge has claimed
+#                    something (the voice WebSocket lane).
+#   None             a conversational turn whose router was off/failed — allow,
+#                    logged as router_unavailable (today's behaviour).
+#   dict             ``semantic_router.route()`` output for this turn.
+UNGATED = object()
+ROUTE_ON_DEMAND = object()
+
+# Skybridge domain → the two-stage router domains that agree with it
+# (router_two_stage.DOMAIN_TOOLS vocabulary). A Skybridge domain the router has
+# no class for (``voice``) can never be agreed with, so it is never vetoed.
+_ROUTER_AGREEING_DOMAINS: dict[str, frozenset[str]] = {
+    "people": frozenset({"people"}),
+    "calendar": frozenset({"calendar", "reminders"}),
+    "lists": frozenset({"lists"}),
+    "timer": frozenset({"timers"}),
+    "clock": frozenset({"time"}),
+    "weather": frozenset({"weather"}),
+    "music": frozenset({"music"}),
+    "smart_home": frozenset({"smart_home"}),
+}
+
+
+def router_veto_enabled() -> bool:
+    """ZOE_SKYBRIDGE_ROUTER_VETO — default ON; ``false``/``0``/``off``/``no``
+    restores the pre-2026-09-28 behaviour (Skybridge ignores the router)."""
+    raw = (os.environ.get("ZOE_SKYBRIDGE_ROUTER_VETO", "1") or "1").strip().lower()
+    return raw not in ("0", "false", "off", "no")
+
+
+def _router_agrees(intent: SkybridgeIntent, router_domain: str) -> bool | None:
+    """True/False when the router's domain agrees with the Skybridge intent;
+    None when the router has no class for this Skybridge domain."""
+    allowed = _ROUTER_AGREEING_DOMAINS.get(intent.domain)
+    if allowed is None:
+        return None
+    if intent.domain == "people" and intent.action == "remember_fact":
+        # "remember that Sarah likes flowers" is the router's remember_fact tool.
+        allowed = allowed | {"memory"}
+    return router_domain in allowed
+
+
+# A reply to the new-list naming prompt is a NAME unless it OPENS with a
+# hesitation/refusal marker (after optional filler). Deliberately narrow: "Things
+# to do" and "Books I want to read" are real list names, so length, pronouns and
+# verbs prove nothing — only a leading "actually…/wait/not now/never mind/…" does.
+_NAMING_REFUSAL_RE = re.compile(
+    r"^(?:(?:um|uh|hmm|well|oh|so|er)\b[\s,.!?]*)*"
+    r"(?:actually|wait|hold\s+on|no|nope|never\s*mind|not\s+now|not\s+yet|cancel"
+    r"|forget\s+it|let'?s\s+not|let'?s\s+wait|i\s+think\s+we\s+should\s+wait"
+    r"|i'?ll\s+do\s+(?:it|that)\s+later|maybe\s+later|later|skip)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_naming_prompt_reply(intent: SkybridgeIntent, context: dict[str, Any] | None) -> bool:
+    return (
+        intent.domain == "lists"
+        and intent.action == "create_list"
+        and _context_domain(context) == "lists"
+        and _context_action(context) == "create_list"
+    )
+
+
+def _looks_like_list_name(message: str) -> bool:
+    """False only for a reply that opens with a hesitation/refusal marker
+    (``_NAMING_REFUSAL_RE``); any other reply answers the naming prompt."""
+    return not _NAMING_REFUSAL_RE.match((message or "").strip())
+
+
+def skybridge_router_gate(
+    message: str,
+    intent: SkybridgeIntent,
+    router_decision: dict[str, Any] | None,
+    *,
+    context: dict[str, Any] | None = None,
+) -> tuple[str, str, str, float | None]:
+    """Decide whether a classified Skybridge intent may answer this turn.
+
+    Returns ``(decision, reason, router_domain, conf)`` with decision ``allow``
+    or ``veto``. Pure — no I/O; the caller logs. Only an ACTIVE two-stage
+    decision (``router_decision["two_stage"]``) can veto: the similarity router
+    has no music/smart_home/notes examples and routes "play some jazz" to
+    ``time``, so vetoing on it would switch those domains off.
+    """
+    if not router_veto_enabled():
+        return "allow", "flag_off", "-", None
+    decision = (router_decision or {}).get("two_stage") if isinstance(router_decision, dict) else None
+    if not isinstance(decision, dict):
+        return "allow", "router_unavailable", "-", None
+    router_domain = str(decision.get("domain") or "chat")
+    conf_raw = decision.get("head_conf")
+    conf = float(conf_raw) if isinstance(conf_raw, (int, float)) else None
+    if context:
+        # A follow-up that only classifies BECAUSE of the card on screen ("add
+        # eggs", "move it to 5") — the router sees the bare utterance and cannot
+        # know that context, so its verdict carries no information here.
+        bare = classify_skybridge_intent(message, None)
+        if bare is None or (bare.domain, bare.action) != (intent.domain, intent.action):
+            # EXCEPT the new-list naming prompt: it takes the WHOLE reply as the
+            # name, so "Actually I think we should wait" would become a list. A
+            # reply that opens with a hesitation/refusal marker gets the router's
+            # verdict like any other turn; any other reply is a name (Greptile, #1757).
+            if not _is_naming_prompt_reply(intent, context) or _looks_like_list_name(message):
+                return "allow", "context_followup", router_domain, conf
+    agrees = _router_agrees(intent, router_domain)
+    if agrees is None:
+        return "allow", "no_router_class", router_domain, conf
+    if agrees:
+        return "allow", "router_agrees", router_domain, conf
+    if (
+        router_domain == "chat"
+        and decision.get("gated")
+        and str(decision.get("head_top") or "") not in ("", "chat")
+    ):
+        # Stage 1 fell under its confidence gate on a non-chat domain: the router
+        # is UNSURE, not saying "chat". Typically garbled STT ("shammy my lists")
+        # where the keyword fallback is the useful recovery — no opinion, no veto.
+        return "allow", "router_unsure", router_domain, conf
+    return "veto", ("router_chat" if router_domain == "chat" else "router_disagrees"), router_domain, conf
+
+
+def _log_router_gate(intent: SkybridgeIntent, decision: str, reason: str, router_domain: str, conf: float | None) -> None:
+    logger.info(
+        "SKYBRIDGE_GATE router=%s conf=%s skybridge=%s action=%s decision=%s reason=%s",
+        router_domain,
+        "-" if conf is None else f"{conf:.4f}",
+        intent.domain,
+        intent.action,
+        decision,
+        reason,
+    )
+
+
+async def _route_on_demand(message: str) -> dict[str, Any] | None:
+    """Run the semantic router for a turn whose caller did not (voice WS lane).
+    Returns None when the router is off or fails — never raises."""
+    try:
+        import semantic_router as _sr
+
+        if not _sr.is_enabled():
+            return None
+        return await asyncio.to_thread(_sr.route, message)
+    except Exception as exc:  # noqa: BLE001 — a router failure must not break the turn
+        logger.warning("skybridge router gate: on-demand route failed (no veto): %s", exc)
+        return None
 
 
 async def _room_eids_for_context(
@@ -1296,8 +1552,16 @@ async def resolve_skybridge_request(
     *,
     context: dict[str, Any] | None = None,
     db: Any | None = None,
+    router_decision: Any = UNGATED,
 ) -> dict[str, Any]:
-    """Resolve a typed or spoken Skybridge request into real card contracts."""
+    """Resolve a typed or spoken Skybridge request into real card contracts.
+
+    ``router_decision`` is the turn's router verdict for the router veto (see
+    ``UNGATED`` / ``ROUTE_ON_DEMAND`` above). A vetoed turn returns
+    ``handled: False`` + ``vetoed: True`` BEFORE any auth challenge or side
+    effect, so the caller falls through to its brain lane exactly as for an
+    unclassified utterance.
+    """
     intent = classify_skybridge_intent(message, context)
     if intent is None:
         return {
@@ -1307,6 +1571,29 @@ async def resolve_skybridge_request(
             "cards": [],
             "skybridge_context": context or {},
         }
+
+    if router_decision is not UNGATED:
+        if router_decision is ROUTE_ON_DEMAND:
+            router_decision = await _route_on_demand(message) if router_veto_enabled() else None
+        decision, reason, router_domain, conf = skybridge_router_gate(
+            message, intent, router_decision, context=context
+        )
+        _log_router_gate(intent, decision, reason, router_domain, conf)
+        if decision == "veto":
+            return {
+                "handled": False,
+                "vetoed": True,
+                "intent": None,
+                "spoken_summary": "",
+                "cards": [],
+                "skybridge_context": context or {},
+                "gate": {
+                    "router": router_domain,
+                    "skybridge": intent.domain,
+                    "action": intent.action,
+                    "reason": reason,
+                },
+            }
 
     if skybridge_intent_requires_identity(intent) and _is_guest_user(user_id):
         return _attach_skybridge_context(_auth_required_result(intent))
