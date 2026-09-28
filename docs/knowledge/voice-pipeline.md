@@ -69,6 +69,38 @@ file per clip. So a Skybridge over-claim is invisible to said-vs-did; the classi
 by `services/zoe-data/tests/test_skybridge_router_veto.py` instead. The bug's audio,
 `~/.zoe-voice-samples/182627_117.wav`, is in the corpus and replays through the router → brain path.
 
+### Panel text lifecycle — what the kiosk shows for a turn (2026-09-28)
+
+The panel's on-screen text for a turn is a separate channel from its audio: the daemon plays the
+`turn_stream` frames, while the estate (`touch/home.html`) draws from push events broadcast by
+`zoe-data` on `/ws/push` (the executor socket in `js/touch-ui-executor.js`):
+
+| event | from | estate shows |
+|---|---|---|
+| `voice:listening_started` | `/api/voice/wake` (wake word, each follow-up window, each "let's talk" window) | orb; holds the current answer for 10 s |
+| `voice:transcript` | `/turn_stream` right after STT (and again in `voice_command`) | "Heard: …" in the dock (8 s) |
+| `voice:thinking` | `voice_command` | orb busy; Ask answer → "…" |
+| `voice:responding` | `voice_command`, per sentence; `show_card` carries the whole reply | the answer on the Ask surface |
+| `voice:done` | end of `voice_command`'s stream (+ `conversation_mode` / `conversation_end` on the "let's talk" fast path) | starts the dismiss clock |
+
+- **Brain/chat text travels ONLY over that socket.** Domain commands also arrive as a DB-queued,
+  polled `panel_navigate` (`?heard=&say=`, a page reload), which is why "regular" turns kept showing
+  text while every "let's talk" turn (all chat) showed none: the socket pinged once on open and never
+  reconnected, and the server drops a silent socket after `ZOE_WS_IDLE_TIMEOUT_SECONDS` (120 s) — or
+  on any zoe-data restart. It now pings every 30 s and reconnects with capped backoff. Diagnose a deaf
+  panel with `WebSocket idle timeout on channel panel_<id>` in `~/.zoe-logs/zoe-data.stderr.log`: after
+  the fix that line should not recur for a live kiosk.
+- **The "let's talk" opener/ender is a fast path** that returns before `voice_command`, so it broadcasts
+  its own `voice:responding` (the ack) + `voice:done` with the conversation flag
+  (`conversation_opener.broadcast_conversation_turn`). Turns *inside* a conversation are ordinary
+  `voice_command` turns — the same broadcasts as a regular turn.
+- **Dismissal.** An answer drifts home after the reading-time dwell once Zoe is done; a follow-up
+  window holds it only 10 s (`VOICE_HOLD_MS`); inside an open conversation every hold is ≥ 30 s
+  (`VOICE_CONV_HOLD_MS`) until `conversation_end` or 30 s of voice silence; a new turn resets the clock.
+  Before the fix a follow-up window CANCELLED the drift and nothing re-armed it, so the answer stayed
+  up until idle-sleep — which the sleep gate blocks in a lit room. Contract:
+  `services/zoe-ui/AGENTS.md`; pinned by `dist/test_touch_voice_text_lifecycle.js`.
+
 ## Measuring it — the replay harness
 
 Jason's saved WAVs at **`~/.zoe-voice-samples`** (1001 curated clips as of 2026-08-04, and growing)
