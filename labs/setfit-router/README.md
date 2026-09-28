@@ -131,3 +131,5 @@ CPU-only; deps pinned in `requirements.txt` (fastembed 0.8.0, scikit-learn
 - `train.py` — embeds (pinned `BAAI/bge-small-en-v1.5`) + trains/saves both heads
 - `eval.py` — held-out eval + threshold sweep → `results/eval.json`
 - `data/train.jsonl`, `eval/needle_corpus.jsonl`, `artifacts/`, `results/`
+- `data/misses.jsonl` — hand-committed REAL misroutes (e.g. the Samantha-bar S1 ask), read by
+  `train.py` next to `train.jsonl`; kept separate because `build_dataset.py` regenerates `train.jsonl`

@@ -28,6 +28,13 @@ the caller falls through exactly as before.
 Env (defaults = the proven config):
   ZOE_ROUTER_SIDECAR_URL          http://127.0.0.1:11436
   ZOE_ROUTER_TWO_STAGE_GATE       0.5
+  ZOE_ROUTER_HEAD_MIN_CONF        0.70  (low-confidence floor for a NON-chat
+                                  head top: below it the turn falls through
+                                  to the brain + recall packet, logged
+                                  gated=true reason=low_conf; 0 = off, i.e.
+                                  the pre-2026-09-28 behaviour. Measured in
+                                  docs/knowledge/two-stage-router-rollout.md
+                                  → "Low-confidence floor".)
   ZOE_ROUTER_TWO_STAGE_TIMEOUT_S  1.5   (strict client timeout → brain)
   ZOE_ROUTER_HEAD_MLP_PATH        services/zoe-data/models/router_head_mlp.joblib
                                   (numpy backend reads the .npz/.json beside it)
@@ -37,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -113,6 +121,56 @@ def gate() -> float:
         return float(os.environ.get("ZOE_ROUTER_TWO_STAGE_GATE", "0.5"))
     except Exception:
         return 0.5
+
+
+# Measured 2026-09-28 (docs/knowledge/two-stage-router-rollout.md →
+# "Low-confidence floor"): every 0.05-wide head_conf band below 0.70 is right
+# only ~58-71% of the time as a final ACTIVE decision (pooled 62%, n=63 over
+# the held-out needle corpus + 5-fold out-of-fold train set), and the Samantha
+# bar S1 misroute sat at 0.537. Change the number only with a new table.
+MIN_CONF_DEFAULT = 0.70
+
+
+def min_conf() -> float:
+    """Low-confidence floor for a non-chat head decision (0 disables).
+
+    Separate from `gate()` on purpose: the 0.5 chat gate is the proven
+    labs/router-90-campaign ship point and stays the documented baseline;
+    this floor is the Samantha-bar S1 fix layered on top of it, so setting
+    ZOE_ROUTER_HEAD_MIN_CONF=0 restores the old behaviour exactly.
+    An unparseable value keeps the measured default (fail toward the brain).
+    """
+    # literal default so tools/audit/flag_inventory.py records it; pinned
+    # equal to MIN_CONF_DEFAULT by tests/test_router_low_conf_floor.py
+    raw = os.environ.get("ZOE_ROUTER_HEAD_MIN_CONF", "0.70")
+    if not raw.strip():
+        return MIN_CONF_DEFAULT
+    try:
+        val = float(raw)
+    except ValueError:
+        val = float("nan")
+    if not math.isfinite(val):
+        logger.warning("bad ZOE_ROUTER_HEAD_MIN_CONF=%r — using %.2f",
+                       raw, MIN_CONF_DEFAULT)
+        return MIN_CONF_DEFAULT
+    return val
+
+
+def gate_reason(top: str, conf: float) -> Optional[str]:
+    """Why stage 1 abstains (→ chat lane), or None when it may call a tool.
+
+      chat_top    the head's top class is chat
+      below_gate  conf < ZOE_ROUTER_TWO_STAGE_GATE (the 0.5 chat gate)
+      low_conf    gate <= conf < ZOE_ROUTER_HEAD_MIN_CONF on a non-chat top —
+                  too unsure to hand a deterministic tool the turn
+    """
+    if top == "chat":
+        return "chat_top"
+    if conf < gate():
+        return "below_gate"
+    if conf < min_conf():
+        return "low_conf"
+    return None
 
 
 def timeout_s() -> float:
@@ -257,6 +315,7 @@ def decide(text: str, vec) -> Optional[dict]:
     Returns a decision dict or None (= caller keeps its existing behavior):
       {"tool": str|None, "domain": str, "args": {...}, "shortlist": [...],
        "head_top": str, "head_conf": float, "gated": bool, "ms": float}
+    plus "reason" (chat_top | below_gate | low_conf) on a gated decision.
     tool None + domain "chat" = confident no-tool (gate abstain or the
     decoder's chat escape). None = infrastructure failure → brain fallback.
     NEVER raises.
@@ -277,9 +336,10 @@ def decide(text: str, vec) -> Optional[dict]:
         shortlist = [str(c) for c in classes[order] if c != "chat"][:3]
         base = {"shortlist": shortlist, "head_top": top,
                 "head_conf": round(conf, 4)}
-        if top == "chat" or conf < gate():
+        reason = gate_reason(top, conf)
+        if reason is not None:
             return {**base, "tool": None, "domain": "chat", "args": {},
-                    "gated": True,
+                    "gated": True, "reason": reason,
                     "ms": round((time.perf_counter() - t0) * 1000, 1)}
         legal = [n for d in shortlist for n in DOMAIN_TOOLS.get(d, [])]
         if not legal:

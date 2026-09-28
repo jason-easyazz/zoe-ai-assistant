@@ -108,7 +108,7 @@ VOICE_PATH_PATTERNS = (
     # the checkpoint was already covered by router_selftrain.py's
     # `replay_gate_passed` ratchet. It is NOT, and the claim was never true:
     # router_selftrain.py contains no reference to a head, an MLP, or a .joblib
-    # anywhere in its 1095 lines. It retrains and promotes the STAGE-2
+    # anywhere in its 1099 lines. It retrains and promotes the STAGE-2
     # FunctionGemma GGUF only, writing it to SERVED_GGUF under
     # ~/models/functiongemma-router/ with its provenance.json beside it — both
     # OUTSIDE the repo (its docstring: "The loop's ONLY production mutation is

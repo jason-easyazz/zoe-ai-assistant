@@ -1,0 +1,3 @@
+{"text": "Who is flying in on Thursday, and where from?", "tool": "recall_memory", "args": {"query": "who is flying in on thursday and where from"}, "source": "samantha_bar_miss_2026-09-28"}
+{"text": "Who is flying in on Thursday, and which city do I live in?", "tool": "recall_memory", "args": {"query": "who is flying in on thursday and which city I live in"}, "source": "samantha_bar_miss_2026-09-28"}
+{"text": "Remind me, who did I say is flying in on Thursday?", "tool": "recall_memory", "args": {"query": "who is flying in on thursday"}, "source": "samantha_bar_miss_2026-09-28"}
