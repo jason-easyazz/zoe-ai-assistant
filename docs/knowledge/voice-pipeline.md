@@ -69,6 +69,38 @@ file per clip. So a Skybridge over-claim is invisible to said-vs-did; the classi
 by `services/zoe-data/tests/test_skybridge_router_veto.py` instead. The bug's audio,
 `~/.zoe-voice-samples/182627_117.wav`, is in the corpus and replays through the router → brain path.
 
+### Panel text lifecycle — what the kiosk shows for a turn (2026-09-28)
+
+The panel's on-screen text for a turn is a separate channel from its audio: the daemon plays the
+`turn_stream` frames, while the estate (`touch/home.html`) draws from push events broadcast by
+`zoe-data` on `/ws/push` (the executor socket in `js/touch-ui-executor.js`):
+
+| event | from | estate shows |
+|---|---|---|
+| `voice:listening_started` | `/api/voice/wake` (wake word, each follow-up window, each "let's talk" window) | orb; holds the current answer for 10 s |
+| `voice:transcript` | `/turn_stream` right after STT (and again in `voice_command`) | "Heard: …" in the dock (8 s) |
+| `voice:thinking` | `voice_command` | orb busy; Ask answer → "…" |
+| `voice:responding` | `voice_command`, per sentence; `show_card` carries the whole reply | the answer on the Ask surface |
+| `voice:done` | end of `voice_command`'s stream (+ `conversation_mode` / `conversation_end` on the "let's talk" fast path) | starts the dismiss clock |
+
+- **Brain/chat text travels ONLY over that socket.** Domain commands also arrive as a DB-queued,
+  polled `panel_navigate` (`?heard=&say=`, a page reload), which is why "regular" turns kept showing
+  text while every "let's talk" turn (all chat) showed none: the socket pinged once on open and never
+  reconnected, and the server drops a silent socket after `ZOE_WS_IDLE_TIMEOUT_SECONDS` (120 s) — or
+  on any zoe-data restart. It now pings every 30 s and reconnects with capped backoff. Diagnose a deaf
+  panel with `WebSocket idle timeout on channel panel_<id>` in `~/.zoe-logs/zoe-data.stderr.log`: after
+  the fix that line should not recur for a live kiosk.
+- **The "let's talk" opener/ender is a fast path** that returns before `voice_command`, so it broadcasts
+  its own `voice:responding` (the ack) + `voice:done` with the conversation flag
+  (`conversation_opener.broadcast_conversation_turn`). Turns *inside* a conversation are ordinary
+  `voice_command` turns — the same broadcasts as a regular turn.
+- **Dismissal.** An answer drifts home after the reading-time dwell once Zoe is done; a follow-up
+  window holds it only 10 s (`VOICE_HOLD_MS`); inside an open conversation every hold is ≥ 30 s
+  (`VOICE_CONV_HOLD_MS`) until `conversation_end` or 30 s of voice silence; a new turn resets the clock.
+  Before the fix a follow-up window CANCELLED the drift and nothing re-armed it, so the answer stayed
+  up until idle-sleep — which the sleep gate blocks in a lit room. Contract:
+  `services/zoe-ui/AGENTS.md`; pinned by `dist/test_touch_voice_text_lifecycle.js`.
+
 ## Measuring it — the replay harness
 
 Jason's saved WAVs at **`~/.zoe-voice-samples`** (1001 curated clips as of 2026-08-04, and growing)
@@ -1063,6 +1095,106 @@ brain turns) and up to **1.12 s** on long clips, measured from the `Recorded …
 - Pinned by `tests/unit/test_voice_daemon_speaker_shadow.py`: the upload must start
   before the score completes, on both the stream and the blocking turn paths. Scoring
   synchronously again turns those tests red.
+
+## Panel barge-in — anchored to playback start (2026-09-28)
+
+The Pi daemon's barge-in decides "the user is talking over Zoe, stop playback". Two
+paths feed it: `_BargeMonitor`, a mic stream of its own opened for each voice turn (the wake
+stream is closed then), and `_barge_in_vad_thread`, which reads the wake stream's
+`_BARGE_QUEUE` and only hears anything while that stream is open, which means announcements.
+Both now ask one `_BargeDetector`. The monitor opens at turn **start**, so it hears the whole
+STT/brain wait. Nothing it hears before playback begins may count:
+
+1. **Stale audio is dropped.** When a new player registers (`_register_tts_process`
+   stamps `_tts_started_at`), the window is cleared, whole chunks already buffered on the
+   monitor's stream are read and discarded (`barge monitor: dropped N stale chunks (~ms)`),
+   and queue items stamped before that instant are dropped (`barge queue: dropped …`).
+   Any chunk whose capture began before `started_at + grace` is ignored.
+2. **Grace.** `BARGE_GRACE_MS` (default 800) after the first write is ignored. aplay and the
+   Pulse sink add ~70–90 ms before the first sound, so this covers ~0.7 s of Zoe's audible
+   onset while the Jabra's echo canceller settles.
+3. **Sustained speech.** `BARGE_MIN_CHUNKS` of the last `BARGE_WINDOW_CHUNKS` (default 3 of 6,
+   ~240 ms of speech in ~480 ms) at `BARGE_IN_THRESHOLD`, or the fast path:
+   `BARGE_FAST_CHUNKS` (default 2) consecutive chunks at `BARGE_FAST_PROB` (default 0.95, never
+   below the threshold; `BARGE_FAST_CHUNKS=0` disables it). It fires at most once per playback.
+
+A real interruption still stops playback quickly. Speech that starts 1 s into the reply fires
+within ~160 ms of its start on the fast path, and within ~240 ms on the window. The tests put
+this at t+1120 ms and t+1200 ms.
+
+Every fire logs its timing and the window, so the next false fire can be diagnosed from the
+log alone:
+
+```
+Barge-in detected during playback (monitor, prob=0.99, th=0.75, t+1120ms, window=2/6[0.01 0.01 0.01 0.01 0.99 0.99]+fast)
+```
+
+`th=` is the effective `BARGE_IN_THRESHOLD`. `t+` is measured from the first write to the player.
+`window=` gives hits/size, the probabilities, and which rule fired. Tune with the env knobs in `/home/pi/.zoe-voice/.env.voice`.
+`BARGE_IN_THRESHOLD=0.75` is live there. Every knob is validated at import. A probability must be finite and within [0, 1], and the threshold must be above 0. Counts must be ≥ 1, except the grace and the fast path, where 0 means off. Anything else logs a WARNING naming the value and keeps the default, so a typo can never silently disable a guard. The VAD thresholds for normal listening
+(`VAD_ENDPOINT_THRESHOLD`, `FOLLOW_UP_VAD_THRESHOLD`) are separate and unchanged.
+
+- **Reading the old log line.** `turn_stream TTFA=` is logged after playback drains, so its
+  timestamp is not the first-audio time. The first write is at `t0 + TTFA`, and `t0` is the POST.
+  On 2026-09-28 `t0` was just after the `Speaker ID (shadow)` line. A barge line a few ms
+  before the TTFA line means the kill ended the drain. It does not mean the barge came before audio.
+- Pinned by `tests/unit/test_voice_daemon_barge_in.py`, which drives the real
+  `_BargeMonitor._run` against a scripted mic and a fake clock. Removing the drain, the grace or
+  the sustained-speech rule each turns a test red.
+- The replay gate cannot see this: it starts from saved recordings and stops before TTS.
+
+## Panel per-turn dead time — adaptive endpoint tail, cooldown, cap (2026-09-28)
+
+These are the daemon knobs between the user's last word and the next thing the panel does.
+They were measured on the 14 panel clips captured 2026-09-28 (18:24–18:27 and 20:43–20:45).
+The script replayed each clip's per-chunk Silero probabilities through the **real**
+`_Endpointer` with the live Pi config (`VAD_ENDPOINT_ENABLED=1`, `ZOE_VAD_TAIL_MS=640`).
+Clean-tail cut risk was checked the same way on the newest 400 corpus clips, 246 of which
+had speech after the wake pre-roll. The probabilities came from the v6.0 ONNX Silero on the
+Jetson, not the Pi's torch-hub copy, so read chunk counts as ±1.
+
+- **The endpoint is already ~0.7–0.9 s, not 1.5 s.** `silence_timeout=1.50s` in the
+  `Recorded …` line is the amplitude timeout used before any speech. After speech, the live
+  close is 640 ms of deep quiet (or 800 ms of any quiet). Silero decays through the ambiguous
+  band for 1–2 chunks before the deep count starts, so the measured gap from speech end to
+  close is **720–880 ms**.
+- **`ZOE_VAD_CLEAN_TAIL_MS`** (default 0 = off, behaviour unchanged). This is a clean stop: at most
+  `ZOE_VAD_CLEAN_FALL_CHUNKS` (2) ambiguous decay chunks, then nothing but deep quiet, after
+  at least `ZOE_VAD_CLEAN_MIN_SPEECH_MS` (480) of speech. When that holds, the recording
+  closes once the whole quiet run reaches this value. The floor is 500 ms, which rounds up
+  to 560 ms. At 560:
+  - **Today:** 10 of 11 endpointed turns would have closed earlier, by a median of 160 ms
+    (max 240), and none were cut. The other 3 clips were two 8 s cap hits and one with no
+    speech.
+  - **Corpus:** 124 of 246 turns closed earlier by a median of 160 ms, and **5 were cut
+    mid-sentence (2.0 %)**. Those were real 0.5–0.7 s pauses after long speech, which Silero
+    cannot tell apart from the end of a turn.
+  It stays off until the operator accepts that trade (see the PR). Stage it with
+  `ZOE_VAD_CLEAN_TAIL_MS=560` in `.env.voice`. Roll back by setting it to 0.
+- **`ZOE_VAD_HESITATION_TAIL_MS`** (default 0 = off). When a quiet run goes deep and then comes
+  back up into the ambiguous band (a breath or an "um"), the any-quiet limit becomes this
+  value, capped at 1.5 s. It only ever makes turns slower: on the corpus it made 20 of 246
+  close later. The captured clips cannot show whether it saves a cut, because they were
+  recorded behind the live endpoint. Treat it as an ear-tuning knob for someone who hesitates.
+- **`Recorded …` now logs `tail=clean|deep|quiet|hesitation|no_speech`.** It names the rule
+  that closed the recording, so a staged flag can be read from the log.
+- **`POST_PLAY_COOLDOWN_S` default is now 0.4 s (was 1.5).** It only gates the **wake word**
+  after a voice cycle or an announcement. It is not on the follow-up path, and it is not
+  barge-in. The 1.5 s dates from the Whisper era, when the echo of a reply re-woke the panel
+  and was transcribed as "yes" in a loop. What prevents that now:
+  - `voice_command()` ends with `oww.reset()`.
+  - A reply is followed by `POST_PLAY_TAIL_S`.
+  - The main loop sleeps 0.5 s before it reopens the wake stream.
+  So wake is scored no sooner than ~0.75 s plus the cooldown after Zoe's last sample.
+  **The Pi's `.env.voice` pins `POST_PLAY_COOLDOWN_S=1.5`, so the line must be removed or
+  changed at deploy.**
+- **`RECORD_SECONDS_MAX` default is now 12 s (was 8).** On 2026-09-28, 2 of 10 turns hit the 8 s
+  cap mid-sentence. STT costs ~0.25 s per second of clip, so only long turns pay for the extra
+  time. **`.env.voice` pins `RECORD_SECONDS_MAX=8`, so change it at deploy.**
+- Pinned by `tests/unit/test_voice_daemon_dead_time.py`, with negative controls for the floor,
+  the hesitation check, the speech minimum and the 1.5 s cap. The replay gate cannot see any
+  of this, because it starts from saved recordings. `scripts/perf/measure_endpointing.py` is the
+  endpointing instrument.
 
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 

@@ -1,8 +1,8 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict. Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router]
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset). Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel]
 timestamp: 2026-09-28T00:00:00Z
 ---
 
@@ -484,3 +484,41 @@ the router is off or not in `active` head mode, so the veto is not protecting an
 `any(term in text …)`. The replay gate cannot see this class (it never calls Skybridge — see
 [voice-pipeline.md](voice-pipeline.md) → *The Skybridge fast path defers to the router*), so the
 guard is `services/zoe-data/tests/test_skybridge_router_veto.py` with its negative controls.
+
+## 12. Zoe interrupts herself — barge-in on her own onset (2026-09-28)
+
+**Signature.** Replies are cut off within the first second, and the room is quiet. The Pi
+`voice.log` shows `Barge-in detected during playback (monitor, prob=0.9x)` with no user speech.
+The following follow-up window then finds nothing (`max_prob=0.008`). On 2026-09-28 at 20:44–20:45
+this happened on three turns in a row. Using `t0 + TTFA` (the `turn_stream TTFA=` line is logged
+after the drain, see [voice-pipeline.md](voice-pipeline.md) → *Panel barge-in*), the fires came
+0.43 s, 0.50 s and 0.81 s after the first audio write. An 18:24 turn fired at **t+11 ms**, while
+the user was still talking at the end of an 8 s capped recording.
+
+**Diagnosis.** `_BargeMonitor` opens at turn start and keeps a rolling 2-of-5 window through
+the STT/brain wait. It had two faults. (a) The window was never tied to playback, so speech
+from just before the first write counted as an interruption. That was the t+11 ms fire.
+(b) Nothing ignored Zoe's own onset. Playback and capture are both on the Jabra (the Pulse
+default sink and source), so the hardware echo canceller does apply. The 20:44 fires landed
+0.3–0.7 s after the first sound, in a quiet room, at prob 0.90–0.99, and two chunks were
+enough to fire. That is the signature of Zoe's own voice reaching the mic before the echo
+canceller settles. It is inferred from the timing: the monitor keeps no audio, so it was not
+recorded. The
+first guess was a stale **queue** backlog, and it was wrong for turns: the monitor reads its
+own stream, and `_BARGE_QUEUE` receives nothing during a turn because the wake stream is
+closed. The queue path, which serves announcements, had the same class with a single-chunk
+trigger.
+
+**Fix.** A single `_BargeDetector` now serves both paths. It is anchored to playback start,
+drops stale audio, ignores a `BARGE_GRACE_MS` (800 ms) onset grace, and needs 3-of-6
+sustained speech or 2 consecutive chunks at ≥ 0.95. The fire line now says
+`t+<ms>` and `window=…`.
+
+**Check it.** `grep -a "Barge-in detected" ~/.zoe-voice/voice.log | tail` on zoe-pi. A fire
+below t+800ms should not happen. A run of fires at t+800–1100ms with a quiet room means the
+echo residual outlasts the grace, so raise `BARGE_GRACE_MS` in `.env.voice` and restart
+`zoe-voice`. A deliberate interruption should show `t+` about 1.1–1.3 s after you start talking.
+
+**Prevention.** `tests/unit/test_voice_daemon_barge_in.py` (stale backlog, the user still talking
+at playback start, onset inside the grace, a real interruption 1 s in, env overrides) has negative
+controls for each guard.
