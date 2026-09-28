@@ -1,9 +1,9 @@
 ---
 type: Runbook
 title: Chroma 0.6.3 → 1.5.x memory-store migration (B0.8)
-description: Why Zoe's palace is migrated one collection at a time instead of with `mempalace migrate`, the measured rehearsal on a copy (10/10 proofs, peak RSS 372 MB, 4.4 min), every program that opens the store and the interpreter it runs under, the operator cutover checklist, and rollback by restoring the directory.
+description: Why Zoe's palace is migrated one collection at a time instead of with `mempalace migrate`, the measured rehearsal on a copy (10/10 proofs, peak RSS 372 MB, 4.4 min), every program that opens the store and the interpreter it runs under, the operator cutover checklist (executed 2026-09-28, see §5), and rollback by restoring the directory.
 tags: [memory, chromadb, mempalace, migration, runbook, b0.8]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Chroma 0.6.3 → 1.5.x memory-store migration (B0.8)
@@ -112,80 +112,318 @@ Re-run with `python3 scripts/maintenance/chroma_migrate_rehearsal.py run --fresh
 gate stopped the proofs, use `run --prove-only`. The script waits up to `--wait-mem-s` (900 s)
 for `MemAvailable ≥ --min-avail-mb` (1200) before each heavy step, then refuses.
 
-## 4. Every program that opens the store
+## 4. Every program that opens the store (as of the cutover PR)
 
-All of these must move to chromadb 1.5.x **in the same window**. A 0.6.3 client left behind
-fails loudly on the migrated store (proof f). It is still an outage for that program.
+The code, the client and the store switch **together**, because the format change is one-way.
+Two guards make a mismatch loud instead of destructive; both read the format from SQLite
+(`mode=ro`: sysdb migration 00010 exists only in 1.x) before chromadb touches the file.
+- `memory_service._check_palace_format` in zoe-data
+- `scripts/lib/palace_client.py` for the scripts
 
-| program | how it opens | interpreter today | when | cutover action |
+A 1.x client on a 0.6 palace would migrate it **in place**, which would destroy the rollback
+snapshot. A 0.6.3 client on the 1.x palace dies anyway.
+
+| program | how it opens | interpreter | when | state after the cutover PR |
 |---|---|---|---|---|
-| zoe-data (`memory_service.py`: `mempalace.palace.get_collection` + a raw `chromadb.PersistentClient` for audit; `zoe_agent.py`; `mcp_server.py` via MemoryService) | chromadb + mempalace | py3.12 venv `~/.zoe/venvs/zoe-data-py312` | always | install 1.5.9 (+ mempalace 3.10.0) into the venv |
-| `zoe-nightly-dreaming.py` (own `PersistentClient` for the quality snapshot) | chromadb | py3.12 venv (drop-in `60-py312-venv.conf`) | `zoe-dreaming.timer` ~02:33 | same venv, nothing extra |
-| `export_memory_store.py` | **SQLite only** | `/usr/bin/python3` (3.10) | `zoe-memory-export.timer` ~02:41 | none: proof a ran its SQL on the 1.x sqlite |
-| `check_memory_tombstones.py` | reads `index_metadata.pickle` + SQLite; `--execute` uses chromadb | `/usr/bin/python3` (3.10), same unit, behind `-` | ~02:41 | **port before trusting it.** On the migrated copy it reports `mempalace_audit added 0 live 0 → ok` and does not list drawers (1.5 writes no drawer pickle yet). Its report is silently wrong on 1.x |
-| `~/bin/nightly-training-cycle.sh` (inline `chromadb.PersistentClient('/home/zoe/.mempalace')`, off-repo) | chromadb | `/usr/bin/python3` (3.10) | `zoe-training.timer` ~02:05 | re-point to the venv python, or stop the timer until it is |
-| `~/scripts/maintenance/mempalace-nightly-backup.sh` / `zoe-backup-verify.sh` (off-repo) | SQLite only (online backup; `COUNT(*) FROM embeddings`) | `python3` (3.10) | `zoe-backup.timer` ~02:34, verify weekly | none (the `embeddings` table persists in 1.x). The pre-cutover tarball is a 0.6 palace, so label it |
-| `check_emotional_thread.py`, `remediate_ownerless_memories.py` (hand-run) | chromadb | `#!/usr/bin/env python3` → 3.10 | manual | run them with the venv python after cutover |
-| `mempalace_baseline.py`, `zoe_memory_prompt_packet_measure.py` | via zoe-data modules | venv when run from zoe-data | manual | none |
-| `~/bin/zoe-memory-mcp.py` (off-repo) | chromadb | 3.10 | referenced only by retired Hermes config backups | leave dead; do not revive |
+| zoe-data (`memory_service.get_drawers_collection` + audit; `zoe_agent.migrate_mempalace_legacy_records`; `mcp_server.py`/recall via MemoryService) | **raw chromadb** (no mempalace wrapper), one cached client per resolved dir, one cached MiniLM EF named `"default"`, format guard | py3.12 venv | always | pins `chromadb==1.5.9`, `mempalace==3.10.0` in `requirements-py312.txt` (mempalace is installed but not imported by the runtime) |
+| `zoe-nightly-dreaming.py` | `palace_client.open_palace_client` | py3.12 venv (drop-in `60-py312-venv.conf`) | `zoe-dreaming.timer` ~02:33 | guarded |
+| `~/bin/nightly-training-cycle.sh` §10.5–10.7 (quality snapshot, dreaming, music digest; off-repo) | chromadb / MemoryService | **moved to the venv 2026-09-27** (`ZOE_PALACE_PY`; backup `~/bin/nightly-training-cycle.sh.pre-b08-20260927`) | `zoe-training.timer` ~02:05 | done (works with either format, since the venv carries the matching client) |
+| `export_memory_store.py` | SQLite only | `/usr/bin/python3` (3.10) | `zoe-memory-export.timer` ~02:41 | none needed (proof a ran its SQL on 1.x) |
+| `check_memory_tombstones.py` report | pickle + SQLite, no chromadb | `/usr/bin/python3` (3.10) | same unit | **ported**: reads 1.x's dict pickle (it used to report 0/0 "ok"), lists segments with no persisted index metadata yet; `--execute` goes through the guard |
+| `check_emotional_thread.py`, `remediate_ownerless_memories.py` (hand-run) | `palace_client` guard | run them with `~/.zoe/venvs/zoe-data-py312/bin/python` | manual | under 3.10 they now refuse with that instruction |
+| `mempalace-nightly-backup.sh` / `zoe-backup-verify.sh` (off-repo) | SQLite only | 3.10 | `zoe-backup.timer` ~02:34 | none (the `embeddings` table persists in 1.x) |
+| `~/scripts/maintenance/mempalace-wing-migration.py` (off-repo, one-shot 2026-04) | `mempalace.palace.get_collection` | 3.10 | never scheduled | leave; it must not be re-run |
+| `~/bin/zoe-memory-mcp.py` (off-repo) | chromadb | 3.10 | retired Hermes config backups only | leave dead |
 
-**Both interpreters move together.** Prefer re-pointing the 3.10 callers at the venv python over
-installing chromadb 1.5.9 into the system 3.10 user-site. That user-site also carries Kokoro's
-CUDA `onnxruntime-gpu`, and a pip resolve that pulls CPU `onnxruntime` next to it can break TTS.
-If 3.10 must carry 1.5.9, install it with a constraints file that pins the current ORT/numpy,
-then import-check Kokoro before restarting anything. That path is unrehearsed.
+The system 3.10 user site keeps chromadb 0.6.3. It hosts Kokoro's CUDA `onnxruntime-gpu`, and
+nothing on 3.10 may open the palace. Moving zoe-data back to 3.10 (the B0.7 rollback) now
+requires the B0.8 rollback as well.
 
-## 5. Cutover checklist (🧑, one window, outside 01:45–03:15)
+## 5. Cutover sequence (🧑 operator, one window, outside 01:45–03:15)
 
-Preconditions:
-- mempalace **3.10.0** is ≥14 days old (on or after 2026-09-30), or the operator accepts the risk.
-- A fresh `run --fresh` rehearsal passes 10/10 on the same day.
-- MemAvailable is ≥ 1.2 GB.
+**What actually happened on 2026-09-28 (LIVE 08:21 AWST).** Step 0's assumption failed: the
+#1745 merge (`d346aa90`) was **not** refused. The deploy gate accepted a fresh passing replay
+artifact bound to a different commit, so at 08:14 the deploy moved the venv to chromadb 1.5.9 +
+mempalace 3.10.0 and the code to `d346aa90` while the store was still 0.6. The format guard
+refused to open it, so memory capture was degraded for ~7 min and the store was intact (no turns fell in the window). Block A's
+preflight (c) correctly stops in that state. The operator then did the store half by hand: `run`
+with `--old-python /usr/bin/python3` (10/10, peak 379 MB, 102 s), swap (rollback dir
+`~/.mempalace.pre-b08-20260928-082034`), restart, `self-recall ok`, timers re-armed, replay PASS
+13/13. Full record and lessons: [incident-runbook.md](incident-runbook.md) §9. For any future
+pins cutover: **merge only inside the window**, after the services are stopped.
 
-1. Stop the writers and every timer that opens the store:
-   `systemctl --user stop zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer`,
-   then `systemctl --user stop zoe-data`. Confirm no opener is running:
-   `pgrep -af "chromadb|zoe-nightly-dreaming|check_memory|nightly-training"` prints nothing.
-2. Final copy + rebuild from the **stopped** store:
-   `python3 scripts/maintenance/chroma_migrate_rehearsal.py run --fresh --date cutover-$(date +%F)`.
-   Nothing writes during the copy, so the counts are final. All 10 proofs must PASS.
-3. Snapshot and swap:
-   `mv ~/.mempalace ~/.mempalace.pre-b08-$(date +%Y%m%d-%H%M%S)`, then
-   `cp -a ~/.zoe/chroma-migration-rehearsal/cutover-<date>/dst ~/.mempalace`.
-   Copy the store rather than moving it, so the rehearsal copy stays pristine. Leave
-   `export/` and `manifest.json` where they are.
-4. Install into the venv:
-   `~/.local/bin/uv pip install --python ~/.zoe/venvs/zoe-data-py312/bin/python chromadb==1.5.9 mempalace==3.10.0`.
-   Constrain numpy/onnxruntime/tokenizers to their current pins. Update
-   `services/zoe-data/requirements-py312.txt` in the same PR: pins, the ~line 82 comment, and the
-   `_skip_name_check=True` audit of `get_collection()` callers. Re-point the 3.10 callers (§4).
-5. Record the embedder identity. mempalace 3.10 warns on a populated collection with no recorded
-   identity (`EmbedderIdentityUnknownWarning`) and resolves it with
-   `mempalace palace set-embedder`. Check the exact CLI with `--help` first; this step is
-   **unrehearsed**.
-6. `systemctl --user start zoe-data`. Poll `/readyz` (`is-active` lies) until `status` is ok **and**
-   `memory_capture` says `self-recall ok`. That check runs `memory_recall_probe.run_self_recall_check`
-   on the new client.
-7. Verify:
-   - `/health` recall `ok`
-   - `check_emotional_thread.py` under the venv python
-   - one real chat turn that recalls a known fact
-   - zoe-data RSS before and after (1.5's Rust core replaces `chroma-hnswlib`; expected about neutral, unmeasured)
-8. Re-enable the timers and watch the next dreaming and memory-export logs.
+Why the order matters. The live checkout's code, the venv pins and the store must all flip while
+zoe-data is down:
+- **New code + old store** → the guard refuses to open (loud; memory is down, the data is safe).
+- **Old code + new pins** → zoe-data runs mempalace 3.10's untested wrapper.
+
+**Blocks A and B below are the B0.8 script as written for #1745 and are kept as the prepared
+record (the 2026-09-28 store half was run by hand); do not re-run them as-is.** They assumed the deploy gate would refuse the merged PR
+(`requirements-py312.txt` is on the voice path) and so ordered: merge, then the window, then
+the replay, then re-run the deploy. That assumption **failed on 2026-09-28**: the gate checked
+only freshness + `pass`, not which commit the artifact exercised, so the deploy went through.
+Until the deploy gate binds the artifact to the deployed tree, do not rely on a refusal.
+
+**For any future pins cutover the order is: stop the writers/openers first, then merge inside
+that window**, so whatever the deploy does lands on stopped services; then the store swap, the
+readiness check and a head-bound replay. Block A's preflight (b)/(c) (a *refused* deploy run,
+live HEAD ≠ merge sha) encode the old order: a reuse must replace them, not skip them.
+
+Step 0 (as planned for #1745, superseded by the above): merge #1745 (squash), expecting its
+deploy to be REFUSED before the reset.
+
+**A. The transition is ONE fail-closed script. Paste it whole.** It starts with a PREFLIGHT that touches nothing. The run id `cutover-<date>-<HHMMSS>` must pass the tool's own `check-date` (the exact format `run` accepts, dir not taken), and the refused #1745 deploy run must exist and be finished; its id is captured by the merge commit sha. Only then does it take the lock and stop anything. At the end it prints `D=` and `DEPLOY_ID=` for block B. It runs in its own
+`bash -euo pipefail`, so `set -e` cannot kill your login shell. Any failure stops it **before**
+`systemctl --user start zoe-data`, and the ERR trap prints the exact next step for the stage it
+reached:
+- Before the swap, nothing changed: restart the old service.
+- After the swap, do not start anything: roll back per §6.
+
+So a failed copy/rebuild, swap, venv refresh or ff-only merge can never start the old opener on
+the new client/store, or the new opener on the old store (the format guard would refuse that
+anyway, loudly).
+
+```bash
+bash -euo pipefail <<'CUTOVER'
+WT=/home/zoe/.worktrees/b0-8-cutover                   # a CLEAN checkout at exactly the merged cutover commit (verified in preflight)
+D=cutover-$(date +%F-%H%M%S); TS=""; STAGE=preflight    # unique per attempt: a retry gets a NEW dir
+TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
+fail() {
+  echo "!! B0.8 cutover FAILED at stage=$STAGE (line $1)." >&2
+  case $STAGE in
+    preflight|pre-stop|stopped|rebuilt)   # nothing swapped: safe to let deploys run again
+      if [ -n "${MY_HOLDER:-}" ]; then kill "$MY_HOLDER" 2>/dev/null || true; rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired; fi ;;
+    *)                                    # store already swapped: KEEP the deploy lock until §6 rollback is done
+      echo "!! deploy lock KEPT (holder pid ${MY_HOLDER:-?}) so no deploy can reset/restart mid-inconsistency." >&2
+      echo "   after the §6 rollback: kill ${MY_HOLDER:-\$(cat /tmp/zoe-b08-deploy-lock-holder.pid)}; rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired" >&2 ;;
+  esac
+  case $STAGE in
+    preflight)
+      echo "!! Preflight only: NOTHING was stopped or changed." >&2 ;;
+    pre-stop|stopped|rebuilt)
+      echo "!! Nothing was swapped: old store + old client intact. Restore service:" >&2
+      echo "   systemctl --user start zoe-data $TIMERS" >&2 ;;
+    started)
+      echo "!! zoe-data started but is not ready. Stop it and roll back per runbook §6:" >&2
+      echo "   systemctl --user stop zoe-data   # then §6 with TS=$TS" >&2 ;;
+    *)
+      echo "!! The store WAS swapped (TS=$TS). Do NOT start zoe-data: roll back per runbook §6." >&2 ;;
+  esac
+}
+trap 'fail $LINENO' ERR
+
+# 0. PREFLIGHT, before anything is stopped:
+#    (a) the run id passes the tool's own validation (the format `run` accepts, dir not taken);
+#    (b) the refused #1745 deploy run exists and has finished. Block B re-runs exactly that run.
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py check-date "$D"
+MERGE_SHA=$(gh pr view 1745 --json mergeCommit --jq .mergeCommit.oid)
+test -n "$MERGE_SHA"
+DEPLOY_ID=$(gh run list --workflow deploy.yml --limit 50 --json databaseId,headSha,status \
+  --jq "[.[] | select(.headSha==\"$MERGE_SHA\" and .status==\"completed\")][0].databaseId // empty")
+test -n "$DEPLOY_ID"                                    # empty = deploy not finished yet: wait, re-paste
+#    (c) that run must have been REFUSED before the checkout reset: the live tree must still be
+#        on the pre-merge commit (old opener). If the live HEAD already equals the merge commit,
+#        the deploy went through — stop here and follow §6 (the order code→store is broken).
+#    (d) the tool worktree must be clean and at exactly the cutover commit: the migration and the
+#        replay run ITS scripts while the artifact is attributed to the live checkout.
+git -C "$WT" fetch -q origin main && git -C "$WT" checkout -q --detach "$MERGE_SHA"
+test -z "$(git -C "$WT" status --porcelain --untracked-files=no)"   # clean tree (untracked scratch is fine)
+test "$(git -C "$WT" rev-parse HEAD)" = "$MERGE_SHA"
+LIVE_HEAD=$(git -C /home/zoe/assistant rev-parse HEAD)
+test "$LIVE_HEAD" != "$MERGE_SHA"                       # live checkout must NOT be on the merged main yet
+test "$(gh run view "$DEPLOY_ID" --json conclusion --jq .conclusion)" = failure   # the refused run
+echo "preflight OK: D=$D DEPLOY_ID=$DEPLOY_ID (merge $MERGE_SHA)"
+echo "PRE-CUTOVER live sha (keep for a §6 rollback): $LIVE_HEAD"
+exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay window overlaps
+# Deploy exclusion across BOTH blocks: deploy.yml takes /tmp/zoe-deploy.lock before it resets the
+# live checkout. Blocks A and B are separate shells, so the lock is held by a small background
+# holder whose lifetime spans both; block B kills it right before the deploy rerun. Preflight also
+# refuses if a deploy is already in progress (one past its checkout step cannot be excluded by the lock).
+test "$(gh run list --workflow deploy.yml --limit 3 --json status --jq '[.[]|select(.status!="completed")]|length')" = 0
+# An ACTIVE holder from another cutover attempt means that attempt is between its blocks: REFUSE
+# (never kill it). A genuinely abandoned holder is released by the explicit recovery below, by hand.
+if [ -f /tmp/zoe-b08-deploy-lock-holder.pid ] && kill -0 "$(cat /tmp/zoe-b08-deploy-lock-holder.pid)" 2>/dev/null \
+   && grep -q zoe-b08-deploy-lock-holder "/proc/$(cat /tmp/zoe-b08-deploy-lock-holder.pid)/cmdline" 2>/dev/null; then   # argv[0] set by exec -a
+  echo "!! another cutover attempt still holds the deploy lock (pid $(cat /tmp/zoe-b08-deploy-lock-holder.pid)). Finish or abandon it first:" >&2
+  echo "   abandoned for sure?  kill \$(cat /tmp/zoe-b08-deploy-lock-holder.pid); rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired" >&2
+  false
+fi
+rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired      # stale file from a dead holder only
+# The new holder must ACQUIRE (flock -n exits at once if the lock is busy) and prove it with a marker.
+# (the holder loops on short sleeps: bash exec-optimises a trailing `sleep N`, which would replace
+#  the process and erase its argv[0] identity from /proc/<pid>/cmdline)
+( exec -a zoe-b08-deploy-lock-holder bash -c 'flock -n 8 && echo acquired > /tmp/zoe-b08-deploy-lock.acquired && for _ in $(seq 1 240); do sleep 60; done' ) 8>/tmp/zoe-deploy.lock &   # bounded: 4 h max, then the lock frees itself
+MY_HOLDER=$!; echo "$MY_HOLDER" > /tmp/zoe-b08-deploy-lock-holder.pid
+sleep 2; test -f /tmp/zoe-b08-deploy-lock.acquired && kill -0 "$MY_HOLDER"   # lock OWNED by this attempt (else a deploy has it — do not proceed)
+STAGE=pre-stop
+
+# 1. Stop every writer/opener
+systemctl --user stop $TIMERS
+systemctl --user stop zoe-data
+STAGE=stopped
+if fuser ~/.mempalace/chroma.sqlite3; then echo "store still open" >&2; false; fi
+
+# 2. Final copy + rebuild from the STOPPED store (exit 1 unless all 10 proofs PASS)
+#    `run` needs a 0.6.x client as the "old" side. Its default is the live venv, which is right
+#    only while the venv still carries 0.6.x. If a deploy already converged the venv to 1.x
+#    (2026-09-28, incident-runbook §9), use the system 3.10 interpreter, which keeps chromadb
+#    0.6.3: `run` opens only the copy and its scratch copies, never the live palace. `run`
+#    itself refuses an --old-python without 0.6.x, so this stays fail-closed.
+OLD_PY=$HOME/.zoe/venvs/zoe-data-py312/bin/python
+"$OLD_PY" -c 'import chromadb,sys; sys.exit(0 if chromadb.__version__.startswith("0.6.") else 1)' 2>/dev/null \
+  || OLD_PY=/usr/bin/python3
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py run --date $D --old-python "$OLD_PY"
+STAGE=rebuilt
+
+# 3. Swap: the old dir becomes the rollback, and nothing opens it
+TS=$(date +%Y%m%d-%H%M%S)
+mv ~/.mempalace ~/.mempalace.pre-b08-$TS
+STAGE=swapped
+cp -a ~/.zoe/chroma-migration-rehearsal/$D/dst ~/.mempalace
+chmod 700 ~/.mempalace
+
+# 4. New client into the live venv: the exact deploy path, additive
+ZOE_PY312_VENV=$HOME/.zoe/venvs/zoe-data-py312 bash $WT/scripts/setup/build_py312_venv.sh --refresh
+test "$(~/.zoe/venvs/zoe-data-py312/bin/python -c 'import chromadb; print(chromadb.__version__)')" = 1.5.9
+STAGE=client-installed
+
+# 5. Live code to the merged main (it must carry the new opener)
+cd /home/zoe/assistant
+git fetch origin main
+test "$(git rev-parse origin/main)" = "$MERGE_SHA"   # main must still be exactly the cutover commit (no later PR landed unverified)
+git merge --ff-only "$MERGE_SHA"                     # advance to the verified commit, never to a newer main
+grep -q "def get_drawers_collection" services/zoe-data/memory_service.py
+STAGE=code-ff
+
+# 6. Start + readiness (is-active lies; poll, then REQUIRE self-recall ok)
+systemctl --user start zoe-data
+STAGE=started
+for i in $(seq 1 36); do curl -sf localhost:8000/readyz >/dev/null && break; sleep 5; done
+curl -sf localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); mc=d["memory_capture"]; print(d["status"], mc); assert d["status"]=="ok" and "self-recall ok" in mc.get("detail","")'
+STAGE=live
+echo "B0.8 transition OK: TS=$TS (rollback dir ~/.mempalace.pre-b08-$TS)"
+echo "If you abandon the cutover after block A, release the deploy lock: kill \$(cat /tmp/zoe-b08-deploy-lock-holder.pid)"
+echo "PRE-CUTOVER live sha (for §6 rollback): $LIVE_HEAD"
+echo "FOR BLOCK B:  D=$D DEPLOY_ID=$DEPLOY_ID"
+CUTOVER
+```
+
+**B. Verify, replay, re-deploy, re-arm: also ONE fail-closed script.** Run it only after A
+printed `B0.8 transition OK`, and paste the `D=` and `DEPLOY_ID=` A printed; it refuses if either is empty. It re-runs exactly that refused deploy. Its EXIT trap restarts and health-checks `kokoro-tts` whenever the block stopped it, including on Ctrl-C, TERM or HUP. Every step must succeed: the
+live snapshot copy, the recall probe, the order-exact parity check against the published
+baseline, and the replay. The tombstone report may exit **3** (a count is UNKNOWN until 1.x
+persists the drawers' index metadata); the script accepts that with a printed warning. Exit 2
+(over the warn threshold) or 1 fails. Only when everything passed does it re-run the refused
+deploy and re-arm the timers.
+
+**On failure the store is ALREADY LIVE**: zoe-data keeps running on the new store and client.
+The script leaves the timers STOPPED, changes nothing, and prints the §6 pointer. Decide
+between a fix-forward and the §6 rollback.
+
+```bash
+D=<from block A> DEPLOY_ID=<from block A> bash -euo pipefail <<'VERIFY'
+: "${D:?paste D= from block A}" "${DEPLOY_ID:?paste DEPLOY_ID= from block A}"   # refuse if empty
+WT=/home/zoe/.worktrees/b0-8-cutover; R=~/.zoe/chroma-migration-rehearsal/$D; STEP=start
+TIMERS="zoe-training.timer zoe-dreaming.timer zoe-memory-export.timer zoe-backup.timer"
+SCR=$(mktemp -d); KOKORO_STOPPED=0
+kokoro_back() { systemctl --user start kokoro-tts; for i in $(seq 1 60); do curl -sf localhost:10201/health | grep -q '"device":"cuda"' && { KOKORO_STOPPED=0; return 0; }; sleep 2; done; return 1; }
+cleanup() {                    # runs on EVERY exit: success, failure, Ctrl-C, kill (TERM/HUP)
+  rm -rf "$SCR"
+  if [ "$KOKORO_STOPPED" = 1 ]; then
+    echo "!! restoring kokoro-tts (this block stopped it)" >&2
+    kokoro_back || echo "!! kokoro-tts did NOT come back healthy: check it NOW" >&2
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+fail() {
+  echo "!! B0.8 verification FAILED at step=$STEP (line $1)." >&2
+  echo "!! The new store is ALREADY LIVE; zoe-data is still running on it. The timers stay STOPPED." >&2
+  echo "!! Nothing was re-deployed. Fix forward, or roll back per runbook §6 (restore ~/.mempalace.pre-b08-<TS>)." >&2
+}
+trap 'fail $LINENO' ERR
+
+STEP=live-copy
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py copy --copy-from ~/.mempalace --copy-to $SCR/store
+STEP=probe
+DEMO=$(python3 -c "import json;print(json.load(open('$R/manifest.json'))['run']['recall_demo_user'])")
+~/.zoe/venvs/zoe-data-py312/bin/python $WT/scripts/maintenance/chroma_migrate_rehearsal.py probe recall \
+  --store $SCR/store --demo-user $DEMO --out-file $SCR/live_top.json
+STEP=compare-recall        # exit 1 unless the top-10 ORDER is identical for all 20 queries
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py compare-recall --baseline $R/recall-parity --new $SCR/live_top.json
+STEP=tombstones
+rc=0; /usr/bin/python3 $WT/scripts/maintenance/check_memory_tombstones.py || rc=$?
+case $rc in
+  0) ;;
+  3) echo "WARN: tombstone count UNKNOWN for a 1.x segment with no persisted index metadata yet (expected right after the rebuild)" >&2 ;;
+  *) echo "tombstone report rc=$rc" >&2; false ;;
+esac
+STEP=rss
+grep -E 'VmRSS|VmSwap' /proc/$(systemctl --user show -p MainPID --value zoe-data)/status   # before: 1028 MB RSS, 0 swap
+
+STEP=replay               # writes the artifact the deploy gate needs; Kokoro stopped for its duration
+set -a; . ~/.hermes/.env; set +a
+KOKORO_STOPPED=1; systemctl --user stop kokoro-tts      # the EXIT trap restores it on any exit
+ZOE_VOICE_REPLAY_STT=remote flock /tmp/zoe-voice-harness.lock nice -n 5 ~/.zoe/venvs/zoe-data-py312/bin/python \
+  $WT/scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote \
+  --service-dir /home/zoe/assistant/services/zoe-data
+STEP=kokoro-health
+kokoro_back
+
+STEP=redeploy             # only now: re-run the SPECIFIC refused #1745 deploy (captured in block A)
+test "$(git -C /home/zoe/assistant fetch -q origin main && git -C /home/zoe/assistant rev-parse origin/main)" = "$(git -C /home/zoe/assistant rev-parse HEAD)"   # main still == the deployed cutover commit (no unverified PR landed meanwhile)
+kill "$(cat /tmp/zoe-b08-deploy-lock-holder.pid 2>/dev/null)" 2>/dev/null || true   # release the deploy lock held since block A
+rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired
+gh run rerun "$DEPLOY_ID"
+sleep 20
+gh run watch "$DEPLOY_ID" --exit-status              # blocks until the deploy finishes; non-zero = failed
+# readiness can be 200 while the memory-capture probe is still warming (it retries ~45 s after
+# start): keep polling for memory_capture ok within the warm-up window, not just the first 200.
+ok=0; for i in $(seq 1 48); do curl -s -m 5 localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("ready") and d["memory_capture"]["status"]=="ok" and "self-recall ok" in (d["memory_capture"].get("detail") or "") else 1)' 2>/dev/null && { ok=1; break; }; sleep 5; done
+test "$ok" = 1                                          # memory self-recall must be ok after the redeploy
+STEP=rearm
+systemctl --user start $TIMERS
+echo "B0.8 verified; deploy re-run; timers re-armed"
+VERIFY
+```
+Kokoro is the `kokoro-tts` user unit on `:10201` (`KOKORO_SIDECAR_PORT`, checked 2026-09-28).
+The health check requires `"device":"cuda"`, not just `status ok`: a CPU fallback means choppy
+TTS.
 
 ## 6. Rollback
 
 Stop zoe-data and the timers. Then:
 - `mv ~/.mempalace ~/.mempalace.b08-failed-<ts>`
 - `mv ~/.mempalace.pre-b08-<ts> ~/.mempalace`
-- reinstall `chromadb==0.6.3 mempalace==3.3.1` in the venv
-- start and poll `/readyz`
+- reinstall the old pair: `~/.local/bin/uv pip install --offline --python ~/.zoe/venvs/zoe-data-py312/bin/python chromadb==0.6.3 mempalace==3.3.1`
+- move the live code back to the pre-cutover commit (`git -C /home/zoe/assistant reset --hard <pre-cutover sha printed by block A>`) so the
+  old opener runs against the restored 0.6 store; the format guard refuses any mismatch.
+- **release the deploy lock the cutover kept** — store, client and code are consistent again, and
+  the revert deploy below needs the lock: verify the pid still IS our holder before signalling it:
+  `p=$(cat /tmp/zoe-b08-deploy-lock-holder.pid); grep -q zoe-b08-deploy-lock-holder /proc/$p/cmdline && kill $p; rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired`
+- revert the cutover PR on GitHub (its deploy now runs normally and converges venv + code).
+- start and poll `/readyz`, then re-arm the timers.
 
 **Restore the directory. Never just re-pin**: 0.6.3 cannot open the 1.x sysdb (proof f). Writes
 made after cutover live only in the 1.x store. Export them first with `export_memory_store.py`,
 which reads both formats.
 
 ## 7. Known facts and traps
+
+- **chromadb 1.x's `DefaultEmbeddingFunction` rebuilds the ONNX session on EVERY call.**
+  Measured per query on the migrated copy:
+
+  | client | per query |
+  |---|---|
+  | 1.5.9 with no EF passed | 0.42–0.89 s |
+  | 1.5.9 with one cached `ONNXMiniLM_L6_V2` named `"default"` | 0.18–0.27 s |
+  | 0.6.3 | 0.11–0.22 s |
+
+  zoe-data therefore opens the drawers with its own cached EF. It must be named `"default"`:
+  any other name raises "Embedding function conflict" against the persisted identity.
+- **`mempalace` 3.3.1 must not run against a 1.x palace.** Its backend runs `_fix_blob_seq_ids`
+  (a raw SQLite UPDATE) on every new client. The rebuilt store has no BLOB `seq_id`s, so it
+  would no-op, but it is unsupported, so the runtime no longer imports mempalace at all.
 
 - **The EF call size sets RSS.** chroma's MiniLM tokenizer pads every text to 256 tokens, and
   ORT's arena keeps the peak. Measured on the 333-drawer export (ORT 1.23.2):

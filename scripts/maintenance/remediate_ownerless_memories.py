@@ -141,6 +141,10 @@ def load_collection(db_path: Path, collection_name: str):
             "chromadb is required. Run this from zoe-data's exact ChromaDB version/venv."
         ) from exc
 
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+    from palace_client import check_client  # refuses a client/format mismatch (B0.8)
+
+    check_client(str(persistent_dir_for_db(db_path)), getattr(chromadb, "__version__", ""))
     try:
         client = chromadb.PersistentClient(path=str(persistent_dir_for_db(db_path)))
         return client.get_collection(collection_name)

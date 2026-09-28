@@ -58,6 +58,10 @@ LIVE_ROOT = "/home/zoe/assistant"
 # its reason — the runbook's one-at-a-time 3.12 step-ups (websockets 17.1,
 # onnxruntime 1.30, numpy 2, ...) land by adding an entry in their own PR.
 STEP_UP_DIVERGENCE: dict[str, str] = {
+    # B0.8 (2026-09-27): the live palace moved to chromadb 1.5.x WITH the py3.12 venv; the
+    # 3.10 lane keeps the 0.6.3 pair and must never open it (format guard refuses).
+    "chromadb": "B0.8 palace migration — docs/knowledge/chroma-1-5-migration.md",
+    "mempalace": "B0.8 — 3.3.1's _fix_blob_seq_ids is unsafe on a 1.x palace",
     # 2026-09-27 age-waived batch (#1743): taken on the LIVE 3.12 lane only. The 3.10
     # lane is the hand-managed system site-packages, now rollback-only (the service
     # runs the 3.12 venv), and requirements.txt must describe what it actually has

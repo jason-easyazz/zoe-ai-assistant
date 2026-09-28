@@ -20,22 +20,17 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ## 0. NEXT ACTION (keep this current)
 
-State as of **2026-09-28 02:30 AWST**:
-- live = `main` `b409dfe5`, and every deploy is green.
+State as of **2026-09-28 08:30 AWST**:
+- live = `main` `d346aa90` (#1745, the B0.8 cutover), and every deploy is green.
 - zoe-data runs on CPython 3.12.13 with uvicorn 0.53.0; `/readyz` is ready and self-recall ok.
+- **B0.8 is LIVE (08:21):** the palace is the migrated 1.x store on chromadb 1.5.9 +
+  mempalace 3.10.0. The deploy ran ahead of the store (~7 min of degraded memory capture;
+  store intact, no turns missed): [incident-runbook.md](../knowledge/incident-runbook.md) §9.
 - The brain sidecar is on Flue 2.1.1 + hono 4.13.9, restarted 02:26.
 - pi is 0.87.1 on the host and in Omnigent.
 
 1. 🧑 **Operator window on the box.** The agent cannot do these steps; each one is a production restart,
    a secret, or a root change:
-   - **B0.8 Chroma 1.5 cutover.** PR #1745 has the client, the pins and the format guards, and
-     it has **not been executed**. The agent's first window step (stop zoe-data and the four
-     timers) was refused by the permission system. The box is unchanged: old palace, venv on
-     chromadb 0.6.3 / mempalace 3.3.1. Run
-     [`chroma-1-5-migration.md`](../knowledge/chroma-1-5-migration.md) §5 in order. Age note:
-     #1745 adopts `mempalace==3.10.0` (14-day rule clears 2026-09-30); Jason's 2026-09-27
-     "do them all now, don't worry about the age rule" covers this batch — record the waiver
-     in the PR when the window runs, or wait until 09-30.
    - **B0.12 apply.** #1727 is files only. Live is still `0.0.0.0:5432` (`pgvector:pg17` =
      17.10) and `0.0.0.0:8007`. Run the PR's apply sequence: rebuild the bridge, then recreate
      Postgres on the pinned 17.11 digest.
@@ -58,7 +53,8 @@ State as of **2026-09-28 02:30 AWST**:
        `__pycache__` (retired in #1653), and it makes `test_no_zoe_music_module` red locally.
      - Omnigent Claude re-login **before 2026-10-11** (B0.11).
      - Actions event policy **before 2026-11-02** (B0.10 b).
-     - Dismiss the chromadb Dependabot alert (the pin is held until B0.8).
+     - Dismiss the chromadb Dependabot alert (B0.8 is live on 1.5.9; the 3.10 manifest keeps
+       0.6.3 by design and nothing on 3.10 opens the palace).
      - L4T 36.5; HA `auth_oidc` 1.2.1.
      - Add the nvm bin to the self-hosted runner's `PATH`; set `vm.page-cluster`.
      - Prune old MemPalace snapshots.
@@ -76,8 +72,10 @@ State as of **2026-09-28 02:30 AWST**:
      generic line spoken; `tier=owner` speaks the full brief.
 
    Also check the Monday 02:31 dreaming run on the new venv drop-in (B3.2).
+   - **B0.8 follow-ups.** Tuesday's (09-29) ~02:33 dreaming run is the first on the 1.x store:
+     confirm it ran and did work (the zero-effect rule, incident-runbook §7). (The live
+     recall-parity compare is done: PASS 20/20.)
 3. **Queue state:** the 09-27 wave **landed: 24 PRs**, listed in §6. Still open:
-   - #1745: the B0.8 cutover, 🧑.
    - #1715: B5.1 evidence, parked draft.
 
    Dependabot #1734–#1740 were closed, each with a rationale (B0.10). The ~14-day age rule
@@ -94,14 +92,21 @@ State as of **2026-09-28 02:30 AWST**:
 
    The window frees ~2 GB. Hold the other PRs (drop `auto-merge`) while a voice PR lands, or
    it goes behind again.
+
+   **Since 2026-09-28 the DEPLOY gate is tree-bound too** (`--expect-tree-of`): the head-bound
+   artifact clears the deploy only if the squash merge is tree-identical to that head and
+   nothing merged after it before its deploy, and nothing overwrote the artifact (incl. the 04:30
+   nightly probe). Otherwise probe a checkout of the MERGED sha (copy the live `services/zoe-data/.env` into the
+   worktree first, or the probe records an error) and `gh run rerun`. Recipe:
+   [merge-and-deploy.md](../knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 4. **Next engineering, in order:**
    1. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).
    2. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
       week).
    3. The `samantha_bar` harness.
-   4. **B3.2/B3.3** on the new store, after the B0.8 cutover.
-   5. Brief-on-arrival (**B2.1**).
-   6. ~~A Kokoro venv without scikit-learn/pandas (B6.6 d)~~ — B5.7, applied live 2026-09-28 (draft PR).
+   4. **B3.2/B3.3** on the new store (B0.8 live 2026-09-28).
+   5. Brief-on-arrival (**B2.1**): built flag-dark; flip it once the panel is on.
+   6. ~~A Kokoro venv without scikit-learn/pandas (B6.6 d)~~ — B5.7, applied live 2026-09-28 #1750.
    7. The 24 h `--cache-ram` occupancy measurement (B0.4/B6.6).
 
 ## 1. Where Zoe already beats the bar (protect these)
@@ -326,7 +331,22 @@ State as of **2026-09-28 02:30 AWST**:
   Needs a per-interpreter `requirements.txt` (two files: #1706) + a voice-gate
   probe re-baseline pointed at the interpreter that runs STT (the probe never installs
   requirements — see `reference_voice_gate_instrument_facts`).
-- B0.8 🧑 MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7 ✅); reconcile row
+- B0.8 ✅ 2026-09-28 08:21 AWST — **LIVE.** #1745 merged as `d346aa90`; the store was cut over
+  by `run --date cutover-2026-09-28-081803 --old-python /usr/bin/python3`: PROOF TABLE 10/10,
+  peak 379 MB, 102 s; old store unmodified since the copy (mtime 07:30 < copy 08:18); rollback
+  dir `~/.mempalace.pre-b08-20260928-082034`. `/readyz` ready + `self-recall ok`, timers
+  re-armed; post-cutover replay PASS 13/13 (brain 1414 ms, VAD 0.792); tombstone report one
+  collection UNKNOWN (expected on a fresh 1.x index); zoe-data RSS 1.33 GB. **Incident:** the
+  merge's deploy was NOT refused (the gate accepted a fresh passing artifact bound to another
+  commit), so the pins + code landed at 08:14 ahead of the store; the format guard refused the
+  0.6 store (~7 min `memory_capture: degraded`, store intact, no turns missed) —
+  [incident-runbook.md](../knowledge/incident-runbook.md) §9. Live recall parity vs the retained
+  baseline, on a copy of the live store: PASS, identical order 20/20, top-1 20, min Jaccard 1.0.
+  (The first compare's "no complete parity baseline" came from passing the run dir instead of
+  its `recall-parity` pointer; it was not a retention bug.) Follow-up (§0): the 09-29 dreaming
+  run on the 1.x store. Nice-to-have: `compare-recall`/`probe` default `--demo-user` from the
+  manifest. History of the item below.
+  MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7 ✅); reconcile row
   counts against `export_memory_store.py`; self-recall probe.
   **Recipe (2026-09-27): per-collection rebuild, NOT `mempalace migrate`.** mempalace 3.10's
   `extract_drawers_from_sqlite()` (`migrate.py`) selects every embedding in `chroma.sqlite3`
@@ -358,7 +378,7 @@ State as of **2026-09-28 02:30 AWST**:
 
   Peak RSS was 372 MB (the rebuild) and the whole run took 4.4 min. Runbook, measured table
   and cutover/rollback: [docs/knowledge/chroma-1-5-migration.md](../knowledge/chroma-1-5-migration.md).
-  **Remaining = the 🧑 cutover window.** **Cutover PR #1745** is open and prepared:
+  **Cutover PR #1745** (merged `d346aa90`, live 2026-09-28):
   - `requirements-py312.txt` moves to `chromadb==1.5.9` + `mempalace==3.10.0`. The 3.10
     manifest keeps 0.6.3 and must never open the palace.
   - zoe-data opens the drawers collection with raw chromadb: one `PersistentClient` per
@@ -366,9 +386,8 @@ State as of **2026-09-28 02:30 AWST**:
     0.42–0.89 s uncached.
   - Read-only format guards refuse a client of the wrong major version.
 
-  The cutover was **NOT executed on 2026-09-27 (22:19)**. The agent's first window step (stop
-  zoe-data + the four timers) was refused by the permission system. The box is unchanged: old
-  palace, venv on 0.6.3 / 3.3.1, every timer active. The operator sequence is runbook §5:
+  The agent's 2026-09-27 22:19 attempt was refused by the permission system (box unchanged);
+  the operator ran it on 2026-09-28 (above). The operator sequence is runbook §5:
   merge #1745 → lock → stop → `chroma_migrate_rehearsal.py run --date cutover-<date>` (10/10)
   → swap → `build_py312_venv.sh --refresh` → ff → `/readyz` self-recall ok → demo parity +
   tombstones + RSS → replay → re-deploy → re-arm the timers. Rollback is §6.
@@ -659,9 +678,16 @@ State as of **2026-09-28 02:30 AWST**:
   `@mariozechner/*` (dead scope, last publish 0.73.1).
 
 ### B2 — Proactivity with judgement (beats Daily Brief / Alexa+ nudges)
-- B2.1 ⬜ **Presence-triggered routines**: emit `person_recognized(panel, person, ts)` from the
+- B2.1 🔨 **Presence-triggered routines**: emit `person_recognized(panel, person, ts)` from the
   panel ID path into the proactive engine; "Zoe speaks first" on first-recognition-of-the-day
   rather than a 07:30 timer (Omnisense).
+  - First slice built, flag-dark: **brief-on-arrival** (`ZOE_PROACTIVE_BRIEF_ON_ARRIVAL`, default
+    off). A 07:30 brief that was not heard is spoken once, at the member's first `owner`
+    presence 07:00–11:00. Presence comes from the kiosk bind/sync, not the voice path. It writes
+    one `proactive_responses` row per day, with accepted/ignored/undelivered as the B2.2 signal.
+    See the [recipients record](../knowledge/synthetic-users-and-proactive-recipients.md).
+  - Next: 🧑 flip the flag once the panel is back on. Then feed face/voice matches in as
+    `owner` presence. That is a voice-path change and needs the replay gate.
 - B2.2 ⬜ **Candidate-selection → delivery-gating split** for proactive turns with a
   three-valued verdict (Immediate / Delayed / Silent) scored by a cheap non-LLM trigger over
   structured events using When2Talk's four factors + a Frigate-style 0–2 salience level;
@@ -1085,9 +1111,34 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
-- 2026-09-28 — B5.7 Kokoro dedicated venv (draft PR), applied live under the brain-window lock: the
+- 2026-09-28 — B5.7 Kokoro dedicated venv #1750, applied live under the brain-window lock: the
   sidecar runs `~/.zoe/venvs/kokoro-py310` (system 3.10 + import blocker for sklearn/pandas/pyarrow).
   ABAB: −2.5 to −4.0 s start → healthy, −97 to −139 MB VmRSS at healthy, p95 within noise, CUDA kept.
+- 2026-09-28 (post-incident) — **the deploy voice gate binds the replay artifact to the deployed
+  tree.** Incident 08:14: #1745 (chromadb 1.5.9 pins in `requirements-py312.txt`, voice-path) was
+  expected to be refused at deploy until a replay for that commit existed. It was not: the gate
+  checked only that the artifact was fresh and passing, and a replay from an unrelated landing a few
+  hours earlier satisfied it. The deploy refreshed the venv and moved the code while the memory
+  store was still on the 0.6 format, and memory degraded for ~7 min. The format guard held, and
+  completing the swap recovered it. Fix: `deploy.yml` and `deploy_live.sh` pass
+  `voice_gate_check.py --expect-tree-of "$target"`. The gate accepts an artifact for that exact
+  commit, or a clean run whose recorded tree equals the target's tree. A squash merge mints a new
+  sha, so the tree match is what keeps PR-head-bound landings working. It holds only when the
+  merge is tree-identical (the branch was up to date) and nothing merged after it before its
+  deploy ran. Otherwise the probe must be re-run against the merged commit. An old live checker
+  that lacks the flag falls back to the stricter `--expect-revision`. Recorded in
+  `merge-and-deploy.md` → *Landing a voice-path PR* and in the root `AGENTS.md` voice-gate section.
+- 2026-09-28 (morning) — **B0.8 LIVE 08:21 AWST.** #1745 merged as `d346aa90` (08:13:45). Its
+  deploy was NOT refused: the voice gate accepted a fresh (2.6 h) passing artifact bound to a
+  different commit, so the venv (chromadb 1.5.9 + mempalace 3.10.0) and the code landed at 08:14
+  while the store was still 0.6. The format guard refused the old store: `memory_capture:
+  degraded` ~7 min, voice/chat fine, store intact, no turns in the window. The operator session completed the swap:
+  `run --date cutover-2026-09-28-081803 --old-python /usr/bin/python3` (10/10, 379 MB, 102 s),
+  swap with rollback `~/.mempalace.pre-b08-20260928-082034`, `/readyz` `self-recall ok`, timers
+  re-armed; replay PASS 13/13 (brain 1414 ms, VAD 0.792); zoe-data RSS 1.33 GB; live recall
+  parity vs the retained baseline PASS 20/20 identical order. Incident record
+  + lessons: incident-runbook §9. Fix: #1754 (entry above). Runbook §5 now passes `--old-python` when the live venv
+  is already on 1.x. §0 and review §9 updated.
 - 2026-09-27/28 (overnight refresh, state as of 2026-09-28 02:30 AWST) — **the 09-27 wave
   landed: 24 PRs.** In merge order:
   - #1718: tracker.

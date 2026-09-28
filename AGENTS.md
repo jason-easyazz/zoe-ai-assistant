@@ -150,9 +150,17 @@ requirement was removed rather than the regex hardened.
 
 **What actually enforces voice regressions:**
 
-1. **The post-merge deploy gate in `deploy.yml` — the real block, unchanged.** A
-   voice-path change with no fresh passing artifact does not reach the box. Fail-closed,
-   runs on the Jetson, nothing in a PR can influence it.
+1. **The post-merge deploy gate in `deploy.yml` — the real block.** A voice-path change
+   with no fresh passing artifact **for the code being deployed** does not reach the box.
+   Fail-closed, runs on the Jetson, nothing in a PR can influence it. Since the
+   2026-09-28 incident (#1745 deployed on a replay of an UNRELATED landing, because the gate
+   checked only freshness + status) it passes `--expect-tree-of <deployed sha>`: the
+   artifact must be for that exact commit, or a clean run whose recorded tree is
+   byte-identical to it. A squash merge mints a new sha, so the tree match is what lets the
+   PR-head artifact land — and only when the squash is tree-identical (branch up to date)
+   and nothing merged after it before its deploy ran. Otherwise re-run the probe against a
+   checkout of the merged commit and re-run the deploy. Landing recipe:
+   [merge-and-deploy.md](docs/knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 2. **The visible PR-time result**, plus mandatory multi-agent review and
    `required_conversation_resolution`.
 
