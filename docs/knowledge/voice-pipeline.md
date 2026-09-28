@@ -3,7 +3,7 @@ type: Reference
 title: Zoe Voice Pipeline
 description: The end-to-end voice path (STT → brain → TTS), how it's measured, and the regression corpus — plus the load-bearing caveat that the warm replay harness understates real live latency.
 tags: [voice, stt, tts, performance, testing]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Zoe Voice Pipeline
@@ -983,6 +983,46 @@ Rollback: set `ZOE_VAD_TAIL_MS=0` and
 `systemctl --user restart zoe-voice` — behaviour is byte-identical to pre-flag. Corpus evidence
 (#1573): −160 ms median tail on ~80 % of turns, +2.7 pt false-cut upper bound; the probe
 (`scripts/perf/measure_endpointing.py`) can exercise old and new behaviour for before/after.
+
+## Panel speaker-ID shadow score — off the first-audio path (2026-09-28)
+
+The Pi daemon (`scripts/setup/zoe_voice_daemon.py`) used to score each turn's
+speaker (resemblyzer) **before** it started the upload to `/api/voice/turn_stream`.
+In W5 shadow mode (`SPEAKER_ID_SHADOW`, default on) the claim is only logged and
+never attached, so that wait bought nothing. It cost a median **0.54 s** (0.37 s on
+brain turns) and up to **1.12 s** on long clips, measured from the `Recorded …` →
+`Speaker ID (shadow)` log gap. That is fix #1 in the
+[panel TTFA breakdown](panel-ttfa-breakdown-2026-09-28.md).
+
+- **Now:** `_speaker_claim_to_attach` hands the score to a background thread
+  (`_start_shadow_scoring`) and the POST starts at once. The thread still calls
+  `_speaker_claim_for_turn` once per turn, so the JSONL row and the
+  `Speaker ID (shadow): <user> (<score>) — logged, not acted on` journal line are
+  unchanged. The line now usually lands *after* the POST starts, not before it.
+- **One inference at a time.** Each scorer joins the previous one before it
+  touches the encoder. Only one resemblyzer inference runs at once, there is one
+  model copy, and rows land in turn order.
+- **Still one row per turn at the edges.** Orderly shutdown (SIGTERM/SIGINT, or
+  the main loop exiting) waits up to 3 s for pending scorers
+  (`_drain_shadow_scoring`), so a restart right after a turn keeps its row. If a
+  scorer thread cannot start, that turn is scored inline (WARNING in the journal),
+  and later turns score in the background as normal. The inline score waits up to
+  10 s for the previous scorer. If that one is still running, the turn is skipped
+  with `speaker shadow: skipped (predecessor still running)` instead of running two
+  inferences at once and writing rows out of order.
+- **Active mode is unchanged.** With shadow off, the claim rides in the payload
+  (`voice_user_id` / `voice_score`), so it is still scored inline before the POST.
+  No follow-up path exists to deliver a late claim. Build one before flipping
+  shadow off if the 0.5 s matters then.
+- **TTFA clock note.** The daemon's `turn_stream TTFA=` starts at the POST, so it
+  **never included** the speaker-ID time, and this fix does not move that number.
+  The saving shows up as a shorter `Recorded …` → POST gap, and in end-of-speech →
+  first-sound time. The daemon does not log the POST start, so measure the gap with
+  the cross-host join in the breakdown: Pi `Recorded …` against the server's
+  `STT_CAPTURE` for the same turn. It should drop by roughly the old speaker-ID time.
+- Pinned by `tests/unit/test_voice_daemon_speaker_shadow.py`: the upload must start
+  before the score completes, on both the stream and the blocking turn paths. Scoring
+  synchronously again turns those tests red.
 
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
