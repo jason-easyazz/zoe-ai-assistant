@@ -160,7 +160,11 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `src/request-identity.ts`; env fallback), identity fail-closed, writes
   dry-run-gated. Emits the Seam-A text-delta + `__TOOL__`/`__THINKING__` sentinel
   stream (byte-pinned to the prod contract) via content-negotiated NDJSON
-  (`src/streaming.ts`).
+  (`src/streaming.ts`). Model text reaches that stream from an execution
+  interceptor on the provider stream (`src/early-text.ts`, kill switch
+  `ZOE_FLUE_EARLY_TEXT=0`), not from `observe()`, whose `text_delta` waits on
+  the runtime's 1 s batched storage flush; the flushed copy is deduped by
+  offset and the store is untouched (`test/early_text.test.ts`).
   Reached from prod via the `ZOE_BRAIN_BACKEND=flue` seam — shipped default-OFF
   (`core`) but production-reachable and **live on this deployment**; supervised
   via the opt-in unit template `scripts/setup/systemd/flue-zoe-brain-2x.service`
@@ -233,7 +237,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   (`src/speculative-turn.ts`, `test/speculative_turn.test.ts`; the prefix is
   pinned equal to `zoe_flue_client._SPECULATIVE_ENVELOPE_PREFIX` by zoe-data's
   `test_voice_speculation_write_deferral.py`).
-  Regression net (hand-run, not CI-wired): `npm test` — 26 `test/*.test.ts` files
+  Regression net (hand-run, not CI-wired): `npm test` — 27 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a
