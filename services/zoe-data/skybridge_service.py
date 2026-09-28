@@ -1398,7 +1398,7 @@ _ROUTER_AGREEING_DOMAINS: dict[str, frozenset[str]] = {
 def router_veto_enabled() -> bool:
     """ZOE_SKYBRIDGE_ROUTER_VETO — default ON; ``false``/``0``/``off``/``no``
     restores the pre-2026-09-28 behaviour (Skybridge ignores the router)."""
-    raw = (os.environ.get("ZOE_SKYBRIDGE_ROUTER_VETO", "") or "").strip().lower()
+    raw = (os.environ.get("ZOE_SKYBRIDGE_ROUTER_VETO", "1") or "1").strip().lower()
     return raw not in ("0", "false", "off", "no")
 
 
