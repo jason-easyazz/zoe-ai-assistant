@@ -124,12 +124,18 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
       @ 0.73) the floor does not catch — it waits on a retrain. Accept when a post-deploy
       `samantha_bar.py --compare-baseline` shows S1 PASS with nothing regressing.
       (b) **Emotional continuity.** S4: the day-1 worry (the interview) is not acknowledged
-      the next day, 3/3 samples. **Status: built, awaiting live compare** — Flue-lane
-      continuity injection (`ZOE_SEAM_CONTINUITY_INJECT`, default ON, kill switch
-      `false`): a first-person mood statement gets the recent-first memory packet
-      (root cause + design: [samantha-bar.md](../knowledge/samantha-bar.md) → *S4 root
-      cause*). Accept when a post-deploy `samantha_bar.py --compare-baseline` shows S4 PASS
-      with nothing regressing. B3.3 (importance-sum reflection) stays the longer-term carrier.
+      the next day, 3/3 samples. **Round 1 (#1756) is live but S4 still FAILs 3/3.** It adds
+      Flue-lane continuity injection (`ZOE_SEAM_CONTINUITY_INJECT`, default ON, kill switch
+      `false`). The injection fires, but the digest had dropped the feeling from the stored
+      fact and the block's instruction was too soft.
+      **Round 2: built, awaiting live compare.**
+      - The feeling is kept in the digest and captured as `affect`.
+      - The block now sits after the user's words with one concrete ask.
+      - Measured 7/8 PASS on the reproduced flow, against 0/6 for round 1 as merged.
+
+      Record: [samantha-bar.md](../knowledge/samantha-bar.md) → *S4 round 2*. Accept when a
+      post-deploy `samantha_bar.py --compare-baseline` shows S4 PASS with nothing
+      regressing. B3.3 (importance-sum reflection) stays the longer-term carrier.
    2. **B7.5 (c)** QR onboarding for new members. (a)+(b) are merged and deployed (#1752);
       the live-panel check (push, `/wake`, a real Telegram send) waits for the Pi.
    3. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on

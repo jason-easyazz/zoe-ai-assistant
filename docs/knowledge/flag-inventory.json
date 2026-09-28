@@ -3949,6 +3949,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_SEAM_CONTINUITY_DEBUG": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_SEAM_CONTINUITY_INJECT": {
         "defaults": [
           "'true'"
@@ -4020,6 +4030,16 @@
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": true
+      },
+      "ZOE_SKYBRIDGE_ROUTER_VETO": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "typed_env": false
       },
       "ZOE_SKYBRIDGE_TIMEZONE": {
         "defaults": [
