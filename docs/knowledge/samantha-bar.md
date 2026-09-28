@@ -276,6 +276,44 @@ the cached prefix. It was also not needed.
 Acceptance is unchanged: after deploy, `--compare-baseline` must show S4 PASS with nothing
 regressing. Samples 1-2 are the ones to watch, because they run after the day-2 mood row lands.
 
+**S1 round 3 (#1767 live, still FAIL — recall, not the router; fixed).** After #1767 the ask
+reached the brain (router `low_conf` → chat), yet the reply named neither Marisol nor Lisbon.
+A demo-user reproduction (seed, capture observed, ask in a NEW session; 3 samples, teardown
+proven) showed where it broke:
+
+1. **The event was in the store every time.** The per-turn digest kept only "User's sister is
+   named Marisol." on 2 of 3 samples, but `person_extractor_llm` had already stored "Marisol:
+   flying in from Lisbon on Thursday", and the digest's own event copy was then dropped by its
+   word-overlap pre-dedup against that row. The relevance packet the seam would fetch (limit 12)
+   held the event on 3 of 3 samples. The loss case is the two writers missing together: the
+   person pass sometimes returns only "sister of the user" (1 of 4 offline), and the old digest
+   prompt sometimes returned only the name (1 of 5 offline).
+2. **Recall rested on the brain's tool choice.** The ask has no "my"/"I", so the seam recall
+   floor (`ZOE_SEAM_RECALL_INJECT`, live ON) never fired. Live main answered "I'll need to check
+   your calendar…" on 3 of 3 samples: it called the calendar tool, not `recall_memory`.
+
+Fixes:
+- **Capture.** The turn-digest prompt asks for BOTH facts when a named person has something
+  happening: who they are, and the event with who/what/where/when kept. Offline on the S1 seed:
+  5 of 5 gave "User's sister is named Marisol" + "User's sister Marisol is flying in from Lisbon
+  on Thursday". The other bar seeds (dad/lighthouse, Hobart, Dunedin, the worry, the short dad)
+  gave the same facts as before, 5 of 5 each. The pre-dedup is unchanged; S7 leans on it.
+- **Recall.** Event-shaped questions (`memory_gate.is_event_question`) now trigger the floor.
+  That means a people-movement verb anchored by a time cue ("Who is flying in on Thursday"), a
+  my/our relation word ("when is my sister arriving"), or a he/she/they subject ("where is she
+  flying from"). They get the same `[MEMORY CONTEXT]` relevance packet. General knowledge
+  ("who is the prime minister", "who is playing on Sunday") never matches. Among every bar line,
+  only `ASK_SISTER` and S6's `ASK_B` match. User B's store holds none of A's facts, so S6 is
+  unchanged.
+
+| 3 samples, demo users, same seeded store | S1 (Marisol + Lisbon) | median ms |
+|---|---|---|
+| live main (no event floor) | 0/3 (calendar tool) | 4649 |
+| **AS CODED**: this branch's seam → the live sidecar, replay-isolated | **3/3** | 2461 |
+
+Acceptance: after deploy, `--compare-baseline` shows S1 PASS with nothing regressing. Then
+re-record the bar.
+
 Next targets, in order (tracker §0): (a) a **router confidence gate** — head decisions below
 ~0.6 fall through to the chat lane (brain + recall packet) instead of a deterministic tool,
 and the miss feeds the router self-train corpus; (b) **emotional continuity** for S4, with
