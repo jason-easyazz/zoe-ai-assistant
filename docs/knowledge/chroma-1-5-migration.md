@@ -1,9 +1,9 @@
 ---
 type: Runbook
 title: Chroma 0.6.3 → 1.5.x memory-store migration (B0.8)
-description: Why Zoe's palace is migrated one collection at a time instead of with `mempalace migrate`, the measured rehearsal on a copy (10/10 proofs, peak RSS 372 MB, 4.4 min), every program that opens the store and the interpreter it runs under, the operator cutover checklist, and rollback by restoring the directory.
+description: Why Zoe's palace is migrated one collection at a time instead of with `mempalace migrate`, the measured rehearsal on a copy (10/10 proofs, peak RSS 372 MB, 4.4 min), every program that opens the store and the interpreter it runs under, the operator cutover checklist (executed 2026-09-28, see §5), and rollback by restoring the directory.
 tags: [memory, chromadb, mempalace, migration, runbook, b0.8]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Chroma 0.6.3 → 1.5.x memory-store migration (B0.8)
@@ -141,10 +141,16 @@ requires the B0.8 rollback as well.
 
 ## 5. Cutover sequence (🧑 operator, one window, outside 01:45–03:15)
 
-**Status (2026-09-27 22:20): NOT executed.** The agent's first window step (stop the timers and
-zoe-data) was refused by the permission system. The box was left unchanged: old store, old
-client, everything running. Everything else is prepared: the cutover PR, the moved 3.10 opener,
-and the rehearsal (10/10).
+**What actually happened on 2026-09-28 (LIVE 08:21 AWST).** Step 0's assumption failed: the
+#1745 merge (`d346aa90`) was **not** refused. The deploy gate accepted a fresh passing replay
+artifact bound to a different commit, so at 08:14 the deploy moved the venv to chromadb 1.5.9 +
+mempalace 3.10.0 and the code to `d346aa90` while the store was still 0.6. The format guard
+refused to open it, so memory capture was degraded for ~7 min and no data was lost. Block A's
+preflight (c) correctly stops in that state. The operator then did the store half by hand: `run`
+with `--old-python /usr/bin/python3` (10/10, peak 379 MB, 102 s), swap (rollback dir
+`~/.mempalace.pre-b08-20260928-082034`), restart, `self-recall ok`, timers re-armed, replay PASS
+13/13. Full record and lessons: [incident-runbook.md](incident-runbook.md) §9. For any future
+pins cutover: **merge only inside the window**, after the services are stopped.
 
 Why the order matters. The live checkout's code, the venv pins and the store must all flip while
 zoe-data is down:
@@ -251,7 +257,15 @@ STAGE=stopped
 if fuser ~/.mempalace/chroma.sqlite3; then echo "store still open" >&2; false; fi
 
 # 2. Final copy + rebuild from the STOPPED store (exit 1 unless all 10 proofs PASS)
-python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py run --date $D
+#    `run` needs a 0.6.x client as the "old" side. Its default is the live venv, which is right
+#    only while the venv still carries 0.6.x. If a deploy already converged the venv to 1.x
+#    (2026-09-28, incident-runbook §9), use the system 3.10 interpreter, which keeps chromadb
+#    0.6.3: `run` opens only the copy and its scratch copies, never the live palace. `run`
+#    itself refuses an --old-python without 0.6.x, so this stays fail-closed.
+OLD_PY=$HOME/.zoe/venvs/zoe-data-py312/bin/python
+"$OLD_PY" -c 'import chromadb,sys; sys.exit(0 if chromadb.__version__.startswith("0.6.") else 1)' 2>/dev/null \
+  || OLD_PY=/usr/bin/python3
+python3 $WT/scripts/maintenance/chroma_migrate_rehearsal.py run --date $D --old-python "$OLD_PY"
 STAGE=rebuilt
 
 # 3. Swap: the old dir becomes the rollback, and nothing opens it

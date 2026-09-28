@@ -566,14 +566,15 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
 
 ## 9. Recommended sequence
 
-**Current order, refreshed 2026-09-28 02:30 AWST, after the 09-27 wave (24 PRs; list in the
+**Current order, refreshed 2026-09-28 08:30 AWST (B0.8 cutover live), after the 09-27 wave (24 PRs; list in the
 tracker §6).** The authoritative NEXT ACTION is the
 [program tracker §0](../architecture/beat-the-bar-2026-program.md). The dated lists below are
 the 2026-09-25 plan, kept with ✓ marks.
 
 1. 🧑 **Operator window.**
-   - The B0.8 Chroma 1.5 cutover. #1745 is prepared but not executed; follow
-     `chroma-1-5-migration.md` §5.
+   - ✓ The B0.8 Chroma 1.5 cutover — LIVE 2026-09-28 08:21 AWST (#1745 `d346aa90`; 10/10
+     proofs, `self-recall ok`, replay PASS 13/13). Its deploy ran ahead of the store (~7 min
+     degraded memory capture, no data loss): `incident-runbook.md` §9.
    - Apply #1727: loopback Postgres 17.11, and rebuild the HA bridge.
    - Music Assistant: YouTube Music re-auth on the panel (the cookies have rotated and the
      provider does not load), then the MA 2.10.3 re-create per `music-ytdlp-js-runtime.md`
@@ -586,10 +587,13 @@ the 2026-09-25 plan, kept with ✓ marks.
    - One real `/ws/voice/` turn on uvicorn 0.53 (#1743).
    - B1.1: Pi proof → head-bound replay → operator flag-on week.
 3. **Verify.** The 2026-09-28 07:30 morning brief (#1726) and the Monday 02:31 dreaming run
-   on the venv drop-in.
+   on the venv drop-in. B0.8 follow-ups: the 09-29 dreaming run is the first on the 1.x store
+   (confirm it did work); the live recall-parity compare still has to run (its baseline lookup
+   printed "no complete parity baseline" although the run retained one; add a `--demo-user`
+   manifest fallback in `chroma_migrate_rehearsal.py`).
 4. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).
 5. The `samantha_bar` harness.
-6. **B3.2** dream gating and **B3.3** reflection on the new store, after the B0.8 cutover.
+6. **B3.2** dream gating and **B3.3** reflection on the new store (B0.8 live 2026-09-28).
 7. Brief-on-arrival (**B2.1**: the first recognition of the day, instead of the 07:30
    timer).
 8. The Kokoro dedicated venv (~−100 MB) and the 24 h `--cache-ram` occupancy measurement.
@@ -641,7 +645,7 @@ the 2026-09-25 plan, kept with ✓ marks.
 **Next quarter:**
 13. Kokoro on ONNX Runtime CUDA (RAM) → then the expressive-lane bake-off. (Measured 2026-09-27: not a win — B5.1 parked.)
 14. MemPalace 3.10 + Chroma 1.5.x migration on a copy, with the bi-temporal supersession
-    work (#3 in §7) designed against the new store. (✓ rehearsal #1732; the cutover #1745 is 🧑.)
+    work (#3 in §7) designed against the new store. (✓ rehearsal #1732; ✓ cutover #1745 live 2026-09-28.)
 15. Borrow list #1, #2, #4, #5, #6 in that order — each is a lab spike with a replay gate.
 16. HA tool-name sweep (✓ pt 1 #1695) → HA 2026.9/10 → MA 2.10 client check (✓ #1723 client port; re-create 🧑); codebase-memory 0.11;
     AG-UI 1.0 + the card carrier.
