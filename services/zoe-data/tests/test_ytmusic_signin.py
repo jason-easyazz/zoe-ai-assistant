@@ -42,11 +42,14 @@ class _FakeContext:
         self.reads = 0
         self.cleared = []
         self.clear_fails = False
+        self.fail_reads = set()  # read numbers that raise (a flaky browser)
         self.closed = False
         self.pages = []
 
     async def cookies(self):
         self.reads += 1
+        if self.reads in self.fail_reads:
+            raise RuntimeError("target closed")
         if self._then is not None and self.reads > self._after:
             return list(self._then)
         return list(self._cookies)
@@ -702,6 +705,40 @@ async def test_a_login_during_the_stale_check_is_not_wiped(monkeypatch):
     assert ys.session_status(res["session_id"])["state"] == "connected"
     assert seen == ["stale-old-value", "fresh-new-value"]
     assert len(saves) == 1 and "fresh-new-value" in saves[0]["cookie"]
+
+
+async def test_a_failed_reread_after_a_stale_verdict_is_retried_not_stuck(monkeypatch):
+    # The re-read before the wipe fails: nothing is wiped on a guess, and the
+    # baseline stays up for re-judging, so the next retry clears it.
+    ctx, _procs = _stub_rig(monkeypatch, STALE_COOKIES)
+    ctx.fail_reads = {2}
+    monkeypatch.setattr(ys, "SESSION_TIMEOUT_S", 30)
+    monkeypatch.setattr(ys, "_BASELINE_RETRY_S", 0.0)
+    seen = _validator(monkeypatch, False, False)
+    saves = _no_save(monkeypatch)
+    res = await ys.start_session()
+    await _let_watcher_poll()
+    assert ys.session_status(res["session_id"])["state"] == "stale_cookie_cleared"
+    assert [c["name"] for c in await ctx.cookies()] == ["keep_me"]
+    assert seen == ["stale-old-value", "stale-old-value"] and saves == []
+    await ys.cancel_session(res["session_id"])
+
+
+async def test_a_failed_start_snapshot_is_not_read_as_a_clean_profile(monkeypatch):
+    # The first cookie read fails. That proves nothing about the jar: the
+    # stale cookie seen on the next read is the SNAPSHOT (judged, wiped), not
+    # a "new login" to validate against a clean baseline.
+    ctx, _procs = _stub_rig(monkeypatch, STALE_COOKIES)
+    ctx.fail_reads = {1}
+    monkeypatch.setattr(ys, "SESSION_TIMEOUT_S", 30)
+    seen = _validator(monkeypatch, False)
+    saves = _no_save(monkeypatch)
+    res = await ys.start_session()
+    await _let_watcher_poll()
+    assert ys.session_status(res["session_id"])["state"] == "stale_cookie_cleared"
+    assert [c["name"] for c in await ctx.cookies()] == ["keep_me"]
+    assert seen == ["stale-old-value"] and saves == []
+    await ys.cancel_session(res["session_id"])
 
 
 async def test_stale_notice_reaches_a_late_watcher(monkeypatch):

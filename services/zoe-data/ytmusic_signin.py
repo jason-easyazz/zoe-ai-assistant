@@ -576,8 +576,9 @@ async def _judge_baseline(session: dict[str, Any], header: str, fingerprint: str
     # their fresh login. Leave it; the watcher validates the new cookie.
     try:
         _h, _n, current = await _probe_context(context)
-    except Exception:  # noqa: BLE001 — can't tell: don't wipe
-        current = None
+    except Exception:  # noqa: BLE001 — can't tell: don't wipe, re-judge on the next retry
+        session["baseline_unverified"] = True
+        return False
     if current != fingerprint:
         logger.info("ytmusic sign-in: profile cookie was stale, but a new login arrived "
                     "meanwhile — not clearing")
@@ -603,13 +604,21 @@ async def _check_profile_at_start(session: dict[str, Any]) -> bool:
     profile has baseline None: any cookie that appears is a fresh login.
     Returns True when the existing login was harvested."""
     context = session.get("context")
+    session["baseline_unverified"] = False
     try:
         header, _names, fingerprint = await _probe_context(context)
-    except Exception as exc:  # noqa: BLE001 — browser not ready: nothing to snapshot yet
+    except Exception as exc:  # noqa: BLE001 — browser not ready: snapshot on the first good read
         logger.debug("ytmusic sign-in: start snapshot not ready: %s", exc)
-        header, fingerprint = "", None
+        # NOT "clean profile": a failed read proves nothing about the jar.
+        session["baseline_pending"] = True
+        return False
+    return await _take_baseline(session, header, fingerprint)
+
+
+async def _take_baseline(session: dict[str, Any], header: str, fingerprint: Optional[str]) -> bool:
+    """Record the start snapshot (None = clean profile) and judge it."""
+    session["baseline_pending"] = False
     session["baseline_fp"] = fingerprint
-    session["baseline_unverified"] = False
     if fingerprint is None:
         return False
     return await _judge_baseline(session, header, fingerprint)
@@ -634,7 +643,14 @@ async def _run_watcher(session: dict[str, Any]) -> None:
                 header, names, fingerprint = await _probe_context(session.get("context"))
             except Exception as exc:  # noqa: BLE001 — browser not ready / transient
                 logger.debug("ytmusic sign-in: harvest probe not ready: %s", exc)
-                header, names, fingerprint = "", [], None
+                await asyncio.sleep(_POLL_S)
+                continue
+            if session.get("baseline_pending"):
+                # The start snapshot failed: this first good read IS the snapshot.
+                if await _take_baseline(session, header, fingerprint):
+                    return
+                await asyncio.sleep(_POLL_S)
+                continue
             if header and _has_required(names) and fingerprint:
                 if fingerprint == session.get("baseline_fp"):
                     if not logged_unchanged:
