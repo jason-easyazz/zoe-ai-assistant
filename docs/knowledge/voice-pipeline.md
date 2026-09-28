@@ -533,6 +533,46 @@ unchanged: the words, `session_id` and `user_id`. Its recall and offer blocks
 - **Kill switch**: `ZOE_VOICE_MEMORY_PACKET_LAZY=false` (default `true`) restores the eager
   build on every lane. Pinned by `test_voice_memory_packet_lazy.py`.
 
+### First token → first sentence: the Flue runtime's 1 s storage flush (2026-09-28)
+
+`brain_ttft_ms` covers only the first token. On the Flue lane the first speakable sentence used
+to arrive about a second later, in one burst. The cause is in `@flue/runtime` 2.1.1, not in the
+model: the `text_delta` that `observe()` subscribers see is the publish callback of a batched
+storage write. The batch flushes at once only when the previous flush started 1 s or more ago.
+Otherwise it waits for `setTimeout(CANONICAL_FLUSH_DELAY_MS = 1e3)`, a module-private constant with
+no config or env knob. So the first delta went out immediately, then nothing for ~0.84–1.09 s,
+then 17–26 deltas within 2 ms, while llama-server decoded steadily at 20–27 tok/s. The median time
+from first token to first speakable unit was 1.08 s (the panel TTFA breakdown in draft PR #1758).
+The bursty-then-stalled rhythm that zoe-data's `_pace_delivery` (`routers/voice_tts.py`) and
+`voice_cadence_guard.py` smooth over came from the same flush.
+
+**The tap (`labs/flue-zoe-brain-2x/src/early-text.ts`).** The sidecar installs an execution
+interceptor through the runtime's supported `instrument()` API. Every model call, and every
+`next()` on its provider stream, runs through the interceptor as a `{type: 'model', turnId}`
+operation. That provider stream is the one `src/providers/capped-completions.ts` returns: pi-ai's
+parse of llama-server's SSE. The interceptor publishes each `text_delta` on an in-process bus
+before the agent loop hands it to the store, tagged with the operation and model-call ids. It
+returns the event untouched. The store, the canonical transcript and `observe()` behave exactly
+as before. `src/streaming.ts` forwards the early copy for the latched operation, only for model
+calls whose `turn_request` had `purpose: 'agent'`. It drops the flushed copy by per-call
+character offset, so no text goes out twice (`EarlyTextReconciler`). Tool sentinels, thinking,
+the `{"done": true}` terminal and its `prompt_cache` still come from `observe()` unchanged.
+
+- **Kill switch**: `ZOE_FLUE_EARLY_TEXT=0` on the sidecar (default on). It restores the
+  observe-only stream. The flag is read per turn.
+- **Per-turn log line** (sidecar journal): `FLUE_EARLY_TEXT first_delta_ms=… first_sentence_ms=…
+  deltas=… deduped=… enabled=0|1`, plus `diverged=N` when the two copies ever disagree (they
+  should not). Times are measured from when the request reaches the streaming middleware. With
+  the tap on, `deduped` equals `deltas`.
+- **Measured** (parallel-port smoke, 2026-09-28, same prompts, warm): the largest gap between
+  text frames fell from 1069–1085 ms to 85–91 ms. First token → first sentence fell from
+  1069–1086 ms to 494–913 ms, which is now just the model's own decode time for the first
+  sentence.
+- **Pinned by** `labs/flue-zoe-brain-2x/test/early_text.test.ts`. It runs the real runtime with
+  its real 1 s flush against a mock model. With the flag off, the ≥ 0.8 s stall must be visible
+  (a negative control). With it on, the stall must be gone, the text byte-identical with no
+  duplicates, and the tool frames unchanged.
+
 ### Which samples the gate replays — capture time, not filename (fixed 2026-08-05)
 
 `--last N` decides what every gate verdict MEANS, and until 2026-08-05 it did not mean what it
