@@ -9,7 +9,8 @@ Capabilities:
   - Command recording + STT (Whisper on Jetson)
   - Barge-in: Silero VAD runs during TTS playback; detected speech interrupts playback
   - Ambient memory: always-on VAD captures room speech for Jetson transcription
-  - Speaker ID: resemblyzer embeddings identify the speaker before posting command
+  - Speaker ID: resemblyzer embeddings identify the speaker (W5 shadow mode, the
+    default, scores on a background thread so the upload never waits for it)
 """
 from __future__ import annotations
 
@@ -1458,6 +1459,62 @@ def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
     return claim
 
 
+# Background shadow scoring (panel TTFA fix #1, 2026-09-28). In shadow mode the
+# claim is scored and logged but NEVER attached, so nothing the server receives
+# depends on it — yet it used to run before the upload POST, costing a median
+# 0.54 s (max 1.12 s) of dead time before every reply
+# (docs/knowledge/panel-ttfa-breakdown-2026-09-28.md). Each turn's scoring now
+# runs on its own daemon thread, started just before the POST.
+#
+# Serialised + FIFO: each scorer joins its predecessor before touching the
+# encoder, so there is only ever ONE resemblyzer inference in flight (one model
+# copy, flat memory, no concurrent use of a model that was never meant to be
+# shared across threads) and the metrics rows still land in turn order.
+_shadow_score_state_lock = threading.Lock()
+_shadow_score_last: threading.Thread | None = None
+
+
+def _start_shadow_scoring(wav_bytes: bytes) -> threading.Thread:
+    """Score + log one turn's shadow claim off the caller's thread.
+
+    Same one-turn-one-row contract as the synchronous path: this calls
+    `_speaker_claim_for_turn` exactly once, which writes the metrics row and
+    the `Speaker ID (shadow): …` journal line. Returns the thread (tests join it).
+    """
+    global _shadow_score_last
+
+    with _shadow_score_state_lock:
+        prev = _shadow_score_last
+
+        def _run() -> None:
+            if prev is not None:
+                prev.join()
+            try:
+                _speaker_claim_for_turn(wav_bytes)
+            except Exception as exc:  # never escapes a daemon thread silently
+                log.warning("Speaker ID (shadow): background scoring failed: %s", exc)
+
+        t = threading.Thread(target=_run, daemon=True, name="speaker-shadow")
+        _shadow_score_last = t
+        t.start()
+    return t
+
+
+def _speaker_claim_to_attach(wav_bytes: bytes) -> tuple[str, float] | None:
+    """The claim to put in the turn payload, without delaying the upload.
+
+    Shadow mode (the default) always attaches nothing, so the score is handed
+    to a background thread and None comes back at once — the POST no longer
+    waits on resemblyzer. Only when shadow mode is OFF does the claim ride in
+    the payload; then it must exist before the POST, so it is scored inline
+    (there is no follow-up path to deliver a late claim).
+    """
+    if SPEAKER_ID_ENABLED and SPEAKER_ID_SHADOW:
+        _start_shadow_scoring(wav_bytes)
+        return None
+    return _speaker_claim_for_turn(wav_bytes)
+
+
 _BUFFER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "buffers")
 _BUFFER_ENABLED = os.environ.get("ZOE_BUFFER_PHRASES", "1").strip().lower() not in {"0", "false", "no", "off"}
 # Only speak a buffer phrase if the answer hasn't come back within this many
@@ -1682,10 +1739,12 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     audio_b64_wav = base64.b64encode(wav).decode()
     # Sentinel, not None: if scoring RAISES, the fallback must re-score rather
     # than inherit a None that looks like a completed no-match. Only a scoring
-    # call that actually returned replaces it.
+    # call that actually returned replaces it. In shadow mode the call returns
+    # None at once and the background scorer it started owns this turn's one
+    # row, so that None is final too — the fallback must not score again.
     if voice_claim is _CLAIM_UNSET:
         try:
-            voice_claim = _speaker_claim_for_turn(wav)
+            voice_claim = _speaker_claim_to_attach(wav)
             if voice_claim:
                 log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
         except Exception:
@@ -1922,7 +1981,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     if voice_claim is _CLAIM_UNSET:
         voice_claim = None
         try:
-            voice_claim = _speaker_claim_for_turn(wav)
+            voice_claim = _speaker_claim_to_attach(wav)
             if voice_claim:
                 log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
         except Exception:
