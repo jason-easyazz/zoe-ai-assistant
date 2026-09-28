@@ -1,4 +1,4 @@
-"""0030 — ``auth_handoffs``: the app-connection handoff record (B7.5).
+"""0031 — ``auth_handoffs``: the app-connection handoff record (B7.5).
 
 One row per "connect an app/account" attempt started on a panel
 (``auth_handoff.start``): which member, which panel, which provider flow, and
@@ -9,14 +9,14 @@ the token) is never stored.
 
 Create-if-missing and idempotent (the 0029 lesson): ``CREATE TABLE IF NOT
 EXISTS`` and ``CREATE INDEX IF NOT EXISTS``, so a re-run or a database where the
-table already exists is a no-op. 0030 owns the table, so its downgrade drops it.
+table already exists is a no-op. 0031 owns the table, so its downgrade drops it.
 Schema comes from Alembic, never from request-time DDL.
 """
 
 from alembic import op
 
-revision = "0030"
-down_revision = "0029"
+revision = "0031"
+down_revision = "0030"
 branch_labels = None
 depends_on = None
 

@@ -38,7 +38,7 @@ J = {"X-Session-ID": "sess-jason"}
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    spec = importlib.util.spec_from_file_location("mig_0030r", SVC / "alembic/versions/0030_auth_handoffs.py")
+    spec = importlib.util.spec_from_file_location("mig_0031r", SVC / "alembic/versions/0031_auth_handoffs.py")
     mig = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mig)
     path = str(tmp_path / "h.db")

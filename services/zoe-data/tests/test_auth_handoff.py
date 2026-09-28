@@ -47,7 +47,7 @@ def _load(name: str, rel: str):
     return mod
 
 
-MIG = _load("mig_0030", "alembic/versions/0030_auth_handoffs.py")
+MIG = _load("mig_0031", "alembic/versions/0031_auth_handoffs.py")
 _REAL_WAKE = auth_handoff._wake_panel  # captured before the fixture stubs it
 
 

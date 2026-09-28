@@ -19,7 +19,7 @@ out of scope here.
 | Piece | Where | Role |
 |---|---|---|
 | Engine | `services/zoe-data/auth_handoff.py` | `start` / `status` / `send_to_phone` / `complete`, plus `mark_ref` / `complete_ref` / `reporter` for provider flows that only hold their phone token |
-| Record | table `auth_handoffs` (alembic `0030`) | one row per attempt: kind, provider, member, panel, status, detail, reason, expiry, and `ref` = the provider token's **nonce** (never the token) |
+| Record | table `auth_handoffs` (alembic `0031`) | one row per attempt: kind, provider, member, panel, status, detail, reason, expiry, and `ref` = the provider token's **nonce** (never the token) |
 | Panel routes | `services/zoe-data/routers/handoff.py` | `POST /api/handoff/start`, `GET /{id}/status`, `POST /{id}/send-to-phone`, `GET /{id}/qr/{handle}` |
 | Panel card | `authCard()` in `services/zoe-ui/dist/touch/home.html` | QR + live status line + "Send to my phone" (only when available) + Close; no text inputs |
 | Push relay | `handoff_update` in `services/zoe-ui/dist/js/touch-ui-executor.js` | turns the `ui_action` into a `zoe:handoff` window event that the card listens for |
@@ -136,4 +136,4 @@ real panel:
 Browser behaviour is covered by `services/zoe-ui/dist/test_touch_music_sources.js`
 (Playwright, run by hand). Backend behaviour is covered by
 `tests/test_auth_handoff.py`, `tests/test_handoff_routes.py` and
-`tests/test_migration_0030_auth_handoffs.py`, all `ci_safe`.
+`tests/test_migration_0031_auth_handoffs.py`, all `ci_safe`.

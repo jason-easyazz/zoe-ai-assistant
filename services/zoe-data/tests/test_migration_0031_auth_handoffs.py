@@ -1,8 +1,8 @@
-"""Migration 0030 (``auth_handoffs``) is create-if-missing and idempotent.
+"""Migration 0031 (``auth_handoffs``) is create-if-missing and idempotent.
 
 The 0029 lesson: schema comes from Alembic, never request-time DDL, and a
 migration must not assume the live database matches the chain. Negative
-controls: drop ``IF NOT EXISTS`` from 0030 (the re-run test goes red), or add
+controls: drop ``IF NOT EXISTS`` from 0031 (the re-run test goes red), or add
 DDL to the engine/router (the no-request-time-DDL test goes red).
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ _DUMMY_URL = "postgresql+psycopg2://u:p@localhost/db"
 
 
 def _mig():
-    spec = importlib.util.spec_from_file_location("mig_0030m", SVC / "alembic/versions/0030_auth_handoffs.py")
+    spec = importlib.util.spec_from_file_location("mig_0031m", SVC / "alembic/versions/0031_auth_handoffs.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -44,7 +44,7 @@ def test_postgres_render_is_create_if_missing(monkeypatch):
     cfg = Config(output_buffer=buf, stdout=buf)
     cfg.set_main_option("script_location", str(SVC / "alembic"))
     cfg.set_main_option("sqlalchemy.url", _DUMMY_URL)
-    command.upgrade(cfg, "0029:0030", sql=True)
+    command.upgrade(cfg, "0030:0031", sql=True)
     sql = buf.getvalue()
     assert "CREATE TABLE IF NOT EXISTS auth_handoffs" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_auth_handoffs_ref ON auth_handoffs (kind, ref)" in sql

@@ -95,7 +95,7 @@ State as of **2026-09-28 02:30 AWST**:
    The window frees ~2 GB. Hold the other PRs (drop `auto-merge`) while a voice PR lands, or
    it goes behind again.
 4. **Next engineering, in order:**
-   1. **B7.5** app-connection handoff engine — (a)+(b) built, DRAFT PR pending land; needs a
+   1. **B7.5** app-connection handoff engine — (a)+(b) built, #1752 pending land; needs a
       live-panel check when the Pi is on (push, `/wake`, a real Telegram send). Next: (c).
    2. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
       week).
@@ -944,8 +944,8 @@ State as of **2026-09-28 02:30 AWST**:
 
   Step (a) builds on those handles. #1741's "set up music" reply already points panel chat at
   Music → Browse → Sources.
-  **(a)+(b) built (DRAFT PR, pending land):** `auth_handoff.py` + `auth_handoffs` (alembic
-  0030) + `routers/handoff.py` + the touch `authCard`; YouTube Music, Spotify/Tidal/Deezer
+  **(a)+(b) built (#1752, pending land):** `auth_handoff.py` + `auth_handoffs` (alembic
+  0031) + `routers/handoff.py` + the touch `authCard`; YouTube Music, Spotify/Tidal/Deezer
   OAuth and the Qobuz form report into it; "Send to my phone" goes via Telegram when
   `ZOE_TELEGRAM_BOT_TOKEN` is set and the member is linked. The duplicate `/js/qrcode.min.js`
   is removed. Operator step: set `ZOE_TELEGRAM_BOT_TOKEN` in the zoe-data env. Live-panel
