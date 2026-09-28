@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-469 flags; 467 not documented in `.env.example`.
+471 flags; 469 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -405,12 +405,14 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ROUTER_TWO_STAGE_TIMEOUT_S` | `'1.5'` | no | NO | `services/zoe-data/router_two_stage.py` |
 | `ZOE_ROUTER_WARM_START` | `dynamic` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_SCHEDULED_QUEUE_WAIT_S` | `1200.0` | yes | NO | `services/zoe-data/main.py` |
+| `ZOE_SEAM_CONTINUITY_INJECT` | `'true'` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_SEARCH_HOTNESS_WEIGHT` | `'0.05'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_SEARCH_PROVIDER` | `'auto'` | yes | yes | `services/zoe-data/web_search_provider.py` |
 | `ZOE_SESSION_LOCK_TIMEOUT_S` | `'5'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_SETUP_QR_HANDLE_TTL_S` | `'120'` | no | NO | `services/zoe-data/setup_qr.py` |
 | `ZOE_SILERO_VAD_MODEL` | `''` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/voice_vad.py` |
 | `ZOE_SKYBRIDGE_ONLY` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_SKYBRIDGE_ROUTER_VETO` | `'1'` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SKYBRIDGE_TIMEZONE` | `-` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SMART_TURN_ENABLED` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_MAX_CHECKS` | `'2'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |

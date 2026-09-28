@@ -2836,9 +2836,14 @@ async def _voice_compose_cards_frame(message_text: str, reply_text: str, user_id
 async def _resolve_voice_cards(message_text: str, user_id: str, context: dict | None = None) -> dict:
     """Resolve voice text to real Skybridge data cards when a supported domain exists."""
     try:
-        from skybridge_service import resolve_skybridge_request
+        from skybridge_service import ROUTE_ON_DEMAND, resolve_skybridge_request
 
-        return await resolve_skybridge_request(message_text, user_id, context=context)
+        # A conversational voice turn: the router veto applies. This lane does not
+        # run the router itself, so Skybridge runs it on demand — only when it
+        # has classified something (SKYBRIDGE_GATE, ZOE_SKYBRIDGE_ROUTER_VETO).
+        return await resolve_skybridge_request(
+            message_text, user_id, context=context, router_decision=ROUTE_ON_DEMAND
+        )
     except Exception as exc:
         logger.warning("Voice WS Skybridge resolve failed: %s", exc)
         return {"handled": False, "cards": [], "spoken_summary": ""}

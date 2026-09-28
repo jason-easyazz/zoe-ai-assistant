@@ -3,7 +3,7 @@ type: Reference
 title: Zoe Voice Pipeline
 description: The end-to-end voice path (STT → brain → TTS), how it's measured, and the regression corpus — plus the load-bearing caveat that the warm replay harness understates real live latency.
 tags: [voice, stt, tts, performance, testing]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Zoe Voice Pipeline
@@ -42,6 +42,32 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
 
 Per-stage timings are exported to Prometheus as `zoe_voice_stage_seconds`
 (`services/zoe-data/voice_metrics.py`), scraped at `:8000/metrics`.
+
+### The Skybridge fast path defers to the router (2026-09-28)
+
+Before the router/brain, `voice_command` offers the turn to the **Skybridge fast path**
+(`skybridge_service.resolve_skybridge_request`) — a regex classifier that answers
+calendar/lists/people/weather/clock/timer/music/smart-home asks deterministically with a card.
+Live 2026-09-28 18:26 it answered the statement "…and just get updates from the family." with
+"I found 0 contacts." while the two-stage router had said `chat`. Two guards since:
+
+- **Shape.** The people matchers claim only a command/question anchored at the start, never a
+  people word inside a statement (contract: `services/zoe-data/AGENTS.md`).
+- **Router veto.** The call carries the turn's router verdict; when the ACTIVE two-stage router
+  picked `chat` or an incompatible domain, Skybridge declines and the turn continues to the
+  intent/expert lanes and the brain. Every gated decision logs one line — grep
+  `SKYBRIDGE_GATE` in `~/.zoe-logs/zoe-data.app.log`:
+  `SKYBRIDGE_GATE router=chat conf=0.9185 skybridge=people action=show decision=veto reason=router_chat`.
+  `reason=router_unavailable` means the router was off/similarity-only (no veto, pre-fix
+  behaviour). A `decision=veto` on a legitimate ask is a router miss worth mining for the
+  self-training loop, not a reason to flip the flag. Kill switch: `ZOE_SKYBRIDGE_ROUTER_VETO=false`.
+
+**The replay harness does not exercise Skybridge.** `replay_samples.py` runs STT → `semantic_router`
+→ `fast_tiers.resolve` → brain; it never calls `resolve_skybridge_request`, and its verdicts come
+from the reply text (`_classify`), not from per-sample expectations — there is no sidecar/expectation
+file per clip. So a Skybridge over-claim is invisible to said-vs-did; the classifier + gate are pinned
+by `services/zoe-data/tests/test_skybridge_router_veto.py` instead. The bug's audio,
+`~/.zoe-voice-samples/182627_117.wav`, is in the corpus and replays through the router → brain path.
 
 ## Measuring it — the replay harness
 
@@ -997,6 +1023,46 @@ Rollback: set `ZOE_VAD_TAIL_MS=0` and
 `systemctl --user restart zoe-voice` — behaviour is byte-identical to pre-flag. Corpus evidence
 (#1573): −160 ms median tail on ~80 % of turns, +2.7 pt false-cut upper bound; the probe
 (`scripts/perf/measure_endpointing.py`) can exercise old and new behaviour for before/after.
+
+## Panel speaker-ID shadow score — off the first-audio path (2026-09-28)
+
+The Pi daemon (`scripts/setup/zoe_voice_daemon.py`) used to score each turn's
+speaker (resemblyzer) **before** it started the upload to `/api/voice/turn_stream`.
+In W5 shadow mode (`SPEAKER_ID_SHADOW`, default on) the claim is only logged and
+never attached, so that wait bought nothing. It cost a median **0.54 s** (0.37 s on
+brain turns) and up to **1.12 s** on long clips, measured from the `Recorded …` →
+`Speaker ID (shadow)` log gap. That is fix #1 in the
+[panel TTFA breakdown](panel-ttfa-breakdown-2026-09-28.md).
+
+- **Now:** `_speaker_claim_to_attach` hands the score to a background thread
+  (`_start_shadow_scoring`) and the POST starts at once. The thread still calls
+  `_speaker_claim_for_turn` once per turn, so the JSONL row and the
+  `Speaker ID (shadow): <user> (<score>) — logged, not acted on` journal line are
+  unchanged. The line now usually lands *after* the POST starts, not before it.
+- **One inference at a time.** Each scorer joins the previous one before it
+  touches the encoder. Only one resemblyzer inference runs at once, there is one
+  model copy, and rows land in turn order.
+- **Still one row per turn at the edges.** Orderly shutdown (SIGTERM/SIGINT, or
+  the main loop exiting) waits up to 3 s for pending scorers
+  (`_drain_shadow_scoring`), so a restart right after a turn keeps its row. If a
+  scorer thread cannot start, that turn is scored inline (WARNING in the journal),
+  and later turns score in the background as normal. The inline score waits up to
+  10 s for the previous scorer. If that one is still running, the turn is skipped
+  with `speaker shadow: skipped (predecessor still running)` instead of running two
+  inferences at once and writing rows out of order.
+- **Active mode is unchanged.** With shadow off, the claim rides in the payload
+  (`voice_user_id` / `voice_score`), so it is still scored inline before the POST.
+  No follow-up path exists to deliver a late claim. Build one before flipping
+  shadow off if the 0.5 s matters then.
+- **TTFA clock note.** The daemon's `turn_stream TTFA=` starts at the POST, so it
+  **never included** the speaker-ID time, and this fix does not move that number.
+  The saving shows up as a shorter `Recorded …` → POST gap, and in end-of-speech →
+  first-sound time. The daemon does not log the POST start, so measure the gap with
+  the cross-host join in the breakdown: Pi `Recorded …` against the server's
+  `STT_CAPTURE` for the same turn. It should drop by roughly the old speaker-ID time.
+- Pinned by `tests/unit/test_voice_daemon_speaker_shadow.py`: the upload must start
+  before the score completes, on both the stream and the blocking turn paths. Scoring
+  synchronously again turns those tests red.
 
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
