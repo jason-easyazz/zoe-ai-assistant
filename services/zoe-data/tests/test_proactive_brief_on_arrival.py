@@ -103,6 +103,7 @@ class FakeDB:
         self.device_panels = {PANEL, "panel-bedroom"}  # panels holding a live device token
         self.enforce_unique = True
         self.fail_claim_link = False
+        self.fail_claim_insert = False
         self.ops = []
 
     @contextlib.asynccontextmanager
@@ -141,6 +142,8 @@ class FakeDB:
             hits = [t for u, t in self.turns if u == user and ts(start) <= ts(t) <= ts(end)]
             return _Cursor([{"first_turn": min(hits) if hits else None}])
         if sql.startswith("INSERT INTO proactive_responses"):
+            if self.fail_claim_insert:
+                raise RuntimeError("transient claim failure")
             (rid, user, key, trig, day, panel, pend, missed, window, created) = p
             if self.enforce_unique and any(
                 r["user_id"] == user and r["claim_key"] == key and r["local_date"] == day
@@ -581,6 +584,64 @@ async def test_scheduled_path_is_unchanged_with_arrival_off(h, monkeypatch):
     assert len(full_briefs(state)) == 2  # pre-existing behaviour: no claim taken
     assert db.responses == []
     assert not any("proactive_responses" in op for op in db.ops)
+
+
+async def test_scheduled_claim_error_fails_closed_but_the_push_still_goes(h, monkeypatch, caplog):
+    """Flag on + a transient claim error on the 07:30 path: the full brief is NOT
+    queued (an unclaimed brief could be spoken again by arrival), the push is
+    still sent, and the line says outcome=claim_error."""
+    db, state = h
+    caplog.set_level(logging.INFO, logger="proactive.engine")
+    pushes = []
+
+    async def fake_push(user_id, message, extra=None):
+        pushes.append((user_id, message))
+        return 1
+
+    async def fake_pending(**_kw):
+        return "pend-1"
+
+    async def fake_compose(trigger_type, ctx, fallback=""):
+        return fallback
+
+    monkeypatch.setattr(engine, "_send_push", fake_push)
+    monkeypatch.setattr(engine, "create_pending", fake_pending)
+    monkeypatch.setattr(engine, "compose_message", fake_compose)
+    state["now"] = local(7, 30)
+    monkeypatch.setattr(engine, "_is_in_quiet_hours", lambda now=None: False)
+    db.fail_claim_insert = True
+    await engine.fire_notification(
+        user_id=USER, message=BRIEF, trigger_type="morning_checkin",
+        context={"spoken_guest_safe": TEASER},
+    )
+    assert pushes == [(USER, BRIEF)]
+    assert state["daemon_enqueues"] == [] and state["panel_enqueues"] == []
+    assert any("outcome=claim_error" in r.getMessage() for r in caplog.records)
+
+
+async def test_negative_control_healthy_claim_speaks_on_the_same_path(h, monkeypatch):
+    """Identical fire_notification with the claim healthy queues the brief —
+    the fail-closed test above is not silent for some other reason."""
+    db, state = h
+
+    async def fake_push(user_id, message, extra=None):
+        return 1
+
+    async def fake_pending(**_kw):
+        return "pend-1"
+
+    async def fake_compose(trigger_type, ctx, fallback=""):
+        return fallback
+
+    monkeypatch.setattr(engine, "_send_push", fake_push)
+    monkeypatch.setattr(engine, "create_pending", fake_pending)
+    monkeypatch.setattr(engine, "compose_message", fake_compose)
+    monkeypatch.setattr(engine, "_is_in_quiet_hours", lambda now=None: False)
+    await engine.fire_notification(
+        user_id=USER, message=BRIEF, trigger_type="morning_checkin",
+        context={"spoken_guest_safe": TEASER},
+    )
+    assert len(full_briefs(state)) == 1 and db.responses[0]["trigger_type"] == "morning_checkin"
 
 
 async def test_claim_link_failure_is_never_recorded_as_undelivered(h):

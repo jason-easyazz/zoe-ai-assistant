@@ -297,15 +297,17 @@ async def claim_full_brief(
 
 async def claim_scheduled_brief(
     *, user_id: str, panel_id: str | None, pending_id: str | None,
-) -> tuple[bool, str | None]:
-    """The 07:30 path's side of the shared claim: ``(may_speak, claim_id)``.
+) -> tuple[str, str | None]:
+    """The 07:30 path's side of the shared claim: ``(verdict, claim_id)``.
 
-    Flag off: ``(True, None)`` with no DB access — the scheduled path is
-    unchanged. Claim lost (arrival already spoke it today): ``(False, None)``.
-    A DB error fails OPEN to today's behaviour (speak, unclaimed) and says so.
+    ``verdict`` is ``speak`` (claim taken, or flag off), ``already_spoken``
+    (arrival has today's claim) or ``claim_error``. Flag off: ``("speak", None)``
+    with no DB access — the scheduled path is unchanged. With the flag on a DB
+    error FAILS CLOSED: an unclaimed full brief could be spoken again by arrival,
+    so the caller must not queue it (the push/text delivery is unaffected).
     """
     if not arrival_enabled():
-        return True, None
+        return "speak", None
     try:
         async with _get_compat_db() as db:
             claim_id = await claim_full_brief(
@@ -314,9 +316,9 @@ async def claim_scheduled_brief(
             )
     except Exception as exc:
         log.warning("brief-on-arrival: scheduled-brief claim failed for user=%s; "
-                    "speaking unclaimed: %s", user_id, exc)
-        return True, None
-    return (claim_id is not None), claim_id
+                    "not speaking the full brief: %s", user_id, exc)
+        return "claim_error", None
+    return ("speak" if claim_id is not None else "already_spoken"), claim_id
 
 
 async def maybe_speak_brief_on_arrival(user_id: str, panel_id: str) -> str:

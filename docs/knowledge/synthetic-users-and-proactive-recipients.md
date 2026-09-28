@@ -85,7 +85,9 @@ both default off, and with either off nothing is read or queued.
   `proactive_responses` row (migration `0030`,
   `UNIQUE (user_id, claim_key, local_date)`, `claim_key = morning_brief_full`).
   With the flag on, the 07:30 path takes the same claim before speaking the full brief
-  (`arrival.claim_scheduled_brief`). A lost claim logs `outcome=already_spoken`. So the
+  (`arrival.claim_scheduled_brief`). A lost claim logs `outcome=already_spoken`. A claim
+  DB error fails closed (`outcome=claim_error`): the push is still sent, but the full brief
+  is not spoken. So the
   full brief is spoken once whichever path, panel or worker gets there first. With the
   flag off, the 07:30 path is unchanged and takes no claim. A failed speak is not
   retried.

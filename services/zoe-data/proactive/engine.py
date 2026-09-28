@@ -346,12 +346,14 @@ async def _maybe_speak_notification(
             # once per member per day by EITHER path — the same UNIQUE claim
             # row (a no-op, no DB, with that flag off).
             from proactive import arrival as _arrival
-            may_speak, claim_id = await _arrival.claim_scheduled_brief(
+            # A claim error fails CLOSED (outcome=claim_error): the push below
+            # in fire_notification is still sent, only the spoken lanes skip.
+            verdict, claim_id = await _arrival.claim_scheduled_brief(
                 user_id=user_id, panel_id=panel_id, pending_id=pending_id,
             )
-            if not may_speak:
-                log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=already_spoken "
-                         "tier=%s", trigger_type, user_id, panel_id, tier)
+            if verdict != "speak":
+                log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s tier=%s",
+                         trigger_type, user_id, panel_id, verdict, tier)
                 return
         panel_outcome, daemon_outcome, _ann_id = await _speak_on_panel(
             user_id=user_id, panel_id=panel_id, message=message, trigger_type=trigger_type,
