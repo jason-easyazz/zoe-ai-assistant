@@ -71,6 +71,18 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    """Float twin of _int_env: a malformed value logs and keeps the default."""
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        log.warning("Env %s=%r is not a number; using default %s", name, raw, default)
+        return default
+
+
 # Optional persistent log file (e.g. ZOE_VOICE_LOG=/home/zoe/.zoe-voice/voice.log)
 _voice_log = os.environ.get("ZOE_VOICE_LOG", "").strip()
 if _voice_log:
@@ -198,16 +210,27 @@ SPEAKER_ID_SHADOW_LOG = os.environ.get(
 )
 # VAD probability threshold for barge-in detection (0.0-1.0).
 BARGE_IN_THRESHOLD = float(os.environ.get("BARGE_IN_THRESHOLD", "0.5"))
-# Rolling-window trigger for the playback barge monitor: >= BARGE_MIN_CHUNKS
-# speech chunks (80ms each) within the last BARGE_WINDOW_CHUNKS. Real speech
-# dips between syllables — a single-chunk trigger is too flaky, sustained
-# windows are robust against beeps/echo blips.
-# Live-tuned 2026-07-07: Jason's real interrupts scored prob=0.99 with ZERO
-# false fires across a 12-turn session, so 2 chunks (~160ms) is safe and snappy.
-BARGE_MIN_CHUNKS = int(os.environ.get("BARGE_MIN_CHUNKS", "2"))
-BARGE_WINDOW_CHUNKS = int(os.environ.get("BARGE_WINDOW_CHUNKS", "5"))
-# Guard window after TTS ends — ignore VAD for this many ms (Jabra AEC residual).
-POST_TTS_PROTECTION_MS = int(os.environ.get("POST_TTS_PROTECTION_MS", "300"))
+# Barge-in decision (_BargeDetector), anchored to the moment playback STARTS.
+# Self-interruption 2026-09-28 (docs/knowledge/incident-runbook.md): the old
+# trigger (2 of 5 chunks, window live since the monitor opened at turn START)
+# fired 0.43-0.81s after the first write in three consecutive replies with a
+# quiet room — Zoe's own onset reaching the mic before the Jabra's echo
+# canceller settles — and once at t+11ms on the user's own speech from BEFORE
+# playback began. Guards:
+#  1. only audio captured AFTER playback starts counts: the rolling window is
+#     cleared and any buffered mic backlog discarded when playback begins;
+#  2. the first BARGE_GRACE_MS after the first write is ignored outright
+#     (aplay + the Pulse sink add ~70-90ms before the first sound, so 800ms
+#     covers ~0.7s of audible onset — past all three measured false fires);
+#  3. sustained speech: >= BARGE_MIN_CHUNKS speech chunks (80ms each) within
+#     the last BARGE_WINDOW_CHUNKS (~240ms of speech in ~480ms) ...
+#  4. ... or the fast path: BARGE_FAST_CHUNKS CONSECUTIVE chunks scoring
+#     >= BARGE_FAST_PROB (a loud, unambiguous interruption, ~160ms).
+BARGE_MIN_CHUNKS = _int_env("BARGE_MIN_CHUNKS", 3)
+BARGE_WINDOW_CHUNKS = _int_env("BARGE_WINDOW_CHUNKS", 6)
+BARGE_GRACE_MS = _int_env("BARGE_GRACE_MS", 800)
+BARGE_FAST_PROB = _float_env("BARGE_FAST_PROB", 0.95)
+BARGE_FAST_CHUNKS = _int_env("BARGE_FAST_CHUNKS", 2)  # <= 0 disables the fast path
 # ── Ambient memory: always-on VAD captures room speech ────────────────────
 AMBIENT_CAPTURE_ENABLED = os.environ.get("AMBIENT_CAPTURE_ENABLED", "false").lower() in ("1", "true", "yes")
 AMBIENT_VAD_THRESHOLD = float(os.environ.get("AMBIENT_VAD_THRESHOLD", "0.4"))
@@ -278,6 +301,27 @@ _barge_in_requested = threading.Event()
 # Current TTS subprocess (aplay/mpg123) so we can kill it on barge-in.
 _tts_process: subprocess.Popen | None = None
 _tts_process_lock = threading.Lock()
+# time.monotonic() when the CURRENT _tts_process started (its first audio was
+# handed to the player). Written with _tts_process under _tts_process_lock; the
+# barge detectors anchor their grace period and stale-audio cut-off to it.
+_tts_started_at: float | None = None
+
+
+def _register_tts_process(proc: "subprocess.Popen") -> None:
+    """Publish a newly started player as the active TTS process + its start time."""
+    global _tts_process, _tts_started_at
+    with _tts_process_lock:
+        _tts_process = proc
+        _tts_started_at = time.monotonic()
+
+
+def _active_playback() -> "tuple[subprocess.Popen, float] | None":
+    """(proc, started_at) while a player is running, else None."""
+    with _tts_process_lock:
+        proc, started = _tts_process, _tts_started_at
+    if proc is None or started is None or proc.poll() is not None:
+        return None
+    return proc, started
 
 # ── Resemblyzer singleton (cached to avoid ~60s reload per call on Pi) ───────
 _voice_encoder = None
@@ -310,7 +354,7 @@ _recording_active = threading.Event()
 # ── Shared audio fan-out queues (A6) ─────────────────────────────────────────
 # Single PyAudio input stream; chunks distributed to consumers via queues.
 _WAKE_QUEUE: "queue.Queue[bytes]" = None   # type: ignore  # set in main()
-_BARGE_QUEUE: "queue.Queue[bytes]" = None  # type: ignore  # set in main()
+_BARGE_QUEUE: "queue.Queue[tuple[float, bytes]]" = None  # type: ignore  # set in main(); (captured_at, chunk)
 _AMBIENT_QUEUE: "queue.Queue[bytes]" = None  # type: ignore  # set in main()
 # Pre-roll ring buffer so the wake->record stream-open gap does not clip the
 # START of the command (the "what's the" that went missing).
@@ -591,8 +635,7 @@ def play_audio_b64(audio_b64: str, content_type: str = "audio/wav"):
                 cmd += ["-D", AUDIO_OUTPUT_DEVICE]
             cmd.append(fpath)
         proc = subprocess.Popen(cmd)
-        with _tts_process_lock:
-            _tts_process = proc
+        _register_tts_process(proc)
         # Poll for barge-in while playback runs.
         while proc.poll() is None:
             if _barge_in_requested.is_set():
@@ -614,15 +657,134 @@ def play_audio_b64(audio_b64: str, content_type: str = "audio/wav"):
         log.warning("Audio playback failed: %s", exc)
 
 
+_CHUNK_S = CHUNK_SIZE / float(SAMPLE_RATE)  # seconds of audio per mic read (80ms default)
+
+
+class _BargeDetector:
+    """Barge-in decision over per-chunk Silero probabilities, anchored to playback.
+
+    Pure state machine (no I/O) shared by both barge paths — the per-turn
+    _BargeMonitor and the queue-fed _barge_in_vad_thread — so the guards below
+    cannot drift apart. Self-interruption 2026-09-28 (incident-runbook §12):
+
+    * Only audio CAPTURED after playback started can count. ``new_playback``
+      clears the window; ``feed`` rejects any chunk whose capture began before
+      ``started_at + grace`` — so neither the user's own trailing words from
+      before Zoe spoke nor a mic backlog read late can trip it.
+    * Grace: the first ``grace_ms`` of playback is ignored (Zoe's onset while
+      the speakerphone's echo canceller and the resumed output sink settle).
+    * Sustained speech: ``min_chunks`` of the last ``window_chunks`` at
+      ``threshold`` — or ``fast_chunks`` CONSECUTIVE chunks at ``fast_prob``
+      (a loud, unambiguous interruption). ``fast_chunks <= 0`` disables it.
+    * Fires at most once per playback.
+    """
+
+    def __init__(self, *, threshold: float | None = None, min_chunks: int | None = None,
+                 window_chunks: int | None = None, grace_ms: int | None = None,
+                 fast_prob: float | None = None, fast_chunks: int | None = None):
+        self.threshold = BARGE_IN_THRESHOLD if threshold is None else float(threshold)
+        self.min_chunks = max(1, BARGE_MIN_CHUNKS if min_chunks is None else int(min_chunks))
+        window = BARGE_WINDOW_CHUNKS if window_chunks is None else int(window_chunks)
+        self.window_chunks = max(self.min_chunks, window)
+        self.grace_s = max(0, BARGE_GRACE_MS if grace_ms is None else int(grace_ms)) / 1000.0
+        fast = BARGE_FAST_PROB if fast_prob is None else float(fast_prob)
+        # The fast path may never be LESS strict than the ordinary threshold.
+        self.fast_prob = max(fast, self.threshold)
+        self.fast_chunks = BARGE_FAST_CHUNKS if fast_chunks is None else int(fast_chunks)
+        self._probs: deque = deque(maxlen=self.window_chunks)
+        self._run = 0
+        self._anchor: float | None = None
+        self._fired = False
+        self.reason = ""
+
+    def new_playback(self, started_at: float) -> bool:
+        """Anchor to the playback that began at ``started_at``. True when it is a
+        NEW playback (window cleared), False when already anchored to it."""
+        if self._anchor == started_at:
+            return False
+        self._anchor = started_at
+        self._probs.clear()
+        self._run = 0
+        self._fired = False
+        self.reason = ""
+        return True
+
+    def idle(self) -> None:
+        """Nothing is playing: nothing heard now may count toward a barge."""
+        self._anchor = None
+        self._probs.clear()
+        self._run = 0
+
+    def feed(self, prob: float, captured_at: float) -> bool:
+        """Score one chunk whose capture BEGAN at ``captured_at`` (monotonic).
+        Returns True exactly once per playback, when the barge-in should fire."""
+        if self._anchor is None or self._fired:
+            return False
+        if captured_at < self._anchor + self.grace_s:
+            return False  # stale (pre-playback) or inside the onset grace
+        self._probs.append(prob)
+        self._run = self._run + 1 if prob >= self.fast_prob else 0
+        if self.hits() >= self.min_chunks:
+            self.reason = "window"
+        elif self.fast_chunks > 0 and self._run >= self.fast_chunks:
+            self.reason = "fast"
+        else:
+            return False
+        self._fired = True
+        return True
+
+    def hits(self) -> int:
+        return sum(1 for p in self._probs if p >= self.threshold)
+
+    def elapsed_ms(self, now: float) -> int:
+        return int(round((now - self._anchor) * 1000)) if self._anchor is not None else -1
+
+    def window_repr(self) -> str:
+        probs = " ".join(f"{p:.2f}" for p in self._probs)
+        return f"{self.hits()}/{self.window_chunks}[{probs}]{'+' + self.reason if self.reason else ''}"
+
+
+def _fire_barge_in(source: str, prob: float, det: _BargeDetector, proc: "subprocess.Popen") -> None:
+    """Log the decision (diagnosable next time), raise the flag, kill the player."""
+    log.info("Barge-in detected during playback (%s, prob=%.2f, th=%.2f, t+%dms, window=%s)",
+             source, prob, det.threshold, det.elapsed_ms(time.monotonic()), det.window_repr())
+    _barge_in_requested.set()
+    # Kill the TTS subprocess DIRECTLY — the stream loop only polls the flag at
+    # network-chunk boundaries, which can be seconds away while the brain
+    # generates the next sentence.
+    try:
+        proc.terminate()
+        log.info("Barge-in: TTS playback terminated immediately.")
+    except Exception as exc:
+        log.debug("Barge-in terminate failed: %s", exc)
+
+
+def _drain_stream_backlog(stream) -> int:
+    """Discard whole chunks already buffered on a PyAudio input stream (audio
+    captured BEFORE now). Returns the number of chunks dropped."""
+    try:
+        avail = int(stream.get_read_available())
+    except Exception:
+        return 0
+    n = max(0, avail // CHUNK_SIZE)
+    for i in range(n):
+        try:
+            stream.read(CHUNK_SIZE, exception_on_overflow=False)
+        except Exception:
+            return i
+    return n
+
+
 class _BargeMonitor:
     """Dedicated mic reader for barge-in DURING TTS playback.
 
     The always-on wake stream is CLOSED for the whole command cycle (the Jabra
     cannot hold two input streams — PyAudio -9985), so the queue-fed barge
     thread hears nothing exactly when barge-in matters. This monitor opens its
-    own short-lived stream while Zoe is speaking (no other input stream is open
-    then) and sets _barge_in_requested on sustained speech: >= BARGE_MIN_CHUNKS
-    speech chunks within the last BARGE_WINDOW_CHUNKS (~240ms in ~480ms).
+    own short-lived stream for the turn (no other input stream is open then)
+    and asks a _BargeDetector whether to stop Zoe. It opens at turn START, so it
+    listens through the STT/brain wait; everything heard before playback begins
+    is discarded when it does (window cleared, buffered backlog dropped).
     """
 
     def __init__(self, pa: "pyaudio.PyAudio"):
@@ -658,40 +820,40 @@ class _BargeMonitor:
         except OSError as exc:
             log.debug("Barge monitor mic open failed: %s", exc)
             return
-        log.debug("Barge monitor listening (th=%.2f, %d/%d chunks)",
-                  BARGE_IN_THRESHOLD, BARGE_MIN_CHUNKS, BARGE_WINDOW_CHUNKS)
-        window: deque = deque(maxlen=max(1, BARGE_WINDOW_CHUNKS))
+        det = _BargeDetector()
+        log.debug("Barge monitor listening (th=%.2f, %d/%d chunks, grace=%dms, fast=%d@%.2f)",
+                  det.threshold, det.min_chunks, det.window_chunks, int(det.grace_s * 1000),
+                  det.fast_chunks, det.fast_prob)
         try:
             while not self._stop.is_set() and not _shutdown.is_set():
                 try:
                     chunk = stream.read(CHUNK_SIZE, exception_on_overflow=False)
                 except Exception:
                     break
+                read_at = time.monotonic()
+                # Every chunk goes through Silero so its streaming state stays
+                # continuous, but only audio heard DURING playback can count.
                 prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
-                window.append(prob >= BARGE_IN_THRESHOLD)
-                if sum(window) >= max(1, BARGE_MIN_CHUNKS):
-                    with _tts_process_lock:
-                        proc = _tts_process
-                    if proc is None or proc.poll() is not None:
-                        # Nothing is playing — this is the user STILL TALKING
-                        # (e.g. the endpointer closed on a long pause), not an
-                        # interruption of Zoe. Setting the flag now would abort
-                        # a reply that hasn't even started (live 22:28:10: user
-                        # spoke 189ms after a 7.84s recording closed, prob=0.99,
-                        # turn died with no audio ever played). Keep watching —
-                        # the window ages out in ~400ms, so only speech that
-                        # actually overlaps playback fires.
-                        continue
-                    log.info("Barge-in detected during playback (monitor, prob=%.2f)", prob)
-                    _barge_in_requested.set()
-                    # Kill the TTS subprocess DIRECTLY — the stream loop only
-                    # polls the flag at network-chunk boundaries, which can be
-                    # seconds away while the brain generates the next sentence.
-                    try:
-                        proc.terminate()
-                        log.info("Barge-in: TTS playback terminated immediately.")
-                    except Exception as exc:
-                        log.debug("Barge-in terminate failed: %s", exc)
+                playing = _active_playback()
+                if playing is None:
+                    # Nothing is playing — the user STILL TALKING (e.g. the
+                    # endpointer closed on a long pause) or the room during the
+                    # STT/brain wait. Never an interruption of Zoe (live 22:28:10:
+                    # a reply died before any audio played), and it must not
+                    # carry into playback either (live 2026-09-28 18:24:50: a
+                    # user still talking at playback start fired it at t+11ms).
+                    det.idle()
+                    continue
+                proc, started_at = playing
+                if det.new_playback(started_at):
+                    dropped = _drain_stream_backlog(stream)
+                    if dropped:
+                        log.info("barge monitor: dropped %d stale chunks (~%dms)",
+                                 dropped, int(dropped * _CHUNK_S * 1000))
+                    # The chunk in hand was captured before playback began.
+                    continue
+                if det.feed(prob, read_at - _CHUNK_S):
+                    _fire_barge_in("monitor", prob, det, proc)
                     break
         finally:
             try:
@@ -701,12 +863,24 @@ class _BargeMonitor:
                 pass
 
 
+def _drain_barge_queue() -> list:
+    """Take everything currently queued on _BARGE_QUEUE without blocking."""
+    items = []
+    while True:
+        try:
+            items.append(_BARGE_QUEUE.get_nowait())
+        except _queue_module.Empty:
+            return items
+
+
 def _barge_in_vad_thread():
     """Background thread: runs Silero VAD during TTS playback to detect barge-in.
 
-    Reads audio chunks from the shared _BARGE_QUEUE (fed by the single input stream).
-    When human speech is detected during TTS, sets _barge_in_requested so
-    play_audio_b64() stops the subprocess.
+    Reads (captured_at, chunk) pairs from the shared _BARGE_QUEUE, fed by the
+    always-on wake stream — so it only hears anything while that stream is
+    open, i.e. for playback OUTSIDE a voice turn (announcements). Same
+    _BargeDetector as the monitor: chunks queued before playback began are
+    dropped, then grace + sustained speech.
     """
     model, _ = _get_silero_vad()
     if model is None:
@@ -714,27 +888,32 @@ def _barge_in_vad_thread():
         return
 
     log.info("Barge-in VAD thread started (threshold=%.2f)", BARGE_IN_THRESHOLD)
-    _protection_until: float = 0.0
+    det = _BargeDetector()
     while not _shutdown.is_set():
         try:
-            chunk = _BARGE_QUEUE.get(timeout=0.1)
+            item = _BARGE_QUEUE.get(timeout=0.1)
         except _queue_module.Empty:
             continue
 
         # Only do VAD inference when TTS is actually playing.
-        if _tts_process is None:
+        playing = _active_playback()
+        if playing is None:
+            det.idle()
             continue
-
-        now = time.monotonic()
-        if now < _protection_until:
-            continue
-
-        prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
-        if prob >= BARGE_IN_THRESHOLD:
-            log.info("Barge-in detected (VAD prob=%.2f)", prob)
-            _barge_in_requested.set()
-            # Protection window: don't fire again for POST_TTS_PROTECTION_MS after TTS ends.
-            _protection_until = time.monotonic() + POST_TTS_PROTECTION_MS / 1000.0
+        proc, started_at = playing
+        batch = [item]
+        if det.new_playback(started_at):
+            batch += _drain_barge_queue()
+            stale = [b for b in batch if b[0] < started_at]
+            if stale:
+                log.info("barge queue: dropped %d stale chunks (~%dms)",
+                         len(stale), int(len(stale) * _CHUNK_S * 1000))
+            batch = [b for b in batch if b[0] >= started_at]
+        for captured_at, chunk in batch:
+            prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
+            if det.feed(prob, captured_at):
+                _fire_barge_in("queue", prob, det, proc)
+                break
     log.info("Barge-in VAD thread stopped.")
 
 
@@ -1666,7 +1845,6 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
     sentence chunks play gaplessly. Starts aplay on the first chunk (format taken
     from that chunk's header) and registers it as the active TTS process so the
     barge-in thread can stop it."""
-    global _tts_process
     try:
         pcm, rate, ch, width = _pcm_from_wav(wav_bytes)
     except Exception as exc:
@@ -1679,8 +1857,7 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
         if AUDIO_OUTPUT_DEVICE != "default":
             cmd += ["-D", AUDIO_OUTPUT_DEVICE]
         aplay = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-        with _tts_process_lock:
-            _tts_process = aplay
+        _register_tts_process(aplay)
     try:
         if aplay.stdin:
             aplay.stdin.write(pcm)
@@ -2723,7 +2900,9 @@ def main():
             # ── Fan-out: distribute chunk to all consumers ───────────────
             # Non-blocking puts — drop if consumer queue is full (never block main loop).
             try:
-                _BARGE_QUEUE.put_nowait(audio_chunk)
+                # Stamped with the chunk's capture START so the barge thread can
+                # drop anything captured before playback began.
+                _BARGE_QUEUE.put_nowait((time.monotonic() - _CHUNK_S, audio_chunk))
             except _queue_module.Full:
                 pass
             try:

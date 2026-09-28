@@ -1024,6 +1024,53 @@ brain turns) and up to **1.12 s** on long clips, measured from the `Recorded …
   before the score completes, on both the stream and the blocking turn paths. Scoring
   synchronously again turns those tests red.
 
+## Panel barge-in — anchored to playback start (2026-09-28)
+
+The Pi daemon's barge-in decides "the user is talking over Zoe, stop playback". Two
+paths feed it: `_BargeMonitor`, a mic stream of its own opened for each voice turn (the wake
+stream is closed then), and `_barge_in_vad_thread`, which reads the wake stream's
+`_BARGE_QUEUE` and only hears anything while that stream is open, which means announcements.
+Both now ask one `_BargeDetector`. The monitor opens at turn **start**, so it hears the whole
+STT/brain wait. Nothing it hears before playback begins may count:
+
+1. **Stale audio is dropped.** When a new player registers (`_register_tts_process`
+   stamps `_tts_started_at`), the window is cleared, whole chunks already buffered on the
+   monitor's stream are read and discarded (`barge monitor: dropped N stale chunks (~ms)`),
+   and queue items stamped before that instant are dropped (`barge queue: dropped …`).
+   Any chunk whose capture began before `started_at + grace` is ignored.
+2. **Grace.** `BARGE_GRACE_MS` (default 800) after the first write is ignored. aplay and the
+   Pulse sink add ~70–90 ms before the first sound, so this covers ~0.7 s of Zoe's audible
+   onset while the Jabra's echo canceller settles.
+3. **Sustained speech.** `BARGE_MIN_CHUNKS` of the last `BARGE_WINDOW_CHUNKS` (default 3 of 6,
+   ~240 ms of speech in ~480 ms) at `BARGE_IN_THRESHOLD`, or the fast path:
+   `BARGE_FAST_CHUNKS` (default 2) consecutive chunks at `BARGE_FAST_PROB` (default 0.95, never
+   below the threshold; `BARGE_FAST_CHUNKS=0` disables it). It fires at most once per playback.
+
+A real interruption still stops playback quickly. Speech that starts 1 s into the reply fires
+within ~160 ms of its start on the fast path, and within ~240 ms on the window. The tests put
+this at t+1120 ms and t+1200 ms.
+
+Every fire logs its timing and the window, so the next false fire can be diagnosed from the
+log alone:
+
+```
+Barge-in detected during playback (monitor, prob=0.99, th=0.75, t+1120ms, window=2/6[0.01 0.01 0.01 0.01 0.99 0.99]+fast)
+```
+
+`th=` is the effective `BARGE_IN_THRESHOLD`. `t+` is measured from the first write to the player.
+`window=` gives hits/size, the probabilities, and which rule fired. Tune with the env knobs in `/home/pi/.zoe-voice/.env.voice`.
+`BARGE_IN_THRESHOLD=0.75` is live there. The VAD thresholds for normal listening
+(`VAD_ENDPOINT_THRESHOLD`, `FOLLOW_UP_VAD_THRESHOLD`) are separate and unchanged.
+
+- **Reading the old log line.** `turn_stream TTFA=` is logged after playback drains, so its
+  timestamp is not the first-audio time. The first write is at `t0 + TTFA`, and `t0` is the POST.
+  On 2026-09-28 `t0` was just after the `Speaker ID (shadow)` line. A barge line a few ms
+  before the TTFA line means the kill ended the drain. It does not mean the barge came before audio.
+- Pinned by `tests/unit/test_voice_daemon_barge_in.py`, which drives the real
+  `_BargeMonitor._run` against a scripted mic and a fake clock. Removing the drain, the grace or
+  the sustained-speech rule each turns a test red.
+- The replay gate cannot see this: it starts from saved recordings and stops before TTS.
+
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
 `services/zoe-data/voice_turn.py` wraps pipecat's `smart-turn-v3.2-cpu.onnx`
