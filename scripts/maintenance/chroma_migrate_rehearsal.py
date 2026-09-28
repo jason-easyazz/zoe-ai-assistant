@@ -929,19 +929,19 @@ def make_venv(venv: Path, uv: str, exclude_newer: str, constraints: dict | None 
                                                   "chroma-hnswlib", "pydantic")}}
 
 
-_DATE_DIR_RE = re.compile(r"(?:[a-z][a-z0-9]*-)?\d{4}-\d{2}-\d{2}")
+_DATE_DIR_RE = re.compile(r"(?:[a-z][a-z0-9]*-)?\d{4}-\d{2}-\d{2}(?:-\d{6})?")
 REHEARSAL_MARKER = ".b08-rehearsal"
 
 
 def rehearsal_dir(base: Path | str, date: str, live: Path | str) -> Path:
     """The one directory a run may create or (with --fresh) delete, validated before any use.
 
-    `date` must be `[prefix-]YYYY-MM-DD` (no separators, no `..`), the result must resolve to a
+    `date` must be `[prefix-]YYYY-MM-DD[-HHMMSS]` (no separators, no `..`); the result must resolve to a
     DIRECT child of the resolved base (no symlink escape), and it must neither be, contain, nor
     sit inside the live palace.
     """
     if not _DATE_DIR_RE.fullmatch(date or ""):
-        raise SystemExit(f"REFUSED: --date {date!r} must look like [prefix-]YYYY-MM-DD")
+        raise SystemExit(f"REFUSED: --date {date!r} must look like [prefix-]YYYY-MM-DD[-HHMMSS]")
     base_r = _real(base)
     root = _real(base_r / date)
     if root.parent != base_r:
@@ -963,6 +963,17 @@ def assert_replaceable(root: Path) -> None:
     except (OSError, ValueError):
         pass
     raise SystemExit(f"REFUSED: {root} was not created by this tool (no {REHEARSAL_MARKER}); not deleting it")
+
+
+def cmd_check_date(args) -> int:
+    """Preflight for the cutover script: validate a run id exactly as `run` will, before any
+    service is stopped. It must be a valid name and must not exist yet (`run` without --fresh
+    refuses an existing dir)."""
+    root = rehearsal_dir(args.rehearsal_root, args.date, _real(args.copy_from))
+    if root.exists() and any(root.iterdir()):
+        raise SystemExit(f"REFUSED: {root} already exists; use a new run id")
+    print(f"PASS check-date {root}")
+    return 0
 
 
 def cmd_run(args) -> int:
@@ -1073,6 +1084,77 @@ def _proof_table(log: list) -> list[dict]:
     return rows
 
 
+def _step_passed(rec: dict | None) -> bool:
+    return bool(rec) and rec.get("rc") == 0 and bool(rec.get("verdicts")) and all(
+        v.startswith("PASS") for v in rec["verdicts"])
+
+
+PARITY_FILES = ("old_top.json", "new_top.json")
+PARITY_COMPLETE = "COMPLETE"
+PARITY_KEEP_VERSIONS = 3
+
+
+def _parity_version_complete(d: Path) -> bool:
+    return d.is_dir() and (d / PARITY_COMPLETE).is_file() and all((d / f).is_file() for f in PARITY_FILES)
+
+
+def retain_parity_baseline(records: list, old_top: Path, new_top: Path, keep: Path) -> bool:
+    """Publish the (old_top, new_top) pair as the post-cutover parity baseline, ALL OR NOTHING.
+
+    Only when both recall probes AND the parity proof passed, and both files exist.
+    1. Write a NEW versioned dir `<keep>.<ts>`: both files first, the `COMPLETE` marker last.
+    2. Swap the `<keep>` symlink to it atomically: `os.replace` of a temp link.
+    A kill at any point therefore leaves the pointer on the previous complete version, or
+    leaves an incomplete version without a marker, which readers ignore. `resolve_parity_baseline`
+    falls back to the newest complete version if the pointer itself is missing or dangling.
+    The previous versions stay on disk (the newest `PARITY_KEEP_VERSIONS` are kept).
+    """
+    if not all(_step_passed(r) for r in records) or not (old_top.is_file() and new_top.is_file()):
+        return False
+    base = keep.parent
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if keep.is_dir() and not keep.is_symlink():
+        # a pre-versioning real directory: adopt it as a version (marker only if it is complete)
+        legacy = keep.with_name(f"{keep.name}.00000000T000000-legacy")
+        os.rename(keep, legacy)
+        if all((legacy / f).is_file() for f in PARITY_FILES):
+            (legacy / PARITY_COMPLETE).touch()
+    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    version = keep.with_name(f"{keep.name}.{ts}-{os.getpid()}")
+    version.mkdir(mode=0o700)
+    for f in (old_top, new_top):
+        shutil.copy2(f, version / f.name)
+    for f in PARITY_FILES:
+        with open(version / f, "rb") as fh:
+            os.fsync(fh.fileno())
+    (version / PARITY_COMPLETE).touch()
+    tmp_link = keep.with_name(f".{keep.name}.link-{os.getpid()}")
+    if tmp_link.is_symlink() or tmp_link.exists():
+        tmp_link.unlink()
+    os.symlink(version.name, tmp_link)
+    os.replace(tmp_link, keep)  # atomic pointer swap
+    for old in _parity_versions(keep)[PARITY_KEEP_VERSIONS:]:
+        if old != version:
+            shutil.rmtree(old, ignore_errors=True)
+    return True
+
+
+def _parity_versions(keep: Path) -> list[Path]:
+    """Complete versioned dirs for `keep`, newest first (names sort by their UTC timestamp)."""
+    cands = [d for d in keep.parent.glob(f"{keep.name}.*") if _parity_version_complete(d)]
+    return sorted(cands, key=lambda d: d.name, reverse=True)
+
+
+def resolve_parity_baseline(keep: Path) -> Path | None:
+    """The directory holding a COMPLETE parity pair: the pointer if it resolves to a complete
+    version (or a legacy complete real dir), otherwise the newest complete version, else None."""
+    if keep.exists() and (_parity_version_complete(keep) or
+                          (not keep.is_symlink() and all((keep / f).is_file() for f in PARITY_FILES))):
+        return keep
+    versions = _parity_versions(keep)
+    return versions[0] if versions else None
+
+
 def _scratch_copy(src: Path, dst: Path) -> Path:
     if dst.exists():
         shutil.rmtree(dst)
@@ -1129,12 +1211,16 @@ def run_proofs(step: Step, facts: dict, summary: dict, *, src: Path, exp: Path, 
     old_r = _scratch_copy(src, scratch / "recall-old")
     new_r = _scratch_copy(dst, scratch / "recall-new")
     old_top, new_top = scratch / "old_top.json", scratch / "new_top.json"
-    step("recall.old", _self_argv(old_py, "probe", "recall", "--store", str(old_r), "--demo-user", demo,
-                                  "--out-file", str(old_top), *common))
-    step("recall.new", _self_argv(new_py, "probe", "recall", "--store", str(new_r), "--demo-user", demo,
-                                  "--out-file", str(new_top), *common))
-    step("proof.e_recall_parity", _self_argv(sys.executable, "compare-recall", "--old", str(old_top),
-                                             "--new", str(new_top)), heavy=False)
+    r_old = step("recall.old", _self_argv(old_py, "probe", "recall", "--store", str(old_r), "--demo-user", demo,
+                                          "--out-file", str(old_top), *common))
+    r_new = step("recall.new", _self_argv(new_py, "probe", "recall", "--store", str(new_r), "--demo-user", demo,
+                                          "--out-file", str(new_top), *common))
+    r_par = step("proof.e_recall_parity", _self_argv(sys.executable, "compare-recall", "--old", str(old_top),
+                                                     "--new", str(new_top)), heavy=False)
+    # Keep the two top-10 files (synthetic demo ids only): after a cutover the 0.6.3 client
+    # is gone, so this is the only "old" side a post-install live parity check can compare to.
+    facts["recall_parity_baseline_retained"] = retain_parity_baseline(
+        [r_old, r_new, r_par], old_top, new_top, scratch.parent / "recall-parity")
 
     # (f) negative control: the 0.6.3 client must fail loudly on (a scratch copy of) the new store.
     neg = _scratch_copy(dst, scratch / "negative" / "store")
@@ -1164,6 +1250,13 @@ def cmd_compare_vectors(args) -> int:
 
 
 def cmd_compare_recall(args) -> int:
+    if args.baseline:
+        base = resolve_parity_baseline(Path(args.baseline))
+        if base is None:
+            return _out(False, "recall_parity", f"no complete parity baseline under {args.baseline}")
+        args.old = str(base / "old_top.json")
+    if not args.old:
+        return _out(False, "recall_parity", "need --old or --baseline")
     old = json.loads(Path(args.old).read_text())
     new = json.loads(Path(args.new).read_text())
     per = {q: jaccard(old[q], new.get(q, [])) for q in old}
@@ -1250,8 +1343,14 @@ def main(argv: list[str] | None = None) -> int:
     cv.add_argument("--queue-db", required=True)
     cv.add_argument("--ids-file", required=True)
     cv.add_argument("--mispair", action="store_true", help="negative control: pair vectors with the wrong ids")
+    cd_ = sub.add_parser("check-date", help="preflight: validate a run id the way `run` will")
+    cd_.add_argument("date")
+    cd_.add_argument("--rehearsal-root", default=str(REHEARSAL_ROOT_DEFAULT))
+    cd_.add_argument("--copy-from", default=str(LIVE_STORE_DEFAULT))
+
     cr = sub.add_parser("compare-recall")
-    cr.add_argument("--old", required=True)
+    cr.add_argument("--old", help="old top-10 file (or use --baseline)")
+    cr.add_argument("--baseline", help="a recall-parity pointer dir; resolves the newest COMPLETE pair")
     cr.add_argument("--new", required=True)
     cr.add_argument("--parity-tolerance", action="store_true",
                     help="accept top-1 equal + top-10 Jaccard >= 0.9 instead of identical order")
@@ -1272,6 +1371,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_probe(args)
     if args.cmd == "compare-vectors":
         return cmd_compare_vectors(args)
+    if args.cmd == "check-date":
+        return cmd_check_date(args)
     if args.cmd == "compare-recall":
         return cmd_compare_recall(args)
     return 2
