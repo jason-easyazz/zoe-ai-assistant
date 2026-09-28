@@ -124,6 +124,10 @@ POSITIVES = [
     "I'm not doing great",
     "Rough day.",
     "I had such a long day",
+    "I've had a rough day",
+    "We had such a long week",
+    "Had a rough day.",
+    "Honestly, today was brutal",
     "I've been so tired lately",
     "im kinda sad",
     "ugh. feeling low",
@@ -144,6 +148,12 @@ NEGATIVES = [
     "My sister is stressed about her exams",
     "The dog gets anxious in storms",
     "The traffic on the highway was terrible today.",
+    "My sister had a rough day",
+    "She had a rough day",
+    "The dog had a terrible night",
+    "Have you had a rough day?",
+    "My sister said today was rough",
+    "Her work has been a lot lately",
     # idioms that share a state word
     "I'm down for tacos",
     "I'm low on milk, add it to the list",
@@ -266,6 +276,25 @@ async def test_portrait_rides_as_one_capped_line(monkeypatch):
     assert len(line) <= len("About this user: ") + zc._CONTINUITY_PORTRAIT_MAX_CHARS + 1
     assert WORRY_BULLET in block
     assert len(block.strip()) <= zc._RECALL_MAX_CHARS
+
+
+@pytest.mark.asyncio
+async def test_slow_portrait_never_drops_a_completed_packet(monkeypatch):
+    """A portrait read past its budget is skipped; the packet still rides."""
+    _stub(monkeypatch)
+
+    async def slow_portrait(uid):
+        await asyncio.sleep(5)
+        return "Jason loves the sea."
+
+    monkeypatch.setattr(zc, "_fetch_portrait_line", slow_portrait)
+    monkeypatch.setattr(zc, "_CONTINUITY_PORTRAIT_TIMEOUT_S", 0.05)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    msg = await _outbound(S4_ASK)
+    assert loop.time() - t0 < 1.0  # the portrait budget, not the packet's, bounds the wait
+    assert WORRY_BULLET in msg
+    assert "About this user" not in msg
 
 
 @pytest.mark.asyncio

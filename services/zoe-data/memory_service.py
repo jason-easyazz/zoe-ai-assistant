@@ -808,6 +808,27 @@ class MemoryService:
             )
         return rows
 
+    async def load_recent_for_prompt(
+        self, user_id: str, *, window_s: float, limit: int
+    ) -> list[MemoryRef]:
+        """Rows captured in the last ``window_s`` seconds, newest first (at most
+        ``limit``) — the recency read under the for-prompt continuity mode.
+
+        The ranked ``load_for_prompt`` orders by confidence × decay + access
+        hotness, so for a heavy user a memory captured yesterday can sit past any
+        fixed prefix of it; this read selects by recency directly. Read-only: no
+        access ticks (a recency read is not evidence the row was useful).
+        """
+        if is_guest_memory_user(user_id):
+            return []
+        self._require(user_id, "user_id is required")
+        try:
+            return await self._run_sync(self._recent_read, user_id, window_s, limit)
+        except Exception as exc:
+            logger.warning("memory_service: load_recent_for_prompt failed user=%s: %s",
+                           user_id, exc)
+            return []
+
     async def search(
         self,
         query: str,
@@ -1418,7 +1439,9 @@ class MemoryService:
         col = self._collection()
         col.upsert(ids=[mem_id], documents=[text], metadatas=[metadata])
 
-    def _metadata_read(self, user_id: str, limit: int) -> list[MemoryRef]:
+    def _visible_rows(self, user_id: str, now: datetime.datetime) -> list[MemoryRef]:
+        """Every row this user may read (unexpired, visible, status-visible) —
+        the shared filter under both the ranked and the recency reads."""
         col = self._collection()
         result = col.get(
             where={"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]},
@@ -1427,7 +1450,6 @@ class MemoryService:
         docs = result.get("documents") or []
         metas = result.get("metadatas") or []
         ids = result.get("ids") or []
-        now = datetime.datetime.now(datetime.timezone.utc)
         filtered: list[MemoryRef] = []
         for rid, doc, meta in zip(ids, docs, metas):
             if not isinstance(meta, dict):
@@ -1440,6 +1462,11 @@ class MemoryService:
             if not _memory_status_visible(meta):
                 continue
             filtered.append(MemoryRef(id=rid, text=doc or "", metadata=dict(meta)))
+        return filtered
+
+    def _metadata_read(self, user_id: str, limit: int) -> list[MemoryRef]:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        filtered = self._visible_rows(user_id, now)
 
         import math
         HALF_LIFE_DAYS = 70.0
@@ -1466,6 +1493,22 @@ class MemoryService:
 
         filtered.sort(key=_score, reverse=True)
         return filtered[:limit]
+
+    def _recent_read(self, user_id: str, window_s: float, limit: int) -> list[MemoryRef]:
+        """Visible rows added within ``window_s`` seconds, NEWEST first, at most
+        ``limit``. Undated / unparseable rows never qualify."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cutoff = now - datetime.timedelta(seconds=window_s)
+        dated: list[tuple[datetime.datetime, MemoryRef]] = []
+        for ref in self._visible_rows(user_id, now):
+            try:
+                dt = _parse_aware_datetime(ref.metadata.get("added_at") or "")
+            except Exception:
+                dt = None
+            if dt is not None and dt >= cutoff:
+                dated.append((dt, ref))
+        dated.sort(key=lambda p: p[0], reverse=True)
+        return [ref for _, ref in dated[:limit]]
 
     def _semantic_search(
         self,

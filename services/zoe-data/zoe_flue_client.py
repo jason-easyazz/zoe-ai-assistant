@@ -691,12 +691,21 @@ _CONTINUITY_RE = re.compile(
     r"(?:^|[.!?]\s+)\s*" + _CONT_LEAD + r"(?:feeling|still|so)\s+" + _CONT_INTENS
     + _CONT_STATE + r"\b"
     r"|"
-    # "today was rough", "this week has been a lot"
-    r"\b(?:today|tonight|this\s+(?:week|morning|afternoon|evening)|work|the\s+day)"
+    # "today was rough", "this week has been a lot" — SENTENCE-INITIAL only, so
+    # a reported third-person day ("my sister said today was rough", "her work
+    # has been a lot") never matches.
+    r"(?:^|[.!?]\s+)\s*" + _CONT_LEAD
+    + r"(?:today|tonight|this\s+(?:week|morning|afternoon|evening)|work|the\s+day|my\s+day)"
     r"(?:['’]s|\s+was|\s+has\s+been|\s+is\s+being)\s+" + _CONT_INTENS + _CONT_BAD_DAY + r"\b"
     r"|"
-    # "I had a rough day", "(I've) had such a long week"
-    r"\b(?:i\s+|i['’]ve\s+|i\s+have\s+)?had\s+(?:a|such\s+a|one\s+of\s+those)\s+"
+    # "I had a rough day", "I've had / we had such a long week" — an EXPLICIT
+    # first-person subject ("she had a rough day", "have you had…" never match)…
+    r"\b(?:i|we)(?:\s+|['’]ve\s+|\s+have\s+|\s+just\s+)had\s+"
+    r"(?:a|such\s+a|one\s+of\s+those)\s+"
+    + _CONT_INTENS + _CONT_BAD_DAY + r"\s+(?:day|week|night|morning|shift)s?\b"
+    r"|"
+    # …or the subjectless shorthand "Had a rough day." at a sentence start.
+    r"(?:^|[.!?]\s+)\s*" + _CONT_LEAD + r"had\s+(?:a|such\s+a|one\s+of\s+those)\s+"
     + _CONT_INTENS + _CONT_BAD_DAY + r"\s+(?:day|week|night|morning|shift)s?\b"
     r"|"
     # bare "Rough day." at the start of a sentence
@@ -720,6 +729,8 @@ _CONTINUITY_PORTRAIT_MAX_CHARS = 240
 # Pre-brain budget for the continuity fetch (packet + portrait, concurrent). A
 # miss costs only the block, never the turn — voice latency outranks the floor.
 _CONTINUITY_TIMEOUT_S = 3.0
+# The portrait is optional: a shorter budget measured from the same start.
+_CONTINUITY_PORTRAIT_TIMEOUT_S = 1.0
 
 
 def _continuity_inject_enabled() -> bool:
@@ -782,29 +793,35 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
     if not _CONTINUITY_RE.search(msg):
         logger.info("SEAM_CONTINUITY user=%s matched=False bullets=0 chars=0", uid)
         return ""
+    # Packet and portrait run concurrently but are awaited INDEPENDENTLY: the
+    # packet is the payload (own budget); the portrait is best-effort garnish
+    # with a shorter budget from the same start, so a slow portrait store can
+    # neither drop a completed packet nor stretch the turn.
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    packet_task = asyncio.ensure_future(_fetch_continuity_packet(uid, msg))
+    portrait_task = asyncio.ensure_future(_fetch_portrait_line(uid))
+    # Retrieve an unawaited portrait failure so it never logs "exception was
+    # never retrieved" when the packet path returns early.
+    portrait_task.add_done_callback(lambda t: t.cancelled() or t.exception())
     packet, portrait = "", ""
     try:
-        packet_res, portrait_res = await asyncio.wait_for(
-            asyncio.gather(
-                _fetch_continuity_packet(uid, msg),
-                _fetch_portrait_line(uid),
-                return_exceptions=True,
-            ),
-            timeout=_CONTINUITY_TIMEOUT_S,
-        )
-        if isinstance(packet_res, BaseException):
-            logger.warning(
-                "seam continuity inject: packet fetch failed, continuing without it: %s",
-                packet_res,
-            )
-        else:
-            packet = packet_res or ""
-        if not isinstance(portrait_res, BaseException):
-            portrait = _portrait_line(str(portrait_res or ""))
+        packet = await asyncio.wait_for(packet_task, timeout=_CONTINUITY_TIMEOUT_S) or ""
     except Exception as exc:  # noqa: BLE001 — continuity must never break a turn
         logger.warning(
-            "seam continuity inject: fetch failed/timed out, continuing without it: %r", exc
+            "seam continuity inject: packet fetch failed/timed out, continuing without it: %r",
+            exc,
         )
+    if packet:
+        remaining = max(0.0, _CONTINUITY_PORTRAIT_TIMEOUT_S - (loop.time() - t0))
+        try:
+            portrait = _portrait_line(
+                str(await asyncio.wait_for(portrait_task, timeout=remaining) or "")
+            )
+        except Exception as exc:  # noqa: BLE001 — the portrait is optional
+            logger.debug("seam continuity inject: portrait skipped: %r", exc)
+    elif not portrait_task.done():
+        portrait_task.cancel()  # no packet → no block; don't leave the read running
     portrait_line = f"About this user: {portrait}" if portrait else ""
     budget = _RECALL_MAX_CHARS - (len(portrait_line) + 1 if portrait_line else 0)
     packet = _truncate_packet((packet or "").strip(), max_chars=budget)

@@ -679,6 +679,10 @@ def _pick_emotional_moments(rows: list[MemoryRef]) -> list[MemoryRef]:
 _PACKET_MODE_CONTINUITY = "continuity"
 _CONTINUITY_RECENT_WINDOW_S = 72 * 3600  # "the last few days" — covers a day-1 → day-2 gap
 _CONTINUITY_RECENT_MAX = 6  # at most half the default packet, so relevance keeps room
+# Bound on the direct recency read (newest-first, inside the window). Recency is
+# read DIRECTLY — not filtered out of the ranked load_for_prompt prefix, where a
+# heavy user's yesterday can rank below any fixed cut.
+_CONTINUITY_RECENT_SCAN = 50
 
 
 def _is_emotional_row(ref: MemoryRef) -> bool:
@@ -750,11 +754,12 @@ async def memory_for_prompt(
     # receives the Query() descriptor, which is not the continuity string — so
     # the isinstance guard keeps them on the relevance packet.
     continuity = isinstance(mode, str) and mode == _PACKET_MODE_CONTINUITY
-    # One metadata read. On an emotional or continuity turn we scan wider
-    # (_EMO_PIN_SCAN) so a crowded-out emotional/recent row is visible to the
-    # pins below; the generic packet still uses only the first `limit` rows
-    # (load_for_prompt returns a stable prefix, so this slice == the narrow read).
-    scan = _EMO_PIN_SCAN if (emo_turn or continuity) else limit
+    # One metadata read. On an emotional turn we scan wider (_EMO_PIN_SCAN) so a
+    # crowded-out emotional row is visible to the pin below; the generic packet
+    # still uses only the first `limit` rows (load_for_prompt returns a stable
+    # prefix, so this slice == the narrow read). Continuity reads recency
+    # directly below, so it does not need the wide ranked scan.
+    scan = _EMO_PIN_SCAN if emo_turn else limit
     all_rows = await svc.load_for_prompt(user_id, limit=scan)
     facts = all_rows[:limit]
     hits: list[MemoryRef] = []
@@ -775,7 +780,26 @@ async def memory_for_prompt(
         hits = _pick_emotional_moments(all_rows) + hits
     # Continuity mode: what was shared in the last few days leads the packet,
     # however little it overlaps the current message lexically.
-    recent = _pick_recent_for_continuity(all_rows) if continuity else None
+    recent = None
+    if continuity:
+        try:
+            recent_rows = await svc.load_recent_for_prompt(
+                user_id,
+                window_s=_CONTINUITY_RECENT_WINDOW_S,
+                limit=_CONTINUITY_RECENT_SCAN,
+            )
+        except Exception:
+            logger.exception("memories: continuity recency read failed")
+            recent_rows = []
+        # Merge with the ranked rows already loaded (dedup by id, recency read
+        # first), then pick emotional-then-newest under the cap.
+        seen_ids: set[str] = set()
+        candidates: list[MemoryRef] = []
+        for ref in list(recent_rows) + list(all_rows):
+            if ref.id not in seen_ids:
+                seen_ids.add(ref.id)
+                candidates.append(ref)
+        recent = _pick_recent_for_continuity(candidates)
     result = _build_memory_prompt_packet(
         facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent
     )

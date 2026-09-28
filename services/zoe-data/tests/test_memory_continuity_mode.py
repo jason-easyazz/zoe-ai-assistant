@@ -43,12 +43,23 @@ OTHER_RECENT = _ref("recent01", "User's sister Marisol is flying in from Lisbon"
 
 
 class _Svc:
+    """Ranked read = `rows` in the given (score) order, like load_for_prompt;
+    recency read = the same rows filtered to the window, newest first."""
+
     def __init__(self, rows, hits):
-        self.rows, self.hits, self.load_limits = rows, hits, []
+        self.rows, self.hits, self.load_limits, self.recent_calls = rows, hits, [], []
 
     async def load_for_prompt(self, user_id, *, limit):
         self.load_limits.append(limit)
         return self.rows[:limit]
+
+    async def load_recent_for_prompt(self, user_id, *, window_s, limit):
+        self.recent_calls.append((window_s, limit))
+        cutoff = NOW.timestamp() - window_s
+        dated = [(memories._added_at_ts(r.metadata), r) for r in self.rows]
+        dated = [(ts, r) for ts, r in dated if ts >= cutoff]
+        dated.sort(key=lambda p: p[0], reverse=True)
+        return [r for _, r in dated[:limit]]
 
     async def search(self, query, *, user_id, limit=6, **_):
         return list(self.hits)
@@ -83,8 +94,33 @@ async def test_continuity_ranks_recent_emotional_fact_above_older_closer_fact(sv
     worry_line = next(ln for ln in p.splitlines() if WORRY.text in ln)
     assert worry_line.startswith("- (recent) ")
     assert res["refs"][0]["id"] == WORRY.id and res["refs"][0].get("recent") is True
-    # continuity reads the wide window so a crowded-out recent row is visible
-    assert svc.load_limits == [memories._EMO_PIN_SCAN]
+    # continuity reads recency DIRECTLY (bounded), not a wider ranked prefix
+    assert svc.recent_calls == [(memories._CONTINUITY_RECENT_WINDOW_S, memories._CONTINUITY_RECENT_SCAN)]
+    assert svc.load_limits == [memories._PROMPT_PACKET_MAX_FACTS]
+
+
+@pytest.mark.asyncio
+async def test_recent_worry_survives_a_crowded_ranked_read(svc):
+    """250 older, higher-scoring memories fill any ranked prefix (the old 200-row
+    scan); yesterday's worry must still reach the packet via the recency read."""
+    crowd = [_ref(f"old{i:05d}", f"long-standing distinct fact {i} about hobby{i}", 24 * (10 + i))
+             for i in range(250)]
+    svc.rows = crowd + [WORRY]  # ranked order: the worry is LAST, past 200
+    svc.hits = []
+    p = (await _packet("continuity"))["packet"]
+    assert WORRY.text in p
+    assert next(ln for ln in p.splitlines() if WORRY.text in ln).startswith("- (recent) ")
+
+
+@pytest.mark.asyncio
+async def test_recency_read_failure_falls_back_to_ranked_rows(svc):
+    async def boom(*a, **k):
+        raise RuntimeError("store down")
+
+    svc.load_recent_for_prompt = boom
+    p = (await _packet("continuity"))["packet"]
+    # the ranked prefix (12 rows) still holds the worry here, so it is still pinned
+    assert next(ln for ln in p.splitlines() if WORRY.text in ln).startswith("- (recent) ")
 
 
 @pytest.mark.parametrize("mode", ["relevance", None])
@@ -129,3 +165,50 @@ def test_pick_recent_emotional_first_then_newest():
     ]
     got = [r.id for r in memories._pick_recent_for_continuity(rows, now_ts=now)]
     assert got == ["emo_old", "plain_new", "plain_old"]  # undated never qualifies
+
+
+# ── MemoryService.load_recent_for_prompt against the REAL service logic ─────
+
+class _Col:
+    """The one collection call the metadata reads make (a filtered `get`)."""
+
+    def __init__(self, rows):
+        self.rows = rows  # [(id, text, meta)]
+
+    def get(self, *, where=None, include=None, **_kw):
+        return {"ids": [r[0] for r in self.rows],
+                "documents": [r[1] for r in self.rows],
+                "metadatas": [dict(r[2]) for r in self.rows]}
+
+
+def _svc_over(rows):
+    from memory_service import MemoryService
+
+    svc = MemoryService(data_dir="/nonexistent/zoe-test-continuity")
+    svc._collection = lambda: _Col(rows)
+    return svc
+
+
+def _meta(hours_ago, **kw):
+    return {"user_id": "demo-a", "status": "approved", "added_at": _iso(hours_ago),
+            "confidence": 0.7, **kw}
+
+
+@pytest.mark.asyncio
+async def test_service_recent_read_is_newest_first_windowed_and_scoped():
+    rows = [(f"old{i:04d}", f"old high-score fact {i}", _meta(24 * 30, confidence=1.0, access_count=500))
+            for i in range(250)]
+    rows += [
+        ("worry001", WORRY.text, _meta(24)),
+        ("newest01", "User bought a whale mug", _meta(2)),
+        ("stale001", "User was worried about rent", _meta(24 * 4)),
+        ("other001", "someone else's recent fact", {**_meta(1), "user_id": "demo-b"}),
+        ("undated1", "User has no date", {"user_id": "demo-a", "status": "approved"}),
+    ]
+    svc = _svc_over(rows)
+    got = await svc.load_recent_for_prompt("demo-a", window_s=72 * 3600, limit=50)
+    assert [r.id for r in got] == ["newest01", "worry001"]
+    # …and the ranked read (unchanged by the refactor) buries the worry past 200
+    ranked = await svc.load_for_prompt("demo-a", limit=200)
+    assert "worry001" not in {r.id for r in ranked}
+    assert await svc.load_recent_for_prompt("guest", window_s=72 * 3600, limit=50) == []
