@@ -302,7 +302,7 @@ def test_naming_prompt_sentence_reply_gets_the_router_verdict():
     assert (decision, reason) == ("veto", "router_chat")  # …but the router's chat wins
 
 
-@pytest.mark.parametrize("reply", ["not now", "never mind", "let's not", "cancel that", "I'll do it later"])
+@pytest.mark.parametrize("reply", ["not now", "never mind", "let's not", "cancel that", "I'll do it later", "Um, wait"])
 def test_naming_prompt_non_names_are_not_exempt(reply):
     intent = sky.SkybridgeIntent(domain="lists", action="create_list", list_name=reply)
     decision, *_ = sky.skybridge_router_gate(reply, intent, _two_stage("chat"), context=NAMING_CTX)
@@ -316,7 +316,16 @@ async def test_naming_prompt_sentence_reply_creates_no_list(resolved):
     assert resolved == [], "a list was created named after a conversational reply"
 
 
-@pytest.mark.parametrize("reply,name", [("Groceries", "Groceries"), ("weekend jobs", "weekend jobs"), ("Camping", "Camping")])
+@pytest.mark.parametrize("reply,name", [
+    ("Groceries", "Groceries"),
+    ("weekend jobs", "weekend jobs"),
+    ("Camping", "Camping"),
+    # long, pronoun- and verb-bearing names are still names (Greptile, #1757)
+    ("Things to do", "Things to do"),
+    ("Books I want to read", "Books I want to read"),
+    ("Stuff for Dad's birthday", "Stuff for Dad's birthday"),
+    ("What to pack for Bali", "What to pack for Bali"),
+])
 async def test_naming_prompt_name_reply_still_creates_the_list(resolved, reply, name):
     # the router cannot see the prompt, so its chat verdict on a bare name is noise
     result = await sky.resolve_skybridge_request(

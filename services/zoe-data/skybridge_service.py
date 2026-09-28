@@ -1414,17 +1414,16 @@ def _router_agrees(intent: SkybridgeIntent, router_domain: str) -> bool | None:
     return router_domain in allowed
 
 
-# Words that make a reply a SENTENCE (hesitation, negation, a first-person or
-# pronoun clause, a finite/modal verb) rather than a name for a list.
-_NOT_A_NAME_WORDS = frozenset(
-    """
-    actually wait no nope nah never mind nevermind not cancel stop forget hmm um uh
-    maybe later sorry okay ok yes yeah
-    i i'm im i'd i'll i've me we we're we'll we'd let's lets you you're it it's its
-    he she they that's this that there
-    think should would could will can shall must might want need don't dont
-    is are was were be been am have has had do does did
-    """.split()
+# A reply to the new-list naming prompt is a NAME unless it OPENS with a
+# hesitation/refusal marker (after optional filler). Deliberately narrow: "Things
+# to do" and "Books I want to read" are real list names, so length, pronouns and
+# verbs prove nothing — only a leading "actually…/wait/not now/never mind/…" does.
+_NAMING_REFUSAL_RE = re.compile(
+    r"^(?:(?:um|uh|hmm|well|oh|so|er)\b[\s,.!?]*)*"
+    r"(?:actually|wait|hold\s+on|no|nope|never\s*mind|not\s+now|not\s+yet|cancel"
+    r"|forget\s+it|let'?s\s+not|let'?s\s+wait|i\s+think\s+we\s+should\s+wait"
+    r"|i'?ll\s+do\s+(?:it|that)\s+later|maybe\s+later|later|skip)\b",
+    re.IGNORECASE,
 )
 
 
@@ -1438,10 +1437,9 @@ def _is_naming_prompt_reply(intent: SkybridgeIntent, context: dict[str, Any] | N
 
 
 def _looks_like_list_name(message: str) -> bool:
-    """A short noun phrase ("Groceries", "weekend jobs", "kids' stuff") — at most
-    four words and none of the sentence markers in ``_NOT_A_NAME_WORDS``."""
-    words = re.findall(r"[a-z0-9'&-]+", _clean_action_text(message).lower())
-    return 0 < len(words) <= 4 and not any(w in _NOT_A_NAME_WORDS for w in words)
+    """False only for a reply that opens with a hesitation/refusal marker
+    (``_NAMING_REFUSAL_RE``); any other reply answers the naming prompt."""
+    return not _NAMING_REFUSAL_RE.match((message or "").strip())
 
 
 def skybridge_router_gate(
@@ -1474,9 +1472,9 @@ def skybridge_router_gate(
         bare = classify_skybridge_intent(message, None)
         if bare is None or (bare.domain, bare.action) != (intent.domain, intent.action):
             # EXCEPT the new-list naming prompt: it takes the WHOLE reply as the
-            # name, so "Actually I think we should wait" would become a list. Only
-            # a name-shaped reply answers the prompt; anything else gets the
-            # router's verdict like any other turn (Greptile, #1757).
+            # name, so "Actually I think we should wait" would become a list. A
+            # reply that opens with a hesitation/refusal marker gets the router's
+            # verdict like any other turn; any other reply is a name (Greptile, #1757).
             if not _is_naming_prompt_reply(intent, context) or _looks_like_list_name(message):
                 return "allow", "context_followup", router_domain, conf
     agrees = _router_agrees(intent, router_domain)
