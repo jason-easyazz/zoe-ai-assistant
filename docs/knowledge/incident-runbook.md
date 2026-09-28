@@ -406,12 +406,14 @@ captures by hand.
   live venv, and it refuses (`--old-python must carry chromadb 0.6.x`) after the deploy has
   converged the venv. `/usr/bin/python3` (3.10, chromadb 0.6.3) is the fallback.
 
-**Open follow-up.** The post-cutover live recall-parity compare printed
-`no complete parity baseline`. A read-only check afterwards found the baseline IS retained and
-complete for this run (`cutover-2026-09-28-081803/recall-parity` → a versioned dir with
-`COMPLETE`; manifest `run.recall_parity_baseline_retained: true`). Two aborted attempts
-(`…-081723`, `…-081740`) left empty run dirs beside it, so the compare probably pointed at the
-wrong run. Verify the retention/lookup path in `chroma_migrate_rehearsal.py`, add a
-`--demo-user` fallback that reads `run.recall_demo_user` from the run's manifest, then run the
-live compare. The rebuild-time parity proof (e) passed 20/20 identical order on the exact store
-that was swapped in.
+**Live recall parity: PASS.** The first post-cutover `compare-recall` printed
+`no complete parity baseline` because it was given the wrong path: `--baseline <run dir>`
+instead of the run's `recall-parity` pointer. It was not a retention bug. The baseline was
+retained and complete: `cutover-2026-09-28-081803/recall-parity` →
+`recall-parity.20260928T001943894457-1679199`, with manifest
+`run.recall_parity_baseline_retained: true`. Re-run against that pointer on a copy of the live
+store (demo user `demo_b08_b9233229`), it passed: identical order 20/20, top-1 equal 20,
+min Jaccard 1.0. **Lesson:** `--baseline` takes `$R/recall-parity`, not `$R`; block B in
+[chroma-1-5-migration.md](chroma-1-5-migration.md) §5 already passes the right path. A
+`--demo-user` default read from the manifest's `run.recall_demo_user` would be a nice-to-have,
+not a fix.

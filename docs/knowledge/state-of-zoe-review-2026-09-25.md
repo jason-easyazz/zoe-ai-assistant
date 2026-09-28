@@ -588,9 +588,8 @@ the 2026-09-25 plan, kept with ✓ marks.
    - B1.1: Pi proof → head-bound replay → operator flag-on week.
 3. **Verify.** The 2026-09-28 07:30 morning brief (#1726) and the Monday 02:31 dreaming run
    on the venv drop-in. B0.8 follow-ups: the 09-29 dreaming run is the first on the 1.x store
-   (confirm it did work); the live recall-parity compare still has to run (its baseline lookup
-   printed "no complete parity baseline" although the run retained one; add a `--demo-user`
-   manifest fallback in `chroma_migrate_rehearsal.py`).
+   (confirm it did work). ✓ Live recall parity PASS 20/20 identical order (the first attempt
+   passed the run dir instead of its `recall-parity` pointer; not a retention bug).
 4. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).
 5. The `samantha_bar` harness.
 6. **B3.2** dream gating and **B3.3** reflection on the new store (B0.8 live 2026-09-28).

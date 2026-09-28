@@ -73,12 +73,8 @@ State as of **2026-09-28 08:30 AWST**:
 
    Also check the Monday 02:31 dreaming run on the new venv drop-in (B3.2).
    - **B0.8 follow-ups.** Tuesday's (09-29) ~02:33 dreaming run is the first on the 1.x store:
-     confirm it ran and did work (the zero-effect rule, incident-runbook §7). Then close the
-     live recall-parity gap: the post-cutover `compare-recall` printed "no complete parity
-     baseline", but the run's baseline is retained and complete
-     (`cutover-2026-09-28-081803/recall-parity`), so verify the lookup path in
-     `chroma_migrate_rehearsal.py`, add a `--demo-user` fallback that reads the manifest's
-     `run.recall_demo_user`, and run the live compare.
+     confirm it ran and did work (the zero-effect rule, incident-runbook §7). (The live
+     recall-parity compare is done: PASS 20/20.)
 3. **Queue state:** the 09-27 wave **landed: 24 PRs**, listed in §6. Still open:
    - #1715: B5.1 evidence, parked draft.
 
@@ -337,9 +333,12 @@ State as of **2026-09-28 08:30 AWST**:
   merge's deploy was NOT refused (the gate accepted a fresh passing artifact bound to another
   commit), so the pins + code landed at 08:14 ahead of the store; the format guard refused the
   0.6 store (~7 min `memory_capture: degraded`, store intact, no turns missed) —
-  [incident-runbook.md](../knowledge/incident-runbook.md) §9. Follow-ups (§0): the 09-29
-  dreaming run on the 1.x store; the live recall-parity compare (baseline lookup + a
-  `--demo-user` manifest fallback). History of the item below.
+  [incident-runbook.md](../knowledge/incident-runbook.md) §9. Live recall parity vs the retained
+  baseline, on a copy of the live store: PASS, identical order 20/20, top-1 20, min Jaccard 1.0.
+  (The first compare's "no complete parity baseline" came from passing the run dir instead of
+  its `recall-parity` pointer; it was not a retention bug.) Follow-up (§0): the 09-29 dreaming
+  run on the 1.x store. Nice-to-have: `compare-recall`/`probe` default `--demo-user` from the
+  manifest. History of the item below.
   MemPalace 3.10 + Chroma 1.5.x migration **on a copy** (needs B0.7 ✅); reconcile row
   counts against `export_memory_store.py`; self-recall probe.
   **Recipe (2026-09-27): per-collection rebuild, NOT `mempalace migrate`.** mempalace 3.10's
@@ -1097,7 +1096,8 @@ a decision input.
   degraded` ~7 min, voice/chat fine, store intact, no turns in the window. The operator session completed the swap:
   `run --date cutover-2026-09-28-081803 --old-python /usr/bin/python3` (10/10, 379 MB, 102 s),
   swap with rollback `~/.mempalace.pre-b08-20260928-082034`, `/readyz` `self-recall ok`, timers
-  re-armed; replay PASS 13/13 (brain 1414 ms, VAD 0.792); zoe-data RSS 1.33 GB. Incident record
+  re-armed; replay PASS 13/13 (brain 1414 ms, VAD 0.792); zoe-data RSS 1.33 GB; live recall
+  parity vs the retained baseline PASS 20/20 identical order. Incident record
   + lessons: incident-runbook §9. Fix in flight (another agent's PR): the voice gate binds the
   replay artifact to the deployed tree. Runbook §5 now passes `--old-python` when the live venv
   is already on 1.x. §0 and review §9 updated.
