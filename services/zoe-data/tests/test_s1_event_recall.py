@@ -60,6 +60,9 @@ EVENT_QUESTIONS = [
     # a public event with the user's own people named still counts
     "who is coming to the game with my brother on Friday",
     "who is coming to the game with us on Friday",
+    # an unrelated public-event word in ANOTHER sentence does not veto it
+    # (Greptile #1771)
+    "Who is flying in on Thursday? The game is Friday",
 ]
 NOT_EVENT_QUESTIONS = [
     "who is the prime minister",
@@ -84,6 +87,9 @@ NOT_EVENT_QUESTIONS = [
     "who is going to the Grand Prix on Sunday",
     # a relative clause in a statement is not a question
     "My cleaner, who comes on Friday, is great",
+    # a personal word in ANOTHER sentence does not vouch for a public-event
+    # question (Greptile #1771)
+    "We're busy. Who is coming to the game on Friday?",
     # statements are not questions about the store
     SAY_SISTER,
 ]
@@ -236,6 +242,32 @@ def test_plain_s1_ask_stays_recall(monkeypatch):
     monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
     assert zc._recall_floor_shape(ASK_SISTER) == "event"
     assert not zc.is_continuity_turn(ASK_SISTER, "demo-a")
+
+
+SEPARATE_FEELING = "I'm exhausted. Who is flying in on Thursday, and where from?"
+
+
+def test_a_feeling_in_another_sentence_keeps_recall_ownership(monkeypatch):
+    """Greptile #1771: the question stands on its own sentence, so it is asked,
+    not shared — recall owns it (and offers are not deferred)."""
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
+    assert zc._CONTINUITY_RE.search(SEPARATE_FEELING)
+    assert zc._recall_floor_shape(SEPARATE_FEELING) == "event"
+    assert not zc.is_continuity_turn(SEPARATE_FEELING, "demo-a")
+
+
+@pytest.mark.asyncio
+async def test_a_feeling_in_another_sentence_gets_the_recall_block(monkeypatch):
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
+    msg, fetched = await _outbound(monkeypatch, SEPARATE_FEELING)
+    assert fetched == [SEPARATE_FEELING]
+    rest = msg.split("\n", 1)[1]
+    assert rest.startswith(zc._RECALL_BLOCK_OPEN)
+    block = rest[: rest.index(zc._RECALL_BLOCK_CLOSE)]
+    assert "Marisol" in block and "Lisbon" in block
+    assert zc._CONTINUITY_BLOCK_OPEN not in msg
 
 
 @pytest.mark.asyncio

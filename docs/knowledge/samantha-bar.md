@@ -369,9 +369,11 @@ continuity.
   "Who flies in on Thursday?"). A relative clause in a statement does not ("my cleaner, who
   comes on Friday, …").
 - A public event or venue ("Who is coming to the game on Friday?") is not claimed unless the
-  user's own people are named too.
-- An event phrase inside a first-person feeling ("I'm anxious about who is flying in on
-  Thursday") is a continuity turn. Its packet still carries the event, because continuity mode
+  user's own people are named too. Both checks look only at the question's own sentence, so
+  "Who is flying in on Thursday? The game is Friday" is still recall.
+- An event phrase inside a first-person feeling, in the same sentence ("I'm anxious about who
+  is flying in on Thursday"), is a continuity turn. A question in its own sentence beside a
+  feeling ("I'm exhausted. Who is flying in on Thursday, and where from?") stays recall. Its packet still carries the event, because continuity mode
   runs the semantic search on the user's words. A personal my/I question stays recall.
 
 Next targets, in order (tracker §0): (a) a **router confidence gate** — head decisions below

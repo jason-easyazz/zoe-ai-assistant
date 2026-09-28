@@ -155,17 +155,35 @@ _EVT_PERSONAL_ANCHOR_RE = re.compile(
 )
 
 
+# Sentence boundaries for scoping the event checks: the anchors and the
+# public-event exclusion are judged INSIDE the sentence that holds the question,
+# so an unrelated sentence ("… The game is Friday", "We're busy. …") neither
+# vetoes nor vouches for it (Greptile #1771). Commas and dashes do not split:
+# "Who is flying in on Thursday, and where from?" is one question.
+_EVT_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+|(?<=[.!?;])(?=[A-Z])")
+
+
+def event_sentences(message: str) -> list[str]:
+    """The message's sentences (split on . ! ? ; only), stripped, non-empty."""
+    return [p.strip() for p in _EVT_SENTENCE_SPLIT_RE.split(message or "") if p.strip()]
+
+
+def _sentence_is_event_question(sentence: str) -> bool:
+    if _EVT_ANCHORED_RE.search(sentence):
+        return True
+    if not _EVT_WHO_TIME_RE.search(sentence):
+        return False
+    return not (_EVT_PUBLIC_RE.search(sentence)
+                and not _EVT_PERSONAL_ANCHOR_RE.search(sentence))
+
+
 def is_event_question(message: str) -> bool:
     """True for an event-shaped question about the user's own people/plans:
-    an anchored shape (a my/our relation or a he/she/they subject), or who +
-    movement + time cue when no public event/venue is named (or one is, but
-    the user's own people are too). Pure str → bool."""
-    msg = message or ""
-    if _EVT_ANCHORED_RE.search(msg):
-        return True
-    if not _EVT_WHO_TIME_RE.search(msg):
-        return False
-    return not (_EVT_PUBLIC_RE.search(msg) and not _EVT_PERSONAL_ANCHOR_RE.search(msg))
+    in SOME sentence of the message, an anchored shape (a my/our relation or a
+    he/she/they subject), or who + movement + time cue when that sentence names
+    no public event/venue (or names one together with the user's own people).
+    Pure str → bool."""
+    return any(_sentence_is_event_question(s) for s in event_sentences(message))
 
 
 def message_needs_memory(message: str) -> bool:

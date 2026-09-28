@@ -503,18 +503,25 @@ def _recall_floor_shape(message: str) -> str:
 
     * a personal my/I question is always recall ("do you remember what I
       said? I'm so anxious" keeps the recall block);
-    * an event shape inside a first-person feeling ("I'm anxious about who is
-      flying in on Thursday") is NOT claimed while continuity is on: the user is
-      sharing a feeling, not asking, so continuity owns the turn — and its
-      packet still carries the event, because continuity mode runs the same
-      semantic search on the user's words (Greptile #1770);
-    * a plain event question ("Who is flying in on Thursday, and where from?")
-      is recall."""
+    * an event question EMBEDDED in a first-person feeling — the same sentence
+      carries both ("I'm anxious about who is flying in on Thursday") — is NOT
+      claimed while continuity is on: the user is sharing a feeling, not
+      asking, so continuity owns the turn, and its packet still carries the
+      event because continuity mode runs the same semantic search on the
+      user's words (Greptile #1770);
+    * a standalone event question stays recall, even beside a feeling in
+      ANOTHER sentence ("I'm exhausted. Who is flying in on Thursday, and where
+      from?") — the explicit question is answered from memory (Greptile #1771).
+    """
     shape = _recall_question_shape(message)
-    if (shape == "event" and _continuity_inject_enabled()
-            and _CONTINUITY_RE.search(message or "")):
-        return ""
+    if shape == "event" and _continuity_inject_enabled():
+        from memory_gate import event_sentences, is_event_question
+
+        if any(_CONTINUITY_RE.search(s) and is_event_question(s)
+               for s in event_sentences(message)):
+            return ""
     return shape
+
 
 _RECALL_BLOCK_OPEN = (
     "[MEMORY CONTEXT — Zoe's stored notes about this user; "
