@@ -88,26 +88,21 @@ PyJWT==2.15.0
 ag-ui-protocol==0.1.19
 python-json-logger>=4.1.0
 
-# ── Vector memory store ───────────────────────────────────────────────────
-# BOTH pins are exact, and the chromadb one is the load-bearing half.
+# ── Vector memory store (3.10 LANE — NOT the live palace client) ────────────
+# B0.8 (2026-09-27): the live palace is chromadb 1.5.x format and zoe-data opens it
+# from the py3.12 venv (`requirements-py312.txt`: chromadb 1.5.9 / mempalace
+# 3.10.0). THIS manifest is the system Python 3.10 lane, whose user site also hosts
+# the CUDA/Kokoro packages, and it deliberately stays on the 0.6.3 pair:
 #
-# mempalace 3.3.1 declares only `chromadb>=0.5.0`, so without an explicit pin a
-# resolver is free to install chromadb 1.5.x against a 0.6.x on-disk palace. That
-# is not a clean upgrade: mempalace's own changelog documents `_fix_blob_seq_ids`
-# misreading chromadb 1.5.x's sysdb-10 BLOB format as legacy 0.6.x big-endian
-# BLOBs, causing **silent drawer-write drops** on palaces migrated in that state
-# (recovery is `mempalace repair --mode max-seq-id`). Silently losing writes is
-# strictly worse than the 2026-07-31 crash-loop, which at least announced itself.
-#
-# Upgrading mempalace to 3.6.0 FORCES that migration (it requires
-# chromadb>=1.5.4,<2), so the two move together or not at all. 3.6.0 does carry
-# real fixes for our exact failure — HNSW divergence detection before opening
-# ChromaDB, and derived-index damage distinguished from data loss — so it is
-# worth doing, but only via: copy the palace, `mempalace migrate` in a throwaway
-# venv, then reconcile row counts against a `scripts/maintenance/export_memory_store.py`
-# export and confirm `memory_recall_probe` still self-recalls. Not in place.
-#
-# Live-verified combination (2026-08-02, 3507 drawers + 17686 audit rows):
+# * No 3.10 program may open the palace. The 0.6.3 client dies on the 1.x format
+#   (`KeyError: '_type'`), and every store opener goes through a format guard
+#   (`scripts/lib/palace_client.py`, `memory_service._check_palace_format`) that
+#   refuses a mismatched client before chromadb touches the file.
+# * Moving zoe-data back to 3.10 (removing the B0.7 drop-in) now REQUIRES the B0.8
+#   rollback too: restore the pre-B0.8 palace directory. See
+#   docs/knowledge/chroma-1-5-migration.md.
+# * Keep the pair exact: mempalace 3.3.1 declares only `chromadb>=0.5.0`, and its
+#   `_fix_blob_seq_ids` misreads the 1.x sysdb (silent drawer-write drops).
 mempalace==3.3.1
 chromadb==0.6.3
 

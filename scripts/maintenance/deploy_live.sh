@@ -99,10 +99,22 @@ prev="$(git -C "$LIVE" rev-parse HEAD)"
 # (STT/brain/TTS), a FRESH, PASSING replay-gate artifact must already exist; a
 # missing/stale/skipped/failed artifact BLOCKS the deploy before any restart.
 # Non-voice deploys are a no-op pass. This never runs the heavy Kokoro harness.
+#
+# Bound to the deployed TREE (incident 2026-09-28): the artifact must be evidence
+# for $target — the same commit, or a clean run on a byte-identical tree (the PR
+# head of an up-to-date squash merge) — not merely fresh. Same binding as
+# deploy.yml, including the fallback to the stricter exact-commit binding when
+# the checker copy predates --expect-tree-of (never to an unbound check).
 git -C "$LIVE" fetch --quiet origin main
 target="$(git -C "$LIVE" rev-parse FETCH_HEAD)"
-if ! python3 "$SCRIPT_DIR/voice_gate_check.py" --repo "$LIVE" --diff "${prev}..${target}"; then
-    echo "✗ REFUSING TO DEPLOY: voice-path change without a fresh passing replay-gate result (see above)." >&2
+bind_flag="--expect-tree-of"
+if ! grep -q -- '--expect-tree-of' "$SCRIPT_DIR/voice_gate_check.py"; then
+    echo "⚠ voice_gate_check.py predates --expect-tree-of; binding to the exact commit instead." >&2
+    bind_flag="--expect-revision"
+fi
+if ! python3 "$SCRIPT_DIR/voice_gate_check.py" --repo "$LIVE" --diff "${prev}..${target}" \
+        "$bind_flag" "$target"; then
+    echo "✗ REFUSING TO DEPLOY: voice-path change without a fresh passing replay-gate result for ${target:0:7} (see above)." >&2
     exit 1
 fi
 

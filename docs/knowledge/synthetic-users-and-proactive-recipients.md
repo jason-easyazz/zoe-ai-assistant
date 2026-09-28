@@ -1,14 +1,14 @@
 ---
 type: Reference
 title: Synthetic users, proactive recipients and kiosk presence (2026-09-27)
-description: Who the nightly memory passes and the proactive triggers treat as a real user — the is_synthetic_user rule and its allowlist flag, the household recipient rule that replaced "created a chat session in 7 days", guest-owned kiosk presence, the nightly purge of probe chat sessions, and why the spoken morning brief was silent from 08-16.
-tags: [memory, dreaming, proactive, morning-brief, presence, test-data, zoe-data]
+description: Who the nightly memory passes and the proactive triggers treat as a real user — the is_synthetic_user rule and its allowlist flag, the household recipient rule that replaced "created a chat session in 7 days", guest-owned kiosk presence, the flag-dark brief-on-arrival, the nightly purge of probe chat sessions, and why the spoken morning brief was silent from 08-16.
+tags: [memory, dreaming, proactive, morning-brief, brief-on-arrival, presence, test-data, zoe-data]
 timestamp: 2026-09-27T12:00:00Z
 ---
 
 # Synthetic users, proactive recipients and kiosk presence
 
-Tracker rows: B3.2 and "Speaks first" in [the program](../architecture/beat-the-bar-2026-program.md).
+Tracker rows: B3.2, B2.1 and "Speaks first" in [the program](../architecture/beat-the-bar-2026-program.md).
 
 ## Synthetic users are filtered at read time
 
@@ -55,6 +55,55 @@ per turn in `routers/voice_tts.py` and kept only as an in-memory session binding
 carries across rollovers. So they do not raise a panel to `owner`; wiring them in is a
 voice-path change and needs the replay gate.
 
+## Brief on arrival (B2.1, flag-dark)
+
+`proactive/arrival.py` speaks a missed 07:30 brief once, when its member turns up.
+It needs `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL=1` and the master `ZOE_PROACTIVE_SPOKEN=1`;
+both default off, and with either off nothing is read or queued.
+
+- **Trigger:** a foreground `POST /api/ui/panel/bind` or `/api/ui/state/sync` from the
+  member's own session (`routers/ui_actions.py::_note_owner_presence`). Guests and
+  device tokens never count. The check runs as a background task, at most every 30 s
+  per member. No voice-path file is involved; face and voice claims will join once
+  they have a server-side record (see above).
+- **Speaks** the latest stored `proactive_pending` text of today's brief, through the
+  same two lanes as the 07:30 brief, on the panel where the member was seen.
+- **Only if all hold:**
+  - 07:00–11:00 local, and not quiet hours;
+  - tier `owner` on that panel; not a synthetic or guest id;
+  - a brief exists today and none of today's rows was opened in chat;
+  - nothing from today was played, except a known `bound_guest` teaser. All of
+    today's rows count, so a later brief cannot hide an earlier delivery, and an
+    unrecognised text counts as heard;
+  - nothing is still queued;
+  - no user turn from the member in the last 2 minutes.
+- **Panel-scoped:** the row's trigger is in `voice_announce.PANEL_SCOPED_TRIGGERS`,
+  so only the daemon whose device-token panel matches may play it, even in the default
+  claim-any mode. If the presence panel has no live device token (a browser alias), no
+  daemon could claim it; nothing is queued and it logs `outcome=unscoped_panel`.
+- **Once per member per local day, across both paths.** The claim is a
+  `proactive_responses` row (migration `0030`,
+  `UNIQUE (user_id, claim_key, local_date)`, `claim_key = morning_brief_full`).
+  With the flag on, the 07:30 path takes the same claim before speaking the full brief
+  (`arrival.claim_scheduled_brief`). A lost claim logs `outcome=already_spoken`. A claim
+  DB error fails closed (`outcome=claim_error`): the push is still sent, but the full brief
+  is not spoken. So the
+  full brief is spoken once whichever path, panel or worker gets there first. With the
+  flag off, the 07:30 path is unchanged and takes no claim. A failed speak is not
+  retried.
+- **Log:** `PROACTIVE_SPOKEN trigger=morning_checkin_arrival user= panel= outcome=
+  daemon_queue= tier=owner missed=absent|guest_teaser|expired`.
+- **Response signal (for B2.2):** the announcement id is linked to the claim in the
+  announcement's own transaction. Once a claim row's window has passed, the slow loop
+  sets its `outcome`:
+  - `accepted`: a member user turn within `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S`
+    (default 120 s) of the daemon playing it;
+  - `ignored`: no such turn;
+  - `undelivered`: the linked row expired unplayed;
+  - `unknown`: no announcement is linked. This is never `undelivered`.
+
+  Each is logged as `PROACTIVE_RESPONSE`.
+
 ## Probe chat rows are purged nightly
 
 The leaked rows come from probes that call the live `/api/chat` as a fixed identity and do
@@ -86,6 +135,8 @@ treated as real and refused there.
   - Panel on (kiosk idle as guest): `panel=<id> outcome=enqueued` and a new
     `voice_announcements` row.
 - **No wait:** `POST /api/proactive/trigger-morning` as the bound member with the panel on.
+- **Arrival (flag on):** `grep -E "morning_checkin_arrival|PROACTIVE_RESPONSE" ~/.zoe-logs/zoe-data.app.log`
+  and `SELECT local_date, trigger_type, missed, outcome, responded FROM proactive_responses ORDER BY created_at DESC`.
 - **Skip counts** (read-only, live DB, 2026-09-27):
 
   | pass | kept | skipped |

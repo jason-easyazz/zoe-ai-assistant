@@ -174,7 +174,12 @@ they can't drift): explicit flag (always wins) → this repo's `services/zoe-dat
 the **main worktree's** (found via git's `--git-common-dir`, not a hardcoded host path). If no `.env`
 resolves anywhere it falls back to the in-tree path so the **loud skip/error still fires**
 (`status=error`, exit 2) — the ladder fixes the *default*, never the failure mode; a skip is never
-quietly upgraded to a pass. Pinned by `tests/unit/test_probe_dsn_resolution.py`. Scheduled daily off-peak via the
+quietly upgraded to a pass. Pinned by `tests/unit/test_probe_dsn_resolution.py`. **The flag always
+wins, so a revision-bound replay (`--service-dir <fresh worktree>/services/zoe-data`, which every
+gate recipe uses) needs the live env COPIED in first** — `cp -n
+/home/zoe/assistant/services/zoe-data/.env <wt>/services/zoe-data/.env && chmod 600 …` — or it
+records `status: error`. The copy is gitignored, so the tree still records clean; recipes:
+[merge-and-deploy.md](merge-and-deploy.md) → *Landing a voice-path PR*. Scheduled daily off-peak via the
 `scripts/setup/systemd/zoe-voice-regression.{service,timer}` templates (operator installs to
 `~/.config/systemd/user/`). Numbers are RELATIVE (warm harness) — used for *drift vs baseline*, not
 as live performance.
@@ -244,7 +249,10 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   `services/livekit/config.yaml` (the on-demand container's serving config). **Read the next section
   before treating a green gate on those three as verification;**
   override `ZOE_VOICE_GATE_PATHS`), it asserts a **fresh** (`< ZOE_VOICE_GATE_MAX_AGE_H`, default 24h)
-  **passing** artifact **matching the current baseline** before the restart — else it fails loudly
+  **passing** artifact **matching the current baseline** and **bound to the deployed tree**
+  (`--expect-tree-of <target>`: that exact commit, or a clean run on a byte-identical tree — the
+  PR head of an up-to-date squash merge; since the 2026-09-28 incident, see
+  [merge-and-deploy.md](merge-and-deploy.md) → *Landing a voice-path PR*) before the restart — else it fails loudly
   (non-zero exit) and the deploy is refused. Non-voice deploys are a no-op pass. **It never runs the
   heavy Kokoro harness** (that would OOM the box under flock) — it only reads the artifact the gate
   produced. Standing rule: *any mandatory loop/gate/job must emit a heartbeat that something checks.*
