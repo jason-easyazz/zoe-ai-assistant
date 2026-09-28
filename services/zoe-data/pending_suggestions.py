@@ -25,6 +25,25 @@ _DEFAULT_EXPIRE_TURNS = 6
 _JUNK_CONTACT_NAMES = frozenset({"user", "zoe"})
 
 
+# Users whose pending `person_create` offer was SHOWN to the brain (surfaced into
+# a prompt) since their last per-user-turn aging tick. In-process: zoe-data runs
+# a single uvicorn worker, and the tick (latent_intent_detector.detect_and_store)
+# runs post-turn in that same process. It makes "shown" and "aged" one fact on
+# every path: the tick may skip a DEFERRED (continuity) turn only when nothing
+# showed an offer that turn — a core-brain packet, the recall_memory tool, any
+# builder — so an offer that is shown always ages (Greptile #1768).
+_SHOWN_SINCE_TICK: set[str] = set()
+
+
+def consume_offer_shown_mark(user_id: str) -> bool:
+    """True when an offer was shown to ``user_id`` since the last aging tick;
+    clears the mark (the tick calls this exactly once per user turn)."""
+    if user_id in _SHOWN_SINCE_TICK:
+        _SHOWN_SINCE_TICK.discard(user_id)
+        return True
+    return False
+
+
 def is_junk_contact_name(name: str) -> bool:
     """True when `name` must never be proposed/saved as a contact."""
     return (name or "").strip().lower() in _JUNK_CONTACT_NAMES
@@ -288,6 +307,8 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
         logger.warning(
             "pending_suggestions.surface_pending_contacts_for_prompt failed for "
             "user=%s — contact offers NOT surfaced: %s", user_id, exc)
+    if out:
+        _SHOWN_SINCE_TICK.add(user_id)
     return out
 
 

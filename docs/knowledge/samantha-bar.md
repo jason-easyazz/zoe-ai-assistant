@@ -239,8 +239,9 @@ Fixes:
   the seam skips the offer block and logs `SEAM_OFFER user=… deferred=1
   reason=continuity`. A continuity turn is decided by the trigger
   (`is_continuity_turn`), not by a packet coming back, so an empty or failed packet still
-  defers. The per-turn offer ager skips the same turns, so a run of emotional turns cannot
-  expire an offer it hid.
+  defers, and a core-brain packet built for a continuity turn defers too. The per-turn offer
+  ager skips a turn only when the offer was really hidden (a continuity turn with no offer
+  shown on any path), so a hidden offer never expires unseen and a shown one always ages.
   The next non-emotional turn offers it.
 
 Variants, five samples each, sent to the sidecar directly (replay isolation) with the

@@ -94,7 +94,8 @@ class _Svc:
         return []
 
 
-async def _compose(monkeypatch, rows, *, mode="continuity", suggest=False, surfaced=None):
+async def _compose(monkeypatch, rows, *, mode="continuity", suggest=False, surfaced=None,
+                   message=ASK_WORRY):
     for flag in ("ZOE_EMOTIONAL_RECALL_ENABLED", "ZOE_MEMORY_COMPOSE_ENABLED"):
         monkeypatch.delenv(flag, raising=False)
     if suggest:
@@ -109,7 +110,7 @@ async def _compose(monkeypatch, rows, *, mode="continuity", suggest=False, surfa
 
     monkeypatch.setattr(pending_suggestions, "surface_pending_contacts_for_prompt", surface)
     monkeypatch.setattr(memories, "_svc", lambda: _Svc(rows))
-    return await memories.memory_for_prompt(user_id="demo-a", message=ASK_WORRY, limit=12,
+    return await memories.memory_for_prompt(user_id="demo-a", message=message, limit=12,
                                             mode=mode, _=None)
 
 
@@ -164,10 +165,11 @@ async def test_continuity_packet_omits_the_offer_fold_and_does_not_surface(monke
 
 @pytest.mark.asyncio
 async def test_relevance_packet_still_folds_the_offer(monkeypatch):
-    """Negative control for the test above: same flags, relevance mode folds."""
+    """Negative control for the test above: same flags, a relevance packet for a
+    non-emotional turn folds."""
     surfaced: list = []
     res = await _compose(monkeypatch, [HOME, WORRY], mode="relevance", suggest=True,
-                         surfaced=surfaced)
+                         surfaced=surfaced, message="What's on my calendar this week?")
     assert "[pending-contact]" in res["packet"] and "Marisol" in res["packet"]
     assert surfaced == ["demo-a"]
 
@@ -366,3 +368,109 @@ async def test_negative_control_aging_on_deferred_turns_expires_the_offer(monkey
     wires = await _run_turns(monkeypatch, store, [ASK_WORRY, "I'm so stressed", "Today was rough",
                                                   "Can you add milk to the shopping list?"])
     assert store.resolved and "Marisol" not in wires[3]
+
+
+# ── core (non-Flue) path: "shown" and "aged" are one fact (Greptile #1768) ──
+
+@pytest.fixture(autouse=True)
+def _clear_shown_marks():
+    pending_suggestions._SHOWN_SINCE_TICK.clear()
+    yield
+    pending_suggestions._SHOWN_SINCE_TICK.clear()
+
+
+class _FakeDb:
+    async def fetch(self, *a, **k):
+        return [{"id": "o1", "pre_filled_slots": json.dumps({"name": "Marisol",
+                                                            "relationship": "sister"}),
+                 "offer_phrase": "", "turns_elapsed": 1, "expire_after_turns": 6}]
+
+    async def execute(self, *a, **k):
+        return None
+
+
+def _real_surface_fake_db(monkeypatch):
+    """The REAL surface_pending_contacts_for_prompt (so its shown mark runs)
+    over a fake DB, and a counting ager + a silent detector."""
+    import contextlib
+
+    import latent_intent_detector as lid
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield _FakeDb()
+
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", ctx)
+    monkeypatch.setattr(lid, "_person_enabled", lambda: True)
+
+    async def no_detect(*a, **k):
+        return []
+
+    monkeypatch.setattr(lid, "detect", no_detect)
+    monkeypatch.setattr(lid, "_deterministic_person_proposals", no_detect)
+    aged: list = []
+
+    async def age(user_id):
+        aged.append(user_id)
+        return 0
+
+    monkeypatch.setattr(pending_suggestions, "age_person_offers_on_user_turn", age)
+    return lid, aged
+
+
+async def _core_packet(monkeypatch, message):
+    """The core brain's packet: zoe_core_client calls memory_for_prompt
+    in-process with the user's message and no mode (relevance)."""
+    for flag in ("ZOE_EMOTIONAL_RECALL_ENABLED", "ZOE_MEMORY_COMPOSE_ENABLED",
+                 "ZOE_SEAM_CONTINUITY_INJECT", "ZOE_SEAM_RECALL_INJECT"):
+        monkeypatch.delenv(flag, raising=False)
+    monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
+    monkeypatch.setattr(memories, "_svc", lambda: _Svc([HOME, WORRY]))
+    res = await memories.memory_for_prompt(user_id="demo-a", message=message, limit=12, _=None)
+    return res["packet"]
+
+
+@pytest.mark.asyncio
+async def test_core_path_emotional_turn_hides_the_offer_and_does_not_age_it(monkeypatch):
+    lid, aged = _real_surface_fake_db(monkeypatch)
+    packet = await _core_packet(monkeypatch, ASK_WORRY)
+    assert "Marisol" not in packet and "[pending-contact]" not in packet
+    await lid.detect_and_store(ASK_WORRY, user_id="demo-a", session_id="s1")
+    assert aged == []
+
+
+@pytest.mark.asyncio
+async def test_core_path_neutral_turn_shows_the_offer_and_ages_it(monkeypatch):
+    lid, aged = _real_surface_fake_db(monkeypatch)
+    msg = "What's on my calendar this week?"
+    packet = await _core_packet(monkeypatch, msg)
+    assert "Marisol" in packet and "[pending-contact]" in packet
+    await lid.detect_and_store(msg, user_id="demo-a", session_id="s1")
+    assert aged == ["demo-a"]
+
+
+@pytest.mark.asyncio
+async def test_offer_shown_on_an_emotional_turn_still_ages(monkeypatch):
+    """The invariant itself: if ANY builder showed the offer this turn (e.g. the
+    sidecar's recall_memory tool, whose query is not the user's words), the
+    turn ages it even though the user's message is a continuity statement."""
+    lid, aged = _real_surface_fake_db(monkeypatch)
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    assert await pending_suggestions.surface_pending_contacts_for_prompt("demo-a")
+    await lid.detect_and_store(ASK_WORRY, user_id="demo-a", session_id="s1")
+    assert aged == ["demo-a"]
+    # the mark is consumed: the next, hidden, emotional turn does not age
+    await lid.detect_and_store(ASK_WORRY, user_id="demo-a", session_id="s1")
+    assert aged == ["demo-a"]
+
+
+@pytest.mark.asyncio
+async def test_negative_control_without_the_shown_mark_a_shown_offer_stops_aging(monkeypatch):
+    """Proves the test above measures the fix: ignore the shown mark and an
+    offer shown on an emotional turn is not aged (the Greptile stale-offer bug)."""
+    lid, aged = _real_surface_fake_db(monkeypatch)
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.setattr(pending_suggestions, "consume_offer_shown_mark", lambda uid: False)
+    await pending_suggestions.surface_pending_contacts_for_prompt("demo-a")
+    await lid.detect_and_store(ASK_WORRY, user_id="demo-a", session_id="s1")
+    assert aged == []

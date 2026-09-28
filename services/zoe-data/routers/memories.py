@@ -858,9 +858,24 @@ async def memory_for_prompt(
     # not lost: it is not surfaced here, so a not-yet-seen offer does not start
     # aging (surfacing marks it; the per-user-turn ager counts surfaced offers
     # only) and the next non-emotional turn offers it as usual.
-    if not continuity:
+    # The same deferral applies wherever the packet is built for a continuity
+    # TURN — the core brain's in-process packet and memory.ts pass the user's
+    # message in relevance mode — decided by the one trigger predicate the seam
+    # and the offer ager use (Greptile #1768).
+    if not continuity and not _is_continuity_turn(message, user_id):
         result = await _fold_pending_contact_offers(result, user_id)
     return result
+
+
+def _is_continuity_turn(message: str, user_id: str) -> bool:
+    """``zoe_flue_client.is_continuity_turn`` (pure trigger predicate), False
+    if it cannot be evaluated — an unknown turn folds offers as before."""
+    try:
+        from zoe_flue_client import is_continuity_turn
+
+        return is_continuity_turn(message if isinstance(message, str) else "", user_id)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @router.post("/backfill-contacts")
