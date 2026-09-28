@@ -4529,8 +4529,8 @@ def migrate_mempalace_legacy_records(default_user_id: str = "family-admin") -> N
         return
     try:
         import datetime
-        from mempalace.palace import get_collection  # type: ignore[import]
-        col = get_collection(_MEMPALACE_DATA)
+        from memory_service import get_drawers_collection
+        col = get_drawers_collection(_MEMPALACE_DATA)
         old = col.get(where={"wing": "zoe"}, include=["documents", "metadatas"])
         ids = old.get("ids") or []
         docs = old.get("documents") or []
@@ -4551,6 +4551,6 @@ def migrate_mempalace_legacy_records(default_user_id: str = "family-admin") -> N
         with open(_MIGRATION_DONE_FLAG, "w") as f:
             f.write(f"migrated {len(ids)} records\n")
     except ImportError:
-        pass  # MemPalace not installed — nothing to migrate
+        pass  # chromadb not installed — nothing to migrate
     except Exception as exc:
         logger.warning("mempalace migration failed (non-fatal): %s", exc)

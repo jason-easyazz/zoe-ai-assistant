@@ -26,9 +26,12 @@ EMO_QUERIES = ["how have I been feeling lately", "what have I been stressed abou
 
 def _substrate():
     """Non-archived emotional_moment rows across all users."""
-    import chromadb
+    from pathlib import Path
 
-    col = chromadb.PersistentClient(path=MEMPALACE).get_collection("mempalace_drawers")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+    from palace_client import open_palace_client  # refuses a client/format mismatch (B0.8)
+
+    col = open_palace_client(MEMPALACE).get_collection("mempalace_drawers")
     got = col.get(where={"memory_type": "emotional_moment"}, include=["documents", "metadatas"])
     rows = [
         (d, m)

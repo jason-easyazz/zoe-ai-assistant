@@ -14,9 +14,10 @@ sys.path.insert(0, str(ZOE_DATA))
 
 
 def memory_quality_snapshot() -> dict:
-    import chromadb
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
+    from palace_client import open_palace_client  # refuses a client/format mismatch (B0.8)
 
-    client = chromadb.PersistentClient(path=str(pathlib.Path.home() / ".mempalace"))
+    client = open_palace_client(str(pathlib.Path.home() / ".mempalace"))
     col = client.get_collection("mempalace_drawers")
     results = col.get(include=["metadatas"])
     statuses: dict[str, int] = {}
