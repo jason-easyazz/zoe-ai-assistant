@@ -615,6 +615,38 @@ def _timer_minutes_value(raw: str) -> Optional[int]:
     return _TIMER_MINUTE_WORDS.get(s)
 
 
+# "who is <X>" claims a CONTACTS lookup only when <X> is shaped like a name or a
+# short person reference ("Marisol", "Sarah Jones", "my dentist"). A clause is
+# a question for the brain + recall packet: Samantha bar S1 "who is flying in on
+# Thursday, and where from?" became `No contacts found for "flying in on
+# thursday, and where from".` (2026-09-28).
+_WHO_IS_CLAUSE_WORDS = frozenset({
+    "today", "tonight", "tomorrow", "yesterday", "weekend", "monday", "tuesday",
+    "wednesday", "thursday", "friday", "saturday", "sunday", "and", "or",
+    "going", "coming", "flying", "arriving", "visiting", "staying", "driving",
+    "on", "in", "at", "from", "to", "with", "for", "about", "when", "where",
+    "why", "how", "what", "that", "this", "it", "there", "here", "the",
+})
+
+
+def _is_name_shaped(obj: str) -> bool:
+    """True when the object of "who is …" can be a contact name / person ref:
+    at most 4 words, no comma, first word not a verb-ing, and no clause word
+    (weekday/time, preposition, conjunction, wh-word). "my X" is always a
+    person reference ("my dentist", "my sister's husband")."""
+    o = obj.strip().rstrip("?.!").strip()
+    if not o or "," in o:
+        return False
+    words = o.split()
+    if len(words) > 4:
+        return False
+    if words[0] == "my":
+        return len(words) <= 3 and not (_WHO_IS_CLAUSE_WORDS & set(words[1:]))
+    if words[0].endswith("ing"):
+        return False
+    return not (_WHO_IS_CLAUSE_WORDS & set(words))
+
+
 def detect_intent(
     text: str,
     log_miss: bool = True,
@@ -916,7 +948,7 @@ def detect_intent(
         return Intent("people_search", {"query": m.group(1).strip()})
 
     m = re.match(r"^who is (.+)$", t)
-    if m:
+    if m and _is_name_shaped(m.group(1)):
         return Intent("people_search", {"query": m.group(1).strip()})
 
 

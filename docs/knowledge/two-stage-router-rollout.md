@@ -203,6 +203,14 @@ fixture `services/zoe-data/tests/fixtures/router_samantha_probe_vectors.json`.
 | S6 "Who is flying in on Thursday, and which city do I live in?" | calendar @ 0.728 | `show_calendar` ✗ | **still `show_calendar`** (above the floor) |
 | S8 "Remind me, who did I say is flying in on Thursday?" | reminders @ 0.9996 | `recall_memory` (the decoder rescues it) | unchanged |
 
+**The floor binds the keyword lanes too (INTENT_GATE, 2026-09-28).** A `low_conf`
+abstain only helps if nothing downstream answers deterministically anyway. After
+#1763 went live, S1 was still answered by the chat.py keyword lane ("who is <X>" →
+contacts lookup). `fast_tiers.intent_gate` now asks this head's stage-1 verdict
+(`router_two_stage.head_verdict`, numpy only) before any keyword intent executes;
+`chat_top`/`low_conf` or a confident different domain vetoes it. The contract is in
+`services/zoe-data/AGENTS.md`.
+
 The floor does not fix a CONFIDENT stage-1 miss: S6 is at 0.73 and S8 at
 0.9996, and no threshold can catch those. They go into the training data
 instead (below).

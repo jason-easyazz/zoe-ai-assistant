@@ -313,6 +313,35 @@ def sidecar_healthy(timeout: float = 2.0) -> bool:
         return False
 
 
+def head_verdict(vec) -> Optional[dict]:
+    """Stage 1 ONLY (no sidecar call): the head's verdict on `vec`.
+
+    {"domain": head_top, or "chat" when gated, "head_top", "head_conf",
+     "gated", "reason"} — the same gate as `decide()` (chat gate + the
+    ZOE_ROUTER_HEAD_MIN_CONF floor), at numpy cost. Used by the deterministic
+    keyword lanes (fast_tiers.intent_gate) so the head is the authority over a
+    keyword claim without paying the ~400 ms decode. None when the head is
+    unavailable. NEVER raises.
+    """
+    try:
+        import numpy as np
+
+        head = _ensure_head()
+        if head is None:
+            return None
+        proba = head.predict_proba(np.asarray(vec, dtype=np.float32)
+                                   .reshape(1, -1))[0]
+        i = int(proba.argmax())
+        top, conf = str(head.classes_[i]), float(proba[i])
+        reason = gate_reason(top, conf)
+        return {"domain": "chat" if reason else top, "head_top": top,
+                "head_conf": round(conf, 4), "gated": reason is not None,
+                "reason": reason}
+    except Exception as exc:
+        logger.warning("two_stage head_verdict failed (non-fatal): %s", exc)
+        return None
+
+
 def decide(text: str, vec) -> Optional[dict]:
     """Full two-stage decision for `text` given its (normalized) embedding.
 

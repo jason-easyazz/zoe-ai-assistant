@@ -1550,6 +1550,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_INTENT_ROUTER_GATE": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/fast_tiers.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_INTERNAL_TOKEN": {
         "defaults": [
           "''",
