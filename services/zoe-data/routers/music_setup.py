@@ -15,16 +15,23 @@ The token NEVER travels in a query string (nginx logs those): the phone link
 keeps it in the #fragment, POSTs carry it in the body, GETs in the
 ``X-Setup-Token`` header, and the panel's QR image is fetched by an opaque
 single-use handle (``setup_qr``).
+
+When the token was minted for an ``auth_handoff`` (the panel's authCard,
+``/api/handoff/start``), every phone step also reports to that handoff by the
+token's nonce so the panel card follows along live: the form loaded →
+``awaiting_phone``; a save / OAuth / browser sign-in began → ``completing``; the
+provider's own outcome → ``done``/``error``. Tokens minted by the legacy
+``/start`` have no handoff and report nothing.
 """
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import Response
 
+import auth_handoff
 import music_service
 import music_setup
 import setup_qr
@@ -35,18 +42,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/music/setup", tags=["music-setup"])
 
 
-def _base_url(request: "Request") -> str:
-    # The LAN HTTPS origin the phone will hit — same wifi as the panel, so the
-    # host the panel loaded from IS reachable by the phone. Prefer an explicit
-    # override; else derive from the incoming request (never a hardcoded IP).
-    override = os.environ.get("ZOE_PUBLIC_URL", "").strip()
-    if override:
-        return override.rstrip("/")
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
-    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
-    if host:
-        return f"{scheme}://{host}".rstrip("/")
-    return str(request.base_url).rstrip("/")
+_base_url = auth_handoff.phone_base_url  # one copy (was duplicated per router)
 
 
 def _setup_url(request: "Request", token: str, provider: str) -> str:
@@ -96,6 +92,13 @@ async def setup_qr_image(handle: str, request: Request) -> Response:
 
 # ── Phone endpoints — gated ONLY by the one-time token ───────────────────────
 
+_HELPER_DOWN = ("The YouTube Music helper isn't running yet — "
+                "ask your Zoe admin to start it, then try again.")
+
+
+def _provider_name(provider: str) -> str:
+    return next((p["name"] for p in music_service._SETUP_CATALOGUE if p["domain"] == provider), provider)
+
 _TOKEN_HEADER = Header(default="", alias="X-Setup-Token")
 
 
@@ -108,6 +111,7 @@ async def setup_form(token: str = _TOKEN_HEADER, provider: str = "") -> dict[str
     form = await music_service.provider_setup_form(provider)
     if form is None:
         return {"ok": False, "reason": "unknown provider"}
+    await auth_handoff.mark_ref("music", payload.get("n"), "awaiting_phone", "Finish on your phone")
     return {"ok": True, "form": form}
 
 
@@ -121,14 +125,16 @@ async def setup_save(payload: dict) -> dict[str, Any]:
     if tok is None or tok.get("p") != provider:
         return {"ok": False, "reason": "invalid or already-used setup link"}
     if not isinstance(values, dict):
+        await auth_handoff.complete_ref("music", tok.get("n"), {"ok": False, "detail": "Something went wrong — start again."})
         return {"ok": False, "reason": "bad values"}
     # YouTube Music can't log in without Zoe's local PO-token generator running.
     # Check it here so a stopped helper reads as an accurate, actionable message
     # rather than a misleading "check your details" credential error.
     if provider == music_service._YTMUSIC_DOMAIN and not await music_service._potoken_reachable(
             music_service._ytmusic_potoken_url()):
-        return {"ok": False, "reason": "The YouTube Music helper isn't running yet — "
-                "ask your Zoe admin to start it, then try again."}
+        await auth_handoff.complete_ref("music", tok.get("n"), {"ok": False, "detail": _HELPER_DOWN})
+        return {"ok": False, "reason": _HELPER_DOWN}
+    await auth_handoff.mark_ref("music", tok.get("n"), "completing", "Connecting…")
     # RE-AUTH refreshes the EXISTING instance in place. Without the instance_id,
     # save mints a fresh instance every time — so reconnecting (a cookie/Premium
     # refresh) would leave a duplicate YouTube Music provider behind. Pass the
@@ -136,8 +142,11 @@ async def setup_save(payload: dict) -> dict[str, Any]:
     existing = await music_service.provider_instance_id(provider)
     saved = await music_service.save_provider(provider, values, instance_id=existing)
     if not saved:
+        await auth_handoff.complete_ref("music", tok.get("n"), {"ok": False, "detail": "Couldn't connect — check your details and start again."})
         return {"ok": False, "reason": "couldn't connect — check your details"}
-    return {"ok": True, "provider": provider, "name": saved.get("name") or provider,
+    name = saved.get("name") or provider
+    await auth_handoff.complete_ref("music", tok.get("n"), {"ok": True, "detail": f"{name} is connected"})
+    return {"ok": True, "provider": provider, "name": name,
             "reconnected": bool(existing)}
 
 
@@ -154,6 +163,10 @@ async def oauth_start(payload: dict) -> dict[str, Any]:
         return {"ok": False, "reason": "invalid or expired setup link"}
     import music_oauth
     res = await music_oauth.start_oauth(provider)
+    if res.get("auth_url"):
+        # completing FIRST: an attempt that already ended reports the moment it is watched
+        await auth_handoff.mark_ref("music", tok.get("n"), "completing", "Signing in on your phone…")
+        music_oauth.watch(res.get("oauth_id"), auth_handoff.reporter("music", tok.get("n"), _provider_name(provider)))
     if not res.get("auth_url"):
         return {"ok": False, "reason": res.get("error") or "couldn't start sign-in"}
     return {"ok": True, "oauth_id": res["oauth_id"], "auth_url": res["auth_url"]}
@@ -191,12 +204,13 @@ async def browser_start(payload: dict) -> dict[str, Any]:
     # The PO-token generator must be up or MA will reject the harvested cookie —
     # check now so a stopped helper reads as an accurate, actionable message.
     if not await music_service._potoken_reachable(music_service._ytmusic_potoken_url()):
-        return {"ok": False, "reason": "The YouTube Music helper isn't running yet — "
-                "ask your Zoe admin to start it, then try again."}
+        return {"ok": False, "reason": _HELPER_DOWN}
     import ytmusic_signin
     res = await ytmusic_signin.start_session()
     if not res.get("ok"):
         return {"ok": False, "reason": res.get("message") or "couldn't start sign-in"}
+    await auth_handoff.mark_ref("music", tok.get("n"), "completing", "Signing in on your phone…")
+    ytmusic_signin.watch(res.get("session_id"), auth_handoff.reporter("music", tok.get("n"), _provider_name(provider)))
     return {"ok": True, "session_id": res["session_id"], "view_url": res["view_url"],
             "expires_in": res.get("expires_in")}
 

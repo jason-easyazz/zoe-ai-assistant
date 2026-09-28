@@ -1559,9 +1559,8 @@
         "readers": [
           "scripts/maintenance/check_emotional_thread.py",
           "services/zoe-data/auth.py",
+          "services/zoe-data/auth_handoff.py",
           "services/zoe-data/mcp_server.py",
-          "services/zoe-data/music_setup.py",
-          "services/zoe-data/smart_home_setup.py",
           "services/zoe-data/zoe_core_client.py"
         ],
         "typed_env": true
@@ -2877,6 +2876,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/auth_handoff.py",
           "services/zoe-data/routers/system.py"
         ],
         "typed_env": false
@@ -3134,6 +3134,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/auth_handoff.py",
           "services/zoe-data/routers/system.py"
         ],
         "typed_env": false
@@ -3504,8 +3505,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/routers/music_setup.py",
-          "services/zoe-data/routers/smart_home_setup.py"
+          "services/zoe-data/auth_handoff.py"
         ],
         "typed_env": false
       },
@@ -4153,6 +4153,16 @@
           "services/zoe-data/web_search_provider.py"
         ],
         "typed_env": true
+      },
+      "ZOE_TELEGRAM_BOT_TOKEN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/auth_handoff.py"
+        ],
+        "typed_env": false
       },
       "ZOE_TELEGRAM_BOT_USERNAME": {
         "defaults": [

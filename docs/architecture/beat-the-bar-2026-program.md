@@ -100,7 +100,8 @@ State as of **2026-09-28 08:30 AWST**:
    worktree first, or the probe records an error) and `gh run rerun`. Recipe:
    [merge-and-deploy.md](../knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 4. **Next engineering, in order:**
-   1. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).
+   1. **B7.5** app-connection handoff engine — (a)+(b) built, #1752 pending land; needs a
+      live-panel check when the Pi is on (push, `/wake`, a real Telegram send). Next: (c).
    2. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
       week).
    3. The `samantha_bar` harness — v0 built (B3.11 🔨); first baseline after the B0.8 cutover (live 2026-09-28) is verified.
@@ -955,7 +956,7 @@ State as of **2026-09-28 08:30 AWST**:
 - B7.2 ⬜ Ask-card conversation mode (PR-1a) → retire `voice.html`.
 - B7.3 ⬜ Voice-authored automations via HA (Gemini for Home) — later.
 - B7.4 ⬜ "Ask about what you see" via the panel camera, one-shot.
-- B7.5 ⬜ **NEXT** — **App-connection handoff engine (QR + send-to-phone)** — VISION principle 8 (#1729; Jason,
+- B7.5 🔨 (a) ✅ (b) ✅ pending land · (c) ⬜ — **App-connection handoff engine (QR + send-to-phone)** — VISION principle 8 (#1729; Jason,
   2026-09-27): app/account sign-ins show a QR on the panel and finish on the phone, and the
   panel card reflects completion live. Today the music QR (the reference flow) never learns it
   finished, and the token/QR mechanics are copied three times (`music_setup`, `smart_home_setup`,
@@ -978,6 +979,13 @@ State as of **2026-09-28 08:30 AWST**:
 
   Step (a) builds on those handles. #1741's "set up music" reply already points panel chat at
   Music → Browse → Sources.
+  **(a)+(b) built (#1752, pending land):** `auth_handoff.py` + `auth_handoffs` (alembic
+  0031) + `routers/handoff.py` + the touch `authCard`; YouTube Music, Spotify/Tidal/Deezer
+  OAuth and the Qobuz form report into it; "Send to my phone" goes via Telegram when
+  `ZOE_TELEGRAM_BOT_TOKEN` is set and the member is linked. The duplicate `/js/qrcode.min.js`
+  is removed. Operator step: set `ZOE_TELEGRAM_BOT_TOKEN` in the zoe-data env. Live-panel
+  checks are pending (the Pi is off). SSOT:
+  [docs/knowledge/app-connection-handoff.md](../knowledge/app-connection-handoff.md).
 
 ### B8 — Self-evolution (nobody else has it)
 - B8.1 ⬜ Rebuild the executor on Flue 2 (`init()` handles + `durable: true` tools);
@@ -1112,6 +1120,8 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-28 — B7.5 (a)+(b) built in #1752: the handoff engine, the live panel
+  `authCard`, the music flows migrated, and send-to-phone via Telegram. (c) is still open.
 - 2026-09-28 — B3.11 Samantha bar harness v0 (`samantha_bar.py`, #1751): 8-scenario memory/companion regression gate with baseline; plus the internal-token `forget-synthetic` route for demo_/test_ teardown; first baseline after the B0.8 cutover.
 - 2026-09-28 — B5.7 Kokoro dedicated venv #1750, applied live under the brain-window lock: the
   sidecar runs `~/.zoe/venvs/kokoro-py310` (system 3.10 + import blocker for sklearn/pandas/pyarrow).

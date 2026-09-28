@@ -17,12 +17,12 @@ the home. Full auto-discovery is deferred until the bridge grows a pairing API.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import Response
 
+import auth_handoff
 import setup_qr
 import smart_home_setup
 
@@ -31,17 +31,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/home/setup", tags=["home-setup"])
 
 
-def _base_url(request: "Request") -> str:
-    # The LAN HTTPS origin the phone will hit — same wifi as the panel. Prefer an
-    # explicit override; else derive from the incoming request (never a hardcoded IP).
-    override = os.environ.get("ZOE_PUBLIC_URL", "").strip()
-    if override:
-        return override.rstrip("/")
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
-    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
-    if host:
-        return f"{scheme}://{host}".rstrip("/")
-    return str(request.base_url).rstrip("/")
+_base_url = auth_handoff.phone_base_url  # one copy (was duplicated per router)
 
 
 def _setup_url(request: "Request", token: str) -> str:

@@ -35,6 +35,7 @@
         'panel_update_field',       // voice-fill a field in the active action form
         'panel_list_update',        // add/remove/set items in the active shopping list form
         'panel_close_action_form',  // programmatically close the action form
+        'handoff_update',           // app-connection handoff status (B7.5) → the panel's authCard
     ]);
 
     const state = {
@@ -966,6 +967,14 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 // 800 ms delay — long enough for the ack fetch (keepalive) to fire before the
                 // page unloads, preventing the action from staying stuck in 'queued' status.
                 setTimeout(() => { window.location.href = page; }, 800);
+                return { status: 'success' };
+            }
+
+            if (actionType === 'handoff_update') {
+                // Relay to the estate's authCard (touch/home.html), which paints
+                // only the handoff it is showing. Its push_ id keeps it out of
+                // the ui-action ledger.
+                window.dispatchEvent(new CustomEvent('zoe:handoff', { detail: payload }));
                 return { status: 'success' };
             }
 

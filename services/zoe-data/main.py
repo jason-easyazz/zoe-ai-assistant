@@ -2215,6 +2215,8 @@ app.include_router(capability_matrix_router)
 app.include_router(music_router)
 from routers.music_setup import router as music_setup_router
 app.include_router(music_setup_router)
+from routers.handoff import router as handoff_router
+app.include_router(handoff_router)
 from routers.smart_home_setup import router as smart_home_setup_router
 app.include_router(smart_home_setup_router)
 app.include_router(skybridge_router)
