@@ -23,7 +23,7 @@ passed before and does not pass now.
 python3 scripts/perf/samantha_bar.py --dry-run                 # the plan; no network, no writes
 ZOE_PERF=1 \
   flock /tmp/zoe-voice-harness.lock nice -n 5 \
-  python3 scripts/perf/samantha_bar.py --compare-baseline      # exit 1 on a regression
+  python3 scripts/perf/samantha_bar.py --compare-baseline      # exit 1 on a regression; exit 2 (refused) with no valid baseline
 ... --record-baseline      # this run becomes the bar (refused if it errored or teardown is unproven)
 ... --samples 3            # judged scenarios ask 3x in fresh sessions, majority vote (odd only)
 ... --teardown-only        # clean up a run that was killed before its own teardown
@@ -36,6 +36,11 @@ Artifacts in `~/.cache/zoe/`:
   `dirty`, `clean_verified`) for the checkout the live service runs from; also the judge
   rubric sha and the per-scenario verdicts.
 - `samantha_bar_pending_teardown.json`: exists only while a teardown is unproven.
+
+`--compare-baseline` REFUSES before writing anything when the baseline is missing, unreadable,
+malformed JSON, or lacks a `scenarios` object (`load_baseline`) — a run that compares against
+nothing can never be red, so it would otherwise report `ok`. The first run is `--record-baseline`
+alone; it overwrites a malformed baseline.
 
 Exit codes: 0 = ran with no regression; 1 = regression; 2 = refused, error, or teardown not
 proven; 3 = harness lock held. Without `ZOE_PERF=1` it prints a skip notice, exits 0 and
@@ -141,9 +146,12 @@ removed in Postgres.
 - **Effect:** the same `MemoryService.delete_user` as the admin forget, with
   `actor="internal:forget-synthetic"`. It is idempotent. The response is
   `{"user_id", "removed", "mode": "synthetic"}`.
-- **Audit:** every call that reaches the id check logs one WARNING line,
-  `MEMORY_FORGET_SYNTHETIC user=<id> removed=<n>` or `MEMORY_FORGET_SYNTHETIC refused
-  user=<id> reason=…`, to the zoe-data app log.
+- **Audit:** every call that reaches the id check logs one WARNING-or-higher line to the
+  zoe-data app log: `MEMORY_FORGET_SYNTHETIC user=<id> removed=<n> outcome=ok`,
+  `MEMORY_FORGET_SYNTHETIC refused user=<id> reason=…`, or (ERROR) `MEMORY_FORGET_SYNTHETIC
+  user=<id> outcome=error (deletion may be partial) error=…` when `delete_user` raises — it
+  deletes memory rows before audit rows, so a raise can be a partial delete; the route still
+  answers 400.
 - **Tests:** `services/zoe-data/tests/test_memory_forget_synthetic.py`, including a
   negative control that loosens the pattern.
 

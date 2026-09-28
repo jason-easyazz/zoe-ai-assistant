@@ -115,6 +115,24 @@ def test_refusal_and_success_are_audited(svc, caplog):
     assert any("user=demo_bar_0a1b2c3d removed=4" in m for m in lines)
 
 
+def test_failed_delete_is_audited_and_still_400(svc, monkeypatch, caplog):
+    """A raise inside delete_user can be a PARTIAL delete (memory rows gone,
+    audit rows not) — the outcome must reach the audit log, not just the 400."""
+    import logging
+    from memory_service import MemoryServiceError
+
+    async def boom(user_id, *, actor):
+        raise MemoryServiceError("delete_user failed: audit table locked")
+    monkeypatch.setattr(svc, "delete_user", boom)
+    with caplog.at_level(logging.WARNING, logger=memories_mod.logger.name):
+        r = _post("demo_bar_0a1b2c3d", HDR)
+    assert r.status_code == 400 and "audit table locked" in r.json()["detail"]
+    lines = [rec for rec in caplog.records if "MEMORY_FORGET_SYNTHETIC" in rec.getMessage()]
+    assert len(lines) == 1 and lines[0].levelno >= logging.WARNING
+    msg = lines[0].getMessage()
+    assert "user=demo_bar_0a1b2c3d" in msg and "outcome=error" in msg and "audit table locked" in msg
+
+
 # ── the rule itself, and its negative control ─────────────────────────────
 
 IDS_REFUSED_BY_THE_NARROW_RULE = ["probe-x", "ci_run", "e2e-1", "bench-1", "DEMO_x"]

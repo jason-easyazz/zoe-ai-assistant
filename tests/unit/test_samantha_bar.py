@@ -446,6 +446,67 @@ def test_unproven_teardown_is_an_error_and_keeps_pending(monkeypatch, tmp_path):
     assert (tmp_path / "p.json").exists() and not (tmp_path / "b.json").exists()
 
 
+# ── compare mode needs a REAL baseline (a None baseline is never red) ──────
+
+def _all_pass(monkeypatch):
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [
+        {"id": s, "verdict": "PASS", "evidence": {}} for s in sb.SCENARIO_IDS])
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+
+
+def test_load_baseline_names_each_problem(tmp_path):
+    p = tmp_path / "b.json"
+    assert sb.load_baseline(p) == (None, f"no baseline at {p} — run --record-baseline first")
+    p.write_text("{not json")
+    base, why = sb.load_baseline(p)
+    assert base is None and "not valid JSON" in why and str(p) in why
+    p.write_text(json.dumps({"revision": {}}))  # right type, no scenarios
+    assert sb.load_baseline(p)[0] is None and "scenarios" in sb.load_baseline(p)[1]
+    p.write_text(json.dumps(_base(S1="PASS")))
+    assert sb.load_baseline(p) == (_base(S1="PASS"), None)
+
+
+@pytest.mark.parametrize("content", [None, "{not json", "[]", '{"scenarios": "PASS"}'])
+def test_compare_mode_refuses_without_a_valid_baseline(monkeypatch, tmp_path, content, capsys):
+    args = _gates_open(monkeypatch, tmp_path)
+    if content is not None:
+        (tmp_path / "b.json").write_text(content)
+    calls = _must_not_run(monkeypatch)
+    assert sb.main(args + ["--compare-baseline"]) == 2
+    assert calls == []  # refused BEFORE any demo user was written
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "refused" and str(tmp_path / "b.json") in res["reason"]
+    assert "REFUSED" in capsys.readouterr().err
+    assert not (tmp_path / "t.jsonl").exists()
+
+
+def test_record_baseline_with_none_present_is_ok(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    _all_pass(monkeypatch)
+    assert sb.main(args + ["--record-baseline"]) == 0
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "ok" and not res["compare"]["has_baseline"]
+    assert json.loads((tmp_path / "b.json").read_text())["scenarios"] == {
+        s: "PASS" for s in sb.SCENARIO_IDS}
+
+
+def test_record_baseline_overwrites_a_malformed_one(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    (tmp_path / "b.json").write_text("{not json")
+    _all_pass(monkeypatch)
+    assert sb.main(args + ["--record-baseline"]) == 0
+    assert "scenarios" in json.loads((tmp_path / "b.json").read_text())
+
+
+def test_compare_with_a_valid_baseline_and_no_regression_is_ok(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    (tmp_path / "b.json").write_text(json.dumps(_base(S1="PASS")))
+    _all_pass(monkeypatch)
+    assert sb.main(args + ["--compare-baseline"]) == 0
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "ok" and res["compare"]["has_baseline"]
+
+
 # ── forget path selection (synthetic by default, admin when a session is given) ──
 
 class _RecLive(sb.Live):

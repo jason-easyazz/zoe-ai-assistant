@@ -905,8 +905,12 @@ async def forget_synthetic_user(target_user: str, request: Request):
     try:
         removed = await _svc().delete_user(target_user, actor="internal:forget-synthetic")
     except MemoryServiceError as exc:
+        # delete_user removes memory rows before audit rows, so a raise here can
+        # be a PARTIAL delete — it must be visible in the audit log, not just a 400.
+        logger.error("MEMORY_FORGET_SYNTHETIC user=%s outcome=error (deletion may be partial) "
+                     "error=%s", target_user, exc)
         raise HTTPException(status_code=400, detail=str(exc))
-    logger.warning("MEMORY_FORGET_SYNTHETIC user=%s removed=%d", target_user, removed)
+    logger.warning("MEMORY_FORGET_SYNTHETIC user=%s removed=%d outcome=ok", target_user, removed)
     return {"user_id": target_user, "removed": removed, "mode": "synthetic"}
 
 

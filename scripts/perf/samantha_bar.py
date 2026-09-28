@@ -49,8 +49,9 @@ Usage:
 
 Artifacts (~/.cache/zoe/): samantha_bar_last.json (full evidence),
 samantha_bar_trend.jsonl (one line per run), samantha_bar_baseline.json.
-Exit: 0 ran, no regression | 1 regression vs baseline | 2 refused / error /
-teardown not proven | 3 harness lock held.
+Exit: 0 ran, no regression | 1 regression vs baseline | 2 refused (gate, or
+--compare-baseline with no valid baseline) / error / teardown not proven |
+3 harness lock held.
 """
 from __future__ import annotations
 
@@ -422,6 +423,26 @@ def score_s8(reply_sister: str, reply_dad: str) -> tuple[str, dict]:
 
 def verdict_map(results: list[dict]) -> dict[str, str]:
     return {r["id"]: r["verdict"] for r in results}
+
+
+def load_baseline(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """Read a baseline file. Returns (baseline, None) or (None, problem).
+
+    A usable baseline is a JSON object with a ``scenarios`` mapping (what
+    ``make_baseline`` writes). Missing, unreadable, malformed, or the wrong
+    shape all come back as a named problem so compare mode can REFUSE rather
+    than silently compare against nothing (a None baseline is never red)."""
+    if not path.exists():
+        return None, f"no baseline at {path} — run --record-baseline first"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as e:
+        return None, f"baseline {path} unreadable: {e}"
+    except json.JSONDecodeError as e:
+        return None, f"baseline {path} is not valid JSON ({e.msg} at line {e.lineno})"
+    if not isinstance(data, dict) or not isinstance(data.get("scenarios"), dict):
+        return None, f"baseline {path} has no 'scenarios' object — re-record it with --record-baseline"
+    return data, None
 
 
 def compare_baseline(current: dict[str, str], baseline: dict[str, Any] | None) -> dict[str, Any]:
@@ -1097,7 +1118,8 @@ def main(argv: list[str] | None = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print the plan; no network, no writes")
     ap.add_argument("--compare-baseline", action="store_true",
-                    help="exit 1 when a previously PASSING scenario no longer passes")
+                    help="exit 1 when a previously PASSING scenario no longer passes; "
+                         "REFUSES (exit 2) when no valid baseline exists — --record-baseline first")
     ap.add_argument("--record-baseline", action="store_true",
                     help="save this run as the baseline (only when teardown is proven)")
     ap.add_argument("--samples", type=int, default=1, help="asks per judged scenario (majority vote)")
@@ -1141,6 +1163,12 @@ def main(argv: list[str] | None = None) -> int:
     live = Live(token, admin, dsn, args.keep_replies)
 
     # Gates -----------------------------------------------------------------
+    baseline, baseline_problem = load_baseline(args.baseline)
+    if args.compare_baseline and baseline is None:
+        return _refuse(args, f"--compare-baseline needs a valid baseline: {baseline_problem}",
+                       revision)
+    if baseline_problem and args.baseline.exists():
+        log(f"baseline ignored ({baseline_problem})")
     if in_nightly_window(dt.datetime.now()):
         return _refuse(args, "inside (or within 30 min of) the 01:45-03:15 nightly window", revision)
     busy, detail = deploy_in_progress()
@@ -1200,12 +1228,6 @@ def main(argv: list[str] | None = None) -> int:
             args.pending.unlink(missing_ok=True)
         log(f"teardown proven={td['proven']} {'' if td['proven'] else td['problems']}")
 
-    baseline = None
-    if args.baseline.exists():
-        try:
-            baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            baseline = None
     cmp = compare_baseline(verdict_map(results), baseline)
     status = "error" if (run_error or not td["proven"] or len(results) != len(SCENARIO_IDS)) \
         else ("regression" if (args.compare_baseline and cmp["red"]) else "ok")
