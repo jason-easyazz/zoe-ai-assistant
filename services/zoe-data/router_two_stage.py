@@ -32,7 +32,8 @@ Env (defaults = the proven config):
                                   head top: below it the turn falls through
                                   to the brain + recall packet, logged
                                   gated=true reason=low_conf; 0 = off, i.e.
-                                  the pre-2026-09-28 behaviour. Measured in
+                                  the pre-2026-09-28 behaviour; outside
+                                  0.0-1.0 → WARNING + 0.70. Measured in
                                   docs/knowledge/two-stage-router-rollout.md
                                   → "Low-confidence floor".)
   ZOE_ROUTER_TWO_STAGE_TIMEOUT_S  1.5   (strict client timeout → brain)
@@ -138,7 +139,8 @@ def min_conf() -> float:
     labs/router-90-campaign ship point and stays the documented baseline;
     this floor is the Samantha-bar S1 fix layered on top of it, so setting
     ZOE_ROUTER_HEAD_MIN_CONF=0 restores the old behaviour exactly.
-    An unparseable value keeps the measured default (fail toward the brain).
+    An unparseable, non-finite or out-of-range (not 0.0-1.0) value logs a
+    WARNING and keeps the measured default.
     """
     # literal default so tools/audit/flag_inventory.py records it; pinned
     # equal to MIN_CONF_DEFAULT by tests/test_router_low_conf_floor.py
@@ -149,9 +151,11 @@ def min_conf() -> float:
         val = float(raw)
     except ValueError:
         val = float("nan")
-    if not math.isfinite(val):
-        logger.warning("bad ZOE_ROUTER_HEAD_MIN_CONF=%r — using %.2f",
-                       raw, MIN_CONF_DEFAULT)
+    # A probability floor: outside [0, 1] is a typo, not a policy ("1.70"
+    # would silently abstain EVERY tool decision) — warn and keep the default.
+    if not (math.isfinite(val) and 0.0 <= val <= 1.0):
+        logger.warning("bad ZOE_ROUTER_HEAD_MIN_CONF=%r (need 0.0-1.0) — "
+                       "using %.2f", raw, MIN_CONF_DEFAULT)
         return MIN_CONF_DEFAULT
     return val
 

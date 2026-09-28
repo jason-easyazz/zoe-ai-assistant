@@ -119,7 +119,13 @@ recall packet).
   `low_conf`). It appears in the decision dict and in the `router_two_stage` log
   line and shadow JSONL.
 - Default **0.70**. **`0` restores the pre-2026-09-28 behaviour exactly.** An
-  unparseable or NaN value keeps 0.70.
+  unparseable, non-finite or out-of-range value (outside 0.0–1.0 — `1.70` would
+  abstain every tool decision) logs a WARNING and keeps 0.70.
+- The voice Skybridge router gate (`skybridge_service.skybridge_router_gate`)
+  treats a `low_conf` abstain as a chat verdict and **vetoes** the fast path;
+  only `below_gate` (the 0.5 gate) keeps its `router_unsure` allow. Otherwise
+  an S1-shaped ask with a calendar cue would get the deterministic calendar
+  reply back from Skybridge.
 - No per-domain overrides. No domain had enough low-confidence decisions (at
   most 14 each) to justify its own number.
 - The downstream expert per-domain thresholds

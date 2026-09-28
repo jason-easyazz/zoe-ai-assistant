@@ -113,10 +113,29 @@ def test_gate_reasons_are_distinct(monkeypatch):
     assert router_two_stage.decide("whats on", VEC)["reason"] == "below_gate"
 
 
-@pytest.mark.parametrize("raw", ["abc", "nan", "inf", "  "])
-def test_unparseable_floor_keeps_the_measured_default(monkeypatch, raw):
+@pytest.mark.parametrize("raw", ["abc", "nan", "inf", "  ", "1.70", "-0.2", "70"])
+def test_bad_or_out_of_range_floor_keeps_the_measured_default(monkeypatch, caplog, raw):
+    """1.70 would silently abstain EVERY tool decision; -0.2 is a typo."""
     monkeypatch.setenv("ZOE_ROUTER_HEAD_MIN_CONF", raw)
-    assert router_two_stage.min_conf() == router_two_stage.MIN_CONF_DEFAULT
+    with caplog.at_level("WARNING", logger="router_two_stage"):
+        assert router_two_stage.min_conf() == router_two_stage.MIN_CONF_DEFAULT
+    if raw.strip():
+        assert "ZOE_ROUTER_HEAD_MIN_CONF" in caplog.text and repr(raw) in caplog.text
+
+
+@pytest.mark.parametrize("raw,want", [("0", 0.0), ("0.0", 0.0), ("1", 1.0),
+                                      ("0.65", 0.65)])
+def test_in_range_floor_is_honoured_including_the_edges(monkeypatch, raw, want):
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_MIN_CONF", raw)
+    assert router_two_stage.min_conf() == want
+
+
+def test_out_of_range_floor_does_not_disable_tools(monkeypatch):
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_MIN_CONF", "1.70")
+    _set_head(monkeypatch, _FakeHead([0.93, 0.02, 0.03, 0.02]))
+    _fake_sidecar(monkeypatch)
+    d = router_two_stage.decide("what have I got on thursday", VEC)
+    assert d["gated"] is False and d["tool"] == "show_calendar"
 
 
 def test_floor_is_in_the_flag_inventory():

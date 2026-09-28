@@ -1486,6 +1486,15 @@ def skybridge_router_gate(
         router_domain == "chat"
         and decision.get("gated")
         and str(decision.get("head_top") or "") not in ("", "chat")
+        # Only the 0.5 stage-1 chat gate (`below_gate`; a record without a
+        # reason predates router_two_stage.gate_reason and can only be that)
+        # means "no opinion". `low_conf` (ZOE_ROUTER_HEAD_MIN_CONF) is a
+        # DELIBERATE send-to-the-brain verdict: allowing here would hand the
+        # Samantha-bar S1 shape ("who is flying in Thursday…" with a calendar
+        # cue, head people @ 0.54) straight back to a deterministic calendar
+        # reply (Greptile, #1763). `chat_top` cannot reach here (head_top is
+        # non-chat) and is a chat verdict anyway.
+        and (decision.get("reason") or "below_gate") == "below_gate"
     ):
         # Stage 1 fell under its confidence gate on a non-chat domain: the router
         # is UNSURE, not saying "chat". Typically garbled STT ("shammy my lists")
