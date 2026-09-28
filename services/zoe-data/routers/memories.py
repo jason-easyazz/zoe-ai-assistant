@@ -720,12 +720,22 @@ def _continuity_focus(recent: list[MemoryRef], refs: list[dict[str, Any]]) -> di
     emotional and made it into the packet. {} when there is none — a neutral
     recent fact is never promoted to a check-in ("how is the haircut going?").
     A 4B model given eleven bullets and a soft "connect if relevant" rarely
-    picks the worry; given one concrete item it does."""
+    picks the worry; given one concrete item it does.
+
+    A bare mood report ("User has been feeling a bit on edge today") is never
+    the focus either (``memory_digest.fact_has_topic``): it is usually what the
+    user is saying right now — the digest stores today's mood statement seconds
+    after the turn, so it becomes the newest emotional row and would displace
+    the real worry on the very next mood turn ("how is feeling on edge going?").
+    Measured live on the Samantha bar S4 round 3: sample 0 checked in about the
+    interview, samples 1-2 (after the mood row landed) did not."""
+    from memory_digest import fact_has_topic
+
     kept = {r.get("id") for r in refs}
     for ref in recent:
         if ref.id in kept and _is_emotional_row(ref):
             text = re.sub(r"\s+", " ", ref.text or "").strip()[:200]
-            if text:
+            if text and fact_has_topic(text):
                 return {"text": text, "affect": memory_affect(ref)}
     return {}
 
@@ -842,8 +852,30 @@ async def memory_for_prompt(
 
     # P1 (ADR-contacts-production-hardening): surface pending "add contact?"
     # offers so the flue brain can proactively confirm them. Flag-gated no-op.
-    result = await _fold_pending_contact_offers(result, user_id)
+    # NOT in continuity mode: a mood turn's one job is the check-in, and with the
+    # word-for-word directive in the packet the reply ended in "add Marisol as a
+    # contact?" on every sample (Samantha bar S4 round 3). The offer is DEFERRED,
+    # not lost: it is not surfaced here, so a not-yet-seen offer does not start
+    # aging (surfacing marks it; the per-user-turn ager counts surfaced offers
+    # only) and the next non-emotional turn offers it as usual.
+    # The same deferral applies wherever the packet is built for a continuity
+    # TURN — the core brain's in-process packet and memory.ts pass the user's
+    # message in relevance mode — decided by the one trigger predicate the seam
+    # and the offer ager use (Greptile #1768).
+    if not continuity and not _is_continuity_turn(message, user_id):
+        result = await _fold_pending_contact_offers(result, user_id)
     return result
+
+
+def _is_continuity_turn(message: str, user_id: str) -> bool:
+    """``zoe_flue_client.is_continuity_turn`` (pure trigger predicate), False
+    if it cannot be evaluated — an unknown turn folds offers as before."""
+    try:
+        from zoe_flue_client import is_continuity_turn
+
+        return is_continuity_turn(message if isinstance(message, str) else "", user_id)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @router.post("/backfill-contacts")

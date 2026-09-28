@@ -274,12 +274,28 @@ async def detect_and_store(user_message: str, *, user_id: str, session_id: str) 
     # per real user chat/voice turn, which makes it the sanctioned aging tick —
     # packet builds no longer age offers (QA review F5a: per-fold aging killed
     # offers before a human ever saw them). Best-effort, never blocks detection.
+    # EXCEPT when the offer was DEFERRED this turn: on a continuity turn every
+    # packet builder hides offers (Samantha bar S4 round 3), and aging a hidden
+    # offer would let a run of emotional turns expire it unseen. Deferred means
+    # BOTH: the turn is a continuity turn AND nothing showed an offer this turn
+    # (pending_suggestions' shown mark, set wherever an offer is surfaced) — so
+    # an offer that WAS shown, on any path, always ages (Greptile #1768).
     if _person_enabled():
         try:
-            from pending_suggestions import age_person_offers_on_user_turn
-            await age_person_offers_on_user_turn(user_id)
-        except Exception as exc:
-            logger.debug("latent_intent_detector: offer aging failed: %s", exc)
+            from pending_suggestions import consume_offer_shown_mark
+            from zoe_flue_client import is_continuity_turn
+
+            shown = consume_offer_shown_mark(user_id)
+            deferred = not shown and is_continuity_turn(user_message, user_id)
+        except Exception as exc:  # noqa: BLE001 — unknown → age as before
+            logger.debug("latent_intent_detector: continuity check failed: %s", exc)
+            deferred = False
+        if not deferred:
+            try:
+                from pending_suggestions import age_person_offers_on_user_turn
+                await age_person_offers_on_user_turn(user_id)
+            except Exception as exc:
+                logger.debug("latent_intent_detector: offer aging failed: %s", exc)
 
     suggestions = await detect(user_message, user_id=user_id, session_id=session_id)
     # Merge the reliable deterministic person proposals (flag-gated), deduping
