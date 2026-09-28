@@ -240,9 +240,10 @@ def test_matching_revision_clears():
     assert PR_SHA[:8] in why
 
 
-def test_revision_binding_is_opt_in_for_the_deploy_path():
-    """The deploy path binds by incoming DIFF plus freshness and passes no
-    expected revision; adding the PR-side check must not start blocking deploys."""
+def test_revision_binding_is_opt_in_at_the_function_level():
+    """evaluate() binds only when asked. Both callers now ask — the PR gate with
+    --expect-revision, the deploy gates with --expect-tree-of (pinned in
+    test_deploy_voice_gate_binding.py) — so this is the unbound `--require` path."""
     ok, _ = vgc.evaluate(artifact(), now_epoch=NOW, max_age_s=DAY,
                          expect_revision=None)
     assert ok is True
@@ -386,6 +387,241 @@ def test_probe_without_a_service_dir_records_no_revision(tmp_path):
     vrp.emit_result(args, status="pass", summary={"n_samples": 20},
                     said_vs_did=[], speed_deltas={}, baseline={})
     assert _json.loads(args.results.read_text())["revision"] is None
+
+
+# --- deploy gate: the artifact is bound to the DEPLOYED TREE ------------------
+# Incident 2026-09-28: the deploy gate checked freshness + status only, so a
+# replay produced for an UNRELATED earlier landing cleared #1745 (a voice-path
+# pin) and the deploy moved code with no evidence for it. `--expect-tree-of
+# <target>` binds the artifact to the code going live. By TREE, not commit: a
+# squash merge mints a new sha, but for an up-to-date branch its tree is
+# byte-identical to the PR head's — so the PR-head-bound artifact still lands,
+# and is refused whenever the deployed code differs.
+def _git_env():
+    import os as _os
+    return {**_os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+
+
+def _rev(repo, ref):
+    import subprocess as sp
+    return sp.run(["git", "-C", str(repo), "rev-parse", ref],
+                  capture_output=True, text=True, check=True).stdout.strip()
+
+
+def squash_repo(tmp_path):
+    """prev -> PR head (touches a voice file) on a branch, then the SQUASH MERGE:
+    a new commit on main with prev as parent and the PR head's exact tree. Plus an
+    UNRELATED commit whose tree differs (the incident's artifact source).
+    Returns (repo, shas) with keys prev/head/merge/other."""
+    import subprocess as sp
+    repo = tmp_path / "sq"
+    (repo / "services" / "zoe-data").mkdir(parents=True)
+    env = _git_env()
+    sp.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "services" / "zoe-data" / "requirements-py312.txt").write_text("chromadb==0.6.3\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "prev"], check=True, env=env)
+    prev = _rev(repo, "HEAD")
+    sp.run(["git", "-C", str(repo), "checkout", "-qb", "pr"], check=True)
+    (repo / "services" / "zoe-data" / "requirements-py312.txt").write_text("chromadb==1.5.9\n")
+    sp.run(["git", "-C", str(repo), "commit", "-qam", "pr head"], check=True, env=env)
+    head = _rev(repo, "HEAD")
+    merge = sp.run(["git", "-C", str(repo), "commit-tree", f"{head}^{{tree}}", "-p", prev,
+                    "-m", "squash (#1745)"], capture_output=True, text=True, check=True,
+                   env=env).stdout.strip()
+    sp.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
+    (repo / "unrelated.txt").write_text("another landing\n")
+    sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-qm", "unrelated"], check=True, env=env)
+    other = _rev(repo, "HEAD")
+    sp.run(["git", "-C", str(repo), "reset", "-q", "--hard", prev], check=True)
+    return repo, {"prev": prev, "head": head, "merge": merge, "other": other}
+
+
+def artifact_for(repo, commit, *, dirty=False, clean_verified=True, **kw):
+    art = artifact(**kw)
+    art["revision"] = {"commit": commit, "tree": _rev(repo, f"{commit}^{{tree}}"),
+                       "dirty": dirty, "clean_verified": clean_verified,
+                       "service_dir": f"{repo}/services/zoe-data"}
+    return art
+
+
+def _tree_of(repo, sha):
+    return (sha, vgc.resolve_tree(repo, sha))
+
+
+def test_squash_merge_has_a_new_sha_but_the_same_tree(tmp_path):
+    """The premise the tree binding rests on — checked, not assumed."""
+    repo, s = squash_repo(tmp_path)
+    assert s["merge"] != s["head"]
+    assert vgc.resolve_tree(repo, s["merge"]) == vgc.resolve_tree(repo, s["head"])
+    assert vgc.resolve_tree(repo, s["other"]) != vgc.resolve_tree(repo, s["merge"])
+
+
+def test_deploy_refuses_an_artifact_for_a_different_tree(tmp_path):
+    """THE incident: fresh, passing, current-baseline evidence for an UNRELATED
+    landing must not clear a voice-path deploy."""
+    repo, s = squash_repo(tmp_path)
+    ok, why = vgc.evaluate(artifact_for(repo, s["other"]), now_epoch=NOW, max_age_s=DAY,
+                           expect_tree_of=_tree_of(repo, s["merge"]))
+    assert ok is False
+    assert "DIFFERENT" in why and s["merge"][:8] in why and s["other"][:8] in why
+
+
+def test_deploy_accepts_the_pr_head_artifact_when_the_tree_is_identical(tmp_path):
+    """Positive control, and the reason the binding is by tree: the up-to-date
+    squash merge is the same code as the PR head the probe ran against."""
+    repo, s = squash_repo(tmp_path)
+    ok, why = vgc.evaluate(artifact_for(repo, s["head"]), now_epoch=NOW, max_age_s=DAY,
+                           expect_tree_of=_tree_of(repo, s["merge"]))
+    assert ok is True, why
+    assert "tree-identical" in why and s["merge"][:8] in why
+
+
+def test_deploy_accepts_an_artifact_for_the_exact_target_commit(tmp_path):
+    """Recipe (a): the probe was re-run against a checkout of the merged commit."""
+    repo, s = squash_repo(tmp_path)
+    ok, why = vgc.evaluate(artifact_for(repo, s["merge"]), now_epoch=NOW, max_age_s=DAY,
+                           expect_tree_of=_tree_of(repo, s["merge"]))
+    assert ok is True, why
+    assert f"bound to {s['merge'][:8]}" in why
+
+
+def test_deploy_refuses_a_dirty_run_even_on_the_same_tree(tmp_path):
+    """A dirty worktree's recorded tree is HEAD's, not what ran — a tree match
+    must not launder it."""
+    repo, s = squash_repo(tmp_path)
+    ok, why = vgc.evaluate(artifact_for(repo, s["head"], dirty=True), now_epoch=NOW,
+                           max_age_s=DAY, expect_tree_of=_tree_of(repo, s["merge"]))
+    assert ok is False and "DIRTY" in why
+    ok, why = vgc.evaluate(artifact_for(repo, s["merge"], dirty=True), now_epoch=NOW,
+                           max_age_s=DAY, expect_tree_of=_tree_of(repo, s["merge"]))
+    assert ok is False and "DIRTY" in why
+
+
+def test_deploy_refuses_unverifiable_cleanliness_on_the_same_tree(tmp_path):
+    repo, s = squash_repo(tmp_path)
+    ok, why = vgc.evaluate(artifact_for(repo, s["head"], clean_verified=False),
+                           now_epoch=NOW, max_age_s=DAY,
+                           expect_tree_of=_tree_of(repo, s["merge"]))
+    assert ok is False and "could NOT verify" in why
+
+
+def test_deploy_refuses_an_unattributed_artifact(tmp_path):
+    """A pre-revision artifact (no `revision`) was exactly what cleared #1745."""
+    repo, s = squash_repo(tmp_path)
+    ok, why = vgc.evaluate(artifact(), now_epoch=NOW, max_age_s=DAY,
+                           expect_tree_of=_tree_of(repo, s["merge"]))
+    assert ok is False and "NO revision" in why
+
+
+def test_unresolvable_target_tree_is_not_a_match(tmp_path):
+    """If the target's tree cannot be resolved, only an exact commit match may
+    clear — `None == None` must never read as the same tree."""
+    art = artifact_with_revision(commit=OTHER_SHA)
+    art["revision"]["tree"] = None
+    ok, why = vgc.evaluate(art, now_epoch=NOW, max_age_s=DAY,
+                           expect_tree_of=(PR_SHA, None))
+    assert ok is False and "could not resolve" in why
+    assert vgc.evaluate(artifact_with_revision(commit=PR_SHA), now_epoch=NOW,
+                        max_age_s=DAY, expect_tree_of=(PR_SHA, None))[0] is True
+
+
+def test_tree_binding_does_not_rescue_a_bad_artifact(tmp_path):
+    repo, s = squash_repo(tmp_path)
+    tgt = _tree_of(repo, s["merge"])
+    for bad in (artifact_for(repo, s["head"], age_h=48.0),
+                artifact_for(repo, s["head"], status="skip")):
+        assert vgc.evaluate(bad, now_epoch=NOW, max_age_s=DAY, expect_tree_of=tgt)[0] is False
+
+
+def _write_artifact(tmp_path, art):
+    import json as _json
+    p = tmp_path / "artifact.json"
+    p.write_text(_json.dumps(art))
+    return p
+
+
+def _now_art(repo, commit, **kw):
+    art = artifact_for(repo, commit, **kw)
+    art["timestamp"] = art["created_at"] = _iso(time.time() - 600)
+    return art
+
+
+def test_deploy_cli_end_to_end_mirrors_the_incident(tmp_path, capsys):
+    """Through main() exactly as deploy.yml calls it: `--diff prev..target
+    --expect-tree-of target`, with the target's tree resolved from --repo."""
+    repo, s = squash_repo(tmp_path)
+    base = ["--repo", str(repo), "--diff", f"{s['prev']}..{s['merge']}",
+            "--baseline", str(tmp_path / "no-baseline.json"),
+            "--expect-tree-of", s["merge"]]
+    # the incident: an unrelated landing's artifact -> REFUSED
+    assert vgc.main(base + ["--artifact", str(_write_artifact(tmp_path, _now_art(repo, s["other"])))]) == 1
+    err = capsys.readouterr().err
+    assert "DIFFERENT" in err and "voice-gate-deploy" in err, err
+    _assert_recipe_copies_env(err, "~/.worktrees/voice-gate-deploy")
+    # the PR head's artifact, squash tree-identical -> ALLOWED
+    assert vgc.main(base + ["--artifact", str(_write_artifact(tmp_path, _now_art(repo, s["head"])))]) == 0
+    assert "tree-identical" in capsys.readouterr().out
+    # dirty -> REFUSED
+    assert vgc.main(base + ["--artifact", str(_write_artifact(
+        tmp_path, _now_art(repo, s["head"], dirty=True)))]) == 1
+
+
+def _assert_recipe_copies_env(text, wt):
+    """Greptile P1 on #1754: a fresh worktree has no gitignored .env, and the
+    recipe's explicit --service-dir bypasses the probe's live-env fallback, so a
+    recipe without this copy step records status=error and can never unwedge."""
+    dst = f"{wt}/services/zoe-data/.env"
+    copy = f"cp -n /home/zoe/assistant/services/zoe-data/.env {dst} && chmod 600 {dst}"
+    assert copy in text, text
+    assert text.index(copy) < text.index(f"--service-dir {wt}/services/zoe-data"), text
+
+
+def test_pr_gate_recipe_copies_the_env_before_the_probe(tmp_path, capsys):
+    assert vgc.main(["--require", "--expect-revision", PR_SHA,
+                     "--artifact", str(tmp_path / "none.json")]) == 1
+    _assert_recipe_copies_env(capsys.readouterr().err, "~/.worktrees/voice-gate")
+
+
+def test_deploy_cli_non_voice_diff_needs_no_artifact(tmp_path):
+    """The binding must not tax ordinary deploys: a non-voice range is still a
+    no-op pass, with no artifact at all."""
+    repo, s = squash_repo(tmp_path)
+    assert vgc.main(["--repo", str(repo), "--diff", f"{s['prev']}..{s['other']}",
+                     "--expect-tree-of", s["other"],
+                     "--artifact", str(tmp_path / "none.json")]) == 0
+
+
+def test_the_two_bindings_are_mutually_exclusive(tmp_path):
+    with pytest.raises(SystemExit):
+        vgc.main(["--require", "--expect-revision", PR_SHA, "--expect-tree-of", PR_SHA])
+
+
+def test_malformed_expect_tree_of_is_refused_loudly(tmp_path, capsys):
+    assert vgc.main(["--require", "--expect-tree-of", "HEAD",
+                     "--artifact", str(tmp_path / "none.json")]) == 1
+    assert "40-char hex" in capsys.readouterr().err
+
+
+def test_probe_artifact_satisfies_the_tree_binding_after_a_squash(tmp_path):
+    """Producer + consumer together: the REAL probe's recorded `revision.tree`
+    (not a hand-built dict) is what the deploy gate compares."""
+    import json as _json
+    import subprocess as sp
+    repo, s = squash_repo(tmp_path)
+    sp.run(["git", "-C", str(repo), "checkout", "-q", s["head"]], check=True)
+    args = _Args(tmp_path)
+    args.service_dir = str(repo / "services" / "zoe-data")
+    vrp.emit_result(args, status="pass", summary={"n_samples": 20},
+                    said_vs_did=[], speed_deltas={}, baseline={})
+    payload = _json.loads(args.results.read_text())
+    assert payload["revision"]["tree"] == vgc.resolve_tree(repo, s["merge"])
+    assert vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
+                        expect_tree_of=_tree_of(repo, s["merge"]))[0] is True
+    assert vgc.evaluate(payload, now_epoch=time.time(), max_age_s=DAY,
+                        expect_tree_of=_tree_of(repo, s["other"]))[0] is False
 
 
 # --- changed-file list as DATA (the PR is never executed) -------------------

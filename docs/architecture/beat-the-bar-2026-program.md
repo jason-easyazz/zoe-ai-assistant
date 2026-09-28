@@ -92,6 +92,13 @@ State as of **2026-09-28 08:30 AWST**:
 
    The window frees ~2 GB. Hold the other PRs (drop `auto-merge`) while a voice PR lands, or
    it goes behind again.
+
+   **Since 2026-09-28 the DEPLOY gate is tree-bound too** (`--expect-tree-of`): the head-bound
+   artifact clears the deploy only if the squash merge is tree-identical to that head and
+   nothing merged after it before its deploy, and nothing overwrote the artifact (incl. the 04:30
+   nightly probe). Otherwise probe a checkout of the MERGED sha (copy the live `services/zoe-data/.env` into the
+   worktree first, or the probe records an error) and `gh run rerun`. Recipe:
+   [merge-and-deploy.md](../knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 4. **Next engineering, in order:**
    1. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).
    2. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
@@ -1096,6 +1103,20 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-28 (post-incident) — **the deploy voice gate binds the replay artifact to the deployed
+  tree.** Incident 08:14: #1745 (chromadb 1.5.9 pins in `requirements-py312.txt`, voice-path) was
+  expected to be refused at deploy until a replay for that commit existed. It was not: the gate
+  checked only that the artifact was fresh and passing, and a replay from an unrelated landing a few
+  hours earlier satisfied it. The deploy refreshed the venv and moved the code while the memory
+  store was still on the 0.6 format, and memory degraded for ~7 min. The format guard held, and
+  completing the swap recovered it. Fix: `deploy.yml` and `deploy_live.sh` pass
+  `voice_gate_check.py --expect-tree-of "$target"`. The gate accepts an artifact for that exact
+  commit, or a clean run whose recorded tree equals the target's tree. A squash merge mints a new
+  sha, so the tree match is what keeps PR-head-bound landings working. It holds only when the
+  merge is tree-identical (the branch was up to date) and nothing merged after it before its
+  deploy ran. Otherwise the probe must be re-run against the merged commit. An old live checker
+  that lacks the flag falls back to the stricter `--expect-revision`. Recorded in
+  `merge-and-deploy.md` → *Landing a voice-path PR* and in the root `AGENTS.md` voice-gate section.
 - 2026-09-28 (morning) — **B0.8 LIVE 08:21 AWST.** #1745 merged as `d346aa90` (08:13:45). Its
   deploy was NOT refused: the voice gate accepted a fresh (2.6 h) passing artifact bound to a
   different commit, so the venv (chromadb 1.5.9 + mempalace 3.10.0) and the code landed at 08:14
@@ -1105,8 +1126,7 @@ a decision input.
   swap with rollback `~/.mempalace.pre-b08-20260928-082034`, `/readyz` `self-recall ok`, timers
   re-armed; replay PASS 13/13 (brain 1414 ms, VAD 0.792); zoe-data RSS 1.33 GB; live recall
   parity vs the retained baseline PASS 20/20 identical order. Incident record
-  + lessons: incident-runbook §9. Fix in flight (another agent's PR): the voice gate binds the
-  replay artifact to the deployed tree. Runbook §5 now passes `--old-python` when the live venv
+  + lessons: incident-runbook §9. Fix: #1754 (entry above). Runbook §5 now passes `--old-python` when the live venv
   is already on 1.x. §0 and review §9 updated.
 - 2026-09-27/28 (overnight refresh, state as of 2026-09-28 02:30 AWST) — **the 09-27 wave
   landed: 24 PRs.** In merge order:
