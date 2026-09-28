@@ -219,7 +219,8 @@ test "$(git -C "$WT" rev-parse HEAD)" = "$MERGE_SHA"
 LIVE_HEAD=$(git -C /home/zoe/assistant rev-parse HEAD)
 test "$LIVE_HEAD" != "$MERGE_SHA"                       # live checkout must NOT be on the merged main yet
 test "$(gh run view "$DEPLOY_ID" --json conclusion --jq .conclusion)" = failure   # the refused run
-echo "preflight OK: D=$D DEPLOY_ID=$DEPLOY_ID (merge $MERGE_SHA; live tree at ${LIVE_HEAD:0:8})"
+echo "preflight OK: D=$D DEPLOY_ID=$DEPLOY_ID (merge $MERGE_SHA)"
+echo "PRE-CUTOVER live sha (keep for a §6 rollback): $LIVE_HEAD"
 exec 9>/tmp/zoe-brain-window.lock; flock -w 7200 9     # no replay window overlaps
 # Deploy exclusion across BOTH blocks: deploy.yml takes /tmp/zoe-deploy.lock before it resets the
 # live checkout. Blocks A and B are separate shells, so the lock is held by a small background
@@ -238,7 +239,7 @@ rm -f /tmp/zoe-b08-deploy-lock-holder.pid /tmp/zoe-b08-deploy-lock.acquired     
 # The new holder must ACQUIRE (flock -n exits at once if the lock is busy) and prove it with a marker.
 # (the holder loops on short sleeps: bash exec-optimises a trailing `sleep N`, which would replace
 #  the process and erase its argv[0] identity from /proc/<pid>/cmdline)
-( exec -a zoe-b08-deploy-lock-holder bash -c 'flock -n 8 && echo acquired > /tmp/zoe-b08-deploy-lock.acquired && while :; do sleep 60; done' ) 8>/tmp/zoe-deploy.lock &
+( exec -a zoe-b08-deploy-lock-holder bash -c 'flock -n 8 && echo acquired > /tmp/zoe-b08-deploy-lock.acquired && for _ in $(seq 1 240); do sleep 60; done' ) 8>/tmp/zoe-deploy.lock &   # bounded: 4 h max, then the lock frees itself
 MY_HOLDER=$!; echo "$MY_HOLDER" > /tmp/zoe-b08-deploy-lock-holder.pid
 sleep 2; test -f /tmp/zoe-b08-deploy-lock.acquired && kill -0 "$MY_HOLDER"   # lock OWNED by this attempt (else a deploy has it — do not proceed)
 STAGE=pre-stop
