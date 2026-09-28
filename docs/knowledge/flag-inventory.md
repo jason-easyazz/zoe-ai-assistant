@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-471 flags; 469 not documented in `.env.example`.
+475 flags; 473 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -445,6 +445,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_USE_CORE_BRAIN` | `'true'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_USE_OMNIGENT_EXECUTOR` | `'0'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_USE_PI_EXECUTOR` | `'false'` | no | NO | `services/zoe-data/pi_executor.py` |
+| `ZOE_VAD_CLEAN_FALL_CHUNKS` | `2` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VAD_CLEAN_MIN_SPEECH_MS` | `480` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VAD_CLEAN_TAIL_MS` | `0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_VAD_HESITATION_TAIL_MS` | `0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_VAD_SPEECH_THRESHOLD` | `'0.5'` | no | NO | `services/zoe-data/voice_vad.py` |
 | `ZOE_VAD_TAIL_DEEP_PROB` | `'0.10'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_VAD_TAIL_MS` | `0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |

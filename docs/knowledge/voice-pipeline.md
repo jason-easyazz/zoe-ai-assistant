@@ -1071,6 +1071,59 @@ Barge-in detected during playback (monitor, prob=0.99, th=0.75, t+1120ms, window
   the sustained-speech rule each turns a test red.
 - The replay gate cannot see this: it starts from saved recordings and stops before TTS.
 
+## Panel per-turn dead time — adaptive endpoint tail, cooldown, cap (2026-09-28)
+
+These are the daemon knobs between the user's last word and the next thing the panel does.
+They were measured on the 14 panel clips captured 2026-09-28 (18:24–18:27 and 20:43–20:45).
+The script replayed each clip's per-chunk Silero probabilities through the **real**
+`_Endpointer` with the live Pi config (`VAD_ENDPOINT_ENABLED=1`, `ZOE_VAD_TAIL_MS=640`).
+Clean-tail cut risk was checked the same way on the newest 400 corpus clips, 246 of which
+had speech after the wake pre-roll. The probabilities came from the v6.0 ONNX Silero on the
+Jetson, not the Pi's torch-hub copy, so read chunk counts as ±1.
+
+- **The endpoint is already ~0.7–0.9 s, not 1.5 s.** `silence_timeout=1.50s` in the
+  `Recorded …` line is the amplitude timeout used before any speech. After speech, the live
+  close is 640 ms of deep quiet (or 800 ms of any quiet). Silero decays through the ambiguous
+  band for 1–2 chunks before the deep count starts, so the measured gap from speech end to
+  close is **720–880 ms**.
+- **`ZOE_VAD_CLEAN_TAIL_MS`** (default 0 = off, behaviour unchanged). This is a clean stop: at most
+  `ZOE_VAD_CLEAN_FALL_CHUNKS` (2) ambiguous decay chunks, then nothing but deep quiet, after
+  at least `ZOE_VAD_CLEAN_MIN_SPEECH_MS` (480) of speech. When that holds, the recording
+  closes once the whole quiet run reaches this value. The floor is 500 ms, which rounds up
+  to 560 ms. At 560:
+  - **Today:** 10 of 11 endpointed turns would have closed earlier, by a median of 160 ms
+    (max 240), and none were cut. The other 3 clips were two 8 s cap hits and one with no
+    speech.
+  - **Corpus:** 124 of 246 turns closed earlier by a median of 160 ms, and **5 were cut
+    mid-sentence (2.0 %)**. Those were real 0.5–0.7 s pauses after long speech, which Silero
+    cannot tell apart from the end of a turn.
+  It stays off until the operator accepts that trade (see the PR). Stage it with
+  `ZOE_VAD_CLEAN_TAIL_MS=560` in `.env.voice`. Roll back by setting it to 0.
+- **`ZOE_VAD_HESITATION_TAIL_MS`** (default 0 = off). When a quiet run goes deep and then comes
+  back up into the ambiguous band (a breath or an "um"), the any-quiet limit becomes this
+  value, capped at 1.5 s. It only ever makes turns slower: on the corpus it made 20 of 246
+  close later. The captured clips cannot show whether it saves a cut, because they were
+  recorded behind the live endpoint. Treat it as an ear-tuning knob for someone who hesitates.
+- **`Recorded …` now logs `tail=clean|deep|quiet|hesitation|no_speech`.** It names the rule
+  that closed the recording, so a staged flag can be read from the log.
+- **`POST_PLAY_COOLDOWN_S` default is now 0.4 s (was 1.5).** It only gates the **wake word**
+  after a voice cycle or an announcement. It is not on the follow-up path, and it is not
+  barge-in. The 1.5 s dates from the Whisper era, when the echo of a reply re-woke the panel
+  and was transcribed as "yes" in a loop. What prevents that now:
+  - `voice_command()` ends with `oww.reset()`.
+  - A reply is followed by `POST_PLAY_TAIL_S`.
+  - The main loop sleeps 0.5 s before it reopens the wake stream.
+  So wake is scored no sooner than ~0.75 s plus the cooldown after Zoe's last sample.
+  **The Pi's `.env.voice` pins `POST_PLAY_COOLDOWN_S=1.5`, so the line must be removed or
+  changed at deploy.**
+- **`RECORD_SECONDS_MAX` default is now 12 s (was 8).** On 2026-09-28, 2 of 10 turns hit the 8 s
+  cap mid-sentence. STT costs ~0.25 s per second of clip, so only long turns pay for the extra
+  time. **`.env.voice` pins `RECORD_SECONDS_MAX=8`, so change it at deploy.**
+- Pinned by `tests/unit/test_voice_daemon_dead_time.py`, with negative controls for the floor,
+  the hesitation check, the speech minimum and the 1.5 s cap. The replay gate cannot see any
+  of this, because it starts from saved recordings. `scripts/perf/measure_endpointing.py` is the
+  endpointing instrument.
+
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
 `services/zoe-data/voice_turn.py` wraps pipecat's `smart-turn-v3.2-cpu.onnx`
