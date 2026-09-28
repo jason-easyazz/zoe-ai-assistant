@@ -17,10 +17,15 @@ import os
 import re
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from auth import get_current_user, require_admin, require_internal_token
+from auth import (
+    _has_valid_internal_token,
+    get_current_user,
+    require_admin,
+    require_internal_token,
+)
 from database import get_db
 from guest_policy import require_feature_access
 from memory_service import (
@@ -868,6 +873,99 @@ async def forget_user(
     except MemoryServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"user_id": target_user, "removed": removed}
+
+
+async def _registered_account(user_id: str) -> bool:
+    """True when Zoe Auth holds an account with this id.
+
+    Reads ``auth_users`` (zoe-auth's account store, same Postgres) through the
+    shared pool. NOT zoe-data's ``users`` table: ``/api/chat`` inserts a row there
+    for every id it sees, so a harness demo user is in ``users`` after its first
+    turn. Raises on any lookup failure — callers refuse (fail closed).
+    """
+    from db_pool import get_db_ctx  # deferred: keeps this module importable in unit tests
+
+    async with get_db_ctx() as db:
+        cur = await db.execute("SELECT 1 FROM auth_users WHERE user_id = ? LIMIT 1", (user_id,))
+        return (await cur.fetchone()) is not None
+
+
+@router.get("/capture-status")
+async def memory_capture_status(request: Request, user_id: str = Query(..., min_length=1)):
+    """Internal-token only: per-user counters of the post-turn memory capture
+    (``memory_capture_stats``: started / completed / failed / in_flight /
+    last_completed_at). No memory content. Lets a harness WAIT for a turn's
+    background extraction + digest to finish instead of sleeping — the chat
+    route schedules it with ``ensure_future``, so the HTTP turn proves nothing.
+    Missing header 401, wrong/unprovisioned token 403.
+    """
+    from memory_capture_stats import snapshot
+
+    if not request.headers.get("X-Internal-Token"):
+        raise HTTPException(status_code=401, detail="capture-status requires X-Internal-Token")
+    if not _has_valid_internal_token(request):
+        raise HTTPException(status_code=403, detail="capture-status: invalid X-Internal-Token")
+    return {"user_id": user_id, **snapshot(user_id)}
+
+
+@router.post("/users/{target_user}/forget-synthetic")
+async def forget_synthetic_user(target_user: str, request: Request):
+    """Hard-forget a SYNTHETIC test user's memory rows — harness teardown.
+
+    Same deletion as the admin ``/forget`` (``MemoryService.delete_user``: every
+    row owned by the id, any status, plus its audit rows; idempotent, a second
+    call returns ``removed: 0``). Differences, all fail-closed:
+      * auth is the internal token ONLY (``X-Internal-Token`` == ``ZOE_INTERNAL_TOKEN``)
+        — loopback alone is not enough; missing header 401, wrong/unprovisioned 403;
+      * the id must pass ``user_filters.synthetic_forget_refusal`` — harness-minted
+        ``demo_<tag>_<hex>`` / ``test_<tag>_<hex>`` only, not allowlisted, never a
+        guest sentinel — else 403 with the reason;
+      * the id must NOT be a registered Zoe Auth account (``auth_users`` — the
+        account store, not zoe-data's ``users`` mirror, which ``/api/chat`` fills
+        for every id it sees): a registered id is 403 ``refused_registered``, and
+        a lookup that FAILS is 409 ``refused_unverified`` — fail closed.
+    Every call that reaches the id check logs one ``MEMORY_FORGET_SYNTHETIC`` line
+    naming the id and the outcome.
+    """
+    from user_filters import synthetic_forget_refusal
+
+    if not request.headers.get("X-Internal-Token"):
+        raise HTTPException(status_code=401, detail="forget-synthetic requires X-Internal-Token")
+    if not _has_valid_internal_token(request):
+        raise HTTPException(
+            status_code=403,
+            detail="forget-synthetic: invalid X-Internal-Token (or ZOE_INTERNAL_TOKEN unprovisioned)",
+        )
+    refusal = synthetic_forget_refusal(target_user)
+    if refusal:
+        logger.warning("MEMORY_FORGET_SYNTHETIC refused user=%r reason=%s", target_user, refusal)
+        raise HTTPException(status_code=403, detail=f"forget-synthetic refused: {refusal}")
+    try:
+        registered = await _registered_account(target_user)
+    except Exception as exc:  # noqa: BLE001 — any lookup failure refuses (fail closed)
+        logger.error("MEMORY_FORGET_SYNTHETIC user=%s outcome=refused_unverified error=%s",
+                     target_user, exc)
+        raise HTTPException(
+            status_code=409,
+            detail="forget-synthetic refused: could not verify the id is not a registered account",
+        )
+    if registered:
+        logger.warning("MEMORY_FORGET_SYNTHETIC user=%s outcome=refused_registered", target_user)
+        raise HTTPException(
+            status_code=403,
+            detail="forget-synthetic refused: id belongs to a registered account — "
+                   "real users need the admin forget",
+        )
+    try:
+        removed = await _svc().delete_user(target_user, actor="internal:forget-synthetic")
+    except MemoryServiceError as exc:
+        # delete_user removes memory rows before audit rows, so a raise here can
+        # be a PARTIAL delete — it must be visible in the audit log, not just a 400.
+        logger.error("MEMORY_FORGET_SYNTHETIC user=%s outcome=error (deletion may be partial) "
+                     "error=%s", target_user, exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+    logger.warning("MEMORY_FORGET_SYNTHETIC user=%s removed=%d outcome=ok", target_user, removed)
+    return {"user_id": target_user, "removed": removed, "mode": "synthetic"}
 
 
 @router.post("/link-preview")
