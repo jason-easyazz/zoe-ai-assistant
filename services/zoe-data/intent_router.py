@@ -629,11 +629,36 @@ _WHO_IS_CLAUSE_WORDS = frozenset({
 })
 
 
-def _is_name_shaped(obj: str) -> bool:
+# Particles that make a lower-case "-ing" word a verb phrase ("flying IN",
+# "coming TO dinner", "picking UP the kids").
+_WHO_IS_VERB_PARTICLES = frozenset({
+    "in", "on", "at", "from", "to", "with", "over", "up", "down", "out", "off",
+    "by", "around", "back", "home", "for", "into", "tonight", "today", "tomorrow",
+})
+_WHO_IS_RAW_RE = re.compile(r"\bwho\s+is\s+(.+?)[\s?.!]*$", re.IGNORECASE)
+
+
+def _ing_is_verb(i: int, words: list[str], raw_words: list[str] | None) -> bool:
+    """A "-ing" token is a VERB only when it is lower-case as the user wrote it
+    AND it ends the phrase or a particle follows it ("who is coming", "flying
+    in"). A capitalised token is a name ("King", "Ming", "Browning"). Without
+    the raw casing (STT/lower-cased input) a lone "-ing" word stays ambiguous
+    and fails toward the brain, never toward a canned contacts miss."""
+    w = words[i]
+    if not w.endswith("ing"):
+        return False
+    raw = raw_words[i] if raw_words and i < len(raw_words) else w
+    if raw[:1].isupper():
+        return False
+    return i == len(words) - 1 or words[i + 1] in _WHO_IS_VERB_PARTICLES
+
+
+def _is_name_shaped(obj: str, raw_obj: str | None = None) -> bool:
     """True when the object of "who is …" can be a contact name / person ref:
-    at most 4 words, no comma, first word not a verb-ing, and no clause word
-    (weekday/time, preposition, conjunction, wh-word). "my X" is always a
-    person reference ("my dentist", "my sister's husband")."""
+    at most 4 words, no comma, no verb-phrase "-ing" (see `_ing_is_verb`), and
+    no clause word (weekday/time, preposition, conjunction, wh-word). "my X" is
+    always a person reference ("my dentist", "my sister's husband").
+    `raw_obj` is the same object with the user's casing, when available."""
     o = obj.strip().rstrip("?.!").strip()
     if not o or "," in o:
         return False
@@ -642,7 +667,12 @@ def _is_name_shaped(obj: str) -> bool:
         return False
     if words[0] == "my":
         return len(words) <= 3 and not (_WHO_IS_CLAUSE_WORDS & set(words[1:]))
-    if words[0].endswith("ing"):
+    raw_words = None
+    if raw_obj:
+        rw = raw_obj.strip().rstrip("?.!").strip().split()
+        if [x.lower() for x in rw] == words:
+            raw_words = rw
+    if any(_ing_is_verb(i, words, raw_words) for i in range(len(words))):
         return False
     return not (_WHO_IS_CLAUSE_WORDS & set(words))
 
@@ -948,7 +978,8 @@ def detect_intent(
         return Intent("people_search", {"query": m.group(1).strip()})
 
     m = re.match(r"^who is (.+)$", t)
-    if m and _is_name_shaped(m.group(1)):
+    _raw_who = _WHO_IS_RAW_RE.search(text or "") if m else None
+    if m and _is_name_shaped(m.group(1), _raw_who.group(1) if _raw_who else None):
         return Intent("people_search", {"query": m.group(1).strip()})
 
 
