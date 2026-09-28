@@ -29,6 +29,11 @@ export interface MockTurn {
   /** Stall before responding — used to force concurrent turns to interleave. */
   delayMs?: number;
   /**
+   * Pause between streamed text deltas — models llama-server's steady decode
+   * (~20-27 tok/s live) so a test can see WHEN each delta reaches the client.
+   */
+  deltaDelayMs?: number;
+  /**
    * Token usage to report on the final chunk. OMITTING IT IS NOT NEUTRAL: pi-ai
    * asks for usage (`stream_options: {include_usage: true}`) and its context
    * estimator is USAGE-ANCHORED — with any assistant message carrying non-zero
@@ -129,6 +134,7 @@ async function writeTurn(res: ServerResponse, turn: MockTurn): Promise<void> {
     // Split into several deltas so text_delta streaming is genuinely exercised.
     for (const piece of turn.text.match(/\S+\s*/g) ?? [turn.text]) {
       res.write(chunk({ content: piece }, null));
+      if (turn.deltaDelayMs) await new Promise((r) => setTimeout(r, turn.deltaDelayMs));
     }
   }
 

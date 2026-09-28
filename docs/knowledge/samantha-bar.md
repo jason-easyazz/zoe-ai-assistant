@@ -172,6 +172,47 @@ switch; each turn logs `SEAM_CONTINUITY user=… matched=… bullets=… chars=�
 Only the two S4 turns in the whole harness script match the trigger (checked against every
 `SAY_*`/`ASK_*`/`FILLER` line), so no other scenario's outbound message changes.
 
+**S4 round 2 (#1756 live, still FAIL 3/3 — root cause two, fix candidate implemented).** The
+round-1 injection fired live on every S4 ask (`SEAM_CONTINUITY … matched=True bullets=11`),
+so the block was not missing; it did not work. A demo-user reproduction on the live path
+showed three causes:
+1. The per-turn digest (`memory_digest.run_turn_digest`) stored the worry as the neutral fact
+   "User has a job interview at the aquarium on Friday." The feeling was gone (the old prompt
+   gave that exact fact on 3 of 3 samples).
+2. Because the fact was neutral, it did not rank as emotional. It fell outside the six
+   `(recent)` pins, behind the dad and home facts.
+3. A soft "connect if relevant" instruction over an 11-bullet block, placed before the user's
+   words, did not make the 4B model check in.
+
+Fixes:
+- (a) The digest prompt now keeps a feeling the user stated.
+- (b) The feeling is read from the user's own words at capture time (`extract_affect`) and
+  stored beside the fact. It is rendered as `(recent, felt anxious)` and counted as emotional.
+- (c) The block rides after the user's words and closes with one concrete ask about the top
+  recent emotional item.
+
+Variants against the reproduced crowded S4 flow (same seeds as the bar, backdated 26 h,
+brain-as-judge with the bar's rubric):
+
+| variant | S4 PASS |
+|---|---|
+| V0 prod as merged (live, end to end) | 0/3 |
+| V0 prod block, sent to the sidecar directly | 0/3 |
+| V1 (a) the fact keeps the feeling | 0/3 |
+| V2 (a)+(b) plus the felt tag | 0/3 |
+| **V3 (a)+(b)+(c), the implemented code** | **2/3, then 5/5** |
+| V4 (b)+(c) with the digest still flat | 3/3 |
+| V5 ask only, no bullets | 3/3, then 5/5 |
+| V6 recent bullets plus the ask | 3/5 |
+
+The new digest prompt gave "User is anxious about their job interview at the aquarium on
+Friday." on 3 of 3 samples. (c) is what moves the needle; (a) and (b) are what let the
+composer find the worry as the focus. `ZOE_SEAM_CONTINUITY_DEBUG` (default off, demo and test
+ids only) logs the block and the reply for tracing.
+
+Acceptance is unchanged: a post-deploy `--compare-baseline` must show S4 PASS with nothing
+regressing.
+
 Next targets, in order (tracker §0): (a) a **router confidence gate** — head decisions below
 ~0.6 fall through to the chat lane (brain + recall packet) instead of a deterministic tool,
 and the miss feeds the router self-train corpus; (b) **emotional continuity** for S4, with

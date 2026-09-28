@@ -546,12 +546,21 @@ class MemoryRef:
 _RECENT_SCAN_CAP = 300
 
 
+def memory_affect(ref: MemoryRef) -> str:
+    """The first-person feeling captured with this row (turn digest's
+    ``affect`` metadata, stored as ``candidate_affect``), or "". Sanitised to a
+    short lowercase word so it is safe to render inline."""
+    raw = str((ref.metadata or {}).get("candidate_affect") or "").strip().lower()
+    return raw if re.fullmatch(r"[a-z][a-z ]{0,23}", raw) else ""
+
+
 def is_emotional_memory(ref: MemoryRef) -> bool:
     """An `emotional_moment` row, or a row whose text carries an emotional cue
     ("I'm pretty anxious about…") — the 4B extractor often stores a worry as a
     plain fact, so the type alone would miss it. Single definition, shared with
     the for-prompt composer."""
-    if str((ref.metadata or {}).get("memory_type")) == "emotional_moment":
+    meta = ref.metadata or {}
+    if str(meta.get("memory_type")) == "emotional_moment" or memory_affect(ref):
         return True
     from memory_gate import message_needs_emotional_recall
 
@@ -1051,8 +1060,14 @@ class MemoryService:
         actor: str,
         edits: Optional[str] = None,
         note: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> Optional[MemoryRef]:
         """Approve / reject / edit a pending memory.
+
+        ``metadata`` (``edit`` only) is extra event metadata for the NEW row —
+        stored ``candidate_``-prefixed exactly like ``ingest(metadata=...)`` and
+        winning over the value carried forward from the edited row (e.g. the
+        turn digest's ``affect`` when an update supersedes a neutral fact).
 
         Returns None only when an AUTOMATIC actor (``MEMORY_OPT_OUT_SOURCES``)
         tries to ``edit`` an opted-out user's memory — the reconcile UPDATE
@@ -1128,6 +1143,7 @@ class MemoryService:
                 expires_at=current.metadata.get("expires_at"),
                 source_excerpt=current.metadata.get("source_excerpt"),
                 scope=current_scope,
+                extra_metadata=metadata,
                 idem_key=self._idempotency_key(
                     user_id,
                     mem_id,

@@ -1135,9 +1135,27 @@
   // Cancelled by: any touch, a follow-up voice turn, an open modal/command bar.
   // The Ask surface gets reading time (its answer is text you're mid-sentence in).
   var AUTO_HOME_MS=7000, AUTO_HOME_READ_MS=110, AUTO_HOME_MAX_MS=30000;
-  var _autoHomeT=null,_voiceScreen=false,_userTookOver=false;
+  // Voice-text lifecycle — how long a voice answer stays up once Zoe has
+  // finished and the mic re-opens (the daemon's follow-up window, or the next
+  // "let's talk" listen window):
+  //   VOICE_HOLD_MS      nobody speaks → the answer goes ~10 s later. It used to
+  //                      CANCEL the drift and nothing re-armed it, so the answer
+  //                      stayed until idle-sleep (never, in a lit room).
+  //   VOICE_CONV_HOLD_MS inside an open "let's talk" conversation (the server's
+  //                      voice:done carries conversation_mode) — covers the
+  //                      daemon's 12 s listen window plus a long utterance and
+  //                      STT, so the text survives between turns. It lapses on
+  //                      conversation_end, or after this long with no voice event
+  //                      (the daemon ends a conversation on silence without
+  //                      telling anyone).
+  // A new turn (transcript/thinking) cancels the clock; its answer re-arms it.
+  var VOICE_HOLD_MS=10000, VOICE_CONV_HOLD_MS=30000;
+  var _autoHomeT=null,_voiceScreen=false,_userTookOver=false,_voiceConvUntil=0;
+  function voiceConvOpen(){return _voiceConvUntil>Date.now();}
+  function voiceConvTouch(){if(voiceConvOpen())_voiceConvUntil=Date.now()+VOICE_CONV_HOLD_MS;}
   function cancelAutoHome(){if(_autoHomeT){clearTimeout(_autoHomeT);_autoHomeT=null;}}
-  function armAutoHome(){
+  // holdMs: an explicit dwell (the listen-window hold) instead of the reading-time one.
+  function armAutoHome(holdMs){
     cancelAutoHome();
     // A LIVE conversation is a destination, not a glance: never drift home
     // mid-sentence. convStop() re-arms the normal drift on exit.
@@ -1152,6 +1170,8 @@
       // ~110ms per character on top of the base dwell, capped — long answers
       // stay up long enough to finish reading.
       ms=Math.min(AUTO_HOME_MAX_MS,AUTO_HOME_MS+((o&&o.textContent||'').length*AUTO_HOME_READ_MS));}
+    if(holdMs>0)ms=holdMs;
+    if(voiceConvOpen())ms=Math.max(ms,VOICE_CONV_HOLD_MS);   // never drift between conversation turns
     _autoHomeT=setTimeout(function(){
       _autoHomeT=null;
       if(_userTookOver||!_voiceScreen||_cur==='home'||_cur==='sleep')return;
@@ -4325,16 +4345,22 @@
     listening:function(){orb.classList.add('listening');
       window.__voiceArrivedAt=0;   // a NEW turn started — the last arrival no longer owns responding events
       _userTookOver=false;         // a new turn hands the screen back to Zoe
-      cancelAutoHome();            // a follow-up is coming — hold the screen
+      voiceConvTouch();
+      // A follow-up MAY come — hold the screen, but only for a bounded window.
+      // The daemon closes an unanswered window silently, so an unbounded hold
+      // here is what left the last answer on screen forever.
+      armAutoHome(VOICE_HOLD_MS);
       if(_lisT)clearTimeout(_lisT);_lisT=setTimeout(function(){orb.classList.remove('listening');},20000);},
     transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);
       window.__voiceArrivedAt=0;   // new turn — see listening()
       _userTookOver=false;
+      voiceConvTouch();
       cancelAutoHome();
       if(t){window.__lastHeard=t;dockHeard(t);}},
-    thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');cancelAutoHome();
+    thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');voiceConvTouch();cancelAutoHome();
       var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
     responding:function(t){orb.classList.remove('listening');orb.classList.add('busy');
+      voiceConvTouch();
       if(!t)return;
       if(_cur==='ask'){askShowAnswer(window.__lastHeard||'',t);return;}
       // Domain commands navigate the panel (?heard&say&domain) — a page that
@@ -4348,7 +4374,10 @@
       // transcript arriving during the defer must not pair with this answer
       _askFallT=setTimeout(function(){_askFallT=null;askShowAnswer(heardNow,t);},1200);},
     // Zoe finished speaking: THIS is when the dwell clock should start.
-    done:function(){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);
+    // d = the voice:done payload; "let's talk" opens/closes a conversation here.
+    done:function(d){orb.classList.remove('listening');orb.classList.remove('busy');if(_lisT)clearTimeout(_lisT);
+      if(d&&d.conversation_end)_voiceConvUntil=0;
+      else if(d&&d.conversation_mode)_voiceConvUntil=Date.now()+VOICE_CONV_HOLD_MS;
       if(_cur!=='home'&&_cur!=='sleep'){_voiceScreen=true;armAutoHome();}}
   };
 
@@ -4516,6 +4545,6 @@
     }).catch(function(){});}catch(e){}
 })();
 </script>
-<script src="/js/touch-ui-executor.js?v=estate-3"></script>
+<script src="/js/touch-ui-executor.js?v=estate-4"></script>
 </body>
 </html>

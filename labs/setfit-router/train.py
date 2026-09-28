@@ -38,6 +38,12 @@ def embed(texts: list[str]) -> np.ndarray:
 
 def main():
     rows = [json.loads(l) for l in (HERE / "data/train.jsonl").read_text().splitlines() if l.strip()]
+    # data/misses.jsonl: hand-committed REAL misroutes (e.g. the Samantha-bar S1
+    # ask). Kept apart from train.jsonl because build_dataset.py regenerates that
+    # file and would silently drop them.
+    misses = HERE / "data/misses.jsonl"
+    if misses.exists():
+        rows += [json.loads(l) for l in misses.read_text().splitlines() if l.strip()]
     X_txt = [r["text"] for r in rows]
     y = np.asarray([r["label"] for r in rows])
     print(f"train rows: {len(rows)}")

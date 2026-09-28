@@ -13,7 +13,8 @@ validated on live traffic before it ever changes behavior.
 SetFit head (ZOE_ROUTER_HEAD=off|shadow|shadow2|active, default off): 'shadow'
 logs the logreg head's prediction + agreement per turn (utterance-hash only)
 and never routes. 'shadow2' computes + logs the FULL two-stage decision
-(router_two_stage: MLP top-3 shortlist + 0.5 chat gate + grammar-constrained
+(router_two_stage: MLP top-3 shortlist + 0.5 chat gate + 0.70 low-confidence
+floor (ZOE_ROUTER_HEAD_MIN_CONF) + grammar-constrained
 FunctionGemma sidecar on :11436) in a background thread — still never routes.
 'active' lets that two-stage decision pick the domain (proven 90.1%/0% chat-FP
 on the 81-case corpus, labs/router-90-campaign); ANY failure falls back to the
@@ -443,6 +444,7 @@ def _two_stage_rec(text: str, decision: Optional[dict], mode_: str,
         "shortlist": d.get("shortlist"),
         "head_conf": d.get("head_conf"),
         "gated": d.get("gated"),
+        "reason": d.get("reason"),
         "failed": decision is None,
         "two_stage_ms": d.get("ms"),
         "actual_routed": actual_routed,
@@ -481,7 +483,8 @@ class RouterDecision:
     """Public result of the two-stage router (interface contract for the
     corpus/prod-path harness). `source`:
       two_stage       the sidecar decoded a validated tool call
-      gate_abstain    stage-1 said chat (top==chat or conf < gate) → brain
+      gate_abstain    stage-1 said chat (top==chat, conf < gate, or a non-chat
+                      top below ZOE_ROUTER_HEAD_MIN_CONF) → brain
       shortlist_miss  the decoder took the chat escape / no legal tool → brain
       error_fallback  head/sidecar failure or timeout → brain
     """
