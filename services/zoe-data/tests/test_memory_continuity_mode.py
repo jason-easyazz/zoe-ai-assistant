@@ -10,6 +10,7 @@ unchanged.
 from __future__ import annotations
 
 import datetime
+import time
 
 import pytest
 
@@ -240,7 +241,12 @@ async def test_service_recent_read_pushes_time_bound_and_cap_into_the_store_quer
         ("other001", "someone else's recent fact", {**_meta(1), "user_id": "demo-b", "wing": "demo-b"}),
     ]
     svc, col = _svc_over(rows)
+    # the service reads the REAL clock; bracket its call with this test's own
+    # clock reads (the module-level NOW is taken at import/collection, which a
+    # full-lane run reaches minutes before this test executes)
+    t_before = time.time()
     got = await svc.load_recent_for_prompt("demo-a", window_s=WINDOW, limit=50)
+    t_after = time.time()
     assert [r.id for r in got] == ["newest01", "worry001"]
     # ONE bounded query: scope AND added_ts >= cutoff, with a hard limit — never a full fetch
     import memory_service as ms
@@ -251,7 +257,7 @@ async def test_service_recent_read_pushes_time_bound_and_cap_into_the_store_quer
     clauses = q["where"]["$and"]
     ts_clause = next(c for c in clauses if "added_ts" in c)
     cutoff = ts_clause["added_ts"]["$gte"]
-    assert abs(cutoff - (NOW.timestamp() - WINDOW)) < 60
+    assert t_before - WINDOW - 1 <= cutoff <= t_after - WINDOW + 1
     # …and the ranked read (unchanged) buries the worry past a 200-row prefix
     ranked = await svc.load_for_prompt("demo-a", limit=200)
     assert "worry001" not in {r.id for r in ranked}
