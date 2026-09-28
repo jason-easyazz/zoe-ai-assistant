@@ -19,7 +19,8 @@ push to `main`**. It deploys straight into the live `/home/zoe/assistant` checko
 
     cd /home/zoe/assistant
     git fetch origin main   # 5 retries — the .git is shared, ref-lock races happen
-    voice_gate_check.py --diff HEAD..FETCH_HEAD   # BLOCKS an ungated voice-path change
+    voice_gate_check.py --diff HEAD..FETCH_HEAD --expect-tree-of "$target"   # BLOCKS a voice-path change
+                                                  # with no evidence for THIS tree
     git reset --hard "$target"                    # the gate-checked SHA, not a re-read FETCH_HEAD
     scripts/deploy/migrate.sh
     docker compose up -d --build zoe-auth
@@ -53,11 +54,12 @@ against a checkout of that commit and re-run after every push to it; and **the w
 trusted code only** (see *The gate's own trust model* below). Unblock a red one with the
 `git worktree add <head>` + probe recipe the check's output prints.
 
-**Deploy time (unchanged, defence in depth).** CD is how changes actually reach the box, so
+**Deploy time (the real block).** CD is how changes actually reach the box, so
 the **voice replay-gate also runs on the runner**, not only on the manual `deploy_live.sh`
 path. Its pull step runs `scripts/maintenance/voice_gate_check.py --repo
-/home/zoe/assistant --diff "${prev}..${target}"` **after** the fetch and **before** the `reset --hard`,
-inside the same `flock /tmp/zoe-deploy.lock`. (Before this, merging a voice-path change auto-deployed it
+/home/zoe/assistant --diff "${prev}..${target}" --expect-tree-of "${target}"` **after** the fetch
+and **before** the `reset --hard`, inside the same `flock /tmp/zoe-deploy.lock`. `deploy_live.sh`
+passes the same binding. (Before this, merging a voice-path change auto-deployed it
 with the mandatory gate never running — a gate that can silently not-run is not a gate.)
 
 - **What blocks:** an incoming diff that touches the voice runtime path (STT/brain/TTS — see
@@ -71,12 +73,34 @@ with the mandatory gate never running — a gate that can silently not-run is no
   unmerged `-2x` port, the offline training copies under `labs/setfit-router/artifacts/`, the
   routers' tests, their offline eval/self-train tooling, or the vendored browser-side
   `livekit-client.umd.min.js`) **without** a fresh
-  (<24h), passing, current-baseline artifact at `~/.cache/zoe/voice_regression_last.json`. Missing,
-  stale, skipped or failed all block — a skip is not a pass. An artifact that claims the probe's
+  (<24h), passing, current-baseline artifact at `~/.cache/zoe/voice_regression_last.json` **that is
+  evidence for the tree being deployed** (next bullet). Missing, stale, skipped, failed, dirty or
+  for-other-code all block — a skip is not a pass. An artifact that claims the probe's
   VAD stage (`vad_stage: true`) also blocks on a missing / `fail` / `error` `vad` block (the Silero
   real-model check — [voice-pipeline.md](voice-pipeline.md) → *The VAD stage*). **Non-voice diffs are a no-op pass**, so
   ordinary deploys are frictionless. The check only *reads* the artifact; it never runs the ~2.3 GB
   Kokoro harness on the runner.
+- **The artifact is BOUND to the deployed tree (`--expect-tree-of`, since 2026-09-28).** Incident:
+  #1745 (chromadb 1.5.9 pins in `requirements-py312.txt`) was expected to be refused until a replay
+  for that commit existed, and was not — the gate checked only freshness + status, and a replay from
+  an UNRELATED landing a few hours earlier satisfied it. The venv refreshed while the memory store
+  was still on the 0.6 format; memory degraded ~7 min until the swap was completed. The gate now
+  accepts an artifact only when its recorded revision is **clean** and either (a) its commit IS the
+  deploy target, or (b) its recorded `revision.tree` equals `git rev-parse <target>^{tree}`. (b)
+  exists because **a squash merge mints a new sha**: an artifact bound to the PR head can never equal
+  the merge commit, but for a branch that was up to date with `main` (branch protection's `strict`)
+  the merge commit's tree is byte-identical to the PR head's — the same code. It is refused, correctly,
+  when another PR merged after this one before its deploy ran (the target is then a newer tree). The checker runs from the live tree at `prev`; a copy predating
+  `--expect-tree-of` gets the stricter `--expect-revision "$target"` instead (feature-detected — never
+  an unbound call). Pinned by `tests/unit/test_deploy_voice_gate_binding.py`, which executes the real
+  deploy.yml gate snippet, and `tests/unit/test_voice_gate_check.py`.
+  - **What the binding does NOT buy**, stated so a green gate is not over-read: the probe measures the
+    RUNNING stack and never installs a requirements file, so for a dependency-pin diff the evidence
+    still exercises the old venv; the binding makes the
+    deploy **refusal a dependable hold**, it does not make the probe see the pins. A refusal holds only
+    while no artifact for that tree exists — producing the evidence is what releases it. So for a
+    change that needs an operator window (a store migration, a venv swap), run the probe as a step
+    **inside** that window, not before merge.
 - **Blocking happens before the reset**, so the live tree stays at `prev` — nothing is migrated or
   restarted, and a retry re-evaluates the *same* change instead of fast-forwarding past it.
 - **Not every gated file is equally evidenced, and the LiveKit lane is the weak one.** The replay
@@ -98,15 +122,46 @@ with the mandatory gate never running — a gate that can silently not-run is no
   gate can hold a run for ~9 minutes, so the window is real.
 - **Fail-closed has a cost, and it is intended.** Once a voice-path change is on `main`, *every*
   subsequent push carries that diff in `prev..target`, so **all deploys stay blocked** until someone
-  produces a fresh passing artifact. Unwedge on the Jetson as user `zoe`:
+  produces a fresh passing artifact **for the target tree**. A probe against the live checkout does
+  NOT unwedge it any more — the live tree is still at `prev`, so that artifact is evidence for the
+  wrong code and is refused. Unwedge on the Jetson as user `zoe`, against a checkout of the target
+  (the refused run prints the exact sha; `ZPY` = the zoe-data service interpreter,
+  `bash scripts/deploy/zoe_data_python.sh`):
 
+      git -C /home/zoe/assistant worktree add --detach ~/.worktrees/voice-gate-deploy <target-sha>
       flock /tmp/zoe-voice-harness.lock \
-        python3 scripts/maintenance/voice_regression_probe.py --samples 20
+        $ZPY ~/.worktrees/voice-gate-deploy/scripts/maintenance/voice_regression_probe.py \
+          --samples 20 --service-dir ~/.worktrees/voice-gate-deploy/services/zoe-data
 
-  (no `--service-dir` needed — it auto-resolves to the live `services/zoe-data/.env`, from a git
-  worktree too; see [voice-pipeline.md](voice-pipeline.md)) then **re-run the deploy workflow** (`gh run rerun <id>` or push). The `flock` is mandatory — two
-  concurrent Kokoro loads OOM the box. The right move is to run the gate **before** merging a voice
-  change, not after CD blocks. Detail: [voice-pipeline.md](voice-pipeline.md).
+  then **re-run the deploy workflow** (`gh run rerun <id>`) and `git worktree remove` it. If more
+  pushes landed meanwhile, the next run's target is newer — probe THAT sha. The `flock` is mandatory —
+  two concurrent Kokoro loads OOM the box. The right move is to produce the evidence **before**
+  merging (below), not after CD blocks. Detail: [voice-pipeline.md](voice-pipeline.md).
+
+### Landing a voice-path PR (the rule since 2026-09-28)
+
+The deploy accepts the PR-head artifact only when the squash merge is **tree-identical** to that head
+and is still the deploy's `target` — i.e. nothing merged after it before its deploy fetched `main`
+(earlier undeployed merges are fine: an up-to-date head already contains them). So:
+
+1. **Serialise.** Drop `--auto` on every other open PR before starting; nothing may merge between
+   this PR's merge and its deploy (a second merge changes the target tree and the head-bound artifact
+   stops matching). Bring the branch up to date (`gh pr update-branch`) **first** — every update is a
+   new head and needs a new probe.
+2. **Probe the final head.** On the Jetson, in a clean worktree at the PR head sha, in the
+   Kokoro-paused window (tracker §0), under `flock /tmp/zoe-voice-harness.lock`, with
+   `--service-dir <worktree>/services/zoe-data`. The PR's `voice-gate` check re-runs green
+   (`--expect-revision <head>`).
+3. **Nothing may overwrite the artifact** before the deploy reads it — it is a single shared slot
+   (`~/.cache/zoe/voice_regression_last.json`): no other PR's probe, and not the nightly
+   `zoe-voice-regression.timer` (04:30), which replays the LIVE checkout and replaces it.
+4. **Merge** (squash, never `--admin`). The deploy log should read
+   `voice-gate: OK — voice replay-gate PASS (… tree-identical to <merge-sha> …)`.
+5. **If the deploy is refused** anyway (branch was behind, another merge landed, artifact
+   overwritten), use the unwedge recipe above against the **merged** commit it names, then
+   `gh run rerun <id>`. That is the `land_voice_pr` path: evidence produced after merge, for the
+   merged code.
+
 - The runner resets to the **gate-checked `$target`**, not a re-read `FETCH_HEAD` — a concurrent fetch
   on the shared `.git` could otherwise advance the tree to a commit pushed *after* the gate ran, a
   silent bypass. (Same fix as #1344 on the manual path.)
@@ -307,9 +362,9 @@ the guard is gone, along with the requirement that made it necessary.
 **The requirement was never where voice enforcement lived.** What actually stops an unproven
 voice change:
 
-1. **The post-merge deploy gate — the real block, unchanged.** `deploy.yml` refuses to
+1. **The post-merge deploy gate — the real block.** `deploy.yml` refuses to
    advance the live tree when the incoming diff touches the voice path without a fresh
-   passing artifact. It is fail-closed, it runs on the box, and nothing in a PR can influence
+   passing artifact for the tree being deployed (`--expect-tree-of`, since 2026-09-28). It is fail-closed, it runs on the box, and nothing in a PR can influence
    it. This is the control that matters.
 2. **The visible PR-time result**, plus mandatory multi-agent review of the diff and
    `required_conversation_resolution`. A red `voice-gate` is unmissable on the PR and is meant

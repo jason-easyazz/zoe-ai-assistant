@@ -244,7 +244,10 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   `services/livekit/config.yaml` (the on-demand container's serving config). **Read the next section
   before treating a green gate on those three as verification;**
   override `ZOE_VOICE_GATE_PATHS`), it asserts a **fresh** (`< ZOE_VOICE_GATE_MAX_AGE_H`, default 24h)
-  **passing** artifact **matching the current baseline** before the restart — else it fails loudly
+  **passing** artifact **matching the current baseline** and **bound to the deployed tree**
+  (`--expect-tree-of <target>`: that exact commit, or a clean run on a byte-identical tree — the
+  PR head of an up-to-date squash merge; since the 2026-09-28 incident, see
+  [merge-and-deploy.md](merge-and-deploy.md) → *Landing a voice-path PR*) before the restart — else it fails loudly
   (non-zero exit) and the deploy is refused. Non-voice deploys are a no-op pass. **It never runs the
   heavy Kokoro harness** (that would OOM the box under flock) — it only reads the artifact the gate
   produced. Standing rule: *any mandatory loop/gate/job must emit a heartbeat that something checks.*

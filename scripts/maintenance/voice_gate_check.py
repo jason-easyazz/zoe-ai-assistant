@@ -29,7 +29,10 @@ Deploy wiring: BOTH deploy paths call this with the incoming git range, between
 the fetch and the tree-advance — the manual scripts/maintenance/deploy_live.sh
 AND the continuous-deploy runner (.github/workflows/deploy.yml), which is how
 changes actually reach the box. If that range changes no voice-path files the
-check is a no-op pass (so ordinary non-voice deploys are frictionless). A block
+check is a no-op pass (so ordinary non-voice deploys are frictionless). When it
+does, both pass `--expect-tree-of <target>`: the artifact must be evidence for
+the TREE about to go live, not merely fresh and passing (incident 2026-09-28 —
+see tree_matches()). A block
 on the CD path is fail-closed and keeps blocking until the probe is re-run; the
 unwedge procedure is in docs/knowledge/merge-and-deploy.md. See
 docs/knowledge/voice-pipeline.md for the artifact contract.
@@ -41,8 +44,10 @@ $GITHUB_OUTPUT, which fails the job (exit 1) rather than let the classification
 vanish and be read downstream as 'non-voice'.
 
 Examples:
-    # deploy path: gate only if the incoming diff touches the voice runtime
-    voice_gate_check.py --repo /home/zoe/assistant --diff HEAD..FETCH_HEAD
+    # deploy path: gate only if the incoming diff touches the voice runtime, and
+    # then only on an artifact for the tree being deployed
+    voice_gate_check.py --repo /home/zoe/assistant --diff "$prev..$target" \
+        --expect-tree-of "$target"
     # PR path, step 1: classify only (never blocks, never reads the artifact)
     voice_gate_check.py --scope-only --diff origin/main...HEAD
     # force the assertion regardless of any diff
@@ -508,6 +513,33 @@ def parse_iso_z(ts: str | None) -> float | None:
     return None
 
 
+def _attribution_problem(rev: Any, target: str) -> str:
+    """Why an artifact's recorded revision cannot be attributed to ANY commit, or ""
+    when it can. Shared by the commit binding (PR gate) and the tree binding
+    (deploy gate): both need a recorded, CLEAN revision before comparing it."""
+    if not isinstance(rev, dict) or not rev.get("commit"):
+        return ("voice replay-gate artifact records NO revision, so it cannot be "
+                f"attributed to {target[:8]} — re-run the probe against a checkout of "
+                f"{target[:8]}")
+    # Two ways attribution fails, and BOTH block. `dirty` is "we looked and found
+    # uncommitted changes". `clean_verified is False` is "we could not look at
+    # all" — a failed `git status` (unreadable index, bad GIT_INDEX_FILE). Unknown
+    # is not clean, so the second case is checked explicitly rather than left to
+    # `bool(None)`, which reads as clean and is exactly the fail-open the binding
+    # exists to prevent. An older artifact with no `clean_verified` key still
+    # works, because it only reaches here with `dirty` explicitly false.
+    if rev.get("dirty"):
+        return (f"voice replay-gate ran against a DIRTY worktree at "
+                f"{str(rev.get('commit'))[:8]} — an uncommitted tree cannot be "
+                "attributed to a commit; commit or stash, then re-run the probe")
+    if rev.get("clean_verified") is False:
+        return (f"voice replay-gate could NOT verify the worktree was clean at "
+                f"{str(rev.get('commit'))[:8]} (git status failed) — cleanliness was "
+                "never established, so the run cannot be attributed to that commit. "
+                "Fix the checkout and re-run the probe.")
+    return ""
+
+
 def revision_matches(artifact: dict[str, Any], expect_revision: str | None) -> tuple[bool, str]:
     """The gate result must come from exercising THIS revision.
 
@@ -523,32 +555,80 @@ def revision_matches(artifact: dict[str, Any], expect_revision: str | None) -> t
     if not expect_revision:
         return True, ""
     rev = artifact.get("revision")
-    if not isinstance(rev, dict) or not rev.get("commit"):
-        return False, ("voice replay-gate artifact records NO revision, so it cannot be "
-                       f"attributed to {expect_revision[:8]} — re-run the probe against a "
-                       "checkout of this PR's head")
-    # Two ways attribution fails, and BOTH block. `dirty` is "we looked and found
-    # uncommitted changes". `clean_verified is False` is "we could not look at
-    # all" — a failed `git status` (unreadable index, bad GIT_INDEX_FILE). Unknown
-    # is not clean, so the second case is checked explicitly rather than left to
-    # `bool(None)`, which reads as clean and is exactly the fail-open the binding
-    # exists to prevent. An older artifact with no `clean_verified` key still
-    # works, because it only reaches here with `dirty` explicitly false.
-    if rev.get("dirty"):
-        return False, (f"voice replay-gate ran against a DIRTY worktree at "
-                       f"{str(rev.get('commit'))[:8]} — an uncommitted tree cannot be "
-                       "attributed to a commit; commit or stash, then re-run the probe")
-    if rev.get("clean_verified") is False:
-        return False, (f"voice replay-gate could NOT verify the worktree was clean at "
-                       f"{str(rev.get('commit'))[:8]} (git status failed) — cleanliness was "
-                       "never established, so the run cannot be attributed to that commit. "
-                       "Fix the checkout and re-run the probe.")
+    problem = _attribution_problem(rev, expect_revision)
+    if problem:
+        return False, problem
     got = str(rev.get("commit"))
     if got != expect_revision:
         return False, (f"voice replay-gate ran against commit {got[:8]}, but this PR's head "
                        f"is {expect_revision[:8]} — that artifact is evidence for DIFFERENT "
                        "code. Re-run the probe against a checkout of this PR's head.")
     return True, ""
+
+
+def tree_matches(artifact: dict[str, Any],
+                 expect_tree_of: tuple[str, str | None] | None) -> tuple[bool, str]:
+    """The DEPLOY gate's binding: the artifact must be evidence for the TREE about
+    to go live. Returns (ok, note).
+
+    Incident 2026-09-28: the deploy gate checked freshness + status only, so a
+    replay produced hours earlier for an UNRELATED landing satisfied it and #1745
+    (a voice-path dependency pin) deployed with no evidence for its own code. The
+    fix binds the artifact to what is deployed — but by TREE, not by commit, and
+    that choice is load-bearing:
+
+    A squash merge mints a NEW commit sha, so an artifact bound to the PR head can
+    never equal the merge commit, and a commit binding alone would refuse EVERY
+    voice landing until someone re-ran the probe after merge. The merge commit's
+    TREE, though, is byte-identical to the PR head's tree whenever the branch was
+    up to date with `main` at merge (branch protection's `strict` guarantees it),
+    and the tree is exactly "the code". So:
+
+      - artifact commit == target commit            -> accept (exact)
+      - artifact tree == target tree (clean run)    -> accept (same code, other sha)
+      - anything else                               -> REFUSE
+
+    The second case is what keeps the existing PR-head-bound landing working. It
+    is refused, correctly, when another merge landed AFTER it before its deploy ran
+    (the target is then a newer tree) or when the branch was not up to date. `expect_tree_of` is (target_commit, target_tree); a tree that
+    could not be resolved (None) refuses unless the commit matches exactly —
+    unknown is not a match."""
+    if not expect_tree_of:
+        return True, ""
+    target, target_tree = expect_tree_of
+    rev = artifact.get("revision")
+    problem = _attribution_problem(rev, target)
+    if problem:
+        return False, problem
+    got = str(rev.get("commit"))
+    if got == target:
+        return True, f"bound to {target[:8]}"
+    got_tree = rev.get("tree")
+    if not target_tree:
+        return False, (f"could not resolve the tree of the deploy target {target[:8]}, and "
+                       f"the artifact is for a different commit ({got[:8]}) — cannot prove "
+                       "it is evidence for the code being deployed (unknown is not a match)")
+    if isinstance(got_tree, str) and got_tree and got_tree == target_tree:
+        return True, (f"tree-identical to {target[:8]} (tree {target_tree[:8]}; artifact "
+                      f"from {got[:8]})")
+    return False, (f"voice replay-gate ran against commit {got[:8]} (tree "
+                   f"{str(got_tree)[:8] if got_tree else 'unrecorded'}), but the deploy "
+                   f"target is {target[:8]} (tree {target_tree[:8]}) — that artifact is "
+                   "evidence for DIFFERENT code. Re-run the probe against a checkout of "
+                   f"{target[:8]}.")
+
+
+def resolve_tree(repo: Path, commit: str) -> str | None:
+    """`<commit>^{tree}` in `repo`, or None if it cannot be resolved (object not
+    fetched, not a repo, git missing). None is never treated as a match."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{commit}^{{tree}}"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = proc.stdout.strip()
+    return out if proc.returncode == 0 and out else None
 
 
 def baseline_matches(artifact: dict[str, Any], baseline: dict[str, Any] | None) -> tuple[bool, str]:
@@ -617,14 +697,16 @@ def vad_block_ok(artifact: dict[str, Any]) -> tuple[bool, str]:
 
 def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: float,
              baseline: dict[str, Any] | None = None,
-             expect_revision: str | None = None) -> tuple[bool, str]:
+             expect_revision: str | None = None,
+             expect_tree_of: tuple[str, str | None] | None = None) -> tuple[bool, str]:
     """The heartbeat check, pure and unit-testable. Returns (allowed, reason).
 
     Blocks unless the artifact exists, has status == "pass", is fresh (within
     max_age_s), was produced against the current baseline, was produced by
-    exercising `expect_revision` when one is given, and — when it claims the VAD
-    stage — carries a passing (or skipped) VAD
-    block (vad_block_ok)."""
+    exercising `expect_revision` when one is given (PR gate: exact commit), was
+    produced against the tree of `expect_tree_of` when one is given (deploy gate:
+    same commit or byte-identical tree — tree_matches), and — when it claims the
+    VAD stage — carries a passing (or skipped) VAD block (vad_block_ok)."""
     if artifact is None:
         return False, ("no voice replay-gate result artifact — the gate never ran "
                        "(a missing artifact is NOT a pass)")
@@ -648,12 +730,17 @@ def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: fl
     ok, why = revision_matches(artifact, expect_revision)
     if not ok:
         return False, why
+    ok, tree_note = tree_matches(artifact, expect_tree_of)
+    if not ok:
+        return False, tree_note
     ok, vad_note = vad_block_ok(artifact)
     if not ok:
         return False, vad_note
     bound = ""
     if expect_revision:
         bound = f", bound to {expect_revision[:8]}"
+    elif tree_note:
+        bound = f", {tree_note}"
     vad_part = f", {vad_note}" if vad_note else ""
     return True, (f"voice replay-gate PASS ({age_s / 3600:.1f}h old, "
                   f"n={((artifact.get('summary') or {}).get('n_samples'))}{bound}{vad_part})")
@@ -815,22 +902,31 @@ def main(argv: list[str] | None = None) -> int:
                     help="read the changed-file list from PATH (one per line) instead "
                          "of running git diff. The PR gate uses this so a pull request "
                          "is consumed as DATA, never executed.")
-    ap.add_argument("--expect-revision", metavar="SHA",
-                    help="require the artifact to record having exercised this exact "
-                         "commit. The PR gate always passes the PR head sha; without it "
-                         "any fresh passing artifact (e.g. from main) would clear the PR.")
+    bind = ap.add_mutually_exclusive_group()
+    bind.add_argument("--expect-revision", metavar="SHA",
+                      help="require the artifact to record having exercised this exact "
+                           "commit. The PR gate always passes the PR head sha; without it "
+                           "any fresh passing artifact (e.g. from main) would clear the PR.")
+    bind.add_argument("--expect-tree-of", metavar="SHA",
+                      help="require the artifact to be evidence for the code at this "
+                           "commit: the same commit, or a clean run whose recorded tree "
+                           "equals this commit's tree (a squash merge of an up-to-date "
+                           "branch). The deploy gates pass the sha being deployed.")
     args = ap.parse_args(argv)
 
     # A revision is an opaque identifier that only ever gets COMPARED, but pin the
     # shape anyway: a malformed value should fail loudly here rather than silently
     # mismatch and read as an ordinary evidence failure.
-    if args.expect_revision:
-        rev = args.expect_revision.strip().lower()
-        if len(rev) != 40 or any(c not in "0123456789abcdef" for c in rev):
-            print(f"voice-gate: --expect-revision must be a 40-char hex sha, got "
-                  f"{args.expect_revision!r}", file=sys.stderr)
-            return 1
-        args.expect_revision = rev
+    for flag, attr in (("--expect-revision", "expect_revision"),
+                       ("--expect-tree-of", "expect_tree_of")):
+        raw = getattr(args, attr)
+        if raw:
+            rev = raw.strip().lower()
+            if len(rev) != 40 or any(c not in "0123456789abcdef" for c in rev):
+                print(f"voice-gate: {flag} must be a 40-char hex sha, got {raw!r}",
+                      file=sys.stderr)
+                return 1
+            setattr(args, attr, rev)
 
     # 0. SCOPE-ONLY: answer "does this diff touch voice?" and stop. Used by the
     #    PR-time gate's scope job, which runs on a GitHub-hosted runner where the
@@ -864,10 +960,15 @@ def main(argv: list[str] | None = None) -> int:
     # 2. Assert the artifact proves a fresh pass.
     artifact = load_json(args.artifact)
     baseline = None if args.no_baseline_check else load_json(args.baseline)
+    expect_tree_of = None
+    if args.expect_tree_of:
+        # Resolved only here, once the gate is actually required: a non-voice
+        # deploy never needs the target's tree.
+        expect_tree_of = (args.expect_tree_of, resolve_tree(args.repo, args.expect_tree_of))
     allowed, reason = evaluate(
         artifact, now_epoch=time.time(),
         max_age_s=args.max_age_hours * 3600.0, baseline=baseline,
-        expect_revision=args.expect_revision)
+        expect_revision=args.expect_revision, expect_tree_of=expect_tree_of)
 
     if allowed:
         print(f"voice-gate: OK — {reason}  (artifact: {args.artifact})")
@@ -886,6 +987,25 @@ def main(argv: list[str] | None = None) -> int:
             "        --samples 20 --service-dir ~/.worktrees/voice-gate/services/zoe-data",
             "  The probe records the commit it exercised; an artifact for any other",
             "  commit is evidence for different code and will not clear this PR.",
+        ]
+    elif args.expect_tree_of:
+        # DEPLOY gate: the evidence must be for the code being deployed. The live
+        # tree is still at the PREVIOUS deploy (the gate blocks before the reset),
+        # so a probe against the live checkout is evidence for the wrong code —
+        # run it against a checkout of the deploy target instead.
+        sha = args.expect_tree_of
+        msg += [
+            f"  The artifact must be evidence for the code being DEPLOYED ({sha[:8]}): the "
+            "same commit, or a clean run on a byte-identical tree (the PR head of an "
+            "up-to-date squash merge).",
+            "  Produce it on the Jetson as user zoe, against a checkout of the target:",
+            f"    git -C /home/zoe/assistant worktree add --detach ~/.worktrees/voice-gate-deploy {sha}",
+            "    flock /tmp/zoe-voice-harness.lock \\",
+            "      python3 ~/.worktrees/voice-gate-deploy/scripts/maintenance/voice_regression_probe.py \\",
+            "        --samples 20 --service-dir ~/.worktrees/voice-gate-deploy/services/zoe-data",
+            "  (run it with the zoe-data SERVICE interpreter — `bash "
+            "scripts/deploy/zoe_data_python.sh` prints it — rather than bare python3), then "
+            "re-run the deploy and `git worktree remove ~/.worktrees/voice-gate-deploy`.",
         ]
     else:
         msg += [
