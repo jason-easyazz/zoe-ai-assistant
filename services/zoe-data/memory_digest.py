@@ -328,10 +328,73 @@ Return ONLY a JSON array (no preamble). Each item:
   "type": one of "profile" | "preference" | "habit" | "event" | "relationship" | "health" | "pet"
   "fact": a single concise sentence in third-person (max 120 chars, e.g. "User's dog is named Teddy")
 
+If the user said how they FEEL about it (anxious, worried, excited, sad, stressed, proud…), keep that feeling in the fact — e.g. "User is anxious about their job interview on Friday", not just "User has a job interview on Friday". Never add a feeling the user did not state.
+
 If nothing personal was stated, return: []
 
 User said: {user_message}
 """
+
+
+_AFFECT_STOPWORDS = frozenset({
+    "user", "users", "user's", "their", "they", "about", "with", "that", "this",
+    "have", "has", "will", "from", "into", "when", "what", "been", "being",
+    "honestly", "pretty", "really", "feel", "feels", "feeling", "keep",
+    # time words: two facts that merely share a day are not the same topic
+    # ("…interview on Friday. My sister arrives Friday" — Greptile #1762)
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "today", "tonight", "tomorrow", "yesterday", "morning", "afternoon", "evening",
+    "week", "weekend", "month", "year", "next", "last", "later", "soon",
+    "january", "february", "march", "april", "june", "july", "august",
+    "september", "october", "november", "december",
+})
+_FACT_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# The feeling words themselves say nothing about WHICH fact the feeling is
+# about, so they never count toward attribution.
+_AFFECT_WORDS = frozenset({
+    "anxious", "anxiety", "nervous", "edge", "uneasy", "worried", "worrying",
+    "dreading", "stressed", "stressing", "pressure", "scared", "afraid",
+    "terrified", "frightened", "overwhelmed", "swamped", "down", "miserable",
+    "heartbroken", "gutted", "upset", "lonely", "frustrated", "annoyed",
+    "exhausted", "drained", "burnt", "burned", "worn", "excited", "thrilled",
+    "pumped", "happy", "delighted", "proud", "relieved", "wait",
+})
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9']+", (text or "").lower())
+            if len(t) > 3 and t not in _AFFECT_STOPWORDS}
+
+
+def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -> str:
+    """The turn's first-person feeling, if this fact came from the sentence that
+    carried it — else "". Sentence-level attribution, not a shared word:
+
+    * content words only — stopwords, time words (weekdays, months, "today"…)
+      and the feeling words themselves never count, so a shared "Friday" proves
+      nothing;
+    * the fact must share at least one content word with the feeling sentence
+      (the digest often SHORTENS: "User has a job interview on Friday" keeps only
+      "interview" from "…anxious about my job interview at the aquarium…");
+    * and the feeling sentence must win UNIQUELY — strictly more shared words
+      than any other sentence of the message. A fact that belongs to a
+      neighbouring sentence ("My sister arrives Friday") loses, and a tie is
+      ambiguous and attaches nothing.
+    """
+    if not affect or not sentence:
+        return ""
+    fact_tokens = _content_tokens(fact)
+    overlap = len(fact_tokens & (_content_tokens(sentence) - _AFFECT_WORDS))
+    if overlap < 1:
+        return ""
+    feel_norm = sentence.strip()
+    for other in _FACT_SENTENCE_SPLIT_RE.split(message or ""):
+        other = other.strip()
+        if not other or other == feel_norm or feel_norm in other:
+            continue
+        if len(fact_tokens & (_content_tokens(other) - _AFFECT_WORDS)) >= overlap:
+            return ""
+    return affect
 
 
 async def run_turn_digest(
@@ -422,6 +485,12 @@ async def run_turn_digest(
 
         import hashlib as _hashlib
         base_turn_id = _hashlib.sha1(user_message.encode("utf-8", "ignore")).hexdigest()[:16]
+        # The digest model can flatten "I'm anxious about X" to "User has X".
+        # Read the feeling from the user's OWN words and store it beside the
+        # fact (metadata `affect`, stored as candidate_affect) so continuity can
+        # still say how they felt.
+        from memory_gate import extract_affect
+        turn_affect, affect_sentence = extract_affect(user_message)
 
         for idx, item in enumerate(facts):
             fact = (item.get("fact") or "").strip()
@@ -464,12 +533,18 @@ async def run_turn_digest(
                 continue
             if op == "update" and target_id:
                 try:
+                    fact_affect = _affect_for_fact(fact, turn_affect, affect_sentence, user_message)
                     new_ref = await svc.review(
                         target_id,
                         decision="edit",
                         edits=fact,
                         actor="turn_digest",
                         note="turn digest supersede (QA F9)",
+                        # The updated row's feeling is THIS turn's, always: a
+                        # feeling is carried onto a superseded neutral fact, and
+                        # a neutral update clears the old one ("" overrides the
+                        # value the edit would otherwise carry forward).
+                        metadata={"affect": fact_affect},
                     )
                     if new_ref is not None:
                         result["new"] += 1
@@ -478,6 +553,7 @@ async def run_turn_digest(
                 except Exception as exc:
                     logger.warning("turn_digest: supersede failed (%s) — plain ingest", exc)
             try:
+                fact_affect = _affect_for_fact(fact, turn_affect, affect_sentence, user_message)
                 ref = await svc.ingest(
                     fact,
                     user_id=user_id,
@@ -488,6 +564,7 @@ async def run_turn_digest(
                     confidence=0.82,
                     status="approved",
                     tags=["turn_digest", "auto_extract"],
+                    metadata={"affect": fact_affect} if fact_affect else None,
                 )
                 if ref is not None:
                     result["new"] += 1

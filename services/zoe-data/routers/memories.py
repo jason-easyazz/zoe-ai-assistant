@@ -33,6 +33,7 @@ from memory_service import (
     MemoryService,
     MemoryServiceError,
     get_memory_service,
+    memory_affect,
 )
 from models import MemoryProposalCreate, MemoryReviewBody
 
@@ -486,7 +487,8 @@ def _build_memory_prompt_packet(
         cite = f"[mem:{str(ref.id)[:8]}]"
         prefix = "(uncertain) " if status == "disputed" else ""
         if is_recent:
-            prefix = f"(recent) {prefix}"
+            felt = memory_affect(ref)
+            prefix = f"(recent, felt {felt}) {prefix}" if felt else f"(recent) {prefix}"
         lines.append(f"- {prefix}{text[:200]} {cite}")
         entry = {
             "id": ref.id,
@@ -712,6 +714,22 @@ def _pick_recent_for_continuity(
     return [r for r, _ in recent[:max_n]]
 
 
+def _continuity_focus(recent: list[MemoryRef], refs: list[dict[str, Any]]) -> dict[str, str]:
+    """The ONE recent emotional item a continuity turn should check in about:
+    the first recent row (already emotional-first, then newest) that is
+    emotional and made it into the packet. {} when there is none — a neutral
+    recent fact is never promoted to a check-in ("how is the haircut going?").
+    A 4B model given eleven bullets and a soft "connect if relevant" rarely
+    picks the worry; given one concrete item it does."""
+    kept = {r.get("id") for r in refs}
+    for ref in recent:
+        if ref.id in kept and _is_emotional_row(ref):
+            text = re.sub(r"\s+", " ", ref.text or "").strip()[:200]
+            if text:
+                return {"text": text, "affect": memory_affect(ref)}
+    return {}
+
+
 @router.get("/for-prompt")
 async def memory_for_prompt(
     user_id: str = Query(..., min_length=1),
@@ -804,6 +822,10 @@ async def memory_for_prompt(
         facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent
     )
     result["user_scoped"] = True
+    if continuity:
+        focus = _continuity_focus(recent or [], result.get("refs") or [])
+        if focus:
+            result["continuity_focus"] = focus
 
     # Increment 2b: fold the relational half (Postgres people/relationships/dates
     # + portrait) into the packet, behind ZOE_MEMORY_COMPOSE_ENABLED (default OFF)
