@@ -22,22 +22,29 @@ Gates, in order (cheap first):
   * presence is ``owner`` on THIS panel;
   * today's ``morning_checkin`` brief exists and was not opened in chat
     (``proactive_pending.claimed``);
-  * the full brief was not already spoken (``voice_announcements.delivered_at``)
-    and is not in flight (queued, unexpired) — a delivered guest teaser does NOT
-    count as heard;
+  * no full brief was already played today (``voice_announcements.delivered_at``
+    over ALL of today's rows; only a known guest-safe teaser does not count as
+    heard) and nothing is still queued;
   * no user turn by the member in the last 2 minutes (do not talk over them);
-  * the per-member, per-local-day claim row in ``proactive_responses`` inserts
-    (UNIQUE — two panels or two workers can never both speak it).
+  * the panel holds a live device token: the row is PANEL-SCOPED
+    (``voice_announce.PANEL_SCOPED_TRIGGERS``) so only that panel's daemon can
+    play a member's private brief — otherwise ``outcome=unscoped_panel``;
+  * the shared claim row in ``proactive_responses`` inserts. Its UNIQUE key
+    (member, ``CLAIM_KEY``, household date) is taken by the 07:30 path too
+    (``claim_scheduled_brief``), so across both paths, two panels or two
+    workers the full brief is spoken at most once a day.
 
-The claim row is also the B2.2 reward signal: the slow loop's sweep
+Each claim row is also the B2.2 reward signal: the announcement id is linked in
+the announcement's own transaction, and the slow loop's sweep
 (``evaluate_pending_responses``) later records whether the member spoke to Zoe
-within ``ZOE_PROACTIVE_ARRIVAL_RESPONSE_S`` (default 120 s) of the brief being
-spoken — ``accepted`` / ``ignored`` — or ``undelivered`` if the daemon never
-played it.
+within ``ZOE_PROACTIVE_ARRIVAL_RESPONSE_S`` (default 120 s) of it playing —
+``accepted`` / ``ignored`` — or ``undelivered`` (expired unplayed) or
+``unknown`` (no announcement linked).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -52,6 +59,8 @@ log = logging.getLogger(__name__)
 
 TRIGGER_TYPE = "morning_checkin_arrival"
 BRIEF_TRIGGER = "morning_checkin"
+# The shared once-per-member-per-day key: "the full morning brief was spoken".
+CLAIM_KEY = "morning_brief_full"
 
 _WINDOW_START_HOUR = 7
 _WINDOW_END_HOUR = 11  # exclusive
@@ -169,9 +178,13 @@ async def _run_guarded(user_id: str, panel_id: str) -> None:
 
 
 async def _todays_brief(db, user_id: str, day_start: str) -> dict | None:
-    """Today's ``morning_checkin`` pending rows: latest message + whether any was opened."""
+    """ALL of today's ``morning_checkin`` pending rows for the member.
+
+    Returns the latest message (what arrival would speak), whether ANY row was
+    opened in chat, and the set of guest-safe teaser lines the rows carried.
+    """
     async with db.execute(
-        """SELECT id, message, claimed FROM proactive_pending
+        """SELECT id, message, claimed, trigger_context FROM proactive_pending
            WHERE user_id = ? AND trigger_type = ?
              AND created_at::timestamptz >= ?::timestamptz
            ORDER BY created_at::timestamptz DESC""",
@@ -180,19 +193,31 @@ async def _todays_brief(db, user_id: str, day_start: str) -> dict | None:
         rows = await cur.fetchall()
     if not rows:
         return None
+    teasers: set[str] = set()
+    for row in rows:
+        try:
+            ctx = json.loads(row["trigger_context"] or "{}")
+        except (TypeError, ValueError):
+            ctx = {}
+        line = str((ctx or {}).get("spoken_guest_safe") or "").strip()
+        if line:
+            teasers.add(line)
     return {
         "id": rows[0]["id"],
         "message": str(rows[0]["message"] or ""),
         "opened": any(int(r["claimed"] or 0) == 1 for r in rows),
+        "teasers": teasers,
     }
 
 
-async def _spoken_state(db, user_id: str, day_start: str, message: str, now: datetime) -> str:
-    """How today's 07:30 brief fared on the speaker.
+async def _spoken_state(db, user_id: str, day_start: str, teasers: set[str], now: datetime) -> str:
+    """How today's brief(s) fared on the speaker, over ALL of today's rows.
 
-    ``delivered`` (the full text was claimed by the daemon) > ``in_flight``
-    (queued, unexpired) > ``guest_teaser`` (only the bound_guest line was
-    played) > ``expired`` (queued, never played) > ``absent`` (never queued).
+    A played row counts as the full brief unless its text is a KNOWN guest-safe
+    teaser — so a later same-day brief with different text can never hide an
+    earlier delivery. Precedence: ``delivered`` > ``in_flight`` (anything still
+    queued; wait for it to drain) > ``guest_teaser`` (only a teaser played) >
+    ``expired`` (queued, never played) > ``absent`` (never queued).
     """
     async with db.execute(
         """SELECT message, delivered_at, expired, expires_at FROM voice_announcements
@@ -201,20 +226,31 @@ async def _spoken_state(db, user_id: str, day_start: str, message: str, now: dat
         (user_id, BRIEF_TRIGGER, day_start),
     ) as cur:
         rows = await cur.fetchall()
-    full = message.strip()
     states: set[str] = set()
     for row in rows:
-        is_full = str(row["message"] or "").strip() == full
+        is_teaser = str(row["message"] or "").strip() in teasers
         if row["delivered_at"]:
-            states.add("delivered" if is_full else "guest_teaser")
-        elif is_full:
-            exp = _parse_ts(row["expires_at"])
-            live = not int(row["expired"] or 0) and exp is not None and exp > now
-            states.add("in_flight" if live else "expired")
+            states.add("guest_teaser" if is_teaser else "delivered")
+            continue
+        exp = _parse_ts(row["expires_at"])
+        if not int(row["expired"] or 0) and exp is not None and exp > now:
+            states.add("in_flight")
+        elif not is_teaser:
+            states.add("expired")
     for state in ("delivered", "in_flight", "guest_teaser", "expired"):
         if state in states:
             return state
     return "absent"
+
+
+async def _panel_has_device(db, panel_id: str) -> bool:
+    """True when ``panel_id`` holds a live device token — i.e. a daemon that can
+    claim a panel-scoped announcement for exactly this panel exists."""
+    async with db.execute(
+        "SELECT 1 FROM device_tokens WHERE panel_id = ? AND revoked = 0 LIMIT 1",
+        (panel_id,),
+    ) as cur:
+        return (await cur.fetchone()) is not None
 
 
 async def _first_user_turn(db, user_id: str, start: str, end: str):
@@ -233,25 +269,54 @@ async def _first_user_turn(db, user_id: str, start: str, end: str):
     return _parse_ts(row["first_turn"]) if row else None
 
 
-async def _claim_today(
-    db, *, user_id: str, panel_id: str, local_date: str, pending_id: str,
+async def claim_full_brief(
+    db, *, user_id: str, trigger_type: str, panel_id: str | None, pending_id: str | None,
     missed: str, now: datetime,
 ) -> str | None:
-    """Insert today's claim row; None if one already exists (once per member per day)."""
+    """Take today's "full brief spoken" claim; None if either path already has it.
+
+    One UNIQUE key (``CLAIM_KEY``, member, household date) shared by the 07:30
+    path and arrival: whichever inserts first speaks, the other never does.
+    """
     claim_id = uuid.uuid4().hex[:16]
+    local_date = now.astimezone(_ZOE_TZ).date().isoformat()
     async with db.execute(
         """INSERT INTO proactive_responses
-               (id, user_id, trigger_type, local_date, panel_id, pending_id,
+               (id, user_id, claim_key, trigger_type, local_date, panel_id, pending_id,
                 missed, response_window_s, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT (user_id, trigger_type, local_date) DO NOTHING
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (user_id, claim_key, local_date) DO NOTHING
            RETURNING id""",
-        (claim_id, user_id, TRIGGER_TYPE, local_date, panel_id, pending_id,
+        (claim_id, user_id, CLAIM_KEY, trigger_type, local_date, panel_id, pending_id,
          missed, _response_window_s(), _fmt(now)),
     ) as cur:
         row = await cur.fetchone()
     await db.commit()
     return row["id"] if row else None
+
+
+async def claim_scheduled_brief(
+    *, user_id: str, panel_id: str | None, pending_id: str | None,
+) -> tuple[bool, str | None]:
+    """The 07:30 path's side of the shared claim: ``(may_speak, claim_id)``.
+
+    Flag off: ``(True, None)`` with no DB access — the scheduled path is
+    unchanged. Claim lost (arrival already spoke it today): ``(False, None)``.
+    A DB error fails OPEN to today's behaviour (speak, unclaimed) and says so.
+    """
+    if not arrival_enabled():
+        return True, None
+    try:
+        async with _get_compat_db() as db:
+            claim_id = await claim_full_brief(
+                db, user_id=user_id, trigger_type=BRIEF_TRIGGER, panel_id=panel_id,
+                pending_id=pending_id, missed="", now=_now_utc(),
+            )
+    except Exception as exc:
+        log.warning("brief-on-arrival: scheduled-brief claim failed for user=%s; "
+                    "speaking unclaimed: %s", user_id, exc)
+        return True, None
+    return (claim_id is not None), claim_id
 
 
 async def maybe_speak_brief_on_arrival(user_id: str, panel_id: str) -> str:
@@ -289,7 +354,7 @@ async def maybe_speak_brief_on_arrival(user_id: str, panel_id: str) -> str:
             if brief["opened"]:
                 _done_for_day[user_id] = today
                 return "done:opened_in_chat"
-            state = await _spoken_state(db, user_id, day_start, brief["message"], now)
+            state = await _spoken_state(db, user_id, day_start, brief["teasers"], now)
             if state == "delivered":
                 _done_for_day[user_id] = today
                 return "done:already_heard"
@@ -300,8 +365,14 @@ async def maybe_speak_brief_on_arrival(user_id: str, panel_id: str) -> str:
             )
             if recent is not None:
                 return "recent_turn"
-            claim_id = await _claim_today(
-                db, user_id=user_id, panel_id=panel_id, local_date=today,
+            # The full brief is private: queue it only where a daemon can claim
+            # it for exactly this panel (panel-scoped row, voice_announce).
+            if not await _panel_has_device(db, panel_id):
+                log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=unscoped_panel "
+                         "tier=%s missed=%s", TRIGGER_TYPE, user_id, panel_id, tier, state)
+                return "unscoped_panel"
+            claim_id = await claim_full_brief(
+                db, user_id=user_id, trigger_type=TRIGGER_TYPE, panel_id=panel_id,
                 pending_id=brief["id"], missed=state, now=now,
             )
         if claim_id is None:
@@ -312,20 +383,12 @@ async def maybe_speak_brief_on_arrival(user_id: str, panel_id: str) -> str:
         _done_for_day[user_id] = today
 
         # No pooled connection is held across the lanes (they open their own).
-        panel_outcome, daemon_outcome, ann_id = await _engine._speak_on_panel(
+        # The claim's announcement_id is linked in the announcement's own
+        # transaction (engine._speak_on_panel with claim_id).
+        panel_outcome, daemon_outcome, _ann_id = await _engine._speak_on_panel(
             user_id=user_id, panel_id=panel_id, message=brief["message"],
-            trigger_type=TRIGGER_TYPE,
+            trigger_type=TRIGGER_TYPE, claim_id=claim_id,
         )
-        try:
-            async with _get_compat_db() as db:
-                await db.execute(
-                    "UPDATE proactive_responses SET announcement_id = ?, spoken_at = ? WHERE id = ?",
-                    (ann_id, _fmt(now), claim_id),
-                )
-                await db.commit()
-        except Exception as exc:
-            log.warning("brief-on-arrival: could not record announcement for claim %s: %s",
-                        claim_id, exc)
         log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s "
                  "tier=%s missed=%s", TRIGGER_TYPE, user_id, panel_id, panel_outcome,
                  daemon_outcome, tier, state)
@@ -337,10 +400,14 @@ async def maybe_speak_brief_on_arrival(user_id: str, panel_id: str) -> str:
 
 
 async def evaluate_pending_responses() -> int:
-    """Record accepted/ignored/undelivered for arrival briefs whose window has closed.
+    """Record the response signal for spoken-brief claims whose window has closed.
 
-    Called from the engine slow loop. A no-op (no DB) with the flag off. Returns
-    the number of rows evaluated. Never raises.
+    Covers both paths that take the shared claim (07:30 and arrival). Outcomes:
+    ``accepted`` / ``ignored`` (a member user turn within the window after the
+    daemon played it, or not), ``undelivered`` (the linked announcement expired
+    unplayed), ``unknown`` (no announcement is linked to the claim — never
+    ``undelivered``, because nothing proves it did not play). Called from the
+    engine slow loop; a no-op (no DB) with the flag off. Never raises.
     """
     if not arrival_enabled():
         return 0
@@ -349,13 +416,13 @@ async def evaluate_pending_responses() -> int:
         now = _now_utc()
         async with _get_compat_db() as db:
             async with db.execute(
-                """SELECT r.id, r.user_id, r.announcement_id, r.response_window_s,
-                          r.spoken_at, r.created_at,
+                """SELECT r.id, r.user_id, r.trigger_type, r.announcement_id,
+                          r.response_window_s, r.created_at,
                           va.delivered_at, va.expired, va.expires_at
                    FROM proactive_responses r
                    LEFT JOIN voice_announcements va ON va.id = r.announcement_id
-                   WHERE r.trigger_type = ? AND r.evaluated_at IS NULL""",
-                (TRIGGER_TYPE,),
+                   WHERE r.claim_key = ? AND r.evaluated_at IS NULL""",
+                (CLAIM_KEY,),
             ) as cur:
                 rows = await cur.fetchall()
             for row in rows:
@@ -364,16 +431,13 @@ async def evaluate_pending_responses() -> int:
                 outcome: str | None = None
                 responded: int | None = None
                 responded_at: str | None = None
-                if delivered is None:
-                    exp = _parse_ts(row["expires_at"])
+                if not row["announcement_id"]:
                     created = _parse_ts(row["created_at"]) or now
-                    never_queued = not row["announcement_id"]
-                    gone = bool(int(row["expired"] or 0)) or exp is None or exp <= now
-                    # A claim with no queued row (the lane failed) is undelivered
-                    # once the response window has passed since the claim.
-                    if (never_queued and created + timedelta(seconds=window) <= now) or (
-                        not never_queued and gone
-                    ):
+                    if created + timedelta(seconds=window) <= now:
+                        outcome = "unknown"
+                elif delivered is None:
+                    exp = _parse_ts(row["expires_at"])
+                    if bool(int(row["expired"] or 0)) or exp is None or exp <= now:
                         outcome = "undelivered"
                 elif delivered + timedelta(seconds=window) <= now:
                     first = await _first_user_turn(
@@ -393,7 +457,7 @@ async def evaluate_pending_responses() -> int:
                 )
                 evaluated += 1
                 log.info("PROACTIVE_RESPONSE trigger=%s user=%s outcome=%s window_s=%d",
-                         TRIGGER_TYPE, row["user_id"], outcome, window)
+                         row["trigger_type"], row["user_id"], outcome, window)
             await db.commit()
     except Exception as exc:
         log.warning("brief-on-arrival: response sweep failed: %s", exc)

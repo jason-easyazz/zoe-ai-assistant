@@ -24,6 +24,8 @@ pytestmark = pytest.mark.ci_safe  # slim-dep green; opts into validate.yml's `-m
 
 import asyncio
 import contextlib
+import copy
+import json
 import inspect
 import io
 import logging
@@ -98,8 +100,19 @@ class FakeDB:
         self.announcements = []  # voice_announcements
         self.turns = []          # (user_id, created_at) user turns in chat_messages
         self.responses = []      # proactive_responses
+        self.device_panels = {PANEL, "panel-bedroom"}  # panels holding a live device token
         self.enforce_unique = True
+        self.fail_claim_link = False
         self.ops = []
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        saved = (copy.deepcopy(self.announcements), copy.deepcopy(self.responses))
+        try:
+            yield self
+        except BaseException:
+            self.announcements, self.responses = saved
+            raise
 
     def execute(self, sql, params=()):
         return _Exec(lambda: self._do(" ".join(sql.split()), tuple(params)))
@@ -109,7 +122,7 @@ class FakeDB:
 
     async def _do(self, sql, p):
         self.ops.append(sql)
-        if sql.startswith("SELECT id, message, claimed FROM proactive_pending"):
+        if sql.startswith("SELECT id, message, claimed, trigger_context FROM proactive_pending"):
             user, trig, start = p
             rows = [r for r in self.pending
                     if r["user_id"] == user and r["trigger_type"] == trig
@@ -120,35 +133,41 @@ class FakeDB:
             return _Cursor([r for r in self.announcements
                             if r["user_id"] == user and r["trigger_type"] == trig
                             and ts(r["created_at"]) >= ts(start)])
+        if sql.startswith("SELECT 1 FROM device_tokens"):
+            (panel,) = p
+            return _Cursor([{"?column?": 1}] if panel in self.device_panels else [])
         if "FROM chat_messages" in sql:
             start, end, user = p
             hits = [t for u, t in self.turns if u == user and ts(start) <= ts(t) <= ts(end)]
             return _Cursor([{"first_turn": min(hits) if hits else None}])
         if sql.startswith("INSERT INTO proactive_responses"):
-            (rid, user, trig, day, panel, pend, missed, window, created) = p
+            (rid, user, key, trig, day, panel, pend, missed, window, created) = p
             if self.enforce_unique and any(
-                r["user_id"] == user and r["trigger_type"] == trig and r["local_date"] == day
+                r["user_id"] == user and r["claim_key"] == key and r["local_date"] == day
                 for r in self.responses
             ):
                 return _Cursor([])
             self.responses.append(dict(
-                id=rid, user_id=user, trigger_type=trig, local_date=day, panel_id=panel,
+                id=rid, user_id=user, claim_key=key, trigger_type=trig, local_date=day,
+                panel_id=panel,
                 pending_id=pend, missed=missed, response_window_s=window, created_at=created,
                 announcement_id=None, spoken_at=None, outcome=None, responded=None,
                 responded_at=None, evaluated_at=None,
             ))
             return _Cursor([{"id": rid}])
         if sql.startswith("UPDATE proactive_responses SET announcement_id"):
+            if self.fail_claim_link:
+                raise RuntimeError("claim link failed")
             ann, spoken, rid = p
             for r in self.responses:
                 if r["id"] == rid:
                     r.update(announcement_id=ann, spoken_at=spoken)
             return _Cursor([])
         if "FROM proactive_responses r" in sql:
-            (trig,) = p
+            (key,) = p
             out = []
             for r in self.responses:
-                if r["trigger_type"] != trig or r["evaluated_at"] is not None:
+                if r["claim_key"] != key or r["evaluated_at"] is not None:
                     continue
                 va = next((a for a in self.announcements if a["id"] == r["announcement_id"]), {})
                 out.append({**r, "delivered_at": va.get("delivered_at"),
@@ -213,11 +232,16 @@ def h(monkeypatch):
     monkeypatch.setattr(voice_announce, "enqueue_announcement", fake_daemon_enqueue)
 
     # Today's 07:30 brief: created, unclaimed, never queued for the speaker.
-    db.pending.append(dict(id="pend-1", user_id=USER, trigger_type="morning_checkin",
-                           message=BRIEF, claimed=0, created_at=iso(local(7, 30))))
+    db.pending.append(pending_row("pend-1", local(7, 30)))
     arrival._reset_state()
     yield db, state
     arrival._reset_state()
+
+
+def pending_row(pid, created, message=BRIEF, claimed=0):
+    return dict(id=pid, user_id=USER, trigger_type="morning_checkin", message=message,
+                claimed=claimed, created_at=iso(created),
+                trigger_context=json.dumps({"spoken_guest_safe": TEASER}))
 
 
 def spoken(state):
@@ -289,8 +313,7 @@ async def test_next_day_is_a_fresh_day(h):
     assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "spoken"
     arrival._reset_state()
     state["now"] = local(8, 15, day=29)
-    db.pending.append(dict(id="pend-2", user_id=USER, trigger_type="morning_checkin",
-                           message=BRIEF, claimed=0, created_at=iso(local(7, 30, day=29))))
+    db.pending.append(pending_row("pend-2", local(7, 30, day=29)))
     assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "spoken"
     assert [r["local_date"] for r in db.responses] == ["2026-09-28", "2026-09-29"]
 
@@ -457,6 +480,147 @@ async def test_response_window_is_tunable(h, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# Greptile #1749 fixes: panel scoping, scheduled-path coordination, claim link,
+# all of today's rows
+# --------------------------------------------------------------------------- #
+async def test_the_arrival_row_is_claimable_only_by_its_own_panel(monkeypatch):
+    """A member's full brief queued for the kitchen is never played by another
+    panel's daemon — in the default claim-any mode too — while an ordinary row
+    keeps the alias-tolerant claim-any behaviour."""
+    import aiosqlite
+
+    monkeypatch.delenv("ZOE_ANNOUNCE_STRICT_PANEL", raising=False)
+    conn = await aiosqlite.connect(":memory:")
+    conn.row_factory = aiosqlite.Row
+    try:
+        await conn.execute(
+            """CREATE TABLE voice_announcements (
+                   id TEXT PRIMARY KEY, user_id TEXT NOT NULL, panel_id TEXT,
+                   message TEXT NOT NULL, trigger_type TEXT DEFAULT '',
+                   created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                   delivered_at TEXT, delivered_to TEXT,
+                   expired INTEGER NOT NULL DEFAULT 0)"""
+        )
+        await voice_announce.enqueue_announcement(
+            conn, user_id=USER, message=BRIEF, panel_id=PANEL,
+            trigger_type=arrival.TRIGGER_TYPE,
+        )
+        assert await voice_announce.claim_announcements(conn, panel_id="panel-bedroom") == []
+        [got] = await voice_announce.claim_announcements(conn, panel_id=PANEL)
+        assert got["trigger_type"] == arrival.TRIGGER_TYPE and got["text"] == BRIEF
+        # Control: an unscoped row is still claimable across panel aliases.
+        await voice_announce.enqueue_announcement(
+            conn, user_id=USER, message="toast", panel_id="panel_a1b2", trigger_type="x",
+        )
+        assert len(await voice_announce.claim_announcements(conn, panel_id="panel-bedroom")) == 1
+    finally:
+        await conn.close()
+
+
+async def test_refuses_to_queue_for_a_panel_no_daemon_can_claim(h, caplog):
+    db, state = h
+    caplog.set_level(logging.INFO, logger="proactive.arrival")
+    db.device_panels = {"zoe-touch-pi"}  # PANEL is a browser alias with no device token
+    assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "unscoped_panel"
+    assert state["daemon_enqueues"] == [] and state["panel_enqueues"] == []
+    assert db.responses == [] and USER not in arrival._done_for_day
+    assert any("outcome=unscoped_panel" in r.getMessage() for r in caplog.records)
+
+
+async def _scheduled_speak():
+    await engine._maybe_speak_notification(
+        user_id=USER, message=BRIEF, trigger_type="morning_checkin",
+        guest_safe_message=TEASER, pending_id="pend-1",
+    )
+
+
+def full_briefs(state):
+    return [e for e in state["daemon_enqueues"] if e["message"] == BRIEF]
+
+
+async def test_arrival_then_scheduled_speaks_the_brief_exactly_once(h):
+    """The race: the 07:30 brief row exists, arrival runs before the scheduled
+    path reaches its speaker lane (07:29:59 -> 07:30)."""
+    db, state = h
+    state["now"] = local(7, 30, 0)
+    assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "spoken"
+    await _scheduled_speak()
+    assert len(full_briefs(state)) == 1
+    [claim] = db.responses
+    assert claim["trigger_type"] == arrival.TRIGGER_TYPE
+
+
+async def test_scheduled_then_arrival_speaks_the_brief_exactly_once(h):
+    db, state = h
+    state["now"] = local(7, 30, 0)
+    await _scheduled_speak()
+    [claim] = db.responses
+    assert claim["trigger_type"] == "morning_checkin" and claim["announcement_id"] == "ann-1"
+    db.announcements[0]["expired"] = 1  # even if it never played, the claim holds
+    state["now"] = local(8, 0)
+    assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "done:already_fired"
+    assert len(full_briefs(state)) == 1
+
+
+async def test_negative_control_uncoordinated_paths_speak_twice(h):
+    """Without the shared claim (UNIQUE off) the same arrival-then-scheduled
+    sequence queues the brief twice — the coordination test is not vacuous."""
+    db, state = h
+    db.enforce_unique = False
+    state["now"] = local(7, 30, 0)
+    assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "spoken"
+    await _scheduled_speak()
+    assert len(full_briefs(state)) == 2
+
+
+async def test_scheduled_path_is_unchanged_with_arrival_off(h, monkeypatch):
+    db, state = h
+    monkeypatch.setenv("ZOE_PROACTIVE_BRIEF_ON_ARRIVAL", "")
+    await _scheduled_speak()
+    await _scheduled_speak()
+    assert len(full_briefs(state)) == 2  # pre-existing behaviour: no claim taken
+    assert db.responses == []
+    assert not any("proactive_responses" in op for op in db.ops)
+
+
+async def test_claim_link_failure_is_never_recorded_as_undelivered(h):
+    """Announcement insert + claim link are one transaction: a failed link
+    queues nothing, and the sweep records ``unknown`` — never ``undelivered``."""
+    db, state = h
+    db.fail_claim_link = True
+    assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "spoken"
+    assert not any(a["trigger_type"] == arrival.TRIGGER_TYPE for a in db.announcements)
+    [claim] = db.responses
+    assert claim["announcement_id"] is None
+    state["now"] += timedelta(seconds=121)
+    assert await arrival.evaluate_pending_responses() == 1
+    assert claim["outcome"] == "unknown" and claim["responded"] is None
+
+
+async def test_a_delivered_full_brief_counts_even_after_a_later_brief(h):
+    """All of today's rows are considered: a later manual brief with different
+    text cannot hide the earlier delivered one."""
+    db, state = h
+    db.announcements.append(dict(id="va-0730", user_id=USER, trigger_type="morning_checkin",
+                                 message=BRIEF, created_at=iso(local(7, 30)),
+                                 expires_at=iso(local(7, 32)), delivered_at=iso(local(7, 30, 5)),
+                                 expired=0))
+    db.pending.append(pending_row("pend-manual", local(7, 50),
+                                  message="Good morning Jason! Here's your manual brief."))
+    assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "done:already_heard"
+    assert spoken(state) == []
+
+
+async def test_an_unrecognised_delivered_text_counts_as_heard(h):
+    db, state = h
+    db.announcements.append(dict(id="va-x", user_id=USER, trigger_type="morning_checkin",
+                                 message="some other morning text", created_at=iso(local(7, 31)),
+                                 expires_at=iso(local(7, 33)), delivered_at=iso(local(7, 31, 5)),
+                                 expired=0))
+    assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "done:already_heard"
+
+
+# --------------------------------------------------------------------------- #
 # Flag off -> nothing
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("arrival_flag,spoken_flag", [("", "1"), ("1", ""), ("0", "0")])
@@ -467,7 +631,8 @@ async def test_flag_off_is_a_true_noop(h, monkeypatch, arrival_flag, spoken_flag
     assert await arrival.maybe_speak_brief_on_arrival(USER, PANEL) == "disabled"
     arrival.schedule_on_owner_presence(USER, PANEL)
     assert not arrival._tasks and not arrival._inflight
-    db.responses.append(dict(id="r0", user_id=USER, trigger_type=arrival.TRIGGER_TYPE,
+    db.responses.append(dict(id="r0", user_id=USER, claim_key=arrival.CLAIM_KEY,
+                             trigger_type=arrival.TRIGGER_TYPE,
                              local_date="2026-09-28", evaluated_at=None, announcement_id=None,
                              response_window_s=120, created_at=iso(local(7, 0))))
     assert await arrival.evaluate_pending_responses() == 0
@@ -542,6 +707,7 @@ def test_migration_0030_creates_the_claim_table_if_missing(monkeypatch):
 
     up = " ".join(_render(monkeypatch, command.upgrade, "0029:0030").split())
     assert "CREATE TABLE IF NOT EXISTS proactive_responses" in up
-    assert "UNIQUE (user_id, trigger_type, local_date)" in up
+    assert "claim_key TEXT NOT NULL" in up
+    assert "UNIQUE (user_id, claim_key, local_date)" in up
     down = _render(monkeypatch, command.downgrade, "0030:0029")
     assert "DROP TABLE IF EXISTS proactive_responses" in down

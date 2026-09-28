@@ -66,23 +66,41 @@ both default off, and with either off nothing is read or queued.
   device tokens never count. The check runs as a background task, at most every 30 s
   per member. No voice-path file is involved; face and voice claims will join once
   they have a server-side record (see above).
-- **Speaks** the stored `proactive_pending` text of today's brief, through the same
-  two lanes as the 07:30 brief, on the panel where the member was seen.
-- **Only if all hold:** 07:00–11:00 local; not quiet hours; tier `owner` on that
-  panel; not a synthetic or guest id; a brief exists today and was not opened in
-  chat; the full text was not delivered and is not still queued (a delivered
-  `bound_guest` teaser does not count as heard); no user turn from the member in
-  the last 2 minutes.
-- **Once per member per local day:** the `proactive_responses` claim row
-  (migration `0030`, `UNIQUE (user_id, trigger_type, local_date)`) decides it, not
-  process memory. A failed speak is not retried.
+- **Speaks** the latest stored `proactive_pending` text of today's brief, through the
+  same two lanes as the 07:30 brief, on the panel where the member was seen.
+- **Only if all hold:**
+  - 07:00–11:00 local, and not quiet hours;
+  - tier `owner` on that panel; not a synthetic or guest id;
+  - a brief exists today and none of today's rows was opened in chat;
+  - nothing from today was played, except a known `bound_guest` teaser. All of
+    today's rows count, so a later brief cannot hide an earlier delivery, and an
+    unrecognised text counts as heard;
+  - nothing is still queued;
+  - no user turn from the member in the last 2 minutes.
+- **Panel-scoped:** the row's trigger is in `voice_announce.PANEL_SCOPED_TRIGGERS`,
+  so only the daemon whose device-token panel matches may play it, even in the default
+  claim-any mode. If the presence panel has no live device token (a browser alias), no
+  daemon could claim it; nothing is queued and it logs `outcome=unscoped_panel`.
+- **Once per member per local day, across both paths.** The claim is a
+  `proactive_responses` row (migration `0030`,
+  `UNIQUE (user_id, claim_key, local_date)`, `claim_key = morning_brief_full`).
+  With the flag on, the 07:30 path takes the same claim before speaking the full brief
+  (`arrival.claim_scheduled_brief`). A lost claim logs `outcome=already_spoken`. So the
+  full brief is spoken once whichever path, panel or worker gets there first. With the
+  flag off, the 07:30 path is unchanged and takes no claim. A failed speak is not
+  retried.
 - **Log:** `PROACTIVE_SPOKEN trigger=morning_checkin_arrival user= panel= outcome=
   daemon_queue= tier=owner missed=absent|guest_teaser|expired`.
-- **Response signal (for B2.2):** the slow loop sets `outcome` on each claim row once
-  its window has passed. `accepted` means a user turn within
-  `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` (default 120 s) of the daemon playing it;
-  otherwise `ignored`, or `undelivered` if it never played. Each is logged as
-  `PROACTIVE_RESPONSE`.
+- **Response signal (for B2.2):** the announcement id is linked to the claim in the
+  announcement's own transaction. Once a claim row's window has passed, the slow loop
+  sets its `outcome`:
+  - `accepted`: a member user turn within `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S`
+    (default 120 s) of the daemon playing it;
+  - `ignored`: no such turn;
+  - `undelivered`: the linked row expired unplayed;
+  - `unknown`: no announcement is linked. This is never `undelivered`.
+
+  Each is logged as `PROACTIVE_RESPONSE`.
 
 ## Probe chat rows are purged nightly
 
@@ -113,7 +131,7 @@ must be added there as an exact, anchored id, or tear its sessions down with
     `voice_announcements` row.
 - **No wait:** `POST /api/proactive/trigger-morning` as the bound member with the panel on.
 - **Arrival (flag on):** `grep -E "morning_checkin_arrival|PROACTIVE_RESPONSE" ~/.zoe-logs/zoe-data.app.log`
-  and `SELECT local_date, missed, outcome, responded FROM proactive_responses ORDER BY created_at DESC`.
+  and `SELECT local_date, trigger_type, missed, outcome, responded FROM proactive_responses ORDER BY created_at DESC`.
 - **Skip counts** (read-only, live DB, 2026-09-27):
 
   | pass | kept | skipped |

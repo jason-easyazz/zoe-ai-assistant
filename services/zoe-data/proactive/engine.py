@@ -156,7 +156,7 @@ async def fire_notification(
     # raises (any spoken-path failure must not block the push).
     await _maybe_speak_notification(
         user_id=user_id, message=message, trigger_type=trigger_type,
-        guest_safe_message=ctx.get("spoken_guest_safe"),
+        guest_safe_message=ctx.get("spoken_guest_safe"), pending_id=pid,
     )
 
     deep_link = f"/chat.html?p={pid}"
@@ -222,6 +222,7 @@ def _spoken_triggers() -> set[str]:
 
 async def _speak_on_panel(
     *, user_id: str, panel_id: str, message: str, trigger_type: str,
+    claim_id: str | None = None,
 ) -> tuple[str, str, str | None]:
     """Deliver ``message`` to BOTH spoken lanes for ``panel_id``; never raises.
 
@@ -230,6 +231,10 @@ async def _speak_on_panel(
     the other. Shared by the P-W2.2 adapter below and the B2.1
     brief-on-arrival path (``proactive/arrival.py``), so both speak through
     the same mechanics and log the same per-lane outcomes.
+
+    ``claim_id`` (a ``proactive_responses`` row, brief-on-arrival only): the
+    announcement insert and the claim's ``announcement_id`` link commit in ONE
+    transaction, so a queued brief is never left unlinked from its claim.
     """
     ann_id: str | None = None
     # Lane 1: kiosk toast (panel_announce). Guarded separately so a
@@ -254,13 +259,31 @@ async def _speak_on_panel(
     try:
         import voice_announce as _voice_announce
         async with _get_compat_db() as db:
-            ann_id = await _voice_announce.enqueue_announcement(
-                db,
-                user_id=user_id,
-                panel_id=panel_id,
-                message=message,
-                trigger_type=trigger_type,
-            )
+            if claim_id is None:
+                ann_id = await _voice_announce.enqueue_announcement(
+                    db,
+                    user_id=user_id,
+                    panel_id=panel_id,
+                    message=message,
+                    trigger_type=trigger_type,
+                )
+            else:
+                async with db.transaction():
+                    queued = await _voice_announce.enqueue_announcement(
+                        db,
+                        user_id=user_id,
+                        panel_id=panel_id,
+                        message=message,
+                        trigger_type=trigger_type,
+                        commit=False,
+                    )
+                    await db.execute(
+                        "UPDATE proactive_responses SET announcement_id = ?, spoken_at = ? "
+                        "WHERE id = ?",
+                        (queued, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                         claim_id),
+                    )
+                ann_id = queued
     except Exception as exc:
         daemon_outcome = f"error:{exc}"
     return panel_outcome, daemon_outcome, ann_id
@@ -268,6 +291,7 @@ async def _speak_on_panel(
 
 async def _maybe_speak_notification(
     user_id: str, message: str, trigger_type: str, guest_safe_message: str | None = None,
+    pending_id: str | None = None,
 ) -> None:
     """P-W2.2/P-W2.3 spoken-delivery adapter: if the flag is ON, the trigger is
     allowlisted, and the user has a fresh foreground panel session
@@ -316,8 +340,22 @@ async def _maybe_speak_notification(
             log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=none outcome=absent",
                      trigger_type, user_id)
             return
+        claim_id = None
+        if tier == _presence.TIER_OWNER and trigger_type == "morning_checkin":
+            # B2.1: with brief-on-arrival on, the full brief is spoken at most
+            # once per member per day by EITHER path — the same UNIQUE claim
+            # row (a no-op, no DB, with that flag off).
+            from proactive import arrival as _arrival
+            may_speak, claim_id = await _arrival.claim_scheduled_brief(
+                user_id=user_id, panel_id=panel_id, pending_id=pending_id,
+            )
+            if not may_speak:
+                log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=already_spoken "
+                         "tier=%s", trigger_type, user_id, panel_id, tier)
+                return
         panel_outcome, daemon_outcome, _ann_id = await _speak_on_panel(
             user_id=user_id, panel_id=panel_id, message=message, trigger_type=trigger_type,
+            claim_id=claim_id,
         )
         log.info("PROACTIVE_SPOKEN trigger=%s user=%s panel=%s outcome=%s daemon_queue=%s tier=%s",
                  trigger_type, user_id, panel_id, panel_outcome, daemon_outcome, tier)

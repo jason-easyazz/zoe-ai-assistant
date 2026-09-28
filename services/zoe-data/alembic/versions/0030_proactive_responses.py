@@ -1,17 +1,19 @@
-"""0030 — proactive_responses: one row per brief-on-arrival delivery (B2.1 / B2.2).
+"""0030 — proactive_responses: one row per full morning brief spoken (B2.1 / B2.2).
 
 ``proactive/arrival.py`` (flag ``ZOE_PROACTIVE_BRIEF_ON_ARRIVAL``, default OFF)
 speaks a missed 07:30 morning brief the first time its member is present on a
-panel between 07:00 and 11:00. Each delivery takes ONE row here:
+panel between 07:00 and 11:00. With the flag on, BOTH that path and the 07:30
+path take ONE row here before speaking the full brief:
 
-  * ``UNIQUE (user_id, trigger_type, local_date)`` is the once-per-member-per-day
-    claim. ``INSERT ... ON CONFLICT DO NOTHING RETURNING id`` lets exactly one of
-    two panels (or two workers) win, so the in-process throttles are never what
+  * ``UNIQUE (user_id, claim_key, local_date)`` is the once-per-member-per-day
+    claim shared by the two paths (``trigger_type`` records which one spoke).
+    ``INSERT ... ON CONFLICT DO NOTHING RETURNING id`` lets exactly one of them
+    (or of two panels / two workers) win, so in-process throttles are never what
     keeps the brief from being spoken twice.
   * ``outcome`` / ``responded`` / ``responded_at`` are the B2.2 reward signal:
     the engine slow loop later records ``accepted`` (a user turn within
-    ``response_window_s`` of the daemon playing it), ``ignored``, or
-    ``undelivered`` (never played).
+    ``response_window_s`` of the daemon playing it), ``ignored``,
+    ``undelivered`` (expired unplayed) or ``unknown`` (no announcement linked).
 
 Timestamps are TEXT UTC (``%Y-%m-%dT%H:%M:%SZ``) like ``voice_announcements``;
 ``local_date`` is the household (``ZOE_TIMEZONE``) date. ``CREATE TABLE IF NOT
@@ -32,6 +34,7 @@ def upgrade() -> None:
         """CREATE TABLE IF NOT EXISTS proactive_responses (
                id TEXT PRIMARY KEY,
                user_id TEXT NOT NULL,
+               claim_key TEXT NOT NULL,
                trigger_type TEXT NOT NULL,
                local_date TEXT NOT NULL,
                panel_id TEXT,
@@ -45,7 +48,7 @@ def upgrade() -> None:
                responded INTEGER,
                responded_at TEXT,
                evaluated_at TEXT,
-               UNIQUE (user_id, trigger_type, local_date)
+               UNIQUE (user_id, claim_key, local_date)
            )"""
     )
 
