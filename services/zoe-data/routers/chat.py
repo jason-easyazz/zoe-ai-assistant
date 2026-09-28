@@ -957,16 +957,21 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
     memory_capture_stats.started(user_id)
     ok = False
     try:
-        await _persist_memory_candidates_impl(user_id, session_id, user_message, assistant_response)
-        ok = True
+        # The impl swallows extractor/digest exceptions (it must never crash the
+        # turn) and reports them as False — a failed capture is COMPLETED but
+        # FAILED, never a success, so a waiter (S7) cannot pass on it.
+        ok = bool(await _persist_memory_candidates_impl(
+            user_id, session_id, user_message, assistant_response))
     finally:
         memory_capture_stats.completed(user_id, ok=ok)
 
 
 async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_message: str,
-                                          assistant_response: str):
+                                          assistant_response: str) -> bool:
+    """True when every memory pass ran cleanly (or there was nothing to capture);
+    False when any pass raised — logged here, counted by the wrapper."""
     if user_id == "guest":
-        return
+        return True
     # A memory COMMAND ("forget everything about Delia", "forget that") is an
     # instruction, not a fact — mining it minted junk rows ("Gift idea for
     # everything about: Delia", live repro 2026-07-13) that resurrected the
@@ -975,7 +980,7 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
         from intent_router import _FORGET_ENTITY_RE, _FORGET_LAST_RE
         t = (user_message or "").strip()
         if _FORGET_LAST_RE.match(t) or _FORGET_ENTITY_RE.match(t):
-            return
+            return True
     except Exception:
         pass  # never let the guard break extraction itself
     # The mirror case: an EXPLICIT "remember/note that …" utterance clears any
@@ -1037,11 +1042,13 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
         # results discarded, a dying extractor vanished without a trace — whole
         # turns' facts were lost while the reply claimed "I'll remember that".
         # Name-and-shame each failed pass at WARNING so loss is visible in ops.
+        clean = True
         for _mx_name, _mx_res in zip(
             ("extract_and_ingest", "run_turn_digest", "person_extract", "person_extract_llm"),
             _mx_results,
         ):
             if isinstance(_mx_res, BaseException):
+                clean = False
                 logger.warning(
                     "memory pass %s FAILED for user=%s (fact loss possible): %s",
                     _mx_name, user_id, _mx_res,
@@ -1062,8 +1069,10 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
                 if t.exception() else None
             )
         )
+        return clean
     except Exception as e:
         logger.warning("Memory candidate persistence failed: %s", e)
+        return False
 
 
 async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:

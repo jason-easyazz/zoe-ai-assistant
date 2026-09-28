@@ -31,6 +31,12 @@ ZOE_PERF=1 \
 ... --teardown-only        # clean up a run that was killed before its own teardown
 ```
 
+Teardown quiesces before the first forget on TWO signals per demo user: a stable `/for-prompt`
+count and `capture-status in_flight == 0` (a turn digest still computing would write a row
+after the forget and falsify the count-back). If the counter is unavailable or still nonzero
+after the wait, cleanup still runs but the teardown is reported unproven (`quiesce` in the
+artifact), the pending-teardown file is kept and the run is `error`.
+
 Artifacts in `~/.cache/zoe/`:
 - `samantha_bar_last.json`: the full evidence.
 - `samantha_bar_trend.jsonl`: one line per run.
@@ -40,8 +46,8 @@ Artifacts in `~/.cache/zoe/`:
 - `samantha_bar_pending_teardown.json`: exists only while a teardown is unproven.
 
 `--compare-baseline` REFUSES before writing anything when the baseline is missing, unreadable,
-malformed JSON, lacks a `scenarios` object, or holds no / unrecognised verdicts
-(`load_baseline`) — a run that compares against nothing can never be red, so it would
+malformed JSON, lacks a `scenarios` object, holds no / unrecognised verdicts, or carries a malformed `samples`
+(must be a positive odd integer) (`load_baseline`) — a run that compares against nothing can never be red, so it would
 otherwise report `ok`. The first run is `--record-baseline` alone; it overwrites a malformed
 baseline. The two flags are mutually exclusive (argparse refuses): a regressed compare run
 must never overwrite the bar with its degraded verdicts. Compare mode also uses the
@@ -84,7 +90,7 @@ ids only). Day 2 follows.
 | S4 | A day-1 worry is acknowledged on day 2, gently and not verbatim. | `interview` must appear, the reply must share fewer than 7 consecutive words with the day-1 sentence, and the judge must say "warm, in its own words" |
 | S5 | A proactive hook, if one fires, carries the day-1 open loop. | Reads `proactive_pending` for demo A. No hook gives SKIP. An `emotional_followup` without the loop gives FAIL. |
 | S6 | Demo B never sees demo A's facts. | Deterministic: no A needle may appear in B's reply or in B's `/for-prompt` packet. If A's own packet holds none of them, the result is SKIP, because the test would be vacuous. A packet read that FAILS (either user) is ERROR — a boundary that was not inspected is never certified. |
-| S7 | A short duplicate ("my dad is Teodor") does not erase the richer fact. | The reply must name Teodor and lighthouse, and A's packet must still hold `lighthouse`. A failed packet read is ERROR. The duplicate's capture must be OBSERVED first: the harness waits on `/api/memories/capture-status` (the turn's background extraction + digest completed, nothing in flight; bounded timeout) — not observed = ERROR, never PASS. |
+| S7 | A short duplicate ("my dad is Teodor") does not erase the richer fact. | The reply must name Teodor and lighthouse, and A's packet must still hold `lighthouse`. A failed packet read is ERROR. The duplicate's capture must be OBSERVED first: the harness waits on `/api/memories/capture-status` (the turn's background extraction + digest completed, nothing in flight, and `failed` did not advance — a memory pass that raised is completed-but-FAILED; bounded timeout) — not observed or failed = ERROR, never PASS. |
 | S8 | S1 and S7 facts survive 32 filler turns spread over 3 sessions. | deterministic: `marisol` and `lighthouse`. ANY failed filler turn is ERROR, even when both names come back — the long history was not built, so the recall proves nothing. |
 
 The judge is the brain itself: llama-server `:11434` `/v1/chat/completions` with temperature 0,
@@ -98,7 +104,10 @@ Several results count as not-pass: a brain-fallback reply, an HTTP error, and an
 are all ERROR. So is an unexercised setup (`setup_problems`): a scenario whose seed turn
 failed or whose seeded fact never landed in the recall packet is ERROR and its ask is not
 even sent — S1 (sister), S2 (both homes), S4/S5 (the worry), S7 (rich dad + short duplicate),
-S8 (S1 + S7 facts, plus any failed filler turn). The fallback texts are the ones zoe-data actually serves when the brain did not
+S8 (S1 + S7 facts, plus any failed filler turn). The day-1 backdate is a precondition too:
+`Live.backdate` re-reads every day-1 session (session row + ≥1 message at the backdated
+timestamp) and the multi-day scenarios S2/S4/S5/S7 are ERROR unless all of them verified —
+an attempted backdate is not a performed one. The fallback texts are the ones zoe-data actually serves when the brain did not
 answer — `zoe_flue_client._FALLBACK_TEXT` ("Sorry, I had trouble reaching my brain just
 now…", chat + voice) and `routers/voice_tts._FALLBACK_PHRASE` — pinned to those source
 constants by `tests/unit/test_samantha_bar.py` AND re-read from the service checkout at run
@@ -147,10 +156,13 @@ removed in Postgres.
 The Postgres sweep deletes by `user_id` from every public table that has that column —
 EXCEPT the tables zoe-auth owns (`AUTH_OWNED_TABLES`: `auth_users`, `auth_sessions`,
 `password_history`, `api_keys`, … — the full list of `scripts/setup/migrate_auth_to_postgres.sql`,
-pinned by a test that parses that file). An account is not a run artefact. Immediately before any
-DELETE the sweep re-checks every id against `auth_users` with the route's semantics: a registered
-id is skipped and reported (`skipped_registered`, which makes the teardown unproven and the run
-`error`), and if `auth_users` cannot be read the whole sweep is refused.
+pinned by a test that parses that file). An account is not a run artefact. The sweep is ONE transaction:
+it re-checks every id against `auth_users` (the route's semantics) before the first DELETE, runs
+every DELETE, then re-reads `auth_users` for the same ids inside the same transaction. A
+pre-registered id is skipped and reported (`skipped_registered`, which makes the teardown
+unproven and the run `error`); an id that registered DURING the sweep rolls the whole
+transaction back — nothing is committed, `rolled_back: true` — so a registration racing the
+teardown can never cost an account its rows. If `auth_users` cannot be read the sweep is refused.
 
 ### Route contract: `GET /api/memories/capture-status?user_id=`
 
@@ -160,7 +172,10 @@ post-turn memory capture kept in `memory_capture_stats.py` — `started`, `compl
 `_persist_memory_candidates` with `asyncio.ensure_future`, so an HTTP turn returning proves
 nothing about its extraction/digest having run, and a deduplicated candidate never becomes a
 visible row; the counters (started before any early return, completed in `finally`) are the
-only completion signal. In-process, reset by a restart. Tests:
+only completion signal. `_persist_memory_candidates_impl` returns True only when every memory
+pass ran cleanly (it swallows their exceptions so the turn never crashes); anything else is
+counted as `failed`, so a waiter can distinguish "captured" from "ran and lost the fact".
+In-process, reset by a restart. Tests:
 `services/zoe-data/tests/test_memory_capture_status.py`.
 
 ### Route contract: `POST /api/memories/users/{id}/forget-synthetic`

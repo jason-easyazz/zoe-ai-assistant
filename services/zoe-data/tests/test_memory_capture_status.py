@@ -86,6 +86,7 @@ def test_persist_hook_counts_success_and_failure(monkeypatch):
 
     async def ok_impl(user_id, session_id, m, r):
         assert stats.snapshot(user_id)["in_flight"] == 1  # started BEFORE the body runs
+        return True  # the impl's contract: True = every pass clean; anything else = failed
 
     async def boom_impl(user_id, session_id, m, r):
         raise RuntimeError("digest exploded")
@@ -98,6 +99,70 @@ def test_persist_hook_counts_success_and_failure(monkeypatch):
         asyncio.run(chat._persist_memory_candidates("demo_bar_0a1b2c3d", "s", "hi", "yo"))
     s = stats.snapshot("demo_bar_0a1b2c3d")
     assert (s["started"], s["completed"], s["failed"], s["in_flight"]) == (2, 2, 1, 0)
+
+
+def _stub_passes(monkeypatch, *, extract=None, digest=None, missing=()):
+    """Stand in for the memory passes via sys.modules (the impl imports them at
+    call time) — no chroma/LLM imports in a unit test."""
+    import re
+    import sys
+    import types
+
+    async def clean(*a, **k):
+        return None
+
+    async def boom(*a, **k):
+        raise RuntimeError("extractor exploded")
+    mods = {
+        "memory_extractor": types.SimpleNamespace(extract_and_ingest=extract or clean),
+        "memory_digest": types.SimpleNamespace(run_turn_digest=digest or clean),
+        "person_extractor": types.SimpleNamespace(process_text=clean),
+        "person_extractor_llm": types.SimpleNamespace(process_text_llm=clean),
+        "latent_intent_detector": types.SimpleNamespace(detect_and_store=clean),
+        "memory_tombstones": types.SimpleNamespace(clear_matching=lambda *a: None,
+                                                  is_explicit_teach=lambda m: False),
+        "intent_router": types.SimpleNamespace(_FORGET_ENTITY_RE=re.compile(r"^forget (.+)$"),
+                                               _FORGET_LAST_RE=re.compile(r"^forget that$")),
+    }
+    for name, mod in mods.items():
+        if name in missing:
+            monkeypatch.delitem(sys.modules, name, raising=False)
+            monkeypatch.setitem(sys.modules, name, None)  # import raises ImportError
+        else:
+            monkeypatch.setitem(sys.modules, name, mod)
+    return boom
+
+
+def test_impl_reports_a_failed_memory_pass_and_the_wrapper_counts_it(monkeypatch):
+    import routers.chat as chat
+    boom = _stub_passes(monkeypatch)
+    _stub_passes(monkeypatch, extract=boom)
+    assert asyncio.run(chat._persist_memory_candidates_impl("demo_bar_0a1b2c3d", "s", "hi", "yo")) is False
+    asyncio.run(chat._persist_memory_candidates("demo_bar_0a1b2c3d", "s", "hi", "yo"))
+    s = stats.snapshot("demo_bar_0a1b2c3d")
+    assert (s["started"], s["completed"], s["failed"], s["in_flight"]) == (1, 1, 1, 0)
+
+
+def test_impl_reports_clean_capture_as_success(monkeypatch):
+    import routers.chat as chat
+    _stub_passes(monkeypatch)
+    assert asyncio.run(chat._persist_memory_candidates_impl("demo_bar_0a1b2c3d", "s", "hi", "yo")) is True
+    asyncio.run(chat._persist_memory_candidates("demo_bar_0a1b2c3d", "s", "hi", "yo"))
+    s = stats.snapshot("demo_bar_0a1b2c3d")
+    assert (s["completed"], s["failed"]) == (1, 0)
+
+
+def test_impl_nothing_to_capture_is_not_a_failure(monkeypatch):
+    import routers.chat as chat
+    _stub_passes(monkeypatch)
+    assert asyncio.run(chat._persist_memory_candidates_impl("guest", "s", "hi", "yo")) is True
+    assert asyncio.run(chat._persist_memory_candidates_impl("demo_bar_0a1b2c3d", "s", "forget that", "ok")) is True
+
+
+def test_impl_outer_failure_is_reported(monkeypatch):
+    import routers.chat as chat
+    _stub_passes(monkeypatch, missing=("memory_extractor",))  # the import itself fails
+    assert asyncio.run(chat._persist_memory_candidates_impl("demo_bar_0a1b2c3d", "s", "hi", "yo")) is False
 
 
 def test_guest_turn_is_still_counted_as_completed(monkeypatch):

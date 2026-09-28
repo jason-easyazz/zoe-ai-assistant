@@ -493,6 +493,11 @@ def setup_problems(seeds: dict[str, dict | None], landings: dict[str, dict | Non
             if (l or {}).get("kind") == "capture":
                 problems.append(f"{name}: the turn's memory capture never completed "
                                 f"({(l or {}).get('why', 'timeout')})")
+            elif (l or {}).get("kind") == "backdate":
+                problems.append(f"{name}: day-1 backdate incomplete "
+                                f"({(l or {}).get('verified_sessions', 0)}/{(l or {}).get('sessions', 0)} "
+                                f"sessions verified, {(l or {}).get('turns', 0)} turns; "
+                                f"missing={(l or {}).get('missing', [])})")
             else:
                 problems.append(f"{name} never landed in the recall packet")
     return problems
@@ -539,6 +544,10 @@ def load_baseline(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     if not scen or bad:
         what = "no scenario verdicts" if not scen else f"unrecognised verdict(s) for {', '.join(bad)}"
         return None, f"baseline {path} holds {what} — re-record it with --record-baseline"
+    samples = data.get("samples", 1)
+    if isinstance(samples, bool) or not isinstance(samples, int) or samples < 1 or samples % 2 == 0:
+        return None, (f"baseline {path} has a malformed 'samples' ({samples!r}; must be a positive "
+                      "odd integer) — re-record it with --record-baseline")
     return data, None
 
 
@@ -773,6 +782,14 @@ class Live:
             st = self.capture_status(user)
             waited = round(time.monotonic() - t0, 1)
             if st and st["completed"] > before["completed"] and not st.get("in_flight"):
+                failed_since = int(st.get("failed") or 0) - int(before.get("failed") or 0)
+                if failed_since > 0:
+                    # Completed, but a memory pass raised: the duplicate was NOT
+                    # captured. Never landed — S7 must not score it.
+                    return {"landed": False, "kind": "capture", "waited_s": waited,
+                            "completed": st["completed"], "failed": st.get("failed"),
+                            "why": f"capture FAILED ({failed_since} memory pass failure(s) "
+                                   "since the turn)"}
                 return {"landed": True, "kind": "capture", "waited_s": waited,
                         "completed": st["completed"], "failed": st.get("failed")}
             if time.monotonic() - t0 > timeout_s:
@@ -883,21 +900,39 @@ class Live:
                 await conn.close()
         return asyncio.run(_run())
 
-    def backdate(self, session_ids: list[str], age_s: int) -> int:
-        """samantha_live's set_session_age, on OUR session ids only."""
+    def backdate(self, session_ids: list[str], age_s: int) -> dict[str, Any]:
+        """samantha_live's set_session_age, on OUR session ids only — VERIFIED.
+
+        Returns {"ok", "sessions", "verified_sessions", "turns", "missing"}: ok
+        only when every session id has its session row AND at least one message
+        row re-read at the backdated timestamp. A partial or empty backdate
+        (chat persistence regressed, a row missing) would otherwise leave
+        S2/S4/S7 running as same-day scenarios while claiming multi-day."""
         created = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=age_s)).isoformat()
+        for sid in session_ids:
+            if not sid.startswith("bar-"):
+                raise ValueError(f"refusing to backdate foreign session {sid!r}")
 
         async def _f(conn):
             n = 0
             for sid in session_ids:
-                if not sid.startswith("bar-"):
-                    raise ValueError(f"refusing to backdate foreign session {sid!r}")
                 r = await conn.execute("UPDATE chat_messages SET created_at = $1 WHERE session_id = $2",
                                        created, sid)
                 n += int(r.split()[-1])
                 await conn.execute("UPDATE chat_sessions SET created_at = $1, updated_at = $1 "
                                    "WHERE id = $2", created, sid)
-            return n
+            # Re-read: the exact value we wrote (created_at is TEXT).
+            msg_rows = {r["session_id"]: int(r["n"]) for r in await conn.fetch(
+                "SELECT session_id, count(*) AS n FROM chat_messages "
+                "WHERE session_id = ANY($1::text[]) AND created_at = $2 GROUP BY session_id",
+                session_ids, created)}
+            sess_rows = {r["id"] for r in await conn.fetch(
+                "SELECT id FROM chat_sessions WHERE id = ANY($1::text[]) AND created_at = $2",
+                session_ids, created)}
+            missing = [s for s in session_ids if s not in sess_rows or msg_rows.get(s, 0) < 1]
+            return {"ok": bool(session_ids) and not missing, "sessions": len(session_ids),
+                    "verified_sessions": len(session_ids) - len(missing), "turns": n,
+                    "missing": missing}
         return self.db(_f)
 
     def proactive_hooks(self, user: str) -> list[dict]:
@@ -923,9 +958,20 @@ def count_export_rows(body: dict) -> int | None:
 # Teardown — the load-bearing part
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _RegisteredDuringSweep(Exception):
+    """Raised inside the sweep transaction to roll it back: an id became a
+    registered account between the pre-check and the deletes."""
+
+
 async def db_teardown(conn, users: list[str], sessions: list[str]) -> dict[str, Any]:
     """Delete every Postgres row the run created, by exact demo id / session id,
-    then COUNT them back. Returns {"deleted": {...}, "remaining": {...}}."""
+    then COUNT them back. Returns {"deleted": {...}, "remaining": {...},
+    "skipped_registered": [...], "rolled_back": bool}.
+
+    The whole sweep is ONE transaction: pre-check auth_users → every DELETE →
+    re-read auth_users for the same ids. An id that registered in between makes
+    the transaction ROLL BACK (nothing committed, the id reported), so a race
+    between registration and teardown can never cost an account its rows."""
     for u in users:
         assert_demo_user(u)
     for s in sessions:
@@ -947,47 +993,68 @@ async def db_teardown(conn, users: list[str], sessions: list[str]) -> dict[str, 
     if not await _exists("auth_users"):
         raise RuntimeError("auth_users not found: cannot verify the demo ids are unregistered "
                            "— sweep refused")
-    registered = sorted({str(r["user_id"]) for r in await conn.fetch(
-        "SELECT user_id FROM auth_users WHERE user_id::text = ANY($1::text[])", users)})
-    if registered:
-        print(f"  db teardown: NOT sweeping registered account(s) {registered}", file=sys.stderr)
-        users = [u for u in users if u not in registered]
 
-    # Chat rows: every session OWNED by a demo user (covers a killed run whose
-    # session list was never written), plus the messages in them.
-    own = [r["id"] for r in await conn.fetch(
-        "SELECT id FROM chat_sessions WHERE user_id = ANY($1::text[])", users)]
-    deleted["chat_messages"] = _n(await conn.execute(
-        "DELETE FROM chat_messages WHERE session_id = ANY($1::text[])", own))
-    if await _exists("memory_consolidation_state"):
-        deleted["memory_consolidation_state"] = _n(await conn.execute(
-            "DELETE FROM memory_consolidation_state WHERE session_id = ANY($1::text[])", own))
-    deleted["chat_sessions"] = _n(await conn.execute(
-        "DELETE FROM chat_sessions WHERE id = ANY($1::text[])", own))
-    # Every public base table with a user_id column, by exact demo id (compared as
-    # text, so an integer user_id column cannot error the sweep). FK order is
-    # unknown, so retry the tables a foreign key refused.
-    tables = sorted({r["table_name"] for r in await conn.fetch(
-        "SELECT c.table_name FROM information_schema.columns c JOIN information_schema.tables t "
-        "ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
-        "WHERE c.table_schema = 'public' AND c.column_name = 'user_id' "
-        "AND t.table_type = 'BASE TABLE'")} - AUTH_OWNED_TABLES)
-    pending = list(tables)
-    for _ in range(4):
-        retry = []
-        for t in pending:
-            try:
-                deleted[t] = deleted.get(t, 0) + _n(await conn.execute(
-                    f'DELETE FROM "{t}" WHERE user_id::text = ANY($1::text[])', users))
-            except Exception as exc:  # noqa: BLE001 — FK order: retry next pass
-                if "foreign key" in str(exc).lower():
-                    retry.append(t)
-                else:
-                    raise
-        if not retry:
-            break
-        pending = retry
-    deleted["users"] = _n(await conn.execute("DELETE FROM users WHERE id = ANY($1::text[])", users))
+    async def _registered(ids: list[str]) -> list[str]:
+        return sorted({str(r["user_id"]) for r in await conn.fetch(
+            "SELECT user_id FROM auth_users WHERE user_id::text = ANY($1::text[])", ids)})
+
+    all_users, tables, rolled_back = list(users), [], False
+    late: list[str] = []
+    try:
+        async with conn.transaction():
+            registered = await _registered(users)
+            if registered:
+                print(f"  db teardown: NOT sweeping registered account(s) {registered}",
+                      file=sys.stderr)
+                users = [u for u in users if u not in registered]
+
+            # Chat rows: every session OWNED by a demo user (covers a killed run whose
+            # session list was never written), plus the messages in them.
+            own = [r["id"] for r in await conn.fetch(
+                "SELECT id FROM chat_sessions WHERE user_id = ANY($1::text[])", users)]
+            deleted["chat_messages"] = _n(await conn.execute(
+                "DELETE FROM chat_messages WHERE session_id = ANY($1::text[])", own))
+            if await _exists("memory_consolidation_state"):
+                deleted["memory_consolidation_state"] = _n(await conn.execute(
+                    "DELETE FROM memory_consolidation_state WHERE session_id = ANY($1::text[])", own))
+            deleted["chat_sessions"] = _n(await conn.execute(
+                "DELETE FROM chat_sessions WHERE id = ANY($1::text[])", own))
+            # Every public base table with a user_id column, by exact demo id (compared as
+            # text, so an integer user_id column cannot error the sweep). FK order is
+            # unknown, so retry the tables a foreign key refused.
+            tables = sorted({r["table_name"] for r in await conn.fetch(
+                "SELECT c.table_name FROM information_schema.columns c JOIN information_schema.tables t "
+                "ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
+                "WHERE c.table_schema = 'public' AND c.column_name = 'user_id' "
+                "AND t.table_type = 'BASE TABLE'")} - AUTH_OWNED_TABLES)
+            pending = list(tables)
+            for _ in range(4):
+                retry = []
+                for t in pending:
+                    try:
+                        deleted[t] = deleted.get(t, 0) + _n(await conn.execute(
+                            f'DELETE FROM "{t}" WHERE user_id::text = ANY($1::text[])', users))
+                    except Exception as exc:  # noqa: BLE001 — FK order: retry next pass
+                        if "foreign key" in str(exc).lower():
+                            retry.append(t)
+                        else:
+                            raise
+                if not retry:
+                    break
+                pending = retry
+            deleted["users"] = _n(await conn.execute(
+                "DELETE FROM users WHERE id = ANY($1::text[])", users))
+            # The race: an account registered under one of these ids AFTER the
+            # pre-check. Re-read inside the same transaction; any hit rolls back
+            # every delete above.
+            late = await _registered(users)
+            if late:
+                raise _RegisteredDuringSweep(late)
+    except _RegisteredDuringSweep:
+        rolled_back, deleted = True, {}
+        registered = sorted(set(registered) | set(late))
+        print(f"  db teardown: ROLLED BACK — registered during the sweep: {late}", file=sys.stderr)
+    users = [u for u in all_users if u not in registered]
 
     remaining: dict[str, int] = {}
     for t in tables:
@@ -1001,7 +1068,7 @@ async def db_teardown(conn, users: list[str], sessions: list[str]) -> dict[str, 
         "OR metadata LIKE ANY($2::text[])", sessions, [f'%"{u}"%' for u in users])
     remaining["users"] = await conn.fetchval("SELECT count(*) FROM users WHERE id = ANY($1::text[])", users)
     return {"deleted": {k: v for k, v in deleted.items() if v}, "remaining": remaining,
-            "skipped_registered": registered}
+            "skipped_registered": registered, "rolled_back": rolled_back}
 
 
 def teardown_verdict(store: dict[str, dict], db: dict[str, Any] | None) -> tuple[bool, list[str]]:
@@ -1030,18 +1097,30 @@ def teardown(live: Live, users: list[str], sessions: list[str]) -> dict[str, Any
     can land after the first forget)."""
     for u in users:
         assert_demo_user(u)
-    # Quiesce: wait until each user's packet count is stable (background digests).
+    # Quiesce: each user's packet count stable AND no capture task in flight. Two
+    # equal packet counts only prove the store was quiet for ten seconds — a turn
+    # digest still computing would write a row after the forget and the proof
+    # would be false. The capture counters are the real signal; unavailable or
+    # nonzero after the wait = the teardown cannot be proven.
+    quiesce: dict[str, dict[str, Any]] = {}
     for u in users:
-        last, stable = None, 0
-        for _ in range(12):
+        last, stable, in_flight = None, 0, None
+        for _ in range(24):
             c = live.packet_count(u)
+            st = live.capture_status(u)
+            in_flight = int(st.get("in_flight") or 0) if st else None
             stable = stable + 1 if (c is not None and c == last) else 0
             last = c
-            if stable >= 2:
+            if stable >= 2 and in_flight == 0:
                 break
             time.sleep(5)
+        quiesce[u] = {"in_flight": in_flight, "packet": last}
+    quiesce_problems = [
+        f"{u}: capture status unavailable — quiescence cannot be proven" if q["in_flight"] is None
+        else f"{u}: capture not quiescent (in_flight={q['in_flight']})"
+        for u, q in quiesce.items() if q["in_flight"] != 0]
     out: dict[str, Any] = {"users": users, "sessions": len(sessions), "rounds": [],
-                           "forget_mode": getattr(live, "forget_mode", "?")}
+                           "forget_mode": getattr(live, "forget_mode", "?"), "quiesce": quiesce}
     db_res = None
     ok, problems = False, ["not attempted"]
     for rnd in range(2):
@@ -1054,6 +1133,8 @@ def teardown(live: Live, users: list[str], sessions: list[str]) -> dict[str, Any
         time.sleep(10 if rnd == 0 else 5)
         store = {u: {"residual": live.residual_count(u), "packet": live.packet_count(u)} for u in users}
         ok, problems = teardown_verdict(store, db_res)
+        if quiesce_problems:  # cleanup still ran, but a count-back under live capture proves nothing
+            ok, problems = False, problems + quiesce_problems
         out["rounds"].append({"forget_removed": removed, "store": store,
                               "db_deleted": (db_res or {}).get("deleted"), "problems": problems})
         if ok:
@@ -1128,8 +1209,16 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     land["S7_rich"] = live.wait_landed(a, ASK_DAD, ("lighthouse",))
     if backdate:
         day1 = [s for s in live.sessions.get(a, []) if s.startswith("bar-d1-")]
-        n = live.backdate(day1, 26 * 3600)
-        log(f"backdated {len(day1)} day-1 session(s) ({n} turns) by 26h")
+        bd = live.backdate(day1, 26 * 3600) if day1 else {"ok": False, "sessions": 0,
+                                                            "verified_sessions": 0, "turns": 0,
+                                                            "missing": []}
+        # The day boundary is a precondition of S2/S4/S5/S7: gate them on the
+        # VERIFIED backdate, not on the update having been attempted.
+        land["backdate"] = {"landed": bool(bd.get("ok")), "kind": "backdate", **bd}
+        log(f"backdated {bd.get('verified_sessions')}/{bd.get('sessions')} day-1 session(s) "
+            f"({bd.get('turns')} turns) by 26h ok={bd.get('ok')}")
+    else:
+        land["backdate"] = {"landed": True, "kind": "backdate", "skipped": True}  # diagnostic run
 
     # Day 2 ------------------------------------------------------------------
     log("day 2: S2 move + ask; S7 short dup + ask; S4; S3")
@@ -1137,7 +1226,7 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     land["S2_new"] = live.wait_landed(a, ASK_HOME, ("hobart",))
     # Supersession needs BOTH facts present: without Dunedin landed, a Hobart-only
     # reply proves nothing.
-    if setup_ok("S2", ("d1-home", "d2-home"), ("S2_old", "S2_new")):
+    if setup_ok("S2", ("d1-home", "d2-home"), ("S2_old", "S2_new", "backdate")):
         v, ev = _ask_judged(live, a, "d2-ask-home", ASK_HOME, samples, score_s2, "S2")
         put("S2", v, landed={"old": land["S2_old"], "new": land["S2_new"]}, **ev)
 
@@ -1147,7 +1236,7 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     cap_before = live.capture_status(a)
     say(a, "d2-dad", SAY_DAD_SHORT)
     land["S7_dup"] = live.wait_captured(a, cap_before)
-    if setup_ok("S7", ("d1-dad", "d2-dad"), ("S7_rich", "S7_dup")):
+    if setup_ok("S7", ("d1-dad", "d2-dad"), ("S7_rich", "S7_dup", "backdate")):
         t = live.chat(a, "d2-ask-dad", ASK_DAD)
         pkt = live.packet(a, ASK_DAD)
         if t["error"]:
@@ -1156,7 +1245,7 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             v, ev = score_s7(t["reply"], pkt)
             put("S7", v, landed=land["S7_rich"], ask={**live.evidence(t), **ev})
 
-    if setup_ok("S4", ("d1-worry",), ("S4",)):
+    if setup_ok("S4", ("d1-worry",), ("S4", "backdate")):
         v, ev = _ask_judged(live, a, "d2-edge", ASK_WORRY, samples, score_s4, "S4")
         put("S4", v, landed=land["S4"], **ev)
 
@@ -1164,7 +1253,7 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     put("S3", v, **ev)
 
     # S5: proactive hooks for demo A (Postgres read) --------------------------
-    if setup_ok("S5", ("d1-worry",), ("S4",)):  # no open loop seeded = nothing to carry
+    if setup_ok("S5", ("d1-worry",), ("S4", "backdate")):  # no open loop seeded = nothing to carry
         try:
             v, ev = score_s5(live.proactive_hooks(a))
         except Exception as exc:  # noqa: BLE001

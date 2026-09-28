@@ -349,9 +349,22 @@ class _Conn:
     """Records every statement; answers the few queries db_teardown makes.
     information_schema reports zoe-auth's tables too (they DO carry user_id)."""
 
-    def __init__(self, left=0, registered=(), auth_missing=False):
+    def __init__(self, left=0, registered=(), auth_missing=False, late_registered=()):
         self.sql, self.left = [], left
         self.registered, self.auth_missing = set(registered), auth_missing
+        self.late_registered, self.auth_reads = set(late_registered), 0
+
+    def transaction(self):
+        conn = self
+
+        class _Tx:
+            async def __aenter__(self):
+                conn.sql.append(("BEGIN", ()))
+
+            async def __aexit__(self, et, ev, tb):
+                conn.sql.append(("ROLLBACK" if et else "COMMIT", ()))
+                return False
+        return _Tx()
 
     async def fetch(self, q, *a):
         self.sql.append((q, a))
@@ -359,7 +372,10 @@ class _Conn:
             return [{"table_name": t} for t in ("people", "chat_sessions", "auth_users",
                                                 "auth_sessions", "password_history", "api_keys")]
         if "FROM auth_users" in q:
-            return [{"user_id": u} for u in a[0] if u in self.registered]
+            self.auth_reads += 1
+            # The second read (after the deletes) also sees ids registered DURING the sweep.
+            seen = self.registered | (self.late_registered if self.auth_reads >= 2 else set())
+            return [{"user_id": u} for u in a[0] if u in seen]
         return [{"id": "bar-x-1"}]
 
     async def fetchval(self, q, *a):
@@ -422,6 +438,32 @@ def test_sweep_skips_a_registered_demo_shaped_id_and_reports_it():
     assert not ok and any("skipped registered" in p and A in p for p in problems)
 
 
+def _kinds(conn):
+    return [q.split()[0].upper() for q, _ in conn.sql]
+
+
+def test_sweep_is_one_transaction_with_a_recheck_after_the_deletes():
+    conn = _Conn()
+    out = asyncio.run(sb.db_teardown(conn, [A, B], ["bar-x-1"]))
+    kinds = _kinds(conn)
+    first_delete, last_delete = kinds.index("DELETE"), len(kinds) - 1 - kinds[::-1].index("DELETE")
+    assert kinds.index("BEGIN") < first_delete and kinds.index("COMMIT") > last_delete
+    assert "ROLLBACK" not in kinds and conn.auth_reads == 2
+    auth_positions = [i for i, (q, _) in enumerate(conn.sql) if "FROM auth_users" in q]
+    assert auth_positions[0] < first_delete < last_delete < auth_positions[1] < kinds.index("COMMIT")
+    assert out["rolled_back"] is False and out["skipped_registered"] == []
+
+
+def test_registration_during_the_sweep_rolls_back_every_delete():
+    conn = _Conn(late_registered=[A])
+    out = asyncio.run(sb.db_teardown(conn, [A, B], ["bar-x-1"]))
+    kinds = _kinds(conn)
+    assert "DELETE" in kinds and "ROLLBACK" in kinds and "COMMIT" not in kinds
+    assert out["rolled_back"] is True and out["deleted"] == {} and A in out["skipped_registered"]
+    ok, problems = sb.teardown_verdict({A: {"residual": 0, "packet": 0}, B: {"residual": 0, "packet": 0}}, out)
+    assert not ok and any("skipped registered" in p and A in p for p in problems)
+
+
 def test_sweep_is_refused_when_registration_cannot_be_verified():
     conn = _Conn(auth_missing=True)
     with pytest.raises(RuntimeError, match="auth_users"):
@@ -437,12 +479,15 @@ def test_db_teardown_refuses_foreign_identities():
 
 
 class _FakeLive:
-    def __init__(self, export_counts, db_left=0):
+    def __init__(self, export_counts, db_left=0, in_flight=0):
         self.export_counts, self.db_left = list(export_counts), db_left
-        self.forgot = []
+        self.forgot, self.in_flight = [], in_flight
 
     def packet_count(self, u):
         return 0
+
+    def capture_status(self, u):
+        return None if self.in_flight is None else {"completed": 1, "in_flight": self.in_flight}
 
     def forget(self, u):
         self.forgot.append(u)
@@ -466,6 +511,48 @@ def test_teardown_reports_unproven(monkeypatch):
     monkeypatch.setattr(sb.time, "sleep", lambda s: None)
     out = sb.teardown(_FakeLive(export_counts=[0, 0], db_left=1), [A], [])
     assert not out["proven"] and any("row(s) left" in p for p in out["problems"])
+
+
+@pytest.mark.parametrize("in_flight, marker", [(1, "not quiescent"), (None, "unavailable")])
+def test_teardown_is_unproven_while_capture_is_in_flight_or_unknown(monkeypatch, in_flight, marker):
+    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    live = _FakeLive(export_counts=[0, 0], in_flight=in_flight)
+    out = sb.teardown(live, [A], ["bar-x-1"])
+    assert live.forgot  # cleanup still ran
+    assert not out["proven"] and any(marker in p and A in p for p in out["problems"])
+    assert out["quiesce"][A]["in_flight"] == in_flight
+
+
+def test_live_backdate_is_verified(monkeypatch):
+    live = sb.Live("tok", "", "postgresql://x", False)
+
+    class _BdConn:
+        def __init__(self, session_rows_ok=True, msg_rows_ok=True):
+            self.ok_s, self.ok_m, self.sql = session_rows_ok, msg_rows_ok, []
+
+        async def execute(self, q, *a):
+            self.sql.append(q)
+            return "UPDATE 2" if "chat_messages" in q else "UPDATE 1"
+
+        async def fetch(self, q, *a):
+            self.sql.append(q)
+            if "FROM chat_messages" in q:
+                return [{"session_id": s, "n": 2} for s in a[0]] if self.ok_m else []
+            return [{"id": s} for s in a[0]] if self.ok_s else []
+    conn = _BdConn()
+    monkeypatch.setattr(live, "db", lambda fn: asyncio.run(fn(conn)))
+    out = live.backdate(["bar-d1-a", "bar-d1-b"], 26 * 3600)
+    assert out == {"ok": True, "sessions": 2, "verified_sessions": 2, "turns": 4, "missing": []}
+    assert any("count(*)" in q for q in conn.sql)  # it re-read, not just wrote
+    conn = _BdConn(session_rows_ok=False)
+    monkeypatch.setattr(live, "db", lambda fn: asyncio.run(fn(conn)))
+    out = live.backdate(["bar-d1-a"], 26 * 3600)
+    assert out["ok"] is False and out["missing"] == ["bar-d1-a"] and out["verified_sessions"] == 0
+    conn = _BdConn(msg_rows_ok=False)
+    monkeypatch.setattr(live, "db", lambda fn: asyncio.run(fn(conn)))
+    assert live.backdate(["bar-d1-a"], 26 * 3600)["ok"] is False
+    with pytest.raises(ValueError):
+        live.backdate(["web_1"], 1)
 
 
 def test_count_export_rows_unknown_shape_is_none():
@@ -667,11 +754,13 @@ class _ScriptedLive(sb.Live):
     """Drives run_scenarios with no network: every turn answers with the needles
     the scenario wants, so the ONLY way a scenario errors is a setup problem."""
 
-    def __init__(self, seed_errors=(), unlanded=(), filler_errors=0, capture_stalls=False):
+    def __init__(self, seed_errors=(), unlanded=(), filler_errors=0, capture_stalls=False,
+                 backdate_incomplete=False):
         super().__init__("tok", "", "postgresql://x", False)
         self.seed_errors, self.unlanded = set(seed_errors), set(unlanded)
         self.filler_errors, self.chats = filler_errors, []
         self.capture_stalls, self.waited_capture = capture_stalls, []
+        self.backdate_incomplete, self.backdated = backdate_incomplete, []
 
     def capture_status(self, user):
         return {"completed": len(self.chats), "in_flight": 0}
@@ -684,6 +773,7 @@ class _ScriptedLive(sb.Live):
 
     def chat(self, user, tag, message):
         self.chats.append(tag)
+        self.sessions.setdefault(user, []).append(f"bar-{tag}-{len(self.chats)}")
         if tag in self.seed_errors or (tag.startswith("filler-") and self.filler_errors
                                        and len([c for c in self.chats if c.startswith("filler-")])
                                        <= self.filler_errors):
@@ -702,7 +792,12 @@ class _ScriptedLive(sb.Live):
         return "" if user == B else "- dad Teodor, retired lighthouse keeper; sister Marisol"
 
     def backdate(self, session_ids, age_s):
-        return 0
+        self.backdated.append(list(session_ids))
+        if self.backdate_incomplete:
+            return {"ok": False, "sessions": len(session_ids), "verified_sessions": 1,
+                    "turns": 2, "missing": session_ids[1:]}
+        return {"ok": True, "sessions": len(session_ids), "verified_sessions": len(session_ids),
+                "turns": 2 * len(session_ids), "missing": []}
 
     def proactive_hooks(self, user):
         return []
@@ -711,12 +806,25 @@ class _ScriptedLive(sb.Live):
         return {}
 
 
-def _drive(monkeypatch, **live_kw):
+def _drive(monkeypatch, backdate=True, **live_kw):
     monkeypatch.setattr(sb, "_ask_judged", lambda live, u, tag, q, n, scorer, sid: ("PASS", {}))
     monkeypatch.setattr(sb.time, "sleep", lambda s: None)
     live = _ScriptedLive(**live_kw)
-    res = {r["id"]: r for r in sb.run_scenarios(live, A, B, 1, False, lambda m: None)}
+    res = {r["id"]: r for r in sb.run_scenarios(live, A, B, 1, backdate, lambda m: None)}
     return live, res
+
+
+def test_backdate_is_verified_and_gates_the_multi_day_scenarios(monkeypatch):
+    live, res = _drive(monkeypatch)
+    assert live.backdated and all(s.startswith("bar-d1-") for s in live.backdated[0])
+    assert {res[s]["verdict"] for s in ("S2", "S4", "S7")} == {"PASS"}
+    live, res = _drive(monkeypatch, backdate_incomplete=True)
+    for sid in ("S2", "S4", "S5", "S7"):
+        assert res[sid]["verdict"] == "ERROR" and "day-1 backdate incomplete" in res[sid]["evidence"]["why"], sid
+    assert "d2-ask-home" not in live.chats and "d2-ask-dad" not in live.chats
+    assert res["S1"]["verdict"] == "PASS" and res["S8"]["verdict"] == "PASS"  # same-day scenarios unaffected
+    live, res = _drive(monkeypatch, backdate=False, backdate_incomplete=True)  # diagnostic run: not gated
+    assert res["S2"]["verdict"] == "PASS" and live.backdated == []
 
 
 def test_healthy_run_has_every_scenario_and_no_setup_errors(monkeypatch):
@@ -778,6 +886,14 @@ def test_live_wait_captured_semantics(monkeypatch):
     monkeypatch.setattr(live, "capture_status", lambda u: {"completed": 3, "in_flight": 0})
     out = live.wait_captured(A, {"completed": 3, "in_flight": 0}, timeout_s=10)
     assert out["landed"] is False and "not completed" in out["why"]
+    # Completed but a memory pass FAILED since the turn: the duplicate was not captured.
+    monkeypatch.setattr(live, "capture_status",
+                        lambda u: {"completed": 4, "failed": 1, "in_flight": 0})
+    out = live.wait_captured(A, {"completed": 3, "failed": 0, "in_flight": 0}, timeout_s=10)
+    assert out["landed"] is False and "capture FAILED" in out["why"]
+    # A failure that predates the turn does not poison it.
+    out = live.wait_captured(A, {"completed": 3, "failed": 1, "in_flight": 0}, timeout_s=10)
+    assert out["landed"] is True
     monkeypatch.setattr(live, "capture_status", lambda u: None)
     assert "unavailable" in live.wait_captured(A, {"completed": 0}, timeout_s=10)["why"]
 
@@ -855,6 +971,23 @@ def test_compare_and_record_are_mutually_exclusive(capsys):
     with pytest.raises(SystemExit):
         sb.main(["--dry-run", "--compare-baseline", "--record-baseline"])
     assert "mutually exclusive" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("samples", ["three", 0, 2, -1, True, 1.5, None])
+def test_baseline_with_a_malformed_sample_count_is_refused(tmp_path, samples):
+    p = tmp_path / "b.json"
+    p.write_text(json.dumps({**_base(S1="PASS"), "samples": samples}))
+    base, why = sb.load_baseline(p)
+    assert base is None and "'samples'" in why and repr(samples) in why
+
+
+def test_compare_refuses_cleanly_on_a_malformed_sample_count(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    (tmp_path / "b.json").write_text(json.dumps({**_base(S1="PASS"), "samples": "three"}))
+    calls = _must_not_run(monkeypatch)
+    assert sb.main(args + ["--compare-baseline"]) == 2 and calls == []  # no ValueError, no run
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "refused" and "'samples'" in res["reason"] and "'three'" in res["reason"]
 
 
 def test_baseline_without_usable_verdicts_is_refused(tmp_path):
