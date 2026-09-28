@@ -5088,6 +5088,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # brain entirely (voice_presence-style fast-path). Flag-gated OFF.
     try:
         from conversation_opener import (
+            broadcast_conversation_turn,
             conversation_opener_enabled,
             is_conversation_ender,
             maybe_conversation_opener,
@@ -5118,6 +5119,19 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             _ack_audio = await _synthesize_kokoro_sidecar(_fast_ack)
         except Exception as _tts_exc:
             logger.warning("voice/turn_stream conversation ack TTS failed: %s", _tts_exc)
+
+        # Panel text for the ack + the conversation flags (voice:responding/done),
+        # as every voice_command turn already emits. A speculative turn's push
+        # waits for the verdict and is dropped on cancel, like its other effects.
+        _ui_push = broadcast_conversation_turn(panel_id, _fast_ack, _fast_flags)
+        if _spec_gate is None:
+            await _ui_push
+        else:
+            _ui_token = _speculation.bind(_spec_gate)
+            try:
+                _spawn_bg(_ui_push)
+            finally:
+                _speculation.unbind(_ui_token)
 
         async def _fast_stream():
             yield (_json.dumps({"transcript": transcript}) + "\n").encode()
