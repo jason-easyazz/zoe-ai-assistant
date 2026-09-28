@@ -682,6 +682,28 @@ async def test_stale_cookie_at_start_is_cleared_and_surfaced(monkeypatch):
     await ys.cancel_session(res["session_id"])
 
 
+async def test_a_login_during_the_stale_check_is_not_wiped(monkeypatch):
+    # YouTube says the start cookie is signed out, but by the time that answer
+    # arrives the person has signed in: the jar holds a NEW cookie. Wiping now
+    # would erase the fresh login — it must be validated and saved instead.
+    ctx, _procs = _stub_rig(monkeypatch, STALE_COOKIES, then=FRESH_COOKIES, after=1)
+    monkeypatch.setattr(ys, "SESSION_TIMEOUT_S", 2)
+    seen = _validator(monkeypatch, False, True)
+    saves = _no_save(monkeypatch)
+    monkeypatch.setattr(ys, "_store_username", lambda u: None)
+
+    async def _no_instance(prov):
+        return None
+    monkeypatch.setattr(music_service, "provider_instance_id", _no_instance)
+
+    res = await ys.start_session()
+    await ys._SESSION["watcher"]
+    assert ctx.cleared == []  # the fresh login was never wiped
+    assert ys.session_status(res["session_id"])["state"] == "connected"
+    assert seen == ["stale-old-value", "fresh-new-value"]
+    assert len(saves) == 1 and "fresh-new-value" in saves[0]["cookie"]
+
+
 async def test_stale_notice_reaches_a_late_watcher(monkeypatch):
     # The router registers watch() after start_session returns; if the start
     # check already wiped the cookie by then, the notice still goes out.

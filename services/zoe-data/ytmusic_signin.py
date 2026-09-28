@@ -570,9 +570,20 @@ async def _judge_baseline(session: dict[str, Any], header: str, fingerprint: str
         session["baseline_unverified"] = True
         return False
     session["baseline_unverified"] = False
+    context = session.get("context")
+    # The check took a network round trip: if the person signed in meanwhile,
+    # the jar no longer holds the cookie we judged — wiping now would erase
+    # their fresh login. Leave it; the watcher validates the new cookie.
+    try:
+        _h, _n, current = await _probe_context(context)
+    except Exception:  # noqa: BLE001 — can't tell: don't wipe
+        current = None
+    if current != fingerprint:
+        logger.info("ytmusic sign-in: profile cookie was stale, but a new login arrived "
+                    "meanwhile — not clearing")
+        return False
     logger.info("ytmusic sign-in: profile cookie is stale (validation failed) — "
                 "clearing its Google/YouTube cookies")
-    context = session.get("context")
     await _clear_stale_login(context)
     try:
         _h, _n, after = await _probe_context(context)
