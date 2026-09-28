@@ -146,22 +146,104 @@ def test_vad_mode_falls_back_to_amplitude_without_silero():
     assert g["_Endpointer"]().mode == "amplitude"
 
 
+def _barge_globals(active_playback):
+    """Exec the REAL barge-in source (playback registry, _BargeDetector, the fire
+    helper and _BargeMonitor) with stubbed daemon globals — no numpy, no mic."""
+    import threading
+    import types
+    from collections import deque
+
+    reg = re.search(r"\ndef _register_tts_process\(.*?(?=\n\n# ── Resemblyzer)", _SRC, re.DOTALL)
+    mon = re.search(r"\n_CHUNK_S = .*?(?=\n\ndef _drain_barge_queue)", _SRC, re.DOTALL)
+    assert reg and mon, "barge-in source blocks not found in daemon"
+    clock = {"t": 1000.0}
+    g = {
+        "np": np, "deque": deque, "threading": threading,
+        "time": types.SimpleNamespace(monotonic=lambda: clock["t"]),
+        "pyaudio": types.SimpleNamespace(paInt16=8, PyAudio=object),
+        "log": types.SimpleNamespace(info=lambda *a, **k: None, debug=lambda *a, **k: None),
+        "subprocess": types.SimpleNamespace(Popen=object),
+        "SAMPLE_RATE": 16000, "CHUNK_SIZE": 1280, "_INPUT_DEVICE_INDEX": None,
+        "BARGE_IN_ENABLED": True, "BARGE_IN_THRESHOLD": 0.5,
+        "BARGE_MIN_CHUNKS": 3, "BARGE_WINDOW_CHUNKS": 6, "BARGE_GRACE_MS": 800,
+        "BARGE_FAST_PROB": 0.95, "BARGE_FAST_CHUNKS": 2,
+        "_barge_in_requested": threading.Event(), "_shutdown": threading.Event(),
+        "_tts_process": None, "_tts_started_at": None, "_tts_process_lock": threading.Lock(),
+        "_get_silero_vad": lambda: (object(), None),
+        # The scripted probability rides in the chunk's first sample.
+        "_vad_prob": lambda model, arr: arr[0] / 10000.0,
+    }
+    exec(compile(reg.group(0) + "\n" + mon.group(0), _DAEMON, "exec"), g)
+    if active_playback is not None:
+        g["_active_playback"] = active_playback
+    return g, clock
+
+
+class _ScriptedMic:
+    def __init__(self, clock, probs):
+        self.clock, self.probs = clock, list(probs)
+
+    def read(self, n, exception_on_overflow=False):
+        if not self.probs:
+            raise OSError("done")
+        self.clock["t"] += 0.08
+        return array.array("h", [int(self.probs.pop(0) * 10000)] * 1280).tobytes()
+
+    def get_read_available(self):
+        return 0
+
+    def stop_stream(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _Proc:
+    def __init__(self, alive=True):
+        self.alive, self.terminated = alive, False
+
+    def poll(self):
+        return None if self.alive and not self.terminated else 0
+
+    def terminate(self):
+        self.terminated = True
+
+
+def _run_monitor(g, clock, probs):
+    pa = type("PA", (), {"open": lambda self, **kw: _ScriptedMic(clock, probs)})()
+    g["_BargeMonitor"](pa)._run()
+    return g["_barge_in_requested"].is_set()
+
+
 def test_barge_monitor_requires_live_tts_process():
     """The monitor must NOT set the barge flag when nothing is playing: speech
     right after the endpointer closes a recording is the user still talking,
     and a stale flag aborts a reply that never started (live 22:28:10 — barge
     prob=0.99 fired 189ms after a 7.84s recording closed, killing the turn).
-    The playback-alive guard must run BEFORE the flag is set / TTS killed,
-    mirroring the legacy queue-fed thread's `if _tts_process is None` guard."""
-    i = _SRC.find("class _BargeMonitor")
-    assert i != -1
-    block = _SRC[i : i + 4500]
-    fire = block.find('log.info("Barge-in detected during playback')
-    guard = block.find("proc = _tts_process")
-    set_flag = block.find("_barge_in_requested.set()")
-    assert guard != -1 and fire != -1 and set_flag != -1
-    assert guard < fire < set_flag, "playback-alive guard must precede fire+flag"
-    assert "proc is None or proc.poll() is not None" in block
+    Behavioural, against the real _BargeMonitor._run: 3 s of prob-0.99 speech
+    with no player never fires; the same speech during a live player does."""
+    g, clock = _barge_globals(active_playback=lambda: None)
+    assert not _run_monitor(g, clock, [0.99] * 40)
+
+    proc = _Proc()
+    g2, clock2 = _barge_globals(active_playback=lambda: (proc, 1000.0))
+    assert _run_monitor(g2, clock2, [0.99] * 40)  # positive control: it CAN fire
+    assert proc.terminated
+
+
+def test_active_playback_requires_a_running_player():
+    """_active_playback (the monitor's only view of "is Zoe speaking") is None
+    unless a registered player is still running."""
+    g, _ = _barge_globals(active_playback=None)
+    assert g["_active_playback"]() is None                      # nothing registered
+    dead = _Proc(alive=False)
+    g["_register_tts_process"](dead)
+    assert g["_active_playback"]() is None                      # player already exited
+    live = _Proc()
+    g["_register_tts_process"](live)
+    got = g["_active_playback"]()
+    assert got is not None and got[0] is live and got[1] == 1000.0
 
 
 def test_daemon_never_reposts_a_processed_turn():
