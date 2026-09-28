@@ -1826,13 +1826,21 @@ async def chat_stream_generator(
         intent = await detect_and_extract_intent(
             message_for_processing, user_id, context=_chat_ctx
         ) if use_intent_fast_path else None
+        # The router head is the authority over a keyword claim (INTENT_GATE):
+        # "who is flying in on Thursday…" must reach the brain + recall packet,
+        # not the contacts lookup (Samantha bar S1). A veto also skips Tier 0.5.
+        _intent_vetoed = False
+        if intent is not None:
+            import fast_tiers as _ft_gate
+            if not _ft_gate.keyword_intent_allowed(intent.name, message_for_processing, lane="chat"):
+                intent, _intent_vetoed = None, True
         if intent:
             _chat_ctx.activate(intent.name, getattr(intent, "slots", {}), message_for_processing)
             _bounded_lru_set(_CHAT_CONTEXTS, session_id, _chat_ctx, max_size=_MAX_CHAT_CONTEXT_SESSIONS)
 
         # Tier 0.5: LLM classifier for short missed utterances
         _tier05_hint: Optional[Intent] = None
-        if intent is None and use_intent_fast_path and len(message_for_processing.split()) <= 20:
+        if intent is None and not _intent_vetoed and use_intent_fast_path and len(message_for_processing.split()) <= 20:
             try:
                 from intent_classifier_llm import (
                     classify_intent_with_context as _classify,
@@ -2878,6 +2886,12 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 }
 
         intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
+        # The router head is the authority over a keyword claim (INTENT_GATE) —
+        # Samantha bar S1 was answered here by the "who is <X>" contacts lookup.
+        if intent is not None:
+            import fast_tiers as _ft_gate
+            if not _ft_gate.keyword_intent_allowed(intent.name, message_for_processing, lane="chat"):
+                intent = None
         # Save original message before appending voice suffix; run_zoe_agent needs the
         # clean text so _check_fast_response (greetings/acks) still matches correctly.
         _original_message_for_agent = message_for_processing

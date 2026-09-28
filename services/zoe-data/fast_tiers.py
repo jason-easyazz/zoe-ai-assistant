@@ -83,6 +83,121 @@ def _router_margin() -> float:
         return 0.05
 
 
+# ── The head is the authority over keyword claims ───────────────────────────
+# Router-domain class(es) each deterministic KEYWORD intent may stand for. An
+# intent absent here has no router class (greetings, panel, engineering, maths,
+# …) and is never gated. Sibling domains that genuinely overlap are listed
+# together (calendar/reminders, people/memory, notes/memory/journal,
+# music/smart_home volume) — the same leniency as the Skybridge gate.
+_INTENT_ROUTER_DOMAINS: dict[str, frozenset[str]] = {
+    "time_query": frozenset({"time"}), "date_query": frozenset({"time"}),
+    "weather": frozenset({"weather"}),
+    "list_show": frozenset({"lists"}), "list_add": frozenset({"lists"}),
+    "list_remove": frozenset({"lists"}),
+    "calendar_show": frozenset({"calendar", "reminders"}),
+    "calendar_create": frozenset({"calendar", "reminders"}),
+    "reminder_list": frozenset({"reminders", "calendar"}),
+    "reminder_create": frozenset({"reminders", "calendar"}),
+    "timer_create": frozenset({"timers"}), "timer_status": frozenset({"timers"}),
+    "people_search": frozenset({"people", "memory"}),
+    "people_create": frozenset({"people", "memory"}),
+    "people_introduce": frozenset({"people", "memory"}),
+    "memory_remember": frozenset({"memory", "people"}),
+    "note_create": frozenset({"notes", "memory", "journal"}),
+    "note_search": frozenset({"notes", "memory"}),
+    "journal_create": frozenset({"journal", "notes"}),
+    "music_play": frozenset({"music"}), "music_control": frozenset({"music"}),
+    "music_favorite": frozenset({"music"}),
+    "music_volume": frozenset({"music", "smart_home"}),
+    "set_volume": frozenset({"music", "smart_home"}),
+    "smart_home": frozenset({"smart_home", "music"}),
+}
+
+
+def intent_gate_enabled() -> bool:
+    """ZOE_INTENT_ROUTER_GATE — default ON; false/0/off/no = the keyword lanes
+    ignore the router head again (pre-2026-09-28 behaviour)."""
+    raw = (os.environ.get("ZOE_INTENT_ROUTER_GATE", "1") or "1").strip().lower()
+    return raw not in ("0", "false", "off", "no")
+
+
+def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str, str]:
+    """Pure rule: may a deterministic keyword intent answer, given the head's
+    stage-1 verdict (router_two_stage.head_verdict shape)? → (decision, reason).
+
+      allow  flag_off / no_router_class / router_unavailable (head off/failed)
+             / router_unsure (only `below_gate`: stage 1 under the 0.5 gate on
+             a real domain has no opinion — garbled STT recovery)
+             / router_agrees (head domain is one of the intent's classes)
+      veto   router_chat (chat_top, or the ZOE_ROUTER_HEAD_MIN_CONF `low_conf`
+             floor — a deliberate send-to-the-brain verdict)
+             / router_disagrees (the head is confident in another domain)
+
+    Same rule as the Skybridge router gate (skybridge_router_gate), so every
+    deterministic lane shares one authority: the head.
+    """
+    if not intent_gate_enabled():
+        return "allow", "flag_off"
+    classes = _INTENT_ROUTER_DOMAINS.get(intent_name)
+    if classes is None:
+        return "allow", "no_router_class"
+    if not isinstance(verdict, dict):
+        return "allow", "router_unavailable"
+    if verdict.get("gated"):
+        if (verdict.get("reason") or "below_gate") == "below_gate":
+            return "allow", "router_unsure"
+        return "veto", "router_chat"
+    if verdict.get("domain") in classes:
+        return "allow", "router_agrees"
+    return "veto", "router_disagrees"
+
+
+def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
+    """True = the keyword intent may execute. Runs the head (numpy, no sidecar)
+    only for an intent that has a router class; logs
+    ``INTENT_GATE lane=… intent=… head=<domain>@<conf> decision=… reason=…``.
+    NEVER raises (a gate failure allows, i.e. today's behaviour)."""
+    try:
+        if not intent_gate_enabled() or intent_name not in _INTENT_ROUTER_DOMAINS:
+            return True
+        import semantic_router as _sr
+
+        verdict = _sr.head_verdict(text)
+        decision, reason = intent_gate_decision(intent_name, verdict)
+        v = verdict or {}
+        conf = v.get("head_conf")
+        logger.info(
+            "INTENT_GATE lane=%s intent=%s head=%s@%s head_reason=%s decision=%s reason=%s",
+            lane, intent_name, v.get("head_top", "-"),
+            "-" if conf is None else f"{float(conf):.4f}",
+            v.get("reason") or "-", decision, reason,
+        )
+        return decision == "allow"
+    except Exception as exc:  # the gate must never break a turn
+        logger.warning("fast_tiers intent_gate failed (non-fatal, allow): %s", exc)
+        return True
+
+
+def keyword_intent_allowed(intent_name: str, text: str, *, lane: str) -> bool:
+    """INTENT_GATE for a caller holding an intent from detect_and_extract_intent
+    (routers/chat.py, after resolve() fell through). Only a KEYWORD claim is
+    gated — the bare detector (no conversation context) must produce the same
+    intent. A context follow-up ("add eggs" with a list on screen) or a
+    classifier-derived intent is not the keyword detector's claim, and the head,
+    which sees only the bare words, has no information about it → allow.
+    NEVER raises."""
+    try:
+        from intent_router import detect_intent
+
+        bare = detect_intent(text, log_miss=False)
+        if bare is None or bare.name != intent_name:
+            return True
+        return intent_gate(intent_name, text, lane=lane)
+    except Exception as exc:
+        logger.warning("fast_tiers keyword_intent_allowed failed (non-fatal, allow): %s", exc)
+        return True
+
+
 async def _tier0(text: str, user_id: str, defer_intents: frozenset[str] = frozenset()):
     """Deterministic regex read shortcut. Returns a `DispatchResult` or `None`.
 
@@ -103,6 +218,9 @@ async def _tier0(text: str, user_id: str, defer_intents: frozenset[str] = frozen
         # A `raw` slot means the intent still needs slot extraction we don't do at
         # Tier-0 — defer rather than execute a half-formed intent.
         if "raw" in (getattr(intent, "slots", None) or {}):
+            return None
+        # The head is the authority over a keyword claim (INTENT_GATE).
+        if not intent_gate(intent.name, text, lane="tier0"):
             return None
         reply = await execute_intent(intent, user_id)
         reply = (reply or "").strip()

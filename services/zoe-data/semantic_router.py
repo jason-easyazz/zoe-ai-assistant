@@ -495,6 +495,45 @@ class RouterDecision:
     latency_ms: float = 0.0
 
 
+# One-slot embedding cache: a keyword-lane head check (head_verdict) and the
+# turn's route() embed the SAME text back to back; the second is free. Keyed by
+# (model identity, exact text), replaced atomically (a tuple), so concurrent
+# turns can only miss, never read another turn's vector.
+_EMBED_CACHE: tuple[int, str, np.ndarray] | None = None
+
+
+def embed(text: str) -> np.ndarray:
+    """Normalized bge-small embedding of `text` (a fresh copy every call)."""
+    global _EMBED_CACHE
+    key = text or ""
+    _ensure_loaded()
+    hit = _EMBED_CACHE
+    if hit is not None and hit[0] == id(_MODEL) and hit[1] == key:
+        return hit[2].copy()
+    v = np.asarray(next(iter(_MODEL.embed([key]))), dtype=np.float32)
+    v /= (np.linalg.norm(v) + 1e-9)
+    _EMBED_CACHE = (id(_MODEL), key, v.copy())
+    return v
+
+
+def head_verdict(text: str) -> Optional[dict]:
+    """The ACTIVE two-stage head's stage-1 verdict on `text` (no sidecar call).
+
+    None unless ZOE_ROUTER_HEAD=active and the router is enabled — i.e. the
+    head only arbitrates keyword claims when it is also routing. See
+    router_two_stage.head_verdict for the shape. NEVER raises.
+    """
+    if not is_enabled() or head_mode() != "active":
+        return None
+    try:
+        import router_two_stage
+
+        return router_two_stage.head_verdict(embed(text))
+    except Exception as exc:
+        logger.warning("head_verdict failed (non-fatal): %s", exc)
+        return None
+
+
 def route_two_stage(text: str) -> RouterDecision:
     """Run ONLY the two-stage decision for `text` (embed → MLP shortlist +
     gate → grammar-constrained sidecar decode). Standalone: needs the
@@ -502,8 +541,7 @@ def route_two_stage(text: str) -> RouterDecision:
     t0 = time.perf_counter()
     try:
         _ensure_loaded()
-        v = np.asarray(next(iter(_MODEL.embed([text or ""]))), dtype=np.float32)
-        v /= (np.linalg.norm(v) + 1e-9)
+        v = embed(text)
         import router_two_stage
 
         d = router_two_stage.decide(text, v)
@@ -530,8 +568,7 @@ def route(text: str) -> dict:
     """
     _ensure_loaded()
     t0 = time.perf_counter()
-    v = np.asarray(next(iter(_MODEL.embed([text or ""]))), dtype=np.float32)
-    v /= (np.linalg.norm(v) + 1e-9)
+    v = embed(text)
     sims = _MATRIX @ v
     scores = {d: float(sims[_DOM_IDX[d]].max()) for d in ROUTES}
     domain = max(scores, key=scores.get)

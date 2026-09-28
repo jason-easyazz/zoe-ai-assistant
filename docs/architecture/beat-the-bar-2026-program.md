@@ -123,6 +123,13 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
       and stage-2 miss corpora (no retrain). Known gap: S6's ask is a CONFIDENT miss (calendar
       @ 0.73) the floor does not catch — it waits on a retrain. Accept when a post-deploy
       `samantha_bar.py --compare-baseline` shows S1 PASS with nothing regressing.
+      **Round 2 (#1763 live, S1 still FAIL):** the router DID send S1 to chat (`low_conf`),
+      but the chat.py KEYWORD lane then answered it: `^who is (.+)$` → `people_search` →
+      `No contacts found for "flying in on thursday, and where from".` (the exact 62-char
+      reply). **Status: built, awaiting live compare** — "who is <X>" claims only a
+      name-shaped X, and every deterministic keyword claim (Tier-0 + both chat keyword
+      lanes) now asks the head first (INTENT_GATE, `ZOE_INTENT_ROUTER_GATE`, default on;
+      contract: `services/zoe-data/AGENTS.md`).
       (b) **Emotional continuity.** S4: the day-1 worry (the interview) is not acknowledged
       the next day, 3/3 samples. **Round 1 (#1756) is live but S4 still FAILs 3/3.** It adds
       Flue-lane continuity injection (`ZOE_SEAM_CONTINUITY_INJECT`, default ON, kill switch
