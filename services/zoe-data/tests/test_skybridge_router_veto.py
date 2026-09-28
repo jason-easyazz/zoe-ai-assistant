@@ -98,8 +98,10 @@ COMMANDS = [
 ]
 
 
-def _two_stage(domain: str, *, conf: float = 0.9185, gated: bool = False, head_top: str | None = None) -> dict:
+def _two_stage(domain: str, *, conf: float = 0.9185, gated: bool = False, head_top: str | None = None,
+               reason: str | None = None) -> dict:
     """A ``semantic_router.route()`` result whose ACTIVE two-stage decided ``domain``."""
+    ts_reason = {"reason": reason} if reason else {}
     return {
         "domain": domain,
         "routed": domain,
@@ -115,6 +117,7 @@ def _two_stage(domain: str, *, conf: float = 0.9185, gated: bool = False, head_t
             "head_conf": conf,
             "gated": gated,
             "ms": 400.0,
+            **ts_reason,
         },
     }
 
@@ -171,6 +174,18 @@ def _intent(domain="people", action="show"):
         (_intent("voice", "set"), _two_stage("chat"), ("allow", "no_router_class")),
         # stage 1 under its confidence gate on a real domain = unsure, not "chat"
         (_intent("lists", "overview"), _two_stage("chat", conf=0.31, gated=True, head_top="lists"), ("allow", "router_unsure")),
+        # ... and the same with the explicit reason router_two_stage now logs
+        (_intent("lists", "overview"),
+         _two_stage("chat", conf=0.31, gated=True, head_top="lists", reason="below_gate"),
+         ("allow", "router_unsure")),
+        # the low-confidence floor (ZOE_ROUTER_HEAD_MIN_CONF) is a DELIBERATE
+        # send-to-the-brain verdict, not "unsure" (Greptile, #1763)
+        (_intent("calendar", "show"),
+         _two_stage("chat", conf=0.5371, gated=True, head_top="people", reason="low_conf"),
+         ("veto", "router_chat")),
+        (_intent("people", "show"),
+         _two_stage("chat", conf=0.8, gated=True, head_top="chat", reason="chat_top"),
+         ("veto", "router_chat")),
         # stage 1 confidently chat IS a verdict
         (_intent(), _two_stage("chat", conf=0.8, gated=True, head_top="chat"), ("veto", "router_chat")),
         # router off / similarity-only / two-stage failed → today's behaviour
@@ -244,6 +259,29 @@ async def test_resolve_veto_even_when_a_matcher_fires_on_the_live_utterance(reso
     assert result["handled"] is False and result["vetoed"] is True
     assert resolved == []
     assert "decision=veto" in caplog.text
+
+
+S1_CALENDAR_CUE = "Who is flying in on Thursday, what is on my calendar?"
+
+
+async def test_resolve_low_conf_floor_vetoes_an_s1_shaped_calendar_claim(resolved, caplog):
+    """Samantha bar S1 shape with a calendar cue: the classifier claims a calendar
+    read, the router's low-confidence floor sent it to the brain. Skybridge must
+    NOT treat that as "unsure" and answer deterministically (Greptile, #1763)."""
+    intent = sky.classify_skybridge_intent(S1_CALENDAR_CUE, None)
+    assert intent is not None and intent.domain == "calendar"
+    caplog.set_level(logging.INFO, logger="skybridge_service")
+    router = _two_stage("chat", conf=0.5371, gated=True, head_top="people", reason="low_conf")
+    result = await sky.resolve_skybridge_request(S1_CALENDAR_CUE, "jason", router_decision=router)
+    assert result["handled"] is False and result["vetoed"] is True
+    assert resolved == []
+    assert "skybridge=calendar action=show decision=veto reason=router_chat" in caplog.text
+
+
+async def test_resolve_below_gate_on_a_real_domain_is_still_allowed(resolved):
+    router = _two_stage("chat", conf=0.31, gated=True, head_top="people", reason="below_gate")
+    result = await sky.resolve_skybridge_request("show my family", "jason", router_decision=router)
+    assert result["handled"] is True and resolved == [("people", "show")]
 
 
 async def test_resolve_router_agrees_is_allowed(resolved, caplog):

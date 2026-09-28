@@ -47,6 +47,10 @@
         seenActions: new Set(),
         seenAuthChallenges: new Set(),
         pushWs: null,
+        pushPing: null,
+        pushRetry: null,
+        pushAttempts: 0,
+        unloading: false,
         autoHomeTimer: null,
         autoHomeArmed: false,
     };
@@ -54,6 +58,15 @@
     const AUTH_CHALLENGE_TTL_MS = 10 * 60 * 1000;
     const GENERATED_ALIAS_CACHE_KEY = 'zoe_touch_panel_alias_generated';
 
+    // Push socket keepalive. The server closes a /ws/push socket that sends
+    // nothing for ZOE_WS_IDLE_TIMEOUT_SECONDS (120 s by default), and broadcasts
+    // do NOT count as activity. One ping on open used to be all this socket
+    // ever sent, with no reconnect, so 2 minutes after a page load (or on any
+    // zoe-data restart) the kiosk went deaf to every voice:* event. Chat and
+    // "let's talk" replies travel ONLY over this socket, so their text never
+    // reached the panel. Same cadence as websocket-sync.js.
+    const PUSH_PING_MS = 30000;
+    const PUSH_RETRY_MAX_MS = 30000;
     const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
     const HOME_PATH = '/touch/home.html';
 
@@ -692,9 +705,12 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             document.dispatchEvent(new CustomEvent('zoe:voice:responding', { detail: { text } }));
         }
 
-        function onDone() {
+        // `data` is the voice:done payload. It carries the "let's talk" flags
+        // (conversation_mode / conversation_end) so the estate can hold the
+        // answer on screen while a conversation is open.
+        function onDone(data) {
             const E = _estate();
-            if (E) { E.done(); document.dispatchEvent(new CustomEvent('zoe:voice:done')); return; }
+            if (E) { E.done(data || null); document.dispatchEvent(new CustomEvent('zoe:voice:done')); return; }
             _setStatus('Done', '');
             removeThinkingDots();
             clearTimeout(_dismissTimer);
@@ -910,7 +926,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                             }
                             if (msg.type === 'voice:done') {
                                 setOrbMode('ambient');
-                                VoiceOverlay.onDone();
+                                VoiceOverlay.onDone(msg.data || null);
                             }
                         }
                     }
@@ -932,11 +948,35 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 }
             };
             ws.onopen = () => {
+                state.pushAttempts = 0;
                 try { ws.send('ping'); } catch (e) { /* ignore */ }
+                if (state.pushPing) clearInterval(state.pushPing);
+                state.pushPing = setInterval(() => {
+                    try { if (ws.readyState === 1) ws.send('ping'); } catch (e) { /* ignore */ }
+                }, PUSH_PING_MS);
+            };
+            ws.onclose = () => {
+                if (state.pushWs !== ws) return;   // a newer socket already replaced this one
+                if (state.pushPing) { clearInterval(state.pushPing); state.pushPing = null; }
+                state.pushWs = null;
+                schedulePushReconnect();
             };
         } catch (e) {
             console.warn('Zoe touch: WebSocket push unavailable', e);
+            schedulePushReconnect();
         }
+    }
+
+    // Exponential backoff, capped: a dead server must not be hammered, and a
+    // panel must never stay deaf for longer than the cap once it is back.
+    function schedulePushReconnect() {
+        if (state.unloading || state.pushRetry) return;
+        state.pushAttempts += 1;
+        const delay = Math.min(1000 * Math.pow(2, state.pushAttempts), PUSH_RETRY_MAX_MS);
+        state.pushRetry = setTimeout(() => {
+            state.pushRetry = null;
+            if (!state.unloading) connectPushWebSocket();
+        }, delay);
     }
 
     function resolveSelector(selector) {
@@ -2259,6 +2299,9 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
             window.addEventListener(evt, () => resetAutoHomeTimer(`user:${evt}`), { passive: true });
         });
         window.addEventListener('beforeunload', () => {
+            state.unloading = true;   // the socket closes with the page — never reconnect it
+            if (state.pushPing) clearInterval(state.pushPing);
+            if (state.pushRetry) clearTimeout(state.pushRetry);
             if (state.pollTimer) clearInterval(state.pollTimer);
             if (state.syncTimer) clearInterval(state.syncTimer);
             clearAutoHomeTimer('beforeunload');

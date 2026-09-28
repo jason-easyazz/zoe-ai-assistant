@@ -56,9 +56,9 @@ rocks:
     stage1_artifact: "services/zoe-data/models/router_head_mlp.npz"
     stage2_artifact_dir: "~/models/functiongemma-router"
     # Stage 2 ONLY. The ratchet never touches stage1_artifact: router_selftrain.py
-    # has no reference to a router/SetFit head, an MLP, or a .joblib in its 1095
+    # has no reference to a router/SetFit head, an MLP, or a .joblib in its 1099
     # lines, and the only model ARTIFACT it promotes in production is the stage-2
-    # SERVED_GGUF under stage2_artifact_dir (:98, :880-882). Everything else it
+    # SERVED_GGUF under stage2_artifact_dir (:98, :884-886). Everything else it
     # writes (rollback restores, deployment markers, provenance, last-known-good
     # archives) lives there too — outside the repo, so no ratchet verdict ever
     # reaches git.
