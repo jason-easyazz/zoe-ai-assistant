@@ -328,7 +328,14 @@ _DECLINE_MARKERS = (
     "never mentioned", "never told",
 )
 _SPECIFIC_NAME_RE = re.compile(
-    r"\b(?:Dr\.?|Doctor)\s+[A-Z][a-z]+|dentist(?:'s name)?\s+is\s+[A-Z][a-z]+")
+    r"\b(?:dr\.?|doctor)\s+[a-z]+"                     # Dr Patel / dr patel
+    r"|dentist(?:'s name)?\s+is\s+[a-z]+"               # your dentist is Harriet
+    r"|\b(?:it'?s|it is|named|called)\s+(?:dr\.?\s+)?[A-Z][a-z]+",  # I think it's Alice
+    re.IGNORECASE)
+# A decline that then GUESSES ("not sure, but I think it's Alice") is not an
+# abstention; the deterministic fast path must not certify it — the judge decides.
+_HEDGE_MARKERS = ("i think", "i believe", "i guess", "perhaps", "maybe", "might be",
+                  "may be", "possibly", "probably", "could be", "if i recall", "i'd guess")
 
 
 def declines(reply: str) -> bool:
@@ -385,9 +392,13 @@ def score_s2(reply: str, judge: Callable[[], tuple[str, str]] | None) -> tuple[s
     return v, {"method": "judge", "judge_verdict": v, "judge_reason": why}
 
 
+def hedges(reply: str) -> bool:
+    return contains_any(reply, _HEDGE_MARKERS)
+
+
 def score_s3(reply: str, judge: Callable[[], tuple[str, str]] | None) -> tuple[str, dict]:
-    if declines(reply) and not names_a_specific(reply):
-        return "PASS", {"method": "deterministic", "why": "declined, no specific named"}
+    if declines(reply) and not names_a_specific(reply) and not hedges(reply):
+        return "PASS", {"method": "deterministic", "why": "declined, no specific named, no guess"}
     if judge is None:
         return "ERROR", {"method": "judge", "why": "not a clear decline; judge unavailable"}
     v, why = judge()
@@ -456,6 +467,24 @@ def score_s7(reply: str, packet: str | None) -> tuple[str, dict]:
     return "FAIL", {**ev, "why": "; ".join(why)}
 
 
+def setup_problems(seeds: dict[str, dict | None], landings: dict[str, dict | None]) -> list[str]:
+    """Why a scenario's PRECONDITIONS did not happen: a seed turn that was never
+    sent or errored, or a fact that never landed in the recall packet. Any
+    problem makes the scenario ERROR — a verdict on an unexercised setup is
+    not evidence (S2 without the Dunedin fact tests no supersession; S7
+    without the short duplicate tests no dedup)."""
+    problems: list[str] = []
+    for tag, t in seeds.items():
+        if t is None:
+            problems.append(f"seed turn {tag} was never sent")
+        elif t.get("error"):
+            problems.append(f"seed turn {tag} failed: {t['error']}")
+    for name, l in landings.items():
+        if not (l or {}).get("landed"):
+            problems.append(f"{name} never landed in the recall packet")
+    return problems
+
+
 def score_s8(reply_sister: str, reply_dad: str, filler_errors: int = 0) -> tuple[str, dict]:
     s = found_needles(reply_sister, ("marisol",))
     d = found_needles(reply_dad, ("lighthouse",))
@@ -492,6 +521,11 @@ def load_baseline(path: Path) -> tuple[dict[str, Any] | None, str | None]:
         return None, f"baseline {path} is not valid JSON ({e.msg} at line {e.lineno})"
     if not isinstance(data, dict) or not isinstance(data.get("scenarios"), dict):
         return None, f"baseline {path} has no 'scenarios' object — re-record it with --record-baseline"
+    scen = data["scenarios"]
+    bad = sorted(str(k) for k, v in scen.items() if v not in VERDICTS)
+    if not scen or bad:
+        what = "no scenario verdicts" if not scen else f"unrecognised verdict(s) for {', '.join(bad)}"
+        return None, f"baseline {path} holds {what} — re-record it with --record-baseline"
     return data, None
 
 
@@ -510,6 +544,8 @@ def compare_baseline(current: dict[str, str], baseline: dict[str, Any] | None) -
     notes = []
     if baseline and baseline.get("judge_prompt_sha256") not in (None, JUDGE_PROMPT_SHA256):
         notes.append("judge rubric changed since the baseline — judged verdicts are not comparable")
+    if base and "PASS" not in base.values():
+        notes.append("baseline holds no PASS verdict — nothing can regress against it")
     return {"has_baseline": bool(base), "regressions": regressions,
             "improvements": improvements, "new": new, "red": bool(regressions), "notes": notes}
 
@@ -983,9 +1019,11 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
                   log: Callable[[str], None]) -> list[dict]:
     res: dict[str, dict] = {}
     land: dict[str, dict] = {}
+    seeds: dict[str, dict] = {}
 
     def say(user, tag, text):
         t = live.chat(user, tag, text)
+        seeds[tag] = t
         if t["error"]:
             log(f"    seed turn error ({tag}): {t['error']}")
         return t
@@ -994,16 +1032,28 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
         res[sid] = {"id": sid, "verdict": verdict, "evidence": ev}
         log(f"  {sid}: {verdict}")
 
+    def setup_ok(sid, seed_tags=(), land_keys=()):
+        """False (and the scenario is ERROR) unless every seed turn succeeded and
+        every fact landed — the ask is then not even sent."""
+        landed = {k: land.get(k) for k in land_keys}
+        problems = setup_problems({t: seeds.get(t) for t in seed_tags}, landed)
+        if problems:
+            put(sid, "ERROR", why="setup not exercised: " + "; ".join(problems),
+                setup_problems=problems, landed=landed)
+            return False
+        return True
+
     # Day 1 ------------------------------------------------------------------
     log("day 1: S1 seed + same-day ask; S2/S4/S7 seeds")
     say(a, "d1-sister", SAY_SISTER)
     land["S1"] = live.wait_landed(a, ASK_SISTER, ("marisol",))
-    t = live.chat(a, "d1-ask-sister", ASK_SISTER)
-    if t["error"]:
-        put("S1", "ERROR", landed=land["S1"], ask=live.evidence(t))
-    else:
-        v, ev = score_s1(t["reply"])
-        put("S1", v, landed=land["S1"], ask={**live.evidence(t), **ev})
+    if setup_ok("S1", ("d1-sister",), ("S1",)):
+        t = live.chat(a, "d1-ask-sister", ASK_SISTER)
+        if t["error"]:
+            put("S1", "ERROR", landed=land["S1"], ask=live.evidence(t))
+        else:
+            v, ev = score_s1(t["reply"])
+            put("S1", v, landed=land["S1"], ask={**live.evidence(t), **ev})
     say(a, "d1-home", SAY_OLD_HOME)
     land["S2_old"] = live.wait_landed(a, ASK_HOME, ("dunedin",))
     say(a, "d1-worry", SAY_WORRY)
@@ -1019,31 +1069,37 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     log("day 2: S2 move + ask; S7 short dup + ask; S4; S3")
     say(a, "d2-home", SAY_NEW_HOME)
     land["S2_new"] = live.wait_landed(a, ASK_HOME, ("hobart",))
-    v, ev = _ask_judged(live, a, "d2-ask-home", ASK_HOME, samples, score_s2, "S2")
-    put("S2", v, landed={"old": land["S2_old"], "new": land["S2_new"]}, **ev)
+    # Supersession needs BOTH facts present: without Dunedin landed, a Hobart-only
+    # reply proves nothing.
+    if setup_ok("S2", ("d1-home", "d2-home"), ("S2_old", "S2_new")):
+        v, ev = _ask_judged(live, a, "d2-ask-home", ASK_HOME, samples, score_s2, "S2")
+        put("S2", v, landed={"old": land["S2_old"], "new": land["S2_new"]}, **ev)
 
     say(a, "d2-dad", SAY_DAD_SHORT)
-    time.sleep(20)  # let the short duplicate's digest land before asking
-    t = live.chat(a, "d2-ask-dad", ASK_DAD)
-    pkt = live.packet(a, ASK_DAD)
-    if t["error"]:
-        put("S7", "ERROR", landed=land["S7_rich"], ask=live.evidence(t))
-    else:
-        v, ev = score_s7(t["reply"], pkt)
-        put("S7", v, landed=land["S7_rich"], ask={**live.evidence(t), **ev})
+    if setup_ok("S7", ("d1-dad", "d2-dad"), ("S7_rich",)):
+        time.sleep(20)  # let the short duplicate's digest land before asking
+        t = live.chat(a, "d2-ask-dad", ASK_DAD)
+        pkt = live.packet(a, ASK_DAD)
+        if t["error"]:
+            put("S7", "ERROR", landed=land["S7_rich"], ask=live.evidence(t))
+        else:
+            v, ev = score_s7(t["reply"], pkt)
+            put("S7", v, landed=land["S7_rich"], ask={**live.evidence(t), **ev})
 
-    v, ev = _ask_judged(live, a, "d2-edge", ASK_WORRY, samples, score_s4, "S4")
-    put("S4", v, landed=land["S4"], **ev)
+    if setup_ok("S4", ("d1-worry",), ("S4",)):
+        v, ev = _ask_judged(live, a, "d2-edge", ASK_WORRY, samples, score_s4, "S4")
+        put("S4", v, landed=land["S4"], **ev)
 
     v, ev = _ask_judged(live, a, "d2-dentist", ASK_UNSAID, samples, score_s3, "S3")
     put("S3", v, **ev)
 
     # S5: proactive hooks for demo A (Postgres read) --------------------------
-    try:
-        v, ev = score_s5(live.proactive_hooks(a))
-    except Exception as exc:  # noqa: BLE001
-        v, ev = "ERROR", {"why": f"hook read failed: {type(exc).__name__}"}
-    put("S5", v, **ev)
+    if setup_ok("S5", ("d1-worry",), ("S4",)):  # no open loop seeded = nothing to carry
+        try:
+            v, ev = score_s5(live.proactive_hooks(a))
+        except Exception as exc:  # noqa: BLE001
+            v, ev = "ERROR", {"why": f"hook read failed: {type(exc).__name__}"}
+        put("S5", v, **ev)
 
     # S6: isolation ----------------------------------------------------------
     t = live.chat(b, "b-ask", ASK_B)
@@ -1060,14 +1116,17 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     errors = 0
     for i, text in enumerate(FILLER):
         errors += bool(say(a, f"filler-{i % FILLER_SESSIONS}", text)["error"])
-    t1 = live.chat(a, "long-ask-sister", ASK_LONG_SISTER)
-    t2 = live.chat(a, "long-ask-dad", ASK_LONG_DAD)
-    if t1["error"] or t2["error"]:
-        put("S8", "ERROR", filler_errors=errors, asks=[live.evidence(t1), live.evidence(t2)])
-    else:
-        v, ev = score_s8(t1["reply"], t2["reply"], errors)
-        put("S8", v, filler_turns=len(FILLER),
-            asks=[live.evidence(t1), live.evidence(t2)], **ev)
+    # The facts S8 must recall are S1's and S7's seeds; without them landed there
+    # is nothing to survive the history (and any failed filler turn is ERROR in score_s8).
+    if setup_ok("S8", ("d1-sister", "d1-dad"), ("S1", "S7_rich")):
+        t1 = live.chat(a, "long-ask-sister", ASK_LONG_SISTER)
+        t2 = live.chat(a, "long-ask-dad", ASK_LONG_DAD)
+        if t1["error"] or t2["error"]:
+            put("S8", "ERROR", filler_errors=errors, asks=[live.evidence(t1), live.evidence(t2)])
+        else:
+            v, ev = score_s8(t1["reply"], t2["reply"], errors)
+            put("S8", v, filler_turns=len(FILLER),
+                asks=[live.evidence(t1), live.evidence(t2)], **ev)
     return [res[k] for k in SCENARIO_IDS if k in res]
 
 
@@ -1174,9 +1233,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="exit 1 when a previously PASSING scenario no longer passes; "
                          "REFUSES (exit 2) when no valid baseline exists — --record-baseline first")
     ap.add_argument("--record-baseline", action="store_true",
-                    help="save this run as the baseline (only when teardown is proven)")
-    ap.add_argument("--samples", type=int, default=1, help="asks per judged scenario (majority vote)")
-    ap.add_argument("--no-backdate", action="store_true", help="skip the 26h day-1 backdate")
+                    help="save this run as the baseline (alone — never with --compare-baseline; "
+                         "only when teardown is proven)")
+    ap.add_argument("--samples", type=int, default=None,
+                    help="asks per judged scenario, odd (majority vote); default 1, or in "
+                         "--compare-baseline mode the BASELINE's count — an explicit mismatch refuses")
+    ap.add_argument("--no-backdate", action="store_true",
+                    help="skip the 26h day-1 backdate (DIAGNOSTIC only: refused with "
+                         "--record-baseline / --compare-baseline, whose scenarios are multi-day)")
     ap.add_argument("--keep-replies", action="store_true",
                     help="store 240-char reply excerpts in the local results file (debug)")
     ap.add_argument("--teardown-only", action="store_true",
@@ -1189,11 +1253,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mem-wait-s", type=int, default=900)
     ap.add_argument("--ready-wait-s", type=int, default=1200)
     args = ap.parse_args(argv)
-    if args.samples < 1 or args.samples % 2 == 0:
+    if args.samples is not None and (args.samples < 1 or args.samples % 2 == 0):
         ap.error("--samples must be a positive odd number (majority vote)")
+    if args.no_backdate and (args.record_baseline or args.compare_baseline):
+        ap.error("--no-backdate is diagnostic only: S2/S4/S7 are multi-day scenarios, so a "
+                 "same-day run can neither set nor clear the bar")
+    if args.compare_baseline and args.record_baseline:
+        ap.error("--compare-baseline and --record-baseline are mutually exclusive: a regressed "
+                 "compare run must never overwrite the bar (record alone, deliberately)")
 
     if args.dry_run:
-        print(plan_text(args.samples))
+        print(plan_text(args.samples or 1))
         return 0
     if os.environ.get("ZOE_PERF") != "1":
         print("samantha_bar: skipped — live runs require ZOE_PERF=1 (see --dry-run)")
@@ -1223,6 +1293,19 @@ def main(argv: list[str] | None = None) -> int:
                        revision)
     if baseline_problem and args.baseline.exists():
         log(f"baseline ignored ({baseline_problem})")
+    if args.compare_baseline:
+        # A majority-of-3 bar compared against a single stochastic answer is not a
+        # comparison: inherit the baseline's count, refuse an explicit mismatch.
+        base_samples = (baseline or {}).get("samples")
+        if args.samples is None:
+            args.samples = int(base_samples or 1)
+            log(f"samples={args.samples} (inherited from the baseline)")
+        elif base_samples is not None and args.samples != base_samples:
+            return _refuse(args, f"--samples {args.samples} does not match the baseline's "
+                                 f"samples={base_samples} — compare with the same count or "
+                                 "re-record the baseline", revision)
+    if args.samples is None:
+        args.samples = 1
     if in_nightly_window(dt.datetime.now()):
         return _refuse(args, "inside (or within 30 min of) the 01:45-03:15 nightly window", revision)
     busy, detail = deploy_in_progress()
@@ -1289,6 +1372,7 @@ def main(argv: list[str] | None = None) -> int:
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
+               "backdate": not args.no_backdate,
                "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
                "scenarios": results, "compare": cmp, "teardown": td,
                "baseline_ref": {"path": str(args.baseline),

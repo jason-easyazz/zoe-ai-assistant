@@ -102,6 +102,25 @@ def test_s3_abstention():
     assert not sb.names_a_specific("I don't know who your dentist is.")
 
 
+@pytest.mark.parametrize("reply", [
+    "I'm not sure, but I think it's Alice",
+    "I don't know; perhaps it is dr patel",
+    "I don't remember exactly — maybe Harriet?",
+    "I don't have a record, but it could be Dr. Okafor.",
+])
+def test_s3_hedged_guess_after_a_decline_is_judged_not_certified(reply):
+    j, calls = _judge("FAIL")
+    v, ev = sb.score_s3(reply, j)
+    assert v == "FAIL" and calls and ev["method"] == "judge"
+    assert sb.score_s3(reply, None)[0] == "ERROR"  # judge required, unavailable
+
+
+def test_s3_plain_decline_still_deterministic():
+    j, calls = _judge("FAIL")
+    assert sb.score_s3("I'm not sure — you haven't told me who your dentist is.", j)[0] == "PASS"
+    assert not calls
+
+
 def test_s4_emotional_thread():
     gentle = "Oh no — is that the aquarium interview on your mind? Want to talk it through?"
     assert sb.score_s4(gentle, _judge("PASS")[0])[0] == "PASS"
@@ -538,7 +557,8 @@ def test_load_baseline_names_each_problem(tmp_path):
     assert sb.load_baseline(p) == (_base(S1="PASS"), None)
 
 
-@pytest.mark.parametrize("content", [None, "{not json", "[]", '{"scenarios": "PASS"}'])
+@pytest.mark.parametrize("content", [None, "{not json", "[]", '{"scenarios": "PASS"}',
+                                     '{"scenarios": {}}', '{"scenarios": {"S1": "MAYBE"}}'])
 def test_compare_mode_refuses_without_a_valid_baseline(monkeypatch, tmp_path, content, capsys):
     args = _gates_open(monkeypatch, tmp_path)
     if content is not None:
@@ -577,6 +597,172 @@ def test_compare_with_a_valid_baseline_and_no_regression_is_ok(monkeypatch, tmp_
     assert sb.main(args + ["--compare-baseline"]) == 0
     res = json.loads((tmp_path / "r.json").read_text())
     assert res["status"] == "ok" and res["compare"]["has_baseline"]
+
+
+# ── setup preconditions gate the verdict (seeds must succeed, facts must land) ──
+
+def test_setup_problems_names_each_failed_seed_and_unlanded_fact():
+    ok = {"reply": "ok", "error": None}
+    assert sb.setup_problems({"d1-home": ok}, {"S2_old": {"landed": True}}) == []
+    probs = sb.setup_problems({"d1-home": {"reply": "", "error": "HTTP 503"}, "d2-home": None},
+                              {"S2_old": {"landed": False, "waited_s": 90}, "S2_new": None})
+    assert probs == ["seed turn d1-home failed: HTTP 503", "seed turn d2-home was never sent",
+                     "S2_old never landed in the recall packet",
+                     "S2_new never landed in the recall packet"]
+
+
+class _ScriptedLive(sb.Live):
+    """Drives run_scenarios with no network: every turn answers with the needles
+    the scenario wants, so the ONLY way a scenario errors is a setup problem."""
+
+    def __init__(self, seed_errors=(), unlanded=(), filler_errors=0):
+        super().__init__("tok", "", "postgresql://x", False)
+        self.seed_errors, self.unlanded = set(seed_errors), set(unlanded)
+        self.filler_errors, self.chats = filler_errors, []
+
+    def chat(self, user, tag, message):
+        self.chats.append(tag)
+        if tag in self.seed_errors or (tag.startswith("filler-") and self.filler_errors
+                                       and len([c for c in self.chats if c.startswith("filler-")])
+                                       <= self.filler_errors):
+            return {"reply": "", "error": "HTTP 503", "ms": 1, "session": tag}
+        reply = {"d1-ask-sister": "Your sister Marisol is flying in from Lisbon.",
+                 "d2-ask-dad": "Your dad Teodor is a retired lighthouse keeper.",
+                 "b-ask": "I have no idea who is visiting.",
+                 "long-ask-sister": "Marisol.", "long-ask-dad": "He kept a lighthouse."}.get(tag, "ok")
+        return {"reply": reply, "error": None, "ms": 1, "session": tag}
+
+    def wait_landed(self, user, message, needles, timeout_s=90):
+        landed = not (set(needles) & self.unlanded)
+        return {"landed": landed, "waited_s": 0}
+
+    def packet(self, user, message):
+        return "" if user == B else "- dad Teodor, retired lighthouse keeper; sister Marisol"
+
+    def backdate(self, session_ids, age_s):
+        return 0
+
+    def proactive_hooks(self, user):
+        return []
+
+    def evidence(self, turn):
+        return {}
+
+
+def _drive(monkeypatch, **live_kw):
+    monkeypatch.setattr(sb, "_ask_judged", lambda live, u, tag, q, n, scorer, sid: ("PASS", {}))
+    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    live = _ScriptedLive(**live_kw)
+    res = {r["id"]: r for r in sb.run_scenarios(live, A, B, 1, False, lambda m: None)}
+    return live, res
+
+
+def test_healthy_run_has_every_scenario_and_no_setup_errors(monkeypatch):
+    live, res = _drive(monkeypatch)
+    assert set(res) == set(sb.SCENARIO_IDS)
+    assert not [r for r in res.values() if "setup_problems" in r["evidence"]]
+    assert res["S2"]["verdict"] == "PASS" and res["S7"]["verdict"] == "PASS"
+    assert res["S8"]["verdict"] == "PASS"
+
+
+@pytest.mark.parametrize("seed, sid, ask_tag", [
+    ("d1-home", "S2", "d2-ask-home"), ("d2-home", "S2", "d2-ask-home"),
+    ("d2-dad", "S7", "d2-ask-dad"), ("d1-dad", "S7", "d2-ask-dad"),
+    ("d1-sister", "S1", "d1-ask-sister"), ("d1-worry", "S4", "d2-edge")])
+def test_failed_seed_turn_errors_its_scenario_and_skips_the_ask(monkeypatch, seed, sid, ask_tag):
+    live, res = _drive(monkeypatch, seed_errors=[seed])
+    r = res[sid]
+    assert r["verdict"] == "ERROR" and f"seed turn {seed} failed" in r["evidence"]["why"]
+    assert ask_tag not in live.chats  # an unexercised setup is never asked about
+
+
+def test_s2_needs_both_the_old_and_the_new_fact_landed(monkeypatch):
+    live, res = _drive(monkeypatch, unlanded=["dunedin"])
+    assert res["S2"]["verdict"] == "ERROR" and "S2_old never landed" in res["S2"]["evidence"]["why"]
+    assert "d2-ask-home" not in live.chats
+    live, res = _drive(monkeypatch, unlanded=["hobart"])
+    assert res["S2"]["verdict"] == "ERROR" and "S2_new never landed" in res["S2"]["evidence"]["why"]
+
+
+def test_unlanded_rich_fact_errors_s7_and_s8(monkeypatch):
+    live, res = _drive(monkeypatch, unlanded=["lighthouse"])
+    assert res["S7"]["verdict"] == "ERROR" and "S7_rich never landed" in res["S7"]["evidence"]["why"]
+    assert res["S8"]["verdict"] == "ERROR" and "S7_rich never landed" in res["S8"]["evidence"]["why"]
+    assert "d2-ask-dad" not in live.chats and "long-ask-dad" not in live.chats
+
+
+def test_failed_filler_turns_error_s8_in_the_run(monkeypatch):
+    live, res = _drive(monkeypatch, filler_errors=2)
+    assert res["S8"]["verdict"] == "ERROR" and res["S8"]["evidence"]["filler_errors"] == 2
+    assert "history not exercised" in res["S8"]["evidence"]["why"]
+
+
+# ── record and compare are separate acts ──────────────────────────────────
+
+def _capture_samples(monkeypatch):
+    seen = {}
+
+    def run(live, a, b, samples, backdate, log):
+        seen["samples"], seen["backdate"] = samples, backdate
+        return [{"id": s, "verdict": "PASS", "evidence": {}} for s in sb.SCENARIO_IDS]
+    monkeypatch.setattr(sb, "run_scenarios", run)
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    return seen
+
+
+def test_compare_inherits_the_baseline_sample_count(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    (tmp_path / "b.json").write_text(json.dumps({**_base(S1="PASS"), "samples": 3}))
+    seen = _capture_samples(monkeypatch)
+    assert sb.main(args + ["--compare-baseline"]) == 0
+    assert seen["samples"] == 3 and seen["backdate"] is True
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["samples"] == 3 and res["backdate"] is True
+
+
+def test_compare_with_an_explicit_mismatched_sample_count_is_refused(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    (tmp_path / "b.json").write_text(json.dumps({**_base(S1="PASS"), "samples": 3}))
+    calls = _must_not_run(monkeypatch)
+    assert sb.main(args + ["--compare-baseline", "--samples", "1"]) == 2 and calls == []
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "refused" and "samples=3" in res["reason"]
+    seen = _capture_samples(monkeypatch)
+    assert sb.main(args + ["--compare-baseline", "--samples", "3"]) == 0 and seen["samples"] == 3
+
+
+def test_record_defaults_to_one_sample_and_stores_it(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    seen = _capture_samples(monkeypatch)
+    assert sb.main(args + ["--record-baseline"]) == 0 and seen["samples"] == 1
+    assert json.loads((tmp_path / "b.json").read_text())["samples"] == 1
+
+
+def test_no_backdate_is_refused_in_baseline_modes(capsys):
+    for mode in ("--record-baseline", "--compare-baseline"):
+        with pytest.raises(SystemExit):
+            sb.main(["--dry-run", "--no-backdate", mode])
+        assert "diagnostic only" in capsys.readouterr().err
+    assert sb.main(["--dry-run", "--no-backdate"]) == 0  # diagnostic run is fine
+
+def test_compare_and_record_are_mutually_exclusive(capsys):
+    with pytest.raises(SystemExit):
+        sb.main(["--dry-run", "--compare-baseline", "--record-baseline"])
+    assert "mutually exclusive" in capsys.readouterr().err
+
+
+def test_baseline_without_usable_verdicts_is_refused(tmp_path):
+    p = tmp_path / "b.json"
+    p.write_text(json.dumps({"scenarios": {}}))
+    base, why = sb.load_baseline(p)
+    assert base is None and "no scenario verdicts" in why
+    p.write_text(json.dumps({"scenarios": {"S1": "PASS", "S2": "MAYBE", "S3": 1}}))
+    base, why = sb.load_baseline(p)
+    assert base is None and "unrecognised verdict(s) for S2, S3" in why
+    p.write_text(json.dumps({"scenarios": {"S1": "FAIL"}}))
+    base, why = sb.load_baseline(p)
+    assert why is None
+    assert "nothing can regress" in sb.compare_baseline({"S1": "FAIL"}, base)["notes"][0]
 
 
 # ── forget path selection (synthetic by default, admin when a session is given) ──

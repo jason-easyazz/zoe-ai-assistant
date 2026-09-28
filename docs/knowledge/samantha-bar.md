@@ -24,8 +24,10 @@ python3 scripts/perf/samantha_bar.py --dry-run                 # the plan; no ne
 ZOE_PERF=1 \
   flock /tmp/zoe-voice-harness.lock nice -n 5 \
   python3 scripts/perf/samantha_bar.py --compare-baseline      # exit 1 on a regression; exit 2 (refused) with no valid baseline
-... --record-baseline      # this run becomes the bar (refused if it errored or teardown is unproven)
+... --record-baseline      # this run becomes the bar (alone — never with --compare-baseline; refused if it errored or teardown is unproven)
 ... --samples 3            # judged scenarios ask 3x in fresh sessions, majority vote (odd only)
+...                        # --compare-baseline inherits the BASELINE's count; an explicit mismatch is refused
+... --no-backdate          # DIAGNOSTIC only (same-day run): refused with --record/--compare-baseline
 ... --teardown-only        # clean up a run that was killed before its own teardown
 ```
 
@@ -38,9 +40,15 @@ Artifacts in `~/.cache/zoe/`:
 - `samantha_bar_pending_teardown.json`: exists only while a teardown is unproven.
 
 `--compare-baseline` REFUSES before writing anything when the baseline is missing, unreadable,
-malformed JSON, or lacks a `scenarios` object (`load_baseline`) — a run that compares against
-nothing can never be red, so it would otherwise report `ok`. The first run is `--record-baseline`
-alone; it overwrites a malformed baseline.
+malformed JSON, lacks a `scenarios` object, or holds no / unrecognised verdicts
+(`load_baseline`) — a run that compares against nothing can never be red, so it would
+otherwise report `ok`. The first run is `--record-baseline` alone; it overwrites a malformed
+baseline. The two flags are mutually exclusive (argparse refuses): a regressed compare run
+must never overwrite the bar with its degraded verdicts. Compare mode also uses the
+baseline's `samples` (a majority-of-3 bar against one stochastic answer is not a comparison):
+omit `--samples` to inherit it; an explicit different count is refused. `--no-backdate` is
+refused in both baseline modes — S2/S4/S7 are multi-day scenarios, and a same-day run can
+neither set nor clear the bar; the results file records `backdate`.
 
 Exit codes: 0 = ran with no regression; 1 = regression; 2 = refused, error, or teardown not
 proven; 3 = harness lock held. Without `ZOE_PERF=1` it prints a skip notice, exits 0 and
@@ -71,8 +79,8 @@ ids only). Day 2 follows.
 | id | proves | scoring |
 |---|---|---|
 | S1 | A fact said in one session is recalled in a new session the same day. | deterministic: both `marisol` and `lisbon` |
-| S2 | After a move, the current city wins and the old one is not asserted as current. | `hobart` is required. If `dunedin` is also mentioned, the judge decides "previous home" vs "still lives there". |
-| S3 | Asked about something never said (the dentist), Zoe declines instead of inventing. | A clear decline with no `Dr X` or `dentist is X` is a deterministic pass. Anything else goes to the judge. |
+| S2 | After a move, the current city wins and the old one is not asserted as current. | `hobart` is required. If `dunedin` is also mentioned, the judge decides "previous home" vs "still lives there". BOTH facts must have landed in the recall packet (Dunedin on day 1, Hobart on day 2) or S2 is ERROR — a Hobart-only reply with no Dunedin present tests no supersession. |
+| S3 | Asked about something never said (the dentist), Zoe declines instead of inventing. | A clear decline with no named specific (`Dr X`, `dentist is X`, `it's X`) and no hedge ("I think", "perhaps", "maybe"…) is a deterministic pass. A decline that then guesses, and anything else, goes to the judge. |
 | S4 | A day-1 worry is acknowledged on day 2, gently and not verbatim. | `interview` must appear, the reply must share fewer than 7 consecutive words with the day-1 sentence, and the judge must say "warm, in its own words" |
 | S5 | A proactive hook, if one fires, carries the day-1 open loop. | Reads `proactive_pending` for demo A. No hook gives SKIP. An `emotional_followup` without the loop gives FAIL. |
 | S6 | Demo B never sees demo A's facts. | Deterministic: no A needle may appear in B's reply or in B's `/for-prompt` packet. If A's own packet holds none of them, the result is SKIP, because the test would be vacuous. A packet read that FAILS (either user) is ERROR — a boundary that was not inspected is never certified. |
@@ -87,7 +95,10 @@ changes what a pass means, so update the pin and re-record the baseline. `compar
 rubric mismatch.
 
 Several results count as not-pass: a brain-fallback reply, an HTTP error, and an empty reply
-are all ERROR. The fallback texts are the ones zoe-data actually serves when the brain did not
+are all ERROR. So is an unexercised setup (`setup_problems`): a scenario whose seed turn
+failed or whose seeded fact never landed in the recall packet is ERROR and its ask is not
+even sent — S1 (sister), S2 (both homes), S4/S5 (the worry), S7 (rich dad + short duplicate),
+S8 (S1 + S7 facts, plus any failed filler turn). The fallback texts are the ones zoe-data actually serves when the brain did not
 answer — `zoe_flue_client._FALLBACK_TEXT` ("Sorry, I had trouble reaching my brain just
 now…", chat + voice) and `routers/voice_tts._FALLBACK_PHRASE` — pinned to those source
 constants by `tests/unit/test_samantha_bar.py` AND re-read from the service checkout at run
