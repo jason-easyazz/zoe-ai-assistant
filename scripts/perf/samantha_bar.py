@@ -1114,11 +1114,19 @@ def teardown(live: Live, users: list[str], sessions: list[str]) -> dict[str, Any
             if stable >= 2 and in_flight == 0:
                 break
             time.sleep(5)
-        quiesce[u] = {"in_flight": in_flight, "packet": last}
-    quiesce_problems = [
-        f"{u}: capture status unavailable — quiescence cannot be proven" if q["in_flight"] is None
-        else f"{u}: capture not quiescent (in_flight={q['in_flight']})"
-        for u, q in quiesce.items() if q["in_flight"] != 0]
+        # Both signals are recorded; BOTH must have been observed for a proof.
+        quiesce[u] = {"in_flight": in_flight, "packet": last, "stable": stable}
+    quiesce_problems: list[str] = []
+    for u, q in quiesce.items():
+        if q["in_flight"] is None:
+            quiesce_problems.append(f"{u}: capture status unavailable — quiescence cannot be proven")
+        elif q["in_flight"] != 0:
+            quiesce_problems.append(f"{u}: capture not quiescent (in_flight={q['in_flight']})")
+        if q["packet"] is None:
+            quiesce_problems.append(f"{u}: packet count unreadable — quiescence cannot be proven")
+        elif q["stable"] < 2:
+            quiesce_problems.append(f"{u}: packet count never stabilised before the forget "
+                                    f"(stable={q['stable']}, last={q['packet']})")
     out: dict[str, Any] = {"users": users, "sessions": len(sessions), "rounds": [],
                            "forget_mode": getattr(live, "forget_mode", "?"), "quiesce": quiesce}
     db_res = None

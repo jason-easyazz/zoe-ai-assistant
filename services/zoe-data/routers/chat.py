@@ -1059,20 +1059,37 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
                         lane="chat", pass_name=_mx_name).inc()
                 except Exception:
                     pass
-        asyncio.ensure_future(_detect_suggestions(
+        # Latent-intent detection stays asynchronous (it can await Gemma), but it
+        # WRITES (pending_suggestions), so it is tracked under the same per-user
+        # in_flight accounting: started here, completed in its own finally. A
+        # waiter (harness teardown) therefore sees in_flight == 0 only once this
+        # write has landed or failed — never while it could still race a delete.
+        asyncio.ensure_future(_tracked_suggestions(user_id, _detect_suggestions(
             user_message,
             user_id=user_id,
             session_id=session_id,
-        )).add_done_callback(
-            lambda t: None if t.cancelled() else (
-                logger.warning("latent intent detection failed: %s", t.exception())
-                if t.exception() else None
-            )
-        )
+        )))
         return clean
     except Exception as e:
         logger.warning("Memory candidate persistence failed: %s", e)
         return False
+
+
+async def _tracked_suggestions(user_id: str, coro) -> None:
+    """Await the latent-suggestions writer under memory_capture_stats accounting."""
+    import memory_capture_stats
+
+    memory_capture_stats.started(user_id)
+    ok = False
+    try:
+        await coro
+        ok = True
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — logged, counted, never propagates
+        logger.warning("latent intent detection failed: %s", exc)
+    finally:
+        memory_capture_stats.completed(user_id, ok=ok)
 
 
 async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:

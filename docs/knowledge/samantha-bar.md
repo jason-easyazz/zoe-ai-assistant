@@ -32,10 +32,12 @@ ZOE_PERF=1 \
 ```
 
 Teardown quiesces before the first forget on TWO signals per demo user: a stable `/for-prompt`
-count and `capture-status in_flight == 0` (a turn digest still computing would write a row
-after the forget and falsify the count-back). If the counter is unavailable or still nonzero
-after the wait, cleanup still runs but the teardown is reported unproven (`quiesce` in the
-artifact), the pending-teardown file is kept and the run is `error`.
+count (two consecutive equal, readable counts) and `capture-status in_flight == 0` (a turn
+digest still computing would write a row after the forget and falsify the count-back). BOTH
+must have been observed: if the counter is unavailable or still nonzero, or the packet count
+was unreadable or never stabilised (`stable < 2`) when the wait ran out, cleanup still runs but
+the teardown is reported unproven (`quiesce` in the artifact records `in_flight`, `packet`,
+`stable` per user), the pending-teardown file is kept and the run is `error`.
 
 Artifacts in `~/.cache/zoe/`:
 - `samantha_bar_last.json`: the full evidence.
@@ -172,7 +174,10 @@ post-turn memory capture kept in `memory_capture_stats.py` — `started`, `compl
 `_persist_memory_candidates` with `asyncio.ensure_future`, so an HTTP turn returning proves
 nothing about its extraction/digest having run, and a deduplicated candidate never becomes a
 visible row; the counters (started before any early return, completed in `finally`) are the
-only completion signal. `_persist_memory_candidates_impl` returns True only when every memory
+only completion signal. The latent-suggestions writer (`detect_and_store`, which can await
+Gemma and then INSERT `pending_suggestions`) stays asynchronous but is tracked under the same
+per-user accounting (`_tracked_suggestions`: started when scheduled, completed in its own
+`finally`), so `in_flight` reaches 0 only once every writer of that turn has landed or failed. `_persist_memory_candidates_impl` returns True only when every memory
 pass ran cleanly (it swallows their exceptions so the turn never crashes); anything else is
 counted as `failed`, so a waiter can distinguish "captured" from "ran and lost the fact".
 In-process, reset by a restart. Tests:

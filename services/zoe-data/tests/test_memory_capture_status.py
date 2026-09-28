@@ -133,23 +133,35 @@ def _stub_passes(monkeypatch, *, extract=None, digest=None, missing=()):
     return boom
 
 
+async def _drained(coro):
+    """Run ``coro`` and let the tasks it scheduled (the tracked suggestions
+    writer) finish before the loop closes."""
+    result = await coro
+    for _ in range(4):
+        await asyncio.sleep(0)
+    return result
+
+
 def test_impl_reports_a_failed_memory_pass_and_the_wrapper_counts_it(monkeypatch):
     import routers.chat as chat
     boom = _stub_passes(monkeypatch)
     _stub_passes(monkeypatch, extract=boom)
-    assert asyncio.run(chat._persist_memory_candidates_impl("demo_bar_0a1b2c3d", "s", "hi", "yo")) is False
-    asyncio.run(chat._persist_memory_candidates("demo_bar_0a1b2c3d", "s", "hi", "yo"))
+    assert asyncio.run(_drained(chat._persist_memory_candidates_impl("demo_bar_0a1b2c3d", "s", "hi", "yo"))) is False
+    stats.reset()
+    asyncio.run(_drained(chat._persist_memory_candidates("demo_bar_0a1b2c3d", "s", "hi", "yo")))
     s = stats.snapshot("demo_bar_0a1b2c3d")
-    assert (s["started"], s["completed"], s["failed"], s["in_flight"]) == (1, 1, 1, 0)
+    # capture (failed) + the tracked suggestions writer (clean) = 2 units, 1 failed
+    assert (s["started"], s["completed"], s["failed"], s["in_flight"]) == (2, 2, 1, 0)
 
 
 def test_impl_reports_clean_capture_as_success(monkeypatch):
     import routers.chat as chat
     _stub_passes(monkeypatch)
-    assert asyncio.run(chat._persist_memory_candidates_impl("demo_bar_0a1b2c3d", "s", "hi", "yo")) is True
-    asyncio.run(chat._persist_memory_candidates("demo_bar_0a1b2c3d", "s", "hi", "yo"))
+    assert asyncio.run(_drained(chat._persist_memory_candidates_impl("demo_bar_0a1b2c3d", "s", "hi", "yo"))) is True
+    stats.reset()
+    asyncio.run(_drained(chat._persist_memory_candidates("demo_bar_0a1b2c3d", "s", "hi", "yo")))
     s = stats.snapshot("demo_bar_0a1b2c3d")
-    assert (s["completed"], s["failed"]) == (1, 0)
+    assert (s["started"], s["completed"], s["failed"], s["in_flight"]) == (2, 2, 0, 0)
 
 
 def test_impl_nothing_to_capture_is_not_a_failure(monkeypatch):
@@ -163,6 +175,56 @@ def test_impl_outer_failure_is_reported(monkeypatch):
     import routers.chat as chat
     _stub_passes(monkeypatch, missing=("memory_extractor",))  # the import itself fails
     assert asyncio.run(chat._persist_memory_candidates_impl("demo_bar_0a1b2c3d", "s", "hi", "yo")) is False
+
+
+def test_latent_suggestions_writer_is_tracked_in_flight_until_done(monkeypatch):
+    """The suggestions task can await Gemma and then INSERT — in_flight must
+    not reach 0 until that write has landed (or failed)."""
+    import routers.chat as chat
+    gate = asyncio.Event()
+    seen = {}
+
+    async def slow_detect(*a, **k):
+        seen["started"] = stats.snapshot("demo_bar_0a1b2c3d")["in_flight"]
+        await gate.wait()
+
+    async def scenario():
+        _stub_passes(monkeypatch)
+        import sys
+        import types
+        monkeypatch.setitem(sys.modules, "latent_intent_detector",
+                            types.SimpleNamespace(detect_and_store=slow_detect))
+        await chat._persist_memory_candidates("demo_bar_0a1b2c3d", "s", "hi", "yo")
+        await asyncio.sleep(0)  # let the tracked task start
+        mid = stats.snapshot("demo_bar_0a1b2c3d")
+        gate.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return mid, stats.snapshot("demo_bar_0a1b2c3d")
+    mid, end = asyncio.run(scenario())
+    assert mid["in_flight"] == 1 and mid["started"] == 2 and mid["completed"] == 1  # capture done, write pending
+    assert seen["started"] >= 1
+    assert end["in_flight"] == 0 and end["completed"] == 2 and end["failed"] == 0
+
+
+def test_latent_suggestions_failure_still_completes_and_counts_failed(monkeypatch):
+    import routers.chat as chat
+
+    async def boom_detect(*a, **k):
+        raise RuntimeError("gemma down")
+
+    async def scenario():
+        _stub_passes(monkeypatch)
+        import sys
+        import types
+        monkeypatch.setitem(sys.modules, "latent_intent_detector",
+                            types.SimpleNamespace(detect_and_store=boom_detect))
+        await chat._persist_memory_candidates("demo_bar_0a1b2c3d", "s", "hi", "yo")
+        for _ in range(3):
+            await asyncio.sleep(0)
+        return stats.snapshot("demo_bar_0a1b2c3d")
+    end = asyncio.run(scenario())
+    assert end["in_flight"] == 0 and end["completed"] == 2 and end["failed"] == 1
 
 
 def test_guest_turn_is_still_counted_as_completed(monkeypatch):

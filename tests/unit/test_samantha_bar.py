@@ -479,12 +479,14 @@ def test_db_teardown_refuses_foreign_identities():
 
 
 class _FakeLive:
-    def __init__(self, export_counts, db_left=0, in_flight=0):
+    def __init__(self, export_counts, db_left=0, in_flight=0, packets=None):
         self.export_counts, self.db_left = list(export_counts), db_left
         self.forgot, self.in_flight = [], in_flight
+        self.packets, self.polls = packets, 0  # packets: callable(poll_index) -> count|None
 
     def packet_count(self, u):
-        return 0
+        self.polls += 1
+        return 0 if self.packets is None else self.packets(self.polls)
 
     def capture_status(self, u):
         return None if self.in_flight is None else {"completed": 1, "in_flight": self.in_flight}
@@ -521,6 +523,26 @@ def test_teardown_is_unproven_while_capture_is_in_flight_or_unknown(monkeypatch,
     assert live.forgot  # cleanup still ran
     assert not out["proven"] and any(marker in p and A in p for p in out["problems"])
     assert out["quiesce"][A]["in_flight"] == in_flight
+
+
+@pytest.mark.parametrize("packets, marker", [
+    (lambda i: None, "packet count unreadable"),          # never readable
+    (lambda i: i, "never stabilised"),                     # keeps changing for every poll
+    (lambda i: None if i % 2 else 0, "never stabilised"),  # readable but never twice in a row
+])
+def test_teardown_is_unproven_when_the_packet_count_never_stabilises(monkeypatch, packets, marker):
+    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    live = _FakeLive(export_counts=[0, 0], packets=packets)  # in_flight is 0 throughout
+    out = sb.teardown(live, [A], ["bar-x-1"])
+    assert live.polls >= 24  # the wait was exhausted
+    assert not out["proven"] and any(marker in p and A in p for p in out["problems"])
+    assert out["quiesce"][A]["stable"] < 2 and out["quiesce"][A]["in_flight"] == 0
+
+
+def test_teardown_quiesce_records_stability_when_proven(monkeypatch):
+    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    out = sb.teardown(_FakeLive(export_counts=[0, 0]), [A], ["bar-x-1"])
+    assert out["proven"] and out["quiesce"][A] == {"in_flight": 0, "packet": 0, "stable": 2}
 
 
 def test_live_backdate_is_verified(monkeypatch):
