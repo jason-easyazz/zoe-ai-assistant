@@ -1,0 +1,45 @@
+# Kokoro TTS sidecar (scripts/setup/kokoro_sidecar.py) — the distributions it
+# ACTUALLY imports, exact-pinned to what the live box runs (2026-09-28).
+#
+# NOTHING IS INSTALLED FROM THIS FILE. The Kokoro venv (~/.zoe/venvs/kokoro-py310,
+# built by scripts/setup/build_kokoro_venv.sh) is created with
+# --system-site-packages, so every package below is the SAME installed copy the
+# system Python 3.10 uses — including the NVIDIA CUDA torch wheel (1.8 GB in
+# ~/.local, no recorded source, not reproducible into a clean venv offline). What
+# the venv adds is an import blocker for scikit-learn / pandas / pyarrow
+# (scripts/setup/kokoro_import_block.py). This file is the drift manifest
+# `build_kokoro_venv.sh --check` verifies under the venv interpreter
+# (scripts/maintenance/requirements_drift_check.py): if an out-of-band
+# `pip install --user` moves any of these, --check goes red before a restart
+# picks it up.
+#
+# Derived from an offline `python -X importtime` survey of the sidecar's import
+# path (module level + `_load_pipeline()`: torch, kokoro.KPipeline, misaki.en /
+# misaki.espeak), mapped to distributions, then cut to the load-bearing set:
+# the sidecar's direct imports, kokoro's declared requirements, misaki[en], and
+# the torch stack. Leaf utilities (certifi, regex, ...) are deliberately left out
+# so an unrelated ~/.local upgrade does not read as Kokoro drift.
+
+# --- the model stack (voice numerics) ---
+torch==2.8.0
+kokoro==0.9.4
+misaki==0.9.4
+transformers==5.17.0
+huggingface-hub==1.11.0
+safetensors==0.8.0
+numpy==1.26.4
+triton==3.6.0
+
+# --- misaki[en] G2P ---
+spacy==3.8.14
+en-core-web-sm==3.8.0
+espeakng-loader==0.2.4
+num2words==0.5.14
+phonemizer-fork==3.3.2
+
+# --- the HTTP sidecar ---
+fastapi==0.141.1
+starlette==1.3.1
+uvicorn==0.49.0
+pydantic==2.13.5
+loguru==0.7.3

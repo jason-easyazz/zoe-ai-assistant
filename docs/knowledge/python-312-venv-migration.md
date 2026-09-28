@@ -16,6 +16,12 @@ the last cp310 wheel, `websockets` 16.1.1 the last release for 3.10, `av` 18 nee
 **Scope.** zoe-data only. Kokoro (`kokoro-tts.service`) and llama-server keep the system
 Python 3.10 / CUDA 12.6 stack; nothing here touches them, `/usr`, or
 `~/.local/lib/python3.10/site-packages`.
+Kokoro's own venv (`~/.zoe/venvs/kokoro-py310`, B5.7) does not change that: it is a
+`--system-site-packages` venv on the same system 3.10 interpreter, so it runs the same CUDA torch
+wheel from `~/.local` and only adds an import blocker for scikit-learn/pandas/pyarrow — see
+[voice-pipeline.md](voice-pipeline.md) (Kokoro dedicated venv). An out-of-band
+`pip install --user` into the 3.10 site-packages now moves Kokoro too; `build_kokoro_venv.sh --check`
+reports it as drift.
 
 **Status 2026-09-27: cutover PR open (drop-in template + deploy wiring); NOT applied to the service.**
 Everything in §1–§3 is measured on the Orin (uv 0.10.11, uv-managed CPython 3.12.13 aarch64,
