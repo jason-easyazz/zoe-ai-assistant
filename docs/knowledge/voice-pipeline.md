@@ -43,6 +43,32 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
 Per-stage timings are exported to Prometheus as `zoe_voice_stage_seconds`
 (`services/zoe-data/voice_metrics.py`), scraped at `:8000/metrics`.
 
+### The Skybridge fast path defers to the router (2026-09-28)
+
+Before the router/brain, `voice_command` offers the turn to the **Skybridge fast path**
+(`skybridge_service.resolve_skybridge_request`) — a regex classifier that answers
+calendar/lists/people/weather/clock/timer/music/smart-home asks deterministically with a card.
+Live 2026-09-28 18:26 it answered the statement "…and just get updates from the family." with
+"I found 0 contacts." while the two-stage router had said `chat`. Two guards since:
+
+- **Shape.** The people matchers claim only a command/question anchored at the start, never a
+  people word inside a statement (contract: `services/zoe-data/AGENTS.md`).
+- **Router veto.** The call carries the turn's router verdict; when the ACTIVE two-stage router
+  picked `chat` or an incompatible domain, Skybridge declines and the turn continues to the
+  intent/expert lanes and the brain. Every gated decision logs one line — grep
+  `SKYBRIDGE_GATE` in `~/.zoe-logs/zoe-data.app.log`:
+  `SKYBRIDGE_GATE router=chat conf=0.9185 skybridge=people action=show decision=veto reason=router_chat`.
+  `reason=router_unavailable` means the router was off/similarity-only (no veto, pre-fix
+  behaviour). A `decision=veto` on a legitimate ask is a router miss worth mining for the
+  self-training loop, not a reason to flip the flag. Kill switch: `ZOE_SKYBRIDGE_ROUTER_VETO=false`.
+
+**The replay harness does not exercise Skybridge.** `replay_samples.py` runs STT → `semantic_router`
+→ `fast_tiers.resolve` → brain; it never calls `resolve_skybridge_request`, and its verdicts come
+from the reply text (`_classify`), not from per-sample expectations — there is no sidecar/expectation
+file per clip. So a Skybridge over-claim is invisible to said-vs-did; the classifier + gate are pinned
+by `services/zoe-data/tests/test_skybridge_router_veto.py` instead. The bug's audio,
+`~/.zoe-voice-samples/182627_117.wav`, is in the corpus and replays through the router → brain path.
+
 ## Measuring it — the replay harness
 
 Jason's saved WAVs at **`~/.zoe-voice-samples`** (1001 curated clips as of 2026-08-04, and growing)
