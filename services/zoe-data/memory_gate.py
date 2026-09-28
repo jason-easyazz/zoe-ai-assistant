@@ -165,13 +165,24 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 #     straight single-quoted span that opens after whitespace and closes before a
 #     boundary (so the apostrophe in "I'm" is not taken for a quote);
 #   * reported speech — "<someone other than I> said/says/told me/… (that) …" to
-#     the end of the sentence ("my sister said she is so stressed").
+#     the end of its clause ("my sister said she is so stressed").
 _QUOTED_SPAN_RE = re.compile(
     r"\"[^\"]*\"|“[^”]*”|‘[^’]*’|(?:(?<=\s)|^)'.*?'(?=\s|[,.!?;:]|$)"
 )
+# The reported span ends at its CLAUSE, not the sentence: "My sister said she
+# is fine, but I'm stressed about my interview" keeps the user's own clause.
+# A clause boundary is ", but/and/so/though/yet", ";", " but/however/although/
+# though/whereas ", or ", " / " and " followed by a first-person subject.
+# A first-person subject straight after the verb ("my sister said I'm
+# stressed") stays inside the reported span — that is the sister speaking.
+_CLAUSE_BOUNDARY = (
+    r"(?:,\s*(?:but|and|so|though|yet)\b|;|\s(?:but|however|although|though|whereas)\b|"
+    r"(?:,\s*|\s+and\s+)i(?:['’]m|\s+am|\s+feel|\s+felt|['’]ve|\s+have|\s+was)\b)"
+)
 _REPORTED_SPEECH_RE = re.compile(
     r"\b(?!i\b)[a-z']+\s+(?:said|says|say|told\s+(?:me|us)|tells\s+(?:me|us)|"
-    r"asked|texted|wrote|messaged|mentioned|reckons|thinks)\b[^.!?]*",
+    r"asked|texted|wrote|messaged|mentioned|reckons|thinks)\b"
+    r"(?:(?!" + _CLAUSE_BOUNDARY + r")[^.!?])*",
     re.IGNORECASE,
 )
 

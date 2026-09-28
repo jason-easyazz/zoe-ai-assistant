@@ -56,6 +56,10 @@ NOW = datetime.datetime.now(datetime.timezone.utc)
     ("I'm proud of how the kids did", "proud"),
     ("I'm stressed and my sister said she is fine", "stressed"),
     ("I told her I'm anxious about it", "anxious"),
+    # the reported span ends at its clause — the user's own clause survives
+    ("My sister said she is fine, but I'm stressed about my interview", "stressed"),
+    ("My sister said she is fine; I'm stressed", "stressed"),
+    ("My sister said she was tired and I'm exhausted", "exhausted"),
 ])
 def test_first_person_feelings_are_extracted(message, label):
     got, sentence = extract_affect(message)
@@ -90,6 +94,11 @@ def test_a_shared_weekday_does_not_carry_the_feeling_to_another_sentence():
     f = memory_digest._affect_for_fact
     assert f("User has an interview on Friday", affect, sentence, msg) == "anxious"
     assert f("User's sister arrives on Friday", affect, sentence, msg) == ""
+    # the S4 shortening: the digest keeps only "interview" from the feeling
+    # sentence — it must still carry the feeling (Greptile #1762)
+    assert f("User has a job interview on Friday", *extract_affect(SAY_WORRY), SAY_WORRY) == "anxious"
+    assert f("The user has a job interview at the aquarium on Friday.",
+             *extract_affect(SAY_WORRY), SAY_WORRY) == "anxious"
     # a fact that fits BOTH sentences equally is ambiguous → nothing attached
     both = "I'm anxious about the Lisbon trip. The Lisbon trip is long."
     a2, s2 = extract_affect(both)
@@ -203,6 +212,31 @@ def test_digest_update_path_carries_the_new_feeling(monkeypatch):
     assert mem_id == "neutral-1" and kw["metadata"] == {"affect": "anxious"}
 
 
+def test_digest_neutral_update_clears_the_old_feeling(monkeypatch):
+    """Greptile #1762: a NEUTRAL turn that supersedes an anxious fact must not
+    keep the old feeling — the update passes an explicit empty affect."""
+    import memory_quality
+
+    svc, _ = _patch_digest(monkeypatch, [
+        {"type": "event", "fact": "User's job interview at the aquarium moved to Monday."},
+    ])
+    reviewed = []
+
+    async def review(mem_id, **kw):
+        reviewed.append((mem_id, kw))
+        return MemoryRef(id="edited-1", text=kw["edits"])
+
+    async def reconcile(_svc, fact, user_id):
+        return "update", "anxious-1"
+
+    svc.review = review
+    monkeypatch.setattr(memory_quality, "reconcile_for_ingest", reconcile)
+    asyncio.run(memory_digest.run_turn_digest(
+        "demo-a", "Update: my job interview at the aquarium moved to Monday.", session_id="s1"))
+    (_, kw), = reviewed
+    assert kw["metadata"] == {"affect": ""}
+
+
 class _Col:
     def __init__(self):
         self.rows = {}
@@ -244,6 +278,14 @@ async def test_real_review_edit_stores_affect_and_continuity_focuses_it(monkeypa
     res = await _compose(monkeypatch, [HOME, DAD, new])
     assert res["continuity_focus"]["affect"] == "anxious"
     assert "job interview" in res["continuity_focus"]["text"]
+    # …and a later NEUTRAL edit of that anxious row clears the feeling instead of
+    # carrying it forward onto the new fact
+    newer = await svc.review(new.id, decision="edit", actor="turn_digest",
+                             edits="User's job interview at the aquarium moved to Monday.",
+                             metadata={"affect": ""})
+    assert memory_affect(newer) == "" and not is_emotional_memory(newer)
+    res2 = await _compose(monkeypatch, [HOME, DAD, newer])
+    assert "continuity_focus" not in res2
 
 
 def test_digest_neutral_turn_stores_no_affect(monkeypatch):

@@ -370,26 +370,29 @@ def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -
     """The turn's first-person feeling, if this fact came from the sentence that
     carried it — else "". Sentence-level attribution, not a shared word:
 
-    * the fact must share ``min(2, n)`` content words with the feeling sentence
-      (``n`` = that sentence's content words; stopwords, time words and the
-      feeling words themselves excluded, so a shared "Friday" proves nothing);
-    * and strictly MORE than with any other sentence of the message, so a fact
-      that belongs to a neighbouring sentence ("My sister arrives Friday") never
-      inherits the feeling. A tie is ambiguous and attaches nothing.
+    * content words only — stopwords, time words (weekdays, months, "today"…)
+      and the feeling words themselves never count, so a shared "Friday" proves
+      nothing;
+    * the fact must share at least one content word with the feeling sentence
+      (the digest often SHORTENS: "User has a job interview on Friday" keeps only
+      "interview" from "…anxious about my job interview at the aquarium…");
+    * and the feeling sentence must win UNIQUELY — strictly more shared words
+      than any other sentence of the message. A fact that belongs to a
+      neighbouring sentence ("My sister arrives Friday") loses, and a tie is
+      ambiguous and attaches nothing.
     """
     if not affect or not sentence:
         return ""
     fact_tokens = _content_tokens(fact)
-    feel_tokens = _content_tokens(sentence) - _AFFECT_WORDS
-    overlap = len(fact_tokens & feel_tokens)
-    if not feel_tokens or overlap < min(2, len(feel_tokens)):
+    overlap = len(fact_tokens & (_content_tokens(sentence) - _AFFECT_WORDS))
+    if overlap < 1:
         return ""
     feel_norm = sentence.strip()
     for other in _FACT_SENTENCE_SPLIT_RE.split(message or ""):
         other = other.strip()
         if not other or other == feel_norm or feel_norm in other:
             continue
-        if len(fact_tokens & _content_tokens(other)) >= overlap:
+        if len(fact_tokens & (_content_tokens(other) - _AFFECT_WORDS)) >= overlap:
             return ""
     return affect
 
@@ -537,9 +540,11 @@ async def run_turn_digest(
                         edits=fact,
                         actor="turn_digest",
                         note="turn digest supersede (QA F9)",
-                        # An update that supersedes a neutral fact must still
-                        # carry this turn's feeling (Greptile #1762).
-                        metadata={"affect": fact_affect} if fact_affect else None,
+                        # The updated row's feeling is THIS turn's, always: a
+                        # feeling is carried onto a superseded neutral fact, and
+                        # a neutral update clears the old one ("" overrides the
+                        # value the edit would otherwise carry forward).
+                        metadata={"affect": fact_affect},
                     )
                     if new_ref is not None:
                         result["new"] += 1
