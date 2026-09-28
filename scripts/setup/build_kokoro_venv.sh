@@ -208,6 +208,14 @@ if [[ "$MODE" == build ]]; then
   echo
   echo "Nothing running has changed. To switch the service (brain-window rules apply):"
   echo "  mkdir -p ~/.config/systemd/user/kokoro-tts.service.d"
-  echo "  cp scripts/setup/systemd/kokoro-tts.service.d/60-kokoro-venv.conf ~/.config/systemd/user/kokoro-tts.service.d/"
+  if [[ "$VENV_DIR" == "$HOME/.zoe/venvs/kokoro-py310" ]]; then
+    echo "  cp scripts/setup/systemd/kokoro-tts.service.d/60-kokoro-venv.conf ~/.config/systemd/user/kokoro-tts.service.d/"
+  else
+    # ZOE_KOKORO_VENV override: the tracked drop-in's ExecStart names the DEFAULT venv, so a
+    # plain copy would restart the sidecar on an interpreter that may not exist (Restart=always
+    # loop, voice on fallback TTS). Render the drop-in for the venv that was actually built.
+    echo "  # ZOE_KOKORO_VENV=$VENV_DIR — render the drop-in for THIS venv (the tracked file names the default):"
+    echo "  sed 's#%h/.zoe/venvs/kokoro-py310/bin/python#$VENV_DIR/bin/python#' scripts/setup/systemd/kokoro-tts.service.d/60-kokoro-venv.conf > ~/.config/systemd/user/kokoro-tts.service.d/60-kokoro-venv.conf"
+  fi
   echo "  systemctl --user daemon-reload && systemctl --user restart kokoro-tts   # poll :10201/health for pipeline_loaded + cuda"
 fi

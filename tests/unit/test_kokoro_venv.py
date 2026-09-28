@@ -232,6 +232,28 @@ def test_drop_in_interpreter_is_the_venv_the_build_script_creates():
     assert shlex.split(_exec_lines(DROP_IN)[1])[0] == f"%h/{m.group(1)}/bin/python"
 
 
+def test_switch_recipe_renders_the_drop_in_for_an_overridden_venv():
+    """Greptile #1750: with ZOE_KOKORO_VENV set, a plain `cp` of the tracked drop-in
+    would restart the sidecar on the DEFAULT interpreter (missing -> Restart=always
+    loop, voice on fallback TTS). The build-mode recipe must render the drop-in for
+    the venv it actually built. The print sits behind the live smoke, so this pins
+    the rendering command itself and proves it on the tracked file."""
+    src = BUILD.read_text()
+    m = re.search(r"sed '(s#[^']+#\$VENV_DIR/bin/python#)' scripts/setup/systemd/kokoro-tts\.service\.d/60-kokoro-venv\.conf", src)
+    assert m, "override branch of the switch recipe not found"
+    assert 'if [[ "$VENV_DIR" == "$HOME/.zoe/venvs/kokoro-py310" ]]' in src
+    override = "/srv/other/kokoro-venv"
+    expr = m.group(1).replace("$VENV_DIR", override)
+    r = subprocess.run(["sed", expr, str(DROP_IN)], capture_output=True, text=True, check=True)
+    rendered = [ln.split("=", 1)[1] for ln in r.stdout.splitlines() if ln.startswith("ExecStart=")]
+    assert rendered[0] == "" and len(rendered) == 2
+    interp, *args = shlex.split(rendered[1])
+    assert interp == f"{override}/bin/python"
+    assert args == ["%h/assistant/scripts/setup/kokoro_sidecar.py"]
+    # negative control: the untouched tracked file still names the default
+    assert shlex.split(_exec_lines(DROP_IN)[1])[0] == "%h/.zoe/venvs/kokoro-py310/bin/python"
+
+
 def test_drop_in_changes_nothing_but_execstart():
     cp = configparser.ConfigParser(strict=False, interpolation=None)
     cp.optionxform = str
