@@ -541,6 +541,23 @@ class MemoryRef:
     score: float = 0.0
 
 
+# Hard cap on the rows a time-bounded recency query may return (see
+# MemoryService._recent_read). Well above any real user's 72 h capture volume.
+_RECENT_SCAN_CAP = 300
+
+
+def is_emotional_memory(ref: MemoryRef) -> bool:
+    """An `emotional_moment` row, or a row whose text carries an emotional cue
+    ("I'm pretty anxious about…") — the 4B extractor often stores a worry as a
+    plain fact, so the type alone would miss it. Single definition, shared with
+    the for-prompt composer."""
+    if str((ref.metadata or {}).get("memory_type")) == "emotional_moment":
+        return True
+    from memory_gate import message_needs_emotional_recall
+
+    return message_needs_emotional_recall(ref.text or "")
+
+
 # PII scrubber
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _TOTP_RE = re.compile(r"(?:\b|:\s*)(\d{6})\b")
@@ -807,6 +824,30 @@ class MemoryService:
                 name="memory_tick_access_prompt",
             )
         return rows
+
+    async def load_recent_for_prompt(
+        self, user_id: str, *, window_s: float, limit: int, emotional_first: bool = False
+    ) -> list[MemoryRef]:
+        """Rows captured in the last ``window_s`` seconds, newest first (at most
+        ``limit``; ``emotional_first`` orders emotional rows ahead before the
+        cut) — the recency read under the for-prompt continuity mode.
+
+        The ranked ``load_for_prompt`` orders by confidence × decay + access
+        hotness, so for a heavy user a memory captured yesterday can sit past any
+        fixed prefix of it; this read selects by recency directly. Read-only: no
+        access ticks (a recency read is not evidence the row was useful).
+        """
+        if is_guest_memory_user(user_id):
+            return []
+        self._require(user_id, "user_id is required")
+        try:
+            return await self._run_sync(
+                self._recent_read, user_id, window_s, limit, emotional_first
+            )
+        except Exception as exc:
+            logger.warning("memory_service: load_recent_for_prompt failed user=%s: %s",
+                           user_id, exc)
+            return []
 
     async def search(
         self,
@@ -1105,7 +1146,7 @@ class MemoryService:
             # doesn't silently drop it.
             _EDIT_CARRY_FORWARD_SKIP = {
                 "user_id", "wing", "room", "visibility", "memory_type", "confidence",
-                "source", "status", "added_by", "added_at", "last_accessed",
+                "source", "status", "added_by", "added_at", "added_ts", "last_accessed",
                 "access_count", "embedding_model_version", "idempotency_key", "tags",
                 "concept_tags", "related_ids", "unique_query_count", "consolidation_count",
                 "session_id", "user_turn_id", "entity_type", "entity_id", "expires_at",
@@ -1243,7 +1284,8 @@ class MemoryService:
         When ``scope`` is None, ``extra_metadata["scope"]`` is promoted to the
         first-class Zoe memory scope and drives legacy visibility mapping.
         """
-        now = datetime.datetime.utcnow().isoformat() + "Z"
+        _now_dt = datetime.datetime.utcnow()
+        now = _now_dt.isoformat() + "Z"
         extra = dict(extra_metadata or {})
         event_scope = scope if scope is not None else extra.get("scope")
         visibility = _scope_visibility(event_scope)
@@ -1258,6 +1300,10 @@ class MemoryService:
             "status": status,
             "added_by": source,
             "added_at": now,
+            # Numeric twin of added_at: chroma `where` compares ($gte/$lt) only
+            # ints/floats, so a time-bounded store query needs this field
+            # (load_recent_for_prompt). Same instant as added_at.
+            "added_ts": _now_dt.replace(tzinfo=datetime.timezone.utc).timestamp(),
             "last_accessed": now,
             "access_count": 0,
             "embedding_model_version": os.environ.get(
@@ -1418,16 +1464,27 @@ class MemoryService:
         col = self._collection()
         col.upsert(ids=[mem_id], documents=[text], metadatas=[metadata])
 
-    def _metadata_read(self, user_id: str, limit: int) -> list[MemoryRef]:
+    @staticmethod
+    def _scope_where(user_id: str) -> dict[str, Any]:
+        return {"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]}
+
+    def _visible_rows(self, user_id: str, now: datetime.datetime) -> list[MemoryRef]:
+        """Every row this user may read (unexpired, visible, status-visible) —
+        the shared filter under both the ranked and the recency reads."""
         col = self._collection()
         result = col.get(
-            where={"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]},
+            where=self._scope_where(user_id),
             include=["documents", "metadatas"],
         )
+        return self._filter_visible(result, user_id, now)
+
+    @staticmethod
+    def _filter_visible(
+        result: Mapping[str, Any], user_id: str, now: datetime.datetime
+    ) -> list[MemoryRef]:
         docs = result.get("documents") or []
         metas = result.get("metadatas") or []
         ids = result.get("ids") or []
-        now = datetime.datetime.now(datetime.timezone.utc)
         filtered: list[MemoryRef] = []
         for rid, doc, meta in zip(ids, docs, metas):
             if not isinstance(meta, dict):
@@ -1440,6 +1497,11 @@ class MemoryService:
             if not _memory_status_visible(meta):
                 continue
             filtered.append(MemoryRef(id=rid, text=doc or "", metadata=dict(meta)))
+        return filtered
+
+    def _metadata_read(self, user_id: str, limit: int) -> list[MemoryRef]:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        filtered = self._visible_rows(user_id, now)
 
         import math
         HALF_LIFE_DAYS = 70.0
@@ -1466,6 +1528,54 @@ class MemoryService:
 
         filtered.sort(key=_score, reverse=True)
         return filtered[:limit]
+
+    def _recent_read(
+        self, user_id: str, window_s: float, limit: int, emotional_first: bool
+    ) -> list[MemoryRef]:
+        """Visible rows added within ``window_s``, selected emotional-first (when
+        asked) then newest, at most ``limit``.
+
+        The time bound and a hard row cap (``_RECENT_SCAN_CAP``) go INTO the
+        store query via the numeric ``added_ts`` field, so the read is bounded on
+        a large store. Ordering happens over the whole bounded candidate set,
+        BEFORE truncation — so a burst of ordinary captures after a worry cannot
+        push the worry out. Trade-offs, both deliberate:
+          * chroma cannot sort, so if one user has more than _RECENT_SCAN_CAP
+            rows inside the window the store picks which of them come back;
+          * rows written before ``added_ts`` existed (or by a writer that does
+            not set it) are invisible to the bounded query. When it finds
+            NOTHING, the read falls back to the full visible-row scan filtered
+            by ``added_at`` — the same scan ``load_for_prompt`` makes every
+            turn — so a user whose recent rows predate the field still gets
+            continuity. The composer also merges the ranked rows.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cutoff = now - datetime.timedelta(seconds=window_s)
+        col = self._collection()
+        result = col.get(
+            where={"$and": [
+                self._scope_where(user_id),
+                {"added_ts": {"$gte": cutoff.timestamp()}},
+            ]},
+            include=["documents", "metadatas"],
+            limit=_RECENT_SCAN_CAP,
+        )
+        rows = self._filter_visible(result, user_id, now)
+        if not rows:
+            rows = self._visible_rows(user_id, now)  # legacy rows without added_ts
+        dated: list[tuple[datetime.datetime, MemoryRef]] = []
+        for ref in rows:
+            try:
+                dt = _parse_aware_datetime(ref.metadata.get("added_at") or "")
+            except Exception:
+                dt = None
+            if dt is not None and dt >= cutoff:
+                dated.append((dt, ref))
+        if emotional_first:
+            dated.sort(key=lambda p: (is_emotional_memory(p[1]), p[0]), reverse=True)
+        else:
+            dated.sort(key=lambda p: p[0], reverse=True)
+        return [ref for _, ref in dated[:limit]]
 
     def _semantic_search(
         self,
