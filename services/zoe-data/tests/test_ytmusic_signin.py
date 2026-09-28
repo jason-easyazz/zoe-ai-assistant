@@ -41,6 +41,7 @@ class _FakeContext:
         self._after = after
         self.reads = 0
         self.cleared = []
+        self.clear_fails = False
         self.closed = False
         self.pages = []
 
@@ -51,6 +52,8 @@ class _FakeContext:
         return list(self._cookies)
 
     async def clear_cookies(self, *, name=None, domain=None, path=None):
+        if self.clear_fails:
+            raise RuntimeError("profile locked")
         self.cleared.append(domain)
         self._cookies = [c for c in self._cookies if not domain.search(c["domain"])]
 
@@ -523,24 +526,75 @@ FRESH_COOKIES = [
 
 
 async def test_unchanged_cookie_is_never_harvested(monkeypatch):
-    # The start check can't tell (inconclusive), so the snapshot is kept; the
-    # validator would now say "signed in" — but an UNCHANGED cookie is not a
-    # login that happened in this session, so it is never even validated.
+    # YouTube said the profile's cookie is signed out, and the wipe failed, so
+    # the stale cookie is still in the jar. Even if a later check would now say
+    # "signed in", an UNCHANGED cookie is not a login that happened in this
+    # session: it is never re-validated and never saved.
     ctx, procs = _stub_rig(monkeypatch, STALE_COOKIES)
+    ctx.clear_fails = True
     monkeypatch.setattr(ys, "SESSION_TIMEOUT_S", 30)
-    seen = _validator(monkeypatch, None, default=True)
+    monkeypatch.setattr(ys, "_BASELINE_RETRY_S", 0.0)
+    seen = _validator(monkeypatch, False, default=True)
     saves = _no_save(monkeypatch)
 
     res = await ys.start_session()
     await _let_watcher_poll()
 
     st = ys.session_status(res["session_id"])
-    assert st["state"] == "awaiting_login"
+    assert st["state"] == "stale_cookie_cleared"
     assert st["view_url"]  # the view is still up for the person
     assert saves == []
     assert ctx.closed is False and not any(p.terminated for p in procs)
     assert ctx.reads > 3  # the watcher kept polling
     assert seen == ["stale-old-value"]  # only the start check asked
+    await ys.cancel_session(res["session_id"])
+
+
+async def test_inconclusive_start_check_is_retried_and_a_live_login_saved(monkeypatch):
+    # A transient outage at start must not decide the session: the unchanged
+    # cookie is retried and saved once YouTube confirms it is signed in.
+    ctx, _procs = _stub_rig(monkeypatch, GOOD_COOKIES)
+    monkeypatch.setattr(ys, "_BASELINE_RETRY_S", 0.0)
+    seen = _validator(monkeypatch, None, None, True)
+    saves = _no_save(monkeypatch)
+    monkeypatch.setattr(ys, "_store_username", lambda u: None)
+
+    async def _no_instance(prov):
+        return None
+    monkeypatch.setattr(music_service, "provider_instance_id", _no_instance)
+
+    res = await ys.start_session()
+    await ys._SESSION["watcher"]
+    assert ys.session_status(res["session_id"])["state"] == "connected"
+    assert len(saves) == 1 and seen == ["secretval"] * 3
+    assert ctx.closed is True
+
+
+async def test_inconclusive_start_check_retried_then_stale_is_cleared(monkeypatch):
+    ctx, _procs = _stub_rig(monkeypatch, STALE_COOKIES)
+    monkeypatch.setattr(ys, "SESSION_TIMEOUT_S", 30)
+    monkeypatch.setattr(ys, "_BASELINE_RETRY_S", 0.0)
+    _validator(monkeypatch, None, False)
+    saves = _no_save(monkeypatch)
+    res = await ys.start_session()
+    await _let_watcher_poll()
+    assert ys.session_status(res["session_id"])["state"] == "stale_cookie_cleared"
+    assert [c["name"] for c in await ctx.cookies()] == ["keep_me"]
+    assert saves == []
+    await ys.cancel_session(res["session_id"])
+
+
+async def test_inconclusive_start_check_backs_off_and_never_harvests_unverified(monkeypatch):
+    ctx, procs = _stub_rig(monkeypatch, STALE_COOKIES)
+    monkeypatch.setattr(ys, "SESSION_TIMEOUT_S", 30)
+    monkeypatch.setattr(ys, "_BASELINE_RETRY_S", 3600.0)
+    seen = _validator(monkeypatch, default=None)
+    saves = _no_save(monkeypatch)
+    res = await ys.start_session()
+    await _let_watcher_poll()
+    assert ys.session_status(res["session_id"])["state"] == "awaiting_login"
+    assert saves == [] and seen == ["stale-old-value"]  # no retry inside the backoff
+    assert ctx.closed is False and not any(p.terminated for p in procs)
     await ys.cancel_session(res["session_id"])
 
 
@@ -697,6 +751,44 @@ async def test_refresh_never_pushes_a_signed_out_cookie(monkeypatch, tmp_path):
     assert saves == [] and ctx.closed is True
 
 
+async def test_refresh_never_pushes_an_unverified_cookie(monkeypatch, tmp_path):
+    async def fake_launch(headless=False):
+        return _FakeContext(STALE_COOKIES)
+
+    monkeypatch.setattr(ys, "_launch_browser", fake_launch)
+    monkeypatch.setattr(ys, "PROFILE_DIR", tmp_path)
+    _validator(monkeypatch, None)
+    saves = _no_save(monkeypatch)
+    r = await ys.refresh_now()
+    assert r["ok"] is False and saves == []
+
+
+async def test_a_late_stale_notice_lands_before_the_outcome():
+    # watch() fires the notice as a task; the outcome report must wait for it,
+    # or the handoff card would go error → completing ("sign in again").
+    import asyncio
+    order = []
+    gate = asyncio.Event()
+
+    async def on_progress(detail):
+        await gate.wait()
+        order.append("progress")
+
+    async def on_done(ok, detail):
+        order.append("done")
+
+    ys._SESSION = {"id": "ytm-x", "state": "stale_cookie_cleared", "watcher": None}
+    ys.watch("ytm-x", on_done, on_progress=on_progress)
+    await asyncio.sleep(0)  # the notice is in flight (blocked on the gate)
+    ys._SESSION["state"] = "timeout"
+    report = asyncio.create_task(ys._report(ys._SESSION))
+    await asyncio.sleep(0.01)
+    assert order == []  # the outcome is held behind the in-flight notice
+    gate.set()
+    await report
+    assert order == ["progress", "done"]
+
+
 # ── the validator: YouTube's own logged_in / yt_li flags ─────────────────────
 
 # Trimmed from a live logged-out youtubei/v1/account/account_menu response
@@ -785,6 +877,7 @@ async def test_validate_cookie_network_failure_is_inconclusive_and_no_cookie_is_
 # ── CloakBrowser's per-launch update check is off (no pypi/github on the hot path)
 
 async def test_launch_disables_cloakbrowser_update_check(monkeypatch, tmp_path):
+    import os
     import sys
     import types
     monkeypatch.delenv("CLOAKBROWSER_AUTO_UPDATE", raising=False)
@@ -799,7 +892,11 @@ async def test_launch_disables_cloakbrowser_update_check(monkeypatch, tmp_path):
 
     monkeypatch.setitem(sys.modules, "cloakbrowser",
                         types.SimpleNamespace(launch_persistent_context_async=fake_launch))
-    await ys._launch_browser(headless=True)
+    try:
+        await ys._launch_browser(headless=True)
+    finally:
+        # _launch_browser writes os.environ directly — monkeypatch can't undo it.
+        os.environ.pop("CLOAKBROWSER_AUTO_UPDATE", None)
     assert seen["auto_update"] == "false"
 
 

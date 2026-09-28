@@ -119,6 +119,9 @@ _VIEWER_TOKEN_FILE = SECRET_DIR / "viewer-token"  # websockify TokenFile: <secre
 # Session lifecycle tunables.
 SESSION_TIMEOUT_S = int(os.environ.get("ZOE_YTMUSIC_SESSION_TIMEOUT_S", "300"))  # 5 min
 _POLL_S = float(os.environ.get("ZOE_YTMUSIC_POLL_S", "2.0"))
+# An inconclusive check of the profile's EXISTING cookie is retried this often
+# (a transient outage must not decide the whole session).
+_BASELINE_RETRY_S = 10.0
 _PROC_KILL_WAIT_S = 3.0
 
 # States the setup page polls on. ``stale_cookie_cleared`` = still waiting for a
@@ -541,17 +544,53 @@ async def _finish_connect(session: dict[str, Any], header: str) -> None:
     session["provider_name"] = saved.get("name") or "YouTube Music"
 
 
+async def _judge_baseline(session: dict[str, Any], header: str, fingerprint: str) -> bool:
+    """Validate the login cookie the profile ALREADY held at session start.
+    Returns True when it was harvested (a live login).
+
+    * signed in → a real, live login: save it now (otherwise the person would
+      stare at a signed-in page until the timeout);
+    * signed OUT → stale (the 2026-09-28 incident): wipe the Google/YouTube
+      cookies so the view shows a real sign-in form;
+    * can't tell → stay unverified; the watcher retries every
+      ``_BASELINE_RETRY_S`` and never harvests the unchanged cookie meanwhile.
+    """
+    session["baseline_checked_at"] = time.monotonic()
+    verdict = await _validate_cookie(header)
+    if verdict is True:
+        session["baseline_unverified"] = False
+        logger.info("ytmusic sign-in: profile already holds a live sign-in (validated) — saving it")
+        session["state"] = "harvesting"
+        await _finish_connect(session, header)
+        return True
+    if verdict is None:
+        if not session.get("baseline_unverified"):
+            logger.info("ytmusic sign-in: couldn't validate the profile's existing cookie — "
+                        "will retry; waiting for a fresh login meanwhile")
+        session["baseline_unverified"] = True
+        return False
+    session["baseline_unverified"] = False
+    logger.info("ytmusic sign-in: profile cookie is stale (validation failed) — "
+                "clearing its Google/YouTube cookies")
+    context = session.get("context")
+    await _clear_stale_login(context)
+    try:
+        _h, _n, after = await _probe_context(context)
+    except Exception:  # noqa: BLE001 — keep the stale snapshot: unchanged still won't count
+        after = fingerprint
+    # None when the wipe worked; the stale digest otherwise, which the watcher
+    # then never re-validates (YouTube already said it is signed out).
+    session["baseline_fp"] = after
+    session["state"] = "stale_cookie_cleared"
+    await _progress(session)
+    return False
+
+
 async def _check_profile_at_start(session: dict[str, Any]) -> bool:
     """Snapshot the login the persistent profile ALREADY holds, before the
-    person has touched the view. Returns True when that login was harvested.
-
-    * no login cookie → baseline None: any cookie that appears is a fresh login;
-    * a cookie YouTube confirms is signed in → a real, live login: save it now
-      (otherwise the person would stare at a signed-in page until timeout);
-    * a cookie YouTube says is NOT signed in → stale (the 2026-09-28 incident):
-      wipe the Google/YouTube cookies so the view shows a real sign-in form;
-    * can't tell (network) → keep the snapshot; only a CHANGED cookie counts.
-    """
+    person has touched the view, and judge it (``_judge_baseline``). A clean
+    profile has baseline None: any cookie that appears is a fresh login.
+    Returns True when the existing login was harvested."""
     context = session.get("context")
     try:
         header, _names, fingerprint = await _probe_context(context)
@@ -559,29 +598,10 @@ async def _check_profile_at_start(session: dict[str, Any]) -> bool:
         logger.debug("ytmusic sign-in: start snapshot not ready: %s", exc)
         header, fingerprint = "", None
     session["baseline_fp"] = fingerprint
+    session["baseline_unverified"] = False
     if fingerprint is None:
         return False
-    verdict = await _validate_cookie(header)
-    if verdict is True:
-        logger.info("ytmusic sign-in: profile already holds a live sign-in (validated) — saving it")
-        session["state"] = "harvesting"
-        await _finish_connect(session, header)
-        return True
-    if verdict is None:
-        logger.info("ytmusic sign-in: couldn't validate the profile's existing cookie — "
-                    "waiting for a fresh login")
-        return False
-    logger.info("ytmusic sign-in: profile cookie is stale (validation failed) — "
-                "clearing its Google/YouTube cookies")
-    await _clear_stale_login(context)
-    try:
-        _h, _n, after = await _probe_context(context)
-    except Exception:  # noqa: BLE001 — keep the stale snapshot: unchanged still won't count
-        after = fingerprint
-    session["baseline_fp"] = after
-    session["state"] = "stale_cookie_cleared"
-    await _progress(session)
-    return False
+    return await _judge_baseline(session, header, fingerprint)
 
 
 async def _run_watcher(session: dict[str, Any]) -> None:
@@ -609,6 +629,12 @@ async def _run_watcher(session: dict[str, Any]) -> None:
                     if not logged_unchanged:
                         logger.info("ytmusic sign-in: stale cookie ignored (unchanged since session start)")
                         logged_unchanged = True
+                    # Unchanged is never harvested on its own — only if the
+                    # start check was inconclusive and a retry now proves it live.
+                    if (session.get("baseline_unverified") and time.monotonic()
+                            - session.get("baseline_checked_at", 0.0) >= _BASELINE_RETRY_S):
+                        if await _judge_baseline(session, header, fingerprint):
+                            return
                 elif fingerprint != session.get("rejected_fp"):
                     verdict = await _validate_cookie(header)
                     if verdict is True:
@@ -636,6 +662,14 @@ async def _run_watcher(session: dict[str, Any]) -> None:
 async def _report(session: dict[str, Any]) -> None:
     """Tell a ``watch``er how the session ended, exactly once (watcher exit or
     explicit cancel, whichever comes first)."""
+    # A "sign in again" notice still in flight must land BEFORE the outcome,
+    # or it would move the handoff card from error back to completing.
+    progress = session.pop("progress_task", None)
+    if progress is not None and not progress.done():
+        try:
+            await progress
+        except Exception:  # noqa: BLE001 — _progress already swallows its own errors
+            pass
     on_done = session.pop("on_done", None)
     if on_done is None:
         return
@@ -781,12 +815,17 @@ async def refresh_now() -> dict[str, Any]:
         logger.info("ytmusic refresh: profile has no valid %s cookie — skipping save", REQUIRED_COOKIE)
         return {"ok": False, "reason": "profile not signed in / cookie incomplete"}
     # Same class as the sign-in watcher: a cookie in the profile is not a live
-    # login. Never push one YouTube says is signed out (it would overwrite MA's
-    # config with a dead cookie); an inconclusive check keeps the old behaviour.
-    if await _validate_cookie(header) is False:
-        logger.info("ytmusic refresh: profile cookie is no longer signed in — skipping save "
-                    "(sign in again from the panel)")
-        return {"ok": False, "reason": "profile sign-in expired — sign in again"}
+    # login. Push only one YouTube confirms is signed in — a signed-out cookie
+    # would overwrite MA's config with a dead one, and an inconclusive check
+    # just waits for the next scheduled refresh.
+    verdict = await _validate_cookie(header)
+    if verdict is not True:
+        if verdict is False:
+            logger.info("ytmusic refresh: profile cookie is no longer signed in — skipping save "
+                        "(sign in again from the panel)")
+            return {"ok": False, "reason": "profile sign-in expired — sign in again"}
+        logger.info("ytmusic refresh: couldn't validate the profile cookie — skipping save")
+        return {"ok": False, "reason": "could not verify the sign-in — will retry"}
     username = _stored_username() or "YouTube Music"
     # Refresh UPDATES the existing instance in place — never a duplicate provider.
     instance_id = await music_service.provider_instance_id(music_service._YTMUSIC_DOMAIN)
