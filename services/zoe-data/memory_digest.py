@@ -366,6 +366,32 @@ def _content_tokens(text: str) -> set[str]:
             if len(t) > 3 and t not in _AFFECT_STOPWORDS}
 
 
+# Words that describe a MOOD rather than name a thing ("a bit rough lately").
+# Only used to decide whether a stored fact has a topic at all.
+_MOOD_FILLER_WORDS = frozenset({
+    "rough", "tough", "awful", "terrible", "stressful", "lately", "quite",
+    "little", "very", "much", "kind", "sort", "generally", "overall", "mood",
+    "vibe", "vibes", "day", "days", "night", "nights", "bad", "hard", "long",
+    "tired", "sleepy", "grumpy", "cranky", "irritable", "moody", "restless",
+    "jittery", "tense", "emotional", "great", "good", "okay", "fine", "better",
+    "worse", "lonely", "blue",
+})
+
+
+def fact_has_topic(text: str) -> bool:
+    """True when a stored fact names SOMETHING beyond a mood — a thing a
+    check-in could ask about ("…anxious about their job interview at the
+    aquarium") — and False for a bare mood report ("User has been feeling a bit
+    on edge today"). Content words only: stopwords, time words, feeling words
+    and mood fillers never count.
+
+    A bare mood report is usually what the user is saying RIGHT NOW (the digest
+    stores today's "I'm on edge" seconds after the turn), so it must never be
+    the continuity focus: "how is feeling on edge going?" is not a check-in
+    (Samantha bar S4 round 3)."""
+    return bool(_content_tokens(text) - _AFFECT_WORDS - _MOOD_FILLER_WORDS)
+
+
 def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -> str:
     """The turn's first-person feeling, if this fact came from the sentence that
     carried it — else "". Sentence-level attribution, not a shared word:

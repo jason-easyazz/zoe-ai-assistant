@@ -1264,9 +1264,17 @@ async def _run_flue_brain_streaming_turn(
         continuity_block = await _continuity_context_block(message, uid)
     # Offer nudge on ANY turn — skipped when the recall packet already carries
     # the offer directive (the fold tags them "[pending-contact]"), so a
-    # recall-shaped turn never asks twice.
+    # recall-shaped turn never asks twice. DEFERRED on a continuity turn: the
+    # check-in is that turn's one job, and with the offer present the reply
+    # ended in "Would you like me to add Marisol as a contact?" on every sample
+    # (Samantha bar S4 round 3). The offer is not surfaced on this turn (the
+    # continuity composer omits the fold too), so a not-yet-seen offer does not
+    # start aging; the next non-emotional turn offers it.
     offer_block = ""
-    if "[pending-contact]" not in recall_block and "[pending-contact]" not in continuity_block:
+    if continuity_block:
+        if _offer_inject_enabled():
+            logger.info("SEAM_OFFER user=%s deferred=1 reason=continuity", uid)
+    elif "[pending-contact]" not in recall_block:
         offer_block = await _pending_offer_block(uid)
     _blocks = "\n".join(b for b in (recall_block, offer_block) if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
