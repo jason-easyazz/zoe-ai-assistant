@@ -23,9 +23,9 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    line; greeting-prefixed homophones like "hey joey" strip, bare real names like "Joe" are kept).
    Package upgrade to `moonshine-voice` 0.1.5 (speculative decoding, `set_keyterms` biasing behind
    `ZOE_MOONSHINE_KEYTERMS`, default off) is B1.10 — **HELD 2026-09-26**: call sites are unchanged
-   and said-vs-did passed, but STT ran +43 % median / ~1.9× per file slower on the Orin CPU, so the
-   box stays on 0.0.62; numbers, method and retest conditions in
-   [moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md).
+   and said-vs-did passed, but STT ran +43 % median / ~1.9× per file slower on the Orin CPU. The
+   box moved to 0.1.3 instead on 2026-09-27 (STT at parity with 0.0.62). Numbers, method and
+   retest conditions are in [moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md).
 2. **Brain — Gemma 4 E4B-QAT + MTP**, host-native `llama-server` on `:11434`. Since **#1322 a
    two-stage router runs as a fast-tier FRONT** for the brain (`ZOE_ROUTER_HEAD=active`, live-verified):
    a SetFit/MLP head (`models/router_head_mlp.joblib`) shortlists the top-3 domains + a chat gate,
@@ -472,9 +472,12 @@ effects the warm harness misses: **memory-starved cold STT** (warmup skipped und
 > **STALE live numbers, kept only as a marker.** An older live snapshot (2026-06-26) read STT ~1.9 s
 > (p90 ~8 s), brain ~4.8 s, first-audio ~5 s p50 / ~12 s p90. **These predate the July latency work
 > (two-stage router, Kokoro→CUDA, filler racing, greeting cache) and are no longer representative** —
-> the warm-harness brain median alone fell ~1.75× over the same window (see *Latency wins* below). No
-> fresh full-path *live* re-measure has been captured yet; **re-measure live before quoting any live
-> figure**, and do not treat the 2026-06-26 numbers as current.
+> the warm-harness brain median alone fell ~1.75× over the same window (see *Latency wins* below). Do
+> not treat the 2026-06-26 numbers as current. The first full-path *live* re-measure is
+> [panel-ttfa-breakdown-2026-09-28.md](panel-ttfa-breakdown-2026-09-28.md): ten real panel turns
+> with a median TTFA of 2.74 s on the daemon's clock and about 4.0 s from end of speech to sound.
+> The largest single cost is a 1 s Flue runtime flush between the first token and the first
+> speakable sentence. **Re-measure live before quoting any live figure.**
 
 ## Latency wins since 2026-07-02 (what moved the bar)
 
