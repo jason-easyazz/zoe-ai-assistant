@@ -1,8 +1,8 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict. Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, skybridge, router]
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router]
 timestamp: 2026-09-28T00:00:00Z
 ---
 
@@ -418,7 +418,42 @@ min Jaccard 1.0. **Lesson:** `--baseline` takes `$R/recall-parity`, not `$R`; bl
 `--demo-user` default read from the manifest's `run.recall_demo_user` would be a nice-to-have,
 not a fix.
 
-## 10. Fast path over-claim — a statement answered as a contacts query (2026-09-28)
+## 10. Stale cookie short-circuits the YouTube Music QR sign-in (2026-09-28)
+
+**Signature.** On the panel → phone YouTube Music sign-in, the phone's view link "didn't work":
+13–17 s after `ytmusic sign-in: starting Xvfb`, zoe-data logged `ytmusic sign-in: harvested
+cookie <… chars> — saving provider (user=…)` and tore the rig down — before the person had
+opened the noVNC view. Three attempts 18:53–18:55 (box local time), same result each time. Music Assistant
+then listed no `ytmusic` provider at all (15 providers, none of them YouTube Music).
+
+**Diagnosis.** `ytmusic_signin._run_watcher` treated "the browser holds `__Secure-3PAPISID`" as
+"the person signed in". The sign-in browser runs on the PERSISTENT profile
+(`$ZOE_YTMUSIC_SECRET_DIR/profile`), which still held the cookie that had rotated/expired in the
+2026-09-25 outage ([music-ytdlp-js-runtime.md](music-ytdlp-js-runtime.md)), so the very first
+poll after the page loaded "found" a login, and the dead cookie was saved to MA again. The class:
+**cookie present is not login happened.**
+
+**Fix.** The watcher snapshots a digest of the profile's `__Secure-3PAPISID`+`SID` at session
+start and validates it against YouTube (`_validate_cookie`: the youtubei `account_menu` POST with
+MA's SAPISIDHASH header, read through YouTube's own `logged_in`/`yt_li` flags). Signed out →
+the Google/YouTube cookies are cleared (only those), the view reloads to a real sign-in form,
+and the state is `stale_cookie_cleared` (the phone and the panel's handoff card say "sign in
+again"). From then on only a cookie that CHANGED during the session and validates True is
+saved; a failing one is not saved and does not tear the view down. `refresh_now()` refuses to
+push a signed-out cookie too. CloakBrowser's per-launch pypi/github update check (seen at
+18:53:38) is off. Pinned by `services/zoe-data/tests/test_ytmusic_signin.py`, including a
+negative control: removing the snapshot comparison turns the unchanged-cookie test red.
+
+**Diagnose fast.** In `~/.zoe-logs/` (zoe-data logs there, not journald): a `harvested cookie`
+line within seconds of `starting Xvfb` means the flow never waited for a human. After the fix,
+expect `profile cookie is stale (validation failed) — clearing…` on the first attempt after a
+rotation, then `harvested cookie` only after the person signs in.
+
+**Prevention.** Any flow that reads credentials from a persistent browser profile must prove the
+credential is NEW (changed since the flow started) and LIVE (the provider says so) before it
+saves it. A presence check alone will pass on whatever the profile left behind.
+
+## 11. Fast path over-claim — a statement answered as a contacts query (2026-09-28)
 
 **Signature.** On the panel Zoe answers a personal statement with a canned card reply
 ("I found 0 contacts.", an empty calendar, a weather card). The app log shows

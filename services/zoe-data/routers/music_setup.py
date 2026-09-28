@@ -210,7 +210,16 @@ async def browser_start(payload: dict) -> dict[str, Any]:
     if not res.get("ok"):
         return {"ok": False, "reason": res.get("message") or "couldn't start sign-in"}
     await auth_handoff.mark_ref("music", tok.get("n"), "completing", "Signing in on your phone…")
-    ytmusic_signin.watch(res.get("session_id"), auth_handoff.reporter("music", tok.get("n"), _provider_name(provider)))
+    nonce = tok.get("n")
+
+    async def _stale_notice(detail: str) -> None:
+        # The profile's old sign-in had expired and was wiped: the panel card
+        # says "sign in again" instead of an unchanged "Signing in…".
+        await auth_handoff.mark_ref("music", nonce, "completing", detail)
+
+    ytmusic_signin.watch(res.get("session_id"),
+                         auth_handoff.reporter("music", nonce, _provider_name(provider)),
+                         on_progress=_stale_notice)
     return {"ok": True, "session_id": res["session_id"], "view_url": res["view_url"],
             "expires_in": res.get("expires_in")}
 
