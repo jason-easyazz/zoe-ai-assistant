@@ -54,6 +54,8 @@ NOW = datetime.datetime.now(datetime.timezone.utc)
     ("I can't wait for Friday", "excited"),
     ("I feel overwhelmed at work", "overwhelmed"),
     ("I'm proud of how the kids did", "proud"),
+    ("I'm stressed and my sister said she is fine", "stressed"),
+    ("I told her I'm anxious about it", "anxious"),
 ])
 def test_first_person_feelings_are_extracted(message, label):
     got, sentence = extract_affect(message)
@@ -68,10 +70,30 @@ def test_first_person_feelings_are_extracted(message, label):
     "I'm low on milk",
     "I live in Hobart now",
     "My dad Teodor is a retired lighthouse keeper",
+    # someone else's words, quoted or reported (Greptile #1762)
+    'My sister said "I\'m so stressed about her exams."',
+    "My sister said 'I'm so stressed about her exams,' and laughed",
+    "My sister said “I’m so stressed”",
+    "My sister said I'm so stressed",
+    "He thinks I'm nervous",
     "",
 ])
 def test_non_first_person_or_non_feelings_are_not(message):
     assert extract_affect(message) == ("", "")
+
+
+def test_a_shared_weekday_does_not_carry_the_feeling_to_another_sentence():
+    """Greptile #1762: '…interview on Friday. My sister arrives Friday'."""
+    msg = "I'm anxious about my interview on Friday. My sister arrives Friday."
+    affect, sentence = extract_affect(msg)
+    assert affect == "anxious"
+    f = memory_digest._affect_for_fact
+    assert f("User has an interview on Friday", affect, sentence, msg) == "anxious"
+    assert f("User's sister arrives on Friday", affect, sentence, msg) == ""
+    # a fact that fits BOTH sentences equally is ambiguous → nothing attached
+    both = "I'm anxious about the Lisbon trip. The Lisbon trip is long."
+    a2, s2 = extract_affect(both)
+    assert f("User has a Lisbon trip", a2, s2, both) == ""
 
 
 def test_affect_attaches_only_to_facts_from_the_feeling_sentence():
@@ -154,6 +176,74 @@ def test_digest_stores_affect_beside_a_flattened_fact(monkeypatch):
     assert res["new"] == 1
     (text, kw), = svc.ingested
     assert kw["metadata"] == {"affect": "anxious"}
+
+
+def test_digest_update_path_carries_the_new_feeling(monkeypatch):
+    """Greptile #1762: an anxious turn that SUPERSEDES an existing neutral
+    interview fact must carry its feeling onto the updated row."""
+    import memory_quality
+
+    svc, _ = _patch_digest(monkeypatch, [
+        {"type": "event", "fact": "User is anxious about their job interview at the aquarium on Friday."},
+    ])
+    reviewed = []
+
+    async def review(mem_id, **kw):
+        reviewed.append((mem_id, kw))
+        return MemoryRef(id="edited-1", text=kw["edits"])
+
+    async def reconcile(_svc, fact, user_id):
+        return "update", "neutral-1"
+
+    svc.review = review
+    monkeypatch.setattr(memory_quality, "reconcile_for_ingest", reconcile)
+    res = asyncio.run(memory_digest.run_turn_digest("demo-a", SAY_WORRY, session_id="s1"))
+    assert res["new"] == 1 and svc.ingested == []
+    (mem_id, kw), = reviewed
+    assert mem_id == "neutral-1" and kw["metadata"] == {"affect": "anxious"}
+
+
+class _Col:
+    def __init__(self):
+        self.rows = {}
+
+    def upsert(self, *, ids, documents, metadatas):
+        for i, d, m in zip(ids, documents, metadatas):
+            self.rows[i] = (d, dict(m))
+
+    def get(self, *, ids=None, include=None, **_kw):
+        hit = [i for i in (ids or []) if i in self.rows]
+        return {"ids": hit, "documents": [self.rows[i][0] for i in hit],
+                "metadatas": [dict(self.rows[i][1]) for i in hit]}
+
+
+@pytest.mark.asyncio
+async def test_real_review_edit_stores_affect_and_continuity_focuses_it(monkeypatch):
+    """End to end on the real MemoryService edit path: a neutral fact edited with
+    the turn's feeling becomes the continuity focus."""
+    from memory_service import MemoryService
+
+    svc = MemoryService(data_dir="/nonexistent/zoe-test-continuity-affect")
+    col = _Col()
+    svc._collection = lambda: col
+
+    async def no_audit(**_kw):
+        return None
+
+    svc._append_audit = no_audit
+    old_meta = {"user_id": "demo-a", "wing": "demo-a", "status": "approved", "memory_type": "event",
+                "source": "turn_digest", "confidence": 0.82,
+                "added_at": (NOW - datetime.timedelta(hours=30)).isoformat()}
+    col.rows["neutral-1"] = ("The user has a job interview at the aquarium on Friday.", old_meta)
+    new = await svc.review("neutral-1", decision="edit", actor="turn_digest",
+                           edits="User is anxious about their job interview at the aquarium on Friday.",
+                           metadata={"affect": "anxious"})
+    assert new.metadata["candidate_affect"] == "anxious"
+    assert col.rows["neutral-1"][1]["status"] == "superseded"
+    assert memory_affect(new) == "anxious" and is_emotional_memory(new)
+    res = await _compose(monkeypatch, [HOME, DAD, new])
+    assert res["continuity_focus"]["affect"] == "anxious"
+    assert "job interview" in res["continuity_focus"]["text"]
 
 
 def test_digest_neutral_turn_stores_no_affect(monkeypatch):
@@ -258,23 +348,36 @@ def _stub_turn(monkeypatch):
     monkeypatch.setattr(zc, "_run_flue_brain_streaming_turn", fake_turn)
 
 
-@pytest.mark.parametrize("flag, uid, logged", [
-    ("1", DEMO, True),
-    ("1", "test_bar_deadbeef", True),
-    ("1", "jason", False),            # a real user is never traced
-    ("1", "demo_user", False),        # a real account can look demo-ish; the shape is exact
-    ("", DEMO, False),                # default OFF
+@pytest.mark.parametrize("flag, uid, registered, logged", [
+    ("1", DEMO, False, True),
+    ("1", "test_bar_deadbeef", False, True),
+    ("1", DEMO, True, False),         # a REAL account named like a demo id (Greptile #1762)
+    ("1", DEMO, "raise", False),      # registration unverifiable → fail closed
+    ("1", "jason", False, False),     # a real user is never traced
+    ("1", "demo_user", False, False),  # a real account can look demo-ish; the shape is exact
+    ("", DEMO, False, False),         # default OFF
 ])
 @pytest.mark.asyncio
-async def test_debug_trace_only_for_harness_ids(monkeypatch, caplog, flag, uid, logged):
+async def test_debug_trace_only_for_harness_ids(monkeypatch, caplog, flag, uid, registered, logged):
     monkeypatch.setenv("ZOE_SEAM_CONTINUITY_DEBUG", flag)
     monkeypatch.delenv("ZOE_SYNTHETIC_USER_ALLOWLIST", raising=False)
+    looked_up = []
+
+    async def fake_registered(user_id):
+        looked_up.append(user_id)
+        if registered == "raise":
+            raise RuntimeError("auth_users unreachable")
+        return registered
+
+    monkeypatch.setattr(memories, "_registered_account", fake_registered)
     _stub_turn(monkeypatch)
     caplog.set_level(logging.INFO, logger=zc.logger.name)
     block = await zc._continuity_context_block(ASK_WORRY, uid)
     out = [d async for d in zc.run_flue_brain_streaming(ASK_WORRY, "s1", uid)]
     assert out[-1].startswith("Oh no")  # the stream itself is untouched
     msgs = [r.getMessage() for r in caplog.records if r.getMessage().startswith("SEAM_CONTINUITY_DEBUG")]
+    if flag != "1" or uid in ("jason", "demo_user"):
+        assert looked_up == []  # cheap gates first: no DB read for these
     if logged:
         assert any(m == f"SEAM_CONTINUITY_DEBUG user={uid} block={block!r}" for m in msgs)
         assert any("reply='Oh no — how are you feeling about the aquarium interview?'" in m for m in msgs)

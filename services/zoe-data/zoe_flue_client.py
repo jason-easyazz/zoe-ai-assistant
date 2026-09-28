@@ -859,7 +859,7 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
     block = ""
     if packet:  # a portrait alone is not continuity — nothing recent to carry
         block = f"{_CONTINUITY_BLOCK_OPEN}\n{body}\n{_CONTINUITY_BLOCK_CLOSE}"
-    if _continuity_debug_uid(uid):
+    if await _continuity_debug_uid(uid):
         logger.info("SEAM_CONTINUITY_DEBUG user=%s block=%r", uid, block)
     return block
 
@@ -880,11 +880,19 @@ def _continuity_ask(focus: dict) -> str:
 _CONTINUITY_DEBUG_ENV = "ZOE_SEAM_CONTINUITY_DEBUG"
 
 
-def _continuity_debug_uid(user_id: str) -> bool:
+async def _continuity_debug_uid(user_id: str) -> bool:
     """True only when ZOE_SEAM_CONTINUITY_DEBUG is on (default OFF) AND the id
-    is harness-minted (``demo_<tag>_<hex>`` / ``test_<tag>_<hex>``, the
-    forget-synthetic shape, not allowlisted). A real user's block or reply is
-    never logged, whatever the flag says."""
+    is harness-minted AND provably not a real account — the same two checks the
+    ``forget-synthetic`` route makes before it will erase an id:
+
+    * shape: ``user_filters.synthetic_forget_refusal`` (``demo_<tag>_<hex>`` /
+      ``test_<tag>_<hex>``, not allowlisted, not a guest sentinel);
+    * registration: ``routers.memories._registered_account`` (zoe-auth's
+      ``auth_users``) — a real account may legally be NAMED like a demo id.
+
+    Any lookup failure returns False (fail closed): a real user's block or reply
+    is never logged, whatever the flag says. The cheap flag + shape checks run
+    first, so a debug-off box never touches the database here."""
     if (os.environ.get("ZOE_SEAM_CONTINUITY_DEBUG") or "").strip().lower() not in {
         "1", "true", "yes", "on",
     }:
@@ -893,7 +901,15 @@ def _continuity_debug_uid(user_id: str) -> bool:
         from user_filters import synthetic_forget_refusal
     except Exception:  # pragma: no cover - in-tree module
         return False
-    return synthetic_forget_refusal(user_id or "") is None
+    if synthetic_forget_refusal(user_id or "") is not None:
+        return False
+    try:
+        from routers.memories import _registered_account
+
+        return not await _registered_account(user_id)
+    except Exception as exc:  # noqa: BLE001 — unverifiable id → never log it
+        logger.debug("seam continuity debug: registration check failed, not logging: %r", exc)
+        return False
 
 
 def _log_prompt_cache(session_id: str, terminal: dict) -> None:
@@ -1168,7 +1184,7 @@ async def run_flue_brain_streaming(
     reply chars, harness-minted ids only — ``_continuity_debug_uid``); for every
     other turn it is a pass-through."""
     turn = _run_flue_brain_streaming_turn(message, session_id, user_id, **kwargs)
-    debug = _continuity_debug_uid((user_id or "").strip())
+    debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
     try:
         async for delta in turn:

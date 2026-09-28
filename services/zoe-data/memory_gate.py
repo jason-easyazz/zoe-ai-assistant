@@ -160,6 +160,25 @@ _AFFECT_RES: tuple[tuple[str, re.Pattern], ...] = tuple(
     for label, forms in _AFFECT_LABELS
 ) + (("excited", re.compile(r"\bi\s+can['’]?t\s+wait\b", re.IGNORECASE)),)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# Someone ELSE's words are never the user's feeling (Greptile #1762):
+#   * quoted spans — straight/curly double quotes, curly single quotes, and a
+#     straight single-quoted span that opens after whitespace and closes before a
+#     boundary (so the apostrophe in "I'm" is not taken for a quote);
+#   * reported speech — "<someone other than I> said/says/told me/… (that) …" to
+#     the end of the sentence ("my sister said she is so stressed").
+_QUOTED_SPAN_RE = re.compile(
+    r"\"[^\"]*\"|“[^”]*”|‘[^’]*’|(?:(?<=\s)|^)'.*?'(?=\s|[,.!?;:]|$)"
+)
+_REPORTED_SPEECH_RE = re.compile(
+    r"\b(?!i\b)[a-z']+\s+(?:said|says|say|told\s+(?:me|us)|tells\s+(?:me|us)|"
+    r"asked|texted|wrote|messaged|mentioned|reckons|thinks)\b[^.!?]*",
+    re.IGNORECASE,
+)
+
+
+def _own_words(sentence: str) -> str:
+    """``sentence`` with quoted spans and reported speech removed."""
+    return _REPORTED_SPEECH_RE.sub(" ", _QUOTED_SPAN_RE.sub(" ", sentence))
 
 
 def extract_affect(message: str) -> tuple[str, str]:
@@ -167,11 +186,13 @@ def extract_affect(message: str) -> tuple[str, str]:
     ("", "") — e.g. "Honestly I'm pretty anxious about my job interview…" →
     ("anxious", "Honestly I'm pretty anxious about my job interview…"). The
     sentence is returned so a caller can attach the feeling only to facts drawn
-    from it. Pure str → tuple, no env read."""
+    from it. Quoted and reported words are someone else's (``_own_words``).
+    Pure str → tuple, no env read."""
     for sentence in _SENTENCE_SPLIT_RE.split(message or ""):
+        own = _own_words(sentence)
         best: tuple[int, str] | None = None
         for label, rx in _AFFECT_RES:
-            m = rx.search(sentence)
+            m = rx.search(own)
             if m and (best is None or m.start() < best[0]):
                 best = (m.start(), label)
         if best is not None:

@@ -340,6 +340,24 @@ _AFFECT_STOPWORDS = frozenset({
     "user", "users", "user's", "their", "they", "about", "with", "that", "this",
     "have", "has", "will", "from", "into", "when", "what", "been", "being",
     "honestly", "pretty", "really", "feel", "feels", "feeling", "keep",
+    # time words: two facts that merely share a day are not the same topic
+    # ("…interview on Friday. My sister arrives Friday" — Greptile #1762)
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "today", "tonight", "tomorrow", "yesterday", "morning", "afternoon", "evening",
+    "week", "weekend", "month", "year", "next", "last", "later", "soon",
+    "january", "february", "march", "april", "june", "july", "august",
+    "september", "october", "november", "december",
+})
+_FACT_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# The feeling words themselves say nothing about WHICH fact the feeling is
+# about, so they never count toward attribution.
+_AFFECT_WORDS = frozenset({
+    "anxious", "anxiety", "nervous", "edge", "uneasy", "worried", "worrying",
+    "dreading", "stressed", "stressing", "pressure", "scared", "afraid",
+    "terrified", "frightened", "overwhelmed", "swamped", "down", "miserable",
+    "heartbroken", "gutted", "upset", "lonely", "frustrated", "annoyed",
+    "exhausted", "drained", "burnt", "burned", "worn", "excited", "thrilled",
+    "pumped", "happy", "delighted", "proud", "relieved", "wait",
 })
 
 
@@ -348,13 +366,32 @@ def _content_tokens(text: str) -> set[str]:
             if len(t) > 3 and t not in _AFFECT_STOPWORDS}
 
 
-def _affect_for_fact(fact: str, affect: str, sentence: str) -> str:
+def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -> str:
     """The turn's first-person feeling, if this fact came from the sentence that
-    carried it (shares a content word) — else "". A turn that says "I'm anxious
-    about my interview, and my sister lives in Lisbon" tags only the interview."""
+    carried it — else "". Sentence-level attribution, not a shared word:
+
+    * the fact must share ``min(2, n)`` content words with the feeling sentence
+      (``n`` = that sentence's content words; stopwords, time words and the
+      feeling words themselves excluded, so a shared "Friday" proves nothing);
+    * and strictly MORE than with any other sentence of the message, so a fact
+      that belongs to a neighbouring sentence ("My sister arrives Friday") never
+      inherits the feeling. A tie is ambiguous and attaches nothing.
+    """
     if not affect or not sentence:
         return ""
-    return affect if _content_tokens(fact) & _content_tokens(sentence) else ""
+    fact_tokens = _content_tokens(fact)
+    feel_tokens = _content_tokens(sentence) - _AFFECT_WORDS
+    overlap = len(fact_tokens & feel_tokens)
+    if not feel_tokens or overlap < min(2, len(feel_tokens)):
+        return ""
+    feel_norm = sentence.strip()
+    for other in _FACT_SENTENCE_SPLIT_RE.split(message or ""):
+        other = other.strip()
+        if not other or other == feel_norm or feel_norm in other:
+            continue
+        if len(fact_tokens & _content_tokens(other)) >= overlap:
+            return ""
+    return affect
 
 
 async def run_turn_digest(
@@ -493,12 +530,16 @@ async def run_turn_digest(
                 continue
             if op == "update" and target_id:
                 try:
+                    fact_affect = _affect_for_fact(fact, turn_affect, affect_sentence, user_message)
                     new_ref = await svc.review(
                         target_id,
                         decision="edit",
                         edits=fact,
                         actor="turn_digest",
                         note="turn digest supersede (QA F9)",
+                        # An update that supersedes a neutral fact must still
+                        # carry this turn's feeling (Greptile #1762).
+                        metadata={"affect": fact_affect} if fact_affect else None,
                     )
                     if new_ref is not None:
                         result["new"] += 1
@@ -507,7 +548,7 @@ async def run_turn_digest(
                 except Exception as exc:
                     logger.warning("turn_digest: supersede failed (%s) — plain ingest", exc)
             try:
-                fact_affect = _affect_for_fact(fact, turn_affect, affect_sentence)
+                fact_affect = _affect_for_fact(fact, turn_affect, affect_sentence, user_message)
                 ref = await svc.ingest(
                     fact,
                     user_id=user_id,
