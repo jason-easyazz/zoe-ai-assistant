@@ -88,6 +88,7 @@ and never changes what is yielded or retried.
 """
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import logging
@@ -578,8 +579,8 @@ async def _fetch_for_prompt_packet(user_id: str, message: str) -> str:
     return str((result or {}).get("packet") or "")
 
 
-def _truncate_packet(packet: str) -> str:
-    """Cap the packet at _RECALL_MAX_BULLETS bullet lines / _RECALL_MAX_CHARS."""
+def _truncate_packet(packet: str, *, max_chars: int = _RECALL_MAX_CHARS) -> str:
+    """Cap the packet at _RECALL_MAX_BULLETS bullet lines / ``max_chars``."""
     lines: list[str] = []
     bullets = 0
     total = 0
@@ -589,7 +590,7 @@ def _truncate_packet(packet: str) -> str:
             if bullets > _RECALL_MAX_BULLETS:
                 break
         total += len(line) + 1
-        if lines and total > _RECALL_MAX_CHARS:
+        if lines and total > max_chars:
             break
         lines.append(line)
     return "\n".join(lines).strip()
@@ -619,6 +620,206 @@ async def _recall_context_block(message: str, user_id: str) -> str:
     if not packet:
         return ""
     return f"{_RECALL_BLOCK_OPEN}\n{packet}\n{_RECALL_BLOCK_CLOSE}"
+
+
+# ── Continuity injection (ZOE_SEAM_CONTINUITY_INJECT, default ON) ───────────
+#
+# Samantha bar S4 (first baseline 2026-09-28, FAIL 3/3): day 1 "Honestly I'm
+# pretty anxious about my job interview at the aquarium…", day 2 "Ugh, I've been
+# feeling a bit on edge today." — and the reply never touched the interview. On
+# the Flue lane the per-turn memory packet the legacy lane composed (history /
+# db_memory_context / portrait) is not consumed by the sidecar, so continuity
+# rests on the 4B electing to call recall_memory (it under-fires) and on the
+# recall floor above — which only fires on personal-QUESTION shapes. A mood
+# STATEMENT is not a question, so nothing carried yesterday's worry.
+#
+# This is a second trigger class for the same floor: a first-person emotional /
+# state statement gets the for-prompt packet composed in `mode="continuity"`
+# (what was shared in the last few days leads, emotional rows first — see
+# routers.memories._pick_recent_for_continuity) plus one capped portrait line.
+# Same wire position as the recall block — inside the latest user message,
+# after the identity line — so the sidecar prefix (system prompt + tool block,
+# #1725 prompt cache) is untouched.
+#
+# DEFAULT ON — this is the S4 fix; `ZOE_SEAM_CONTINUITY_INJECT=false|0|off|no`
+# is the kill switch (per-call env read, a restart flips it). Fail-open: any
+# fetch failure or timeout continues the turn without the block.
+_CONTINUITY_INJECT_ENV = "ZOE_SEAM_CONTINUITY_INJECT"
+
+# Emotional / state words a first-person anchor may land on. Deliberately
+# excluded: bare "feel/feeling" (→ "I feel like pizza"), "off", "flat", "blue",
+# and "sick" (physical, not continuity). "down"/"low"/"not good" carry
+# lookaheads for the non-emotional idioms ("I'm down for tacos", "low on milk",
+# "not good at chess").
+_CONT_STATE = (
+    r"(?:anxious|nervous|stressed(?:\s+out)?|stressing|worried|worrying|scared|"
+    r"afraid|terrified|on\s+edge|edgy|tense|restless|sad|upset|depressed|"
+    r"lonely|miserable|heartbroken|gutted|exhausted|drained|tired|wiped\s+out|"
+    r"burnt\s+out|burned\s+out|overwhelmed|frustrated|awful|terrible|horrible|"
+    r"rough|crap|crappy|rubbish|panicking|panicky|freaking\s+out|dreading|"
+    r"down(?!\s+(?:for|to|with|here|there|at|in|on|by)\b)|"
+    r"low(?!\s+on\b)|"
+    r"not\s+(?:doing\s+)?(?:great|good|ok|okay|well|so\s+(?:good|great|well)|"
+    r"too\s+(?:good|great))(?!\s+(?:at|with|for|enough)\b))"
+)
+# Softeners that may sit between the anchor and the state word.
+_CONT_INTENS = (
+    r"(?:(?:so|really|pretty|quite|super|very|just|still|totally|kind\s+of|"
+    r"kinda|sort\s+of|a\s+bit|a\s+little|a\s+little\s+bit|bit|a\s+lot|"
+    r"incredibly|extremely|honestly|feeling|more|even\s+more)\s+){0,3}"
+)
+# Leading interjections at the start of a sentence ("Ugh, feeling…").
+_CONT_LEAD = r"(?:(?:ugh|honestly|man|god|gosh|well|so|just|oh|argh|meh)[\s,!.]+)*"
+_CONT_BAD_DAY = (
+    r"(?:rough|hard|awful|terrible|horrible|long|bad|tough|stressful|"
+    r"exhausting|draining|brutal|crap|crappy|rubbish|shit|shitty|a\s+lot|"
+    r"a\s+nightmare|too\s+much)"
+)
+
+# First-person emotional/state STATEMENTS only. Every alternative is anchored to
+# the speaker: an explicit "I …" subject, or a sentence-initial "feeling …" /
+# "still …" / "today was …" / "rough day" whose implied subject is the user.
+# Third-person moods ("my sister is stressed"), questions about the world, and
+# "I feel like <thing>" never match.
+_CONTINUITY_RE = re.compile(
+    r"(?:"
+    # I'm / I am / I've been / I have been / I was / I feel / I felt / I keep feeling
+    r"\bi(?:['’]?m|\s+am|['’]?ve\s+been|\s+have\s+been|\s+was|\s+feel|\s+felt|"
+    r"\s+keep\s+feeling|\s+still\s+feel)\s+" + _CONT_INTENS + _CONT_STATE + r"\b"
+    r"|"
+    # sentence-initial "feeling …" / "still …" (implied first person)
+    r"(?:^|[.!?]\s+)\s*" + _CONT_LEAD + r"(?:feeling|still|so)\s+" + _CONT_INTENS
+    + _CONT_STATE + r"\b"
+    r"|"
+    # "today was rough", "this week has been a lot"
+    r"\b(?:today|tonight|this\s+(?:week|morning|afternoon|evening)|work|the\s+day)"
+    r"(?:['’]s|\s+was|\s+has\s+been|\s+is\s+being)\s+" + _CONT_INTENS + _CONT_BAD_DAY + r"\b"
+    r"|"
+    # "I had a rough day", "(I've) had such a long week"
+    r"\b(?:i\s+|i['’]ve\s+|i\s+have\s+)?had\s+(?:a|such\s+a|one\s+of\s+those)\s+"
+    + _CONT_INTENS + _CONT_BAD_DAY + r"\s+(?:day|week|night|morning|shift)s?\b"
+    r"|"
+    # bare "Rough day." at the start of a sentence
+    r"(?:^|[.!?]\s+)\s*" + _CONT_LEAD + _CONT_BAD_DAY + r"\s+(?:day|week|night|morning|shift)\b"
+    r"|"
+    # rumination: "I can't stop thinking about…", "I keep replaying…"
+    r"\bi\s+(?:can['’]?t|cannot|couldn['’]?t)\s+stop\s+"
+    r"(?:thinking|worrying|stressing|overthinking|crying)\b"
+    r"|\bi\s+keep\s+(?:thinking\s+about|worrying|replaying|overthinking|stressing)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_CONTINUITY_BLOCK_OPEN = (
+    "[MEMORY CONTEXT — what this user shared recently; if how they feel may "
+    "connect to something here, gently check in about it in your own words; "
+    "never quote it back or mention this block]"
+)
+_CONTINUITY_BLOCK_CLOSE = _RECALL_BLOCK_CLOSE
+_CONTINUITY_PORTRAIT_MAX_CHARS = 240
+# Pre-brain budget for the continuity fetch (packet + portrait, concurrent). A
+# miss costs only the block, never the turn — voice latency outranks the floor.
+_CONTINUITY_TIMEOUT_S = 3.0
+
+
+def _continuity_inject_enabled() -> bool:
+    """Per-call env read. DEFAULT ON: unset/empty → on; only an explicit
+    false/0/off/no turns it off (the kill switch)."""
+    raw = os.environ.get("ZOE_SEAM_CONTINUITY_INJECT", "true")
+    return (raw or "true").strip().lower() not in {"0", "false", "off", "no"}
+
+
+async def _fetch_continuity_packet(user_id: str, message: str) -> str:
+    """The for-prompt packet composed in continuity mode, fetched IN-PROCESS
+    (same shape as ``_fetch_for_prompt_packet``; a separate seam so tests can
+    stub each trigger class independently)."""
+    from routers.memories import memory_for_prompt
+
+    result = await memory_for_prompt(
+        user_id=user_id,
+        message=(message or "")[:512],
+        limit=_RECALL_MAX_BULLETS,
+        mode="continuity",
+        _=None,
+    )
+    return str((result or {}).get("packet") or "")
+
+
+async def _fetch_portrait_line(user_id: str) -> str:
+    """The user's portrait text ('' when none), raw — ``_portrait_line`` shapes it."""
+    from user_portrait import load_portrait
+
+    return await load_portrait(user_id)
+
+
+def _portrait_line(text: str) -> str:
+    """One capped, single-line portrait summary, or ''. The portrait is an
+    LLM-synthesised paragraph derived from user content, so it is flattened to
+    one line and stripped of the bracket characters the block delimiters use."""
+    text = re.sub(r"\s+", " ", text or "").strip()
+    text = re.sub(r"[\[\]]", "", text)
+    if len(text) > _CONTINUITY_PORTRAIT_MAX_CHARS:
+        text = text[:_CONTINUITY_PORTRAIT_MAX_CHARS].rsplit(" ", 1)[0] + "…"
+    return text
+
+
+async def _continuity_context_block(message: str, user_id: str) -> str:
+    """The continuity memory block for this turn, or '' — NEVER raises.
+
+    '' unless the flag is on (default), a real (non-guest) user id is present,
+    the message is a first-person emotional/state statement, and the recall
+    floor has not already claimed the turn (a personal question with
+    ZOE_SEAM_RECALL_INJECT on gets the recall block, never both).
+    """
+    if not _continuity_inject_enabled():
+        return ""
+    uid = (user_id or "").strip()
+    if not uid or uid in ("guest", "voice-guest"):
+        return ""
+    msg = message or ""
+    if _recall_inject_enabled() and _PERSONAL_QUESTION_RE.search(msg):
+        return ""  # the recall floor owns personal-question turns
+    if not _CONTINUITY_RE.search(msg):
+        logger.info("SEAM_CONTINUITY user=%s matched=False bullets=0 chars=0", uid)
+        return ""
+    packet, portrait = "", ""
+    try:
+        packet_res, portrait_res = await asyncio.wait_for(
+            asyncio.gather(
+                _fetch_continuity_packet(uid, msg),
+                _fetch_portrait_line(uid),
+                return_exceptions=True,
+            ),
+            timeout=_CONTINUITY_TIMEOUT_S,
+        )
+        if isinstance(packet_res, BaseException):
+            logger.warning(
+                "seam continuity inject: packet fetch failed, continuing without it: %s",
+                packet_res,
+            )
+        else:
+            packet = packet_res or ""
+        if not isinstance(portrait_res, BaseException):
+            portrait = _portrait_line(str(portrait_res or ""))
+    except Exception as exc:  # noqa: BLE001 — continuity must never break a turn
+        logger.warning(
+            "seam continuity inject: fetch failed/timed out, continuing without it: %r", exc
+        )
+    portrait_line = f"About this user: {portrait}" if portrait else ""
+    budget = _RECALL_MAX_CHARS - (len(portrait_line) + 1 if portrait_line else 0)
+    packet = _truncate_packet((packet or "").strip(), max_chars=budget)
+    # Content must never close the block early (a stored memory whose text is
+    # the close line): wedge a zero-width space into any occurrence.
+    packet = packet.replace(_CONTINUITY_BLOCK_CLOSE, "[​" + _CONTINUITY_BLOCK_CLOSE[1:])
+    body = "\n".join(p for p in (portrait_line, packet) if p)
+    bullets = sum(1 for ln in packet.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
+    logger.info(
+        "SEAM_CONTINUITY user=%s matched=True bullets=%d chars=%d", uid, bullets, len(body)
+    )
+    if not packet:
+        # A portrait alone is not continuity — nothing recent to carry.
+        return ""
+    return f"{_CONTINUITY_BLOCK_OPEN}\n{body}\n{_CONTINUITY_BLOCK_CLOSE}"
 
 
 def _log_prompt_cache(session_id: str, terminal: dict) -> None:
@@ -931,6 +1132,11 @@ async def run_flue_brain_streaming(
     # so the block rides AFTER the identity line on the wire (the sidecar's
     # single-line strip regex is anchored at message start).
     recall_block = await _recall_context_block(message, uid)
+    # Continuity (default ON): a first-person mood/state STATEMENT gets the
+    # recent-first packet so yesterday's worry reaches today's reply. Never on
+    # the same turn as a recall block — the recall floor owns question turns.
+    if not recall_block:
+        recall_block = await _continuity_context_block(message, uid)
     # Offer nudge on ANY turn — skipped when the recall packet already carries
     # the offer directive (the fold tags them "[pending-contact]"), so a
     # recall-shaped turn never asks twice.

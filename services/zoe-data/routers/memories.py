@@ -424,6 +424,7 @@ def _build_memory_prompt_packet(
     *,
     max_facts: int = _PROMPT_PACKET_MAX_FACTS,
     boost_emotional: bool = False,
+    recent: Optional[list[MemoryRef]] = None,
 ) -> dict[str, Any]:
     """Compile a compact, cited memory packet for system-prompt injection.
 
@@ -441,6 +442,12 @@ def _build_memory_prompt_packet(
     intensity — so a heavy user's emotional continuity isn't crowded out of the
     small packet by ordinary facts. A stable sort keeps existing order otherwise;
     OFF is a byte-for-byte no-op.
+
+    ``recent`` (continuity mode only, see ``_pick_recent_for_continuity``) is
+    considered FIRST — ahead of semantic hits — and each of its lines carries a
+    ``(recent)`` prefix so the brain can tell "shared in the last few days" from
+    a long-standing fact. None/empty (every non-continuity caller) is a
+    byte-for-byte no-op.
     """
     if boost_emotional and facts:
         facts = sorted(facts, key=_emotional_intensity, reverse=True)
@@ -450,7 +457,7 @@ def _build_memory_prompt_packet(
     lines: list[str] = []
     refs: list[dict[str, Any]] = []
 
-    def _consider(ref: MemoryRef, *, from_search: bool) -> None:
+    def _consider(ref: MemoryRef, *, from_search: bool, is_recent: bool = False) -> None:
         if len(lines) >= max_facts:
             return
         meta = ref.metadata or {}
@@ -478,16 +485,21 @@ def _build_memory_prompt_packet(
         kept_ts.append(_added_at_ts(meta))
         cite = f"[mem:{str(ref.id)[:8]}]"
         prefix = "(uncertain) " if status == "disputed" else ""
+        if is_recent:
+            prefix = f"(recent) {prefix}"
         lines.append(f"- {prefix}{text[:200]} {cite}")
-        refs.append(
-            {
-                "id": ref.id,
-                "memory_type": meta.get("memory_type", "fact"),
-                "status": status,
-                "from_search": from_search,
-            }
-        )
+        entry = {
+            "id": ref.id,
+            "memory_type": meta.get("memory_type", "fact"),
+            "status": status,
+            "from_search": from_search,
+        }
+        if is_recent:
+            entry["recent"] = True
+        refs.append(entry)
 
+    for ref in recent or ():
+        _consider(ref, from_search=False, is_recent=True)
     for ref in hits:
         _consider(ref, from_search=True)
     for ref in facts:
@@ -653,6 +665,50 @@ def _pick_emotional_moments(rows: list[MemoryRef]) -> list[MemoryRef]:
     return emo[:_EMO_PIN_MAX]
 
 
+# ── Continuity mode (Samantha bar S4, the emotional thread) ──────────────────
+#
+# A mood STATEMENT ("ugh, I've been feeling a bit on edge today") shares almost
+# no words with yesterday's worry ("anxious about my job interview at the
+# aquarium"), so relevance ranking — semantic blend for hits, confidence×decay
+# plus access hotness for facts — has nothing to latch onto and the worry is not
+# in the packet. Continuity is about WHEN something was said, not what it
+# matches: in `mode="continuity"` the composer pins what the user shared in the
+# last few days ahead of everything else, emotional rows first. Only the flue
+# seam's continuity trigger asks for this mode; every other caller gets the
+# relevance packet, unchanged.
+_PACKET_MODE_CONTINUITY = "continuity"
+_CONTINUITY_RECENT_WINDOW_S = 72 * 3600  # "the last few days" — covers a day-1 → day-2 gap
+_CONTINUITY_RECENT_MAX = 6  # at most half the default packet, so relevance keeps room
+
+
+def _is_emotional_row(ref: MemoryRef) -> bool:
+    """An `emotional_moment` row, or a fact whose text carries an emotional cue
+    ("I'm pretty anxious about…") — the 4B extractor often stores a worry as a
+    plain fact, so the type alone would miss it."""
+    if str((ref.metadata or {}).get("memory_type")) == "emotional_moment":
+        return True
+    return _message_needs_emotional_recall(ref.text or "")
+
+
+def _pick_recent_for_continuity(
+    rows: list[MemoryRef],
+    *,
+    now_ts: Optional[float] = None,
+    window_s: float = _CONTINUITY_RECENT_WINDOW_S,
+    max_n: int = _CONTINUITY_RECENT_MAX,
+) -> list[MemoryRef]:
+    """Rows captured within ``window_s`` of ``now_ts`` (by stored `added_at`),
+    emotional rows first, then newest first; at most ``max_n``. Pure filter over
+    rows the caller already loaded — no store round-trip. Undated rows never
+    qualify (``_added_at_ts`` → -inf)."""
+    now = datetime.datetime.now(datetime.timezone.utc).timestamp() if now_ts is None else now_ts
+    cutoff = now - window_s
+    recent = [(r, _added_at_ts(r.metadata or {})) for r in rows]
+    recent = [(r, ts) for r, ts in recent if cutoff <= ts <= now + 300]
+    recent.sort(key=lambda p: (_is_emotional_row(p[0]), p[1]), reverse=True)
+    return [r for r, _ in recent[:max_n]]
+
+
 @router.get("/for-prompt")
 async def memory_for_prompt(
     user_id: str = Query(..., min_length=1),
@@ -662,6 +718,12 @@ async def memory_for_prompt(
         description="Current user message, for relevance ranking",
     ),
     limit: int = Query(_PROMPT_PACKET_MAX_FACTS, ge=1, le=40),
+    mode: str = Query(
+        "relevance",
+        pattern="^(relevance|continuity)$",
+        description="'continuity' pins facts from the last few days ahead of "
+        "relevance (the flue seam's mood-statement turns)",
+    ),
     _: None = Depends(require_internal_token),
 ):
     """Compact, cited memory packet for injection into an agent's system prompt.
@@ -684,15 +746,19 @@ async def memory_for_prompt(
     # user's emotional moments into the packet. Decide it first so a single
     # load_for_prompt can widen its window on an emotional turn — no second read.
     emo_turn = _emotional_recall_enabled() and _message_needs_emotional_recall(message)
-    # One metadata read. On an emotional turn we scan wider (_EMO_PIN_SCAN) so a
-    # crowded-out emotional row is visible to the pin below; the generic packet
-    # still uses only the first `limit` rows (load_for_prompt returns a stable
-    # prefix, so this slice == the narrow read).
-    scan = _EMO_PIN_SCAN if emo_turn else limit
+    # In-process callers pass every argument explicitly; one that omits `mode`
+    # receives the Query() descriptor, which is not the continuity string — so
+    # the isinstance guard keeps them on the relevance packet.
+    continuity = isinstance(mode, str) and mode == _PACKET_MODE_CONTINUITY
+    # One metadata read. On an emotional or continuity turn we scan wider
+    # (_EMO_PIN_SCAN) so a crowded-out emotional/recent row is visible to the
+    # pins below; the generic packet still uses only the first `limit` rows
+    # (load_for_prompt returns a stable prefix, so this slice == the narrow read).
+    scan = _EMO_PIN_SCAN if (emo_turn or continuity) else limit
     all_rows = await svc.load_for_prompt(user_id, limit=scan)
     facts = all_rows[:limit]
     hits: list[MemoryRef] = []
-    needs_search = _message_needs_memory(message) or emo_turn
+    needs_search = _message_needs_memory(message) or emo_turn or continuity
     if message.strip() and needs_search:
         try:
             hits = await svc.search(message, user_id=user_id, limit=6)
@@ -707,8 +773,11 @@ async def memory_for_prompt(
     # non-emotional turn stays a byte-for-byte no-op even with the flag on.
     if emo_turn:
         hits = _pick_emotional_moments(all_rows) + hits
+    # Continuity mode: what was shared in the last few days leads the packet,
+    # however little it overlaps the current message lexically.
+    recent = _pick_recent_for_continuity(all_rows) if continuity else None
     result = _build_memory_prompt_packet(
-        facts, hits, max_facts=limit, boost_emotional=emo_turn
+        facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent
     )
     result["user_scoped"] = True
 
