@@ -274,12 +274,24 @@ async def detect_and_store(user_message: str, *, user_id: str, session_id: str) 
     # per real user chat/voice turn, which makes it the sanctioned aging tick —
     # packet builds no longer age offers (QA review F5a: per-fold aging killed
     # offers before a human ever saw them). Best-effort, never blocks detection.
+    # EXCEPT on a continuity turn: the seam DEFERS offers there (they are not
+    # shown), so aging one would let a run of emotional turns expire an offer
+    # the user never saw again (Samantha bar S4 round 3). Same predicate the
+    # seam uses, so "deferred" and "not aged" can never disagree.
     if _person_enabled():
         try:
-            from pending_suggestions import age_person_offers_on_user_turn
-            await age_person_offers_on_user_turn(user_id)
-        except Exception as exc:
-            logger.debug("latent_intent_detector: offer aging failed: %s", exc)
+            from zoe_flue_client import is_continuity_turn
+
+            deferred = is_continuity_turn(user_message, user_id)
+        except Exception as exc:  # noqa: BLE001 — unknown → age as before
+            logger.debug("latent_intent_detector: continuity check failed: %s", exc)
+            deferred = False
+        if not deferred:
+            try:
+                from pending_suggestions import age_person_offers_on_user_turn
+                await age_person_offers_on_user_turn(user_id)
+            except Exception as exc:
+                logger.debug("latent_intent_detector: offer aging failed: %s", exc)
 
     suggestions = await detect(user_message, user_id=user_id, session_id=session_id)
     # Merge the reliable deterministic person proposals (flag-gated), deduping

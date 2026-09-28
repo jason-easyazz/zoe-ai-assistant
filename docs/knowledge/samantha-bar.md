@@ -233,11 +233,14 @@ sample 0 PASS, samples 1-4 FAIL. The composer's focus, captured before each samp
 
 Fixes:
 - (e) A bare mood report is never the focus (`memory_digest.fact_has_topic`: it must name
-  something beyond feeling, time and filler words). The worry stays the focus.
+  something beyond feeling, time and filler words, past forms included — "User felt down
+  today" has no topic). The worry stays the focus.
 - (a) Offers are deferred on continuity turns. The continuity composer omits the fold, and
   the seam skips the offer block and logs `SEAM_OFFER user=… deferred=1
-  reason=continuity`. The offer is not surfaced on that turn, so an offer the user has not
-  seen yet does not start aging.
+  reason=continuity`. A continuity turn is decided by the trigger
+  (`is_continuity_turn`), not by a packet coming back, so an empty or failed packet still
+  defers. The per-turn offer ager skips the same turns, so a run of emotional turns cannot
+  expire an offer it hid.
   The next non-emotional turn offers it.
 
 Variants, five samples each, sent to the sidecar directly (replay isolation) with the

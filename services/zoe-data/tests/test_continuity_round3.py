@@ -32,6 +32,7 @@ import zoe_flue_client as zc
 from memory_service import MemoryRef
 
 ASK_WORRY = "Ugh, I've been feeling a bit on edge today."
+_REAL_OFFER_BLOCK = zc._pending_offer_block
 NOW = datetime.datetime.now(datetime.timezone.utc)
 
 
@@ -63,6 +64,14 @@ DAD = _ref("dad00001", "User's father is a retired lighthouse keeper.", 26)
     ("User is worried about their mum's surgery.", True),
     ("User is excited about the trip to Bali.", True),
     ("User is stressed about the move.", True),
+    # past / perfect forms of a bare mood (Greptile #1768)
+    ("User felt down today.", False),
+    ("User has been feeling on edge.", False),
+    ("User was feeling a bit tense.", False),
+    ("User seemed stressed lately.", False),
+    ("User got overwhelmed this afternoon.", False),
+    ("User had a rough time this week.", False),
+    ("User felt anxious about their job interview at the aquarium.", True),
 ])
 def test_fact_has_topic(text, has_topic):
     assert memory_digest.fact_has_topic(text) is has_topic
@@ -112,6 +121,18 @@ async def test_todays_mood_row_never_displaces_the_worry_as_focus(monkeypatch):
         "affect": "anxious"}
     # the mood row is still in the packet as a (recent) bullet — only the focus skips it
     assert "on edge" in res["packet"]
+
+
+@pytest.mark.parametrize("mood", [
+    "User felt down today.",
+    "User has been feeling on edge.",
+    "User had a rough day.",
+])
+@pytest.mark.asyncio
+async def test_past_tense_mood_row_never_takes_the_focus(monkeypatch, mood):
+    row = _ref("mood0002", mood, 0.01, candidate_affect="sad")
+    res = await _compose(monkeypatch, [HOME, DAD, WORRY, row])
+    assert res["continuity_focus"]["text"].startswith("User is anxious about their job interview")
 
 
 @pytest.mark.asyncio
@@ -187,7 +208,7 @@ PACKET = ("## What I know about you\n"
           "- User lives in Hobart. [mem:home0001]\n")
 
 
-def _seam(monkeypatch, *, offer_env="1"):
+def _seam(monkeypatch, *, offer_env="1", packet=PACKET, packet_exc=None):
     monkeypatch.setenv("ZOE_FLUE_WIRE", "1")
     monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
     monkeypatch.delenv("ZOE_SEAM_RECALL_INJECT", raising=False)
@@ -199,7 +220,9 @@ def _seam(monkeypatch, *, offer_env="1"):
     calls = {"offer": 0}
 
     async def fake_continuity(uid, msg):
-        return {"packet": PACKET, "continuity_focus": FOCUS}
+        if packet_exc is not None:
+            raise packet_exc
+        return {"packet": packet, "continuity_focus": FOCUS if packet else {}}
 
     async def no_portrait(uid):
         return ""
@@ -251,3 +274,95 @@ async def test_no_deferral_log_when_offer_inject_is_off(monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="zoe_flue_client"):
         await _outbound(ASK_WORRY)
     assert not any("SEAM_OFFER" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("packet, exc", [("", None), (PACKET, RuntimeError("store down"))])
+@pytest.mark.asyncio
+async def test_emotional_turn_without_a_packet_still_defers_the_offer(monkeypatch, caplog,
+                                                                       packet, exc):
+    """Greptile #1768: the continuity TURN is decided by the trigger, not by a
+    block being built — an empty or failed packet must not let the offer through."""
+    calls = _seam(monkeypatch, packet=packet, packet_exc=exc)
+    with caplog.at_level(logging.INFO, logger="zoe_flue_client"):
+        wire = await _outbound(ASK_WORRY)
+    assert "[MEMORY CONTEXT" not in wire  # no block this turn
+    assert "Marisol" not in wire and calls["offer"] == 0
+    assert any("SEAM_OFFER user=demo-a deferred=1 reason=continuity" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_is_continuity_turn_predicate(monkeypatch):
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.delenv("ZOE_SEAM_RECALL_INJECT", raising=False)
+    assert zc.is_continuity_turn(ASK_WORRY, "demo-a")
+    assert not zc.is_continuity_turn("Add milk to the list", "demo-a")
+    assert not zc.is_continuity_turn(ASK_WORRY, "guest")
+    monkeypatch.setenv("ZOE_SEAM_CONTINUITY_INJECT", "false")
+    assert not zc.is_continuity_turn(ASK_WORRY, "demo-a")
+
+
+# ── deferred offers do not age (Greptile #1768) ─────────────────────────────
+
+class _OfferStore:
+    """In-memory model of pending_suggestions' aging: an offer surfaced once
+    (turns_elapsed=1) expires when turns_elapsed > expire_after_turns."""
+
+    def __init__(self, expire=2):
+        self.turns, self.expire, self.resolved = 1, expire, False
+
+    async def age(self, user_id):
+        if not self.resolved:
+            self.turns += 1
+            if self.turns > self.expire:
+                self.resolved = True
+        return int(self.resolved)
+
+    async def surface(self, user_id, *, limit=3):
+        return [] if self.resolved else [{"id": "o1", "name": "Marisol",
+                                          "relationship": "sister", "offer_phrase": ""}]
+
+
+async def _run_turns(monkeypatch, store, messages):
+    import latent_intent_detector as lid
+
+    monkeypatch.setattr(lid, "_person_enabled", lambda: True)
+
+    async def no_detect(*a, **k):
+        return []
+
+    monkeypatch.setattr(lid, "detect", no_detect)
+    monkeypatch.setattr(lid, "_deterministic_person_proposals", no_detect)
+    monkeypatch.setattr(pending_suggestions, "age_person_offers_on_user_turn", store.age)
+    monkeypatch.setattr(pending_suggestions, "surface_pending_contacts_for_prompt", store.surface)
+    monkeypatch.setattr(pending_suggestions, "person_suggestions_enabled", lambda: True)
+    wires = []
+    for msg in messages:
+        await lid.detect_and_store(msg, user_id="demo-a", session_id="s1")
+        wires.append(await _outbound(msg))
+    return wires
+
+
+@pytest.mark.asyncio
+async def test_offer_survives_a_run_of_continuity_turns(monkeypatch):
+    _seam(monkeypatch)
+    monkeypatch.setattr(zc, "_pending_offer_block", _REAL_OFFER_BLOCK)
+    store = _OfferStore(expire=2)
+    wires = await _run_turns(monkeypatch, store, [ASK_WORRY, "I'm so stressed", "Today was rough",
+                                                  "Can you add milk to the shopping list?"])
+    assert all("Marisol" not in w for w in wires[:3])  # deferred on every emotional turn
+    # never aged on the three emotional turns — only the neutral turn's own tick
+    assert not store.resolved and store.turns == 2
+    assert "Marisol" in wires[3]                         # offered on the neutral turn
+
+
+@pytest.mark.asyncio
+async def test_negative_control_aging_on_deferred_turns_expires_the_offer(monkeypatch):
+    """Proves the test above measures the fix: age on every turn and the same
+    three emotional turns expire the offer before the neutral turn."""
+    _seam(monkeypatch)
+    monkeypatch.setattr(zc, "_pending_offer_block", _REAL_OFFER_BLOCK)
+    monkeypatch.setattr(zc, "is_continuity_turn", lambda m, u: False)
+    store = _OfferStore(expire=2)
+    wires = await _run_turns(monkeypatch, store, [ASK_WORRY, "I'm so stressed", "Today was rough",
+                                                  "Can you add milk to the shopping list?"])
+    assert store.resolved and "Marisol" not in wires[3]

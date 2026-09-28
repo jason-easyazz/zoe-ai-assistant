@@ -786,6 +786,28 @@ def _portrait_line(text: str) -> str:
     return text
 
 
+def is_continuity_turn(message: str, user_id: str) -> bool:
+    """True when this turn is a CONTINUITY turn — decided by the trigger alone,
+    never by whether a packet came back: the flag is on (default), the id is a
+    real (non-guest) user, the recall floor does not own the turn (a personal
+    question with ZOE_SEAM_RECALL_INJECT on), and the message is a first-person
+    emotional/state statement (``_CONTINUITY_RE``). Pure — no I/O.
+
+    The seam defers pending-contact offers on every such turn (even when the
+    packet fetch fails or comes back empty), and
+    ``latent_intent_detector.detect_and_store`` skips the offer-aging tick on
+    it, so a run of emotional turns can never expire an offer it hid."""
+    if not _continuity_inject_enabled():
+        return False
+    uid = (user_id or "").strip()
+    if not uid or uid in ("guest", "voice-guest"):
+        return False
+    msg = message or ""
+    if _recall_inject_enabled() and _PERSONAL_QUESTION_RE.search(msg):
+        return False  # the recall floor owns personal-question turns
+    return bool(_CONTINUITY_RE.search(msg))
+
+
 async def _continuity_context_block(message: str, user_id: str) -> str:
     """The continuity memory block for this turn, or '' — NEVER raises.
 
@@ -794,16 +816,12 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
     floor has not already claimed the turn (a personal question with
     ZOE_SEAM_RECALL_INJECT on gets the recall block, never both).
     """
-    if not _continuity_inject_enabled():
-        return ""
     uid = (user_id or "").strip()
-    if not uid or uid in ("guest", "voice-guest"):
-        return ""
     msg = message or ""
-    if _recall_inject_enabled() and _PERSONAL_QUESTION_RE.search(msg):
-        return ""  # the recall floor owns personal-question turns
-    if not _CONTINUITY_RE.search(msg):
-        logger.info("SEAM_CONTINUITY user=%s matched=False bullets=0 chars=0", uid)
+    if not is_continuity_turn(msg, uid):
+        if (_continuity_inject_enabled() and uid and uid not in ("guest", "voice-guest")
+                and not (_recall_inject_enabled() and _PERSONAL_QUESTION_RE.search(msg))):
+            logger.info("SEAM_CONTINUITY user=%s matched=False bullets=0 chars=0", uid)
         return ""
     # Packet and portrait run concurrently but are awaited INDEPENDENTLY: the
     # packet is the payload (own budget); the portrait is best-effort garnish
@@ -1260,18 +1278,22 @@ async def _run_flue_brain_streaming_turn(
     # acts on it), still inside the latest user message — the sidecar prefix
     # and the #1725 prompt cache are untouched.
     continuity_block = ""
+    continuity_turn = False
     if not recall_block:
         continuity_block = await _continuity_context_block(message, uid)
+        continuity_turn = is_continuity_turn(message, uid)
     # Offer nudge on ANY turn — skipped when the recall packet already carries
     # the offer directive (the fold tags them "[pending-contact]"), so a
     # recall-shaped turn never asks twice. DEFERRED on a continuity turn: the
     # check-in is that turn's one job, and with the offer present the reply
     # ended in "Would you like me to add Marisol as a contact?" on every sample
-    # (Samantha bar S4 round 3). The offer is not surfaced on this turn (the
-    # continuity composer omits the fold too), so a not-yet-seen offer does not
-    # start aging; the next non-emotional turn offers it.
+    # (Samantha bar S4 round 3). Decided by the TRIGGER, not by the block: an
+    # emotional turn whose packet timed out or came back empty still defers.
+    # The offer is not surfaced on this turn (the continuity composer omits the
+    # fold too) and the per-turn ager skips continuity turns
+    # (latent_intent_detector), so the next non-emotional turn offers it.
     offer_block = ""
-    if continuity_block:
+    if continuity_turn or continuity_block:
         if _offer_inject_enabled():
             logger.info("SEAM_OFFER user=%s deferred=1 reason=continuity", uid)
     elif "[pending-contact]" not in recall_block:

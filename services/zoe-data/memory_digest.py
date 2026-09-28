@@ -375,6 +375,12 @@ _MOOD_FILLER_WORDS = frozenset({
     "tired", "sleepy", "grumpy", "cranky", "irritable", "moody", "restless",
     "jittery", "tense", "emotional", "great", "good", "okay", "fine", "better",
     "worse", "lonely", "blue",
+    # past / perfect forms of a mood report ("User felt down today", "User has
+    # been feeling on edge", "User seemed tense", "User got overwhelmed") and
+    # "a rough time / moment" — Greptile #1768
+    "felt", "seemed", "seems", "seem", "seeming", "getting", "gotten", "became",
+    "become", "becoming", "time", "times", "moment", "moments", "somewhat",
+    "rather", "wasn't", "isn't", "hasn't", "feelings",
 })
 
 
