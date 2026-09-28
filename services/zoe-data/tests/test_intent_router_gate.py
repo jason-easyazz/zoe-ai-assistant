@@ -325,6 +325,10 @@ def test_both_chat_keyword_lanes_are_gated():
     ("Who is Browning?", "browning"),
     ("Who is Sterling Archer?", "sterling archer"),
     ("hey zoe who is King", "king"),
+    # trailing punctuation incl. the single-character ellipsis (#1769 Greptile)
+    ("Who is King\u2026?", "king"),
+    ("who is Ming...", "ming"),
+    ("Who is Browning?!", "browning"),
 ])
 def test_capitalised_ing_names_are_contacts_lookups(text, query):
     got = intent_router.detect_intent(text, log_miss=False)
@@ -337,6 +341,9 @@ def test_capitalised_ing_names_are_contacts_lookups(text, query):
     "who is coming",
     "Who is going out tonight?",
     "who is picking up the kids tomorrow",
+    # lower-case "-ing" + a direct OBJECT, not a particle (#1769 Greptile)
+    "who is bringing groceries",
+    "who is making dinner tonight",
     "who is ming",  # lower-case lone "-ing": ambiguous → the brain, never a canned miss
 ])
 def test_ing_verb_phrases_go_to_the_brain(text):

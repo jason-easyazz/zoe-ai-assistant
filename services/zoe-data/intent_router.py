@@ -629,50 +629,46 @@ _WHO_IS_CLAUSE_WORDS = frozenset({
 })
 
 
-# Particles that make a lower-case "-ing" word a verb phrase ("flying IN",
-# "coming TO dinner", "picking UP the kids").
-_WHO_IS_VERB_PARTICLES = frozenset({
-    "in", "on", "at", "from", "to", "with", "over", "up", "down", "out", "off",
-    "by", "around", "back", "home", "for", "into", "tonight", "today", "tomorrow",
-})
-_WHO_IS_RAW_RE = re.compile(r"\bwho\s+is\s+(.+?)[\s?.!]*$", re.IGNORECASE)
+# Trailing punctuation a user (or STT) puts after the object: "?", "!", ".",
+# ",", "..." and the single-character ellipsis "…". Stripped from BOTH the
+# normalised and the raw object so the raw casing still lines up word for word.
+_WHO_IS_TRAILING_PUNCT_RE = re.compile(r"[\s?.!,\u2026]+$")
+_WHO_IS_RAW_RE = re.compile(r"\bwho\s+is\s+(.+)$", re.IGNORECASE)
 
 
-def _ing_is_verb(i: int, words: list[str], raw_words: list[str] | None) -> bool:
-    """A "-ing" token is a VERB only when it is lower-case as the user wrote it
-    AND it ends the phrase or a particle follows it ("who is coming", "flying
-    in"). A capitalised token is a name ("King", "Ming", "Browning"). Without
-    the raw casing (STT/lower-cased input) a lone "-ing" word stays ambiguous
-    and fails toward the brain, never toward a canned contacts miss."""
-    w = words[i]
-    if not w.endswith("ing"):
-        return False
-    raw = raw_words[i] if raw_words and i < len(raw_words) else w
-    if raw[:1].isupper():
-        return False
-    return i == len(words) - 1 or words[i + 1] in _WHO_IS_VERB_PARTICLES
+def _who_is_obj_words(obj: str) -> list[str]:
+    return _WHO_IS_TRAILING_PUNCT_RE.sub("", obj.strip()).split()
+
+
+def _ing_is_verb(word: str, raw: str) -> bool:
+    """The word right after "who is" is a VERB when it ends in "-ing" and the
+    user wrote it LOWER-CASE — whatever follows it (an object: "bringing
+    groceries", a particle: "coming to dinner", nothing: "who is coming").
+    A capitalised "-ing" word is a name ("King", "Browning", "Sterling
+    Archer"). Without the raw casing (STT / lower-cased input) a lone "-ing"
+    word stays ambiguous and fails toward the brain, never toward a canned
+    contacts miss."""
+    return word.endswith("ing") and not raw[:1].isupper()
 
 
 def _is_name_shaped(obj: str, raw_obj: str | None = None) -> bool:
     """True when the object of "who is …" can be a contact name / person ref:
-    at most 4 words, no comma, no verb-phrase "-ing" (see `_ing_is_verb`), and
-    no clause word (weekday/time, preposition, conjunction, wh-word). "my X" is
-    always a person reference ("my dentist", "my sister's husband").
-    `raw_obj` is the same object with the user's casing, when available."""
-    o = obj.strip().rstrip("?.!").strip()
-    if not o or "," in o:
+    at most 4 words, no comma, a first word that is not a lower-case "-ing"
+    verb (see `_ing_is_verb`), and no clause word (weekday/time, preposition,
+    conjunction, wh-word). "my X" is always a person reference ("my dentist",
+    "my sister's husband"). `raw_obj` is the same object with the user's
+    casing, when available."""
+    words = _who_is_obj_words(obj)
+    if not words or "," in " ".join(words):
         return False
-    words = o.split()
     if len(words) > 4:
         return False
     if words[0] == "my":
         return len(words) <= 3 and not (_WHO_IS_CLAUSE_WORDS & set(words[1:]))
-    raw_words = None
-    if raw_obj:
-        rw = raw_obj.strip().rstrip("?.!").strip().split()
-        if [x.lower() for x in rw] == words:
-            raw_words = rw
-    if any(_ing_is_verb(i, words, raw_words) for i in range(len(words))):
+    raw_words = _who_is_obj_words(raw_obj) if raw_obj else None
+    if not raw_words or [x.lower() for x in raw_words] != words:
+        raw_words = words  # casing unknown → treat as lower-case (fails toward the brain)
+    if _ing_is_verb(words[0], raw_words[0]):
         return False
     return not (_WHO_IS_CLAUSE_WORDS & set(words))
 
