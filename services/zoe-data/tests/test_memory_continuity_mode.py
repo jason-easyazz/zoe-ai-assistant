@@ -53,12 +53,15 @@ class _Svc:
         self.load_limits.append(limit)
         return self.rows[:limit]
 
-    async def load_recent_for_prompt(self, user_id, *, window_s, limit):
-        self.recent_calls.append((window_s, limit))
+    async def load_recent_for_prompt(self, user_id, *, window_s, limit, emotional_first=False):
+        self.recent_calls.append((window_s, limit, emotional_first))
         cutoff = NOW.timestamp() - window_s
         dated = [(memories._added_at_ts(r.metadata), r) for r in self.rows]
         dated = [(ts, r) for ts, r in dated if ts >= cutoff]
-        dated.sort(key=lambda p: p[0], reverse=True)
+        if emotional_first:
+            dated.sort(key=lambda p: (memories._is_emotional_row(p[1]), p[0]), reverse=True)
+        else:
+            dated.sort(key=lambda p: p[0], reverse=True)
         return [r for _, r in dated[:limit]]
 
     async def search(self, query, *, user_id, limit=6, **_):
@@ -95,7 +98,9 @@ async def test_continuity_ranks_recent_emotional_fact_above_older_closer_fact(sv
     assert worry_line.startswith("- (recent) ")
     assert res["refs"][0]["id"] == WORRY.id and res["refs"][0].get("recent") is True
     # continuity reads recency DIRECTLY (bounded), not a wider ranked prefix
-    assert svc.recent_calls == [(memories._CONTINUITY_RECENT_WINDOW_S, memories._CONTINUITY_RECENT_SCAN)]
+    assert svc.recent_calls == [
+        (memories._CONTINUITY_RECENT_WINDOW_S, memories._CONTINUITY_RECENT_SCAN, True)
+    ]
     assert svc.load_limits == [memories._PROMPT_PACKET_MAX_FACTS]
 
 
@@ -169,46 +174,123 @@ def test_pick_recent_emotional_first_then_newest():
 
 # ── MemoryService.load_recent_for_prompt against the REAL service logic ─────
 
+def _matches(meta, where):
+    """The subset of chroma `where` semantics these reads use: $and/$or, field
+    equality, and $gte on a numeric field (a missing field never matches)."""
+    if where is None:
+        return True
+    if "$and" in where:
+        return all(_matches(meta, w) for w in where["$and"])
+    if "$or" in where:
+        return any(_matches(meta, w) for w in where["$or"])
+    (key, cond), = where.items()
+    if isinstance(cond, dict):
+        (op, val), = cond.items()
+        assert op == "$gte" and isinstance(val, (int, float)), cond  # chroma: numbers only
+        v = meta.get(key)
+        return isinstance(v, (int, float)) and v >= val
+    return meta.get(key) == cond
+
+
 class _Col:
-    """The one collection call the metadata reads make (a filtered `get`)."""
+    """A fake collection honouring `where` + `limit` and recording every get."""
 
     def __init__(self, rows):
         self.rows = rows  # [(id, text, meta)]
+        self.gets = []
 
-    def get(self, *, where=None, include=None, **_kw):
-        return {"ids": [r[0] for r in self.rows],
-                "documents": [r[1] for r in self.rows],
-                "metadatas": [dict(r[2]) for r in self.rows]}
+    def get(self, *, where=None, include=None, limit=None, **_kw):
+        self.gets.append({"where": where, "limit": limit})
+        hit = [r for r in self.rows if _matches(r[2], where)]
+        if limit is not None:
+            hit = hit[:limit]
+        return {"ids": [r[0] for r in hit],
+                "documents": [r[1] for r in hit],
+                "metadatas": [dict(r[2]) for r in hit]}
 
 
 def _svc_over(rows):
     from memory_service import MemoryService
 
     svc = MemoryService(data_dir="/nonexistent/zoe-test-continuity")
-    svc._collection = lambda: _Col(rows)
-    return svc
+    col = _Col(rows)
+    svc._collection = lambda: col
+    return svc, col
 
 
-def _meta(hours_ago, **kw):
-    return {"user_id": "demo-a", "status": "approved", "added_at": _iso(hours_ago),
-            "confidence": 0.7, **kw}
+def _meta(hours_ago, *, legacy=False, **kw):
+    m = {"user_id": "demo-a", "status": "approved", "added_at": _iso(hours_ago),
+         "confidence": 0.7, **kw}
+    if not legacy:
+        m["added_ts"] = (NOW - datetime.timedelta(hours=hours_ago)).timestamp()
+    return m
+
+
+WINDOW = 72 * 3600
 
 
 @pytest.mark.asyncio
-async def test_service_recent_read_is_newest_first_windowed_and_scoped():
+async def test_service_recent_read_pushes_time_bound_and_cap_into_the_store_query():
     rows = [(f"old{i:04d}", f"old high-score fact {i}", _meta(24 * 30, confidence=1.0, access_count=500))
             for i in range(250)]
     rows += [
         ("worry001", WORRY.text, _meta(24)),
         ("newest01", "User bought a whale mug", _meta(2)),
         ("stale001", "User was worried about rent", _meta(24 * 4)),
-        ("other001", "someone else's recent fact", {**_meta(1), "user_id": "demo-b"}),
-        ("undated1", "User has no date", {"user_id": "demo-a", "status": "approved"}),
+        ("other001", "someone else's recent fact", {**_meta(1), "user_id": "demo-b", "wing": "demo-b"}),
     ]
-    svc = _svc_over(rows)
-    got = await svc.load_recent_for_prompt("demo-a", window_s=72 * 3600, limit=50)
+    svc, col = _svc_over(rows)
+    got = await svc.load_recent_for_prompt("demo-a", window_s=WINDOW, limit=50)
     assert [r.id for r in got] == ["newest01", "worry001"]
-    # …and the ranked read (unchanged by the refactor) buries the worry past 200
+    # ONE bounded query: scope AND added_ts >= cutoff, with a hard limit — never a full fetch
+    import memory_service as ms
+
+    assert len(col.gets) == 1
+    q = col.gets[0]
+    assert q["limit"] == ms._RECENT_SCAN_CAP
+    clauses = q["where"]["$and"]
+    ts_clause = next(c for c in clauses if "added_ts" in c)
+    cutoff = ts_clause["added_ts"]["$gte"]
+    assert abs(cutoff - (NOW.timestamp() - WINDOW)) < 60
+    # …and the ranked read (unchanged) buries the worry past a 200-row prefix
     ranked = await svc.load_for_prompt("demo-a", limit=200)
     assert "worry001" not in {r.id for r in ranked}
-    assert await svc.load_recent_for_prompt("guest", window_s=72 * 3600, limit=50) == []
+    assert await svc.load_recent_for_prompt("guest", window_s=WINDOW, limit=50) == []
+
+
+@pytest.mark.asyncio
+async def test_service_recent_read_keeps_an_emotional_row_under_a_burst_of_newer_rows():
+    rows = [("worry001", WORRY.text, _meta(30))]
+    rows += [(f"new{i:04d}", f"ordinary capture number {i} about chore{i}", _meta(29 - i * 0.2))
+             for i in range(120)]
+    svc, _ = _svc_over(rows)
+    got = await svc.load_recent_for_prompt("demo-a", window_s=WINDOW, limit=50, emotional_first=True)
+    assert len(got) == 50 and got[0].id == "worry001"
+    # without emotional-first it is newest-first, and the worry is past the cut
+    plain = await svc.load_recent_for_prompt("demo-a", window_s=WINDOW, limit=50)
+    assert "worry001" not in {r.id for r in plain}
+
+
+@pytest.mark.asyncio
+async def test_service_recent_read_falls_back_for_rows_without_added_ts():
+    rows = [
+        ("legacy01", WORRY.text, _meta(24, legacy=True)),
+        ("legacy02", "User booked a haircut", _meta(24 * 5, legacy=True)),
+    ]
+    svc, col = _svc_over(rows)
+    got = await svc.load_recent_for_prompt("demo-a", window_s=WINDOW, limit=50, emotional_first=True)
+    assert [r.id for r in got] == ["legacy01"]
+    assert len(col.gets) == 2 and col.gets[1]["limit"] is None  # bounded miss → legacy scan
+
+
+def test_build_metadata_stamps_numeric_added_ts_matching_added_at():
+    from memory_service import MemoryService
+
+    md = MemoryService._build_metadata(
+        user_id="demo-a", source="chat", session_id=None, user_turn_id=None,
+        memory_type="fact", confidence=0.7, status="approved", tags=[],
+        entity_type=None, entity_id=None, expires_at=None,
+    )
+    added = datetime.datetime.fromisoformat(md["added_at"].replace("Z", "+00:00"))
+    assert isinstance(md["added_ts"], float)
+    assert abs(md["added_ts"] - added.timestamp()) < 1e-3

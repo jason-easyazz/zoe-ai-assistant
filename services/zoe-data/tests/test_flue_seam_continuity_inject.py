@@ -298,6 +298,37 @@ async def test_slow_portrait_never_drops_a_completed_packet(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cancelling_the_turn_cancels_both_reads(monkeypatch):
+    """A cancelled turn (client gone, barge-in) must not leave the portrait read
+    running: CancelledError is not an Exception, so only a finally catches it."""
+    _stub(monkeypatch)
+    seen = {"packet": None, "portrait": None}
+
+    async def hang(kind):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            seen[kind] = "cancelled"
+            raise
+
+    async def packet(uid, msg):
+        await hang("packet")
+
+    async def portrait(uid):
+        await hang("portrait")
+
+    monkeypatch.setattr(zc, "_fetch_continuity_packet", packet)
+    monkeypatch.setattr(zc, "_fetch_portrait_line", portrait)
+    outer = asyncio.ensure_future(zc._continuity_context_block(S4_ASK, "demo-a"))
+    await asyncio.sleep(0.05)
+    outer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await outer
+    await asyncio.sleep(0)  # let the cancelled children run their handlers
+    assert seen == {"packet": "cancelled", "portrait": "cancelled"}
+
+
+@pytest.mark.asyncio
 async def test_portrait_failure_keeps_the_packet(monkeypatch):
     _stub(monkeypatch)
 

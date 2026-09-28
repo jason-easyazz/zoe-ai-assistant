@@ -806,22 +806,28 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
     portrait_task.add_done_callback(lambda t: t.cancelled() or t.exception())
     packet, portrait = "", ""
     try:
-        packet = await asyncio.wait_for(packet_task, timeout=_CONTINUITY_TIMEOUT_S) or ""
-    except Exception as exc:  # noqa: BLE001 — continuity must never break a turn
-        logger.warning(
-            "seam continuity inject: packet fetch failed/timed out, continuing without it: %r",
-            exc,
-        )
-    if packet:
-        remaining = max(0.0, _CONTINUITY_PORTRAIT_TIMEOUT_S - (loop.time() - t0))
         try:
-            portrait = _portrait_line(
-                str(await asyncio.wait_for(portrait_task, timeout=remaining) or "")
+            packet = await asyncio.wait_for(packet_task, timeout=_CONTINUITY_TIMEOUT_S) or ""
+        except Exception as exc:  # noqa: BLE001 — continuity must never break a turn
+            logger.warning(
+                "seam continuity inject: packet fetch failed/timed out, continuing without it: %r",
+                exc,
             )
-        except Exception as exc:  # noqa: BLE001 — the portrait is optional
-            logger.debug("seam continuity inject: portrait skipped: %r", exc)
-    elif not portrait_task.done():
-        portrait_task.cancel()  # no packet → no block; don't leave the read running
+        if packet:
+            remaining = max(0.0, _CONTINUITY_PORTRAIT_TIMEOUT_S - (loop.time() - t0))
+            try:
+                portrait = _portrait_line(
+                    str(await asyncio.wait_for(portrait_task, timeout=remaining) or "")
+                )
+            except Exception as exc:  # noqa: BLE001 — the portrait is optional
+                logger.debug("seam continuity inject: portrait skipped: %r", exc)
+    finally:
+        # Whatever ended the wait — no packet, a timeout, or the TURN itself being
+        # cancelled (CancelledError is not an Exception) — never leave either
+        # read running past this function.
+        for task in (packet_task, portrait_task):
+            if not task.done():
+                task.cancel()
     portrait_line = f"About this user: {portrait}" if portrait else ""
     budget = _RECALL_MAX_CHARS - (len(portrait_line) + 1 if portrait_line else 0)
     packet = _truncate_packet((packet or "").strip(), max_chars=budget)

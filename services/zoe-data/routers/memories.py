@@ -686,12 +686,11 @@ _CONTINUITY_RECENT_SCAN = 50
 
 
 def _is_emotional_row(ref: MemoryRef) -> bool:
-    """An `emotional_moment` row, or a fact whose text carries an emotional cue
-    ("I'm pretty anxious about…") — the 4B extractor often stores a worry as a
-    plain fact, so the type alone would miss it."""
-    if str((ref.metadata or {}).get("memory_type")) == "emotional_moment":
-        return True
-    return _message_needs_emotional_recall(ref.text or "")
+    """See ``memory_service.is_emotional_memory`` (the single definition — the
+    service's recency read orders by it too)."""
+    from memory_service import is_emotional_memory
+
+    return is_emotional_memory(ref)
 
 
 def _pick_recent_for_continuity(
@@ -787,6 +786,7 @@ async def memory_for_prompt(
                 user_id,
                 window_s=_CONTINUITY_RECENT_WINDOW_S,
                 limit=_CONTINUITY_RECENT_SCAN,
+                emotional_first=True,
             )
         except Exception:
             logger.exception("memories: continuity recency read failed")
