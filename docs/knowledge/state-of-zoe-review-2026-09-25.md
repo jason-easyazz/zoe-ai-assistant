@@ -566,9 +566,10 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
 
 ## 9. Recommended sequence
 
-**Current order, refreshed 2026-09-28 16:40 AWST (B0.8 live; the afternoon chain #1749 / #1754 /
-#1750 / #1751 / #1752 merged and deployed), after the 09-27 wave (24 PRs; list in the
-tracker §6).** The authoritative NEXT ACTION is the
+**Current order, refreshed 2026-09-29 03:00 AWST (the panel is ON; the 09-28 evening chain
+#1756 → #1769, 13 PRs, merged and deployed — list in the tracker §6; S4 passed the Samantha
+bar live for the first time at 01:12, S1 still fails on recall), after the afternoon chain
+and the 09-27 wave.** The authoritative NEXT ACTION is the
 [program tracker §0](../architecture/beat-the-bar-2026-program.md). The dated lists below are
 the 2026-09-25 plan, kept with ✓ marks.
 
@@ -576,6 +577,15 @@ the 2026-09-25 plan, kept with ✓ marks.
    - ✓ The B0.8 Chroma 1.5 cutover — LIVE 2026-09-28 08:21 AWST (#1745 `d346aa90`; 10/10
      proofs, `self-recall ok`, replay PASS 13/13). Its deploy ran ahead of the store (~7 min
      degraded memory capture, store intact, no turns missed): `incident-runbook.md` §9.
+   - **Rotate the Pi `DEVICE_TOKEN`** (an agent's grep printed it into a tool transcript
+     2026-09-28 ~21:30; never left the box, treat as exposed).
+   - **Decide `ZOE_VAD_CLEAN_TAIL_MS`** (#1766, shipped OFF): −160 ms on ~half the turns vs a
+     2.0 % mid-sentence cut on the corpus. Stage with `560` in `.env.voice` if accepted.
+   - **YouTube Music QR re-scan on the panel** — #1759 fixed the stale-cookie short-circuit,
+     so the sign-in should now complete; then the MA 2.10.3 re-create below.
+   - **A real "let's talk" test** on the panel (#1764): text on the kiosk for every turn, card
+     home ~10 s after a silent window. The kiosk page reload happens on the first DOMAIN
+     command, so test a domain command before judging chat-lane text after a restart.
    - Apply #1727: loopback Postgres 17.11, and rebuild the HA bridge.
    - Music Assistant: YouTube Music re-auth on the panel (the cookies have rotated and the
      provider does not load), then the MA 2.10.3 re-create per `music-ytdlp-js-runtime.md`
@@ -584,9 +594,10 @@ the 2026-09-25 plan, kept with ✓ marks.
      restores 2.8.7).
    - Revoke the Telegram token; rotate the Postgres password.
    - The Gemma re-upload swap (B6.2).
-2. **Panel on.**
-   - One real `/ws/voice/` turn on uvicorn 0.53 (#1743).
-   - B1.1: Pi proof → head-bound replay → operator flag-on week.
+2. ✓ **Panel on** (2026-09-28 evening). Daemon deployed 00:38 with #1760/#1765/#1766;
+   `POST_PLAY_COOLDOWN_S=0.4`, `RECORD_SECONDS_MAX=12` applied.
+   - One real `/ws/voice/` turn on uvicorn 0.53 (#1743) — still to do.
+   - B1.1: Pi proof → head-bound replay → operator flag-on week — now unblocked.
 3. **Verify.** The 2026-09-28 07:30 morning brief (#1726) and the Monday 02:31 dreaming run
    on the venv drop-in. B0.8 follow-ups: the 09-29 dreaming run is the first on the 1.x store
    (confirm it did work). ✓ Live recall parity PASS 20/20 identical order (the first attempt
@@ -598,16 +609,19 @@ the 2026-09-25 plan, kept with ✓ marks.
 5. ✓ The `samantha_bar` harness — #1751 merged; **first baseline 2026-09-28 16:33**
    (`8ac726b7`, samples=3, teardown proven): PASS S2/S3/S6/S7/S8, SKIP S5 (hook-gated),
    **FAIL S1 + S4** ([record](samantha-bar.md) → *First baseline*).
-   **Next Samantha actions, in order:**
-   1. **Router confidence gate** — S1 failed because the two-stage router sent the ask to
-      `calendar` (head_conf 0.5371) and it was answered deterministically in 488 ms, the brain
-      and recall packet never consulted. Head decisions below ~0.6 fall through to the chat
-      lane; the miss feeds the router self-train corpus.
-   2. **Emotional continuity** — S4: the day-1 worry is not acknowledged the next day (3/3);
-      B3.3 is the carrier and S4 its acceptance test.
+   **Samantha actions, status 2026-09-29 03:00** ([record](samantha-bar.md) → *Live compares*):
+   1. ✓ **Router confidence gate** — #1763 (`ZOE_ROUTER_HEAD_MIN_CONF=0.70`), then #1767 (the
+      head is the authority over keyword claims) and #1769. S1's routing is fixed; the ask
+      reaches the brain and **still FAILs on recall** — S1 round 3 (digest keeps who/where/when
+      for events + recall floor on event-shaped questions) is in flight. Still open: the
+      router retrain for the confident misses (S6 @ 0.73).
+   2. ✓ **Emotional continuity** — rounds #1756 / #1762 / #1768; **S4 PASS live at 01:12**
+      (first pass). Authoritative 03:56 run on `269bb680`: S4 PASS and S1 PASS. B3.3 stays the carrier; re-record the bar once S4 passes
+      on the re-record run.
+   3. Streaming STT during recording (TTFA fix #2) once ≥ 1.5 GB is free.
 6. **B3.2** dream gating and **B3.3** reflection on the new store (B0.8 live 2026-09-28).
 7. ✓ Brief-on-arrival (**B2.1**) — #1749 merged flag-dark 2026-09-28 (panel-scoped, shared
-   daily claim with the 07:30 brief). 🧑 Flip it once the panel is on.
+   daily claim with the 07:30 brief). 🧑 The panel is on — flip it.
 8. ✓ The Kokoro dedicated venv — #1750 applied live 2026-09-28 (−97 to −139 MB). Still: the
    24 h `--cache-ram` occupancy measurement.
 9. Dated operator items:

@@ -1,6 +1,6 @@
 ---
 type: program-plan
-date: 2026-09-25
+date: 2026-09-29
 audience: Jason + every agent — the single tracker for "Zoe better than anything else"
 status: 🔨 active — NEXT ACTION is always §0
 ---
@@ -20,20 +20,34 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ## 0. NEXT ACTION (keep this current)
 
-State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
-- live = `main` `5c18200a` (#1752, last of the five-PR chain #1749 → #1754 → #1750 → #1751 →
-  #1752; all merged, all five deploys green). The #1750 deploy is the first cleared by the
-  tree-bound gate (#1754): `voice-gate: OK — … tree-identical to 7d188b55 (tree 4706c0b1;
-  artifact from 2ef7b366)`.
-- **First Samantha bar baseline recorded 16:33** (commit `8ac726b7`, samples=3, teardown
-  proven): 5 PASS, 1 SKIP, 2 FAIL — S1 is a router misroute, S4 the emotional thread. Both are
-  the next Samantha targets (item 4 below; B3.11).
-- B0.8 is LIVE since 08:21: the palace is the migrated 1.x store on chromadb 1.5.9 +
-  mempalace 3.10.0. The deploy ran ahead of the store (~7 min of degraded memory capture;
-  store intact, no turns missed): [incident-runbook.md](../knowledge/incident-runbook.md) §9.
-- zoe-data runs on CPython 3.12.13 with uvicorn 0.53.0; `/readyz` is ready and self-recall ok.
-- The brain sidecar is on Flue 2.1.1 + hono 4.13.9, restarted 02:26.
-- pi is 0.87.1 on the host and in Omnigent.
+State as of **2026-09-29 03:00 AWST** (the evening chain landed; **the panel is on**):
+- live = `main` `5d4a7980` (#1769, last of the 13-PR chain #1756 → #1759 → #1757 → #1760 →
+  #1761 → #1762 → #1763 → #1764 → #1765 → #1766 → #1767 → #1768 → #1769; all merged, every
+  deploy GitHub created is green and tree-bound). One merge (#1762, `d46be79a`) got **no deploy
+  run at all** and reached the box with the #1763 deploy 46 min later — incident-runbook §15;
+  a 2-min local watchdog now covers that gap.
+- **The panel is on** (`zoe-touch-pi`, since the 2026-09-28 evening). The Pi daemon was
+  deployed three times overnight, last at **00:38** from `main` (md5 `86f22ce3` ==
+  `scripts/setup/zoe_voice_daemon.py` on main): it carries #1760 (speaker-ID off the
+  first-audio path), #1765 (barge-in anchored to playback start) and #1766 (dead time).
+  `.env.voice` now sets `POST_PLAY_COOLDOWN_S=0.4` and `RECORD_SECONDS_MAX=12`; the adaptive
+  endpoint tail `ZOE_VAD_CLEAN_TAIL_MS` ships **OFF** pending Jason (item 1). Since that
+  restart: 0 barge-in fires over 1 turn — too few turns to call it.
+- **Samantha bar:** S4 **passed live for the first time at 01:12** (`d7b8ff4c`); S1 still
+  FAILs on every run — it now reaches the brain (`BRAIN_LANE lane_served=flue`) and fails on
+  recall, not routing; **S1 round 3 is in flight** (draft PR, 2026-09-29 morning). The 03:50
+  compare on `5d4a7980` is the authoritative post-chain run: **S1 PASS and S4 PASS — every scored scenario PASS (S2, S3, S6, S7, S8), S5 SKIP (hook-gated), no regression** on `269bb680` (03:49–03:56, after the S1 round-3 deploy). The baseline is being re-recorded on `269bb680` so future compares gate against the new bar.
+  Record: [samantha-bar.md](../knowledge/samantha-bar.md) → *Live compares*.
+- The brain sidecar streams model text ahead of the runtime's 1 s storage flush (#1761,
+  `ZOE_FLUE_EARLY_TEXT`, default on): first sentence median **749 ms** warm on the
+  post-deploy 20-turn probe (was ~1.08 s after the first token). Panel TTFA fixes #1 and #3
+  of [the breakdown](../knowledge/panel-ttfa-breakdown-2026-09-28.md) are live; the
+  breakdown's stage table is the BEFORE and has not been re-measured live.
+- Router: the low-confidence floor `ZOE_ROUTER_HEAD_MIN_CONF=0.70` (#1763) and the head as
+  the authority over every keyword claim (`ZOE_INTENT_ROUTER_GATE`, #1767, #1769) are live.
+- Unchanged: B0.8 store (chromadb 1.5.9 + mempalace 3.10.0), zoe-data on CPython 3.12.13 +
+  uvicorn 0.53.0 (`/readyz` ready, `dependencies.tts` = `kokoro-sidecar` on CUDA), Flue 2.1.1
+  sidecar, pi 0.87.1.
 
 1. 🧑 **Operator window on the box.** The agent cannot do these steps; each one is a production restart,
    a secret, or a root change:
@@ -46,10 +60,27 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
      `music-ytdlp-js-runtime.md`.
    - **Secrets.** Revoke the Telegram token and vacuum the journal (B0.3). Rotate the Postgres
      password (B0.14).
-   - **Needs the panel on.** Make one real `/ws/voice/` turn (the last B0.7 item, and the uvicorn
-     0.53 websockets-sansio proof for #1743). (The Pi provisioning helper is NOT deployed on the
-     live panel — `scripts/setup/touchscreen/README.md` — so #1741's poll secret applies only
-     to panels provisioned in future; re-align those helpers as a set before the next pairing.)
+   - **On the panel (it is on now).**
+     - **Rotate the Pi `DEVICE_TOKEN`.** An agent's grep printed it into a tool transcript
+       (2026-09-28 ~21:30). It never left the box, but treat it as exposed: new token in
+       `/home/pi/.zoe-voice/.env.voice` + the zoe-data side, restart `zoe-voice`.
+     - **Decide `ZOE_VAD_CLEAN_TAIL_MS`** (#1766, shipped OFF): `560` closes a clean stop
+       160 ms earlier on about half the turns, at a measured 2.0 % mid-sentence cut on the
+       corpus (5 of 246). The voice rule says a lost command is a bug, so it is Jason's call.
+       To stage: set it in `.env.voice`, restart, watch `tail=clean` lines and any clipped
+       transcripts.
+     - **YouTube Music QR re-scan** — #1759 now detects a FRESH login (the stale-cookie
+       short-circuit is fixed), so the panel → phone sign-in should complete; then the MA
+       2.10.3 re-create below.
+     - **A real "let's talk" conversation** (#1764): turn text must appear on the kiosk and
+       the card must go home ~10 s after a silent follow-up window. Known and accepted: the
+       kiosk page reload happens on the first DOMAIN command (poll + reload), so the first
+       chat-lane turn after a zoe-data restart may show text only once a domain command has
+       reloaded the page.
+     - One real `/ws/voice/` turn (the last B0.7 item, and the uvicorn 0.53 websockets-sansio
+       proof for #1743). (The Pi provisioning helper is NOT deployed on the live panel —
+       `scripts/setup/touchscreen/README.md` — so #1741's poll secret applies only to panels
+       provisioned in future; re-align those helpers as a set before the next pairing.)
    - **Brain.** Swap in the verified Gemma re-upload (B6.2). Only the template changed, and
      the files are staged and checksummed. Do it in its own window so the brain change stays
      separately attributable, then run one replay gate.
@@ -107,54 +138,41 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
    worktree first, or the probe records an error) and `gh run rerun`. Recipe:
    [merge-and-deploy.md](../knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 4. **Next engineering, in order:**
-   1. **The two FAILs of the first Samantha bar baseline** (B3.11, record:
-      [samantha-bar.md](../knowledge/samantha-bar.md) → *First baseline*):
-      (a) **Router confidence gate.** S1 (same-day recall across sessions) failed because the
-      two-stage router sent the ask to `calendar` (head_conf 0.5371, gated=false, shortlist
-      people/calendar/reminders) and it was answered deterministically in 488 ms; the brain and
-      the recall packet were never consulted. Head decisions below ~0.6 should fall through to
-      the chat lane (brain + recall packet), and the miss goes into the router self-train
-      corpus. A misroute, not a memory failure. **Status: built, awaiting live compare** —
-      measured low-confidence floor `ZOE_ROUTER_HEAD_MIN_CONF` (default **0.70**, `0` = old
-      behaviour): a non-chat head top below it abstains to the chat lane, logged
-      `gated: true, reason: low_conf` (table + why 0.70:
-      [two-stage-router-rollout.md](../knowledge/two-stage-router-rollout.md) → *Low-confidence
-      floor*; 81-case 90.1% → 84.0%, chat-FP 0%). S1/S6/S8 asks committed to the stage-1
-      and stage-2 miss corpora (no retrain). Known gap: S6's ask is a CONFIDENT miss (calendar
-      @ 0.73) the floor does not catch — it waits on a retrain. Accept when a post-deploy
-      `samantha_bar.py --compare-baseline` shows S1 PASS with nothing regressing.
-      **Round 2 (#1763 live, S1 still FAIL):** the router DID send S1 to chat (`low_conf`),
-      but the chat.py KEYWORD lane then answered it: `^who is (.+)$` → `people_search` →
-      `No contacts found for "flying in on thursday, and where from".` (the exact 62-char
-      reply). **Status: built, awaiting live compare** — "who is <X>" claims only a
-      name-shaped X, and every deterministic keyword claim (Tier-0 + both chat keyword
-      lanes) now asks the head first (INTENT_GATE, `ZOE_INTENT_ROUTER_GATE`, default on;
-      contract: `services/zoe-data/AGENTS.md`).
-      (b) **Emotional continuity.** S4: the day-1 worry (the interview) is not acknowledged
-      the next day, 3/3 samples. **Round 1 (#1756) is live but S4 still FAILs 3/3.** It adds
-      Flue-lane continuity injection (`ZOE_SEAM_CONTINUITY_INJECT`, default ON, kill switch
-      `false`). The injection fires, but the digest had dropped the feeling from the stored
-      fact and the block's instruction was too soft.
-      **Round 2 (#1762) is live: 1/3.** The feeling is kept and the block carries one
-      concrete ask, but after sample 0 the digest stores the day-2 mood itself, and that
-      row became the focus.
-      **Round 3: built, awaiting live compare.**
-      - A bare mood report is never the focus.
-      - The contact offer is deferred on continuity turns.
-      - Measured 5/5 on the reproduced post-pollution flow. Prod as merged scored 0/5 there
-        and 1/5 live end to end.
-
-      Record: [samantha-bar.md](../knowledge/samantha-bar.md) → *S4 round 3*. Accept when a
-      post-deploy `samantha_bar.py --compare-baseline` shows S4 PASS with nothing
-      regressing. B3.3 (importance-sum reflection) stays the longer-term carrier.
-   2. **B7.5 (c)** QR onboarding for new members. (a)+(b) are merged and deployed (#1752);
-      the live-panel check (push, `/wake`, a real Telegram send) waits for the Pi.
-   3. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
-      week).
-   4. **B3.2/B3.3** on the new store (B0.8 live 2026-09-28); B3.3 now has S4 as its target.
-   5. Brief-on-arrival (**B2.1**): #1749 merged flag-dark; 🧑 flip it once the panel is on.
-   6. ~~A Kokoro venv without scikit-learn/pandas (B6.6 d)~~ — B5.7, applied live 2026-09-28 #1750.
-   7. The 24 h `--cache-ram` occupancy measurement (B0.4/B6.6).
+   1. **Samantha bar S1 + S4** (B3.11, record: [samantha-bar.md](../knowledge/samantha-bar.md)
+      → *Live compares*):
+      (a) **S1 — routing is FIXED, recall is not.** Three rounds landed: #1763 the
+      low-confidence floor (`ZOE_ROUTER_HEAD_MIN_CONF=0.70`; S1's `calendar` @ 0.5371 now
+      abstains, `reason: low_conf`), #1767 the head is the authority over keyword claims
+      (`INTENT_GATE`; the chat.py `^who is (.+)$` lane had answered S1 with "No contacts
+      found"), #1769 its follow-ups ("-ing" names by casing; every detector intent in exactly
+      one gate map). The ask now reaches the brain (`BRAIN_LANE lane_served=flue`, 01:08) and
+      **still FAILs** — the reply does not name who is flying in or from where. **S1 round 3**
+      (the digest keeps who/where/when for event facts; the recall floor also fires on
+      event-shaped questions) is in flight as a draft PR. **DONE 03:56 — S1 PASS live** (#1770; post-merge follow-ups in #1771, landing next).
+      (b) **S4 — first live PASS 01:12** (`d7b8ff4c`). Rounds: #1756 continuity injection
+      (`ZOE_SEAM_CONTINUITY_INJECT`), #1762 the digest keeps a stated feeling + `affect`
+      captured from the user's words + the block after the user's words with one concrete
+      ask, #1768 a bare mood report is never the focus + contact offers deferred on
+      continuity turns (`SEAM_OFFER … deferred=1 reason=continuity`). **DONE 03:56 — S4 PASS live** (#1768).
+      Re-record the bar once S4 passes on the re-record run itself. B3.3 (importance-sum
+      reflection) stays the longer-term carrier.
+   2. **Streaming STT during recording** (TTFA breakdown fix #2, pinned in `IDEAS.md`):
+      Moonshine already runs `MEDIUM_STREAMING`; needs a chunked upload lane daemon →
+      zoe-data and **≥ 1.5 GB quiet headroom** before it starts.
+   3. **B1.1** flip — the panel is on, so the Pi proof is unblocked: Pi proof → head-bound
+      replay → operator flag-on week. The Pi daemon already carries the B1.1 code (inert
+      while `ZOE_SPECULATIVE_TURN` is off).
+   4. **The offer-injection conflict on continuity turns** — ✅ done in #1768 (offers wait).
+      Residue: the digest's supersede/review edit path does not attach `affect`.
+   5. **Router retrain for the confident misses** (S6's ask goes to `calendar` at 0.73 and
+      S8-class asks sit in the 0.80–0.95 band that is only 60–77 % right — the floor cannot
+      catch either): run the ratchet on the miss corpora #1763 committed
+      ([router-selftrain-loop.md](../knowledge/router-selftrain-loop.md)).
+   6. **B7.5 (c)** QR onboarding for new members; the live-panel check of (a)+(b) (push,
+      `/wake`, a real Telegram send) is now possible.
+   7. **B3.2/B3.3** on the new store; B3.3 has S4 as its target.
+   8. Brief-on-arrival (**B2.1**): #1749 merged flag-dark; 🧑 the panel is on — flip it.
+   9. The 24 h `--cache-ram` occupancy measurement (B0.4/B6.6).
 
 ## 1. Where Zoe already beats the bar (protect these)
 
@@ -591,6 +609,9 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
   drop on cancel, keep if the final transcript is equivalent. Source: HF
   `speech-to-speech --speculative_reopen_ms`, Pipecat `speculation_gate.py`, LiveKit
   `_transcripts_equivalent`. Gate: replay corpus; cancellations < 30%; RAM flat. Owner: agent.
+  **2026-09-29:** the panel is on and the Pi daemon (deployed 00:38 with #1760/#1765/#1766)
+  already carries the B1.1 code, inert while `ZOE_SPECULATIVE_TURN` is off — the Pi proof is
+  the next step (§0 item 4.3).
 - B1.2 ⬜ **False-interruption pause → 2 s timer → resume** if no final transcript arrives
   (LiveKit `agent_activity.py`). Gate: replay with injected 300 ms noise bursts mid-reply.
 - B1.3 ⬜ **Unmute interruption policy**: text-confirmed interrupt immediately; VAD-only
@@ -723,6 +744,29 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
   trace attrs for `gen_ai.tool.call.*` (check trace consumers). Pins are
   `@earendil-works/pi-ai` 0.83.0 (2x sidecar) / `pi-coding-agent` 0.87.1 (`zoe-core`, since #1746), not
   `@mariozechner/*` (dead scope, last publish 0.73.1).
+- B1.12 ✅ **Panel first-audio + turn-guard set, LIVE 2026-09-28 (night).** Measured first
+  ([panel-ttfa-breakdown-2026-09-28.md](../knowledge/panel-ttfa-breakdown-2026-09-28.md):
+  ten real panel turns, median TTFA 2.74 s on the daemon clock, ~4.0 s end of speech → first
+  sound; the biggest single cost was the Flue runtime's 1 s storage flush between the first
+  token and the first speakable sentence, and the daemon's clock missed the ~0.85 s endpoint
+  tail and a 0.54 s synchronous speaker-ID score). Landed the same night: **#1760**
+  speaker-ID shadow score off the critical path (−0.37 s median, −1.1 s max); **#1761** the
+  sidecar emits model text before the flush (`ZOE_FLUE_EARLY_TEXT`; first sentence median
+  749 ms warm on the post-deploy probe, was ~1.08 s); **#1765** barge-in anchored to
+  playback start (corrected root cause: Zoe's own onset through a window that ran through
+  the whole STT/brain wait and was never reset — NOT a queue backlog; 800 ms grace, 3-of-6
+  sustained or 2×≥0.95, once per playback); **#1766** dead time — `POST_PLAY_COOLDOWN_S` 1.5 →
+  0.4 (wake-word only; the 1.5 was a Whisper-era echo guard), recording cap 8 → 12 s (2 of 10
+  turns hit 8 s mid-sentence), and the flag-dark adaptive tail `ZOE_VAD_CLEAN_TAIL_MS` (🧑
+  decision, §0 item 1). Finding: **the endpoint was never 1.5 s** — `silence_timeout=1.50s`
+  in the `Recorded` line is the pre-speech amplitude timeout; after speech the panel closes
+  on 640 ms deep / 800 ms any quiet, measured 720–880 ms through the real endpointer. Also
+  **#1764** panel text lifecycle (let's-talk turns show text; the voice card auto-dismisses
+  after 10 s / 30 s in a conversation) with the finding that the kiosk push socket had no
+  keepalive and died on the server's 120 s idle timeout two minutes after every page load.
+  Open from the breakdown: fix #2 streaming STT (≥ 1.5 GB), #4 = B1.1, #5 first-clause first
+  unit (now unblocked), #6 small items. The stage table is the BEFORE; re-measure live before
+  quoting a new TTFA.
 
 ### B2 — Proactivity with judgement (beats Daily Brief / Alexa+ nudges)
 - B2.1 🔨 **Presence-triggered routines**: emit `person_recognized(panel, person, ts)` from the
@@ -735,6 +779,8 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
     spoken brief per member per day) and fails closed on a claim error. It writes
     one `proactive_responses` row per day, with accepted/ignored/undelivered as the B2.2 signal.
     See the [recipients record](../knowledge/synthetic-users-and-proactive-recipients.md).
+  - **2026-09-29:** the panel is on; the flip (`ZOE_PROACTIVE_BRIEF_ON_ARRIVAL=1` in the
+    zoe-data env + restart) is now a 🧑 step, not a wait.
   - Next: 🧑 flip the flag once the panel is back on. Then feed face/voice matches in as
     `owner` presence. That is a voice-path change and needs the replay gate.
 - B2.2 ⬜ **Candidate-selection → delivery-gating split** for proactive turns with a
@@ -796,6 +842,11 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
   `auth_users`); the teardown sweep excludes auth-owned tables and runs in one transaction
   with a re-check; failed captures, backdates and filler turns can no longer PASS; the
   internal `GET /api/memories/capture-status` completion signal.
+  **Live compares, 2026-09-28 night** (record → *Live compares*): S4 rounds 1–3 landed
+  (#1756, #1762, #1768) and **S4 passed live for the first time at 01:12** (`d7b8ff4c`); S1's
+  routing was fixed in three PRs (#1763 floor, #1767 keyword authority, #1769) and the ask
+  now reaches the brain, but **S1 still FAILs** on recall — round 3 in flight. One one-off S8
+  FAIL at 22:38 (PASS on every other run). **Authoritative post-chain compare 03:56 on `269bb680`: S1 PASS, S4 PASS, all scored scenarios PASS, S5 SKIP; baseline re-recorded on that commit.**
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -1017,7 +1068,7 @@ State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
 - B7.2 ⬜ Ask-card conversation mode (PR-1a) → retire `voice.html`.
 - B7.3 ⬜ Voice-authored automations via HA (Gemini for Home) — later.
 - B7.4 ⬜ "Ask about what you see" via the panel camera, one-shot.
-- B7.5 🔨 (a) ✅ (b) ✅ merged #1752 · (c) ⬜ — **App-connection handoff engine (QR + send-to-phone)** — VISION principle 8 (#1729; Jason,
+- B7.5 🔨 (a) ✅ (b) ✅ merged #1752 · (c) ⬜ · panel on since 2026-09-28, live check pending · #1759 fixed the stale-cookie short-circuit in the YouTube flow — **App-connection handoff engine (QR + send-to-phone)** — VISION principle 8 (#1729; Jason,
   2026-09-27): app/account sign-ins show a QR on the panel and finish on the phone, and the
   panel card reflects completion live. Today the music QR (the reference flow) never learns it
   finished, and the token/QR mechanics are copied three times (`music_setup`, `smart_home_setup`,
@@ -1181,6 +1232,71 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-28 (night) → 09-29 — **the panel came back on and the evening chain landed: 13 PRs,
+  live = `5d4a7980`; the Pi daemon runs the merged #1760 + #1765 + #1766 code (deployed 00:38,
+  md5 `86f22ce3`) with `POST_PLAY_COOLDOWN_S=0.4` and `RECORD_SECONDS_MAX=12` applied; the
+  adaptive tail stays OFF.** In merge order:
+  **#1756** (`759074e9`, 19:34) S4 round 1 — Flue-lane continuity injection
+  (`ZOE_SEAM_CONTINUITY_INJECT`); fired on every S4 ask, S4 stayed FAIL 3/3;
+  **#1759** (`c096f211`, 20:06) YouTube sign-in must detect a FRESH login — a stale profile
+  cookie short-circuited the QR flow three times in two minutes (incident-runbook §10);
+  **#1757** (`fe83ea3e`, 20:42) Skybridge fast path may not claim declaratives and defers to
+  the router (`ZOE_SKYBRIDGE_ROUTER_VETO`, incident-runbook §11); its landing is incident §14
+  — auto-merge fired 48 s before the head's probe finished;
+  **#1760** (`697d4074`, 21:11) speaker-ID shadow score off the first-audio path (−0.37 s
+  median, −1.1 s max; TTFA breakdown fix #1);
+  **#1761** (`53a6c209`, 21:20) the sidecar emits model text before the Flue runtime's 1 s
+  storage flush (`ZOE_FLUE_EARLY_TEXT`; TTFA fix #3): post-deploy probe first sentence median
+  749 ms warm (min 481 ms), first sentence − first delta 464 ms, against ~1.08 s before;
+  **#1762** (`d46be79a`, 22:30) S4 round 2 — the digest keeps a stated feeling, `affect` is
+  captured from the user's words (`(recent, felt anxious)`), the block moves after the user's
+  words with one concrete ask. **GitHub created no deploy run for this merge** (incident §15 a);
+  the code reached the box with the #1763 deploy at 23:16;
+  **#1763** (`a1570765`, 23:16) router low-confidence floor `ZOE_ROUTER_HEAD_MIN_CONF=0.70`
+  (`reason: low_conf`; 81-case 90.1 % → 84.0 %, chat-FP 0 %). Live compare 23:22: S1 still FAIL
+  (routed to chat, then answered by the keyword lane), S4 1/3;
+  **#1764** (`94b85e07`, 23:28) panel shows turn text in let's-talk mode and auto-dismisses the
+  voice card (10 s / 30 s). Finding: the kiosk push socket (`/ws/push`) sent one `ping` on
+  open with no keepalive or reconnect, so the server's 120 s idle timeout
+  (`ZOE_WS_IDLE_TIMEOUT_SECONDS`) closed it two minutes after every page load and chat-lane
+  text silently stopped; only domain commands (poll + page reload) still showed text. Now
+  ping every 30 s + exponential reconnect;
+  **#1765** (`d3304786`, 00:21) barge-in monitor ignores stale mic backlog and Zoe's own
+  onset (incident §12). **Corrected root cause:** the three 20:44 self-interruptions fired
+  0.43/0.50/0.81 s AFTER the first write to the player at prob 0.90–0.99 in a quiet room —
+  Zoe's own voice through a window that ran through the whole STT/brain wait and was never
+  reset at playback start. NOT a queue backlog (the turn monitor never reads `_BARGE_QUEUE`);
+  **#1766** (`8e4748ce`, 00:36) per-turn dead time: adaptive tail `ZOE_VAD_CLEAN_TAIL_MS`
+  (OFF — 160 ms on half the turns vs 2.0 % mid-sentence cuts; 🧑), cooldown 1.5 → 0.4 s
+  (wake-word only), cap 8 → 12 s. **Finding: the endpoint was never 1.5 s** —
+  `silence_timeout=1.50s` is the pre-speech amplitude timeout; after speech the panel closes
+  on 640/800 ms, measured 720–880 ms on the day's clips through the real endpointer;
+  **#1767** (`d7b8ff4c`, 01:06) the router head is the authority over keyword claims
+  (`INTENT_GATE`, `ZOE_INTENT_ROUTER_GATE`): after the floor, S1 was still answered by the
+  chat.py `^who is (.+)$` lane ("No contacts found …", the exact 62-char reply); "who is <X>"
+  now claims only a name-shaped X and every deterministic keyword claim asks the head first
+  (offline: 47 of 242 claims vetoed, 45 of them misclaims, 0 wrong claims allowed). **Live
+  compare 01:12: S4 PASS — the first live pass**; S1 FAIL (now a recall failure);
+  **#1768** (`6fc3935d`, 01:57) S4 round 3 — a bare mood report is never the continuity
+  focus (the digest stored the day-2 mood seconds after sample 0 and it became the focus:
+  live 1/5 ×3) and contact offers wait on continuity turns (5/5 on the reproduced
+  post-pollution flow, contact question 0/5);
+  **#1769** (`5d4a7980`, 02:24) #1767 follow-ups: "-ing" names are names by casing, every
+  detector intent has exactly one gate decision (audited by a test), and the flaky
+  `test_memory_continuity_mode` cutoff assertion fixed (module-import `NOW`).
+  **Authoritative post-chain compare (03:50, `5d4a7980`): **S1 PASS and S4 PASS — every scored scenario PASS (S2, S3, S6, S7, S8), S5 SKIP (hook-gated), no regression** on `269bb680` (03:49–03:56, after the S1 round-3 deploy). The baseline is being re-recorded on `269bb680` so future compares gate against the new bar.**
+  **Incidents** (runbook): **§13** the landing script was edited while running and left
+  Kokoro stopped 19:37–19:42 (fix: the restore `trap` before the stop); **§14** auto-merge
+  armed before the probe on #1757 (fix: disarm on every push, arm last); **§15** the
+  overnight landing hazards — no deploy run for a merge (2-min watchdog + the gate's local
+  recipe), the single replay-artifact slot overwritten at 22:34 (serial landings), a
+  `reset --hard` in a PR worktree wiped an agent's uncommitted edits (private `land-<pr>`
+  checkouts), and a deploy run created ~4 min after the merge killed a probe at 02:01 (wait
+  for a completed deploy of main HEAD). **#1758**'s TTFA breakdown is folded in by this PR
+  (ranked fixes now carry a landed-status column; the stage table is the BEFORE). Pins in
+  `IDEAS.md`: scheduled cookie refresh, device-code OAuth, offer-injection residue (affect on
+  the supersede path), streaming STT; the router-gate pin is marked DONE with its residue (the
+  confident misses need the retrain).
 - 2026-09-28 (afternoon) — **the chain landed: five PRs, all merged, all five deploys green,
   live = `5c18200a`.** In merge order: **#1749** B2.1 brief-on-arrival (flag-dark
   `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL`, panel-scoped, shares the daily claim with the 07:30 brief,

@@ -577,7 +577,7 @@ storage write. The batch flushes at once only when the previous flush started 1 
 Otherwise it waits for `setTimeout(CANONICAL_FLUSH_DELAY_MS = 1e3)`, a module-private constant with
 no config or env knob. So the first delta went out immediately, then nothing for ~0.84–1.09 s,
 then 17–26 deltas within 2 ms, while llama-server decoded steadily at 20–27 tok/s. The median time
-from first token to first speakable unit was 1.08 s (the panel TTFA breakdown in draft PR #1758).
+from first token to first speakable unit was 1.08 s ([panel TTFA breakdown](panel-ttfa-breakdown-2026-09-28.md); its ranked fixes carry a landed-status column).
 The bursty-then-stalled rhythm that zoe-data's `_pace_delivery` (`routers/voice_tts.py`) and
 `voice_cadence_guard.py` smooth over came from the same flush.
 

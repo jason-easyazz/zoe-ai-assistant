@@ -3,7 +3,7 @@ type: Reference
 title: Samantha bar harness (samantha_bar.py v0)
 description: The Samantha-quality regression gate. Eight scripted multi-day memory and companion scenarios run against throwaway demo users through the live API. Covers how to run it, what each scenario proves, the scoring and judge, the baseline and teardown contracts, and known limits.
 tags: [memory, samantha, eval, regression-gate, harness, zoe-data]
-timestamp: 2026-09-28T08:45:00Z
+timestamp: 2026-09-29T08:45:00Z
 ---
 
 # Samantha bar harness (`scripts/perf/samantha_bar.py`, v0)
@@ -276,10 +276,53 @@ the cached prefix. It was also not needed.
 Acceptance is unchanged: after deploy, `--compare-baseline` must show S4 PASS with nothing
 regressing. Samples 1-2 are the ones to watch, because they run after the day-2 mood row lands.
 
-Next targets, in order (tracker §0): (a) a **router confidence gate** — head decisions below
-~0.6 fall through to the chat lane (brain + recall packet) instead of a deterministic tool,
-and the miss feeds the router self-train corpus; (b) **emotional continuity** for S4, with
-B3.3 reflection as the carrier.
+## Live compares, 2026-09-28 night (the acceptance evidence)
+
+Every row is a `--compare-baseline` run against the 16:33 baseline (`8ac726b7`), samples=3,
+teardown proven, from `~/.cache/zoe/samantha_bar_trend.jsonl`. `commit` is the LIVE checkout
+the harness verified (`clean_verified: true`), which is what makes a row evidence for a PR:
+the 22:38 row ran while the box was still on `53a6c209` (#1762 had merged but GitHub created
+no deploy run for it — [incident-runbook.md](incident-runbook.md) §15 a), so it is evidence
+about #1761, not #1762.
+
+| when (AWST) | live commit | what was live | S1 | S4 | rest | status |
+|---|---|---|---|---|---|---|
+| 19:41 | `759074e9` (#1756) | S4 round 1 | FAIL | FAIL 3/3 | S2/S3/S6/S7/S8 PASS, S5 SKIP | ok |
+| 22:38 | `53a6c209` (#1761) | still round 1 (see above) | FAIL | FAIL | **S8 FAIL** (one-off; PASS on every other run) | regression |
+| 23:22 | `a1570765` (#1763) | S4 round 2 + router floor | FAIL | FAIL (1/3: sample 0 PASS) | all PASS | ok |
+| 01:12 | `d7b8ff4c` (#1767) | + round 3 (#1768 not yet) … | FAIL | **PASS** (first live pass) | all PASS | ok |
+| 03:49–03:56 | `269bb680` (#1770, full chain incl. S1 r3 + S4 r3) | authoritative post-chain | **PASS** | **PASS** | PASS / PASS / SKIP / PASS / PASS / PASS | status=ok, no regression |
+
+Reading it:
+- **S4 passed live for the first time at 01:12** on `d7b8ff4c`. That commit carries #1762
+  (round 2) and #1767; #1768 (round 3: bare mood is never the focus, offers deferred) merged
+  at 01:57 and #1769 at 02:24. The 01:12 pass predates round 3, so it is the round-2 code
+  passing 3/3 on that run where the 23:22 run had 1/3 — the samples-1-2 focus flip that #1768
+  fixes is intermittent on the live path, which is exactly why round 3 was built.
+  Authoritative run 03:56 on `269bb680`: **S4 PASS** (round 3 live: a bare mood report is never the focus; offers deferred on continuity turns).
+- **S1 still FAILs on every run.** The routing fixes worked as designed: after #1763 the
+  router sent the ask to chat (`gated: true, reason: low_conf`), after #1767 the keyword
+  lane no longer answered it, so the ask now reaches the brain: at the 01:12 run the app log
+  shows the S1 ask session served by the Flue lane (`BRAIN_LANE lane_attempted=flue
+  lane_served=flue outcome=ok`, 01:08:43) — and the reply still does not name who is flying
+  in or from where. So S1 has moved from a ROUTING failure to a RECALL failure: the digest
+  and the recall floor are the next suspects. **S1 round 3** (the digest keeps who/where/when
+  for event facts, and the recall floor also fires on event-shaped questions) is in flight as
+  a draft PR (2026-09-29 morning). It merged as #1770 (03:32) and the authoritative run 03:56 on `269bb680` shows **S1 PASS** — the event-question recall floor fires on ASK_SISTER and the packet carries the flight fact.
+- The 22:38 S8 FAIL is the only regression row of the night; S8 passed at 23:22, 01:12 and
+  after. Treat a single S8 FAIL as noise until it repeats; the bar's "only a previous PASS can
+  regress" rule means it would have gone red on a re-recorded bar, so re-record only from a
+  run where every scenario that has ever passed passes.
+- The harness refused two compares (01:45 and 02:35) with `status: refused, reason: inside
+  (or within 30 min of) the 01:45-03:15 nightly window` — its own guard against colliding
+  with the dreaming/digest jobs. The authoritative post-chain compare is the 03:50 run.
+
+Re-record the bar (`--record-baseline`) only once S4 passes on the re-record run itself: the
+first PASS is what lets S4 start regress-gating. S1 stays outside the gate until it passes.
+
+Next targets (tracker §0): S1 round 3 (in flight); the router retrain for the confident
+misses (S6's ask at 0.73 goes to `calendar` and the floor cannot catch it); then B3.3
+reflection as the longer-term carrier for S4.
 
 ## Teardown (the demo-users-only guardrail)
 
