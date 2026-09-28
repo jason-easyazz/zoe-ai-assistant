@@ -1,8 +1,8 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit). Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate]
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, skybridge, router]
 timestamp: 2026-09-28T00:00:00Z
 ---
 
@@ -417,3 +417,35 @@ min Jaccard 1.0. **Lesson:** `--baseline` takes `$R/recall-parity`, not `$R`; bl
 [chroma-1-5-migration.md](chroma-1-5-migration.md) §5 already passes the right path. A
 `--demo-user` default read from the manifest's `run.recall_demo_user` would be a nice-to-have,
 not a fix.
+
+## 10. Fast path over-claim — a statement answered as a contacts query (2026-09-28)
+
+**Signature.** On the panel Zoe answers a personal statement with a canned card reply
+("I found 0 contacts.", an empty calendar, a weather card). The app log shows
+`SKYBRIDGE TIMING … reply='I found 0 contacts.'` for the turn, while the router line just before it
+says `chat` — here `router_two_stage {"actual_routed": "chat", "head_conf": 0.9185,
+"gated": false, "shortlist": ["people","memory","journal"]}` at 18:26:27.
+
+**Diagnosis.** The Skybridge fast path runs before the brain and did not look at the router. Its
+people branch claimed any utterance containing `" family"`/`" friends"`/`" person"`/`" contact"`
+(`" person"` even matched "personal"), so "I go down and I spend the weekends with him and just get
+updates from the family." became a directory query. Same class as #1150 (the fast path claiming
+"add a journal entry"). Running the 517 distinct panel transcripts in the app logs through the old
+classifier found 9 more people claims, none of them a directory ask — among them "Hey Zoe. Can you
+remove all memories of a person named Sarah?", "But it's the person who's authenticated on the
+panel." and "Hey zoe Show me my dashboard". Test phrasings fared the same: "can you find me a good
+pizza recipe" and "show me the news" were contact searches.
+
+**Fix.** (1) The people matchers need a command/question shape — imperative/interrogative at the
+start, noun as the verb's object. (2) The router veto: when the active two-stage router says
+`chat` (or an incompatible domain), Skybridge declines before any auth challenge or side effect
+and the turn goes on to the brain. Flag `ZOE_SKYBRIDGE_ROUTER_VETO` (default on).
+
+**Check it.** `grep SKYBRIDGE_GATE ~/.zoe-logs/zoe-data.app.log | tail` — every gated voice turn
+Skybridge classified logs `decision=allow|veto reason=…`. A run of `reason=router_unavailable` means
+the router is off or not in `active` head mode, so the veto is not protecting anything.
+
+**Prevention.** A new fast-path phrasing goes into a shape regex, never another
+`any(term in text …)`. The replay gate cannot see this class (it never calls Skybridge — see
+[voice-pipeline.md](voice-pipeline.md) → *The Skybridge fast path defers to the router*), so the
+guard is `services/zoe-data/tests/test_skybridge_router_veto.py` with its negative controls.
