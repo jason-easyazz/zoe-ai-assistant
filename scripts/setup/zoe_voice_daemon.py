@@ -9,7 +9,8 @@ Capabilities:
   - Command recording + STT (Whisper on Jetson)
   - Barge-in: Silero VAD runs during TTS playback; detected speech interrupts playback
   - Ambient memory: always-on VAD captures room speech for Jetson transcription
-  - Speaker ID: resemblyzer embeddings identify the speaker before posting command
+  - Speaker ID: resemblyzer embeddings identify the speaker (W5 shadow mode, the
+    default, scores on a background thread so the upload never waits for it)
 """
 from __future__ import annotations
 
@@ -1458,6 +1459,120 @@ def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
     return claim
 
 
+# Background shadow scoring (panel TTFA fix #1, 2026-09-28). In shadow mode the
+# claim is scored and logged but NEVER attached, so nothing the server receives
+# depends on it — yet it used to run before the upload POST, costing a median
+# 0.54 s (max 1.12 s) of dead time before every reply
+# (docs/knowledge/panel-ttfa-breakdown-2026-09-28.md). Each turn's scoring now
+# runs on its own daemon thread, started just before the POST.
+#
+# Serialised + FIFO: each scorer joins its predecessor before touching the
+# encoder, so there is only ever ONE resemblyzer inference in flight (one model
+# copy, flat memory, no concurrent use of a model that was never meant to be
+# shared across threads) and the metrics rows still land in turn order.
+_shadow_score_state_lock = threading.Lock()
+_shadow_score_last: threading.Thread | None = None
+
+
+# Orderly shutdown waits this long for the last pending scorer (and, through
+# its predecessor join, every earlier one) so a restart right after a turn does
+# not drop that turn's row + journal line. Bounded: a stop must never hang.
+_SHADOW_DRAIN_TIMEOUT_S = 3.0
+# A failed thread start falls back to scoring inline; it waits at most this long
+# for the in-flight scorer first. If that scorer is STILL running, the turn is
+# skipped (WARNING) instead of overlapping it: one inference at a time and
+# in-order rows outrank one turn's row, and a stuck predecessor never holds
+# the turn forever.
+_SHADOW_INLINE_WAIT_S = 10.0
+
+
+def _start_shadow_scoring(wav_bytes: bytes) -> threading.Thread | None:
+    """Score + log one turn's shadow claim off the caller's thread.
+
+    Same one-turn-one-row contract as the synchronous path: this calls
+    `_speaker_claim_for_turn` exactly once, which writes the metrics row and
+    the `Speaker ID (shadow): …` journal line. Returns the started thread
+    (tests join it), or None when the thread could not start and the turn was
+    scored inline instead.
+    """
+    global _shadow_score_last
+
+    with _shadow_score_state_lock:
+        prev = _shadow_score_last
+
+        def _run() -> None:
+            if prev is not None:
+                prev.join()
+            try:
+                _speaker_claim_for_turn(wav_bytes)
+            except Exception as exc:  # never escapes a daemon thread silently
+                log.warning("Speaker ID (shadow): background scoring failed: %s", exc)
+
+        t = threading.Thread(target=_run, daemon=True, name="speaker-shadow")
+        try:
+            t.start()
+        except Exception as exc:  # e.g. RuntimeError: can't start new thread
+            start_error: Exception | None = exc
+        else:
+            # Published only AFTER a successful start: later scorers join this
+            # thread, and joining one that never started raises — which would
+            # silently cost every later turn its row.
+            _shadow_score_last = t
+            return t
+
+    # The background thread could not start. Score this turn inline (the old,
+    # pre-upload behaviour) so it still gets its one row; later turns are
+    # unaffected because nothing unstarted was published.
+    log.warning("Speaker ID (shadow): background scorer failed to start (%s) — scoring this turn inline",
+                start_error)
+    if prev is not None:
+        prev.join(timeout=_SHADOW_INLINE_WAIT_S)
+        if prev.is_alive():
+            # Scoring anyway would put two inferences on the one encoder and
+            # land this row ahead of its predecessor's. Skip this turn's row,
+            # loudly, rather than overlap; later turns chain onto `prev` as normal.
+            log.warning("speaker shadow: skipped (predecessor still running) — no row for this turn")
+            return None
+    try:
+        _speaker_claim_for_turn(wav_bytes)
+    except Exception as exc:
+        log.warning("Speaker ID (shadow): inline scoring failed: %s", exc)
+    return None
+
+
+def _drain_shadow_scoring(timeout: float = _SHADOW_DRAIN_TIMEOUT_S) -> bool:
+    """Wait (bounded) for pending shadow scorers; True when none is left running.
+
+    Joining the LAST scorer drains all of them, since each joins its
+    predecessor before scoring.
+    """
+    with _shadow_score_state_lock:
+        last = _shadow_score_last
+    if last is None:
+        return True
+    last.join(timeout=timeout)
+    if last.is_alive():
+        log.warning("Speaker ID (shadow): scorer still running after %.1fs at shutdown — "
+                    "that turn's metrics row may be lost", timeout)
+        return False
+    return True
+
+
+def _speaker_claim_to_attach(wav_bytes: bytes) -> tuple[str, float] | None:
+    """The claim to put in the turn payload, without delaying the upload.
+
+    Shadow mode (the default) always attaches nothing, so the score is handed
+    to a background thread and None comes back at once — the POST no longer
+    waits on resemblyzer. Only when shadow mode is OFF does the claim ride in
+    the payload; then it must exist before the POST, so it is scored inline
+    (there is no follow-up path to deliver a late claim).
+    """
+    if SPEAKER_ID_ENABLED and SPEAKER_ID_SHADOW:
+        _start_shadow_scoring(wav_bytes)
+        return None
+    return _speaker_claim_for_turn(wav_bytes)
+
+
 _BUFFER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "buffers")
 _BUFFER_ENABLED = os.environ.get("ZOE_BUFFER_PHRASES", "1").strip().lower() not in {"0", "false", "no", "off"}
 # Only speak a buffer phrase if the answer hasn't come back within this many
@@ -1682,10 +1797,12 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     audio_b64_wav = base64.b64encode(wav).decode()
     # Sentinel, not None: if scoring RAISES, the fallback must re-score rather
     # than inherit a None that looks like a completed no-match. Only a scoring
-    # call that actually returned replaces it.
+    # call that actually returned replaces it. In shadow mode the call returns
+    # None at once and the background scorer it started owns this turn's one
+    # row, so that None is final too — the fallback must not score again.
     if voice_claim is _CLAIM_UNSET:
         try:
-            voice_claim = _speaker_claim_for_turn(wav)
+            voice_claim = _speaker_claim_to_attach(wav)
             if voice_claim:
                 log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
         except Exception:
@@ -1922,7 +2039,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     if voice_claim is _CLAIM_UNSET:
         voice_claim = None
         try:
-            voice_claim = _speaker_claim_for_turn(wav)
+            voice_claim = _speaker_claim_to_attach(wav)
             if voice_claim:
                 log.info("Speaker claim: %s (%.3f)", voice_claim[0], voice_claim[1])
         except Exception:
@@ -2687,6 +2804,9 @@ def main():
             pa.terminate()
         except Exception:
             pass
+        # Background shadow scorers are daemon threads: without this bounded
+        # drain, a restart right after a turn would drop its row + journal line.
+        _drain_shadow_scoring()
         log.info("Voice daemon stopped.")
 
 

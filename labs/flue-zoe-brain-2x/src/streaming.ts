@@ -65,10 +65,23 @@
  * Identity binding and the ZOE_BRAIN_ALLOW_WRITES gate live in the tools and are
  * untouched.
  *
- * Event source: `observe()` (in-process, synchronous, full fidelity). The
- * durable stream (`GET /agents/:name/:id?live=...`) is NOT used because the
- * runtime buffers `text_delta`/`thinking_*` persistence for ~3s
- * (BUFFERED_RUN_EVENT_TYPES in @flue/runtime) — unusable for voice TTFT.
+ * Event source: `observe()` (in-process, full fidelity). The durable stream
+ * (`GET /agents/:name/:id?live=...`) is NOT used because it is read back from
+ * storage — unusable for voice TTFT.
+ *
+ * `observe()` IS NOT PROMPT FOR TEXT EITHER (corrected 2026-09-28). Its
+ * `text_delta` is published only after the runtime's batched storage write,
+ * which flushes at most once a second (`CANONICAL_FLUSH_DELAY_MS = 1e3`), so
+ * after the first token the reply arrived in ~1 s bursts. Model text therefore
+ * has a SECOND source: `src/early-text.ts` taps the provider stream through the
+ * runtime's supported execution interceptor and publishes each delta the moment
+ * the model yields it. This middleware forwards that early copy for the latched
+ * operation and drops the flushed `observe()` copy by per-turn character offset
+ * (`EarlyTextReconciler`), so each character goes out exactly once. Everything
+ * else — tool sentinels, thinking, the terminal and its `prompt_cache` — still
+ * comes from `observe()` unchanged. Kill switch: `ZOE_FLUE_EARLY_TEXT=0`
+ * restores the observe-only stream. One `FLUE_EARLY_TEXT` log line per turn
+ * records first-delta / first-sentence latency and the dedupe count.
  *
  * Correlation: the subscriber filters on the instance id, latches the first
  * `operation_start` with `operationKind === 'prompt'` after our admission
@@ -81,6 +94,12 @@
  */
 import { observe } from '@flue/runtime';
 import type { MiddlewareHandler } from 'hono';
+import {
+  EarlyTextReconciler,
+  earlyTextEnabled,
+  subscribeEarlyText,
+  type EarlyTextSubscribe,
+} from './early-text.ts';
 
 export const NDJSON_CONTENT_TYPE = 'application/x-ndjson';
 export const TOOL_SENTINEL_PREFIX = '__TOOL__:';
@@ -386,6 +405,10 @@ export interface StreamingMiddlewareOptions {
   observeFn?: ObserveFn;
   /** overall turn deadline; defaults to ZOE_BRAIN_STREAM_TIMEOUT_S (180s). */
   timeoutMs?: number;
+  /** injection seam for offline tests; defaults to the src/early-text.ts bus. */
+  earlyTextSubscribe?: EarlyTextSubscribe;
+  /** per-turn log sink; defaults to console.log. */
+  log?: (line: string) => void;
 }
 
 /**
@@ -406,7 +429,10 @@ export function seamAStreamingMiddleware(opts?: StreamingMiddlewareOptions): Mid
     const instanceId = decodeURIComponent(match[2]);
 
     // Subscribe BEFORE admission so no event of our turn can be missed.
-    const session = openTurnStream(instanceId, observeFn, opts?.timeoutMs ?? timeoutMsFromEnv());
+    const session = openTurnStream(instanceId, observeFn, opts?.timeoutMs ?? timeoutMsFromEnv(), {
+      earlyTextSubscribe: earlyTextEnabled() ? (opts?.earlyTextSubscribe ?? subscribeEarlyText) : null,
+      log: opts?.log ?? ((line) => console.log(line)),
+    });
     try {
       await next(); // flue(): fail-closed route auth + payload validation + admission
     } catch (err) {
@@ -433,12 +459,26 @@ interface TurnStream {
   abandon: () => void;
 }
 
+/** Sentence end in the text streamed so far — for the per-turn latency log only. */
+const SENTENCE_END_RE = /[.!?\u2026]["')\]]*(?:\s|$)/;
+
+interface TurnStreamOptions {
+  /** early-text bus; `null` = ZOE_FLUE_EARLY_TEXT off (observe-only stream). */
+  earlyTextSubscribe: EarlyTextSubscribe | null;
+  log: (line: string) => void;
+}
+
 /**
  * Subscribe to runtime events for one agent instance and expose the mapped
  * Seam-A chunk stream as NDJSON bytes. Terminates on the latched prompt
  * operation's end event, on timeout, or on consumer cancel.
  */
-function openTurnStream(instanceId: string, observeFn: ObserveFn, timeoutMs: number): TurnStream {
+function openTurnStream(
+  instanceId: string,
+  observeFn: ObserveFn,
+  timeoutMs: number,
+  opts: TurnStreamOptions,
+): TurnStream {
   const encoder = new TextEncoder();
   const state = newSeamAState();
   const pending: string[] = [];
@@ -452,25 +492,58 @@ function openTurnStream(instanceId: string, observeFn: ObserveFn, timeoutMs: num
     wake = null;
   };
 
+  // Text-latency accounting for the per-turn FLUE_EARLY_TEXT line. The clock
+  // starts when the request reaches the middleware (before admission).
+  const startedAt = performance.now();
+  const earlyText = opts.earlyTextSubscribe ? new EarlyTextReconciler() : null;
+  let textFrames = 0;
+  let firstDeltaMs = -1;
+  let firstSentenceMs = -1;
+  let textSoFar = '';
+  const pushText = (text: string) => {
+    state.streamedText = true;
+    textFrames += 1;
+    const at = Math.round(performance.now() - startedAt);
+    if (firstDeltaMs < 0) firstDeltaMs = at;
+    if (firstSentenceMs < 0) {
+      textSoFar += text;
+      if (SENTENCE_END_RE.test(textSoFar)) firstSentenceMs = at;
+    }
+    push(ndjsonLine(text));
+  };
+
   let unobserve: () => void = () => {};
+  let unsubscribeEarly: () => void = () => {};
   let timer: ReturnType<typeof setTimeout> | null = null;
   const cleanup = () => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
     unobserve();
     unobserve = () => {};
+    unsubscribeEarly();
+    unsubscribeEarly = () => {};
   };
   const finish = (terminal: Record<string, unknown>) => {
     if (finished) return;
     finished = true;
     cleanup();
     push(ndjsonLine(terminal));
+    try {
+      opts.log(
+        `FLUE_EARLY_TEXT first_delta_ms=${firstDeltaMs} first_sentence_ms=${firstSentenceMs}`
+        + ` deltas=${textFrames} deduped=${earlyText?.deduped ?? 0}`
+        + ` enabled=${earlyText ? 1 : 0}`
+        + (earlyText?.diverged ? ` diverged=${earlyText.diverged}` : ''),
+      );
+    } catch {
+      /* logging must never break the stream */
+    }
   };
   const finishOk = () => {
     // Mirror prod's agent_end fallback: if no text delta ever streamed, the
     // complete last assistant message is the answer — emit it as one chunk.
     if (!finished && !state.streamedText && state.lastAssistantText) {
-      push(ndjsonLine(state.lastAssistantText));
+      pushText(state.lastAssistantText);
     }
     finish(
       state.promptCache.length > 0
@@ -480,6 +553,22 @@ function openTurnStream(instanceId: string, observeFn: ObserveFn, timeoutMs: num
   };
 
   timer = setTimeout(() => finish({ error: 'brain turn timed out' }), timeoutMs);
+
+  // Early text (src/early-text.ts): the model's own deltas, ahead of the
+  // runtime's 1 s storage flush. Forwarded only for the latched operation and
+  // only for model calls whose `turn_request` (purpose `agent`) we saw — so a
+  // call we joined mid-way, or a non-conversation call, stays observe-only.
+  if (earlyText && opts.earlyTextSubscribe) {
+    unsubscribeEarly = opts.earlyTextSubscribe((delta) => {
+      try {
+        if (finished || latchedOperationId === null) return;
+        if (delta.operationId !== latchedOperationId) return;
+        if (earlyText.recordEarly(delta.turnId, delta.text)) pushText(delta.text);
+      } catch {
+        /* never let the tap kill the stream; observe() still carries the text */
+      }
+    });
+  }
 
   unobserve = observeFn((observation, ctx) => {
     try {
@@ -515,7 +604,23 @@ function openTurnStream(instanceId: string, observeFn: ObserveFn, timeoutMs: num
         }
         return;
       }
-      for (const chunk of seamAFrames(event, state)) push(ndjsonLine(chunk));
+      if (earlyText) {
+        if (event.type === 'turn_request' && event.purpose === 'agent'
+          && event.operationId === latchedOperationId && typeof event.turnId === 'string') {
+          earlyText.allowTurn(event.turnId);
+        }
+        if (event.type === 'text_delta') {
+          // The flushed copy: forward only what the early tap has not already sent.
+          const text = typeof event.text === 'string' ? event.text : '';
+          const rest = earlyText.reconcileFlushed(event.turnId, text);
+          if (rest) pushText(rest);
+          return;
+        }
+      }
+      for (const chunk of seamAFrames(event, state)) {
+        if (event.type === 'text_delta') pushText(chunk);
+        else push(ndjsonLine(chunk));
+      }
     } catch {
       // A malformed event must never kill the stream; the timeout still bounds
       // the turn if the terminal event itself was the malformed one.

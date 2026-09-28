@@ -114,3 +114,98 @@ def message_needs_emotional_recall(message: str) -> bool:
     (the flag decision stays at the endpoint), so both callers stay cheap."""
     low = (message or "").lower()
     return any(cue in low for cue in EMOTIONAL_TRIGGER_WORDS)
+
+
+# ── Affect at capture time (Samantha bar S4) ─────────────────────────────────
+#
+# The per-turn digest rewrites "Honestly I'm pretty anxious about my job
+# interview at the aquarium on Friday" as the neutral fact "The user has a job
+# interview at the aquarium on Friday" — the feeling is exactly what emotional
+# continuity needs, and it is gone before anything is stored. The RAW turn still
+# has it at capture time, so `extract_affect` reads it deterministically from the
+# user's own words and the digest stores it beside the fact (`affect` metadata).
+#
+# First-person only: "my sister is anxious" is not the user's feeling. Each
+# label maps the surface forms that express it; the label is what is rendered
+# ("felt anxious").
+_AFFECT_LABELS: tuple[tuple[str, str], ...] = (
+    ("anxious", r"anxious|anxiety|nervous|on\s+edge|uneasy"),
+    ("worried", r"worried|worrying|dreading"),
+    ("stressed", r"stressed(?:\s+out)?|stressing|under\s+(?:a\s+lot\s+of\s+)?pressure"),
+    ("scared", r"scared|afraid|terrified|frightened"),
+    ("overwhelmed", r"overwhelmed|swamped"),
+    ("sad", r"sad|down(?!\s+(?:for|to|with|here|there|at|in|on|by)\b)|low(?!\s+on\b)|"
+            r"miserable|heartbroken|gutted"),
+    ("upset", r"upset"),
+    ("lonely", r"lonely"),
+    ("frustrated", r"frustrated|annoyed|fed\s+up"),
+    ("exhausted", r"exhausted|drained|burnt\s+out|burned\s+out|worn\s+out"),
+    ("excited", r"excited|thrilled|pumped"),
+    ("happy", r"happy|delighted|over\s+the\s+moon"),
+    ("proud", r"proud"),
+    ("relieved", r"relieved"),
+)
+_AFFECT_SOFTENERS = (
+    r"(?:(?:so|really|pretty|quite|super|very|just|still|totally|kind\s+of|kinda|"
+    r"sort\s+of|a\s+bit|a\s+little|a\s+little\s+bit|bit|incredibly|extremely|"
+    r"honestly|feeling|more|getting)\s+){0,3}"
+)
+_AFFECT_ANCHOR = (
+    r"(?:\bi(?:['’]?m|\s+am|['’]?ve\s+been|\s+have\s+been|\s+was|\s+feel|\s+felt|"
+    r"\s+keep\s+feeling|\s+still\s+feel|\s+get|\s+got)|(?:^|[.!?,]\s*)\s*feeling)\s+"
+)
+_AFFECT_RES: tuple[tuple[str, re.Pattern], ...] = tuple(
+    (label, re.compile(_AFFECT_ANCHOR + _AFFECT_SOFTENERS + r"(?:" + forms + r")\b",
+                       re.IGNORECASE))
+    for label, forms in _AFFECT_LABELS
+) + (("excited", re.compile(r"\bi\s+can['’]?t\s+wait\b", re.IGNORECASE)),)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# Someone ELSE's words are never the user's feeling (Greptile #1762):
+#   * quoted spans — straight/curly double quotes, curly single quotes, and a
+#     straight single-quoted span that opens after whitespace and closes before a
+#     boundary (so the apostrophe in "I'm" is not taken for a quote);
+#   * reported speech — "<someone other than I> said/says/told me/… (that) …" to
+#     the end of its clause ("my sister said she is so stressed").
+_QUOTED_SPAN_RE = re.compile(
+    r"\"[^\"]*\"|“[^”]*”|‘[^’]*’|(?:(?<=\s)|^)'.*?'(?=\s|[,.!?;:]|$)"
+)
+# The reported span ends at its CLAUSE, not the sentence: "My sister said she
+# is fine, but I'm stressed about my interview" keeps the user's own clause.
+# A clause boundary is ", but/and/so/though/yet", ";", " but/however/although/
+# though/whereas ", or ", " / " and " followed by a first-person subject.
+# A first-person subject straight after the verb ("my sister said I'm
+# stressed") stays inside the reported span — that is the sister speaking.
+_CLAUSE_BOUNDARY = (
+    r"(?:,\s*(?:but|and|so|though|yet)\b|;|\s(?:but|however|although|though|whereas)\b|"
+    r"(?:,\s*|\s+and\s+)i(?:['’]m|\s+am|\s+feel|\s+felt|['’]ve|\s+have|\s+was)\b)"
+)
+_REPORTED_SPEECH_RE = re.compile(
+    r"\b(?!i\b)[a-z']+\s+(?:said|says|say|told\s+(?:me|us)|tells\s+(?:me|us)|"
+    r"asked|texted|wrote|messaged|mentioned|reckons|thinks)\b"
+    r"(?:(?!" + _CLAUSE_BOUNDARY + r")[^.!?])*",
+    re.IGNORECASE,
+)
+
+
+def _own_words(sentence: str) -> str:
+    """``sentence`` with quoted spans and reported speech removed."""
+    return _REPORTED_SPEECH_RE.sub(" ", _QUOTED_SPAN_RE.sub(" ", sentence))
+
+
+def extract_affect(message: str) -> tuple[str, str]:
+    """(label, sentence) for the first first-person feeling in ``message``, or
+    ("", "") — e.g. "Honestly I'm pretty anxious about my job interview…" →
+    ("anxious", "Honestly I'm pretty anxious about my job interview…"). The
+    sentence is returned so a caller can attach the feeling only to facts drawn
+    from it. Quoted and reported words are someone else's (``_own_words``).
+    Pure str → tuple, no env read."""
+    for sentence in _SENTENCE_SPLIT_RE.split(message or ""):
+        own = _own_words(sentence)
+        best: tuple[int, str] | None = None
+        for label, rx in _AFFECT_RES:
+            m = rx.search(own)
+            if m and (best is None or m.start() < best[0]):
+                best = (m.start(), label)
+        if best is not None:
+            return best[1], sentence.strip()
+    return "", ""

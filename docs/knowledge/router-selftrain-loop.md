@@ -19,10 +19,10 @@ worse model is a loop that will eventually do so.
   rocks — are never touched.
 - **NOT the subject — stage 1.** The loop never reads, retrains, or promotes the SetFit
   head `services/zoe-data/models/router_head_mlp.joblib`. The driver has **no reference
-  to a router/SetFit head, an MLP, or a `.joblib`** in its 1095 lines (a case-insensitive
+  to a router/SetFit head, an MLP, or a `.joblib`** in its 1099 lines (a case-insensitive
   `head` grep matches exactly one incidental word — "heading" at `:133` — and nothing
   else); the only model **artifact** it promotes in production is the stage-2
-  `SERVED_GGUF` (`router_selftrain.py:98`, written at `:880-882`) under
+  `SERVED_GGUF` (`router_selftrain.py:98`, written at `:884-886`) under
   `~/models/functiongemma-router/`. Its other production writes — rollback restores,
   deployment markers, provenance, last-known-good archives — land in that same
   directory, **outside the repo** — so no ratchet verdict ever reaches git. Stage-1 heads are **hand-committed** (`git log -- services/zoe-data/
@@ -125,7 +125,9 @@ Every stage is recorded in the run journal.
    re-measurement of the incumbent**. The incumbent's score is never read from a
    stale results file — it is whatever the sidecar is actually serving right now.
 2. **TRAIN** — warm-start from the production checkpoint lineage on the existing
-   training sets **plus** the new candidate. CPU-only (GPU training is impossible
+   training sets (`labs/functiongemma-finetune/data/train.jsonl`, `train_sibling.jsonl`,
+   `train_round2.jsonl`, and the hand-committed real misroutes in `train_misses.jsonl`)
+   **plus** the new candidate. CPU-only (GPU training is impossible
    on this Jetson), `nice`'d, `oom_score_adj=1000` so the live services win any
    memory fight. Stops the brain for the window if memory is too tight and
    **always** restarts it.
