@@ -314,3 +314,69 @@ def test_both_chat_keyword_lanes_are_gated():
     src = (SVC / "routers" / "chat.py").read_text()
     assert src.count('keyword_intent_allowed(intent.name, message_for_processing, lane="chat")') == 2
     assert "if intent is None and not _intent_vetoed and use_intent_fast_path" in src
+
+
+# --------------------------------------------------------------------------- #
+# follow-ups (#1767 Greptile): real "-ing" names; every detector intent mapped #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("text,query", [
+    ("Who is King?", "king"),
+    ("who is Ming", "ming"),
+    ("Who is Browning?", "browning"),
+    ("Who is Sterling Archer?", "sterling archer"),
+    ("hey zoe who is King", "king"),
+    # trailing punctuation incl. the single-character ellipsis (#1769 Greptile)
+    ("Who is King\u2026?", "king"),
+    ("who is Ming...", "ming"),
+    ("Who is Browning?!", "browning"),
+])
+def test_capitalised_ing_names_are_contacts_lookups(text, query):
+    got = intent_router.detect_intent(text, log_miss=False)
+    assert got is not None and got.name == "people_search" and got.slots["query"] == query
+
+
+@pytest.mark.parametrize("text", [
+    S1,
+    "who is coming to dinner",
+    "who is coming",
+    "Who is going out tonight?",
+    "who is picking up the kids tomorrow",
+    # lower-case "-ing" + a direct OBJECT, not a particle (#1769 Greptile)
+    "who is bringing groceries",
+    "who is making dinner tonight",
+    "who is ming",  # lower-case lone "-ing": ambiguous → the brain, never a canned miss
+])
+def test_ing_verb_phrases_go_to_the_brain(text):
+    got = intent_router.detect_intent(text, log_miss=False)
+    assert got is None or got.name != "people_search", (text, got)
+
+
+def _detector_intent_names() -> set[str]:
+    import re
+
+    src = (SVC / "intent_router.py").read_text()
+    names = set()
+    for a, b in re.findall(
+            r'Intent\(\s*"([a-z_]+)"(?:\s+if\s+[^"\n]+?\s+else\s+"([a-z_]+)")?', src):
+        names.update(n for n in (a, b) if n)
+    assert len(names) > 50, "the Intent( literal scan broke — fix the regex, not the map"
+    return names
+
+
+def test_every_detector_intent_is_gated_or_explicitly_ungated():
+    mapped = set(fast_tiers._INTENT_ROUTER_DOMAINS)
+    ungated = set(fast_tiers._INTENT_UNGATED)
+    assert not mapped & ungated, mapped & ungated
+    assert all(fast_tiers._INTENT_UNGATED[n].strip() for n in ungated)
+    missing = (_detector_intent_names() | set(fast_tiers._TIER0_READ_INTENTS)) - mapped - ungated
+    assert not missing, (
+        f"detector intents with no gate decision: {sorted(missing)} — add each to "
+        "fast_tiers._INTENT_ROUTER_DOMAINS (router class) or _INTENT_UNGATED (with a reason)")
+    assert set(fast_tiers._TIER0_READ_INTENTS) <= mapped
+
+
+@pytest.mark.parametrize("intent", ["journal_streak", "journal_prompt"])
+def test_journal_keyword_claims_are_gated(intent):
+    assert fast_tiers.intent_gate_decision(
+        intent, _verdict("journal", 0.62, "low_conf")) == ("veto", "router_chat")
+    assert fast_tiers.intent_gate_decision(intent, _verdict("journal", 0.97)) == ("allow", "router_agrees")
