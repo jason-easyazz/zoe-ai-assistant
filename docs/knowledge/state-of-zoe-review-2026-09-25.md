@@ -566,10 +566,10 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
 
 ## 9. Recommended sequence
 
-**Current order, refreshed 2026-09-29 03:00 AWST (the panel is ON; the 09-28 evening chain
-#1756 → #1769, 13 PRs, merged and deployed — list in the tracker §6; S4 passed the Samantha
-bar live for the first time at 01:12, S1 still fails on recall), after the afternoon chain
-and the 09-27 wave.** The authoritative NEXT ACTION is the
+**Current order, refreshed 2026-09-29 04:10 AWST (the panel is ON; the 09-28 evening chain
+#1756 → #1770, 14 PRs, merged and deployed, live `269bb680` — list in the tracker §6; S1 and S4
+both PASS on the 03:56 Samantha compare and the bar was re-recorded at 04:00), after the
+afternoon chain and the 09-27 wave.** The authoritative NEXT ACTION is the
 [program tracker §0](../architecture/beat-the-bar-2026-program.md). The dated lists below are
 the 2026-09-25 plan, kept with ✓ marks.
 
@@ -611,13 +611,14 @@ the 2026-09-25 plan, kept with ✓ marks.
    **FAIL S1 + S4** ([record](samantha-bar.md) → *First baseline*).
    **Samantha actions, status 2026-09-29 03:00** ([record](samantha-bar.md) → *Live compares*):
    1. ✓ **Router confidence gate** — #1763 (`ZOE_ROUTER_HEAD_MIN_CONF=0.70`), then #1767 (the
-      head is the authority over keyword claims) and #1769. S1's routing is fixed; the ask
-      reaches the brain and **still FAILs on recall** — S1 round 3 (digest keeps who/where/when
-      for events + recall floor on event-shaped questions) is in flight. Still open: the
-      router retrain for the confident misses (S6 @ 0.73).
+      head is the authority over keyword claims) and #1769. S1's routing was fixed by those;
+      its recall by **#1770** (S1 round 3: digest keeps who/where/when for events + recall
+      floor on event-shaped questions, live 03:49) — **S1 PASS on the 03:56 compare on
+      `269bb680`**. Still open: the router retrain for the confident misses (S6 @ 0.73).
    2. ✓ **Emotional continuity** — rounds #1756 / #1762 / #1768; **S4 PASS live at 01:12**
-      (first pass). Authoritative 03:56 run on `269bb680`: S4 PASS and S1 PASS. B3.3 stays the carrier; re-record the bar once S4 passes
-      on the re-record run.
+      (first pass). Authoritative 03:56 run on `269bb680`: S4 PASS and S1 PASS; **baseline
+      re-recorded at 04:00 on `269bb680`** (all seven scored PASS), so both regress-gate now.
+      B3.3 stays the carrier.
    3. Streaming STT during recording (TTFA fix #2) once ≥ 1.5 GB is free.
 6. **B3.2** dream gating and **B3.3** reflection on the new store (B0.8 live 2026-09-28).
 7. ✓ Brief-on-arrival (**B2.1**) — #1749 merged flag-dark 2026-09-28 (panel-scoped, shared

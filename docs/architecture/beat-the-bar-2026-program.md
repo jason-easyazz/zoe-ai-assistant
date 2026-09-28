@@ -20,10 +20,11 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ## 0. NEXT ACTION (keep this current)
 
-State as of **2026-09-29 03:00 AWST** (the evening chain landed; **the panel is on**):
-- live = `main` `5d4a7980` (#1769, last of the 13-PR chain #1756 → #1759 → #1757 → #1760 →
-  #1761 → #1762 → #1763 → #1764 → #1765 → #1766 → #1767 → #1768 → #1769; all merged, every
-  deploy GitHub created is green and tree-bound). One merge (#1762, `d46be79a`) got **no deploy
+State as of **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is on**):
+- live = `main` `269bb680` (#1770 S1 round 3, merged 03:32 and deployed by the local recipe
+  03:49; before it the 13-PR chain #1756 → #1759 → #1757 → #1760 → #1761 → #1762 → #1763 →
+  #1764 → #1765 → #1766 → #1767 → #1768 → #1769, all merged, every deploy GitHub created green
+  and tree-bound). #1771 (event-question follow-ups) is landing next. One merge (#1762, `d46be79a`) got **no deploy
   run at all** and reached the box with the #1763 deploy 46 min later — incident-runbook §15;
   a 2-min local watchdog now covers that gap.
 - **The panel is on** (`zoe-touch-pi`, since the 2026-09-28 evening). The Pi daemon was
@@ -33,11 +34,15 @@ State as of **2026-09-29 03:00 AWST** (the evening chain landed; **the panel is 
   `.env.voice` now sets `POST_PLAY_COOLDOWN_S=0.4` and `RECORD_SECONDS_MAX=12`; the adaptive
   endpoint tail `ZOE_VAD_CLEAN_TAIL_MS` ships **OFF** pending Jason (item 1). Since that
   restart: 0 barge-in fires over 1 turn — too few turns to call it.
-- **Samantha bar:** S4 **passed live for the first time at 01:12** (`d7b8ff4c`); S1 still
-  FAILs on every run — it now reaches the brain (`BRAIN_LANE lane_served=flue`) and fails on
-  recall, not routing; **S1 round 3 is in flight** (draft PR, 2026-09-29 morning). The 03:50
-  compare on `5d4a7980` is the authoritative post-chain run: **S1 PASS and S4 PASS — every scored scenario PASS (S2, S3, S6, S7, S8), S5 SKIP (hook-gated), no regression** on `269bb680` (03:49–03:56, after the S1 round-3 deploy). The baseline is being re-recorded on `269bb680` so future compares gate against the new bar.
-  Record: [samantha-bar.md](../knowledge/samantha-bar.md) → *Live compares*.
+- **Samantha bar: S1 and S4 both DONE.** S4 passed live for the first time at 01:12
+  (`d7b8ff4c`, rounds #1756/#1762/#1768). S1 failed on every run until its routing
+  (#1763/#1767/#1769) and then its recall (**#1770**, S1 round 3: the digest keeps
+  who/where/when for event facts and the recall floor fires on event-shaped questions) were
+  fixed. **Authoritative post-chain compare 03:49–03:56 on `269bb680`: S1 PASS, S4 PASS, every
+  scored scenario PASS (S2, S3, S6, S7, S8), S5 SKIP (hook-gated), no regression.** The
+  **baseline was re-recorded at 04:00 on `269bb680`** (all seven scored scenarios PASS,
+  `~/.cache/zoe/samantha_bar_baseline.json`), so S1 and S4 now regress-gate. Record:
+  [samantha-bar.md](../knowledge/samantha-bar.md) → *Live compares*.
 - The brain sidecar streams model text ahead of the runtime's 1 s storage flush (#1761,
   `ZOE_FLUE_EARLY_TEXT`, default on): first sentence median **749 ms** warm on the
   post-deploy 20-turn probe (was ~1.08 s after the first token). Panel TTFA fixes #1 and #3
@@ -140,22 +145,25 @@ State as of **2026-09-29 03:00 AWST** (the evening chain landed; **the panel is 
 4. **Next engineering, in order:**
    1. **Samantha bar S1 + S4** (B3.11, record: [samantha-bar.md](../knowledge/samantha-bar.md)
       → *Live compares*):
-      (a) **S1 — routing is FIXED, recall is not.** Three rounds landed: #1763 the
+      (a) **S1 — ✅ DONE (#1770, PASS on the 03:56 compare; baseline re-recorded 04:00).**
+      Routing was fixed first: #1763 the
       low-confidence floor (`ZOE_ROUTER_HEAD_MIN_CONF=0.70`; S1's `calendar` @ 0.5371 now
       abstains, `reason: low_conf`), #1767 the head is the authority over keyword claims
       (`INTENT_GATE`; the chat.py `^who is (.+)$` lane had answered S1 with "No contacts
       found"), #1769 its follow-ups ("-ing" names by casing; every detector intent in exactly
-      one gate map). The ask now reaches the brain (`BRAIN_LANE lane_served=flue`, 01:08) and
-      **still FAILs** — the reply does not name who is flying in or from where. **S1 round 3**
-      (the digest keeps who/where/when for event facts; the recall floor also fires on
-      event-shaped questions) is in flight as a draft PR. **DONE 03:56 — S1 PASS live** (#1770; post-merge follow-ups in #1771, landing next).
-      (b) **S4 — first live PASS 01:12** (`d7b8ff4c`). Rounds: #1756 continuity injection
+      one gate map). After those the ask reached the brain (`BRAIN_LANE lane_served=flue`,
+      01:08) and still failed on recall — the reply did not name who was flying in or from
+      where. **S1 round 3 (#1770, merged 03:32, live 03:49)** made the digest keep
+      who/where/when for event facts and the recall floor fire on event-shaped questions:
+      **S1 PASS** on the 03:56 compare. Post-merge follow-ups are in #1771 (landing next).
+      (b) **S4 — ✅ DONE (first live PASS 01:12 on `d7b8ff4c`; PASS again on the 03:56
+      compare; baseline re-recorded 04:00).** Rounds: #1756 continuity injection
       (`ZOE_SEAM_CONTINUITY_INJECT`), #1762 the digest keeps a stated feeling + `affect`
       captured from the user's words + the block after the user's words with one concrete
       ask, #1768 a bare mood report is never the focus + contact offers deferred on
-      continuity turns (`SEAM_OFFER … deferred=1 reason=continuity`). **DONE 03:56 — S4 PASS live** (#1768).
-      Re-record the bar once S4 passes on the re-record run itself. B3.3 (importance-sum
-      reflection) stays the longer-term carrier.
+      continuity turns (`SEAM_OFFER … deferred=1 reason=continuity`). B3.3 (importance-sum
+      reflection) stays the longer-term carrier. Next for the bar: the router retrain for the
+      confident misses (item 5) and S5 once the surfacing hook exists.
    2. **Streaming STT during recording** (TTFA breakdown fix #2, pinned in `IDEAS.md`):
       Moonshine already runs `MEDIUM_STREAMING`; needs a chunked upload lane daemon →
       zoe-data and **≥ 1.5 GB quiet headroom** before it starts.
@@ -779,8 +787,11 @@ State as of **2026-09-29 03:00 AWST** (the evening chain landed; **the panel is 
     spoken brief per member per day) and fails closed on a claim error. It writes
     one `proactive_responses` row per day, with accepted/ignored/undelivered as the B2.2 signal.
     See the [recipients record](../knowledge/synthetic-users-and-proactive-recipients.md).
-  - **2026-09-29:** the panel is on; the flip (`ZOE_PROACTIVE_BRIEF_ON_ARRIVAL=1` in the
-    zoe-data env + restart) is now a 🧑 step, not a wait.
+  - **2026-09-29:** the panel is on; the flip is now a 🧑 step, not a wait. It needs **both**
+    flags in the zoe-data env + restart: `ZOE_PROACTIVE_SPOKEN=1` (the master switch for
+    spoken proactivity, default off) **and** `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL=1` —
+    `arrival_enabled()` requires both, so setting only the arrival flag silently leaves the
+    feature off.
   - Next: 🧑 flip the flag once the panel is back on. Then feed face/voice matches in as
     `owner` presence. That is a voice-path change and needs the replay gate.
 - B2.2 ⬜ **Candidate-selection → delivery-gating split** for proactive turns with a
@@ -845,8 +856,12 @@ State as of **2026-09-29 03:00 AWST** (the evening chain landed; **the panel is 
   **Live compares, 2026-09-28 night** (record → *Live compares*): S4 rounds 1–3 landed
   (#1756, #1762, #1768) and **S4 passed live for the first time at 01:12** (`d7b8ff4c`); S1's
   routing was fixed in three PRs (#1763 floor, #1767 keyword authority, #1769) and the ask
-  now reaches the brain, but **S1 still FAILs** on recall — round 3 in flight. One one-off S8
-  FAIL at 22:38 (PASS on every other run). **Authoritative post-chain compare 03:56 on `269bb680`: S1 PASS, S4 PASS, all scored scenarios PASS, S5 SKIP; baseline re-recorded on that commit.**
+  reached the brain but still failed on recall until **#1770** (S1 round 3: the digest keeps
+  who/where/when for event facts; the recall floor fires on event-shaped questions). One
+  one-off S8 FAIL at 22:38 (PASS on every other run). **Authoritative post-chain compare
+  03:49–03:56 on `269bb680` (live since 03:49): S1 PASS, S4 PASS, every scored scenario PASS,
+  S5 SKIP, no regression. Baseline re-recorded at 04:00 on `269bb680` (all seven scored PASS),
+  so S1 and S4 now regress-gate.**
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -1284,7 +1299,12 @@ a decision input.
   **#1769** (`5d4a7980`, 02:24) #1767 follow-ups: "-ing" names are names by casing, every
   detector intent has exactly one gate decision (audited by a test), and the flaky
   `test_memory_continuity_mode` cutoff assertion fixed (module-import `NOW`).
-  **Authoritative post-chain compare (03:50, `5d4a7980`): **S1 PASS and S4 PASS — every scored scenario PASS (S2, S3, S6, S7, S8), S5 SKIP (hook-gated), no regression** on `269bb680` (03:49–03:56, after the S1 round-3 deploy). The baseline is being re-recorded on `269bb680` so future compares gate against the new bar.**
+  **#1770** (`269bb680`, 03:32; deployed by the local recipe 03:49) S1 round 3 — the digest
+  keeps who/where/when for event facts and the recall floor fires on event-shaped questions.
+  **Authoritative post-chain compare 03:49–03:56 on `269bb680`: S1 PASS and S4 PASS — every
+  scored scenario PASS (S2, S3, S6, S7, S8), S5 SKIP (hook-gated), no regression. Baseline
+  re-recorded at 04:00 on `269bb680` (all seven scored PASS), so S1 and S4 now regress-gate.**
+  #1771 (event-question follow-ups) is landing next.
   **Incidents** (runbook): **§13** the landing script was edited while running and left
   Kokoro stopped 19:37–19:42 (fix: the restore `trap` before the stop); **§14** auto-merge
   armed before the probe on #1757 (fix: disarm on every push, arm last); **§15** the

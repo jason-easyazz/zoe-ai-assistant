@@ -198,11 +198,42 @@ they must beat.
 
 ## Re-measuring
 
+### Historical method (the path as it was, before #1760 / #1761)
+
+This is how the tables above were built. The join order and the Flue signature it looks for
+are PRE-fix and no longer describe the live panel.
+
 1. Pull `^2026-…` lines from the Pi `voice.log`, and the matching window from
    `~/.zoe-logs/zoe-data.stderr.log` (JSON, ms, `request_id`).
 2. Per turn, join `Recorded` → `Speaker ID` → `STT_CAPTURE` / `STT=` → `:3579` POST →
-   `VOICE TIMING` → first `10201/synthesize` → `t0 + TTFA`.
+   `VOICE TIMING` → first `10201/synthesize` → `t0 + TTFA`. (Pre-#1760 the speaker-ID score
+   ran synchronously BEFORE the POST, so `Recorded` → `Speaker ID` was dead time on the
+   critical path.)
 3. For the Flue burst, stream a replay-isolated probe session and timestamp NDJSON deltas.
-   The signature is one early delta, then a ~1 s gap.
+   The pre-#1761 signature was one early delta, then a ~1 s gap, then the burst.
 4. Run any bench under the harness flock with MemAvailable above 700 MB. Measure STT through
    the live `/api/voice/transcribe` with a `replay-` panel id, not in-process.
+
+### Post-fix procedure (the live panel since 2026-09-28 night)
+
+Same sources, different expectations — following the historical steps on the current panel
+would misattribute stage time and read the missing gap as a failed probe.
+
+1. Same log pull as above.
+2. Join `Recorded` → `:3579` POST → `VOICE TIMING` → first `10201/synthesize` → `t0 + TTFA`.
+   The `Speaker ID (shadow): … — logged, not acted on` line now lands **after** the POST
+   starts (#1760: background thread, one per turn, joined in order), so it is no longer a
+   stage — do not subtract it. Check only that exactly one such line and one
+   `speaker_shadow_metrics.jsonl` row exist per turn.
+3. For the Flue stream, read the sidecar's own line instead of timing deltas by hand:
+   `journalctl --user -u flue-zoe-brain-2x | grep FLUE_EARLY_TEXT` gives `first_delta_ms`,
+   `first_sentence_ms`, `deltas`, `deduped` per streamed turn (#1761, `ZOE_FLUE_EARLY_TEXT`
+   on). Expect **no ~1 s gap**: first sentence − first delta is the model's own decode time
+   (post-deploy probe median 464 ms; first sentence median 749 ms warm). A `diverged=` field or
+   `deltas != deduped` is the thing to investigate, not the absence of the gap. With the flag
+   off (`enabled=0`) the historical gap returns — that is the negative control.
+4. Same bench rules as above. Also read the daemon's `Recorded …` line for `tail=` (#1766) and
+   the barge-in lines for `t+<ms>` (#1765) if endpoint or interruption timing is in question.
+5. Compare against the stage table above as the BEFORE. Expected deltas per median brain
+   turn: −0.37 s from #1760 (end of speech → POST) and about −0.6 s from #1761 (first token →
+   first sentence). A fresh live table has not been recorded yet.
