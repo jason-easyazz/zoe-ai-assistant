@@ -96,7 +96,8 @@ State as of **2026-09-28 08:30 AWST**:
    **Since 2026-09-28 the DEPLOY gate is tree-bound too** (`--expect-tree-of`): the head-bound
    artifact clears the deploy only if the squash merge is tree-identical to that head and
    nothing merged after it before its deploy, and nothing overwrote the artifact (incl. the 04:30
-   nightly probe). Otherwise probe a checkout of the MERGED sha and `gh run rerun`. Recipe:
+   nightly probe). Otherwise probe a checkout of the MERGED sha (copy the live `services/zoe-data/.env` into the
+   worktree first, or the probe records an error) and `gh run rerun`. Recipe:
    [merge-and-deploy.md](../knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 4. **Next engineering, in order:**
    1. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).

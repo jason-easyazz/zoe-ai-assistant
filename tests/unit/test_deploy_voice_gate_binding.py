@@ -124,6 +124,23 @@ def _run_gate(repo: Path, artifact: Path, tmp_path: Path) -> subprocess.Complete
                           capture_output=True, text=True, env=env)
 
 
+ENV_SRC = "/home/zoe/assistant/services/zoe-data/.env"
+
+
+def _assert_env_copied_before_probe(text: str, wt: str, env_src: str = ENV_SRC) -> None:
+    """A fresh worktree has no gitignored services/zoe-data/.env and the explicit
+    --service-dir bypasses the probe's live-env fallback, so a recipe WITHOUT the
+    copy records status=error — it can never unwedge anything (Greptile P1, #1754).
+    The copy must come before the probe line, and keep the file private."""
+    dst = f"{wt}/services/zoe-data/.env"
+    copy = f"cp -n {env_src} {dst}"
+    probe = f"--service-dir {wt}/services/zoe-data"
+    assert copy in text, text
+    assert f"chmod 600 {dst}" in text, text
+    assert probe in text, text
+    assert text.index(copy) < text.index(probe), text
+
+
 def _need_git():
     if not shutil.which("git"):
         pytest.skip("git not available")
@@ -144,6 +161,10 @@ def test_deploy_step_refuses_the_incident_artifact(landing, tmp_path):
     assert "DIFFERENT" in r.stderr
     # the printed unwedge recipe replays a checkout of the TARGET, not the live tree
     assert f"voice-gate-deploy {s['merge']}" in r.stdout
+    # (the harness rewrites the live-checkout path to the throwaway repo, so the
+    # copy source is that repo's services/zoe-data/.env)
+    _assert_env_copied_before_probe(r.stdout, "~/.worktrees/voice-gate-deploy",
+                                    env_src=f"{repo}/services/zoe-data/.env")
 
 
 def test_deploy_step_accepts_the_tree_identical_pr_head_artifact(landing, tmp_path):
@@ -217,3 +238,10 @@ def test_deploy_live_sh_is_bound_the_same_way():
     assert len(calls) == 1, calls
     call = " ".join(lines[calls[0]:calls[0] + 2])
     assert '"$bind_flag" "$target"' in call, call
+
+
+def test_pr_time_recipe_in_voice_gate_yml_copies_the_env():
+    """The PR check's printed recipe has the same failure mode: without the copy
+    the head-bound probe errors and the check can never go green."""
+    text = (REPO / ".github" / "workflows" / "voice-gate.yml").read_text()
+    _assert_env_copied_before_probe(text, "~/.worktrees/voice-gate")

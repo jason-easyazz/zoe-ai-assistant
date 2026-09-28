@@ -129,11 +129,17 @@ with the mandatory gate never running — a gate that can silently not-run is no
   `bash scripts/deploy/zoe_data_python.sh`):
 
       git -C /home/zoe/assistant worktree add --detach ~/.worktrees/voice-gate-deploy <target-sha>
+      cp -n /home/zoe/assistant/services/zoe-data/.env ~/.worktrees/voice-gate-deploy/services/zoe-data/.env \
+        && chmod 600 ~/.worktrees/voice-gate-deploy/services/zoe-data/.env
       flock /tmp/zoe-voice-harness.lock \
         $ZPY ~/.worktrees/voice-gate-deploy/scripts/maintenance/voice_regression_probe.py \
           --samples 20 --service-dir ~/.worktrees/voice-gate-deploy/services/zoe-data
 
-  then **re-run the deploy workflow** (`gh run rerun <id>`) and `git worktree remove` it. If more
+  **The `.env` copy is not optional.** A fresh worktree has no `services/zoe-data/.env` (gitignored),
+  and the explicit `--service-dir` bypasses the probe's fallback to the live env, so without it the
+  probe prints `no .env in <dir> … skipping` and records `status: error` — never a pass. The copy is
+  gitignored, so the worktree still records `dirty: false`; mode 600, never committed, removed with
+  the worktree. Then **re-run the deploy workflow** (`gh run rerun <id>`) and `git worktree remove` it. If more
   pushes landed meanwhile, the next run's target is newer — probe THAT sha. The `flock` is mandatory —
   two concurrent Kokoro loads OOM the box. The right move is to produce the evidence **before**
   merging (below), not after CD blocks. Detail: [voice-pipeline.md](voice-pipeline.md).
@@ -148,9 +154,11 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
    this PR's merge and its deploy (a second merge changes the target tree and the head-bound artifact
    stops matching). Bring the branch up to date (`gh pr update-branch`) **first** — every update is a
    new head and needs a new probe.
-2. **Probe the final head.** On the Jetson, in a clean worktree at the PR head sha, in the
-   Kokoro-paused window (tracker §0), under `flock /tmp/zoe-voice-harness.lock`, with
-   `--service-dir <worktree>/services/zoe-data`. The PR's `voice-gate` check re-runs green
+2. **Probe the final head.** On the Jetson, in a clean worktree at the PR head sha, first copy the
+   live env in (`cp -n /home/zoe/assistant/services/zoe-data/.env <worktree>/services/zoe-data/.env
+   && chmod 600 <worktree>/services/zoe-data/.env` — without it the probe records an error, see
+   above), then in the Kokoro-paused window (tracker §0), under `flock /tmp/zoe-voice-harness.lock`,
+   with `--service-dir <worktree>/services/zoe-data`. The PR's `voice-gate` check re-runs green
    (`--expect-revision <head>`).
 3. **Nothing may overwrite the artifact** before the deploy reads it — it is a single shared slot
    (`~/.cache/zoe/voice_regression_last.json`): no other PR's probe, and not the nightly

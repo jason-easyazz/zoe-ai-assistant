@@ -876,6 +876,22 @@ def _scope_only(args: argparse.Namespace) -> int:
     return 0
 
 
+LIVE_SERVICE_ENV = "/home/zoe/assistant/services/zoe-data/.env"
+
+
+def env_copy_step(worktree: str) -> str:
+    """The recipe step that makes a worktree replay RUN at all.
+
+    A fresh worktree has no services/zoe-data/.env (gitignored), and the explicit
+    --service-dir every recipe passes bypasses the probe's fallback to the live
+    env — so without this the probe prints "no .env in <dir> … skipping" and
+    records status=error, never a pass. The file is gitignored, so the worktree
+    still records clean (dirty=false); mode 600, never committed, removed with
+    the worktree. `cp -n` never overwrites an existing one."""
+    dst = f"{worktree}/services/zoe-data/.env"
+    return f"cp -n {LIVE_SERVICE_ENV} {dst} && chmod 600 {dst}"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--artifact", type=Path,
@@ -982,6 +998,7 @@ def main(argv: list[str] | None = None) -> int:
             "on the Jetson as user zoe:",
             f"    git -C /home/zoe/assistant fetch origin {args.expect_revision}",
             f"    git worktree add ~/.worktrees/voice-gate {args.expect_revision}",
+            f"    {env_copy_step('~/.worktrees/voice-gate')}",
             "    flock /tmp/zoe-voice-harness.lock \\",
             "      python3 scripts/maintenance/voice_regression_probe.py \\",
             "        --samples 20 --service-dir ~/.worktrees/voice-gate/services/zoe-data",
@@ -1000,6 +1017,7 @@ def main(argv: list[str] | None = None) -> int:
             "up-to-date squash merge).",
             "  Produce it on the Jetson as user zoe, against a checkout of the target:",
             f"    git -C /home/zoe/assistant worktree add --detach ~/.worktrees/voice-gate-deploy {sha}",
+            f"    {env_copy_step('~/.worktrees/voice-gate-deploy')}",
             "    flock /tmp/zoe-voice-harness.lock \\",
             "      python3 ~/.worktrees/voice-gate-deploy/scripts/maintenance/voice_regression_probe.py \\",
             "        --samples 20 --service-dir ~/.worktrees/voice-gate-deploy/services/zoe-data",

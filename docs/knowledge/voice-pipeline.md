@@ -174,7 +174,12 @@ they can't drift): explicit flag (always wins) → this repo's `services/zoe-dat
 the **main worktree's** (found via git's `--git-common-dir`, not a hardcoded host path). If no `.env`
 resolves anywhere it falls back to the in-tree path so the **loud skip/error still fires**
 (`status=error`, exit 2) — the ladder fixes the *default*, never the failure mode; a skip is never
-quietly upgraded to a pass. Pinned by `tests/unit/test_probe_dsn_resolution.py`. Scheduled daily off-peak via the
+quietly upgraded to a pass. Pinned by `tests/unit/test_probe_dsn_resolution.py`. **The flag always
+wins, so a revision-bound replay (`--service-dir <fresh worktree>/services/zoe-data`, which every
+gate recipe uses) needs the live env COPIED in first** — `cp -n
+/home/zoe/assistant/services/zoe-data/.env <wt>/services/zoe-data/.env && chmod 600 …` — or it
+records `status: error`. The copy is gitignored, so the tree still records clean; recipes:
+[merge-and-deploy.md](merge-and-deploy.md) → *Landing a voice-path PR*. Scheduled daily off-peak via the
 `scripts/setup/systemd/zoe-voice-regression.{service,timer}` templates (operator installs to
 `~/.config/systemd/user/`). Numbers are RELATIVE (warm harness) — used for *drift vs baseline*, not
 as live performance.

@@ -175,6 +175,12 @@ jobs:
             # an older tree without the resolver falls back to python3.
             ZPY="$(bash scripts/deploy/zoe_data_python.sh 2>/dev/null || echo python3)"
             echo "  git -C /home/zoe/assistant worktree add --detach ~/.worktrees/voice-gate-deploy ${target}"
+            # The worktree has no services/zoe-data/.env (gitignored), and an
+            # explicit --service-dir bypasses the probe's live-env fallback, so
+            # without this copy the probe records an ERROR, not a pass. The file
+            # is ignored, so the tree still records clean; mode 600, never
+            # committed, gone with the worktree.
+            echo "  cp -n /home/zoe/assistant/services/zoe-data/.env ~/.worktrees/voice-gate-deploy/services/zoe-data/.env && chmod 600 ~/.worktrees/voice-gate-deploy/services/zoe-data/.env"
             echo "  flock /tmp/zoe-voice-harness.lock \\"
             echo "    ${ZPY} ~/.worktrees/voice-gate-deploy/scripts/maintenance/voice_regression_probe.py \\"
             echo "      --samples 20 --service-dir ~/.worktrees/voice-gate-deploy/services/zoe-data"

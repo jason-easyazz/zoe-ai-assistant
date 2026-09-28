@@ -560,12 +560,29 @@ def test_deploy_cli_end_to_end_mirrors_the_incident(tmp_path, capsys):
     assert vgc.main(base + ["--artifact", str(_write_artifact(tmp_path, _now_art(repo, s["other"])))]) == 1
     err = capsys.readouterr().err
     assert "DIFFERENT" in err and "voice-gate-deploy" in err, err
+    _assert_recipe_copies_env(err, "~/.worktrees/voice-gate-deploy")
     # the PR head's artifact, squash tree-identical -> ALLOWED
     assert vgc.main(base + ["--artifact", str(_write_artifact(tmp_path, _now_art(repo, s["head"])))]) == 0
     assert "tree-identical" in capsys.readouterr().out
     # dirty -> REFUSED
     assert vgc.main(base + ["--artifact", str(_write_artifact(
         tmp_path, _now_art(repo, s["head"], dirty=True)))]) == 1
+
+
+def _assert_recipe_copies_env(text, wt):
+    """Greptile P1 on #1754: a fresh worktree has no gitignored .env, and the
+    recipe's explicit --service-dir bypasses the probe's live-env fallback, so a
+    recipe without this copy step records status=error and can never unwedge."""
+    dst = f"{wt}/services/zoe-data/.env"
+    copy = f"cp -n /home/zoe/assistant/services/zoe-data/.env {dst} && chmod 600 {dst}"
+    assert copy in text, text
+    assert text.index(copy) < text.index(f"--service-dir {wt}/services/zoe-data"), text
+
+
+def test_pr_gate_recipe_copies_the_env_before_the_probe(tmp_path, capsys):
+    assert vgc.main(["--require", "--expect-revision", PR_SHA,
+                     "--artifact", str(tmp_path / "none.json")]) == 1
+    _assert_recipe_copies_env(capsys.readouterr().err, "~/.worktrees/voice-gate")
 
 
 def test_deploy_cli_non_voice_diff_needs_no_artifact(tmp_path):
