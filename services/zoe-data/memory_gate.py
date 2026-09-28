@@ -92,7 +92,7 @@ _PROCEDURAL_HOW_RE = re.compile(r"^\s*how\s+(?:do|can|would|should|could)\s+(?:i
 # Sunday", "when does the train leave", "what is the weather today") has none
 # of those pairings and never matches.
 _EVT_MOVE = (
-    r"(?:fly(?:ing|s)?|flown|com(?:e|es|ing)|arriv(?:e|es|ing)|land(?:s|ing)?|"
+    r"(?:fly(?:ing|s)?|flies|flown|com(?:e|es|ing)|arriv(?:e|es|ing)|land(?:s|ing)?|"
     r"visit(?:s|ing)?|get(?:s|ting)?\s+in|stay(?:s|ing)?|leav(?:e|es|ing)|"
     r"driv(?:e|es|ing)\s+(?:up|down|over|in|back)|"
     r"head(?:s|ing)?\s+(?:over|home|back|down|up|in)|"
@@ -116,29 +116,74 @@ _EVT_WH_AUX = (
     r"(?:when|where|what\s+time|what\s+day|how\s+long)"
     r"(?:['’]s|\s+(?:is|are|was|were|does|do|did|will))\s+"
 )
-EVENT_QUESTION_RE = re.compile(
-    r"(?:"
-    # who + movement + time cue: "who is flying in on Thursday", "who's coming
-    # over tonight", "who is staying with us this weekend"
-    r"\bwho(?:['’]s|\s+is|\s+are|\s+was|\s+will\s+be)\s+" + _EVT_MOVE +
-    r"\b[^.?!]{0,60}?\b" + _EVT_TIME + r"\b"
-    r"|"
-    # when/where/what time + my/our + relation: "where is my sister flying
-    # from", "what time does my dad land", "when are our parents arriving"
+# who + movement + time cue: "who is flying in on Thursday", "who's coming over
+# tonight", "who is staying with us this weekend" — and the bare present tense
+# with no auxiliary: "Who arrives on Thursday?", "Who flies in on Thursday?"
+# (Greptile #1770). The bare form must OPEN the question (message or clause
+# start, optionally after "so/and/hey/ok/remind me/tell me") so a relative
+# clause in a statement ("my cleaner, who comes on Friday, …") is not a question.
+_EVT_WHO_TIME_RE = re.compile(
+    r"(?:\bwho(?:['’]s|\s+is|\s+are|\s+was|\s+will\s+be)\s+"
+    r"|(?:^|[.!?;:]\s*)(?:(?:so|and|hey|ok|okay|remind\s+me|tell\s+me)[,\s]+)?who\s+)"
+    + _EVT_MOVE + r"\b[^.?!]{0,60}?\b" + _EVT_TIME + r"\b",
+    re.IGNORECASE,
+)
+# Anchored shapes — a relation word or a pronoun ties them to the user's people:
+#   when/where/what time + my/our + relation: "where is my sister flying from",
+#   "what time does my dad land", "when are our parents arriving";
+#   when/where/what time + he/she/they + movement: "where is she flying from".
+_EVT_ANCHORED_RE = re.compile(
     r"\b" + _EVT_WH_AUX + r"(?:my|our)\s+" + _EVT_REL + r"\b"
     r"|"
-    # when/where/what time + he/she/they + movement: "where is she flying from",
-    # "when does he land"
-    r"\b" + _EVT_WH_AUX + r"(?:she|he|they)\s+" + _EVT_MOVE + r"\b"
-    r")",
+    r"\b" + _EVT_WH_AUX + r"(?:she|he|they)\s+" + _EVT_MOVE + r"\b",
+    re.IGNORECASE,
+)
+# A public event or venue as the destination/object ("Who is coming to the game
+# on Friday?") is a question about the world, not the user's people — the
+# who+time shape does not claim it unless the message also names the user's own
+# people (Greptile #1770).
+_EVT_PUBLIC_RE = re.compile(
+    r"\b(?:game|match|concert|gig|show|festival|finals?|race|parade|premiere|"
+    r"conference|olympics|world\s+cup|derby|tournament|playoffs?|grand\s+prix|"
+    r"election|debate|oscars|grammys|super\s+bowl|stadium|arena|theat(?:re|er)|"
+    r"cinema|movies|ceremony|summit|rally|launch|opening)\b",
+    re.IGNORECASE,
+)
+_EVT_PERSONAL_ANCHOR_RE = re.compile(
+    r"\b(?:my|our)\s+" + _EVT_REL + r"\b|\b(?:he|she|they|me|us|we)\b",
     re.IGNORECASE,
 )
 
 
+# Sentence boundaries for scoping the event checks: the anchors and the
+# public-event exclusion are judged INSIDE the sentence that holds the question,
+# so an unrelated sentence ("… The game is Friday", "We're busy. …") neither
+# vetoes nor vouches for it (Greptile #1771). Commas and dashes do not split:
+# "Who is flying in on Thursday, and where from?" is one question.
+_EVT_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+|(?<=[.!?;])(?=[A-Z])")
+
+
+def event_sentences(message: str) -> list[str]:
+    """The message's sentences (split on . ! ? ; only), stripped, non-empty."""
+    return [p.strip() for p in _EVT_SENTENCE_SPLIT_RE.split(message or "") if p.strip()]
+
+
+def _sentence_is_event_question(sentence: str) -> bool:
+    if _EVT_ANCHORED_RE.search(sentence):
+        return True
+    if not _EVT_WHO_TIME_RE.search(sentence):
+        return False
+    return not (_EVT_PUBLIC_RE.search(sentence)
+                and not _EVT_PERSONAL_ANCHOR_RE.search(sentence))
+
+
 def is_event_question(message: str) -> bool:
-    """True for an event-shaped question about the user's own people/plans
-    (see EVENT_QUESTION_RE). Pure str → bool."""
-    return bool(EVENT_QUESTION_RE.search(message or ""))
+    """True for an event-shaped question about the user's own people/plans:
+    in SOME sentence of the message, an anchored shape (a my/our relation or a
+    he/she/they subject), or who + movement + time cue when that sentence names
+    no public event/venue (or names one together with the user's own people).
+    Pure str → bool."""
+    return any(_sentence_is_event_question(s) for s in event_sentences(message))
 
 
 def message_needs_memory(message: str) -> bool:
