@@ -1479,8 +1479,10 @@ _shadow_score_last: threading.Thread | None = None
 # not drop that turn's row + journal line. Bounded: a stop must never hang.
 _SHADOW_DRAIN_TIMEOUT_S = 3.0
 # A failed thread start falls back to scoring inline; it waits at most this long
-# for the in-flight scorer first, so the fallback keeps one inference at a time
-# without letting a stuck predecessor hold the turn forever.
+# for the in-flight scorer first. If that scorer is STILL running, the turn is
+# skipped (WARNING) instead of overlapping it: one inference at a time and
+# in-order rows outrank one turn's row, and a stuck predecessor never holds
+# the turn forever.
 _SHADOW_INLINE_WAIT_S = 10.0
 
 
@@ -1525,6 +1527,12 @@ def _start_shadow_scoring(wav_bytes: bytes) -> threading.Thread | None:
                 start_error)
     if prev is not None:
         prev.join(timeout=_SHADOW_INLINE_WAIT_S)
+        if prev.is_alive():
+            # Scoring anyway would put two inferences on the one encoder and
+            # land this row ahead of its predecessor's. Skip this turn's row,
+            # loudly, rather than overlap; later turns chain onto `prev` as normal.
+            log.warning("speaker shadow: skipped (predecessor still running) — no row for this turn")
+            return None
     try:
         _speaker_claim_for_turn(wav_bytes)
     except Exception as exc:

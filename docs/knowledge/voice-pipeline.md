@@ -1006,7 +1006,10 @@ brain turns) and up to **1.12 s** on long clips, measured from the `Recorded …
   the main loop exiting) waits up to 3 s for pending scorers
   (`_drain_shadow_scoring`), so a restart right after a turn keeps its row. If a
   scorer thread cannot start, that turn is scored inline (WARNING in the journal),
-  and later turns score in the background as normal.
+  and later turns score in the background as normal. The inline score waits up to
+  10 s for the previous scorer. If that one is still running, the turn is skipped
+  with `speaker shadow: skipped (predecessor still running)` instead of running two
+  inferences at once and writing rows out of order.
 - **Active mode is unchanged.** With shadow off, the claim rides in the payload
   (`voice_user_id` / `voice_score`), so it is still scored inline before the POST.
   No follow-up path exists to deliver a late claim. Build one before flipping

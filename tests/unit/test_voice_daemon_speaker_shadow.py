@@ -689,3 +689,53 @@ def test_failed_thread_start_scores_inline_and_later_turns_still_score(daemon, m
     assert t is not None
     t.join(timeout=5)
     assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1", "turn-2"]
+
+
+def test_failed_start_skips_rather_than_overlaps_a_still_running_predecessor(daemon, monkeypatch, shadow_log, caplog):
+    # A failed start whose predecessor is STILL running after the bounded wait
+    # must not score inline: that would put two inferences on the one encoder
+    # and land this row ahead of the predecessor's. Skip it, loudly.
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "_SHADOW_INLINE_WAIT_S", 0.1)
+    release = threading.Event()
+    active = []
+    overlap = []
+
+    def _score(wav):
+        active.append(wav)
+        if len(active) > 1:
+            overlap.append(list(active))
+        if wav == b"turn-1":
+            release.wait(timeout=3)
+        active.remove(wav)
+        return (wav.decode(), 0.8)
+
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", _score)
+    first = daemon._start_shadow_scoring(b"turn-1")  # still running below
+
+    class _NoStartThread(threading.Thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    import types
+    fake_threading = types.SimpleNamespace(**vars(threading))
+    fake_threading.Thread = _NoStartThread
+    monkeypatch.setattr(daemon, "threading", fake_threading)
+    try:
+        with caplog.at_level("WARNING"):
+            assert daemon._start_shadow_scoring(b"turn-2") is None
+    finally:
+        monkeypatch.setattr(daemon, "threading", threading)
+        release.set()
+    first.join(timeout=5)
+
+    assert overlap == [], "inline fallback overlapped a still-running scorer"
+    assert any("speaker shadow: skipped (predecessor still running)" in r.getMessage()
+               for r in caplog.records)
+    assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1"]
+
+    # The next turn scores normally, in order.
+    third = daemon._start_shadow_scoring(b"turn-3")
+    third.join(timeout=5)
+    assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1", "turn-3"]
