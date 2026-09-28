@@ -346,20 +346,27 @@ def test_teardown_verdict():
 
 
 class _Conn:
-    """Records every statement; answers the few queries db_teardown makes."""
+    """Records every statement; answers the few queries db_teardown makes.
+    information_schema reports zoe-auth's tables too (they DO carry user_id)."""
 
-    def __init__(self, left=0):
+    def __init__(self, left=0, registered=(), auth_missing=False):
         self.sql, self.left = [], left
+        self.registered, self.auth_missing = set(registered), auth_missing
 
     async def fetch(self, q, *a):
         self.sql.append((q, a))
         if "information_schema" in q:
-            return [{"table_name": "people"}, {"table_name": "chat_sessions"}]
+            return [{"table_name": t} for t in ("people", "chat_sessions", "auth_users",
+                                                "auth_sessions", "password_history", "api_keys")]
+        if "FROM auth_users" in q:
+            return [{"user_id": u} for u in a[0] if u in self.registered]
         return [{"id": "bar-x-1"}]
 
     async def fetchval(self, q, *a):
         self.sql.append((q, a))
-        return True if "to_regclass" in q else self.left
+        if "to_regclass" in q:
+            return not (self.auth_missing and a[0].endswith("auth_users"))
+        return self.left
 
     async def execute(self, q, *a):
         self.sql.append((q, a))
@@ -375,6 +382,51 @@ def test_db_teardown_is_scoped_to_demo_ids_and_counts_back():
     for q, args in deletes:  # every delete is bound to demo ids or demo-owned sessions
         flat = [x for arg in args for x in (arg if isinstance(arg, list) else [arg])]
         assert flat and all(x in (A, B, "bar-x-1") for x in flat), q
+
+
+def _deletes(conn):
+    return [(q, a) for q, a in conn.sql if q.lstrip().upper().startswith("DELETE")]
+
+
+def test_auth_owned_tables_are_pinned_to_the_auth_schema():
+    """Drift guard: every table zoe-auth's Postgres migration creates is denylisted."""
+    import re as _re
+    sql = (REPO / "scripts/setup/migrate_auth_to_postgres.sql").read_text()
+    created = set(_re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", sql))
+    assert created and created <= sb.AUTH_OWNED_TABLES
+    assert {"auth_users", "auth_sessions", "password_history"} <= sb.AUTH_OWNED_TABLES
+
+
+def test_sweep_never_targets_an_auth_owned_table():
+    conn = _Conn()
+    out = asyncio.run(sb.db_teardown(conn, [A], []))
+    touched = {q for q, _ in conn.sql if "DELETE" in q.upper() or "count(*)" in q}
+    for t in sb.AUTH_OWNED_TABLES:
+        assert not any(f'"{t}"' in q or f" {t} " in q for q in touched), t
+    assert "people" in out["remaining"] and "auth_users" not in out["remaining"]
+    # The only auth_users statement is the read-only registration check.
+    auth_stmts = [q for q, _ in conn.sql if "auth_users" in q and "to_regclass" not in q]
+    assert auth_stmts and all(q.lstrip().upper().startswith("SELECT") for q in auth_stmts)
+
+
+def test_sweep_skips_a_registered_demo_shaped_id_and_reports_it():
+    conn = _Conn(registered=[A])
+    out = asyncio.run(sb.db_teardown(conn, [A, B], ["bar-x-1"]))
+    assert out["skipped_registered"] == [A]
+    for q, a in _deletes(conn):
+        for arg in a:
+            assert A not in (arg if isinstance(arg, list) else [arg]), (q, a)
+    assert any(B in a[0] for q, a in _deletes(conn) if a and isinstance(a[0], list))
+    # The verdict cannot be "proven" while an account was left in place.
+    ok, problems = sb.teardown_verdict({B: {"residual": 0, "packet": 0}}, out)
+    assert not ok and any("skipped registered" in p and A in p for p in problems)
+
+
+def test_sweep_is_refused_when_registration_cannot_be_verified():
+    conn = _Conn(auth_missing=True)
+    with pytest.raises(RuntimeError, match="auth_users"):
+        asyncio.run(sb.db_teardown(conn, [A], []))
+    assert _deletes(conn) == []  # nothing was deleted before the refusal
 
 
 def test_db_teardown_refuses_foreign_identities():
@@ -615,10 +667,20 @@ class _ScriptedLive(sb.Live):
     """Drives run_scenarios with no network: every turn answers with the needles
     the scenario wants, so the ONLY way a scenario errors is a setup problem."""
 
-    def __init__(self, seed_errors=(), unlanded=(), filler_errors=0):
+    def __init__(self, seed_errors=(), unlanded=(), filler_errors=0, capture_stalls=False):
         super().__init__("tok", "", "postgresql://x", False)
         self.seed_errors, self.unlanded = set(seed_errors), set(unlanded)
         self.filler_errors, self.chats = filler_errors, []
+        self.capture_stalls, self.waited_capture = capture_stalls, []
+
+    def capture_status(self, user):
+        return {"completed": len(self.chats), "in_flight": 0}
+
+    def wait_captured(self, user, before, timeout_s=180):
+        self.waited_capture.append((user, before))
+        if self.capture_stalls:
+            return {"landed": False, "kind": "capture", "why": "capture not completed (in_flight=1)"}
+        return {"landed": True, "kind": "capture", "waited_s": 1.0}
 
     def chat(self, user, tag, message):
         self.chats.append(tag)
@@ -689,6 +751,50 @@ def test_unlanded_rich_fact_errors_s7_and_s8(monkeypatch):
     assert res["S7"]["verdict"] == "ERROR" and "S7_rich never landed" in res["S7"]["evidence"]["why"]
     assert res["S8"]["verdict"] == "ERROR" and "S7_rich never landed" in res["S8"]["evidence"]["why"]
     assert "d2-ask-dad" not in live.chats and "long-ask-dad" not in live.chats
+
+
+def test_s7_waits_for_the_duplicate_capture_and_errors_when_it_never_completes(monkeypatch):
+    live, res = _drive(monkeypatch)
+    assert res["S7"]["verdict"] == "PASS"
+    assert live.waited_capture == [(A, {"completed": live.chats.index("d2-dad"), "in_flight": 0})]
+    live, res = _drive(monkeypatch, capture_stalls=True)
+    assert res["S7"]["verdict"] == "ERROR"
+    assert "S7_dup: the turn's memory capture never completed" in res["S7"]["evidence"]["why"]
+    assert "d2-ask-dad" not in live.chats  # scoring cannot proceed while the duplicate is unobserved
+
+
+def test_live_wait_captured_semantics(monkeypatch):
+    live = sb.Live("tok", "", "postgresql://x", False)
+    clock = {"t": 0.0}
+    monkeypatch.setattr(sb.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(sb.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+    # Endpoint absent before the turn: nothing to compare against, never landed.
+    assert sb.Live.wait_captured(live, A, None)["landed"] is False
+    states = iter([{"completed": 3, "in_flight": 1}, {"completed": 4, "in_flight": 1},
+                   {"completed": 4, "in_flight": 0}])
+    monkeypatch.setattr(live, "capture_status", lambda u: next(states))
+    out = live.wait_captured(A, {"completed": 3, "in_flight": 0})
+    assert out["landed"] is True and out["completed"] == 4
+    monkeypatch.setattr(live, "capture_status", lambda u: {"completed": 3, "in_flight": 0})
+    out = live.wait_captured(A, {"completed": 3, "in_flight": 0}, timeout_s=10)
+    assert out["landed"] is False and "not completed" in out["why"]
+    monkeypatch.setattr(live, "capture_status", lambda u: None)
+    assert "unavailable" in live.wait_captured(A, {"completed": 0}, timeout_s=10)["why"]
+
+
+def test_live_capture_status_reads_the_internal_endpoint(monkeypatch):
+    live = sb.Live("tok", "", "postgresql://x", False)
+    seen = {}
+
+    def req(method, url, headers, body=None, timeout=60):
+        seen.update(method=method, url=url, headers=headers)
+        return 200, {"user_id": A, "started": 2, "completed": 2, "failed": 0, "in_flight": 0}
+    monkeypatch.setattr(live, "_req", req)
+    assert live.capture_status(A)["completed"] == 2
+    assert seen["method"] == "GET" and "/api/memories/capture-status?user_id=" in seen["url"]
+    assert seen["headers"] == {"X-Internal-Token": "tok"}
+    monkeypatch.setattr(live, "_req", lambda *a, **k: (404, {}))
+    assert live.capture_status(A) is None
 
 
 def test_failed_filler_turns_error_s8_in_the_run(monkeypatch):

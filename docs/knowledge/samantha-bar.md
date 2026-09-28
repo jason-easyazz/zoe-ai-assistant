@@ -84,7 +84,7 @@ ids only). Day 2 follows.
 | S4 | A day-1 worry is acknowledged on day 2, gently and not verbatim. | `interview` must appear, the reply must share fewer than 7 consecutive words with the day-1 sentence, and the judge must say "warm, in its own words" |
 | S5 | A proactive hook, if one fires, carries the day-1 open loop. | Reads `proactive_pending` for demo A. No hook gives SKIP. An `emotional_followup` without the loop gives FAIL. |
 | S6 | Demo B never sees demo A's facts. | Deterministic: no A needle may appear in B's reply or in B's `/for-prompt` packet. If A's own packet holds none of them, the result is SKIP, because the test would be vacuous. A packet read that FAILS (either user) is ERROR — a boundary that was not inspected is never certified. |
-| S7 | A short duplicate ("my dad is Teodor") does not erase the richer fact. | The reply must name Teodor and lighthouse, and A's packet must still hold `lighthouse`. A failed packet read is ERROR. |
+| S7 | A short duplicate ("my dad is Teodor") does not erase the richer fact. | The reply must name Teodor and lighthouse, and A's packet must still hold `lighthouse`. A failed packet read is ERROR. The duplicate's capture must be OBSERVED first: the harness waits on `/api/memories/capture-status` (the turn's background extraction + digest completed, nothing in flight; bounded timeout) — not observed = ERROR, never PASS. |
 | S8 | S1 and S7 facts survive 32 filler turns spread over 3 sessions. | deterministic: `marisol` and `lighthouse`. ANY failed filler turn is ERROR, even when both names come back — the long history was not built, so the recall proves nothing. |
 
 The judge is the brain itself: llama-server `:11434` `/v1/chat/completions` with temperature 0,
@@ -143,6 +143,25 @@ the check fails (the route is not deployed, the token is refused, or the admin s
 bad), the run refuses. A run that cannot clean up must not write.
 `DELETE /api/chat/sessions/{id}` ignores `X-Zoe-User-Id`, which is why chat rows are
 removed in Postgres.
+
+The Postgres sweep deletes by `user_id` from every public table that has that column —
+EXCEPT the tables zoe-auth owns (`AUTH_OWNED_TABLES`: `auth_users`, `auth_sessions`,
+`password_history`, `api_keys`, … — the full list of `scripts/setup/migrate_auth_to_postgres.sql`,
+pinned by a test that parses that file). An account is not a run artefact. Immediately before any
+DELETE the sweep re-checks every id against `auth_users` with the route's semantics: a registered
+id is skipped and reported (`skipped_registered`, which makes the teardown unproven and the run
+`error`), and if `auth_users` cannot be read the whole sweep is refused.
+
+### Route contract: `GET /api/memories/capture-status?user_id=`
+
+Internal token only (missing 401, wrong/unprovisioned 403). Returns the per-user counters of the
+post-turn memory capture kept in `memory_capture_stats.py` — `started`, `completed`, `failed`,
+`in_flight`, `last_completed_at` — no memory content. `routers/chat.py` schedules
+`_persist_memory_candidates` with `asyncio.ensure_future`, so an HTTP turn returning proves
+nothing about its extraction/digest having run, and a deduplicated candidate never becomes a
+visible row; the counters (started before any early return, completed in `finally`) are the
+only completion signal. In-process, reset by a restart. Tests:
+`services/zoe-data/tests/test_memory_capture_status.py`.
 
 ### Route contract: `POST /api/memories/users/{id}/forget-synthetic`
 

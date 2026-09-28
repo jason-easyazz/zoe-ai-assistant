@@ -945,7 +945,26 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
     2. LLM turn digest   — background Gemma call, catches nuanced facts the
                            regex misses (relationships, pets, life events, etc.)
                            within seconds rather than waiting for the 3am batch.
+
+    Scheduled with ``asyncio.ensure_future`` (the turn returns first), so the
+    ONLY completion signal is ``memory_capture_stats`` — started before any
+    early return, completed in ``finally`` — read via
+    ``GET /api/memories/capture-status`` (internal token). Harness contract:
+    ``scripts/perf/samantha_bar.py`` waits on it before scoring S7.
     """
+    import memory_capture_stats
+
+    memory_capture_stats.started(user_id)
+    ok = False
+    try:
+        await _persist_memory_candidates_impl(user_id, session_id, user_message, assistant_response)
+        ok = True
+    finally:
+        memory_capture_stats.completed(user_id, ok=ok)
+
+
+async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_message: str,
+                                          assistant_response: str):
     if user_id == "guest":
         return
     # A memory COMMAND ("forget everything about Delia", "forget that") is an

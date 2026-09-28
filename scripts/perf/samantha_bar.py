@@ -106,6 +106,15 @@ SOURCE_FALLBACK_CONSTANTS = (("zoe_flue_client.py", "_FALLBACK_TEXT"),
 _SOURCE_FALLBACK_MARKERS: list[str] = []
 
 DEMO_USER_RE = re.compile(r"^demo_bar_[0-9a-f]{8}$")
+# Tables zoe-auth OWNS (scripts/setup/migrate_auth_to_postgres.sql): the teardown
+# sweep never targets them, whatever information_schema says — an account is not
+# a run artefact. Pinned against that SQL by tests/unit/test_samantha_bar.py.
+AUTH_OWNED_TABLES = frozenset({
+    "auth_users", "auth_sessions", "passcodes", "passcode_history", "password_history",
+    "roles", "permissions", "audit_logs", "panels", "panel_user_bindings", "rate_limits",
+    "guest_codes", "oauth_states", "oauth_device_codes", "service_accounts", "api_keys",
+    "sessions", "oidc_clients", "oidc_signing_keys",
+})
 SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8")
 VERDICTS = ("PASS", "FAIL", "SKIP", "ERROR")
 
@@ -481,7 +490,11 @@ def setup_problems(seeds: dict[str, dict | None], landings: dict[str, dict | Non
             problems.append(f"seed turn {tag} failed: {t['error']}")
     for name, l in landings.items():
         if not (l or {}).get("landed"):
-            problems.append(f"{name} never landed in the recall packet")
+            if (l or {}).get("kind") == "capture":
+                problems.append(f"{name}: the turn's memory capture never completed "
+                                f"({(l or {}).get('why', 'timeout')})")
+            else:
+                problems.append(f"{name} never landed in the recall packet")
     return problems
 
 
@@ -734,6 +747,41 @@ class Live:
             return None
         return str((body or {}).get("packet") or "")
 
+    def capture_status(self, user: str) -> dict[str, Any] | None:
+        """Per-user post-turn capture counters (/capture-status, internal). None
+        when the endpoint is unavailable (old server / token refused)."""
+        assert_demo_user(user)
+        q = urllib.parse.urlencode({"user_id": user})
+        code, body = self._req("GET", f"{DATA_BASE}/api/memories/capture-status?{q}",
+                               {"X-Internal-Token": self.token})
+        if code != 200 or not isinstance(body, dict) or "completed" not in body:
+            return None
+        return body
+
+    def wait_captured(self, user: str, before: dict[str, Any] | None,
+                      timeout_s: float = 180) -> dict[str, Any]:
+        """Observable completion of a turn's background memory capture: the
+        user's ``completed`` counter has advanced past ``before`` and nothing is
+        in flight. The chat route schedules capture with ensure_future, so the
+        HTTP turn returning proves nothing — and a deduplicated candidate never
+        becomes a visible row, so the packet cannot be polled for it."""
+        t0 = time.monotonic()
+        if before is None:
+            return {"landed": False, "kind": "capture", "waited_s": 0.0,
+                    "why": "capture-status unavailable before the turn"}
+        while True:
+            st = self.capture_status(user)
+            waited = round(time.monotonic() - t0, 1)
+            if st and st["completed"] > before["completed"] and not st.get("in_flight"):
+                return {"landed": True, "kind": "capture", "waited_s": waited,
+                        "completed": st["completed"], "failed": st.get("failed")}
+            if time.monotonic() - t0 > timeout_s:
+                return {"landed": False, "kind": "capture", "waited_s": waited,
+                        "why": "capture-status unavailable" if st is None else
+                               f"capture not completed (completed={st['completed']}, "
+                               f"in_flight={st.get('in_flight')})"}
+            time.sleep(3)
+
     def packet_count(self, user: str) -> int | None:
         q = urllib.parse.urlencode({"user_id": user, "message": "", "limit": 40})
         code, body = self._req("GET", f"{DATA_BASE}/api/memories/for-prompt?{q}",
@@ -891,6 +939,20 @@ async def db_teardown(conn, users: list[str], sessions: list[str]) -> dict[str, 
     async def _exists(table: str) -> bool:
         return await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}")
 
+    # A demo-SHAPED id can still be a registered account (Zoe Auth ids are
+    # usernames; one may be created between mint and teardown). Re-verify against
+    # auth_users — the account store — immediately before ANY delete, with the
+    # same semantics as /forget-synthetic: registered → skipped (and reported),
+    # lookup impossible → the whole sweep is refused (fail closed).
+    if not await _exists("auth_users"):
+        raise RuntimeError("auth_users not found: cannot verify the demo ids are unregistered "
+                           "— sweep refused")
+    registered = sorted({str(r["user_id"]) for r in await conn.fetch(
+        "SELECT user_id FROM auth_users WHERE user_id::text = ANY($1::text[])", users)})
+    if registered:
+        print(f"  db teardown: NOT sweeping registered account(s) {registered}", file=sys.stderr)
+        users = [u for u in users if u not in registered]
+
     # Chat rows: every session OWNED by a demo user (covers a killed run whose
     # session list was never written), plus the messages in them.
     own = [r["id"] for r in await conn.fetch(
@@ -909,7 +971,7 @@ async def db_teardown(conn, users: list[str], sessions: list[str]) -> dict[str, 
         "SELECT c.table_name FROM information_schema.columns c JOIN information_schema.tables t "
         "ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
         "WHERE c.table_schema = 'public' AND c.column_name = 'user_id' "
-        "AND t.table_type = 'BASE TABLE'")})
+        "AND t.table_type = 'BASE TABLE'")} - AUTH_OWNED_TABLES)
     pending = list(tables)
     for _ in range(4):
         retry = []
@@ -938,7 +1000,8 @@ async def db_teardown(conn, users: list[str], sessions: list[str]) -> dict[str, 
         "SELECT count(*) FROM chat_messages WHERE session_id = ANY($1::text[]) "
         "OR metadata LIKE ANY($2::text[])", sessions, [f'%"{u}"%' for u in users])
     remaining["users"] = await conn.fetchval("SELECT count(*) FROM users WHERE id = ANY($1::text[])", users)
-    return {"deleted": {k: v for k, v in deleted.items() if v}, "remaining": remaining}
+    return {"deleted": {k: v for k, v in deleted.items() if v}, "remaining": remaining,
+            "skipped_registered": registered}
 
 
 def teardown_verdict(store: dict[str, dict], db: dict[str, Any] | None) -> tuple[bool, list[str]]:
@@ -956,6 +1019,9 @@ def teardown_verdict(store: dict[str, dict], db: dict[str, Any] | None) -> tuple
         problems.append("postgres teardown did not run")
     else:
         problems += [f"postgres {t}: {n} row(s) left" for t, n in sorted(db["remaining"].items()) if n]
+        if db.get("skipped_registered"):
+            problems.append("postgres sweep skipped registered account(s): "
+                            + ", ".join(db["skipped_registered"]))
     return (not problems), problems
 
 
@@ -1075,9 +1141,13 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
         v, ev = _ask_judged(live, a, "d2-ask-home", ASK_HOME, samples, score_s2, "S2")
         put("S2", v, landed={"old": land["S2_old"], "new": land["S2_new"]}, **ev)
 
+    # The short duplicate is captured in the background (ensure_future) and, being
+    # a duplicate, never becomes a visible row: wait for the capture COUNTER to
+    # advance, not for time to pass. Not observed → S7 ERROR, never PASS.
+    cap_before = live.capture_status(a)
     say(a, "d2-dad", SAY_DAD_SHORT)
-    if setup_ok("S7", ("d1-dad", "d2-dad"), ("S7_rich",)):
-        time.sleep(20)  # let the short duplicate's digest land before asking
+    land["S7_dup"] = live.wait_captured(a, cap_before)
+    if setup_ok("S7", ("d1-dad", "d2-dad"), ("S7_rich", "S7_dup")):
         t = live.chat(a, "d2-ask-dad", ASK_DAD)
         pkt = live.packet(a, ASK_DAD)
         if t["error"]:

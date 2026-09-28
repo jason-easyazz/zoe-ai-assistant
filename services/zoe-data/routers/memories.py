@@ -890,6 +890,24 @@ async def _registered_account(user_id: str) -> bool:
         return (await cur.fetchone()) is not None
 
 
+@router.get("/capture-status")
+async def memory_capture_status(request: Request, user_id: str = Query(..., min_length=1)):
+    """Internal-token only: per-user counters of the post-turn memory capture
+    (``memory_capture_stats``: started / completed / failed / in_flight /
+    last_completed_at). No memory content. Lets a harness WAIT for a turn's
+    background extraction + digest to finish instead of sleeping — the chat
+    route schedules it with ``ensure_future``, so the HTTP turn proves nothing.
+    Missing header 401, wrong/unprovisioned token 403.
+    """
+    from memory_capture_stats import snapshot
+
+    if not request.headers.get("X-Internal-Token"):
+        raise HTTPException(status_code=401, detail="capture-status requires X-Internal-Token")
+    if not _has_valid_internal_token(request):
+        raise HTTPException(status_code=403, detail="capture-status: invalid X-Internal-Token")
+    return {"user_id": user_id, **snapshot(user_id)}
+
+
 @router.post("/users/{target_user}/forget-synthetic")
 async def forget_synthetic_user(target_user: str, request: Request):
     """Hard-forget a SYNTHETIC test user's memory rows — harness teardown.
