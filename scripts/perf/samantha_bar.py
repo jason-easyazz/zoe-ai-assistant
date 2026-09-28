@@ -26,7 +26,7 @@ SAFETY (the demo-users-only guardrail, docs/architecture/zoe-memory-samantha-bui
     rows by exact demo id / exact session id. A pending-teardown file is written
     BEFORE the first write, so a killed run is torn down by the next one;
   * memory rows are hard-deleted through ``POST /api/memories/users/{id}/forget-synthetic``
-    (internal token, ``^(demo|test)[-_]`` ids only). If ``ZOE_BAR_ADMIN_SESSION`` holds an
+    (internal token, harness-minted ``demo_<tag>_<hex>`` ids only). If ``ZOE_BAR_ADMIN_SESSION`` holds an
     admin ``X-Session-ID`` the admin ``/forget`` + ``/export`` path is used instead. If
     neither path answers, the live run REFUSES to start: a run that cannot clean up
     must not write.
@@ -88,7 +88,22 @@ DEFAULT_PENDING = CACHE / "samantha_bar_pending_teardown.json"
 MIN_MEM_MB = 1229  # 1.2 GB
 NIGHTLY_WINDOW = ((1, 45), (3, 15))  # local time; nightly jobs own the box
 NIGHTLY_GUARD_MIN = 30  # a run takes ~15-30 min: do not start this close to it
-BRAIN_FALLBACK_MARKERS = ("trouble reaching my brain", "having trouble reaching")
+# Canned "the brain did not answer" texts. The live ones are pinned to their
+# source constants by tests/unit/test_samantha_bar.py AND re-read from the
+# service checkout at run time (load_source_fallback_markers), so a rewording in
+# zoe-data cannot turn an outage into an ordinary reply.
+BRAIN_FALLBACK_MARKERS = (
+    "trouble reaching my brain",          # zoe_flue_client._FALLBACK_TEXT (chat + voice)
+    "having trouble reaching",
+    "something went wrong. please try again",  # routers/voice_tts._FALLBACK_PHRASE
+    "i had trouble with that",            # routers/voice_livekit canned replies
+    "trouble processing that",
+    "couldn't reach",
+)
+# (relative file, constant name) pairs read from the live service checkout.
+SOURCE_FALLBACK_CONSTANTS = (("zoe_flue_client.py", "_FALLBACK_TEXT"),
+                             ("routers/voice_tts.py", "_FALLBACK_PHRASE"))
+_SOURCE_FALLBACK_MARKERS: list[str] = []
 
 DEMO_USER_RE = re.compile(r"^demo_bar_[0-9a-f]{8}$")
 SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8")
@@ -274,9 +289,33 @@ def contains_any(text: str, needles: Iterable[str]) -> bool:
     return bool(found_needles(text, needles))
 
 
+def source_fallback_markers(service_dir: Path | None) -> list[str]:
+    """The fallback texts as the SERVICE CHECKOUT defines them (see
+    SOURCE_FALLBACK_CONSTANTS): a plain regex read of ``NAME = "..."`` — no
+    import of zoe-data. Missing file/constant → that entry is skipped."""
+    found: list[str] = []
+    if not service_dir:
+        return found
+    for rel, name in SOURCE_FALLBACK_CONSTANTS:
+        try:
+            src = (Path(service_dir) / rel).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        m = re.search(rf'^\s*{re.escape(name)}\s*=\s*"([^"\n]+)"', src, re.M)
+        if m and m.group(1).strip():
+            found.append(m.group(1).strip().lower())
+    return found
+
+
+def load_source_fallback_markers(service_dir: Path | None) -> list[str]:
+    """Arm is_brain_fallback with the service checkout's own fallback texts."""
+    _SOURCE_FALLBACK_MARKERS[:] = source_fallback_markers(service_dir)
+    return list(_SOURCE_FALLBACK_MARKERS)
+
+
 def is_brain_fallback(reply: str) -> bool:
     low = (reply or "").lower()
-    return any(m in low for m in BRAIN_FALLBACK_MARKERS)
+    return any(m in low for m in (*BRAIN_FALLBACK_MARKERS, *_SOURCE_FALLBACK_MARKERS))
 
 
 _DECLINE_MARKERS = (
@@ -382,7 +421,12 @@ def score_s5(hooks: list[dict]) -> tuple[str, dict]:
     return "SKIP", {**ev, "why": "hooks fired, none of them an emotional follow-up"}
 
 
-def score_s6(reply_b: str, packet_b: str, packet_a: str) -> tuple[str, dict]:
+def score_s6(reply_b: str, packet_b: str | None, packet_a: str | None) -> tuple[str, dict]:
+    if packet_b is None or packet_a is None:
+        # A packet that could not be read was not inspected: isolation is UNTESTED, never PASS.
+        missing = [n for n, p in (("B", packet_b), ("A", packet_a)) if p is None]
+        return "ERROR", {"method": "deterministic",
+                         "why": f"recall packet read failed for user {' and '.join(missing)}"}
     a_has = found_needles(packet_a, A_NEEDLES)
     leak_reply = found_needles(reply_b, A_NEEDLES)
     leak_packet = found_needles(packet_b, A_NEEDLES)
@@ -395,7 +439,9 @@ def score_s6(reply_b: str, packet_b: str, packet_a: str) -> tuple[str, dict]:
     return "PASS", ev
 
 
-def score_s7(reply: str, packet: str) -> tuple[str, dict]:
+def score_s7(reply: str, packet: str | None) -> tuple[str, dict]:
+    if packet is None:
+        return "ERROR", {"method": "deterministic", "why": "recall packet read failed"}
     ev = {"method": "deterministic",
           "reply_found": found_needles(reply, ("teodor", "lighthouse", "model ship")),
           "store_kept_richer": contains_any(packet, ("lighthouse",))}
@@ -410,10 +456,14 @@ def score_s7(reply: str, packet: str) -> tuple[str, dict]:
     return "FAIL", {**ev, "why": "; ".join(why)}
 
 
-def score_s8(reply_sister: str, reply_dad: str) -> tuple[str, dict]:
+def score_s8(reply_sister: str, reply_dad: str, filler_errors: int = 0) -> tuple[str, dict]:
     s = found_needles(reply_sister, ("marisol",))
     d = found_needles(reply_dad, ("lighthouse",))
-    ev = {"method": "deterministic", "sister_found": s, "dad_found": d}
+    ev = {"method": "deterministic", "sister_found": s, "dad_found": d,
+          "filler_errors": filler_errors}
+    if filler_errors:
+        # The long history was not actually built: the recall proves nothing. ERROR, never PASS.
+        return "ERROR", {**ev, "why": f"{filler_errors} filler turn(s) failed — history not exercised"}
     return ("PASS" if s and d else "FAIL"), ev
 
 
@@ -635,14 +685,17 @@ class Live:
         return {"reply": reply, "error": err, "ms": int((time.monotonic() - t0) * 1000),
                 "session": sid}
 
-    def packet(self, user: str, message: str) -> str:
-        """The recall packet the brain would get (/for-prompt, internal)."""
+    def packet(self, user: str, message: str) -> str | None:
+        """The recall packet the brain would get (/for-prompt, internal).
+
+        None when the read FAILED (non-200) — distinct from "" (an empty packet),
+        so a scenario can never pass on a packet it did not actually inspect."""
         assert_demo_user(user)
         q = urllib.parse.urlencode({"user_id": user, "message": message[:900], "limit": 40})
         code, body = self._req("GET", f"{DATA_BASE}/api/memories/for-prompt?{q}",
                                {"X-Internal-Token": self.token})
         if code != 200:
-            return ""
+            return None
         return str((body or {}).get("packet") or "")
 
     def packet_count(self, user: str) -> int | None:
@@ -702,7 +755,7 @@ class Live:
         t0 = time.monotonic()
         needles = list(needles)
         while True:
-            hit = found_needles(self.packet(user, message), needles)
+            hit = found_needles(self.packet(user, message) or "", needles)
             waited = round(time.monotonic() - t0, 1)
             if len(hit) == len(needles):
                 return {"landed": True, "waited_s": waited}
@@ -1012,8 +1065,8 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     if t1["error"] or t2["error"]:
         put("S8", "ERROR", filler_errors=errors, asks=[live.evidence(t1), live.evidence(t2)])
     else:
-        v, ev = score_s8(t1["reply"], t2["reply"])
-        put("S8", v, filler_turns=len(FILLER), filler_errors=errors,
+        v, ev = score_s8(t1["reply"], t2["reply"], errors)
+        put("S8", v, filler_turns=len(FILLER),
             asks=[live.evidence(t1), live.evidence(t2)], **ev)
     return [res[k] for k in SCENARIO_IDS if k in res]
 
@@ -1149,6 +1202,7 @@ def main(argv: list[str] | None = None) -> int:
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = resolve_service_dir(args.service_dir)
     revision = service_revision(service_dir)
+    load_source_fallback_markers(service_dir)  # the checkout's own "brain did not answer" texts
     lock_fd = _acquire_lock()  # noqa: F841 — held for the process lifetime
     try:
         cur = os.nice(0)

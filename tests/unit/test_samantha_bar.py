@@ -135,6 +135,30 @@ def test_s6_isolation_and_vacuous_skip():
     assert sb.score_s6("No idea.", "", "")[0] == "SKIP"
 
 
+def test_s6_failed_packet_read_is_error_never_pass():
+    a_pkt = "- Sister Marisol flying in from Lisbon"
+    v, ev = sb.score_s6("I don't know who is visiting.", None, a_pkt)  # B's read failed
+    assert v == "ERROR" and "user B" in ev["why"]
+    v, ev = sb.score_s6("I don't know who is visiting.", "", None)  # A's read failed
+    assert v == "ERROR" and "user A" in ev["why"]
+    assert sb.score_s6("No idea.", None, None)[0] == "ERROR"
+
+
+def test_s7_failed_packet_read_is_error():
+    rich = "Your dad Teodor is a retired lighthouse keeper who builds model ships."
+    assert sb.score_s7(rich, None)[0] == "ERROR"
+
+
+def test_live_packet_is_none_on_failed_read_and_text_on_success(monkeypatch):
+    live = sb.Live("tok", "", "postgresql://x", False)
+    monkeypatch.setattr(live, "_req", lambda *a, **k: (503, {"_error": "URLError"}))
+    assert live.packet("demo_bar_0a1b2c3d", "who?") is None
+    monkeypatch.setattr(live, "_req", lambda *a, **k: (200, {"packet": ""}))
+    assert live.packet("demo_bar_0a1b2c3d", "who?") == ""
+    monkeypatch.setattr(live, "_req", lambda *a, **k: (200, {"packet": "- x"}))
+    assert live.packet("demo_bar_0a1b2c3d", "who?") == "- x"
+
+
 def test_s7_richer_fact_in_reply_and_store():
     rich = "Your dad Teodor is a retired lighthouse keeper who builds model ships."
     assert sb.score_s7(rich, "- dad Teodor, retired lighthouse keeper")[0] == "PASS"
@@ -146,6 +170,54 @@ def test_s7_richer_fact_in_reply_and_store():
 def test_s8_both_facts():
     assert sb.score_s8("Marisol!", "He kept a lighthouse.")[0] == "PASS"
     assert sb.score_s8("Marisol!", "He was a teacher.")[0] == "FAIL"
+
+
+def test_s8_any_failed_filler_turn_is_error_even_when_both_names_recalled():
+    v, ev = sb.score_s8("Marisol!", "He kept a lighthouse.", filler_errors=1)
+    assert v == "ERROR" and "history not exercised" in ev["why"] and ev["filler_errors"] == 1
+    assert sb.score_s8("Marisol!", "He kept a lighthouse.", filler_errors=0)[0] == "PASS"
+
+
+ZD = REPO / "services/zoe-data"
+
+
+def _source_const(rel, name):
+    import re as _re
+    m = _re.search(rf'^\s*{name}\s*=\s*"([^"\n]+)"', (ZD / rel).read_text(), _re.M)
+    assert m, f"{name} not found in {rel}"
+    return m.group(1)
+
+
+@pytest.fixture
+def no_source_markers():
+    sb._SOURCE_FALLBACK_MARKERS[:] = []
+    yield
+    sb._SOURCE_FALLBACK_MARKERS[:] = []
+
+
+def test_live_fallback_texts_are_errors_with_builtin_markers_alone(no_source_markers):
+    """Drift guard: the exact texts zoe-data serves when the brain did not answer
+    must hit a BUILT-IN marker, even before the run-time source read."""
+    for rel, name in sb.SOURCE_FALLBACK_CONSTANTS:
+        text = _source_const(rel, name)
+        assert sb.is_brain_fallback(text), (rel, name, text)
+    assert sb.is_brain_fallback("Sorry, I had trouble reaching my brain just now. Could you try again?")
+    assert sb.is_brain_fallback("Sorry, something went wrong. Please try again.")
+    assert sb.is_brain_fallback("Sorry, I had trouble with that.")
+    assert not sb.is_brain_fallback("Your sister Marisol lands in Hobart on Friday.")
+
+
+def test_source_fallback_markers_are_read_from_the_checkout(no_source_markers, tmp_path):
+    (tmp_path / "routers").mkdir()
+    (tmp_path / "zoe_flue_client.py").write_text('x = 1\n_FALLBACK_TEXT = "Zorp is unavailable, sorry."\n')
+    (tmp_path / "routers" / "voice_tts.py").write_text('def f():\n    _FALLBACK_PHRASE = "Blip went wrong."\n')
+    assert not sb.is_brain_fallback("zorp is unavailable, sorry.")
+    assert sb.load_source_fallback_markers(tmp_path) == ["zorp is unavailable, sorry.", "blip went wrong."]
+    assert sb.is_brain_fallback("ZORP is unavailable, sorry.") and sb.is_brain_fallback("Blip went wrong.")
+    assert sb.load_source_fallback_markers(tmp_path / "missing") == []  # missing checkout: nothing armed
+    assert sb.load_source_fallback_markers(None) == []
+    live = sb.source_fallback_markers(ZD)
+    assert _source_const("zoe_flue_client.py", "_FALLBACK_TEXT").lower() in live
 
 
 def test_brain_fallback_is_never_a_reply():

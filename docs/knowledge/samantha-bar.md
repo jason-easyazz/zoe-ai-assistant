@@ -75,9 +75,9 @@ ids only). Day 2 follows.
 | S3 | Asked about something never said (the dentist), Zoe declines instead of inventing. | A clear decline with no `Dr X` or `dentist is X` is a deterministic pass. Anything else goes to the judge. |
 | S4 | A day-1 worry is acknowledged on day 2, gently and not verbatim. | `interview` must appear, the reply must share fewer than 7 consecutive words with the day-1 sentence, and the judge must say "warm, in its own words" |
 | S5 | A proactive hook, if one fires, carries the day-1 open loop. | Reads `proactive_pending` for demo A. No hook gives SKIP. An `emotional_followup` without the loop gives FAIL. |
-| S6 | Demo B never sees demo A's facts. | Deterministic: no A needle may appear in B's reply or in B's `/for-prompt` packet. If A's own packet holds none of them, the result is SKIP, because the test would be vacuous. |
-| S7 | A short duplicate ("my dad is Teodor") does not erase the richer fact. | The reply must name Teodor and lighthouse, and A's packet must still hold `lighthouse`. |
-| S8 | S1 and S7 facts survive 32 filler turns spread over 3 sessions. | deterministic: `marisol` and `lighthouse` |
+| S6 | Demo B never sees demo A's facts. | Deterministic: no A needle may appear in B's reply or in B's `/for-prompt` packet. If A's own packet holds none of them, the result is SKIP, because the test would be vacuous. A packet read that FAILS (either user) is ERROR — a boundary that was not inspected is never certified. |
+| S7 | A short duplicate ("my dad is Teodor") does not erase the richer fact. | The reply must name Teodor and lighthouse, and A's packet must still hold `lighthouse`. A failed packet read is ERROR. |
+| S8 | S1 and S7 facts survive 32 filler turns spread over 3 sessions. | deterministic: `marisol` and `lighthouse`. ANY failed filler turn is ERROR, even when both names come back — the long history was not built, so the recall proves nothing. |
 
 The judge is the brain itself: llama-server `:11434` `/v1/chat/completions` with temperature 0,
 `top_k` 1 and seed 0. It gets a fixed system prompt and one rubric per judged scenario, and
@@ -86,8 +86,12 @@ unparseable answer is ERROR. The rubric text is pinned by sha256 in the tests. E
 changes what a pass means, so update the pin and re-record the baseline. `compare` notes a
 rubric mismatch.
 
-Several results count as not-pass: a brain-fallback reply ("trouble reaching my brain"), an
-HTTP error, and an empty reply are all ERROR. For the baseline, a previously passing
+Several results count as not-pass: a brain-fallback reply, an HTTP error, and an empty reply
+are all ERROR. The fallback texts are the ones zoe-data actually serves when the brain did not
+answer — `zoe_flue_client._FALLBACK_TEXT` ("Sorry, I had trouble reaching my brain just
+now…", chat + voice) and `routers/voice_tts._FALLBACK_PHRASE` — pinned to those source
+constants by `tests/unit/test_samantha_bar.py` AND re-read from the service checkout at run
+time (`load_source_fallback_markers`), so a rewording cannot turn an outage into a reply. For the baseline, a previously passing
 scenario that now reports SKIP or ERROR is a regression. **A skip is not a pass.**
 
 Evidence never stores raw replies by default. It keeps the length, a 12-character sha,
@@ -136,8 +140,16 @@ removed in Postgres.
   - A missing header returns **401**.
   - A wrong token, or no token provisioned on the host, returns **403**.
 - **Id rule:** `user_filters.synthetic_forget_refusal`.
-  - The id must match `^(demo|test)[-_]`. The match is case-sensitive and narrower than the
-    batch filter: `probe`/`ci`/`e2e`/`bench` ids are refused.
+  - The id must be harness-SHAPED, `^(demo|test)_[a-z0-9]{1,16}_[0-9a-f]{6,32}$` — a family
+    tag plus a lowercase hex nonce, exactly what `samantha_bar.py` (`demo_bar_<8 hex>`) and
+    `chroma_migrate_rehearsal.py` (`demo_b08_<8 hex>`) mint. Never a bare prefix: Zoe Auth
+    derives account ids from usernames, so `demo_user` / `test-jason` can be REAL accounts.
+    Case-sensitive and narrower than the batch filter: `probe`/`ci`/`e2e`/`bench` are refused.
+  - The id must not be a registered Zoe Auth account: the route reads `auth_users` (the
+    account store, in the same Postgres — NOT zoe-data's `users` mirror, which `/api/chat`
+    fills for every id it sees). A registered id is **403** (`outcome=refused_registered`);
+    a lookup that fails is **409** (`outcome=refused_unverified`) — fail closed, nothing
+    deleted either way.
   - The id must have no surrounding whitespace.
   - The id must not be a guest sentinel.
   - The id must not be in `ZOE_SYNTHETIC_USER_ALLOWLIST`. An allowlisted id is treated as a

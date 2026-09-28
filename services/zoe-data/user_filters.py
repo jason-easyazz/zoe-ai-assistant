@@ -68,17 +68,23 @@ def drop_synthetic_users(
 
 
 # The ONLY ids an internal (non-admin) caller may hard-forget through
-# ``POST /api/memories/users/{id}/forget-synthetic``. Deliberately NARROWER than
-# SYNTHETIC_USER_RE: case-sensitive and ``demo``/``test`` only — ``probe``/``ci``/
-# ``e2e``/``bench`` ids are filtered from the batch passes but are not erasable
-# without an admin. Pinned by tests/test_memory_forget_synthetic.py.
-FORGET_SYNTHETIC_RE = re.compile(r"^(demo|test)[-_]")
+# ``POST /api/memories/users/{id}/forget-synthetic``: the exact shapes the
+# harnesses MINT — ``demo``/``test``, a family tag, then a lowercase hex nonce
+# (``scripts/perf/samantha_bar.py`` mints ``demo_bar_<8 hex>``,
+# ``scripts/maintenance/chroma_migrate_rehearsal.py`` ``demo_b08_<8 hex>``).
+# NEVER a bare prefix: Zoe Auth derives account ids from usernames, so a real
+# account can be ``demo_user`` or ``test-jason``. Deliberately NARROWER than
+# SYNTHETIC_USER_RE (case-sensitive; no ``probe``/``ci``/``e2e``/``bench``).
+# The route ALSO refuses any id that is a registered account. Pinned by
+# tests/test_memory_forget_synthetic.py.
+FORGET_SYNTHETIC_RE = re.compile(r"^(demo|test)_[a-z0-9]{1,16}_[0-9a-f]{6,32}$")
 
 
 def synthetic_forget_refusal(user_id: str | None) -> str | None:
     """Why ``user_id`` may NOT be hard-forgotten by an internal caller, or None.
 
-    Refuses guest sentinels, anything outside ``^(demo|test)[-_]``, ids with
+    Refuses guest sentinels, anything not harness-shaped (``FORGET_SYNTHETIC_RE``:
+    ``demo_<tag>_<hex>`` / ``test_<tag>_<hex>``), ids with
     surrounding whitespace, and ids the operator re-admitted through
     ``ZOE_SYNTHETIC_USER_ALLOWLIST`` — an allowlisted id is treated as a real
     user, so only an admin can erase it.
@@ -89,7 +95,8 @@ def synthetic_forget_refusal(user_id: str | None) -> str | None:
     if uid != uid.strip():
         return "id has surrounding whitespace"
     if not FORGET_SYNTHETIC_RE.match(uid):
-        return "not a synthetic demo_/test_ id — real users need the admin forget"
+        return ("not a harness-minted synthetic id (demo_<tag>_<hex> / test_<tag>_<hex>) — "
+                "real users need the admin forget")
     if not is_synthetic_user(uid):
         return "id is allowlisted (ZOE_SYNTHETIC_USER_ALLOWLIST) and treated as a real user"
     return None

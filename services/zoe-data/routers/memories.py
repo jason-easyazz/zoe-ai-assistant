@@ -875,6 +875,21 @@ async def forget_user(
     return {"user_id": target_user, "removed": removed}
 
 
+async def _registered_account(user_id: str) -> bool:
+    """True when Zoe Auth holds an account with this id.
+
+    Reads ``auth_users`` (zoe-auth's account store, same Postgres) through the
+    shared pool. NOT zoe-data's ``users`` table: ``/api/chat`` inserts a row there
+    for every id it sees, so a harness demo user is in ``users`` after its first
+    turn. Raises on any lookup failure — callers refuse (fail closed).
+    """
+    from db_pool import get_db_ctx  # deferred: keeps this module importable in unit tests
+
+    async with get_db_ctx() as db:
+        cur = await db.execute("SELECT 1 FROM auth_users WHERE user_id = ? LIMIT 1", (user_id,))
+        return (await cur.fetchone()) is not None
+
+
 @router.post("/users/{target_user}/forget-synthetic")
 async def forget_synthetic_user(target_user: str, request: Request):
     """Hard-forget a SYNTHETIC test user's memory rows — harness teardown.
@@ -884,8 +899,13 @@ async def forget_synthetic_user(target_user: str, request: Request):
     call returns ``removed: 0``). Differences, all fail-closed:
       * auth is the internal token ONLY (``X-Internal-Token`` == ``ZOE_INTERNAL_TOKEN``)
         — loopback alone is not enough; missing header 401, wrong/unprovisioned 403;
-      * the id must pass ``user_filters.synthetic_forget_refusal`` — ``^(demo|test)[-_]``,
-        not allowlisted, never a guest sentinel — else 403 with the reason.
+      * the id must pass ``user_filters.synthetic_forget_refusal`` — harness-minted
+        ``demo_<tag>_<hex>`` / ``test_<tag>_<hex>`` only, not allowlisted, never a
+        guest sentinel — else 403 with the reason;
+      * the id must NOT be a registered Zoe Auth account (``auth_users`` — the
+        account store, not zoe-data's ``users`` mirror, which ``/api/chat`` fills
+        for every id it sees): a registered id is 403 ``refused_registered``, and
+        a lookup that FAILS is 409 ``refused_unverified`` — fail closed.
     Every call that reaches the id check logs one ``MEMORY_FORGET_SYNTHETIC`` line
     naming the id and the outcome.
     """
@@ -902,6 +922,22 @@ async def forget_synthetic_user(target_user: str, request: Request):
     if refusal:
         logger.warning("MEMORY_FORGET_SYNTHETIC refused user=%r reason=%s", target_user, refusal)
         raise HTTPException(status_code=403, detail=f"forget-synthetic refused: {refusal}")
+    try:
+        registered = await _registered_account(target_user)
+    except Exception as exc:  # noqa: BLE001 — any lookup failure refuses (fail closed)
+        logger.error("MEMORY_FORGET_SYNTHETIC user=%s outcome=refused_unverified error=%s",
+                     target_user, exc)
+        raise HTTPException(
+            status_code=409,
+            detail="forget-synthetic refused: could not verify the id is not a registered account",
+        )
+    if registered:
+        logger.warning("MEMORY_FORGET_SYNTHETIC user=%s outcome=refused_registered", target_user)
+        raise HTTPException(
+            status_code=403,
+            detail="forget-synthetic refused: id belongs to a registered account — "
+                   "real users need the admin forget",
+        )
     try:
         removed = await _svc().delete_user(target_user, actor="internal:forget-synthetic")
     except MemoryServiceError as exc:

@@ -1,11 +1,14 @@
 """POST /api/memories/users/{id}/forget-synthetic — the internal harness-teardown forget.
 
 Contract pinned here: internal token ONLY (missing 401, wrong/unprovisioned 403,
-loopback alone never enough); ids must match ``^(demo|test)[-_]``, must not be
-allowlisted (an allowlisted id is a real user) and must not be a guest sentinel —
-otherwise 403 with the reason and NO deletion; a permitted id gets exactly the
-admin forget's ``delete_user`` call. The pattern is pinned against a loosened
-copy (negative control) so widening it goes red.
+loopback alone never enough); ids must be harness-shaped (``FORGET_SYNTHETIC_RE``:
+``demo_<tag>_<hex>`` / ``test_<tag>_<hex>`` — never a bare prefix, since Zoe Auth
+derives account ids from usernames), must not be allowlisted (an allowlisted id is
+a real user), must not be a guest sentinel, and must NOT be a registered Zoe Auth
+account (``auth_users``; a failed lookup refuses too) — otherwise 403/409 with the
+reason and NO deletion; a permitted id gets exactly the admin forget's
+``delete_user`` call. The pattern is pinned against loosened copies (negative
+controls) so widening it goes red.
 """
 from __future__ import annotations
 
@@ -41,6 +44,12 @@ def svc(monkeypatch):
     monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", TOKEN)
     monkeypatch.setattr(memories_mod, "_svc", lambda: fake)
     monkeypatch.delenv("ZOE_SYNTHETIC_USER_ALLOWLIST", raising=False)
+
+    async def not_registered(user_id):
+        fake.looked_up.append(user_id)
+        return False
+    fake.looked_up = []
+    monkeypatch.setattr(memories_mod, "_registered_account", not_registered)
     return fake
 
 
@@ -51,12 +60,67 @@ def _post(uid: str, headers=None, client_host: str = "testclient"):
     return client.post(f"/api/memories/users/{uid}/forget-synthetic", headers=headers or {})
 
 
-@pytest.mark.parametrize("uid", ["demo_bar_0a1b2c3d", "demo-tomb", "test_isolation_a_1", "test-sec-b-4f9c0c"])
-def test_demo_and_test_ids_are_deleted(svc, uid):
+# Exactly what the harnesses mint: samantha_bar `demo_bar_<8 hex>`, the chroma
+# rehearsal `demo_b08_<8 hex>`; a test_ family with a hex nonce is the same shape.
+HARNESS_IDS = ["demo_bar_0a1b2c3d", "demo_b08_1a2b3c4d", "test_sec_4f9c0c"]
+# Username-shaped ids Zoe Auth could hand a REAL account (bare prefix, no hex
+# nonce, wrong separator, short/uppercase nonce) — the old `^(demo|test)[-_]`
+# rule admitted every one of these.
+USERNAME_SHAPED_IDS = ["demo_user", "test_jason", "demo-tomb", "test-sec-b-4f9c0c",
+                       "test_isolation_a_1", "demo_bar_abc", "DEMO_bar_0a1b2c3d",
+                       "demo_bar_0A1B2C3D", "demo_b08_sentinel", "demo_", "test_x_"]
+
+
+@pytest.mark.parametrize("uid", HARNESS_IDS)
+def test_harness_shaped_unregistered_ids_are_deleted(svc, uid):
     r = _post(uid, HDR)
     assert r.status_code == 200, r.text
     assert r.json() == {"user_id": uid, "removed": 4, "mode": "synthetic"}
     assert svc.deleted == [(uid, "internal:forget-synthetic")]
+    assert svc.looked_up == [uid]  # the registration check ran before the delete
+
+
+@pytest.mark.parametrize("uid", USERNAME_SHAPED_IDS)
+def test_username_shaped_ids_are_refused_before_any_lookup(svc, uid):
+    r = _post(uid, HDR)
+    assert r.status_code == 403 and "harness-minted" in r.json()["detail"]
+    assert svc.deleted == [] and svc.looked_up == []
+
+
+def test_registered_account_with_a_harness_shape_is_refused(svc, monkeypatch, caplog):
+    import logging
+
+    async def registered(user_id):
+        return True
+    monkeypatch.setattr(memories_mod, "_registered_account", registered)
+    with caplog.at_level(logging.WARNING, logger=memories_mod.logger.name):
+        r = _post("demo_bar_0a1b2c3d", HDR)
+    assert r.status_code == 403 and "registered account" in r.json()["detail"]
+    assert svc.deleted == []
+    msgs = [rec.getMessage() for rec in caplog.records if "MEMORY_FORGET_SYNTHETIC" in rec.getMessage()]
+    assert msgs == ["MEMORY_FORGET_SYNTHETIC user=demo_bar_0a1b2c3d outcome=refused_registered"]
+
+
+def test_registration_lookup_failure_refuses_closed(svc, monkeypatch, caplog):
+    import logging
+
+    async def broken(user_id):
+        raise RuntimeError("relation auth_users does not exist")
+    monkeypatch.setattr(memories_mod, "_registered_account", broken)
+    with caplog.at_level(logging.WARNING, logger=memories_mod.logger.name):
+        r = _post("demo_bar_0a1b2c3d", HDR)
+    assert r.status_code == 409 and "could not verify" in r.json()["detail"]
+    assert svc.deleted == []
+    msgs = [rec.getMessage() for rec in caplog.records if "MEMORY_FORGET_SYNTHETIC" in rec.getMessage()]
+    assert len(msgs) == 1 and "outcome=refused_unverified" in msgs[0] and "auth_users" in msgs[0]
+
+
+def test_registered_account_check_reads_auth_users_not_users():
+    """The real lookup targets zoe-auth's account store; zoe-data's ``users``
+    mirror is filled by /api/chat for every id and would refuse every teardown."""
+    import inspect
+    src = inspect.getsource(memories_mod._registered_account)
+    assert "FROM auth_users WHERE user_id" in src and "FROM users" not in src
 
 
 @pytest.mark.parametrize("uid", ["jason", "family-admin", "Christine", "testa", "demolition",
@@ -75,11 +139,12 @@ def test_guest_sentinels_are_refused(svc, uid):
 
 
 def test_allowlisted_demo_id_is_treated_as_real(svc, monkeypatch):
-    monkeypatch.setenv("ZOE_SYNTHETIC_USER_ALLOWLIST", "demo_lab_keep")
-    r = _post("demo_lab_keep", HDR)
+    monkeypatch.setenv("ZOE_SYNTHETIC_USER_ALLOWLIST", "demo_lab_c0ffee")
+    r = _post("demo_lab_c0ffee", HDR)
     assert r.status_code == 403 and "allowlisted" in r.json()["detail"]
     assert svc.deleted == []
-    assert _post("demo_lab_other", HDR).status_code == 200  # only the listed id is protected
+    assert _post("demo_lab_0ther1", HDR).status_code == 403  # allowlist aside, not hex-shaped
+    assert _post("demo_lab_0a1b2c", HDR).status_code == 200  # only the listed id is protected
 
 
 def test_missing_token_is_401_even_from_loopback(svc):
@@ -139,8 +204,18 @@ IDS_REFUSED_BY_THE_NARROW_RULE = ["probe-x", "ci_run", "e2e-1", "bench-1", "DEMO
 
 
 def test_pattern_is_pinned():
-    assert user_filters.FORGET_SYNTHETIC_RE.pattern == r"^(demo|test)[-_]"
+    assert user_filters.FORGET_SYNTHETIC_RE.pattern == r"^(demo|test)_[a-z0-9]{1,16}_[0-9a-f]{6,32}$"
     assert not (user_filters.FORGET_SYNTHETIC_RE.flags & re.IGNORECASE)
+
+
+def test_negative_control_old_bare_prefix_would_admit_username_shapes():
+    # The pre-fix rule: any demo-/test_ prefix. Every username-shaped id above
+    # passes it — which is exactly the hole (Zoe Auth ids ARE usernames).
+    old = re.compile(r"^(demo|test)[-_]")
+    admitted = [u for u in USERNAME_SHAPED_IDS if old.match(u)]
+    assert admitted == [u for u in USERNAME_SHAPED_IDS if u[:4] in ("demo", "test")]
+    assert {"demo_user", "test_jason", "demo-tomb"} <= set(admitted)
+    assert not any(user_filters.FORGET_SYNTHETIC_RE.match(u) for u in USERNAME_SHAPED_IDS)
 
 
 def test_negative_control_loosened_pattern_would_admit_more(svc, monkeypatch):
