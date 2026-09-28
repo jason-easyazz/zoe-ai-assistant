@@ -89,6 +89,19 @@ def make_db(tmp_path: Path) -> Path:
     with sqlite3.connect(db) as conn:
         conn.execute("create table fixture(id integer primary key)")
         conn.execute("insert into fixture(id) values (1)")
+        # The palace format guard (scripts/lib/palace_client.py) refuses an existing
+        # chroma.sqlite3 it cannot identify, so the fixture carries a sysdb migration
+        # marker matching the installed chromadb major (10+ = 1.x, else 0.6).
+        try:
+            import chromadb  # noqa: WPS433
+            _major = int(str(chromadb.__version__).split(".")[0])
+        except Exception:  # pragma: no cover - fake/absent chromadb
+            _major = 0
+        conn.execute("create table migrations(dir text, version integer)")
+        conn.executemany(
+            "insert into migrations values ('sysdb', ?)",
+            [(v,) for v in range(1, (10 if _major >= 1 else 9) + 1)],
+        )
     (store / "index-segment").mkdir()
     (store / "index-segment" / "header.bin").write_bytes(b"hnsw")
     return db

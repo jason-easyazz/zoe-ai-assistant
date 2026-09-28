@@ -76,8 +76,115 @@ _AUDIT_COLLECTION = os.environ.get("ZOE_MEMORY_AUDIT_COLLECTION", "mempalace_aud
 # fresh list(...) copy per upsert — which also means no shared mutable object
 # ever reaches chroma. See _append_audit_sync.
 _AUDIT_NULL_EMBEDDING: tuple[float, ...] = (1.0,) + (0.0,) * 383
+# ONE chromadb.PersistentClient per resolved palace dir, shared by the drawers and the
+# audit collections (the name predates the drawers moving onto it). Two clients on
+# different spellings of one path would be two systems writing one SQLite.
 _AUDIT_CLIENTS: dict[str, Any] = {}
 _AUDIT_CLIENTS_LOCK = threading.Lock()
+
+_DRAWERS_COLLECTION = "mempalace_drawers"
+_DRAWERS_EF: Any = None
+_DRAWERS_EF_LOCK = threading.Lock()
+
+
+def _palace_client(data_dir: str) -> Any:
+    """The cached PersistentClient for ``data_dir`` (resolved, so every spelling shares it)."""
+    key = os.path.realpath(os.path.abspath(os.path.expanduser(data_dir)))
+    client = _AUDIT_CLIENTS.get(key)
+    if client is None:
+        with _AUDIT_CLIENTS_LOCK:
+            client = _AUDIT_CLIENTS.get(key)
+            if client is None:
+                import chromadb
+                _check_palace_format(key, getattr(chromadb, "__version__", "0"))
+                client = chromadb.PersistentClient(path=key)
+                _AUDIT_CLIENTS[key] = client
+    return client
+
+
+def _check_palace_format(palace_dir: str, chromadb_version: str) -> None:
+    """Refuse a client whose major version disagrees with the palace's on-disk format.
+
+    B0.8: a 1.x client silently migrates a 0.6 palace IN PLACE on first open (one-way),
+    and a 0.6.3 client dies on a 1.x palace. Read the format from SQLite (``mode=ro``),
+    before chromadb touches the file: sysdb migration 00010 exists only in 1.x.
+    Mirrors ``scripts/lib/palace_client.py`` (scripts cannot import service code).
+    """
+    import sqlite3
+
+    db = os.path.join(palace_dir, "chroma.sqlite3")
+    if not os.path.exists(db):
+        return  # a brand-new palace takes whatever this client writes
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        row = con.execute("SELECT max(version) FROM migrations WHERE dir = 'sysdb'").fetchone()
+    except sqlite3.OperationalError as exc:
+        # An EXISTING chroma.sqlite3 whose format cannot be read (no migrations table, partial
+        # restore, unknown schema) must fail closed: a 1.x client would otherwise initialise or
+        # migrate it in place before the guard has identified it. Only a missing DB is "new".
+        raise RuntimeError(
+            f"palace {palace_dir} has a chroma.sqlite3 whose format cannot be identified ({exc}); "
+            "refusing to open it (see docs/knowledge/chroma-1-5-migration.md)"
+        ) from exc
+    finally:
+        con.close()
+    on_disk = "1.x" if row and row[0] is not None and int(row[0]) >= 10 else "0.6"
+    client = "1.x" if int(str(chromadb_version).split(".")[0]) >= 1 else "0.6"
+    if on_disk != client:
+        raise RuntimeError(
+            f"palace {palace_dir} is chromadb {on_disk} format but the installed client is "
+            f"{chromadb_version}; refusing to open it (see docs/knowledge/chroma-1-5-migration.md)"
+        )
+
+
+def _drawers_embedding_function() -> Any:
+    """One MiniLM ONNX session per process, reported under the name ``"default"``.
+
+    B0.8 (chromadb 1.5.x): the palace's collections persist the embedding-function
+    identity ``"default"``. Opening one WITHOUT an EF gives chroma's
+    ``DefaultEmbeddingFunction``, which builds a fresh ``ONNXMiniLM_L6_V2`` (and ONNX
+    session) on EVERY call: measured 0.42-0.89 s per query vs 0.18-0.27 s with this
+    cached instance, and 0.11-0.22 s on 0.6.3. Passing a differently-named EF raises
+    "Embedding function conflict", hence the name. The model is the same archive (SHA
+    ``913d7300…``) that chroma pins in both 0.6.3 and 1.5.9; mempalace 3.10 uses the
+    same trick (``embedding._build_ef_class``).
+    """
+    global _DRAWERS_EF
+    if _DRAWERS_EF is None:
+        with _DRAWERS_EF_LOCK:
+            if _DRAWERS_EF is None:
+                from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
+
+                class _ZoeMiniLM(ONNXMiniLM_L6_V2):
+                    @staticmethod
+                    def name() -> str:
+                        return "default"
+
+                _DRAWERS_EF = _ZoeMiniLM()
+    return _DRAWERS_EF
+
+
+def get_drawers_collection(data_dir: str) -> Any:
+    """The recall (drawers) collection: Zoe's one opener, raw chromadb.
+
+    Replaces ``mempalace.palace.get_collection`` (B0.8). mempalace 3.3.1's backend runs
+    ``_fix_blob_seq_ids`` against the SQLite on every new client, which is unsafe on a
+    1.x palace, and 3.10's wrapper adds file locks, where-validation and identity
+    checks Zoe has never run under. What stays the same is what 3.3.1 did: a cached
+    client, the existing collection as-is, and ``hnsw:space=cosine`` only when a brand-new
+    palace has none yet. The live palace keeps its own ``l2`` space.
+    """
+    client = _palace_client(data_dir)
+    ef = _drawers_embedding_function()
+    try:
+        return client.get_collection(_DRAWERS_COLLECTION, embedding_function=ef)
+    except Exception:
+        names = {getattr(c, "name", c) for c in client.list_collections()}
+        if _DRAWERS_COLLECTION in names:
+            raise  # it exists: this is a real error, never paper over it with a create
+        return client.create_collection(
+            _DRAWERS_COLLECTION, metadata={"hnsw:space": "cosine"}, embedding_function=ef
+        )
 
 _MEMORY_SCOPE_TO_VISIBILITY = {
     "personal": "personal",
@@ -1302,20 +1409,10 @@ class MemoryService:
         return task
 
     def _collection(self):
-        from mempalace.palace import get_collection  # type: ignore[import]
-        return get_collection(self._data_dir)
+        return get_drawers_collection(self._data_dir)
 
     def _audit_collection(self):
-        data_dir = os.path.realpath(os.path.abspath(os.path.expanduser(self._data_dir)))
-        client = _AUDIT_CLIENTS.get(data_dir)
-        if client is None:
-            with _AUDIT_CLIENTS_LOCK:
-                client = _AUDIT_CLIENTS.get(data_dir)
-                if client is None:
-                    import chromadb
-                    client = chromadb.PersistentClient(path=data_dir)
-                    _AUDIT_CLIENTS[data_dir] = client
-        return client.get_or_create_collection(_AUDIT_COLLECTION)
+        return _palace_client(self._data_dir).get_or_create_collection(_AUDIT_COLLECTION)
 
     def _write_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
         col = self._collection()
