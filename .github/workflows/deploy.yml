@@ -141,22 +141,51 @@ jobs:
           # Ordering is deliberate (same as #1344): blocking BEFORE the reset
           # leaves the live tree at $prev, so a retry re-evaluates the SAME change
           # instead of fast-forwarding past it and skipping the gate entirely.
+          #
+          # BOUND TO THE DEPLOYED TREE (incident 2026-09-28, #1745): freshness +
+          # status alone let a replay from an UNRELATED earlier landing clear a
+          # voice-path deploy. `--expect-tree-of $target` requires the artifact to
+          # be evidence for the code going live — the same commit, or a clean run
+          # whose recorded tree equals $target's tree (the PR head of an
+          # up-to-date squash merge). Anything else, incl. a dirty tree, BLOCKS.
+          #
+          # BOOTSTRAP: the checker runs from the live tree at $prev, and a copy
+          # that predates --expect-tree-of would reject the unknown flag and wedge
+          # EVERY deploy (the retry re-evaluates the same range). So feature-
+          # detect, and fall back to the STRICTER exact-commit binding
+          # (--expect-revision, which every copy since #1594 supports) — never to
+          # an unbound check.
           prev="$(git rev-parse HEAD)" || exit 1
           target="$(git rev-parse FETCH_HEAD)" || exit 1
+          bind_flag="--expect-tree-of"
+          if ! grep -q -- '--expect-tree-of' scripts/maintenance/voice_gate_check.py; then
+            echo "::warning::live voice_gate_check.py predates --expect-tree-of; binding to the exact commit (--expect-revision) for this run."
+            bind_flag="--expect-revision"
+          fi
           if ! python3 scripts/maintenance/voice_gate_check.py \
-                 --repo /home/zoe/assistant --diff "${prev}..${target}"; then
-            echo "::error::REFUSING TO DEPLOY: ${prev:0:7}..${target:0:7} changes the voice runtime path without a fresh passing replay-gate result (see above)."
+                 --repo /home/zoe/assistant --diff "${prev}..${target}" \
+                 "${bind_flag}" "${target}"; then
+            echo "::error::REFUSING TO DEPLOY: ${prev:0:7}..${target:0:7} changes the voice runtime path without a fresh passing replay-gate result for the code being deployed (see above)."
             echo "Live tree stays at ${prev} — nothing was deployed or restarted."
-            echo "To unwedge, on the Jetson as user zoe:"
+            echo "To unwedge, on the Jetson as user zoe, replay a checkout of ${target:0:7}"
+            echo "(NOT the live tree — it is still at ${prev:0:7}, so its artifact is"
+            echo "evidence for the wrong code and the gate refuses it):"
             # The probe's in-process STT must load the SERVICE's stack (B0.7:
             # the 3.12 venv after cutover). Resolved from the PRE-reset tree, so
             # an older tree without the resolver falls back to python3.
             ZPY="$(bash scripts/deploy/zoe_data_python.sh 2>/dev/null || echo python3)"
+            echo "  git -C /home/zoe/assistant worktree add --detach ~/.worktrees/voice-gate-deploy ${target}"
+            # The worktree has no services/zoe-data/.env (gitignored), and an
+            # explicit --service-dir bypasses the probe's live-env fallback, so
+            # without this copy the probe records an ERROR, not a pass. The file
+            # is ignored, so the tree still records clean; mode 600, never
+            # committed, gone with the worktree.
+            echo "  cp -n /home/zoe/assistant/services/zoe-data/.env ~/.worktrees/voice-gate-deploy/services/zoe-data/.env && chmod 600 ~/.worktrees/voice-gate-deploy/services/zoe-data/.env"
             echo "  flock /tmp/zoe-voice-harness.lock \\"
-            echo "    ${ZPY} scripts/maintenance/voice_regression_probe.py \\"
-            echo "      --samples 20 --service-dir /home/zoe/assistant/services/zoe-data"
-            echo "then re-run this workflow. See docs/knowledge/merge-and-deploy.md"
-            echo "\"The CD path enforces the voice replay-gate\"."
+            echo "    ${ZPY} ~/.worktrees/voice-gate-deploy/scripts/maintenance/voice_regression_probe.py \\"
+            echo "      --samples 20 --service-dir ~/.worktrees/voice-gate-deploy/services/zoe-data"
+            echo "then re-run this workflow and remove the worktree. See"
+            echo "docs/knowledge/merge-and-deploy.md \"The CD path enforces the voice replay-gate\"."
             exit 1
           fi
           # Reset to EXACTLY the gate-checked SHA — not FETCH_HEAD, which a

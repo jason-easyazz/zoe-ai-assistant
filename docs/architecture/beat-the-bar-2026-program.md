@@ -92,15 +92,22 @@ State as of **2026-09-28 08:30 AWST**:
 
    The window frees ~2 GB. Hold the other PRs (drop `auto-merge`) while a voice PR lands, or
    it goes behind again.
+
+   **Since 2026-09-28 the DEPLOY gate is tree-bound too** (`--expect-tree-of`): the head-bound
+   artifact clears the deploy only if the squash merge is tree-identical to that head and
+   nothing merged after it before its deploy, and nothing overwrote the artifact (incl. the 04:30
+   nightly probe). Otherwise probe a checkout of the MERGED sha (copy the live `services/zoe-data/.env` into the
+   worktree first, or the probe records an error) and `gh run rerun`. Recipe:
+   [merge-and-deploy.md](../knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 4. **Next engineering, in order:**
    1. **B7.5** app-connection handoff engine — (a)+(b) built, #1752 pending land; needs a
       live-panel check when the Pi is on (push, `/wake`, a real Telegram send). Next: (c).
    2. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
       week).
-   3. The `samantha_bar` harness.
+   3. The `samantha_bar` harness — v0 built (B3.11 🔨); first baseline after the B0.8 cutover (live 2026-09-28) is verified.
    4. **B3.2/B3.3** on the new store (B0.8 live 2026-09-28).
    5. Brief-on-arrival (**B2.1**): built flag-dark; flip it once the panel is on.
-   6. A Kokoro venv without scikit-learn/pandas (B6.6 d).
+   6. ~~A Kokoro venv without scikit-learn/pandas (B6.6 d)~~ — B5.7, applied live 2026-09-28 #1750.
    7. The 24 h `--cache-ram` occupancy measurement (B0.4/B6.6).
 
 ## 1. Where Zoe already beats the bar (protect these)
@@ -728,6 +735,7 @@ State as of **2026-09-28 08:30 AWST**:
   /home/zoe/assistant/scripts/maintenance/zoe-nightly-dreaming.py` + `daemon-reload`; imports
   (chromadb, db_pool, memory_digest) verified to resolve under the venv 2026-09-27; verify the
   Mon 2026-09-28 02:31 AWST run log. ✅ It also iterated ~24 users incl. test/probe ids: now filtered by `user_filters.is_synthetic_user` (dreaming, consolidation, music, portrait, proactive triggers; `ZOE_SYNTHETIC_USER_ALLOWLIST`), and the leaking probe chat sessions are purged nightly (#1726 MERGED; `emotional_followup` joined in #1731; [record](../knowledge/synthetic-users-and-proactive-recipients.md)).
+- B3.11 🔨 **Samantha bar harness v0** (`scripts/perf/samantha_bar.py`, [record](../knowledge/samantha-bar.md)): 8 multi-day scenarios (same-day recall, supersession, abstention, emotional thread, hook-gated unprompted surfacing, isolation, richer fact, 32-turn history) on throwaway `demo_bar_*` users via the live API; brain-as-judge at temperature 0 with a pinned rubric; head-bound baseline, only a previous PASS can regress; asserted teardown through the new internal-token `POST /api/memories/users/{id}/forget-synthetic` (harness-shaped `demo_<tag>_<hex>` ids only, non-allowlisted, not a registered account). ⬜ First live run: `--record-baseline --samples 3` after the B0.8 cutover is verified and the route is deployed.
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -791,6 +799,14 @@ State as of **2026-09-28 08:30 AWST**:
 - B5.5 ⬜ Gemma 4 E4B **audio input** for paralinguistics on flagged turns only (BF16 mmproj
   costs RAM — after B0.1/B5.1).
 - B5.6 ⬜ Voxtral Realtime as an offline second-opinion ASR judge in the replay harness.
+- B5.7 ✅ **Kokoro dedicated venv without scikit-learn/pandas/pyarrow — APPLIED LIVE 2026-09-28**
+  (draft PR). `~/.zoe/venvs/kokoro-py310` is a `--system-site-packages` venv on the same system 3.10
+  (same CUDA torch wheel) plus a `.pth` import blocker; `build_kokoro_venv.sh` (+ `--check`), drift
+  manifest `requirements-kokoro.txt`, drop-in `kokoro-tts.service.d/60-kokoro-venv.conf`. Controlled
+  ABAB: **start → healthy −2.5 to −4.0 s**, VmRSS at healthy **−97 to −139 MB** (anon −44 to −59 MB),
+  441 → 0 sklearn/pandas/pyarrow files mapped, synth p95 within noise, CUDA kept. Head-bound replay:
+  see the PR. Details: [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro dedicated venv).
+  ⬜ scipy/librosa/matplotlib also ride in through transformers; each needs its own runtime proof.
 
 ### B6 — Brain headroom (optimise around the rock)
 - B6.1 = B0.4 (FA rebuild). B6.2 🔨 **Re-upload staged, swap is an operator step.** Downloaded
@@ -884,8 +900,8 @@ State as of **2026-09-28 08:30 AWST**:
   `MALLOC_TRIM_THRESHOLD_=131072`. Measured in a same-age controlled A/B: **−113 to −125 MB anon**
   (VmRSS −73 to −112 MB), with synth p50/p95 within noise over two ABAB rounds. The predicted
   −400 to −800 MB did not happen: the "arena bloat" was mostly live data. Details and table:
-  [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro sidecar memory). ⬜ The remaining
-  Kokoro RAM lever is a dedicated venv without scikit-learn/pandas (~−100 MB).
+  [voice-pipeline.md](../knowledge/voice-pipeline.md) (Kokoro sidecar memory). The dedicated venv
+  without scikit-learn/pandas followed as **B5.7** (−97 to −139 MB VmRSS, −2.5 to −4 s startup).
   (e) ✅ **Router heads on numpy — no scikit-learn/scipy in zoe-data** (#1730 MERGED, LIVE:
   the running zoe-data maps 0 sklearn/scipy files, checked 2026-09-28; −73 MB). Both stage-1
   heads (logreg 13×384; MLP 384→256 relu→13 softmax) are exported to `.npz` + JSON by
@@ -1106,6 +1122,24 @@ a decision input.
 ## 6. Change log
 - 2026-09-28 — B7.5 (a)+(b) built in #1752: the handoff engine, the live panel
   `authCard`, the music flows migrated, and send-to-phone via Telegram. (c) is still open.
+- 2026-09-28 — B3.11 Samantha bar harness v0 (`samantha_bar.py`, #1751): 8-scenario memory/companion regression gate with baseline; plus the internal-token `forget-synthetic` route for demo_/test_ teardown; first baseline after the B0.8 cutover.
+- 2026-09-28 — B5.7 Kokoro dedicated venv #1750, applied live under the brain-window lock: the
+  sidecar runs `~/.zoe/venvs/kokoro-py310` (system 3.10 + import blocker for sklearn/pandas/pyarrow).
+  ABAB: −2.5 to −4.0 s start → healthy, −97 to −139 MB VmRSS at healthy, p95 within noise, CUDA kept.
+- 2026-09-28 (post-incident) — **the deploy voice gate binds the replay artifact to the deployed
+  tree.** Incident 08:14: #1745 (chromadb 1.5.9 pins in `requirements-py312.txt`, voice-path) was
+  expected to be refused at deploy until a replay for that commit existed. It was not: the gate
+  checked only that the artifact was fresh and passing, and a replay from an unrelated landing a few
+  hours earlier satisfied it. The deploy refreshed the venv and moved the code while the memory
+  store was still on the 0.6 format, and memory degraded for ~7 min. The format guard held, and
+  completing the swap recovered it. Fix: `deploy.yml` and `deploy_live.sh` pass
+  `voice_gate_check.py --expect-tree-of "$target"`. The gate accepts an artifact for that exact
+  commit, or a clean run whose recorded tree equals the target's tree. A squash merge mints a new
+  sha, so the tree match is what keeps PR-head-bound landings working. It holds only when the
+  merge is tree-identical (the branch was up to date) and nothing merged after it before its
+  deploy ran. Otherwise the probe must be re-run against the merged commit. An old live checker
+  that lacks the flag falls back to the stricter `--expect-revision`. Recorded in
+  `merge-and-deploy.md` → *Landing a voice-path PR* and in the root `AGENTS.md` voice-gate section.
 - 2026-09-28 (morning) — **B0.8 LIVE 08:21 AWST.** #1745 merged as `d346aa90` (08:13:45). Its
   deploy was NOT refused: the voice gate accepted a fresh (2.6 h) passing artifact bound to a
   different commit, so the venv (chromadb 1.5.9 + mempalace 3.10.0) and the code landed at 08:14
@@ -1115,8 +1149,7 @@ a decision input.
   swap with rollback `~/.mempalace.pre-b08-20260928-082034`, `/readyz` `self-recall ok`, timers
   re-armed; replay PASS 13/13 (brain 1414 ms, VAD 0.792); zoe-data RSS 1.33 GB; live recall
   parity vs the retained baseline PASS 20/20 identical order. Incident record
-  + lessons: incident-runbook §9. Fix in flight (another agent's PR): the voice gate binds the
-  replay artifact to the deployed tree. Runbook §5 now passes `--old-python` when the live venv
+  + lessons: incident-runbook §9. Fix: #1754 (entry above). Runbook §5 now passes `--old-python` when the live venv
   is already on 1.x. §0 and review §9 updated.
 - 2026-09-27/28 (overnight refresh, state as of 2026-09-28 02:30 AWST) — **the 09-27 wave
   landed: 24 PRs.** In merge order:

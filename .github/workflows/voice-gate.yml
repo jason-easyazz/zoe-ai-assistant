@@ -348,6 +348,7 @@ jobs:
                 '```\n' +
                 `git -C /home/zoe/assistant fetch origin ${headSha}\n` +
                 `git worktree add ~/.worktrees/voice-gate ${headSha}\n` +
+                'cp -n /home/zoe/assistant/services/zoe-data/.env ~/.worktrees/voice-gate/services/zoe-data/.env && chmod 600 ~/.worktrees/voice-gate/services/zoe-data/.env\n' +
                 'flock /tmp/zoe-voice-harness.lock \\\n' +
                 '  python3 scripts/maintenance/voice_regression_probe.py \\\n' +
                 '    --samples 20 --service-dir ~/.worktrees/voice-gate/services/zoe-data\n' +

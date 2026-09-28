@@ -945,9 +945,33 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
     2. LLM turn digest   — background Gemma call, catches nuanced facts the
                            regex misses (relationships, pets, life events, etc.)
                            within seconds rather than waiting for the 3am batch.
+
+    Scheduled with ``asyncio.ensure_future`` (the turn returns first), so the
+    ONLY completion signal is ``memory_capture_stats`` — started before any
+    early return, completed in ``finally`` — read via
+    ``GET /api/memories/capture-status`` (internal token). Harness contract:
+    ``scripts/perf/samantha_bar.py`` waits on it before scoring S7.
     """
+    import memory_capture_stats
+
+    memory_capture_stats.started(user_id)
+    ok = False
+    try:
+        # The impl swallows extractor/digest exceptions (it must never crash the
+        # turn) and reports them as False — a failed capture is COMPLETED but
+        # FAILED, never a success, so a waiter (S7) cannot pass on it.
+        ok = bool(await _persist_memory_candidates_impl(
+            user_id, session_id, user_message, assistant_response))
+    finally:
+        memory_capture_stats.completed(user_id, ok=ok)
+
+
+async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_message: str,
+                                          assistant_response: str) -> bool:
+    """True when every memory pass ran cleanly (or there was nothing to capture);
+    False when any pass raised — logged here, counted by the wrapper."""
     if user_id == "guest":
-        return
+        return True
     # A memory COMMAND ("forget everything about Delia", "forget that") is an
     # instruction, not a fact — mining it minted junk rows ("Gift idea for
     # everything about: Delia", live repro 2026-07-13) that resurrected the
@@ -956,7 +980,7 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
         from intent_router import _FORGET_ENTITY_RE, _FORGET_LAST_RE
         t = (user_message or "").strip()
         if _FORGET_LAST_RE.match(t) or _FORGET_ENTITY_RE.match(t):
-            return
+            return True
     except Exception:
         pass  # never let the guard break extraction itself
     # The mirror case: an EXPLICIT "remember/note that …" utterance clears any
@@ -1018,11 +1042,13 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
         # results discarded, a dying extractor vanished without a trace — whole
         # turns' facts were lost while the reply claimed "I'll remember that".
         # Name-and-shame each failed pass at WARNING so loss is visible in ops.
+        clean = True
         for _mx_name, _mx_res in zip(
             ("extract_and_ingest", "run_turn_digest", "person_extract", "person_extract_llm"),
             _mx_results,
         ):
             if isinstance(_mx_res, BaseException):
+                clean = False
                 logger.warning(
                     "memory pass %s FAILED for user=%s (fact loss possible): %s",
                     _mx_name, user_id, _mx_res,
@@ -1033,18 +1059,37 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
                         lane="chat", pass_name=_mx_name).inc()
                 except Exception:
                     pass
-        asyncio.ensure_future(_detect_suggestions(
+        # Latent-intent detection stays asynchronous (it can await Gemma), but it
+        # WRITES (pending_suggestions), so it is tracked under the same per-user
+        # in_flight accounting: started here, completed in its own finally. A
+        # waiter (harness teardown) therefore sees in_flight == 0 only once this
+        # write has landed or failed — never while it could still race a delete.
+        asyncio.ensure_future(_tracked_suggestions(user_id, _detect_suggestions(
             user_message,
             user_id=user_id,
             session_id=session_id,
-        )).add_done_callback(
-            lambda t: None if t.cancelled() else (
-                logger.warning("latent intent detection failed: %s", t.exception())
-                if t.exception() else None
-            )
-        )
+        )))
+        return clean
     except Exception as e:
         logger.warning("Memory candidate persistence failed: %s", e)
+        return False
+
+
+async def _tracked_suggestions(user_id: str, coro) -> None:
+    """Await the latent-suggestions writer under memory_capture_stats accounting."""
+    import memory_capture_stats
+
+    memory_capture_stats.started(user_id)
+    ok = False
+    try:
+        await coro
+        ok = True
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — logged, counted, never propagates
+        logger.warning("latent intent detection failed: %s", exc)
+    finally:
+        memory_capture_stats.completed(user_id, ok=ok)
 
 
 async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
