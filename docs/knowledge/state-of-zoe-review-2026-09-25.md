@@ -566,7 +566,8 @@ check red) and #1610 (web-search spike, 62 files, now conflicting). Open issues:
 
 ## 9. Recommended sequence
 
-**Current order, refreshed 2026-09-28 08:30 AWST (B0.8 cutover live), after the 09-27 wave (24 PRs; list in the
+**Current order, refreshed 2026-09-28 16:40 AWST (B0.8 live; the afternoon chain #1749 / #1754 /
+#1750 / #1751 / #1752 merged and deployed), after the 09-27 wave (24 PRs; list in the
 tracker §6).** The authoritative NEXT ACTION is the
 [program tracker §0](../architecture/beat-the-bar-2026-program.md). The dated lists below are
 the 2026-09-25 plan, kept with ✓ marks.
@@ -590,12 +591,25 @@ the 2026-09-25 plan, kept with ✓ marks.
    on the venv drop-in. B0.8 follow-ups: the 09-29 dreaming run is the first on the 1.x store
    (confirm it did work). ✓ Live recall parity PASS 20/20 identical order (the first attempt
    passed the run dir instead of its `recall-parity` pointer; not a retention bug).
-4. **B7.5** app-connection handoff engine (QR + send-to-phone, music flows first).
-5. The `samantha_bar` harness.
+   ✓ The deploy voice gate binds the replay artifact to the deployed tree (#1754), verified on
+   the #1750 deploy (`tree-identical to 7d188b55`).
+4. ✓ **B7.5** app-connection handoff engine — (a)+(b) merged and deployed (#1752, migration
+   0031). Still: (c) QR onboarding, and the live-panel check when the Pi is on.
+5. ✓ The `samantha_bar` harness — #1751 merged; **first baseline 2026-09-28 16:33**
+   (`8ac726b7`, samples=3, teardown proven): PASS S2/S3/S6/S7/S8, SKIP S5 (hook-gated),
+   **FAIL S1 + S4** ([record](samantha-bar.md) → *First baseline*).
+   **Next Samantha actions, in order:**
+   1. **Router confidence gate** — S1 failed because the two-stage router sent the ask to
+      `calendar` (head_conf 0.5371) and it was answered deterministically in 488 ms, the brain
+      and recall packet never consulted. Head decisions below ~0.6 fall through to the chat
+      lane; the miss feeds the router self-train corpus.
+   2. **Emotional continuity** — S4: the day-1 worry is not acknowledged the next day (3/3);
+      B3.3 is the carrier and S4 its acceptance test.
 6. **B3.2** dream gating and **B3.3** reflection on the new store (B0.8 live 2026-09-28).
-7. Brief-on-arrival (**B2.1**: the first recognition of the day, instead of the 07:30
-   timer).
-8. The Kokoro dedicated venv (~−100 MB) and the 24 h `--cache-ram` occupancy measurement.
+7. ✓ Brief-on-arrival (**B2.1**) — #1749 merged flag-dark 2026-09-28 (panel-scoped, shared
+   daily claim with the 07:30 brief). 🧑 Flip it once the panel is on.
+8. ✓ The Kokoro dedicated venv — #1750 applied live 2026-09-28 (−97 to −139 MB). Still: the
+   24 h `--cache-ram` occupancy measurement.
 9. Dated operator items:
    - Omnigent Claude re-login before 2026-10-11.
    - The Actions event policy before 2026-11-02.

@@ -20,12 +20,18 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ## 0. NEXT ACTION (keep this current)
 
-State as of **2026-09-28 08:30 AWST**:
-- live = `main` `d346aa90` (#1745, the B0.8 cutover), and every deploy is green.
-- zoe-data runs on CPython 3.12.13 with uvicorn 0.53.0; `/readyz` is ready and self-recall ok.
-- **B0.8 is LIVE (08:21):** the palace is the migrated 1.x store on chromadb 1.5.9 +
+State as of **2026-09-28 16:40 AWST** (the afternoon chain landed):
+- live = `main` `5c18200a` (#1752, last of the five-PR chain #1749 → #1754 → #1750 → #1751 →
+  #1752; all merged, all five deploys green). The #1750 deploy is the first cleared by the
+  tree-bound gate (#1754): `voice-gate: OK — … tree-identical to 7d188b55 (tree 4706c0b1;
+  artifact from 2ef7b366)`.
+- **First Samantha bar baseline recorded 16:33** (commit `8ac726b7`, samples=3, teardown
+  proven): 5 PASS, 1 SKIP, 2 FAIL — S1 is a router misroute, S4 the emotional thread. Both are
+  the next Samantha targets (item 4 below; B3.11).
+- B0.8 is LIVE since 08:21: the palace is the migrated 1.x store on chromadb 1.5.9 +
   mempalace 3.10.0. The deploy ran ahead of the store (~7 min of degraded memory capture;
   store intact, no turns missed): [incident-runbook.md](../knowledge/incident-runbook.md) §9.
+- zoe-data runs on CPython 3.12.13 with uvicorn 0.53.0; `/readyz` is ready and self-recall ok.
 - The brain sidecar is on Flue 2.1.1 + hono 4.13.9, restarted 02:26.
 - pi is 0.87.1 on the host and in Omnigent.
 
@@ -93,20 +99,31 @@ State as of **2026-09-28 08:30 AWST**:
    The window frees ~2 GB. Hold the other PRs (drop `auto-merge`) while a voice PR lands, or
    it goes behind again.
 
-   **Since 2026-09-28 the DEPLOY gate is tree-bound too** (`--expect-tree-of`): the head-bound
+   **Since 2026-09-28 the DEPLOY gate is tree-bound too** (#1754 merged; `--expect-tree-of`;
+   first verified on the #1750 deploy, gate line in the state block above): the head-bound
    artifact clears the deploy only if the squash merge is tree-identical to that head and
    nothing merged after it before its deploy, and nothing overwrote the artifact (incl. the 04:30
    nightly probe). Otherwise probe a checkout of the MERGED sha (copy the live `services/zoe-data/.env` into the
    worktree first, or the probe records an error) and `gh run rerun`. Recipe:
    [merge-and-deploy.md](../knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 4. **Next engineering, in order:**
-   1. **B7.5** app-connection handoff engine — (a)+(b) built, #1752 pending land; needs a
-      live-panel check when the Pi is on (push, `/wake`, a real Telegram send). Next: (c).
-   2. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
+   1. **The two FAILs of the first Samantha bar baseline** (B3.11, record:
+      [samantha-bar.md](../knowledge/samantha-bar.md) → *First baseline*):
+      (a) **Router confidence gate.** S1 (same-day recall across sessions) failed because the
+      two-stage router sent the ask to `calendar` (head_conf 0.5371, gated=false, shortlist
+      people/calendar/reminders) and it was answered deterministically in 488 ms; the brain and
+      the recall packet were never consulted. Head decisions below ~0.6 should fall through to
+      the chat lane (brain + recall packet), and the miss goes into the router self-train
+      corpus. A misroute, not a memory failure.
+      (b) **Emotional continuity.** S4: the day-1 worry (the interview) is not acknowledged
+      the next day, 3/3 samples. B3.3 (importance-sum reflection) is the designed carrier;
+      S4 is its acceptance test.
+   2. **B7.5 (c)** QR onboarding for new members. (a)+(b) are merged and deployed (#1752);
+      the live-panel check (push, `/wake`, a real Telegram send) waits for the Pi.
+   3. **B1.1** flip, once the panel is on (Pi proof → head-bound replay → operator flag-on
       week).
-   3. The `samantha_bar` harness — v0 built (B3.11 🔨); first baseline after the B0.8 cutover (live 2026-09-28) is verified.
-   4. **B3.2/B3.3** on the new store (B0.8 live 2026-09-28).
-   5. Brief-on-arrival (**B2.1**): built flag-dark; flip it once the panel is on.
+   4. **B3.2/B3.3** on the new store (B0.8 live 2026-09-28); B3.3 now has S4 as its target.
+   5. Brief-on-arrival (**B2.1**): #1749 merged flag-dark; 🧑 flip it once the panel is on.
    6. ~~A Kokoro venv without scikit-learn/pandas (B6.6 d)~~ — B5.7, applied live 2026-09-28 #1750.
    7. The 24 h `--cache-ram` occupancy measurement (B0.4/B6.6).
 
@@ -682,9 +699,11 @@ State as of **2026-09-28 08:30 AWST**:
 - B2.1 🔨 **Presence-triggered routines**: emit `person_recognized(panel, person, ts)` from the
   panel ID path into the proactive engine; "Zoe speaks first" on first-recognition-of-the-day
   rather than a 07:30 timer (Omnisense).
-  - First slice built, flag-dark: **brief-on-arrival** (`ZOE_PROACTIVE_BRIEF_ON_ARRIVAL`, default
-    off). A 07:30 brief that was not heard is spoken once, at the member's first `owner`
-    presence 07:00–11:00. Presence comes from the kiosk bind/sync, not the voice path. It writes
+  - First slice **merged 2026-09-28 (#1749), flag-dark**: **brief-on-arrival**
+    (`ZOE_PROACTIVE_BRIEF_ON_ARRIVAL`, default off). A 07:30 brief that was not heard is spoken
+    once, at the member's first `owner` presence 07:00–11:00. Panel-scoped; presence comes from
+    the kiosk bind/sync, not the voice path. It shares the daily claim with the 07:30 brief (one
+    spoken brief per member per day) and fails closed on a claim error. It writes
     one `proactive_responses` row per day, with accepted/ignored/undelivered as the B2.2 signal.
     See the [recipients record](../knowledge/synthetic-users-and-proactive-recipients.md).
   - Next: 🧑 flip the flag once the panel is back on. Then feed face/voice matches in as
@@ -735,7 +754,19 @@ State as of **2026-09-28 08:30 AWST**:
   /home/zoe/assistant/scripts/maintenance/zoe-nightly-dreaming.py` + `daemon-reload`; imports
   (chromadb, db_pool, memory_digest) verified to resolve under the venv 2026-09-27; verify the
   Mon 2026-09-28 02:31 AWST run log. ✅ It also iterated ~24 users incl. test/probe ids: now filtered by `user_filters.is_synthetic_user` (dreaming, consolidation, music, portrait, proactive triggers; `ZOE_SYNTHETIC_USER_ALLOWLIST`), and the leaking probe chat sessions are purged nightly (#1726 MERGED; `emotional_followup` joined in #1731; [record](../knowledge/synthetic-users-and-proactive-recipients.md)).
-- B3.11 🔨 **Samantha bar harness v0** (`scripts/perf/samantha_bar.py`, [record](../knowledge/samantha-bar.md)): 8 multi-day scenarios (same-day recall, supersession, abstention, emotional thread, hook-gated unprompted surfacing, isolation, richer fact, 32-turn history) on throwaway `demo_bar_*` users via the live API; brain-as-judge at temperature 0 with a pinned rubric; head-bound baseline, only a previous PASS can regress; asserted teardown through the new internal-token `POST /api/memories/users/{id}/forget-synthetic` (harness-shaped `demo_<tag>_<hex>` ids only, non-allowlisted, not a registered account). ⬜ First live run: `--record-baseline --samples 3` after the B0.8 cutover is verified and the route is deployed.
+- B3.11 🔨 **Samantha bar harness v0** (`scripts/perf/samantha_bar.py`, [record](../knowledge/samantha-bar.md)): 8 multi-day scenarios (same-day recall, supersession, abstention, emotional thread, hook-gated unprompted surfacing, isolation, richer fact, 32-turn history) on throwaway `demo_bar_*` users via the live API; brain-as-judge at temperature 0 with a pinned rubric; head-bound baseline, only a previous PASS can regress; asserted teardown through the new internal-token `POST /api/memories/users/{id}/forget-synthetic` (harness-shaped `demo_<tag>_<hex>` ids only, non-allowlisted, not a registered account). ✅ **First baseline 2026-09-28 16:33** (#1751 merged as `8ac726b7`; `--record-baseline
+  --samples 3`, teardown proven, `~/.cache/zoe/samantha_bar_baseline.json`): PASS S2 newer fact
+  wins, S3 decline when nothing said, S6 user isolation, S7 keep the richer fact, S8 recall
+  after a 32-turn history; SKIP S5 unprompted surfacing (hook-gated); **FAIL S1** same-day
+  recall across sessions — a two-stage router misroute to `calendar` (head_conf 0.5371), the
+  brain and recall packet never consulted, not a memory failure; **FAIL S4** the emotional
+  thread (3/3 samples). Diagnosis and log evidence in the record. Next: the router confidence
+  gate and emotional continuity (§0 item 4). #1751 took 7 review rounds / 19 threads; the
+  catches that changed the contract: a name-only demo-user check could have erased a real
+  account with a demo-shaped id (now exact id shape + registered-account refusal via
+  `auth_users`); the teardown sweep excludes auth-owned tables and runs in one transaction
+  with a re-check; failed captures, backdates and filler turns can no longer PASS; the
+  internal `GET /api/memories/capture-status` completion signal.
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -800,7 +831,8 @@ State as of **2026-09-28 08:30 AWST**:
   costs RAM — after B0.1/B5.1).
 - B5.6 ⬜ Voxtral Realtime as an offline second-opinion ASR judge in the replay harness.
 - B5.7 ✅ **Kokoro dedicated venv without scikit-learn/pandas/pyarrow — APPLIED LIVE 2026-09-28**
-  (draft PR). `~/.zoe/venvs/kokoro-py310` is a `--system-site-packages` venv on the same system 3.10
+  (#1750 merged; its deploy was the first cleared by the tree-bound gate; replay 13/13, brain
+  median 1381 ms). `~/.zoe/venvs/kokoro-py310` is a `--system-site-packages` venv on the same system 3.10
   (same CUDA torch wheel) plus a `.pth` import blocker; `build_kokoro_venv.sh` (+ `--check`), drift
   manifest `requirements-kokoro.txt`, drop-in `kokoro-tts.service.d/60-kokoro-venv.conf`. Controlled
   ABAB: **start → healthy −2.5 to −4.0 s**, VmRSS at healthy **−97 to −139 MB** (anon −44 to −59 MB),
@@ -956,7 +988,7 @@ State as of **2026-09-28 08:30 AWST**:
 - B7.2 ⬜ Ask-card conversation mode (PR-1a) → retire `voice.html`.
 - B7.3 ⬜ Voice-authored automations via HA (Gemini for Home) — later.
 - B7.4 ⬜ "Ask about what you see" via the panel camera, one-shot.
-- B7.5 🔨 (a) ✅ (b) ✅ pending land · (c) ⬜ — **App-connection handoff engine (QR + send-to-phone)** — VISION principle 8 (#1729; Jason,
+- B7.5 🔨 (a) ✅ (b) ✅ merged #1752 · (c) ⬜ — **App-connection handoff engine (QR + send-to-phone)** — VISION principle 8 (#1729; Jason,
   2026-09-27): app/account sign-ins show a QR on the panel and finish on the phone, and the
   panel card reflects completion live. Today the music QR (the reference flow) never learns it
   finished, and the token/QR mechanics are copied three times (`music_setup`, `smart_home_setup`,
@@ -979,8 +1011,8 @@ State as of **2026-09-28 08:30 AWST**:
 
   Step (a) builds on those handles. #1741's "set up music" reply already points panel chat at
   Music → Browse → Sources.
-  **(a)+(b) built (#1752, pending land):** `auth_handoff.py` + `auth_handoffs` (alembic
-  0031) + `routers/handoff.py` + the touch `authCard`; YouTube Music, Spotify/Tidal/Deezer
+  **(a)+(b) merged 2026-09-28 (#1752, deployed 16:35 AWST):** `auth_handoff.py` + `auth_handoffs`
+  (alembic 0031) + `routers/handoff.py` + the touch `authCard`; YouTube Music, Spotify/Tidal/Deezer
   OAuth and the Qobuz form report into it; "Send to my phone" goes via Telegram when
   `ZOE_TELEGRAM_BOT_TOKEN` is set and the member is linked. The duplicate `/js/qrcode.min.js`
   is removed. Operator step: set `ZOE_TELEGRAM_BOT_TOKEN` in the zoe-data env. Live-panel
@@ -1120,6 +1152,30 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-28 (afternoon) — **the chain landed: five PRs, all merged, all five deploys green,
+  live = `5c18200a`.** In merge order: **#1749** B2.1 brief-on-arrival (flag-dark
+  `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL`, panel-scoped, shares the daily claim with the 07:30 brief,
+  fails closed on a claim error); **#1754** the deploy-gate tree binding (verified on the #1750
+  deploy: `voice-gate: OK — … tree-identical to 7d188b55 (tree 4706c0b1; artifact from
+  2ef7b366)`); **#1750** B5.7 Kokoro dedicated venv (replay 13/13, brain median 1381 ms);
+  **#1751** B3.11 Samantha bar harness v0.1 (7 review rounds, 19 threads; notable catches: a
+  name-only demo-user check could have erased a real account with a demo-shaped id → exact id
+  shape + registered-account refusal via `auth_users`; the teardown sweep now excludes
+  auth-owned tables and runs in one transaction with a re-check; failed captures, backdates and
+  filler turns can no longer PASS; new internal `GET /api/memories/capture-status` completion
+  signal); **#1752** B7.5 (a)+(b) app-connection handoff engine (migration 0031).
+  **First Samantha bar baseline, 16:33, commit `8ac726b7`, samples=3, teardown proven**
+  (`~/.cache/zoe/samantha_bar_baseline.json`): PASS S2 newer fact wins, S3 decline when
+  nothing said, S6 user isolation, S7 keep the richer fact, S8 recall after a 32-turn history;
+  SKIP S5 unprompted surfacing (hook-gated); **FAIL S1** same-day recall across sessions — the
+  ask was routed by the two-stage router to `calendar` (head_conf 0.5371, gated=false,
+  shortlist people/calendar/reminders) and answered deterministically in 488 ms; the brain and
+  the recall packet were never consulted — a router misroute, not a memory failure; **FAIL S4**
+  the emotional thread — the day-1 worry (interview) is not acknowledged the next day, 3/3
+  samples. Both are the next Samantha targets (§0 item 4). Record:
+  [samantha-bar.md](../knowledge/samantha-bar.md). Follow-ups pinned in `IDEAS.md`: a
+  probe-only env for PR-head replays, `build_kokoro_venv.sh` smoke/whitespace hardening, the
+  router confidence gate.
 - 2026-09-28 — B7.5 (a)+(b) built in #1752: the handoff engine, the live panel
   `authCard`, the music flows migrated, and send-to-phone via Telegram. (c) is still open.
 - 2026-09-28 — B3.11 Samantha bar harness v0 (`samantha_bar.py`, #1751): 8-scenario memory/companion regression gate with baseline; plus the internal-token `forget-synthetic` route for demo_/test_ teardown; first baseline after the B0.8 cutover.

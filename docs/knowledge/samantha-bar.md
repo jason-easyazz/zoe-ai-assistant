@@ -3,7 +3,7 @@ type: Reference
 title: Samantha bar harness (samantha_bar.py v0)
 description: The Samantha-quality regression gate. Eight scripted multi-day memory and companion scenarios run against throwaway demo users through the live API. Covers how to run it, what each scenario proves, the scoring and judge, the baseline and teardown contracts, and known limits.
 tags: [memory, samantha, eval, regression-gate, harness, zoe-data]
-timestamp: 2026-09-28T06:00:00Z
+timestamp: 2026-09-28T08:45:00Z
 ---
 
 # Samantha bar harness (`scripts/perf/samantha_bar.py`, v0)
@@ -121,6 +121,47 @@ latency, which synthetic needles were found, whether the seed fact "landed" in t
 packet (and how long that took), and the judge's reason. `--keep-replies` adds 240-character
 excerpts to the local results file for debugging.
 
+## First baseline (2026-09-28)
+
+Recorded **2026-09-28 16:33 AWST** with `--record-baseline --samples 3` against the live
+service at commit `8ac726b7` (#1751, clean checkout, `clean_verified: true`), teardown
+proven. The bar is `~/.cache/zoe/samantha_bar_baseline.json`.
+
+| id | scenario | verdict |
+|---|---|---|
+| S1 | same-day recall across sessions | **FAIL** |
+| S2 | newer fact wins (supersession) | PASS |
+| S3 | decline when nothing was said | PASS |
+| S4 | the emotional thread | **FAIL** (3/3 samples) |
+| S5 | unprompted surfacing | SKIP (hook-gated; see Known limits) |
+| S6 | user isolation | PASS |
+| S7 | keep the richer fact | PASS |
+| S8 | recall after a 32-turn history | PASS |
+
+Only a previous PASS can regress, so S1 and S4 cannot turn a `--compare-baseline` run red
+until each passes once and the bar is re-recorded.
+
+**S1 diagnosis — a router misroute, not a memory failure.** The ask was routed by the
+two-stage router to `calendar` and answered deterministically in 488 ms; the brain and the
+recall packet were never consulted, so nothing in the store could have been recalled — and
+the fact WAS there (`landed: true`, 5.6 s after the seed turn).
+`~/.zoe-logs/zoe-data.app.log`, 2026-09-28 16:29:25 (`zoe.router_head_shadow`):
+
+```
+router_two_stage {"actual_routed": "calendar", "gated": false, "head_conf": 0.5371,
+  "mode": "active", "shortlist": ["people", "calendar", "reminders"],
+  "similarity_routed": "calendar", "two_stage_tool": "show_calendar", …}
+```
+
+**S4** — the day-1 worry (the interview) is not acknowledged on day 2 in any of the three
+samples (`mentions_interview: false` on every sample; the worry had landed in the recall
+packet, `landed: true`).
+
+Next targets, in order (tracker §0): (a) a **router confidence gate** — head decisions below
+~0.6 fall through to the chat lane (brain + recall packet) instead of a deterministic tool,
+and the miss feeds the router self-train corpus; (b) **emotional continuity** for S4, with
+B3.3 reflection as the carrier.
+
 ## Teardown (the demo-users-only guardrail)
 
 Every identity is asserted against `^demo_bar_[0-9a-f]{8}$` before any write. The pending
@@ -219,8 +260,9 @@ In-process, reset by a restart. Tests:
 
 ## Known limits (v0)
 
-- **Needs the route deployed.** The live zoe-data must serve `forget-synthetic`. Until it
-  does, the preflight refuses unless an admin session is supplied.
+- **Needs the route deployed** (it is, since the #1751 deploy on 2026-09-28). The live
+  zoe-data must serve `forget-synthetic`; otherwise the preflight refuses unless an admin
+  session is supplied.
 - **Multi-day is approximated.** Backdating moves only the Postgres chat rows. Memory-store
   `added_at` stays "now", so recency ranking sees everything as same-day.
 - **S5 is structurally SKIP for demo users today.** `emotional_followup` and the other
