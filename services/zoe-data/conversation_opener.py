@@ -15,10 +15,13 @@ The phrase matcher itself is pure and dependency-free.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
 from typing import Any, Mapping
+
+logger = logging.getLogger(__name__)
 
 # Tight allowlist. Matching is fullmatch over the normalized utterance
 # (apostrophes removed, punctuation stripped), optionally followed by "zoe" —
@@ -209,3 +212,31 @@ def next_ender_ack() -> str:
         phrase = phrases[_ENDER_ACK_CURSOR % len(phrases)]
         _ENDER_ACK_CURSOR += 1
     return phrase
+
+
+_CONVERSATION_FLAGS = ("conversation_mode", "conversation_end")
+
+
+async def broadcast_conversation_turn(
+    panel_id: str, reply: str, flags: Mapping[str, Any] | None = None
+) -> None:
+    """Show an opener/ender fast-path turn on the panel like any answered turn.
+
+    The fast path returns before ``voice_command``, which is where every other
+    turn broadcasts ``voice:responding`` + ``voice:done``, so the panel used to
+    get only the transcript: the warm ack never appeared, and the estate never
+    learned that a conversation had opened or closed. The conversation flags
+    ride on both events so the touch UI can hold the answer on screen for the
+    life of the conversation. Best-effort: a push failure never fails a turn.
+    """
+    extra = {k: True for k in _CONVERSATION_FLAGS if (flags or {}).get(k)}
+    try:
+        from push import broadcaster
+
+        if reply:
+            await broadcaster.broadcast("all", "voice:responding", {
+                "panel_id": panel_id, "text": str(reply)[:200], **extra,
+            })
+        await broadcaster.broadcast("all", "voice:done", {"panel_id": panel_id, **extra})
+    except Exception as exc:  # the UI push is never allowed to break the turn
+        logger.debug("conversation fast-path UI broadcast failed (non-fatal): %s", exc)
