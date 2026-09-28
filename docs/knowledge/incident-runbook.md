@@ -363,10 +363,18 @@ replay artifact that was **fresh and passing**. Nothing bound the evidence to th
 deployed, so a probe run for another PR earlier that morning cleared the cutover merge.
 (`voice-gate.yml`'s PR-time check already passes `--expect-revision`; the deploy path did not.)
 
-**Why no data was lost.** The read-only format guard reads the sysdb format from SQLite
+**Why no stored data was lost.** The read-only format guard reads the sysdb format from SQLite
 (`mode=ro`) before chromadb touches the file, so the 1.x client never opened, and never
 migrated in place, the 0.6 store. The old store was unmodified from 07:30 (its last write) until
 the copy at 08:18.
+
+**New memories are a separate question.** While the guard refused, a turn's memory write would
+have failed with no durable retry, so captures in that window can be lost even though the store
+is intact. On 2026-09-28 the app log (`~/.zoe-logs/zoe-data.app.log`, 08:14–08:21) shows 11
+guard refusals, all from the startup and retry self-recall probes (08:14:05, 08:14:50, 08:19:50,
+08:20:18), and no chat or voice turn lines; the probe passed at 08:20:40. So nothing needs
+reprocessing this time. After any recurrence, grep that window for turns and replay their
+captures by hand.
 
 **Recovery (what was run).**
 1. Stop the timers and zoe-data; confirm nothing holds `~/.mempalace/chroma.sqlite3`.

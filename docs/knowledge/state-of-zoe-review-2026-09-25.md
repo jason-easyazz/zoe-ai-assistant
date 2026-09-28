@@ -574,7 +574,7 @@ the 2026-09-25 plan, kept with ✓ marks.
 1. 🧑 **Operator window.**
    - ✓ The B0.8 Chroma 1.5 cutover — LIVE 2026-09-28 08:21 AWST (#1745 `d346aa90`; 10/10
      proofs, `self-recall ok`, replay PASS 13/13). Its deploy ran ahead of the store (~7 min
-     degraded memory capture, no data loss): `incident-runbook.md` §9.
+     degraded memory capture, store intact, no turns missed): `incident-runbook.md` §9.
    - Apply #1727: loopback Postgres 17.11, and rebuild the HA bridge.
    - Music Assistant: YouTube Music re-auth on the panel (the cookies have rotated and the
      provider does not load), then the MA 2.10.3 re-create per `music-ytdlp-js-runtime.md`

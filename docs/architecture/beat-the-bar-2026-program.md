@@ -24,8 +24,8 @@ State as of **2026-09-28 08:30 AWST**:
 - live = `main` `d346aa90` (#1745, the B0.8 cutover), and every deploy is green.
 - zoe-data runs on CPython 3.12.13 with uvicorn 0.53.0; `/readyz` is ready and self-recall ok.
 - **B0.8 is LIVE (08:21):** the palace is the migrated 1.x store on chromadb 1.5.9 +
-  mempalace 3.10.0. The deploy ran ahead of the store (~7 min of degraded memory capture, no
-  data loss): [incident-runbook.md](../knowledge/incident-runbook.md) §9.
+  mempalace 3.10.0. The deploy ran ahead of the store (~7 min of degraded memory capture;
+  store intact, no turns missed): [incident-runbook.md](../knowledge/incident-runbook.md) §9.
 - The brain sidecar is on Flue 2.1.1 + hono 4.13.9, restarted 02:26.
 - pi is 0.87.1 on the host and in Omnigent.
 
@@ -336,7 +336,7 @@ State as of **2026-09-28 08:30 AWST**:
   collection UNKNOWN (expected on a fresh 1.x index); zoe-data RSS 1.33 GB. **Incident:** the
   merge's deploy was NOT refused (the gate accepted a fresh passing artifact bound to another
   commit), so the pins + code landed at 08:14 ahead of the store; the format guard refused the
-  0.6 store (~7 min `memory_capture: degraded`, no data loss) —
+  0.6 store (~7 min `memory_capture: degraded`, store intact, no turns missed) —
   [incident-runbook.md](../knowledge/incident-runbook.md) §9. Follow-ups (§0): the 09-29
   dreaming run on the 1.x store; the live recall-parity compare (baseline lookup + a
   `--demo-user` manifest fallback). History of the item below.
@@ -1094,7 +1094,7 @@ a decision input.
   deploy was NOT refused: the voice gate accepted a fresh (2.6 h) passing artifact bound to a
   different commit, so the venv (chromadb 1.5.9 + mempalace 3.10.0) and the code landed at 08:14
   while the store was still 0.6. The format guard refused the old store: `memory_capture:
-  degraded` ~7 min, voice/chat fine, no data loss. The operator session completed the swap:
+  degraded` ~7 min, voice/chat fine, store intact, no turns in the window. The operator session completed the swap:
   `run --date cutover-2026-09-28-081803 --old-python /usr/bin/python3` (10/10, 379 MB, 102 s),
   swap with rollback `~/.mempalace.pre-b08-20260928-082034`, `/readyz` `self-recall ok`, timers
   re-armed; replay PASS 13/13 (brain 1414 ms, VAD 0.792); zoe-data RSS 1.33 GB. Incident record

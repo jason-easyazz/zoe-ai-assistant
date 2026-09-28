@@ -145,7 +145,7 @@ requires the B0.8 rollback as well.
 #1745 merge (`d346aa90`) was **not** refused. The deploy gate accepted a fresh passing replay
 artifact bound to a different commit, so at 08:14 the deploy moved the venv to chromadb 1.5.9 +
 mempalace 3.10.0 and the code to `d346aa90` while the store was still 0.6. The format guard
-refused to open it, so memory capture was degraded for ~7 min and no data was lost. Block A's
+refused to open it, so memory capture was degraded for ~7 min and the store was intact (no turns fell in the window). Block A's
 preflight (c) correctly stops in that state. The operator then did the store half by hand: `run`
 with `--old-python /usr/bin/python3` (10/10, peak 379 MB, 102 s), swap (rollback dir
 `~/.mempalace.pre-b08-20260928-082034`), restart, `self-recall ok`, timers re-armed, replay PASS
@@ -157,13 +157,20 @@ zoe-data is down:
 - **New code + old store** → the guard refuses to open (loud; memory is down, the data is safe).
 - **Old code + new pins** → zoe-data runs mempalace 3.10's untested wrapper.
 
-The deploy gate also refuses the merged PR until a fresh replay artifact exists, because
-`requirements-py312.txt` is on the voice path. Refused means blocked *before* the reset, so the
-live tree stays at `prev`. The replay needs the new stack running, so the order is: merge, then
-the window, then the replay, then re-run the deploy.
+**Blocks A and B below are the B0.8 script as written for #1745 and are kept as the prepared
+record (the 2026-09-28 store half was run by hand); do not re-run them as-is.** They assumed the deploy gate would refuse the merged PR
+(`requirements-py312.txt` is on the voice path) and so ordered: merge, then the window, then
+the replay, then re-run the deploy. That assumption **failed on 2026-09-28**: the gate checked
+only freshness + `pass`, not which commit the artifact exercised, so the deploy went through.
+Until the deploy gate binds the artifact to the deployed tree, do not rely on a refusal.
 
-Step 0: merge #1745 (squash). Its deploy will be REFUSED by the voice gate before the reset,
-so the live tree is untouched. That is expected; §B clears it.
+**For any future pins cutover the order is: stop the writers/openers first, then merge inside
+that window**, so whatever the deploy does lands on stopped services; then the store swap, the
+readiness check and a head-bound replay. Block A's preflight (b)/(c) (a *refused* deploy run,
+live HEAD ≠ merge sha) encode the old order: a reuse must replace them, not skip them.
+
+Step 0 (as planned for #1745, superseded by the above): merge #1745 (squash), expecting its
+deploy to be REFUSED before the reset.
 
 **A. The transition is ONE fail-closed script. Paste it whole.** It starts with a PREFLIGHT that touches nothing. The run id `cutover-<date>-<HHMMSS>` must pass the tool's own `check-date` (the exact format `run` accepts, dir not taken), and the refused #1745 deploy run must exist and be finished; its id is captured by the merge commit sha. Only then does it take the lock and stop anything. At the end it prints `D=` and `DEPLOY_ID=` for block B. It runs in its own
 `bash -euo pipefail`, so `set -e` cannot kill your login shell. Any failure stops it **before**
