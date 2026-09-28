@@ -3,7 +3,7 @@ type: Runbook
 title: Music path yt-dlp JavaScript runtime
 description: How the live Music Assistant container solves YouTube's nsig/sig JS challenge (MA bakes deno; we only pin the image), the sh -lc PATH artifact that produced a false "no JS runtime" diagnosis, the read-only probe (JS solve + PO-token plugin/server major match), the 2026-09-25 bgutil mismatch outage and the recreate rule, the MA 2.10 setup-flow API break and zoe-data's version switch, the canonical B0.12 recipe (interim step 0, then 2.10.3 adoption), and the apply/rollback procedure with the YouTube Music re-auth risk.
 tags: [music, music-assistant, yt-dlp, youtube, deno, bgutil, po-token, docker, operations]
-timestamp: 2026-09-27T00:00:00Z
+timestamp: 2026-09-28T00:00:00Z
 ---
 
 # Music path yt-dlp JavaScript runtime
@@ -210,6 +210,13 @@ It lives in the writable layer, so a later re-create replaces it with whatever
 PyPI has then — which is the behaviour you want, as long as the server major still
 matches. Undo: the same command with `yt-dlp[default]==2026.7.4`
 `bgutil-ytdlp-pot-provider==1.3.1`.
+
+**Re-auth trap (2026-09-28).** The panel QR sign-in (`ytmusic_signin.py`) used to treat *any*
+`__Secure-3PAPISID` in its persistent profile as a login, so with the rotated cookie from this
+outage still in the profile it "connected" within ~15 s and saved the dead cookie again (MA then
+did not load the provider at all). Fixed: the sign-in only saves a cookie that changed during the
+session and that YouTube confirms is signed in, and wipes a stale one first. See
+[incident-runbook.md](incident-runbook.md) §10.
 
 ## MA 2.10.x — pinned; adopt ONLY via the B0.12 recipe below
 

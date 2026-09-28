@@ -8,6 +8,14 @@ account. This module presents a remote browser the user signs into *themselves*,
 auto-detects the login, harvests the resulting cookie, hands it to Music
 Assistant's ``ytmusic`` provider, and tears the browser down.
 
+"Cookie present" is NOT "login happened" (live incident 2026-09-28: the
+persistent profile still held a rotated, dead cookie, so every attempt "found"
+it within seconds, saved it, and tore the view down before the person had even
+opened it). The watcher snapshots the profile's login cookie at session start
+and harvests only one that CHANGED during the session and that YouTube itself
+confirms is signed in; a stale cookie found at start is wiped (Google/YouTube
+cookies only) so the view shows a real sign-in form.
+
 Security model (non-negotiable — mirrors the lab's Forbidden contract):
   * NEVER enter, request, autofill, store, or log a Google password. This module
     only ever READS the cookie the browser already holds after the human signed
@@ -40,8 +48,10 @@ teardown state machine + the anti-expiry ``refresh_now`` path.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -49,7 +59,9 @@ import subprocess
 import time
 from pathlib import Path
 from urllib.parse import quote
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
+
+import httpx
 
 import music_service
 
@@ -63,6 +75,23 @@ REQUIRED_COOKIE = "__Secure-3PAPISID"
 # Cookies live across these registrable domains after a YTMusic login. We collect
 # from all of them and assemble a single Cookie header (what ytmusic-api sends).
 AUTH_DOMAINS = (".youtube.com", ".google.com", "youtube.com", "google.com")
+
+# Clearing a stale login removes ONLY these cookies (every google.com /
+# youtube.com host), never the rest of the persistent profile.
+_AUTH_COOKIE_DOMAIN_RE = re.compile(r"(^|\.)(youtube|google)\.com$")
+
+# ── "cookie present" is NOT "login happened" (live incident 2026-09-28) ──────
+# The persistent profile can hold a rotated/expired __Secure-3PAPISID. Seeing it
+# is not a login: the watcher harvests only a cookie that CHANGED during this
+# session (or appeared in a clean profile), and only after YouTube itself says
+# the cookie is signed in. The check is the request MA's ytmusic provider makes
+# (a youtubei POST with the SAPISIDHASH auth header), read through YouTube's own
+# explicit ``logged_in`` / ``yt_li`` tracking flags — no page scraping.
+_YTM_ORIGIN = "https://music.youtube.com"
+_VALIDATE_URL = f"{_YTM_ORIGIN}/youtubei/v1/account/account_menu?alt=json&prettyPrint=false"
+_VALIDATE_TIMEOUT_S = 8.0
+_VALIDATE_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0"
+_LOGGED_IN_KEYS = ("logged_in", "yt_li")
 
 # ── Ports / display (override via env; single session so fixed defaults are OK) ─
 _DISPLAY = os.environ.get("ZOE_RIG_DISPLAY", ":99")
@@ -92,8 +121,11 @@ SESSION_TIMEOUT_S = int(os.environ.get("ZOE_YTMUSIC_SESSION_TIMEOUT_S", "300")) 
 _POLL_S = float(os.environ.get("ZOE_YTMUSIC_POLL_S", "2.0"))
 _PROC_KILL_WAIT_S = 3.0
 
-# States the setup page polls on.
-_ACTIVE_STATES = {"starting", "awaiting_login", "harvesting"}
+# States the setup page polls on. ``stale_cookie_cleared`` = still waiting for a
+# login, but the profile's old sign-in had expired and was wiped first (the
+# phone/panel say "sign in again" rather than nothing).
+_ACTIVE_STATES = {"starting", "awaiting_login", "stale_cookie_cleared", "harvesting"}
+STALE_DETAIL = "Your old YouTube Music sign-in had expired — sign in again on your phone."
 _TERMINAL_STATES = {"connected", "error", "timeout"}
 
 # The single active session record (one session at a time — hard guardrail).
@@ -118,10 +150,8 @@ def _ensure_secret_dir() -> Path:
     return SECRET_DIR
 
 
-def _assemble_cookie_header(cookies: list[dict]) -> tuple[str, list[str]]:
-    """Turn CDP/Playwright cookie dicts into one ``Cookie:`` header, keeping only
-    the auth domains and de-duping by name (last wins). HttpOnly cookies are
-    included — that is the point. Returns (header, sorted_names)."""
+def _auth_cookie_map(cookies: list[dict]) -> dict[str, str]:
+    """Auth-domain cookies only, de-duped by name (last wins)."""
     picked: dict[str, str] = {}
     for c in cookies:
         dom = (c.get("domain") or "").lstrip(".")
@@ -131,12 +161,105 @@ def _assemble_cookie_header(cookies: list[dict]) -> tuple[str, list[str]]:
         if not name:
             continue
         picked[name] = c.get("value", "")
+    return picked
+
+
+def _assemble_cookie_header(cookies: list[dict]) -> tuple[str, list[str]]:
+    """Turn CDP/Playwright cookie dicts into one ``Cookie:`` header, keeping only
+    the auth domains and de-duping by name (last wins). HttpOnly cookies are
+    included — that is the point. Returns (header, sorted_names)."""
+    picked = _auth_cookie_map(cookies)
     header = "; ".join(f"{k}={v}" for k, v in picked.items())
     return header, sorted(picked)
 
 
 def _has_required(names: list[str]) -> bool:
     return REQUIRED_COOKIE in names
+
+
+def _login_fingerprint(picked: dict[str, str]) -> Optional[str]:
+    """A one-way digest of the login-bearing cookies (``__Secure-3PAPISID`` +
+    ``SID``), or None when there is no login cookie. Comparing digests tells a
+    login that happened DURING the session from one the profile already held,
+    without keeping the secret values on the session record."""
+    value = picked.get(REQUIRED_COOKIE)
+    if not value:
+        return None
+    return hashlib.sha256(f"{value}\0{picked.get('SID', '')}".encode()).hexdigest()
+
+
+def _cookie_value(header: str, name: str) -> str:
+    for part in header.split(";"):
+        key, _, value = part.strip().partition("=")
+        if key == name:
+            return value
+    return ""
+
+
+def _sapisid_hash(sapisid: str, now: Optional[float] = None) -> str:
+    """The ``Authorization`` value ytmusicapi (and so MA) sends with a cookie."""
+    ts = str(int(now if now is not None else time.time()))
+    digest = hashlib.sha1(f"{ts} {sapisid} {_YTM_ORIGIN}".encode()).hexdigest()
+    return f"SAPISIDHASH {ts}_{digest}"
+
+
+def _logged_in_verdict(data: Any) -> Optional[bool]:
+    """Read YouTube's own login flags from a youtubei response:
+    ``responseContext.serviceTrackingParams[].params[]`` carries ``logged_in``
+    (GFEEDBACK) and ``yt_li`` (CSI) as "1"/"0". True/False only when every flag
+    present agrees; None when they are missing or disagree (inconclusive)."""
+    try:
+        services = data["responseContext"]["serviceTrackingParams"]
+    except (KeyError, TypeError):
+        return None
+    seen: set[str] = set()
+    for svc in services if isinstance(services, list) else []:
+        for p in (svc or {}).get("params") or []:
+            if isinstance(p, dict) and p.get("key") in _LOGGED_IN_KEYS:
+                seen.add(str(p.get("value")))
+    if seen == {"1"}:
+        return True
+    if seen == {"0"}:
+        return False
+    return None
+
+
+async def _validate_cookie(header: str) -> Optional[bool]:
+    """Ask YouTube Music whether ``header`` is a signed-in session.
+
+    True = signed in; False = YouTube says NOT signed in (a stale/expired
+    cookie); None = could not tell (network, non-JSON, unexpected shape). Never
+    logs the cookie or the response body."""
+    sapisid = _cookie_value(header, REQUIRED_COOKIE)
+    if not sapisid:
+        return False
+    headers = {
+        "User-Agent": _VALIDATE_UA,
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "X-Goog-AuthUser": "0",
+        "x-origin": _YTM_ORIGIN,
+        "Origin": _YTM_ORIGIN,
+        "Cookie": header,
+        "Authorization": _sapisid_hash(sapisid),
+    }
+    body = {"context": {"client": {"clientName": "WEB_REMIX", "clientVersion": "1.20250101.01.00"},
+                        "user": {}}}
+    try:
+        async with httpx.AsyncClient(timeout=_VALIDATE_TIMEOUT_S) as client:
+            resp = await client.post(_VALIDATE_URL, headers=headers, json=body)
+    except Exception as exc:  # noqa: BLE001 — inconclusive, never fatal
+        logger.info("ytmusic sign-in: cookie validation inconclusive (%s)", type(exc).__name__)
+        return None
+    if resp.status_code in (401, 403):
+        return False
+    if resp.status_code != 200:
+        logger.info("ytmusic sign-in: cookie validation inconclusive (HTTP %s)", resp.status_code)
+        return None
+    try:
+        return _logged_in_verdict(resp.json())
+    except ValueError:
+        return None
 
 
 def _store_username(username: str) -> None:
@@ -273,6 +396,11 @@ async def _launch_browser(headless: bool = False) -> Any:
     refresh path uses headless=True (no display needed)."""
     from cloakbrowser import launch_persistent_context_async
 
+    # CloakBrowser otherwise GETs pypi.org + api.github.com on every launch (an
+    # "update available" check, and a background Chromium download) — network
+    # side effects on the sign-in hot path of a pinned, local-first stack.
+    # setdefault so an operator can still opt back in.
+    os.environ.setdefault("CLOAKBROWSER_AUTO_UPDATE", "false")
     _ensure_secret_dir()
     PROFILE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     if not headless:
@@ -315,8 +443,31 @@ async def _bring_up_rig(session: dict[str, Any]) -> None:
 async def _harvest_from_context(context: Any) -> tuple[str, list[str]]:
     """Read every auth-domain cookie the live browser holds and assemble the
     Cookie header. Same-process, so no CDP round-trip is needed."""
-    cookies = await context.cookies()
-    return _assemble_cookie_header(cookies)
+    header, names, _fp = await _probe_context(context)
+    return header, names
+
+
+async def _probe_context(context: Any) -> tuple[str, list[str], Optional[str]]:
+    """(cookie header, sorted names, login fingerprint) from the live browser."""
+    picked = _auth_cookie_map(await context.cookies())
+    header = "; ".join(f"{k}={v}" for k, v in picked.items())
+    return header, sorted(picked), _login_fingerprint(picked)
+
+
+async def _clear_stale_login(context: Any) -> None:
+    """Drop ONLY the Google/YouTube cookies (never the rest of the profile) and
+    reload the login page, so the person lands on a real sign-in form rather
+    than a half-signed-in expired session. Best-effort."""
+    try:
+        await context.clear_cookies(domain=_AUTH_COOKIE_DOMAIN_RE)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ytmusic sign-in: clearing the stale login cookies failed: %s", exc)
+        return
+    try:
+        page = context.pages[0] if context.pages else await context.new_page()
+        await page.goto(_LOGIN_URL, wait_until="domcontentloaded")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("ytmusic sign-in: reload after clearing best-effort failed: %s", exc)
 
 
 async def _derive_username(context: Any) -> str:
@@ -390,24 +541,85 @@ async def _finish_connect(session: dict[str, Any], header: str) -> None:
     session["provider_name"] = saved.get("name") or "YouTube Music"
 
 
+async def _check_profile_at_start(session: dict[str, Any]) -> bool:
+    """Snapshot the login the persistent profile ALREADY holds, before the
+    person has touched the view. Returns True when that login was harvested.
+
+    * no login cookie → baseline None: any cookie that appears is a fresh login;
+    * a cookie YouTube confirms is signed in → a real, live login: save it now
+      (otherwise the person would stare at a signed-in page until timeout);
+    * a cookie YouTube says is NOT signed in → stale (the 2026-09-28 incident):
+      wipe the Google/YouTube cookies so the view shows a real sign-in form;
+    * can't tell (network) → keep the snapshot; only a CHANGED cookie counts.
+    """
+    context = session.get("context")
+    try:
+        header, _names, fingerprint = await _probe_context(context)
+    except Exception as exc:  # noqa: BLE001 — browser not ready: nothing to snapshot yet
+        logger.debug("ytmusic sign-in: start snapshot not ready: %s", exc)
+        header, fingerprint = "", None
+    session["baseline_fp"] = fingerprint
+    if fingerprint is None:
+        return False
+    verdict = await _validate_cookie(header)
+    if verdict is True:
+        logger.info("ytmusic sign-in: profile already holds a live sign-in (validated) — saving it")
+        session["state"] = "harvesting"
+        await _finish_connect(session, header)
+        return True
+    if verdict is None:
+        logger.info("ytmusic sign-in: couldn't validate the profile's existing cookie — "
+                    "waiting for a fresh login")
+        return False
+    logger.info("ytmusic sign-in: profile cookie is stale (validation failed) — "
+                "clearing its Google/YouTube cookies")
+    await _clear_stale_login(context)
+    try:
+        _h, _n, after = await _probe_context(context)
+    except Exception:  # noqa: BLE001 — keep the stale snapshot: unchanged still won't count
+        after = fingerprint
+    session["baseline_fp"] = after
+    session["state"] = "stale_cookie_cleared"
+    await _progress(session)
+    return False
+
+
 async def _run_watcher(session: dict[str, Any]) -> None:
-    """Poll the live browser for the auth cookie; when present, harvest → save →
-    teardown. Times out (and tears down) after SESSION_TIMEOUT_S."""
+    """Snapshot the profile's login, then poll the live browser until a login
+    happens DURING this session: a login cookie that differs from the snapshot
+    AND that YouTube confirms is signed in → harvest → save → teardown. A stale
+    or unvalidated cookie is never saved. Times out (and tears down) after
+    SESSION_TIMEOUT_S."""
     deadline = time.monotonic() + SESSION_TIMEOUT_S
     try:
         session["state"] = "awaiting_login"
+        if await _check_profile_at_start(session):
+            return
+        logged_unchanged = False
         while time.monotonic() < deadline:
             if session.get("state") in _TERMINAL_STATES:
                 return
             try:
-                header, names = await _harvest_from_context(session.get("context"))
+                header, names, fingerprint = await _probe_context(session.get("context"))
             except Exception as exc:  # noqa: BLE001 — browser not ready / transient
                 logger.debug("ytmusic sign-in: harvest probe not ready: %s", exc)
-                header, names = "", []
-            if header and _has_required(names):
-                session["state"] = "harvesting"
-                await _finish_connect(session, header)
-                return
+                header, names, fingerprint = "", [], None
+            if header and _has_required(names) and fingerprint:
+                if fingerprint == session.get("baseline_fp"):
+                    if not logged_unchanged:
+                        logger.info("ytmusic sign-in: stale cookie ignored (unchanged since session start)")
+                        logged_unchanged = True
+                elif fingerprint != session.get("rejected_fp"):
+                    verdict = await _validate_cookie(header)
+                    if verdict is True:
+                        session["state"] = "harvesting"
+                        await _finish_connect(session, header)
+                        return
+                    if verdict is False:
+                        # Not saved, not torn down: keep waiting for a real login.
+                        session["rejected_fp"] = fingerprint
+                        logger.info("ytmusic sign-in: validation failed — new cookie is not "
+                                    "signed in; still waiting")
             await asyncio.sleep(_POLL_S)
         session["state"] = "timeout"
         session["error"] = "Sign-in timed out — head back to your Zoe panel and try again."
@@ -434,14 +646,32 @@ async def _report(session: dict[str, Any]) -> None:
         logger.info("ytmusic sign-in: completion report failed: %s", exc)
 
 
-def watch(session_id: str, on_done: Any) -> None:
+async def _progress(session: dict[str, Any]) -> None:
+    """Tell a ``watch``er the old sign-in was wiped (the panel's handoff card
+    says "sign in again"). Idempotent; reporting never affects the sign-in."""
+    on_progress = session.get("on_progress")
+    if on_progress is None or session.get("state") != "stale_cookie_cleared":
+        return
+    try:
+        await on_progress(STALE_DETAIL)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("ytmusic sign-in: progress report failed: %s", exc)
+
+
+def watch(session_id: str, on_done: Any,
+          on_progress: Optional[Callable[[str], Awaitable[None]]] = None) -> None:
     """Register ``on_done(ok, detail)`` for the live session (auth_handoff's
-    reporter). A session that already ended reports at once; any other id is a
-    no-op."""
+    reporter), and optionally ``on_progress(detail)`` for the stale-cookie
+    notice. A session that already ended reports at once, as does a stale
+    cookie already cleared; any other id is a no-op."""
     session = _SESSION
     if session is None or not session_id or session.get("id") != session_id:
         return
     session["on_done"] = on_done
+    if on_progress is not None:
+        session["on_progress"] = on_progress
+        if session.get("state") == "stale_cookie_cleared":
+            session["progress_task"] = asyncio.create_task(_progress(session))
     watcher = session.get("watcher")
     if session.get("state") in _TERMINAL_STATES and (watcher is None or watcher.done()):
         session["report_task"] = asyncio.create_task(_report(session))
@@ -550,6 +780,13 @@ async def refresh_now() -> dict[str, Any]:
     if not header or not _has_required(names):
         logger.info("ytmusic refresh: profile has no valid %s cookie — skipping save", REQUIRED_COOKIE)
         return {"ok": False, "reason": "profile not signed in / cookie incomplete"}
+    # Same class as the sign-in watcher: a cookie in the profile is not a live
+    # login. Never push one YouTube says is signed out (it would overwrite MA's
+    # config with a dead cookie); an inconclusive check keeps the old behaviour.
+    if await _validate_cookie(header) is False:
+        logger.info("ytmusic refresh: profile cookie is no longer signed in — skipping save "
+                    "(sign in again from the panel)")
+        return {"ok": False, "reason": "profile sign-in expired — sign in again"}
     username = _stored_username() or "YouTube Music"
     # Refresh UPDATES the existing instance in place — never a duplicate provider.
     instance_id = await music_service.provider_instance_id(music_service._YTMUSIC_DOMAIN)

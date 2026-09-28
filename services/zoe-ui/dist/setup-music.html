@@ -224,6 +224,7 @@
               { headers: TOKEN_HDR })
           .then(function (r) { return r.json(); }).then(function (s) {
             if (s.state === 'harvesting') { $('bStatus').textContent = 'Signed in — connecting to Zoe…'; }
+            else if (s.state === 'stale_cookie_cleared') { $('bStatus').textContent = 'Your old sign-in had expired — sign in again above…'; }
             else if (s.state === 'connected') {
               clearInterval(poll); $('signinFrame').src = 'about:blank';
               $('doneTitle').textContent = (s.name || 'YouTube Music') + ' connected!'; show('done');
