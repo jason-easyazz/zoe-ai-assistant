@@ -1002,6 +1002,11 @@ brain turns) and up to **1.12 s** on long clips, measured from the `Recorded …
 - **One inference at a time.** Each scorer joins the previous one before it
   touches the encoder. Only one resemblyzer inference runs at once, there is one
   model copy, and rows land in turn order.
+- **Still one row per turn at the edges.** Orderly shutdown (SIGTERM/SIGINT, or
+  the main loop exiting) waits up to 3 s for pending scorers
+  (`_drain_shadow_scoring`), so a restart right after a turn keeps its row. If a
+  scorer thread cannot start, that turn is scored inline (WARNING in the journal),
+  and later turns score in the background as normal.
 - **Active mode is unchanged.** With shadow off, the claim rides in the payload
   (`voice_user_id` / `voice_score`), so it is still scored inline before the POST.
   No follow-up path exists to deliver a late claim. Build one before flipping

@@ -610,3 +610,82 @@ def test_background_scorers_run_one_at_a_time_in_turn_order(daemon, monkeypatch,
 
     assert overlap == [], "two speaker-ID inferences ran concurrently"
     assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1", "turn-2"]
+
+
+# ── background scoring: shutdown drain + failed thread start ────────────────
+
+def test_orderly_shutdown_drains_a_mid_run_scorer(daemon, monkeypatch, shadow_log):
+    # Scorers are daemon threads: without the drain, a restart right after a
+    # turn exits before the row is written.
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    release = threading.Event()
+
+    def _score(wav):  # noqa: ARG001
+        release.wait(timeout=2)
+        return ("jason", 0.735)
+
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", _score)
+    daemon._start_shadow_scoring(b"turn")
+    threading.Timer(0.2, release.set).start()  # still mid-run when shutdown begins
+
+    assert daemon._drain_shadow_scoring(timeout=3.0) is True
+    assert len(_rows(shadow_log)) == 1, "shutdown returned before the pending row was written"
+
+
+def test_drain_is_bounded_and_reports_a_stuck_scorer(daemon, monkeypatch, shadow_log):
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    release = threading.Event()
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav",
+                        lambda wav: release.wait(timeout=5) and None)
+    t = daemon._start_shadow_scoring(b"turn")
+    try:
+        assert daemon._drain_shadow_scoring(timeout=0.1) is False  # a stop never hangs
+    finally:
+        release.set()
+        t.join(timeout=5)
+
+
+def test_main_shutdown_path_drains_pending_scorers(daemon):
+    # main() needs the mic and wake models, so pin the wiring structurally: the
+    # drain must sit in main()'s shutdown `finally`, which runs on SIGTERM/SIGINT
+    # (the handler only sets _shutdown, ending the loop) and on a crash.
+    import ast
+
+    tree = ast.parse(inspect.getsource(daemon.main))
+    finals = [n for n in ast.walk(tree) if isinstance(n, ast.Try) and n.finalbody]
+    called = {
+        c.func.id
+        for t in finals for stmt in t.finalbody for c in ast.walk(stmt)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+    }
+    assert "_drain_shadow_scoring" in called
+
+
+def test_failed_thread_start_scores_inline_and_later_turns_still_score(daemon, monkeypatch, shadow_log, caplog):
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_ID_SHADOW", True)
+    monkeypatch.setattr(daemon, "_identify_speaker_from_wav", lambda wav: (wav.decode(), 0.8))
+
+    class _NoStartThread(threading.Thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    import types
+    fake_threading = types.SimpleNamespace(**vars(threading))
+    fake_threading.Thread = _NoStartThread
+    monkeypatch.setattr(daemon, "threading", fake_threading)
+    with caplog.at_level("WARNING"):
+        assert daemon._start_shadow_scoring(b"turn-1") is None
+    # The failed-start turn still got its row (scored inline) and said so.
+    assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1"]
+    assert any("failed to start" in r.getMessage() for r in caplog.records)
+    assert not isinstance(daemon._shadow_score_last, _NoStartThread), "an unstarted thread was published"
+
+    # The next turn's scorer runs normally — nothing unstarted to join.
+    monkeypatch.setattr(daemon, "threading", threading)
+    t = daemon._start_shadow_scoring(b"turn-2")
+    assert t is not None
+    t.join(timeout=5)
+    assert [r["user_id"] for r in _rows(shadow_log)] == ["turn-1", "turn-2"]

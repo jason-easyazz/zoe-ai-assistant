@@ -1474,12 +1474,24 @@ _shadow_score_state_lock = threading.Lock()
 _shadow_score_last: threading.Thread | None = None
 
 
-def _start_shadow_scoring(wav_bytes: bytes) -> threading.Thread:
+# Orderly shutdown waits this long for the last pending scorer (and, through
+# its predecessor join, every earlier one) so a restart right after a turn does
+# not drop that turn's row + journal line. Bounded: a stop must never hang.
+_SHADOW_DRAIN_TIMEOUT_S = 3.0
+# A failed thread start falls back to scoring inline; it waits at most this long
+# for the in-flight scorer first, so the fallback keeps one inference at a time
+# without letting a stuck predecessor hold the turn forever.
+_SHADOW_INLINE_WAIT_S = 10.0
+
+
+def _start_shadow_scoring(wav_bytes: bytes) -> threading.Thread | None:
     """Score + log one turn's shadow claim off the caller's thread.
 
     Same one-turn-one-row contract as the synchronous path: this calls
     `_speaker_claim_for_turn` exactly once, which writes the metrics row and
-    the `Speaker ID (shadow): …` journal line. Returns the thread (tests join it).
+    the `Speaker ID (shadow): …` journal line. Returns the started thread
+    (tests join it), or None when the thread could not start and the turn was
+    scored inline instead.
     """
     global _shadow_score_last
 
@@ -1495,9 +1507,47 @@ def _start_shadow_scoring(wav_bytes: bytes) -> threading.Thread:
                 log.warning("Speaker ID (shadow): background scoring failed: %s", exc)
 
         t = threading.Thread(target=_run, daemon=True, name="speaker-shadow")
-        _shadow_score_last = t
-        t.start()
-    return t
+        try:
+            t.start()
+        except Exception as exc:  # e.g. RuntimeError: can't start new thread
+            start_error: Exception | None = exc
+        else:
+            # Published only AFTER a successful start: later scorers join this
+            # thread, and joining one that never started raises — which would
+            # silently cost every later turn its row.
+            _shadow_score_last = t
+            return t
+
+    # The background thread could not start. Score this turn inline (the old,
+    # pre-upload behaviour) so it still gets its one row; later turns are
+    # unaffected because nothing unstarted was published.
+    log.warning("Speaker ID (shadow): background scorer failed to start (%s) — scoring this turn inline",
+                start_error)
+    if prev is not None:
+        prev.join(timeout=_SHADOW_INLINE_WAIT_S)
+    try:
+        _speaker_claim_for_turn(wav_bytes)
+    except Exception as exc:
+        log.warning("Speaker ID (shadow): inline scoring failed: %s", exc)
+    return None
+
+
+def _drain_shadow_scoring(timeout: float = _SHADOW_DRAIN_TIMEOUT_S) -> bool:
+    """Wait (bounded) for pending shadow scorers; True when none is left running.
+
+    Joining the LAST scorer drains all of them, since each joins its
+    predecessor before scoring.
+    """
+    with _shadow_score_state_lock:
+        last = _shadow_score_last
+    if last is None:
+        return True
+    last.join(timeout=timeout)
+    if last.is_alive():
+        log.warning("Speaker ID (shadow): scorer still running after %.1fs at shutdown — "
+                    "that turn's metrics row may be lost", timeout)
+        return False
+    return True
 
 
 def _speaker_claim_to_attach(wav_bytes: bytes) -> tuple[str, float] | None:
@@ -2746,6 +2796,9 @@ def main():
             pa.terminate()
         except Exception:
             pass
+        # Background shadow scorers are daemon threads: without this bounded
+        # drain, a restart right after a turn would drop its row + journal line.
+        _drain_shadow_scoring()
         log.info("Voice daemon stopped.")
 
 
