@@ -3,7 +3,7 @@
  *
  * zoe-data folds context blocks INTO the user message (zoe_flue_client: the recall
  * floor and pending-offer blocks ahead of the words, continuity — and #1781's
- * `[Today <date>]` — after them). Flue persists that message verbatim and replays
+ * `[Today <date>]` and the proactivity selector's `[RAISE …]` — after them). Flue persists that message verbatim and replays
  * it every later turn of the session, so old recall packets and "ask the user
  * exactly …" directives stay readable forever (measured: 193 memory blocks and 116
  * offer directives in the live store). The core lane drops them in memory.ts; this
@@ -29,6 +29,7 @@ export const FLUE_CONTEXT_BLOCKS: readonly (readonly [string, string])[] = [
   ['[MEMORY CONTEXT', '[END MEMORY CONTEXT]'],
   ['[PENDING CONTACT OFFER', '[END PENDING CONTACT OFFER]'],
   ['[Today', '[END Today]'],
+  ['[RAISE', '[END RAISE]'],
 ];
 
 const OPEN_BY_CLOSE = new Map(FLUE_CONTEXT_BLOCKS.map(([open, close]) => [close, open]));

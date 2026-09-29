@@ -3332,6 +3332,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PROACTIVE_SELECTOR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/selector.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PROACTIVE_SLOW_LOOP_S": {
         "defaults": [
           "'300'"
