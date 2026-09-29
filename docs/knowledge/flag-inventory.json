@@ -204,6 +204,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_APP_LOG": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/user_model_ab.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_ASSISTANT_ROOT": {
         "defaults": [
           "-",
@@ -327,7 +337,8 @@
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/perf/samantha_bar.py"
+          "scripts/perf/samantha_bar.py",
+          "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
       },
@@ -466,6 +477,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/perf/measure_tts_cadence.py",
+          "scripts/perf/user_model_ab.py",
           "services/zoe-data/zoe_flue_client.py"
         ],
         "typed_env": false
@@ -2962,7 +2974,8 @@
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",
           "scripts/perf/measure_voice.py",
-          "scripts/perf/samantha_bar.py"
+          "scripts/perf/samantha_bar.py",
+          "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
       },
