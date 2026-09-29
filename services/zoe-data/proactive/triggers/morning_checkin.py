@@ -6,7 +6,7 @@ and portrait-informed personal note so every morning brief feels personal.
 import logging
 import os
 import zoneinfo
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from proactive.recipients import proactive_recipients
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
@@ -16,6 +16,19 @@ log = logging.getLogger(__name__)
 _ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
 _FIRE_HOUR = 7
 _FIRE_MINUTE = 30
+
+
+def _due_iso(value) -> str | None:
+    """``open_loops.follow_up_after`` as a UTC ISO 8601 string (None stays None).
+
+    The column is TIMESTAMP (naive) written as ``CURRENT_TIMESTAMP + …`` in a
+    UTC database session, so a naive value IS UTC. A string keeps the context
+    JSON-safe for ``create_pending`` (a raw ``datetime`` failed every 07:30
+    brief once loops existed) and ``brief_first_turn._as_utc`` parses it back.
+    """
+    if not isinstance(value, datetime):
+        return value
+    return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).isoformat()
 
 
 async def _build_morning_context(db, user_id: str, today: str, *, include_board: bool = True) -> dict:
@@ -41,7 +54,7 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
             loops = await cur.fetchall()
         if loops:
             ctx["open_loops"] = [
-                {"text": row[0], "hint": row[1] or "", "weight": row[2], "due": row[3]}
+                {"text": row[0], "hint": row[1] or "", "weight": row[2], "due": _due_iso(row[3])}
                 for row in loops
             ]
     except Exception as exc:

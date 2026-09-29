@@ -13,12 +13,32 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 
 
 from db_compat import get_compat_db as _get_compat_db
 
 log = logging.getLogger(__name__)
+
+
+def _context_json_default(value):
+    """``json.dumps`` fallback for trigger contexts: a DB-typed value must never
+    fail the notification. datetime/date/time -> ISO 8601, Decimal -> float
+    (str if non-finite), UUID -> str; anything else -> str, logged by TYPE."""
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value) if value.is_finite() else str(value)
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    log.warning("create_pending: context value of type %s stored as str", type(value).__name__)
+    return str(value)
+
+
+def dumps_context(context: dict | None) -> str:
+    """Serialise a trigger context for ``proactive_pending.trigger_context``."""
+    return json.dumps(context or {}, default=_context_json_default)
 
 
 async def create_pending(
@@ -43,7 +63,7 @@ async def create_pending(
                (id, user_id, message, trigger_type, item_id, trigger_context, expires_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (pid, user_id, message, trigger_type, item_id,
-             json.dumps(context or {}), expires),
+             dumps_context(context), expires),
         )
         await db.commit()
     log.debug("Created pending %s for user %s", pid, user_id)
