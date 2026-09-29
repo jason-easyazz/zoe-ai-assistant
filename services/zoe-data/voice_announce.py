@@ -16,6 +16,10 @@ server→daemon announcement lane:
     `GET /api/voice/announcements` endpoint in `routers/voice_tts.py`. Claims
     are atomic (UPDATE ... WHERE delivered_at IS NULL, rowcount-checked), so
     overlapping polls can never return the same row twice (no double-speak).
+  * `mark_played(db, ...)` — backs the device-token-only
+    `POST /api/voice/announcements/{id}/played` ACK the daemon sends after
+    playback returns. `delivered_at` only means CLAIMED (before TTS or
+    playback); `played_at` is the evidence it was heard.
   * TTL: an announcement older than `ZOE_ANNOUNCE_TTL_S` (default 120 s) is
     marked `expired = 1` and never returned — a stale "good morning" spoken at
     noon is worse than silence.
@@ -59,6 +63,8 @@ PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival",)
 # Hard cap per claim; the engine enqueues one row per spoken notification, so
 # anything larger than a handful means a backlog that should expire, not play.
 _CLAIM_LIMIT = 5
+# The 07:30 brief's trigger (proactive/triggers/morning_checkin.py).
+SCHEDULED_BRIEF_TRIGGER = "morning_checkin"
 
 
 def _ttl_s() -> int:
@@ -161,7 +167,7 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
     # 2) Candidate rows (oldest first, so briefs play in order).
     if _strict_panel():
         cursor = await db.execute(
-            """SELECT id, message, trigger_type, expires_at FROM voice_announcements
+            """SELECT id, user_id, message, trigger_type, expires_at FROM voice_announcements
                WHERE delivered_at IS NULL AND expired = 0 AND expires_at > ?
                  AND panel_id = ?
                ORDER BY created_at ASC LIMIT ?""",
@@ -170,7 +176,7 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
     else:
         scoped = ", ".join("?" for _ in PANEL_SCOPED_TRIGGERS)
         cursor = await db.execute(
-            f"""SELECT id, message, trigger_type, expires_at FROM voice_announcements
+            f"""SELECT id, user_id, message, trigger_type, expires_at FROM voice_announcements
                WHERE delivered_at IS NULL AND expired = 0 AND expires_at > ?
                  AND (COALESCE(trigger_type, '') NOT IN ({scoped}) OR panel_id = ?)
                ORDER BY created_at ASC LIMIT ?""",
@@ -181,6 +187,23 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
     # 3) Atomic per-row claim — the poll-overlap guard.
     claimed: list[dict] = []
     for row in rows:
+        # The 07:30 brief vs the first-turn brief (ZOE_BRIEF_ON_FIRST_TURN): never
+        # play a brief the conversation already delivered, and hold it while a
+        # conversational brief is mid-reply. A no-op with that flag off.
+        if (row["trigger_type"] or "") == SCHEDULED_BRIEF_TRIGGER:
+            import brief_first_turn
+
+            verdict = await brief_first_turn.scheduled_row_gate(db, str(row["user_id"] or ""))
+            if verdict == "defer":
+                continue  # stays pending; its TTL keeps counting
+            if verdict == "suppress":
+                await db.execute(
+                    "UPDATE voice_announcements SET expired = 1 WHERE id = ? AND delivered_at IS NULL",
+                    (row["id"],),
+                )
+                log.info("voice_announce: %s suppressed — the first-turn brief already "
+                         "delivered today's brief", row["id"])
+                continue
         async with db.execute(
             """UPDATE voice_announcements SET delivered_at = ?, delivered_to = ?
                WHERE id = ? AND delivered_at IS NULL""",
@@ -203,3 +226,22 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
             len(claimed), panel_id,
         )
     return claimed
+
+
+async def mark_played(db, *, announcement_id: str, panel_id: str) -> bool:
+    """Record the daemon's playback ACK; True when this call set ``played_at``.
+
+    Only the panel that claimed the row may ACK it (``delivered_to``), and only
+    once. The claim alone (``delivered_at``) is not proof of playback: the TTS
+    fetch can fail, a deferred row can outlive its TTL on the daemon, or the
+    daemon can stop between polling and playing.
+    """
+    async with db.execute(
+        """UPDATE voice_announcements SET played_at = ?
+           WHERE id = ? AND delivered_to = ? AND delivered_at IS NOT NULL
+             AND played_at IS NULL""",
+        (_fmt(_now()), announcement_id, panel_id),
+    ) as cur:
+        updated = getattr(cur, "rowcount", 0) == 1
+    await db.commit()
+    return updated

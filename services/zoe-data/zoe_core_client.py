@@ -38,6 +38,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping
 
+import brief_first_turn
 from pi_intent_classifier import (
     _assistant_text_from_rpc_event,
     _pi_subprocess_env,
@@ -881,6 +882,10 @@ def _close_marker(label: str) -> str:
 _PORTRAIT_CLOSE = _close_marker(_PORTRAIT_LABEL)
 _RECALL_CLOSE = _close_marker(_RECALL_LABEL)
 _HISTORY_CLOSE = _close_marker(_HISTORY_LABEL)
+# The first-turn day brief (brief_first_turn owns the label; the close follows
+# the same mechanical rule, pinned by a test).
+_TODAY_LABEL = brief_first_turn.BLOCK_LABEL
+_TODAY_CLOSE = _close_marker(_TODAY_LABEL)
 
 # (open, close) for every block `_compose_message` folds in, in composition order.
 # Mirrored by `CONTEXT_BLOCKS` in memory.ts, which strips them; a drift there is
@@ -891,6 +896,7 @@ _CONTEXT_BLOCKS = (
     (_RECALL_LABEL, _RECALL_CLOSE),
     (_MEMORY_BLOCK_OPEN, _MEMORY_BLOCK_CLOSE),
     (_HISTORY_LABEL, _HISTORY_CLOSE),
+    (_TODAY_LABEL, _TODAY_CLOSE),
 )
 
 # Every marker composition owns, and therefore every marker that must be rendered
@@ -1069,6 +1075,7 @@ def _compose_message(
     portrait: str | None,
     voice_mode: bool = False,
     memory_packet: str | None = None,
+    day_brief: str | None = None,
 ) -> str:
     """Prepend the per-turn context the brain needs ahead of the user's words.
 
@@ -1152,6 +1159,12 @@ def _compose_message(
             parts.append(
                 _context_block(_HISTORY_LABEL, _HISTORY_CLOSE, "\n".join(lines))
             )
+    # First-turn day brief (brief_first_turn, default OFF): closest to the
+    # utterance, still BEFORE it — the message stays last.
+    if day_brief:
+        parts.append(
+            _context_block(_TODAY_LABEL, _TODAY_CLOSE, _neutralize_markers(day_brief.strip()))
+        )
     if not parts:
         return message  # no context at all → the bare utterance, unchanged
     parts.append(f"{_UTTERANCE_MARKER}\n{message}")
@@ -1184,11 +1197,21 @@ async def run_zoe_core_streaming(
     # call in the lane (memory.ts stands down via ZOE_CORE_MEMORY_SEAM), and it
     # must NOT be skipped when the caller supplied db_memory_context — the endpoint
     # folds in pending-contact offers that no other path produces. See the header.
+    # The first-turn day brief is prepared alongside the packet (both never
+    # raise); its claim is settled in the finally below, by whether text went out.
+    briefs: list = []
+
     async def _compose() -> str:
-        packet = await _memory_packet_block(message, user_id)
+        packet, brief = await asyncio.gather(
+            _memory_packet_block(message, user_id),
+            brief_first_turn.prepare(message, user_id),
+        )
+        if brief is not None:
+            briefs.append(brief)
         return _compose_message(
             message, history=history, db_memory_context=db_memory_context,
             portrait=portrait, voice_mode=voice_mode, memory_packet=packet,
+            day_brief=brief.body if brief else None,
         )
     # Bound concurrent brain turns (see _MAX_CONCURRENCY), but only for the
     # duration of actual generation — NOT for however long the consumer takes to
@@ -1221,11 +1244,14 @@ async def run_zoe_core_streaming(
             await queue.put(_DONE)
 
     producer = asyncio.ensure_future(_produce())
+    yielded_any = False
     try:
         while True:
             item = await queue.get()
             if item is _DONE:
                 break
+            if not str(item).startswith(("__TOOL__:", "__THINKING__:")):
+                yielded_any = True
             yield item
         if errors:
             raise errors[0]
@@ -1237,6 +1263,10 @@ async def run_zoe_core_streaming(
             producer.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await producer
+        # The day brief's claim is settled on EVERY exit — clean, error, or a
+        # consumer that disconnected/barged in — by whether text went out.
+        if briefs:
+            await brief_first_turn.settle(briefs[0], produced=yielded_any)
 
 
 async def _reset_worker_for(

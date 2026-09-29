@@ -18,14 +18,19 @@ _FIRE_HOUR = 7
 _FIRE_MINUTE = 30
 
 
-async def _build_morning_context(db, user_id: str, today: str) -> dict:
-    """Collect open loops, emotional moments, calendar events, and portrait for the brief."""
+async def _build_morning_context(db, user_id: str, today: str, *, include_board: bool = True) -> dict:
+    """Collect open loops, emotional moments, calendar events, and portrait for the brief.
+
+    Shared with ``brief_first_turn`` (the day context folded into the first
+    conversation of the day), which passes ``include_board=False``: the
+    engineering board is not day context, and skipping it saves a Multica call.
+    """
     ctx: dict = {}
 
     # Open loops approaching follow-up time
     try:
         async with db.execute(
-            """SELECT loop_text, follow_up_hint, emotional_weight
+            """SELECT loop_text, follow_up_hint, emotional_weight, follow_up_after
                FROM open_loops
                WHERE user_id=? AND resolved = false
                  AND (follow_up_after IS NULL OR follow_up_after <= CURRENT_TIMESTAMP + INTERVAL '1 day')
@@ -36,7 +41,7 @@ async def _build_morning_context(db, user_id: str, today: str) -> dict:
             loops = await cur.fetchall()
         if loops:
             ctx["open_loops"] = [
-                {"text": row[0], "hint": row[1] or "", "weight": row[2]}
+                {"text": row[0], "hint": row[1] or "", "weight": row[2], "due": row[3]}
                 for row in loops
             ]
     except Exception as exc:
@@ -45,7 +50,7 @@ async def _build_morning_context(db, user_id: str, today: str) -> dict:
     # Today's calendar events
     try:
         async with db.execute(
-            """SELECT title, start_time, end_time, location
+            """SELECT title, start_time, end_time, location, end_date, duration
                FROM events
                WHERE start_date=? AND user_id=? AND deleted=0
                ORDER BY start_time
@@ -55,7 +60,8 @@ async def _build_morning_context(db, user_id: str, today: str) -> dict:
             events = await cur.fetchall()
         if events:
             ctx["calendar"] = [
-                {"title": row[0], "start": row[1] or "", "end": row[2] or "", "location": row[3] or ""}
+                {"title": row[0], "start": row[1] or "", "end": row[2] or "", "location": row[3] or "",
+                 "end_date": row[4] or "", "duration": row[5]}
                 for row in events
             ]
     except Exception as exc:
@@ -109,6 +115,8 @@ async def _build_morning_context(db, user_id: str, today: str) -> dict:
     # engines (docs/VISION.md; the HA/MA embed-don't-expose rule). Role lookup
     # failures fail CLOSED — no role proof, no board line.
     caller_is_admin = False
+    if not include_board:
+        return ctx
     try:
         cursor = await db.execute("SELECT role FROM users WHERE id = ?", (user_id,))
         role_row = await cursor.fetchone()
