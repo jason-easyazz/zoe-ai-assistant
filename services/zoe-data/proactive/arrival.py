@@ -310,22 +310,60 @@ async def brief_claimed(db, *, user_id: str, now: datetime) -> bool:
         return (await cur.fetchone()) is not None
 
 
-async def scheduled_brief_delivery(db, *, user_id: str, now: datetime) -> str:
-    """How today's 07:30 full brief fared on the speaker, read-only.
+# A CLAIMED-but-unacknowledged 07:30 brief is still "in flight" this long past its
+# TTL: the daemon may start speaking just before its deadline, and the TTS fetch
+# (30 s timeout) plus up to 1200 chars of audio must finish before the ACK lands.
+_PLAY_ACK_GRACE_S = 180
 
-    ``_spoken_state`` over today's ``morning_checkin`` rows (a known guest-safe
-    teaser never counts as heard): ``delivered`` / ``in_flight`` /
-    ``guest_teaser`` / ``expired`` / ``absent``; ``absent`` when no brief exists.
-    The daemon's claim (``voice_announce.claim_announcements`` setting
-    ``delivered_at``) is the only point where the scheduled path is known to
-    have SUCCEEDED — ``_speak_on_panel`` merely queues. ``brief_first_turn``
-    takes the shared claim when it first observes ``delivered``.
+
+async def claim_holder(db, *, user_id: str, now: datetime) -> str | None:
+    """``trigger_type`` of the path holding today's shared claim, or None."""
+    local_date = now.astimezone(_ZOE_TZ).date().isoformat()
+    async with db.execute(
+        """SELECT trigger_type FROM proactive_responses
+           WHERE user_id = ? AND claim_key = ? AND local_date = ? LIMIT 1""",
+        (user_id, CLAIM_KEY, local_date),
+    ) as cur:
+        row = await cur.fetchone()
+    return str(row["trigger_type"] or "") if row else None
+
+
+async def scheduled_brief_delivery(db, *, user_id: str, now: datetime) -> str:
+    """Whether today's 07:30 full brief was HEARD, read-only: ``played`` /
+    ``in_flight`` / ``free``.
+
+    Only the daemon's playback ACK (``played_at``, ``voice_announce.mark_played``)
+    counts as heard. ``delivered_at`` is set when the daemon CLAIMS the row —
+    before TTS and playback — so a claim whose playback never completes is not
+    delivery. ``in_flight`` is BOUNDED: a queued row until its ``expires_at``
+    (``ZOE_ANNOUNCE_TTL_S``), a claimed row until ``expires_at`` +
+    ``_PLAY_ACK_GRACE_S``; after that it is ``free`` and the conversation gets
+    the brief. A known guest-safe teaser never counts either way.
     """
     day_start = _day_start_utc(now.astimezone(_ZOE_TZ))
     brief = await _todays_brief(db, user_id, day_start)
-    if brief is None:
-        return "absent"
-    return await _spoken_state(db, user_id, day_start, brief["teasers"], now)
+    teasers = brief["teasers"] if brief else set()
+    async with db.execute(
+        """SELECT message, delivered_at, played_at, expired, expires_at FROM voice_announcements
+           WHERE user_id = ? AND trigger_type = ?
+             AND created_at::timestamptz >= ?::timestamptz""",
+        (user_id, BRIEF_TRIGGER, day_start),
+    ) as cur:
+        rows = await cur.fetchall()
+    in_flight = False
+    for row in rows:
+        if str(row["message"] or "").strip() in teasers:
+            continue
+        if row["played_at"]:
+            return "played"
+        exp = _parse_ts(row["expires_at"])
+        if exp is None:
+            continue
+        if row["delivered_at"]:
+            in_flight = in_flight or now < exp + timedelta(seconds=_PLAY_ACK_GRACE_S)
+        elif not int(row["expired"] or 0):
+            in_flight = in_flight or now < exp
+    return "in_flight" if in_flight else "free"
 
 
 async def claim_scheduled_brief(
@@ -346,8 +384,12 @@ async def claim_scheduled_brief(
       holds today's claim the full brief is not spoken again (``already_spoken``);
       otherwise it is queued WITHOUT a claim, because queueing is not delivery —
       a failed or expired announcement must leave the day's brief to the first
-      conversation. A delivered one is claimed by ``brief_first_turn`` when it
-      sees it (``scheduled_brief_delivery``). A read error fails closed too.
+      conversation. A PLAYED one (the daemon's ACK) is claimed by
+      ``brief_first_turn`` when it sees it (``scheduled_brief_delivery``). The
+      read-then-queue window is closed on the daemon side: the claim endpoint
+      holds or suppresses a ``morning_checkin`` row while a first-turn brief is
+      mid-reply or already delivered (``brief_first_turn.scheduled_row_gate``).
+      A read error fails closed too.
     """
     from brief_first_turn import brief_on_first_turn_enabled
 

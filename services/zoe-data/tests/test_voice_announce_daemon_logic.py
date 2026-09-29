@@ -131,6 +131,31 @@ def test_deliver_speak_failure_reported():
     assert p.deliver(ann, wait=lambda s: clock.advance(s)) == "speak_failed"
 
 
+@pytest.mark.parametrize("speak_ok,ttl,expect_acks", [
+    (True, 60.0, ["a1"]),   # played → ACKed (played_at on the server)
+    (False, 60.0, []),      # TTS/playback failed after the claim → no ACK
+    (True, 0.0, []),        # expired on the daemon → never played, no ACK
+])
+def test_ack_is_sent_only_after_playback(speak_ok, ttl, expect_acks):
+    """The server's claim (delivered_at) is not proof of playback; the ACK is."""
+    clock = FakeClock()
+    acks = []
+    p, _ = _poller(clock, speak=lambda ann: speak_ok, ack=lambda ann: acks.append(ann["id"]))
+    p.deliver({"id": "a1", "text": "x", "expires_in_s": ttl}, wait=lambda s: clock.advance(s))
+    assert acks == expect_acks
+
+
+def test_ack_failure_never_escapes():
+    clock = FakeClock()
+
+    def broken_ack(ann):
+        raise RuntimeError("zoe-data restarting")
+
+    p, _ = _poller(clock, ack=broken_ack)
+    assert p.deliver({"id": "a1", "text": "x", "expires_in_s": 60.0},
+                     wait=lambda s: clock.advance(s)) == "spoken"
+
+
 def test_deliver_missing_ttl_expires_not_speaks():
     """No/garbage expires_in_s → treated as already at the TTL edge (never a
     forever-fresh announce)."""

@@ -58,6 +58,10 @@ class AnnouncePoller:
       speak(ann)     -> bool        — synthesize + play one announcement
                         through the daemon's existing TTS path. False = failed.
       is_busy()      -> bool        — live turn / TTS playing / cooldown.
+      ack(ann)       -> None        — optional: report a SPOKEN announcement back
+                        to the server (``POST /api/voice/announcements/{id}/played``).
+                        The claim alone is not proof it was heard. Failures
+                        are logged and never escape.
       poll_interval_s               — idle cadence between polls.
       defer_wait_s                  — re-check cadence while deferring.
       backoff_max_s                 — cap for the failure backoff (each
@@ -76,8 +80,10 @@ class AnnouncePoller:
         backoff_max_s: float = 60.0,
         monotonic: Callable[[], float] = time.monotonic,
         logger=None,
+        ack: Optional[Callable[[dict], None]] = None,
     ):
         self._fetch = fetch
+        self._ack = ack
         self._speak = speak
         self._is_busy = is_busy
         self.poll_interval_s = max(0.5, float(poll_interval_s))
@@ -117,6 +123,11 @@ class AnnouncePoller:
                 return "expired"
             if action == "speak":
                 ok = bool(self._speak(ann))
+                if ok and self._ack is not None:
+                    try:
+                        self._ack(ann)
+                    except Exception as exc:  # the ACK must never hurt the voice path
+                        self._warning("announce %s: played-ACK failed (%s)", ann.get("id", "?"), exc)
                 return "spoken" if ok else "speak_failed"
             wait(self.defer_wait_s)
 

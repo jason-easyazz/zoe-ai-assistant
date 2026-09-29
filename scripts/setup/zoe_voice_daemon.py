@@ -2736,6 +2736,14 @@ def _speak_announcement(ann: dict) -> bool:
     return True
 
 
+def _ack_announcement(ann: dict) -> None:
+    """Tell zoe-data the claimed announcement was PLAYED (its claim alone is not
+    proof: TTS or playback can fail after the claim). One attempt, short timeout."""
+    ann_id = str(ann.get("id") or "").strip()
+    if ann_id:
+        _api_post(f"/api/voice/announcements/{ann_id}/played", {}, timeout=5, retries=0)
+
+
 def _announce_poll_thread():
     """Background thread: poll/claim/speak server announcements (P-W2.3)."""
     if not ANNOUNCE_POLL_ENABLED:
@@ -2753,6 +2761,7 @@ def _announce_poll_thread():
         is_busy=_daemon_busy,
         poll_interval_s=ANNOUNCE_POLL_S,
         logger=log,
+        ack=_ack_announcement,
     )
     log.info("Announce poll thread started (interval=%.1fs)", ANNOUNCE_POLL_S)
     poller.run(_shutdown.wait)

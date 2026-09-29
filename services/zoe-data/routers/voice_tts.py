@@ -2214,6 +2214,26 @@ async def voice_announcements(caller: dict = Depends(_require_voice_auth), db=De
     return {"ok": True, "announcements": items}
 
 
+@router.post("/announcements/{announcement_id}/played")
+async def voice_announcement_played(
+    announcement_id: str, caller: dict = Depends(_require_voice_auth), db=Depends(get_db)
+):
+    """The daemon's playback ACK: the claimed announcement was actually played.
+
+    Device-token ONLY, like the claim, and only for a row this panel claimed
+    (``voice_announce.mark_played``). ``delivered_at`` records the claim, which
+    happens before TTS and playback; ``played_at`` is what "heard" means.
+    """
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="Announcement ACK requires a device token")
+    import voice_announce
+
+    updated = await voice_announce.mark_played(
+        db, announcement_id=announcement_id, panel_id=str(caller.get("panel_id") or "")
+    )
+    return {"ok": True, "updated": updated}
+
+
 _STREAM_TEXT_MAX = 2000  # character cap for streaming TTS to prevent runaway requests
 
 

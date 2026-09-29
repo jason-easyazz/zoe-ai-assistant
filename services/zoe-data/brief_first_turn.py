@@ -54,6 +54,13 @@ _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})")
 _settled: dict[str, str] = {}  # user -> local date whose claim is known taken
 _ctx_cache: dict[str, tuple[str, float, dict]] = {}
 _settling: set = set()
+# user -> monotonic time a conversational brief was injected and not yet settled.
+# The daemon claim endpoint holds a queued 07:30 brief while this is fresh
+# (``scheduled_row_gate``). In-process is enough: zoe-data runs ONE uvicorn
+# worker (scripts/setup/systemd/zoe-data.service, no --workers), and the bound
+# keeps a lost settle from holding the spoken brief past its TTL anyway.
+_briefing: dict[str, float] = {}
+_BRIEFING_HOLD_S = 120.0
 
 
 def brief_on_first_turn_enabled() -> bool:
@@ -233,11 +240,11 @@ async def _claim_state(user_id: str, now: datetime) -> str:
     """``taken`` / ``in_flight`` / ``free`` for today's shared claim.
 
     ``taken`` when the claim row exists, or when today's 07:30 full brief was
-    actually DELIVERED by the daemon — the scheduled path queues without a claim
-    while only this flag is on, so its success is claimed here, the first time
-    it is seen. ``in_flight``: that brief is queued and not yet played or
-    expired — wait, do not talk over it. Anything else (expired, never queued,
-    only the guest teaser played) is ``free``.
+    PLAYED (the daemon's ACK, never its claim) — the scheduled path queues
+    without a claim while only this flag is on, so its success is claimed here,
+    the first time it is seen. ``in_flight``: that brief is queued or claimed and
+    not yet acknowledged, within its bounded window — wait, do not talk over it.
+    Anything else (expired, never played, only the guest teaser) is ``free``.
     """
     from db_compat import get_compat_db
     from proactive import arrival
@@ -246,7 +253,7 @@ async def _claim_state(user_id: str, now: datetime) -> str:
         if await arrival.brief_claimed(db, user_id=user_id, now=now):
             return "taken"
         delivery = await arrival.scheduled_brief_delivery(db, user_id=user_id, now=now)
-        if delivery == "delivered":
+        if delivery == "played":
             await arrival.claim_full_brief(
                 db, user_id=user_id, trigger_type=arrival.BRIEF_TRIGGER, panel_id=None,
                 pending_id=None, missed="", now=now,
@@ -313,6 +320,7 @@ async def _prepare(message: str, uid: str, now: datetime) -> DayBrief | None:
         _log(uid, len(items), shape, injected=False, claimed=False)
         return None
     lines = items if shape == "greeting" else critical
+    _briefing[uid] = time.monotonic()
     return DayBrief(uid, shape, len(items), render_body(shape, lines, local_date), now, local_date)
 
 
@@ -351,6 +359,7 @@ async def settle(brief: DayBrief | None, *, produced: bool) -> bool:
 
 
 async def _settle(brief: DayBrief, produced: bool) -> bool:
+    _briefing.pop(brief.user_id, None)
     claimed = False
     if produced:
         try:
@@ -362,7 +371,33 @@ async def _settle(brief: DayBrief, produced: bool) -> bool:
     return claimed
 
 
+async def scheduled_row_gate(db, user_id: str) -> str:
+    """For the daemon claim of a queued 07:30 brief row: ``play`` / ``defer`` /
+    ``suppress``. Never raises (an error plays, the pre-existing behaviour).
+
+    Closes the read-then-queue race: the 07:30 path reads a free claim, a first
+    turn injects the brief meanwhile, the 07:30 row is queued anyway. While that
+    conversational brief is mid-reply the row is held (``defer``: left pending,
+    its TTL counting); once the first-turn brief holds the claim the row is
+    never played (``suppress``). With this flag off: ``play``, no I/O.
+    """
+    if not brief_on_first_turn_enabled() or not user_id:
+        return "play"
+    started = _briefing.get(user_id)
+    if started is not None and time.monotonic() - started < _BRIEFING_HOLD_S:
+        return "defer"
+    try:
+        from proactive.arrival import claim_holder
+
+        holder = await claim_holder(db, user_id=user_id, now=_now_utc())
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("brief-first-turn: gate read failed, playing: %r", exc)
+        return "play"
+    return "suppress" if holder == TRIGGER_TYPE else "play"
+
+
 def _reset_state() -> None:
     """Clear the in-process throttles (tests; simulates a restart)."""
     _settled.clear()
     _ctx_cache.clear()
+    _briefing.clear()

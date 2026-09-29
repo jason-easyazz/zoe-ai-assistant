@@ -66,7 +66,7 @@ class _Cur:
 class FakeDB:
     """``proactive_responses`` with its UNIQUE (user_id, claim_key, local_date),
     plus today's 07:30 ``proactive_pending`` / ``voice_announcements`` rows as
-    ``arrival._todays_brief`` / ``_spoken_state`` read them."""
+    ``arrival._todays_brief`` / ``scheduled_brief_delivery`` read them."""
 
     def __init__(self):
         self.claims: dict[tuple, str] = {}
@@ -77,11 +77,14 @@ class FakeDB:
     def execute(self, sql, params=()):
         sql = " ".join(sql.split())
         self.ops.append(sql.split()[0])
+        if sql.startswith("SELECT trigger_type FROM proactive_responses"):
+            holder = self.claims.get(tuple(params))
+            return _Cur({"trigger_type": holder} if holder else None)
         if sql.startswith("SELECT 1 FROM proactive_responses"):
             return _Cur({"?column?": 1} if tuple(params) in self.claims else None)
         if sql.startswith("SELECT id, message, claimed, trigger_context FROM proactive_pending"):
             return _Cur(None, list(self.pending))
-        if sql.startswith("SELECT message, delivered_at, expired, expires_at FROM voice_announcements"):
+        if sql.startswith("SELECT message, delivered_at, played_at, expired, expires_at FROM voice_announcements"):
             return _Cur(None, list(self.announcements))
         if sql.startswith("INSERT INTO proactive_responses"):
             key = (params[1], params[2], params[4])
@@ -264,13 +267,18 @@ async def test_first_turn_claim_stops_a_reenabled_0730_spoken_brief(env, monkeyp
 
 
 def _scheduled_brief(state, **announcement):
-    """Today's 07:30 brief: its pending row and one daemon-queue row."""
+    """Today's 07:30 brief: its pending row and one daemon-queue row, queued at
+    07:30 with the default 120 s TTL."""
     state["db"].pending.append({"id": "pend-1", "message": "Good morning!", "claimed": 0,
                                 "trigger_context": json.dumps({"spoken_guest_safe": "teaser"})})
-    row = {"message": "Good morning!", "delivered_at": None, "expired": 0,
+    row = {"message": "Good morning!", "delivered_at": None, "played_at": None, "expired": 0,
            "expires_at": "2026-09-28T23:32:00Z"}
     row.update(announcement)
     state["db"].announcements.append(row)
+    return row
+
+
+CLAIMED = "2026-09-28T23:30:05Z"  # the daemon's claim (delivered_at): NOT playback
 
 
 async def test_0730_attempt_takes_no_claim_when_only_first_turn_is_on(env, monkeypatch):
@@ -281,28 +289,111 @@ async def test_0730_attempt_takes_no_claim_when_only_first_turn_is_on(env, monke
 
 
 async def test_failed_0730_delivery_leaves_the_brief_to_the_first_turn(env):
-    _scheduled_brief(env, expired=1)  # the daemon never played it
+    _scheduled_brief(env, expired=1)  # the daemon never claimed it
     assert await bft.prepare("morning", MEMBER) is not None
 
 
-async def test_delivered_0730_brief_is_claimed_and_stops_the_first_turn(env):
-    _scheduled_brief(env, delivered_at="2026-09-28T23:30:05Z")
+async def test_played_0730_brief_is_claimed_and_stops_the_first_turn(env):
+    _scheduled_brief(env, delivered_at=CLAIMED, played_at="2026-09-28T23:30:40Z")
     assert await bft.prepare("morning", MEMBER) is None
     assert env["db"].claims[(MEMBER, arrival.CLAIM_KEY, DAY)] == arrival.BRIEF_TRIGGER
     assert env["gathers"] == 0
 
 
+async def test_claimed_but_never_played_is_not_delivery_and_expiry_frees_it(env):
+    """The daemon claimed the row (delivered_at) but its TTS/playback never
+    completed (no played_at ACK): that is in flight within a BOUNDED window —
+    expires_at 07:32 + 180 s grace — and never counts as delivered."""
+    _scheduled_brief(env, delivered_at=CLAIMED)
+    env["now"] = at(7, 34)
+    assert await bft.prepare("morning", MEMBER) is None and not claimed(env)
+    env["now"] = at(7, 36)
+    assert await bft.prepare("morning", MEMBER) is not None and not claimed(env)
+
+
 async def test_only_the_guest_teaser_played_still_leaves_the_brief(env):
-    _scheduled_brief(env, message="teaser", delivered_at="2026-09-28T23:30:05Z")
+    _scheduled_brief(env, message="teaser", delivered_at=CLAIMED, played_at=CLAIMED)
     assert await bft.prepare("morning", MEMBER) is not None
 
 
-async def test_queued_0730_brief_is_not_talked_over_then_expiry_frees_it(env):
-    _scheduled_brief(env)  # queued, expires 07:32
+async def test_queued_row_is_waited_on_only_until_its_ttl(env):
+    """A queued, never-claimed row holds the brief only until expires_at — even
+    if the claim sweep has not yet marked it expired (a stuck row cannot hold
+    the conversational brief all morning)."""
+    _scheduled_brief(env)  # queued 07:30, expires 07:32, expired flag never set
     env["now"] = at(7, 31)
     assert await bft.prepare("morning", MEMBER) is None and not claimed(env)
-    env["db"].announcements[0]["expired"] = 1
+    env["now"] = at(7, 33)
     assert await bft.prepare("morning", MEMBER) is not None
+
+
+# ── the read-then-queue race, through the real daemon claim ──────────────────
+@pytest.fixture
+async def queue(env, monkeypatch):
+    """A real ``voice_announcements`` table behind ``voice_announce``; the gate's
+    claim-holder read goes to the same fake claim store as the first-turn path."""
+    import aiosqlite
+
+    import voice_announce
+
+    conn = await aiosqlite.connect(":memory:")
+    conn.row_factory = aiosqlite.Row
+    await conn.execute(
+        """CREATE TABLE voice_announcements (id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+           panel_id TEXT, message TEXT NOT NULL, trigger_type TEXT DEFAULT '',
+           created_at TEXT NOT NULL, expires_at TEXT NOT NULL, delivered_at TEXT,
+           delivered_to TEXT, expired INTEGER NOT NULL DEFAULT 0, played_at TEXT)"""
+    )
+
+    async def holder(db, *, user_id, now):
+        return env["db"].claims.get((user_id, arrival.CLAIM_KEY, DAY))
+
+    monkeypatch.setattr(arrival, "claim_holder", holder)
+    monkeypatch.setattr(arrival, "_now_utc", lambda: at(7, 30))
+    yield conn, voice_announce
+    await conn.close()
+
+
+async def _queue_0730(conn, va):
+    return await va.enqueue_announcement(conn, user_id=MEMBER, message="Good morning!",
+                                         trigger_type="morning_checkin", panel_id="p1")
+
+
+async def test_race_first_turn_between_the_0730_read_and_queue_never_double_delivers(env, queue):
+    """Greptile's interleaving: the 07:30 path reads a free claim; a first turn
+    injects the brief; the 07:30 row is queued anyway. The daemon claim holds it
+    while the reply is in progress and never plays it once the first turn has
+    claimed the day."""
+    conn, va = queue
+    env["now"] = at(7, 30)
+    assert (await arrival.claim_scheduled_brief(user_id=MEMBER, panel_id="p1", pending_id=None))[0] == "speak"
+    brief = await bft.prepare("morning", MEMBER)  # nothing queued yet → injects
+    assert brief is not None
+    await _queue_0730(conn, va)
+    assert await va.claim_announcements(conn, panel_id="p1") == []  # held mid-reply
+    await bft.settle(brief, produced=True)
+    assert claimed(env)
+    assert await va.claim_announcements(conn, panel_id="p1") == []  # suppressed
+    cur = await conn.execute("SELECT expired, delivered_at FROM voice_announcements")
+    row = await cur.fetchone()
+    assert (row["expired"], row["delivered_at"]) == (1, None)
+
+
+async def test_race_first_turn_with_no_text_releases_the_0730_row(env, queue):
+    conn, va = queue
+    brief = await bft.prepare("morning", MEMBER)
+    await _queue_0730(conn, va)
+    assert await va.claim_announcements(conn, panel_id="p1") == []
+    await bft.settle(brief, produced=False)  # the turn failed before any text
+    assert [a["text"] for a in await va.claim_announcements(conn, panel_id="p1")] == ["Good morning!"]
+
+
+async def test_gate_is_inert_with_the_flag_off(env, queue, monkeypatch):
+    conn, va = queue
+    monkeypatch.delenv("ZOE_BRIEF_ON_FIRST_TURN")
+    env["db"].claims[(MEMBER, arrival.CLAIM_KEY, DAY)] = bft.TRIGGER_TYPE
+    await _queue_0730(conn, va)
+    assert len(await va.claim_announcements(conn, panel_id="p1")) == 1
 
 
 # ── the Flue seam: block after the words, claim after an ok verdict ──────────

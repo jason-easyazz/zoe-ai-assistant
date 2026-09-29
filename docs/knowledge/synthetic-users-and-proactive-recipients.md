@@ -145,12 +145,31 @@ would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
   nothing.
 - **The 07:30 spoken path with only this flag on** checks the claim read-only
   (`arrival.claim_scheduled_brief`): if the first-turn brief already went out it is not
-  spoken; otherwise it is queued WITHOUT a claim, because queueing is not delivery. The
-  daemon setting `delivered_at` is the only success signal, and the first-turn check
-  (`arrival.scheduled_brief_delivery`) claims it when it sees it. Queued and not yet
-  played means wait; expired or only the guest teaser played means the first turn still
-  gets the brief. With `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` on, arrival's contract applies
-  unchanged (claim before queueing, no retry).
+  spoken; otherwise it is queued WITHOUT a claim, because queueing is not delivery.
+  - **Heard = the daemon's playback ACK.** `delivered_at` is set when the daemon CLAIMS a
+    row, before TTS and playback. The daemon now POSTs
+    `/api/voice/announcements/{id}/played` after playback returns, which sets `played_at`
+    (migration `0032`, `voice_announce.mark_played`, only the claiming panel, once). Only
+    `played_at` counts (`arrival.scheduled_brief_delivery`); the first-turn check then
+    takes the shared claim.
+  - **Waiting is bounded.** A queued row holds the conversational brief until its
+    `expires_at` (`ZOE_ANNOUNCE_TTL_S`, default 120 s); a claimed but unacknowledged row
+    until `expires_at` + 180 s. After that the first turn gets the brief. The guest
+    teaser never counts.
+  - **The read-then-queue race** (07:30 reads a free claim, a first turn injects, the
+    07:30 row is queued anyway) is closed at the daemon claim
+    (`voice_announce.claim_announcements` → `brief_first_turn.scheduled_row_gate`): a
+    `morning_checkin` row is held pending while that member's conversational brief is
+    mid-reply (in-process marker, ≤120 s; zoe-data runs one uvicorn worker), and is
+    marked `expired` without playing once the first-turn brief holds the claim. Inert with
+    the flag off.
+  - **Deploy order:** the daemon's ACK ships in `scripts/setup/zoe_voice_daemon.py` +
+    `zoe_voice_announce.py`, deployed to the Pi by the operator separately. Until it is,
+    no row is ever ACKed, so a played 07:30 brief is treated as unheard after the bounded
+    wait and the first turn repeats it. Deploy the daemon before enabling
+    `ZOE_PROACTIVE_SPOKEN` together with this flag.
+  - With `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` on, arrival's contract applies unchanged
+    (claim before queueing, no retry).
   Two concurrent first turns can both see the block; only one claim lands.
 - **Log:** `BRIEF_FIRST_TURN user= items= shape=greeting|command injected=0|1 claimed=0|1`,
   one line per decision on a non-empty day.
