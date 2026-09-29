@@ -36,7 +36,8 @@ class _Cur:
     """Both forms the compat layer returns: awaitable and async context."""
 
     def __init__(self, rows=(), rowcount=0):
-        self._rows, self.rowcount = [_Rec((r,)) for r in rows], rowcount
+        self._rows = [_Rec(r if isinstance(r, tuple) else (r,)) for r in rows]
+        self.rowcount = rowcount
 
     def __await__(self):
         async def _self():
@@ -65,6 +66,8 @@ class _LoopsDb:
             return _Cur(self.messages)  # newest first, like the SQL
         if head.startswith("SELECT loop_text"):
             return _Cur(self.unresolved)
+        if head.startswith("SELECT id, loop_text"):
+            return _Cur(list(enumerate(self.unresolved, 1)))
         if head.startswith("UPDATE open_loops"):
             return _Cur(rowcount=self.expired)
         assert head.startswith("INSERT INTO open_loops"), head[:80]
@@ -131,7 +134,8 @@ async def test_fenced_reply_inserts_typed_rows(monkeypatch, caplog):
     assert posts[0]["url"].endswith("/v1/chat/completions") and posts[0]["timeout"] == 45.0
     prompt = posts[0]["payload"]["messages"][1]["content"]
     assert prompt.index("new course") < prompt.index("plumber"), "prompt reads oldest first"
-    assert "OPEN_LOOPS user=user-1 extracted=2 inserted=2 skipped_dup=0 expired=0 status=ok" in caplog.text
+    assert ("OPEN_LOOPS user=user-1 extracted=2 inserted=2 skipped_dup=0 expired=0 "
+            "discarded_meta=0 skipped_turns=0 status=ok") in caplog.text
 
 
 async def test_duplicates_are_skipped_output_capped_stale_loops_aged_out(monkeypatch):
@@ -169,11 +173,32 @@ async def test_stale_loops_age_out_even_without_new_turns(monkeypatch):
 
 async def test_secrets_in_loop_text_are_redacted(monkeypatch):
     db = _LoopsDb(["need to change the router"])
-    _install(monkeypatch, db, reply=json.dumps([_loop("User must change the router; wifi password is hunter2")]))
+    _install(monkeypatch, db, reply=json.dumps([_loop("User must call the plumber; wifi password is hunter2")]))
 
     await memory_digest._extract_open_loops("user-1")
 
     assert "hunter2" not in db.inserts[0][1] and "[REDACTED]" in db.inserts[0][1]
+
+
+async def test_meta_turns_and_anchorless_loops_are_discarded(monkeypatch):
+    # Owner calibration (2026-09-30), paraphrased: a "let's talk" opener and a
+    # correction produced vague loops with no entity; real ones name something.
+    db = _LoopsDb(["let's talk", "you got that wrong, fix that",
+                   "A relative is in hospital and I'm flying over to visit"],
+                  unresolved=["The user expressed a desire to talk continuously",
+                              "User is tired because work is busy"])
+    posts = _install(monkeypatch, db, reply=json.dumps([
+        _loop("The user mentioned a problem with something they said that needs to be fixed", weight=3),
+        _loop("A relative is in hospital; the user is travelling to visit", weight=5)]))
+
+    result = await memory_digest._extract_open_loops("user-1")
+
+    prompt = posts[0]["payload"]["messages"][1]["content"]
+    assert "let's talk" not in prompt and "fix that" not in prompt and "hospital" in prompt
+    assert (result["skipped_turns"], result["discarded_meta"], result["inserted"]) == (2, 2, 1)
+    resolved = [p for sql, p in db.calls if "WHERE id = ?" in sql]
+    assert resolved == [(1,)]  # only the anchor-less stored loop, resolved with resolved_at
+    assert db.inserts[0][3] == 5
 
 
 @pytest.mark.parametrize("reply, exc, status", [
