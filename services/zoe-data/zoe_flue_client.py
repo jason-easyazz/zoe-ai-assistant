@@ -1250,32 +1250,36 @@ async def run_flue_brain_streaming(
     This wrapper adds ZOE_SEAM_CONTINUITY_DEBUG's reply log (the first 200
     reply chars, harness-minted ids only — ``_continuity_debug_uid``) and the
     first-turn day brief (``brief_first_turn``, ZOE_BRIEF_ON_FIRST_TURN, default
-    OFF): the ``[Today]`` block rides after the user's words like the continuity
-    block, and today's shared claim is taken only once the turn's own verdict is
-    ``ok`` — a fallback/failed turn never burns the day's brief."""
+    OFF): the dated ``[Today …]`` block rides after the user's words like the
+    continuity block, and today's shared claim is taken once any real reply text
+    was emitted — also when the stream then dies or the consumer walks away. A
+    turn that emitted no text (only the fallback) never burns the day's brief."""
     import brief_first_turn
 
     brief = await brief_first_turn.prepare(message, user_id)
-    sink = kwargs.pop("outcome_sink", None)
-    if sink is None:
-        sink = {}
     turn = _run_flue_brain_streaming_turn(
-        message, session_id, user_id, outcome_sink=sink,
-        day_brief_block=brief.block if brief else "", **kwargs,
+        message, session_id, user_id, day_brief_block=brief.block if brief else "", **kwargs,
     )
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
+    emitted = False  # real reply text went out (never a sentinel or the fallback)
     try:
         async for delta in turn:
-            if debug and not delta.startswith(("__TOOL__:", "__THINKING__:")):
-                reply.append(delta)
+            if not delta.startswith(("__TOOL__:", "__THINKING__:")):
+                if debug:
+                    reply.append(delta)
+                if delta.strip() and delta != _FALLBACK_TEXT:
+                    emitted = True
             yield delta
-        if brief is not None:
-            await brief_first_turn.settle(brief, produced=sink.get("outcome") == FLUE_OUTCOME_OK)
     finally:
         # Close the inner turn deterministically when the consumer stops early
         # (barge-in / cancellation) — exactly as if it had been iterated directly.
         await turn.aclose()
+        # Settled HERE, not after the loop: a consumer that disconnects or barges
+        # in after the first text exits through this finally (GeneratorExit or a
+        # CancelledError), and the brief it heard must still take the claim.
+        if brief is not None:
+            await brief_first_turn.settle(brief, produced=emitted)
         if debug:
             logger.info(
                 "SEAM_CONTINUITY_DEBUG user=%s session=%s reply=%r",

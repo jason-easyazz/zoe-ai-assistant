@@ -310,25 +310,55 @@ async def brief_claimed(db, *, user_id: str, now: datetime) -> bool:
         return (await cur.fetchone()) is not None
 
 
+async def scheduled_brief_delivery(db, *, user_id: str, now: datetime) -> str:
+    """How today's 07:30 full brief fared on the speaker, read-only.
+
+    ``_spoken_state`` over today's ``morning_checkin`` rows (a known guest-safe
+    teaser never counts as heard): ``delivered`` / ``in_flight`` /
+    ``guest_teaser`` / ``expired`` / ``absent``; ``absent`` when no brief exists.
+    The daemon's claim (``voice_announce.claim_announcements`` setting
+    ``delivered_at``) is the only point where the scheduled path is known to
+    have SUCCEEDED — ``_speak_on_panel`` merely queues. ``brief_first_turn``
+    takes the shared claim when it first observes ``delivered``.
+    """
+    day_start = _day_start_utc(now.astimezone(_ZOE_TZ))
+    brief = await _todays_brief(db, user_id, day_start)
+    if brief is None:
+        return "absent"
+    return await _spoken_state(db, user_id, day_start, brief["teasers"], now)
+
+
 async def claim_scheduled_brief(
     *, user_id: str, panel_id: str | None, pending_id: str | None,
 ) -> tuple[str, str | None]:
     """The 07:30 path's side of the shared claim: ``(verdict, claim_id)``.
 
     ``verdict`` is ``speak`` (claim taken, or flags off), ``already_spoken``
-    (arrival or the first-turn brief has today's claim) or ``claim_error``. With
-    BOTH claim-sharing flags off (``ZOE_PROACTIVE_BRIEF_ON_ARRIVAL``,
-    ``ZOE_BRIEF_ON_FIRST_TURN``): ``("speak", None)`` with no DB access — the
-    scheduled path is unchanged. With either flag on a DB
-    error FAILS CLOSED: an unclaimed full brief could be spoken again by arrival,
-    so the caller must not queue it (the push/text delivery is unaffected).
+    (today's claim is already held) or ``claim_error``.
+
+    * Both ``ZOE_PROACTIVE_BRIEF_ON_ARRIVAL`` and ``ZOE_BRIEF_ON_FIRST_TURN`` off:
+      ``("speak", None)`` with no DB access — the scheduled path is unchanged.
+    * Arrival on: the claim is TAKEN before queueing (arrival's contract — one
+      spoken attempt per day across both spoken paths, never retried). A DB
+      error FAILS CLOSED: an unclaimed full brief could be spoken again by
+      arrival, so the caller must not queue it (push/text delivery unaffected).
+    * Only the first-turn brief on: READ-ONLY. If the first-turn brief already
+      holds today's claim the full brief is not spoken again (``already_spoken``);
+      otherwise it is queued WITHOUT a claim, because queueing is not delivery —
+      a failed or expired announcement must leave the day's brief to the first
+      conversation. A delivered one is claimed by ``brief_first_turn`` when it
+      sees it (``scheduled_brief_delivery``). A read error fails closed too.
     """
     from brief_first_turn import brief_on_first_turn_enabled
 
-    if not (arrival_enabled() or brief_on_first_turn_enabled()):
+    arrival_on = arrival_enabled()
+    if not (arrival_on or brief_on_first_turn_enabled()):
         return "speak", None
     try:
         async with _get_compat_db() as db:
+            if not arrival_on:
+                taken = await brief_claimed(db, user_id=user_id, now=_now_utc())
+                return ("already_spoken" if taken else "speak"), None
             claim_id = await claim_full_brief(
                 db, user_id=user_id, trigger_type=BRIEF_TRIGGER, panel_id=panel_id,
                 pending_id=pending_id, missed="", now=_now_utc(),

@@ -1198,7 +1198,7 @@ async def run_zoe_core_streaming(
     # must NOT be skipped when the caller supplied db_memory_context — the endpoint
     # folds in pending-contact offers that no other path produces. See the header.
     # The first-turn day brief is prepared alongside the packet (both never
-    # raise) and its claim is taken only after the turn produced text.
+    # raise); its claim is settled in the finally below, by whether text went out.
     briefs: list = []
 
     async def _compose() -> str:
@@ -1253,8 +1253,6 @@ async def run_zoe_core_streaming(
             if not str(item).startswith(("__TOOL__:", "__THINKING__:")):
                 yielded_any = True
             yield item
-        if briefs:
-            await brief_first_turn.settle(briefs[0], produced=yielded_any and not errors)
         if errors:
             raise errors[0]
     finally:
@@ -1265,6 +1263,10 @@ async def run_zoe_core_streaming(
             producer.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await producer
+        # The day brief's claim is settled on EVERY exit — clean, error, or a
+        # consumer that disconnected/barged in — by whether text went out.
+        if briefs:
+            await brief_first_turn.settle(briefs[0], produced=yielded_any)
 
 
 async def _reset_worker_for(

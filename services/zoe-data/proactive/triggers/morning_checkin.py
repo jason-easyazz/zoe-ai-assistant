@@ -50,7 +50,7 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
     # Today's calendar events
     try:
         async with db.execute(
-            """SELECT title, start_time, end_time, location
+            """SELECT title, start_time, end_time, location, end_date, duration
                FROM events
                WHERE start_date=? AND user_id=? AND deleted=0
                ORDER BY start_time
@@ -60,7 +60,8 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
             events = await cur.fetchall()
         if events:
             ctx["calendar"] = [
-                {"title": row[0], "start": row[1] or "", "end": row[2] or "", "location": row[3] or ""}
+                {"title": row[0], "start": row[1] or "", "end": row[2] or "", "location": row[3] or "",
+                 "end_date": row[4] or "", "duration": row[5]}
                 for row in events
             ]
     except Exception as exc:

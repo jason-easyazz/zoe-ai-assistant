@@ -111,10 +111,15 @@ member's first brain turn of the morning, so Zoe mentions it the way a human ass
 would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
 
 - **Where:** both brain lanes call it. The Flue seam
-  (`zoe_flue_client.run_flue_brain_streaming`) appends a `[Today]` … `[END Today]`
-  block after the user's words, where the continuity block rides. The core seam folds
-  the same block in as a delimited context block just before `[The user just said]`
-  (`_CONTEXT_BLOCKS`, mirrored in zoe-core `memory.ts`), so superseded copies elide.
+  (`zoe_flue_client.run_flue_brain_streaming`) appends a `[Today 2026-09-29]` …
+  `[END Today]` block after the user's words, where the continuity block rides. The
+  label is dated because Flue keeps every message it was sent and a session can
+  outlive a household day (a voice panel session rolls only after 5 min of silence,
+  `routers/voice_tts._get_or_create_voice_session`; a caller-supplied or chat session id
+  never rolls). The body says `Today is <date>` and to ignore an earlier block with a
+  different date. The core seam folds the same body in as a `[Today]` context block just
+  before `[The user just said]` (`_CONTEXT_BLOCKS`, mirrored in zoe-core `memory.ts`),
+  where older copies are stripped anyway.
   Tier-0 and keyword intents never reach a brain and never count.
 - **Only if all hold:** real member (`user_filters.is_synthetic_user`); local time in
   `ZOE_BRIEF_WINDOW_START`–`ZOE_BRIEF_WINDOW_END` (default `05:00`–`12:00`,
@@ -122,7 +127,9 @@ would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
   `morning_brief_full` claim is not taken; the day context is not empty.
 - **Day context:** `morning_checkin._build_morning_context(..., include_board=False)`
   (the same gatherer as the 07:30 brief). Items are decided in code: today's events
-  that are not over, open loops, and at most one recent emotional moment. The portrait
+  whose STORED end has not passed (`end_time`, else start + `duration` minutes; the
+  voice writer stores neither, so an event with no end stays listed), open loops, and at
+  most one recent emotional moment. The portrait
   and the engineering board are never items. Empty means nothing changes and no claim.
   The gathered context is cached in-process for 5 minutes.
 - **Shape (`turn_shape`, phrase-gated):** a greeting or open turn ("morning", "hey zoe,
@@ -131,10 +138,19 @@ would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
   or an overdue loop. Otherwise nothing is injected and the claim stays free for the
   next open turn.
 - **Claim:** the SAME `proactive_responses` row as the 07:30 and arrival paths
-  (`trigger_type = brief_first_turn`), taken only after the lane reports a produced reply
-  (Flue: the turn's `ok` verdict; core: text streamed without error). A failed turn does
-  not burn the day's brief. While this flag is on, the 07:30 spoken path also takes the
-  claim (`arrival.claim_scheduled_brief`), so re-enabling it never double-delivers.
+  (`trigger_type = brief_first_turn`). It is settled in each lane's stream `finally`,
+  so it is taken once any reply text went out, including when the stream then errors,
+  the client disconnects or a barge-in cancels the turn (the write is shielded). A turn
+  that emitted no text (an error before the first token, the canned fallback) takes
+  nothing.
+- **The 07:30 spoken path with only this flag on** checks the claim read-only
+  (`arrival.claim_scheduled_brief`): if the first-turn brief already went out it is not
+  spoken; otherwise it is queued WITHOUT a claim, because queueing is not delivery. The
+  daemon setting `delivered_at` is the only success signal, and the first-turn check
+  (`arrival.scheduled_brief_delivery`) claims it when it sees it. Queued and not yet
+  played means wait; expired or only the guest teaser played means the first turn still
+  gets the brief. With `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` on, arrival's contract applies
+  unchanged (claim before queueing, no retry).
   Two concurrent first turns can both see the block; only one claim lands.
 - **Log:** `BRIEF_FIRST_TURN user= items= shape=greeting|command injected=0|1 claimed=0|1`,
   one line per decision on a non-empty day.

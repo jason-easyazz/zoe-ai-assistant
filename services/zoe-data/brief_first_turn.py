@@ -35,6 +35,9 @@ GREETING_INSTRUCTION = (
     "assistant would; do not read it out as a list. If they asked for something "
     "specific, answer that first and weave in only what is time-relevant."
 )
+# Flue keeps every user message it was sent (nothing elides old blocks there) and a
+# session can outlive a household day, so each block names its date.
+STALE_INSTRUCTION = "Ignore any earlier [Today …] block with a different date."
 COMMAND_INSTRUCTION = (
     "The user asked for something specific: do that and answer it first. Then add "
     "at most ONE short line about this, because it is soon."
@@ -50,6 +53,7 @@ _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})")
 # In-process throttles only; once-per-day correctness rests on the claim row.
 _settled: dict[str, str] = {}  # user -> local date whose claim is known taken
 _ctx_cache: dict[str, tuple[str, float, dict]] = {}
+_settling: set = set()
 
 
 def brief_on_first_turn_enabled() -> bool:
@@ -138,10 +142,30 @@ def _as_utc(value) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def _stored_end(ev: dict, start: datetime | None, local_now: datetime) -> datetime:
+    """When an event ends per what the calendar STORED: ``end_time`` (unless
+    ``end_date`` is a later day), else ``start + duration`` minutes (the panel's
+    default entry mode stores only a duration), else never today — the voice
+    writer (``intent_router`` → ``create_event_record``) stores neither, so a
+    missing end is no proof the event is over."""
+    never = local_now + timedelta(days=1)
+    end_date = str(ev.get("end_date") or "")[:10]
+    if end_date and end_date > local_now.date().isoformat():
+        return never
+    end = _at(local_now, ev.get("end"))
+    if end is not None:
+        return end
+    try:
+        minutes = int(ev.get("duration") or 0)
+    except (TypeError, ValueError):
+        minutes = 0
+    return start + timedelta(minutes=minutes) if start and minutes > 0 else never
+
+
 def day_items(ctx: dict, local_now: datetime) -> tuple[list[str], list[str]]:
     """``(items, time_critical)`` from a gathered day context. Pure.
 
-    Past events are dropped; the portrait and the engineering board are never
+    Events whose stored end has passed are dropped; the portrait and the engineering board are never
     day items. ``time_critical`` holds at most one line: the soonest event
     starting within 2 h, else the first overdue open loop.
     """
@@ -151,10 +175,9 @@ def day_items(ctx: dict, local_now: datetime) -> tuple[list[str], list[str]]:
         title = _clean(ev.get("title"))
         if not title:
             continue
-        start, end = _at(local_now, ev.get("start")), _at(local_now, ev.get("end"))
-        over = end if end is not None else (start + timedelta(hours=1) if start else None)
-        if over is not None and over < local_now:
-            continue  # already over
+        start = _at(local_now, ev.get("start"))
+        if _stored_end(ev, start, local_now) < local_now:
+            continue  # its STORED end has passed; no stored end = still on
         when = f" at {start.strftime('%H:%M')}" if start else " (all day)"
         where = f", {_clean(ev.get('location'))}" if _clean(ev.get("location")) else ""
         items.append(f"Calendar: {title}{when}{where}")
@@ -177,9 +200,10 @@ def day_items(ctx: dict, local_now: datetime) -> tuple[list[str], list[str]]:
     return items, critical
 
 
-def render_body(shape: str, lines: list[str]) -> str:
+def render_body(shape: str, lines: list[str], local_date: str) -> str:
     instruction = GREETING_INSTRUCTION if shape == "greeting" else COMMAND_INSTRUCTION
-    return instruction + "\n" + "\n".join(f"- {line}" for line in lines)
+    head = f"Today is {local_date}. {instruction} {STALE_INSTRUCTION}"
+    return head + "\n" + "\n".join(f"- {line}" for line in lines)
 
 
 @dataclass
@@ -189,11 +213,15 @@ class DayBrief:
     items: int
     body: str  # instruction + items, undelimited (the core seam delimits it)
     now: datetime
+    local_date: str
 
     @property
     def block(self) -> str:
-        """The delimited block the Flue seam appends after the user's words."""
-        return f"{BLOCK_LABEL}\n{self.body}\n{BLOCK_CLOSE}"
+        """The block the Flue seam appends after the user's words, its label DATED
+        (``[Today 2026-09-29]``) because Flue never elides a superseded copy. The
+        core seam uses the bare ``BLOCK_LABEL`` — its strip matches whole lines
+        and removes every older copy anyway."""
+        return f"{BLOCK_LABEL[:-1]} {self.local_date}]\n{self.body}\n{BLOCK_CLOSE}"
 
 
 # ── I/O seams (tests stub these) ─────────────────────────────────────────────
@@ -201,12 +229,30 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def _claim_taken(user_id: str, now: datetime) -> bool:
+async def _claim_state(user_id: str, now: datetime) -> str:
+    """``taken`` / ``in_flight`` / ``free`` for today's shared claim.
+
+    ``taken`` when the claim row exists, or when today's 07:30 full brief was
+    actually DELIVERED by the daemon — the scheduled path queues without a claim
+    while only this flag is on, so its success is claimed here, the first time
+    it is seen. ``in_flight``: that brief is queued and not yet played or
+    expired — wait, do not talk over it. Anything else (expired, never queued,
+    only the guest teaser played) is ``free``.
+    """
     from db_compat import get_compat_db
-    from proactive.arrival import brief_claimed
+    from proactive import arrival
 
     async with get_compat_db() as db:
-        return await brief_claimed(db, user_id=user_id, now=now)
+        if await arrival.brief_claimed(db, user_id=user_id, now=now):
+            return "taken"
+        delivery = await arrival.scheduled_brief_delivery(db, user_id=user_id, now=now)
+        if delivery == "delivered":
+            await arrival.claim_full_brief(
+                db, user_id=user_id, trigger_type=arrival.BRIEF_TRIGGER, panel_id=None,
+                pending_id=None, missed="", now=now,
+            )
+            return "taken"
+    return "in_flight" if delivery == "in_flight" else "free"
 
 
 async def _gather(user_id: str, local_date: str) -> dict:
@@ -248,8 +294,10 @@ async def _prepare(message: str, uid: str, now: datetime) -> DayBrief | None:
     local_date = local_now.date().isoformat()
     if _settled.get(uid) == local_date:
         return None
-    if await _claim_taken(uid, now):
+    state = await _claim_state(uid, now)
+    if state == "taken":
         _settled[uid] = local_date
+    if state != "free":
         return None
     cached = _ctx_cache.get(uid)
     if cached and cached[0] == local_date and time.monotonic() - cached[1] < _GATHER_CACHE_S:
@@ -265,7 +313,7 @@ async def _prepare(message: str, uid: str, now: datetime) -> DayBrief | None:
         _log(uid, len(items), shape, injected=False, claimed=False)
         return None
     lines = items if shape == "greeting" else critical
-    return DayBrief(uid, shape, len(items), render_body(shape, lines), now)
+    return DayBrief(uid, shape, len(items), render_body(shape, lines, local_date), now, local_date)
 
 
 async def prepare(message: str, user_id: str) -> DayBrief | None:
@@ -282,13 +330,27 @@ async def prepare(message: str, user_id: str) -> DayBrief | None:
 
 
 async def settle(brief: DayBrief | None, *, produced: bool) -> bool:
-    """Take today's shared claim once the lane PRODUCED a reply. NEVER raises.
+    """Take today's shared claim once the turn EMITTED reply text. NEVER raises.
 
-    ``produced=False`` (a failed/fallback turn) takes nothing, so the next turn
-    still gets the brief. Returns True when this call took the claim.
+    Both lanes call this from their stream's ``finally``, so a turn that ended in
+    a disconnect, a barge-in or an error AFTER its first text still takes the
+    claim (the brief was said, or started — repeating it is the worse failure).
+    ``produced=False`` (no text at all: an error before the first token, the
+    canned fallback) takes nothing, so the next turn still gets the brief.
+
+    Shielded: the claim write finishes even when the turn's task is being
+    cancelled (a barge-in cancels it mid-stream). Returns True when this call
+    took the claim.
     """
     if brief is None:
         return False
+    task = asyncio.ensure_future(_settle(brief, produced))
+    _settling.add(task)  # a shielded task must stay referenced until it finishes
+    task.add_done_callback(_settling.discard)
+    return await asyncio.shield(task)
+
+
+async def _settle(brief: DayBrief, produced: bool) -> bool:
     claimed = False
     if produced:
         try:
