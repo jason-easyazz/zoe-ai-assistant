@@ -1779,15 +1779,18 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     """
     from db_compat import get_compat_db as _get_compat_db
     created_at_valid_sql = CREATED_AT_VALID_TIMESTAMP_SQL.replace("created_at", "cm.created_at")
+    from open_loop_quality import loop_is_concrete, loop_turn_is_meta
+
     result = {"user_id": user_id, "extracted": 0, "inserted": 0, "skipped_dup": 0,
-              "expired": 0, "status": "ok"}
+              "expired": 0, "discarded_meta": 0, "skipped_turns": 0, "status": "ok"}
 
     def _done(status: str) -> dict:
         result["status"] = status
         _loops_log.info(
-            "OPEN_LOOPS user=%s extracted=%d inserted=%d skipped_dup=%d expired=%d status=%s",
+            "OPEN_LOOPS user=%s extracted=%d inserted=%d skipped_dup=%d expired=%d "
+            "discarded_meta=%d skipped_turns=%d status=%s",
             user_id, result["extracted"], result["inserted"], result["skipped_dup"],
-            result["expired"], status,
+            result["expired"], result["discarded_meta"], result["skipped_turns"], status,
         )
         return result
 
@@ -1803,6 +1806,19 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 (user_id,),
             )
             result["expired"] = int(getattr(expired, "rowcount", 0) or 0)
+            # Junk already stored (no concrete anchor — open_loop_quality) is
+            # discarded the only way the table allows: resolved, with resolved_at.
+            async with _db.execute(
+                "SELECT id, loop_text FROM open_loops WHERE user_id = ? AND resolved IS NOT TRUE",
+                (user_id,),
+            ) as cur:
+                junk = [r[0] for r in await cur.fetchall() if not loop_is_concrete(str(r[1] or ""))]
+            for loop_id in junk:
+                await _db.execute(
+                    "UPDATE open_loops SET resolved = TRUE, resolved_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ?", (loop_id,),
+                )
+            result["discarded_meta"] = len(junk)
             async with _db.execute(
                 f"""SELECT cm.content FROM chat_messages cm
                    JOIN chat_sessions cs ON cm.session_id = cs.id
@@ -1824,7 +1840,11 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     lines: list[str] = []
     budget = _OPEN_LOOPS_TRANSCRIPT_CHARS
     for row in rows:
-        line = "User: " + " ".join(str(row[0] or "").split())
+        text = " ".join(str(row[0] or "").split())
+        if text and loop_turn_is_meta(text):  # Zoe's mechanics, not the user's life
+            result["skipped_turns"] += 1
+            continue
+        line = "User: " + text
         if len(line) <= 6 or len(line) > budget:
             continue
         lines.append(line)
@@ -1865,6 +1885,9 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         text, reject = scrub_pii(" ".join(str(item.get("loop_text") or "").split())[:300])
         hint, hint_reject = scrub_pii(" ".join(str(item.get("follow_up_hint") or "").split())[:200])
         if len(text) < 8 or reject:
+            continue
+        if not loop_is_concrete(text):
+            result["discarded_meta"] += 1
             continue
         candidates.append((
             text,
