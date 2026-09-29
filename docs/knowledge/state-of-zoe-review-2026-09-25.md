@@ -577,8 +577,10 @@ the 2026-09-25 plan, kept with ✓ marks.
    - ✓ The B0.8 Chroma 1.5 cutover — LIVE 2026-09-28 08:21 AWST (#1745 `d346aa90`; 10/10
      proofs, `self-recall ok`, replay PASS 13/13). Its deploy ran ahead of the store (~7 min
      degraded memory capture, store intact, no turns missed): `incident-runbook.md` §9.
-   - ✓ **Pi `DEVICE_TOKEN` rotated** 2026-09-29 ~10:31 (exposed in a tool transcript
-     2026-09-28 ~21:30). Runbook: `incident-runbook.md` §18.
+   - ⏳ **Pi `DEVICE_TOKEN` rotation IN PROGRESS** 2026-09-29 (exposed in a tool transcript
+     2026-09-28 ~21:30): a replacement token was minted 10:49 but is NOT yet installed on the
+     Pi / probe env, and the old id is NOT yet revoked — the panel still runs on the old token.
+     Runbook: `incident-runbook.md` §18.
    - **Decide `ZOE_VAD_CLEAN_TAIL_MS`** (#1766, shipped OFF): −160 ms on ~half the turns vs a
      2.0 % mid-sentence cut on the corpus. Stage with `560` in `.env.voice` if accepted.
    - **YouTube Music QR re-scan on the panel** — #1759 fixed the stale-cookie short-circuit,
@@ -697,7 +699,8 @@ Live = `main` `8da575f7`; detail in the [tracker §6](../architecture/beat-the-b
   [`zoe-context-audit-2026-09-29.md`](../research/zoe-context-audit-2026-09-29.md).
 - **Samantha bar:** all scored scenarios PASS against the 04:00 baseline; S4/S8 flake
   ([samantha-bar.md](samantha-bar.md) → *Flake rate*).
-- **Security (§4):** the Pi `DEVICE_TOKEN` was rotated. Still open: an admin device token
+- **Security (§4):** the Pi `DEVICE_TOKEN` rotation is in progress (new token minted, install +
+  revoke pending). Still open: an admin device token
   `test-e2e-token` and a zoe-auth admin account `p0test` are active — revoke/disable.
 
 ## Appendix A — Known-problems register (2026-09-25)

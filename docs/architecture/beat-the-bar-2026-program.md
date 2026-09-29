@@ -81,7 +81,7 @@ Earlier, **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is on*
    - **Secrets.** Revoke the Telegram token and vacuum the journal (B0.3). Rotate the Postgres
      password (B0.14).
    - **On the panel (it is on now).**
-     - ✓ **Pi `DEVICE_TOKEN` rotated** 2026-09-29 ~10:31 (exposed in a tool transcript
+     - ⏳ **Pi `DEVICE_TOKEN` rotation in progress** 2026-09-29 (new token minted 10:49, install + revoke pending; exposed in a tool transcript
        09-28 ~21:30; daemon re-synced with no auth failure). Confirm the OLD token id is
        revoked. Recipe: incident-runbook §18.
      - **Decide `ZOE_VAD_CLEAN_TAIL_MS`** (#1766, shipped OFF): `560` closes a clean stop
@@ -1311,7 +1311,7 @@ a decision input.
   **Samantha bar** (baseline 04:00 on `269bb680`): the post-#1781 compare recorded S8 ERROR
   with zoe-data restarting mid-run (10:24–10:25) — not evidence (incident-runbook §16); after
   #1782 and #1783 all PASS; after #1785 S4 FAIL, S8 FAIL, then all PASS → flake, re-run rule.
-  **Operator:** Pi `DEVICE_TOKEN` rotated (~10:31, runbook §18); `test-e2e-token` (admin
+  **Operator:** Pi `DEVICE_TOKEN` rotation in progress (new token minted, install + revoke pending; runbook §18); `test-e2e-token` (admin
   device token) and the `p0test` zoe-auth admin account found active → revoke/disable (§0).
   **Owner rule** recorded in [VISION.md](../VISION.md) principle 9: dive deep to understand
   before changing Zoe — quality, not first thought.
