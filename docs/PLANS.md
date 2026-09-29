@@ -158,3 +158,4 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 - **Samantha memory 1a + 1b (2026-06-24):** idle-consolidation engine (#771) + per-turn user (#775), behind a flag.
 - **Voice + memory hardening (2026-06-23):** capture/first-audio/recall fixes, write-quality gate, junk cleanup, identity-from-auth. (See PR history; memory `project-mempalace-deep-dive`.)
 - **Command center stood up** (this doc + IDEAS.md + VISION.md).
+- 2026-09-29 — Research: context manager vs training the brain on user data → build the context manager (see `docs/research/samantha-context-engineering-2026-09-29.md`, gap list in the Samantha plan §8.x); spoken 07:30 brief turned OFF by owner decision, replaced by brief-on-first-turn (in progress).

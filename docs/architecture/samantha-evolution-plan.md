@@ -692,6 +692,25 @@ actually consulted.
   satellites come (already runs `wyoming-piper` locally; ADR names it).
 - **LiveKit SIP** stays the phone bridge candidate (already in-house) per the ADR.
 
+### 8.x Context manager vs training the brain on user data (researched 2026-09-29)
+
+Full report: [docs/research/samantha-context-engineering-2026-09-29.md](../research/samantha-context-engineering-2026-09-29.md).
+Verdict: **build the context manager; never train facts into the brain.** Every system that feels like it
+knows its user (ChatGPT memory, Claude memory tool, Gemini, Letta, Mem0, Zep, Honcho) does it by context
+assembly — a small always-present user-model block + retrieved episodes + a sleep-time/dreaming rewrite —
+and the evidence on fine-tuning facts is uniformly negative (RAG 0.875 vs FT 0.504, Ovadia EMNLP 2024;
+LoRA on new facts −71% NQ F1, Meta 2025; personalisation RAG +14.9% vs PEFT +1.1%, ICTIR 2025). The
+Jetson RAM limit is therefore not the blocker. Off-box LoRA (E4B QLoRA ≈10 GB VRAM, llama.cpp `--lora`
+hot-swap) is feasible but buys STYLE only, breaks prompt caching per-request, and is untested against the
+QAT quant + MTP head — Phase-3 optional, behind the replay gate.
+Ordered gap list (impact per unit of work): (1) bounded, byte-stable user-model block ≤300–400 tokens
+rebuilt by dreaming, (2) stable-prefix → volatile-tail ordering with per-section token budgets, (3) keep
+verbatim evidence beside distilled facts (+15.9 LoCoMo), (4) validity intervals + supersedes at write time,
+(5) proactivity selector precomputed in dreaming (≤1 surfaced per conversation, trigger + cooldown),
+(6) `recall` memory tool for the router, (7) ask-to-remember policy, (8) small side models (reranker,
+should-I-surface gate) in the router-head pattern, (9) optional style LoRA. Evals: LongMemEval-S, STALE,
+PersonaMem, PM-Bench/ATRBench; Samantha bar stays the product gate.
+
 ## 9. The OS horizon — Samantha was an operating system (W9–W18)
 
 In *Her*, Samantha isn't an app with a good memory. She's **OS1**: the interface to
