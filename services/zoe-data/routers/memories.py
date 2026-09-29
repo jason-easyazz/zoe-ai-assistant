@@ -1055,6 +1055,20 @@ async def memory_capture_status(request: Request, user_id: str = Query(..., min_
     return {"user_id": user_id, **snapshot(user_id)}
 
 
+@router.get("/user-model")
+async def memory_user_model(request: Request, user_id: str = Query(..., min_length=1)):
+    """The Flue brain's always-present user-model block
+    (``user_portrait.load_user_model_block``). Portrait prose is personal, so
+    TOKEN only, as capture-status: missing header 401, wrong/unprovisioned 403."""
+    if not request.headers.get("X-Internal-Token"):
+        raise HTTPException(status_code=401, detail="user-model requires X-Internal-Token")
+    if not _has_valid_internal_token(request):
+        raise HTTPException(status_code=403, detail="user-model: invalid X-Internal-Token")
+    from user_portrait import load_user_model_block
+
+    return await load_user_model_block(user_id)
+
+
 @router.post("/users/{target_user}/forget-synthetic")
 async def forget_synthetic_user(target_user: str, request: Request):
     """Hard-forget a SYNTHETIC test user's memory rows — harness teardown.

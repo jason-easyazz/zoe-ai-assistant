@@ -13,9 +13,11 @@ Design principle: personal data stays in this runtime layer — portraits live i
 SQLite and are injected into the context window. They never enter model weights.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import time
 
 import httpx
@@ -365,12 +367,14 @@ async def _save_portrait(user_id: str, portrait_text: str, memory_count: int, db
         logger.error("portrait: save failed user=%s: %s", user_id, exc)
 
 
-async def load_portrait(user_id: str, db=None) -> str:
+async def load_portrait(user_id: str, db=None, max_chars: int | None = None) -> str:
     """Load portrait text for a user. Returns '' if none exists yet.
 
     Fast direct SQLite lookup — no vector search, no embedding overhead.
-    Called on every chat turn.
+    Called on every chat turn. Capped at ``max_chars`` (default
+    PORTRAIT_MAX_INJECT_CHARS); ``0`` returns it uncapped.
     """
+    cap = PORTRAIT_MAX_INJECT_CHARS if max_chars is None else max_chars
     sql = "SELECT portrait_text FROM user_portraits WHERE user_id = ?"
     try:
         from db_pool import get_db_ctx  # type: ignore[import]
@@ -384,14 +388,71 @@ async def load_portrait(user_id: str, db=None) -> str:
                 row = await (await _db.execute(sql, (user_id,))).fetchone()
         if row and row[0]:
             text = row[0].strip()
-            # Truncate at PORTRAIT_MAX_INJECT_CHARS to stay within token budget
-            if len(text) > PORTRAIT_MAX_INJECT_CHARS:
-                text = text[:PORTRAIT_MAX_INJECT_CHARS].rsplit(" ", 1)[0] + "…"
+            # Truncate at the cap to stay within token budget
+            if cap and len(text) > cap:
+                text = text[:cap].rsplit(" ", 1)[0] + "…"
             return text
         return ""
     except Exception as exc:
         logger.debug("portrait: load failed (non-fatal) user=%s: %s", user_id, exc)
         return ""
+
+
+# ── User-model block: the Flue sidecar's SYSTEM-prompt suffix (src/user-model.ts),
+# so it is built only from week-stable inputs (users-table name, weekly portrait).
+USER_MODEL_MAX_CHARS = 1400
+_USER_MODEL_SKIP_IDS = frozenset({"family-admin", "voice-daemon"})  # as voice_tts
+
+
+def _cap_at_sentence(text: str, cap: int) -> str:
+    """Cut at the last sentence end within ``cap`` if that keeps ≥ half, else a word."""
+    if len(text) <= cap:
+        return text
+    ends = [m.end() for m in re.finditer(r"[.!?](?=\s)", text[: cap + 1])]
+    if ends and ends[-1] >= cap // 2:
+        return text[: ends[-1]]
+    return text[: cap - 1].rsplit(" ", 1)[0] + "…"
+
+
+def compose_user_model_text(name: str | None, portrait: str | None) -> str:
+    """Name line + flattened, PII-scrubbed portrait, ≤ USER_MODEL_MAX_CHARS (pure)."""
+    from memory_service import scrub_pii  # type: ignore[import]
+
+    name = re.sub(r"\s+", " ", name or "").strip()
+    head = f"You are speaking with {name} (the signed-in user)." if name else ""
+    body, reject = scrub_pii(re.sub(r"\s+", " ", portrait or "").strip())
+    if reject:
+        logger.warning("user-model: portrait dropped by PII scrub (%s)", reject)
+        body = ""
+    body = _cap_at_sentence(body, USER_MODEL_MAX_CHARS - len(head) - 1) if body else ""
+    return "\n".join(p for p in (head, body) if p)
+
+
+async def load_user_model_block(user_id: str) -> dict:
+    """``{"version", "text"}``; both "" when ``ZOE_USER_MODEL_BLOCK`` is off (read
+    per call) or for a guest / synthetic / service id. ``version`` is a content
+    hash, so it changes exactly when the text does. Never raises."""
+    from memory_service import is_guest_memory_user  # type: ignore[import]
+    from user_filters import is_synthetic_user
+
+    uid = (user_id or "").strip()
+    flag = (os.environ.get("ZOE_USER_MODEL_BLOCK") or "").strip().lower()
+    if (flag not in {"1", "true", "yes", "on"} or is_guest_memory_user(uid)
+            or is_synthetic_user(uid) or uid in _USER_MODEL_SKIP_IDS):
+        return {"version": "", "text": ""}
+    name = ""
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+        async with get_db_ctx() as db:
+            row = await (await db.execute("SELECT name FROM users WHERE id = ?", (uid,))).fetchone()
+        name = ((row[0] if row else "") or "").strip()
+        name = name.title() if name.islower() else name
+    except Exception as exc:
+        logger.debug("user-model: name load failed (non-fatal) user=%s: %s", uid, exc)
+    text = compose_user_model_text(name, await load_portrait(uid, max_chars=0))
+    version = hashlib.sha256(text.encode()).hexdigest()[:16] if text else ""
+    logger.info("USER_MODEL_BLOCK user=%s chars=%d version=%s", uid, len(text), version or "-")
+    return {"version": version, "text": text}
 
 
 async def run_portrait_synthesis_for_all(db=None) -> list[dict]:
