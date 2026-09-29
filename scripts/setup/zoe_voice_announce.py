@@ -48,6 +48,43 @@ def decide(busy: bool, remaining_s: float) -> str:
     return "speak"
 
 
+# The played-ACK retry schedule: waits BEFORE each attempt (3 attempts, ~10 s).
+ACK_RETRY_DELAYS_S = (0.0, 2.0, 8.0)
+
+
+def ack_with_retries(
+    *,
+    post: Callable[[str], bool],
+    ann_id: str,
+    delays: Iterable[float] = ACK_RETRY_DELAYS_S,
+    sleep: Callable[[float], None] = time.sleep,
+    logger=None,
+) -> bool:
+    """Deliver one played-ACK with bounded retries; True once ``post`` succeeds.
+
+    ``post(ann_id)`` returns True when the server has it (or will never take it)
+    and False / raises on a failure worth retrying — e.g. zoe-data restarting on
+    a deploy. Never raises. When every attempt fails the ACK is LOST, and the
+    server later treats the heard announcement as unheard; for the morning brief
+    that means the first conversation of the day repeats it. That is the accepted
+    failure mode: a repeat is recoverable, a brief that nobody delivered is not.
+    """
+    last = ""
+    for delay in delays:
+        if delay > 0:
+            sleep(delay)
+        try:
+            if post(ann_id):
+                return True
+            last = "server did not accept it"
+        except Exception as exc:  # noqa: BLE001 — the ACK must never hurt the daemon
+            last = str(exc)
+    if logger is not None:
+        logger.warning("announce %s: played-ACK lost after retries (%s) — the server "
+                       "will treat it as unheard", ann_id, last)
+    return False
+
+
 class AnnouncePoller:
     """Poll → claim → speak/defer/expire loop, with injected side effects.
 

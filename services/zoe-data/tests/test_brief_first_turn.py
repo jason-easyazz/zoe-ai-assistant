@@ -388,6 +388,56 @@ async def test_race_first_turn_with_no_text_releases_the_0730_row(env, queue):
     assert [a["text"] for a in await va.claim_announcements(conn, panel_id="p1")] == ["Good morning!"]
 
 
+async def test_claim_is_written_before_the_hold_is_released(env, queue, monkeypatch):
+    """No daemon poll can land between the two steps of settle and find neither
+    the hold nor the claim: observed from inside the claim write itself."""
+    conn, _ = queue
+    brief = await bft.prepare("morning", MEMBER)
+    real_take = bft._take_claim
+    seen = {}
+
+    async def observing_take(user_id, now):
+        seen["before_write"] = await bft.scheduled_row_gate(conn, MEMBER)
+        ok = await real_take(user_id, now)
+        seen["after_write"] = await bft.scheduled_row_gate(conn, MEMBER)
+        return ok
+
+    monkeypatch.setattr(bft, "_take_claim", observing_take)
+    await bft.settle(brief, produced=True)
+    assert seen == {"before_write": "defer", "after_write": "defer"}  # hold still up
+    assert await bft.scheduled_row_gate(conn, MEMBER) == "suppress"
+
+
+async def test_a_failed_claim_write_keeps_the_hold_until_it_expires(env, queue, monkeypatch):
+    conn, _ = queue
+    brief = await bft.prepare("morning", MEMBER)
+
+    async def failing_take(user_id, now):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(bft, "_take_claim", failing_take)
+    assert await bft.settle(brief, produced=True) is False
+    assert await bft.scheduled_row_gate(conn, MEMBER) == "defer"  # the brief went out
+    monkeypatch.setattr(bft, "_BRIEFING_HOLD_S", 0.0)  # its bound elapses
+    assert await bft.scheduled_row_gate(conn, MEMBER) == "play"
+
+
+async def test_overlapping_turns_each_keep_their_own_hold(env, queue):
+    """Two turns inject the brief concurrently (say a voice turn and a chat turn).
+    The one that emits no text releases only its OWN hold; the other still holds
+    the 07:30 row until it settles and claims the day."""
+    conn, va = queue
+    turn_a = await bft.prepare("morning", MEMBER)
+    turn_b = await bft.prepare("hey zoe", MEMBER)
+    assert turn_a.token != turn_b.token
+    await _queue_0730(conn, va)
+    await bft.settle(turn_a, produced=False)
+    assert await va.claim_announcements(conn, panel_id="p1") == []  # B still holds it
+    await bft.settle(turn_b, produced=True)
+    assert await va.claim_announcements(conn, panel_id="p1") == []  # suppressed
+    assert claimed(env)
+
+
 async def test_gate_is_inert_with_the_flag_off(env, queue, monkeypatch):
     conn, va = queue
     monkeypatch.delenv("ZOE_BRIEF_ON_FIRST_TURN")

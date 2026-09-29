@@ -156,6 +156,45 @@ def test_ack_failure_never_escapes():
                      wait=lambda s: clock.advance(s)) == "spoken"
 
 
+def test_ack_retries_on_its_schedule_until_the_server_takes_it():
+    outcomes = iter([False, RuntimeError("zoe-data restarting"), True])
+    slept, posted = [], []
+
+    def post(ann_id):
+        posted.append(ann_id)
+        result = next(outcomes)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    assert va.ack_with_retries(post=post, ann_id="a1", sleep=slept.append) is True
+    assert posted == ["a1"] * 3 and slept == [2.0, 8.0]  # 3 attempts over ~10 s
+
+
+def test_ack_stops_at_the_first_success():
+    posted = []
+    assert va.ack_with_retries(post=lambda i: posted.append(i) or True, ann_id="a1",
+                               sleep=lambda s: None) is True
+    assert posted == ["a1"]
+
+
+def test_ack_lost_after_all_retries_is_reported_never_raised():
+    """The accepted failure mode: the ACK is lost, the server later treats the
+    heard brief as unheard, and the first conversation repeats it."""
+    warnings = []
+
+    class _Log:
+        def warning(self, msg, *args):
+            warnings.append(msg % args)
+
+    def post(ann_id):
+        raise RuntimeError("down")
+
+    assert va.ack_with_retries(post=post, ann_id="a1", sleep=lambda s: None, logger=_Log()) is False
+    assert len(va.ACK_RETRY_DELAYS_S) == 3 and sum(va.ACK_RETRY_DELAYS_S) <= 10
+    assert warnings and "lost after retries" in warnings[0]
+
+
 def test_deliver_missing_ttl_expires_not_speaks():
     """No/garbage expires_in_s → treated as already at the TTL edge (never a
     forever-fresh announce)."""

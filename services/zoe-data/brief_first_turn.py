@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -54,13 +55,35 @@ _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})")
 _settled: dict[str, str] = {}  # user -> local date whose claim is known taken
 _ctx_cache: dict[str, tuple[str, float, dict]] = {}
 _settling: set = set()
-# user -> monotonic time a conversational brief was injected and not yet settled.
-# The daemon claim endpoint holds a queued 07:30 brief while this is fresh
+# user -> {turn token -> monotonic injection time}: one HOLD per conversational
+# brief that is injected and not yet settled. Keyed per TURN, not per user, so
+# settling one turn never releases an overlapping one. The daemon claim endpoint
+# holds a queued 07:30 brief while ANY of a user's holds is live
 # (``scheduled_row_gate``). In-process is enough: zoe-data runs ONE uvicorn
-# worker (scripts/setup/systemd/zoe-data.service, no --workers), and the bound
-# keeps a lost settle from holding the spoken brief past its TTL anyway.
-_briefing: dict[str, float] = {}
+# worker (scripts/setup/systemd/zoe-data.service, no --workers); each hold
+# expires after ``_BRIEFING_HOLD_S`` so a lost settle cannot hold the spoken
+# brief past its TTL.
+_briefing: dict[str, dict[str, float]] = {}
 _BRIEFING_HOLD_S = 120.0
+
+
+def _live_holds(user_id: str) -> dict[str, float]:
+    """The user's unexpired holds (expired ones pruned)."""
+    holds = _briefing.get(user_id) or {}
+    now = time.monotonic()
+    for token in [t for t, at in holds.items() if now - at >= _BRIEFING_HOLD_S]:
+        holds.pop(token, None)
+    if not holds:
+        _briefing.pop(user_id, None)
+    return holds
+
+
+def _release_hold(user_id: str, token: str) -> None:
+    holds = _briefing.get(user_id)
+    if holds is not None:
+        holds.pop(token, None)
+        if not holds:
+            _briefing.pop(user_id, None)
 
 
 def brief_on_first_turn_enabled() -> bool:
@@ -221,6 +244,7 @@ class DayBrief:
     body: str  # instruction + items, undelimited (the core seam delimits it)
     now: datetime
     local_date: str
+    token: str = ""  # this turn's hold on a queued 07:30 brief (``_briefing``)
 
     @property
     def block(self) -> str:
@@ -320,8 +344,10 @@ async def _prepare(message: str, uid: str, now: datetime) -> DayBrief | None:
         _log(uid, len(items), shape, injected=False, claimed=False)
         return None
     lines = items if shape == "greeting" else critical
-    _briefing[uid] = time.monotonic()
-    return DayBrief(uid, shape, len(items), render_body(shape, lines, local_date), now, local_date)
+    token = uuid.uuid4().hex
+    _briefing.setdefault(uid, {})[token] = time.monotonic()
+    return DayBrief(uid, shape, len(items), render_body(shape, lines, local_date), now,
+                    local_date, token)
 
 
 async def prepare(message: str, user_id: str) -> DayBrief | None:
@@ -359,14 +385,22 @@ async def settle(brief: DayBrief | None, *, produced: bool) -> bool:
 
 
 async def _settle(brief: DayBrief, produced: bool) -> bool:
-    _briefing.pop(brief.user_id, None)
+    # ORDER matters: the claim is written BEFORE this turn's hold is released, so
+    # a daemon poll can never find neither (hold gone, claim not yet written) and
+    # play a queued 07:30 brief the member just heard. A failed claim write keeps
+    # the hold until its own expiry — the brief went out, so the spoken copy stays
+    # held for as long as the hold is allowed to last.
     claimed = False
+    keep_hold = False
     if produced:
         try:
             claimed = await _take_claim(brief.user_id, brief.now)
             _settled[brief.user_id] = brief.now.astimezone(zoe_timezone()).date().isoformat()
         except Exception as exc:  # noqa: BLE001
+            keep_hold = True
             logger.warning("brief-first-turn: claim failed for user=%s: %r", brief.user_id, exc)
+    if not keep_hold:
+        _release_hold(brief.user_id, brief.token)
     _log(brief.user_id, brief.items, brief.shape, injected=True, claimed=claimed)
     return claimed
 
@@ -383,8 +417,7 @@ async def scheduled_row_gate(db, user_id: str) -> str:
     """
     if not brief_on_first_turn_enabled() or not user_id:
         return "play"
-    started = _briefing.get(user_id)
-    if started is not None and time.monotonic() - started < _BRIEFING_HOLD_S:
+    if _live_holds(user_id):
         return "defer"
     try:
         from proactive.arrival import claim_holder

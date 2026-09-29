@@ -148,7 +148,10 @@ would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
   spoken; otherwise it is queued WITHOUT a claim, because queueing is not delivery.
   - **Heard = the daemon's playback ACK.** `delivered_at` is set when the daemon CLAIMS a
     row, before TTS and playback. The daemon now POSTs
-    `/api/voice/announcements/{id}/played` after playback returns, which sets `played_at`
+    `/api/voice/announcements/{id}/played` only when the audio actually played (the player
+    exited 0, or a barge-in stopped it), which sets `played_at`. It retries 3 times over
+    ~10 s on a background thread; if every attempt fails the heard brief reads as unheard
+    and the first turn repeats it (accepted: a repeat beats a lost brief)
     (migration `0032`, `voice_announce.mark_played`, only the claiming panel, once). Only
     `played_at` counts (`arrival.scheduled_brief_delivery`); the first-turn check then
     takes the shared claim.
@@ -159,10 +162,11 @@ would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
   - **The read-then-queue race** (07:30 reads a free claim, a first turn injects, the
     07:30 row is queued anyway) is closed at the daemon claim
     (`voice_announce.claim_announcements` → `brief_first_turn.scheduled_row_gate`): a
-    `morning_checkin` row is held pending while that member's conversational brief is
-    mid-reply (in-process marker, ≤120 s; zoe-data runs one uvicorn worker), and is
-    marked `expired` without playing once the first-turn brief holds the claim. Inert with
-    the flag off.
+    `morning_checkin` row is held pending while ANY of that member's conversational briefs
+    is mid-reply (one in-process hold per turn, ≤120 s each; zoe-data runs one uvicorn
+    worker). `settle` writes the claim before releasing its own hold, and keeps the hold
+    if the write fails. The row is marked `expired` without playing once the first-turn
+    brief holds the claim. Inert with the flag off.
   - **Deploy order:** the daemon's ACK ships in `scripts/setup/zoe_voice_daemon.py` +
     `zoe_voice_announce.py`, deployed to the Pi by the operator separately. Until it is,
     no row is ever ACKed, so a played 07:30 brief is treated as unheard after the bounded
