@@ -82,6 +82,11 @@ async function fetchInto(userId: string, started: number): Promise<void> {
   cache.set(userId, { ...entry, freshUntil: Date.now() + (ttl > 0 ? ttl : 300_000) });
 }
 
+/** The cached suffix for `userId` ('' when none) — no refresh, no binding (accounting only). */
+export function cachedUserModelSuffix(userId: string): string {
+  return cache.get(userId)?.suffix ?? '';
+}
+
 /** This turn's suffix: decided from the cache on its first model call (kicking a
  *  background refresh if missing/stale), then bound to the turn's signal. */
 export function turnUserModelSuffix(signal: AbortSignal | undefined): string {

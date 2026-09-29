@@ -825,6 +825,10 @@ def test_zoe_core_lockfile_is_voice_path():
     "scripts/setup/systemd/flue-zoe-brain-2x.service",
     "services/zoe-data/zoe_flue_client.py",
     "services/zoe-data/brain_dispatch.py",
+    # what the lane injects in front of the brain (recall packet, user model)
+    "services/zoe-data/routers/memories.py",
+    "services/zoe-data/user_portrait.py",
+    "services/zoe-data/memory_gate.py",
 ])
 def test_live_flue_brain_lane_is_voice_path(path):
     pats = vgc.voice_path_patterns()

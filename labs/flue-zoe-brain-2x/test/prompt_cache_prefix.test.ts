@@ -81,6 +81,12 @@ describe('prompt-cache prefix stability (real sidecar, mock model)', () => {
     assert.ok(await waitFor(() => harness.model.callCount >= 1));
     const second = await ndjsonTurn(harness, sid, 'thanks. how do I poach an egg?');
     assert.ok(await waitFor(() => harness.model.callCount >= 2));
+    // `context_budget` (estimated sections, test/context_blocks.test.ts) rides along.
+    for (const t of [first, second]) {
+      const terminal = t[t.length - 1] as { context_budget?: unknown };
+      assert.ok(terminal.context_budget, 'the terminal carries context_budget');
+      delete terminal.context_budget;
+    }
     assert.deepEqual(first[first.length - 1], {
       done: true,
       prompt_cache: [{ prompt_n: 3100 - 2338, cache_n: 2338 }],
