@@ -51,6 +51,8 @@ Not a chatbot. A presence that grows with you.
      completes it on their phone and the panel card reflects completion live. QR is the
      baseline unless a better way exists — a known member may get a Telegram "send to my
      phone" link instead; a guest always gets the QR. (Not about the panel PIN.)
+9. **Understand before you change.** Always dive deep to fully understand before changing
+   Zoe — quality, not first thought. (Owner rule, 2026-09-29.)
 
 ## 🗂️ Where things live (the hierarchy)
 | Layer | File | Holds |

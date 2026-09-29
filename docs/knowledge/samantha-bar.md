@@ -381,6 +381,31 @@ Next targets, in order (tracker §0): (a) a **router confidence gate** — head 
 and the miss feeds the router self-train corpus; (b) **emotional continuity** for S4, with
 B3.3 reflection as the carrier.
 
+## Flake rate and the re-run rule (2026-09-29)
+
+Compares against the 04:00 baseline (`269bb680`), samples=3, teardown proven, from the trend file:
+
+| when (AWST) | live commit | what was live | result |
+|---|---|---|---|
+| 10:21–10:25 | `ce4527c0` (#1781) | brief on first turn | S8 ERROR — zoe-data restarted mid-run; not evidence ([incident-runbook.md](incident-runbook.md) §16) |
+| 10:30–10:35 | `042763f7` (#1782) | open-loop repair | all scored PASS |
+| 10:40–10:45 | `e65f9be3` (#1783) | user-model block, flag-dark | all scored PASS |
+| 10:53–10:57 | `8da575f7` (#1785) | stale-block elision, flag-dark | S4 FAIL |
+| 11:02–11:06 | `8da575f7` | same | S8 FAIL |
+| 11:11–11:15 | `8da575f7` | same | all scored PASS |
+
+`ZOE_USER_MODEL_BLOCK` and `ZOE_BRAIN_ELIDE_STALE_BLOCKS` were OFF for every row, so neither
+PR's behaviour change was active. Three runs of the
+same commit gave three different verdicts. **S4 and S8 have an intrinsic flake rate:** S4 is
+judged, and its per-ask majority-of-3 still flips at the run level. S8 is deterministic but sits
+on a retrieval edge, with one ask per fact after 32 filler turns and no sampling. The 09-28 22:38
+S8 FAIL (see *Live compares*) was the same flake.
+
+- **Rule:** a single red S4 or S8 is a hypothesis, not a regression. Re-run the compare (after
+  the deploy run has completed — runbook §16) before concluding or reverting.
+- **Follow-up:** a majority-of-N for S4/S8 in the harness itself (whole-scenario repeats for
+  S4, sampled asks for S8), so one compare gives a stable verdict.
+
 ## Teardown (the demo-users-only guardrail)
 
 Every identity is asserted against `^demo_bar_[0-9a-f]{8}$` before any write. The pending

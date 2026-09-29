@@ -20,7 +20,22 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ## 0. NEXT ACTION (keep this current)
 
-State as of **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is on**):
+State as of **2026-09-29 11:30 AWST** (the context-manager morning; record in §6):
+- live = `main` `8da575f7` (#1785). Merged and deployed today, every deploy run green:
+  #1773 (test-suite palace isolation), #1780 (context-engineering research), #1781
+  (brief on first turn), #1782 (open-loop extraction repair + the code-level
+  [context audit](../research/zoe-context-audit-2026-09-29.md)), #1783 (user-model block),
+  #1785 (stale-block elision; replaces #1784). The Pi daemon carries #1781's playback ACK.
+- **Flags:** ON `ZOE_BRIEF_ON_FIRST_TURN`. OFF `ZOE_PROACTIVE_SPOKEN` (owner decision: no
+  unprompted spoken 07:30 brief; Zoe mentions today's context on the first conversation of
+  the morning instead), `ZOE_USER_MODEL_BLOCK` and `ZOE_BRAIN_ELIDE_STALE_BLOCKS` (both
+  merged flag-dark, not yet A/B'd).
+- **Samantha bar:** compares after #1782 and #1783 all PASS; after #1785 three runs gave S4
+  FAIL, then S8 FAIL, then all PASS. S4/S8 flake intrinsically — re-run before concluding
+  ([samantha-bar.md](../knowledge/samantha-bar.md) → *Flake rate*).
+- **Next:** item 4.0 below; the security items in item 1.
+
+Earlier, **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is on**):
 - live = `main` `269bb680` (#1770 S1 round 3, merged 03:32 and deployed by the local recipe
   03:49; before it the 13-PR chain #1756 → #1759 → #1757 → #1760 → #1761 → #1762 → #1763 →
   #1764 → #1765 → #1766 → #1767 → #1768 → #1769, all merged, every deploy GitHub created green
@@ -66,9 +81,9 @@ State as of **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is 
    - **Secrets.** Revoke the Telegram token and vacuum the journal (B0.3). Rotate the Postgres
      password (B0.14).
    - **On the panel (it is on now).**
-     - **Rotate the Pi `DEVICE_TOKEN`.** An agent's grep printed it into a tool transcript
-       (2026-09-28 ~21:30). It never left the box, but treat it as exposed: new token in
-       `/home/pi/.zoe-voice/.env.voice` + the zoe-data side, restart `zoe-voice`.
+     - ✓ **Pi `DEVICE_TOKEN` rotated** 2026-09-29 ~10:31 (exposed in a tool transcript
+       09-28 ~21:30; daemon re-synced with no auth failure). Confirm the OLD token id is
+       revoked. Recipe: incident-runbook §18.
      - **Decide `ZOE_VAD_CLEAN_TAIL_MS`** (#1766, shipped OFF): `560` closes a clean stop
        160 ms earlier on about half the turns, at a measured 2.0 % mid-sentence cut on the
        corpus (5 of 246). The voice rule says a lost command is a bug, so it is Jason's call.
@@ -86,6 +101,9 @@ State as of **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is 
        proof for #1743). (The Pi provisioning helper is NOT deployed on the live panel —
        `scripts/setup/touchscreen/README.md` — so #1741's poll secret applies only to panels
        provisioned in future; re-align those helpers as a set before the next pairing.)
+   - **Security (found 2026-09-29).** An active device token named `test-e2e-token` with role
+     admin, and an active zoe-auth admin account `p0test`: revoke the token
+     (`DELETE /api/panels/{panel}/token/{token_id}`) and disable the account.
    - **Brain.** Swap in the verified Gemma re-upload (B6.2). Only the template changed, and
      the files are staged and checksummed. Do it in its own window so the brain change stays
      separately attributable, then run one replay gate.
@@ -101,17 +119,13 @@ State as of **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is 
      - Add the nvm bin to the self-hosted runner's `PATH`; set `vm.page-cluster`.
      - Prune old MemPalace snapshots.
      - `ggshield install --mode global --force` (B0.10 c).
-2. **Verify today:** the **07:30 morning brief** is the first run after #1726:
-   `grep -E "T(07:[3-5][0-9]:[0-9]{2}\+0800|23:[3-5][0-9]:[0-9]{2}\+0000).*(morning_checkin: users kept|PROACTIVE_SPOKEN)" ~/.zoe-logs/zoe-data.app.log`
-   — the app log carries its UTC offset; lines are `+0800` (AWST, `T07:3x`) when the service
-   runs with the box's local zone and `+0000` (`T23:3x` of the previous date) when it runs in
-   UTC, so the pattern matches both (the trigger can fire anywhere in the 07:30–07:59 window).
-   - The brief's own path logs `PROACTIVE_SPOKEN trigger=morning_checkin user=jason …` — that
-     line is the proof; the recipient helper's `users kept=N` line precedes it. Do not rely on
-     the autopilot `fired for N user(s)` line, which comes from a different path.
-   - With the panel off, `outcome=absent` on that PROACTIVE_SPOKEN line still proves the brief
-     was created; with the panel on and idle as guest expect `tier=bound_guest` and only the
-     generic line spoken; `tier=owner` speaks the full brief.
+2. **Verify:** (a) **the 2026-09-30 02:33 dreaming run** is the first with #1782's open-loop
+   repair: `grep OPEN_LOOPS /home/zoe/training/logs/dreaming-systemd.log` must show `inserted>0`
+   for a real member, then
+   review that night's loops by hand. (b) **The first-turn brief** on the first morning
+   conversation: `grep BRIEF_FIRST_TURN ~/.zoe-logs/zoe-data.app.log` (`injected=1
+   claimed=1` on a day with items). The 07:30 spoken brief is OFF by owner decision, so a
+   missing `PROACTIVE_SPOKEN` line is expected.
 
    Also check the Monday 02:31 dreaming run on the new venv drop-in (B3.2).
    - **B0.8 follow-ups.** Tuesday's (09-29) ~02:33 dreaming run is the first on the 1.x store:
@@ -143,6 +157,13 @@ State as of **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is 
    worktree first, or the probe records an error) and `gh run rerun`. Recipe:
    [merge-and-deploy.md](../knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 4. **Next engineering, in order:**
+   0. **Context manager (2026-09-29, [research](../research/samantha-context-engineering-2026-09-29.md)).**
+      A/B the two flag-dark PRs, one at a time, each with the replay gate and a Samantha
+      compare flag-off vs flag-on: `ZOE_USER_MODEL_BLOCK` (#1783; `demo_bar_*` users have no
+      portrait, so seed an allowlisted demo user with a portrait to test the block itself —
+      #1783's A/B recipe) and `ZOE_BRAIN_ELIDE_STALE_BLOCKS` (#1785; sidecar env, read the
+      `FLUE_CONTEXT_BUDGET` `stale=` column first). Then the samantha_bar follow-up:
+      majority-of-N for S4/S8.
    1. **Samantha bar S1 + S4** (B3.11, record: [samantha-bar.md](../knowledge/samantha-bar.md)
       → *Live compares*):
       (a) **S1 — ✅ DONE (#1770, PASS on the 03:56 compare; baseline re-recorded 04:00).**
@@ -179,7 +200,8 @@ State as of **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is 
    6. **B7.5 (c)** QR onboarding for new members; the live-panel check of (a)+(b) (push,
       `/wake`, a real Telegram send) is now possible.
    7. **B3.2/B3.3** on the new store; B3.3 has S4 as its target.
-   8. Brief-on-arrival (**B2.1**): #1749 merged flag-dark; 🧑 the panel is on — flip it.
+   8. Brief-on-arrival (**B2.1**): ⏸ parked by the 2026-09-29 owner decision (it needs
+      `ZOE_PROACTIVE_SPOKEN=1`, which stays off); brief-on-first-turn (#1781) is live instead.
    9. The 24 h `--cache-ram` occupancy measurement (B0.4/B6.6).
 
 ## 1. Where Zoe already beats the bar (protect these)
@@ -794,6 +816,11 @@ State as of **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is 
     feature off.
   - Next: 🧑 flip the flag once the panel is back on. Then feed face/voice matches in as
     `owner` presence. That is a voice-path change and needs the replay gate.
+  - **2026-09-29 owner decision: no unprompted spoken brief.** `ZOE_PROACTIVE_SPOKEN` stays
+    0, so brief-on-arrival stays off (⏸). Replaced by **brief on first turn** (#1781,
+    `ZOE_BRIEF_ON_FIRST_TURN`, ON live): a `[Today]` block on the member's first brain turn
+    05:00–12:00, sharing the daily claim; a 07:30 brief counts as heard only on the daemon's
+    playback ACK (`voice_announcements.played_at`, migration 0032).
 - B2.2 ⬜ **Candidate-selection → delivery-gating split** for proactive turns with a
   three-valued verdict (Immediate / Delayed / Silent) scored by a cheap non-LLM trigger over
   structured events using When2Talk's four factors + a Frigate-style 0–2 salience level;
@@ -862,6 +889,9 @@ State as of **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is 
   03:49–03:56 on `269bb680` (live since 03:49): S1 PASS, S4 PASS, every scored scenario PASS,
   S5 SKIP, no regression. Baseline re-recorded at 04:00 on `269bb680` (all seven scored PASS),
   so S1 and S4 now regress-gate.**
+  **2026-09-29:** after #1782 and #1783 all PASS; after #1785 run 1 S4 FAIL, run 2 S8 FAIL,
+  run 3 all PASS. S4 (judged) and S8 (retrieval edge) have an intrinsic flake rate: re-run
+  before concluding; follow-up = majority-of-N for S4/S8.
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -1247,6 +1277,44 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-29 (day) — **brief-on-first-turn live; the context-manager PRs merged flag-dark;
+  the test suite no longer writes to the household palace.** Merge times AWST, every deploy
+  run green, live = `8da575f7`:
+  **#1773** (`c64d589b`, 05:24) `services/zoe-data/tests/conftest.py` pins
+  `MEMPALACE_DATA_DIR` + `ZOE_VOICE_STT_LOG` to a tempdir before any zoe-data import (fails
+  loudly if too late). 225 of 482 live drawers were pytest fixture rows (45 local suite runs ×
+  5 fixture contacts); the operator purged them;
+  **#1780** (`29b7a226`, 09:00) research: context manager vs training on user data →
+  build the context manager ([doc](../research/samantha-context-engineering-2026-09-29.md));
+  **#1781** (`ce4527c0`, 10:17) brief on first turn (`ZOE_BRIEF_ON_FIRST_TURN`, flipped ON
+  after deploy). Three Greptile rounds: the claim settles on emitted text; the Flue block
+  label is dated (`[Today YYYY-MM-DD]`) because a Flue session can outlive a day; the 07:30
+  path counts as heard only on the daemon's playback ACK `played_at` (migration 0032,
+  device-token-only `POST /api/voice/announcements/{id}/played`); per-turn holds; a failed
+  playback is not ACKed; the ACK retries 3× in the background;
+  **#1782** (`042763f7`, 10:27) open-loop extraction repaired — the dead
+  `zoe_agent._llm_chat` import (it never existed; `open_loops` had 0 rows), a typed INSERT
+  Postgres rejected, and a boolean-vs-integer compare; `source_excerpt` is PII-scrubbed and
+  capped at the MemoryService boundary; the code-level
+  [context audit](../research/zoe-context-audit-2026-09-29.md). Proof = the 2026-09-30 02:33
+  dreaming run's `OPEN_LOOPS` line;
+  **#1783** (`e65f9be3`, 10:37) `ZOE_USER_MODEL_BLOCK` (flag-dark): a portrait-based block
+  (≤1,400 chars) appended to the END of the Flue system prompt, served token-only at
+  `GET /api/memories/user-model`. Measured on the live template (Gemma 4 renders system →
+  tools → messages): static system text 2,153 tok, core tool block 498 tok, the block at its
+  cap ≈330 tok;
+  **#1785** (`8da575f7`, 10:50) `ZOE_BRAIN_ELIDE_STALE_BLOCKS` (sidecar, flag-dark) strips
+  injected blocks from all but the newest user message on the wire; the `FLUE_CONTEXT_BUDGET`
+  log line is unflagged; `routers/memories.py`, `user_portrait.py` and `memory_gate.py` joined
+  the replay gate's voice-path list. It replaces **#1784**, which was stacked on #1783's
+  branch and conflicted on every #1783 file after the squash (incident-runbook §17).
+  **Samantha bar** (baseline 04:00 on `269bb680`): the post-#1781 compare recorded S8 ERROR
+  with zoe-data restarting mid-run (10:24–10:25) — not evidence (incident-runbook §16); after
+  #1782 and #1783 all PASS; after #1785 S4 FAIL, S8 FAIL, then all PASS → flake, re-run rule.
+  **Operator:** Pi `DEVICE_TOKEN` rotated (~10:31, runbook §18); `test-e2e-token` (admin
+  device token) and the `p0test` zoe-auth admin account found active → revoke/disable (§0).
+  **Owner rule** recorded in [VISION.md](../VISION.md) principle 9: dive deep to understand
+  before changing Zoe — quality, not first thought.
 - 2026-09-28 (night) → 09-29 — **the panel came back on and the evening chain landed: 13 PRs,
   live = `5d4a7980`; the Pi daemon runs the merged #1760 + #1765 + #1766 code (deployed 00:38,
   md5 `86f22ce3`) with `POST_PLAY_COOLDOWN_S=0.4` and `RECORD_SECONDS_MAX=12` applied; the
