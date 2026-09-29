@@ -1599,7 +1599,7 @@ async def _load_open_loops(user_id: str, limit: int = 5) -> str:
             async with _db.execute(
                 """SELECT loop_text, follow_up_hint, emotional_weight
                    FROM open_loops
-                   WHERE user_id = ? AND resolved = 0
+                   WHERE user_id = ? AND resolved IS NOT TRUE
                    ORDER BY emotional_weight DESC, created_at DESC
                    LIMIT ?""",
                 (user_id, limit),

@@ -21,6 +21,8 @@ Additional adversarially-verified findings fixed alongside the above:
          forgotten fact isn't dropped as a stale duplicate
   FIX 8  review(decision='edit') must carry forward scope/visibility/
          source_excerpt/extra metadata instead of defaulting them away
+  FIX 9  source_excerpt is PII-scrubbed and capped at the write boundary
+         (scrub BEFORE the cut), on ingest and on edit
 """
 
 import threading
@@ -439,3 +441,39 @@ async def test_edit_preserves_shared_scope_and_extras(svc):
     assert edited.metadata["scope"] == "shared"
     assert edited.metadata.get("source_excerpt") == "said during dinner"
     assert edited.metadata.get("candidate_custom_note") == "from kitchen assistant"
+
+
+# ── FIX 9: source_excerpt is scrubbed + capped where it is written ────────────
+
+async def test_ingest_scrubs_source_excerpt(svc):
+    ref = await _seed(svc, "user is changing the home router",
+                      source_excerpt="changing the router, the password is hunter2 btw")
+    assert ref.metadata["source_excerpt"] == "changing the router, the password is [REDACTED] btw"
+    assert "hunter2" not in str(svc._fake.rows[ref.id]["metadata"])
+
+
+async def test_rejected_excerpt_is_dropped_but_the_fact_is_kept(svc):
+    ref = await _seed(svc, "user paid the plumber by card",
+                      source_excerpt="paid the plumber with 4111 1111 1111 1111 today")
+    assert ref is not None and "source_excerpt" not in ref.metadata
+
+
+async def test_excerpt_is_scrubbed_before_it_is_cut(svc):
+    # The card straddles the cap: cut-then-scrub would keep 12 digits the Luhn
+    # check can no longer recognise; scrub-then-cut drops the excerpt instead.
+    cap = memory_service._SOURCE_EXCERPT_MAX_CHARS
+    card = "4111 1111 1111 1111"
+    excerpt = "x" * (cap - 10) + " " + card
+    ref = await _seed(svc, "user shared a long story", source_excerpt=excerpt)
+    assert "source_excerpt" not in ref.metadata
+    long_ref = await _seed(svc, "user told a long story", source_excerpt="y" * (cap + 50))
+    assert len(long_ref.metadata["source_excerpt"]) == cap
+
+
+async def test_edit_takes_new_evidence_and_scrubs_it(svc):
+    ref = await _seed(svc, "birthday is march 15", source_excerpt="my birthday is march 15")
+    edited = await svc.review(
+        ref.id, decision="edit", edits="birthday is march 25", actor="tester",
+        source_excerpt="no, march 25 - pin: 4455",
+    )
+    assert edited.metadata["source_excerpt"] == "no, march 25 - pin: [REDACTED]"

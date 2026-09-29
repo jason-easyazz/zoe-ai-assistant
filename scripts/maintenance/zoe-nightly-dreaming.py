@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import pathlib
 import sys
 import time
@@ -45,8 +46,25 @@ async def run_music_digest(db) -> list:
     return await run_music_taste_digest_for_all(db=db)
 
 
+def surface_count_logs() -> None:
+    """Print the counts-only ``OPEN_LOOPS user=… extracted=… inserted=…`` line.
+
+    This runner configures no logging, so Python's last-resort handler shows
+    WARNING+ only. Attach a handler to that ONE logger rather than raising the
+    root level: memory_digest's other INFO lines carry fact text.
+    """
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    counts = logging.getLogger("memory_digest.open_loops")
+    counts.setLevel(logging.INFO)
+    counts.addHandler(handler)
+    counts.propagate = False
+
+
 async def main() -> int:
     from db_pool import close_pool, get_db_ctx, init_pool
+
+    surface_count_logs()
 
     try:
         await init_pool()

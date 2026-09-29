@@ -633,6 +633,30 @@ def scrub_pii(text: str) -> tuple[str, Optional[str]]:
     return redacted, None
 
 
+#: Cap for the verbatim evidence stored beside a fact (metadata
+#: ``source_excerpt``). The write boundary owns BOTH the scrub and the cut, so
+#: producers pass the whole utterance. Sized above the 220-char utterance cut
+#: hindsight_retain_candidates uses so its appended "\nEvidence: <refs>" survives.
+_SOURCE_EXCERPT_MAX_CHARS = 400
+
+
+def scrub_source_excerpt(text: Optional[str], *, limit: int = _SOURCE_EXCERPT_MAX_CHARS) -> Optional[str]:
+    """PII-scrub THEN cap an evidence excerpt; None when there is nothing safe to keep.
+
+    Scrub runs on the whole input before the cut, so truncation can never slice a
+    card number below the Luhn check and store its digits. A hard reject (card,
+    SSN, key, PEM, JWT…) drops the EXCERPT only — the fact it sits beside was
+    scrubbed separately and is not affected.
+    """
+    raw = (text or "").strip() if isinstance(text, str) else ""
+    if not raw:
+        return None
+    scrubbed, reject = scrub_pii(raw)
+    if reject:
+        return None
+    return scrubbed[:limit].rstrip() or None
+
+
 async def _user_opted_out(user_id: str) -> bool:
     """Per-user ``memory_opt_out`` preference. Fail-open: a lookup failure (no
     pool in tests, DB blip) returns False — a preference read must never lose a fact."""
@@ -1061,8 +1085,13 @@ class MemoryService:
         edits: Optional[str] = None,
         note: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        source_excerpt: Optional[str] = None,
     ) -> Optional[MemoryRef]:
         """Approve / reject / edit a pending memory.
+
+        ``source_excerpt`` (``edit`` only) is the evidence for the NEW text — a
+        correcting utterance replaces the edited row's excerpt; omitted, the old
+        excerpt is carried forward.
 
         ``metadata`` (``edit`` only) is extra event metadata for the NEW row —
         stored ``candidate_``-prefixed exactly like ``ingest(metadata=...)`` and
@@ -1141,7 +1170,8 @@ class MemoryService:
                 entity_type=current.metadata.get("entity_type"),
                 entity_id=current.metadata.get("entity_id"),
                 expires_at=current.metadata.get("expires_at"),
-                source_excerpt=current.metadata.get("source_excerpt"),
+                source_excerpt=(source_excerpt if source_excerpt
+                                else current.metadata.get("source_excerpt")),
                 scope=current_scope,
                 extra_metadata=metadata,
                 idem_key=self._idempotency_key(
@@ -1343,8 +1373,12 @@ class MemoryService:
             md["entity_id"] = entity_id
         if expires_at:
             md["expires_at"] = _normalize_expires_at(expires_at)
-        if source_excerpt:
-            md["source_excerpt"] = source_excerpt
+        # Every write path (ingest, review edit, carry-forward) builds metadata
+        # here, so the excerpt is scrubbed at this one boundary — no caller can
+        # store raw text by skipping its own scrub.
+        excerpt = scrub_source_excerpt(source_excerpt)
+        if excerpt:
+            md["source_excerpt"] = excerpt
         if event_scope:
             md["scope"] = str(event_scope)
         _promote_event_metadata(md, extra)
