@@ -716,16 +716,23 @@ def _bridge_post(path: str, data: dict, timeout: int = 60) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
-def play_audio_b64(audio_b64: str, content_type: str = "audio/wav"):
+def play_audio_b64(audio_b64: str, content_type: str = "audio/wav") -> bool:
     """Decode and play base64 audio via aplay/mpg123.
 
     Registers the subprocess in _tts_process so the barge-in thread can kill it.
     Checks _barge_in_requested before and during playback.
+
+    Returns True when audio reached the speaker: the player exited 0, or a
+    barge-in stopped it (the listener heard it and talked over it). False when
+    there was nothing to play, the player could not start, or it exited
+    non-zero (device busy/missing, bad audio) — callers that report playback
+    (the announcement ACK) must not claim it was heard. Never raises.
     """
     global _tts_process
     if not audio_b64:
-        return
+        return False
     _barge_in_requested.clear()
+    played = False
     try:
         raw = base64.b64decode(audio_b64)
         ext = "mp3" if "mpeg" in content_type else "wav"
@@ -745,9 +752,11 @@ def play_audio_b64(audio_b64: str, content_type: str = "audio/wav"):
         proc = subprocess.Popen(cmd)
         _register_tts_process(proc)
         # Poll for barge-in while playback runs.
+        barged = False
         while proc.poll() is None:
             if _barge_in_requested.is_set():
                 log.info("Barge-in: stopping TTS playback")
+                barged = True
                 proc.terminate()
                 try:
                     proc.wait(timeout=1)
@@ -755,6 +764,9 @@ def play_audio_b64(audio_b64: str, content_type: str = "audio/wav"):
                     proc.kill()
                 break
             time.sleep(0.05)
+        played = barged or proc.returncode == 0
+        if not played:
+            log.warning("Audio playback failed: %s exited %s", cmd[0], proc.returncode)
         with _tts_process_lock:
             _tts_process = None
         try:
@@ -763,6 +775,8 @@ def play_audio_b64(audio_b64: str, content_type: str = "audio/wav"):
             pass
     except Exception as exc:
         log.warning("Audio playback failed: %s", exc)
+        return False
+    return played
 
 
 _CHUNK_S = CHUNK_SIZE / float(SAMPLE_RATE)  # seconds of audio per mic read (80ms default)
@@ -2729,11 +2743,38 @@ def _speak_announcement(ann: dict) -> bool:
     _recording_active.set()  # pause ambient capture, as during a reply
     _ignore_wake_until = time.monotonic() + _ANNOUNCE_WAKE_GUARD_MAX_S
     try:
-        play_audio_b64(audio_b64, resp.get("content_type", "audio/wav"))
+        # The playback result, not "TTS arrived": a failed player must not be
+        # ACKed as heard (the poller ACKs only a True here).
+        played = play_audio_b64(audio_b64, resp.get("content_type", "audio/wav"))
     finally:
         _recording_active.clear()
         _ignore_wake_until = time.monotonic() + POST_PLAY_COOLDOWN_S
-    return True
+    if not played:
+        log.warning("announce %s: playback failed — not acknowledged", ann.get("id", "?"))
+    return played
+
+
+def _post_played_ack(ann_id: str) -> bool:
+    """One ACK attempt; True once the server has the ACK (or will never take it)."""
+    resp = _api_post(f"/api/voice/announcements/{ann_id}/played", {}, timeout=5, retries=0)
+    return bool(resp.get("ok"))
+
+
+def _ack_announcement(ann: dict) -> None:
+    """Tell zoe-data the claimed announcement was PLAYED (its claim alone is not
+    proof: TTS or playback can fail after the claim).
+
+    Bounded retries (``zoe_voice_announce.ACK_RETRY_DELAYS_S``: 3 attempts over
+    ~10 s) on a background thread, so a slow or restarting zoe-data never delays
+    the next announcement. Never raises."""
+    ann_id = str(ann.get("id") or "").strip()
+    if not ann_id or _announce_logic is None:
+        return
+    threading.Thread(
+        target=_announce_logic.ack_with_retries,
+        kwargs={"post": _post_played_ack, "ann_id": ann_id, "logger": log},
+        daemon=True, name=f"announce-ack-{ann_id[:8]}",
+    ).start()
 
 
 def _announce_poll_thread():
@@ -2753,6 +2794,7 @@ def _announce_poll_thread():
         is_busy=_daemon_busy,
         poll_interval_s=ANNOUNCE_POLL_S,
         logger=log,
+        ack=_ack_announcement,
     )
     log.info("Announce poll thread started (interval=%.1fs)", ANNOUNCE_POLL_S)
     poller.run(_shutdown.wait)

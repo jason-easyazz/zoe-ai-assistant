@@ -41,7 +41,8 @@ _SCHEMA = """CREATE TABLE voice_announcements (
     expires_at TEXT NOT NULL,
     delivered_at TEXT,
     delivered_to TEXT,
-    expired INTEGER NOT NULL DEFAULT 0
+    expired INTEGER NOT NULL DEFAULT 0,
+    played_at TEXT
 )"""
 
 
@@ -182,6 +183,20 @@ async def test_empty_message_rejected(db):
         await voice_announce.enqueue_announcement(db, user_id="u", message="   ")
 
 
+# ── playback ACK: played_at, only by the claiming panel, once ───────────────
+
+async def test_mark_played_only_by_the_claiming_panel_and_only_once(db):
+    ann_id = await voice_announce.enqueue_announcement(db, user_id="u", message="brief")
+    assert not await voice_announce.mark_played(db, announcement_id=ann_id, panel_id="p1"), \
+        "an unclaimed row cannot have been played"
+    await voice_announce.claim_announcements(db, panel_id="p1")
+    assert not await voice_announce.mark_played(db, announcement_id=ann_id, panel_id="p2")
+    assert await voice_announce.mark_played(db, announcement_id=ann_id, panel_id="p1")
+    assert not await voice_announce.mark_played(db, announcement_id=ann_id, panel_id="p1")
+    cur = await db.execute("SELECT played_at FROM voice_announcements")
+    assert (await cur.fetchone())["played_at"]
+
+
 # ── strict panel matching (opt-in; default is claim-any, see module doc) ────
 
 async def test_strict_panel_filters_other_panels(db, monkeypatch):
@@ -266,6 +281,32 @@ def test_device_token_accepted(monkeypatch):
     assert body["ok"] is True
     assert [a["id"] for a in body["announcements"]] == ["a1"]
     assert claimed_with["panel_id"] == "zoe-touch-pi", "claim must be keyed by the token's panel"
+
+
+def test_played_ack_requires_a_device_token_and_uses_its_panel(monkeypatch):
+    seen = {}
+
+    async def fake_mark(db, *, announcement_id, panel_id):
+        seen.update(id=announcement_id, panel=panel_id)
+        return True
+
+    monkeypatch.setattr(voice_announce, "mark_played", fake_mark)
+    session = _app({
+        voice_tts._validate_device_token: lambda: None,
+        get_current_user: lambda: {"user_id": "member-a", "role": "admin"},
+        get_db: lambda: _NullDB(),
+    })
+    assert TestClient(session).post("/api/voice/announcements/a1/played").status_code == 403
+    device = _app({
+        voice_tts._validate_device_token: lambda: {
+            "panel_id": "zoe-touch-pi", "user_id": "voice-daemon", "role": "voice-daemon",
+        },
+        get_current_user: lambda: {"user_id": "guest", "role": "guest"},
+        get_db: lambda: object(),
+    })
+    resp = TestClient(device).post("/api/voice/announcements/a1/played")
+    assert resp.status_code == 200 and resp.json()["updated"] is True
+    assert seen == {"id": "a1", "panel": "zoe-touch-pi"}
 
 
 def test_endpoint_is_wired_through_require_voice_auth():

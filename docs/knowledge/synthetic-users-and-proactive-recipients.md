@@ -88,9 +88,9 @@ both default off, and with either off nothing is read or queued.
   (`arrival.claim_scheduled_brief`). A lost claim logs `outcome=already_spoken`. A claim
   DB error fails closed (`outcome=claim_error`): the push is still sent, but the full brief
   is not spoken. So the
-  full brief is spoken once whichever path, panel or worker gets there first. With the
-  flag off, the 07:30 path is unchanged and takes no claim. A failed speak is not
-  retried.
+  full brief is spoken once whichever path, panel or worker gets there first. With both
+  this flag and `ZOE_BRIEF_ON_FIRST_TURN` off, the 07:30 path is unchanged and takes no
+  claim. A failed speak is not retried.
 - **Log:** `PROACTIVE_SPOKEN trigger=morning_checkin_arrival user= panel= outcome=
   daemon_queue= tier=owner missed=absent|guest_teaser|expired`.
 - **Response signal (for B2.2):** the announcement id is linked to the claim in the
@@ -103,6 +103,81 @@ both default off, and with either off nothing is read or queued.
   - `unknown`: no announcement is linked. This is never `undelivered`.
 
   Each is logged as `PROACTIVE_RESPONSE`.
+
+## Brief on the first turn of the day (flag-dark)
+
+No unprompted spoken brief: `brief_first_turn.py` folds the day's context into the
+member's first brain turn of the morning, so Zoe mentions it the way a human assistant
+would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
+
+- **Where:** both brain lanes call it. The Flue seam
+  (`zoe_flue_client.run_flue_brain_streaming`) appends a `[Today 2026-09-29]` …
+  `[END Today]` block after the user's words, where the continuity block rides. The
+  label is dated because Flue keeps every message it was sent and a session can
+  outlive a household day (a voice panel session rolls only after 5 min of silence,
+  `routers/voice_tts._get_or_create_voice_session`; a caller-supplied or chat session id
+  never rolls). The body says `Today is <date>` and to ignore an earlier block with a
+  different date. The core seam folds the same body in as a `[Today]` context block just
+  before `[The user just said]` (`_CONTEXT_BLOCKS`, mirrored in zoe-core `memory.ts`),
+  where older copies are stripped anyway.
+  Tier-0 and keyword intents never reach a brain and never count.
+- **Only if all hold:** real member (`user_filters.is_synthetic_user`); local time in
+  `ZOE_BRIEF_WINDOW_START`–`ZOE_BRIEF_WINDOW_END` (default `05:00`–`12:00`,
+  `ZOE_TIMEZONE`); not a continuity (emotional statement) turn; today's
+  `morning_brief_full` claim is not taken; the day context is not empty.
+- **Day context:** `morning_checkin._build_morning_context(..., include_board=False)`
+  (the same gatherer as the 07:30 brief). Items are decided in code: today's events
+  whose STORED end has not passed (`end_time`, else start + `duration` minutes; the
+  voice writer stores neither, so an event with no end stays listed), open loops, and at
+  most one recent emotional moment. The portrait
+  and the engineering board are never items. Empty means nothing changes and no claim.
+  The gathered context is cached in-process for 5 minutes.
+- **Shape (`turn_shape`, phrase-gated):** a greeting or open turn ("morning", "hey zoe,
+  what's up", "let's talk") gets the full list with a "mention it naturally, once"
+  instruction. Any other turn gets one line, and only for an event starting within 2 h
+  or an overdue loop. Otherwise nothing is injected and the claim stays free for the
+  next open turn.
+- **Claim:** the SAME `proactive_responses` row as the 07:30 and arrival paths
+  (`trigger_type = brief_first_turn`). It is settled in each lane's stream `finally`,
+  so it is taken once any reply text went out, including when the stream then errors,
+  the client disconnects or a barge-in cancels the turn (the write is shielded). A turn
+  that emitted no text (an error before the first token, the canned fallback) takes
+  nothing.
+- **The 07:30 spoken path with only this flag on** checks the claim read-only
+  (`arrival.claim_scheduled_brief`): if the first-turn brief already went out it is not
+  spoken; otherwise it is queued WITHOUT a claim, because queueing is not delivery.
+  - **Heard = the daemon's playback ACK.** `delivered_at` is set when the daemon CLAIMS a
+    row, before TTS and playback. The daemon now POSTs
+    `/api/voice/announcements/{id}/played` only when the audio actually played (the player
+    exited 0, or a barge-in stopped it), which sets `played_at`. It retries 3 times over
+    ~10 s on a background thread; if every attempt fails the heard brief reads as unheard
+    and the first turn repeats it (accepted: a repeat beats a lost brief)
+    (migration `0032`, `voice_announce.mark_played`, only the claiming panel, once). Only
+    `played_at` counts (`arrival.scheduled_brief_delivery`); the first-turn check then
+    takes the shared claim.
+  - **Waiting is bounded.** A queued row holds the conversational brief until its
+    `expires_at` (`ZOE_ANNOUNCE_TTL_S`, default 120 s); a claimed but unacknowledged row
+    until `expires_at` + 180 s. After that the first turn gets the brief. The guest
+    teaser never counts.
+  - **The read-then-queue race** (07:30 reads a free claim, a first turn injects, the
+    07:30 row is queued anyway) is closed at the daemon claim
+    (`voice_announce.claim_announcements` → `brief_first_turn.scheduled_row_gate`): a
+    `morning_checkin` row is held pending while ANY of that member's conversational briefs
+    is mid-reply (one in-process hold per turn, ≤120 s each; zoe-data runs one uvicorn
+    worker). `settle` writes the claim before releasing its own hold, and keeps the hold
+    if the write fails. The row is marked `expired` without playing once the first-turn
+    brief holds the claim. Inert with the flag off.
+  - **Deploy order:** the daemon's ACK ships in `scripts/setup/zoe_voice_daemon.py` +
+    `zoe_voice_announce.py`, deployed to the Pi by the operator separately. Until it is,
+    no row is ever ACKed, so a played 07:30 brief is treated as unheard after the bounded
+    wait and the first turn repeats it. Deploy the daemon before enabling
+    `ZOE_PROACTIVE_SPOKEN` together with this flag.
+  - With `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` on, arrival's contract applies unchanged
+    (claim before queueing, no retry).
+  Two concurrent first turns can both see the block; only one claim lands.
+- **Log:** `BRIEF_FIRST_TURN user= items= shape=greeting|command injected=0|1 claimed=0|1`,
+  one line per decision on a non-empty day.
+- **Pinned by:** `services/zoe-data/tests/test_brief_first_turn.py`.
 
 ## Probe chat rows are purged nightly
 

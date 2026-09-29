@@ -49,6 +49,8 @@ import memoryExtension, {
   PORTRAIT_BLOCK_OPEN,
   RECALL_BLOCK_CLOSE,
   RECALL_BLOCK_OPEN,
+  TODAY_BLOCK_CLOSE,
+  TODAY_BLOCK_OPEN,
   memoryBlock,
   neutralizeMarkers,
   stripContextBlocks,
@@ -413,7 +415,9 @@ function blockCount(messages: readonly { content?: unknown }[], open = MEMORY_BL
 }
 
 /**
- * A FULL composed turn — all four blocks, as a real voice turn is composed.
+ * A FULL composed turn — every block type, as a real voice turn is composed
+ * (`[Today]` rides only a day's first turn in production; here it repeats so its
+ * elision is covered like the others).
  *
  * `[Recent conversation]` replays the whole running conversation every turn, which
  * is what makes the accumulation quadratic rather than linear.
@@ -428,6 +432,7 @@ function fullUserTurn(utterance: string, turn: number, history: readonly string[
       `${MEMORY_USAGE_DIRECTIVE}\n\n## What I know about you\n- fact as of turn ${turn} [mem:${turn}]`,
     ),
     delimited(HISTORY_MARKER, HISTORY_CLOSE, history.map((h) => `user: ${h}`).join("\n")),
+    delimited(TODAY_BLOCK_OPEN, TODAY_BLOCK_CLOSE, `- Calendar: dentist at 10:00 (turn ${turn})`),
     `${UTTERANCE_MARKER}\n${utterance}`,
   ].join("\n\n");
   return { role: "user", content: [{ type: "text", text }] };
