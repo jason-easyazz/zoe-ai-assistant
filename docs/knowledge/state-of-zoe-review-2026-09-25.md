@@ -577,8 +577,10 @@ the 2026-09-25 plan, kept with ✓ marks.
    - ✓ The B0.8 Chroma 1.5 cutover — LIVE 2026-09-28 08:21 AWST (#1745 `d346aa90`; 10/10
      proofs, `self-recall ok`, replay PASS 13/13). Its deploy ran ahead of the store (~7 min
      degraded memory capture, store intact, no turns missed): `incident-runbook.md` §9.
-   - **Rotate the Pi `DEVICE_TOKEN`** (an agent's grep printed it into a tool transcript
-     2026-09-28 ~21:30; never left the box, treat as exposed).
+   - ⏳ **Pi `DEVICE_TOKEN` rotation IN PROGRESS** 2026-09-29 (exposed in a tool transcript
+     2026-09-28 ~21:30): a replacement token was minted 10:49 but is NOT yet installed on the
+     Pi / probe env, and the old id is NOT yet revoked — the panel still runs on the old token.
+     Runbook: `incident-runbook.md` §18.
    - **Decide `ZOE_VAD_CLEAN_TAIL_MS`** (#1766, shipped OFF): −160 ms on ~half the turns vs a
      2.0 % mid-sentence cut on the corpus. Stage with `560` in `.env.voice` if accepted.
    - **YouTube Music QR re-scan on the panel** — #1759 fixed the stale-cookie short-circuit,
@@ -681,6 +683,25 @@ the 2026-09-25 plan, kept with ✓ marks.
     the executor design decision (Flue `init()` handles + durable tools).
 
 ---
+
+## 10. Addendum 2026-09-29 — what is live now
+
+Live = `main` `8da575f7`; detail in the [tracker §6](../architecture/beat-the-bar-2026-program.md).
+- **Proactivity:** the spoken 07:30 brief is OFF by owner decision (`ZOE_PROACTIVE_SPOKEN=0`).
+  Brief on first turn (#1781, `ZOE_BRIEF_ON_FIRST_TURN`) is ON: Zoe folds today's context into
+  the first morning conversation.
+- **Memory:** open-loop extraction works again (#1782; first proof = the 2026-09-30 02:33
+  dreaming run). The test suite no longer writes to the household palace (#1773); the 225
+  fixture drawers it had written were purged.
+- **Context manager, merged flag-dark:** the user-model block (#1783, `ZOE_USER_MODEL_BLOCK`)
+  and stale-block elision (#1785, `ZOE_BRAIN_ELIDE_STALE_BLOCKS`). Both await an A/B.
+  Research: [`samantha-context-engineering-2026-09-29.md`](../research/samantha-context-engineering-2026-09-29.md),
+  [`zoe-context-audit-2026-09-29.md`](../research/zoe-context-audit-2026-09-29.md).
+- **Samantha bar:** all scored scenarios PASS against the 04:00 baseline; S4/S8 flake
+  ([samantha-bar.md](samantha-bar.md) → *Flake rate*).
+- **Security (§4):** the Pi `DEVICE_TOKEN` rotation is in progress (new token minted, install +
+  revoke pending). Still open: an admin device token
+  `test-e2e-token` and a zoe-auth admin account `p0test` are active — revoke/disable.
 
 ## Appendix A — Known-problems register (2026-09-25)
 

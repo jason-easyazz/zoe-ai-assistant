@@ -106,6 +106,9 @@ both default off, and with either off nothing is read or queued.
 
 ## Brief on the first turn of the day (flag-dark)
 
+**Live state (2026-09-29):** ON on the live box (`ZOE_BRIEF_ON_FIRST_TURN=1`), with
+`ZOE_PROACTIVE_SPOKEN=0` by owner decision (no unprompted spoken brief).
+
 No unprompted spoken brief: `brief_first_turn.py` folds the day's context into the
 member's first brain turn of the morning, so Zoe mentions it the way a human assistant
 would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).

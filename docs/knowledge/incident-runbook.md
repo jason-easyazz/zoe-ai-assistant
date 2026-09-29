@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, and the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag). Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing]
-timestamp: 2026-09-29T03:00:00+08:00
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, and the panel device-token rotation runbook. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token]
+timestamp: 2026-09-29T11:30:00+08:00
 ---
 
 # Production Incident Runbook
@@ -623,3 +623,45 @@ lost data on the box; one lost an agent's uncommitted edits.
   for a **completed** deploy of `origin/main` HEAD (or 8 min of quiet) before it probes.
   Corollary for readers of the trend file: a `fail` row during a deploy restart is not a
   regression; the re-probe 20 min later passed 20/20.
+
+## 16. A Samantha compare run while the box was changing under it (2026-09-29)
+
+**Signature.** A `samantha_bar.py --compare-baseline` row shows `ERROR` (or a one-off `FAIL`)
+right after a merge. On 09-29 the post-#1781 compare (10:21–10:25 AWST) recorded S8 `ERROR`
+while zoe-data restarted mid-run (journal: 10:24:25 and 10:25:13).
+
+**Diagnosis.** `git rev-parse HEAD == <merge sha>` on the live checkout is not proof the code
+is live: `deploy.yml` resets the tree FIRST and restarts services after, which can be minutes
+later (memory waits, sidecar rebuilds). A compare in that gap, or across any restart, tests a
+half-deployed box.
+
+**Rule.** Start a compare only after the merge's own deploy RUN has `completed`
+(`gh run list --workflow deploy.yml --json headSha,status,conclusion`) and `/health` answers;
+hold while any deploy run is `in_progress` or a restart is pending. A row taken across a
+restart is not evidence — re-run it.
+
+## 17. Stacked PR conflicts on every parent file after the parent squash-merges (2026-09-29)
+
+**Signature.** A PR opened on another PR's branch (#1784 on #1783) goes `CONFLICTING` on every
+file the parent touched as soon as the parent squash-merges.
+
+**Diagnosis.** The squash commit on `main` has a different sha from the parent branch's commits,
+so git sees both sides editing the same lines. Force-push is blocked by policy, so the branch
+cannot be rewritten in place.
+
+**Fix.** In a private landing checkout: `git rebase --onto origin/main <parent-branch-tip>
+<child-branch>`, push it as a NEW branch, open a replacement PR (#1785) and close the old one
+with a "superseded by" comment. Prevention: do not stack; branch from `main` after the parent lands.
+
+## 18. Runbook — rotating the panel device token (2026-09-29)
+
+1. Log in to zoe-auth as an admin (the username is case-sensitive) and keep the session id.
+2. Mint: `POST /api/panels/{panel}/token` with header `X-Session-ID: <admin session>`; note the
+   new token and its id. Never write a placeholder into any env file.
+3. Install it in BOTH places: on the Pi, `/home/pi/.zoe-voice/.env.voice` `DEVICE_TOKEN` (the
+   daemon); on the Zoe box, `/home/zoe/.hermes/.env` `ZOE_DEVICE_TOKEN` (the replay/latency probe).
+4. `systemctl --user restart zoe-voice`; the journal must show `Speaker profiles synced` and no
+   `API auth failure … (401)` line.
+5. Only THEN revoke the old id: `DELETE /api/panels/{panel}/token/{old_token_id}` (admin).
+6. Recovery: the daemon's `.env.voice.bak-*` backup restores the last working env.
+Never print a token into a transcript or log; check by length or by the sync line.
