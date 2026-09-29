@@ -295,18 +295,37 @@ async def claim_full_brief(
     return row["id"] if row else None
 
 
+async def brief_claimed(db, *, user_id: str, now: datetime) -> bool:
+    """True when today's shared claim (member, ``CLAIM_KEY``, household date) is taken.
+
+    Read-only. ``brief_first_turn`` checks it before gathering the day context,
+    so a brief already spoken by the 07:30 or arrival path is not repeated.
+    """
+    local_date = now.astimezone(_ZOE_TZ).date().isoformat()
+    async with db.execute(
+        """SELECT 1 FROM proactive_responses
+           WHERE user_id = ? AND claim_key = ? AND local_date = ? LIMIT 1""",
+        (user_id, CLAIM_KEY, local_date),
+    ) as cur:
+        return (await cur.fetchone()) is not None
+
+
 async def claim_scheduled_brief(
     *, user_id: str, panel_id: str | None, pending_id: str | None,
 ) -> tuple[str, str | None]:
     """The 07:30 path's side of the shared claim: ``(verdict, claim_id)``.
 
-    ``verdict`` is ``speak`` (claim taken, or flag off), ``already_spoken``
-    (arrival has today's claim) or ``claim_error``. Flag off: ``("speak", None)``
-    with no DB access — the scheduled path is unchanged. With the flag on a DB
+    ``verdict`` is ``speak`` (claim taken, or flags off), ``already_spoken``
+    (arrival or the first-turn brief has today's claim) or ``claim_error``. With
+    BOTH claim-sharing flags off (``ZOE_PROACTIVE_BRIEF_ON_ARRIVAL``,
+    ``ZOE_BRIEF_ON_FIRST_TURN``): ``("speak", None)`` with no DB access — the
+    scheduled path is unchanged. With either flag on a DB
     error FAILS CLOSED: an unclaimed full brief could be spoken again by arrival,
     so the caller must not queue it (the push/text delivery is unaffected).
     """
-    if not arrival_enabled():
+    from brief_first_turn import brief_on_first_turn_enabled
+
+    if not (arrival_enabled() or brief_on_first_turn_enabled()):
         return "speak", None
     try:
         async with _get_compat_db() as db:

@@ -88,9 +88,9 @@ both default off, and with either off nothing is read or queued.
   (`arrival.claim_scheduled_brief`). A lost claim logs `outcome=already_spoken`. A claim
   DB error fails closed (`outcome=claim_error`): the push is still sent, but the full brief
   is not spoken. So the
-  full brief is spoken once whichever path, panel or worker gets there first. With the
-  flag off, the 07:30 path is unchanged and takes no claim. A failed speak is not
-  retried.
+  full brief is spoken once whichever path, panel or worker gets there first. With both
+  this flag and `ZOE_BRIEF_ON_FIRST_TURN` off, the 07:30 path is unchanged and takes no
+  claim. A failed speak is not retried.
 - **Log:** `PROACTIVE_SPOKEN trigger=morning_checkin_arrival user= panel= outcome=
   daemon_queue= tier=owner missed=absent|guest_teaser|expired`.
 - **Response signal (for B2.2):** the announcement id is linked to the claim in the
@@ -103,6 +103,42 @@ both default off, and with either off nothing is read or queued.
   - `unknown`: no announcement is linked. This is never `undelivered`.
 
   Each is logged as `PROACTIVE_RESPONSE`.
+
+## Brief on the first turn of the day (flag-dark)
+
+No unprompted spoken brief: `brief_first_turn.py` folds the day's context into the
+member's first brain turn of the morning, so Zoe mentions it the way a human assistant
+would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
+
+- **Where:** both brain lanes call it. The Flue seam
+  (`zoe_flue_client.run_flue_brain_streaming`) appends a `[Today]` … `[END Today]`
+  block after the user's words, where the continuity block rides. The core seam folds
+  the same block in as a delimited context block just before `[The user just said]`
+  (`_CONTEXT_BLOCKS`, mirrored in zoe-core `memory.ts`), so superseded copies elide.
+  Tier-0 and keyword intents never reach a brain and never count.
+- **Only if all hold:** real member (`user_filters.is_synthetic_user`); local time in
+  `ZOE_BRIEF_WINDOW_START`–`ZOE_BRIEF_WINDOW_END` (default `05:00`–`12:00`,
+  `ZOE_TIMEZONE`); not a continuity (emotional statement) turn; today's
+  `morning_brief_full` claim is not taken; the day context is not empty.
+- **Day context:** `morning_checkin._build_morning_context(..., include_board=False)`
+  (the same gatherer as the 07:30 brief). Items are decided in code: today's events
+  that are not over, open loops, and at most one recent emotional moment. The portrait
+  and the engineering board are never items. Empty means nothing changes and no claim.
+  The gathered context is cached in-process for 5 minutes.
+- **Shape (`turn_shape`, phrase-gated):** a greeting or open turn ("morning", "hey zoe,
+  what's up", "let's talk") gets the full list with a "mention it naturally, once"
+  instruction. Any other turn gets one line, and only for an event starting within 2 h
+  or an overdue loop. Otherwise nothing is injected and the claim stays free for the
+  next open turn.
+- **Claim:** the SAME `proactive_responses` row as the 07:30 and arrival paths
+  (`trigger_type = brief_first_turn`), taken only after the lane reports a produced reply
+  (Flue: the turn's `ok` verdict; core: text streamed without error). A failed turn does
+  not burn the day's brief. While this flag is on, the 07:30 spoken path also takes the
+  claim (`arrival.claim_scheduled_brief`), so re-enabling it never double-delivers.
+  Two concurrent first turns can both see the block; only one claim lands.
+- **Log:** `BRIEF_FIRST_TURN user= items= shape=greeting|command injected=0|1 claimed=0|1`,
+  one line per decision on a non-empty day.
+- **Pinned by:** `services/zoe-data/tests/test_brief_first_turn.py`.
 
 ## Probe chat rows are purged nightly
 

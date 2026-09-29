@@ -1247,10 +1247,22 @@ async def run_flue_brain_streaming(
     """Streaming brain turn through the Flue sidecar — see
     ``_run_flue_brain_streaming_turn`` for the contract.
 
-    This wrapper only adds ZOE_SEAM_CONTINUITY_DEBUG's reply log (the first 200
-    reply chars, harness-minted ids only — ``_continuity_debug_uid``); for every
-    other turn it is a pass-through."""
-    turn = _run_flue_brain_streaming_turn(message, session_id, user_id, **kwargs)
+    This wrapper adds ZOE_SEAM_CONTINUITY_DEBUG's reply log (the first 200
+    reply chars, harness-minted ids only — ``_continuity_debug_uid``) and the
+    first-turn day brief (``brief_first_turn``, ZOE_BRIEF_ON_FIRST_TURN, default
+    OFF): the ``[Today]`` block rides after the user's words like the continuity
+    block, and today's shared claim is taken only once the turn's own verdict is
+    ``ok`` — a fallback/failed turn never burns the day's brief."""
+    import brief_first_turn
+
+    brief = await brief_first_turn.prepare(message, user_id)
+    sink = kwargs.pop("outcome_sink", None)
+    if sink is None:
+        sink = {}
+    turn = _run_flue_brain_streaming_turn(
+        message, session_id, user_id, outcome_sink=sink,
+        day_brief_block=brief.block if brief else "", **kwargs,
+    )
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
     try:
@@ -1258,6 +1270,8 @@ async def run_flue_brain_streaming(
             if debug and not delta.startswith(("__TOOL__:", "__THINKING__:")):
                 reply.append(delta)
             yield delta
+        if brief is not None:
+            await brief_first_turn.settle(brief, produced=sink.get("outcome") == FLUE_OUTCOME_OK)
     finally:
         # Close the inner turn deterministically when the consumer stops early
         # (barge-in / cancellation) — exactly as if it had been iterated directly.
@@ -1356,6 +1370,11 @@ async def _run_flue_brain_streaming_turn(
     brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     if continuity_block:
         brain_message = f"{brain_message}\n{continuity_block}"
+    # First-turn day brief (brief_first_turn, default OFF): same position as the
+    # continuity block — after the user's words, inside the latest user message.
+    day_block = str(kwargs.get("day_brief_block") or "")
+    if day_block:
+        brain_message = f"{brain_message}\n{day_block}"
     outbound_message = _wrap_message_with_identity(brain_message, uid)
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.
