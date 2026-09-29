@@ -94,10 +94,14 @@ import {
 import {
   contextWindowTokens,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
+  estimateMessageTokens,
+  estimateTextTokens,
+  estimateToolTokens,
   replyReserveTokens,
   windowContextToBudget,
 } from '../context-window.ts';
-import { turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
+import { elideStaleBlocks, elideStaleBlocksEnabled } from '../context-blocks.ts';
+import { cachedUserModelSuffix, turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -214,14 +218,55 @@ export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   // comes off first. See src/speculative-turn.ts.
   const unwrapped = stripReplayEnvelope(stripSpeculativeEnvelope(context.messages));
   const clean = { ...context, messages: stripIdentityEnvelope(unwrapped) };
+  // ZOE_BRAIN_ELIDE_STALE_BLOCKS (src/context-blocks.ts): older user messages lose
+  // their injected blocks before windowing. Disclosure below still reads `clean`,
+  // so the session-sticky tool block never retracts when a block is elided.
+  const elided = elideStaleBlocksEnabled() ? elideStaleBlocks(clean.messages) : clean.messages;
+  const sent = elided === clean.messages ? clean : { ...clean, messages: elided };
   // The user-model block (src/user-model.ts) joins the system prompt BEFORE
   // windowing, so the history budget is charged for it. '' → unchanged.
-  const windowed = windowContextToBudget(withUserModelBlock(clean, userModelSuffix));
+  const windowed = windowContextToBudget(withUserModelBlock(sent, userModelSuffix));
   const safe = stripCodingBuiltins(windowed);
   const disclosed = progressiveToolsEnabled()
     ? discloseTools(safe, clean.messages)
     : safe;
   return applyCap(disclosed);
+}
+
+/** Estimated tokens (chars/4, as windowing) per section of one model call's prompt. */
+export interface PromptSections {
+  system: number;
+  tools: number;
+  /** messages before the newest user message, as sent */
+  history: number;
+  /** the newest user message + this turn's tool rounds */
+  tail: number;
+  /** injected blocks in older stored user messages (removed when `elided` is 1) */
+  stale: number;
+  elided: 0 | 1;
+}
+
+/**
+ * Accounting only: the section sizes of the request `context` (a `turn_request`,
+ * i.e. pre-policy) becomes after `applyPolicies`. The user-model suffix is read
+ * from the cache rather than the turn binding, so it is an estimate like the rest.
+ */
+export function promptSections(context: Context): PromptSections {
+  const unwrapped = stripReplayEnvelope(stripSpeculativeEnvelope(context.messages));
+  const uid = forwardedIdentityFromMessages(unwrapped) || (process.env.ZOE_BRAIN_USER_ID ?? '');
+  const sent = applyPolicies(context, cachedUserModelSuffix(uid.trim()));
+  const tokens = (ms: Message[]) => ms.reduce((n, m) => n + estimateMessageTokens(m), 0);
+  let last = sent.messages.length;
+  while (last > 0 && sent.messages[last - 1].role !== 'user') last -= 1;
+  const stored = stripIdentityEnvelope(unwrapped);
+  return {
+    system: estimateTextTokens(sent.systemPrompt ?? ''),
+    tools: estimateToolTokens(sent.tools),
+    history: tokens(sent.messages.slice(0, Math.max(0, last - 1))),
+    tail: tokens(sent.messages.slice(Math.max(0, last - 1))),
+    stale: tokens(stored) - tokens(elideStaleBlocks(stored)),
+    elided: elideStaleBlocksEnabled() ? 1 : 0,
+  };
 }
 
 /**

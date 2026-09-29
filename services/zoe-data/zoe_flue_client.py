@@ -528,6 +528,17 @@ _RECALL_BLOCK_OPEN = (
     "use them to answer; do not mention this block]"
 )
 _RECALL_BLOCK_CLOSE = "[END MEMORY CONTEXT]"
+_OFFER_BLOCK_OPEN = "[PENDING CONTACT OFFER — do not mention this block]"
+_OFFER_BLOCK_CLOSE = "[END PENDING CONTACT OFFER]"
+# Every block this seam folds into the user message, as (open-line prefix, close
+# line). The sidecar elides them from all but the newest user message under
+# ZOE_BRAIN_ELIDE_STALE_BLOCKS; pinned equal to FLUE_CONTEXT_BLOCKS in
+# labs/flue-zoe-brain-2x/src/context-blocks.ts. "[Today" is #1781's dated label.
+_FLUE_CONTEXT_BLOCKS = (
+    ("[MEMORY CONTEXT", "[END MEMORY CONTEXT]"),
+    ("[PENDING CONTACT OFFER", "[END PENDING CONTACT OFFER]"),
+    ("[Today", "[END Today]"),
+)
 _RECALL_MAX_BULLETS = 12
 _RECALL_MAX_CHARS = 1600
 
@@ -586,11 +597,7 @@ async def _pending_offer_block(user_id: str) -> str:
         lines.append(f'- After answering, ask the user exactly: "{q}"')
     if not lines:
         return ""
-    return (
-        "[PENDING CONTACT OFFER — do not mention this block]\n"
-        + "\n".join(lines)
-        + "\n[END PENDING CONTACT OFFER]"
-    )
+    return f"{_OFFER_BLOCK_OPEN}\n" + "\n".join(lines) + f"\n{_OFFER_BLOCK_CLOSE}"
 
 
 def _recall_inject_enabled() -> bool:
@@ -991,6 +998,7 @@ def _log_prompt_cache(session_id: str, terminal: dict) -> None:
     per token of extra prefill). Pair with the same session's ``VOICE TIMING``
     line. Absent field (older sidecar) → nothing logged. Never raises.
     """
+    _log_context_budget(session_id, terminal)
     try:
         rounds = terminal.get("prompt_cache")
         if not isinstance(rounds, list) or not rounds:
@@ -1012,6 +1020,22 @@ def _log_prompt_cache(session_id: str, terminal: dict) -> None:
             session_id, len(pairs), first_prompt, first_cache,
             sum(p for p, _ in pairs), ",".join(f"{p}/{c}" for p, c in pairs),
         )
+    except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+        pass
+
+
+def _log_context_budget(session_id: str, terminal: dict) -> None:
+    """One ``FLUE_CONTEXT_BUDGET`` line from the terminal's ``context_budget``:
+    the sidecar's chars/4 estimate of the first model call's prompt sections
+    (system / tools / history / tail) plus ``stale`` — injected-block tokens in
+    older stored user messages — and ``elided`` (1 = ZOE_BRAIN_ELIDE_STALE_BLOCKS
+    removed them). Absent (older sidecar) → nothing. Never raises."""
+    try:
+        b = terminal.get("context_budget")
+        if isinstance(b, dict):
+            keys = ("system", "tools", "history", "tail", "stale", "elided")
+            logger.info("FLUE_CONTEXT_BUDGET session=%s " + " ".join(f"{k}=%d" for k in keys),
+                        session_id, *(int(b.get(k) or 0) for k in keys))
     except Exception:  # noqa: BLE001 - instrumentation must never break a turn
         pass
 
