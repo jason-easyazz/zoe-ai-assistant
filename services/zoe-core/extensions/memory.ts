@@ -202,6 +202,9 @@ export const RECALL_BLOCK_CLOSE = "[END What you remember]";
 // The first-turn day brief (zoe-data brief_first_turn.py, ZOE_BRIEF_ON_FIRST_TURN).
 export const TODAY_BLOCK_OPEN = "[Today]";
 export const TODAY_BLOCK_CLOSE = "[END Today]";
+// The proactivity selector's one raise (zoe-data proactive/selector.py, ZOE_PROACTIVE_SELECTOR).
+export const RAISE_BLOCK_OPEN = "[RAISE]";
+export const RAISE_BLOCK_CLOSE = "[END RAISE]";
 
 /**
  * Every delimited block the seam folds into a user message, in composition order.
@@ -217,6 +220,7 @@ export const CONTEXT_BLOCKS: readonly (readonly [string, string])[] = [
   [MEMORY_BLOCK_OPEN, MEMORY_BLOCK_CLOSE],
   [HISTORY_MARKER, HISTORY_CLOSE],
   [TODAY_BLOCK_OPEN, TODAY_BLOCK_CLOSE],
+  [RAISE_BLOCK_OPEN, RAISE_BLOCK_CLOSE],
 ];
 
 // ── Delimiter-collision guard (mirrors `_neutralize_markers` in zoe_core_client) ─

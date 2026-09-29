@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Synthetic users, proactive recipients and kiosk presence (2026-09-27)
-description: Who the nightly memory passes and the proactive triggers treat as a real user — the is_synthetic_user rule and its allowlist flag, the household recipient rule that replaced "created a chat session in 7 days", guest-owned kiosk presence, the flag-dark brief-on-arrival, the nightly purge of probe chat sessions, and why the spoken morning brief was silent from 08-16.
+description: Who the nightly memory passes and the proactive triggers treat as a real user — the is_synthetic_user rule and its allowlist flag, the household recipient rule that replaced "created a chat session in 7 days", guest-owned kiosk presence, the flag-dark brief-on-arrival, the flag-dark proactivity selector, the nightly purge of probe chat sessions, and why the spoken morning brief was silent from 08-16.
 tags: [memory, dreaming, proactive, morning-brief, brief-on-arrival, presence, test-data, zoe-data]
 timestamp: 2026-09-27T12:00:00Z
 ---
@@ -181,6 +181,46 @@ would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
 - **Log:** `BRIEF_FIRST_TURN user= items= shape=greeting|command injected=0|1 claimed=0|1`,
   one line per decision on a non-empty day.
 - **Pinned by:** `services/zoe-data/tests/test_brief_first_turn.py`.
+
+## Proactivity selector (flag-dark)
+
+Research gap #5 ([context audit](../research/zoe-context-audit-2026-09-29.md)): precompute
+"things worth raising" nightly, surface at most one per conversation. `ZOE_PROACTIVE_SELECTOR=1`
+enables both halves (default off, read per call; off = no I/O). Code: `proactive/selector.py`.
+
+- **Nightly (dreaming phase 1.6, after open-loop extraction):** per real member, rank
+  unresolved `open_loops` whose follow-up is due within 48 h (or undated), recent emotional
+  rows (the continuity recency read, 72 h, `is_emotional_memory` + `fact_has_topic`, minus
+  moments the `emotional_followup` push already spoke), and the member's events in the next
+  48 h. `salience = importance × recency × relevance`:
+  importance = `emotional_weight/5` (loops), `candidate_intensity` in [0.3, 1] default 0.6
+  (moments), 0.6 (events); recency = `0.5^(age_h/72)` (events 1.0); relevance = 1.0 due ≤24 h,
+  0.6 ≤48 h, 0.7 undated (loops), 0.8 (moments), 1.0 ≤24 h / 0.7 ≤48 h (events). Drop < 0.1,
+  one per topic (content-token containment), cap 5. No model call. Upserted into
+  `proactive_candidates` (migration 0033) so cooldown/count survive the recompute; dropped
+  rows are expired, deleted once out of cooldown. Log `PROACTIVE_SELECT user= candidates= kept=`.
+- **Runtime (both lanes, `prepare` before the turn, `settle` in the stream `finally`):** a
+  turn qualifies when `brief_first_turn.turn_shape` is `greeting` (any candidate with
+  `on_open`), or it is not a deterministic intent (`intent_router.detect_intent`: commands,
+  acks, meta — never) and one of a candidate's `cue_words` (its concrete anchors) is in the
+  user's words. Highest salience wins, skipping expired rows, rows in cooldown (3 days) and
+  rows raised twice. Never: with the `[Today]` brief on the same turn (the brief wins, logged
+  `reason=brief`), on a continuity turn, a second time in the same session
+  (`last_surfaced_session`, durable), or for a synthetic id. Flue appends
+  `[RAISE — once, naturally, only if it fits; otherwise ignore]` … `[END RAISE]` after the
+  user's words (and defers a pending contact offer that turn, `SEAM_OFFER … reason=raise`;
+  the offer ager skips it); core folds `[RAISE]` before `[The user just said]`. Both pairs are
+  in the elide tables. The candidate is marked surfaced only once reply text went out. Log
+  `PROACTIVE_RAISE user= kind= shape=greeting|cue injected=0|1 settled=0|1`.
+- **Harness exception:** a harness-minted `demo_<tag>_<hex>` id may hold candidates, but only
+  through `POST /api/proactive/selector/run-synthetic/{id}` (internal token, the
+  `forget-synthetic` guards) — the Samantha bar's S5 hook. The nightly pass never sees one.
+- **Open-loop hygiene (always on):** `_extract_open_loops` drops meta user turns before the
+  prompt (wake-only, conversation opener/ender, `looks_like_correction`, any deterministic
+  intent except memory/journal/note/people writes) and discards loops with no concrete anchor
+  (`loop_is_concrete`: a relation or mid-sentence name, an event/place/role noun, a time
+  phrase). Stored anchor-less loops are marked `resolved = TRUE` with `resolved_at` — the
+  table has no separate "discarded" state. Log adds `discarded_meta=` and `skipped_turns=`.
 
 ## Probe chat rows are purged nightly
 

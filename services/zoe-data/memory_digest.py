@@ -1757,6 +1757,85 @@ def _bounded_int(value, lo: int, hi: int, default: int) -> int:
         return default
 
 
+# Concrete-anchor rule (owner review of the first real extraction, 2026-09-30:
+# junk loops were Zoe's own mechanics — a "let's talk" opener read as "wants to
+# talk continuously", a correction read as "a problem that needs fixing" — vague,
+# with no entity). A loop must name SOMETHING: a relation (memory_gate._EVT_REL)
+# or a mid-sentence capitalised name (person_extractor_llm's stoplist), an
+# event/appointment noun (intent_router.EVENT_CATEGORY_HINTS + the gaps below),
+# a place, or a time expression (memory_gate._EVT_TIME).
+_LOOP_ANCHOR_NOUNS = frozenset({
+    # events, appointments, errands with a date
+    "appointment", "meeting", "exam", "results", "scan", "surgery", "operation",
+    "trip", "travel", "travelling", "traveling", "flight", "holiday", "visit", "visiting",
+    "wedding", "funeral", "birthday", "party", "deadline", "moving", "course",
+    "passport", "visa", "licence", "license", "tax", "bill", "invoice", "rent", "quote",
+    # people by role (relations come from memory_gate)
+    "plumber", "builder", "electrician", "mechanic", "landlord", "lawyer", "vet",
+    "teacher", "coach", "manager", "client",
+    # places
+    "work", "job", "home", "house", "uni", "university", "airport", "gym", "car",
+    "bedroom", "bathroom", "kitchen", "garden", "garage", "shed",
+})
+_LOOP_NAME_STOP = frozenset({"User", "Users", "Zoe"})
+
+
+def loop_anchors(text: str) -> set[str]:
+    """Lowercased anchor words of a loop/moment text (names, relations, event
+    nouns, places) — also the cue words a later turn can match. No time words."""
+    from intent_router import EVENT_CATEGORY_HINTS
+    from memory_gate import _EVT_REL
+    from person_extractor_llm import _CAP_STOP, _CAP_TOKEN
+
+    raw = text or ""
+    nouns = _LOOP_ANCHOR_NOUNS.union(*EVENT_CATEGORY_HINTS.values())
+    found = {t for t in re.findall(r"[a-z0-9:'-]+", raw.lower())
+             if t in nouns or t.rstrip("s") in nouns}
+    found |= {m.lower() for m in re.findall(rf"\b(?:{_EVT_REL})\b", raw, re.IGNORECASE)}
+    for sentence in _FACT_SENTENCE_SPLIT_RE.split(raw):
+        # Position rule on top of the stoplist: the LLM writes loops, so a
+        # sentence-initial capital ("Expressed…", "Feeling…") is never a name.
+        found |= {m.group().lower() for m in _CAP_TOKEN.finditer(sentence)
+                  if m.start() > 0 and m.group() not in _CAP_STOP | _LOOP_NAME_STOP}
+    return found
+
+
+def loop_is_concrete(text: str) -> bool:
+    """True when a loop names a person, event, place or time (see above)."""
+    from memory_gate import _EVT_TIME
+
+    return bool(loop_anchors(text) or re.search(rf"\b{_EVT_TIME}\b", text or "", re.IGNORECASE))
+
+
+# Intents that carry what the user SHARED stay loop input; every other
+# deterministic intent is a command Zoe handled on the spot, a greeting/ack, or
+# a meta turn about Zoe herself (user_issue_report, memory_forget_*, lets_talk).
+_LOOP_CONTENT_INTENTS = frozenset({
+    "memory_remember", "journal_create", "note_create", "people_create", "people_introduce",
+})
+
+
+def loop_turn_is_meta(text: str) -> bool:
+    """True for a user turn about Zoe's mechanics, not the user's life: a wake-only
+    line (voice_presence), a conversation opener/ender (conversation_opener), a
+    correction (memory_quality.looks_like_correction), or a deterministic
+    command/meta intent (intent_router.detect_intent). Unknown → kept."""
+    try:
+        from conversation_opener import is_conversation_ender, is_conversation_opener
+        from intent_router import detect_intent
+        from memory_quality import looks_like_correction
+        from voice_presence import is_wake_text
+
+        if (is_wake_text(text) or is_conversation_opener(text) or is_conversation_ender(text)
+                or looks_like_correction(text)):
+            return True
+        intent = detect_intent(text, log_miss=False)
+        return intent is not None and intent.name not in _LOOP_CONTENT_INTENTS
+    except Exception as exc:  # noqa: BLE001 — a classifier failure keeps the turn
+        logger.debug("open_loops: meta-turn check failed: %s", type(exc).__name__)
+        return False
+
+
 def _loop_is_dup(tokens: set[str], seen: list[set[str]]) -> bool:
     """Dedupe key: the loop's content tokens. A paraphrase of an unresolved loop
     (or of one accepted earlier this run) is the same loop once containment
@@ -1780,14 +1859,15 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     from db_compat import get_compat_db as _get_compat_db
     created_at_valid_sql = CREATED_AT_VALID_TIMESTAMP_SQL.replace("created_at", "cm.created_at")
     result = {"user_id": user_id, "extracted": 0, "inserted": 0, "skipped_dup": 0,
-              "expired": 0, "status": "ok"}
+              "expired": 0, "discarded_meta": 0, "skipped_turns": 0, "status": "ok"}
 
     def _done(status: str) -> dict:
         result["status"] = status
         _loops_log.info(
-            "OPEN_LOOPS user=%s extracted=%d inserted=%d skipped_dup=%d expired=%d status=%s",
+            "OPEN_LOOPS user=%s extracted=%d inserted=%d skipped_dup=%d expired=%d "
+            "discarded_meta=%d skipped_turns=%d status=%s",
             user_id, result["extracted"], result["inserted"], result["skipped_dup"],
-            result["expired"], status,
+            result["expired"], result["discarded_meta"], result["skipped_turns"], status,
         )
         return result
 
@@ -1803,6 +1883,19 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 (user_id,),
             )
             result["expired"] = int(getattr(expired, "rowcount", 0) or 0)
+            # Junk already stored (no concrete anchor — loop_is_concrete) is
+            # discarded the only way the table allows: resolved, with resolved_at.
+            async with _db.execute(
+                "SELECT id, loop_text FROM open_loops WHERE user_id = ? AND resolved IS NOT TRUE",
+                (user_id,),
+            ) as cur:
+                junk = [r[0] for r in await cur.fetchall() if not loop_is_concrete(str(r[1] or ""))]
+            for loop_id in junk:
+                await _db.execute(
+                    "UPDATE open_loops SET resolved = TRUE, resolved_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ?", (loop_id,),
+                )
+            result["discarded_meta"] = len(junk)
             async with _db.execute(
                 f"""SELECT cm.content FROM chat_messages cm
                    JOIN chat_sessions cs ON cm.session_id = cs.id
@@ -1824,7 +1917,11 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     lines: list[str] = []
     budget = _OPEN_LOOPS_TRANSCRIPT_CHARS
     for row in rows:
-        line = "User: " + " ".join(str(row[0] or "").split())
+        text = " ".join(str(row[0] or "").split())
+        if text and loop_turn_is_meta(text):
+            result["skipped_turns"] += 1
+            continue
+        line = "User: " + text
         if len(line) <= 6 or len(line) > budget:
             continue
         lines.append(line)
@@ -1865,6 +1962,9 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         text, reject = scrub_pii(" ".join(str(item.get("loop_text") or "").split())[:300])
         hint, hint_reject = scrub_pii(" ".join(str(item.get("follow_up_hint") or "").split())[:200])
         if len(text) < 8 or reject:
+            continue
+        if not loop_is_concrete(text):
+            result["discarded_meta"] += 1
             continue
         candidates.append((
             text,
@@ -1946,6 +2046,17 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
     except Exception as exc:
         logger.warning("dreaming: open_loops extraction failed user=%s: %s", user_id, exc)
         result["open_loops"] = {"status": "error", "error": str(exc)}
+
+    # Phase 1.6: proactivity selector (ZOE_PROACTIVE_SELECTOR, default OFF — a
+    # no-op without I/O when off). Ranks tonight's loops/moments/events.
+    try:
+        from proactive.selector import select_for_user
+
+        selected = await select_for_user(user_id)
+        if selected is not None:
+            result["proactive_select"] = selected
+    except Exception as exc:
+        logger.warning("dreaming: proactive selector failed user=%s: %s", user_id, exc)
 
     if is_sunday:
         deep = await _deep_sleep_pass(user_id)
