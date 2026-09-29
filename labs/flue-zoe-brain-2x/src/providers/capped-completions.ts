@@ -97,6 +97,7 @@ import {
   replyReserveTokens,
   windowContextToBudget,
 } from '../context-window.ts';
+import { turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
 
 /** Provider id the sidecar registers; the agent binds to `zoe/local`. */
 export const ZOE_PROVIDER_ID = 'zoe';
@@ -190,6 +191,9 @@ export function applyCap(context: Context): Context {
  *      guarantees it regardless of ZOE_BRAIN_PROGRESSIVE_TOOLS;
  *   4. the iteration cap (past the cap, strip ALL tools so the turn must finish
  *      in plain text).
+ * Before step 1, `userModelSuffix` (the turn's always-present user-model block,
+ * src/user-model.ts; '' while zoe-data's ZOE_USER_MODEL_BLOCK is off) is
+ * appended to the system prompt, so windowing budgets for it.
  *
  * DISCLOSURE BASIS (fixed 2026-08-03): steps 2-3 derive the active ability
  * groups from the PRE-WINDOW message list, not the windowed one. Deriving them
@@ -200,7 +204,7 @@ export function applyCap(context: Context): Context {
  * windowing had quietly broken that. Passing the full basis restores it AND
  * makes the tool block a stable prompt prefix.
  */
-export function applyPolicies(context: Context): Context {
+export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   // Strip the control envelopes BEFORE any other policy so the model — and every
   // downstream transform — only ever sees the human-authored message text. The
   // replay marker rides AHEAD of the identity line on the wire (both parsers are
@@ -210,7 +214,9 @@ export function applyPolicies(context: Context): Context {
   // comes off first. See src/speculative-turn.ts.
   const unwrapped = stripReplayEnvelope(stripSpeculativeEnvelope(context.messages));
   const clean = { ...context, messages: stripIdentityEnvelope(unwrapped) };
-  const windowed = windowContextToBudget(clean);
+  // The user-model block (src/user-model.ts) joins the system prompt BEFORE
+  // windowing, so the history budget is charged for it. '' → unchanged.
+  const windowed = windowContextToBudget(withUserModelBlock(clean, userModelSuffix));
   const safe = stripCodingBuiltins(windowed);
   const disclosed = progressiveToolsEnabled()
     ? discloseTools(safe, clean.messages)
@@ -291,7 +297,7 @@ function cappedStream(
   bindIdentityForRound(context, options?.signal);
   return streamOpenAICompletions(
     model as Model<'openai-completions'>,
-    applyPolicies(context),
+    applyPolicies(context, turnUserModelSuffix(options?.signal)),
     withBrainTemperature(options),
   );
 }
@@ -304,7 +310,7 @@ function cappedStreamSimple(
   bindIdentityForRound(context, options?.signal);
   return streamSimpleOpenAICompletions(
     model as Model<'openai-completions'>,
-    applyPolicies(context),
+    applyPolicies(context, turnUserModelSuffix(options?.signal)),
     withBrainTemperature(options),
   );
 }

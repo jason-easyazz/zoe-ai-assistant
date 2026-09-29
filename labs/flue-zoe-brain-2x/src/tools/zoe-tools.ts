@@ -167,7 +167,8 @@ function allowWrites(): boolean {
 // tool's own ToolContext.signal, the same object the provider bound against. Read
 // fresh each call so a single process is never pinned to one identity. BOTH
 // sources are trusted server-side; the model can never supply this id.
-function actingUserId(signal?: AbortSignal): string {
+// Exported so src/user-model.ts keys the user-model block on the SAME user.
+export function actingUserId(signal?: AbortSignal): string {
   const id = (currentUserId(signal) || process.env.ZOE_BRAIN_USER_ID || '').trim();
   // Fail closed on guest-style identities: zoe-data returns a *successful* empty
   // packet for them, which would otherwise look like "nothing stored" and hide an

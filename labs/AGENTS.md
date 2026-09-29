@@ -237,7 +237,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   (`src/speculative-turn.ts`, `test/speculative_turn.test.ts`; the prefix is
   pinned equal to `zoe_flue_client._SPECULATIVE_ENVELOPE_PREFIX` by zoe-data's
   `test_voice_speculation_write_deferral.py`).
-  Regression net (hand-run, not CI-wired): `npm test` — 27 `test/*.test.ts` files
+  Regression net (hand-run, not CI-wired): `npm test` — 28 `test/*.test.ts` files
   driven against an in-process mock OpenAI-compatible model, so no llama-server
   and no ports; `npm run typecheck`; `./smoke-built.sh` boots the BUILT server on
   a throwaway port + data dir. Security- and cap-critical tests each carry a

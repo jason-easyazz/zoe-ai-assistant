@@ -4395,6 +4395,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_USER_MODEL_BLOCK": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/user_portrait.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_USE_CORE_BRAIN": {
         "defaults": [
           "'true'"
