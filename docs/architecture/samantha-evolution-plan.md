@@ -695,6 +695,7 @@ actually consulted.
 ### 8.x Context manager vs training the brain on user data (researched 2026-09-29)
 
 Full report: [docs/research/samantha-context-engineering-2026-09-29.md](../research/samantha-context-engineering-2026-09-29.md).
+Code audit of Zoe against that gap list (file:function evidence, per-lane prompt order, first three PRs): [docs/research/zoe-context-audit-2026-09-29.md](../research/zoe-context-audit-2026-09-29.md).
 Verdict: **build the context manager; never train facts into the brain.** Every system that feels like it
 knows its user (ChatGPT memory, Claude memory tool, Gemini, Letta, Mem0, Zep, Honcho) does it by context
 assembly — a small always-present user-model block + retrieved episodes + a sleep-time/dreaming rewrite —

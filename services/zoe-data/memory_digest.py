@@ -525,6 +525,9 @@ async def run_turn_digest(
         # still say how they felt.
         from memory_gate import extract_affect
         turn_affect, affect_sentence = extract_affect(user_message)
+        # Verbatim evidence beside each distilled fact; MemoryService scrubs
+        # and caps it at the write boundary.
+        turn_excerpt = " ".join(user_message.split())
 
         for idx, item in enumerate(facts):
             fact = (item.get("fact") or "").strip()
@@ -579,6 +582,7 @@ async def run_turn_digest(
                         # a neutral update clears the old one ("" overrides the
                         # value the edit would otherwise carry forward).
                         metadata={"affect": fact_affect},
+                        source_excerpt=turn_excerpt,
                     )
                     if new_ref is not None:
                         result["new"] += 1
@@ -599,6 +603,7 @@ async def run_turn_digest(
                     status="approved",
                     tags=["turn_digest", "auto_extract"],
                     metadata={"affect": fact_affect} if fact_affect else None,
+                    source_excerpt=turn_excerpt,
                 )
                 if ref is not None:
                     result["new"] += 1
@@ -1695,91 +1700,213 @@ async def _synthesis_pass(user_id: str) -> dict:
     return summary
 
 
-async def _extract_open_loops(user_id: str, db=None) -> dict:
-    """Extract open loops from recent messages and store in open_loops table.
+# ── Open loops (nightly, dreaming phase 1.5) ─────────────────────────────────
+#
+# Consumers: proactive/triggers/morning_checkin.py (morning brief) and the
+# legacy zoe_agent [OPEN LOOPS] block. Nothing ever marks a loop resolved, so
+# the extractor itself dedupes against the user's unresolved loops and ages
+# out stale ones — otherwise the 48h window re-inserts the same loop every
+# night and the brief (oldest first) repeats it forever.
+_OPEN_LOOPS_MAX_PER_RUN = 5
+_OPEN_LOOPS_TRANSCRIPT_CHARS = 3000   # same budget as the nightly fact extractor
+_OPEN_LOOPS_DUP_OVERLAP = 0.6         # content-token containment ⇒ same loop
+_OPEN_LOOPS_TTL_DAYS = 14             # unresolved loops older than this age out
+_OPEN_LOOPS_MAX_FOLLOW_UP_DAYS = 14
+# Counts-only log line; its own logger so the standalone dreaming runner can
+# surface it without enabling memory_digest's INFO lines (those carry fact text).
+_loops_log = logging.getLogger("memory_digest.open_loops")
 
-    An open loop is an unresolved thread: a worry, a plan, something the user
-    mentioned they're waiting on, or something emotionally significant that
-    deserves a follow-up. Runs as part of the nightly dreaming cycle.
+_OPEN_LOOPS_PROMPT = """Identify open loops in these messages from the user — unresolved threads, worries, plans, things they are waiting on, or emotionally significant mentions that deserve a gentle follow-up later. Skip anything already resolved, plain questions, and requests Zoe handled on the spot (timers, reminders, music, lookups).
+
+Messages (oldest first):
+{messages}
+
+Return ONLY a JSON array (at most 5 items, [] if none). Each item:
+{{"loop_text": "one sentence about the user's open thread",
+  "follow_up_hint": "what Zoe could gently ask or say later",
+  "emotional_weight": 1-5,
+  "follow_up_in_days": 0-14}}"""
+
+
+def _parse_json_array(raw: str) -> list | None:
+    """Parse the model's JSON array; None when there is no parseable array.
+
+    Tolerates what the local 4B wraps around JSON: ```json fences, preamble,
+    trailing prose (even prose containing brackets), and a one-key object
+    wrapper ({"loops": [...]}).
+    """
+    text = re.sub(r"```(?:json)?", "", raw or "", flags=re.IGNORECASE).strip()
+    decoder = json.JSONDecoder()
+    for start in (m.start() for m in re.finditer(r"[\[{]", text)):
+        try:
+            value, _end = decoder.raw_decode(text, start)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            lists = [v for v in value.values() if isinstance(v, list)]
+            return lists[0] if len(lists) == 1 else None
+        if isinstance(value, list):
+            return value
+    return None
+
+
+def _bounded_int(value, lo: int, hi: int, default: int) -> int:
+    try:
+        return max(lo, min(hi, int(float(str(value).strip()))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _loop_is_dup(tokens: set[str], seen: list[set[str]]) -> bool:
+    """Dedupe key: the loop's content tokens. A paraphrase of an unresolved loop
+    (or of one accepted earlier this run) is the same loop once containment
+    overlap reaches _OPEN_LOOPS_DUP_OVERLAP."""
+    for other in seen:
+        if tokens and other and len(tokens & other) / min(len(tokens), len(other)) >= _OPEN_LOOPS_DUP_OVERLAP:
+            return True
+    return False
+
+
+async def _extract_open_loops(user_id: str, db=None) -> dict:
+    """Extract open loops from the user's last 48h of turns into ``open_loops``.
+
+    An open loop is an unresolved thread: a worry, a plan, something the user is
+    waiting on, or something emotionally significant that deserves a follow-up.
+    Calls the local brain the same way as the rest of this module (one non-
+    streaming ``/v1/chat/completions`` POST; llama-server has one slot, so a
+    busy brain queues the request and the timeout bounds the wait). Never
+    raises; ``status`` says which stage stopped the pass.
     """
     from db_compat import get_compat_db as _get_compat_db
-    created_at_valid_sql = CREATED_AT_VALID_TIMESTAMP_SQL.replace("created_at", "m.created_at")
+    created_at_valid_sql = CREATED_AT_VALID_TIMESTAMP_SQL.replace("created_at", "cm.created_at")
+    result = {"user_id": user_id, "extracted": 0, "inserted": 0, "skipped_dup": 0,
+              "expired": 0, "status": "ok"}
 
-    # Load last 48h of messages for this user
+    def _done(status: str) -> dict:
+        result["status"] = status
+        _loops_log.info(
+            "OPEN_LOOPS user=%s extracted=%d inserted=%d skipped_dup=%d expired=%d status=%s",
+            user_id, result["extracted"], result["inserted"], result["skipped_dup"],
+            result["expired"], status,
+        )
+        return result
+
+    # Age out first, every run — a quiet user's stale loop must not keep leading
+    # the brief. Then load turns by the same owner rule as the user list
+    # (per-turn metadata owner, then session owner).
     try:
         async with _get_compat_db() as _db:
+            expired = await _db.execute(
+                f"""UPDATE open_loops SET resolved = TRUE, resolved_at = CURRENT_TIMESTAMP
+                   WHERE user_id = ? AND resolved IS NOT TRUE
+                     AND created_at < CURRENT_TIMESTAMP - INTERVAL '{_OPEN_LOOPS_TTL_DAYS} days'""",
+                (user_id,),
+            )
+            result["expired"] = int(getattr(expired, "rowcount", 0) or 0)
             async with _db.execute(
-                f"""SELECT m.content, m.role FROM chat_messages m
-                   JOIN chat_sessions s ON m.session_id = s.id
-                   WHERE s.user_id = ? AND m.role = 'user'
+                f"""SELECT cm.content FROM chat_messages cm
+                   JOIN chat_sessions cs ON cm.session_id = cs.id
+                   WHERE {_message_owner_expr()} = ? AND cm.role = 'user'
                      AND CASE
                            WHEN {created_at_valid_sql}
-                           THEN m.created_at::timestamptz
+                           THEN cm.created_at::timestamptz
                            ELSE NULL
                          END > CURRENT_TIMESTAMP - INTERVAL '2 days'
-                   ORDER BY m.created_at DESC LIMIT 50""",
+                   ORDER BY cm.created_at DESC LIMIT 50""",
                 (user_id,),
             ) as cur:
                 rows = await cur.fetchall()
     except Exception as exc:
         logger.warning("open_loops: message load failed user=%s: %s", user_id, exc)
-        return {"user_id": user_id, "extracted": 0}
+        return _done("load_error")
 
-    if not rows:
-        return {"user_id": user_id, "extracted": 0}
+    # Newest turns win the budget; the prompt reads oldest first.
+    lines: list[str] = []
+    budget = _OPEN_LOOPS_TRANSCRIPT_CHARS
+    for row in rows:
+        line = "User: " + " ".join(str(row[0] or "").split())
+        if len(line) <= 6 or len(line) > budget:
+            continue
+        lines.append(line)
+        budget -= len(line) + 1
+    if not lines:
+        return _done("no_messages")
+    lines.reverse()
 
-    messages_text = "\n".join(f"User: {r['content']}" for r in rows[:30])
-    prompt = f"""Identify open loops in these messages — unresolved threads, worries, plans, waiting situations, or emotionally significant mentions that deserve a follow-up.
-
-Messages:
-{messages_text}
-
-Return a JSON array (max 5 items) where each item has:
-- "loop_text": brief description of the open loop (1-2 sentences)
-- "follow_up_hint": what Zoe should ask/say when following up
-- "emotional_weight": 1 (low) to 5 (high)
-- "follow_up_after": ISO-8601 datetime (when to follow up, e.g. tomorrow or in 3 days)
-
-Only include genuine open loops, not resolved topics. Return [] if none found."""
-
+    payload = {
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+        "messages": [
+            {"role": "system", "content": "You extract open loops from conversations. Return ONLY a valid JSON array."},
+            {"role": "user", "content": _OPEN_LOOPS_PROMPT.format(messages="\n".join(lines))},
+        ],
+        "max_tokens": 500,
+        "temperature": 0.1,
+        "stream": False,
+    }
     try:
-        import json as _json
-        from zoe_agent import _llm_chat  # type: ignore[import]
-        response = await _llm_chat([
-            {"role": "system", "content": "You extract open loops from conversations. Return only valid JSON arrays."},
-            {"role": "user", "content": prompt},
-        ], max_tokens=500)
-        loops = _json.loads(response.strip())
-        if not isinstance(loops, list):
-            loops = []
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"] or ""
     except Exception as exc:
-        logger.warning("open_loops: LLM extraction failed user=%s: %s", user_id, exc)
-        return {"user_id": user_id, "extracted": 0}
+        logger.warning("open_loops: LLM call failed user=%s: %s: %s", user_id, type(exc).__name__, exc)
+        return _done("llm_error")
 
-    stored = 0
+    parsed = _parse_json_array(raw)
+    if parsed is None:
+        logger.warning("open_loops: no JSON array in LLM reply user=%s (len=%d)", user_id, len(raw))
+        return _done("parse_error")
+
+    from memory_service import scrub_pii  # type: ignore[import]
+    candidates: list[tuple[str, str, int, int]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        text, reject = scrub_pii(" ".join(str(item.get("loop_text") or "").split())[:300])
+        hint, hint_reject = scrub_pii(" ".join(str(item.get("follow_up_hint") or "").split())[:200])
+        if len(text) < 8 or reject:
+            continue
+        candidates.append((
+            text,
+            "" if hint_reject else hint,
+            _bounded_int(item.get("emotional_weight"), 1, 5, 1),
+            # The model has no clock, so it gives a relative delay; the timestamp
+            # is computed in SQL (the column is TIMESTAMP — a string bind fails).
+            _bounded_int(item.get("follow_up_in_days"), 0, _OPEN_LOOPS_MAX_FOLLOW_UP_DAYS, 1),
+        ))
+        if len(candidates) >= _OPEN_LOOPS_MAX_PER_RUN:
+            break
+    result["extracted"] = len(candidates)
+    if not candidates:
+        return _done("ok")
+
     try:
         async with _get_compat_db() as _db:
-            for loop in loops[:5]:
-                if not isinstance(loop, dict) or not loop.get("loop_text"):
+            async with _db.execute(
+                "SELECT loop_text FROM open_loops WHERE user_id = ? AND resolved IS NOT TRUE",
+                (user_id,),
+            ) as cur:
+                seen = [_content_tokens(r[0]) for r in await cur.fetchall()]
+            for text, hint, weight, days in candidates:
+                tokens = _content_tokens(text)
+                if _loop_is_dup(tokens, seen):
+                    result["skipped_dup"] += 1
                     continue
                 await _db.execute(
                     """INSERT INTO open_loops
                        (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (
-                        user_id,
-                        loop.get("loop_text", ""),
-                        loop.get("follow_up_hint", ""),
-                        loop.get("emotional_weight", 1),
-                        loop.get("follow_up_after"),
-                    ),
+                       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(days => ?::int))""",
+                    (user_id, text, hint, weight, days),
                 )
-                stored += 1
-            await _db.commit()
+                result["inserted"] += 1
+                seen.append(tokens)
     except Exception as exc:
-        logger.warning("open_loops: DB insert failed user=%s: %s", user_id, exc)
+        # Class + constraint only: a driver message can echo a bound value.
+        logger.warning("open_loops: DB write failed user=%s: %s constraint=%s", user_id,
+                       type(exc).__name__, getattr(exc, "constraint_name", "") or "-")
+        return _done("db_error")
 
-    return {"user_id": user_id, "extracted": stored}
+    return _done("ok")
 
 
 async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool = True) -> dict:

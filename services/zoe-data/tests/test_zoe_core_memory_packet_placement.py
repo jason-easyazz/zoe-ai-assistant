@@ -846,6 +846,7 @@ def test_every_block_is_delimited_on_both_sides_exactly_once():
         db_memory_context="- likes oat milk",
         portrait="Jason, lives in Geraldton",
         memory_packet=_PACKET,
+        day_brief="Mention it naturally.\n- Calendar: dentist at 09:30",
     )
     for open_marker, close_marker in zc._CONTEXT_BLOCKS:
         assert _delimiter_lines(composed, open_marker) == 1, f"{open_marker} is not opened once"

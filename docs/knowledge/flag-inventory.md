@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-479 flags; 477 not documented in `.env.example`.
+482 flags; 480 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -65,6 +65,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BRAIN_TOKEN` | `-` | no | NO | `scripts/perf/measure_tts_cadence.py`<br>`services/zoe-data/zoe_flue_client.py` |
 | `ZOE_BRAIN_UNIT` | `'llama-server.service'` | no | NO | `scripts/maintenance/router_selftrain.py`<br>`services/zoe-data/main.py` |
 | `ZOE_BRAIN_URL` | `-` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
+| `ZOE_BRIEF_ON_FIRST_TURN` | `''` | no | NO | `services/zoe-data/brief_first_turn.py` |
+| `ZOE_BRIEF_WINDOW_END` | `'12:00'` | no | NO | `services/zoe-data/brief_first_turn.py` |
+| `ZOE_BRIEF_WINDOW_START` | `'05:00'` | no | NO | `services/zoe-data/brief_first_turn.py` |
 | `ZOE_BUFFER_DELAY_S` | `'0.8'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_BUFFER_PHRASES` | `'1'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_CAP_A2A_DELEGATE` | `3000` | yes | NO | `services/zoe-data/zoe_agent.py` |

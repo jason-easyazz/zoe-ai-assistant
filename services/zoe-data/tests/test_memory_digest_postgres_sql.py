@@ -46,6 +46,12 @@ class _FakeCtx:
 class _AsyncCursor:
     def __init__(self, rows):
         self._rows = rows
+        self.rowcount = 0
+
+    def __await__(self):  # `await db.execute(...)` form (open-loop age-out UPDATE)
+        async def _self():
+            return self
+        return _self().__await__()
 
     async def __aenter__(self):
         return self
@@ -67,8 +73,8 @@ class _CompatDb:
     def execute(self, sql, params=()):
         self.sql.append(sql)
         self.params.append(params)
-        if self.has_malformed_prefix_timestamp:
-            assert "m.created_at ~ '^\\d{4}-\\d{2}-\\d{2}[ T]'" not in sql
+        if self.has_malformed_prefix_timestamp and "FROM chat_messages" in sql:
+            assert "cm.created_at ~ '^\\d{4}-\\d{2}-\\d{2}[ T]'" not in sql
             assert sql.count("$'") >= 1
         return _AsyncCursor(self.rows)
 
@@ -160,12 +166,16 @@ async def test_extract_open_loops_uses_temporal_cast_for_mixed_text_timestamps(m
     monkeypatch.setattr(db_compat, "get_compat_db", lambda: _CompatCtx(db))
 
     result = await memory_digest._extract_open_loops("user-1")
+    load_sql, load_params = next((q, p) for q, p in zip(db.sql, db.params) if "FROM chat_messages" in q)
 
-    assert result == {"user_id": "user-1", "extracted": 0}
-    assert "WHEN m.created_at ~ '^(" in db.sql[0]
-    assert "THEN m.created_at::timestamptz" in db.sql[0]
-    assert "END > CURRENT_TIMESTAMP - INTERVAL '2 days'" in db.sql[0]
-    assert "datetime('now', '-2 days')" not in db.sql[0]
+    assert (result["extracted"], result["inserted"], result["status"]) == (0, 0, "no_messages")
+    assert "WHEN cm.created_at ~ '^(" in load_sql
+    assert "THEN cm.created_at::timestamptz" in load_sql
+    assert "END > CURRENT_TIMESTAMP - INTERVAL '2 days'" in load_sql
+    assert "datetime('now', '-2 days')" not in load_sql
+    # Same owner rule as the dreaming user list (per-turn metadata owner first).
+    assert "substring(cm.metadata from" in load_sql
+    assert load_params == ("user-1",)
 
 
 @pytest.mark.asyncio
@@ -176,10 +186,11 @@ async def test_extract_open_loops_malformed_prefix_timestamp_does_not_reach_cast
     monkeypatch.setattr(db_compat, "get_compat_db", lambda: _CompatCtx(db))
 
     result = await memory_digest._extract_open_loops("user-1")
+    load_sql, load_params = next((q, p) for q, p in zip(db.sql, db.params) if "FROM chat_messages" in q)
 
-    assert result == {"user_id": "user-1", "extracted": 0}
-    assert "2026-13-45" not in db.sql[0]
-    assert "m.created_at::timestamptz" in db.sql[0]
+    assert (result["extracted"], result["status"]) == (0, "no_messages")
+    assert "2026-13-45" not in load_sql
+    assert "cm.created_at::timestamptz" in load_sql
 
 
 @pytest.mark.asyncio

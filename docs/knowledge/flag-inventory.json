@@ -491,6 +491,36 @@
         ],
         "typed_env": false
       },
+      "ZOE_BRIEF_ON_FIRST_TURN": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brief_first_turn.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRIEF_WINDOW_END": {
+        "defaults": [
+          "'12:00'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brief_first_turn.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRIEF_WINDOW_START": {
+        "defaults": [
+          "'05:00'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brief_first_turn.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BUFFER_DELAY_S": {
         "defaults": [
           "'0.8'"

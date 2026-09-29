@@ -512,7 +512,7 @@ class _FakeReconcileSvc(_FakeIngestSvc):
     async def search(self, query, *, user_id, limit=10, timeout_s=2.0):
         return [self._Hit(i, t) for i, t in self._existing][:limit]
 
-    async def review(self, mem_id, *, decision, edits=None, actor="", note=""):
+    async def review(self, mem_id, *, decision, edits=None, actor="", note="", source_excerpt=None):
         assert decision == "edit"
         self.reviews.append((mem_id, edits))
         return _Ref(f"new-{mem_id}")

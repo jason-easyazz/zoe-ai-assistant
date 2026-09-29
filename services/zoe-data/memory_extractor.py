@@ -897,6 +897,12 @@ async def extract_and_ingest(
     except Exception:
         is_storable_fact = lambda _t: (True, "")  # gate unavailable → degrade to plain store
 
+    # Verbatim evidence for every fact mined from this turn. The WHOLE message
+    # goes to the store, which scrubs before it cuts; the candidates' own
+    # ``source_excerpt`` is pre-cut, which could slice a card number below the
+    # scrubber's Luhn check.
+    turn_excerpt = " ".join((user_message or "").split())
+
     for idx, c in enumerate(candidates):
         # Write-quality gate (mem0-style): drop candidates that aren't shaped
         # like a storable personal fact before they reach the store. Conservative
@@ -933,6 +939,7 @@ async def extract_and_ingest(
                     edits=c.text,
                     actor=source,
                     note="conversational correction supersede (QA F2)",
+                    source_excerpt=turn_excerpt,
                 )
                 if new_ref is not None:
                     saved += 1
@@ -955,6 +962,7 @@ async def extract_and_ingest(
             tags=["conversation", "auto_extract"],
             entity_type=entity_type,
             entity_id=entity_id,
+            source_excerpt=turn_excerpt,
         )
         if ref is not None:
             saved += 1

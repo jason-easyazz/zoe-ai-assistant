@@ -295,21 +295,112 @@ async def claim_full_brief(
     return row["id"] if row else None
 
 
+async def brief_claimed(db, *, user_id: str, now: datetime) -> bool:
+    """True when today's shared claim (member, ``CLAIM_KEY``, household date) is taken.
+
+    Read-only. ``brief_first_turn`` checks it before gathering the day context,
+    so a brief already spoken by the 07:30 or arrival path is not repeated.
+    """
+    local_date = now.astimezone(_ZOE_TZ).date().isoformat()
+    async with db.execute(
+        """SELECT 1 FROM proactive_responses
+           WHERE user_id = ? AND claim_key = ? AND local_date = ? LIMIT 1""",
+        (user_id, CLAIM_KEY, local_date),
+    ) as cur:
+        return (await cur.fetchone()) is not None
+
+
+# A CLAIMED-but-unacknowledged 07:30 brief is still "in flight" this long past its
+# TTL: the daemon may start speaking just before its deadline, and the TTS fetch
+# (30 s timeout) plus up to 1200 chars of audio must finish before the ACK lands.
+_PLAY_ACK_GRACE_S = 180
+
+
+async def claim_holder(db, *, user_id: str, now: datetime) -> str | None:
+    """``trigger_type`` of the path holding today's shared claim, or None."""
+    local_date = now.astimezone(_ZOE_TZ).date().isoformat()
+    async with db.execute(
+        """SELECT trigger_type FROM proactive_responses
+           WHERE user_id = ? AND claim_key = ? AND local_date = ? LIMIT 1""",
+        (user_id, CLAIM_KEY, local_date),
+    ) as cur:
+        row = await cur.fetchone()
+    return str(row["trigger_type"] or "") if row else None
+
+
+async def scheduled_brief_delivery(db, *, user_id: str, now: datetime) -> str:
+    """Whether today's 07:30 full brief was HEARD, read-only: ``played`` /
+    ``in_flight`` / ``free``.
+
+    Only the daemon's playback ACK (``played_at``, ``voice_announce.mark_played``)
+    counts as heard. ``delivered_at`` is set when the daemon CLAIMS the row —
+    before TTS and playback — so a claim whose playback never completes is not
+    delivery. ``in_flight`` is BOUNDED: a queued row until its ``expires_at``
+    (``ZOE_ANNOUNCE_TTL_S``), a claimed row until ``expires_at`` +
+    ``_PLAY_ACK_GRACE_S``; after that it is ``free`` and the conversation gets
+    the brief. A known guest-safe teaser never counts either way.
+    """
+    day_start = _day_start_utc(now.astimezone(_ZOE_TZ))
+    brief = await _todays_brief(db, user_id, day_start)
+    teasers = brief["teasers"] if brief else set()
+    async with db.execute(
+        """SELECT message, delivered_at, played_at, expired, expires_at FROM voice_announcements
+           WHERE user_id = ? AND trigger_type = ?
+             AND created_at::timestamptz >= ?::timestamptz""",
+        (user_id, BRIEF_TRIGGER, day_start),
+    ) as cur:
+        rows = await cur.fetchall()
+    in_flight = False
+    for row in rows:
+        if str(row["message"] or "").strip() in teasers:
+            continue
+        if row["played_at"]:
+            return "played"
+        exp = _parse_ts(row["expires_at"])
+        if exp is None:
+            continue
+        if row["delivered_at"]:
+            in_flight = in_flight or now < exp + timedelta(seconds=_PLAY_ACK_GRACE_S)
+        elif not int(row["expired"] or 0):
+            in_flight = in_flight or now < exp
+    return "in_flight" if in_flight else "free"
+
+
 async def claim_scheduled_brief(
     *, user_id: str, panel_id: str | None, pending_id: str | None,
 ) -> tuple[str, str | None]:
     """The 07:30 path's side of the shared claim: ``(verdict, claim_id)``.
 
-    ``verdict`` is ``speak`` (claim taken, or flag off), ``already_spoken``
-    (arrival has today's claim) or ``claim_error``. Flag off: ``("speak", None)``
-    with no DB access — the scheduled path is unchanged. With the flag on a DB
-    error FAILS CLOSED: an unclaimed full brief could be spoken again by arrival,
-    so the caller must not queue it (the push/text delivery is unaffected).
+    ``verdict`` is ``speak`` (claim taken, or flags off), ``already_spoken``
+    (today's claim is already held) or ``claim_error``.
+
+    * Both ``ZOE_PROACTIVE_BRIEF_ON_ARRIVAL`` and ``ZOE_BRIEF_ON_FIRST_TURN`` off:
+      ``("speak", None)`` with no DB access — the scheduled path is unchanged.
+    * Arrival on: the claim is TAKEN before queueing (arrival's contract — one
+      spoken attempt per day across both spoken paths, never retried). A DB
+      error FAILS CLOSED: an unclaimed full brief could be spoken again by
+      arrival, so the caller must not queue it (push/text delivery unaffected).
+    * Only the first-turn brief on: READ-ONLY. If the first-turn brief already
+      holds today's claim the full brief is not spoken again (``already_spoken``);
+      otherwise it is queued WITHOUT a claim, because queueing is not delivery —
+      a failed or expired announcement must leave the day's brief to the first
+      conversation. A PLAYED one (the daemon's ACK) is claimed by
+      ``brief_first_turn`` when it sees it (``scheduled_brief_delivery``). The
+      read-then-queue window is closed on the daemon side: the claim endpoint
+      holds or suppresses a ``morning_checkin`` row while a first-turn brief is
+      mid-reply or already delivered (``brief_first_turn.scheduled_row_gate``).
+      A read error fails closed too.
     """
-    if not arrival_enabled():
+    from brief_first_turn import brief_on_first_turn_enabled
+
+    arrival_on = arrival_enabled()
+    if not (arrival_on or brief_on_first_turn_enabled()):
         return "speak", None
     try:
         async with _get_compat_db() as db:
+            if not arrival_on:
+                taken = await brief_claimed(db, user_id=user_id, now=_now_utc())
+                return ("already_spoken" if taken else "speak"), None
             claim_id = await claim_full_brief(
                 db, user_id=user_id, trigger_type=BRIEF_TRIGGER, panel_id=panel_id,
                 pending_id=pending_id, missed="", now=_now_utc(),
