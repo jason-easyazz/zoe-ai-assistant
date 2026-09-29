@@ -216,6 +216,13 @@ VOICE_PATH_PATTERNS = (
     # turn gets answered by, and neither matched any glob above.
     "services/zoe-data/zoe_flue_client.py",
     "services/zoe-data/brain_dispatch.py",
+    # What that client and the sidecar put IN FRONT of the brain: the for-prompt
+    # packet composer + the user-model endpoint (routers/memories.py), the portrait
+    # and user-model block (user_portrait.py), and the recall/continuity trigger
+    # predicates (memory_gate.py). They shape every voice recall block.
+    "services/zoe-data/routers/memories.py",
+    "services/zoe-data/user_portrait.py",
+    "services/zoe-data/memory_gate.py",
     # THE TWO-STAGE ROUTER — its serving UNIT *and* the code that makes the
     # routing decision. docs/CANONICAL.md lists the two-stage router as a LIVE
     # tool-router FRONT on the voice path (ZOE_ROUTER_HEAD=active), and

@@ -93,7 +93,9 @@
  * Part of the live Zoe brain (flue-zoe-brain-2x.service, :3579).
  */
 import { observe } from '@flue/runtime';
+import type { Context } from '@earendil-works/pi-ai';
 import type { MiddlewareHandler } from 'hono';
+import { promptSections, type PromptSections } from './providers/capped-completions.ts';
 import {
   EarlyTextReconciler,
   earlyTextEnabled,
@@ -258,6 +260,10 @@ export interface SeamAState {
   lastAssistantText: string;
   /** per-model-call prompt-cache accounting, in round order (see above). */
   promptCache: PromptCacheRound[];
+  /** estimated prompt sections of the turn's FIRST model call, from its
+   *  `turn_request` (the round that gates first token); `context_budget` on the
+   *  terminal. Additive, like `prompt_cache`; nothing model-visible changes. */
+  contextBudget?: PromptSections;
 }
 
 export function newSeamAState(): SeamAState {
@@ -364,6 +370,16 @@ export function seamAFrames(event: Record<string, unknown>, state: SeamAState): 
     case 'tool': {
       const sentinel = toolResultSentinel(event);
       return sentinel === null ? [] : [sentinel];
+    }
+    case 'turn_request': {
+      const input = (event.request as { input?: Record<string, unknown> } | undefined)?.input;
+      if (event.purpose !== 'agent' || state.contextBudget || !Array.isArray(input?.messages)) return [];
+      try {
+        state.contextBudget = promptSections(input as unknown as Context);
+      } catch {
+        /* accounting must never break the stream */
+      }
+      return [];
     }
     case 'turn': {
       // One model call (one tool round). Accounting only — never a chunk.
@@ -545,11 +561,11 @@ function openTurnStream(
     if (!finished && !state.streamedText && state.lastAssistantText) {
       pushText(state.lastAssistantText);
     }
-    finish(
-      state.promptCache.length > 0
-        ? { done: true, prompt_cache: state.promptCache }
-        : { done: true },
-    );
+    finish({
+      done: true,
+      ...(state.promptCache.length > 0 ? { prompt_cache: state.promptCache } : {}),
+      ...(state.contextBudget ? { context_budget: state.contextBudget } : {}),
+    });
   };
 
   timer = setTimeout(() => finish({ error: 'brain turn timed out' }), timeoutMs);
