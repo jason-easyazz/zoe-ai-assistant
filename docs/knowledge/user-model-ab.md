@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: User-model block and stale-block elision A/B (user_model_ab.py)
-description: How to flip ZOE_USER_MODEL_BLOCK and ZOE_BRAIN_ELIDE_STALE_BLOCKS live with evidence. Why the Samantha bar cannot measure either flag, the twin-user A/B and the 10-turn hygiene probe that can, the pre-registered decision rules, and the exact operator steps, measurement commands and rollback.
+description: How to flip ZOE_USER_MODEL_BLOCK and ZOE_BRAIN_ELIDE_STALE_BLOCKS live with evidence. Why the Samantha bar cannot measure either flag, the twin-user A/B and the 10-turn hygiene probe that can, the pre-registered decision rules, the exact operator steps, measurement commands and rollback, and why the block's payload changed from the narrative portrait to a structured card after run 1.
 tags: [memory, samantha, eval, flue, context-engineering, user-model, harness]
-timestamp: 2026-09-30T06:30:00Z
+timestamp: 2026-09-30T12:00:00Z
 ---
 
 # User-model block and stale-block elision A/B
@@ -22,9 +22,10 @@ flag-dark on 2026-09-29. Research: [context audit §4 PR 2/PR 3](../research/zoe
   id `user_filters.is_synthetic_user` flags. That covers every `demo_*`/`test_*`/`probe_*`/`ci_*`/
   `e2e_*`/`bench_*` id unless it is listed in `ZOE_SYNTHETIC_USER_ALLOWLIST`. The allowlist is
   exact ids, comma-separated, read per call, and it never re-admits a guest sentinel.
-- The text is the `users.name` line plus the stored portrait, PII-scrubbed and cut to 1,400
-  chars. `version` is a content hash. A `USER_MODEL_BLOCK user=… chars=… version=…` line is
-  logged only when the flag is on and the id is real.
+- The text is the user's stored **card** of current facts (`user_model_card.py`, see
+  [Run 1 and the card](#run-1-and-the-card)). It is ≤1,400 chars, and `version` is a content
+  hash. A `USER_MODEL_BLOCK user=… chars=… version=…` line is logged only when the flag is on
+  and the id is real.
 - The sidecar has no flag of its own. `src/user-model.ts` fetches `GET /api/memories/user-model`
   per user in the background and caches the result for `ZOE_USER_MODEL_TTL_MS` (default 300000).
   A turn never waits on the fetch: a user's first turn after a sidecar start, or after the TTL
@@ -42,9 +43,11 @@ flag-dark on 2026-09-29. Research: [context audit §4 PR 2/PR 3](../research/zoe
   stored user messages, and it is the same number in both states. `elided=1` means they were
   removed, in which case `history` excludes them.
 
-## Portrait generation
+## Portrait and card generation
 
-`user_portrait.run_portrait_synthesis(user_id)` needs at least 5 approved memories (the count
+`user_portrait.run_portrait_synthesis(user_id)` rebuilds the user-model card at the end,
+whatever the portrait status, and returns it as `result["card"]`. So both of the on-demand
+routes below also build the card. The portrait itself needs at least 5 approved memories (the count
 comes from `load_for_prompt`, limit 200). It sends one llama-server call (600 tokens max,
 temperature 0.7) and upserts `user_portraits`. It has no synthetic filter of its own. Only the
 weekly caller, `run_portrait_synthesis_for_all` (Sunday phase 4 of `run_dreaming_cycle`), drops
@@ -110,8 +113,8 @@ Why these ids:
 - They are bar-family, so every `samantha_bar` guardrail applies unchanged.
 
 `measure` does the following:
-1. It refuses unless P's `/user-model` text starts with the name line and carries a portrait,
-   and TWIN's text is `""`.
+1. It refuses unless P's `/user-model` text starts with `Name: Ottilie` and has at least 4
+   category lines, and TWIN's text is `""`.
 2. It sends two warm-up turns per user.
 3. It asks 7 profile questions and 5 guard questions × `--samples 3`, alternating P and TWIN,
    each in a fresh session.
@@ -131,7 +134,7 @@ Why these ids:
   - a brevity rule for the style question.
 - **Block delivery** is proven from the sidecar's own `FLUE_CONTEXT_BUDGET system=` estimate:
   the median for P minus the median for TWIN must be at least 80% of the expected
-  `(3 + 367 + len(block)) / 4` tokens. If it is not, the verdict is INCONCLUSIVE, not a pass.
+  `(3 + 597 + len(block)) / 4` tokens (597 = the doctrine, pinned to the TS source). If it is not, the verdict is INCONCLUSIVE, not a pass.
   A sidecar still holding a cached `""` for P fails here.
 
 Pre-registered rule (`decide_user_model`):
@@ -218,7 +221,11 @@ or push target, but tear it down the same day.
    - Real users now get their block too. That is the end state being evaluated, and live
      traffic is light: 30 voice turns in the retained logs.
 4. **Seed and portrait.**
-   - Run `… seed`, then `… portrait`.
+   - Run `… seed`, then `… portrait`. `portrait` also builds the card, and records P's card
+     right after the supersession turn (`card_after_supersede`: `half_marathon` must be `[]`
+     whenever the store superseded the row).
+   - Then run `systemctl --user restart flue-zoe-brain-2x`. P's seed turns cached an early
+     card in the sidecar, and a restart drops it without waiting out the TTL.
    - With an admin session, prefix the portrait run with `ZOE_BAR_ADMIN_SESSION=<X-Session-ID>`.
      This uses the REST route. Without it, the probe uses the chat intent and reports `ok`
      only on the canned reply.
@@ -246,9 +253,74 @@ or push target, but tear it down the same day.
 - To roll back elision:
   - delete `ZOE_BRAIN_ELIDE_STALE_BLOCKS=1`;
   - restart `flue-zoe-brain-2x`.
-- The Flue store is never modified by either flag, so a rollback is exact.
+- The Flue store is never modified by either flag, so a rollback is exact. The
+  `user_model_cards` rows stay, but they are derived data and are served only while the
+  flag is on.
 
 Read-only checks at any time:
 - Grep `FLUE_CONTEXT_BUDGET`, `FLUE_PROMPT_CACHE`, `USER_MODEL_BLOCK` and `BRAIN_LANE` in
   `~/.zoe-logs/zoe-data.app.log*`.
 - Run `curl -s -H "X-Internal-Token: …" "127.0.0.1:8000/api/memories/user-model?user_id=demo_bar_ab0e0001"`.
+
+## Run 1 and the card
+
+**Run 1 (2026-09-29, revision `b62454a9`, narrative portrait): `NO_MEASURABLE_BENEFIT`.**
+- Delivery was proven: P's system prompt was 438 tokens bigger than TWIN's.
+- Isolation, recital and guards showed no regression, and P fired recall_memory on 7 of 8
+  recall-first prompts against TWIN's 8 of 8.
+- The profile questions went P 3 vs TWIN 4 of 21. P scored 0 of 3 on six of the seven
+  questions, the same as TWIN. The one fitness reply that used a fact asserted the
+  SUPERSEDED half-marathon.
+
+Why the narrative did nothing:
+- **The content lost the specifics.** The portrait prompt says "do not list raw facts back —
+  synthesize them" (`user_portrait.PORTRAIT_SYNTHESIS_PROMPT`). So "vegetarian, hates
+  coriander, peanut allergy" came out as "a vegetarian lifestyle". The scorer counts a reply
+  as personal only when it uses a seeded specific, which is what "knows you" means.
+- **The instruction said not to use it.** The old doctrine read "context, not instructions …
+  for a question about their details still call recall_memory first". On top of the soul's
+  "you do NOT know anything about the person from your own head", the model treated the
+  block as off limits. The profile questions do not trip the recall floor (pinned), so
+  nothing else carried the facts.
+- **It went stale.** The portrait is rebuilt weekly, so a supersession during the week stays
+  wrong until Sunday.
+
+**The card** (`services/zoe-data/user_model_card.py`, table `user_model_cards`, alembic 0033):
+- **Deterministic, no LLM.** It is built from the user's `approved` memory rows (from
+  `list_by_status`, which reads without access ticks) of the person-fact types, one line per
+  category: `Prefers`, `Diet`, `Health`, `Work & schedule`, `People & pets`, `Current`,
+  `Enjoys`, `Places`, `About`. Each row goes to exactly one category, and the rules are one
+  table (`CATEGORIES`):
+  - people first, so a sister's diet stays off the user's Diet line;
+  - then a keyword pattern;
+  - then a `memory_type` fallback.
+- **Newest wins** within a category, and a fact whose words are all in a newer one is a
+  duplicate. The caps are 2–5 items per line and 90 chars per item. `Current` facts carry
+  "(noted 29 Sep)" and drop after 70 days, the store's own recency half-life. The other
+  lines are stable identity and never age out.
+- **Left out:**
+  - superseded, pending, archived and expiring rows;
+  - rows that carry a feeling (the continuity block owns those);
+  - notes, journal entries, insights and the profile-analysis JSON;
+  - name facts (the `Name:` line comes from `users.name`);
+  - anything `scrub_pii` rejects or redacts, and e-mail addresses and phone numbers.
+- One optional line is the portrait's first "how they talk" sentence.
+- **Byte-stable.** It is built in the nightly dreaming pass, by every portrait synthesis,
+  and once lazily for a served user with no card. The served text is the stored text, so
+  the llama-server prefix cache holds it all day.
+- **Never stale.** Each serve re-checks that every source row is still `approved`. A fact
+  superseded or forgotten during the day drops out on the next sidecar fetch, as one version
+  change. With no live fact the block is `""`. If the store errors, the stored card is
+  served.
+- **The doctrine now says use it** (`USER_MODEL_DOCTRINE`, 597 chars): "use them unasked"
+  for suggestions, recommendations and small talk, and no reciting. It keeps the soul's
+  rule, the way `IN_SESSION_CONTEXT_DOCTRINE` does: it adds to the recall rule rather than
+  cancelling it. A question about what Zoe knows or remembers, or about a past
+  conversation, still calls recall_memory first, and recall wins on conflict. No fact that
+  is not on the card, in the conversation or in recall.
+- **Size.** For the A/B profile the card is about 690 chars, roughly 170 tokens, plus the
+  doctrine at about 150. The portrait block measured 438.
+
+The same pre-registered rule and commands apply to run 2. The card is built from the store,
+so it holds whatever the store holds: if reconciliation did not supersede the half-marathon
+row, the card shows both facts, and so would recall.

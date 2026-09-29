@@ -1997,6 +1997,14 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
                 logger.warning("dreaming: agent_sync failed: %s", exc)
                 result["agent_sync"] = {"status": "error", "error": str(exc)}
 
+    # Nightly: rebuild the user-model card (user_model_card.py; deterministic, no LLM) so
+    # the always-present block tracks the store day by day. On Sundays the portrait
+    # synthesis above has already rebuilt it. It is a no-op unless ZOE_USER_MODEL_BLOCK is on.
+    if "card" not in (result.get("portrait") or {}):
+        from user_model_card import rebuild_user_model_card  # type: ignore[import]
+
+        result["user_model_card"] = await rebuild_user_model_card(user_id, db=db)
+
     # Opt-in, report-only Lint pass (default OFF via ZOE_MEMORY_LINT_IN_DREAMING).
     # Lint never mutates stored memory; it only emits a structured report of
     # contradictions / stale / orphan / duplicate rows for human review.
