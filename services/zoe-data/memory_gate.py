@@ -186,6 +186,49 @@ def is_event_question(message: str) -> bool:
     return any(_sentence_is_event_question(s) for s in event_sentences(message))
 
 
+# ── Evidence-shaped questions (ZOE_RECALL_EVIDENCE, context gaps #3/#6) ──────
+# WHEN the user told Zoe something, WHAT they said, or whether Zoe is sure: on
+# these turns the recall packet quotes the user's own words (`recall_evidence`).
+# Table-driven, first match wins; every row pins "I"/"we" or a challenge aimed at
+# Zoe, so "when did the war end" / "make sure the light is off" never match. The
+# "sure" rows overlap zoe_agent._VERIFY_CHALLENGE_RE (the chat lane's WEB check),
+# which is too heavy to import here.
+EVIDENCE_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple(
+    (kind, re.compile(rx, re.IGNORECASE))
+    for kind, rx in (
+        ("when", r"\bwhen\s+did\s+(?:i|we)\b"),
+        ("when", r"\bwhen\s+was\s+(?:it\s+)?(?:that\s+)?(?:i|we)\s+(?:told|said|mentioned)\b"),
+        ("when", r"\bhow\s+long\s+ago\s+did\s+(?:i|we)\b"),
+        ("when", r"\bwhat\s+(?:day|date)\s+did\s+(?:i|we)\b"),
+        ("when", r"\bwhen\s+did\s+you\s+(?:learn|find\s+out|hear)\b"),
+        ("said", r"\bwhat\s+(?:exactly\s+)?(?:did|have|had)\s+i\s+(?:say|said|tell|told|mention|mentioned)\b"),
+        ("said", r"\bwhat\s+i\s+(?:said|told\s+you|mentioned)\b"),
+        ("said", r"\b(?:did|have)\s+i\s+(?:ever\s+|really\s+|actually\s+)?(?:say|said|tell|told|mention|mentioned)\b"),
+        ("said", r"\bmy\s+(?:exact\s+|own\s+)?words\b"),
+        ("sure", r"\b(?:are|r)\s+(?:you|u)\s+(?:really\s+)?(?:sure|certain|positive)\b"),
+        ("sure", r"^\W*(?:you\s+sure|sure\s*\?)"),
+        ("sure", r"\bhow\s+do\s+you\s+know\s+(?:that|this)\b"),
+        ("sure", r"\bwhere\s+did\s+you\s+(?:get|hear)\s+that\b"),
+        ("sure", r"\bi\s+(?:never|didn['’]?t|did\s+not)\s+(?:say|said|tell|told|mention|mentioned)\b"),
+    )
+)
+
+
+def evidence_question_kind(message: str) -> str:
+    """"when" / "said" / "sure" for an evidence-shaped question, else "".
+    First matching row of ``EVIDENCE_QUESTION_PATTERNS`` wins. Pure."""
+    text = message or ""
+    for kind, rx in EVIDENCE_QUESTION_PATTERNS:
+        if rx.search(text):
+            return kind
+    return ""
+
+
+def is_evidence_question(message: str) -> bool:
+    """True when the recall packet should quote the user's own words."""
+    return bool(evidence_question_kind(message))
+
+
 def message_needs_memory(message: str) -> bool:
     """True when the message likely benefits from MemPalace semantic search.
 
