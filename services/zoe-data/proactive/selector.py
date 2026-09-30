@@ -272,10 +272,12 @@ def _now() -> datetime:
 
 
 def _eligible(uid: str) -> bool:
-    """Real members only (user_filters: guest sentinels and test/demo/probe ids out)."""
-    from user_filters import is_synthetic_user
+    """Real members. The one synthetic exception is a harness-minted id
+    (``demo_<tag>_<hex>``, user_filters.synthetic_forget_refusal): it can only
+    hold candidates through the internal Samantha-bar hook, never the nightly pass."""
+    from user_filters import is_synthetic_user, synthetic_forget_refusal
 
-    return not is_synthetic_user(uid)
+    return not is_synthetic_user(uid) or synthetic_forget_refusal(uid) is None
 
 
 def _is_command(message: str) -> bool:

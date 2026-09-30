@@ -247,8 +247,9 @@ async def test_continuity_turns_defer(seeded):
 
 
 @pytest.mark.parametrize("uid, eligible", [
-    ("test-sec-b-a1b2c3", False), ("demo_bar_0a1b2c3d", False), ("guest", False),
+    ("test-sec-b-a1b2c3", False), ("demo-user", False), ("guest", False),
     ("member-b", True),
+    ("demo_bar_0a1b2c3d", True),  # harness-minted: only the internal S5 hook seeds it
 ])
 async def test_synthetic_users_never_raise(env, uid, eligible):
     _loop(env["db"], "User has a dentist appointment tomorrow", user=uid)
@@ -406,3 +407,69 @@ async def test_prepare_never_raises_and_is_time_boxed(seeded, monkeypatch):
     monkeypatch.setattr(sel, "_load", slow)
     monkeypatch.setattr(sel, "_PREPARE_TIMEOUT_S", 0.05)
     assert await sel.prepare("Hi Zoe, how are things?", MEMBER, "s1") is None
+
+
+# ── the Samantha-bar S5 hook: forget-synthetic guards, fail closed ───────────
+class _Req:
+    headers = {"X-Internal-Token": "t"}
+
+
+@pytest.fixture
+def hook(monkeypatch):
+    import auth
+    import memory_digest
+    import routers.memories as memories
+    from routers import proactive as route
+
+    calls = {"extract": [], "select": [], "registered": False, "token": True}
+
+    async def registered(uid):
+        if calls["registered"] is None:
+            raise RuntimeError("auth_users unreachable")
+        return calls["registered"]
+
+    async def extract(uid, db=None):
+        calls["extract"].append(uid)
+        return {"status": "ok"}
+
+    async def select(uid, **kw):
+        calls["select"].append(uid)
+        return {"kept": 1, "kinds": ["emotional"]}
+
+    monkeypatch.setattr(auth, "_has_valid_internal_token", lambda r: calls["token"])
+    monkeypatch.setattr(memories, "_registered_account", registered)
+    monkeypatch.setattr(memory_digest, "_extract_open_loops", extract)
+    monkeypatch.setattr(sel, "select_for_user", select)
+    monkeypatch.setenv("ZOE_PROACTIVE_SELECTOR", "1")
+    return route, calls
+
+
+async def test_hook_runs_extraction_then_selection_for_a_harness_id(hook):
+    route, calls = hook
+    out = await route.run_selector_synthetic("demo_bar_0a1b2c3d", _Req())
+    assert out == {"enabled": True, "open_loops": "ok", "kept": 1, "kinds": ["emotional"]}
+    assert calls["extract"] == calls["select"] == ["demo_bar_0a1b2c3d"]
+
+
+@pytest.mark.parametrize("uid, token, registered, code", [
+    ("demo_bar_0a1b2c3d", False, False, 403),   # no/invalid internal token
+    ("member-a", True, False, 403),             # a real member: never through the hook
+    ("demo-user", True, False, 403),            # synthetic but not harness-minted
+    ("demo_bar_0a1b2c3d", True, True, 403),     # a registered account named like a demo id
+    ("demo_bar_0a1b2c3d", True, None, 409),     # registration unverifiable: fail closed
+])
+async def test_hook_refuses_everything_else(hook, uid, token, registered, code):
+    from fastapi import HTTPException
+
+    route, calls = hook
+    calls["token"], calls["registered"] = token, registered
+    with pytest.raises(HTTPException) as err:
+        await route.run_selector_synthetic(uid, _Req())
+    assert err.value.status_code == code and not calls["extract"] and not calls["select"]
+
+
+async def test_hook_is_inert_with_the_flag_off(hook, monkeypatch):
+    route, calls = hook
+    monkeypatch.setenv("ZOE_PROACTIVE_SELECTOR", "0")
+    assert await route.run_selector_synthetic("demo_bar_0a1b2c3d", _Req()) == {"enabled": False}
+    assert not calls["extract"]

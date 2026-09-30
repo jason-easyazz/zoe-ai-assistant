@@ -90,7 +90,7 @@ ids only). Day 2 follows.
 | S2 | After a move, the current city wins and the old one is not asserted as current. | `hobart` is required. If `dunedin` is also mentioned, the judge decides "previous home" vs "still lives there". BOTH facts must have landed in the recall packet (Dunedin on day 1, Hobart on day 2) or S2 is ERROR — a Hobart-only reply with no Dunedin present tests no supersession. |
 | S3 | Asked about something never said (the dentist), Zoe declines instead of inventing. | A clear decline with no named specific (`Dr X`, `dentist is X`, `it's X`) and no hedge ("I think", "perhaps", "maybe"…) is a deterministic pass. A decline that then guesses, and anything else, goes to the judge. |
 | S4 | A day-1 worry is acknowledged on day 2, gently and not verbatim. | `interview` must appear, the reply must share fewer than 7 consecutive words with the day-1 sentence, and the judge must say "warm, in its own words" |
-| S5 | A proactive hook, if one fires, carries the day-1 open loop. | Reads `proactive_pending` for demo A. No hook gives SKIP. An `emotional_followup` without the loop gives FAIL. |
+| S5 | With `ZOE_PROACTIVE_SELECTOR` on, an open turn raises the day-1 worry once and the next open turn does not. | Calls the internal selector hook for demo A (open-loop extraction + ranking), then two greeting turns in fresh sessions. PASS: turn 1 mentions interview/aquarium, turn 2 does not, and the carrying `proactive_candidates` row has `surfaced_count == 1`. No carrying candidate, no raise, or a second raise gives FAIL. Flag off or no route: the old `proactive_pending` read (no hook gives SKIP). |
 | S6 | Demo B never sees demo A's facts. | Deterministic: no A needle may appear in B's reply or in B's `/for-prompt` packet. If A's own packet holds none of them, the result is SKIP, because the test would be vacuous. A packet read that FAILS (either user) is ERROR — a boundary that was not inspected is never certified. |
 | S7 | A short duplicate ("my dad is Teodor") does not erase the richer fact. | The reply must name Teodor and lighthouse, and A's packet must still hold `lighthouse`. A failed packet read is ERROR. The duplicate's capture must be OBSERVED first: the harness waits on `/api/memories/capture-status` (the turn's background extraction + digest completed, nothing in flight, and `failed` did not advance — a memory pass that raised is completed-but-FAILED; bounded timeout) — not observed or failed = ERROR, never PASS. |
 | S8 | S1 and S7 facts survive 32 filler turns spread over 3 sessions. | deterministic: `marisol` and `lighthouse`. ANY failed filler turn is ERROR, even when both names come back — the long history was not built, so the recall proves nothing. |
@@ -536,10 +536,11 @@ carries both. Exit 2 = refused / error / teardown unproven; 3 = lock held. Artif
   session is supplied.
 - **Multi-day is approximated.** Backdating moves only the Postgres chat rows. Memory-store
   `added_at` stays "now", so recency ranking sees everything as same-day.
-- **S5 is structurally SKIP for demo users today.** `emotional_followup` and the other
-  proactive triggers filter `is_synthetic_user`, so no hook fires for `demo_*` ids
-  ([synthetic users](synthetic-users-and-proactive-recipients.md)). S5 starts measuring
-  when a lab sets `ZOE_SYNTHETIC_USER_ALLOWLIST`.
+- **S5 is SKIP unless `ZOE_PROACTIVE_SELECTOR` is on.** The proactive triggers filter
+  `is_synthetic_user`, so no hook fires for `demo_*` ids. With the selector flag on, the bar
+  seeds the candidates itself through the internal `run-synthetic` hook
+  ([proactivity selector](synthetic-users-and-proactive-recipients.md#proactivity-selector-flag-dark)).
+  A/B: flag off → S5 SKIP; flag on → S5 PASS, S1–S4/S6–S8 unchanged.
 - **Self-judging.** The judge is the same Gemma that answers. Temperature 0 makes it stable,
   not unbiased. Deterministic checks gate first, and the judge only decides the ambiguous
   remainder.

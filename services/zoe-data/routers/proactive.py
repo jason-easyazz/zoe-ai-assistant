@@ -7,6 +7,7 @@ Endpoints:
   DELETE /api/proactive/schedule/{id}   — cancel a scheduled nudge
   POST   /api/proactive/pending/{id}    — claim a pending notification → session
   POST   /api/proactive/trigger-morning — manually trigger morning brief (admin/self)
+  POST   /api/proactive/selector/run-synthetic/{id} — Samantha-bar S5 hook (internal token)
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from auth import get_current_user
@@ -204,3 +205,35 @@ async def dismiss_pending_suggestion(
 
     ok = await mark_resolved(suggestion_id, user["user_id"])
     return {"ok": ok}
+
+
+@router.post("/selector/run-synthetic/{target_user}")
+async def run_selector_synthetic(target_user: str, request: Request):
+    """Run the nightly selector steps (open-loop extraction, then ranking) NOW for
+    ONE harness-minted id — the hook Samantha bar S5 waits on. The nightly pass
+    never sees such ids (dreaming drops synthetic users). Guards are the
+    ``forget-synthetic`` ones, fail closed: internal token only; the id must pass
+    ``synthetic_forget_refusal``; a registered account (or a failed lookup) is
+    refused. Flag off: ``{"enabled": false}``, no work."""
+    from auth import _has_valid_internal_token
+    from memory_digest import _extract_open_loops
+    from proactive.selector import select_for_user, selector_enabled
+    from routers.memories import _registered_account
+    from user_filters import synthetic_forget_refusal
+
+    if not _has_valid_internal_token(request):
+        raise HTTPException(status_code=403, detail="internal token required")
+    refusal = synthetic_forget_refusal(target_user)
+    if refusal:
+        raise HTTPException(status_code=403, detail=f"refused: {refusal}")
+    try:
+        registered = await _registered_account(target_user)
+    except Exception:  # noqa: BLE001 — unverifiable id: refuse
+        raise HTTPException(status_code=409, detail="refused: registration unverifiable")
+    if registered:
+        raise HTTPException(status_code=403, detail="refused: registered account")
+    if not selector_enabled():
+        return {"enabled": False}
+    loops = await _extract_open_loops(target_user)
+    selected = await select_for_user(target_user) or {}
+    return {"enabled": True, "open_loops": loops.get("status"), **selected}
