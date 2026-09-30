@@ -1365,6 +1365,12 @@ async def _run_flue_brain_streaming_turn(
     # Keep the format byte-for-byte in sync with that module. Omit empty/guest ids
     # so the sidecar's own fail-closed identity handling applies.
     uid = (user_id or "").strip()
+    # ZOE_RECALL_EVIDENCE (default OFF): note this turn's shape so a
+    # recall_memory TOOL call made during it quotes the user's words when asked
+    # "what did I say / are you sure" (the tool only sends the model's query).
+    from recall_evidence import note_turn
+
+    note_turn(uid, message)
     # Deterministic recall floor (default OFF): on a personal- or event-shaped
     # question turn, prepend the for-prompt packet so recall no longer depends on the model
     # electing to call its recall_memory tool. Placed BEFORE the identity wrap
