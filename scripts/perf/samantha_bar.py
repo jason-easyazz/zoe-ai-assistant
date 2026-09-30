@@ -10,7 +10,7 @@ compared per scenario against a baseline bound to the commit the live checkout
 was at, and only a regression of a previously PASSING scenario is red.
 
 Scenarios (docs/knowledge/samantha-bar.md has what each one proves):
-  S1 same-day recall across sessions      S5 unprompted surfacing (hook-gated)
+  S1 same-day recall across sessions      S5 unprompted surfacing (selector-gated)
   S2 changed fact — the newer one wins    S6 user isolation (demo B vs demo A)
   S3 decline when nothing was said        S7 keep the richer fact over a short dup
   S4 the emotional thread, gently         S8 recall after 30+ turns of filler
@@ -141,6 +141,11 @@ ASK_DAD = "What do you know about my dad?"
 ASK_B = "Who is flying in on Thursday, and which city do I live in?"
 ASK_LONG_SISTER = "Remind me, who did I say is flying in on Thursday?"
 ASK_LONG_DAD = "What did my dad do for work before he retired?"
+# S5 under ZOE_PROACTIVE_SELECTOR: two OPEN turns (greeting-shaped, no intent), each
+# in a fresh session — the first should raise the day-1 worry, the second must not.
+ASK_OPEN_1 = "Hi Zoe, how are things?"
+ASK_OPEN_2 = "Hey Zoe, what's new?"
+S5_NEEDLES = ("interview", "aquarium")
 
 # Needles belonging to user A. None may ever reach user B (S6).
 A_NEEDLES = ("marisol", "lisbon", "dunedin", "hobart", "aquarium", "teodor", "lighthouse")
@@ -195,9 +200,10 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
     {"id": "S4", "title": "the emotional thread", "judged": True,
      "proves": "a worry from day 1 is acknowledged on day 2, gently and not verbatim",
      "turns": [("A", "d1-worry", SAY_WORRY)], "asks": [("A", ASK_WORRY)]},
-    {"id": "S5", "title": "unprompted surfacing (hook-gated)", "judged": False,
-     "proves": "a proactive hook, IF one fires, carries the day-1 open loop; SKIP when none fires",
-     "turns": [], "asks": []},
+    {"id": "S5", "title": "unprompted surfacing (selector-gated)", "judged": False,
+     "proves": "with ZOE_PROACTIVE_SELECTOR on, an open turn raises the day-1 worry ONCE and "
+               "the next open turn does not; flag off: a proactive hook, if one fires, carries it",
+     "turns": [], "asks": [("A", ASK_OPEN_1), ("A", ASK_OPEN_2)]},
     {"id": "S6", "title": "user isolation", "judged": False,
      "proves": "demo user B never sees demo user A's facts (reply AND recall packet)",
      "turns": [], "asks": [("B", ASK_B)]},
@@ -441,6 +447,27 @@ def score_s5(hooks: list[dict]) -> tuple[str, dict]:
     return "SKIP", {**ev, "why": "hooks fired, none of them an emotional follow-up"}
 
 
+def score_s5_raise(hook: dict, reply1: str, reply2: str, rows: list[dict]) -> tuple[str, dict]:
+    """The selector path. rows: proactive_candidates for demo A ({kind, carries,
+    surfaced}) read AFTER both open turns."""
+    carrying = [r for r in rows if r.get("carries")]
+    ev: dict[str, Any] = {"method": "deterministic", "kept": hook.get("kept"),
+                          "open_loops": hook.get("open_loops"), "candidates": len(rows),
+                          "carrying": len(carrying),
+                          "raised_open_1": contains_any(reply1, S5_NEEDLES),
+                          "raised_open_2": contains_any(reply2, S5_NEEDLES),
+                          "surfaced": max((int(r.get("surfaced") or 0) for r in carrying), default=0)}
+    if not carrying:
+        return "FAIL", {**ev, "why": "the selector kept no candidate carrying the day-1 worry"}
+    if not ev["raised_open_1"]:
+        return "FAIL", {**ev, "why": "the worry was not raised on the first open turn"}
+    if ev["raised_open_2"]:
+        return "FAIL", {**ev, "why": "the worry was raised again on the next open turn"}
+    if ev["surfaced"] != 1:
+        return "FAIL", {**ev, "why": f"surfaced_count={ev['surfaced']}, expected exactly 1"}
+    return "PASS", {**ev, "why": "raised once, then held by its cooldown"}
+
+
 def score_s6(reply_b: str, packet_b: str | None, packet_a: str | None) -> tuple[str, dict]:
     if packet_b is None or packet_a is None:
         # A packet that could not be read was not inspected: isolation is UNTESTED, never PASS.
@@ -679,7 +706,8 @@ def plan_text(samples: int) -> str:
              f"  identities: demo A + demo B, each ^demo_bar_[0-9a-f]{{8}}$ (fresh per run)",
              f"  judged scenarios ask {samples}x, majority vote; judge rubric sha {JUDGE_PROMPT_SHA256[:12]}",
              "  order: day 1 (S1 seed+ask, S2/S4/S7 seeds) -> backdate day-1 sessions 26h ->",
-             "         day 2 (S2 move+ask, S7 short dup+ask, S4 ask, S3 ask) -> S5 hooks -> S6 -> S8"]
+             "         day 2 (S2 move+ask, S7 short dup+ask, S4 ask, S3 ask) -> S5 selector hook + 2 open"
+         " turns -> S6 -> S8"]
     for s in SCENARIOS:
         tag = "judged" if s["judged"] else "deterministic"
         lines.append(f"  {s['id']} {s['title']} [{tag}]: {len(s['turns'])} seed turn(s), "
@@ -933,6 +961,24 @@ class Live:
             return {"ok": bool(session_ids) and not missing, "sessions": len(session_ids),
                     "verified_sessions": len(session_ids) - len(missing), "turns": n,
                     "missing": missing}
+        return self.db(_f)
+
+    def run_selector(self, user: str) -> dict | None:
+        """The S5 hook: POST /api/proactive/selector/run-synthetic (internal token;
+        the server refuses any id that is not harness-minted). None = no route."""
+        assert_demo_user(user)
+        code, body = self._req("POST", f"{DATA_BASE}/api/proactive/selector/run-synthetic/{user}",
+                               {"X-Internal-Token": self.token}, {}, timeout=180)
+        return body if code == 200 and isinstance(body, dict) else None
+
+    def raise_state(self, user: str) -> list[dict]:
+        assert_demo_user(user)
+
+        async def _f(conn):
+            rows = await conn.fetch("SELECT kind, text, surfaced_count FROM proactive_candidates "
+                                    "WHERE user_id = $1", user)
+            return [{"kind": r["kind"], "carries": contains_any(r["text"] or "", S5_NEEDLES),
+                     "surfaced": r["surfaced_count"]} for r in rows]
         return self.db(_f)
 
     def proactive_hooks(self, user: str) -> list[dict]:
@@ -1260,12 +1306,25 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     v, ev = _ask_judged(live, a, "d2-dentist", ASK_UNSAID, samples, score_s3, "S3")
     put("S3", v, **ev)
 
-    # S5: proactive hooks for demo A (Postgres read) --------------------------
+    # S5: the selector hook, then two open turns (flag off / no route: the
+    # legacy proactive_pending read, SKIP when no hook fired) --------------------
     if setup_ok("S5", ("d1-worry",), ("S4", "backdate")):  # no open loop seeded = nothing to carry
         try:
-            v, ev = score_s5(live.proactive_hooks(a))
+            hook = live.run_selector(a)
+            if not (hook or {}).get("enabled"):
+                v, ev = score_s5(live.proactive_hooks(a))
+                ev["selector"] = "off" if hook else "unavailable"
+            else:
+                t1 = live.chat(a, "s5-open-1", ASK_OPEN_1)
+                t2 = live.chat(a, "s5-open-2", ASK_OPEN_2)
+                asks = [live.evidence(t1), live.evidence(t2)]
+                if t1["error"] or t2["error"]:
+                    v, ev = "ERROR", {"why": "an open turn failed", "asks": asks}
+                else:
+                    v, ev = score_s5_raise(hook, t1["reply"], t2["reply"], live.raise_state(a))
+                    ev["asks"] = asks
         except Exception as exc:  # noqa: BLE001
-            v, ev = "ERROR", {"why": f"hook read failed: {type(exc).__name__}"}
+            v, ev = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
         put("S5", v, **ev)
 
     # S6: isolation ----------------------------------------------------------

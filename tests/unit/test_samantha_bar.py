@@ -145,6 +145,27 @@ def test_s5_is_hook_gated():
     assert sb.score_s5(other)[0] == "SKIP"
 
 
+@pytest.mark.parametrize("rows, r1, r2, verdict", [
+    ([{"kind": "emotional", "carries": True, "surfaced": 1}], "How did the interview go?", "Not much!", "PASS"),
+    ([], "How did the interview go?", "Not much!", "FAIL"),                          # nothing kept
+    ([{"kind": "emotional", "carries": True, "surfaced": 1}], "All good here.", "Hi!", "FAIL"),  # not raised
+    ([{"kind": "emotional", "carries": True, "surfaced": 1}], "The interview?", "The aquarium?", "FAIL"),
+    ([{"kind": "emotional", "carries": True, "surfaced": 2}], "The interview?", "Hi!", "FAIL"),  # re-raised
+    ([{"kind": "event", "carries": False, "surfaced": 1}], "The interview?", "Hi!", "FAIL"),
+])
+def test_s5_selector_path_scores_raised_once(rows, r1, r2, verdict):
+    assert sb.score_s5_raise({"enabled": True, "kept": len(rows)}, r1, r2, rows)[0] == verdict
+
+
+@pytest.mark.parametrize("hook, expected", [(None, "SKIP"), ({"enabled": False}, "SKIP"),
+                                            ({"enabled": True, "kept": 1}, "PASS")])
+def test_s5_flag_off_keeps_the_legacy_skip_and_flag_on_runs_two_open_turns(monkeypatch, hook, expected):
+    live, res = _drive(monkeypatch, selector_hook=hook)
+    assert res["S5"]["verdict"] == expected
+    opened = [c for c in live.chats if c.startswith("s5-open-")]
+    assert opened == (["s5-open-1", "s5-open-2"] if expected == "PASS" else [])
+
+
 def test_s6_isolation_and_vacuous_skip():
     a_pkt = "- Sister Marisol flying in from Lisbon"
     assert sb.score_s6("I don't know who is visiting.", "", a_pkt)[0] == "PASS"
@@ -777,8 +798,9 @@ class _ScriptedLive(sb.Live):
     the scenario wants, so the ONLY way a scenario errors is a setup problem."""
 
     def __init__(self, seed_errors=(), unlanded=(), filler_errors=0, capture_stalls=False,
-                 backdate_incomplete=False):
+                 backdate_incomplete=False, selector_hook=None):
         super().__init__("tok", "", "postgresql://x", False)
+        self.selector_hook = selector_hook
         self.seed_errors, self.unlanded = set(seed_errors), set(unlanded)
         self.filler_errors, self.chats = filler_errors, []
         self.capture_stalls, self.waited_capture = capture_stalls, []
@@ -803,7 +825,8 @@ class _ScriptedLive(sb.Live):
         reply = {"d1-ask-sister": "Your sister Marisol is flying in from Lisbon.",
                  "d2-ask-dad": "Your dad Teodor is a retired lighthouse keeper.",
                  "b-ask": "I have no idea who is visiting.",
-                 "long-ask-sister": "Marisol.", "long-ask-dad": "He kept a lighthouse."}.get(tag, "ok")
+                 "long-ask-sister": "Marisol.", "long-ask-dad": "He kept a lighthouse.",
+                 "s5-open-1": "Good! How did the aquarium interview go?"}.get(tag, "ok")
         return {"reply": reply, "error": None, "ms": 1, "session": tag}
 
     def wait_landed(self, user, message, needles, timeout_s=90):
@@ -823,6 +846,12 @@ class _ScriptedLive(sb.Live):
 
     def proactive_hooks(self, user):
         return []
+
+    def run_selector(self, user):
+        return self.selector_hook
+
+    def raise_state(self, user):
+        return [{"kind": "emotional", "carries": True, "surfaced": 1}]
 
     def evidence(self, turn):
         return {}

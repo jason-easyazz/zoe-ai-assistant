@@ -206,12 +206,17 @@ enables both halves (default off, read per call; off = no I/O). Code: `proactive
   user's words. Highest salience wins, skipping expired rows, rows in cooldown (3 days) and
   rows raised twice. Never: with the `[Today]` brief on the same turn (the brief wins, logged
   `reason=brief`), on a continuity turn, a second time in the same session
-  (`last_surfaced_session`, durable), or for a synthetic id (`is_synthetic_user`). Flue appends
+  (`last_surfaced_session`, durable), or for a synthetic id (`is_synthetic_user`; the one
+  exception is below). Flue appends
   `[RAISE — once, naturally, only if it fits; otherwise ignore]` … `[END RAISE]` after the
   user's words (and defers a pending contact offer that turn, `SEAM_OFFER … reason=raise`;
   the offer ager skips it); core folds `[RAISE]` before `[The user just said]`. Both pairs are
   in the elide tables. The candidate is marked surfaced only once reply text went out. Log
   `PROACTIVE_RAISE user= kind= shape=greeting|cue injected=0|1 settled=0|1`.
+- **Harness exception:** a harness-minted `demo_<tag>_<hex>` id may hold and receive
+  candidates, but only through `POST /api/proactive/selector/run-synthetic/{id}` (internal
+  token, the `forget-synthetic` guards: harness shape, not allowlisted, not a registered
+  account, fail closed) — the Samantha bar's S5 hook. The nightly pass never sees one.
 - **Junk never surfaces:** loops and moments must pass `open_loop_quality.loop_is_concrete`
   (the open-loop calibration, #1790); their anchor words are the candidate's `cue_words`.
 
