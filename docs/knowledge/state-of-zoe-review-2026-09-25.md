@@ -703,6 +703,23 @@ Live = `main` `8da575f7`; detail in the [tracker §6](../architecture/beat-the-b
   revoke pending). Still open: an admin device token
   `test-e2e-token` and a zoe-auth admin account `p0test` are active — revoke/disable.
 
+## 11. Addendum 2026-09-30 — what is live now
+
+Live = `main` `43343791` (#1796); detail in the [tracker §6](../architecture/beat-the-bar-2026-program.md).
+- **Flags ON:** `ZOE_BRIEF_ON_FIRST_TURN`, `ZOE_PROACTIVE_SELECTOR`, `ZOE_RECALL_EVIDENCE`,
+  `ZOE_USER_MODEL_BLOCK`, `ZOE_MEMORY_IMPLICIT_SUPERSEDE` (zoe-data) and
+  `ZOE_BRAIN_ELIDE_STALE_BLOCKS` (sidecar). OFF: `ZOE_PROACTIVE_SPOKEN`.
+- **Context manager, now live:** a structured user-model card is the always-present block
+  (#1792); stale injected blocks are elided from Flue history (#1785); recalled facts carry dates
+  and the user's own words (#1789, #1795); a stated change of plan retires the old fact at write
+  time and nightly (#1796); a nightly selector raises at most one open loop per session (#1791).
+  Evidence: [user-model-ab.md](user-model-ab.md).
+- **Samantha bar:** all eight scenarios PASS, S5 for the first time; baseline re-recorded on
+  `db217287` ([samantha-bar.md](samantha-bar.md)). Voice replay gate `status=pass` with every flag on.
+- **Still open (operator):** rotate `ZOE_BRAIN_TOKEN` (printed in an agent transcript), set
+  `ZOE_BASE_URL` to the box's LAN URL ([incident-runbook.md](incident-runbook.md) §20), disable the
+  zoe-auth admin `p0test`.
+
 ## Appendix A — Known-problems register (2026-09-25)
 
 State key: BLOCKED · AWAITING OPERATOR · IN PROGRESS · DARK-BY-DESIGN · UNVERIFIED ·

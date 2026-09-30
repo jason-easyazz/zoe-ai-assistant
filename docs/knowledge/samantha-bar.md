@@ -3,7 +3,7 @@ type: Reference
 title: Samantha bar harness (samantha_bar.py v0)
 description: The Samantha-quality regression gate. Eight scripted multi-day memory and companion scenarios run against throwaway demo users through the live API. Covers how to run it, what each scenario proves, the scoring and judge, the baseline and teardown contracts, and known limits.
 tags: [memory, samantha, eval, regression-gate, harness, zoe-data]
-timestamp: 2026-09-29T08:45:00Z
+timestamp: 2026-09-30T03:00:00Z
 ---
 
 # Samantha bar harness (`scripts/perf/samantha_bar.py`, v0)
@@ -502,6 +502,25 @@ In-process, reset by a restart. Tests:
 - **Tests:** `services/zoe-data/tests/test_memory_forget_synthetic.py`, including a
   negative control that loosens the pattern.
 
+## S5 scored and the baseline re-recorded (2026-09-30)
+
+`ZOE_PROACTIVE_SELECTOR` went ON live with #1791, and #1794 added the `run-synthetic` hook, so
+S5 is no longer a structural SKIP. From the trend file (AWST):
+
+| when | live commit | result |
+|---|---|---|
+| 08:40 | `26d350e3` (#1791) | S8 FAIL, S5 SKIP (hook not yet merged) |
+| 08:48 | `26d350e3` | all scored PASS — the S8 red was the flake; re-run rule held |
+| 09:24 | `db217287` (#1794) | **all eight PASS — S5's first PASS** |
+| 09:52 | `db217287` | `--record-baseline`: S1–S8 PASS |
+| 10:29, 10:38, 10:55 | `45db6119`, `43343791` | all eight PASS against the new bar |
+
+The previous bar is kept at `~/.cache/zoe/samantha_bar_baseline.pre-2026-09-30.json`
+(`269bb680`, S5 SKIP, `samples: 3`). The new baseline records **`samples: 1`**, and
+`--compare-baseline` inherits the baseline's count. So compares now run one sample per ask,
+which is weaker against the S4/S8 flake. Re-record with `--samples 3` at the next quiet window
+if the bar is to gate at majority-of-3 again.
+
 ## Companion probe: recall evidence (`recall_evidence_probe.py`)
 
 `scripts/perf/recall_evidence_probe.py` checks "when did I tell you about X?" for
@@ -529,6 +548,12 @@ dated anyway. `said_ok` (Lisbon + Thursday) is recorded, not gated — the fact 
 carries both. Exit 2 = refused / error / teardown unproven; 3 = lock held. Artifacts:
 `~/.cache/zoe/recall_evidence_probe_last.json` + `recall_evidence_probe_trend.jsonl`.
 
+Live 2026-09-30 (flag on, `45db6119`): `when_ok` and `said_ok` true, the bullet dated today,
+but verdict **FAIL** because `packet.quoted=false`. `score_packet` looks for the quote on the one
+line naming Marisol and Lisbon, but the quote landed on another bullet (the one without
+"Lisbon"; RECALL_EVIDENCE logged `quoted=1`), and the Lisbon row carries no `source_excerpt`. The
+check is too narrow: fixing it is a follow-up, and the feature itself stays ON.
+
 ## Known limits (v0)
 
 - **Needs the route deployed** (it is, since the #1751 deploy on 2026-09-28). The live
@@ -536,7 +561,8 @@ carries both. Exit 2 = refused / error / teardown unproven; 3 = lock held. Artif
   session is supplied.
 - **Multi-day is approximated.** Backdating moves only the Postgres chat rows. Memory-store
   `added_at` stays "now", so recency ranking sees everything as same-day.
-- **S5 is SKIP unless `ZOE_PROACTIVE_SELECTOR` is on.** The proactive triggers filter
+- **S5 is SKIP unless `ZOE_PROACTIVE_SELECTOR` is on** (it is ON live since 2026-09-30, so
+  S5 is scored and regress-gates). The proactive triggers filter
   `is_synthetic_user`, so no hook fires for `demo_*` ids. With the selector flag on, the bar
   seeds the candidates itself through the internal `run-synthetic` hook
   ([proactivity selector](synthetic-users-and-proactive-recipients.md#proactivity-selector-flag-dark)).

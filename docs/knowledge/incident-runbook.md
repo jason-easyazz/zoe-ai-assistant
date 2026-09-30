@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, and the morning check-in failing on a datetime in its context (latent until open loops existed). Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json]
-timestamp: 2026-09-30T08:00:00+08:00
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, and detaching agent-launched harnesses. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness]
+timestamp: 2026-09-30T11:00:00+08:00
 ---
 
 # Production Incident Runbook
@@ -652,6 +652,15 @@ cannot be rewritten in place.
 **Fix.** In a private landing checkout: `git rebase --onto origin/main <parent-branch-tip>
 <child-branch>`, push it as a NEW branch, open a replacement PR (#1785) and close the old one
 with a "superseded by" comment. Prevention: do not stack; branch from `main` after the parent lands.
+Seen again 2026-09-30: #1788 → #1791 (same recipe).
+
+Two neighbours from the same day:
+- **Parallel PRs conflict on append-only docs** (`docs/PLANS.md` log lines, `AGENTS.md` bullets)
+  because each adds a line at the same spot. The operator's local landing helper (not in the
+  repo) now union-merges `docs/PLANS.md` (keeps both sides, drops the markers); other files
+  still abort the landing for a manual merge.
+- **Alembic revision numbers clash between parallel PRs.** #1791 and #1792 both claimed 0033;
+  renumber the later PR after the earlier one merges (#1792 → 0034) and re-check `down_revision`.
 
 ## 18. Runbook — rotating the panel device token (2026-09-29)
 
@@ -669,3 +678,28 @@ Never print a token into a transcript or log; check by length or by the sync lin
 ## 19. Morning check-in notification failed — latent until the data existed (2026-09-30)
 
 `fire_notification failed … (type=morning_checkin): Object of type datetime is not JSON serializable`: `open_loops.follow_up_after` (TIMESTAMP) rode into the trigger context as a `datetime` (#1781) and `create_pending` stored it with a bare `json.dumps`; green for days only because `open_loops` stayed empty until #1782. Fixed at both ends — the gatherer emits a UTC ISO string, and `session_utils.dumps_context` serialises datetime/Decimal/UUID. Prevention: a test of a DB-fed path must feed a row of every column type, not an empty table.
+
+## 20. Voice probe hangs for minutes in `getaddrinfo` — `ZOE_BASE_URL=http://zoe.local` (2026-09-30)
+
+**Signature.** `voice_regression_probe.py` (or `measure_voice.py`) makes no progress for minutes;
+a stack dump shows the replay stuck in `socket.getaddrinfo`.
+
+**Diagnosis.** The replay harness (`tests/replay_samples.py` `_load_env`, setdefault) merges
+`services/zoe-data/.env` into its environment, so it inherits `ZOE_BASE_URL=http://zoe.local`.
+On this LAN another device answers as `zoe.local` and the box is `zoe-2.local` on mDNS
+(operator diagnosis), so the IPv4 lookup through NSS `mdns4_minimal` times out
+(`getent ahostsv4 zoe.local` gave no answer within 5 s on a re-check). Find it with `python3 -X faulthandler` under
+`timeout -s ABRT <n>`, which prints every thread's stack when it fires.
+
+**Fix.** Every local probe pins `ZOE_BASE_URL=http://127.0.0.1:8000` in its own environment
+(setdefault never overrides it). 🧑 Operator: set `ZOE_BASE_URL=https://192.168.1.218` in the live
+`.env` (the panel pairing QR `pair_url` is built from it). Cost on 09-30: the stuck landing
+left Kokoro stopped 07:40–08:03.
+
+## 21. A harness launched from an agent tool must be detached from the tool (2026-09-30)
+
+Run long harnesses (probe, bar, A/B) from an agent's shell with stdin closed, unbuffered
+Python, and stdout to a file: `python3 -u … </dev/null >~/.cache/zoe/<name>.log 2>&1`. Without
+`</dev/null` a child can block on the tool's stdin; without `-u` and a file, progress stays in a
+pipe buffer and a hang looks like silence. Read the log file to follow it.
+

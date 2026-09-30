@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: User-model block and stale-block elision A/B (user_model_ab.py)
-description: How to flip ZOE_USER_MODEL_BLOCK and ZOE_BRAIN_ELIDE_STALE_BLOCKS live with evidence. Why the Samantha bar cannot measure either flag, the twin-user A/B and the 10-turn hygiene probe that can, the pre-registered decision rules, the exact operator steps, measurement commands and rollback, and why the block's payload changed from the narrative portrait to a structured card after run 1.
+description: How to flip ZOE_USER_MODEL_BLOCK and ZOE_BRAIN_ELIDE_STALE_BLOCKS live with evidence. Why the Samantha bar cannot measure either flag, the twin-user A/B and the 10-turn hygiene probe that can, the pre-registered decision rules, the exact operator steps, measurement commands and rollback, why the block's payload changed from the narrative portrait to a structured card after run 1, and the run 1–3 results that flipped both flags on.
 tags: [memory, samantha, eval, flue, context-engineering, user-model, harness]
-timestamp: 2026-09-30T12:00:00Z
+timestamp: 2026-09-30T03:00:00Z
 ---
 
 # User-model block and stale-block elision A/B
@@ -342,4 +342,31 @@ Fix: flag-dark `ZOE_MEMORY_IMPLICIT_SUPERSEDE` (see [memory supersession](memory
 the tombstone retires the old row at write time, links it to the 10k row, and the card is
 rebuilt at once — Current shows "doing a 10k in May instead", no half-marathon. Re-run the
 A/B with both flags on before flipping either.
+
+## Run 3 (2026-09-30, revision `43343791`, card + implicit supersede) and the decisions
+
+**`FLIP`.** With `ZOE_MEMORY_IMPLICIT_SUPERSEDE=1` the supersede turn logged
+`MEMORY_SUPERSEDE cue=change of plan superseded=1` for both users, and `card_after_supersede`
+showed no half-marathon and the 10k. Profile samples P 9 vs TWIN 3 of 21 (benefit **+6**, needed
+≥ 3), no regressions: the `race` guard passed 3/3 on both arms, leak 3/3 PASS, delivery proven
+(P's system prompt +346 tokens, card 784 chars). Artefact: `~/.cache/zoe/user_model_ab_measure.json`.
+
+| run | payload | profile P vs TWIN (of 21) | blocker | verdict |
+|---|---|---|---|---|
+| 1 (09-29, `b62454a9`) | narrative portrait | 3 vs 4 | abstracts the specifics; doctrine deferred to recall | NO_MEASURABLE_BENEFIT |
+| 2 (09-30, `db217287`) | card | 7 vs 3 (+4) | `race` P 0/3: correction stored as two rows, old one never superseded | DO_NOT_FLIP |
+| 3 (09-30, `43343791`) | card + implicit supersede | 9 vs 3 (+6) | none | **FLIP** |
+
+**Elision (hygiene probe, `b62454a9`, 2026-09-30 06:24–06:28 AWST): KEPT ON.** At turn 9
+`history` was 1551 tokens off vs 501 on (the 1080 stale tokens removed); the mean post-block
+`first_prompt_n` fell 428.9 → 393.1, so the re-prefill cost nothing measurable. `hygiene-compare`
+does not show this: it judges the **final** turn, where the off run's session had already rolled
+to `history=0`, so it reports `history_dropped=false`. Follow-up: judge the last block-bearing
+turn instead. Artefacts: `~/.cache/zoe/user_model_ab_hygiene_{off,on}.json`.
+
+**Live since 2026-09-30:** `ZOE_USER_MODEL_BLOCK=1` and `ZOE_MEMORY_IMPLICIT_SUPERSEDE=1`
+(zoe-data), `ZOE_BRAIN_ELIDE_STALE_BLOCKS=1` (sidecar); the allowlist line is removed. Gates
+with the full flag set: Samantha bar 8/8, voice replay probe `status=pass` (19/19 scoreable OK).
+The owner's card builds (16 items, 997 chars). The nightly conflict-pass dry run on the owner
+found 0 pairs (operator-reported).
 
