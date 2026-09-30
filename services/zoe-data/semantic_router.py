@@ -516,19 +516,75 @@ def embed(text: str) -> np.ndarray:
     return v
 
 
+# ── Evidence precedence: when-did-I / what-did-I-say / are-you-sure
+# (memory_gate.is_evidence_question) never belongs to a domain expert. The head
+# reads a NAME as people (live 2026-09-30: "What exactly did I say about
+# Marisol?" → people @ 0.9872), but only the recall packet can answer (it dates
+# and quotes the user's words — recall_evidence). when/said → memory; sure →
+# chat (the brain: a challenge may be about the world). ONE rule on BOTH head
+# surfaces — route() (Tier-1, Skybridge, voice) and head_verdict() (INTENT_GATE).
+# Unflagged, like the low-confidence floor (router_two_stage.gate_reason).
+EVIDENCE_REASON = "evidence_question"
+
+
+def evidence_target(text: str, domain: Optional[str]) -> Optional[str]:
+    """Where an evidence-shaped question goes instead of `domain`, or None to
+    keep `domain` (not evidence-shaped, or already chat/memory). Pure."""
+    if domain in (None, "chat", "memory"):
+        return None
+    from memory_gate import evidence_question_kind  # stdlib-only
+
+    kind = evidence_question_kind(text or "")
+    if not kind:
+        return None
+    return "chat" if kind == "sure" else "memory"
+
+
+def _evidence_decision(decision: dict, target: str) -> dict:
+    """`decision` re-pointed at `target`; head_top/head_conf keep the head's."""
+    if target == "chat":
+        return {**decision, "tool": None, "domain": "chat", "args": {},
+                "gated": True, "reason": EVIDENCE_REASON}
+    return {**decision, "tool": "recall_memory", "domain": "memory", "args": {},
+            "gated": False, "reason": EVIDENCE_REASON}
+
+
+def _apply_evidence_precedence(text: str, out: dict, scores: dict) -> None:
+    """route(): re-point a domain-expert claim on an evidence question (in
+    place) and log ``INTENT_GATE evidence_question=1 head=… conf=… routed=…``."""
+    target = evidence_target(text, out.get("domain"))
+    if target is None:
+        return
+    ts = out.get("two_stage")
+    head = (ts or {}).get("head_top") or out.get("domain")
+    conf = (ts or {}).get("head_conf")
+    if isinstance(ts, dict):
+        out["two_stage"] = _evidence_decision(ts, target)
+    out["domain"] = target
+    if out.get("routed") != "chat":
+        out["routed"] = target
+    out["score"] = round(float(scores.get(target, 0.0)), 3)
+    logger.info("INTENT_GATE evidence_question=1 head=%s conf=%s routed=%s",
+                head, "-" if conf is None else f"{float(conf):.4f}", target)
+
+
 def head_verdict(text: str) -> Optional[dict]:
     """The ACTIVE two-stage head's stage-1 verdict on `text` (no sidecar call).
 
     None unless ZOE_ROUTER_HEAD=active and the router is enabled — i.e. the
     head only arbitrates keyword claims when it is also routing. See
-    router_two_stage.head_verdict for the shape. NEVER raises.
+    router_two_stage.head_verdict for the shape; an evidence-shaped question
+    comes back re-pointed (``reason="evidence_question"``). NEVER raises.
     """
     if not is_enabled() or head_mode() != "active":
         return None
     try:
         import router_two_stage
 
-        return router_two_stage.head_verdict(embed(text))
+        verdict = router_two_stage.head_verdict(embed(text))
+        # head_top: an unsure (below_gate) head must not wave a claim through
+        target = evidence_target(text, (verdict or {}).get("head_top"))
+        return _evidence_decision(verdict, target) if target else verdict
     except Exception as exc:
         logger.warning("head_verdict failed (non-fatal): %s", exc)
         return None
@@ -601,6 +657,7 @@ def route(text: str) -> dict:
             # 0.0 — never another domain's score — so expert per-domain
             # threshold gates deny rather than act on a borrowed confidence.
             out["score"] = round(float(scores.get(ts_domain, 0.0)), 3)
+            _apply_evidence_precedence(text, out, scores)
             out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
             # `routed` is still the SIMILARITY decision the two-stage pre-empted —
             # log it as the independent baseline (out["routed"] is now the
@@ -608,4 +665,6 @@ def route(text: str) -> dict:
             _log_two_stage(_two_stage_rec(text, decision, "active",
                                           out["routed"], similarity_routed=routed))
         # decision None → similarity behavior unchanged (brain-safe)
+    if "two_stage" not in out:
+        _apply_evidence_precedence(text, out, scores)
     return out

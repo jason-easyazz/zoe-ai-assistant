@@ -186,6 +186,9 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
       veto   router_chat (chat_top, or the ZOE_ROUTER_HEAD_MIN_CONF `low_conf`
              floor — a deliberate send-to-the-brain verdict)
              / router_disagrees (the head is confident in another domain)
+             / evidence_question (semantic_router re-pointed an evidence-
+             shaped question: only a memory_* intent may keep it — never a
+             people/lists/calendar/… expert, whatever the head's confidence)
 
     Same rule as the Skybridge router gate (skybridge_router_gate), so every
     deterministic lane shares one authority: the head.
@@ -197,6 +200,10 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
         return "allow", "no_router_class"
     if not isinstance(verdict, dict):
         return "allow", "router_unavailable"
+    if verdict.get("reason") == "evidence_question":
+        if intent_name.startswith("memory_"):
+            return "allow", "evidence_memory_intent"
+        return "veto", "evidence_question"
     if verdict.get("gated"):
         if (verdict.get("reason") or "below_gate") == "below_gate":
             return "allow", "router_unsure"
