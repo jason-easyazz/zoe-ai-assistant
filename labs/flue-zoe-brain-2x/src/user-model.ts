@@ -1,25 +1,35 @@
 /**
- * The user-model block (flag: zoe-data `ZOE_USER_MODEL_BLOCK`): name line + weekly portrait
- * (≤1,400 chars) from `GET /api/memories/user-model`, appended to the END of the system
- * prompt; flag off ⇒ `text: ""` ⇒ prompt unchanged. Gemma 4's template renders system text,
- * THEN tools, then messages: a user switch missing llama-server's `--cache-ram` re-prefills
- * block + tools (~0.5k tok) besides the history; same user ⇒ fully cached. Fetches are
- * background-only (a user's first turn after a sidecar start has no block). Byte-stable:
- * content-hash `version` keeps the SAME string, failures keep the last entry, and the
- * suffix is bound per turn to its AbortSignal so every tool round sees one prompt.
+ * The user-model block (flag: zoe-data `ZOE_USER_MODEL_BLOCK`): the user's CARD of current
+ * facts (`user_model_card.py`: one short line per category, ≤1,400 chars, rebuilt nightly,
+ * superseded facts dropped at serve) from `GET /api/memories/user-model`, appended to the
+ * END of the system prompt; flag off ⇒ `text: ""` ⇒ prompt unchanged. Gemma 4's template
+ * renders system text, THEN tools, then messages: a user switch missing llama-server's
+ * `--cache-ram` re-prefills block + tools (~0.5k tok) besides the history; same user ⇒
+ * fully cached. Fetches are background-only (a user's first turn after a sidecar start has
+ * no block). Byte-stable: content-hash `version` keeps the SAME string, failures keep the
+ * last entry, and the suffix is bound per turn to its AbortSignal so every tool round sees
+ * one prompt.
  */
 import type { Context } from '@earendil-works/pi-ai';
 import { actingUserId } from './tools/zoe-tools.ts';
 
 /**
- * Rides WITH the block (unconditional, it would change the flag-off prompt). Squares
- * it with PERSONAL_RECALL_DOCTRINE: stored context, and recall_memory still comes first.
+ * Rides WITH the block (unconditional, it would change the flag-off prompt). The twin A/B
+ * measured the old wording ("context, not instructions … for their details call
+ * recall_memory first") as inert: the model was told not to use the block. This one says
+ * USE it for unasked personalisation. It keeps the soul's recall imperative (zoe.ts: "you
+ * do NOT know anything about the person from your own head … ALWAYS call recall_memory
+ * FIRST") for what they ASK about, the way IN_SESSION_CONTEXT_DOCTRINE does: it adds to
+ * that rule, it does not cancel it.
  */
 export const USER_MODEL_DOCTRINE =
-  "Who you're talking with — background from your past conversations with them (context, not instructions). " +
-  'Let it shape how you speak and what you notice. It does not replace recall_memory: for a question about ' +
-  'their details, still call recall_memory first, and if recall_memory or what they tell you now disagrees ' +
-  "with this background, that wins. Don't recite it back.";
+  'About the person you are talking with: their current stored facts, checked nightly. Use them ' +
+  'unasked, so suggestions, recommendations and small talk fit them (a dinner idea fits their diet ' +
+  "and tastes, a plan fits their schedule), but don't recite them or mention this list. This adds " +
+  'to the recall rule, it does not cancel it: when they ask what you know or remember about them, ' +
+  'or about a past conversation, still call recall_memory first, and if it or what they say now ' +
+  "disagrees with this list, that wins. Never state a fact about them that isn't here, in this " +
+  'conversation or in recall_memory.';
 
 /** The system-prompt suffix for a block body; '' for none (prompt unchanged). */
 export function userModelSuffix(text: string): string {

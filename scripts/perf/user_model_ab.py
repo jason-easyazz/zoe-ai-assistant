@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """user_model_ab.py — live A/B evidence for two flag-dark Flue context features.
 
-1. ``ZOE_USER_MODEL_BLOCK`` (zoe-data, #1783): the per-user name line + weekly
-   portrait appended to the Flue system prompt. The Samantha bar cannot see it:
+1. ``ZOE_USER_MODEL_BLOCK`` (zoe-data, #1783): the per-user card of current facts
+   (``user_model_card.py``; it was the weekly narrative portrait until the first run
+   measured that inert) appended to the Flue system prompt. The Samantha bar cannot see it:
    its ``demo_bar_*`` users are synthetic, so ``load_user_model_block`` returns
    ``""`` for them and their wire is byte-identical in both flag states.
 2. ``ZOE_BRAIN_ELIDE_STALE_BLOCKS`` (sidecar, #1785): older user messages lose
@@ -95,8 +96,10 @@ SEEDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 SEED_MIN_LANDED = 9  # of 11, and the SAME set for P and TWIN (store parity)
 SAY_WORRY_P = SEEDS[-1][1]
-# Sent AFTER the portrait, so the week-stale portrait still says "half-marathon"
-# while the store says "10k": the stale-block supersession guard (S2 analogue).
+# Sent AFTER the portrait (and the card built with it), so the portrait still says
+# "half-marathon" while the store says "10k": the stale-block supersession guard (S2
+# analogue). The card drops the row at serve once the store has marked it superseded;
+# `portrait` records whether it did (card_after_supersede).
 SAY_SUPERSEDE = "Change of plan: I've dropped the half-marathon. I'm doing a 10k in May instead."
 SUPERSEDE_NEEDLE = "10k"
 PORTRAIT_CHAT_ASK = "Please rebuild your portrait of me."
@@ -175,12 +178,13 @@ BENEFIT_MIN_SAMPLES = 3     # P must beat TWIN by >= 3 profile-question samples
 RECALL_TOLERANCE = 1        # P's recall_memory fire count may trail TWIN's by at most 1
 DELIVERY_MIN_FRACTION = 0.8  # P's system estimate must exceed TWIN's by >= 80% of the block
 BREVITY_MAX_WORDS = 90
+CARD_MIN_LINES = 4  # name + at least 4 category lines: the 11 seeds span 7 categories
 VERBATIM_RUN = sb.VERBATIM_RUN
 ELIDE_MIN_HISTORY_DROP = 0.5  # ON history <= OFF history - 0.5 * stale
 ELIDE_MAX_REPREFILL = 400     # mean extra first_prompt_n on post-block turns (~0.7 s)
 # len(USER_MODEL_DOCTRINE) in labs/flue-zoe-brain-2x/src/user-model.ts — pinned to
 # the TS source by tests/unit/test_user_model_ab.py.
-DOCTRINE_CHARS = 367
+DOCTRINE_CHARS = 597
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -473,7 +477,8 @@ def plan_text() -> str:
         f"  P={P_USER} (allowlisted → block)  TWIN={TWIN_USER} (not allowlisted → no block)",
         f"  name={PROFILE_NAME}; {len(SEEDS)} synthetic seed facts; supersession after the portrait",
         "  seed:     users.name for P+TWIN (own rows), seeds via /api/chat, capture + landing verified",
-        "  portrait: POST /api/portrait/{id}/regenerate (ZOE_BAR_ADMIN_SESSION) or the chat intent;",
+        "  portrait: POST /api/portrait/{id}/regenerate (ZOE_BAR_ADMIN_SESSION) or the chat intent",
+        "            (either one also rebuilds the user-model card);",
         "            then the supersession turn for both",
         f"  measure:  {len(PROFILE_QS)} profile + {len(GUARD_QS)} guard questions x samples, P/TWIN "
         f"interleaved; one fresh L asks {len(LEAK_QS)} leak questions right after P; {len(RECALL_PROMPTS)} "
@@ -657,6 +662,10 @@ def phase_portrait(live: ProbeLive, args, log) -> dict:
                                "landed": land["landed"]}
     ok = all(v["ok"] for v in out["portrait"].values()) and \
         all(v["landed"] and not v["error"] for v in out["supersede"].values())
+    card = (live.user_model(P_USER) or {}).get("text") or ""
+    out["card_after_supersede"] = {"chars": len(card), "lines": card.count("\n") + bool(card),
+                                   "half_marathon": asserted(card, ("half marathon",)),
+                                   "ten_k": word_hits(card, TEN_K)}
     out["status"] = "ok" if ok else "error"
     log(f"portrait: {json.dumps(out)}")
     return out
@@ -675,9 +684,10 @@ def phase_measure(live: ProbeLive, args, log) -> tuple[dict, int]:
     if um_p is None or um_t is None:
         return {"status": "refused", "why": "GET /api/memories/user-model failed"}, 2
     block = um_p.get("text") or ""
-    if not block.startswith(f"You are speaking with {PROFILE_NAME}") or len(block) < 200:
-        return {"status": "refused", "why": f"P is not served a portrait block (chars={len(block)}): "
-                "ZOE_USER_MODEL_BLOCK on + P in ZOE_SYNTHETIC_USER_ALLOWLIST + a portrait needed"}, 2
+    if not block.startswith(f"Name: {PROFILE_NAME}\n") or block.count("\n") < CARD_MIN_LINES:
+        return {"status": "refused", "why": f"P is not served a user-model card (chars={len(block)}): "
+                "ZOE_USER_MODEL_BLOCK on + P in ZOE_SYNTHETIC_USER_ALLOWLIST + the portrait "
+                "phase (which builds the card) needed"}, 2
     if um_t.get("text"):
         return {"status": "refused", "why": "TWIN is served a block — it must NOT be allowlisted"}, 2
     offset = log_offset()
