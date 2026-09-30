@@ -2,6 +2,8 @@
  * src/user-model.ts offline (stub zoe-data + real sidecar on the mock model): flag off
  * ⇒ wire system prompt byte-identical to a turn that never consults the block; flag on
  * ⇒ that + doctrine + block on EVERY round; never holds a turn; binds per turn; fails open.
+ * The doctrine tells the model to USE the card unasked while recall_memory stays first for
+ * what the user asks about (the A/B measured the old "context, not instructions" wording inert).
  */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -9,7 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { after, before, beforeEach, it } from 'node:test';
 import { startBrainHarness, waitFor, type BrainHarness } from './helpers/harness.ts';
 
-const BLOCK = 'You are speaking with Sam (the signed-in user).\nSam is training for a half marathon.';
+const BLOCK = 'Name: Sam\nDiet: vegetarian\nCurrent: training for a 10k in May (noted 29 Sep)';
 const stub = { hits: [] as string[], status: 200, body: { version: 'v1', text: BLOCK } as object };
 const server = createServer((req, res) => {
   stub.hits.push(`${new URL(req.url ?? '/', 'http://s').searchParams.get('user_id')}|${req.headers['x-internal-token']}`);
@@ -43,6 +45,18 @@ const turnSignal = (userId: string) => {
   return signal;
 };
 const settle = () => um.refreshUserModel('sam'); // joins (or runs) the background fetch
+
+it('doctrine: use the card unasked; recall_memory stays first for what they ask; no recital', () => {
+  const d = um.USER_MODEL_DOCTRINE;
+  assert.match(d, /Use them unasked/);
+  assert.match(d, /dinner idea fits their diet/);
+  assert.match(d, /adds to the recall rule, it does not cancel it/);
+  assert.match(d, /what you know or remember about them, or about a past conversation, still call recall_memory first/);
+  assert.match(d, /don't recite them/);
+  assert.match(d, /Never state a fact about them that isn't here/);
+  assert.doesNotMatch(d, /context, not instructions/);
+  assert.ok(d.length < 650, `doctrine grew to ${d.length} chars`);
+});
 
 it('no block ⇒ no suffix, same Context, same policies output', async () => {
   const { applyPolicies } = await import('../src/providers/capped-completions.ts');
