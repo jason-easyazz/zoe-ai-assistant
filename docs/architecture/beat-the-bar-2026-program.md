@@ -1,6 +1,6 @@
 ---
 type: program-plan
-date: 2026-09-29
+date: 2026-09-30
 audience: Jason + every agent — the single tracker for "Zoe better than anything else"
 status: 🔨 active — NEXT ACTION is always §0
 ---
@@ -20,7 +20,21 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ## 0. NEXT ACTION (keep this current)
 
-State as of **2026-09-29 11:30 AWST** (the context-manager morning; record in §6):
+State as of **2026-09-30 11:00 AWST** (context-manager tier 2 live; record in §6):
+- live = `main` `43343791` (#1796). Merged and deployed since the last entry, every deploy
+  run green: #1787, #1790, #1789, #1791 (replaces #1788), #1793, #1792, #1794, #1795, #1796.
+- **Flags:** ON `ZOE_BRIEF_ON_FIRST_TURN`, `ZOE_PROACTIVE_SELECTOR`, `ZOE_RECALL_EVIDENCE`,
+  `ZOE_USER_MODEL_BLOCK`, `ZOE_MEMORY_IMPLICIT_SUPERSEDE` (zoe-data `.env`) and
+  `ZOE_BRAIN_ELIDE_STALE_BLOCKS` (sidecar `.env`). OFF `ZOE_PROACTIVE_SPOKEN` (owner decision).
+  The A/B allowlist line is removed.
+- **Gates with the full flag set:** Samantha bar 8/8 PASS incl. **S5, first ever PASS**
+  (09:24 on `db217287`); baseline re-recorded 09:52 on `db217287` (S1–S8 PASS; note
+  `samples: 1`, the old bar was 3 — [samantha-bar.md](../knowledge/samantha-bar.md)); compares
+  on `43343791` at 10:38 and 10:55 all PASS. Voice replay probe `status=pass`, 19/19 scoreable OK
+  (1 EMPTY of 20), at `~/.cache/zoe/voice_probe_flags_on.json`.
+- **Next:** item 4.0 below.
+
+Earlier, **2026-09-29 11:30 AWST** (the context-manager morning; record in §6):
 - live = `main` `8da575f7` (#1785). Merged and deployed today, every deploy run green:
   #1773 (test-suite palace isolation), #1780 (context-engineering research), #1781
   (brief on first turn), #1782 (open-loop extraction repair + the code-level
@@ -158,12 +172,18 @@ Earlier, **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is on*
    [merge-and-deploy.md](../knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 4. **Next engineering, in order:**
    0. **Context manager (2026-09-29, [research](../research/samantha-context-engineering-2026-09-29.md)).**
-      A/B the two flag-dark PRs, one at a time, each with the replay gate and a Samantha
-      compare flag-off vs flag-on: `ZOE_USER_MODEL_BLOCK` (#1783; `demo_bar_*` users have no
-      portrait, so seed an allowlisted demo user with a portrait to test the block itself —
-      #1783's A/B recipe) and `ZOE_BRAIN_ELIDE_STALE_BLOCKS` (#1785; sidecar env, read the
-      `FLUE_CONTEXT_BUDGET` `stale=` column first). Then the samantha_bar follow-up:
-      majority-of-N for S4/S8.
+      Built and live as of 2026-09-30 (§6): user-model card, elision, evidence recall,
+      implicit supersede, proactivity selector. Follow-ups, in order: (a) per-user raise
+      spacing for the selector — raises are once per *session*, and the bar's S5 runs log two
+      `PROACTIVE_RAISE` lines for one user in two sessions seconds apart; (b) the
+      `recall_evidence_probe.py` packet check (it wants the quote on the Marisol+Lisbon line;
+      the quote landed on the other bullet and the Lisbon row has no `source_excerpt`); (c) `hygiene-compare`
+      judges the final turn, where the off arm had rolled to `history=0` — judge the last
+      block-bearing turn; (d) the samantha_bar majority-of-N for S4/S8. Then the remaining gap
+      list: (7) an ask-to-remember policy, (8) small side models (log injected `[mem:id]` refs
+      per turn first). 🧑 operator: set `ZOE_BASE_URL=https://192.168.1.218` in
+      `services/zoe-data/.env` (runbook §20; the panel pairing QR is built from it), rotate
+      `ZOE_BRAIN_TOKEN` (printed in an agent transcript), disable the zoe-auth admin `p0test`.
    1. **Samantha bar S1 + S4** (B3.11, record: [samantha-bar.md](../knowledge/samantha-bar.md)
       → *Live compares*):
       (a) **S1 — ✅ DONE (#1770, PASS on the 03:56 compare; baseline re-recorded 04:00).**
@@ -892,6 +912,9 @@ Earlier, **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is on*
   **2026-09-29:** after #1782 and #1783 all PASS; after #1785 run 1 S4 FAIL, run 2 S8 FAIL,
   run 3 all PASS. S4 (judged) and S8 (retrieval edge) have an intrinsic flake rate: re-run
   before concluding; follow-up = majority-of-N for S4/S8.
+  **2026-09-30:** S5 is scored (#1794 hook, `ZOE_PROACTIVE_SELECTOR` on): first PASS 09:24 on
+  `db217287`; baseline re-recorded 09:52 on `db217287` with all eight PASS, so S5 now
+  regress-gates. S8 flaked once after #1791 and passed on the re-run.
 - B3.3 ⬜ **Importance-sum reflection** reusing `emotional_moment.intensity`; insights carry
   ≥2 evidence ids (Generative Agents); that is what the emotional follow-up fires on.
 - B3.4 ⬜ **User-visible memory page** on the touch UI: consolidated topics, edit/delete,
@@ -1277,6 +1300,45 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-09-30 — **context-manager tier 2 live: proactivity selector, user-model card, evidence
+  recall, implicit supersede; S5 scored for the first time.** Merge times AWST, every deploy
+  run green, live = `43343791`:
+  **#1787** (`b62454a9`, 06:23) user-model A/B probe (`scripts/perf/user_model_ab.py`,
+  [record](../knowledge/user-model-ab.md));
+  **#1790** (`42640693`, 06:44) open-loop calibration (`open_loop_quality.py`): meta turns never
+  become loops and a loop needs a concrete anchor — the owner's first 4 real loops (2 good,
+  2 junk) are the calibration cases;
+  **#1789** (`ecb7bbf5`, 08:16) `ZOE_RECALL_EVIDENCE`: recalled facts carry a date (+12 tok
+  each, measured) and, on when / what-did-I-say / are-you-sure turns, the user's own words;
+  **#1791** (`26d350e3`, 08:33) `ZOE_PROACTIVE_SELECTOR`: nightly `proactive_candidates`
+  (migration 0033), salience = importance × recency × relevance, at most one `[RAISE]` block
+  per session; replaces #1788 (split three ways, runbook §17);
+  **#1793** (`2908d2ee`, 08:50) morning check-in datetime JSON fix (runbook §19);
+  **#1792** (`2d76aad5`, 09:00) the structured user-model **card** (`user_model_card.py`,
+  migration 0034; renumbered from 0033 after #1791 landed) replaces the narrative portrait as
+  the always-present block, with a use-it sidecar doctrine;
+  **#1794** (`db217287`, 09:10) S5 hook: `POST /api/proactive/selector/run-synthetic/{id}`;
+  **#1795** (`45db6119`, 10:16) evidence-shaped questions never routed to a domain expert +
+  Flue recall-floor `evidence` shape;
+  **#1796** (`43343791`, 10:31) `ZOE_MEMORY_IMPLICIT_SUPERSEDE` (`memory_supersede.py`):
+  change-cue supersede at write time + nightly conflict pass, `valid_from`/`invalid_at`,
+  `state_change` tombstones; fixed a digest dedup that discarded negations.
+
+  | A/B | result | decision |
+  |---|---|---|
+  | Elision, 10-turn probe | turn 9 history 1551 → 501 tok (stale 1080 removed); post-block re-prefill 428.9 → 393.1 | **KEPT ON** (`hygiene-compare` misreports: follow-up (c)) |
+  | User model round 1 (portrait) | profile P 3 vs TWIN 4 of 21 | NO_MEASURABLE_BENEFIT |
+  | User model round 2 (card) | P 7 vs TWIN 3 (+4); `race` guard P 0/3 | DO_NOT_FLIP → built #1796 |
+  | User model round 3 (card + supersede) | P 9 vs TWIN 3 (+6); race 3/3; leak PASS; delivery +346 tok | **FLIP** |
+  | Selector | bar 8/8, S5 PASS | **KEPT ON** |
+  | Recall evidence | `when_ok`, `said_ok` true after #1795; verdict FAIL on the packet quote check | **ON**; probe fix = follow-up (b) |
+
+  Nightly conflict-pass dry run on the owner: 0 pairs (operator-reported). The owner's card
+  builds (16 items, 997 chars). S8 failed once after #1791 (08:40) and passed on the re-run
+  (08:48) — the 09-29 re-run rule. Incidents: runbook §20 (voice probe hung on `zoe.local`;
+  Kokoro stopped 07:40–08:03), §21 (agent-launched harnesses), §17 (stacked + parallel PR
+  conflicts, migration renumbering). **Operator:** rotate `ZOE_BRAIN_TOKEN` (an agent's
+  redaction slipped), set `ZOE_BASE_URL`, disable `p0test`.
 - 2026-09-29 (day) — **brief-on-first-turn live; the context-manager PRs merged flag-dark;
   the test suite no longer writes to the household palace.** Merge times AWST, every deploy
   run green, live = `8da575f7`:
