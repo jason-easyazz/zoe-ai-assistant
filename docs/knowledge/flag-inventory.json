@@ -337,6 +337,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
           "scripts/perf/user_model_ab.py"
         ],
@@ -2974,6 +2975,7 @@
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",
           "scripts/perf/measure_voice.py",
+          "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
           "scripts/perf/user_model_ab.py"
         ],
@@ -3599,6 +3601,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/main.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_RECALL_EVIDENCE": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_evidence.py"
         ],
         "typed_env": true
       },

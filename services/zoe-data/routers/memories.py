@@ -36,6 +36,7 @@ from memory_service import (
     memory_affect,
 )
 from models import MemoryProposalCreate, MemoryReviewBody
+import recall_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -426,6 +427,9 @@ def _build_memory_prompt_packet(
     max_facts: int = _PROMPT_PACKET_MAX_FACTS,
     boost_emotional: bool = False,
     recent: Optional[list[MemoryRef]] = None,
+    evidence: bool = False,
+    quotes: bool = False,
+    now: Optional[float] = None,
 ) -> dict[str, Any]:
     """Compile a compact, cited memory packet for system-prompt injection.
 
@@ -449,6 +453,13 @@ def _build_memory_prompt_packet(
     ``(recent)`` prefix so the brain can tell "shared in the last few days" from
     a long-standing fact. None/empty (every non-continuity caller) is a
     byte-for-byte no-op.
+
+    ``evidence`` (ZOE_RECALL_EVIDENCE, see ``recall_evidence``) dates each
+    bullet ``(Mon 22 Sep, 8 days ago)`` before its cite and adds one
+    instruction line under the authority rule; ``quotes`` additionally appends
+    ``— you said: "…"`` to the first ``MAX_QUOTES`` bullets (presented order)
+    that have a quotable excerpt, one quote per distinct excerpt. False (the
+    default, and every caller while the flag is off) is a byte-for-byte no-op.
     """
     if boost_emotional and facts:
         facts = sorted(facts, key=_emotional_intensity, reverse=True)
@@ -457,8 +468,11 @@ def _build_memory_prompt_packet(
     kept_ts: list[float] = []
     lines: list[str] = []
     refs: list[dict[str, Any]] = []
+    quote_by_id: dict[str, str] = {}
+    dated = 0
 
     def _consider(ref: MemoryRef, *, from_search: bool, is_recent: bool = False) -> None:
+        nonlocal dated
         if len(lines) >= max_facts:
             return
         meta = ref.metadata or {}
@@ -489,7 +503,11 @@ def _build_memory_prompt_packet(
         if is_recent:
             felt = memory_affect(ref)
             prefix = f"(recent, felt {felt}) {prefix}" if felt else f"(recent) {prefix}"
-        lines.append(f"- {prefix}{text[:200]} {cite}")
+        when = recall_evidence.date_suffix(meta, now=now) if evidence else ""
+        dated += bool(when)
+        if quotes:
+            quote_by_id[ref.id] = recall_evidence.quote_for(meta, text[:200])
+        lines.append(f"- {prefix}{text[:200]}{when} {cite}")
         entry = {
             "id": ref.id,
             "memory_type": meta.get("memory_type", "fact"),
@@ -514,6 +532,16 @@ def _build_memory_prompt_packet(
     # presented first so the brain's newest-wins doctrine sees the correction
     # before the stale sibling. No conflicts ⇒ byte-for-byte unchanged.
     lines, refs = _present_conflicts_newest_first(lines, refs, kept_tokens, kept_ts)
+    # Quotes go on the first bullets AS PRESENTED (after the newest-first
+    # reorder), so a correction carries its words above its stale sibling.
+    quoted: set[str] = set()
+    for i, entry in enumerate(refs):
+        if len(quoted) >= recall_evidence.MAX_QUOTES:
+            break
+        words = quote_by_id.get(entry["id"]) or ""
+        if words and words not in quoted:
+            quoted.add(words)
+            lines[i] = f'{lines[i]} — you said: "{words}"'
     # Denial-echo guard: this packet is injected every turn, but in a long-lived
     # session the model's OWN earlier "I don't have any information about X"
     # replies sit in the conversation context and can outvote the packet on
@@ -522,18 +550,23 @@ def _build_memory_prompt_packet(
     # WITH the facts so recalled memory beats stale conversational denials.
     # The header line stays first — consumers pin
     # `startswith("## What I know about you")`.
-    return {
+    guide = f"{recall_evidence.instruction_line(quotes=bool(quoted))}\n" if evidence else ""
+    result: dict[str, Any] = {
         "packet": (
             "## What I know about you\n"
             "(These stored memories are authoritative and current. If anything "
             "said earlier in this conversation conflicts with them — including "
             "your own earlier replies that information was unknown or not on "
             "file — trust these memories and answer from them.)\n"
+            + guide
             + "\n".join(lines)
         ),
         "refs": refs,
         "count": len(refs),
     }
+    if evidence:
+        result["evidence"] = {"dated": dated, "quoted": len(quoted)}
+    return result
 
 
 def _fold_relational_block(
@@ -828,9 +861,21 @@ async def memory_for_prompt(
                 seen_ids.add(ref.id)
                 candidates.append(ref)
         recent = _pick_recent_for_continuity(candidates)
+    # Evidence-bearing recall (ZOE_RECALL_EVIDENCE, default OFF): dates on every
+    # relevance packet — the floor, the recall_memory tool, the core lane —
+    # and the user's own words on an evidence-shaped turn. Never in continuity
+    # mode: that block is S4-tuned and budgeted around its closing ask.
+    evidence = not continuity and recall_evidence.enabled()
+    quotes = evidence and recall_evidence.wants_quotes(message, user_id)
     result = _build_memory_prompt_packet(
-        facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent
+        facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent,
+        evidence=evidence, quotes=quotes,
     )
+    if evidence:
+        ev = result.pop("evidence", None) or {}
+        logger.info("RECALL_EVIDENCE user=%s quotes=%d bullets=%d dated=%d quoted=%d chars=%d",
+                    user_id, int(quotes), result.get("count", 0), ev.get("dated", 0),
+                    ev.get("quoted", 0), len(result.get("packet") or ""))
     result["user_scoped"] = True
     if continuity:
         focus = _continuity_focus(recent or [], result.get("refs") or [])
