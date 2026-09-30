@@ -486,15 +486,20 @@ def _recall_question_shape(message: str) -> str:
     "event" (an event-shaped question about the user's people/plans —
     ``memory_gate.is_event_question``: "Who is flying in on Thursday, and
     where from?", "where is she flying from" — Samantha bar S1 round 3), or ""
-    (not a recall question). Pure. Ownership against continuity is decided by
+    (not a recall question), or "evidence" (``memory_gate.is_evidence_question``:
+    "What exactly did I say about Marisol?", "are you sure?" — no my/I-question
+    shape, yet only the packet's dated, quoted bullets can answer it; live miss
+    2026-09-30). Pure. Ownership against continuity is decided by
     ``_recall_floor_shape`` — the ONE predicate the floor, the continuity
     exclusivity check and the offer ager share."""
     msg = message or ""
     if _PERSONAL_QUESTION_RE.search(msg):
         return "personal"
-    from memory_gate import is_event_question  # stdlib-only; keeps this module slim
+    from memory_gate import is_event_question, is_evidence_question  # stdlib-only
 
-    return "event" if is_event_question(msg) else ""
+    if is_event_question(msg):
+        return "event"
+    return "evidence" if is_evidence_question(msg) else ""
 
 
 def _recall_floor_shape(message: str) -> str:
@@ -652,8 +657,9 @@ async def _recall_context_block(message: str, user_id: str) -> str:
 
     '' unless the flag is ON, a real user id is present, and the message
     matches a conservative recall-question shape the floor claims
-    (``_recall_floor_shape``: a personal my/I question, or an event-shaped
-    question not embedded in a first-person feeling). A fetch failure logs
+    (``_recall_floor_shape``: a personal my/I question, an evidence-shaped
+    question, or an event-shaped question not embedded in a first-person
+    feeling). A fetch failure logs
     and returns '' — the turn always proceeds, at worst without the floor.
     """
     if not _recall_inject_enabled():
@@ -1371,7 +1377,7 @@ async def _run_flue_brain_streaming_turn(
     from recall_evidence import note_turn
 
     note_turn(uid, message)
-    # Deterministic recall floor (default OFF): on a personal- or event-shaped
+    # Deterministic recall floor (default OFF): on a personal-, event- or evidence-shaped
     # question turn, prepend the for-prompt packet so recall no longer depends on the model
     # electing to call its recall_memory tool. Placed BEFORE the identity wrap
     # so the block rides AFTER the identity line on the wire (the sidecar's
