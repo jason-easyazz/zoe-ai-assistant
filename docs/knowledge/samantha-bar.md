@@ -502,6 +502,33 @@ In-process, reset by a restart. Tests:
 - **Tests:** `services/zoe-data/tests/test_memory_forget_synthetic.py`, including a
   negative control that loosens the pattern.
 
+## Companion probe: recall evidence (`recall_evidence_probe.py`)
+
+`scripts/perf/recall_evidence_probe.py` checks "when did I tell you about X?" for
+`ZOE_RECALL_EVIDENCE`, reusing this harness's Live client, gates, lock and asserted teardown
+(own pending file `recall_evidence_probe_pending_teardown.json`). One fresh `demo_bar_<hex>`
+user says "my sister Marisol is flying in from Lisbon on Thursday"; the probe reads
+`/for-prompt` for "When did I tell you about Marisol flying in?", asks it, then asks "What
+exactly did I say about Marisol?". With the flag on, a recalled bullet reads
+`- … (Tue 22 Sep, 8 days ago) [mem:…] — you said: "…"` under one instruction line (quotes
+only on when / what-did-I-say / are-you-sure turns; batch-digest rows undated; pre-#1782 rows
+have no excerpt, so date only).
+
+The server's mode is read from the packet (the instruction line exists only when the flag is
+on). Run it flag off (ablation), then set `ZOE_RECALL_EVIDENCE=1` beside
+`ZOE_SEAM_RECALL_INJECT`, restart zoe-data, poll `/health`, and run it again:
+
+```bash
+ZOE_PERF=1 flock /tmp/zoe-voice-harness.lock nice -n 5 python3 scripts/perf/recall_evidence_probe.py
+```
+
+Verdicts: flag on → PASS (exit 0) needs the Marisol bullet dated `(<Ddd D Mon>, today)`, a
+`you said: "…Lisbon…"` quote and a "when" reply naming today ("today", "earlier", "just now",
+the weekday), else FAIL (exit 1); flag off → BASELINE (exit 0), or ERROR if the packet is
+dated anyway. `said_ok` (Lisbon + Thursday) is recorded, not gated — the fact text alone
+carries both. Exit 2 = refused / error / teardown unproven; 3 = lock held. Artifacts:
+`~/.cache/zoe/recall_evidence_probe_last.json` + `recall_evidence_probe_trend.jsonl`.
+
 ## Known limits (v0)
 
 - **Needs the route deployed** (it is, since the #1751 deploy on 2026-09-28). The live
