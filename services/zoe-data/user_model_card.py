@@ -9,7 +9,7 @@ vegetarian lifestyle"), and a week-old portrait re-asserted a superseded fact.
 * Built by :func:`rebuild_user_model_card` in the nightly dreaming pass, by every
   portrait synthesis (``portrait_refresh`` intent, ``POST /api/portrait/…/regenerate``),
   and once lazily when a served user has no card yet. It is stored in ``user_model_cards``
-  (alembic 0033) with a content-hash ``version``, so the served block stays byte-identical
+  (alembic 0034) with a content-hash ``version``, so the served block stays byte-identical
   between builds.
 * Served by :func:`load_card_block`, which re-checks that every source row is still
   ``approved``. A fact that is superseded, archived or forgotten during the day drops
@@ -275,7 +275,7 @@ def card_version(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16] if text else ""
 
 
-# ── Storage (user_model_cards, alembic 0033) ─────────────────────────────────────────
+# ── Storage (user_model_cards, alembic 0034) ─────────────────────────────────────────
 
 _UPSERT = """INSERT INTO user_model_cards (user_id, card_json, card_text, version, built_at,
                                            source_count)

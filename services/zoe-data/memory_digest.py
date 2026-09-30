@@ -1970,6 +1970,17 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         logger.warning("dreaming: open_loops extraction failed user=%s: %s", user_id, exc)
         result["open_loops"] = {"status": "error", "error": str(exc)}
 
+    # Phase 1.6: proactivity selector (ZOE_PROACTIVE_SELECTOR, default OFF — a
+    # no-op without I/O when off). Ranks tonight's loops/moments/events.
+    try:
+        from proactive.selector import select_for_user
+
+        selected = await select_for_user(user_id)
+        if selected is not None:
+            result["proactive_select"] = selected
+    except Exception as exc:
+        logger.warning("dreaming: proactive selector failed user=%s: %s", user_id, exc)
+
     if is_sunday:
         deep = await _deep_sleep_pass(user_id)
         result["deep_sleep"] = deep

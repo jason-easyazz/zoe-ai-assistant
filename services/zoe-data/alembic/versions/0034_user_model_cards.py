@@ -1,4 +1,4 @@
-"""0033 — ``user_model_cards``: the stored user-model card (``user_model_card.py``).
+"""0034 — ``user_model_cards``: the stored user-model card (``user_model_card.py``).
 
 This is the structured card of current facts that ``GET /api/memories/user-model`` serves
 to the Flue sidecar, flag-dark behind ``ZOE_USER_MODEL_BLOCK``. One row per user:
@@ -18,8 +18,8 @@ and the next dreaming pass rebuilds it.
 
 from alembic import op
 
-revision = "0033"
-down_revision = "0032"
+revision = "0034"
+down_revision = "0033"
 branch_labels = None
 depends_on = None
 

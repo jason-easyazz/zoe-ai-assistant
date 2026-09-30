@@ -1,6 +1,6 @@
-"""Migration 0033 (``user_model_cards``) is create-if-missing, idempotent, and the only DDL.
+"""Migration 0034 (``user_model_cards``) is create-if-missing, idempotent, and the only DDL.
 
-Negative controls: drop ``IF NOT EXISTS`` from 0033 (the re-run test goes red), or add DDL
+Negative controls: drop ``IF NOT EXISTS`` from 0034 (the re-run test goes red), or add DDL
 to ``user_model_card.py`` (the no-request-time-DDL test goes red).
 """
 from __future__ import annotations
@@ -20,10 +20,10 @@ SVC = Path(__file__).resolve().parents[1]
 
 def _run(engine, fn_name):
     spec = importlib.util.spec_from_file_location(
-        "mig_0033", SVC / "alembic/versions/0033_user_model_cards.py")
+        "mig_0034", SVC / "alembic/versions/0034_user_model_cards.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert (mod.revision, mod.down_revision) == ("0033", "0032")
+    assert (mod.revision, mod.down_revision) == ("0034", "0033")
     with engine.begin() as conn:
         with Operations.context(MigrationContext.configure(conn)):
             getattr(mod, fn_name)()

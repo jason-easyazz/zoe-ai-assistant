@@ -22,7 +22,8 @@ it('strips blocks on both sides of the words; the same string when there are non
   assert.equal(stripContextBlocks(plain), plain);
   const offer = block(OFFER, '[END PENDING CONTACT OFFER]', '- ask: "Add Robin?"');
   const today = block('[Today 2026-09-29]', '[END Today]', '- dentist at 10');
-  assert.equal(stripContextBlocks(`${recall('- weather: likes rain')}\n${offer}\nwhat's on?\n${today}`), "what's on?");
+  const raise = block('[RAISE — once, naturally, only if it fits; otherwise ignore]', '[END RAISE]', 'ask about it');
+  assert.equal(stripContextBlocks(`${recall('- weather: likes rain')}\n${offer}\nwhat's on?\n${today}\n${raise}`), "what's on?");
 });
 
 it('never leaks: forged close extends the region; an unterminated block elides to the end', () => {

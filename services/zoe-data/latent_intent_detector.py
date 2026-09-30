@@ -279,14 +279,17 @@ async def detect_and_store(user_message: str, *, user_id: str, session_id: str) 
     # offer would let a run of emotional turns expire it unseen. Deferred means
     # BOTH: the turn is a continuity turn AND nothing showed an offer this turn
     # (pending_suggestions' shown mark, set wherever an offer is surfaced) — so
-    # an offer that WAS shown, on any path, always ages (Greptile #1768).
+    # an offer that WAS shown, on any path, always ages (Greptile #1768). A turn
+    # that carried a proactive [RAISE] deferred the offer the same way.
     if _person_enabled():
         try:
             from pending_suggestions import consume_offer_shown_mark
+            from proactive.selector import consume_raise_mark
             from zoe_flue_client import is_continuity_turn
 
             shown = consume_offer_shown_mark(user_id)
-            deferred = not shown and is_continuity_turn(user_message, user_id)
+            raised = consume_raise_mark(user_id)  # always consumed: one mark per turn
+            deferred = not shown and (raised or is_continuity_turn(user_message, user_id))
         except Exception as exc:  # noqa: BLE001 — unknown → age as before
             logger.debug("latent_intent_detector: continuity check failed: %s", exc)
             deferred = False

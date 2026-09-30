@@ -48,6 +48,8 @@ import memoryExtension, {
   PORTRAIT_BLOCK_CLOSE,
   PORTRAIT_BLOCK_OPEN,
   RECALL_BLOCK_CLOSE,
+  RAISE_BLOCK_CLOSE,
+  RAISE_BLOCK_OPEN,
   RECALL_BLOCK_OPEN,
   TODAY_BLOCK_CLOSE,
   TODAY_BLOCK_OPEN,
@@ -433,6 +435,7 @@ function fullUserTurn(utterance: string, turn: number, history: readonly string[
     ),
     delimited(HISTORY_MARKER, HISTORY_CLOSE, history.map((h) => `user: ${h}`).join("\n")),
     delimited(TODAY_BLOCK_OPEN, TODAY_BLOCK_CLOSE, `- Calendar: dentist at 10:00 (turn ${turn})`),
+    delimited(RAISE_BLOCK_OPEN, RAISE_BLOCK_CLOSE, `Earlier they told you: a trip (turn ${turn})`),
     `${UTTERANCE_MARKER}\n${utterance}`,
   ].join("\n\n");
   return { role: "user", content: [{ type: "text", text }] };

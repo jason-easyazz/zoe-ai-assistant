@@ -285,7 +285,7 @@ Why the narrative did nothing:
 - **It went stale.** The portrait is rebuilt weekly, so a supersession during the week stays
   wrong until Sunday.
 
-**The card** (`services/zoe-data/user_model_card.py`, table `user_model_cards`, alembic 0033):
+**The card** (`services/zoe-data/user_model_card.py`, table `user_model_cards`, alembic 0034):
 - **Deterministic, no LLM.** It is built from the user's `approved` memory rows (from
   `list_by_status`, which reads without access ticks) of the person-fact types, one line per
   category: `Prefers`, `Diet`, `Health`, `Work & schedule`, `People & pets`, `Current`,
