@@ -886,6 +886,9 @@ _HISTORY_CLOSE = _close_marker(_HISTORY_LABEL)
 # the same mechanical rule, pinned by a test).
 _TODAY_LABEL = brief_first_turn.BLOCK_LABEL
 _TODAY_CLOSE = _close_marker(_TODAY_LABEL)
+# The proactivity selector's one raise (proactive/selector.py, flag-dark).
+_RAISE_LABEL = "[RAISE]"
+_RAISE_CLOSE = _close_marker(_RAISE_LABEL)
 
 # (open, close) for every block `_compose_message` folds in, in composition order.
 # Mirrored by `CONTEXT_BLOCKS` in memory.ts, which strips them; a drift there is
@@ -897,6 +900,7 @@ _CONTEXT_BLOCKS = (
     (_MEMORY_BLOCK_OPEN, _MEMORY_BLOCK_CLOSE),
     (_HISTORY_LABEL, _HISTORY_CLOSE),
     (_TODAY_LABEL, _TODAY_CLOSE),
+    (_RAISE_LABEL, _RAISE_CLOSE),
 )
 
 # Every marker composition owns, and therefore every marker that must be rendered
@@ -1076,6 +1080,7 @@ def _compose_message(
     voice_mode: bool = False,
     memory_packet: str | None = None,
     day_brief: str | None = None,
+    raise_body: str | None = None,
 ) -> str:
     """Prepend the per-turn context the brain needs ahead of the user's words.
 
@@ -1165,6 +1170,10 @@ def _compose_message(
         parts.append(
             _context_block(_TODAY_LABEL, _TODAY_CLOSE, _neutralize_markers(day_brief.strip()))
         )
+    if raise_body:  # never alongside day_brief (proactive.selector.prepare)
+        parts.append(
+            _context_block(_RAISE_LABEL, _RAISE_CLOSE, _neutralize_markers(raise_body.strip()))
+        )
     if not parts:
         return message  # no context at all → the bare utterance, unchanged
     parts.append(f"{_UTTERANCE_MARKER}\n{message}")
@@ -1199,7 +1208,10 @@ async def run_zoe_core_streaming(
     # folds in pending-contact offers that no other path produces. See the header.
     # The first-turn day brief is prepared alongside the packet (both never
     # raise); its claim is settled in the finally below, by whether text went out.
+    from proactive import selector as proactive_selector
+
     briefs: list = []
+    raises: list = []
 
     async def _compose() -> str:
         packet, brief = await asyncio.gather(
@@ -1208,10 +1220,15 @@ async def run_zoe_core_streaming(
         )
         if brief is not None:
             briefs.append(brief)
+        raised = await proactive_selector.prepare(
+            message, user_id, session_id, brief_active=brief is not None)
+        if raised is not None:
+            raises.append(raised)
         return _compose_message(
             message, history=history, db_memory_context=db_memory_context,
             portrait=portrait, voice_mode=voice_mode, memory_packet=packet,
             day_brief=brief.body if brief else None,
+            raise_body=raised.body if raised else None,
         )
     # Bound concurrent brain turns (see _MAX_CONCURRENCY), but only for the
     # duration of actual generation — NOT for however long the consumer takes to
@@ -1267,6 +1284,8 @@ async def run_zoe_core_streaming(
         # consumer that disconnected/barged in — by whether text went out.
         if briefs:
             await brief_first_turn.settle(briefs[0], produced=yielded_any)
+        if raises:
+            await proactive_selector.settle(raises[0], produced=yielded_any)
 
 
 async def _reset_worker_for(

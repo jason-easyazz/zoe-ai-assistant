@@ -538,6 +538,7 @@ _FLUE_CONTEXT_BLOCKS = (
     ("[MEMORY CONTEXT", "[END MEMORY CONTEXT]"),
     ("[PENDING CONTACT OFFER", "[END PENDING CONTACT OFFER]"),
     ("[Today", "[END Today]"),
+    ("[RAISE", "[END RAISE]"),
 )
 _RECALL_MAX_BULLETS = 12
 _RECALL_MAX_CHARS = 1600
@@ -1277,12 +1278,18 @@ async def run_flue_brain_streaming(
     OFF): the dated ``[Today …]`` block rides after the user's words like the
     continuity block, and today's shared claim is taken once any real reply text
     was emitted — also when the stream then dies or the consumer walks away. A
-    turn that emitted no text (only the fallback) never burns the day's brief."""
+    turn that emitted no text (only the fallback) never burns the day's brief.
+    The proactivity selector's ``[RAISE …]`` (ZOE_PROACTIVE_SELECTOR, default OFF)
+    follows the same prepare/settle contract; the brief wins a turn they share."""
     import brief_first_turn
+    from proactive import selector as proactive_selector
 
     brief = await brief_first_turn.prepare(message, user_id)
+    raised = await proactive_selector.prepare(
+        message, user_id, session_id, brief_active=brief is not None)
     turn = _run_flue_brain_streaming_turn(
-        message, session_id, user_id, day_brief_block=brief.block if brief else "", **kwargs,
+        message, session_id, user_id, day_brief_block=brief.block if brief else "",
+        raise_block=raised.block if raised else "", **kwargs,
     )
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
@@ -1304,6 +1311,8 @@ async def run_flue_brain_streaming(
         # CancelledError), and the brief it heard must still take the claim.
         if brief is not None:
             await brief_first_turn.settle(brief, produced=emitted)
+        if raised is not None:
+            await proactive_selector.settle(raised, produced=emitted)
         if debug:
             logger.info(
                 "SEAM_CONTINUITY_DEBUG user=%s session=%s reply=%r",
@@ -1390,9 +1399,13 @@ async def _run_flue_brain_streaming_turn(
     # fold too) and the per-turn ager skips continuity turns
     # (latent_intent_detector), so the next non-emotional turn offers it.
     offer_block = ""
+    raise_block = str(kwargs.get("raise_block") or "")
     if continuity_turn or continuity_block:
         if _offer_inject_enabled():
             logger.info("SEAM_OFFER user=%s deferred=1 reason=continuity", uid)
+    elif raise_block:  # one ask per turn, same evidence as continuity (S4 round 3)
+        if _offer_inject_enabled():
+            logger.info("SEAM_OFFER user=%s deferred=1 reason=raise", uid)
     elif "[pending-contact]" not in recall_block:
         offer_block = await _pending_offer_block(uid)
     _blocks = "\n".join(b for b in (recall_block, offer_block) if b)
@@ -1409,6 +1422,8 @@ async def _run_flue_brain_streaming_turn(
     day_block = str(kwargs.get("day_brief_block") or "")
     if day_block:
         brain_message = f"{brain_message}\n{day_block}"
+    if raise_block:  # proactive.selector: never on the same turn as the day brief
+        brain_message = f"{brain_message}\n{raise_block}"
     outbound_message = _wrap_message_with_identity(brain_message, uid)
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.
