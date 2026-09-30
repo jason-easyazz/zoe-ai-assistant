@@ -500,6 +500,9 @@ def _build_memory_prompt_packet(
         kept_ts.append(_added_at_ts(meta))
         cite = f"[mem:{str(ref.id)[:8]}]"
         prefix = "(uncertain) " if status == "disputed" else ""
+        if str(meta.get("memory_type")) == "state_change":
+            # memory_supersede's tombstone: a recorded CHANGE, not a current fact.
+            prefix = f"(change) {prefix}"
         if is_recent:
             felt = memory_affect(ref)
             prefix = f"(recent, felt {felt}) {prefix}" if felt else f"(recent) {prefix}"

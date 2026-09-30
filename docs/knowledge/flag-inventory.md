@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-485 flags; 483 not documented in `.env.example`.
+486 flags; 484 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -251,6 +251,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MEMORY_AUDIT_COLLECTION` | `'mempalace_audit'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_COMPOSE_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_memory_compose.py` |
 | `ZOE_MEMORY_DIGEST_LOOKBACK_HOURS` | `-` | no | NO | `services/zoe-data/memory_digest.py` |
+| `ZOE_MEMORY_IMPLICIT_SUPERSEDE` | `False` | yes | NO | `services/zoe-data/memory_supersede.py` |
 | `ZOE_MEMORY_LINK_RESOLVER_ENABLED` | `''` | no | NO | `services/zoe-data/memory_digest.py` |
 | `ZOE_MEMORY_LINT_IN_DREAMING` | `''` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LINT_NEAR_DUP_RATIO` | `'0.92'` | no | NO | `services/zoe-data/memory_lint.py` |

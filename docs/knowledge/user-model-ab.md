@@ -324,3 +324,22 @@ Why the narrative did nothing:
 The same pre-registered rule and commands apply to run 2. The card is built from the store,
 so it holds whatever the store holds: if reconciliation did not supersede the half-marathon
 row, the card shows both facts, and so would recall.
+
+## Run 2 (2026-09-30, revision `db217287`, the card)
+
+**`DO_NOT_FLIP`, blocked only by the un-superseded race row.** The benefit arm cleared the
+bar: profile samples P 7 vs TWIN 3 of 21 (benefit **+4**, needed ≥ 3). The one regression was
+the `race` guard: TWIN 2/3 PASS, P 0/3 — each P reply asserted the half-marathon.
+
+Why: the supersede turn stored "User dropped the half-marathon." and "User is doing a 10k in
+May instead." as two plain ADDs and left "training for their first half-marathon in March"
+`approved` (`card_after_supersede`: half-marathon present, no 10k). The shared reconciler only
+supersedes a same-attribute value change or a ≥ 0.92 near-duplicate; this turn is neither
+(measured ratios 0.59 and 0.43). The card was also not rebuilt until the night, so its
+liveness check had nothing to drop.
+
+Fix: flag-dark `ZOE_MEMORY_IMPLICIT_SUPERSEDE` (see [memory supersession](memory-supersession.md)):
+the tombstone retires the old row at write time, links it to the 10k row, and the card is
+rebuilt at once — Current shows "doing a 10k in May instead", no half-marathon. Re-run the
+A/B with both flags on before flipping either.
+

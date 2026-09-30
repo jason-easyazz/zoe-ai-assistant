@@ -46,6 +46,9 @@ ALLOWED_TYPES = frozenset({"fact", "profile", "preference", "habit", "event",
 EXCLUDED_SOURCES = ("synthesis", "profile-analysis", "note_", "journal_")
 PER_SOURCE_CAP = {"music_digest": 1}  # nightly music taste rows would flood "Enjoys"
 PEOPLE_TYPES = frozenset({"relationship", "pet", "person"})
+# memory_supersede's tombstone type/tag. Not in ALLOWED_TYPES; the tag check also
+# covers a tombstone whose type a later edit changed.
+STATE_CHANGE = "state_change"
 
 _ROLES = (r"wife|husband|partner|fianc[eé]e?|girlfriend|boyfriend|sons?|daughters?|kids?|"
           r"child(?:ren)?|brothers?|sisters?|siblings?|mum|mom|mother|dad|father|parents?|"
@@ -99,7 +102,8 @@ CATEGORIES: tuple[Category, ...] = (
         r"training", r"learning", r"studying", r"preparing", r"planning", r"plans?",
         r"working on", r"project", r"goals?", r"trying to", r"saving (?:up )?for", r"trip",
         r"holiday", r"vacation", r"audition", r"exam", r"interview", r"moving", r"wedding",
-        r"race", r"(?:half[- ])?marathon", r"10 ?k", r"upcoming",
+        r"race", r"(?:half[- ])?marathon", r"10 ?k", r"5 ?k", r"triathlon", r"ironman",
+        r"fun run", r"upcoming",
         r"next (?:week|month|year|weekend|spring|summer|autumn|fall|winter|\w+day)",
         r"this (?:week|month|year|weekend)",
         r"(?:in|on|by) (?:january|february|march|april|may|june|july|august|september|"
@@ -186,6 +190,8 @@ def categorize(text: str, meta: dict[str, Any]) -> Category | None:
 def _eligible(meta: dict[str, Any]) -> bool:
     source = str(meta.get("source") or "")
     return (str(meta.get("status") or "approved") == "approved"
+            # a recorded change ("dropped the half-marathon") is never a current fact
+            and STATE_CHANGE not in str(meta.get("tags") or "").split(",")
             and str(meta.get("memory_type") or "fact") in ALLOWED_TYPES
             and not source.startswith(EXCLUDED_SOURCES)
             and not meta.get("expires_at")          # time-bound rows: recall/continuity own them

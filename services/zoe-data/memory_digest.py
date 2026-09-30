@@ -431,6 +431,17 @@ def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -
     return affect
 
 
+def _implicit_change_cue(user_message: str) -> str | None:
+    """The utterance's change-of-state cue when ZOE_MEMORY_IMPLICIT_SUPERSEDE is on,
+    else None (memory_supersede; off = the turn digest is unchanged)."""
+    try:
+        import memory_supersede
+
+        return memory_supersede.utterance_cue(user_message) if memory_supersede.enabled() else None
+    except Exception:
+        return None
+
+
 async def run_turn_digest(
     user_id: str,
     user_message: str,
@@ -528,15 +539,33 @@ async def run_turn_digest(
         # Verbatim evidence beside each distilled fact; MemoryService scrubs
         # and caps it at the write boundary.
         turn_excerpt = " ".join(user_message.split())
+        # Implicit supersede (gap #4, flag-dark ZOE_MEMORY_IMPLICIT_SUPERSEDE): None
+        # unless the flag is on AND the user's own words carry a change-of-state cue.
+        change_cue = _implicit_change_cue(user_message)
+        changed_refs: list = []
 
         for idx, item in enumerate(facts):
             fact = (item.get("fact") or "").strip()
             if not fact or len(fact) < 8:
                 continue
-            # Word-overlap dedup (same as nightly digest)
+            fact_type = item.get("type", "fact")
+            fact_tags = ["turn_digest", "auto_extract"]
+            fact_changes = False
+            if change_cue:
+                from memory_supersede import STATE_CHANGE, fact_cue, is_tombstone
+                fact_changes = fact_cue(fact) is not None
+                if is_tombstone(fact):
+                    # "User dropped the half-marathon" records a change, never a
+                    # current fact: the card and the recall packet treat it so.
+                    fact_type = STATE_CHANGE
+                    fact_tags = fact_tags + [STATE_CHANGE]
+            # Word-overlap dedup (same as nightly digest). A change fact skips it: its
+            # words are the OLD fact's plus "no longer", so it always "overlaps"
+            # ("User no longer lives in Dunedin." scores 0.83 against "User lives in
+            # Dunedin." and was dropped as a duplicate of the fact it retires).
             fact_words = set(fact.lower().split())
             overlap = sum(1 for w in fact_words if w in existing_lower) / max(len(fact_words), 1)
-            if overlap > 0.7:
+            if overlap > 0.7 and not fact_changes:
                 result["skipped_duplicates"] += 1
                 continue
             if not _passes_quality_gate(fact):
@@ -587,6 +616,8 @@ async def run_turn_digest(
                     if new_ref is not None:
                         result["new"] += 1
                         logger.info("turn_digest: superseded %s with %r", target_id, fact[:60])
+                        if fact_changes:
+                            changed_refs.append(new_ref)
                         continue
                 except Exception as exc:
                     logger.warning("turn_digest: supersede failed (%s) — plain ingest", exc)
@@ -598,18 +629,32 @@ async def run_turn_digest(
                     source=source,
                     session_id=session_id,
                     user_turn_id=f"{base_turn_id}-td{idx}",
-                    memory_type=item.get("type", "fact"),
+                    memory_type=fact_type,
                     confidence=0.82,
                     status="approved",
-                    tags=["turn_digest", "auto_extract"],
+                    tags=fact_tags,
                     metadata={"affect": fact_affect} if fact_affect else None,
                     source_excerpt=turn_excerpt,
                 )
                 if ref is not None:
                     result["new"] += 1
                     logger.info("turn_digest: stored for %s: %s", user_id, fact[:80])
+                    if fact_changes:
+                        changed_refs.append(ref)
             except MemoryServiceError as exc:
                 logger.debug("turn_digest: ingest failed for %s: %s", user_id, exc)
+
+        if changed_refs:
+            from memory_supersede import supersede_for_turn
+
+            sup = await supersede_for_turn(svc, user_id, change_cue, changed_refs)
+            result["superseded"] = sup["superseded"]
+            if sup["superseded"]:
+                # The card is otherwise rebuilt nightly; rebuild now so the same day's
+                # card carries the replacement (no-op unless ZOE_USER_MODEL_BLOCK is on).
+                from user_model_card import rebuild_user_model_card
+
+                await rebuild_user_model_card(user_id)
 
     except Exception as exc:
         logger.warning("turn_digest: unexpected error for %s: %s", user_id, exc)
@@ -1145,6 +1190,25 @@ async def _resolve_contradictions(svc, user_id: str, max_pairs: int = 50) -> int
                     "consolidation: supersede skipped id=%s: %s", older.id, exc
                 )
     return resolved
+
+
+async def _implicit_conflict_pass(user_id: str) -> dict | None:
+    """Nightly implicit-conflict pass (gap #4; flag-dark ZOE_MEMORY_IMPLICIT_SUPERSEDE,
+    None when off — no store read). The LLM contradiction passes above judge only
+    pairs a search or a 0.25 overlap puts in front of them, and "User dropped the
+    half-marathon" is not a contradiction of "training for a half-marathon" in their
+    prompt's sense. This is deterministic (``memory_supersede.conflict_pairs``: a newer
+    change cue on the same topic, or a different home), capped per user per run, and
+    skips opted-out users like every automatic write."""
+    import memory_supersede
+
+    if not memory_supersede.enabled():
+        return None
+    from memory_service import _user_opted_out, get_memory_service
+
+    if await _user_opted_out(user_id):
+        return {"skipped": "opt_out"}
+    return await memory_supersede.nightly_conflict_pass(get_memory_service(), user_id)
 
 
 async def run_weekly_consolidation(user_id: str) -> dict:
@@ -1938,6 +2002,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
     Called by nightly-training-cycle.sh after run_memory_digest.
     Phase 1 (REM)         — runs nightly: reinforce recent memories
     Phase 1.5 (Open Loops)— runs nightly: extract unresolved threads same night they're mentioned
+    Phase 1.7 (Conflicts) — runs nightly, flag-dark: implicit-conflict supersede (memory_supersede)
     Phase 2 (Deep Sleep)  — runs weekly (Sunday): consolidation
     Phase 3 (Synthesis)   — runs weekly (Sunday): long-term synthesis
     Phase 4 (Portrait)    — runs weekly (Sunday): synthesizes user portrait in SQLite
@@ -1980,6 +2045,16 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
             result["proactive_select"] = selected
     except Exception as exc:
         logger.warning("dreaming: proactive selector failed user=%s: %s", user_id, exc)
+
+    # Phase 1.7: implicit-conflict pass (ZOE_MEMORY_IMPLICIT_SUPERSEDE, default OFF — a
+    # no-op without I/O when off). Before the Sunday portrait and the
+    # card rebuild, so both see its result.
+    try:
+        conflicts = await _implicit_conflict_pass(user_id)
+        if conflicts is not None:
+            result["implicit_conflicts"] = conflicts
+    except Exception as exc:
+        logger.warning("dreaming: implicit-conflict pass failed user=%s: %s", user_id, exc)
 
     if is_sunday:
         deep = await _deep_sleep_pass(user_id)

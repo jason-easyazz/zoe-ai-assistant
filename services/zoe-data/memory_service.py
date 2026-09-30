@@ -462,6 +462,15 @@ class _BoundedKeySet:
         self._items.pop(key, None)
 
 
+def _implicit_supersede_on() -> bool:
+    """``ZOE_MEMORY_IMPLICIT_SUPERSEDE`` (memory_supersede.enabled), read per call."""
+    try:
+        from memory_supersede import enabled
+        return enabled()
+    except Exception:
+        return False
+
+
 def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
     """Return True only for the caller's personal rows or shared family rows."""
 
@@ -1198,6 +1207,8 @@ class MemoryService:
                 "session_id", "user_turn_id", "entity_type", "entity_id", "expires_at",
                 "source_excerpt", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
                 "review_note", "superseded_by_id", "_query_hashes",
+                # validity interval: the NEW row's own (written by _build_metadata)
+                "valid_from", "invalid_at",
                 # importance is a computed function of the row's TEXT (like
                 # memory_type/confidence above), so it must be recomputed for the
                 # edited text by _build_metadata — never carried forward, or an
@@ -1229,6 +1240,8 @@ class MemoryService:
                 old_meta = dict(current.metadata)
                 old_meta["status"] = "superseded"
                 old_meta["superseded_by_id"] = new_id
+                if _implicit_supersede_on():
+                    old_meta["invalid_at"] = new_meta["added_ts"]
                 await self._run_sync(
                     self._write_row, mem_id, current.text, old_meta
                 )
@@ -1242,6 +1255,58 @@ class MemoryService:
                 reason=note or "",
             )
             return MemoryRef(id=new_id, text=scrubbed, metadata=new_meta)
+
+    async def supersede_by(
+        self, user_id: str, old_id: str, new_id: str, *, actor: str, note: str = "",
+    ) -> bool:
+        """Retire ``old_id`` in favour of an EXISTING row ``new_id`` (metadata-only).
+
+        The implicit-supersede path (``memory_supersede``): unlike ``review(edit)`` it
+        writes no new text, because the successor was already stored by the turn. Under
+        the per-user lock it re-reads both rows and acts only when both belong to
+        ``user_id``, differ, and ``old_id`` is still ``approved`` (idempotent and
+        race-safe). Old row: ``status=superseded``, ``superseded_by_id``, ``invalid_at``
+        (epoch seconds). New row: ``supersedes_id`` (first link wins) and ``valid_from``.
+        ``col.update`` without documents keeps both embeddings. Never raises.
+        """
+        if not user_id or not old_id or not new_id or old_id == new_id:
+            return False
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:
+                done = await self._run_sync(self._supersede_by_sync, user_id, old_id, new_id)
+        except Exception as exc:
+            logger.warning("memory_service: supersede_by failed id=%s: %s", old_id,
+                           type(exc).__name__)
+            return False
+        if done:
+            await self._append_audit(
+                mem_id=old_id, user_id=user_id, actor=actor, action="supersede",
+                before={"status": "approved"},
+                after={"status": "superseded", "superseded_by_id": new_id},
+                reason=note,
+            )
+            _invalidate_agent_user_facts_cache(user_id)
+        return bool(done)
+
+    def _supersede_by_sync(self, user_id: str, old_id: str, new_id: str) -> bool:
+        col = self._collection()
+        got = col.get(ids=[old_id, new_id], include=["metadatas"])
+        metas = {i: dict(m or {}) for i, m in zip(got.get("ids") or [], got.get("metadatas") or [])}
+        old_m, new_m = metas.get(old_id), metas.get(new_id)
+        if old_m is None or new_m is None:
+            return False
+        if any(str(m.get("user_id") or m.get("wing") or "") != user_id for m in (old_m, new_m)):
+            return False
+        if str(old_m.get("status") or "") != "approved":
+            return False
+        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        old_m.update(status="superseded", superseded_by_id=new_id, invalid_at=now)
+        new_m.setdefault("valid_from", new_m.get("added_ts") or now)
+        if not new_m.get("supersedes_id"):
+            new_m["supersedes_id"] = old_id
+        col.update(ids=[old_id, new_id], metadatas=[old_m, new_m])
+        return True
 
     async def export_user(self, user_id: str) -> dict[str, Any]:
         """Full JSON dump for GDPR-style export."""
@@ -1363,6 +1428,10 @@ class MemoryService:
             "unique_query_count": 0,   # distinct queries that have surfaced this memory
             "consolidation_count": 0,  # weekly deep-sleep passes that have touched this memory
         }
+        if _implicit_supersede_on():
+            # Validity interval (gap #4): valid_from = capture time; invalid_at is
+            # written when the row is superseded (supersede_by / review edit).
+            md["valid_from"] = md["added_ts"]
         if session_id:
             md["session_id"] = session_id
         if user_turn_id:
