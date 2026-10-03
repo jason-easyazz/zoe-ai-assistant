@@ -28,7 +28,7 @@ def unit_python() -> str | None:
     try:
         proc = subprocess.run(["bash", str(AUTHORITY)], capture_output=True,
                               text=True, timeout=20)
-    except (OSError, subprocess.SubprocessError):
+    except Exception:  # noqa: BLE001 — any failure to ask = "systemd can't say"
         return None
     out = proc.stdout.strip()
     return out if proc.returncode == 0 and out else None

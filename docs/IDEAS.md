@@ -92,3 +92,15 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 
 ### Streaming STT during recording — 💡 pinned (needs ≥ 1.5 GB free)
 - **Core:** fix #2 of the [panel TTFA breakdown](knowledge/panel-ttfa-breakdown-2026-09-28.md): the live Moonshine model is already `MEDIUM_STREAMING` and `moonshine_voice` 0.1.3 exposes `create_stream` / `add_audio` / `stop`, so the server could consume audio during recording and only finish the tail at the endpoint (STT is ~0.25 s per second of clip today, 0.35–2.0 s per turn). Needs a chunked upload lane daemon → zoe-data (the panel POSTs `turn_stream`, not `/ws/voice/`) and a second resident stream buffer — start only with ≥ 1.5 GB quiet headroom. Also lets the 12 s cap (#1766) grow without paying for it in STT. Same-source follow-ups: tests must stop writing to the live `~/.zoe-voice/voice_stt.jsonl` (5,097 `test-panel` rows); the replay harness never exercises Skybridge, so said-vs-did is blind to fast-path over-claims — wire it in. Source: TTFA breakdown, 2026-09-28.
+
+### Field-scan pieces (2026-10-03) — 💡 pinned
+- **Source:** [companion-field-vs-samantha-2026-10-03.md](research/companion-field-vs-samantha-2026-10-03.md) §2. NEW pieces only; tracked items (B1.1, B1.2, B4.1 …) stay in the tracker.
+- 💡 **Pull, not push** (P1): an orb "I have something" state + "what's up?" voice inbox (Notify/Question/Review), one-unanswered-then-wait — offer without unprompted speech (LangChain ambient agents, Nomi).
+- 💡 **Duck → decide → resume** (P2): fade playback −15 dB on barge-in, resume the same reply if it was a backchannel/noise (Voice-Light, arXiv 2609.20995) — refines B1.2.
+- 💡 **Speaker gate per Omi's postmortem + confirm-to-teach** (P3): one model for enrol+match, ≥5-clip centroid, AS-norm, "Is this you?" cards (base + last 5 confirmations) — Omi measured 71 % cross-session false-reject.
+- 💡 **Arousal on the Pi for frustration repair** (P4): Wav2Small (~100 KB) on the daemon, arousal only, valence stays text — needs Jason's call on W4/W3 scope + a licence check.
+- 💡 **Persona-drift band on the resident bge-small** (P5): positive/negative anchors → aligned/neutral/deviation, log-only first (Nautilus Compass, Assistant Axis).
+- 💡 **Incomplete-turn marker → pause thoughts** (P7): ●/◐/○ first token (Pipecat), then motivation-scored thoughts (Inner Thoughts, CHI 2025) instead of a fixed 7 s marker.
+- 💡 **Presence fusion** (P8): PanaCast person-detect ≤1 fps on the Pi + Bermuda BLE IRK for *who*; mmWave later.
+- 💡 **Failure-fed evolution proposals** (P9): W7's first inputs = replay misses + Samantha-bar FAILs + `chat_feedback` (Letta skill learning: +36.8 % with failures).
+- 💡 **Learned should-I-speak head** (P10): numpy head on bge-small trained on `proactive_responses` once ~200 rows exist (evidence: arXiv 2605.30152).

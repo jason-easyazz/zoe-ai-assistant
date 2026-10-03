@@ -192,7 +192,11 @@ steady state leaves ~350–1200MB. Remote mode POSTs each WAV to the live `/api/
 `zoe_latency_probe` — in the environment, provisioned in `~/.hermes/.env`): measured
 2026-07-27, a full run peaks at **445MB** and the per-mode memory floor is 700MB vs 1500MB.
 Transcripts are engine-identical across modes (same Moonshine, same box), so baselines carry
-over; the replay JSON records `stt_mode`. Router/`fast_tiers` deliberately stay in-process —
+over; the replay JSON records `stt_mode`. **Remote STT targets the LOCAL service by number:**
+`--base-url`, else `ZOE_REPLAY_BASE_URL` (the unit sets it), else `http://127.0.0.1:8000` —
+never `ZOE_BASE_URL`, the public URL, whose mDNS lookup hung the nightly run for three nights
+([incident-runbook.md](incident-runbook.md) §20). A hostname base gets a 5 s bounded DNS check
+(`urlopen`'s timeout does not cover `getaddrinfo`). Router/`fast_tiers` deliberately stay in-process —
 only the harness runs them with `allow_writes=False`; the live endpoints would execute the
 commands for real. Flip back to `inprocess` only when the live service itself is the thing
 under test. Expect ~5% single-turn brain flake on a busy box: one CANT_DO in 20 fails the gate

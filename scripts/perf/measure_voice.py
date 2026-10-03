@@ -95,6 +95,9 @@ def main() -> int:
     ap.add_argument("--python", default=None,
                     help=f"interpreter for the replay (default: ${PYTHON_ENV}, else the "
                          "zoe-data unit's — see scripts/lib/service_python.py)")
+    ap.add_argument("--base-url", default=None,
+                    help="passed through to replay_samples.py for --stt remote (its "
+                         "default: ZOE_REPLAY_BASE_URL, else http://127.0.0.1:8000)")
     args = ap.parse_args()
 
     if os.environ.get("ZOE_PERF") != "1":
@@ -132,6 +135,8 @@ def main() -> int:
         "--brain", "--user", args.user, "--json", replay_json,
         "--stt", args.stt,
     ]
+    if args.base_url:
+        cmd += ["--base-url", args.base_url]
     if args.since:
         cmd += ["--since", args.since]
     else:
