@@ -44,10 +44,13 @@ Usage:
 import argparse
 import asyncio
 import glob
+import ipaddress
 import json
 import os
 import re
+import socket
 import sys
+import threading
 import time
 import uuid
 
@@ -187,6 +190,41 @@ def _classify(transcript: str, reply: str, outcome: str) -> str:
     return "OK"
 
 
+def _replay_base_url(cli_base: str | None) -> str:
+    """--base-url, else ZOE_REPLAY_BASE_URL, else numeric loopback. NEVER ZOE_BASE_URL:
+    that is the PUBLIC URL (http://zoe.local live, an mDNS name another device owns);
+    taking it hung every nightly replay in getaddrinfo (runbook §20)."""
+    return (cli_base or os.environ.get("ZOE_REPLAY_BASE_URL")
+            or "http://127.0.0.1:8000").strip()
+
+
+def _check_resolvable(url: str, timeout: float = 5.0) -> None:
+    """Bound DNS for url's host — urlopen's timeout does not cover getaddrinfo.
+    Numeric hosts return at once; a name gets *timeout* in an abandoned daemon thread."""
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or ""
+    try:
+        ipaddress.ip_address(host)
+        return
+    except ValueError:
+        pass
+    box: dict = {}
+
+    def _resolve() -> None:
+        try:
+            box["ok"] = bool(host) and bool(socket.getaddrinfo(host, None))
+        except OSError as exc:
+            box["err"] = exc
+
+    t = threading.Thread(target=_resolve, daemon=True)
+    t.start()
+    t.join(timeout)
+    if not box.get("ok"):
+        why = box.get("err") or ("no host" if not host else f"no answer within {timeout:g}s")
+        raise RuntimeError(f"cannot resolve replay host {host!r} ({why}) — use a numeric "
+                           "--base-url / ZOE_REPLAY_BASE_URL (runbook §20)")
+
+
 def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
     """STT via the LIVE zoe-data /api/voice/transcribe (its Moonshine is already warm).
 
@@ -211,6 +249,7 @@ def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
     import base64 as _b64
     import urllib.request as _rq
 
+    _check_resolvable(base_url)  # per call: urlopen's timeout cannot bound DNS
     with open(wav_path, "rb") as fh:
         payload = json.dumps({
             "audio_base64": _b64.b64encode(fh.read()).decode("ascii"),
@@ -233,6 +272,22 @@ async def _run(args) -> int:
     _load_env()
     os.environ.setdefault("ZOE_ROUTER_ENABLED", "1")
 
+    _remote_token = ""
+    if args.stt == "remote":
+        # After _load_env (the override may live in .env), before init_pool/warm.
+        args.base_url = _replay_base_url(args.base_url)
+        _remote_token = (os.environ.get("ZOE_DEVICE_TOKEN")
+                         or os.environ.get("DEVICE_TOKEN") or "").strip()
+        if not _remote_token:
+            print("--stt remote needs ZOE_DEVICE_TOKEN in the environment "
+                  "(same convention as zoe_latency_probe; never a CLI flag)", file=sys.stderr)
+            return 1
+        try:
+            _check_resolvable(args.base_url)
+        except RuntimeError as exc:
+            print(f"--stt remote: {exc}", file=sys.stderr)
+            return 1
+
     from db_pool import init_pool
     await init_pool()
 
@@ -245,21 +300,6 @@ async def _run(args) -> int:
     )
 
     sr.warm()
-
-    _remote_token = ""
-    if args.stt == "remote":
-        # Resolve the base HERE, after _load_env() has merged the service .env —
-        # an argparse-time default reads the environment before that merge, so a
-        # ZOE_BASE_URL that lives only in the .env (the normal case for the live
-        # service) would be silently ignored in favour of loopback (Bugbot, #1572).
-        if not args.base_url:
-            args.base_url = os.environ.get("ZOE_BASE_URL") or "http://127.0.0.1:8000"
-        _remote_token = (os.environ.get("ZOE_DEVICE_TOKEN")
-                         or os.environ.get("DEVICE_TOKEN") or "").strip()
-        if not _remote_token:
-            print("--stt remote needs ZOE_DEVICE_TOKEN in the environment "
-                  "(same convention as zoe_latency_probe; never a CLI flag)", file=sys.stderr)
-            return 1
 
     user = args.user
     session_id = _run_session_id()
@@ -409,8 +449,9 @@ def main() -> None:
                     help="'remote' = transcribe via the LIVE /api/voice/transcribe "
                          "(no second Moonshine load; needs ZOE_DEVICE_TOKEN in env)")
     ap.add_argument("--base-url", default=None,
-                    help="live service base URL for --stt remote (default: ZOE_BASE_URL "
-                         "resolved AFTER the service .env is loaded, else localhost:8000)")
+                    help="live service base URL for --stt remote (default: "
+                         "ZOE_REPLAY_BASE_URL, else http://127.0.0.1:8000; never "
+                         "ZOE_BASE_URL, the public URL — runbook §20)")
     args = ap.parse_args()
 
     # Resolve --since-date to an epoch HERE, not in _select: that keeps _select

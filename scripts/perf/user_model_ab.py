@@ -443,15 +443,33 @@ def analyse_hygiene(budget: list[dict], cache: list[dict], n_turns: int) -> dict
             "problems": problems, "valid": not problems}
 
 
+def _unrolled_end(run: dict[str, Any]) -> int:
+    """Index of the last turn before the session's history window first rolls
+    (``history`` decreases): past it, ``history`` no longer holds the stale blocks."""
+    hist = [row.get("history", 0) for row in run.get("table") or []]
+    for i in range(1, len(hist)):
+        if hist[i] < hist[i - 1]:
+            return i - 1
+    return len(hist) - 1
+
+
 def compare_hygiene(off: dict[str, Any], on: dict[str, Any]) -> dict[str, Any]:
-    """Pre-registered elision rule over one OFF run and one ON run."""
+    """Pre-registered elision rule over one OFF run and one ON run.
+
+    The history rule is judged at the last turn where NEITHER arm's window has
+    rolled, not blindly at the final turn: on 2026-09-30 the off session rolled to
+    ``history=0`` at turn 10, hiding a 1551 → 501 drop at turn 9."""
     problems = []
     if not (off.get("valid") and on.get("valid")):
         problems.append("an input run is not valid evidence: "
                         + json.dumps({"off": off.get("problems"), "on": on.get("problems")}))
     if off.get("elided") != 0 or on.get("elided") != 1:
         problems.append(f"arms mislabelled: off elided={off.get('elided')} on elided={on.get('elided')}")
-    fo, fn = off.get("final") or {}, on.get("final") or {}
+    judged = min(_unrolled_end(off), _unrolled_end(on))
+    if judged < 0:
+        problems.append("no per-turn table to judge")
+    fo = off["table"][judged] if judged >= 0 else {}
+    fn = on["table"][judged] if judged >= 0 else {}
     clean_off = fo.get("history", 0) - fo.get("stale", 0)
     drop = fo.get("history", 0) - fn.get("history", 0)
     history_ok = drop >= ELIDE_MIN_HISTORY_DROP * fo.get("stale", 0) > 0
@@ -462,8 +480,9 @@ def compare_hygiene(off: dict[str, Any], on: dict[str, Any]) -> dict[str, Any]:
     ok = not problems and all(checks.values())
     return {"verdict": "FLIP" if ok else ("INCONCLUSIVE" if problems else "DO_NOT_FLIP"),
             "problems": problems, "checks": checks,
-            "final_history_off": fo.get("history"), "final_stale_off": fo.get("stale"),
-            "off_history_minus_stale": clean_off, "final_history_on": fn.get("history"),
+            "judged_turn": judged + 1, "final_turn": len(off.get("table") or []),
+            "history_off": fo.get("history"), "stale_off": fo.get("stale"),
+            "off_history_minus_stale": clean_off, "history_on": fn.get("history"),
             "history_drop": drop, "extra_first_prompt_n_post_block": extra}
 
 

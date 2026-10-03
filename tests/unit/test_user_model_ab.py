@@ -336,6 +336,45 @@ def test_compare_hygiene_reprefill_cost_bound():
     assert ab.compare_hygiene(off, on)["verdict"] == "DO_NOT_FLIP"
 
 
+# The live 2026-09-30 hygiene runs (b62454a9; docs/knowledge/user-model-ab.md, "Elision"):
+# per turn (history, stale, first_prompt_n). The off session rolled to history=0 at turn 10.
+OFF_0930 = [(0, 0, 2679), (52, 0, 720), (152, 46, 957), (452, 291, 98), (553, 337, 1129),
+            (818, 518, 127), (921, 564, 322), (1234, 830, 306), (1551, 1080, 63), (0, 1080, 649)]
+ON_0930 = [(0, 0, 314), (64, 0, 532), (126, 46, 913), (181, 291, 113), (240, 337, 842),
+           (314, 518, 132), (375, 564, 342), (422, 830, 320), (501, 1080, 90), (568, 1080, 292)]
+
+
+def _live(rows, elided):
+    budget = _budget([st for _, st, _ in rows], [h for h, _, _ in rows], elided)
+    return ab.analyse_hygiene(budget, [{"first_prompt_n": f} for _, _, f in rows], 10)
+
+
+def test_compare_hygiene_2026_09_30_judges_turn_9_not_the_rolled_final():
+    off, on = _live(OFF_0930, 0), _live(ON_0930, 1)
+    assert off["valid"] and on["valid"]
+    assert (off["first_prompt_n_post_block"], on["first_prompt_n_post_block"]) == (428.9, 393.1)
+    cmp = ab.compare_hygiene(off, on)
+    assert cmp["judged_turn"] == 9 and cmp["final_turn"] == 10
+    assert (cmp["history_off"], cmp["history_on"], cmp["stale_off"]) == (1551, 501, 1080)
+    assert cmp["history_drop"] == 1050 and cmp["checks"]["history_dropped"]
+    assert cmp["extra_first_prompt_n_post_block"] == pytest.approx(-35.8)
+    assert cmp["verdict"] == "FLIP"
+
+
+def test_compare_hygiene_2026_09_30_negative_controls():
+    off, on = _live(OFF_0930, 0), _live(ON_0930, 1)
+    # Judging the final turn (the old bug) reads the roll as "no drop".
+    final_only = {**off, "table": off["table"][-1:]}
+    assert not ab.compare_hygiene(final_only, {**on, "table": on["table"][-1:]})["checks"]["history_dropped"]
+    # A flag-on arm that kept the stale tokens still fails at the judged turn.
+    kept = _live([(h + st, st, f) for h, st, f in ON_0930], 1)
+    assert ab.compare_hygiene(off, kept)["verdict"] == "DO_NOT_FLIP"
+    # The re-prefill bound still applies.
+    slow = _live([(h, st, f + ab.ELIDE_MAX_REPREFILL + 100 if i in on["post_block_turns"] else f)
+                  for i, (h, st, f) in enumerate(ON_0930)], 1)
+    assert not ab.compare_hygiene(off, slow)["checks"]["reprefill_bounded"]
+
+
 def test_compare_hygiene_mislabelled_arms_are_inconclusive():
     run = _run(STALE, HIST, 0, 60)
     assert ab.compare_hygiene(run, run)["verdict"] == "INCONCLUSIVE"
