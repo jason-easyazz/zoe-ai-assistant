@@ -221,7 +221,7 @@ async def test_brief_settles_on_emitted_text_with_and_without_abort(env, monkeyp
     monkeypatch.setenv("ZOE_FLUE_ABORT_ON_CANCEL", flag)
     settled = []
 
-    async def prepare(message, user_id):
+    async def prepare(message, user_id, session_id=""):   # main's signature since #1801
         return SimpleNamespace(block="[Today …]")
 
     async def settle(brief, *, produced):
