@@ -388,6 +388,7 @@ async def _reconcile_same_kind_entity_row(
     entity_id: Optional[str],
     pattern_type: str,
     source: str,
+    source_excerpt: Optional[str] = None,
 ) -> Optional[str]:
     """Supersede/skip against an existing row of the SAME person + SAME kind.
 
@@ -420,6 +421,7 @@ async def _reconcile_same_kind_entity_row(
         edits=text,
         actor=source,
         note=f"person {pattern_type} supersede (entity-keyed, QA 2026-07-13)",
+        source_excerpt=source_excerpt,
     )
     if new_ref is None:
         return None  # supersede failed — fall through to the normal path
@@ -452,8 +454,13 @@ async def _ingest_to_mempalace(
     source: str = "conversation",
     session_id: Optional[str] = None,
     pattern_type: Optional[str] = None,
+    source_excerpt: Optional[str] = None,
 ) -> Optional[str]:
     """Write one fact to MemPalace and return the mem_id.
+
+    ``source_excerpt`` is the text the fact was mined from (the user's utterance on
+    the chat/voice lanes) — the evidence ``recall_evidence`` quotes. MemoryService
+    scrubs and caps it at its write boundary; an edit carries the NEW evidence.
 
     ``pattern_type`` (birthday/preference/work/…) is stored on the row and
     drives the entity-keyed reconciliation: compact "Name: value" rows have no
@@ -481,7 +488,8 @@ async def _ingest_to_mempalace(
         if pattern_type:
             try:
                 handled = await _reconcile_same_kind_entity_row(
-                    svc, text, user_id, person_name, entity_id, pattern_type, source
+                    svc, text, user_id, person_name, entity_id, pattern_type, source,
+                    source_excerpt,
                 )
             except Exception as exc:
                 logger.debug(
@@ -534,6 +542,7 @@ async def _ingest_to_mempalace(
                     edits=text,
                     actor=source,
                     note="person fact supersede (QA F9)",
+                    source_excerpt=source_excerpt,
                 )
                 if new_ref is not None:
                     logger.info("person_extractor: superseded %s with %r", target_id, text[:60])
@@ -564,6 +573,7 @@ async def _ingest_to_mempalace(
             tags=["person", "auto_extract", person_name.lower()],
             entity_type="person" if entity_id and not entity_id.startswith("slug:") else "person_pending",
             entity_id=entity_id or f"slug:{person_name.lower().replace(' ', '_')}",
+            source_excerpt=source_excerpt,
         )
         return ref.id if ref else None
     except Exception as exc:
@@ -971,8 +981,10 @@ async def apply_person_fact(
     source: str,
     session_id: str | None = None,
     db=None,
+    source_excerpt: str | None = None,
 ) -> bool:
-    """Apply one structured person fact (regex or LLM). Returns True if written."""
+    """Apply one structured person fact (regex or LLM). Returns True if written.
+    ``source_excerpt``: the text it was mined from (see ``_ingest_to_mempalace``)."""
     name = (name or "").strip()
     value = (value or "").strip()
     if not name or not value:
@@ -1005,6 +1017,7 @@ async def apply_person_fact(
             source=source,
             session_id=session_id,
             pattern_type=pattern_type,
+            source_excerpt=source_excerpt,
         )
 
         if not person_uuid:
@@ -1135,6 +1148,7 @@ async def process_text(
         if not tasks:
             return written
 
+        excerpt = " ".join(text.split())  # the evidence beside each fact (as turn_digest)
         # Deduplicate names to avoid redundant DB lookups
         names = list({t[0] for t in tasks})
         uuid_cache: dict[str, Optional[str]] = {}
@@ -1176,6 +1190,7 @@ async def process_text(
                 source=source,
                 session_id=session_id,
                 pattern_type=pattern_type,
+                source_excerpt=excerpt,
             )
 
             # PostgreSQL write (only when we have a DB UUID)
