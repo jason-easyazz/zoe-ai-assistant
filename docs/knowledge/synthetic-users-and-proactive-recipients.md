@@ -207,7 +207,17 @@ enables both halves (default off, read per call; off = no I/O). Code: `proactive
   rows raised twice. Never: with the `[Today]` brief on the same turn (the brief wins, logged
   `reason=brief`), on a continuity turn, a second time in the same session
   (`last_surfaced_session`, durable), or for a synthetic id (`is_synthetic_user`; the one
-  exception is below). Flue appends
+  exception is below).
+- **Per-member spacing (both flags read per call):** at most `ZOE_PROACTIVE_RAISE_PER_DAY`
+  raises (default 2; 0 = no cap) per local day (`ZOE_TIMEZONE`), at least
+  `ZOE_PROACTIVE_RAISE_GAP_S` apart (default 7200; 0 = no gap; capped at the 3-day cooldown),
+  across conversations. Before this, two conversations seconds apart each got a raise
+  (2026-09-30 09:21:33 / :36, `bar-s5-open-1/-2`, different candidates). The evidence is
+  durable — each candidate's `last_surfaced_at`, set at settle; a raised row outlives its
+  3-day cooldown, so one stamp per row counts the day — and survives a restart. While a
+  raised turn is still streaming, an in-process per-member hold covers the overlap. Blocked
+  turns log `PROACTIVE_RAISE … injected=0 settled=0 reason=gap|daily_cap|held`. The brief
+  check runs first, so the `[Today]` brief still wins its turn. Flue appends
   `[RAISE — once, naturally, only if it fits; otherwise ignore]` … `[END RAISE]` after the
   user's words (and defers a pending contact offer that turn, `SEAM_OFFER … reason=raise`;
   the offer ager skips it); core folds `[RAISE]` before `[The user just said]`. Both pairs are

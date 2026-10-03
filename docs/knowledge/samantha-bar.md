@@ -541,18 +541,24 @@ on). Run it flag off (ablation), then set `ZOE_RECALL_EVIDENCE=1` beside
 ZOE_PERF=1 flock /tmp/zoe-voice-harness.lock nice -n 5 python3 scripts/perf/recall_evidence_probe.py
 ```
 
-Verdicts: flag on → PASS (exit 0) needs the Marisol bullet dated `(<Ddd D Mon>, today)`, a
-`you said: "…Lisbon…"` quote and a "when" reply naming today ("today", "earlier", "just now",
-the weekday), else FAIL (exit 1); flag off → BASELINE (exit 0), or ERROR if the packet is
-dated anyway. `said_ok` (Lisbon + Thursday) is recorded, not gated — the fact text alone
-carries both. Exit 2 = refused / error / teardown unproven; 3 = lock held. Artifacts:
+Verdicts: flag on → PASS (exit 0) when what the user hears is right: `when_ok` (the "when"
+reply names today — "today", "earlier", "just now", the weekday) AND `said_ok` (the "what did
+I say" reply carries Lisbon and Thursday), else FAIL (exit 1); flag off → BASELINE (exit 0),
+or ERROR if the packet is dated anyway. The packet flags are diagnostics, not gates:
+`bullet_found` / `dated_today` / `quoted` describe the bullet whose FACT names Lisbon, and
+`quoted_any` says whether any Marisol bullet carries the `you said: "…Lisbon…"` quote — the
+packet quotes each distinct utterance once, so it legitimately rides whichever bullet from that
+turn is presented first. Exit 2 = refused / error / teardown unproven; 3 = lock held. Artifacts:
 `~/.cache/zoe/recall_evidence_probe_last.json` + `recall_evidence_probe_trend.jsonl`.
 
 Live 2026-09-30 (flag on, `45db6119`): `when_ok` and `said_ok` true, the bullet dated today,
-but verdict **FAIL** because `packet.quoted=false`. `score_packet` looks for the quote on the one
-line naming Marisol and Lisbon, but the quote landed on another bullet (the one without
-"Lisbon"; RECALL_EVIDENCE logged `quoted=1`), and the Lisbon row carries no `source_excerpt`. The
-check is too narrow: fixing it is a follow-up, and the feature itself stays ON.
+but the old verdict was **FAIL** on `packet.quoted=false` — it is a PASS under the behavioural
+verdict. The seed turn wrote two rows: the turn digest's "User's sister is named Marisol" (with
+the utterance; it took the one quote) and the LLM person extractor's "Marisol: flying in from
+Lisbon on Thursday" (the 42-char `reconcile_for_ingest` at 10:30:14 is exactly that string) via
+`apply_person_fact` → `_ingest_to_mempalace` under source `conversation`, which dropped the
+utterance and was not a quotable writer. Both person extractors now forward it (scrubbed at the
+`MemoryService` boundary) and `conversation` / `voice` are quotable.
 
 ## Known limits (v0)
 
