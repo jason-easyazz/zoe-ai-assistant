@@ -219,9 +219,11 @@ def test_pref_regex_is_case_insensitive_due_to_ignorecase_flag():
     # claims names "start with a capital letter", but the IGNORECASE flag
     # defeats that guard. Pin the current behavior so a future refactor
     # that switches to case-sensitive name matching surfaces here.
-    m = _PREF_RE.search("she loves pizza")
-    assert m is not None
-    assert m.group(1) == "she"
+    # 2026-10-04: _NAME is now case-sensitive by construction ((?-i:…)), so a
+    # lowercase pronoun is no longer a person. The capitalised form still matches.
+    assert _PREF_RE.search("she loves pizza") is None
+    m = _PREF_RE.search("Sara loves pizza")
+    assert m is not None and m.group(1) == "Sara"
 
 
 def test_bday_regex_matches_possessive_form():
@@ -268,7 +270,7 @@ def test_meeting_regex_matches_with_venue():
     # the current contract so a future tightening surfaces here.
     m = _MEETING_RE.search("Met Sarah for coffee at Blue Bottle")
     assert m is not None
-    assert m.group(1) == "Sarah for"
+    assert m.group(1) == "Sarah"          # the "for" swallow is gone with the case-sensitive name
     assert m.group(2) == "Blue Bottle"
 
 
@@ -277,7 +279,7 @@ def test_meeting_regex_matches_without_venue():
     # Same "for" swallowing quirk applies to group 1.
     m = _MEETING_RE.search("Met Mike for coffee")
     assert m is not None
-    assert m.group(1) == "Mike for"
+    assert m.group(1) == "Mike"
     assert m.group(2) is None
 
 
@@ -337,7 +339,7 @@ def test_bucket_regex_swallows_trailing_word_when_capitalized_or_under_ignorecas
     # (e.g. case-sensitive matching) surfaces here.
     m = _BUCKET_RE.search("Would love to hike with Mike tomorrow.")
     assert m is not None
-    assert m.group(2) == "Mike tomorrow"
+    assert m.group(2) == "Mike"           # the tightening this test was waiting for (2026-10-04)
 
 
 # ── Relationship regex (_REL_RE) ────────────────────────────────────────────
@@ -495,3 +497,28 @@ def test_are_branch_role2_tokens_resolve_after_rstrip():
             f"are-branch token {token!r} -> {looked_up!r} is not in _ROLE_TO_TYPE; "
             "the relationship would be silently dropped"
         )
+
+
+# ── IGNORECASE must not defeat the capitalised-name requirement (2026-10-04) ──
+@pytest.mark.parametrize("text", [
+    "I've been getting migraines most afternoons lately and it's starting to worry me.",
+    "I'm getting better sleep since the new mattress.",
+    "We're buying groceries after work.",
+])
+def test_lowercase_words_never_become_a_gift_recipient(text):
+    assert _GIFT_IDEA_RE.search(text) is None
+
+
+def test_gift_idea_keeps_the_article_out_of_the_item_without_eating_a_leading_a():
+    m = _GIFT_IDEA_RE.search("Thinking about getting Kate an amber necklace.")
+    assert m and m.group(1) == "Kate" and m.group(2) == "amber necklace"
+    m = _GIFT_IDEA_RE.search("Getting Mike afternoon tea vouchers")
+    assert m and m.group(1) == "Mike" and m.group(2) == "afternoon tea vouchers"
+
+
+def test_name_pattern_is_case_sensitive_inside_ignorecase_patterns():
+    import re
+    from person_extractor import _NAME
+    rx = re.compile(rf"met\s+{_NAME}", re.IGNORECASE)
+    assert rx.search("MET Kate") and rx.search("met Kate").group(1) == "Kate"
+    assert rx.search("met kate") is None
