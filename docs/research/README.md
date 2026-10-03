@@ -1,12 +1,13 @@
 # Memory & Hallucination Reduction Research - Documentation Index
 
-**Date:** November 18, 2025  
-**Status:** Ready for Implementation  
+**Date:** November 18, 2025
+**Status:** Ready for Implementation
 **Timeline:** 2 weeks (P0), 1 week (P1)
 
 > **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list).
 >
 > **2026-10-03:** [flue-and-agent-runtimes-2026-10-03.md](./flue-and-agent-runtimes-2026-10-03.md) (Flue runtime feature matrix, upgrade risk, voice/agent-runtime field comparison, ranked actions).
+> **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list). Field scan 2026-10-03: [companion-field-vs-samantha-2026-10-03.md](./companion-field-vs-samantha-2026-10-03.md) (OSS/commercial voice-companion field vs the Samantha spec, as a delta against tracker B1–B10 and state review §7).
 
 ---
 
@@ -31,9 +32,9 @@ This research package analyzes 40+ production LLM systems (2025) and provides sp
 ## 📄 Document Guide
 
 ### 1. EXECUTIVE_SUMMARY.md (⭐ Start Here)
-**Purpose:** High-level overview and quick decision-making  
-**Length:** 15 minutes  
-**Audience:** Project leads, decision makers  
+**Purpose:** High-level overview and quick decision-making
+**Length:** 15 minutes
+**Audience:** Project leads, decision makers
 
 **Contents:**
 - TL;DR: What you need to know
@@ -49,9 +50,9 @@ This research package analyzes 40+ production LLM systems (2025) and provides sp
 ---
 
 ### 2. MEMORY_HALLUCINATION_ANALYSIS.md (📚 Comprehensive Reference)
-**Purpose:** Deep analysis of research findings vs. current architecture  
-**Length:** 2-3 hours (30,000 words)  
-**Audience:** Architects, senior developers  
+**Purpose:** Deep analysis of research findings vs. current architecture
+**Length:** 2-3 hours (30,000 words)
+**Audience:** Architects, senior developers
 
 **Contents:**
 - Current state assessment (what works, what's missing)
@@ -73,21 +74,21 @@ This research package analyzes 40+ production LLM systems (2025) and provides sp
 ---
 
 ### 3. IMPLEMENTATION_GUIDE_P0.md (🛠️ Step-by-Step Code)
-**Purpose:** Practical implementation guide with code examples  
-**Length:** 1-2 hours (15,000 words)  
-**Audience:** Developers implementing the changes  
+**Purpose:** Practical implementation guide with code examples
+**Length:** 1-2 hours (15,000 words)
+**Audience:** Developers implementing the changes
 
 **Contents:**
 - **P0-2:** Context Validation (Days 1-2)
   - Files to create: `context_validator.py`
   - Files to update: `chat.py`
   - Testing procedures
-  
+
 - **P0-3:** Confidence Expression (Day 3)
   - Files to create: `response_formatter.py`
   - Integration points
   - Example outputs
-  
+
 - **P0-1:** Behavioral Memory (Days 4-6)
   - Files to create: `behavioral_memory.py`, cron job
   - Database schema
@@ -105,9 +106,9 @@ This research package analyzes 40+ production LLM systems (2025) and provides sp
 ---
 
 ### 4. ARCHITECTURE_DIAGRAM.md (🎨 Visual Guide)
-**Purpose:** Visual representation of architecture changes  
-**Length:** 20 minutes (visual + annotations)  
-**Audience:** Visual learners, team presentations  
+**Purpose:** Visual representation of architecture changes
+**Length:** 20 minutes (visual + annotations)
+**Audience:** Visual learners, team presentations
 
 **Contents:**
 - Current architecture (before P0)
@@ -133,7 +134,7 @@ This research package analyzes 40+ production LLM systems (2025) and provides sp
    - Focus on: Expected Outcomes Dashboard
 3. **Decision:** Approve P0 implementation?
 
-**Time Investment:** 25 minutes  
+**Time Investment:** 25 minutes
 **Expected Outcome:** Go/no-go decision with confidence
 
 ---
@@ -147,7 +148,7 @@ This research package analyzes 40+ production LLM systems (2025) and provides sp
 3. **ARCHITECTURE_DIAGRAM.md** (20 min)
    - Focus on: Three-Layer Memory Architecture, Decision Flows
 
-**Time Investment:** 1.5 hours  
+**Time Investment:** 1.5 hours
 **Expected Outcome:** Confident in architectural soundness
 
 ---
@@ -160,7 +161,7 @@ This research package analyzes 40+ production LLM systems (2025) and provides sp
 3. **ARCHITECTURE_DIAGRAM.md** - As needed for context (10 min)
 4. **MEMORY_HALLUCINATION_ANALYSIS.md** - Section 9 (Troubleshooting) as needed
 
-**Time Investment:** 45 minutes per feature  
+**Time Investment:** 45 minutes per feature
 **Expected Outcome:** Feature implemented correctly with tests
 
 ---
@@ -172,7 +173,7 @@ This research package analyzes 40+ production LLM systems (2025) and provides sp
 2. **ARCHITECTURE_DIAGRAM.md** (20 min)
 3. **MEMORY_HALLUCINATION_ANALYSIS.md** - Section 1 & 2 (30 min)
 
-**Time Investment:** 1 hour  
+**Time Investment:** 1 hour
 **Expected Outcome:** Solid understanding of enhancements
 
 ---
@@ -395,9 +396,9 @@ Month 2+ (2026+): P2 Future Considerations
 
 ## 📝 Document Maintenance
 
-**Last Updated:** November 18, 2025  
-**Version:** 1.0  
-**Status:** Ready for Implementation  
+**Last Updated:** November 18, 2025
+**Version:** 1.0
+**Status:** Ready for Implementation
 
 **Change Log:**
 - 2025-11-18: Initial research analysis and documentation complete
@@ -422,8 +423,3 @@ Good luck! 🚀
 - [Implementation Guide](./IMPLEMENTATION_GUIDE_P0.md) - Code examples
 - [Architecture Diagrams](./ARCHITECTURE_DIAGRAM.md) - Visual guide
 - [Comprehensive Analysis](./MEMORY_HALLUCINATION_ANALYSIS.md) - Full details (30,000 words)
-
-
-
-
-
