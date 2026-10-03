@@ -6,7 +6,7 @@
 
 > **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list).
 >
-> **Inference + speech stack (2026-10-03):** [inference-speech-stack-2026-10-03.md](./inference-speech-stack-2026-10-03.md) — on-box audit of the brain (llama.cpp b11194 + MTP), router head, Moonshine, Kokoro and the Pi panel vs upstream and the field, with a ranked, measurement-gated action list (SWA-checkpoint TTFT floor, RAM chain to streaming STT, B1.1 flip, post-b11194 MTP changes).
+> **2026-10-03:** [flue-and-agent-runtimes-2026-10-03.md](./flue-and-agent-runtimes-2026-10-03.md) (Flue runtime feature matrix, upgrade risk, voice/agent-runtime field comparison, ranked actions).
 > **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list). Field scan 2026-10-03: [companion-field-vs-samantha-2026-10-03.md](./companion-field-vs-samantha-2026-10-03.md) (OSS/commercial voice-companion field vs the Samantha spec, as a delta against tracker B1–B10 and state review §7).
 
 ---
