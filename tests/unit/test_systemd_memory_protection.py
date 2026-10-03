@@ -102,13 +102,15 @@ TIGHT_CEILING_OK = {
         "Same bounded-model-server class as kokoro-tts: llama.cpp serving a "
         "fixed 270M Q8_0 GGUF with a fixed --ctx-size 1024 KV cache, "
         "--parallel 1 and the prompt cache capped at --cache-ram 64 (the 8 GiB "
-        "default would outgrow the 1G ceiling), so everything large is "
+        "default would outgrow the ~1G ceiling), so everything large is "
         "allocated at startup and does not "
         "grow with load (VmHWM 598.8 MB, only 1.05x VmRSS+VmSwap — a settled "
         "working set, not a starved lower bound). The 3x rule targets runtimes "
         "whose UNCOVERED allocation scales with load (V8 external buffers); "
         "here the only allocation outside the 768M floor is grammar/jinja/HTTP "
-        "scratch for one in-flight request, so 768M/1G is deliberate."
+        "scratch for one in-flight request, so 768M/1280M is deliberate (1G "
+        "before A1 mlocked the 278 MB GGUF; the ceiling grew by the locked, "
+        "unreclaimable weights so the backstop did not tighten)."
     ),
 }
 
