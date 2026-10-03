@@ -45,18 +45,24 @@ in [beat-the-bar-2026-program.md](../architecture/beat-the-bar-2026-program.md).
    action 1's smaller cache entries, the two together could free ~2 GB, which is the precondition
    for streaming STT (needs ≥1.5 GB) and for the replay gate's own 2 GB rule. **Actions 3–4.**
 3. **The cheapest end-of-speech win is already built**: B1.1 speculative turn-start at 320 ms
-   (offline: −320 ms median, −244 ms mean per turn, 14.3 % cancel). It needs the Pi proof only.
-   **Action 2.** Smart Turn as a veto was already measured as *not* a win
+   (offline: −320 ms median, −244 ms mean per turn, 14.3 % cancel). Code and offline gate are done;
+   what remains is the rest of the flip list in the b1 doc: live Pi proof, a head-bound replay
+   PASS, RAM flat across the replay, then an operator-only flag-on panel week. **Action 2.** Smart Turn as a veto was already measured as *not* a win
    ([b1 doc](../architecture/b1-speculative-turn-start.md)) — do not redo it.
 4. **Upstream moved under the MTP lane since b11194**: probabilistic drafting + rejection sampling
    for MTP (#27694, merged 2026-10-02; +5–13 % decode throughput at temperature 0.6–0.8 on Qwen
    MTP models, and Zoe runs at 0.7), "stop accepting draft tokens at EOG" (#29638), the failed
    restore cleanup (#27530) and the PLE prefetch (#29599). One gated rebuild collects all four.
    **Action 5.**
-5. **The nightly instrument is down.** `zoe-voice-regression.service` has timed out three nights
-   running (2026-10-01/02/03, killed at the 30-min start timeout after only ~9 s of CPU, no output
-   after the Postgres wait). Last PASS: 2026-09-30 02:30 (STT 568 ms, brain 2,030 ms, e2e
-   2,260 ms medians, 19/19). Every action below is gated on that harness, so fixing it is step 0.
+5. **The nightly instrument was down, and is only half repaired.** `zoe-voice-regression.service`
+   timed out three nights running (2026-10-01/02/03, killed at the 30-min start timeout after only
+   ~9 s of CPU, no output after the Postgres wait). Cause found and fixed in #1798: a
+   `getaddrinfo('zoe.local')` hang (the retired Pi still owns the name), and the unit now forces
+   the replay to loopback (`scripts/setup/systemd/zoe-voice-regression.service`). The second
+   defect is still open as #1811: the gate runs the probe on `/usr/bin/python3`, not the service's
+   py3.12 venv, so recall has been silently off inside every replay since B0.8. Last PASS before
+   the outage: 2026-09-30 02:30 (STT 568 ms, brain 2,030 ms, e2e 2,260 ms medians, 19/19). Every
+   action below is gated on that harness, so confirming it is step 0.
 
 ## 1. What we run today
 
@@ -380,17 +386,23 @@ files, same weights, same voices. Every voice-path row is replay-gated against
 [brain-flags-tuning-2026-09.md](../knowledge/brain-flags-tuning-2026-09.md) (one flag vs the live
 set, same-session control, Kokoro paused for headroom).
 
-**Step 0 (prerequisite, not ranked): get the nightly instrument running again.**
-`zoe-voice-regression.service` timed out on 2026-10-01, 10-02 and 10-03. It was killed at the
-30-minute start timeout after ~9 s of CPU, and nothing was logged after the Postgres wait. With
-MemAvailable at 0.3–0.5 GB, the box also cannot meet the gate's own ≥ 2 GB quiet-headroom rule.
-Find why the probe stalls before it reports, because every row below cites it as its gate.
-Effort: debugging. Rock-safe: n/a.
+**Step 0 (prerequisite, not ranked): confirm the nightly instrument is back, on the right
+interpreter.** The three-night timeout (2026-10-01/02/03) is diagnosed and fixed — #1798, see
+`docs/knowledge/incident-runbook.md` ("Fixed in #1798"): the replay no longer resolves
+`zoe.local`, and the unit pins `ZOE_REPLAY_BASE_URL` to loopback. Do not re-investigate it.
+What is still required before any row below can cite the harness as its gate:
+(a) one nightly run that lands a trend entry (first candidate: the 04:30 run after the live unit
+was reinstalled from the repo); (b) #1811 merged and the unit reinstalled, so the probe runs on
+the service's py3.12 venv (today it runs on `/usr/bin/python3`, where recall is silently off);
+(c) a fresh baseline recorded on that interpreter (`--update-baseline`, Kokoro paused, ≥ 2 GB
+free) — the existing bar was recorded with recall off, so drift against it is not comparable.
+With MemAvailable at 0.3–0.5 GB the box also cannot meet the gate's own ≥ 2 GB quiet-headroom
+rule; action 3 is what buys that. Effort: operator steps + one merge. Rock-safe: n/a.
 
 | # | change | expected gain | risk | rock-safe? | how to measure (harness + gate) | effort / kind |
 |---|---|---|---|---|---|---|
 | 1 | **`--swa-full` on the brain** (no SWA checkpoints → no split prefill) | **−120 to −135 ms brain TTFT per voice turn**: an 8–31-token suffix drops from ~196 ms (3 decode calls) to ~61 ms (1 call). Also ~−110 ms on every 128–511-token tool-round suffix (2 fewer forward passes). RAM: ≈ +150 MiB KV, −up to 340 MiB of slot checkpoints, cache-ram entries ~−50 % (172 → ≈ 81 MiB for a 2.8 k-token turn) | Medium. Changes cache invalidation (SWA rollback becomes free, no checkpoint restore). SWA layers attend over a full-size cache: estimated ≤ 3 % decode cost at ~3 k context **[inference]**. #29045 (iSWA `seq_pos_max`) is open upstream | Yes, flag only | Brain window, one flag vs the live set, same-session control. (a) prompt-eval-vs-new-tokens bins from the journal (recipe in the appendix): success = the 5–31-token bins collapse to the 1–2-token step (~61 ms). (b) `VOICE TIMING brain_ttft_ms`. (c) decode ms/token is flat. (d) RssAnon at load and after 24 h. (e) replay PASS: said-vs-did not regressed, brain median not slower. Negative control: flag off restores the 116/196 ms steps | Flag (1 line in `scripts/setup/systemd/llama-server.service`) + 1 brain window |
-| 2 | **Flip B1.1 speculative turn-start at 320 ms** (`ZOE_SPECULATIVE_TURN`, Pi + server) | **−320 ms median, −244 ms mean** per turn, end of speech → POST (offline over 1,171 corpus clips; 14.3 % cancel) | Medium. The live cancel rate is unknown, and a cancelled turn spends one STT + a brain start | Yes | The existing B1.1 runbook ([b1 doc](../architecture/b1-speculative-turn-start.md)): Pi proof, live `endpoint_wait_delta_ms ≥ 250`, live cancel rate < 30 %, replay gate | Flag (built, flag-dark) |
+| 2 | **Flip B1.1 speculative turn-start at 320 ms** (`ZOE_SPECULATIVE_TURN`, Pi + server) | **−320 ms median, −244 ms mean** per turn, end of speech → POST (offline over 1,171 corpus clips; 14.3 % cancel) | Medium. The live cancel rate is unknown, and a cancelled turn spends one STT + a brain start | Yes | The full flip list in the B1.1 runbook ([b1 doc](../architecture/b1-speculative-turn-start.md), "Flip criteria"), in order, any miss keeps it dark: (1) offline cancel estimate < 30 % with ≥ 250 ms median saving (met); (2) Phase 2 landed (met, #1742); (3) replay PASS bound to the head under the harness flock; (4) RAM flat — `mem_available_mb` before/after the replay within noise; (5) an operator-only live panel week with the flag on at both ends: cancel share < 30 %, `endpoint_wait_delta_ms` ≥ 250 ms median on committed turns, zero double-speak, zero duplicate writes, zero said-X-did-Y | Flag (built, flag-dark) |
 | 3 | **Free RAM around the brain: (a) re-size `--cache-ram` after #1; (b) `--lazy-mode on` for the PLE table on a build with #29599** | (a) Entries halve, so 2048 MiB holds ~2× the entries (fewer ~4 s cold misses), or 1024 MiB keeps today's coverage for **−1 GiB**. (b) **−1.2 to −1.45 GB RSS** (1,512 MiB table mlocked today; upstream measured −1.2 GB peak on E4B) | (a) Low once #1 is measured. (b) Medium-high: upstream desktop decode −8 to −11 % before the prefetch fix (≈ +1–3 ms/token here **[unverified on Orin]**). Lazy pages are evictable, which breaks the "brain never pages" property: under pressure a cold row is an NVMe major fault on the hot path | Yes | (a) 24 h `-lv 4` `cache state` occupancy + hit rate, chat T2/T3 TTFT (brain-flags-tuning §1 method). (b) Brain window on the new build: decode ms/token, cold prefill tok/s, `majflt` of the llama-server PID across a replay (`/proc/<pid>/stat` field 12), RssFile/VmLck before and after, replay PASS. Run (b) under a deliberately loaded box too, because that is when the fault cost shows | (a) flag. (b) upgrade (#5) + flag |
 | 4 | **Streaming STT during recording** (Moonshine `create_stream` / `add_audio` / `update_transcription`, chunked upload lane) | **−0.4 to −0.5 s median, −1.7 to −1.9 s on 8–10 s turns** (0.25 s/s batch cost → near-constant finalize; upstream: 269 ms x86 / 802 ms Pi 5 end-of-speech → final for Medium Streaming) | Medium-high. Transport change; streaming vs batch transcripts can differ; **0.1.3 lacks the #218 hypothesis-drop fix, 0.1.5 is 3× slower per decoder step** (wait for `dev-v0.1.6`, or measure #218 on 0.1.3 first); needs ≥ 1.5 GB free → after #3 | Yes, same model, different call pattern | First measure finalize latency in-process when ≥ 1.5 GB is free (the TTFA doc's bench OOM'd at 650 MB). Then replay gate on said-vs-did with the corpus fed in 1,280-sample chunks, calling `update_transcription` every 0.5 s. STT stage must not regress on short clips | Code (daemon + new zoe-data ingest route) |
 | 5 | **Rebuild llama.cpp at current master (≥ b11377), then a separate one-flag window for `--spec-draft-sampling probabilistic`** | Probabilistic MTP: +5 to +13 % decode throughput at temp 0.6–0.8 on Qwen MTP (author's sweep) → est. **−20 to −50 ms first sentence**, −5–10 % reply duration **[unverified on Gemma E4B]**. Also #29638 (EOG draft overhang), #27530 (failed-restore cleanup), #29599 (enables #3b) | Medium-high. 183 commits, both binaries (brain + router head) to consider, #29467 (abort under memory pressure + prefix reuse) still open. The flag changes sampling *mechanics* but preserves the output distribution | Yes | The B0.4 rebuild recipe in [voice-pipeline.md](../knowledge/voice-pipeline.md) ("Brain build + flags"): same flags first, replay PASS, decode/prefill parity. Then the flag alone: MTP accept rate from `/metrics`, decode ms/token, replay | Upgrade + flag |
