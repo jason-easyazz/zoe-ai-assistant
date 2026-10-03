@@ -45,13 +45,20 @@ def observed_mode(packet: str | None) -> str:
     return "on" if EVIDENCE_MARKER in packet else "off"
 
 
+def _quote(line: str) -> str:
+    return line.split('you said: "', 1)[1] if 'you said: "' in line else ""
+
+
 def score_packet(packet: str | None) -> dict[str, Any]:
-    line = next((ln for ln in (packet or "").splitlines() if "marisol" in ln.lower()
-                 and "lisbon" in ln.lower()), "")
-    quote = line.split('you said: "', 1)[1] if 'you said: "' in line else ""
+    """Diagnostics, not the verdict. ``quoted`` = the Lisbon bullet carries the quote;
+    ``quoted_any`` = some Marisol bullet does (the packet quotes each distinct excerpt
+    once, so the utterance can ride a sibling bullet from the same turn)."""
+    lines = [ln for ln in (packet or "").splitlines() if "marisol" in ln.lower()]
+    line = next((ln for ln in lines if "lisbon" in ln.split(' — you said: "', 1)[0].lower()), "")
     return {"bullet_found": bool(line), "dated_today": bool(_DATED_TODAY.search(line)),
             "any_date": bool(re.search(r"\((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d", packet or "")),
-            "quoted": "lisbon" in quote.lower()}
+            "quoted": "lisbon" in _quote(line).lower(),
+            "quoted_any": any("lisbon" in _quote(ln).lower() for ln in lines)}
 
 
 def score_when(reply: str, weekday: str) -> bool:
@@ -63,9 +70,12 @@ def score_said(reply: str) -> bool:
     return bar.contains_all(reply, ("lisbon", "thursday"))
 
 
-def verdict(mode: str, pkt: dict[str, Any], when_ok: bool) -> str:
+def verdict(mode: str, pkt: dict[str, Any], when_ok: bool, said_ok: bool) -> str:
+    """Flag on: what the user hears — the "when" reply names today AND the "what did I
+    say" reply carries Lisbon + Thursday. The packet flags are diagnostics: the
+    quote legitimately rides whichever bullet is presented first (2026-09-30)."""
     if mode == "on":
-        return "PASS" if (pkt["dated_today"] and pkt["quoted"] and when_ok) else "FAIL"
+        return "PASS" if (when_ok and said_ok) else "FAIL"
     if mode == "off":
         return "ERROR" if pkt["any_date"] else "BASELINE"
     return "ERROR"
@@ -82,7 +92,7 @@ def run(live: bar.Live, user: str, log) -> dict[str, Any]:
     when = live.chat(user, "evask", ASK_WHEN)
     said = live.chat(user, "evsaid", ASK_SAID)
     when_ok, said_ok = score_when(when["reply"], weekday), score_said(said["reply"])
-    v = verdict(mode, pkt, when_ok)
+    v = verdict(mode, pkt, when_ok, said_ok)
     if seed["error"] or when["error"] or said["error"] or not landed_pkt["landed"]:
         v = "ERROR"
     log(f"mode={mode} packet={pkt} when_ok={when_ok} said_ok={said_ok} -> {v}")

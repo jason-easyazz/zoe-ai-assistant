@@ -3,8 +3,8 @@
 Fixtures only — no household text, no real ids. The DB edge is a real SQLite file
 built by migration 0033 (plus the three source tables), behind db_pool's own cursor
 types, so the upsert / cooldown / session SQL runs for real. Negative controls: break the flag read (every runtime test goes dark), drop the
-brief check, the command check, the synthetic check or the ``produced`` guard — the
-matching test goes red.
+brief check, the command check, the synthetic check, the ``produced`` guard, the
+per-member spacing (gap / daily cap) or the user hold — the matching test goes red.
 """
 from __future__ import annotations
 
@@ -100,7 +100,8 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setenv("ZOE_PROACTIVE_SELECTOR", "1")
     monkeypatch.setenv("ZOE_TIMEZONE", "UTC")
     for key in ("ZOE_SEAM_RECALL_INJECT", "ZOE_SEAM_OFFER_INJECT", "ZOE_BRIEF_ON_FIRST_TURN",
-                "ZOE_SYNTHETIC_USER_ALLOWLIST"):
+                "ZOE_SYNTHETIC_USER_ALLOWLIST", "ZOE_PROACTIVE_RAISE_GAP_S",
+                "ZOE_PROACTIVE_RAISE_PER_DAY"):
         monkeypatch.delenv(key, raising=False)
     sel._reset_state()
     state = {"now": NOW, "db": db, "mem": mem}
@@ -205,6 +206,7 @@ async def test_greeting_raises_the_top_candidate_once_per_session(seeded, caplog
     assert "PROACTIVE_RAISE user=member-a kind=open_loop shape=greeting injected=1 settled=1" in caplog.text
     sel._reset_state()  # a restart: the durable record still holds the conversation
     assert await sel.prepare("Hey Zoe, what's new?", MEMBER, "s1") is None
+    seeded["now"] = NOW + timedelta(seconds=sel.raise_gap_s() + 1)  # past the member gap
     second = await sel.prepare("Hey Zoe, what's new?", MEMBER, "s2")  # cooldown: the next one
     assert second is not None and "kitchen" in second.text
 
@@ -217,7 +219,7 @@ async def test_cooldown_and_the_surfaced_cap(seeded):
 
     first = await greet(NOW, "s1")
     await sel.settle(first, produced=True)
-    assert "kitchen" in (await greet(NOW + timedelta(hours=1), "s2")).text  # aquarium cooling
+    assert "kitchen" in (await greet(NOW + timedelta(hours=3), "s2")).text  # aquarium cooling
     sel._reset_state()
     again = await greet(NOW + sel.COOLDOWN + timedelta(hours=1), "s3")  # cooldown over
     assert "aquarium" in again.text
@@ -226,6 +228,87 @@ async def test_cooldown_and_the_surfaced_cap(seeded):
     last = await greet(NOW + 2 * sel.COOLDOWN + timedelta(hours=2), "s4")  # MAX_SURFACED reached
     assert last is None or "aquarium" not in last.text
     assert ("open_loop", 2) in [row[:2] for row in _surfaced(seeded)]
+
+
+# ── per-member spacing: gap + daily cap, durable, beside once-per-session ────
+GREET = "Hi Zoe, how are things?"
+
+
+async def _raise_at(env, at, sid, *, settle=True):
+    env["now"] = at
+    raised = await sel.prepare(GREET, MEMBER, sid)
+    if raised is not None and settle:
+        assert await sel.settle(raised, produced=True)
+    return raised
+
+
+async def test_a_second_conversation_three_seconds_later_does_not_raise(seeded, caplog):
+    """The 2026-09-30 09:21:33 / :36 interleaving: s5-open-1 then s5-open-2, both greeted,
+    both raised (different candidates). Now the second waits out the member gap."""
+    assert await _raise_at(seeded, NOW, "open-1") is not None
+    with caplog.at_level(logging.INFO, logger="proactive.selector"):
+        assert await _raise_at(seeded, NOW + timedelta(seconds=3), "open-2") is None
+    assert "kind=open_loop shape=greeting injected=0 settled=0 reason=gap" in caplog.text
+    assert [r[1] for r in _surfaced(seeded)] == [1]  # exactly one raise recorded
+
+
+async def test_overlapping_conversations_hold_per_member(seeded, caplog):
+    first = await sel.prepare(GREET, MEMBER, "open-1")  # mid-reply: nothing settled yet
+    with caplog.at_level(logging.INFO, logger="proactive.selector"):
+        assert await sel.prepare(GREET, MEMBER, "open-2") is None
+    assert "reason=held" in caplog.text
+    await sel.settle(first, produced=False)  # nothing heard: the member hold is released
+    assert await sel.prepare(GREET, MEMBER, "open-2") is not None
+
+
+async def test_gap_expires_and_survives_a_restart(seeded, caplog):
+    await _raise_at(seeded, NOW, "s1")
+    sel._reset_state()  # restart: the gap evidence is the durable last_surfaced_at
+    assert await _raise_at(seeded, NOW + timedelta(seconds=7199), "s2") is None
+    assert await _raise_at(seeded, NOW + timedelta(seconds=7200), "s3") is not None
+
+
+async def test_daily_cap_is_per_local_day(seeded, caplog):
+    _loop(seeded["db"], "User is waiting on the plumber about the leaking boiler", weight=5)
+    await _select(seeded)
+    assert await _raise_at(seeded, NOW + timedelta(hours=1), "s1") is not None
+    assert await _raise_at(seeded, NOW + timedelta(hours=4), "s2") is not None
+    with caplog.at_level(logging.INFO, logger="proactive.selector"):
+        assert await _raise_at(seeded, NOW + timedelta(hours=8), "s3") is None
+    assert "reason=daily_cap" in caplog.text
+    sel._reset_state()
+    seeded["now"] = NOW + timedelta(days=1, minutes=5)  # the next local day
+    await sel.select_for_user(MEMBER, now=seeded["now"])
+    assert await _raise_at(seeded, seeded["now"], "s4") is not None
+
+
+async def test_daily_cap_counts_the_members_local_day(seeded, monkeypatch):
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")  # UTC+8: local midnight = 16:00Z
+    monkeypatch.setenv("ZOE_PROACTIVE_RAISE_GAP_S", "0")
+    monkeypatch.setenv("ZOE_PROACTIVE_RAISE_PER_DAY", "1")
+    assert await _raise_at(seeded, NOW + timedelta(hours=15), "s1") is not None  # 23:00 local
+    assert await _raise_at(seeded, NOW + timedelta(hours=16, seconds=1), "s2") is not None
+
+
+async def test_negative_control_no_spacing_raises_three_seconds_later(seeded, monkeypatch):
+    monkeypatch.setenv("ZOE_PROACTIVE_RAISE_GAP_S", "0")
+    monkeypatch.setenv("ZOE_PROACTIVE_RAISE_PER_DAY", "0")
+    await _raise_at(seeded, NOW, "open-1")
+    assert await _raise_at(seeded, NOW + timedelta(seconds=3), "open-2") is not None
+
+
+@pytest.mark.parametrize("gap, per_day, want", [
+    (None, None, (7200, 2)), ("", "", (7200, 2)), ("abc", "x", (7200, 2)),
+    ("-5", "-1", (7200, 2)), ("0", "0", (0, 0)), ("600", "5", (600, 5)),
+    ("9999999", "2", (int(sel.COOLDOWN.total_seconds()), 2)),  # capped: evidence is kept that long
+])
+def test_spacing_env_defaults(monkeypatch, gap, per_day, want):
+    for key, val in (("ZOE_PROACTIVE_RAISE_GAP_S", gap), ("ZOE_PROACTIVE_RAISE_PER_DAY", per_day)):
+        if val is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, val)
+    assert (sel.raise_gap_s(), sel.raise_per_day()) == want
 
 
 async def test_command_turns_never_cue_turns_do(seeded):

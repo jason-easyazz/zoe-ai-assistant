@@ -190,7 +190,9 @@ session's `FLUE_CONTEXT_BUDGET` and `FLUE_PROMPT_CACHE` lines back from the app 
 - **Pre-registered rule** (`hygiene-compare`): FLIP when all of these hold:
   - both runs are valid;
   - the arms are labelled correctly (off `elided=0`, on `elided=1`);
-  - `history_off − history_on ≥ 0.5 × stale_off`;
+  - `history_off − history_on ≥ 0.5 × stale_off`, judged at the last turn where neither
+    arm's history window has rolled (`history` decreased), not blindly at turn 10
+    (`judged_turn` / `final_turn` in the output);
   - the mean extra `first_prompt_n` on post-block turns is ≤ 400.
 - **Informational:** does the stale worry come back on filler turns, and is the contact offer
   re-asked.
@@ -360,9 +362,10 @@ showed no half-marathon and the 10k. Profile samples P 9 vs TWIN 3 of 21 (benefi
 **Elision (hygiene probe, `b62454a9`, 2026-09-30 06:24–06:28 AWST): KEPT ON.** At turn 9
 `history` was 1551 tokens off vs 501 on (the 1080 stale tokens removed); the mean post-block
 `first_prompt_n` fell 428.9 → 393.1, so the re-prefill cost nothing measurable. `hygiene-compare`
-does not show this: it judges the **final** turn, where the off run's session had already rolled
-to `history=0`, so it reports `history_dropped=false`. Follow-up: judge the last block-bearing
-turn instead. Artefacts: `~/.cache/zoe/user_model_ab_hygiene_{off,on}.json`.
+first judged the **final** turn, where the off run's session had already rolled to `history=0`,
+and reported `history_dropped=false`; it now judges turn 9 (the last un-rolled turn) and returns
+FLIP on these artefacts (`history_drop=1050`, pinned in `tests/unit/test_user_model_ab.py`).
+Artefacts: `~/.cache/zoe/user_model_ab_hygiene_{off,on}.json`.
 
 **Live since 2026-09-30:** `ZOE_USER_MODEL_BLOCK=1` and `ZOE_MEMORY_IMPLICIT_SUPERSEDE=1`
 (zoe-data), `ZOE_BRAIN_ELIDE_STALE_BLOCKS=1` (sidecar); the allowlist line is removed. Gates
