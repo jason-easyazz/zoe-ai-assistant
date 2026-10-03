@@ -5,6 +5,8 @@
 **Timeline:** 2 weeks (P0), 1 week (P1)
 
 > **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list).
+>
+> **2026-10-03:** [flue-and-agent-runtimes-2026-10-03.md](./flue-and-agent-runtimes-2026-10-03.md) (Flue runtime feature matrix, upgrade risk, voice/agent-runtime field comparison, ranked actions).
 
 ---
 
