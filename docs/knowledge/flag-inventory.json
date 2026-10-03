@@ -3654,6 +3654,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_RECALL_PRESENT_STATE_SHAPES": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_RELATIONSHIP_GRAPH_ENABLED": {
         "defaults": [
           "''"
@@ -3797,6 +3807,16 @@
       "ZOE_ROUTER_ENABLED": {
         "defaults": [
           "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROUTER_EVENT_TIME_PRECEDENCE": {
+        "defaults": [
+          "-"
         ],
         "in_env_example": false,
         "readers": [

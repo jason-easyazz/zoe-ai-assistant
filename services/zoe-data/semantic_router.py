@@ -540,31 +540,69 @@ def evidence_target(text: str, domain: Optional[str]) -> Optional[str]:
     return "chat" if kind == "sure" else "memory"
 
 
-def _evidence_decision(decision: dict, target: str) -> dict:
+# ── Event-time precedence (day-sim 9, flag-dark ZOE_ROUTER_EVENT_TIME_PRECEDENCE):
+# "What time is my dentist appointment on Friday?" → head time @ 0.997 → "It's
+# 10:41 PM." (live 2026-10-03). A when/what-time question about the user's OWN
+# event (memory_gate.is_event_time_question) keeps a calendar/memory/chat claim
+# (the calendar expert defers a question to the brain, which holds the calendar
+# tool and the recall floor) and any other domain is re-pointed to memory.
+EVENT_TIME_REASON = "event_time_question"
+_EVENT_TIME_KEEP = frozenset({"chat", "memory", "calendar"})
+
+
+def event_time_precedence_enabled() -> bool:
+    """ZOE_ROUTER_EVENT_TIME_PRECEDENCE — default OFF (voice path; the operator
+    flips it after the replay gate). Per-call env read."""
+    raw = (os.environ.get("ZOE_ROUTER_EVENT_TIME_PRECEDENCE") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def event_time_target(text: str, domain: Optional[str]) -> Optional[str]:
+    """"memory" when an event-time question was claimed by a domain other than
+    calendar/memory/chat (and the flag is on), else None. Pure but for the flag."""
+    if domain is None or domain in _EVENT_TIME_KEEP or not event_time_precedence_enabled():
+        return None
+    from memory_gate import is_event_time_question  # stdlib-only
+
+    return "memory" if is_event_time_question(text or "") else None
+
+
+def question_precedence(text: str, domain: Optional[str]) -> Optional[tuple[str, str]]:
+    """(target, reason) when a question-shape rule overrides `domain`, else
+    None. Evidence first (a "when did I…" is evidence, not an event time)."""
+    target = evidence_target(text, domain)
+    if target:
+        return target, EVIDENCE_REASON
+    target = event_time_target(text, domain)
+    return (target, EVENT_TIME_REASON) if target else None
+
+
+def _evidence_decision(decision: dict, target: str, reason: str = EVIDENCE_REASON) -> dict:
     """`decision` re-pointed at `target`; head_top/head_conf keep the head's."""
     if target == "chat":
         return {**decision, "tool": None, "domain": "chat", "args": {},
-                "gated": True, "reason": EVIDENCE_REASON}
+                "gated": True, "reason": reason}
     return {**decision, "tool": "recall_memory", "domain": "memory", "args": {},
-            "gated": False, "reason": EVIDENCE_REASON}
+            "gated": False, "reason": reason}
 
 
-def _apply_evidence_precedence(text: str, out: dict, scores: dict) -> None:
-    """route(): re-point a domain-expert claim on an evidence question (in
-    place) and log ``INTENT_GATE evidence_question=1 head=… conf=… routed=…``."""
-    target = evidence_target(text, out.get("domain"))
-    if target is None:
+def _apply_question_precedence(text: str, out: dict, scores: dict) -> None:
+    """route(): re-point a domain-expert claim on an evidence / event-time
+    question (in place) and log ``INTENT_GATE <reason>=1 head=… conf=… routed=…``."""
+    hit = question_precedence(text, out.get("domain"))
+    if hit is None:
         return
+    target, reason = hit
     ts = out.get("two_stage")
     head = (ts or {}).get("head_top") or out.get("domain")
     conf = (ts or {}).get("head_conf")
     if isinstance(ts, dict):
-        out["two_stage"] = _evidence_decision(ts, target)
+        out["two_stage"] = _evidence_decision(ts, target, reason)
     out["domain"] = target
     if out.get("routed") != "chat":
         out["routed"] = target
     out["score"] = round(float(scores.get(target, 0.0)), 3)
-    logger.info("INTENT_GATE evidence_question=1 head=%s conf=%s routed=%s",
+    logger.info("INTENT_GATE %s=1 head=%s conf=%s routed=%s", reason,
                 head, "-" if conf is None else f"{float(conf):.4f}", target)
 
 
@@ -573,8 +611,9 @@ def head_verdict(text: str) -> Optional[dict]:
 
     None unless ZOE_ROUTER_HEAD=active and the router is enabled — i.e. the
     head only arbitrates keyword claims when it is also routing. See
-    router_two_stage.head_verdict for the shape; an evidence-shaped question
-    comes back re-pointed (``reason="evidence_question"``). NEVER raises.
+    router_two_stage.head_verdict for the shape; an evidence-shaped or (flag on)
+    event-time question comes back re-pointed (``reason="evidence_question"`` /
+    ``"event_time_question"``). NEVER raises.
     """
     if not is_enabled() or head_mode() != "active":
         return None
@@ -583,8 +622,8 @@ def head_verdict(text: str) -> Optional[dict]:
 
         verdict = router_two_stage.head_verdict(embed(text))
         # head_top: an unsure (below_gate) head must not wave a claim through
-        target = evidence_target(text, (verdict or {}).get("head_top"))
-        return _evidence_decision(verdict, target) if target else verdict
+        hit = question_precedence(text, (verdict or {}).get("head_top"))
+        return _evidence_decision(verdict, *hit) if hit else verdict
     except Exception as exc:
         logger.warning("head_verdict failed (non-fatal): %s", exc)
         return None
@@ -657,7 +696,7 @@ def route(text: str) -> dict:
             # 0.0 — never another domain's score — so expert per-domain
             # threshold gates deny rather than act on a borrowed confidence.
             out["score"] = round(float(scores.get(ts_domain, 0.0)), 3)
-            _apply_evidence_precedence(text, out, scores)
+            _apply_question_precedence(text, out, scores)
             out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
             # `routed` is still the SIMILARITY decision the two-stage pre-empted —
             # log it as the independent baseline (out["routed"] is now the
@@ -666,5 +705,5 @@ def route(text: str) -> dict:
                                           out["routed"], similarity_routed=routed))
         # decision None → similarity behavior unchanged (brain-safe)
     if "two_stage" not in out:
-        _apply_evidence_precedence(text, out, scores)
+        _apply_question_precedence(text, out, scores)
     return out
