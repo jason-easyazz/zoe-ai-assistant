@@ -60,7 +60,7 @@ class _DB:
 
     def execute(self, sql, params=()):
         if "FROM open_loops" in sql:
-            return _Cur([("renew the rego", "", 2, DUE_NAIVE_UTC)])
+            return _Cur([("renew the rego", "", 2, DUE_NAIVE_UTC, 7)])  # SELECT order, + id
         if "FROM events" in sql:
             return _Cur([CAL_ROW])
         self.writes.append((sql, params))

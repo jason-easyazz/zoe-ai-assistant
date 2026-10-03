@@ -1767,9 +1767,9 @@ async def _synthesis_pass(user_id: str) -> dict:
 # ── Open loops (nightly, dreaming phase 1.5) ─────────────────────────────────
 #
 # Consumers: proactive/triggers/morning_checkin.py (morning brief) and the
-# legacy zoe_agent [OPEN LOOPS] block. Nothing ever marks a loop resolved, so
-# the extractor itself dedupes against the user's unresolved loops and ages
-# out stale ones — otherwise the 48h window re-inserts the same loop every
+# legacy zoe_agent [OPEN LOOPS] block. Only expiry, the junk discard and (under
+# ZOE_LOOP_LIFECYCLE) a supersede mark a loop resolved, so the extractor itself
+# dedupes against the user's unresolved loops and ages out stale ones — otherwise the 48h window re-inserts the same loop every
 # night and the brief (oldest first) repeats it forever.
 _OPEN_LOOPS_MAX_PER_RUN = 5
 _OPEN_LOOPS_TRANSCRIPT_CHARS = 3000   # same budget as the nightly fact extractor
@@ -1790,6 +1790,16 @@ Return ONLY a JSON array (at most 5 items, [] if none). Each item:
   "follow_up_hint": "what Zoe could gently ask or say later",
   "emotional_weight": 1-5,
   "follow_up_in_days": 0-14}}"""
+# ZOE_LOOP_LIFECYCLE: the schema above gives only the range, so the model spreads its
+# picks over it (3/5/7/10 days on the day-sim seeds, 1–7 on live rows) and a worry
+# stated today waited most of a week. A caring friend checks in on a worry soon.
+_OPEN_LOOPS_HORIZON = ("\nfollow_up_in_days is when a caring friend would naturally check in: "
+                       "1 for a worry, a health concern or a strong feeling; the day after a "
+                       "dated event; 2-3 for anything else; at most 7 unless it is a plan "
+                       "months away.")
+# A loop closed in the transcript window (a supersede, ZOE_LOOP_LIFECYCLE) must not be
+# re-extracted from the very turns that created it: dedupe against those too.
+_OPEN_LOOPS_RESOLVED_DEDUPE_DAYS = 2
 
 
 def _parse_json_array(raw: str) -> list | None:
@@ -1843,7 +1853,10 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     """
     from db_compat import get_compat_db as _get_compat_db
     created_at_valid_sql = CREATED_AT_VALID_TIMESTAMP_SQL.replace("created_at", "cm.created_at")
+    from open_loop_lifecycle import lifecycle_enabled
     from open_loop_quality import loop_is_concrete, loop_turn_is_meta
+
+    lifecycle = lifecycle_enabled()
 
     result = {"user_id": user_id, "extracted": 0, "inserted": 0, "skipped_dup": 0,
               "expired": 0, "discarded_meta": 0, "skipped_turns": 0, "status": "ok"}
@@ -1921,7 +1934,8 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You extract open loops from conversations. Return ONLY a valid JSON array."},
-            {"role": "user", "content": _OPEN_LOOPS_PROMPT.format(messages="\n".join(lines))},
+            {"role": "user", "content": _OPEN_LOOPS_PROMPT.format(messages="\n".join(lines))
+             + (_OPEN_LOOPS_HORIZON if lifecycle else "")},
         ],
         "max_tokens": 500,
         "temperature": 0.1,
@@ -1969,8 +1983,10 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
 
     try:
         async with _get_compat_db() as _db:
+            recent = (f" OR resolved_at > CURRENT_TIMESTAMP - INTERVAL "
+                      f"'{_OPEN_LOOPS_RESOLVED_DEDUPE_DAYS} days'" if lifecycle else "")
             async with _db.execute(
-                "SELECT loop_text FROM open_loops WHERE user_id = ? AND resolved IS NOT TRUE",
+                f"SELECT loop_text FROM open_loops WHERE user_id = ? AND (resolved IS NOT TRUE{recent})",
                 (user_id,),
             ) as cur:
                 seen = [_content_tokens(r[0]) for r in await cur.fetchall()]
