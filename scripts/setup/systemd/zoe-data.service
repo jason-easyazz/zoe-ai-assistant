@@ -96,5 +96,18 @@ MemoryLow=2G
 CPUWeight=300
 IOWeight=300
 
+# ── Open-files limit (A10, infra audit 2026-10-03 D10) ───────────────────────
+# The user manager's default soft RLIMIT_NOFILE is 1024 (hard 1048576), and the
+# live zoe-data ran at exactly that. 41 fds were in use after 3.5 days, so this
+# is not a leak fix — it removes EMFILE as a path to the runbook §1 hang
+# (docs/knowledge/incident-runbook.md): uvicorn's accept() failing with EMFILE
+# leaves the process alive while the listen queue fills to backlog + 1, which
+# looks exactly like an event-loop stall. Raising the SOFT limit past 1024 is
+# only unsafe for code that calls select(); none in zoe-data does (asyncio/uvloop
+# use epoll, httpcore uses poll on Linux) — checked 2026-10-03. Installed hosts
+# get this through the tracked drop-in zoe-data.service.d/30-nofile.conf (never a
+# template copy); the two must agree (tests/unit/test_zoe_data_unit_limits.py).
+LimitNOFILE=65536
+
 [Install]
 WantedBy=default.target

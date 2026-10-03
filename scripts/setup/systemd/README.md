@@ -52,6 +52,7 @@ copy (installed units carry host edits and their own untracked drop-ins). The
 | Drop-in | What it changes | Runbook |
 |---------|-----------------|---------|
 | `zoe-data.service.d/60-py312-venv.conf` | zoe-data's interpreter: `/usr/bin/python3` (3.10) → `~/.zoe/venvs/zoe-data-py312/bin/python` (B0.7). Build the venv FIRST. | `docs/knowledge/python-312-venv-migration.md` §8 |
+| `zoe-data.service.d/30-nofile.conf` | zoe-data's open-files limit: soft `1024` (user-manager default) → `LimitNOFILE=65536` (A10, infra audit 2026-10-03). Removes EMFILE-on-accept as a path to the accept-queue hang. Same value is in the template; `tests/unit/test_zoe_data_unit_limits.py` keeps them equal. | `docs/knowledge/incident-runbook.md` §1; install/verify/rollback in the file header |
 | `kokoro-tts.service.d/40-memory-tuning.conf` | Kokoro's glibc allocator: `MALLOC_ARENA_MAX=2` + `MALLOC_TRIM_THRESHOLD_=131072` (B6.6). Allocator only — no numeric change. | `docs/knowledge/voice-pipeline.md` (Kokoro memory) |
 | `kokoro-tts.service.d/60-kokoro-venv.conf` | Kokoro's interpreter: `/usr/bin/python3` → `~/.zoe/venvs/kokoro-py310/bin/python` (B5.7) — the same 3.10 + site-packages (`--system-site-packages`) with scikit-learn/pandas/pyarrow blocked. Build the venv FIRST (`scripts/setup/build_kokoro_venv.sh`); restart only under the brain-window lock. | `docs/knowledge/voice-pipeline.md` (Kokoro dedicated venv) |
 

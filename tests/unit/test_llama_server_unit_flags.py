@@ -35,9 +35,12 @@ couplings that fail at RUNTIME, not startup:
   TTFT measured); ``-1`` is "no limit" on 15.6G unified memory.
 
 The FunctionGemma router sidecar (``functiongemma-router.service``, same llama.cpp
-server, CPU-only) carries one coupling of its own: its ``--cache-ram`` must be a
-positive cap that fits under the unit's ``MemoryMax``. Left at the 8192 MiB default
-inside a 1G cgroup, the cache never evicts — the cgroup OOM-kills the sidecar first.
+server, CPU-only) carries couplings of its own: its ``--cache-ram`` must be a
+positive cap that fits under the unit's ``MemoryMax`` (left at the 8192 MiB default
+inside a ~1G cgroup, the cache never evicts — the cgroup OOM-kills the sidecar
+first). And since A1 (infra audit 2026-10-03) it MLOCKS its GGUF: the lock flag must
+be spelled for the build it runs, ``LimitMEMLOCK`` must not cap it, and the ceiling
+must hold the floor plus the now-unreclaimable weights.
 """
 
 from __future__ import annotations
@@ -222,7 +225,7 @@ def test_router_prompt_cache_fits_under_its_cgroup_ceiling():
     cmd = _exec_start(ROUTER_UNIT)
     cram = _flag(cmd, "--cache-ram")
     assert cram is not None, (
-        "router --cache-ram missing: the llama.cpp default is 8192 MiB, which a MemoryMax=1G "
+        "router --cache-ram missing: the llama.cpp default is 8192 MiB, which a ~1G MemoryMax "
         "cgroup OOM-kills long before the cache would evict"
     )
     ceiling = _memory_max_mib(ROUTER_UNIT)
@@ -230,3 +233,83 @@ def test_router_prompt_cache_fits_under_its_cgroup_ceiling():
         f"router --cache-ram {cram} MiB must be a positive cap well under MemoryMax "
         f"({ceiling} MiB) — the model and KV already hold most of it"
     )
+
+
+# A1 (docs/research/infra-data-config-2026-10-03.md D1): the router's GGUF mapping was
+# measured at Rss 0 kB of 278 MB with 7.7 M file refaults, costing ~130 ms p50 on the
+# first routed turn after a quiet gap. The r2 GGUF is 291,557,728 bytes; its tensor
+# mapping is 278 MiB. Re-point this if the router model changes size.
+ROUTER_LOCKED_GGUF_MIB = 278
+
+
+def _service_section(unit: Path) -> str:
+    text = unit.read_text(encoding="utf-8")
+    m = re.search(r"^\[Service\]\n(.*?)(?=^\[|\Z)", text, re.DOTALL | re.MULTILINE)
+    assert m, f"{unit.name} has no [Service] section"
+    return m.group(1)
+
+
+def _router_mlock_problems(unit: Path) -> list[str]:
+    """Every way the router's weight lock is missing or would fail at startup."""
+    cmd = _exec_start(unit)
+    binary = cmd.split()[0]
+    has_old = re.search(r"(?:^|\s)--mlock(?:\s|$)", cmd) is not None
+    has_new = _flag(cmd, "--load-mode") == "mmap+mlock"
+    problems = []
+    if not (has_old or has_new):
+        problems.append("router ExecStart does not mlock its weights (A1)")
+    if "b11194" in binary and has_old:
+        problems.append(f"{binary} is the b11194 build, which removed --mlock")
+    if "b11194" not in binary and has_new:
+        problems.append(f"{binary} predates --load-mode; use --mlock")
+    if not re.search(r"^LimitMEMLOCK=infinity$", _service_section(unit), re.MULTILINE):
+        problems.append("router [Service] lacks LimitMEMLOCK=infinity; a capped "
+                        "RLIMIT_MEMLOCK makes llama.cpp skip the lock with only a warning")
+    return problems
+
+
+def test_router_pins_its_weights_with_the_flag_its_build_accepts():
+    assert _router_mlock_problems(ROUTER_UNIT) == []
+
+
+def test_router_mlock_check_catches_each_failure(tmp_path):
+    """Negative controls: each break of the live unit must go red."""
+    live = ROUTER_UNIT.read_text(encoding="utf-8")
+    breaks = {
+        "no lock": live.replace("  --mlock \\\n", ""),
+        "b11194 + --mlock": live.replace(
+            "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server",
+            "/home/zoe/llama.cpp-b11194/build-jetson/bin/llama-server"),
+        "memlock capped": live.replace("LimitMEMLOCK=infinity", "LimitMEMLOCK=8M"),
+        "memlock in [Install]": live.replace("LimitMEMLOCK=infinity\n", "")
+        + "LimitMEMLOCK=infinity\n",
+    }
+    for name, text in breaks.items():
+        assert text != live, f"negative control {name!r} did not change the unit"
+        probe = tmp_path / f"{name.replace(' ', '_')}.service"
+        probe.write_text(text, encoding="utf-8")
+        assert _router_mlock_problems(probe), f"negative control {name!r} stayed green"
+
+
+def _size_mib(value: str) -> float:
+    m = re.fullmatch(r"([0-9]+)([KMG])", value)
+    assert m, f"unparseable size {value!r}"
+    return int(m.group(1)) * {"K": 1 / 1024, "M": 1, "G": 1024}[m.group(2)]
+
+
+def _router_floor_plus_lock_fits(low: str, ceiling: str) -> bool:
+    return _size_mib(low) + ROUTER_LOCKED_GGUF_MIB <= _size_mib(ceiling)
+
+
+def test_router_ceiling_holds_the_floor_plus_the_locked_weights():
+    """Locked pages are unreclaimable. The 768M floor was sized for a working set
+    measured while the weights were still evictable, so after the lock the
+    ceiling must hold floor + GGUF, or the backstop moves inside normal use."""
+    section = _service_section(ROUTER_UNIT)
+    low = re.search(r"^MemoryLow=(\S+)$", section, re.MULTILINE).group(1)
+    ceiling = re.search(r"^MemoryMax=(\S+)$", section, re.MULTILINE).group(1)
+    assert _router_floor_plus_lock_fits(low, ceiling), (
+        f"MemoryLow={low} + {ROUTER_LOCKED_GGUF_MIB} MiB locked GGUF exceeds MemoryMax={ceiling}"
+    )
+    # Negative control: the pre-A1 1G ceiling must fail this rule.
+    assert not _router_floor_plus_lock_fits(low, "1G")

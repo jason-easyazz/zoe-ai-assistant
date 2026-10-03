@@ -17,6 +17,7 @@ Measured 2026-08-02, with both regressions live at once: seven private Serenas
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -116,3 +117,54 @@ def test_omnigent_container_codex_serena_attaches_by_url():
     claude_entry = json.loads(OMNIGENT_MCP_JSON.read_text())["mcpServers"]["serena"]
     assert entry.get("url") == claude_entry["url"]
     assert not entry["url"].startswith("http://127."), entry["url"]
+
+
+def _launch_props(tmp_path: Path, script: Path, extra_env: dict | None = None) -> dict:
+    """Run the launcher against a fake systemd-run and return the -p properties
+    it would hand the scope. Exercises the real script, not a grep of it."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    record = tmp_path / "systemd-run.args"
+    systemd_run = fake_bin / "systemd-run"
+    systemd_run.write_text(
+        "#!/usr/bin/env bash\n"
+        # The availability probe ends in `true`; the real launch ends in the binary.
+        f'[ "${{@: -1}}" = true ] && exit 0\nprintf "%s\\n" "$@" > {record}\n'
+    )
+    mcp = fake_bin / "codebase-memory-mcp"
+    mcp.write_text("#!/usr/bin/env bash\nexit 0\n")
+    for f in (systemd_run, mcp):
+        f.chmod(0o755)
+    env = {"PATH": f"{fake_bin}:/usr/bin:/bin", "HOME": str(tmp_path),
+           "CODEBASE_MEMORY_BIN": str(mcp), **(extra_env or {})}
+    subprocess.run(["bash", str(script)], env=env, check=True, timeout=30)
+    args = record.read_text().splitlines()
+    return dict(args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "-p")
+
+
+def _throttle_band(props: dict) -> bool:
+    return props["MemoryHigh"] != props["MemoryMax"]
+
+
+def test_soft_cap_equals_hard_cap_by_default(tmp_path):
+    """A6 (infra audit 2026-10-03, D3): memory.high never OOM-kills. A 512M high
+    under a 768M max held one spawn throttled at ~2k major faults/s and ~200 MB/s
+    of NVMe reads for its whole life, with `oom 0`. No throttle band means a
+    runaway spawn is killed at the max instead."""
+    props = _launch_props(tmp_path, ROOT / CAPPED)
+    assert props == {"MemoryHigh": "768M", "MemoryMax": "768M", "MemorySwapMax": "768M"}
+    assert not _throttle_band(props)
+
+
+def test_raising_the_hard_cap_moves_the_soft_cap_and_swap_cap_with_it(tmp_path):
+    props = _launch_props(tmp_path, ROOT / CAPPED, {"CODEBASE_MEMORY_MEM_MAX": "1G"})
+    assert props == {"MemoryHigh": "1G", "MemoryMax": "1G", "MemorySwapMax": "1G"}
+
+
+def test_throttle_band_check_catches_the_old_default(tmp_path):
+    """Negative control: the pre-A6 launcher (512M high) must read as banded."""
+    old = tmp_path / "old_capped.sh"
+    body = (ROOT / CAPPED).read_text()
+    old.write_text(body.replace('CODEBASE_MEMORY_MEM_HIGH:-$MEM_MAX', "CODEBASE_MEMORY_MEM_HIGH:-512M"))
+    assert old.read_text() != body, "negative control did not alter the launcher"
+    assert _throttle_band(_launch_props(tmp_path, old))
