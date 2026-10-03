@@ -4,10 +4,9 @@
 **Status:** Ready for Implementation
 **Timeline:** 2 weeks (P0), 1 week (P1)
 
-> **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list).
+> **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code-level audit of Zoe's context assembly against it).
 >
-> **2026-10-03:** [flue-and-agent-runtimes-2026-10-03.md](./flue-and-agent-runtimes-2026-10-03.md) (Flue runtime feature matrix, upgrade risk, voice/agent-runtime field comparison, ranked actions).
-> **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list). Field scan 2026-10-03: [companion-field-vs-samantha-2026-10-03.md](./companion-field-vs-samantha-2026-10-03.md) (OSS/commercial voice-companion field vs the Samantha spec, as a delta against tracker B1–B10 and state review §7).
+> **2026-10-03 audits:** [companion-field-vs-samantha-2026-10-03.md](./companion-field-vs-samantha-2026-10-03.md) (field scan vs the Samantha spec, pieces to borrow), [flue-and-agent-runtimes-2026-10-03.md](./flue-and-agent-runtimes-2026-10-03.md) (Flue feature matrix, upgrade risk, runtime field comparison), [inference-speech-stack-2026-10-03.md](./inference-speech-stack-2026-10-03.md) (brain/router/STT/TTS/Pi config vs the field, ranked actions), [infra-data-config-2026-10-03.md](./infra-data-config-2026-10-03.md) (host, uvicorn, Postgres, Chroma, docker, naming/TLS, backups — ranked actions). The memory profile lives in `docs/knowledge/memory-pressure-profile-2026-10-03.md`.
 
 ---
 
