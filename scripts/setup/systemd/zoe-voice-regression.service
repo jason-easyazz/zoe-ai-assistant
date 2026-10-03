@@ -44,12 +44,16 @@ ExecStartPre=/usr/bin/mkdir -p %h/.zoe-logs
 # fired before :5432 was up and recorded status=error runs. Gate on a bounded
 # TCP wait instead; on timeout the unit fails RED with a clear one-liner.
 ExecStartPre=/usr/bin/python3 %h/assistant/scripts/maintenance/wait_for_port.py --host 127.0.0.1 --port 5432 --timeout 300 --label postgres
-# The zoe-data SERVICE interpreter (B0.7 venv), not /usr/bin/python3: the replay
-# imports zoe-data in-process, and 3.10's chromadb 0.6.3 cannot open the 1.x palace
-# (B0.8) — recall was silently OFF inside every replay until this line changed.
-# The probe also re-execs itself on the unit's interpreter (scripts/lib/
-# service_python.py), so after a B0.7 ROLLBACK that deletes the venv, set this
-# back to /usr/bin/python3 and it will follow the service automatically.
-ExecStart=/usr/bin/flock /tmp/zoe-voice-harness.lock %h/.zoe/venvs/zoe-data-py312/bin/python %h/assistant/scripts/maintenance/voice_regression_probe.py --samples 20
+# STABLE launcher, SERVICE interpreter. The replay imports zoe-data in-process, so
+# it must run on the zoe-data SERVICE's interpreter (B0.7 venv today): 3.10's
+# chromadb 0.6.3 cannot open the 1.x palace (B0.8) and recall was silently OFF
+# inside every replay until the probe learned to follow the service. It does that
+# by re-exec: the probe starts here on /usr/bin/python3, asks systemd what the
+# zoe-data unit execs (scripts/lib/service_python.py — systemd is the authority,
+# venv presence is not) and re-execs itself onto that interpreter (same PID, so
+# flock still holds). Do NOT hard-code the venv here: after a B0.7 rollback that
+# moves zoe-data back to /usr/bin/python3 a venv launcher would measure the WRONG
+# stack, and once the venv is deleted it could not launch at all (Codex P1, #1811).
+ExecStart=/usr/bin/flock /tmp/zoe-voice-harness.lock /usr/bin/python3 %h/assistant/scripts/maintenance/voice_regression_probe.py --samples 20
 StandardOutput=append:%h/.zoe-logs/voice-regression.log
 StandardError=append:%h/.zoe-logs/voice-regression.log

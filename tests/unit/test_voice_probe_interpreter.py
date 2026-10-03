@@ -44,7 +44,9 @@ sp = _load("service_python_t", "scripts/lib/service_python.py")
 
 def _exe(tmp_path: Path, name: str) -> str:
     p = tmp_path / name
-    p.write_text("#!/bin/sh\n")
+    # A real Python 3 behind the fake path: the ladder now EXECUTES each candidate
+    # (`runs_python`), so a bare shell stub would be rejected as not-a-Python.
+    p.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n')
     p.chmod(0o755)
     return str(p)
 
@@ -77,6 +79,27 @@ class TestResolveServicePython:
     def test_bad_explicit_choice_is_a_hard_error_not_a_silent_fallback(self, tmp_path):
         with pytest.raises(SystemExit, match="not an executable"):
             sp.resolve_service_python(str(tmp_path / "nope"), env={}, query=lambda: None)
+
+    def test_non_python_executable_is_a_hard_error(self, tmp_path):
+        # /bin/true is executable and exits 0 — exec'ing it would end the probe
+        # green with no artifact. Explicit AND env-selected paths are checked.
+        with pytest.raises(SystemExit, match="Python 3"):
+            sp.resolve_service_python("/bin/true", env={}, query=lambda: None)
+        with pytest.raises(SystemExit, match="Python 3"):
+            sp.resolve_service_python(None, env={sp.ENV_VAR: "/bin/true"}, query=lambda: None)
+
+    def test_non_python_unit_answer_falls_through_like_a_missing_one(self, tmp_path):
+        venv = _exe(tmp_path, "venv")
+        py, src = sp.resolve_service_python(None, env={}, query=lambda: "/bin/true",
+                                            venv=Path(venv))
+        assert (py, src) == (venv, "zoe-data venv (systemd unavailable)")
+
+    def test_runs_python_accepts_a_real_interpreter_and_rejects_true(self):
+        assert sp.runs_python(sys.executable)
+        # /bin/true exits 0 for ANY argv, so an exit-status-only check passes it
+        # (the negative control that caught the first version): the token must be printed.
+        assert not sp.runs_python("/bin/true")
+        assert not sp.runs_python("/nonexistent/python")
 
     def test_same_python_does_not_resolve_venv_symlinks(self, tmp_path):
         base = _exe(tmp_path, "python3.12")
@@ -222,8 +245,14 @@ def test_measure_voice_reports_recall(monkeypatch, tmp_path, recall, rc):
     assert json.loads(out.read_text())["memory_recall"] == (recall or "unreported")
 
 
-def test_unit_runs_the_probe_on_the_service_venv():
+def test_unit_launches_from_the_stable_system_python_and_follows_the_service():
+    # Codex P1 (#1811): the LAUNCHER must be stable. Hard-coding the venv in
+    # ExecStart measures the venv even after a B0.7 rollback moves zoe-data back to
+    # /usr/bin/python3 (a wrong-stack probe), and cannot launch at all once the
+    # venv is deleted. The probe re-execs onto whatever the zoe-data unit reports,
+    # so the stable launcher follows the service in every rollback shape.
     unit = (REPO / "scripts" / "setup" / "systemd" / "zoe-voice-regression.service").read_text()
     start = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
-    assert "%h/.zoe/venvs/zoe-data-py312/bin/python" in start
-    assert "/usr/bin/python3" not in start   # negative control: the 3.10 launcher is gone
+    assert "/usr/bin/python3" in start
+    assert ".zoe/venvs" not in start   # negative control: no hard-coded venv launcher
+    assert "re-exec" in unit           # the comment tells the next reader WHY
