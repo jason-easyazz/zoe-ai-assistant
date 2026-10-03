@@ -2,7 +2,8 @@
 #
 # Serves the round-2 fine-tuned FunctionGemma-270M GGUF (proven 90.1% overall /
 # 0% chat-FP on the 81-case corpus, labs/router-90-campaign) on :11436, CPU-only
-# (-ngl 0, ~600 MB RSS), for services/zoe-data/router_two_stage.py. The brain
+# (-ngl 0, ~600 MB RSS incl. the mlocked 278 MB GGUF), for
+# services/zoe-data/router_two_stage.py. The brain
 # (Gemma 4 E4B on :11434) is untouched — this is a fast-tier FRONT, not a brain
 # swap (docs/CANONICAL.md rocks hold).
 #
@@ -31,6 +32,22 @@ After=network.target
 #    608 requests; p99 72). Was 4096. Do not raise without a measured need.
 #  Do NOT add --no-repack: weights would be served from reclaimable file pages —
 #    the paging failure the memory block below exists to prevent.
+#  --mlock (A1, infra audit 2026-10-03, docs/research/infra-data-config-2026-10-03.md
+#    D1) = pin the GGUF mapping. Repack alone did NOT keep the weights resident:
+#    the tensors llama.cpp serves straight from the mmap stay reclaimable FILE
+#    pages, and MemorySwapMax=0 only protects anon. Measured live 2026-10-03:
+#    the 278 MB GGUF mapping at Rss 0 kB (fully evicted), 7.7 M file refaults on
+#    this cgroup (~12 MB re-read per request), and router `total time` p50/p90
+#    293/450 ms when the previous request was <10 min earlier vs 427/638 ms after
+#    a >10 min gap (n=2,384, journald 09-28..10-03; max 1,588 ms, past the 1.5 s
+#    client timeout). The leaf MemoryLow below cannot fix this: its effective
+#    value is 0 on this host (ancestor slices are memory.low=0).
+#    SPELLING IS BUILD-SPECIFIC: this unit runs b9733 (build-jetson-new), which
+#    takes `--mlock`; the brain's b11194 REMOVED it (`--load-mode mmap+mlock`).
+#    Repointing ExecStart at b11194 without respelling is an unknown-flag
+#    startup failure — pinned by tests/unit/test_llama_server_unit_flags.py.
+#    mlock failing (RLIMIT_MEMLOCK) is only a WARNING in llama.cpp, so the
+#    install check is `VmLck` in /proc/<pid>/status ~= 278 MB, not "it started".
 Type=simple
 Environment=LD_LIBRARY_PATH=/home/zoe/llama.cpp/build-jetson-new/bin
 ExecStart=/home/zoe/llama.cpp/build-jetson-new/bin/llama-server \
@@ -42,6 +59,7 @@ ExecStart=/home/zoe/llama.cpp/build-jetson-new/bin/llama-server \
   --n-gpu-layers 0 \
   --parallel 1 \
   --threads 4 \
+  --mlock \
   --jinja
 # Startup gate: healthy AND serving exactly the r2 GGUF (identity check —
 # a wrong model here would silently change routing quality).
@@ -75,18 +93,19 @@ ExecStartPost=/bin/bash -c 'for i in $(seq 1 60); do curl -sf http://127.0.0.1:1
 # (1.28x the peak — the same margin kokoro-tts uses over its 2,465 MB VmHWM),
 # so the protected zone covers the model rather than part of it.
 #
-# MemoryMax=1G is a leak BACKSTOP, and a ceiling is safe here for a reason that
-# does NOT generalise from the binary: this is the same llama-server binary that
-# is MemoryMax-EXEMPT on :11434, but that exemption is about unaccounted
-# GPU/NvMap pages, and this instance runs `--n-gpu-layers 0`. Verified in
+# MemoryMax (1G until A1, 1280M now — see below) is a leak BACKSTOP, and a
+# ceiling is safe here for a reason that does NOT generalise from the binary:
+# this is the same llama-server binary that is MemoryMax-EXEMPT on :11434, but
+# that exemption is about unaccounted GPU/NvMap pages, and this instance runs
+# `--n-gpu-layers 0`. Verified in
 # /proc/1564/maps: exactly ONE /dev/nv mapping, a single 4 KB
 # /dev/nvgpu/igpu0/ctrl control page, and ZERO /dev/nvmap allocations — the
 # nvidia .so files are mapped (Jetson CUDA build) but are ordinary file-backed
 # pages. No weights and no KV cache on device, so cgroup accounting is COMPLETE
 # and the ceiling genuinely bounds this cgroup.
 #
-# The 1.33x ceiling-to-floor ratio is below the usual 3x rule and is a
-# documented TIGHT_CEILING_OK exception, for kokoro-tts's reason: the 3x rule
+# The 1.67x ceiling-to-floor ratio (1.33x before A1) is below the usual 3x
+# rule and is a documented TIGHT_CEILING_OK exception, for kokoro-tts's reason: the 3x rule
 # exists for runtimes whose UNCOVERED allocation grows with load (V8 external
 # buffers). llama.cpp here is bounded at startup — fixed Q8_0 GGUF, fixed
 # --ctx-size 1024 KV cache, --parallel 1, prompt cache capped by --cache-ram 64
@@ -96,9 +115,22 @@ ExecStartPost=/bin/bash -c 'for i in $(seq 1 60); do curl -sf http://127.0.0.1:1
 # not an outage (Restart=always + the fallback above), so the tighter backstop
 # is preferred over leaving 2.5 GB of unswappable headroom on a 15.6 GB box
 # where llama-server holds ~6.4 GB.
+#
+# MemoryMax 1G -> 1280M with --mlock (A1). Locked pages are unreclaimable, so
+# pinning the 278 MB mapping takes it out of what the kernel could reclaim before
+# reaching the ceiling. 1280M keeps the anon headroom the 1G ceiling gave when the
+# weights were still evictable (1G + 278 MB), so this is the same leak backstop,
+# not a looser one. Live 2026-10-03: cgroup 288 MB (anon 283 MB, weights
+# evicted), VmHWM 692 MB. Pinned: MemoryLow + the locked GGUF must fit under
+# MemoryMax (tests/unit/test_llama_server_unit_flags.py).
+# LimitMEMLOCK=infinity: the user manager on this host already defaults it
+# (DefaultLimitMEMLOCK=infinity), but a rebuilt host with a small distro default
+# (64 KiB-8 MiB) would silently skip the lock — stated here, as in
+# llama-server.service.
+LimitMEMLOCK=infinity
 MemorySwapMax=0
 MemoryLow=768M
-MemoryMax=1G
+MemoryMax=1280M
 Restart=always
 RestartSec=5
 TimeoutStartSec=120

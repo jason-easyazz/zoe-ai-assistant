@@ -2553,6 +2553,26 @@ async def _notify_ui_channel(channel: str, event_type: str, data: dict) -> None:
         logger.debug("%s UI notify skipped: %s", channel, exc)
 
 
+def _zoe_now():
+    """The household wall clock (ZOE_TIMEZONE) — one seam tests can freeze."""
+    from datetime import datetime
+    from time_utils import zoe_timezone
+
+    return datetime.now(zoe_timezone())
+
+
+def _past_event_note(start_date: str, start_time: Optional[str], now) -> str:
+    """' That time has already passed today.' / ' That date is already in the
+    past.' when the event the user EXPLICITLY dated is behind the household clock
+    `now`, else '' — the booking stays where they said; the reply just says so."""
+    today = now.date().isoformat()
+    if start_date < today:
+        return " That date is already in the past."
+    if start_date == today and start_time and start_time < now.strftime("%H:%M"):
+        return " That time has already passed today."
+    return ""
+
+
 async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Create a calendar event straight through the DB, mirroring mcp_server's
     calendar_create_event tool (same events columns, category default 'general',
@@ -2568,8 +2588,11 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
     if not title:
         return None
     raw_date = slots.get("date")
+    now = _zoe_now()
     if raw_date:
-        start_date = _parse_date(str(raw_date)) or None
+        # household clock, not the server's date (same anchor as reminders)
+        start_date = _parse_date(str(raw_date), today=now.date()) or None
+        logger.info("CALENDAR_CREATE date_raw=%r resolved=%s", str(raw_date)[:40], start_date)
         if not start_date:
             # A date WAS given but couldn't be parsed — fail rather than silently
             # dropping it onto today, which would land the event on a day the user
@@ -2580,7 +2603,7 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
         # Jess at 12pm" means today; asking "which day?" every time is worse UX than
         # defaulting. The confirmation names the day ("...today at 12 PM"), so the
         # user can move it if they meant otherwise.
-        start_date = today_for_zoe_tz().isoformat()
+        start_date = now.date().isoformat()
     start_time = _parse_time(str(slots.get("time") or "")) if slots.get("time") else None
     category = str(slots.get("category") or "general").strip() or "general"
     try:
@@ -2607,7 +2630,7 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
         when = day if day in ("today", "tomorrow") else f"on {day}"
         clock = _say_clock(start_time) if start_time else ""
         when_phrase = f"{when} at {clock}" if clock else when
-        return f"Added {title} to your calendar {when_phrase}."
+        return f"Added {title} to your calendar {when_phrase}.{_past_event_note(start_date, start_time, now)}"
     except Exception as exc:
         logger.warning("calendar_create direct execution unavailable; falling back to mcporter: %s", exc)
         return None
@@ -5119,6 +5142,13 @@ def _parse_date(raw: str, today: Optional["date"] = None) -> Optional[str]:
     if raw == "tomorrow":
         return (today + timedelta(days=1)).isoformat()
 
+    # An EXPLICIT date wins over the weekday heuristic: "Saturday 3 October",
+    # said on Saturday 3 October, is TODAY — not next Saturday (day-sim 2026-10-03
+    # booked it on the 10th). The weekday is only a label once a date is named.
+    explicit = _parse_explicit_date(re.sub(_LEADING_WEEKDAY_RE, "", raw), today)
+    if explicit:
+        return explicit
+
     day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
     for i, name in enumerate(day_names):
         if raw.startswith(name):
@@ -5126,7 +5156,21 @@ def _parse_date(raw: str, today: Optional["date"] = None) -> Optional[str]:
             if days_ahead == 0:
                 days_ahead = 7
             return (today + timedelta(days=days_ahead)).isoformat()
+    return None
 
+
+# "on saturday, " / "sat the " — a weekday label in front of an explicit date.
+_LEADING_WEEKDAY_RE = (
+    r"^(?:on\s+)?(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)"
+    r"(?:day|sday|nesday|rsday|urday)?\b[\s,]*(?:the\s+)?"
+)
+
+
+def _parse_explicit_date(raw: str, today: "date") -> Optional[str]:
+    """ISO for an explicit month+day ("october 3", "3rd of october", optional
+    year) or ISO date in `raw`, else None. A year-less date stays in `today`'s
+    year (callers such as reminders roll a past one forward)."""
+    raw = re.sub(r"^the\s+", "", raw)
     months = {
         "january": 1, "february": 2, "march": 3, "april": 4, "may": 5,
         "june": 6, "july": 7, "august": 8, "september": 9, "october": 10,
@@ -5135,7 +5179,7 @@ def _parse_date(raw: str, today: Optional["date"] = None) -> Optional[str]:
         "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
     }
 
-    m = re.match(r"(\w+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{4}))?", raw)
+    m = re.match(r"(\w+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?", raw)
     if m:
         month_name, day, year = m.group(1), int(m.group(2)), m.group(3)
         month = months.get(month_name)
@@ -5143,7 +5187,7 @@ def _parse_date(raw: str, today: Optional["date"] = None) -> Optional[str]:
             yr = int(year) if year else today.year
             return f"{yr:04d}-{month:02d}-{day:02d}"
 
-    m = re.match(r"(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(\w+)(?:\s+(\d{4}))?", raw)
+    m = re.match(r"(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(\w+)(?:,?\s+(\d{4}))?", raw)
     if m:
         day, month_name, year = int(m.group(1)), m.group(2), m.group(3)
         month = months.get(month_name)

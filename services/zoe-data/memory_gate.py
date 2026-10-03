@@ -229,6 +229,97 @@ def is_evidence_question(message: str) -> bool:
     return bool(evidence_question_kind(message))
 
 
+def _first_match(patterns: tuple[tuple[str, re.Pattern], ...], message: str) -> str:
+    text = message or ""
+    return next((kind for kind, rx in patterns if rx.search(text)), "")
+
+
+# ── Present-state questions about the user's OWN stored facts (day-sim 6/6n) ─
+# "Am I still doing the half-marathon?", "Do I still get migraines?", "How's my
+# mum?" carry no what's-my/when-did-I shape, so the Flue recall floor sent no
+# packet and the brain answered "not sure I have that saved" / "see your doctor"
+# (live 2026-10-03). Each row pins I/we/my/our; the lookaheads keep session,
+# device and weather-advice questions out ("am I still connected?", "is my timer
+# still running?", "do I still need an umbrella?"). First match wins.
+_PS_SESSION = (
+    r"(?:connected|online|offline|there|here|muted|live|audible|paired|recording|"
+    r"on\s+(?:the\s+)?(?:call|line|hold|mute|speaker|wi-?fi|network|air)|"
+    r"(?:logged|signed)\s+(?:in|on)|being\s+(?:recorded|heard)|talking\s+to\s+you)"
+)
+_PS_DEVICE = (
+    r"(?:timers?|alarms?|wi-?fi|internet|connection|phone|battery|music|song|"
+    r"playlist|volume|lights?|tv|telly|speakers?|mic(?:rophone)?|camera|screen|"
+    r"panel|bluetooth|app|account|subscription|order|parcel|package|delivery)"
+)
+_PS_PET = (
+    r"(?:pets?|dogs?|cats?|pupp(?:y|ies)|pups?|kittens?|horses?|budgies?|parrots?|"
+    r"rabbits?|bunn(?:y|ies)|hamsters?|guinea\s+pigs?|chooks|chickens|fish)"
+)
+PRESENT_STATE_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple(
+    (kind, re.compile(rx, re.IGNORECASE))
+    for kind, rx in (
+        ("still", r"\b(?:(?:am|was)\s+i|(?:are|were)\s+we)\s+still\b(?!\s+" + _PS_SESSION + r"\b)"),
+        ("still", r"\b(?:do|did)\s+(?:i|we)\s+still\b(?!\s+need\s+(?:an?\s+|my\s+)?"
+                  r"(?:umbrella|jacket|coat|jumper|sunscreen)\b)"),
+        ("still", r"\b(?:is|are|was|were)\s+(?:my|our)\s+(?!" + _PS_DEVICE + r"\b)"
+                  r"(?:[\w'’-]+\s+){1,3}?still\b"),
+        ("still", r"\bhave\s+(?:i|we)\s+still\s+got\b"),
+        ("how", r"\bhow(?:['’]s|\s+is|\s+are|\s+was|\s+were)\s+(?:my|our)\s+"
+                r"(?:" + _EVT_REL + r"|" + _PS_PET + r")\b"),
+        ("which", r"\bwhich\s+(?:[\w'’-]+\s+){1,3}?(?:am|are|was|were)\s+(?:i|we)\b"),
+        ("which", r"\bwhich\s+(?:[\w'’-]+\s+){1,3}?do\s+(?:i|we)\s+(?:have|own|use|support|"
+                  r"barrack\s+for|go\s+to|work|drive|prefer|like)\b"),
+    )
+)
+
+
+def present_state_question_kind(message: str) -> str:
+    """"still" / "how" / "which" for a present-state question about the user's
+    own stored facts, else "". Pure."""
+    return _first_match(PRESENT_STATE_QUESTION_PATTERNS, message)
+
+
+# ── Event-time questions about the user's OWN plans (day-sim 9) ──────────────
+# "What time is my dentist appointment on Friday?" was claimed by the head as
+# time @ 0.997 and answered "It's 10:41 PM." (live 2026-10-03). A when/what-time
+# question about the user's own appointment is a calendar/memory question, never
+# the clock. Rows pin my/our or I/we AND an event noun (or a travel/shift verb),
+# so "what time is it", "what time does the game start" and "what time is my
+# alarm set for" never match. First match wins.
+_ET_NOUN = (
+    r"(?:appointments?|appt|meetings?|flights?|dentist|doctor(?:['’]s)?|gp|physio|"
+    r"chiro|vet|optometrist|surgery|operation|scan|x-?ray|check-?up|interview|exams?|"
+    r"tests?|class(?:es)?|lessons?|lectures?|shifts?|sessions?|booking|reservation|"
+    r"dinner|lunch|breakfast|brunch|party|wedding|funeral|game|match|race|training|"
+    r"practice|rehearsal|recital|concert|gig|haircut|massage|therapy|counselling|"
+    r"pick-?up|drop-?off|train|bus|ferry|call|presentation|deadline|event|date|"
+    r"visit|trip|holiday)"
+)
+_ET_WH = r"(?:when|what\s+time|what\s+day|which\s+day|what\s+date)"
+EVENT_TIME_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple(
+    (kind, re.compile(rx, re.IGNORECASE))
+    for kind, rx in (
+        ("my_event", r"\b" + _ET_WH + r"(?:['’]s|\s+(?:is|are|was|were|does|do|did|will))\s+"
+                     r"(?:my|our)\s+(?:[\w'’-]+\s+){0,3}?" + _ET_NOUN + r"\b"),
+        ("have_event", r"\b" + _ET_WH + r"\s+(?:do|am|are|have)\s+(?:i|we)\s+(?:got\s+)?"
+                       r"(?:[\w'’-]+\s+){0,2}?" + _ET_NOUN + r"\b"),
+        ("my_move", r"\b(?:when|what\s+time)\s+(?:do|am|are)\s+(?:i|we)\s+(?:seeing|meeting|"
+                    r"fly(?:ing)?|land(?:ing)?|leav(?:e|ing)|depart(?:ing)?|due|booked|"
+                    r"start(?:ing)?|finish(?:ing)?|on)\b"),
+    )
+)
+
+
+def event_time_question_kind(message: str) -> str:
+    """"my_event" / "have_event" / "my_move" for a question about WHEN the
+    user's own event is, else "". Pure."""
+    return _first_match(EVENT_TIME_QUESTION_PATTERNS, message)
+
+
+def is_event_time_question(message: str) -> bool:
+    return bool(event_time_question_kind(message))
+
+
 def message_needs_memory(message: str) -> bool:
     """True when the message likely benefits from MemPalace semantic search.
 

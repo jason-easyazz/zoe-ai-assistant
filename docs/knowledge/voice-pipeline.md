@@ -202,6 +202,32 @@ commands for real. Flip back to `inprocess` only when the live service itself is
 under test. Expect ~5% single-turn brain flake on a busy box: one CANT_DO in 20 fails the gate
 by design (said-vs-did is zero-tolerance) — re-run before treating it as a real regression.
 
+**Interpreter + memory recall — the gate runs on the zoe-data SERVICE interpreter.** The replay
+imports zoe-data in-process (`memory_service`, `fast_tiers`, the flue client's recall/continuity
+floor), so its interpreter decides which chromadb opens the palace. From B0.8 (2026-09-25) to
+2026-10-03 the unit and the landing scripts launched the probe with `/usr/bin/python3` (3.10,
+chromadb 0.6.3) against the 1.x palace: every open was refused (`palace is chromadb 1.x format but
+the installed client is 0.6.3`), every recall reader swallowed it, and every run scored brain turns
+**without recall** while live had it. Now: (1) the unit's `ExecStart` stays on `/usr/bin/python3` —
+a STABLE, rollback-safe launcher (a hard-coded venv launcher would measure the wrong stack after
+a B0.7 rollback, and could not launch once the venv is deleted) — and the probe **re-execs onto
+the service's interpreter** (the venv today); (2) the probe resolves that interpreter through ONE ladder
+(`scripts/lib/service_python.py`: `--python` → `ZOE_PROBE_PYTHON` → the zoe-data unit's ExecStart via
+`scripts/deploy/zoe_data_python.sh` → the venv if systemd can't answer → the current interpreter)
+and **re-executes itself on it**, so a bare `python3 voice_regression_probe.py` still runs VAD,
+cleanup and replay on the service's stack; `measure_voice.py` takes the same `--python` and passes it
+to the replay explicitly; (3) the replay preflights the palace with the service's own guard and
+watches for swallowed mismatches, emitting `memory_recall: ok|mismatch|error|disabled` plus the
+interpreter + chromadb version; (4) **any recall state but `ok` makes the run `status=error`** (exit
+2) and never writes a baseline. To measure a *candidate* interpreter (a cutover), pass
+`--python <it>` — otherwise the probe follows the unit. Pinned by
+`tests/unit/test_voice_probe_interpreter.py` + `services/zoe-data/tests/test_replay_memory_recall.py`.
+**Re-baseline once after this lands:** the stored baseline was recorded recall-OFF on 3.10, so
+brain_ms (bigger prompts on recall-shaped turns) is not comparable — the probe prints a `NOTE` until
+the baseline carries `memory_recall: ok`. In a quiet window (≥ 2 GB free, no landing holding the
+lock): `flock /tmp/zoe-voice-harness.lock ~/.zoe/venvs/zoe-data-py312/bin/python
+scripts/maintenance/voice_regression_probe.py --samples 20 --update-baseline`.
+
 **Write isolation takes TWO mechanisms, because a turn has two executors.** `allow_writes=False`
 governs `fast_tiers` only. On brain fall-through the turn reaches the flue sidecar, whose tools run
 with `ZOE_BRAIN_ALLOW_WRITES=true` (both lanes' `.env`), so a corpus command — "remember X", "add
@@ -262,7 +288,8 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   {"status": "pass|fail|skip|error", "timestamp": "…Z",
    "said_vs_did_regressions": ["FUNCTION: …"], "per_stage_speed_deltas": {"stt_ms": {"cur_ms": …, "baseline_ms": …, "delta_ms": …, "ratio": …}, …},
    "baseline_ref": {"path": "…", "created_at": "…Z", "ok_rate": …},
-   "reason": "…", "summary": {"n_samples": …, "ok_rate": …, "medians_ms": {…}},
+   "reason": "…", "summary": {"n_samples": …, "ok_rate": …, "medians_ms": {…},
+               "memory_recall": "ok|mismatch|error|disabled|unreported", "interpreter": {…}},
    "non_pass_streak": 0, "non_pass_alert_after": 3, "non_pass_alert": false,
    "vad_stage": true,
    "vad": {"status": "pass|fail|skip|error", "clips": 24, "speech_detected": 23,

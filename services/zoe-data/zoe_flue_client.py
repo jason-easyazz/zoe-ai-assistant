@@ -568,6 +568,14 @@ _PERSONAL_QUESTION_RE = re.compile(
 )
 
 
+def _present_state_shapes_enabled() -> bool:
+    """ZOE_RECALL_PRESENT_STATE_SHAPES — default OFF (voice path; the operator
+    flips it after the replay gate). Per-call env read like the floor flag."""
+    return (os.environ.get("ZOE_RECALL_PRESENT_STATE_SHAPES") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _recall_question_shape(message: str) -> str:
     """Which recall-floor shape this message is: "personal" (a my/I question),
     "event" (an event-shaped question about the user's people/plans —
@@ -576,14 +584,27 @@ def _recall_question_shape(message: str) -> str:
     (not a recall question), or "evidence" (``memory_gate.is_evidence_question``:
     "What exactly did I say about Marisol?", "are you sure?" — no my/I-question
     shape, yet only the packet's dated, quoted bullets can answer it; live miss
-    2026-09-30). Pure. Ownership against continuity is decided by
+    2026-09-30), or — with ZOE_RECALL_PRESENT_STATE_SHAPES on — "present"
+    (``memory_gate.present_state_question_kind``: "do I still get migraines?")
+    / "event_time" (``memory_gate.is_event_time_question``: "what time is my
+    dentist appointment?"). Pure but for that flag. Ownership against continuity is decided by
     ``_recall_floor_shape`` — the ONE predicate the floor, the continuity
     exclusivity check and the offer ager share."""
     msg = message or ""
     if _PERSONAL_QUESTION_RE.search(msg):
         return "personal"
-    from memory_gate import is_event_question, is_evidence_question  # stdlib-only
+    from memory_gate import (  # stdlib-only
+        is_event_question, is_event_time_question, is_evidence_question,
+        present_state_question_kind,
+    )
 
+    if _present_state_shapes_enabled():
+        # "Am I still doing the half-marathon?", "How's my mum?" (day-sim 6/6n) and
+        # "What time is my dentist appointment?" (day-sim 9): the user's own facts.
+        if present_state_question_kind(msg):
+            return "present"
+        if is_event_time_question(msg):
+            return "event_time"
     if is_event_question(msg):
         return "event"
     return "evidence" if is_evidence_question(msg) else ""
@@ -1377,7 +1398,7 @@ async def run_flue_brain_streaming(
     import brief_first_turn
     from proactive import selector as proactive_selector
 
-    brief = await brief_first_turn.prepare(message, user_id)
+    brief = await brief_first_turn.prepare(message, user_id, session_id)
     raised = await proactive_selector.prepare(
         message, user_id, session_id, brief_active=brief is not None)
     turn = _run_flue_brain_streaming_turn(

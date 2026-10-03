@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Synthetic users, proactive recipients and kiosk presence (2026-09-27)
-description: Who the nightly memory passes and the proactive triggers treat as a real user — the is_synthetic_user rule and its allowlist flag, the household recipient rule that replaced "created a chat session in 7 days", guest-owned kiosk presence, the flag-dark brief-on-arrival, the flag-dark proactivity selector, the nightly purge of probe chat sessions, and why the spoken morning brief was silent from 08-16.
+description: Who the nightly memory passes and the proactive triggers treat as a real user — the is_synthetic_user rule and its allowlist flag, the household recipient rule that replaced "created a chat session in 7 days", guest-owned kiosk presence, the flag-dark brief-on-arrival, the flag-dark proactivity selector and open-loop lifecycle, the nightly purge of probe chat sessions, and why the spoken morning brief was silent from 08-16.
 tags: [memory, dreaming, proactive, morning-brief, brief-on-arrival, presence, test-data, zoe-data]
 timestamp: 2026-09-27T12:00:00Z
 ---
@@ -145,7 +145,8 @@ would. `ZOE_BRIEF_ON_FIRST_TURN=1` enables it (default off, read per call).
   so it is taken once any reply text went out, including when the stream then errors,
   the client disconnects or a barge-in cancels the turn (the write is shielded). A turn
   that emitted no text (an error before the first token, the canned fallback) takes
-  nothing.
+  nothing. Under `ZOE_LOOP_LIFECYCLE` the same settle marks the loops and moment the brief
+  mentioned as surfaced for the selector ([Open-loop lifecycle](#open-loop-lifecycle-flag-dark)).
 - **The 07:30 spoken path with only this flag on** checks the claim read-only
   (`arrival.claim_scheduled_brief`): if the first-turn brief already went out it is not
   spoken; otherwise it is queued WITHOUT a claim, because queueing is not delivery.
@@ -195,7 +196,8 @@ enables both halves (default off, read per call; off = no I/O). Code: `proactive
   48 h. `salience = importance × recency × relevance`:
   importance = `emotional_weight/5` (loops), `candidate_intensity` in [0.3, 1] default 0.6
   (moments), 0.6 (events); recency = `0.5^(age_h/72)` (events 1.0); relevance = 1.0 due ≤24 h,
-  0.6 ≤48 h, 0.7 undated (loops), 0.8 (moments), 1.0 ≤24 h / 0.7 ≤48 h (events). Drop < 0.1,
+  0.6 ≤48 h, 0.7 undated (loops; later-due loops decay under `ZOE_LOOP_LIFECYCLE`, see
+  [Open-loop lifecycle](#open-loop-lifecycle-flag-dark)), 0.8 (moments), 1.0 ≤24 h / 0.7 ≤48 h (events). Drop < 0.1,
   one per topic (content-token containment), cap 5. No model call. Upserted into
   `proactive_candidates` (migration 0033) so cooldown/count survive the recompute; dropped
   rows are expired, deleted once out of cooldown. Log `PROACTIVE_SELECT user= candidates= kept=`.
@@ -229,6 +231,52 @@ enables both halves (default off, read per call; off = no I/O). Code: `proactive
   account, fail closed) — the Samantha bar's S5 hook. The nightly pass never sees one.
 - **Junk never surfaces:** loops and moments must pass `open_loop_quality.loop_is_concrete`
   (the open-loop calibration, #1790); their anchor words are the candidate's `cue_words`.
+
+## Open-loop lifecycle (flag-dark)
+
+`ZOE_LOOP_LIFECYCLE=1` (default off, read per call; off = byte-identical) closes four gaps the
+week-in-the-life simulation (`scripts/perf/samantha_day_sim.py`, live run 2026-10-03) found.
+Code: `open_loop_lifecycle.py` plus the owners below. Voice path: replay-gate before enabling.
+
+- **Raise phrasing (`proactive/selector.py` `ask_phrasing`).** The `[RAISE]` block rides in
+  the USER message, and a bare hint read as the user asking: the first raise came back as "I
+  don't have any information about how your dentist appointment went". For loops and moments
+  the body now says to ask ONE short, gentle question in Zoe's own words, quotes the loop's
+  `follow_up_hint` as the example when it is a question, and forbids the "no information"
+  disclaimer. Events keep the old body; the flag is snapshotted at `prepare`. Probe on the
+  live brain (bare system prompt, hint "How did the dentist appointment go?", 3 samples each):
+  old body 1/3 disclaimers and 1/3 statements; new body 6/6 questions across two hints.
+- **The brief marks what it said (`brief_first_turn.mentioned`, `selector.mark_brief_surfaced`).**
+  The `[Today]` brief listed a loop and nothing recorded it, so the next conversation could
+  raise it again. The morning context now carries each loop's `id` and the moment ids; at
+  settle, once reply text went out, every loop or moment whose rendered line is in the brief
+  is marked surfaced like a raise (count, 3-day cooldown, this session, one shared
+  `last_surfaced_at`). An item the nightly pass never ranked gets an already-expired row that
+  carries the cooldown, so a later night cannot select it fresh. The brief's stamp also
+  starts the member gap (no raise within `ZOE_PROACTIVE_RAISE_GAP_S` of it), and the daily
+  cap counts DISTINCT stamps, so one brief is one delivery. Lanes pass `session_id` to `prepare`. Log
+  `PROACTIVE_RAISE user= kind=brief … marked=N`.
+- **Corrections close loops (`resolve_for_supersede`).** A retired fact closes the open loops
+  resting on it: every `MemoryService.review(edit)` (after the lock, `ended=False`) and the
+  implicit supersede at write time and nightly (`memory_supersede`, `ended=True`). Pure rule
+  `retired_match`: the loop names an anchor (`open_loop_quality.loop_anchors`) the
+  retirement took away ("Ballarat" when it became Bendigo), or — for an ending/replacement —
+  shares an anchor with the old fact and half its topic (`memory_supersede.topic_tokens`). An
+  edit that only adds detail closes nothing. The closed loop's candidate is expired at once,
+  and the extractor dedupes against loops resolved in the last 2 days so the next night does
+  not re-extract them from the turns that made them. Log `OPEN_LOOPS user= resolved_by_supersede=N source=`.
+- **Horizon.** The extractor's prompt gave only `"follow_up_in_days": 0-14`, and the model
+  spread its picks over it (3/5/7/10 days on the day-sim seeds; live rows 1/3/5/7), while
+  the selector excluded anything due beyond 48 h — nights 1–2 kept nothing. Relevance now
+  decays instead: 0.4 due within 7 days, 0.25 beyond (still salience-ranked, still capped 5).
+  The prompt adds when a caring friend would check in (1 day for a worry, health concern or
+  strong feeling; the day after a dated event; 2–3 otherwise). Replayed on the d1 seeds:
+  migraine 5→1 day, race 10→7, mum 3, Kestrel 7. The migraine worry was ALSO dropped by
+  `loop_is_concrete` (no anchor named a symptom, logged `discarded_meta=1`), so named health
+  conditions (`HEALTH_NOUNS` — migraine, headache, insomnia… never "pain" or "sick", because
+  anchors are cue words) count as anchors. The gate itself stays.
+
+Pinned by `tests/test_open_loop_lifecycle.py`.
 
 ## Probe chat rows are purged nightly
 

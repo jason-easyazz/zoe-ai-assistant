@@ -24,11 +24,32 @@
 # agent session), so they are not orphans and reap_stale_serena-style cleanup
 # correctly leaves them alone.
 #
-# Tunables (env): CODEBASE_MEMORY_MEM_HIGH (default 512M, throttle/reclaim),
-# CODEBASE_MEMORY_MEM_MAX (default 768M, hard OOM-kill), CODEBASE_MEMORY_BIN.
-# Defaults are deliberately well ABOVE the observed healthy working set
-# (~50-220 MB) and below the runaway outliers (388-473 MB), so a normal session
-# never notices the cap and a leaking one is killed instead of the host.
+# Tunables (env): CODEBASE_MEMORY_MEM_MAX (default 768M, hard OOM-kill),
+# CODEBASE_MEMORY_MEM_HIGH (default = MEM_MAX, i.e. no separate throttle band),
+# CODEBASE_MEMORY_BIN. The 768M default is deliberately well ABOVE the observed
+# healthy working set (~50-220 MB) and below the runaway outliers (388-473 MB
+# on 2026-08-02), so a normal session never notices the cap and a leaking one
+# is killed instead of the host.
+#
+# WHY MemoryHigh == MemoryMax (A6, infra audit 2026-10-03, D3): memory.high
+# NEVER OOM-kills — over it the kernel reclaims and THROTTLES the allocator,
+# indefinitely. With the old 512M high under a 768M max, a spawn whose anon
+# outgrew 512M and had already filled its 768M swap allowance could not reach
+# the max (the throttle stalls it first), and the only thing left to reclaim
+# was its own file pages — so it refaulted them forever. Measured live
+# 2026-10-03 on one agent's scope: anon 533 MB over high, swap.current at
+# swap.max (768M), 3.4 M `high` events, 108 M file refaults (~400 GB re-read),
+# ~2k major faults/s and ~200 MB/s of NVMe reads charged to user.slice, for
+# the scope's whole 37-minute life, with `max 0 oom 0` — i.e. the cap was
+# "working" and the host paid for it in disk bandwidth shared with the voice
+# stack's own refaults. With high == max there is no throttle band: below the
+# max the cgroup gets no local reclaim at all; at the max, reclaim can only
+# push anon into the (bounded) swap allowance, and once that is full it cannot
+# make progress and ends in an OOM kill of this ONE spawn — an agent loses
+# code-intel for the session, which is the outcome the cap was always meant to
+# have. Cost: a spawn may now hold up to 768M resident instead of 512M before
+# that happens (+256 MB per agent session at worst). The swap cap is unchanged
+# (MemorySwapMax = MEM_MAX).
 set -euo pipefail
 
 ZOE_LOCAL_BIN="/home/zoe/.local/bin"
@@ -47,8 +68,8 @@ if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
     exit 1
 fi
 
-MEM_HIGH="${CODEBASE_MEMORY_MEM_HIGH:-512M}"
 MEM_MAX="${CODEBASE_MEMORY_MEM_MAX:-768M}"
+MEM_HIGH="${CODEBASE_MEMORY_MEM_HIGH:-$MEM_MAX}"
 
 # Escape hatch matching serena_mcp_capped.sh: nesting a scope inside a systemd
 # unit reparents the process to PID 1 and moves it out of the unit's cgroup.

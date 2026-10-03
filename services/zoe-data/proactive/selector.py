@@ -15,8 +15,9 @@ product so a zero in any one — stale, trivial, not due — sinks the item):
   recency     0.5 ** (age_h / 72) — half-life 72 h, the continuity window
               (routers.memories._CONTINUITY_RECENT_WINDOW_S) · events: 1.0
   relevance   open loop: follow-up due within 24 h (or overdue) 1.0, within 48 h 0.6,
-              no date 0.7, later → not a candidate · moment: 0.8 · event: starts
-              within 24 h 1.0, within 48 h 0.7
+              no date 0.7, later → not a candidate (``ZOE_LOOP_LIFECYCLE``: within 7 d
+              0.4, later 0.25 — the extractor dates loops 3–14 d out, so nights 1–2
+              kept nothing) · moment: 0.8 · event: starts within 24 h 1.0, within 48 h 0.7
 Items below ``MIN_SALIENCE`` are dropped. Full contract:
 docs/knowledge/synthetic-users-and-proactive-recipients.md ("Proactivity selector").
 """
@@ -44,6 +45,7 @@ COOLDOWN = timedelta(days=3)
 MAX_SURFACED = 2          # raised twice without resolution → never again (no nagging)
 EXPIRES = timedelta(hours=36)  # one missed nightly run must not strand stale rows
 EVENT_HORIZON = timedelta(hours=48)
+LOOP_WEEK = timedelta(days=7)
 _PREPARE_TIMEOUT_S = 2.0
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -100,12 +102,18 @@ def salience(importance: float, age_h: float | None, relevance: float) -> float:
     return round(max(0.0, min(1.0, importance)) * recency * relevance, 4)
 
 
-def loop_relevance(due: datetime | None, now: datetime) -> float | None:
+def loop_relevance(due: datetime | None, now: datetime, *, decay: bool = False) -> float | None:
+    """``decay`` (``ZOE_LOOP_LIFECYCLE``): a later-due loop ranks lower instead of
+    being excluded — still salience-ranked and capped, so a due item wins."""
     if due is None:
         return 0.7
     if due <= now + timedelta(hours=24):
         return 1.0
-    return 0.6 if due <= now + EVENT_HORIZON else None
+    if due <= now + EVENT_HORIZON:
+        return 0.6
+    if not decay:
+        return None
+    return 0.4 if due <= now + LOOP_WEEK else 0.25
 
 
 def score_all(loops: list[dict], moments: list[dict], events: list[dict],
@@ -116,12 +124,14 @@ def score_all(loops: list[dict], moments: list[dict], events: list[dict],
     added} · events: {id, title, start (aware), tz}. Loops and moments must name
     something (open_loop_quality.loop_is_concrete), so junk rows never surface."""
     from memory_digest import _content_tokens
+    from open_loop_lifecycle import lifecycle_enabled
     from open_loop_quality import loop_anchors, loop_is_concrete
 
     out: list[Candidate] = []
+    decay = lifecycle_enabled()
     for lp in loops:
         text = _clean(lp.get("text"))
-        rel = loop_relevance(_as_utc(lp.get("due")), now)
+        rel = loop_relevance(_as_utc(lp.get("due")), now, decay=decay)
         if rel is None or not text or not loop_is_concrete(text):
             continue
         created = _as_utc(lp.get("created")) or now
@@ -277,10 +287,13 @@ class Raise:
     text: str
     hint: str
     token: str
+    lifecycle: bool = False  # ZOE_LOOP_LIFECYCLE at prepare: the question phrasing
 
     @property
     def body(self) -> str:
         lead = _LEAD.get(self.kind, "Earlier they told you")
+        if self.kind != "event" and self.lifecycle:
+            return f"{lead}: {self.text}. {ask_phrasing(self.hint)}"
         return (f"{lead}: {self.text}. If it fits, {self.hint} — once, in your own words, "
                 "never quoting them and never as a list or a reminder.")
 
@@ -288,6 +301,20 @@ class Raise:
     def block(self) -> str:
         """The Flue seam's block, appended after the user's words."""
         return f"{RAISE_OPEN}\n{self.body}\n{RAISE_CLOSE}"
+
+
+def ask_phrasing(hint: str) -> str:
+    """How a loop or moment is raised (``ZOE_LOOP_LIFECYCLE``). The block rides in the
+    USER message, so a bare hint ("How did the dentist go?") read as the user asking
+    and drew "I don't have any information about how your dentist appointment went"
+    (day sim, 2026-10-03). Say who asks, and forbid the disclaimer."""
+    hint = (hint or "").replace('"', "").strip()
+    example = f' — for example: "{hint}"' if hint.endswith("?") else (f" ({hint})" if hint else "")
+    return ("If it fits this conversation, ask them about it with ONE short, gentle question "
+            f"in your own words{example}. You are asking THEM how it is for them; you do not "
+            "need to know the answer, so never say you have no information about it. One "
+            "sentence, never quoting them, never as a list or a reminder. If it does not fit, "
+            "leave it out.")
 
 
 def _now() -> datetime:
@@ -343,7 +370,9 @@ def _spacing(rows: list[tuple], now: datetime) -> str:
         from time_utils import zoe_timezone
 
         midnight = now.astimezone(zoe_timezone()).replace(hour=0, minute=0, second=0, microsecond=0)
-        if sum(s >= _iso(midnight) for s in stamps) >= cap:
+        # Distinct stamps = deliveries: a day brief marks everything it mentioned with
+        # ONE stamp (mark_brief_surfaced), and that is one proactive mention, not three.
+        if len({s for s in stamps if s >= _iso(midnight)}) >= cap:
             return "daily_cap"
     return ""
 
@@ -398,8 +427,11 @@ async def _prepare(message: str, uid: str, sid: str, brief_active: bool) -> Rais
             token = uuid.uuid4().hex
             _holds[("s", sid)] = _holds[("u", uid)] = (token, time.monotonic())
             _raise_marks.add(uid)
+            from open_loop_lifecycle import lifecycle_enabled
+
             return Raise(uid, sid, str(r[0]), str(r[1]), shape, _clean(r[2]),
-                         _clean(r[3]) or _ASK.get(str(r[1]), _ASK["open_loop"]), token)
+                         _clean(r[3]) or _ASK.get(str(r[1]), _ASK["open_loop"]), token,
+                         lifecycle_enabled())
     return None
 
 
@@ -455,6 +487,47 @@ async def _settle(raised: Raise, produced: bool) -> bool:
                 _holds.pop(key, None)
     _log(raised.user_id, raised.kind, raised.shape, True, settled)
     return settled
+
+
+async def mark_brief_surfaced(user_id: str, session_id: str,
+                              items: list[tuple[str, str, str]]) -> int:
+    """The ``[Today]`` brief mentioned these ``(kind, source_ref, text)`` items: record
+    them as surfaced exactly as a raise would (count, cooldown, this session, ONE shared
+    stamp), so the next conversation does not raise the loop the brief just voiced.
+    An item the nightly pass never selected gets an already-expired row that carries
+    the cooldown, so a later night cannot select it fresh. Called from
+    ``brief_first_turn`` settle (``ZOE_LOOP_LIFECYCLE``). Never raises."""
+    if not items or not user_id or not session_id or not selector_enabled():
+        return 0
+    try:
+        from db_compat import get_compat_db
+        from open_loop_quality import loop_anchors
+
+        now = _now()
+        stamp, cool = _iso(now), _iso(now + COOLDOWN)
+        async with get_compat_db() as db:
+            for kind, ref, text in items:
+                await db.execute(
+                    """INSERT INTO proactive_candidates (id, user_id, kind, source_ref, text,
+                           salience, on_open, cue_words, expires_at, cooldown_until,
+                           surfaced_count, last_surfaced_session, last_surfaced_at,
+                           created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 1, ?, ?, ?, ?)
+                       ON CONFLICT (user_id, kind, source_ref) DO UPDATE SET
+                           surfaced_count = proactive_candidates.surfaced_count + 1,
+                           cooldown_until = excluded.cooldown_until,
+                           last_surfaced_session = excluded.last_surfaced_session,
+                           last_surfaced_at = excluded.last_surfaced_at""",
+                    (uuid.uuid4().hex, user_id, kind, ref, _clean(text),
+                     " ".join(sorted(loop_anchors(text))), stamp, cool, session_id, stamp,
+                     stamp, stamp),
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("proactive-selector: brief mark failed user=%s: %r", user_id, exc)
+        return 0
+    logger.info("PROACTIVE_RAISE user=%s kind=brief shape=brief injected=1 settled=1 marked=%d",
+                user_id, len(items))
+    return len(items)
 
 
 def consume_raise_mark(user_id: str) -> bool:

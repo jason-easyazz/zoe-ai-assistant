@@ -1216,7 +1216,7 @@ async def run_zoe_core_streaming(
     async def _compose() -> str:
         packet, brief = await asyncio.gather(
             _memory_packet_block(message, user_id),
-            brief_first_turn.prepare(message, user_id),
+            brief_first_turn.prepare(message, user_id, session_id),
         )
         if brief is not None:
             briefs.append(brief)

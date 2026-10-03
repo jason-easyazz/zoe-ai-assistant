@@ -317,11 +317,15 @@ on the box; everything else is unchanged:
 |---|---|---|---|
 | `--cache-ram` | unset = **8192 MiB** default | `64` | The unit has `MemoryMax=1G`. An 8 GiB prompt-cache cap inside a 1 GiB cgroup means the cache never evicts: the cgroup OOM-kills the sidecar first. The corpus alone fills 18 entries / 32 MiB, so the cache does grow with traffic. At 64 MiB it evicts oldest-first. |
 | `--ctx-size` | 4096 | `1024` | The longest live routing request was 87 tokens (608 requests, p99 72). 1024 is about 12× headroom. |
+| `--mlock` (2026-10-03, A1) | unset | set, + `LimitMEMLOCK=infinity`, `MemoryMax` 1G → 1280M | The 278 MB GGUF mapping was measured at **Rss 0 kB** with 7.7 M file refaults (~12 MB per request); journald `total time` p50/p90 was 293/450 ms when the previous request was <10 min earlier and 427/638 ms after a longer gap (n = 2,384, max 1,588 ms > the 1.5 s client timeout). Locked pages are unreclaimable, so the ceiling grows by the GGUF. Evidence: `docs/research/infra-data-config-2026-10-03.md` D1. |
 
 `--no-repack` is deliberately NOT used. Without repack the weights are served from
 reclaimable file pages, which is the paging failure the unit's `MemorySwapMax=0`
-exists to prevent. `tests/unit/test_llama_server_unit_flags.py` pins
-`--cache-ram` as a positive cap under a quarter of `MemoryMax`.
+exists to prevent. Repack alone was not enough, though: the tensors llama.cpp still
+serves straight from the mmap stayed file pages and were evicted between turns,
+which is what `--mlock` (above) closes. `tests/unit/test_llama_server_unit_flags.py` pins
+`--cache-ram` as a positive cap under a quarter of `MemoryMax`, and the lock: spelled
+for this build, `LimitMEMLOCK=infinity`, and `MemoryLow` + locked GGUF under `MemoryMax`.
 
 Measurement: a fresh restart for each arm, then the 81-case prod-path corpus
 (`labs/router-90-campaign/prod_path_eval.py`) run against the live sidecar:
