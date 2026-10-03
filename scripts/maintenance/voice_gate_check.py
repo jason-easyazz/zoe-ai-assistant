@@ -94,6 +94,13 @@ VOICE_PATH_PATTERNS = (
     # know BEFORE the venv becomes the service interpreter (Codex P1, #1706).
     "services/zoe-data/requirements-py312.txt",
     "scripts/setup/build_py312_venv.sh",
+    # The interpreter ladder decides WHICH Python/chromadb stack produces replay
+    # evidence (B0.8: a 0.6.3 client on the 1.x palace had recall silently off
+    # inside every replay), and the nightly unit is where that ladder is applied
+    # on a timer. A change to either can switch the evidence back to a recall-off
+    # stack with no code diff elsewhere, so both are voice path (Codex P2, #1811).
+    "scripts/lib/service_python.py",
+    "scripts/setup/systemd/zoe-voice-regression.service",
     "*kokoro*",
     "*moonshine*",
     # THE LIVE ROUTER'S MODEL ARTIFACTS — the stage-1 checkpoint of the two-stage

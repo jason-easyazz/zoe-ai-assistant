@@ -90,12 +90,22 @@ def test_watch_counts_swallowed_recall_failures_and_still_prints(capsys):
     assert "unrelated warning" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("brain,preflight,logs,expected", [
-    (False, "mismatch", 3, "disabled"),   # no brain turns -> recall not exercised
-    (True, "ok", 0, "ok"),
-    (True, "ok", 1, "mismatch"),          # a runtime mismatch beats a clean preflight
-    (True, "mismatch", 0, "mismatch"),
-    (True, "error", 0, "error"),
+@pytest.mark.parametrize("brain,preflight,logs,load_failures,expected", [
+    (False, "mismatch", 3, 2, "disabled"),   # no brain turns -> recall not exercised
+    (True, "ok", 0, 0, "ok"),
+    (True, "ok", 1, 0, "mismatch"),          # a runtime mismatch beats a clean preflight
+    (True, "mismatch", 0, 0, "mismatch"),
+    (True, "error", 0, 0, "error"),
+    # Codex P1 (#1811): a clean preflight + swallowed runtime read failures is NOT
+    # evidence — brain turns were scored without recall. Mismatch stays the more
+    # specific verdict when both are logged.
+    (True, "ok", 0, 1, "load-failure"),
+    (True, "ok", 2, 1, "mismatch"),
 ])
-def test_recall_state(brain, preflight, logs, expected):
-    assert _harness()._memory_recall_state(brain, preflight, logs) == expected
+def test_recall_state(brain, preflight, logs, load_failures, expected):
+    assert _harness()._memory_recall_state(brain, preflight, logs, load_failures) == expected
+
+
+def test_recall_state_load_failures_default_to_zero():
+    # Older callers pass three positionals; the default must not turn them into a failure.
+    assert _harness()._memory_recall_state(True, "ok", 0) == "ok"

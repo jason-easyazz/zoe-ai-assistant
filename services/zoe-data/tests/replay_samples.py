@@ -194,11 +194,21 @@ def _memory_recall_preflight() -> tuple[str, str]:
         return state, f"{type(exc).__name__}: {exc}"
 
 
-def _memory_recall_state(brain: bool, preflight: str, mismatch_logs: int) -> str:
-    """disabled (no brain turns) | mismatch | the preflight's own verdict."""
+def _memory_recall_state(brain: bool, preflight: str, mismatch_logs: int,
+                         load_failures: int = 0) -> str:
+    """disabled (no brain turns) | mismatch | load-failure | the preflight's own verdict.
+
+    Runtime read failures the readers swallow (`load_for_prompt failed`,
+    `packet fetch failed` — a corrupt collection, a packet fetch timeout) mean
+    some brain turns were scored WITHOUT recall even though the palace opened
+    in preflight. That is a verdict, never a diagnostic (Codex P1, #1811)."""
     if not brain:
         return "disabled"
-    return "mismatch" if mismatch_logs else preflight
+    if mismatch_logs:
+        return "mismatch"
+    if load_failures:
+        return "load-failure"
+    return preflight
 
 
 def _interpreter() -> dict:
@@ -489,7 +499,12 @@ async def _run(args) -> int:
         for r in cant:
             print(f"    {r['file']}: {r['transcript']!r} → {r['outcome']}")
 
-    recall = _memory_recall_state(args.brain, preflight, watch.mismatch)
+    recall = _memory_recall_state(args.brain, preflight, watch.mismatch,
+                                  watch.load_failures)
+    if recall == "load-failure":
+        recall_detail = (f"{watch.load_failures} recall read(s) failed at runtime "
+                         f"(load_for_prompt / packet fetch) after a clean preflight: "
+                         f"{recall_detail}")
     print(f"memory recall: {recall}  (mismatch logs={watch.mismatch}, "
           f"load failures={watch.load_failures})")
     if args.json:
