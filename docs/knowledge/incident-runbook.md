@@ -691,10 +691,15 @@ On this LAN another device answers as `zoe.local` and the box is `zoe-2.local` o
 (`getent ahostsv4 zoe.local` gave no answer within 5 s on a re-check). Find it with `python3 -X faulthandler` under
 `timeout -s ABRT <n>`, which prints every thread's stack when it fires.
 
-**Fix.** Every local probe pins `ZOE_BASE_URL=http://127.0.0.1:8000` in its own environment
-(setdefault never overrides it). 🧑 Operator: set `ZOE_BASE_URL=https://192.168.1.218` in the live
-`.env` (the panel pairing QR `pair_url` is built from it). Cost on 09-30: the stuck landing
-left Kokoro stopped 07:40–08:03.
+**Fixed in #PRNUM** (after the nightly unit timed out at 05:00 on 10-02 and 10-03 — the
+probe's own skip diagnosis also called `getaddrinfo('zoe.local')`). The replay never reads
+`ZOE_BASE_URL`: `--stt remote` targets `--base-url`, else `ZOE_REPLAY_BASE_URL`, else
+`http://127.0.0.1:8000`; a hostname base is resolved under a 5 s bound and fails with a
+one-line reason. The probe passes the base explicitly, and its diagnosis port-probes numeric
+hosts only and reports `ZOE_BASE_URL` without resolving it. Pinned by
+`tests/unit/test_replay_base_url.py`. 🧑 Operator, still: set `ZOE_BASE_URL=https://192.168.1.218`
+in the live `.env` (the panel pairing QR `pair_url` is built from it). Cost on 09-30: the stuck
+landing left Kokoro stopped 07:40–08:03.
 
 ## 21. A harness launched from an agent tool must be detached from the tool (2026-09-30)
 
