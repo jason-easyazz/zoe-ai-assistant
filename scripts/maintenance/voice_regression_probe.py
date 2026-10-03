@@ -96,6 +96,11 @@ from service_dir import (  # noqa: E402 — sibling-import convention, scripts/ 
     service_dir_candidates as _service_dir_candidates,
     SERVICE_DIR_HELP,
 )
+from service_python import (  # noqa: E402
+    ENV_VAR as PYTHON_ENV,
+    resolve_service_python,
+    same_python,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 MEASURE = REPO / "scripts" / "perf" / "measure_voice.py"
@@ -249,7 +254,8 @@ def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
     return obs
 
 
-def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: str) -> dict[str, Any]:
+def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: str,
+                python: str | None = None) -> dict[str, Any]:
     """Run measure_voice.py under the shared flock and return its aggregated JSON."""
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         out_json = tf.name
@@ -262,15 +268,15 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: st
         # AND manual) timed out at ~17 min. The gate never once succeeded.
         # Args are passed WITHOUT a shell, so paths with spaces/metachars are
         # safe; ZOE_PERF goes via env, not a shell prefix.
-        # sys.executable, not a PATH "python3": measure_voice re-invokes ITS own
-        # sys.executable for the replay, so this hop decides which interpreter's
-        # STT stack the whole run measures (B0.7 gate 2 launches the probe with the
-        # zoe-data 3.12 venv python; "python3" silently fell back to 3.10).
+        # The resolved interpreter (never a PATH "python3", which is 3.10) runs
+        # measure_voice AND, via --python, the replay: that hop decides which
+        # chromadb/STT stack the whole run measures (scripts/lib/service_python.py).
+        python = python or sys.executable
         cmd = [
-            sys.executable, str(MEASURE),
+            python, str(MEASURE),
             "--last", str(samples), "--user", user,
             "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
-            "--stt", stt,
+            "--stt", stt, "--python", python,
         ]
         if stt == "remote":
             cmd += ["--base-url", _replay_base(service_dir)]
@@ -341,7 +347,25 @@ def summarize(report: dict[str, Any]) -> dict[str, Any]:
         "empty": empty, "scoreable": max(0, scoreable),
         "verdicts": verdicts,
         "medians_ms": medians,
+        # Did the brain turns run WITH the memory the live service injects?
+        # Anything but "ok" (incl. a replay too old to say) fails closed in main().
+        "memory_recall": report.get("memory_recall") or "unreported",
+        "memory_recall_detail": report.get("memory_recall_detail"),
+        "memory_load_failures": report.get("memory_load_failures"),
+        "interpreter": report.get("interpreter"),
     }
+
+
+def recall_gate(summary: dict[str, Any]) -> str | None:
+    """The reason this run is NOT evidence, or None. A gate that scored brain
+    turns without recall must never report pass (B0.8: a 0.6.3 client on the 1.x
+    palace had recall silently off inside every replay while live had it on)."""
+    state = summary.get("memory_recall")
+    if state == "ok":
+        return None
+    return (f"memory recall {state} inside the replay "
+            f"({summary.get('memory_recall_detail') or 'no detail'}) — brain turns were "
+            "scored WITHOUT recall; run the probe on the zoe-data service interpreter")
 
 
 def compare(cur: dict[str, Any], baseline: dict[str, Any], warn_ratio: float, warn_ms: float) -> list[str]:
@@ -930,7 +954,23 @@ def _print_vad(vad: dict[str, Any]) -> None:
         print(f"  VAD: {str(vad.get('status')).upper()} — {vad.get('reason')}")
 
 
-def main() -> int:
+_REEXEC_ENV = "_ZOE_PROBE_REEXEC"
+
+
+def _reexec_if_needed(python: str, source: str) -> None:
+    """Re-exec this probe on `python` so EVERY stage (VAD, cleanup, replay) runs
+    the service's stack, whoever launched it (timer, landing script, bare python3).
+    Same PID, so a parent `flock` wrapper still owns the harness lock. Guarded
+    against loops: a re-exec'd child never re-execs again."""
+    if same_python(python, sys.executable) or os.environ.get(_REEXEC_ENV) == python:
+        return
+    print(f"probe: re-executing on {python} ({source}); was {sys.executable}", flush=True)
+    sys.stderr.flush()
+    os.execve(python, [python, os.path.abspath(__file__), *sys.argv[1:]],
+              {**os.environ, _REEXEC_ENV: python})
+
+
+def main(reexec: bool = False) -> int:
     ap = argparse.ArgumentParser(description="Zoe voice regression + speed probe.")
     ap.add_argument("--samples", type=int, default=int(os.environ.get("ZOE_VOICE_PROBE_SAMPLES", "20")),
                     help="newest N corpus samples to replay")
@@ -972,12 +1012,27 @@ def main() -> int:
     ap.add_argument("--sample-dir", default=DEFAULT_SAMPLE_DIR,
                     help="voice corpus dir for the VAD stage (default: ZOE_VOICE_SAMPLE_DIR "
                          "or ~zoe/.zoe-voice-samples — the replay harness's own default)")
+    ap.add_argument("--python", default=None,
+                    help=f"interpreter for the whole run (default: ${PYTHON_ENV}, else the "
+                         "zoe-data unit's ExecStart — scripts/lib/service_python.py). The "
+                         "probe re-executes itself on it, so VAD + replay match the service.")
     ap.add_argument("--no-cleanup", action="store_true",
                     help="skip the post-run replay-artifact cleanup (soft-delete of rows created during the replay window)")
     args = ap.parse_args()
     # Resolve BEFORE anything reads it: _resolve_dsn and run_measure both consume
     # args.service_dir, and both must see the same live dir.
     args.service_dir = str(_resolve_service_dir(args.service_dir))
+    try:
+        args.python, python_source = resolve_service_python(args.python)
+    except SystemExit as exc:   # a bad explicit choice still leaves an artifact
+        print(f"ERROR: {exc}", file=sys.stderr)
+        emit_result(args, status="error", summary=dict(EMPTY_SUMMARY), said_vs_did=[],
+                    speed_deltas={}, baseline={}, reason=f"interpreter: {exc}")
+        return 2
+    if reexec:
+        _reexec_if_needed(args.python, python_source)
+    print(f"probe interpreter: {sys.executable}; replay interpreter: {args.python} "
+          f"({python_source})")
 
     _lock_fd = _acquire_harness_lock()  # noqa: F841 — held for process lifetime
 
@@ -1029,7 +1084,8 @@ def main() -> int:
 
     run_started_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     try:
-        report = run_measure(args.samples, args.service_dir, args.user, args.timeout, args.stt)
+        report = run_measure(args.samples, args.service_dir, args.user, args.timeout, args.stt,
+                             python=args.python)
     except Exception as exc:
         reason = f"voice probe could not run: {exc}"
         print(f"ERROR: {reason}", file=sys.stderr)
@@ -1055,8 +1111,19 @@ def main() -> int:
     print(f"  medians: STT={m.get('stt_ms')}  brain={m.get('brain_ms')}  e2e={m.get('e2e_ms')}  (ms; warm-harness, relative only)")
     for w in warnings:
         print(f"WARN {w}")
+    interp = summary.get("interpreter") or {}
+    print(f"  memory recall: {summary['memory_recall']}  (replay on {interp.get('python')}, "
+          f"Python {interp.get('version')}, chromadb {interp.get('chromadb')})")
+    recall_error = recall_gate(summary)
+    base_recall = ((baseline.get("summary") or {}) if isinstance(baseline, dict) else {}).get("memory_recall")
+    if not recall_error and baseline and base_recall != "ok" and not args.update_baseline:
+        print("NOTE baseline was recorded WITHOUT recall-on evidence — per-stage speed deltas "
+              "are not comparable; re-baseline once in a quiet window (--update-baseline)")
 
-    if args.update_baseline or not args.baseline.exists():
+    if recall_error:
+        # NEVER write a recall-off run as the bar, and never call it a pass.
+        print(f"ERROR: {recall_error}", file=sys.stderr)
+    elif args.update_baseline or not args.baseline.exists():
         write_json(args.baseline, {
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "summary": summary,
@@ -1078,6 +1145,9 @@ def main() -> int:
     # calendar/lists are dirty and the systemd unit shows non-zero.
     status = fold_vad_status("pass" if (not warnings and cleanup_ok) else "fail", vad)
     reason_parts = list(warnings)
+    if recall_error:
+        status = "error"
+        reason_parts.insert(0, recall_error)
     if not cleanup_ok:
         reason_parts.append("replay-artifact cleanup FAILED (calendar/lists may be dirty)")
     if vad.get("status") in ("fail", "error"):
@@ -1093,4 +1163,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(reexec=True))

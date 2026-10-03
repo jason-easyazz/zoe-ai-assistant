@@ -127,10 +127,18 @@ def test_voice_path_detection():
         "services/zoe-ui/index.html",
         "scripts/setup/kokoro_sidecar.py",
         "docs/README.md",
+        "scripts/lib/service_python.py",
+        "scripts/setup/systemd/zoe-voice-regression.service",
+        "scripts/deploy/zoe_data_python.sh",
     ]
     hits = vgc.touched_voice_files(changed, pats)
     assert "services/zoe-data/routers/voice_tts.py" in hits
     assert "scripts/setup/kokoro_sidecar.py" in hits  # *kokoro* glob
+    # The interpreter ladder + the nightly unit decide which stack produces the
+    # evidence (Codex P2, #1811): a change there must force re-measurement.
+    assert "scripts/lib/service_python.py" in hits
+    assert "scripts/setup/systemd/zoe-voice-regression.service" in hits
+    assert "scripts/deploy/zoe_data_python.sh" in hits   # the ladder's systemd authority
     assert "services/zoe-ui/index.html" not in hits
     assert "docs/README.md" not in hits
 

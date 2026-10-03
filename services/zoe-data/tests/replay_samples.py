@@ -46,7 +46,9 @@ import asyncio
 import glob
 import ipaddress
 import json
+import logging
 import os
+import platform
 import re
 import socket
 import sys
@@ -149,6 +151,83 @@ def _select(sample_dir: str, args) -> list[str]:
     if args.last:
         files = files[-args.last:]
     return files
+
+
+# The service's palace guard (memory_service._check_palace_format) raises with
+# this phrase; every recall reader logs it and returns nothing (never raises).
+_MISMATCH_PHRASE = "but the installed client is"
+# Runtime recall read failures, scoped to the READERS that emit them (logger name +
+# phrase). A bare substring over-matched: `pending_suggestions` logs
+# "pending_suggestions.load_for_prompt failed" on the legacy lane, which is an
+# offers query, not recall — a healthy Chroma run must not become status=error
+# because of it (Codex P2, #1811).
+_LOAD_FAILURE_RULES = (
+    ("memory_service", "load_for_prompt failed"),      # memory_service.load_for_prompt
+    ("zoe_flue_client", "packet fetch failed"),        # seam recall / continuity inject
+)
+
+
+def _is_recall_load_failure(logger_name: str, msg: str) -> bool:
+    return any((logger_name == mod or logger_name.startswith(mod + "."))
+               and phrase in msg for mod, phrase in _LOAD_FAILURE_RULES)
+
+
+class _MemoryRecallWatch(logging.StreamHandler):
+    """Root WARNING handler: counts recall failures the readers swallow, and
+    still prints every record (it replaces logging's last-resort stderr output)."""
+
+    def __init__(self) -> None:
+        super().__init__(sys.stderr)
+        self.setLevel(logging.WARNING)
+        self.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        self.mismatch = 0
+        self.load_failures = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+        self.mismatch += _MISMATCH_PHRASE in msg
+        self.load_failures += _is_recall_load_failure(record.name, msg)
+        super().emit(record)
+
+
+def _memory_recall_preflight() -> tuple[str, str]:
+    """Can THIS interpreter's chromadb open the palace the live service reads?
+
+    Runs the service's own guard (read-only SQLite, opens nothing). Returns
+    (ok|mismatch|error, detail). Lazy imports keep this module slim for tests."""
+    try:
+        import chromadb
+        import memory_service as ms
+
+        data_dir = os.path.realpath(os.path.expanduser(ms.get_memory_service()._data_dir))
+        ms._check_palace_format(data_dir, chromadb.__version__)
+        return "ok", f"palace {data_dir} opens with chromadb {chromadb.__version__}"
+    except Exception as exc:  # noqa: BLE001 — every failure is a recorded state
+        state = "mismatch" if _MISMATCH_PHRASE in str(exc) else "error"
+        return state, f"{type(exc).__name__}: {exc}"
+
+
+def _memory_recall_state(brain: bool, preflight: str, mismatch_logs: int,
+                         load_failures: int = 0) -> str:
+    """disabled (no brain turns) | mismatch | load-failure | the preflight's own verdict.
+
+    Runtime read failures the readers swallow (`load_for_prompt failed`,
+    `packet fetch failed` — a corrupt collection, a packet fetch timeout) mean
+    some brain turns were scored WITHOUT recall even though the palace opened
+    in preflight. That is a verdict, never a diagnostic (Codex P1, #1811)."""
+    if not brain:
+        return "disabled"
+    if mismatch_logs:
+        return "mismatch"
+    if load_failures:
+        return "load-failure"
+    return preflight
+
+
+def _interpreter() -> dict:
+    mod = sys.modules.get("chromadb")
+    return {"python": sys.executable, "version": platform.python_version(),
+            "chromadb": getattr(mod, "__version__", None)}
 
 
 def _run_session_id() -> str:
@@ -271,6 +350,16 @@ def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
 async def _run(args) -> int:
     _load_env()
     os.environ.setdefault("ZOE_ROUTER_ENABLED", "1")
+    watch = _MemoryRecallWatch()
+    logging.getLogger().addHandler(watch)
+    preflight, recall_detail = (_memory_recall_preflight() if args.brain
+                                else ("disabled", "brain not run (no --brain)"))
+    interp = _interpreter()
+    print(f"interpreter: {interp['python']} (Python {interp['version']}, "
+          f"chromadb {interp['chromadb']}); memory recall preflight: {preflight}")
+    if preflight not in ("ok", "disabled"):
+        print(f"!! memory recall {preflight.upper()}: {recall_detail} — brain turns "
+              "will be scored WITHOUT recall", file=sys.stderr)
 
     _remote_token = ""
     if args.stt == "remote":
@@ -423,9 +512,20 @@ async def _run(args) -> int:
         for r in cant:
             print(f"    {r['file']}: {r['transcript']!r} → {r['outcome']}")
 
+    recall = _memory_recall_state(args.brain, preflight, watch.mismatch,
+                                  watch.load_failures)
+    if recall == "load-failure":
+        recall_detail = (f"{watch.load_failures} recall read(s) failed at runtime "
+                         f"(load_for_prompt / packet fetch) after a clean preflight: "
+                         f"{recall_detail}")
+    print(f"memory recall: {recall}  (mismatch logs={watch.mismatch}, "
+          f"load failures={watch.load_failures})")
     if args.json:
         with open(args.json, "w") as fh:
-            json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt}, fh, indent=2)
+            json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt,
+                       "interpreter": interp, "memory_recall": recall,
+                       "memory_recall_detail": recall_detail,
+                       "memory_load_failures": watch.load_failures}, fh, indent=2)
         print(f"\nwrote {args.json}")
     return 0
 
