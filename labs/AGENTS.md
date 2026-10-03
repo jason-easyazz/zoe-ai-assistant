@@ -164,7 +164,11 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   interceptor on the provider stream (`src/early-text.ts`, kill switch
   `ZOE_FLUE_EARLY_TEXT=0`), not from `observe()`, whose `text_delta` waits on
   the runtime's 1 s batched storage flush; the flushed copy is deduped by
-  offset and the store is untouched (`test/early_text.test.ts`).
+  offset and the store is untouched (`test/early_text.test.ts`). A turn POST
+  carrying `x-zoe-abort-on-cancel: 1` (zoe-data `ZOE_FLUE_ABORT_ON_CANCEL`) gets
+  abort-on-cancel and first-chunk/stall deadlines (`src/turn-guard.ts`); Flue aborts
+  whole INSTANCES, so never abort without the guard's latest-submission check.
+  `Zoe.durability` is bounded (2 attempts / 120 s) (`test/abort_guard.test.ts`).
   Reached from prod via the `ZOE_BRAIN_BACKEND=flue` seam — shipped default-OFF
   (`core`) but production-reachable and **live on this deployment**; supervised
   via the opt-in unit template `scripts/setup/systemd/flue-zoe-brain-2x.service`

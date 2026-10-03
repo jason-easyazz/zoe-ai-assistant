@@ -1150,6 +1150,36 @@ Barge-in detected during playback (monitor, prob=0.99, th=0.75, t+1120ms, window
   the sustained-speech rule each turns a test red.
 - The replay gate cannot see this: it starts from saved recordings and stops before TTS.
 
+### Brain side of a barge-in — abort the Flue turn (flag-dark, 2026-10-03)
+
+Stopping playback does not stop the brain. With `ZOE_FLUE_ABORT_ON_CANCEL` off (the default), a
+barge-in, disconnect or B1.1 speculative cancel only closes the stream. The Flue run then
+finishes on llama-server's single slot, the next turn queues behind the unheard reply, and the
+reply is stored as said. The live store had 0 aborts in 4,620 submissions. With the flag ON:
+
+- **Both layers abort.** The sidecar aborts the run when its stream is cancelled, and zoe-data
+  sends a guarded `POST /agents/zoe/:id/abort` that names the submission. Flue aborts every
+  unsettled submission of a session, so the sidecar refuses an abort whose submission is no
+  longer the latest admission (`skipped:superseded`) and holds new admissions while an abort is
+  recorded (`labs/flue-zoe-brain-2x/src/turn-guard.ts`).
+- **The slot frees.** Flue's abort closes its model request, and llama-server b11194 releases
+  the slot. Measured live: free 0.2 s after a disconnect at chunk 5, with 11 of 400 tokens made.
+- **The next turn's context.** Flue drops the aborted partial. The model sees the interrupted
+  user message and then `<signal type="submission_aborted">Submission was aborted.</signal>` as
+  a user turn (the Gemma template accepts consecutive user turns). The model therefore does not
+  know what the user heard. Fixing that is A3, and it can use `emitted_chars` from the
+  `FLUE_ABORT` log line.
+- **Deadlines (A5, sidecar, opted-in turns only).** `ZOE_FLUE_FIRST_CHUNK_MS` (30000) is the
+  allowed silence after a model call starts, and `ZOE_FLUE_STALL_MS` (10000) is the allowed gap
+  between outputs. Either one ends the stream with `{"error"}` (the existing fallback) and
+  aborts the run. Basis: first text on single-round turns is p99 5.5 s, p99.9 6.3 s, max 6.9 s
+  (n=1,406). The largest prompt (4,760 tokens at ~2.1 ms/token) takes ~10 s, and a call can
+  queue behind another session (max submission 21.6 s). Decoding runs at 20–27 tok/s.
+- **A2 (not flagged).** `Zoe.durability = {maxAttempts: 2, timeoutMs: 120_000}`.
+- **Landing.** Use the replay gate plus an A/B: barge-in replay, and the next turn's
+  `brain_ttft_ms` / `FLUE_PROMPT_CACHE` with the flag off and on. On the sidecar,
+  `ZOE_FLUE_ABORT_GUARD=0` ignores the opt-in header.
+
 ## Panel per-turn dead time — adaptive endpoint tail, cooldown, cap (2026-09-28)
 
 These are the daemon knobs between the user's last word and the next thing the panel does.

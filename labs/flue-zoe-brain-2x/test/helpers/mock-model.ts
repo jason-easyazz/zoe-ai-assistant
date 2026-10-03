@@ -66,6 +66,9 @@ export interface MockModelServer {
   requests: CapturedRequest[];
   /** Requests seen so far — a stable count for polling assertions. */
   readonly callCount: number;
+  /** Responses the CLIENT closed before the mock finished writing them — what
+   *  llama-server sees when Flue aborts a model call (it then frees the slot). */
+  readonly disconnects: number;
   close(): Promise<void>;
 }
 
@@ -123,6 +126,7 @@ function chunk(delta: Record<string, unknown>, finish: string | null): string {
 }
 
 async function writeTurn(res: ServerResponse, turn: MockTurn): Promise<void> {
+  if (res.destroyed) return;
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
@@ -198,6 +202,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 export async function startMockModel(script: MockScript): Promise<MockModelServer> {
   const requests: CapturedRequest[] = [];
+  let disconnects = 0;
 
   const server: Server = createServer((req, res) => {
     void (async () => {
@@ -208,6 +213,9 @@ export async function startMockModel(script: MockScript): Promise<MockModelServe
       } catch {
         body = {};
       }
+      res.on('close', () => {
+        if (!res.writableFinished) disconnects += 1;
+      });
       const captured = capture(body);
       const call = requests.length;
       requests.push(captured);
@@ -238,6 +246,9 @@ export async function startMockModel(script: MockScript): Promise<MockModelServe
     requests,
     get callCount() {
       return requests.length;
+    },
+    get disconnects() {
+      return disconnects;
     },
     close: () =>
       new Promise<void>((resolve) => {

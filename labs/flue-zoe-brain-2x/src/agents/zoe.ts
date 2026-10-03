@@ -305,3 +305,13 @@ export function Zoe(): string {
 }
 
 Zoe.agentName = 'zoe';
+
+/**
+ * A2 — bounded durability (@flue/runtime 2.1.1 `DurabilityConfig`; default 10
+ * attempts / 1 h). Only process interruptions consume attempts (transient model
+ * errors retry inside one), and startup recovery runs ahead of new work — so the
+ * default could replay a stale voice turn before the live one for an hour. 120 s is
+ * enforced preemptively by the node coordinator, under zoe-data's 180 s seam
+ * timeout. Live store, 4,650 settled: max 21.6 s, no second attempt ever needed.
+ */
+Zoe.durability = { maxAttempts: 2, timeoutMs: 120_000 };

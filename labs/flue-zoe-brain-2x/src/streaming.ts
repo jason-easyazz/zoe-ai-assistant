@@ -100,8 +100,22 @@ import {
   EarlyTextReconciler,
   earlyTextEnabled,
   subscribeEarlyText,
+  subscribeModelActivity,
   type EarlyTextSubscribe,
+  type ModelActivityListener,
 } from './early-text.ts';
+import {
+  ABORT_OPT_IN_HEADER,
+  ADMITTED_KEY,
+  DEFAULT_FIRST_CHUNK_MS,
+  DEFAULT_STALL_MS,
+  SUBMISSION_HEADER,
+  abortGuardRequested,
+  admittedSubmissionId,
+  deadlineMsFromEnv,
+  flueAbortLine,
+  type TurnGuard,
+} from './turn-guard.ts';
 
 export const NDJSON_CONTENT_TYPE = 'application/x-ndjson';
 export const TOOL_SENTINEL_PREFIX = '__TOOL__:';
@@ -425,6 +439,13 @@ export interface StreamingMiddlewareOptions {
   earlyTextSubscribe?: EarlyTextSubscribe;
   /** per-turn log sink; defaults to console.log. */
   log?: (line: string) => void;
+  /** A1/A5 (src/turn-guard.ts). Absent = no admission tracking, no guarded abort. */
+  guard?: TurnGuard;
+  /** injection seam for offline tests; defaults to the src/early-text.ts bus. */
+  subscribeActivity?: (listener: ModelActivityListener) => () => void;
+  /** deadline overrides for tests; default ZOE_FLUE_FIRST_CHUNK_MS / ZOE_FLUE_STALL_MS. */
+  firstChunkMs?: number;
+  stallMs?: number;
 }
 
 /**
@@ -435,6 +456,7 @@ export interface StreamingMiddlewareOptions {
  */
 export function seamAStreamingMiddleware(opts?: StreamingMiddlewareOptions): MiddlewareHandler {
   const observeFn = opts?.observeFn ?? observe;
+  const guard = opts?.guard;
   return async (c, next) => {
     if (c.req.method !== 'POST' || !streamingEnabled()) return next();
     const url = new URL(c.req.url);
@@ -443,11 +465,18 @@ export function seamAStreamingMiddleware(opts?: StreamingMiddlewareOptions): Mid
     const match = url.pathname.match(/^\/agents\/([^/]+)\/([^/]+)$/);
     if (!match) return next();
     const instanceId = decodeURIComponent(match[2]);
+    const guarded = guard && abortGuardRequested(c.req.header(ABORT_OPT_IN_HEADER)) ? {
+      guard,
+      subscribeActivity: opts?.subscribeActivity ?? subscribeModelActivity,
+      firstChunkMs: opts?.firstChunkMs ?? deadlineMsFromEnv('ZOE_FLUE_FIRST_CHUNK_MS', DEFAULT_FIRST_CHUNK_MS),
+      stallMs: opts?.stallMs ?? deadlineMsFromEnv('ZOE_FLUE_STALL_MS', DEFAULT_STALL_MS),
+    } : null;
 
     // Subscribe BEFORE admission so no event of our turn can be missed.
     const session = openTurnStream(instanceId, observeFn, opts?.timeoutMs ?? timeoutMsFromEnv(), {
       earlyTextSubscribe: earlyTextEnabled() ? (opts?.earlyTextSubscribe ?? subscribeEarlyText) : null,
       log: opts?.log ?? ((line) => console.log(line)),
+      guarded,
     });
     try {
       await next(); // flue(): fail-closed route auth + payload validation + admission
@@ -460,12 +489,19 @@ export function seamAStreamingMiddleware(opts?: StreamingMiddlewareOptions): Mid
       session.abandon();
       return;
     }
+    const admitted = guard ? await admittedSubmissionId(c.res) : null;
+    if (guard) c.set(ADMITTED_KEY as never, admitted as never); // for turnGuardMiddleware
+    session.bindSubmission(admitted);
     // Upgrade the 202 admission to the live NDJSON stream. Hono's res setter
     // carries the 202's Location / Stream-Next-Offset headers over, so the
     // client can still fall back to the durable stream after a disconnect.
     c.res = new Response(session.readable, {
       status: 200,
-      headers: { 'content-type': NDJSON_CONTENT_TYPE, 'x-accel-buffering': 'no' },
+      headers: {
+        'content-type': NDJSON_CONTENT_TYPE,
+        'x-accel-buffering': 'no',
+        ...(guarded && admitted ? { [SUBMISSION_HEADER]: admitted } : {}),
+      },
     });
   };
 }
@@ -473,6 +509,16 @@ export function seamAStreamingMiddleware(opts?: StreamingMiddlewareOptions): Mid
 interface TurnStream {
   readable: ReadableStream<Uint8Array>;
   abandon: () => void;
+  /** The admitted submission (from the 202), so a guarded abort can name it. */
+  bindSubmission: (submissionId: string | null) => void;
+}
+
+interface GuardedTurn {
+  guard: TurnGuard;
+  subscribeActivity: (listener: ModelActivityListener) => () => void;
+  /** 0 disables the deadline. */
+  firstChunkMs: number;
+  stallMs: number;
 }
 
 /** Sentence end in the text streamed so far — for the per-turn latency log only. */
@@ -482,6 +528,8 @@ interface TurnStreamOptions {
   /** early-text bus; `null` = ZOE_FLUE_EARLY_TEXT off (observe-only stream). */
   earlyTextSubscribe: EarlyTextSubscribe | null;
   log: (line: string) => void;
+  /** A1/A5 opt-in (`x-zoe-abort-on-cancel: 1`); null = today's behaviour exactly. */
+  guarded?: GuardedTurn | null;
 }
 
 /**
@@ -516,9 +564,11 @@ function openTurnStream(
   let firstDeltaMs = -1;
   let firstSentenceMs = -1;
   let textSoFar = '';
+  let emittedChars = 0;
   const pushText = (text: string) => {
     state.streamedText = true;
     textFrames += 1;
+    emittedChars += text.length;
     const at = Math.round(performance.now() - startedAt);
     if (firstDeltaMs < 0) firstDeltaMs = at;
     if (firstSentenceMs < 0) {
@@ -530,14 +580,20 @@ function openTurnStream(
 
   let unobserve: () => void = () => {};
   let unsubscribeEarly: () => void = () => {};
+  let unsubscribeActivity: () => void = () => {};
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let watchdog: ReturnType<typeof setInterval> | null = null;
   const cleanup = () => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
+    if (watchdog !== null) clearInterval(watchdog);
+    watchdog = null;
     unobserve();
     unobserve = () => {};
     unsubscribeEarly();
     unsubscribeEarly = () => {};
+    unsubscribeActivity();
+    unsubscribeActivity = () => {};
   };
   const finish = (terminal: Record<string, unknown>) => {
     if (finished) return;
@@ -568,7 +624,70 @@ function openTurnStream(
     });
   };
 
-  timer = setTimeout(() => finish({ error: 'brain turn timed out' }), timeoutMs);
+  // A1/A5: abort the Flue run when this stream gives up on it, so llama-server's
+  // single slot is freed (it cancels the generation when Flue's provider request
+  // closes — verified live, see the PR) instead of finishing an unheard reply.
+  const guarded = opts.guarded ?? null;
+  let submissionId: string | null = null;
+  let abortRequested = false;
+  const abortTurn = (reason: string) => {
+    if (!guarded || abortRequested) return;
+    abortRequested = true;
+    const at = { chars: emittedChars, deltas: textFrames };
+    void guarded.guard.abort(instanceId, submissionId).then((result) => {
+      try {
+        opts.log(flueAbortLine(instanceId, submissionId, reason, at.chars, at.deltas, result));
+      } catch {
+        /* logging must never break the stream */
+      }
+    });
+  };
+
+  timer = setTimeout(() => {
+    finish({ error: 'brain turn timed out' });
+    abortTurn('timeout');
+  }, timeoutMs);
+
+  // A5 deadlines, per model call of the latched operation: no model output within
+  // `firstChunkMs` of the call's first wait, or `stallMs` of its last output. Tool
+  // time between calls is not timed (tools have their own timeouts). Activity is
+  // kept for every operation because the latch (observe()) can trail the call.
+  if (guarded && (guarded.firstChunkMs > 0 || guarded.stallMs > 0)) {
+    const calls = new Map<string, { waitingSince: number | null; stepped: boolean }>();
+    unsubscribeActivity = guarded.subscribeActivity((a) => {
+      const key = `${a.operationId}\u0000${a.turnId}`;
+      let call = calls.get(key);
+      if (!call) {
+        if (a.kind !== 'wait') return;
+        call = { waitingSince: null, stepped: false };
+        calls.set(key, call);
+      }
+      if (a.kind === 'wait') call.waitingSince ??= performance.now();
+      else if (a.kind === 'step') {
+        call.stepped = true;
+        call.waitingSince = null;
+      } else if (a.kind === 'end') calls.delete(key);
+      else if (a.kind === 'idle') call.waitingSince = null;
+      // 'open' (response headers, no output yet) leaves the first-chunk clock running.
+    });
+    const tick = Math.max(50, Math.min(250, Math.floor(Math.min(
+      guarded.firstChunkMs || Infinity, guarded.stallMs || Infinity) / 4)));
+    watchdog = setInterval(() => {
+      if (finished || latchedOperationId === null) return;
+      const now = performance.now();
+      for (const [key, call] of calls) {
+        if (!key.startsWith(`${latchedOperationId}\u0000`) || call.waitingSince === null) continue;
+        const limit = call.stepped ? guarded.stallMs : guarded.firstChunkMs;
+        if (limit > 0 && now - call.waitingSince > limit) {
+          const reason = call.stepped ? 'stall' : 'first_chunk';
+          finish({ error: `brain turn stalled (${reason}: no model output for ${limit} ms)` });
+          abortTurn(reason);
+          return;
+        }
+      }
+    }, tick);
+    (watchdog as { unref?: () => void }).unref?.();
+  }
 
   // Early text (src/early-text.ts): the model's own deltas, ahead of the
   // runtime's 1 s storage flush. Forwarded only for the latched operation and
@@ -656,13 +775,16 @@ function openTurnStream(
       if (finished) controller.close();
     },
     cancel() {
-      // Consumer went away mid-turn: stop observing. The turn itself keeps
-      // running to completion inside Flue (same as an abandoned prod stream).
+      // Consumer went away mid-turn: stop observing. Without the opt-in the turn
+      // keeps running to completion inside Flue (same as an abandoned prod
+      // stream); with it, the run is aborted (A1).
       cancelled = true;
+      const wasFinished = finished;
       finished = true;
       cleanup();
       wake?.();
       wake = null;
+      if (!wasFinished) abortTurn('disconnect');
     },
   });
 
@@ -673,6 +795,9 @@ function openTurnStream(
       cleanup();
       wake?.();
       wake = null;
+    },
+    bindSubmission: (id) => {
+      submissionId = id;
     },
   };
 }

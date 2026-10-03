@@ -131,6 +131,11 @@ _LIVE_CHILDREN_LOCK = threading.Lock()
 _SHUTTING_DOWN = threading.Event()
 
 
+def shutting_down() -> bool:
+    """True once zoe-data's lifespan shutdown has begun (read-only view)."""
+    return _SHUTTING_DOWN.is_set()
+
+
 def _kill_tree(popen: "subprocess.Popen") -> None:
     """SIGKILL the child's whole process group.
 

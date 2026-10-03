@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-488 flags; 486 not documented in `.env.example`.
+489 flags; 487 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -147,6 +147,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_EXPRESSIVE_TTS` | `False` | yes | NO | `services/zoe-data/voice_delivery.py` |
 | `ZOE_FACE_ID_ENABLED` | `'false'` | no | NO | `services/zoe-data/routers/face_id.py` |
 | `ZOE_FACE_ID_THRESHOLD` | `'0.45'` | no | NO | `services/zoe-data/routers/face_id.py` |
+| `ZOE_FLUE_ABORT_ON_CANCEL` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FLUE_BRAIN_TIMEOUT_S` | `dynamic` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FLUE_BRAIN_URL` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FLUE_STREAM_ENABLED` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
