@@ -691,7 +691,7 @@ On this LAN another device answers as `zoe.local` and the box is `zoe-2.local` o
 (`getent ahostsv4 zoe.local` gave no answer within 5 s on a re-check). Find it with `python3 -X faulthandler` under
 `timeout -s ABRT <n>`, which prints every thread's stack when it fires.
 
-**Fixed in #PRNUM** (after the nightly unit timed out at 05:00 on 10-02 and 10-03 — the
+**Fixed in #1798** (after the nightly unit timed out at 05:00 on 10-02 and 10-03 — the
 probe's own skip diagnosis also called `getaddrinfo('zoe.local')`). The replay never reads
 `ZOE_BASE_URL`: `--stt remote` targets `--base-url`, else `ZOE_REPLAY_BASE_URL`, else
 `http://127.0.0.1:8000`; a hostname base is resolved under a 5 s bound and fails with a
