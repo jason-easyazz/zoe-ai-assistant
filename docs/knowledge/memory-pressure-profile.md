@@ -8,6 +8,10 @@ timestamp: 2026-07-06T21:15:00Z
 
 # Memory Pressure Profile (2026-07-06)
 
+> **SUCCESSOR 2026-10-03:** the W3 re-measurement by this same method lives in
+> [`memory-pressure-profile-2026-10-03.md`](memory-pressure-profile-2026-10-03.md) — current
+> host snapshot, ledger against this profile, ranked reclaim list and the W3 DoD verdict.
+
 > **STATUS 2026-07-19 — the two biggest swap owners below are FIXED.** The voice
 > stack now carries cgroup guards (`MemorySwapMax=0` + `MemoryLow`), so
 > llama-server and kokoro-tts hold **0 swap** instead of the 4.14 GB / 630 MB
