@@ -43,7 +43,7 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
     # Open loops approaching follow-up time
     try:
         async with db.execute(
-            """SELECT loop_text, follow_up_hint, emotional_weight, follow_up_after
+            """SELECT loop_text, follow_up_hint, emotional_weight, follow_up_after, id
                FROM open_loops
                WHERE user_id=? AND resolved = false
                  AND (follow_up_after IS NULL OR follow_up_after <= CURRENT_TIMESTAMP + INTERVAL '1 day')
@@ -54,7 +54,8 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
             loops = await cur.fetchall()
         if loops:
             ctx["open_loops"] = [
-                {"text": row[0], "hint": row[1] or "", "weight": row[2], "due": _due_iso(row[3])}
+                {"text": row[0], "hint": row[1] or "", "weight": row[2], "due": _due_iso(row[3]),
+                 "id": row[4]}  # brief_first_turn.mentioned keys the selector's candidate
                 for row in loops
             ]
     except Exception as exc:
@@ -85,7 +86,7 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
         from memory_service import get_memory_service
         svc = get_memory_service()
         refs = await svc.load_for_prompt(user_id, limit=30)
-        emo_items = []
+        emo_items, emo_ids = [], []
         for ref in refs:
             mt = (ref.metadata or {}).get("memory_type", "") or ""
             if mt == "emotional_moment":
@@ -97,12 +98,15 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
                     delta = _dt.datetime.utcnow() - added_dt
                     if delta.days <= 3:
                         emo_items.append((ref.text or "")[:150])
+                        emo_ids.append(ref.id)
                 except Exception:
                     emo_items.append((ref.text or "")[:150])
+                    emo_ids.append(ref.id)
             if len(emo_items) >= 2:
                 break
         if emo_items:
             ctx["emotional_moments"] = emo_items
+            ctx["emotional_moment_ids"] = emo_ids  # aligned; the brief marks what it said
     except Exception as exc:
         log.debug("morning_checkin: emotional moments load failed (non-fatal): %s", exc)
 

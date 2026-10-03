@@ -1254,7 +1254,14 @@ class MemoryService:
                 after={"id": new_id, "text": scrubbed},
                 reason=note or "",
             )
-            return MemoryRef(id=new_id, text=scrubbed, metadata=new_meta)
+        if new_id != mem_id:
+            # A corrected fact closes the open loops resting on what it corrected away
+            # (ZOE_LOOP_LIFECYCLE; no I/O when off; never raises). Outside the lock.
+            from open_loop_lifecycle import resolve_for_supersede
+
+            await resolve_for_supersede(user_id, [(current.text, scrubbed)], ended=False,
+                                        source=f"edit:{actor}")
+        return MemoryRef(id=new_id, text=scrubbed, metadata=new_meta)
 
     async def supersede_by(
         self, user_id: str, old_id: str, new_id: str, *, actor: str, note: str = "",

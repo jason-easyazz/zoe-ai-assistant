@@ -1290,7 +1290,7 @@ async def run_flue_brain_streaming(
     import brief_first_turn
     from proactive import selector as proactive_selector
 
-    brief = await brief_first_turn.prepare(message, user_id)
+    brief = await brief_first_turn.prepare(message, user_id, session_id)
     raised = await proactive_selector.prepare(
         message, user_id, session_id, brief_active=brief is not None)
     turn = _run_flue_brain_streaming_turn(

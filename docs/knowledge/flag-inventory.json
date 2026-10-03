@@ -2299,6 +2299,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LOOP_LIFECYCLE": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/open_loop_lifecycle.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MAX_BROWSER_TABS": {
         "defaults": [
           "5"

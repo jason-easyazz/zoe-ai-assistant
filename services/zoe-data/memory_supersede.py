@@ -234,6 +234,7 @@ async def supersede_for_turn(svc, user_id: str, cue: str, written: Iterable[Any]
         own = {r.id for r in refs}
         rows = await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT)
         taken: set[str] = set()
+        retired: list[tuple[str, str]] = []  # (old, successor) texts, for the open loops
         for ref, c in sorted(acting, key=lambda rc: rc[1].kind != "end"):
             by = replacement if (c.kind == "end" and replacement is not None) else ref
             hits = 0
@@ -247,12 +248,16 @@ async def supersede_for_turn(svc, user_id: str, cue: str, written: Iterable[Any]
                 if await svc.supersede_by(user_id, old.id, by.id, actor=ACTOR,
                                           note=f"implicit change ({c.name})"):
                     taken.add(old.id)
+                    retired.append((old.text, by.text))
                     hits += 1
                     out["new"] = out["new"] or str(by.id)[:8]
         out["superseded"] = len(taken)
         if taken:
             logger.info("MEMORY_SUPERSEDE user=%s cue=%s superseded=%d new=%s",
                         user_id, cue, len(taken), out["new"])
+            from open_loop_lifecycle import resolve_for_supersede
+
+            await resolve_for_supersede(user_id, retired, ended=True, source="turn")
     except Exception as exc:  # the write path must never fail on this
         logger.warning("implicit supersede failed user=%s: %s", user_id, type(exc).__name__)
     return out
@@ -297,12 +302,18 @@ async def nightly_conflict_pass(svc, user_id: str, *, cap: int = NIGHTLY_CAP,
     rows = await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT)
     pairs = conflict_pairs(rows)
     done = 0
+    retired: list[tuple[str, str]] = []
     for newer, older, reason in pairs:
         if done >= cap or dry_run:
             break
         if await svc.supersede_by(user_id, older.id, newer.id, actor=ACTOR,
                                   note=f"nightly implicit conflict ({reason})"):
             done += 1
+            retired.append((older.text, newer.text))
+    if retired:
+        from open_loop_lifecycle import resolve_for_supersede
+
+        await resolve_for_supersede(user_id, retired, ended=True, source="nightly")
     logger.info("MEMORY_CONFLICT_PASS user=%s pairs=%d superseded=%d%s", user_id,
                 len(pairs), done, " dry_run=1" if dry_run else "")
     return {"pairs": len(pairs), "superseded": done}

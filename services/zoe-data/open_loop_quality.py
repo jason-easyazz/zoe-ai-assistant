@@ -43,13 +43,18 @@ _CONTENT_INTENTS = frozenset({
 def loop_anchors(text: str) -> set[str]:
     """Lowercased anchor words in a loop text: a relation (memory_gate._EVT_REL), a
     mid-sentence capitalised name (person_extractor_llm's stoplist), an event, role or
-    place noun (intent_router.EVENT_CATEGORY_HINTS + ``_ANCHOR_NOUNS``). No time words."""
+    place noun (intent_router.EVENT_CATEGORY_HINTS + ``_ANCHOR_NOUNS``), and under
+    ``ZOE_LOOP_LIFECYCLE`` a health condition (``open_loop_lifecycle.HEALTH_NOUNS``).
+    No time words."""
     from intent_router import EVENT_CATEGORY_HINTS
     from memory_gate import _EVT_REL
+    from open_loop_lifecycle import HEALTH_NOUNS, lifecycle_enabled
     from person_extractor_llm import _CAP_STOP, _CAP_TOKEN
 
     raw = text or ""
     nouns = _ANCHOR_NOUNS.union(*EVENT_CATEGORY_HINTS.values())
+    if lifecycle_enabled():  # a named condition is a thing to ask about (flag-dark)
+        nouns = nouns | HEALTH_NOUNS
     found = {t for t in re.findall(r"[a-z0-9:'-]+", raw.lower())
              if t in nouns or t.rstrip("s") in nouns}
     found |= {m.lower() for m in re.findall(rf"\b(?:{_EVT_REL})\b", raw, re.IGNORECASE)}

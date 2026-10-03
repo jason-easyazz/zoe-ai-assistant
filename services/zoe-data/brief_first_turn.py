@@ -50,6 +50,8 @@ _PREPARE_TIMEOUT_S = 2.0
 _GATHER_CACHE_S = 300.0  # a task added mid-morning shows up within 5 min
 _ITEM_MAX_CHARS = 140
 _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})")
+_FOLLOW, _OVERDUE = "To follow up: ", "Overdue: "
+_MOMENT = "Recently on their mind (at most a gentle check-in): "
 
 # In-process throttles only; once-per-day correctness rests on the claim row.
 _settled: dict[str, str] = {}  # user -> local date whose claim is known taken
@@ -219,15 +221,31 @@ def day_items(ctx: dict, local_now: datetime) -> tuple[list[str], list[str]]:
         text = _clean(loop.get("hint") or loop.get("text"))
         if not text:
             continue
-        items.append(f"To follow up: {text}")
+        items.append(_FOLLOW + text)
         due = _as_utc(loop.get("due"))
         if not overdue and due is not None and due < now_utc:
-            overdue = f"Overdue: {text}"
+            overdue = _OVERDUE + text
     for moment in ((ctx or {}).get("emotional_moments") or [])[:1]:
         if _clean(moment):
-            items.append(f"Recently on their mind (at most a gentle check-in): {_clean(moment)}")
+            items.append(_MOMENT + _clean(moment))
     critical = [soonest[1]] if soonest else ([overdue] if overdue else [])
     return items, critical
+
+
+def mentioned(ctx: dict, lines: list[str]) -> list[tuple[str, str, str]]:
+    """``(kind, source_ref, text)`` of the loops and the moment whose line IS in the
+    rendered brief — bounded to what was said, keyed like the selector's candidates
+    (``open_loops:<id>`` / ``memory:<id>``). Pure."""
+    said, out = set(lines), []
+    for loop in (ctx or {}).get("open_loops") or []:
+        text = _clean(loop.get("hint") or loop.get("text"))
+        if loop.get("id") is not None and text and {_FOLLOW + text, _OVERDUE + text} & said:
+            out.append(("open_loop", f"open_loops:{loop['id']}", str(loop.get("text") or "")))
+    moments = (ctx or {}).get("emotional_moments") or []
+    ids = (ctx or {}).get("emotional_moment_ids") or []
+    if moments and ids and _MOMENT + _clean(moments[0]) in said:
+        out.append(("emotional", f"memory:{ids[0]}", str(moments[0])))
+    return out
 
 
 def render_body(shape: str, lines: list[str], local_date: str) -> str:
@@ -245,6 +263,8 @@ class DayBrief:
     now: datetime
     local_date: str
     token: str = ""  # this turn's hold on a queued 07:30 brief (``_briefing``)
+    session_id: str = ""
+    surfaced: tuple = ()  # ``mentioned`` items, marked at settle (ZOE_LOOP_LIFECYCLE)
 
     @property
     def block(self) -> str:
@@ -311,7 +331,7 @@ def _log(brief_user: str, items: int, shape: str, injected: bool, claimed: bool)
                 brief_user, items, shape, int(injected), int(claimed))
 
 
-async def _prepare(message: str, uid: str, now: datetime) -> DayBrief | None:
+async def _prepare(message: str, uid: str, now: datetime, sid: str = "") -> DayBrief | None:
     local_now = now.astimezone(zoe_timezone())
     if not in_window(local_now):
         return None  # outside the window: nothing, and the claim stays untaken
@@ -344,20 +364,25 @@ async def _prepare(message: str, uid: str, now: datetime) -> DayBrief | None:
         _log(uid, len(items), shape, injected=False, claimed=False)
         return None
     lines = items if shape == "greeting" else critical
+    from open_loop_lifecycle import lifecycle_enabled
+
+    surfaced = tuple(mentioned(ctx, lines)) if sid and lifecycle_enabled() else ()
     token = uuid.uuid4().hex
     _briefing.setdefault(uid, {})[token] = time.monotonic()
     return DayBrief(uid, shape, len(items), render_body(shape, lines, local_date), now,
-                    local_date, token)
+                    local_date, token, sid, surfaced)
 
 
-async def prepare(message: str, user_id: str) -> DayBrief | None:
-    """The day brief for this turn, or None. NEVER raises; time-boxed."""
+async def prepare(message: str, user_id: str, session_id: str = "") -> DayBrief | None:
+    """The day brief for this turn, or None. NEVER raises; time-boxed. ``session_id``
+    lets settle mark what the brief mentioned as surfaced for the selector."""
     uid = (user_id or "").strip()
     if not brief_on_first_turn_enabled() or not uid or is_synthetic_user(uid):
         return None
     try:
-        return await asyncio.wait_for(_prepare(message or "", uid, _now_utc()),
-                                      timeout=_PREPARE_TIMEOUT_S)
+        return await asyncio.wait_for(
+            _prepare(message or "", uid, _now_utc(), (session_id or "").strip()),
+            timeout=_PREPARE_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001 — the brief must never break a turn
         logger.debug("brief-first-turn: prepare skipped (non-fatal): %r", exc)
         return None
@@ -401,6 +426,11 @@ async def _settle(brief: DayBrief, produced: bool) -> bool:
             logger.warning("brief-first-turn: claim failed for user=%s: %r", brief.user_id, exc)
     if not keep_hold:
         _release_hold(brief.user_id, brief.token)
+    if produced and brief.surfaced:
+        # The loops it voiced are surfaced: the next conversation must not raise them.
+        from proactive.selector import mark_brief_surfaced
+
+        await mark_brief_surfaced(brief.user_id, brief.session_id, list(brief.surfaced))
     _log(brief.user_id, brief.items, brief.shape, injected=True, claimed=claimed)
     return claimed
 
