@@ -45,7 +45,9 @@ import argparse
 import asyncio
 import glob
 import json
+import logging
 import os
+import platform
 import re
 import sys
 import time
@@ -148,6 +150,60 @@ def _select(sample_dir: str, args) -> list[str]:
     return files
 
 
+# The service's palace guard (memory_service._check_palace_format) raises with
+# this phrase; every recall reader logs it and returns nothing (never raises).
+_MISMATCH_PHRASE = "but the installed client is"
+_LOAD_FAILURE_PHRASES = ("load_for_prompt failed", "packet fetch failed")
+
+
+class _MemoryRecallWatch(logging.StreamHandler):
+    """Root WARNING handler: counts recall failures the readers swallow, and
+    still prints every record (it replaces logging's last-resort stderr output)."""
+
+    def __init__(self) -> None:
+        super().__init__(sys.stderr)
+        self.setLevel(logging.WARNING)
+        self.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        self.mismatch = 0
+        self.load_failures = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+        self.mismatch += _MISMATCH_PHRASE in msg
+        self.load_failures += any(p in msg for p in _LOAD_FAILURE_PHRASES)
+        super().emit(record)
+
+
+def _memory_recall_preflight() -> tuple[str, str]:
+    """Can THIS interpreter's chromadb open the palace the live service reads?
+
+    Runs the service's own guard (read-only SQLite, opens nothing). Returns
+    (ok|mismatch|error, detail). Lazy imports keep this module slim for tests."""
+    try:
+        import chromadb
+        import memory_service as ms
+
+        data_dir = os.path.realpath(os.path.expanduser(ms.get_memory_service()._data_dir))
+        ms._check_palace_format(data_dir, chromadb.__version__)
+        return "ok", f"palace {data_dir} opens with chromadb {chromadb.__version__}"
+    except Exception as exc:  # noqa: BLE001 — every failure is a recorded state
+        state = "mismatch" if _MISMATCH_PHRASE in str(exc) else "error"
+        return state, f"{type(exc).__name__}: {exc}"
+
+
+def _memory_recall_state(brain: bool, preflight: str, mismatch_logs: int) -> str:
+    """disabled (no brain turns) | mismatch | the preflight's own verdict."""
+    if not brain:
+        return "disabled"
+    return "mismatch" if mismatch_logs else preflight
+
+
+def _interpreter() -> dict:
+    mod = sys.modules.get("chromadb")
+    return {"python": sys.executable, "version": platform.python_version(),
+            "chromadb": getattr(mod, "__version__", None)}
+
+
 def _run_session_id() -> str:
     """Fresh brain/flue session id per harness RUN (all samples in one run share
     it, preserving the within-run conversational continuity the old fixed id
@@ -232,6 +288,16 @@ def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
 async def _run(args) -> int:
     _load_env()
     os.environ.setdefault("ZOE_ROUTER_ENABLED", "1")
+    watch = _MemoryRecallWatch()
+    logging.getLogger().addHandler(watch)
+    preflight, recall_detail = (_memory_recall_preflight() if args.brain
+                                else ("disabled", "brain not run (no --brain)"))
+    interp = _interpreter()
+    print(f"interpreter: {interp['python']} (Python {interp['version']}, "
+          f"chromadb {interp['chromadb']}); memory recall preflight: {preflight}")
+    if preflight not in ("ok", "disabled"):
+        print(f"!! memory recall {preflight.upper()}: {recall_detail} — brain turns "
+              "will be scored WITHOUT recall", file=sys.stderr)
 
     from db_pool import init_pool
     await init_pool()
@@ -383,9 +449,15 @@ async def _run(args) -> int:
         for r in cant:
             print(f"    {r['file']}: {r['transcript']!r} → {r['outcome']}")
 
+    recall = _memory_recall_state(args.brain, preflight, watch.mismatch)
+    print(f"memory recall: {recall}  (mismatch logs={watch.mismatch}, "
+          f"load failures={watch.load_failures})")
     if args.json:
         with open(args.json, "w") as fh:
-            json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt}, fh, indent=2)
+            json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt,
+                       "interpreter": interp, "memory_recall": recall,
+                       "memory_recall_detail": recall_detail,
+                       "memory_load_failures": watch.load_failures}, fh, indent=2)
         print(f"\nwrote {args.json}")
     return 0
 

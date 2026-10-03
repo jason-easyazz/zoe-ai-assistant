@@ -217,7 +217,7 @@ def _drive_main(tmp_path, monkeypatch, fake, *, avail_mb=10_000, extra=()):
     monkeypatch.setattr(vrp, "mem_available_mb", lambda: avail_mb)
     monkeypatch.setattr(vrp, "cleanup_replay_artifacts", lambda *a, **k: True)
     monkeypatch.setattr(vrp, "service_revision", lambda *_: None)
-    report = {"n_samples": 4, "verdicts": {"OK": 4},
+    report = {"n_samples": 4, "verdicts": {"OK": 4}, "memory_recall": "ok",
               "aggregate_ms": {"stt_ms": {"median": 100}, "brain_ms": {"median": 200},
                                "e2e_ms": {"median": 300}}}
     monkeypatch.setattr(vrp, "run_measure", lambda *a, **k: report)
