@@ -91,6 +91,9 @@ def main() -> int:
     ap.add_argument("--stt", choices=["inprocess", "remote"], default="inprocess",
                     help="passed through to replay_samples.py; 'remote' avoids the "
                          "harness's second Moonshine load (needs ZOE_DEVICE_TOKEN)")
+    ap.add_argument("--base-url", default=None,
+                    help="passed through to replay_samples.py for --stt remote (its "
+                         "default: ZOE_REPLAY_BASE_URL, else http://127.0.0.1:8000)")
     args = ap.parse_args()
 
     if os.environ.get("ZOE_PERF") != "1":
@@ -124,6 +127,8 @@ def main() -> int:
         "--brain", "--user", args.user, "--json", replay_json,
         "--stt", args.stt,
     ]
+    if args.base_url:
+        cmd += ["--base-url", args.base_url]
     if args.since:
         cmd += ["--since", args.since]
     else:
