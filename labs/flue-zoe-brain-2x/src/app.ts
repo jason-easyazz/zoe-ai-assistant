@@ -26,7 +26,7 @@
  * LIVE — the deployed Zoe brain (flue-zoe-brain-2x.service on :3579,
  * ZOE_BRAIN_BACKEND=flue + ZOE_FLUE_WIRE=2; sole brain since the 2026-08-09 cutover).
  */
-import { setProvider } from '@flue/runtime';
+import { init, setProvider } from '@flue/runtime';
 import { createAgentRouter } from '@flue/runtime/routing';
 import { Hono } from 'hono';
 import { Zoe } from './agents/zoe.ts';
@@ -34,6 +34,7 @@ import { requireBrainToken } from './auth.ts';
 import { installEarlyTextTap } from './early-text.ts';
 import { createZoeProvider } from './providers/capped-completions.ts';
 import { seamAStreamingMiddleware } from './streaming.ts';
+import { TurnGuard, turnGuardMiddleware } from './turn-guard.ts';
 import { optionalZoeTools } from './tools/zoe-tools.ts';
 
 /**
@@ -87,8 +88,12 @@ export function createApp(): Hono {
   // sentinel stream instead of the bare 202 admission. Registered AFTER the auth
   // gate and BEFORE the agent router, so a 401 short-circuits ahead of it and a 202
   // admission can be upgraded to a stream. Kill switch: ZOE_BRAIN_STREAM=0.
-  // See src/streaming.ts for the pinned prod contract.
-  app.use('/agents/*', seamAStreamingMiddleware());
+  // See src/streaming.ts for the pinned prod contract. The TurnGuard (A1/A5,
+  // src/turn-guard.ts) acts only for a request carrying `x-zoe-abort-on-cancel: 1`;
+  // it aborts through Flue's documented in-process handle, `init(agent).abort()`.
+  const guard = new TurnGuard((id) => init(Zoe, { id }).abort());
+  app.use('/agents/*', turnGuardMiddleware(guard));
+  app.use('/agents/*', seamAStreamingMiddleware({ guard }));
 
   // The agent's HTTP surface: POST /:id (202 admission), GET|HEAD /:id (stream
   // read), POST /:id/abort, GET /:id/attachments/:attachmentId — all relative to

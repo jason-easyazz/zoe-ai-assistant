@@ -1324,6 +1324,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_FLUE_ABORT_ON_CANCEL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_FLUE_BRAIN_TIMEOUT_S": {
         "defaults": [
           "dynamic"

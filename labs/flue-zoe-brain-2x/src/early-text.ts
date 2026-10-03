@@ -106,13 +106,63 @@ export function textDeltaOf(result: unknown): string | null {
 }
 
 /**
+ * Model-call liveness for the A5 deadlines: `wait` = the loop starts waiting on the
+ * provider; `step` = an iterator step with model OUTPUT; `open` = pi-ai's `start`
+ * (response headers — not output); `end` = the stream finished or threw; `idle` = a
+ * non-step wait resolved. Published only while an opted-in turn subscribes.
+ */
+export interface ModelActivity {
+  operationId: string;
+  turnId: string;
+  kind: 'wait' | 'step' | 'open' | 'end' | 'idle';
+}
+export type ModelActivityListener = (activity: ModelActivity) => void;
+const activityListeners = new Set<ModelActivityListener>();
+
+export function subscribeModelActivity(listener: ModelActivityListener): () => void {
+  activityListeners.add(listener);
+  return () => void activityListeners.delete(listener);
+}
+
+function publishActivity(operationId: unknown, turnId: unknown, kind: ModelActivity['kind']): void {
+  if (activityListeners.size === 0 || typeof operationId !== 'string' || typeof turnId !== 'string') return;
+  for (const listener of [...activityListeners]) {
+    try {
+      listener({ operationId, turnId, kind });
+    } catch {
+      /* a subscriber's bug must never reach the agent loop */
+    }
+  }
+}
+
+/** Classify a resolved interceptor result for `ModelActivity`. */
+export function activityKindOf(result: unknown): 'step' | 'open' | 'end' | 'idle' {
+  if (!result || typeof result !== 'object' || !('done' in result)) return 'idle';
+  const step = result as { done?: unknown; value?: { type?: unknown } };
+  if (step.done === true) return 'end';
+  const type = step.value?.type;
+  if (type === 'start') return 'open';
+  return type === 'done' || type === 'error' ? 'end' : 'step';
+}
+
+/**
  * The execution interceptor. Pass-through for everything; for a model
  * operation's iterator steps, publishes text deltas AFTER `next()` resolves and
  * returns its value untouched. Skips all work when nothing is subscribed.
  */
 export const earlyTextInterceptor: FlueExecutionInterceptor = async (operation, ctx, next) => {
-  if (operation.type !== 'model' || listeners.size === 0) return next();
-  const result = await next();
+  if (operation.type !== 'model' || (listeners.size === 0 && activityListeners.size === 0)) return next();
+  const activityTurn = operation.turnId ?? ctx?.turnId;
+  publishActivity(ctx?.operationId, activityTurn, 'wait');
+  let result: Awaited<ReturnType<typeof next>>;
+  try {
+    result = await next();
+  } catch (err) {
+    publishActivity(ctx?.operationId, activityTurn, 'end');
+    throw err;
+  }
+  publishActivity(ctx?.operationId, activityTurn, activityKindOf(result));
+  if (listeners.size === 0) return result;
   try {
     const text = textDeltaOf(result);
     const operationId = ctx?.operationId;

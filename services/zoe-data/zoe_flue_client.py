@@ -320,6 +320,93 @@ def _headers() -> dict[str, str]:
     return headers
 
 
+# ── A1: abort the Flue turn when its consumer goes away (default OFF) ────────
+# Without it a cancelled stream leaves the Flue turn running on llama-server's
+# single slot (the next turn queues behind an unheard reply, stored as said).
+# ON: the streaming POST carries ``x-zoe-abort-on-cancel: 1`` (the sidecar then
+# aborts on stream cancel and arms its A5 deadlines) and a cancel here ALSO asks
+# for the abort, naming the submission echoed in ``x-flue-submission-id``. Flue
+# aborts a whole INSTANCE, so the sidecar refuses an abort that is no longer the
+# session's latest turn (labs/flue-zoe-brain-2x src/turn-guard.ts). Fire-and-
+# forget, never raising: cancellation and the #1781 settle order are untouched.
+# OFF: request bytes and code paths are exactly today's. Streaming path only.
+_ABORT_OPT_IN_HEADER = "x-zoe-abort-on-cancel"
+_SUBMISSION_HEADER = "x-flue-submission-id"
+_ABORT_TIMEOUT_S = 1.5
+_ABORT_TASKS: set = set()  # strong refs: a fire-and-forget task must not be GC'd
+
+
+def _abort_on_cancel_enabled() -> bool:
+    """ZOE_FLUE_ABORT_ON_CANCEL — per-call env read, default OFF."""
+    return (os.environ.get("ZOE_FLUE_ABORT_ON_CANCEL") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _abort_reason(exc: BaseException, voice_mode: bool) -> str:
+    """speculative > shutdown > barge_in > disconnect. Server-side a voice barge-in
+    cannot be told from any other voice-consumer exit (e.g. a budget timeout), so
+    every voice-mode cancel is ``barge_in``; the log's ``exit=`` keeps the class."""
+    try:
+        import voice_speculation as _vs
+
+        gate = _vs.bound_gate()
+        if isinstance(exc, _vs.SpeculativeTurnCancelled) or (
+            gate is not None and gate.resolved and gate.verdict() not in _vs.RELEASED_VERDICTS
+        ):
+            return "speculative"
+        import async_subprocess
+
+        if async_subprocess.shutting_down():
+            return "shutdown"
+    except Exception:  # noqa: BLE001 - a label must never break a cancel
+        pass
+    return "barge_in" if voice_mode else "disconnect"
+
+
+async def _post_guarded_abort(session_id: str, submission_id: str, reason: str) -> str:
+    """Ask the sidecar to abort ``submission_id``; returns its outcome label."""
+    import httpx
+
+    headers = {k: v for k, v in _headers().items() if k != "Content-Type"}
+    headers.update({"x-zoe-abort-submission": submission_id, "x-zoe-abort-reason": reason})
+    async with httpx.AsyncClient(timeout=_ABORT_TIMEOUT_S) as client:
+        resp = await client.post(f"{_endpoint(session_id, stream=True)}/abort", headers=headers)
+    if resp.status_code != 200:
+        return f"http_{resp.status_code}"
+    return str(resp.json().get("outcome") or "unknown")[:40]
+
+
+def _schedule_flue_abort(
+    session_id: str, submission_id: str, exc: BaseException, *,
+    voice_mode: bool, emitted_chars: int, emitted_deltas: int,
+) -> None:
+    """Background guarded abort + one ``FLUE_ABORT`` line (``emitted_chars`` = reply
+    text already handed out, for A3). Never raises."""
+    reason = _abort_reason(exc, voice_mode)
+
+    async def _run() -> None:
+        t0 = asyncio.get_running_loop().time()
+        outcome = "skipped:no_submission_id"
+        if submission_id:
+            try:
+                outcome = await _post_guarded_abort(session_id, submission_id, reason)
+            except Exception as err:  # noqa: BLE001 - never raise from a cancel path
+                outcome = f"error:{type(err).__name__}"
+        logger.info(
+            "FLUE_ABORT side=zoe-data session=%s submission=%s reason=%s exit=%s "
+            "emitted_chars=%d deltas=%d outcome=%s latency_ms=%d",
+            session_id, submission_id or "-", reason, type(exc).__name__, emitted_chars,
+            emitted_deltas, outcome, round((asyncio.get_running_loop().time() - t0) * 1000),
+        )
+
+    try:
+        task = asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:  # no running loop (interpreter teardown)
+        return
+    _ABORT_TASKS.add(task)
+    task.add_done_callback(_ABORT_TASKS.discard)
+
+
 # Machine-readable acting-identity envelope. MUST match the sidecar's parser
 # (labs/flue-zoe-brain-2x src/request-identity.ts IDENTITY_ENVELOPE_PREFIX / _RE):
 # a leading " zoe-uid:<id>\n" line the sidecar reads then strips before the model
@@ -1489,11 +1576,17 @@ async def _run_flue_brain_streaming_turn(
         # turn (the #1137 duplicate-write class).
         yielded_any = False
         admitted = False  # a 2xx means the sidecar is EXECUTING the turn
+        abort_on_cancel = _abort_on_cancel_enabled()  # A1, default OFF
+        submission_id = ""
+        terminal_seen = False
+        emitted_chars = emitted_deltas = 0
         try:
             import httpx
 
             headers = dict(_headers())
             headers["Accept"] = "application/x-ndjson"
+            if abort_on_cancel:
+                headers[_ABORT_OPT_IN_HEADER] = "1"
             async with httpx.AsyncClient(timeout=_timeout_s()) as client:
                 async with client.stream(
                     "POST", _endpoint(session_id, stream=True), content=payload, headers=headers
@@ -1518,6 +1611,8 @@ async def _run_flue_brain_streaming_turn(
                         return
                     resp.raise_for_status()
                     admitted = True
+                    if abort_on_cancel:
+                        submission_id = resp.headers.get(_SUBMISSION_HEADER) or ""
                     if "application/x-ndjson" in (resp.headers.get("content-type") or ""):
                         finished = False
                         done_ok = False
@@ -1534,9 +1629,13 @@ async def _run_flue_brain_streaming_turn(
                             if isinstance(chunk, str):
                                 if chunk:
                                     yielded_any = True
+                                    if not chunk.startswith((_TOOL_SENTINEL_PREFIX, _THINKING_SENTINEL_PREFIX)):
+                                        emitted_chars += len(chunk)
+                                        emitted_deltas += 1
                                     yield chunk
                                 continue
                             if isinstance(chunk, dict):
+                                terminal_seen = terminal_seen or "done" in chunk or "error" in chunk
                                 if chunk.get("done"):
                                     finished = True
                                     done_ok = True
@@ -1598,6 +1697,15 @@ async def _run_flue_brain_streaming_turn(
                     )
                     yield _FALLBACK_TEXT
                     return
+        except (GeneratorExit, asyncio.CancelledError) as exc:
+            # Consumer gone (A1): flag on, abort the admitted run. Never awaits.
+            if abort_on_cancel and admitted and not terminal_seen:
+                _schedule_flue_abort(
+                    session_id, submission_id, exc,
+                    voice_mode=bool(kwargs.get("voice_mode")),
+                    emitted_chars=emitted_chars, emitted_deltas=emitted_deltas,
+                )
+            raise
         except Exception as exc:  # noqa: BLE001 - a brain hiccup must never crash a turn
             if yielded_any:
                 # Mid-stream failure after real text: the turn executed; ending
