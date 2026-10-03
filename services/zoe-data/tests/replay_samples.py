@@ -156,7 +156,20 @@ def _select(sample_dir: str, args) -> list[str]:
 # The service's palace guard (memory_service._check_palace_format) raises with
 # this phrase; every recall reader logs it and returns nothing (never raises).
 _MISMATCH_PHRASE = "but the installed client is"
-_LOAD_FAILURE_PHRASES = ("load_for_prompt failed", "packet fetch failed")
+# Runtime recall read failures, scoped to the READERS that emit them (logger name +
+# phrase). A bare substring over-matched: `pending_suggestions` logs
+# "pending_suggestions.load_for_prompt failed" on the legacy lane, which is an
+# offers query, not recall — a healthy Chroma run must not become status=error
+# because of it (Codex P2, #1811).
+_LOAD_FAILURE_RULES = (
+    ("memory_service", "load_for_prompt failed"),      # memory_service.load_for_prompt
+    ("zoe_flue_client", "packet fetch failed"),        # seam recall / continuity inject
+)
+
+
+def _is_recall_load_failure(logger_name: str, msg: str) -> bool:
+    return any((logger_name == mod or logger_name.startswith(mod + "."))
+               and phrase in msg for mod, phrase in _LOAD_FAILURE_RULES)
 
 
 class _MemoryRecallWatch(logging.StreamHandler):
@@ -173,7 +186,7 @@ class _MemoryRecallWatch(logging.StreamHandler):
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
         self.mismatch += _MISMATCH_PHRASE in msg
-        self.load_failures += any(p in msg for p in _LOAD_FAILURE_PHRASES)
+        self.load_failures += _is_recall_load_failure(record.name, msg)
         super().emit(record)
 
 

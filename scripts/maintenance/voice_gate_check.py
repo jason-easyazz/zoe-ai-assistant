@@ -101,6 +101,10 @@ VOICE_PATH_PATTERNS = (
     # stack with no code diff elsewhere, so both are voice path (Codex P2, #1811).
     "scripts/lib/service_python.py",
     "scripts/setup/systemd/zoe-voice-regression.service",
+    # ...and the AUTHORITY the ladder executes to learn what zoe-data runs on
+    # (systemd ExecStart parsing). A change to its parsing or output alone can
+    # move the evidence to another interpreter (Codex P2 round 3, #1811).
+    "scripts/deploy/zoe_data_python.sh",
     "*kokoro*",
     "*moonshine*",
     # THE LIVE ROUTER'S MODEL ARTIFACTS — the stage-1 checkpoint of the two-stage

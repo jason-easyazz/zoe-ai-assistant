@@ -90,6 +90,29 @@ def test_watch_counts_swallowed_recall_failures_and_still_prints(capsys):
     assert "unrelated warning" in capsys.readouterr().err
 
 
+def test_watch_scopes_load_failures_to_the_recall_readers(capsys):
+    # Codex P2 (#1811): the legacy lane's offers query logs the same phrase under
+    # another logger; that is not a recall failure and must not fail the run.
+    rs = _harness()
+    watch = rs._MemoryRecallWatch()
+    offers = logging.getLogger("pending_suggestions")
+    flue = logging.getLogger("zoe_flue_client")
+    ms = logging.getLogger("memory_service")
+    for lg in (offers, flue, ms):
+        lg.addHandler(watch)
+    try:
+        offers.warning("pending_suggestions.load_for_prompt failed for user=u — offers skipped")
+        flue.warning("seam recall inject: packet fetch failed, continuing without it: boom")
+        flue.warning("seam continuity inject: packet fetch failed/timed out, continuing without it: 'x'")
+        ms.warning("memory_service: load_for_prompt failed user=u: collection is corrupt")
+        ms.warning("memory_service: something else")
+    finally:
+        for lg in (offers, flue, ms):
+            lg.removeHandler(watch)
+    capsys.readouterr()
+    assert (watch.mismatch, watch.load_failures) == (0, 3)
+
+
 @pytest.mark.parametrize("brain,preflight,logs,load_failures,expected", [
     (False, "mismatch", 3, 2, "disabled"),   # no brain turns -> recall not exercised
     (True, "ok", 0, 0, "ok"),

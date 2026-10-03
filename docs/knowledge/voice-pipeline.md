@@ -208,8 +208,10 @@ floor), so its interpreter decides which chromadb opens the palace. From B0.8 (2
 2026-10-03 the unit and the landing scripts launched the probe with `/usr/bin/python3` (3.10,
 chromadb 0.6.3) against the 1.x palace: every open was refused (`palace is chromadb 1.x format but
 the installed client is 0.6.3`), every recall reader swallowed it, and every run scored brain turns
-**without recall** while live had it. Now: (1) the unit's `ExecStart` is
-`%h/.zoe/venvs/zoe-data-py312/bin/python`; (2) the probe resolves the interpreter through ONE ladder
+**without recall** while live had it. Now: (1) the unit's `ExecStart` stays on `/usr/bin/python3` —
+a STABLE, rollback-safe launcher (a hard-coded venv launcher would measure the wrong stack after
+a B0.7 rollback, and could not launch once the venv is deleted) — and the probe **re-execs onto
+the service's interpreter** (the venv today); (2) the probe resolves that interpreter through ONE ladder
 (`scripts/lib/service_python.py`: `--python` → `ZOE_PROBE_PYTHON` → the zoe-data unit's ExecStart via
 `scripts/deploy/zoe_data_python.sh` → the venv if systemd can't answer → the current interpreter)
 and **re-executes itself on it**, so a bare `python3 voice_regression_probe.py` still runs VAD,
