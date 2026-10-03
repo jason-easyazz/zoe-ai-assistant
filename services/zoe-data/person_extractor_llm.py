@@ -279,6 +279,9 @@ async def process_text_llm(
             source=source,
             session_id=session_id,
             db=db,
+            # The utterance it was mined from: recall_evidence quotes it for the
+            # chat/voice sources ("conversation"/"voice"); scrubbed at MemoryService.
+            source_excerpt=" ".join(text.split()),
         )
         if ok:
             written += 1

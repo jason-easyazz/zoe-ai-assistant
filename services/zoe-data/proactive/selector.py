@@ -4,8 +4,9 @@ Precompute, don't improvise (research gap #5, docs/research/samantha-context-eng
 2026-09-29.md §4.5). Nightly, inside the dreaming cycle, each real member gets at most
 ``CAP`` ranked "things worth raising" in ``proactive_candidates``. At runtime a brain
 turn may carry ONE of them as a ``[RAISE …]`` block — on an open/greeting turn, or when
-a candidate's cue word is in the user's words — at most once per conversation. The
-model only phrases; ranking, triggers and cooldown are decided here in code.
+a candidate's cue word is in the user's words — at most once per conversation, and
+per member at most ``ZOE_PROACTIVE_RAISE_PER_DAY`` a local day, ``ZOE_PROACTIVE_RAISE_GAP_S``
+apart. The model only phrases; ranking, triggers, spacing and cooldown are decided here.
 
 Salience = importance × recency × relevance (Generative Agents' three factors, as a
 product so a zero in any one — stale, trivial, not due — sinks the item):
@@ -57,6 +58,26 @@ _ASK = {
 
 def selector_enabled() -> bool:
     return (os.environ.get("ZOE_PROACTIVE_SELECTOR", "") or "").strip().lower() in _TRUTHY
+
+
+def raise_gap_s() -> int:
+    """Minimum seconds between two raises to one member, across conversations
+    (``ZOE_PROACTIVE_RAISE_GAP_S``, default 7200, read per call; 0 = no gap; negative →
+    default). Capped at ``COOLDOWN``: the evidence is the candidates' ``last_surfaced_at``,
+    and a raised row is kept at least that long (the nightly delete waits out cooldown)."""
+    from typed_env import env_int
+
+    gap = env_int("ZOE_PROACTIVE_RAISE_GAP_S", 7200)
+    return min(gap if gap >= 0 else 7200, int(COOLDOWN.total_seconds()))
+
+
+def raise_per_day() -> int:
+    """Raises per member per local day (``ZOE_PROACTIVE_RAISE_PER_DAY``, default 2, read
+    per call; 0 = no cap; negative → default)."""
+    from typed_env import env_int
+
+    cap = env_int("ZOE_PROACTIVE_RAISE_PER_DAY", 2)
+    return cap if cap >= 0 else 2
 
 
 def _iso(dt: datetime) -> str:
@@ -236,7 +257,9 @@ async def select_for_user(user_id: str, *, now: datetime | None = None) -> dict 
 
 
 # ── Runtime raise (both brain lanes: prepare before the turn, settle in its finally) ──
-_holds: dict[str, tuple[str, float]] = {}  # session -> (token, t): injected, not settled
+# ("s", session) / ("u", user) -> (token, t): injected, not yet settled. The user hold
+# spaces two conversations whose turns overlap (the DB record lands only at settle).
+_holds: dict[tuple[str, str], tuple[str, float]] = {}
 _HOLD_S = 120.0  # brief_first_turn._BRIEFING_HOLD_S: a lost settle cannot hold forever
 _raised_sessions: set[str] = set()  # settled with text (backstop for a failed DB write)
 _raise_marks: set[str] = set()     # users whose turn deferred a contact offer for a raise
@@ -296,12 +319,33 @@ def _words(message: str) -> set[str]:
     return toks | {t.rstrip("s") for t in toks}
 
 
-def _held(sid: str) -> bool:
-    hold = _holds.get(sid)
+def _held(key: tuple[str, str]) -> bool:
+    hold = _holds.get(key)
     if hold and time.monotonic() - hold[1] >= _HOLD_S:
-        _holds.pop(sid, None)
+        _holds.pop(key, None)
         hold = None
     return hold is not None
+
+
+def _spacing(rows: list[tuple], now: datetime) -> str:
+    """Why a member's raise must wait ("gap" | "daily_cap"), or "". Durable: the
+    evidence is each candidate's ``last_surfaced_at`` (set at settle), so it survives a
+    restart. A candidate is raised at most once per ``COOLDOWN`` (> 1 day), so one
+    stamp per row counts every raise of the local day."""
+    stamps = sorted(str(r[11]) for r in rows if r[11])
+    if not stamps:
+        return ""
+    gap = raise_gap_s()
+    if gap and stamps[-1] > _iso(now - timedelta(seconds=gap)):
+        return "gap"
+    cap = raise_per_day()
+    if cap:
+        from time_utils import zoe_timezone
+
+        midnight = now.astimezone(zoe_timezone()).replace(hour=0, minute=0, second=0, microsecond=0)
+        if sum(s >= _iso(midnight) for s in stamps) >= cap:
+            return "daily_cap"
+    return ""
 
 
 async def _load(user_id: str) -> list[tuple]:
@@ -310,7 +354,7 @@ async def _load(user_id: str) -> list[tuple]:
     async with get_compat_db() as db:
         async with db.execute(
             "SELECT id, kind, text, hint, salience, on_open, cue_words, expires_at, "
-            "cooldown_until, surfaced_count, last_surfaced_session "
+            "cooldown_until, surfaced_count, last_surfaced_session, last_surfaced_at "
             "FROM proactive_candidates WHERE user_id = ?", (user_id,),
         ) as cur:
             return [tuple(r) for r in await cur.fetchall()]
@@ -331,12 +375,13 @@ async def _prepare(message: str, uid: str, sid: str, brief_active: bool) -> Rais
             return None
         shape = "cue"
     # The continuity check-in is that turn's one job (the offer defers there too).
-    if is_continuity_turn(message, uid) or _held(sid) or sid in _raised_sessions:
+    if is_continuity_turn(message, uid) or _held(("s", sid)) or sid in _raised_sessions:
         return None
     rows = await _load(uid)
     if any(r[10] == sid for r in rows):
         return None  # already raised in this conversation (durable across restarts)
-    now, words = _iso(_now()), _words(message)
+    now_dt = _now()
+    now, words = _iso(now_dt), _words(message)
     for r in sorted(rows, key=lambda r: float(r[4] or 0), reverse=True):
         if str(r[7]) <= now or (r[8] and str(r[8]) > now) or int(r[9] or 0) >= MAX_SURFACED:
             continue
@@ -344,8 +389,14 @@ async def _prepare(message: str, uid: str, sid: str, brief_active: bool) -> Rais
             if brief_active:  # the [Today] brief owns this turn; the candidate waits
                 _log(uid, r[1], shape, False, False, "brief")
                 return None
+            # Per member, not per conversation. No await from this check to the hold
+            # below, so two overlapping turns cannot both pass it.
+            why = "held" if _held(("u", uid)) else _spacing(rows, now_dt)
+            if why:
+                _log(uid, r[1], shape, False, False, why)
+                return None
             token = uuid.uuid4().hex
-            _holds[sid] = (token, time.monotonic())
+            _holds[("s", sid)] = _holds[("u", uid)] = (token, time.monotonic())
             _raise_marks.add(uid)
             return Raise(uid, sid, str(r[0]), str(r[1]), shape, _clean(r[2]),
                          _clean(r[3]) or _ASK.get(str(r[1]), _ASK["open_loop"]), token)
@@ -399,8 +450,9 @@ async def _settle(raised: Raise, produced: bool) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.warning("proactive-selector: settle failed user=%s: %r", raised.user_id, exc)
     finally:
-        if (_holds.get(raised.session_id) or ("",))[0] == raised.token:
-            _holds.pop(raised.session_id, None)
+        for key in (("s", raised.session_id), ("u", raised.user_id)):
+            if (_holds.get(key) or ("",))[0] == raised.token:
+                _holds.pop(key, None)
     _log(raised.user_id, raised.kind, raised.shape, True, settled)
     return settled
 
