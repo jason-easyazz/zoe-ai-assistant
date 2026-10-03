@@ -4,7 +4,9 @@
 **Status:** Ready for Implementation
 **Timeline:** 2 weeks (P0), 1 week (P1)
 
-> **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list). Infra/data-layer configuration audit with ranked actions: [infra-data-config-2026-10-03.md](./infra-data-config-2026-10-03.md).
+> **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list).
+>
+> **2026-10-03:** [flue-and-agent-runtimes-2026-10-03.md](./flue-and-agent-runtimes-2026-10-03.md) (Flue runtime feature matrix, upgrade risk, voice/agent-runtime field comparison, ranked actions).
 > **Later reports (2026-09-29):** [samantha-context-engineering-2026-09-29.md](./samantha-context-engineering-2026-09-29.md) (context manager vs training) and [zoe-context-audit-2026-09-29.md](./zoe-context-audit-2026-09-29.md) (code audit against its gap list). Field scan 2026-10-03: [companion-field-vs-samantha-2026-10-03.md](./companion-field-vs-samantha-2026-10-03.md) (OSS/commercial voice-companion field vs the Samantha spec, as a delta against tracker B1–B10 and state review §7).
 
 ---
