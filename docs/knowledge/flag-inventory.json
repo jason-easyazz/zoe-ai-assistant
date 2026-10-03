@@ -339,6 +339,7 @@
         "readers": [
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
+          "scripts/perf/samantha_day_sim.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
@@ -2987,6 +2988,7 @@
           "scripts/perf/measure_voice.py",
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
+          "scripts/perf/samantha_day_sim.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false

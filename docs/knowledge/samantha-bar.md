@@ -97,7 +97,7 @@ ids only). Day 2 follows.
 | S8 | S1 and S7 facts survive 32 filler turns spread over 3 sessions. | deterministic: `marisol` and `lighthouse`. ANY failed filler turn is ERROR, even when both names come back — the long history was not built, so the recall proves nothing. |
 | S10 | A one-word change of state retires the old fact: "I gave up the cello." after "I play the cello in a community orchestra on Tuesday evenings." **Expected FAIL today — a target, not a regression.** | deterministic. Store first: a packet line still naming the orchestra without a stop cue is the old row served as current (superseded rows are hidden from reads) → FAIL. Then the reply must say they stopped. Why it fails: `memory_supersede.same_topic` needs the new fact to cover ≥ 0.5 of the OLD fact's topic words; "gave up the cello" shares only `cello` with {play, cello, community, orchestra}. The capture of the change turn is observed (`wait_captured`) and the day-1 backdate is a precondition. |
 | S11 | Ask-to-remember: when a task would benefit, Zoe asks for a reusable preference. **Expected SKIP — not built.** | No turns. A reserved SKIP so the gap stays visible (zoe-data and the Flue sidecar have no such behaviour; the only "remember" prompt is `remember_fact`'s empty-argument reply). |
-| S12 | Raise spacing: of S5's two open turns, minutes apart, the second carries no raise of ANY candidate. | deterministic, no extra turn: `proactive_candidates.last_surfaced_session` read after S5. A candidate surfaced in the second session = FAIL (the selector's cooldown is per candidate, so with ≥ 2 candidates the next one opens the next conversation); nothing raised in the first, or fewer than 2 candidates (nothing else could open the second conversation) = SKIP; S5 setup not exercised = ERROR. |
+| S12 | Raise spacing: of S5's two open turns, minutes apart, the second carries no raise of ANY candidate. | deterministic, no extra turn: `proactive_candidates.last_surfaced_session` read after S5. A candidate surfaced in the second session = FAIL. Before #1801 the cooldown was per candidate only, so with ≥ 2 candidates the next one opened the next conversation; #1801 added a per-member gap (`ZOE_PROACTIVE_RAISE_GAP_S`, default 2 h) and a daily cap, and S12 is that fix's live regression check; nothing raised in the first, or fewer than 2 candidates (nothing else could open the second conversation) = SKIP; S5 setup not exercised = ERROR. |
 
 `EXPECTED` marks S10 (FAIL) and S11 (SKIP) as targets: the result line and the artifact carry
 `expected`, and `--compare-baseline` is unchanged (only a previous PASS can regress), so a
@@ -634,7 +634,7 @@ card asks are still asked and their measured verdict is kept as `no_card_baselin
 
 ### First live run (2026-10-03 22:38–22:42 AWST, default mode, samples 1)
 
-Live checkout `11c6c0f2` (`dirty: true` — an untracked-config edit, `.serena/project.yml`),
+Live checkout `11c6c0f2` (before #1801's raise gap deployed; `dirty: true` — a local `.serena/project.yml` edit),
 all six context flags ON, teardown proven (2 users, Postgres count-back 0). It waited ~4.5 min
 for the 1.2 GB memory gate first; the week itself took 3 min 21 s. Overall **FAIL**: 7 PASS, 3 FAIL, 5 SKIP (the brief + card
 asks — default mode). What it found:

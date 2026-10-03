@@ -240,7 +240,7 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
      "turns": [], "asks": []},
     {"id": "S12", "title": "raise spacing", "judged": False,
      "proves": "of S5's two open turns minutes apart, the second carries no raise of ANY candidate "
-               "(per-candidate cooldown alone lets the next candidate open the next conversation)",
+               "(the regression check for #1801's per-member raise gap, ZOE_PROACTIVE_RAISE_GAP_S)",
      "turns": [], "asks": []},
 )
 EXPECTED = {s["id"]: s["expected"] for s in SCENARIOS if s.get("expected")}
@@ -561,7 +561,7 @@ def score_s12(rows: list[dict], s1: str, s2: str) -> tuple[str, dict]:
                                      "second conversation"}
     if s2 in sessions:
         return "FAIL", {**ev, "why": "the second open conversation, minutes later, also opened with "
-                                     "a raise (cooldown is per candidate; no per-user spacing)"}
+                                     "a raise (the per-member gap, #1801 ZOE_PROACTIVE_RAISE_GAP_S, did not hold)"}
     if s1 not in sessions:
         return "SKIP", {**ev, "why": "nothing was raised on the first open turn — spacing not exercised"}
     return "PASS", ev

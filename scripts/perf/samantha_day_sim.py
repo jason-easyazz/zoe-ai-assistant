@@ -440,7 +440,7 @@ def score_spacing(rows: list[dict], sid1: str, sid2: str) -> tuple[str, dict]:
                                     "second conversation")
     if sid2 in sessions:
         return _r("FAIL", **ev, why="the second conversation, minutes later, also opened with a raise "
-                                    "(per-candidate cooldown only — no per-user spacing)")
+                                    "(the per-member gap, #1801 ZOE_PROACTIVE_RAISE_GAP_S, did not hold)")
     if sid1 not in sessions:
         return _r("SKIP", **ev, why="nothing was raised on the first open turn — spacing not exercised")
     return _r("PASS", **ev)
