@@ -1735,37 +1735,37 @@ class MemoryService:
                 seen.add(rid)
                 hits.append(MemoryRef(id=rid, text=doc or "", metadata=md, score=float(dist or 0.0)))
 
-        _collect(col.query(
-            query_texts=[query],
-            n_results=max(limit * 3, limit),
-            where=where,
-            include=["documents", "metadatas", "distances"],
-        ))
+        # Order matters (measured 2026-10-04, day-sim ask 4 after the first fallback shipped):
+        # the owner-filtered HNSW query can come back FULL BUT WRONG — hnswlib fills ``ef``
+        # with the allowed rows it happens to meet while the asked-about rows sit behind
+        # tombstones (demo churn: 1,591 elements for 258 live rows), so a "short result"
+        # trigger never fires. Query UNFILTERED first (an over-fetch capped at the
+        # collection size; at palace scale this is a few hundred rows) and apply the same
+        # visibility / status / expiry rules in Python; the filtered query only
+        # supplements when the owner's visible rows are still fewer than ``limit``.
+        try:
+            total = int(col.count())
+        except Exception:  # noqa: BLE001 — count is a nicety for the cap
+            total = 0
+        n_wide = max(limit * 20, 200)
+        if total > 0:
+            n_wide = min(n_wide, total)
+        if n_wide > 0:
+            _collect(col.query(
+                query_texts=[query],
+                n_results=n_wide,
+                include=["documents", "metadatas", "distances"],
+            ))
+        wide = len(hits)
         if len(hits) < limit:
-            # A filtered HNSW query returns SHORT (often empty) when the owner's rows are
-            # sparse in the query's neighbourhood or the graph is tombstone-heavy: hnswlib
-            # explores ef candidates, skips deleted and disallowed ones, and stops. Measured
-            # 2026-10-04 on the live palace (258 rows, 1,591 ever added): "When did I tell
-            # you about the dentist?" → 0 rows WITH the owner filter, 18 without; a
-            # one-word query found 18 either way. The packet then carried no semantic hits
-            # and the brain said it had nothing stored. Over-fetch without the filter and
-            # apply the same visibility rules here; the blend below ranks as before.
-            try:
-                total = int(col.count())
-            except Exception:  # noqa: BLE001 — count is a nicety for the cap
-                total = 0
-            n_more = max(limit * 20, 200)
-            if total > 0:
-                n_more = min(n_more, total)
-            if n_more > 0:
-                before = len(hits)
-                _collect(col.query(
-                    query_texts=[query],
-                    n_results=n_more,
-                    include=["documents", "metadatas", "distances"],
-                ))
-                logger.info("MEMORY_SEARCH_FALLBACK user=%s filtered=%d limit=%d unfiltered_n=%d "
-                            "added=%d", user_id, before, limit, n_more, len(hits) - before)
+            _collect(col.query(
+                query_texts=[query],
+                n_results=max(limit * 3, limit),
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            ))
+            logger.info("MEMORY_SEARCH_SUPPLEMENT user=%s unfiltered_visible=%d limit=%d "
+                        "filtered_added=%d", user_id, wide, limit, len(hits) - wide)
 
         # Re-rank by blending semantic distance with hotness signals.
         # load_for_prompt already does this for the metadata-only path; here we

@@ -4,8 +4,11 @@ Measured 2026-10-04 on the live palace (258 rows, 1,591 ever added — 84 % tomb
 from demo-user churn): ``col.query`` for "When did I tell you about the dentist?" returned
 0 ids WITH the owner filter and 18 without, while a one-word query returned 18 either
 way. The recall packet then carried no semantic hits and the brain answered that it had
-nothing about the dentist. ``_semantic_search`` now over-fetches without the filter when
-the filtered query is short and applies the same visibility rules in Python."""
+nothing about the dentist. A "short result" trigger was not enough either: the filtered
+query can come back FULL BUT WRONG (ef filled with the allowed rows hnswlib met first).
+``_semantic_search`` now queries UNFILTERED first (over-fetch capped at the collection
+size), applies the same visibility rules in Python, and runs the owner-filtered query only
+as a supplement when the visible rows are still fewer than ``limit``."""
 from __future__ import annotations
 
 import pytest
@@ -58,12 +61,12 @@ def test_short_filtered_query_falls_back_and_keeps_only_the_owners_rows():
     assert "id2" in ids and "id4" in ids          # the owner's rows came back
     assert "id1" not in ids and "id3" not in ids  # other owners' private rows never leak
     assert "id5" in ids                           # family-visible rows stay visible, as the filter allows
-    assert [c["where"] for c in col.calls] == [{"$or": [{"user_id": "demo_bar_x"}, {"wing": "demo_bar_x"},
-                                                        {"visibility": "family"}]}, None]
-    assert col.calls[1]["n"] == len(col.rows)      # capped at the collection size
+    assert col.calls[0]["where"] is None and col.calls[0]["n"] == len(col.rows)   # unfiltered first, capped
+    assert col.calls[1]["where"] == {"$or": [{"user_id": "demo_bar_x"}, {"wing": "demo_bar_x"},
+                                             {"visibility": "family"}]}              # supplement (3 < 6)
 
 
-def test_sufficient_filtered_query_never_issues_the_fallback():
+def test_sufficient_unfiltered_query_never_issues_the_filtered_supplement():
     rows = [_row(i, "u1", f"fact {i}", 0.1 * i) for i in range(1, 8)]
 
     class _Full(_Col):
@@ -75,7 +78,7 @@ def test_sufficient_filtered_query_never_issues_the_fallback():
 
     col = _Full(rows)
     hits = _svc(col)._semantic_search("fact", "u1", 3, {})
-    assert len(hits) == 3 and len(col.calls) == 1 and col.calls[0]["where"] is not None
+    assert len(hits) == 3 and len(col.calls) == 1 and col.calls[0]["where"] is None
 
 
 def test_fallback_dedups_and_still_drops_superseded_rows():
@@ -86,3 +89,22 @@ def test_fallback_dedups_and_still_drops_superseded_rows():
     ])
     hits = _svc(col)._semantic_search("live", "u1", 5, {})
     assert [h.id for h in hits] == ["id1"]
+
+
+def test_full_but_wrong_filtered_result_cannot_hide_the_owners_nearest_rows():
+    """The measured shape after the first fix: the filtered query returns ``limit`` rows of
+    the owner's, none of them the asked-about ones. Unfiltered-first makes the nearest
+    visible rows win regardless."""
+    nearest = [_row(1, "u1", "User has a dentist appointment on Friday.", 0.10)]
+    filler = [_row(i, "u1", f"unrelated fact {i}", 0.5 + i * 0.01) for i in range(2, 9)]
+
+    class _Wrong(_Col):
+        def query(self, *, query_texts, n_results, include, where=None):
+            self.calls.append({"where": where, "n": n_results})
+            rows = (filler if where is not None else nearest + filler)[:n_results]
+            return {"ids": [[r[0] for r in rows]], "documents": [[r[1] for r in rows]],
+                    "metadatas": [[r[2] for r in rows]], "distances": [[r[3] for r in rows]]}
+
+    col = _Wrong(nearest + filler)
+    hits = _svc(col)._semantic_search("When did I tell you about the dentist?", "u1", 6, {})
+    assert hits[0].id == "id1" and len(col.calls) == 1
