@@ -168,6 +168,13 @@ As of 2026-10-03:
 | SDK behaviour | `readSubmissionReply()` now requires `settlements`. zoe-data does not use the SDK | [doc] |
 | pi 0.84–0.87 behaviour to replay-gate | `toolChoice` on openai-completions; `supportsFinishReason`; strict tool schemas no longer sent to unknown endpoints (#9816, the one llama.cpp fix that reaches Flue); bodyless 400/413 no longer misread as overflow; **a fix for quadratic `EventStream` drain CPU (0.86.0)** | [doc] |
 
+**Open hazard (2026-10-03):** Dependabot PR #1776 bumps `@earendil-works/pi-ai` in
+`labs/flue-zoe-brain-2x` from 0.83.0 to **0.87.1** while `@flue/runtime` stays at 2.1.1
+(`pi-ai ^0.83.0`). That is the `TranscriptContext` break described above, applied to our
+provider import (`@earendil-works/pi-ai/api/openai-completions`) without the port. It must
+not merge as a routine minor/patch bump; close it or hold it for the A6 port, and pin the
+package out of Dependabot's minor-patch group.
+
 **What 2.2.x would buy Zoe:**
 - bounded history reads: irrelevant, because we never read history over HTTP;
 - PDF attachments: replaced by a placeholder on openai-completions anyway;
