@@ -36,12 +36,19 @@ presents conflicting bullets newest-first; the Dunedin row is retired later by a
 
 - **Cue table** (`memory_supersede.CUES`): end cues — dropped, no longer, not … anymore,
   stopped, quit, gave up, cancelled, used to; swap cues — change of plan (utterance only),
-  moved from, moved to, instead, switched to, changed to, now … rather than. Everyday
+  moved from, moved to, instead, switched to, changed to, now … rather than, and
+  **correction** (utterance only: "actually/wait/sorry/no … wrong/meant/not …", "I got
+  that wrong", "I was wrong", "I meant", "correction") — a change of state with no change
+  verb, added 2026-10-04 after the day-sim's ask 3 showed the corrected home town being
+  dropped. Everyday
   senses are excluded in the regex and pinned by tests: dropped my keys / the kids off /
   by, stopped at the shops, got/am used to. "instead"/"rather than" with a one-off time
   ("this morning", "for lunch") is a substitution, not a change.
-- **Gate:** the utterance must carry a cue AND the stored fact must carry one itself, so
-  an unrelated fact from the same turn cannot retire anything.
+- **Gate:** the utterance must carry a cue AND the stored fact must either carry one
+  itself OR replace an approved row by the same-topic / exclusive-home-slot match
+  (`changes_existing`; a corrected fact — "User's mum lives in Bendigo" — has no cue word).
+  An unrelated fact from the same turn (no cue, no matching row) still cannot retire
+  anything, and a cue-less change acts as a swap in `supersede_for_turn`.
 - **Tombstone:** a fact with an END cue is stored `memory_type=state_change`, tag
   `state_change`. The card never lists it; the recall packet prefixes it `(change)`.
 - **Topic match** (`same_topic`): equal subject key (owner, relation words, possessive

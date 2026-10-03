@@ -91,6 +91,18 @@ CUES: tuple[Cue, ...] = (
     _c("switched to", "swap", r"\bswitched (?:over )?to\b"),
     _c("changed to", "swap", r"\bchanged (?:it |that |this )?to\b"),
     _c("rather than", "swap", r"\bnow\b[^.!?]{0,60}?\brather than\b"),
+    # A CORRECTION is a change of state with no change verb: "Actually, I got that
+    # wrong — my mum lives in Bendigo, not Ballarat." Utterance-only: the new fact
+    # ("User's mum lives in Bendigo") carries no cue word, so it acts through the
+    # same-topic / exclusive-slot match in memory_digest + supersede_for_turn
+    # instead (measured 2026-10-04: the word-overlap dedup dropped the corrected
+    # fact as a duplicate of the one it replaces, in every day-sim run).
+    _c("correction", "swap",
+       r"^\s*(?:actually|wait|sorry|no)\b[^.!?]{0,80}?\b(?:wrong|meant|mistake|"
+       r"not(?!\s+(?:sure|really|yet|bad|much|quite|too|that|so|very|just|only|even)\b))\b"
+       r"|\bi (?:got|had) (?:that|it) wrong\b|\bi was wrong\b|\bmy (?:mistake|bad)\b"
+       r"|\bthat'?s (?:wrong|not right|incorrect)\b|\bi meant\b|\bcorrection\b",
+       fact_level=False),
 )
 # "Tea instead of coffee this morning" is a one-off substitution, not a change of state.
 _ONE_OFF = re.compile(r"\b(?:today|tonight|this (?:morning|afternoon|evening)|yesterday|"
@@ -111,6 +123,30 @@ def fact_cue(text: str) -> Optional[Cue]:
     hits = [c for c in CUES if c.fact_level and c.pattern.search(text or "")]
     hits = [c for c in hits if not (c.name in _ONE_OFF_CUES and _ONE_OFF.search(text or ""))]
     return next((c for c in hits if c.kind == "end"), hits[0] if hits else None)
+
+
+def _utterance_swap(cue: Optional[str]) -> Optional[Cue]:
+    """The acting cue for a change row whose text carries none: the utterance's own
+    cue as a swap (the row replaces what it matched), or None when there was no cue."""
+    if not cue:
+        return None
+    for c in CUES:
+        if c.name == cue:
+            return Cue(c.name, "swap", c.pattern, c.fact_level)
+    return Cue(cue, "swap", re.compile(r"(?!x)x"), False)
+
+
+def changes_existing(fact: str, rows: Iterable[Any]) -> bool:
+    """Does this cue-less fact replace an approved row (same topic, or the exclusive
+    home slot)? Used by the turn digest so the word-overlap dedup cannot drop a
+    corrected fact as a duplicate of the row it retires."""
+    for old in rows:
+        if not _is_target(getattr(old, "metadata", None) or {}):
+            continue
+        text = getattr(old, "text", "") or ""
+        if exclusive_conflict(fact, text) or same_topic(fact, text):
+            return True
+    return False
 
 
 def is_tombstone(text: str) -> bool:
@@ -225,7 +261,11 @@ async def supersede_for_turn(svc, user_id: str, cue: str, written: Iterable[Any]
     out: dict[str, Any] = {"superseded": 0, "new": ""}
     try:
         refs = [r for r in written if r is not None and getattr(r, "id", None)]
-        acting = [(r, fact_cue(r.text or "")) for r in refs]
+        # A written row acts through its OWN cue word, or — when the turn's utterance
+        # carried a cue — through the topic / exclusive-slot match that admitted it
+        # (``changes_existing`` in memory_digest): a corrected fact has no cue word.
+        by_utterance = _utterance_swap(cue)
+        acting = [(r, fact_cue(r.text or "") or by_utterance) for r in refs]
         acting = [(r, c) for r, c in acting if c is not None]
         if not acting:
             return out

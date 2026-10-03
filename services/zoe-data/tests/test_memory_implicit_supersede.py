@@ -555,3 +555,59 @@ def test_dreaming_runs_the_pass_before_the_card(monkeypatch, on):
     res = asyncio.run(memory_digest.run_dreaming_cycle(UID, run_agent_sync_phase=False))
     assert order == ["conflicts", "card"]
     assert ("implicit_conflicts" in res) is on
+
+
+# ── corrections: a change of state with no change verb (day-sim ask 3, 2026-10-04) ──
+MUM_FIX = "Actually, I got that wrong earlier - my mum lives in Bendigo, not Ballarat."
+MUM_OLD = "User's mum Ingrid lives in Ballarat."
+MUM_NEW = "User's mum lives in Bendigo."
+
+
+@pytest.mark.parametrize("text", [
+    MUM_FIX,
+    "Wait, I meant Tuesday, not Thursday.",
+    "Sorry, that's wrong - her name is Kate.",
+    "I was wrong about the time, it's at 3.",
+    "No, I got it wrong, the dentist is Friday.",
+    "Correction: the race is in September.",
+])
+def test_correction_cue_positives(text):
+    assert ms.utterance_cue(text) == "correction"
+
+
+@pytest.mark.parametrize("text", [
+    "Actually, I'd love a coffee.",                 # discourse "actually", no correction
+    "Actually I'm not sure what to cook tonight.",  # "not sure" is not a correction
+    "No, Caitlin is allergic to shellfish.",        # ambiguous negation: the clarifier's job
+    "It's not too bad today.",
+    "Change of plan: I'm doing the 12k instead.",   # stays its own cue
+])
+def test_correction_cue_negatives(text):
+    assert ms.utterance_cue(text) != "correction"
+
+
+def test_changes_existing_matches_the_home_slot_and_same_topic_only():
+    rows = [types.SimpleNamespace(text=MUM_OLD, metadata={"status": "approved", "memory_type": "relationship"}),
+            types.SimpleNamespace(text="User plays the cello.", metadata={"status": "approved", "memory_type": "habit"})]
+    assert ms.changes_existing(MUM_NEW, rows)                       # exclusive home slot, same subject
+    assert not ms.changes_existing("User's sister is visiting in May.", rows)
+    # a superseded / state-change row is never a target
+    gone = [types.SimpleNamespace(text=MUM_OLD, metadata={"status": "superseded", "memory_type": "relationship"})]
+    assert not ms.changes_existing(MUM_NEW, gone)
+
+
+def test_correction_retires_the_old_home_row_only_under_flag(monkeypatch):
+    """Measured 2026-10-04 (day-sim ask 3, both runs): the corrected fact scores 0.83
+    on the word-overlap dedup against the row it replaces and was dropped — the
+    reply then asserted Ballarat. Control: flag off keeps the measured failure."""
+    blob = f"## What I know about you:\n- {MUM_OLD}\n- User plays the cello."
+    facts = [{"type": "relationship", "fact": MUM_NEW}]
+    seeds = [(MUM_OLD, "relationship"), ("User plays the cello.", "habit")]
+    col, (old, cello), res = _turn(monkeypatch, MUM_FIX, facts, seeds, on=False, blob=blob.lower())
+    assert res["skipped_duplicates"] == 1 and col.rows[old][1]["status"] == "approved"
+    col, (old, cello), res = _turn(monkeypatch, MUM_FIX, facts, seeds, on=True, blob=blob.lower())
+    assert res["superseded"] == 1
+    assert col.rows[old][1]["status"] == "superseded"
+    assert col.rows[cello][1]["status"] == "approved"
+    new_id, new_meta = _by_text(col, MUM_NEW)
+    assert new_meta["status"] == "approved"
