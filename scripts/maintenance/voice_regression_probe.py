@@ -182,6 +182,14 @@ def _service_env_get(service_dir: str, *names: str) -> tuple[str | None, str | N
     return None, None
 
 
+def _replay_base(service_dir: str) -> str:
+    """Base handed to the replay for --stt remote — ZOE_REPLAY_BASE_URL, else loopback,
+    never ZOE_BASE_URL (runbook §20). Passed explicitly so the replay and the
+    diagnosis cannot disagree about the target."""
+    _, base = _service_env_get(service_dir, "ZOE_REPLAY_BASE_URL")
+    return (base or "http://127.0.0.1:8000").strip()
+
+
 def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
     """Report the OBSERVED state behind a measure_voice skip — never a guessed cause.
 
@@ -211,22 +219,33 @@ def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
         tok_name, _ = _service_env_get(service_dir, "ZOE_DEVICE_TOKEN", "DEVICE_TOKEN")
         obs.append(f"{tok_name} present" if tok_name
                    else "ZOE_DEVICE_TOKEN/DEVICE_TOKEN MISSING")
-        # Probe the endpoint the harness ACTUALLY targets (ZOE_BASE_URL), not a
-        # hardcoded 127.0.0.1:8000 — a hardcoded probe against a redirected base
-        # is exactly the reports-a-guess failure this file exists to remove.
+        # Probe the endpoint the replay ACTUALLY targets, and NEVER resolve a name:
+        # create_connection's timeout does not bound getaddrinfo (runbook §20).
+        import ipaddress
         from urllib.parse import urlparse
-        _, base = _service_env_get(service_dir, "ZOE_BASE_URL")
-        base = base or "http://127.0.0.1:8000"
-        u = urlparse(base)
-        if u.scheme not in ("http", "https") or not u.hostname:
+        base = _replay_base(service_dir)
+        try:
+            u = urlparse(base)
+            port = u.port or (443 if u.scheme == "https" else 80)
+        except ValueError:
+            u, port = None, None
+        if u is None or u.scheme not in ("http", "https") or not u.hostname:
             # A malformed base is ITSELF the observation. Probing a fallback like
             # 127.0.0.1:80 would report the state of an endpoint the harness
             # cannot target — a guess with a confident tone.
-            obs.append(f"ZOE_BASE_URL INVALID ({base!r}) — cannot probe the endpoint")
+            obs.append(f"replay base INVALID ({base!r}) — cannot probe the endpoint")
         else:
-            port = u.port or (443 if u.scheme == "https" else 80)
-            obs.append(f"zoe-data {u.hostname}:{port} "
-                       f"{'reachable' if _port_open(u.hostname, port) else 'REFUSED'}")
+            try:
+                ipaddress.ip_address(u.hostname)
+            except ValueError:
+                state = "NOT PROBED (hostname; the diagnosis never resolves names)"
+            else:
+                state = "reachable" if _port_open(u.hostname, port) else "REFUSED"
+            obs.append(f"zoe-data {u.hostname}:{port} {state}")
+        # Reported, never resolved: the public URL the replay must NOT use.
+        _, public = _service_env_get(service_dir, "ZOE_BASE_URL")
+        if public:
+            obs.append(f"ZOE_BASE_URL={public} (public URL; not used by the replay)")
     return obs
 
 
@@ -253,6 +272,8 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: st
             "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
             "--stt", stt,
         ]
+        if stt == "remote":
+            cmd += ["--base-url", _replay_base(service_dir)]
         proc = subprocess.run(
             cmd, cwd=str(REPO), capture_output=True, text=True,
             timeout=timeout + 120, env={**os.environ, "ZOE_PERF": "1"},
