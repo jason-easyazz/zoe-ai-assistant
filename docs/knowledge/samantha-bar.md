@@ -578,7 +578,11 @@ proves the CHAIN rather than one mechanism: one synthetic person tells Zoe about
 over three simulated days, the nightly passes are stood in for, and the morning asks a human
 assistant must get right are scored. It reuses this harness's Live client, gates, lock,
 backdate and proven teardown unchanged (bar-family ids, own pending file
-`samantha_day_sim_pending_teardown.json`); its judge is the bar's judge with its own rubrics,
+`samantha_day_sim_pending_teardown.json`), and in default mode also backdates each day's
+selector raise stamps (`last_surfaced_at` / `cooldown_until` of candidates surfaced on that
+day's seeding sessions, `DayLive.backdate_candidates`) so a cue raise on a seeding turn under
+`ZOE_LOOP_LIFECYCLE` cannot land the first open turn inside the live 2 h raise gap (1r read
+`reason=gap` on 2026-10-04 before this); its judge is the bar's judge with its own rubrics,
 pinned with every pre-committed PASS criterion by `CRITERIA_SHA256`.
 
 ```bash
