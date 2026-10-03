@@ -339,6 +339,7 @@
         "readers": [
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
+          "scripts/perf/samantha_day_sim.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
@@ -2987,6 +2988,7 @@
           "scripts/perf/measure_voice.py",
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
+          "scripts/perf/samantha_day_sim.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
@@ -3343,6 +3345,26 @@
           "services/zoe-data/proactive/arrival.py"
         ],
         "typed_env": false
+      },
+      "ZOE_PROACTIVE_RAISE_GAP_S": {
+        "defaults": [
+          "7200"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/selector.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_PROACTIVE_RAISE_PER_DAY": {
+        "defaults": [
+          "2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/selector.py"
+        ],
+        "typed_env": true
       },
       "ZOE_PROACTIVE_SELECTOR": {
         "defaults": [

@@ -30,9 +30,11 @@ BATCH_WRITERS = frozenset({
 })
 #: Writers that pass the WHOLE user utterance as ``source_excerpt``
 #: (memory_extractor.extract_and_ingest / memory_digest.run_turn_digest, chat +
-#: voice, and expert_dispatch's explicit-teach extractor call).
+#: voice, expert_dispatch's explicit-teach extractor call, and the person
+#: extractors — regex + LLM — on the chat ("conversation") and voice lanes).
 QUOTABLE_WRITERS = frozenset({
     "chat_regex", "turn_digest", "voice_regex", "voice_turn_digest", "voice_fact",
+    "conversation", "voice",
 })
 
 EXCERPT_MAX_CHARS = 120

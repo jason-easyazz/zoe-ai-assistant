@@ -32,6 +32,11 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # Needs ZOE_DEVICE_TOKEN (provisioned in ~/.hermes/.env, loaded above). Flip
 # back to inprocess only if the live service itself is what you are testing.
 Environment=ZOE_VOICE_REPLAY_STT=remote
+# Remote STT targets the LOCAL service by number. The .env above sets
+# ZOE_BASE_URL=http://zoe.local (the PUBLIC URL); the replay used to take it,
+# and getaddrinfo on that mDNS name hung every run to the 30min timeout
+# (runbook §20). The code now defaults to loopback; this makes the unit explicit.
+Environment=ZOE_REPLAY_BASE_URL=http://127.0.0.1:8000
 # systemd does not create parent dirs for append: log targets — ensure it exists.
 ExecStartPre=/usr/bin/mkdir -p %h/.zoe-logs
 # Boot race (perf plan 3a): this is a USER unit, so `After=docker.service` (a
