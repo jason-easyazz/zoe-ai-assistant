@@ -166,6 +166,53 @@ def test_s5_flag_off_keeps_the_legacy_skip_and_flag_on_runs_two_open_turns(monke
     assert opened == (["s5-open-1", "s5-open-2"] if expected == "PASS" else [])
 
 
+# ── S10–S12 (2026-10-03): targets and the raise-spacing check ─────────────
+
+def test_s10_and_s11_are_marked_targets_not_regressions():
+    assert sb.EXPECTED == {"S10": "FAIL", "S11": "SKIP"}
+    assert "S9" not in sb.SCENARIO_IDS  # the card hop lives in samantha_day_sim.py
+
+
+@pytest.mark.parametrize("reply, packet, verdict", [
+    # The known miss: the old row is still served as current.
+    ("You gave up the cello.", "- User plays the cello in a community orchestra\n- User gave up the cello",
+     "FAIL"),
+    ("You gave up the cello.", "- User gave up the cello", "PASS"),
+    ("You gave up the cello, so no more orchestra.", "- User gave up playing cello in the orchestra",
+     "PASS"),                                               # the tombstone names the orchestra
+    ("Yes, Tuesdays with the orchestra!", "- User gave up the cello", "FAIL"),  # retired, reply wrong
+    ("Yes.", None, "ERROR"),
+])
+def test_s10_one_word_change(reply, packet, verdict):
+    assert sb.score_s10(reply, packet)[0] == verdict
+
+
+@pytest.mark.parametrize("rows, verdict", [
+    ([{"surfaced": 1, "session": "o1"}, {"surfaced": 0, "session": None}], "PASS"),
+    ([{"surfaced": 1, "session": "o1"}], "SKIP"),             # one candidate: spacing is vacuous
+    ([{"surfaced": 1, "session": "o1"}, {"surfaced": 1, "session": "o2"}], "FAIL"),
+    ([{"surfaced": 0, "session": None}], "SKIP"),
+    ([], "SKIP"),
+])
+def test_s12_raise_spacing(rows, verdict):
+    assert sb.score_s12(rows, "o1", "o2")[0] == verdict
+
+
+def test_s10_s11_s12_in_the_run(monkeypatch):
+    rows = [{"kind": "open_loop", "carries": True, "surfaced": 1, "session": "s5-open-1"},
+            {"kind": "open_loop", "carries": False, "surfaced": 1, "session": "s5-open-2"}]
+    monkeypatch.setattr(_ScriptedLive, "raise_state", lambda self, user: rows)
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 2})
+    assert res["S5"]["verdict"] == "PASS"            # the worry was raised once ...
+    assert res["S12"]["verdict"] == "FAIL"           # ... but the next conversation opened with a raise too
+    assert res["S11"]["verdict"] == "SKIP" and res["S11"]["expected"] == "SKIP"
+    assert res["S10"]["expected"] == "FAIL" and "d2-ask-cello" in live.chats
+    live, res = _drive(monkeypatch, seed_errors=["d2-cello"])
+    assert res["S10"]["verdict"] == "ERROR" and "d2-ask-cello" not in live.chats
+    live, res = _drive(monkeypatch, selector_hook=None)
+    assert res["S12"]["verdict"] == "SKIP"           # selector off: spacing not exercised
+
+
 def test_s6_isolation_and_vacuous_skip():
     a_pkt = "- Sister Marisol flying in from Lisbon"
     assert sb.score_s6("I don't know who is visiting.", "", a_pkt)[0] == "PASS"
@@ -915,7 +962,8 @@ def test_unlanded_rich_fact_errors_s7_and_s8(monkeypatch):
 def test_s7_waits_for_the_duplicate_capture_and_errors_when_it_never_completes(monkeypatch):
     live, res = _drive(monkeypatch)
     assert res["S7"]["verdict"] == "PASS"
-    assert live.waited_capture == [(A, {"completed": live.chats.index("d2-dad"), "in_flight": 0})]
+    # The first capture wait is S7's duplicate (S10's change turn waits after it).
+    assert live.waited_capture[0] == (A, {"completed": live.chats.index("d2-dad"), "in_flight": 0})
     live, res = _drive(monkeypatch, capture_stalls=True)
     assert res["S7"]["verdict"] == "ERROR"
     assert "S7_dup: the turn's memory capture never completed" in res["S7"]["evidence"]["why"]
