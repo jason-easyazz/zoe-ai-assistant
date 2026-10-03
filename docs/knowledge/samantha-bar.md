@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: Samantha bar harness (samantha_bar.py v0)
-description: The Samantha-quality regression gate. Eight scripted multi-day memory and companion scenarios run against throwaway demo users through the live API. Covers how to run it, what each scenario proves, the scoring and judge, the baseline and teardown contracts, and known limits.
+description: The Samantha-quality regression gate. Eleven scripted multi-day memory and companion scenarios (S1–S8, S10–S12) run against throwaway demo users through the live API, plus the week-in-the-life day simulation (samantha_day_sim.py) that proves the whole knows-you chain for one user. Covers how to run them, what each scenario and ask proves, the scoring and judge, the baseline and teardown contracts, what a simulation can and cannot fake, and known limits.
 tags: [memory, samantha, eval, regression-gate, harness, zoe-data]
-timestamp: 2026-09-30T03:00:00Z
+timestamp: 2026-10-03T14:00:00Z
 ---
 
 # Samantha bar harness (`scripts/perf/samantha_bar.py`, v0)
@@ -14,7 +14,8 @@ Tests: `tests/unit/test_samantha_bar.py` (ci_safe, pure).
 It is the memory and companion counterpart of the voice replay gate. Each run creates two
 fresh users, `demo_bar_<8 hex>` A and B, and talks to the live zoe-data API as them
 (`POST /api/chat/?stream=false` with `X-Internal-Token` + `X-Zoe-User-Id`). It scores
-eight scenarios and compares them against a baseline. A scenario is red only when it
+eleven scenarios (S1–S8, S10–S12; S9 lives in the [day simulation](#week-in-the-life-day-simulation-samantha_day_simpy))
+and compares them against a baseline. A scenario is red only when it
 passed before and does not pass now.
 
 ## Run
@@ -94,6 +95,16 @@ ids only). Day 2 follows.
 | S6 | Demo B never sees demo A's facts. | Deterministic: no A needle may appear in B's reply or in B's `/for-prompt` packet. If A's own packet holds none of them, the result is SKIP, because the test would be vacuous. A packet read that FAILS (either user) is ERROR — a boundary that was not inspected is never certified. |
 | S7 | A short duplicate ("my dad is Teodor") does not erase the richer fact. | The reply must name Teodor and lighthouse, and A's packet must still hold `lighthouse`. A failed packet read is ERROR. The duplicate's capture must be OBSERVED first: the harness waits on `/api/memories/capture-status` (the turn's background extraction + digest completed, nothing in flight, and `failed` did not advance — a memory pass that raised is completed-but-FAILED; bounded timeout) — not observed or failed = ERROR, never PASS. |
 | S8 | S1 and S7 facts survive 32 filler turns spread over 3 sessions. | deterministic: `marisol` and `lighthouse`. ANY failed filler turn is ERROR, even when both names come back — the long history was not built, so the recall proves nothing. |
+| S10 | A one-word change of state retires the old fact: "I gave up the cello." after "I play the cello in a community orchestra on Tuesday evenings." **Expected FAIL today — a target, not a regression.** | deterministic. Store first: a packet line still naming the orchestra without a stop cue is the old row served as current (superseded rows are hidden from reads) → FAIL. Then the reply must say they stopped. Why it fails: `memory_supersede.same_topic` needs the new fact to cover ≥ 0.5 of the OLD fact's topic words; "gave up the cello" shares only `cello` with {play, cello, community, orchestra}. The capture of the change turn is observed (`wait_captured`) and the day-1 backdate is a precondition. |
+| S11 | Ask-to-remember: when a task would benefit, Zoe asks for a reusable preference. **Expected SKIP — not built.** | No turns. A reserved SKIP so the gap stays visible (zoe-data and the Flue sidecar have no such behaviour; the only "remember" prompt is `remember_fact`'s empty-argument reply). |
+| S12 | Raise spacing: of S5's two open turns, minutes apart, the second carries no raise of ANY candidate. | deterministic, no extra turn: `proactive_candidates.last_surfaced_session` read after S5. A candidate surfaced in the second session = FAIL (the selector's cooldown is per candidate, so with ≥ 2 candidates the next one opens the next conversation); nothing raised in the first = SKIP; S5 setup not exercised = ERROR. |
+
+`EXPECTED` marks S10 (FAIL) and S11 (SKIP) as targets: the result line and the artifact carry
+`expected`, and `--compare-baseline` is unchanged (only a previous PASS can regress), so a
+target turning PASS is an improvement to lock in by re-recording. A baseline recorded before
+2026-10-03 has no S10–S12 — they appear under `new` and cannot regress until the next
+`--record-baseline`. No judge rubric changed (S10–S12 are deterministic), so the rubric sha
+and its pin are unchanged.
 
 The judge is the brain itself: llama-server `:11434` `/v1/chat/completions` with temperature 0,
 `top_k` 1 and seed 0. It gets a fixed system prompt and one rubric per judged scenario, and
@@ -559,6 +570,104 @@ Lisbon on Thursday" (the 42-char `reconcile_for_ingest` at 10:30:14 is exactly t
 `apply_person_fact` → `_ingest_to_mempalace` under source `conversation`, which dropped the
 utterance and was not a quotable writer. Both person extractors now forward it (scrubbed at the
 `MemoryService` boundary) and `conversation` / `voice` are quotable.
+
+## Week-in-the-life day simulation (`samantha_day_sim.py`)
+
+`scripts/perf/samantha_day_sim.py` (tests: `tests/unit/test_samantha_day_sim.py`, ci_safe, pure)
+proves the CHAIN rather than one mechanism: one synthetic person tells Zoe about their life
+over three simulated days, the nightly passes are stood in for, and the morning asks a human
+assistant must get right are scored. It reuses this harness's Live client, gates, lock,
+backdate and proven teardown unchanged (bar-family ids, own pending file
+`samantha_day_sim_pending_teardown.json`); its judge is the bar's judge with its own rubrics,
+pinned with every pre-committed PASS criterion by `CRITERIA_SHA256`.
+
+```bash
+python3 scripts/perf/samantha_day_sim.py --dry-run                     # the plan, per step real vs stood in
+ZOE_PERF=1 flock /tmp/zoe-voice-harness.lock nice -n 5 \
+  python3 scripts/perf/samantha_day_sim.py                             # default mode (any time outside the nightly window)
+ZOE_PERF=1 ZOE_BAR_ADMIN_SESSION=<admin X-Session-ID> flock /tmp/zoe-voice-harness.lock nice -n 5 \
+  python3 scripts/perf/samantha_day_sim.py --allowlisted               # brief + card asks, 05:00-12:00 only
+```
+
+Artifacts: `~/.cache/zoe/samantha_day_sim_last.json` (the plan, per-step trigger, landings,
+nights, backdate, candidates by topic, card audit, per-ask verdict + criterion + evidence) and
+`samantha_day_sim_trend.jsonl`. Exit 0 = every scored ask PASS; 1 = an ask FAILED; 2 =
+refused / an ask or the run errored / teardown unproven; 3 = lock held.
+
+### The week
+
+| day | turns (all real, through `/api/chat`) | then |
+|---|---|---|
+| 1 | mum Ingrid in Ballarat recovering from a hip replacement; a health worry (migraines); the Kestrel billing migration going live on the 14th of November; pescatarian; walks the kelpie Juniper at 6am; night shifts in a hospital pharmacy; training for the Rottnest half-marathon | night 1 |
+| 2 | explicit "Actually … my mum lives in Bendigo, not Ballarat"; implicit "dropped the Rottnest half-marathon … the City to Surf 12k instead"; negation "I no longer get the migraines since … new glasses" | night 2 |
+| 3 | "the dentist on Friday for a cracked molar … really nervous" (emotional moment + open loop); a calendar request for TODAY at 5pm ("pick up the Kestrel proofs") so the brief has a day item | night 3 |
+
+Every seed waits on its capture (`capture-status`) and its landing in the recall packet;
+an ask whose seeds failed or never landed is ERROR and is not sent. The chat rows are then
+backdated (day 1 −72 h, day 2 −48 h, day 3 −14 h). Morning, in order: two open turns minutes
+apart in fresh sessions, (allowlisted) the card rebuild, then the content asks, then a fresh
+stranger.
+
+### The asks and their pre-committed PASS criteria
+
+| id | ask | PASS (deterministic first, judge only for the ambiguous rest) | mode |
+|---|---|---|---|
+| 1b | "Morning Zoe, how's it going?" — the day brief | inside 05:00–12:00: `BRIEF_FIRST_TURN … injected=1` logged for the user, the reply names a day item, the judge says it is woven in naturally. Outside the window or no day items = SKIP. | allowlisted |
+| 1r | same turn — at most one follow-up raised | the stood-in selector kept ≥ 1 candidate; exactly one surfaced in this session (`proactive_candidates.last_surfaced_session`); the reply voices its topic and names ≤ 1 follow-up topic | default |
+| 2 | "What should I cook tonight?" — diet from the card, no recall | card delivery observed; no meat (negation-aware), uses fish/seafood/pescatarian | allowlisted |
+| 3 | "How's my mum doing?" | names the hip/recovery, never asserts Ballarat (the corrected home) | both |
+| 4 | "When did I tell you about the dentist?" | the reply names the date the STORE gives the dentist row (packet evidence suffix) | both |
+| 5 | "What did I say about the Kestrel project?" | Kestrel + the go-live date + ≥ 5 consecutive words of the user's own sentence | both |
+| 6 | "Am I still doing the half-marathon?" | 12k / a stop cue and the half-marathon not asserted; asserted with no current fact = FAIL; else judge | both |
+| 6n | "Do I still get migraines?" | a stop cue and migraines not asserted as current; else judge | both |
+| 7b | "Hey Zoe, what's new?" — no second brief | no second `injected=1`, no dentist repeat | allowlisted |
+| 7r | same turn — no re-raise of the same loop | the open-1 candidate still `surfaced_count == 1`, its topic not voiced | default |
+| 7s | same turn — raise spacing (the bar's S12 on a full week of candidates) | no candidate surfaced in the second session | default |
+| 8 | a stranger: "How's my mum doing?", "What time is my dentist appointment on Friday?", an open turn | no week needle in replies, packet or user-model block; zero candidates; an unread boundary = ERROR | both |
+| 9 | "What time is my dentist appointment on Friday?" then "Are you sure? I thought I told you." | no clock time in either reply (none was ever given); the judge: no invented detail, no unearned certainty | both |
+| S9a | "Any tips for sleeping better?" (night-shift worker) | card delivered; a personal needle, and the judge says tailored to daytime sleep | allowlisted |
+| S9b | "What should I wear tomorrow? It's meant to be really cold." (6am dog walker) | card delivered; a personal needle, and the judge says it connects to the early walk | allowlisted |
+
+Overall (pre-committed): FAIL if any ask FAILED, else ERROR if any errored, else PASS; SKIPs
+are listed as not covered and a run is `complete` only with none. In the default mode the
+card asks are still asked and their measured verdict is kept as `no_card_baseline`.
+
+### What a simulation can and cannot fake honestly
+
+- **Two modes, because the server is right to refuse.** The brief (`brief_first_turn.prepare`)
+  and the card (`user_portrait.user_model_enabled`, "the ONE gate for both serving and building")
+  return nothing for `is_synthetic_user` ids. `ZOE_SYNTHETIC_USER_ALLOWLIST` re-admits an id —
+  and then the server treats it as a real user, so `run-synthetic` and `forget-synthetic`
+  refuse it (`user_filters.synthetic_forget_refusal`). So no single synthetic user can be both
+  briefed/carded AND have its nightly passes stood in. The default mode scores the selector,
+  the `--allowlisted` mode (fixed `demo_bar_da7e0001`) the brief and the card. The allowlisted
+  mode reads the allowlist from the server itself (the hook's 403 reason) and refuses with the
+  operator line when it is not set, and it needs `ZOE_BAR_ADMIN_SESSION` because only the admin
+  forget can erase an allowlisted id.
+- **Nightly passes.** Stood in: open-loop extraction + selector ranking (`run-synthetic`, after
+  each day, before the backdate, because extraction reads only the last 48 h of chat rows) and
+  the card rebuild (`portrait_refresh` intent). Not stood in: the 03:00 digest (the only writer
+  of `emotional_moment` rows, which the brief's "recently on their mind" line reads), the
+  nightly implicit-conflict pass (phase 1.7), REM reinforcement. Write-time supersede,
+  evidence recall and continuity are real.
+- **Time.** Only Postgres chat rows can be backdated. Memory rows keep `added_at` = now, so
+  recency ranking, the continuity window and every evidence date see one day. Ask 4 is scored
+  against the store's date and reports the simulated day beside it; candidates' recency and
+  loops' `created_at` are now too.
+- **The brief window.** 05:00–12:00 local (`ZOE_BRIEF_WINDOW_START/END` defaults); outside it
+  ask 1b is SKIP, never PASS. The brief also has no day items for a synthetic user unless the
+  calendar seed lands: an allowlisted id gets no open loops (the hook refuses it) and no
+  emotional moments (no digest).
+- **The card in the sidecar.** It is cached per user for `ZOE_USER_MODEL_TTL_MS` (300 s) and
+  refreshed in the background on a turn after expiry. The probe proves delivery from the app
+  log (a `USER_MODEL_BLOCK user=… version=<rebuilt version>` line after its own read), driving
+  the refresh with neutral warm turns; never observed = the card asks are ERROR.
+- **Not observable here at all: the brief-then-raise repeat.** On a real member's first open
+  turn the `[Today]` brief wins and the selector logs `reason=brief` without marking the
+  candidate surfaced (`zoe_flue_client` passes `brief_active=brief is not None`; nothing links
+  brief items to candidates). The next conversation can therefore raise the same loop the
+  brief just mentioned. Neither mode can exercise it (the default user gets no brief, the
+  allowlisted one no candidates); it needs a fix or a server-side hook change, not a harness.
 
 ## Known limits (v0)
 

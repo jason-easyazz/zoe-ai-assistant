@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """samantha_bar.py v0 — the Samantha-quality regression gate (memory + companion).
 
-Run like the voice replay gate: eight scripted multi-day scenarios against
+Run like the voice replay gate: twelve scripted multi-day scenarios against
 throwaway ``demo_bar_<8 hex>`` users through the LIVE zoe-data API
 (``/api/chat`` with ``X-Internal-Token`` + ``X-Zoe-User-Id``), scored
 deterministically where possible and by the brain itself (fixed rubric,
@@ -14,6 +14,11 @@ Scenarios (docs/knowledge/samantha-bar.md has what each one proves):
   S2 changed fact — the newer one wins    S6 user isolation (demo B vs demo A)
   S3 decline when nothing was said        S7 keep the richer fact over a short dup
   S4 the emotional thread, gently         S8 recall after 30+ turns of filler
+  S10 one-word change ("gave up the cello") — expected FAIL today: a TARGET, not a regression
+  S11 ask-to-remember — expected SKIP: the behaviour is not built
+  S12 raise spacing — two open conversations minutes apart must not both open with a raise
+  (S9, the personalisation hop, needs the user-model card, which a fresh synthetic bar user
+  can never be served: it lives in scripts/perf/samantha_day_sim.py.)
 
 SAFETY (the demo-users-only guardrail, docs/architecture/zoe-memory-samantha-buildplan.md
 + services/zoe-data/tests/samantha_live/AGENTS.md):
@@ -115,7 +120,7 @@ AUTH_OWNED_TABLES = frozenset({
     "guest_codes", "oauth_states", "oauth_device_codes", "service_accounts", "api_keys",
     "sessions", "oidc_clients", "oidc_signing_keys",
 })
-SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8")
+SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S10", "S11", "S12")
 VERDICTS = ("PASS", "FAIL", "SKIP", "ERROR")
 
 
@@ -146,6 +151,16 @@ ASK_LONG_DAD = "What did my dad do for work before he retired?"
 ASK_OPEN_1 = "Hi Zoe, how are things?"
 ASK_OPEN_2 = "Hey Zoe, what's new?"
 S5_NEEDLES = ("interview", "aquarium")
+# S10: a one-word change of state. "gave up" is a supersede cue, but the tombstone
+# ("User gave up the cello") shares one topic word with the old row, so
+# memory_supersede.same_topic's old-coverage rule (>= 0.5) does not retire it.
+SAY_CELLO = "I play the cello in a community orchestra on Tuesday evenings."
+SAY_CELLO_STOP = "I gave up the cello."
+ASK_CELLO = "Do I still play the cello?"
+S10_STOP_CUES = ("gave up", "given up", "stopped", "quit", "no longer", "not anymore",
+                 "don't play", "do not play", "not playing", "no more")
+S11_WHY = ("not built: zoe-data has no ask-to-remember behaviour (nothing asks the user for a "
+           "reusable preference when a task would benefit); reserved so the gap stays visible")
 
 # Needles belonging to user A. None may ever reach user B (S6).
 A_NEEDLES = ("marisol", "lisbon", "dunedin", "hobart", "aquarium", "teodor", "lighthouse")
@@ -215,7 +230,20 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
      "proves": f"S1 and S7 facts survive {len(FILLER)} turns of filler",
      "turns": [("A", f"filler-{i % FILLER_SESSIONS}", t) for i, t in enumerate(FILLER)],
      "asks": [("A", ASK_LONG_SISTER), ("A", ASK_LONG_DAD)]},
+    {"id": "S10", "title": "one-word change of state", "judged": False, "expected": "FAIL",
+     "proves": "'gave up the cello' retires 'plays the cello in a community orchestra' (store) and "
+               "the reply says they stopped — the known supersede miss, a target not a regression",
+     "turns": [("A", "d1-cello", SAY_CELLO), ("A", "d2-cello", SAY_CELLO_STOP)],
+     "asks": [("A", ASK_CELLO)]},
+    {"id": "S11", "title": "ask-to-remember (not built)", "judged": False, "expected": "SKIP",
+     "proves": "Zoe asks for a reusable preference when a task would benefit — " + S11_WHY,
+     "turns": [], "asks": []},
+    {"id": "S12", "title": "raise spacing", "judged": False,
+     "proves": "of S5's two open turns minutes apart, the second carries no raise of ANY candidate "
+               "(per-candidate cooldown alone lets the next candidate open the next conversation)",
+     "turns": [], "asks": []},
 )
+EXPECTED = {s["id"]: s["expected"] for s in SCENARIOS if s.get("expected")}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -503,6 +531,39 @@ def score_s7(reply: str, packet: str | None) -> tuple[str, dict]:
     return "FAIL", {**ev, "why": "; ".join(why)}
 
 
+def score_s10(reply: str, packet: str | None) -> tuple[str, dict]:
+    """Store first: a packet line still naming the orchestra without a stop cue is the
+    old fact served as current (superseded rows are hidden from reads). Then the reply
+    must say they stopped."""
+    if packet is None:
+        return "ERROR", {"method": "deterministic", "why": "recall packet read failed"}
+    held = [ln for ln in packet.splitlines()
+            if contains_any(ln, ("orchestra",)) and not contains_any(ln, S10_STOP_CUES)]
+    ev = {"method": "deterministic", "store_retired": not held,
+          "reply_says_stopped": contains_any(reply, S10_STOP_CUES)}
+    if held:
+        return "FAIL", {**ev, "why": "the store still serves 'plays the cello in a community "
+                                     "orchestra' as current (one-word change not superseded)"}
+    if not ev["reply_says_stopped"]:
+        return "FAIL", {**ev, "why": "the old fact is retired but the reply does not say they stopped"}
+    return "PASS", ev
+
+
+def score_s12(rows: list[dict], s1: str, s2: str) -> tuple[str, dict]:
+    """rows: proactive_candidates ({surfaced, session}) after S5's two open turns.
+    PASS iff no candidate was surfaced in the second session; SKIP when nothing was
+    raised in the first (spacing not exercised)."""
+    sessions = {r.get("session") for r in rows if int(r.get("surfaced") or 0) > 0}
+    ev = {"method": "deterministic", "candidates": len(rows),
+          "raised_open_1": s1 in sessions, "raised_open_2": s2 in sessions}
+    if s2 in sessions:
+        return "FAIL", {**ev, "why": "the second open conversation, minutes later, also opened with "
+                                     "a raise (cooldown is per candidate; no per-user spacing)"}
+    if s1 not in sessions:
+        return "SKIP", {**ev, "why": "nothing was raised on the first open turn — spacing not exercised"}
+    return "PASS", ev
+
+
 def setup_problems(seeds: dict[str, dict | None], landings: dict[str, dict | None]) -> list[str]:
     """Why a scenario's PRECONDITIONS did not happen: a seed turn that was never
     sent or errored, or a fact that never landed in the recall packet. Any
@@ -706,11 +767,12 @@ def plan_text(samples: int) -> str:
              f"  identities: demo A + demo B, each ^demo_bar_[0-9a-f]{{8}}$ (fresh per run)",
              f"  judged scenarios ask {samples}x, majority vote; judge rubric sha {JUDGE_PROMPT_SHA256[:12]}",
              "  order: day 1 (S1 seed+ask, S2/S4/S7 seeds) -> backdate day-1 sessions 26h ->",
-             "         day 2 (S2 move+ask, S7 short dup+ask, S4 ask, S3 ask) -> S5 selector hook + 2 open"
-         " turns -> S6 -> S8"]
+             "         day 2 (S2 move+ask, S7 short dup+ask, S10 'gave up'+ask, S4 ask, S3 ask) -> S5 selector"
+         " hook + 2 open turns (S12 scores their spacing) -> S6 -> S8; S11 is a reserved SKIP"]
     for s in SCENARIOS:
         tag = "judged" if s["judged"] else "deterministic"
-        lines.append(f"  {s['id']} {s['title']} [{tag}]: {len(s['turns'])} seed turn(s), "
+        exp = f", expected {s['expected']}" if s.get("expected") else ""
+        lines.append(f"  {s['id']} {s['title']} [{tag}{exp}]: {len(s['turns'])} seed turn(s), "
                      f"{len(s['asks'])} question(s) — {s['proves']}")
     lines += ["  teardown: forget-synthetic (or admin forget) + residual == 0 + /for-prompt == 0, Postgres rows by",
               "            exact demo id / session id == 0 — runs in finally, asserted, exit 2 if unproven",
@@ -975,10 +1037,11 @@ class Live:
         assert_demo_user(user)
 
         async def _f(conn):
-            rows = await conn.fetch("SELECT kind, text, surfaced_count FROM proactive_candidates "
-                                    "WHERE user_id = $1", user)
+            rows = await conn.fetch("SELECT kind, text, surfaced_count, last_surfaced_session "
+                                    "FROM proactive_candidates WHERE user_id = $1", user)
             return [{"kind": r["kind"], "carries": contains_any(r["text"] or "", S5_NEEDLES),
-                     "surfaced": r["surfaced_count"]} for r in rows]
+                     "surfaced": r["surfaced_count"], "session": r["last_surfaced_session"]}
+                    for r in rows]
         return self.db(_f)
 
     def proactive_hooks(self, user: str) -> list[dict]:
@@ -1231,7 +1294,9 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
 
     def put(sid, verdict, **ev):
         res[sid] = {"id": sid, "verdict": verdict, "evidence": ev}
-        log(f"  {sid}: {verdict}")
+        if sid in EXPECTED:  # a target: its verdict is tracked, it is not a regression
+            res[sid]["expected"] = EXPECTED[sid]
+        log(f"  {sid}: {verdict}" + (f" (expected {EXPECTED[sid]})" if sid in EXPECTED else ""))
 
     def setup_ok(sid, seed_tags=(), land_keys=()):
         """False (and the scenario is ERROR) unless every seed turn succeeded and
@@ -1261,6 +1326,8 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     land["S4"] = live.wait_landed(a, "feeling anxious interview", ("interview",))
     say(a, "d1-dad", SAY_DAD_RICH)
     land["S7_rich"] = live.wait_landed(a, ASK_DAD, ("lighthouse",))
+    say(a, "d1-cello", SAY_CELLO)
+    land["S10_old"] = live.wait_landed(a, ASK_CELLO, ("orchestra",))
     if backdate:
         day1 = [s for s in live.sessions.get(a, []) if s.startswith("bar-d1-")]
         bd = live.backdate(day1, 26 * 3600) if day1 else {"ok": False, "sessions": 0,
@@ -1299,6 +1366,20 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             v, ev = score_s7(t["reply"], pkt)
             put("S7", v, landed=land["S7_rich"], ask={**live.evidence(t), **ev})
 
+    # S10: the one-word change. Its capture is background too: wait on the counter.
+    cap_before = live.capture_status(a)
+    say(a, "d2-cello", SAY_CELLO_STOP)
+    land["S10_stop"] = live.wait_captured(a, cap_before)
+    if setup_ok("S10", ("d1-cello", "d2-cello"), ("S10_old", "S10_stop", "backdate")):
+        t = live.chat(a, "d2-ask-cello", ASK_CELLO)
+        pkt = live.packet(a, ASK_CELLO)
+        if t["error"]:
+            put("S10", "ERROR", ask=live.evidence(t))
+        else:
+            v, ev = score_s10(t["reply"], pkt)
+            put("S10", v, ask={**live.evidence(t), **ev})
+    put("S11", "SKIP", why=S11_WHY)
+
     if setup_ok("S4", ("d1-worry",), ("S4", "backdate")):
         v, ev = _ask_judged(live, a, "d2-edge", ASK_WORRY, samples, score_s4, "S4")
         put("S4", v, landed=land["S4"], **ev)
@@ -1308,7 +1389,9 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
 
     # S5: the selector hook, then two open turns (flag off / no route: the
     # legacy proactive_pending read, SKIP when no hook fired) --------------------
+    # S12 rides on S5's two open turns: no extra brain turn.
     if setup_ok("S5", ("d1-worry",), ("S4", "backdate")):  # no open loop seeded = nothing to carry
+        v12, ev12 = "SKIP", {"why": "ZOE_PROACTIVE_SELECTOR off or the hook unavailable"}
         try:
             hook = live.run_selector(a)
             if not (hook or {}).get("enabled"):
@@ -1320,12 +1403,19 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
                 asks = [live.evidence(t1), live.evidence(t2)]
                 if t1["error"] or t2["error"]:
                     v, ev = "ERROR", {"why": "an open turn failed", "asks": asks}
+                    v12, ev12 = "ERROR", {"why": "an S5 open turn failed"}
                 else:
-                    v, ev = score_s5_raise(hook, t1["reply"], t2["reply"], live.raise_state(a))
+                    rows = live.raise_state(a)
+                    v, ev = score_s5_raise(hook, t1["reply"], t2["reply"], rows)
                     ev["asks"] = asks
+                    v12, ev12 = score_s12(rows, t1["session"], t2["session"])
         except Exception as exc:  # noqa: BLE001
             v, ev = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
+            v12, ev12 = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
         put("S5", v, **ev)
+        put("S12", v12, **ev12)
+    else:
+        put("S12", "ERROR", why="S5's setup was not exercised, so its open turns never ran")
 
     # S6: isolation ----------------------------------------------------------
     t = live.chat(b, "b-ask", ASK_B)
@@ -1613,7 +1703,9 @@ def main(argv: list[str] | None = None) -> int:
         log("baseline NOT recorded: the run errored or its teardown is unproven")
 
     for r in results:
-        log(f"  {r['id']:<3} {r['verdict']:<5} {next(s['title'] for s in SCENARIOS if s['id'] == r['id'])}")
+        exp = f"  (expected {r['expected']}: a target)" if r.get("expected") else ""
+        log(f"  {r['id']:<3} {r['verdict']:<5} "
+            f"{next(s['title'] for s in SCENARIOS if s['id'] == r['id'])}{exp}")
     if cmp["regressions"]:
         log(f"REGRESSIONS vs baseline: {', '.join(cmp['regressions'])}")
     log(f"status={status}  results={args.results}")
