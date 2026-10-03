@@ -435,8 +435,9 @@ regression, ever (replay harness is the enforcement).
 - [x] **W3.1** ccd-cli fleet cleanup — **DONE** (measured 2026-07-19: **2 ccd-cli procs / 55 MB swap** vs the profile's 19 / 3.59 GB — one of the two was the measuring session itself. The fleet drained via session turnover, and the STRUCTURAL causes are fixed so it cannot rebuild the same way: per-session Serena spawn replaced by one shared `serena-mcp.service` (#1400, the fleet's ~1 GB-per-session multiplier), voice stack made unswappable (#1409, `MemorySwapMax=0` — total swap 6.6→3.4 GB), stale-Serena reaper live. Residual honesty: nothing caps ccd-cli session *count* itself; if a pileup recurs it now degrades agents, not the voice path)
 - [x] **W3.2** audit-row embedding stop — **DONE** (#1084: `_AUDIT_NULL_EMBEDDING`, executed from the profile's candidate list)
 - [ ] **W3.3** reap generalization (HA / music-assistant) — NOT STARTED
-- [ ] **W3.4** zram rebalance (measure-first) — NOT STARTED
+- [x] **W3.4** zram rebalance (measure-first) — **DONE via B0.1** (2026-09-27, operator: 8 × 978 MB → 8 × 244 MiB, `/ 8 /` in `nvzramconfig.sh`; measured 2026-10-03: zram costs 503 MiB of RAM vs ≈3.9 GB on 07-06, ≈3.4 GB returned). Only lever left: zram off (~0.5 GB, operator/root) — see [the 2026-10-03 profile](../knowledge/memory-pressure-profile-2026-10-03.md)
 - [ ] **W3.5** harness fence-out (with tech-debt Wave 4) — NOT STARTED
+- [ ] **W3 DoD profile** — MEASURED 2026-10-03, **NOT MET in substance**: swap 2.1–2.7 GB (< 6 GB ✅) but MemAvailable 0.42–0.56 GB (07-06: 2.1 GB). Ranked reclaim list + the operator decisions (gate metric, brain `--cache-ram`, MA reap, HA reap = won't-do, zram off, Kokoro ONNX) in [`memory-pressure-profile-2026-10-03.md`](../knowledge/memory-pressure-profile-2026-10-03.md). W4.1 stays blocked.
 - [ ] **W4.1** SER bake-off (Wav2Small / emotion2vec) — NOT STARTED
 - [ ] **W4.2–4** scoring hook + fusion + lab-proof — NOT STARTED (gated on W3)
 - [~] **W5** speaker-ID enrollment + shadow mode + enable — **SCAFFOLDING MERGED, DARK**

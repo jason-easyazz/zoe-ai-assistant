@@ -56,6 +56,7 @@ from service_dir import (  # noqa: E402 — sibling-import convention, scripts/ 
     resolve_service_dir,
     SERVICE_DIR_HELP,
 )
+from service_python import ENV_VAR as PYTHON_ENV, resolve_service_python  # noqa: E402
 
 
 def _median(values: list[float]) -> dict:
@@ -91,6 +92,12 @@ def main() -> int:
     ap.add_argument("--stt", choices=["inprocess", "remote"], default="inprocess",
                     help="passed through to replay_samples.py; 'remote' avoids the "
                          "harness's second Moonshine load (needs ZOE_DEVICE_TOKEN)")
+    ap.add_argument("--python", default=None,
+                    help=f"interpreter for the replay (default: ${PYTHON_ENV}, else the "
+                         "zoe-data unit's — see scripts/lib/service_python.py)")
+    ap.add_argument("--base-url", default=None,
+                    help="passed through to replay_samples.py for --stt remote (its "
+                         "default: ZOE_REPLAY_BASE_URL, else http://127.0.0.1:8000)")
     args = ap.parse_args()
 
     if os.environ.get("ZOE_PERF") != "1":
@@ -119,11 +126,17 @@ def main() -> int:
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         replay_json = tf.name
 
+    # The replay imports zoe-data in-process, so ITS interpreter decides which
+    # chromadb opens the palace — it must be the service's, never "whatever ran us".
+    python, source = resolve_service_python(args.python)
+    print(f"replay interpreter: {python}  ({source})")
     cmd = [
-        sys.executable, "tests/replay_samples.py",
+        python, "tests/replay_samples.py",
         "--brain", "--user", args.user, "--json", replay_json,
         "--stt", args.stt,
     ]
+    if args.base_url:
+        cmd += ["--base-url", args.base_url]
     if args.since:
         cmd += ["--since", args.since]
     else:
@@ -200,8 +213,19 @@ def _run_and_report(cmd: list[str], service_dir: str, replay_json: str, args) ->
     if bad:
         print(f"  ⚠ {bad} turns failed function (CANT_DO/ERROR) — a speed change that breaks Zoe.")
 
+    # Recall evidence from the replay itself. Anything but "ok" means the brain
+    # turns were scored WITHOUT the memory the live service injects.
+    recall = data.get("memory_recall") or "unreported"
+    print(f"  memory     : recall={recall}  interpreter={data.get('interpreter')}")
+    if recall != "ok":
+        print(f"  ⚠ memory recall {recall.upper()}: {data.get('memory_recall_detail') or ''} — "
+              "brain turns were scored WITHOUT recall; this run is not evidence.")
     report = {
         "kind": "voice_e2e",
+        "memory_recall": recall,
+        "memory_recall_detail": data.get("memory_recall_detail"),
+        "memory_load_failures": data.get("memory_load_failures"),
+        "interpreter": data.get("interpreter"),
         "service_dir": service_dir,
         "n_samples": len(e2e_rows),
         "aggregate_ms": agg,
@@ -214,7 +238,7 @@ def _run_and_report(cmd: list[str], service_dir: str, replay_json: str, args) ->
         print(f"\nwrote {args.json}")
 
     # Non-zero exit if any turn broke function — lets CI/operators gate on it.
-    return 1 if bad else 0
+    return 1 if bad or recall != "ok" else 0
 
 
 if __name__ == "__main__":

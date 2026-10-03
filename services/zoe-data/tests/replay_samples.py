@@ -44,10 +44,15 @@ Usage:
 import argparse
 import asyncio
 import glob
+import ipaddress
 import json
+import logging
 import os
+import platform
 import re
+import socket
 import sys
+import threading
 import time
 import uuid
 
@@ -148,6 +153,83 @@ def _select(sample_dir: str, args) -> list[str]:
     return files
 
 
+# The service's palace guard (memory_service._check_palace_format) raises with
+# this phrase; every recall reader logs it and returns nothing (never raises).
+_MISMATCH_PHRASE = "but the installed client is"
+# Runtime recall read failures, scoped to the READERS that emit them (logger name +
+# phrase). A bare substring over-matched: `pending_suggestions` logs
+# "pending_suggestions.load_for_prompt failed" on the legacy lane, which is an
+# offers query, not recall — a healthy Chroma run must not become status=error
+# because of it (Codex P2, #1811).
+_LOAD_FAILURE_RULES = (
+    ("memory_service", "load_for_prompt failed"),      # memory_service.load_for_prompt
+    ("zoe_flue_client", "packet fetch failed"),        # seam recall / continuity inject
+)
+
+
+def _is_recall_load_failure(logger_name: str, msg: str) -> bool:
+    return any((logger_name == mod or logger_name.startswith(mod + "."))
+               and phrase in msg for mod, phrase in _LOAD_FAILURE_RULES)
+
+
+class _MemoryRecallWatch(logging.StreamHandler):
+    """Root WARNING handler: counts recall failures the readers swallow, and
+    still prints every record (it replaces logging's last-resort stderr output)."""
+
+    def __init__(self) -> None:
+        super().__init__(sys.stderr)
+        self.setLevel(logging.WARNING)
+        self.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        self.mismatch = 0
+        self.load_failures = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+        self.mismatch += _MISMATCH_PHRASE in msg
+        self.load_failures += _is_recall_load_failure(record.name, msg)
+        super().emit(record)
+
+
+def _memory_recall_preflight() -> tuple[str, str]:
+    """Can THIS interpreter's chromadb open the palace the live service reads?
+
+    Runs the service's own guard (read-only SQLite, opens nothing). Returns
+    (ok|mismatch|error, detail). Lazy imports keep this module slim for tests."""
+    try:
+        import chromadb
+        import memory_service as ms
+
+        data_dir = os.path.realpath(os.path.expanduser(ms.get_memory_service()._data_dir))
+        ms._check_palace_format(data_dir, chromadb.__version__)
+        return "ok", f"palace {data_dir} opens with chromadb {chromadb.__version__}"
+    except Exception as exc:  # noqa: BLE001 — every failure is a recorded state
+        state = "mismatch" if _MISMATCH_PHRASE in str(exc) else "error"
+        return state, f"{type(exc).__name__}: {exc}"
+
+
+def _memory_recall_state(brain: bool, preflight: str, mismatch_logs: int,
+                         load_failures: int = 0) -> str:
+    """disabled (no brain turns) | mismatch | load-failure | the preflight's own verdict.
+
+    Runtime read failures the readers swallow (`load_for_prompt failed`,
+    `packet fetch failed` — a corrupt collection, a packet fetch timeout) mean
+    some brain turns were scored WITHOUT recall even though the palace opened
+    in preflight. That is a verdict, never a diagnostic (Codex P1, #1811)."""
+    if not brain:
+        return "disabled"
+    if mismatch_logs:
+        return "mismatch"
+    if load_failures:
+        return "load-failure"
+    return preflight
+
+
+def _interpreter() -> dict:
+    mod = sys.modules.get("chromadb")
+    return {"python": sys.executable, "version": platform.python_version(),
+            "chromadb": getattr(mod, "__version__", None)}
+
+
 def _run_session_id() -> str:
     """Fresh brain/flue session id per harness RUN (all samples in one run share
     it, preserving the within-run conversational continuity the old fixed id
@@ -187,6 +269,41 @@ def _classify(transcript: str, reply: str, outcome: str) -> str:
     return "OK"
 
 
+def _replay_base_url(cli_base: str | None) -> str:
+    """--base-url, else ZOE_REPLAY_BASE_URL, else numeric loopback. NEVER ZOE_BASE_URL:
+    that is the PUBLIC URL (http://zoe.local live, an mDNS name another device owns);
+    taking it hung every nightly replay in getaddrinfo (runbook §20)."""
+    return (cli_base or os.environ.get("ZOE_REPLAY_BASE_URL")
+            or "http://127.0.0.1:8000").strip()
+
+
+def _check_resolvable(url: str, timeout: float = 5.0) -> None:
+    """Bound DNS for url's host — urlopen's timeout does not cover getaddrinfo.
+    Numeric hosts return at once; a name gets *timeout* in an abandoned daemon thread."""
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or ""
+    try:
+        ipaddress.ip_address(host)
+        return
+    except ValueError:
+        pass
+    box: dict = {}
+
+    def _resolve() -> None:
+        try:
+            box["ok"] = bool(host) and bool(socket.getaddrinfo(host, None))
+        except OSError as exc:
+            box["err"] = exc
+
+    t = threading.Thread(target=_resolve, daemon=True)
+    t.start()
+    t.join(timeout)
+    if not box.get("ok"):
+        why = box.get("err") or ("no host" if not host else f"no answer within {timeout:g}s")
+        raise RuntimeError(f"cannot resolve replay host {host!r} ({why}) — use a numeric "
+                           "--base-url / ZOE_REPLAY_BASE_URL (runbook §20)")
+
+
 def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
     """STT via the LIVE zoe-data /api/voice/transcribe (its Moonshine is already warm).
 
@@ -211,6 +328,7 @@ def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
     import base64 as _b64
     import urllib.request as _rq
 
+    _check_resolvable(base_url)  # per call: urlopen's timeout cannot bound DNS
     with open(wav_path, "rb") as fh:
         payload = json.dumps({
             "audio_base64": _b64.b64encode(fh.read()).decode("ascii"),
@@ -232,6 +350,32 @@ def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
 async def _run(args) -> int:
     _load_env()
     os.environ.setdefault("ZOE_ROUTER_ENABLED", "1")
+    watch = _MemoryRecallWatch()
+    logging.getLogger().addHandler(watch)
+    preflight, recall_detail = (_memory_recall_preflight() if args.brain
+                                else ("disabled", "brain not run (no --brain)"))
+    interp = _interpreter()
+    print(f"interpreter: {interp['python']} (Python {interp['version']}, "
+          f"chromadb {interp['chromadb']}); memory recall preflight: {preflight}")
+    if preflight not in ("ok", "disabled"):
+        print(f"!! memory recall {preflight.upper()}: {recall_detail} — brain turns "
+              "will be scored WITHOUT recall", file=sys.stderr)
+
+    _remote_token = ""
+    if args.stt == "remote":
+        # After _load_env (the override may live in .env), before init_pool/warm.
+        args.base_url = _replay_base_url(args.base_url)
+        _remote_token = (os.environ.get("ZOE_DEVICE_TOKEN")
+                         or os.environ.get("DEVICE_TOKEN") or "").strip()
+        if not _remote_token:
+            print("--stt remote needs ZOE_DEVICE_TOKEN in the environment "
+                  "(same convention as zoe_latency_probe; never a CLI flag)", file=sys.stderr)
+            return 1
+        try:
+            _check_resolvable(args.base_url)
+        except RuntimeError as exc:
+            print(f"--stt remote: {exc}", file=sys.stderr)
+            return 1
 
     from db_pool import init_pool
     await init_pool()
@@ -245,21 +389,6 @@ async def _run(args) -> int:
     )
 
     sr.warm()
-
-    _remote_token = ""
-    if args.stt == "remote":
-        # Resolve the base HERE, after _load_env() has merged the service .env —
-        # an argparse-time default reads the environment before that merge, so a
-        # ZOE_BASE_URL that lives only in the .env (the normal case for the live
-        # service) would be silently ignored in favour of loopback (Bugbot, #1572).
-        if not args.base_url:
-            args.base_url = os.environ.get("ZOE_BASE_URL") or "http://127.0.0.1:8000"
-        _remote_token = (os.environ.get("ZOE_DEVICE_TOKEN")
-                         or os.environ.get("DEVICE_TOKEN") or "").strip()
-        if not _remote_token:
-            print("--stt remote needs ZOE_DEVICE_TOKEN in the environment "
-                  "(same convention as zoe_latency_probe; never a CLI flag)", file=sys.stderr)
-            return 1
 
     user = args.user
     session_id = _run_session_id()
@@ -383,9 +512,20 @@ async def _run(args) -> int:
         for r in cant:
             print(f"    {r['file']}: {r['transcript']!r} → {r['outcome']}")
 
+    recall = _memory_recall_state(args.brain, preflight, watch.mismatch,
+                                  watch.load_failures)
+    if recall == "load-failure":
+        recall_detail = (f"{watch.load_failures} recall read(s) failed at runtime "
+                         f"(load_for_prompt / packet fetch) after a clean preflight: "
+                         f"{recall_detail}")
+    print(f"memory recall: {recall}  (mismatch logs={watch.mismatch}, "
+          f"load failures={watch.load_failures})")
     if args.json:
         with open(args.json, "w") as fh:
-            json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt}, fh, indent=2)
+            json.dump({"counts": counts, "rows": rows, "stt_mode": args.stt,
+                       "interpreter": interp, "memory_recall": recall,
+                       "memory_recall_detail": recall_detail,
+                       "memory_load_failures": watch.load_failures}, fh, indent=2)
         print(f"\nwrote {args.json}")
     return 0
 
@@ -409,8 +549,9 @@ def main() -> None:
                     help="'remote' = transcribe via the LIVE /api/voice/transcribe "
                          "(no second Moonshine load; needs ZOE_DEVICE_TOKEN in env)")
     ap.add_argument("--base-url", default=None,
-                    help="live service base URL for --stt remote (default: ZOE_BASE_URL "
-                         "resolved AFTER the service .env is loaded, else localhost:8000)")
+                    help="live service base URL for --stt remote (default: "
+                         "ZOE_REPLAY_BASE_URL, else http://127.0.0.1:8000; never "
+                         "ZOE_BASE_URL, the public URL — runbook §20)")
     args = ap.parse_args()
 
     # Resolve --since-date to an epoch HERE, not in _select: that keeps _select
