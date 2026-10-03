@@ -369,3 +369,15 @@ def test_judge_messages_reuse_the_bar_judge_system_and_fill_the_brief_items():
     assert "Zoe knew these things were on for the user today: dentist." in msgs[1]["content"]
     assert "ZOE REPLIED: Hi! Dentist Friday." in msgs[1]["content"]
     assert len(ds.build_judge_messages("race", "q", "x" * 5000)[1]["content"]) < 3000
+
+
+def test_shift_iso_z_moves_selector_stamps_and_leaves_junk_alone():
+    assert ds.shift_iso_z("2026-10-04T07:07:02Z", 48 * 3600) == "2026-10-02T07:07:02Z"
+    assert ds.shift_iso_z("", 10) == ""
+    assert ds.shift_iso_z("not-a-stamp", 10) == "not-a-stamp"
+
+
+def test_backdate_candidates_refuses_foreign_sessions():
+    live = ds.DayLive.__new__(ds.DayLive)
+    with pytest.raises(ValueError):
+        live.backdate_candidates("demo_bar_00000001", "web-", 10)

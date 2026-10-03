@@ -543,6 +543,7 @@ async def run_turn_digest(
         # unless the flag is on AND the user's own words carry a change-of-state cue.
         change_cue = _implicit_change_cue(user_message)
         changed_refs: list = []
+        existing_rows = None  # approved rows, read once, only for a cue turn
 
         for idx, item in enumerate(facts):
             fact = (item.get("fact") or "").strip()
@@ -554,6 +555,20 @@ async def run_turn_digest(
             if change_cue:
                 from memory_supersede import STATE_CHANGE, fact_cue, is_tombstone
                 fact_changes = fact_cue(fact) is not None
+                if not fact_changes:
+                    # A correction's new fact carries no cue word ("User's mum lives
+                    # in Bendigo"); it is a change iff it replaces an approved row
+                    # (same topic / exclusive home slot). Otherwise the overlap
+                    # dedup below drops it as a duplicate of the row it retires.
+                    if existing_rows is None:
+                        from memory_supersede import SCAN_LIMIT
+                        try:
+                            existing_rows = await svc.list_by_status(
+                                user_id=user_id, status="approved", limit=SCAN_LIMIT)
+                        except Exception:
+                            existing_rows = []
+                    from memory_supersede import changes_existing
+                    fact_changes = changes_existing(fact, existing_rows)
                 if is_tombstone(fact):
                     # "User dropped the half-marathon" records a change, never a
                     # current fact: the card and the recall packet treat it so.

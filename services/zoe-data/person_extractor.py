@@ -56,7 +56,12 @@ def birthday_capture_enabled() -> bool:
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
-_NAME = r"([A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)"
+# Case-SENSITIVE by construction: every pattern below compiles with re.IGNORECASE,
+# which silently turned "[A-Z][a-z]" into "any word" — "getting migraines most
+# afternoons" minted a person "migraines most" and a gift idea "fternoons lately…"
+# (day-sim packet, 2026-10-04). The scoped (?-i:…) keeps the capital letter a
+# requirement whatever flags the enclosing pattern uses.
+_NAME = r"((?-i:[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?))"
 
 # Likes/loves/hates
 _PREF_RE = re.compile(
@@ -85,7 +90,7 @@ _MEETING_RE = re.compile(
 
 # Gift bought/giving
 _GIFT_IDEA_RE = re.compile(
-    rf"(?:buying?|getting?|get|thinking\s+about\s+getting?)\s+{_NAME}\s+a?\s*(.+?)(?:[.!?]|$)",
+    rf"(?:buying?|getting?|get|thinking\s+about\s+getting?)\s+{_NAME}\s+(?:an?\s+)?(.+?)(?:[.!?]|$)",
     re.IGNORECASE,
 )
 _GIFT_GIVEN_RE = re.compile(
@@ -95,7 +100,7 @@ _GIFT_GIVEN_RE = re.compile(
 
 # Bucket list
 _BUCKET_RE = re.compile(
-    rf"(?:want\s+to|would\s+love\s+to|hope\s+to|should)\s+(.+?)\s+with\s+{_NAME}(?:[.!?]|$)",
+    rf"(?:want\s+to|would\s+love\s+to|hope\s+to|should)\s+(.+?)\s+with\s+{_NAME}(?:\s+[a-z][^.!?]*)?(?:[.!?]|$)",
     re.IGNORECASE,
 )
 

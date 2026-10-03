@@ -331,7 +331,7 @@ def day_plan(mode: str, today: dt.date) -> list[dict[str, Any]]:
             steps.append({"step": f"night-{day}", "kind": "night", "trigger": "not-run",
                           "text": "the hook refuses an allowlisted id; no nightly stand-in"})
     steps.append({"step": "backdate", "kind": "clock", "trigger": "synthetic",
-                  "text": "chat rows only: " + ", ".join(f"{d} -{h}h" for d, h in BACKDATE_H.items())})
+                  "text": "chat rows + that day's raise stamps: " + ", ".join(f"{d} -{h}h" for d, h in BACKDATE_H.items())})
     steps += [{"step": f"ask-{i}", "kind": "ask", "trigger": "real", "text": t}
               for i, t in (("1", OPEN_1), ("7", OPEN_2))]
     if mode == "allowlisted":
@@ -676,6 +676,19 @@ def allowlist_from_hook(code: int, detail: str) -> bool | None:
 # Live
 # ─────────────────────────────────────────────────────────────────────────────
 
+def shift_iso_z(stamp: str, age_s: int) -> str:
+    """Move a selector stamp (``%Y-%m-%dT%H:%M:%SZ``) ``age_s`` seconds into the past.
+    Unparseable or empty stamps come back unchanged (never raise inside a sweep)."""
+    raw = (stamp or "").strip()
+    if not raw:
+        return stamp
+    try:
+        when = dt.datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return stamp
+    return (when - dt.timedelta(seconds=age_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class DayLive(sb.Live):
     def session(self, user: str, tag: str) -> str:
         sid = f"bar-ds-{tag}-{user[-4:]}-{self.nonce}"
@@ -722,6 +735,38 @@ class DayLive(sb.Live):
         code, body = self._req("GET", f"{sb.DATA_BASE}/api/memories/user-model?{q}",
                                {"X-Internal-Token": self.token})
         return body if code == 200 and isinstance(body, dict) else None
+
+    def backdate_candidates(self, user: str, session_prefix: str, age_s: int) -> dict[str, Any]:
+        """The selector's raise stamps are the OTHER clock the sim compresses. A cue raise
+        on a day-2 seeding turn (ZOE_LOOP_LIFECYCLE) writes ``last_surfaced_at`` = now;
+        left there, the first open turn ("day 4") sits inside the 2 h raise gap and 1r
+        reads ``reason=gap`` (measured 2026-10-04). Shift ``last_surfaced_at`` and
+        ``cooldown_until`` of this user's candidates surfaced in that day's sessions by
+        the same age as the day's chat rows, so the product's spacing rule sees the
+        simulated day, not the wall clock."""
+        sb.assert_demo_user(user)
+        if not session_prefix.startswith("bar-"):
+            raise ValueError(f"refusing foreign session prefix {session_prefix!r}")
+
+        async def _f(conn):
+            rows = await conn.fetch(
+                "SELECT id, last_surfaced_at, cooldown_until FROM proactive_candidates "
+                "WHERE user_id = $1 AND last_surfaced_session LIKE $2 "
+                "AND last_surfaced_at IS NOT NULL AND last_surfaced_at <> ''",
+                user, session_prefix + "%")
+            n = 0
+            for r in rows:
+                await conn.execute(
+                    "UPDATE proactive_candidates SET last_surfaced_at = $1, cooldown_until = $2 "
+                    "WHERE id = $3 AND user_id = $4",
+                    shift_iso_z(r["last_surfaced_at"], age_s), shift_iso_z(r["cooldown_until"], age_s),
+                    r["id"], user)
+                n += 1
+            return {"ok": True, "candidates": n}
+        try:
+            return self.db(_f)
+        except Exception as exc:  # noqa: BLE001 — reported, never fatal
+            return {"ok": False, "candidates": 0, "error": type(exc).__name__}
 
     def candidates(self, user: str) -> list[dict]:
         sb.assert_demo_user(user)
@@ -835,8 +880,12 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
     for day, hours in BACKDATE_H.items():
         sids = [s for s in live.sessions.get(user, []) if s.startswith(f"bar-ds-{day}-")]
         backdate[day] = live.backdate(sids, hours * 3600) if sids else {"ok": False, "sessions": 0}
+        if sids and mode == "default":
+            # the raise stamps a cue raise left on this day's seeding turns
+            backdate[day]["raise_stamps"] = live.backdate_candidates(user, f"bar-ds-{day}-", hours * 3600)
     backdate_ok = all(b.get("ok") for b in backdate.values())
-    log(f"backdated chat rows: {json.dumps({d: b.get('ok') for d, b in backdate.items()})}")
+    log(f"backdated chat rows: {json.dumps({d: b.get('ok') for d, b in backdate.items()})}; "
+        f"raise stamps: {json.dumps({d: (b.get('raise_stamps') or {}).get('candidates', 0) for d, b in backdate.items()})}")
 
     candidates_before = live.candidates(user) if mode == "default" else []
 

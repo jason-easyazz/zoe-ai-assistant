@@ -1711,35 +1711,61 @@ class MemoryService:
         depth_by_pid: dict[str, int] | None = None,
     ) -> list[MemoryRef]:
         col = self._collection()
-        result = col.query(
-            query_texts=[query],
-            n_results=max(limit * 3, limit),
-            where={"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]},
-            include=["documents", "metadatas", "distances"],
-        )
-        ids = (result.get("ids") or [[]])[0]
-        docs = (result.get("documents") or [[]])[0]
-        metas = (result.get("metadatas") or [[]])[0]
-        distances = (result.get("distances") or [[]])[0]
+        where = {"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]}
         now = datetime.datetime.now(datetime.timezone.utc)
         hits: list[MemoryRef] = []
-        for rid, doc, meta, dist in zip(ids, docs, metas, distances):
-            md = dict(meta) if isinstance(meta, dict) else {}
-            expires = md.get("expires_at")
-            if expires and _memory_expired(expires, now):
-                continue
-            if not _memory_visible_to_user(md, user_id):
-                continue
-            if not _memory_status_visible(md):
-                continue
-            hits.append(
-                MemoryRef(
-                    id=rid,
-                    text=doc or "",
-                    metadata=md,
-                    score=float(dist or 0.0),
-                )
-            )
+        seen: set[str] = set()
+
+        def _collect(result: dict) -> None:
+            ids = (result.get("ids") or [[]])[0]
+            docs = (result.get("documents") or [[]])[0]
+            metas = (result.get("metadatas") or [[]])[0]
+            distances = (result.get("distances") or [[]])[0]
+            for rid, doc, meta, dist in zip(ids, docs, metas, distances):
+                if rid in seen:
+                    continue
+                md = dict(meta) if isinstance(meta, dict) else {}
+                expires = md.get("expires_at")
+                if expires and _memory_expired(expires, now):
+                    continue
+                if not _memory_visible_to_user(md, user_id):
+                    continue
+                if not _memory_status_visible(md):
+                    continue
+                seen.add(rid)
+                hits.append(MemoryRef(id=rid, text=doc or "", metadata=md, score=float(dist or 0.0)))
+
+        _collect(col.query(
+            query_texts=[query],
+            n_results=max(limit * 3, limit),
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        ))
+        if len(hits) < limit:
+            # A filtered HNSW query returns SHORT (often empty) when the owner's rows are
+            # sparse in the query's neighbourhood or the graph is tombstone-heavy: hnswlib
+            # explores ef candidates, skips deleted and disallowed ones, and stops. Measured
+            # 2026-10-04 on the live palace (258 rows, 1,591 ever added): "When did I tell
+            # you about the dentist?" → 0 rows WITH the owner filter, 18 without; a
+            # one-word query found 18 either way. The packet then carried no semantic hits
+            # and the brain said it had nothing stored. Over-fetch without the filter and
+            # apply the same visibility rules here; the blend below ranks as before.
+            try:
+                total = int(col.count())
+            except Exception:  # noqa: BLE001 — count is a nicety for the cap
+                total = 0
+            n_more = max(limit * 20, 200)
+            if total > 0:
+                n_more = min(n_more, total)
+            if n_more > 0:
+                before = len(hits)
+                _collect(col.query(
+                    query_texts=[query],
+                    n_results=n_more,
+                    include=["documents", "metadatas", "distances"],
+                ))
+                logger.info("MEMORY_SEARCH_FALLBACK user=%s filtered=%d limit=%d unfiltered_n=%d "
+                            "added=%d", user_id, before, limit, n_more, len(hits) - before)
 
         # Re-rank by blending semantic distance with hotness signals.
         # load_for_prompt already does this for the metadata-only path; here we

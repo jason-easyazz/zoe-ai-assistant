@@ -708,3 +708,32 @@ Python, and stdout to a file: `python3 -u … </dev/null >~/.cache/zoe/<name>.lo
 `</dev/null` a child can block on the tool's stdin; without `-u` and a file, progress stays in a
 pipe buffer and a hang looks like silence. Read the log file to follow it.
 
+## 22. Recall says "nothing stored" for a fact that IS stored — tombstone-heavy HNSW index
+
+**Signature (2026-10-04, day-sim ask 4):** two dentist facts stored a minute earlier; "When
+did I tell you about the dentist?" → "I don't see anything about the dentist in what I
+have stored." The `/for-prompt` packet with `limit=40` listed them at positions 14 and 16;
+the floor's packet (limit 12, 1,600-char cap) had none. `RECALL_EVIDENCE` looked healthy.
+
+**Cause:** chroma 1.x never compacts a persistent HNSW index. Every deleted row stays in
+the graph as a tombstone; demo-user teardown after each bar / day-sim run adds ~20 a day.
+The live drawers index held **1,591 elements for 258 live rows**. hnswlib explores `ef`
+candidates, skips deleted and disallowed ones and stops — so `col.query` for that sentence
+returned **0 ids with the owner filter and 18 without**, while a one-word query returned 18
+either way. No hits → the composer falls through to generic ranking → the newest rows sit
+in the tail → the character cap drops them.
+
+**Find it:** `python3 scripts/maintenance/compact_drawers_index.py` (read-only report;
+`compaction_advised=True` at ratio ≥ 3). In-process, the tell is an unfiltered query
+reaching far more rows than the filtered one for the same text. Since the fix the service
+logs `MEMORY_SEARCH_FALLBACK …` whenever the filtered query is short — count those.
+
+**Fix:** the service now over-fetches without the filter and re-applies visibility in
+Python (`memory_service._semantic_search`), so recall no longer depends on graph health.
+Remove the cause by compacting (operator, zoe-data stopped — the recipe is in the script's
+docstring; it backs up the palace and verifies before returning 0). Rebuilding from the
+STORED embeddings is bit-identical; nothing is re-embedded.
+
+**Negative controls that held:** index lag ruled out (a fact is searchable 8 s after the
+turn in a small store); query embeddings are unit-norm, no NaN; the `where` filter alone
+flips 18 → 0 for the same vector.

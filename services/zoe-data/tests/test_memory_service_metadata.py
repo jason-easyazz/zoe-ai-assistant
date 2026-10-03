@@ -27,7 +27,11 @@ class _FakeCollection:
         return self.get_result
 
     def query(self, **kwargs):
-        self.seen_query_where = kwargs.get("where")
+        # The FIRST (owner-filtered) query's where; the short-result fallback issues a
+        # second, unfiltered query (2026-10-04) and must not overwrite this record.
+        if self.seen_query_where is None:
+            self.seen_query_where = kwargs.get("where")
+        self.query_calls = getattr(self, "query_calls", 0) + 1
         return self.query_result
 
     def delete(self, **kwargs):
