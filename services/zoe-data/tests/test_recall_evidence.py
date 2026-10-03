@@ -314,6 +314,12 @@ def _tool_call(query):
 
 def test_tool_result_uses_the_users_turn_shape(svc, monkeypatch):
     monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    # The route renders against the wall clock: pin it, or "8 days ago" rots daily.
+    import time as _time
+    import types
+
+    monkeypatch.setattr(rev, "time", types.SimpleNamespace(time=lambda: NOW,
+                                                           monotonic=_time.monotonic))
     monkeypatch.setenv(rev.EVIDENCE_ENV, "1")
     body = _tool_call("sister flight")
     assert body["packet"].startswith("## What I know about you\n")

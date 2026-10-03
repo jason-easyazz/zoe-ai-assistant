@@ -3344,6 +3344,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_PROACTIVE_RAISE_GAP_S": {
+        "defaults": [
+          "7200"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/selector.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_PROACTIVE_RAISE_PER_DAY": {
+        "defaults": [
+          "2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/selector.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_PROACTIVE_SELECTOR": {
         "defaults": [
           "''"
