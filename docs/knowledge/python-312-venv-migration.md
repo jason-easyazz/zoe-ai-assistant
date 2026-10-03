@@ -217,12 +217,15 @@ All of it is executed against stubs by `tests/unit/test_zoe_data_py312_cutover.p
 2. **Replay gate with THIS interpreter, service untouched.** The probe defaults to
    `--stt inprocess`, i.e. Moonshine + onnxruntime + numpy load in the probe's own process — so
    running it with the venv python measures the venv's STT stack against the LIVE brain without a
-   restart. The interpreter propagates on BOTH hops — the probe launches `measure_voice.py` with
-   its own `sys.executable` (a PATH `python3` until #1706, which silently fell back to 3.10), and
-   `measure_voice` launches the replay with its own:
+   restart. The interpreter propagates on BOTH hops, explicitly (`--python` to `measure_voice.py`,
+   which hands it to the replay). Since 2026-10-03 the probe re-executes itself on the zoe-data
+   UNIT's interpreter unless `--python` / `ZOE_PROBE_PYTHON` names one
+   (`scripts/lib/service_python.py`) — so BEFORE the drop-in is installed, `--python` is what keeps
+   this a venv measurement:
    ```bash
    flock /tmp/zoe-voice-harness.lock ~/.zoe/venvs/zoe-data-py312/bin/python \
-     scripts/maintenance/voice_regression_probe.py --service-dir /home/zoe/assistant/services/zoe-data --stt inprocess
+     scripts/maintenance/voice_regression_probe.py --python ~/.zoe/venvs/zoe-data-py312/bin/python \
+     --service-dir /home/zoe/assistant/services/zoe-data --stt inprocess
    ```
    Said-vs-did must not regress and per-stage medians must stay inside the baseline's ratio; needs
    ≥ 2 GB quiet headroom (the in-process Moonshine load).
@@ -292,7 +295,7 @@ bash $L/scripts/setup/build_py312_venv.sh --check
 
 # 3. Replay gate with the VENV's STT stack, service untouched (needs ≥2 GB quiet headroom).
 flock /tmp/zoe-voice-harness.lock $V $L/scripts/maintenance/voice_regression_probe.py \
-  --stt inprocess --service-dir $L/services/zoe-data
+  --python $V --stt inprocess --service-dir $L/services/zoe-data   # --python: else it re-execs on the UNIT's interpreter
 #    said-vs-did must not regress; per-stage medians inside the baseline ratio.
 
 # 4. Install the drop-in and restart.
@@ -312,7 +315,7 @@ curl -s localhost:8000/readyz | python3 -c 'import json,sys; d=json.load(sys.std
 
 # 6. Replay gate against the LIVE service (HTTP STT on the restarted venv process).
 flock /tmp/zoe-voice-harness.lock $V $L/scripts/maintenance/voice_regression_probe.py \
-  --stt remote --service-dir $L/services/zoe-data
+  --python $V --stt remote --service-dir $L/services/zoe-data
 
 # 7. Drift with the venv interpreter — 0 MISMATCH (also checks the torch CPU wheel URL).
 $V $L/scripts/maintenance/requirements_drift_check.py $L/services/zoe-data/requirements-py312.txt

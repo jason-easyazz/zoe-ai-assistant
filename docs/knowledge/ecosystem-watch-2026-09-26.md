@@ -20,8 +20,9 @@ description: Re-check of the twelve upstream dependencies and platforms that the
 > **Headline (top 5):** (1) the repo has **no Actions event policy**, so `voice-gate.yml` and
 > `break-glass.yml` fail from **2026-11-02** — one path-scoped policy fixes it (§9);
 > (2) Copilot's review default flips to the ~5× dearer Balanced tier on **2026-09-28** — set
-> Lite now (§9); (3) **Flue 2.2.0 is not a drop-in**: it exists only as `2.2.0-next.1`
-> (2026-09-25) and its Pi 0.87 bump changes the stream contract that Zoe's
+> Lite now (§9); (3) **Flue 2.2.0 is not a drop-in**: it existed only as `2.2.0-next.1`
+> (2026-09-25; superseded — 2.2.0–2.2.2 final shipped 2026-09-28, same pi 0.87.1 port requirement, see
+> `docs/research/flue-and-agent-runtimes-2026-10-03.md` §2) and its Pi 0.87 bump changes the stream contract that Zoe's
 > `capped-completions.ts` / `context-window.ts` read (§4); (4) Moonshine upstream is silent
 > (zero commits since 0.1.5) and nobody has reported the decoder-step regression — the
 > issue draft is in §2; (5) the Kokoro ONNX-CUDA path is de-risked by kokoro-onnx 0.6.1's

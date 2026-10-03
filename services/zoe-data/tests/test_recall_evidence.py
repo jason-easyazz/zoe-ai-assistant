@@ -4,6 +4,8 @@ each rule has a negative control."""
 from __future__ import annotations
 
 import datetime
+import time
+import types
 
 import pytest
 from fastapi import FastAPI
@@ -267,6 +269,10 @@ class _FakeSvc:
 
 @pytest.fixture
 def svc(monkeypatch):
+    # The endpoint renders "N days ago" against the wall clock: pin it to NOW, or
+    # every relative date asserted below rots a day at a time (it did — 2026-10-01).
+    monkeypatch.setattr(rev, "time", types.SimpleNamespace(time=lambda: NOW,
+                                                           monotonic=time.monotonic))
     monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda uid: False)
     monkeypatch.setattr(memories_mod, "_svc", lambda: _FakeSvc(_rows()))
 
