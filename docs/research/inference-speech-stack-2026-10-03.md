@@ -427,8 +427,10 @@ does not pause Kokoro) and below the brain-window policy; action 3 is what buys 
 | 10 | **Barge-in false-interruption resume** (LiveKit pattern: pause, resume if nothing is transcribed within ~2 s) | UX, not latency: fewer lost replies on a cough or TV | Low-medium | Yes | Barge-in log (`t+<ms>`, #1765) on live turns; count resumes vs true interruptions | Code (daemon) |
 
 **Stacking.** #1, #2 and #6 are independent: ~0.13 + ~0.24 + ~0.3 s ≈ 0.7 s off the median turn.
-#3 → #4 is the RAM chain. Streaming STT is the largest single gain left (~0.45 s median, ~1.8 s on
-long turns), and it is blocked on memory that #1 + #3 can free.
+#3 → #4 is the RAM chain. Streaming STT (#4) is the largest *candidate* gain left, but only as an
+unverified upper bound (≤ ~0.44 s median, ≤ ~1.8 s on long turns; the Orin figure could be a slight
+median regression — row 4), so it must not be prioritised on that number until the in-process
+measurement exists; it is blocked on memory that #1 + #3 can free either way.
 
 ## 4. Already right — do not touch
 
