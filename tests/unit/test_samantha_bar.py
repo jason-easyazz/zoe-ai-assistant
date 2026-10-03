@@ -188,7 +188,8 @@ def test_s10_one_word_change(reply, packet, verdict):
 
 
 @pytest.mark.parametrize("rows, verdict", [
-    ([{"surfaced": 1, "session": "o1"}], "PASS"),
+    ([{"surfaced": 1, "session": "o1"}, {"surfaced": 0, "session": None}], "PASS"),
+    ([{"surfaced": 1, "session": "o1"}], "SKIP"),             # one candidate: spacing is vacuous
     ([{"surfaced": 1, "session": "o1"}, {"surfaced": 1, "session": "o2"}], "FAIL"),
     ([{"surfaced": 0, "session": None}], "SKIP"),
     ([], "SKIP"),

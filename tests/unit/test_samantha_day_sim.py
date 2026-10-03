@@ -39,7 +39,7 @@ P = ds.ALLOWLISTED_USER
 def test_criteria_and_rubrics_are_pinned():
     # Editing a criterion or a rubric changes what PASS means: update this pin deliberately.
     assert ds.CRITERIA_SHA256 == ds.criteria_digest()
-    assert ds.CRITERIA_SHA256 == "afd6fddf4a0466b506b53e4aff7c9befbb114e597917051b1398e3316432eccb"
+    assert ds.CRITERIA_SHA256 == "8426a30a6a494de9d1f0dba6868e4d12cba0490ce1b92e4725371eef497711de"
 
 
 def test_every_ask_has_a_criterion_and_a_known_mode():
@@ -228,15 +228,30 @@ ROWS = [{"kind": "open_loop", "topics": ["dentist"], "surfaced": 1, "session": "
         {"kind": "event", "topics": ["project"], "surfaced": 0, "session": None}]
 
 
-@pytest.mark.parametrize("rows, reply, verdict", [
-    (ROWS, "Morning! Feeling any better about the dentist on Friday?", "PASS"),
-    ([], "Morning!", "FAIL"),                                          # nothing kept
-    ([{**ROWS[0], "session": "other"}, ROWS[1]], "Morning!", "FAIL"),  # nothing raised here
-    (ROWS, "Morning! All good?", "FAIL"),                              # injected, never voiced
-    (ROWS, "Morning! How's the dentist worry, and the Kestrel launch?", "FAIL"),  # two topics
+def _jt(v):
+    seen = []
+
+    def judge(topic):
+        seen.append(topic)
+        return v, "because"
+    judge.seen = seen
+    return judge
+
+
+@pytest.mark.parametrize("rows, reply, judge, verdict", [
+    (ROWS, "Morning! Feeling any better about the dentist on Friday?", _jt("PASS"), "PASS"),
+    # The first live run's reply: the topic is voiced, as a disclaimer. The judge decides.
+    (ROWS, "I don't have any information about how your dentist appointment went.", _jt("FAIL"), "FAIL"),
+    (ROWS, "Morning! Feeling any better about the dentist on Friday?", None, "ERROR"),
+    ([], "Morning!", _jt("PASS"), "FAIL"),                                          # nothing kept
+    ([{**ROWS[0], "session": "other"}, ROWS[1]], "Morning!", _jt("PASS"), "FAIL"),  # nothing raised here
+    (ROWS, "Morning! All good?", _jt("PASS"), "FAIL"),                              # never voiced
+    (ROWS, "Morning! How's the dentist worry, and the Kestrel launch?", _jt("PASS"), "FAIL"),  # two
 ])
-def test_score_raise_open(rows, reply, verdict):
-    assert ds.score_raise_open(rows, "s1", reply)[0] == verdict
+def test_score_raise_open(rows, reply, judge, verdict):
+    assert ds.score_raise_open(rows, "s1", reply, judge)[0] == verdict
+    if judge is not None and verdict in ("PASS", "FAIL") and judge.seen:
+        assert judge.seen == [ds.TOPIC_DESC["dentist"]]  # the judge is told what was raised
 
 
 @pytest.mark.parametrize("rows, reply2, verdict", [
@@ -253,6 +268,7 @@ def test_score_no_reraise(rows, reply2, verdict):
     (ROWS, "PASS"),
     (ROWS + [{"kind": "event", "topics": ["project"], "surfaced": 1, "session": "s2"}], "FAIL"),
     ([ROWS[1]], "SKIP"),
+    ([ROWS[0]], "SKIP"),   # the first live run: one candidate — spacing is vacuous, never PASS
 ])
 def test_score_spacing(rows, verdict):
     assert ds.score_spacing(rows, "s1", "s2")[0] == verdict

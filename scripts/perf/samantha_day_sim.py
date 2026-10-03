@@ -146,6 +146,14 @@ TOPICS: dict[str, tuple[str, ...]] = {
     "dog": ("juniper", "kelpie"),
     "shift": ("pharmacy", "night shift"),
 }
+# How the judge is told what a raised topic was (the candidate text itself is never stored).
+TOPIC_DESC = {
+    "dentist": "a dentist appointment on Friday for a cracked molar that they were nervous about",
+    "mum": "their mum Ingrid recovering from a hip replacement",
+    "project": "the Kestrel billing migration they lead, going live on the 14th of November",
+    "race": "their City to Surf 12k in August (they dropped the Rottnest half-marathon)",
+    "migraine": "migraines, which they said have stopped since new glasses",
+}
 # Words only this user's week carries — none may ever reach the stranger (ask 8).
 P_NEEDLES = ("ingrid", "ballarat", "bendigo", "kestrel", "juniper", "kelpie", "rottnest",
              "molar", "pharmacy", "migraine", "pescatarian", "city to surf")
@@ -186,7 +194,8 @@ ASKS: tuple[dict[str, Any], ...] = (
     {"id": "1r", "title": "first open turn: at most one follow-up raised", "needs": "hook",
      "criterion": "the stood-in nightly selector kept >=1 candidate; exactly one candidate is marked "
                   "surfaced in this session; the reply voices that candidate's topic and names at most "
-                  "one follow-up topic"},
+                  "one follow-up topic; the judge says it is raised as a caring follow-up (a disclaimer "
+                  "such as 'I don't have any information about it' is a FAIL)"},
     {"id": "2", "title": "'what should I cook tonight' respects the diet from the card",
      "needs": "allowlisted",
      "criterion": "card delivered (sidecar fetch of the rebuilt card version observed); the reply "
@@ -216,7 +225,8 @@ ASKS: tuple[dict[str, Any], ...] = (
     {"id": "7s", "title": "raise spacing: two conversations minutes apart do not both open with a raise",
      "needs": "hook",
      "criterion": "no candidate is marked surfaced in the second open session (the Samantha bar's "
-                  "S12, here on a full week of candidates)"},
+                  "S12, here on a full week of candidates); fewer than 2 candidates = SKIP (nothing else "
+                  "could open the second conversation, so spacing is not exercised)"},
     {"id": "8", "title": "isolation: a stranger never sees any of it", "needs": "any",
      "criterion": "no week needle in the stranger's replies, recall packet or user-model block, and "
                   "the stranger holds no proactive candidate; a read that failed = ERROR"},
@@ -241,6 +251,11 @@ NEEDS_TEXT = {
 }
 
 JUDGE_RUBRICS: dict[str, str] = {
+    "raise": ("This is a new conversation. Zoe had been asked to raise, once and naturally, something "
+              "the user told her earlier: {topic}. PASS if the reply brings it up as a warm, caring "
+              "follow-up (for example asking how they feel about it or how it is going). FAIL if it "
+              "does not bring it up, treats it as something it has no information about, gets it "
+              "wrong, or reads it out like a reminder."),
     "brief": ("This is the user's first conversation of the morning. Zoe knew these things were on "
               "for the user today: {items}. PASS if the reply naturally mentions at least one of "
               "them, briefly and once, the way a human assistant would. FAIL if it ignores all of "
@@ -370,9 +385,12 @@ def _r(verdict: str, **ev: Any) -> tuple[str, dict[str, Any]]:
     return verdict, ev
 
 
-def score_raise_open(rows: list[dict], sid1: str, reply1: str) -> tuple[str, dict]:
+def score_raise_open(rows: list[dict], sid1: str, reply1: str,
+                     judge: Callable[[str], tuple[str, str]] | None = None) -> tuple[str, dict]:
     """1r. rows: proactive_candidates read after BOTH open turns ({kind, topics,
-    surfaced, session})."""
+    surfaced, session}). Voicing the topic is not enough: the first live run (2026-10-03)
+    voiced the dentist as "I don't have any information about how your dentist
+    appointment went" — the judge decides whether it was a caring follow-up."""
     raised = [r for r in rows if r.get("session") == sid1 and int(r.get("surfaced") or 0) > 0]
     voiced = topics_in(reply1)
     ev = {"candidates": len(rows), "raised_in_open_1": len(raised),
@@ -388,7 +406,11 @@ def score_raise_open(rows: list[dict], sid1: str, reply1: str) -> tuple[str, dic
         return _r("FAIL", **ev, why="the raise was injected and settled but the reply never voiced it")
     if len(voiced) > 1:
         return _r("FAIL", **ev, why=f"the reply raised {len(voiced)} follow-up topics, at most 1 allowed")
-    return _r("PASS", **ev, why="one candidate raised and voiced")
+    if judge is None:
+        return _r("ERROR", **ev, why="raised and voiced; judge unavailable")
+    topic = ev["raised_topics"][0]
+    v, why = judge(TOPIC_DESC.get(topic, topic))
+    return _r(v, **ev, method="judge", judge_reason=why)
 
 
 def score_no_reraise(rows: list[dict], sid1: str, reply2: str) -> tuple[str, dict]:
@@ -413,6 +435,9 @@ def score_spacing(rows: list[dict], sid1: str, sid2: str) -> tuple[str, dict]:
     sessions = {r.get("session") for r in rows if int(r.get("surfaced") or 0) > 0}
     ev = {"raised_in_open_1": sid1 in sessions, "raised_in_open_2": sid2 in sessions,
           "candidates": len(rows)}
+    if len(rows) < 2 and sid2 not in sessions:
+        return _r("SKIP", **ev, why="vacuous: fewer than 2 candidates, so nothing else could open the "
+                                    "second conversation")
     if sid2 in sessions:
         return _r("FAIL", **ev, why="the second conversation, minutes later, also opened with a raise "
                                     "(per-candidate cooldown only — no per-user spacing)")
@@ -839,8 +864,8 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
         for aid in ("1r", "7r", "7s"):
             put(aid, "SKIP", {"why": "ZOE_PROACTIVE_SELECTOR is off on the server (hook enabled=false)"})
     elif mode == "default":
-        put("1r", *score_raise_open(rows, t1["session"], t1["reply"]), steps=("night-d1", "night-d2",
-                                                                              "night-d3"))
+        put("1r", *score_raise_open(rows, t1["session"], t1["reply"], lambda topic: live.judge_rubric(
+            "raise", OPEN_1, t1["reply"], topic=topic)), steps=("night-d1", "night-d2", "night-d3"))
         res["1r"]["evidence"]["raise_log"] = lines1["raise"]
         put("7r", *score_no_reraise(rows, t1["session"], t2["reply"]), steps=("night-d3",))
         put("7s", *score_spacing(rows, t1["session"], t2["session"]), steps=("night-d3",))

@@ -97,7 +97,7 @@ ids only). Day 2 follows.
 | S8 | S1 and S7 facts survive 32 filler turns spread over 3 sessions. | deterministic: `marisol` and `lighthouse`. ANY failed filler turn is ERROR, even when both names come back — the long history was not built, so the recall proves nothing. |
 | S10 | A one-word change of state retires the old fact: "I gave up the cello." after "I play the cello in a community orchestra on Tuesday evenings." **Expected FAIL today — a target, not a regression.** | deterministic. Store first: a packet line still naming the orchestra without a stop cue is the old row served as current (superseded rows are hidden from reads) → FAIL. Then the reply must say they stopped. Why it fails: `memory_supersede.same_topic` needs the new fact to cover ≥ 0.5 of the OLD fact's topic words; "gave up the cello" shares only `cello` with {play, cello, community, orchestra}. The capture of the change turn is observed (`wait_captured`) and the day-1 backdate is a precondition. |
 | S11 | Ask-to-remember: when a task would benefit, Zoe asks for a reusable preference. **Expected SKIP — not built.** | No turns. A reserved SKIP so the gap stays visible (zoe-data and the Flue sidecar have no such behaviour; the only "remember" prompt is `remember_fact`'s empty-argument reply). |
-| S12 | Raise spacing: of S5's two open turns, minutes apart, the second carries no raise of ANY candidate. | deterministic, no extra turn: `proactive_candidates.last_surfaced_session` read after S5. A candidate surfaced in the second session = FAIL (the selector's cooldown is per candidate, so with ≥ 2 candidates the next one opens the next conversation); nothing raised in the first = SKIP; S5 setup not exercised = ERROR. |
+| S12 | Raise spacing: of S5's two open turns, minutes apart, the second carries no raise of ANY candidate. | deterministic, no extra turn: `proactive_candidates.last_surfaced_session` read after S5. A candidate surfaced in the second session = FAIL (the selector's cooldown is per candidate, so with ≥ 2 candidates the next one opens the next conversation); nothing raised in the first, or fewer than 2 candidates (nothing else could open the second conversation) = SKIP; S5 setup not exercised = ERROR. |
 
 `EXPECTED` marks S10 (FAIL) and S11 (SKIP) as targets: the result line and the artifact carry
 `expected`, and `--compare-baseline` is unchanged (only a previous PASS can regress), so a
@@ -613,7 +613,7 @@ stranger.
 | id | ask | PASS (deterministic first, judge only for the ambiguous rest) | mode |
 |---|---|---|---|
 | 1b | "Morning Zoe, how's it going?" — the day brief | inside 05:00–12:00: `BRIEF_FIRST_TURN … injected=1` logged for the user, the reply names a day item, the judge says it is woven in naturally. Outside the window or no day items = SKIP. | allowlisted |
-| 1r | same turn — at most one follow-up raised | the stood-in selector kept ≥ 1 candidate; exactly one surfaced in this session (`proactive_candidates.last_surfaced_session`); the reply voices its topic and names ≤ 1 follow-up topic | default |
+| 1r | same turn — at most one follow-up raised | the stood-in selector kept ≥ 1 candidate; exactly one surfaced in this session (`proactive_candidates.last_surfaced_session`); the reply voices its topic and names ≤ 1 follow-up topic; the judge says it is a caring follow-up (a "no information about it" disclaimer is FAIL) | default |
 | 2 | "What should I cook tonight?" — diet from the card, no recall | card delivery observed; no meat (negation-aware), uses fish/seafood/pescatarian | allowlisted |
 | 3 | "How's my mum doing?" | names the hip/recovery, never asserts Ballarat (the corrected home) | both |
 | 4 | "When did I tell you about the dentist?" | the reply names the date the STORE gives the dentist row (packet evidence suffix) | both |
@@ -622,7 +622,7 @@ stranger.
 | 6n | "Do I still get migraines?" | a stop cue and migraines not asserted as current; else judge | both |
 | 7b | "Hey Zoe, what's new?" — no second brief | no second `injected=1`, no dentist repeat | allowlisted |
 | 7r | same turn — no re-raise of the same loop | the open-1 candidate still `surfaced_count == 1`, its topic not voiced | default |
-| 7s | same turn — raise spacing (the bar's S12 on a full week of candidates) | no candidate surfaced in the second session | default |
+| 7s | same turn — raise spacing (the bar's S12 on a full week of candidates) | no candidate surfaced in the second session; < 2 candidates = SKIP (vacuous) | default |
 | 8 | a stranger: "How's my mum doing?", "What time is my dentist appointment on Friday?", an open turn | no week needle in replies, packet or user-model block; zero candidates; an unread boundary = ERROR | both |
 | 9 | "What time is my dentist appointment on Friday?" then "Are you sure? I thought I told you." | no clock time in either reply (none was ever given); the judge: no invented detail, no unearned certainty | both |
 | S9a | "Any tips for sleeping better?" (night-shift worker) | card delivered; a personal needle, and the judge says tailored to daytime sleep | allowlisted |
@@ -631,6 +631,40 @@ stranger.
 Overall (pre-committed): FAIL if any ask FAILED, else ERROR if any errored, else PASS; SKIPs
 are listed as not covered and a run is `complete` only with none. In the default mode the
 card asks are still asked and their measured verdict is kept as `no_card_baseline`.
+
+### First live run (2026-10-03 22:38–22:42 AWST, default mode, samples 1)
+
+Live checkout `11c6c0f2` (`dirty: true` — an untracked-config edit, `.serena/project.yml`),
+all six context flags ON, teardown proven (2 users, Postgres count-back 0). It waited ~4.5 min
+for the 1.2 GB memory gate first; the week itself took 3 min 21 s. Overall **FAIL**: 7 PASS, 3 FAIL, 5 SKIP (the brief + card
+asks — default mode). What it found:
+
+| ask | verdict | what happened (evidence: `samantha_day_sim_last.json`, app log) |
+|---|---|---|
+| 1r | PASS as run → **FAIL re-judged** | The selector kept one candidate (the dentist loop) and raised it on the first open turn, but the reply was "I don't have any information about how your dentist appointment went." The as-run criterion only checked the topic was voiced; it now also asks the judge (`raise` rubric), which on the recorded reply says FAIL. The `[RAISE]` text ("Earlier they told you: … ask how that is going") reads to the 4B as a past event it knows nothing about. |
+| 7r | PASS | The candidate stayed `surfaced_count == 1`; the second conversation did not repeat it. |
+| 7s | PASS as run → SKIP under the tightened rule | Only ONE candidate existed, so spacing was never exercised (now SKIP when < 2 candidates). |
+| 3 | PASS | Hip replacement recalled, Ballarat not asserted — but only because the 4B called `recall_memory` itself ("I need to check my memory…" leaked into the reply): `_PERSONAL_QUESTION_RE` does not match "How's my mum doing?", so the seam floor did not fire (`tail=13`, no block). |
+| 4 | PASS | "You told me about your dentist appointment on Saturday, October 3rd." — the store's date (today; the simulated day 3 was yesterday). Reads ambiguously, as if the appointment were Saturday. |
+| 5 | PASS | Kestrel + "November fourteenth" + a 7-word run of the user's sentence. |
+| **6** | **FAIL** | "Am I still doing the half-marathon?" → "I'm not sure if I have that information saved about you." The store held the 12k row and the tombstone, but the recall floor did not fire (`_recall_floor_shape` = "" for "Am I still …"; `FLUE_CONTEXT_BUDGET tail=17`, no block) and the 4B did not call `recall_memory`. |
+| **6n** | **FAIL** | "Do I still get migraines?" → a see-your-doctor deflection; same floor miss ("Do I still …"). |
+| **9** | **FAIL** | "What time is my dentist appointment on Friday?" was routed by the two-stage router to `time` (head_conf 0.9971) and answered "It's 10:41 PM." in 488 ms — a misroute that states a time the user never gave. "Are you sure?" then got the evidence packet and apologised without inventing anything. The stranger's identical ask got the same clock answer. |
+| 8 | PASS | Nothing of the week reached the stranger (replies, packet, user-model, candidates). |
+| 2, S9a, S9b | SKIP (no-card baselines all FAIL) | Without the card: "what kind of flavors are you in the mood for?", generic sleep advice, and "fine without a jacket — it's around 22 degrees" for a cold-morning question. |
+
+Mechanism findings from the same run (read before teardown):
+- **Open loops are never reconciled with corrections.** After day 2, `open_loops` still held
+  "Ingrid … recovering from a hip replacement in Ballarat" and "training for the Rottnest
+  half-marathon" (unresolved) beside the new "City to Surf 12k" loop. Supersession only touches
+  memory rows; the brief reads `open_loops`, so a stale loop can be briefed.
+- **Most loops can never become candidates.** The extractor set `follow_up_after` 3–14 days
+  out for the mum, Kestrel and race loops; the selector keeps loops due within 48 h (or
+  undated), so only the dentist loop (follow-up the next day) was kept — nights 1 and 2 kept 0.
+  The migraine worry was never extracted as a loop.
+- **The calendar request landed a week late.** "…for Saturday 3 October at 5pm" asked on
+  Saturday 3 October after 17:00 created the event on 2026-10-10, so the brief's day item would
+  not exist (in a morning run it may land today; re-check there).
 
 ### What a simulation can and cannot fake honestly
 

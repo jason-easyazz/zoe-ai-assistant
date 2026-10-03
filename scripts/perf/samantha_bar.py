@@ -552,10 +552,13 @@ def score_s10(reply: str, packet: str | None) -> tuple[str, dict]:
 def score_s12(rows: list[dict], s1: str, s2: str) -> tuple[str, dict]:
     """rows: proactive_candidates ({surfaced, session}) after S5's two open turns.
     PASS iff no candidate was surfaced in the second session; SKIP when nothing was
-    raised in the first (spacing not exercised)."""
+    raised in the first, or fewer than 2 candidates exist (spacing not exercised)."""
     sessions = {r.get("session") for r in rows if int(r.get("surfaced") or 0) > 0}
     ev = {"method": "deterministic", "candidates": len(rows),
           "raised_open_1": s1 in sessions, "raised_open_2": s2 in sessions}
+    if len(rows) < 2 and s2 not in sessions:
+        return "SKIP", {**ev, "why": "vacuous: fewer than 2 candidates, so nothing else could open the "
+                                     "second conversation"}
     if s2 in sessions:
         return "FAIL", {**ev, "why": "the second open conversation, minutes later, also opened with "
                                      "a raise (cooldown is per candidate; no per-user spacing)"}
