@@ -726,10 +726,12 @@ in the tail → the character cap drops them.
 **Find it:** `python3 scripts/maintenance/compact_drawers_index.py` (read-only report;
 `compaction_advised=True` at ratio ≥ 3). In-process, the tell is an unfiltered query
 reaching far more rows than the filtered one for the same text. Since the fix the service
-logs `MEMORY_SEARCH_FALLBACK …` whenever the filtered query is short — count those.
+logs `MEMORY_SEARCH_SUPPLEMENT …` whenever the unfiltered pass was short — count those.
 
-**Fix:** the service now over-fetches without the filter and re-applies visibility in
-Python (`memory_service._semantic_search`), so recall no longer depends on graph health.
+**Fix:** the service now queries UNFILTERED first and re-applies visibility in Python
+(`memory_service._semantic_search`; the owner-filtered query only supplements a short
+result — a short-result trigger alone missed the FULL-BUT-WRONG case measured on the
+confirmation run), so recall no longer depends on graph health.
 Remove the cause by compacting (operator, zoe-data stopped — the recipe is in the script's
 docstring; it backs up the palace and verifies before returning 0). Rebuilding from the
 STORED embeddings is bit-identical; nothing is re-embedded.
