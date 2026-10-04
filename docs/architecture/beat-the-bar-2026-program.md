@@ -20,7 +20,36 @@ status: 🔨 active — NEXT ACTION is always §0
 
 ## 0. NEXT ACTION (keep this current)
 
-State as of **2026-09-30 11:00 AWST** (context-manager tier 2 live; record in §6):
+State as of **2026-10-04 09:10 AWST** (the 2026-10-03 audits executed; the memory index repaired; record in §6):
+- live = `main` `462a6876` (#1815). Merged and deployed since the last entry, every deploy run
+  green: #1798, #1801, #1800, #1799, #1802, #1803, #1804, #1805, #1810, #1811, #1807, #1808,
+  #1806, #1809, #1812, #1813, #1814, #1815 (18 PRs; the docs leg landed 02:26–04:40, the
+  voice-path leg 06:07–08:59, every landing head-bound replay-gated).
+- **Flags flipped live after an A/B (`ZOE_RECALL_PRESENT_STATE_SHAPES`,
+  `ZOE_ROUTER_EVENT_TIME_PRECEDENCE`, `ZOE_LOOP_LIFECYCLE`; day-sim asks 6/6n/9 FAIL→PASS,
+  replay 19/19) and after a scripted-cancel proof (`ZOE_FLUE_ABORT_ON_CANCEL`: off = 0 aborts,
+  on = `FLUE_ABORT … outcome=requested latency_ms=12`, next turn 730 ms).** All four in
+  zoe-data `.env` under a dated comment block.
+- **The voice gate measures again:** the 04:30 nightly PASSED (first since 09-30; #1798 fixed the
+  `getaddrinfo('zoe.local')` hang, #1811 runs the probe on the service venv — recall had been
+  silently OFF inside every replay since B0.8); bar re-recorded 06:52 on `39ba057c`
+  (recall ok, STT 559 / brain 1,420 / e2e 1,780 ms medians). Earlier bars are not comparable.
+- **Memory index repaired (owner, 08:57):** the drawers HNSW index held 1,591 elements for 258
+  live rows; sentence queries reached 33 rows unfiltered and 0 with the owner filter. After
+  `compact_drawers_index.py --compact`: 258/258 and 6/6. Service-side, search now queries
+  unfiltered first (#1813, #1815; incident-runbook §22, sig. #31 for the `count()` wedge).
+- **Day-sim after everything:** 3 PASS (corrections supersede, #1812), 6/6n/9 PASS, 1r raise
+  injected + settled on the first open turn (#1812 backdates raise stamps; #1814 makes a
+  greeting raise assertive — confirmation pending), 4 pending the post-compaction run.
+- **Operator still:** router `--mlock` unit (#1806 A1: ≥ 1 GB free, no agent session); the
+  decision list in [memory-pressure-profile-2026-10-03.md](../knowledge/memory-pressure-profile-2026-10-03.md)
+  §reclaim and [inference-speech-stack-2026-10-03.md](../research/inference-speech-stack-2026-10-03.md)
+  §3 (`--swa-full`, `--cache-ram`, B1.1 flip, rebuild); TLS cert before 2026-11-24; off-box backups.
+- **Next:** the P1–P5 field pieces ([companion-field-vs-samantha-2026-10-03.md](../research/companion-field-vs-samantha-2026-10-03.md) §2),
+  starting with P2 duck→decide→resume and P3 the speaker gate; a scheduled drawers compaction
+  (ratio ≥ 3) so demo churn cannot re-break recall.
+
+Earlier, **2026-09-30 11:00 AWST** (context-manager tier 2 live; record in §6):
 - live = `main` `43343791` (#1796). Merged and deployed since the last entry, every deploy
   run green: #1787, #1790, #1789, #1791 (replaces #1788), #1793, #1792, #1794, #1795, #1796.
 - **Flags:** ON `ZOE_BRIEF_ON_FIRST_TURN`, `ZOE_PROACTIVE_SELECTOR`, `ZOE_RECALL_EVIDENCE`,
@@ -1300,6 +1329,26 @@ vLLM on Orin (no MTP); a Jetson reflash before B0.7/B0.8; any LoCoMo leaderboard
 a decision input.
 
 ## 6. Change log
+- 2026-10-04 — **the audits executed, the memory index repaired, four flags flipped.** Merge
+  times UTC in the PR list; live = `462a6876`. Docs leg: **#1802** Flue deep dive, **#1803**
+  inference + speech audit (7 Codex rounds: temp 0.5 not 0.7, streaming-STT gain an upper bound,
+  probe floors vs the 2 GB brain-window policy, CANONICAL said b11194 "pending" while it was
+  live), **#1804** infra audit, **#1805** week-in-the-life day-sim + S9–S12, **#1810** clock
+  pin + guard. Voice-path leg (each head-bound replay-gated): **#1811** probe on the service venv
+  (recall-off is never a pass; stable `/usr/bin/python3` launcher + re-exec; `runs_python`
+  print-token check — `/bin/true -c …` exits 0), **#1807** present-state recall shapes +
+  event-time routing + explicit dates, **#1808** loop lifecycle, **#1806** router mlock /
+  codebase-memory cap / zoe-data NOFILE (applied), **#1809** Flue abort-on-cancel + durability
+  budget + first-chunk/stall deadlines, **#1812** corrections supersede the fact they replace +
+  day-sim raise-stamp backdate + case-safe person names + `compact_drawers_index.py`,
+  **#1813** search unfiltered-first, **#1814** greeting raises are brought up, **#1815** hotfix:
+  no `col.count()` in the search path (chroma 1.5.9 Rust client wedged zoe-data 08:07–08:29).
+  Nightly voice gate PASSED 04:30 (first since 09-30); bar re-recorded 06:52. Owner compacted the
+  drawers index 08:57 (1,591 → 258 elements; sentence-query reach 33 → 258 unfiltered, 0 → 6
+  filtered). Records: incident-runbook §22; `docs/research/*-2026-10-03.md`.
+- 2026-10-03 — **research day:** #1798 nightly probe never resolves `zoe.local`; #1801 raise
+  spacing + daily cap; #1800 memory-pressure profile (W3 DoD not met: 0.4–0.5 GB available);
+  #1799 companion-field scan (P1–P10 to borrow).
 - 2026-09-30 — **context-manager tier 2 live: proactivity selector, user-model card, evidence
   recall, implicit supersede; S5 scored for the first time.** Merge times AWST, every deploy
   run green, live = `43343791`:
