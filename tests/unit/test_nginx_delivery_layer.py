@@ -142,7 +142,8 @@ def test_deploy_restarts_the_container_when_nginx_changes_and_preflights_the_new
     step = DEPLOY[DEPLOY.index("Restart zoe-ui / nginx (if changed)"):]
     step = step[: step.index("- name:", 10)]
     assert "services/zoe-ui/nginx.conf services/zoe-ui/nginx.d docker-compose.yml" in step
-    assert re.search(r"nginx@sha256:[0-9a-f]{64}\"? nginx -t", step), "pre-flight with the pinned digest"
+    assert re.search(r"NGINX_IMAGE=\"nginx@sha256:[0-9a-f]{64}\"", step), "the pinned digest is declared in the step"
+    assert '"$NGINX_IMAGE" nginx -t' in step, "pre-flight runs with the pinned digest"
     assert "docker compose up -d --no-deps zoe-ui" in step
     assert "docker restart zoe-ui" in step
 
