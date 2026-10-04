@@ -4,7 +4,9 @@ This module provides JSON-formatted logging with structured fields for better
 integration with log aggregation systems like Loki, CloudWatch, and Datadog.
 """
 
+import fnmatch
 import logging
+import os
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -108,6 +110,97 @@ def setup_json_logging(extra_filters=None) -> None:
     root_logger.setLevel(logging.INFO)
 
 
+# ── poll-loop quieting ────────────────────────────────────────────────────────
+# Kiosk/panel clients poll a handful of endpoints every few seconds. On
+# 2026-10-04 the seven below were ~90% of every "Request completed" line
+# (~248k lines / 95 MB in the unrotated stderr log) and, via uvicorn's access
+# log, ~97% of the 86 MB stdout log — all ``200 OK``, none of it information.
+# A SUCCESSFUL, FAST poll is demoted to DEBUG; anything >= 400 or slower than
+# ``ZOE_LOG_QUIET_POLL_SLOW_MS`` still logs at INFO, so an outage (the thing a
+# poll log exists to show) is never hidden. ``ZOE_LOG_QUIET_POLL_PATHS``
+# overrides the list (comma-separated fnmatch globs; ``off`` disables quieting).
+DEFAULT_QUIET_POLL_PATHS: tuple[str, ...] = (
+    "/health",
+    "/api/system/health",
+    "/api/ui/actions/pending",
+    "/api/ui/state/sync",
+    "/api/voice/announcements",
+    "/api/system/display/preferences",
+    "/api/skybridge/timers",
+    "/api/ha/entities",
+    "/api/music/now-playing",
+    "/api/panels/*/config",
+)
+DEFAULT_QUIET_POLL_SLOW_MS = 1000
+
+
+def quiet_poll_patterns() -> tuple[str, ...]:
+    """The active poll-path globs (env override, else the built-in list)."""
+    raw = os.environ.get("ZOE_LOG_QUIET_POLL_PATHS")
+    if raw is None:
+        return DEFAULT_QUIET_POLL_PATHS
+    raw = raw.strip()
+    if raw.lower() in ("", "off", "none", "0", "false"):
+        return ()
+    return tuple(p.strip() for p in raw.split(",") if p.strip())
+
+
+def _quiet_poll_slow_ms() -> int:
+    try:
+        return max(0, int(os.environ.get("ZOE_LOG_QUIET_POLL_SLOW_MS", DEFAULT_QUIET_POLL_SLOW_MS)))
+    except (TypeError, ValueError):
+        return DEFAULT_QUIET_POLL_SLOW_MS
+
+
+#: The one non-GET that is a poll: the panel's periodic UI-state heartbeat.
+#: Every other write (PUT/POST/PATCH/DELETE) is a *change* someone made and must
+#: always leave a trace, even on a path that is otherwise a polled read.
+HEARTBEAT_POST_PATHS: tuple[str, ...] = ("/api/ui/state/sync",)
+
+
+def is_quiet_poll(
+    path: str,
+    status_code: int,
+    duration_ms: Optional[float] = None,
+    method: str = "GET",
+) -> bool:
+    """True when a finished request is a healthy poll that should log at DEBUG.
+
+    ``duration_ms=None`` (uvicorn's access record carries none) means "judge on
+    status alone". Only reads are quiet (GET/HEAD), plus the heartbeat POST in
+    :data:`HEARTBEAT_POST_PATHS`: a successful ``PUT /api/panels/<id>/config`` or
+    ``PUT /api/system/display/preferences`` is a configuration change, not a poll.
+    """
+    verb = (method or "GET").upper()
+    if verb not in ("GET", "HEAD") and not (verb == "POST" and path in HEARTBEAT_POST_PATHS):
+        return False
+    if status_code >= 400:
+        return False
+    if duration_ms is not None and duration_ms >= _quiet_poll_slow_ms():
+        return False
+    return any(fnmatch.fnmatchcase(path, pat) for pat in quiet_poll_patterns())
+
+
+class QuietPollAccessFilter(logging.Filter):
+    """Drop uvicorn access lines for healthy polls (the stdout-log twin of the
+    middleware demotion above). uvicorn's access record args are
+    ``(client_addr, method, full_path, http_version, status_code)``.
+    Fails open: a record in any other shape is kept.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        try:
+            method = str(args[1])
+            path = str(args[2]).split("?", 1)[0]
+            status = int(args[4])
+        except (TypeError, ValueError):
+            return True
+        return not is_quiet_poll(path, status, None, method)
+
+
 class StructuredLoggingMiddleware(BaseHTTPMiddleware):
     """Middleware that adds structured logging with request context."""
     
@@ -150,7 +243,13 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             
             # Log the request completion
             logger = logging.getLogger(__name__)
-            logger.info(
+            level = (
+                logging.DEBUG
+                if is_quiet_poll(metadata["path"], response.status_code, elapsed_ms, request.method)
+                else logging.INFO
+            )
+            logger.log(
+                level,
                 "Request completed",
                 extra=metadata,
             )
