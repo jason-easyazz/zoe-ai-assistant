@@ -11,7 +11,7 @@ services:
 
   # ── UI ─────────────────────────────────────────────────────────────────────
   zoe-ui:
-    image: nginx:alpine  # pinned: nginx@sha256:b3c656d55d7ad751196f21b7fd2e8d4da9cb430e32f646adcf92441b72f82b14
+    image: nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f  # nginx:alpine as of 2026-10-04; same digest in deploy.yml + validate.yml (pinned by test_nginx_delivery_layer.py)
     container_name: zoe-ui
     ports:
     - 80:80

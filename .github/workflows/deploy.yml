@@ -350,15 +350,21 @@ jobs:
           fi
           # Pre-flight the NEW files in a throwaway container (the live one still holds the
           # old inode, so `docker exec zoe-ui nginx -t` would test the OLD config).
+          # Same digest as docker-compose.yml's image (pinned by tests/unit/test_nginx_delivery_layer.py):
+          # the parser that pre-flights must be the parser that serves.
+          NGINX_IMAGE="nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f"
           docker run --rm --add-host zoe-auth:127.0.0.1 --add-host host.docker.internal:127.0.0.1 \
             -v "$PWD/services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
             -v "$PWD/services/zoe-ui/nginx.d:/etc/nginx/zoe:ro" \
             -v "$PWD/ssl:/etc/nginx/ssl:ro" \
-            nginx:alpine nginx -t
+            "$NGINX_IMAGE" nginx -t
           docker compose up -d --no-deps zoe-ui
           docker restart zoe-ui
+          # Probe something nginx serves ITSELF (a static page), not /health — that is
+          # proxied to zoe-data, which the step after this one may be about to restart.
           for attempt in {1..12}; do
-            curl -skf https://localhost/health > /dev/null && { echo "zoe-ui serving the new config."; exit 0; }
+            code="$(curl -sk -o /dev/null -w '%{http_code}' https://localhost/index.html || true)"
+            [ "$code" = "200" ] && { echo "zoe-ui serving the new config."; exit 0; }
             sleep 3
           done
           docker logs --tail=40 zoe-ui

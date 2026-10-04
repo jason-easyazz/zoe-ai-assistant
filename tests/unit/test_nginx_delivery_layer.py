@@ -142,7 +142,7 @@ def test_deploy_restarts_the_container_when_nginx_changes_and_preflights_the_new
     step = DEPLOY[DEPLOY.index("Restart zoe-ui / nginx (if changed)"):]
     step = step[: step.index("- name:", 10)]
     assert "services/zoe-ui/nginx.conf services/zoe-ui/nginx.d docker-compose.yml" in step
-    assert "nginx:alpine nginx -t" in step
+    assert re.search(r"nginx@sha256:[0-9a-f]{64}\"? nginx -t", step), "pre-flight with the pinned digest"
     assert "docker compose up -d --no-deps zoe-ui" in step
     assert "docker restart zoe-ui" in step
 
@@ -150,5 +150,56 @@ def test_deploy_restarts_the_container_when_nginx_changes_and_preflights_the_new
 def test_validate_parses_the_real_conf_with_a_negative_control():
     step = VALIDATE[VALIDATE.index("nginx config must parse"):]
     step = step[: step.index("- name:", 10)]
-    assert "nginx:alpine nginx -t" in step
+    assert re.search(r"nginx@sha256:[0-9a-f]{64} nginx -t", step), "parse with the pinned digest"
     assert "broken.conf" in step and "the check is not checking" in step
+
+
+def test_nginx_image_digest_is_the_same_in_compose_deploy_and_validate():
+    digests = set()
+    for text in (COMPOSE, DEPLOY, VALIDATE):
+        found = set(re.findall(r"nginx@sha256:[0-9a-f]{64}", text))
+        assert len(found) == 1, "exactly one nginx digest per file"
+        digests |= found
+    assert len(digests) == 1, f"the parser that pre-flights must be the parser that serves: {digests}"
+    assert "nginx:alpine nginx -t" not in DEPLOY and "nginx:alpine nginx -t" not in VALIDATE
+
+
+def test_deploy_probes_a_page_nginx_serves_itself_not_the_proxied_health():
+    step = DEPLOY[DEPLOY.index("Restart zoe-ui / nginx (if changed)"):]
+    step = step[: step.index("- name:", 10)]
+    assert "https://localhost/index.html" in step
+    assert "https://localhost/health" not in step, "/health is proxied to zoe-data, which the next step may be restarting"
+
+
+def _tool():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "ensure_nginx_security_headers", ROOT / "tools" / "audit" / "ensure_nginx_security_headers.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_tool_leaves_the_real_conf_untouched_and_reports_it_managed():
+    mod = _tool()
+    assert mod.ensure_headers(CONF) == CONF
+    assert mod.missing_headers(CONF) == []
+
+
+def test_tool_snippet_in_a_nested_location_does_not_satisfy_the_server_scope():
+    # Codex (#1834): a server whose ONLY include sits inside a location must still get
+    # server-scope headers, while that location is left alone.
+    mod = _tool()
+    conf = (
+        "server {\n    listen 80;\n    server_name _;\n"
+        "    location ~* \\.(js|css)$ {\n        include /etc/nginx/zoe/security-headers.inc;\n"
+        "        add_header Cache-Control \"no-cache\" always;\n    }\n}\n"
+    )
+    assert mod.missing_headers(conf), "server scope has no headers — must be reported"
+    out = mod.ensure_headers(conf)
+    assert out != conf, "write mode must repair the server scope"
+    assert out.count("add_header Content-Security-Policy") == 1, "only the server scope gains a literal block"
+    assert out.count("include /etc/nginx/zoe/security-headers.inc;") == 1, "the including location is left alone"
+    assert mod.missing_headers(out) == []

@@ -224,7 +224,7 @@ def _insert_location_headers(block: str, *, include_hsts: bool) -> str:
     for start, end in location_blocks:
         result.append(block[cursor:start])
         location = block[start:end]
-        if not _has_active_add_header(location):
+        if not _has_active_add_header(location) or _has_snippet_include(location):
             result.append(location)
             cursor = end
             continue
@@ -254,8 +254,12 @@ def ensure_headers(text: str) -> str:
     for start, end in blocks:
         result.append(text[cursor:start])
         block = text[start:end]
-        if _has_snippet_include(block):
-            result.append(block)
+        location_blocks = _find_named_blocks(block, "location")
+        first_location_start = min((loc_start for loc_start, _loc_end in location_blocks), default=len(block))
+        if _has_snippet_include(block[:first_location_start]):
+            # Server scope is covered by the snippet; nested locations that set
+            # their own add_header are repaired below unless they include it too.
+            result.append(_insert_location_headers(block, include_hsts=_is_tls_block(block)))
             cursor = end
             continue
         block = _strip_managed_block(block)
