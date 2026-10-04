@@ -4529,23 +4529,26 @@ def migrate_mempalace_legacy_records(default_user_id: str = "family-admin") -> N
         return
     try:
         import datetime
-        from memory_service import get_drawers_collection
-        col = get_drawers_collection(_MEMPALACE_DATA)
-        old = col.get(where={"wing": "zoe"}, include=["documents", "metadatas"])
-        ids = old.get("ids") or []
-        docs = old.get("documents") or []
-        metas = old.get("metadatas") or []
-        if ids:
-            now_iso = datetime.datetime.now().isoformat()
-            updated_metas = []
-            for m in metas:
-                m = dict(m)
-                m["wing"] = default_user_id
-                if "added_at" not in m:
-                    m["added_at"] = now_iso
-                updated_metas.append(m)
-            col.upsert(ids=ids, documents=docs, metadatas=updated_metas)
-            logger.info("mempalace: migrated %d legacy records → wing=%s", len(ids), default_user_id)
+        from memory_service import collection_op, get_drawers_collection
+        # A direct opener user: hold the collection lease for the whole read-modify-write
+        # so the index compaction drains this op instead of swapping the collection under it.
+        with collection_op():
+            col = get_drawers_collection(_MEMPALACE_DATA)
+            old = col.get(where={"wing": "zoe"}, include=["documents", "metadatas"])
+            ids = old.get("ids") or []
+            docs = old.get("documents") or []
+            metas = old.get("metadatas") or []
+            if ids:
+                now_iso = datetime.datetime.now().isoformat()
+                updated_metas = []
+                for m in metas:
+                    m = dict(m)
+                    m["wing"] = default_user_id
+                    if "added_at" not in m:
+                        m["added_at"] = now_iso
+                    updated_metas.append(m)
+                col.upsert(ids=ids, documents=docs, metadatas=updated_metas)
+                logger.info("mempalace: migrated %d legacy records → wing=%s", len(ids), default_user_id)
         # Mark done
         os.makedirs(os.path.dirname(_MIGRATION_DONE_FLAG), exist_ok=True)
         with open(_MIGRATION_DONE_FLAG, "w") as f:

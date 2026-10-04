@@ -77,11 +77,19 @@ if [ "${CODEBASE_MEMORY_NO_SCOPE:-0}" = "1" ]; then
     exec "$BIN" "$@"
 fi
 
+# --slice=zoe-agents.slice: without it each scope lands in app.slice beside its caller, so
+# the per-client caps bound each member but nothing bounds the SUM (the 2026-08-02 fleet).
+# The aggregate bound lives in scripts/setup/systemd/zoe-agents.slice (docs/research/
+# agent-sessions-off-box-2026-10-04.md, section 3.1). The 768M member cap is unchanged.
+# Until an operator installs that slice unit, systemd creates an implicit slice of the
+# same name with NO limits, so shipping this line first is harmless.
+#
 # MemorySwapMax is set alongside MemoryMax deliberately: capping RSS without
 # capping swap just relocates a leak into swap, which is what happened to Serena
 # (2.1 GB leaked into swap under a MemoryMax that looked correct).
 if systemd-run --user --scope --quiet --collect true 2>/dev/null; then
     exec systemd-run --user --scope --quiet --collect \
+        --slice=zoe-agents.slice \
         -p MemoryHigh="$MEM_HIGH" -p MemoryMax="$MEM_MAX" -p MemorySwapMax="$MEM_MAX" \
         "$BIN" "$@"
 fi
