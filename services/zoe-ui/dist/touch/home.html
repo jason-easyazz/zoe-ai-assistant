@@ -1375,14 +1375,34 @@
       // keep it fresh while it's visible (title/art/state change on skip)
       // (reschedule already armed above, before the early returns — arming it
       //  again here would leak the first timer and double the poll rate)
-    }).catch(function(){});
+    }).catch(function(){
+      // A failed poll (deploy restart, MA hiccup) must not end the 5 s chain —
+      // this poller is the only heartbeat while you're off the music card.
+      if(gen!==_dockMusicGen)return;
+      if(_dockMusicT){clearTimeout(_dockMusicT);_dockMusicT=null;}
+      _dockMusicT=setTimeout(paintDockMusic,5000);
+    });
   }
   // Dock timer chip — a small live countdown pinned in the dock while any
   // timer runs; tapping it opens the timer surface. Refreshed by renderDock.
   var _dockTmr={t:null,gen:0};
+  // ONE timers fetch for everyone. The dock chip (every renderDock), the timer
+  // surface (15 s) and the alarm watcher (15 s) each hit /api/skybridge/timers
+  // on their own; a response younger than TIMERS_MEMO_MS is shared instead.
+  // A failed fetch is not memoised, so the next caller retries at once.
+  var TIMERS_MEMO_MS=10000,_tmMemo={at:0,p:null};
+  function timersGet(now){
+    now=now||Date.now();
+    if(_tmMemo.p&&now-_tmMemo.at<TIMERS_MEMO_MS)return _tmMemo.p;
+    _tmMemo.at=now;
+    var p=apiGet('/api/skybridge/timers');
+    _tmMemo.p=p;
+    p.catch(function(){if(_tmMemo.p===p)_tmMemo.p=null;});
+    return p;
+  }
   function paintDockTimer(){
     var gen=++_dockTmr.gen;   // overlapping renderDock()s: only the newest response paints
-    apiGet('/api/skybridge/timers').then(function(d){
+    timersGet().then(function(d){
       if(gen!==_dockTmr.gen)return;
       var now=Date.now();
       var exps=((d&&d.timers)||[]).map(function(t){return +t.expires_at_ms||0;}).filter(function(e){return e>now;}).sort(function(a,b){return a-b;}).slice(0,4);
@@ -1469,7 +1489,16 @@
   }
   var _ha={loaded:false,ok:false,lights:[],climate:null,scenes:[]};
   function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)});}
-  function loadHA(cb){apiGet('/api/ha/entities').then(function(s){
+  // One in-flight entity load at a time, and a response younger than HA_MEMO_MS
+  // is reused: the dock's refreshHA (30 s), the Rooms surface (30 s) and the Sleep
+  // surface (30 s) all used to fetch /api/ha/entities independently.
+  var HA_MEMO_MS=5000,_haAt=0,_haInflight=null;
+  function loadHA(cb){
+    if(_ha.loaded&&Date.now()-_haAt<HA_MEMO_MS){cb&&cb();return;}
+    if(_haInflight){_haInflight.then(function(){cb&&cb();});return;}
+    _haInflight=_loadHA().then(function(){_haAt=Date.now();_haInflight=null;cb&&cb();});
+  }
+  function _loadHA(){return apiGet('/api/ha/entities').then(function(s){
       var arr=Array.isArray(s)?s:((s&&s.entities)||(s&&s.states)||[]);
       function dom(e){return String(e.entity_id||'').split('.')[0];}
       // Toggleable pins: real lights first, else the house's input_boolean
@@ -1480,8 +1509,8 @@
       // Healthy only when the response is the documented shape (array, or the
       // ha_control envelope carrying its count field) — a malformed 200 from a
       // sick bridge must not read as "the house has no devices".
-      _ha.loaded=true;_ha.ok=Array.isArray(s)||(!!s&&typeof s.count==='number');cb&&cb();
-    }).catch(function(){_ha.loaded=true;_ha.ok=false;cb&&cb();});}
+      _ha.loaded=true;_ha.ok=Array.isArray(s)||(!!s&&typeof s.count==='number');
+    }).catch(function(){_ha.loaded=true;_ha.ok=false;});}
   // Re-pull HA state and refresh the dock — recovers from a failed first load and
   // keeps light/temp state fresh. Skips while heard/hidden/mid-interaction.
   function refreshHA(){
@@ -1837,6 +1866,7 @@
       var np=d&&d.now_playing;
       var spk=document.getElementById('mSpk'),ti=document.getElementById('mTitle'),ar=document.getElementById('mArtist'),fill=document.getElementById('mFill'),te=document.getElementById('mElapsed'),td=document.getElementById('mDur'),pp=document.getElementById('mPP');
       var idle=!d||!d.available||!np||!(np.title||np.state==='playing'||np.state==='paused');
+      var unavailable=!!d&&d.available===false;   // Music Assistant itself is down — not "nothing playing"
       var scrub=document.querySelector('.mfull .mscrub'),tp=document.getElementById('mTransport');
       var tbtn=document.getElementById('mToolsBtn'),vtile=document.getElementById('mVolT');
       noteNP(np);   // before the idle return, so stopping the music lets sleep arm again
@@ -1846,9 +1876,10 @@
         // hide the controls that have nothing to act on.
         if(np&&np.player_id&&!_music.player_id)_music.player_id=np.player_id;
         _music.np=null;
-        if(ti)ti.textContent='Nothing playing';
+        if(ti)ti.textContent=unavailable?'Music isn’t available right now':'Nothing playing';
         var pp0=document.getElementById('mPP');if(pp0){pp0.dataset.playing='0';pp0.innerHTML=PLAY_I;}
-        if(ar)ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';
+        if(ar){if(unavailable)ar.textContent='The music service is offline — the speakers come back when it does.';
+          else ar.innerHTML='Say <b style="color:var(--ink)">“Hey Zoe, play some music”</b> — or pick a speaker first.';}
         if(scrub)scrub.style.display='none';if(tp)tp.style.display='none';
         // Nothing to act on: hide the tools + volume tiles too, and force the
         // tools row shut so it can't linger over an idle card.
@@ -1903,7 +1934,13 @@
         if(mvv)mvv.textContent=Math.round(np.volume)+'%';
       }
       _music.shuffle=!!np.shuffle;
-    }).catch(function(){});
+    }).catch(function(){
+      // Failed ≠ idle: keep whatever the card showed and say so quietly, rather
+      // than repainting "Nothing playing" over a track that is still playing.
+      if(_cur!=='music')return;
+      var ar2=document.getElementById('mArtist');
+      if(ar2&&!_music.np)ar2.textContent='Couldn’t reach the music service — retrying.';
+    });
   }
   // Smooth elapsed between the 5s polls — the scrub advances every second
   // while something is playing instead of jumping on each poll.
@@ -2149,11 +2186,15 @@
         var provs=(d&&d.providers)||[];
         host.innerHTML='<div class="srclist">'+provs.map(_srcRow).join('')+'</div>'||_qempty('No music services.');
         _wireSources(host);
-      }).catch(function(){if(_cur!=='browse'||gen!==_qGen)return;
-        // The catalogue is owner-gated — a guest kiosk gets 401. Offer sign-in.
-        host.innerHTML='<div class="srcnote">Sign in to manage music services.'
-          +'<button class="srcbtn" id="srcSignin">Sign in</button></div>';
-        var b=document.getElementById('srcSignin');if(b)b.onclick=function(){if(window.__showAuthCard)window.__showAuthCard();};
+      }).catch(function(e){if(_cur!=='browse'||gen!==_qGen)return;
+        // 'auth' = the catalogue is owner-gated and this is a guest — offer sign-in.
+        // Anything else is a FAILED load (deploy restart, bridge down) and must not
+        // read as "sign in" (empty ≠ failed ≠ unknown).
+        if(e&&e.message==='auth'){
+          host.innerHTML='<div class="srcnote">Sign in to manage music services.'
+            +'<button class="srcbtn" id="srcSignin">Sign in</button></div>';
+          var b=document.getElementById('srcSignin');if(b)b.onclick=function(){if(window.__showAuthCard)window.__showAuthCard();};
+        } else host.innerHTML=_qempty('Couldn’t load music services — tap Sources again to retry.');
       });return;}
   }
   function _srcRow(p){
@@ -3125,14 +3166,31 @@
   function wireListsFull(){
     var tabs=document.getElementById('lstTabs');if(!tabs)return;
     tabs.innerHTML='<span class="ltab" style="opacity:.6">Loading…</span>';
-    Promise.all(LIST_TYPES.map(function(t){return apiJson('GET','/api/lists/'+t).then(function(d){return (d.lists||[]).map(function(l){l.list_type=l.list_type||t;return l;});}).catch(function(){return [];});}))
-      .then(function(groups){if(_cur!=='list')return;
-        _lst.lists=[].concat.apply([],groups);
+    Promise.all(LIST_TYPES.map(function(t){return apiJson('GET','/api/lists/'+t).then(function(d){return {ok:true,lists:(d.lists||[]).map(function(l){l.list_type=l.list_type||t;return l;})};}).catch(function(e){return {ok:false,auth:!!(e&&e.message==='auth')};});}))
+      .then(function(results){if(_cur!=='list')return;
+        var m=mergeListGroups(results,_lst.lists);
+        if(m.allFailed){
+          // Every type failed (a deploy restart, typically). Keep the last good
+          // board if we have one; never paint "no lists" over a transient failure.
+          if(m.lists.length){toast('Couldn’t refresh lists');paintListTabs();paintListBody();return;}
+          tabs.innerHTML='<span class="ltab" data-retry="1">'+(m.auth?'Sign in to see your lists':'Couldn’t load lists — tap to retry')+'</span>';
+          tabs.onclick=function(e){if(e.target.closest('[data-retry]')){tabs.onclick=null;if(m.auth&&window.__showAuthCard)window.__showAuthCard();else wireListsFull();}};
+          return;
+        }
+        if(m.someFailed)toast('Some lists didn’t load');
+        _lst.lists=m.lists;
         // a previously-selected list may have been deleted elsewhere — revalidate
         if(_lst.sel&&!_lst.lists.some(function(l){return l.id===_lst.sel;}))_lst.sel=null;
         if(!_lst.sel&&_lst.lists.length)_lst.sel=_lst.lists[0].id;
         paintListTabs();paintListBody();
       }).catch(function(){if(_cur==='list')tabs.innerHTML='<span class="ltab">Couldn’t load lists</span>';});
+  }
+  // Pure: per-type results → the board to show. Pinned by dist/test_touch_resilience.js.
+  function mergeListGroups(results,prev){
+    var ok=results.filter(function(r){return r&&r.ok;});
+    var allFailed=ok.length===0,someFailed=ok.length<results.length;
+    var lists=allFailed?(prev||[]):[].concat.apply([],ok.map(function(r){return r.lists||[];}));
+    return {lists:lists,allFailed:allFailed,someFailed:someFailed,auth:results.some(function(r){return r&&!r.ok&&r.auth;})};
   }
   function paintListTabs(){
     var tabs=document.getElementById('lstTabs');if(!tabs)return;
@@ -3174,7 +3232,7 @@
   function fmtT(s){s=Math.max(0,Math.round(s));var m=Math.floor(s/60);return m+':'+two(s%60);}
   function timerRemain(t){if(t.expires_at_ms!=null)return (t.expires_at_ms-Date.now())/1000;if(t.ends_at)return (new Date(t.ends_at).getTime()-Date.now())/1000;if(t.remaining_seconds!=null)return t.remaining_seconds;return t.duration_seconds||0;}
   function wireTimer(){
-    function paint(){apiJson('GET','/api/skybridge/timers').then(function(d){if(_cur!=='timer')return;
+    function paint(){timersGet().then(function(d){if(_cur!=='timer')return;
       var ts=(d.timers||[]).filter(function(t){return timerRemain(t)>0;}).sort(function(a,b){return timerRemain(a)-timerRemain(b);});
       var rings=document.getElementById('tmRings'),more=document.getElementById('tmMore');
       if(!rings)return;
@@ -4042,7 +4100,7 @@
   // detect the crossing client-side). Cancelled timers (gone while still in the
   // future) are pruned so they never alarm.
   var _tAlarm={known:{},fired:{},chime:null};
-  function _tAlarmRefresh(){apiGet('/api/skybridge/timers').then(function(d){
+  function _tAlarmRefresh(){timersGet().then(function(d){
     var seen={},now=Date.now();
     ((d&&d.timers)||[]).forEach(function(t){var id=String(t.timer_id||t.id||''),exp=+t.expires_at_ms||0;if(!id||!exp)return;seen[id]=1;
       if(!_tAlarm.fired[id])_tAlarm.known[id]={exp:exp,label:t.label||t.title||'Timer'};});
