@@ -3,7 +3,7 @@
 
 Logged OUT: every data page must navigate exactly once to /index.html with ZERO /api
 requests and ZERO /ws/push attempts (the synchronous members-only gate in js/auth.js);
-public pages stay put. Logged IN (a member session minted with a PIN from $ZOE_PIN via
+public pages stay put. Logged IN (a member session minted with a PIN from $DESKTOP_GATE_PIN via
 /api/auth/login/passcode): every data page loads with no "Session Expired" overlay, no
 401/403, no ReferenceError/TypeError, one push URL carrying session_id, chat lists the
 member's sessions and never the guest probe pool, and a GUEST session is treated as
@@ -16,7 +16,7 @@ rejects the push handshake as cross-origin, so the socket check only requires a 
 URL with bounded reconnects; run it against the real origin (--base https://192.168.1.218)
 after deploy to see exactly one socket.
 
-  ZOE_PIN=<member pin> python3 scripts/maintenance/desktop_browser_verify.py --base https://192.168.1.218:8443
+  DESKTOP_GATE_PIN=<member pin> python3 scripts/maintenance/desktop_browser_verify.py --base https://192.168.1.218:8443
 """
 import argparse
 ap = argparse.ArgumentParser()
@@ -62,7 +62,7 @@ with sync_playwright() as p:
     print("=== LOGGED IN (member session via passcode) — pages load, ONE push socket each, no overlay, chat lists MY sessions")
     import urllib.request, ssl
     ctxssl=ssl.create_default_context(); ctxssl.check_hostname=False; ctxssl.verify_mode=ssl.CERT_NONE
-    body=json.dumps({"username":args.username,"user_id":args.user,"passcode":os.environ["ZOE_PIN"]}).encode()
+    body=json.dumps({"username":args.username,"user_id":args.user,"passcode":os.environ["DESKTOP_GATE_PIN"]}).encode()
     req=urllib.request.Request(BASE+"/api/auth/login/passcode", data=body, headers={"Content-Type":"application/json"})
     d=json.loads(urllib.request.urlopen(req, context=ctxssl, timeout=15).read())
     assert d.get("success") and d.get("session_id"), "passcode login failed"
