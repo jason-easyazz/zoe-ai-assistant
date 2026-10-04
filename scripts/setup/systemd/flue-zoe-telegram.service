@@ -27,6 +27,10 @@ WorkingDirectory=%h/assistant/labs/flue-zoe-telegram-2x
 ExecStart=%h/.nvm/current/bin/node dist/server.mjs
 Restart=always
 RestartSec=5
+# The Flue/Node server traps SIGTERM and exits 143 (128+15); without this every stop or
+# deploy restart logs "Failed with result 'exit-code'" (29+ false failures in a week) and
+# buries a real crash. Restart=always is unchanged. docs/knowledge/log-review-units-2026-10-04.md
+SuccessExitStatus=143
 # Secrets and identity (TELEGRAM_BOT_TOKEN, ZOE_DATA_URL,
 # ZOE_INTERNAL_TOKEN, ...) live in the lab-local .env — copy .env.example and fill
 # it in. NEVER inline values here. The file is required (no '-' prefix): the unit

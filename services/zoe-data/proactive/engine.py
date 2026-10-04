@@ -431,6 +431,15 @@ async def _slow_loop() -> None:
                 await evaluate_pending_responses()
             except Exception as exc:
                 log.warning("brief-on-arrival response sweep failed: %s", exc)
+
+            # Step 4: pull-not-push inbox PR 1 — close delivery-ledger rows whose
+            # evidence is in. Flag-dark: an immediate no-op (no DB) unless
+            # ZOE_PROACTIVE_LEDGER is on. Writes a table only; never speaks.
+            try:
+                from proactive.ledger import sweep as ledger_sweep
+                await ledger_sweep()
+            except Exception as exc:
+                log.warning("delivery-ledger sweep failed: %s", exc)
         except Exception as exc:
             # Covers connection-acquisition failures (e.g. transient pool
             # exhaustion / DB restart) that would otherwise escape this loop
