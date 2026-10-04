@@ -1,0 +1,51 @@
+# zoe-agents.slice — the aggregate bound for every ENGINEERING cgroup on this box (user slice).
+#
+# Why (docs/research/agent-sessions-off-box-2026-10-04.md, §1.4 + §3.1): every recorded
+# RAM incident since July is an agent-tooling incident (19 ccd-cli processes, six
+# per-session Serenas, 14 codebase-memory instances, 19 leaked Omnigent runners). Each
+# class fix bounded a COMPONENT; nothing bounded the SUM, or how many engineering
+# processes run on the product box at once. A slice bounds exactly what is parented to
+# it, so the members are parented here, each keeping its own member cap:
+#   * agent sessions      - `scripts/agents/zoe-agent` (systemd-run --scope --slice=)
+#   * the remote bridge   - `zoe-claude-bridge.service` (Slice=)
+#   * shared Serena       - `serena-mcp.service.d/70-agents-slice.conf` (Slice=)
+#   * codebase-memory     - `scripts/maintenance/codebase_memory_capped.sh` (--slice=)
+#   * (PR 2) the builder unit
+# The Omnigent container CANNOT join (Docker puts it under system.slice); its own limit
+# is counted beside this one, not inside it: worst case 3 GB (this slice) + 1.5 GB
+# (container) = 4.5 GB, typical ~1.3 GB, instead of an open-ended fleet.
+#
+# The three memory keys travel together - "two out of three is not a cap"
+# (incident-runbook.md section 6):
+#   MemoryHigh == MemoryMax  no throttle band: memory.high never OOM-kills, it throttles
+#                            the allocator forever (the A6 lesson, scripts/AGENTS.md:45).
+#                            With them equal, a runaway ends in an OOM kill of THIS
+#                            slice's biggest member, not in permanent refault on the NVMe.
+#   MemorySwapMax=0          a cap that can be pushed into swap just relocates the leak
+#                            (Serena leaked 2.1 GB into swap under a MemoryMax that
+#                            looked correct, 2026-07-03).
+# CPUWeight/IOWeight 50 (default 100; the voice stack holds 300-400): dev tooling must
+# lose every scheduling fight against the voice path. The record gives no weight - 50 is
+# this PR's choice, retune from the sampler's data.
+#
+# Caveat: cgroup guards cover CPU pages only. They do nothing for NvMap/CUDA allocations
+# (the 2026-07-19 brain crash-loop), so a GPU-loading harness run from a session is
+# guarded by `flock /tmp/zoe-voice-harness.lock`, not by this slice.
+#
+# INERT until an operator installs it. Install / verify / negative controls / rollback:
+# docs/knowledge/engineering-off-box.md. Quick form:
+#   cp scripts/setup/systemd/zoe-agents.slice ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/zoe-agents.slice/memory.max   # 3221225472
+# Rollback: rm ~/.config/systemd/user/zoe-agents.slice; systemctl --user daemon-reload.
+
+[Unit]
+Description=Engineering agents (Claude/Codex sessions, Serena, codebase-memory) - aggregate memory bound
+Documentation=file://%h/assistant/docs/knowledge/engineering-off-box.md
+
+[Slice]
+MemoryHigh=3G
+MemoryMax=3G
+MemorySwapMax=0
+CPUWeight=50
+IOWeight=50

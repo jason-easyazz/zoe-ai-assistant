@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Exec target of zoe-claude-bridge.service — runs INSIDE the unit's `flock -n -E 75 <lease>`.
+#
+# The Claude Code remote-control bridge is not a stable path: on this box it is
+# ~/.claude/remote/srv/<sha1>/server (one directory per app release, e.g. 89cb6289…/server),
+# NOT a file called `srv`. A unit cannot pin the hash, so this resolves the newest release
+# directory at start. Because the flock in the unit's ExecStart wraps THIS script, the lease
+# is held for as long as the bridge runs, and every ccd-cli the bridge spawns inherits both the
+# lease fd and the unit's Slice=.
+#
+# [unverified] The flags below are copied from the live process observed 2026-10-04
+# (`server --serve --socket <run>/rpc.sock --token-file <run>/token.<id>`); how the desktop app
+# discovers a server it did not start (run dir <hash>/daemon.lock + daemon.token) was NOT
+# tested. The unit therefore ships without [Install] and is stage-gated in the runbook.
+#
+# Overrides (no ZOE_* flags — this is operator tooling): AGENT_BRIDGE_SRV_ROOT,
+# AGENT_BRIDGE_RUN_DIR.
+set -euo pipefail
+
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+HOLDER="$RUNTIME_DIR/zoe-agent-session.holder"
+SRV_ROOT="${AGENT_BRIDGE_SRV_ROOT:-$HOME/.claude/remote/srv}"
+RUN_DIR="${AGENT_BRIDGE_RUN_DIR:-$HOME/.claude/remote/run/zoe-managed}"
+
+bin=""
+for d in "$SRV_ROOT"/*/; do
+    [ -x "${d}server" ] || continue
+    if [ -z "$bin" ] || [ "$d" -nt "${bin%server}" ]; then bin="${d}server"; fi
+done
+if [ -z "$bin" ]; then
+    echo "zoe-claude-bridge-exec: no executable <release>/server under $SRV_ROOT" >&2
+    exit 127
+fi
+
+mkdir -p "$RUN_DIR"
+chmod 700 "$RUN_DIR"
+token="$RUN_DIR/token"
+if [ ! -s "$token" ]; then
+    (umask 077; head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$token")
+fi
+
+printf 'pid=%s\nsince=%s\ncli=%s\n' "$$" "$(date +%s)" "claude-bridge" > "$HOLDER"
+exec "$bin" --serve --socket "$RUN_DIR/rpc.sock" --token-file "$token"
