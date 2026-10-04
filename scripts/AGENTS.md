@@ -272,6 +272,31 @@ no review in flight** — it kills live dispatches. Prefer
   true and requires the reap to PROCEED — so a guard cannot pass by the reaper
   simply refusing everything.
 
+- `ma_idle_reap.py` — the STOP half of the Music Assistant idle reap (flag-dark
+  `ZOE_MA_IDLE_REAP=1`; the START half is `services/zoe-data/ma_ondemand.py`).
+  Dry-run by default, `--execute` stops; paired 10-min user timer
+  `zoe-ma-idle-reap.{service,timer}` in `setup/systemd/` (operator opt-in; reads
+  `services/zoe-data/.env` via `EnvironmentFile` so the flag + MA token have ONE
+  home — a missing token makes MA unreadable and the reaper KEEPS, visibly, in
+  `~/.zoe-logs/ma-idle-reap.log`). `decide()` is pure and keeps the container
+  unless EVERY guard passes: flag on, container running, MA API readable (unknown
+  is never idle), no `inflight` stamp younger than `ZOE_MA_INFLIGHT_GRACE_S` (120),
+  no player `playing` and no `paused` player with a queue, the newest of the
+  zoe-data `activity` stamp and MA's per-QUEUE `elapsed_time_last_updated` older
+  than `ZOE_MA_IDLE_MIN` (45), and the local hour outside `ZOE_MA_REAP_QUIET_HOURS`
+  (`HH-HH`, wraps midnight, unset = none). Queue timestamps, not player ones: a
+  Sonos/Cast player refreshes its own stamp on local (non-MA) playback and would
+  pin MA alive forever. The stop runs under the shared `flock` `ensure_running`
+  holds while starting, and `observe()` — the ONE snapshot (docker, MA
+  players/queues, stamps, clock) → `decide()` path — runs AGAIN inside the lock:
+  a play started natively in MA (phone app, Sonos, AirPlay) stamps nothing, so
+  only a re-fetch can see it; an inflight-only re-check cut a live stream. Pinned
+  by `tests/unit/test_ma_idle_reap.py` (`ci_safe`): every guard has a negative
+  control, `test_all_guards_pass_requires_a_stop` requires the reap to PROCEED,
+  and `test_execute_re_observes_under_the_lock_and_sees_a_native_play` makes the
+  second `players/all` answer `playing` and requires a keep.
+  Record + apply/rollback: `docs/knowledge/music-assistant-idle-reap.md`.
+
 Verification: `bash -n`, `pytest tests/unit/test_cross_review_poll.py
 tests/unit/test_reap_stale_omnigent_runners.py` (offline, `ci_safe`, canned
 fixtures + a fake clock + synthetic `/proc` trees — no network, no live

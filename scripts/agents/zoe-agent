@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# zoe-agent — the ONE way to start an engineering CLI (Claude Code / Codex) on the Zoe box.
+#
+#   zoe-agent claude [claude args...]
+#   zoe-agent codex  [codex args...]
+#   zoe-agent --force claude ...        OPERATOR ONLY (see below)
+#
+# What it does, in this order, BEFORE the CLI runs:
+#   1. takes the session lease — a non-blocking flock on $XDG_RUNTIME_DIR/zoe-agent-session.lock
+#      (exit 75 = "another engineering session holds the lease"), and
+#   2. enters zoe-agents.slice via `systemd-run --user --scope`, then exec's the CLI.
+# The lock fd is inherited by the CLI and everything it spawns, so the lease lives exactly as
+# long as the session. Why a LAUNCHER and not a Claude Code SessionStart hook: that hook is
+# context-only (it cannot refuse), and by the time it runs the process is already outside any
+# slice. The enforcement point has to be the thing that exec's the CLI. Record:
+# docs/research/agent-sessions-off-box-2026-10-04.md section 3.1.
+#
+# The session lease is deliberately NOT /tmp/zoe-voice-harness.lock. That lock is the
+# brain-window lock, taken only around model-loading commands (voice_regression_probe.py,
+# measure_voice.py, a Kokoro load). Tying it to an open session would let an idle editor block
+# the nightly replay gate and every voice-PR landing. This script never touches it.
+#
+# --force is for the OPERATOR (Jason), for a deliberate second session or a recovery. It skips
+# the lease check (so it also holds no lease) but STILL enters the slice, so the aggregate cap
+# applies, and the sampler counts the session. Agents must never pass it.
+#
+# Exit codes: 75 lease held by another session; 64 usage; 127 CLI not found; otherwise the
+# CLI's own exit status (exec replaces this shell, so nothing here can mask it).
+set -euo pipefail
+
+SLICE="zoe-agents.slice"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+LOCK="$RUNTIME_DIR/zoe-agent-session.lock"
+HOLDER="$RUNTIME_DIR/zoe-agent-session.holder"
+
+usage() {
+    cat >&2 <<USAGE
+usage: zoe-agent [--force] claude|codex [CLI args...]
+  Starts the CLI inside $SLICE holding the single engineering-session lease.
+  --force  OPERATOR ONLY: skip the lease (still enters the slice; the sampler counts it).
+USAGE
+}
+
+force=0
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    --force) force=1; shift ;;
+esac
+cli="${1:-}"
+case "$cli" in
+    claude|codex) shift ;;
+    *) usage; exit 64 ;;
+esac
+
+cli_path="$(command -v "$cli" || true)"
+if [ -z "$cli_path" ]; then
+    echo "zoe-agent: '$cli' not found on PATH" >&2
+    exit 127
+fi
+
+if [ "$force" = 1 ]; then
+    echo "zoe-agent: --force: starting WITHOUT the session lease (operator override); still entering $SLICE" >&2
+else
+    mkdir -p "$RUNTIME_DIR"
+    exec 9>>"$LOCK"
+    rc=0
+    flock -n -E 75 9 || rc=$?
+    if [ "$rc" = 75 ]; then
+        holder_pid="" holder_since="" holder_cli=""
+        if [ -r "$HOLDER" ]; then
+            while IFS='=' read -r k v; do
+                case "$k" in
+                    pid) holder_pid="$v" ;;
+                    since) holder_since="$v" ;;
+                    cli) holder_cli="$v" ;;
+                esac
+            done < "$HOLDER"
+        fi
+        if [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null; then
+            since_h="$holder_since"
+            if [[ "$holder_since" =~ ^[0-9]+$ ]]; then
+                since_h="$(date -d "@$holder_since" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || echo "$holder_since")"
+            fi
+            echo "zoe-agent: another engineering session holds the lease (pid $holder_pid, since $since_h, ${holder_cli:-unknown cli})." >&2
+        else
+            echo "zoe-agent: another engineering session holds the lease (pid unknown; holder file missing or stale -" >&2
+            echo "           likely zoe-claude-bridge.service or a process that inherited the lock fd:" >&2
+            echo "           systemctl --user status zoe-claude-bridge)." >&2
+        fi
+        echo "zoe-agent: one session at a time on this box. Finish or close it; --force is operator-only." >&2
+        exit 75
+    elif [ "$rc" != 0 ]; then
+        echo "zoe-agent: could not take the session lock $LOCK (flock exit $rc)" >&2
+        exit "$rc"
+    fi
+    printf 'pid=%s\nsince=%s\ncli=%s\n' "$$" "$(date +%s)" "$cli" > "$HOLDER"
+fi
+
+# The probe must not hold the lease fd past its own life, hence 9>&-.
+if systemd-run --user --scope --quiet --collect true 9>&- 2>/dev/null; then
+    exec systemd-run --user --slice="$SLICE" --scope --quiet --collect -- "$cli_path" "$@"
+fi
+
+# No systemd user bus (container, no session): keep the lease, lose the slice, and say so —
+# the sampler's "outside the slice" count will show it.
+echo "zoe-agent: systemd user scope unavailable, launching OUTSIDE $SLICE (lease still held)" >&2
+exec "$cli_path" "$@"
