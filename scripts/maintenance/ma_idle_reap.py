@@ -198,6 +198,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         if time.time() - _mtime(state_dir / "inflight") < args.inflight_grace_s:
             print(f"{stamp} MA_REAP keep music request in flight (re-check)")
             return 0
+        # Stamp BEFORE the stop: zoe-data's ensure_running distrusts any cached
+        # "MA answered" older than this file, so a wake right after the stop probes
+        # instead of skipping straight to a request that would fail.
+        (state_dir / "stopped").touch()
         rc, out = _docker("stop", container, timeout=60)
     if rc != 0:
         print(f"{stamp} MA_REAP stop FAILED rc={rc} {out[:200]}", file=sys.stderr)

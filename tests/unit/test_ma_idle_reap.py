@@ -125,6 +125,9 @@ def test_cli_dry_run_never_stops(monkeypatch, tmp_path, capsys):
     assert reap.main([]) == 0
     assert "would-stop" in capsys.readouterr().out
     assert all(a[0] != "stop" for a in calls), "dry-run must never docker stop"
+    assert not (tmp_path / "stopped").exists(), "dry-run must not stamp a stop"
     assert reap.main(["--execute"]) == 0
     assert ("stop", "zoe-music-assistant") in calls
     assert "MA_REAP stop idle_min=" in capsys.readouterr().out
+    # The stamp ensure_running reads to distrust a pre-stop "seen up" (Codex P2).
+    assert (tmp_path / "stopped").exists()

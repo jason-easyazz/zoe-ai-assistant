@@ -21,6 +21,7 @@ def reap(monkeypatch, tmp_path):
     monkeypatch.setenv("ZOE_MA_IDLE_REAP", "1")
     monkeypatch.setenv("ZOE_MA_REAP_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(ma_ondemand, "_last_seen_up", 0.0)
+    monkeypatch.setattr(ma_ondemand, "_last_seen_up_wall", 0.0)
     monkeypatch.setattr(ma_ondemand, "_lock", None)
     log = {"docker": [], "http_up": False, "running": False}
 
@@ -78,6 +79,73 @@ async def test_docker_start_failure_is_false(reap, monkeypatch):
         return 1, "Error: No such container"
     monkeypatch.setattr(ma_ondemand, "_docker_cmd", _docker)
     assert await ma_ondemand.ensure_running(timeout_s=0.2) is False
+
+
+async def test_fresh_seen_up_skips_the_probe(reap):
+    """The cache's positive case, so the two tests below are not vacuous."""
+    ma_ondemand.note_seen_up()
+    assert await ma_ondemand.ensure_running(timeout_s=0.2) is True
+    assert reap["docker"] == []
+
+
+async def test_reaper_stop_stamp_overrides_a_fresh_seen_up(reap, tmp_path):
+    """Codex P2: a 'seen up' from the panel's 5 s poll can describe the container
+    the reaper stopped a moment later — the reaper's `stopped` stamp (newer than
+    that answer) must force a real probe + start, not a skip."""
+    ma_ondemand.note_seen_up()
+    import time
+    time.sleep(0.01)
+    (tmp_path / "stopped").touch()
+    assert await ma_ondemand.ensure_running(timeout_s=2.0) is True
+    assert ("start", "zoe-music-assistant") in reap["docker"]
+    assert not (tmp_path / "stopped").exists(), "a successful start clears the stamp"
+
+
+async def test_failed_request_invalidates_the_seen_up_cache(monkeypatch, reap):
+    """Codex P2: any transport failure must drop the cache so the next wake probes."""
+    ma_ondemand.note_seen_up()
+
+    class _Down(_FakeClient):
+        async def post(self, url, json=None, headers=None):
+            raise OSError("connection refused")
+    monkeypatch.setattr(music_service.httpx, "AsyncClient", _Down)
+    assert await music_service._ma("players/all") is None
+    assert ma_ondemand._last_seen_up == 0.0
+    assert await ma_ondemand.ensure_running(timeout_s=2.0) is True
+    assert ("start", "zoe-music-assistant") in reap["docker"]
+
+
+async def test_provider_write_path_wakes_ma_before_the_version_probe(monkeypatch, reap):
+    """Codex P2: /api/music/setup/start → provider_setup_form → _ma_api_for_write
+    reads /info directly; with MA reaped that returned None and the flow died as
+    'unknown provider' before any wake command. The YouTube Music reconnect is the
+    operator's only re-auth path, so the write funnel must wake first."""
+    order = []
+
+    async def _ensure():
+        order.append("wake")
+        return True
+
+    async def _info():
+        order.append("info")
+        return None
+    monkeypatch.setattr(ma_ondemand, "ensure_running", _ensure)
+    monkeypatch.setattr(music_service, "_ma_info", _info)
+    assert await music_service.provider_setup_form("ytmusic") is None  # MA still unreadable → honest None
+    assert order == ["wake", "info"], "the wake must precede the /info probe"
+
+
+async def test_provider_write_path_is_inert_with_flag_off(monkeypatch, reap):
+    monkeypatch.setenv("ZOE_MA_IDLE_REAP", "0")
+
+    async def _boom():
+        raise AssertionError("no wake with the flag off")
+
+    async def _info():
+        return None
+    monkeypatch.setattr(ma_ondemand, "ensure_running", _boom)
+    monkeypatch.setattr(music_service, "_ma_info", _info)
+    assert await music_service.provider_setup_form("ytmusic") is None
 
 
 class _FakeClient:

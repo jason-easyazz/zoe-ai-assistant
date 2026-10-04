@@ -136,6 +136,8 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
         # A transport failure is the only sign zoe-data gets that MA went away —
         # possibly to be re-created on a different version. Re-read /info next time.
         _invalidate_ma_version()
+        if reap_on:  # ...and never let a pre-stop "seen up" skip the next wake
+            ma_ondemand.note_seen_down()
         return None
 
 
@@ -276,7 +278,14 @@ async def _ma_api_for_write() -> Optional[bool]:
     """For a credential WRITE: True = 2.10+ flow API, False = pre-2.10 API,
     None = MA's version is unreadable right now. A write must not guess: on 2.10
     the pre-2.10 save 'succeeds' and drops the cookie, so an unknown version fails
-    the write instead of taking the old path."""
+    the write instead of taking the old path.
+
+    Every credential write (setup form, connect, re-auth, OAuth) funnels through
+    here, so this is where a reaped MA is woken: the version probe below is a
+    direct /info read that would otherwise report "unreadable" and end the
+    flow as "unknown provider" before any wake command ran — and the YouTube
+    Music reconnect is the operator's only path to re-auth after a restart."""
+    await ensure_running()
     ver = await ma_server_version(fresh=True)
     if ver is None:
         logger.info("MA version unreadable (/info) — refusing a provider write rather than guess the API")

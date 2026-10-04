@@ -37,9 +37,13 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _TRUTHY = ("1", "true", "on", "yes")
-# If any MA call answered this recently, skip the /info probe on a wake.
+# If any MA call answered this recently, skip the /info probe on a wake — unless
+# a request has FAILED since (note_seen_down) or the reaper's `stopped` stamp is
+# newer than that answer: the panel's 5 s poll can leave a "seen up" that
+# describes the container the reaper stopped a moment later.
 _RECENT_UP_S = 30.0
-_last_seen_up: float = 0.0
+_last_seen_up: float = 0.0        # monotonic, for the TTL
+_last_seen_up_wall: float = 0.0   # wall clock, compared against the stamp mtime
 _lock: Optional[asyncio.Lock] = None
 
 
@@ -85,8 +89,25 @@ def note_activity() -> None:
 
 
 def note_seen_up() -> None:
-    global _last_seen_up
+    global _last_seen_up, _last_seen_up_wall
     _last_seen_up = time.monotonic()
+    _last_seen_up_wall = time.time()
+
+
+def note_seen_down() -> None:
+    """A request to MA failed — the cached "seen up" is stale; probe next time."""
+    global _last_seen_up, _last_seen_up_wall
+    _last_seen_up = 0.0
+    _last_seen_up_wall = 0.0
+
+
+def _recently_up() -> bool:
+    if time.monotonic() - _last_seen_up >= _RECENT_UP_S:
+        return False
+    try:  # the reaper touches `stopped` as it stops MA; newer than our answer = stale
+        return (state_dir() / "stopped").stat().st_mtime < _last_seen_up_wall
+    except OSError:
+        return True
 
 
 async def _docker_cmd(*args: str, timeout: float = 20.0) -> tuple[int, str]:
@@ -145,7 +166,7 @@ async def ensure_running(timeout_s: Optional[float] = None) -> bool:
         return True
     touch("activity")
     touch("inflight")
-    if time.monotonic() - _last_seen_up < _RECENT_UP_S:
+    if _recently_up():
         return True
     if await _http_up():
         note_seen_up()
@@ -180,6 +201,10 @@ async def ensure_running(timeout_s: Optional[float] = None) -> bool:
     touch("inflight")
     if ok:
         note_seen_up()
+        try:
+            (state_dir() / "stopped").unlink()
+        except OSError:
+            pass
         logger.info("MA_REAP start latency_ms=%d", latency_ms)
     else:
         logger.warning("MA_REAP start timeout latency_ms=%d (MA not serving yet)", latency_ms)
