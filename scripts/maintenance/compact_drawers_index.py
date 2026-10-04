@@ -69,9 +69,13 @@ def report(palace: Path) -> list[dict]:
             except Exception as exc:  # noqa: BLE001 — a report must never crash on a pickle
                 total = None
                 print(f"  ({name}: index metadata unreadable: {type(exc).__name__})", file=sys.stderr)
+        fresh = bool(seg) and not (palace / seg[0] / "index_metadata.pickle").exists()
         row = {"collection": name, "live_rows": live, "elements_added": total,
                "tombstone_ratio": (round(tombstone_ratio(total, live), 2) if total is not None else None),
-               "compaction_advised": (compaction_advised(total, live) if total is not None else None)}
+               "compaction_advised": (compaction_advised(total, live) if total is not None else None),
+               # chroma persists a new segment's index files lazily (sync threshold): right after
+               # a rebuild the directory does not exist yet, which means ratio ≈ 1, not unknown.
+               "note": ("fresh index — not persisted yet, ratio ≈ 1" if fresh else "")}
         out.append(row)
     return out
 
@@ -142,7 +146,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for r in rows:
                 print(f"{r['collection']:>20}: live={r['live_rows']:>6} added={r['elements_added']!s:>6} "
-                      f"ratio={r['tombstone_ratio']!s:>6} compaction_advised={r['compaction_advised']}")
+                      f"ratio={r['tombstone_ratio']!s:>6} compaction_advised={r['compaction_advised']}"
+                      + (f"  ({r['note']})" if r.get("note") else ""))
         return 0
     if not args.i_stopped_zoe_data:
         print("--compact needs --i-stopped-zoe-data (stop zoe-data first: the service holds the index)", file=sys.stderr)
