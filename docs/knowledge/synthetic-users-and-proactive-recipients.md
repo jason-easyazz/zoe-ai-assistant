@@ -236,7 +236,7 @@ enables both halves (default off, read per call; off = no I/O). Code: `proactive
 
 Pull-not-push inbox, **PR 1 of 6** ([record](../research/pull-not-push-inbox-2026-10-04.md)
 §3.1 / §3.5 / §5). `ZOE_PROACTIVE_LEDGER=1` (default off, read per call; off = byte-identical,
-no DB access). Code: `proactive/ledger.py`; migration `0035`
+no DB access). Code: `proactive/ledger.py`; migration `0036`
 (`proactive_deliveries`). It records evidence only: it changes no reply, no block, no spacing
 rule, no candidate row, and never speaks (`ZOE_PROACTIVE_SPOKEN` stays 0).
 

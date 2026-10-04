@@ -1,4 +1,4 @@
-"""0035 — proactive_deliveries: the delivery ledger (pull-not-push inbox, PR 1).
+"""0036 — proactive_deliveries: the delivery ledger (pull-not-push inbox, PR 1).
 
 ``proactive/ledger.py`` (flag ``ZOE_PROACTIVE_LEDGER``, default OFF) writes ONE open row per
 item a conversation actually carried to a member: a ``[RAISE …]`` that settled with reply
@@ -30,8 +30,8 @@ the table: a ledger of behaviour is not worth keeping past the schema that defin
 
 from alembic import op
 
-revision = "0035"
-down_revision = "0034"
+revision = "0036"
+down_revision = "0035"
 branch_labels = None
 depends_on = None
 

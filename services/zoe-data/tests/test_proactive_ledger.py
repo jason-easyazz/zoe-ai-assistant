@@ -1,7 +1,7 @@
 """Delivery ledger (``proactive/ledger.py``, ``ZOE_PROACTIVE_LEDGER``) — pull-not-push inbox PR 1.
 
 Fixtures only — no household text, no real ids. The DB edge is a real SQLite file built by
-migrations 0033 + 0035 behind db_pool's own cursor types, so the idempotent INSERT, the
+migrations 0033 + 0036 behind db_pool's own cursor types, so the idempotent INSERT, the
 outcome UPDATE and the selector's own SQL run for real; the two Postgres-only chat reads
 (``ledger._reply_after`` / ``ledger._user_turns``) are replaced by time-honouring fakes, like
 every other ``ci_safe`` test of a Postgres edge.
@@ -9,7 +9,7 @@ every other ``ci_safe`` test of a Postgres edge.
 Negative controls (each was run red before commit):
   * flag off  -> no row, no sweep DB access, and the candidate table + raise blocks are
     byte-identical to a flag-on run;
-  * drop ``idem_key``'s UNIQUE from migration 0035               -> duplicate-key test red;
+  * drop ``idem_key``'s UNIQUE from migration 0036               -> duplicate-key test red;
   * make ``ledger_enabled`` always True                          -> the flag-off tests red;
   * make ``voiced_in`` always 1                                  -> undelivered test red;
   * start the next-turn window BEFORE the reply                  -> trigger-turn test red;
@@ -85,7 +85,7 @@ def env(monkeypatch, tmp_path):
     path = str(tmp_path / "zoe.db")
     engine = sa.create_engine(f"sqlite:///{path}")
     _migrate(engine, "0033_proactive_candidates.py")
-    _migrate(engine, "0035_proactive_deliveries.py")
+    _migrate(engine, "0036_proactive_deliveries.py")
     db = _Sqlite(path)
     for ddl in (
         "CREATE TABLE open_loops (id INTEGER PRIMARY KEY, user_id TEXT, loop_text TEXT, "
@@ -177,11 +177,11 @@ def _candidates(env):
 
 
 # ── migration ─────────────────────────────────────────────────────────────────
-def test_migration_0035_is_idempotent_and_chained():
+def test_migration_0036_is_idempotent_and_chained():
     engine = sa.create_engine("sqlite://")
-    mod = _migrate(engine, "0035_proactive_deliveries.py")
-    assert (mod.revision, mod.down_revision) == ("0035", "0034")
-    _migrate(engine, "0035_proactive_deliveries.py")  # already present: a no-op
+    mod = _migrate(engine, "0036_proactive_deliveries.py")
+    assert (mod.revision, mod.down_revision) == ("0036", "0035")
+    _migrate(engine, "0036_proactive_deliveries.py")  # already present: a no-op
     with engine.connect() as conn:
         cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(proactive_deliveries)")}
         idx = {r[1] for r in conn.exec_driver_sql("PRAGMA index_list(proactive_deliveries)")}
@@ -189,7 +189,7 @@ def test_migration_0035_is_idempotent_and_chained():
                     "delivered_by", "session_id", "cue_words", "voiced", "surfaced_at",
                     "expires_at", "outcome", "outcome_at", "created_at"}
     assert {"idx_proactive_deliveries_open", "idx_proactive_deliveries_user"} <= idx
-    _migrate(engine, "0035_proactive_deliveries.py", "downgrade")
+    _migrate(engine, "0036_proactive_deliveries.py", "downgrade")
     with engine.connect() as conn:
         assert not conn.exec_driver_sql(
             "SELECT name FROM sqlite_master WHERE name='proactive_deliveries'").fetchall()
