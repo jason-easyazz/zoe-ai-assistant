@@ -209,6 +209,7 @@ def score_reply(reply: str, pos_vecs: Sequence[Sequence[float]], neg_vecs: Seque
 class DriftReport:
     n_scored: int = 0
     skipped_kid: int = 0
+    skipped_unlabeled: int = 0
     skipped_other: int = 0
     bands: dict[str, int] = field(default_factory=lambda: {"aligned": 0, "neutral": 0, "deviation": 0})
     deviation_share: float = 0.0
@@ -220,7 +221,8 @@ class DriftReport:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "n_scored": self.n_scored, "skipped_kid": self.skipped_kid, "skipped_other": self.skipped_other,
+            "n_scored": self.n_scored, "skipped_kid": self.skipped_kid, "skipped_unlabeled": self.skipped_unlabeled,
+            "skipped_other": self.skipped_other,
             "bands": dict(self.bands), "deviation_share": round(self.deviation_share, 4),
             "style_pass_rate": round(self.style_pass_rate, 4), "check_rates": self.check_rates,
             "trait_cue_rates": self.trait_cue_rates, "status": self.status, "reasons": list(self.reasons),
@@ -233,9 +235,17 @@ def _is_kid_row(row: dict[str, Any]) -> bool:
     return row.get("member_mode") == "kid" or row.get("mode") == "kid" or bool(row.get("minor"))
 
 
+def _is_labeled(row: dict[str, Any]) -> bool:
+    """A row can be excluded for a child only if it SAYS who it was for: a non-empty
+    ``member_mode`` (companion/mentor/helper/kid/guest) or an explicit boolean ``minor``."""
+    return bool(row.get("member_mode") or row.get("mode")) or isinstance(row.get("minor"), bool)
+
+
 def score_rows(rows: Iterable[dict[str, Any]], record: Optional[pl.PersonaRecord] = None,
                embed: Embedder = lexical_embed, mode: Optional[str] = pl.DEFAULT_MODE) -> DriftReport:
-    """Score assistant rows. Kid/minor rows are skipped before anything is read from them."""
+    """Score assistant rows. FAIL-CLOSED on who the row was for: kid/minor rows are skipped, and so is
+    any row with NO member label (it might be a child's) — counted in ``skipped_unlabeled``, never
+    scored. Skipping happens before anything is read from the row."""
     record = record or pl.default_persona()
     pos_vecs = [embed(a) for a in positive_anchors(record, mode)]
     neg_vecs = [embed(a) for a in NEGATIVE_SEEDS]
@@ -246,6 +256,9 @@ def score_rows(rows: Iterable[dict[str, Any]], record: Optional[pl.PersonaRecord
     for row in rows:
         if _is_kid_row(row):
             report.skipped_kid += 1
+            continue
+        if not _is_labeled(row):
+            report.skipped_unlabeled += 1
             continue
         if row.get("role", "assistant") != "assistant":
             report.skipped_other += 1
@@ -290,9 +303,12 @@ def maybe_score_reply(reply: str, record: pl.PersonaRecord, embed: Embedder = le
 
 
 # ── Transcript IO + CLI ────────────────────────────────────────────────────────────────
-def load_transcript(path: str) -> list[dict[str, Any]]:
-    """JSONL (``{"role", "text"|"content", "member_mode"?, "minor"?}``) or plain text, one reply
-    per non-empty line (treated as assistant rows). Bad JSON lines are an error, not a skip."""
+def load_transcript(path: str, member: Optional[str] = None) -> list[dict[str, Any]]:
+    """JSONL (``{"role", "text"|"content", "member_mode"|"minor"}``) or plain text, one reply per
+    non-empty line (assistant rows). Plain text and unlabeled JSONL rows carry no member label, so
+    they are labelled with ``member`` when given and otherwise left UNLABELED (``score_rows`` then
+    refuses to score them: a child's replies must never be scored by accident). Bad JSON lines are
+    an error, not a skip."""
     rows: list[dict[str, Any]] = []
     with open(path, "r", encoding="utf-8") as fh:
         for n, line in enumerate(fh, 1):
@@ -309,6 +325,10 @@ def load_transcript(path: str) -> list[dict[str, Any]]:
                 rows.append(obj)
             else:
                 rows.append({"role": "assistant", "text": line})
+    if member is not None:
+        for r in rows:
+            if not _is_labeled(r):
+                r["member_mode"] = member
     return rows
 
 
@@ -320,6 +340,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("transcript", help="JSONL or plain-text file of replies")
     ap.add_argument("--persona", help="persona JSON file (default: today's persona)")
     ap.add_argument("--mode", default=pl.DEFAULT_MODE, choices=[m for m in pl.MODES if m != "kid"])
+    ap.add_argument("--member", choices=("companion", "mentor", "helper", "guest", "kid"),
+                    help="label for rows that carry none (REQUIRED for plain-text input): who these replies "
+                         "were for. 'kid' skips them all. Unlabeled rows are never scored.")
     ap.add_argument("--embedder", default="lexical", choices=("lexical", "bge"))
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     args = ap.parse_args(argv)
@@ -328,7 +351,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.persona:
             with open(args.persona, "r", encoding="utf-8") as fh:
                 record = pl.validate_persona(json.load(fh))
-        rows = load_transcript(args.transcript)
+        rows = load_transcript(args.transcript, member=args.member)
+        unlabeled = sum(1 for r in rows if not _is_labeled(r))
+        if unlabeled and args.member is None:
+            raise ValueError(
+                f"{unlabeled} row(s) carry no member label (plain text has none), so replies to a child "
+                "could not be excluded; add 'member_mode' to each JSONL row or pass --member "
+                "{companion,mentor,helper,guest,kid} (kid skips them all)")
         embed = lexical_embed if args.embedder == "lexical" else load_bge_embedder()
         report = score_rows(rows, record, embed, mode=args.mode)
     except (OSError, ValueError, ImportError) as exc:

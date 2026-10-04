@@ -59,6 +59,7 @@ def _payload(record: pl.PersonaRecord, member: pl.MemberMode | None, uid: str = 
         "version": record.version,
         "is_default": record.version == pl.default_persona().version,
         "block": block,
+        "opted_in": bool(member and member.mode != pl.UNSET_MODE),
         "held_for_minor": bool(member and member.minor and not pl.MINORS_GET_PERSONA),
         "block_tokens": pl.estimate_tokens(block),
         "budget": {"max_tokens": pl.MAX_BLOCK_TOKENS, "max_chars": pl.MAX_BLOCK_CHARS},
@@ -119,7 +120,8 @@ async def put_mode(user_id: str, body: dict, user: dict = Depends(require_signed
     if unknown:
         raise HTTPException(status_code=422, detail={"errors": [f"unknown field(s): {', '.join(unknown)}"]})
     current = await pl.load_member_mode(uid)
-    mode = body.get("mode", current.mode)
+    # A member with no row has not opted in; a PUT without a mode opts them in at the default.
+    mode = body.get("mode", pl.DEFAULT_MODE if current.mode == pl.UNSET_MODE else current.mode)
     minor_given = "minor" in body
     minor = body["minor"] if minor_given else current.minor
 

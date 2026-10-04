@@ -29,7 +29,9 @@ A **household persona**: one Zoe for the house, described by data — three to f
 strengths (low / mid / high), a voice style, an optional few *boundaries*, an optional short
 backstory — plus a **relationship mode per member** (`companion`, `mentor`, `helper`, `kid`).
 It is rendered deterministically (no model writes it) into a block of at most 175 tokens that
-replaces the fixed persona paragraphs. It changes *tone*. It never changes *who Zoe is*
+replaces the fixed persona paragraphs. **The layer is opt-in per member.** A member with no stored mode row (every existing member, children
+included, on day one) has not opted in and keeps the fixed persona unchanged; `companion` is only what an
+opt-in without a choice becomes, never what a missing row means. It changes *tone*. It never changes *who Zoe is*
 (`IDENTITY_DOCTRINE`: she is Zoe, never "Gemma"), what she is allowed to do, or which tools she
 may call.
 
@@ -197,8 +199,9 @@ PR) scores a sample of Zoe's replies two ways, both deterministic given an embed
 2. **Style adherence**: cheap, explicit checks — forbidden openers, self-identification as a
    model, markdown in a spoken reply, brevity when `short`, the `kid` register — plus a trait-cue
    count over the sample.
-Kid-mode and minor turns are skipped; guests are never keyed; the report holds counts and rates, not
-per-person rows.
+Kid-mode and minor turns are skipped, and so is **any row that carries no member label** (fail-closed: an
+unlabeled row might be a child's, so plain-text input is refused unless the operator passes `--member`);
+guests are never keyed; the report holds counts and rates, not per-person rows.
 
 **The bar.** Provisional until a baseline week has been measured (the record says so; nothing is
 calibrated yet): over a sample of at least 30 replies, **deviation share ≤ 10 %** and **style
@@ -225,9 +228,11 @@ the PR.
 | ≤ 175-token block, rejected at write time rather than truncated | `tests/test_persona_layer.py` |
 | Boundaries narrow only; injection-shaped text rejected | `tests/test_persona_layer.py` |
 | Minor ⇒ only `kid`/`helper`; kid cannot become companion-like | `tests/test_persona_layer.py`, `tests/test_persona_routes.py` |
+| Opt-in per member: no `member_modes` row ⇒ fixed persona (children on day one); the minor flags survive a migration rollback | `tests/test_persona_layer.py`, `tests/test_persona_routes.py` |
+| Free text is NFKC-normalised and de-obfuscated before the instruction filter; the 175-**token** estimate (not only the char cap) is enforced at write time | `tests/test_persona_layer.py` |
 | A minor is held on the fixed persona until the crisis path ships; a failed mode lookup never defaults a child to `companion` | `tests/test_persona_layer.py`, `tests/test_persona_routes.py` |
 | Guests / synthetic users get no member mode | `tests/test_persona_layer.py` |
 | Persona writes are admin-only; no model-driven writer exists | `tests/test_persona_routes.py` (403s, static scan of callers) |
-| Drift scorer skips kid turns and keeps no per-person row | `tests/test_persona_drift.py` |
+| Drift scorer skips kid turns AND unlabeled rows (plain text needs `--member`) and keeps no per-person row | `tests/test_persona_drift.py` |
 | Crisis path | **not pinned — not built (§7)** |
 | Affective-record consent/retention | **not pinned — no affective record exists yet (§6)** |

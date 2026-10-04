@@ -104,7 +104,12 @@ def test_get_returns_the_default_the_block_and_the_vocabulary(env):
     body = r.json()
     assert body["is_default"] is True and body["enabled"] is True
     assert body["persona"] == pl.default_persona().to_dict() == body["defaults"]
-    assert body["block"].startswith("You are Zoe") and "you are a companion" in body["block"]
+    # P1: a member with no row has NOT opted in — the fixed persona applies, nothing is rendered for them
+    assert body["opted_in"] is False and body["block"] == "" and body["block_tokens"] == 0
+    opted = env.as_(MEMBER).put("/api/persona/modes/jason", json={}).json()   # opt in without choosing a mode
+    assert opted == {"user_id": "jason", "mode": "companion", "minor": False}
+    after = env.as_(MEMBER).get("/api/persona").json()
+    assert after["opted_in"] is True and after["block"].startswith("You are Zoe") and "you are a companion" in after["block"]
     assert body["block_tokens"] <= body["budget"]["max_tokens"] == 175
     assert "warm" in body["vocabulary"]["traits"] and body["vocabulary"]["modes"] == list(pl.MODES)
 
@@ -150,7 +155,7 @@ def test_a_member_sets_their_own_ordinary_mode(env):
     assert r.status_code == 200 and r.json() == {"user_id": "jason", "mode": "mentor", "minor": False}
     assert env.as_(MEMBER).get("/api/persona/modes/jason").json()["mode"] == "mentor"
     assert "you are a mentor" in env.as_(MEMBER).get("/api/persona").json()["block"]
-    assert env.as_(MEMBER).delete("/api/persona/modes/jason").json()["mode"] == "companion"
+    assert env.as_(MEMBER).delete("/api/persona/modes/jason").json()["mode"] == "unset"  # back to not opted in
 
 
 def test_a_member_cannot_touch_someone_elses_mode_or_reach_kid(env):
@@ -159,7 +164,7 @@ def test_a_member_cannot_touch_someone_elses_mode_or_reach_kid(env):
     assert env.as_(MEMBER).delete("/api/persona/modes/mia").status_code == 403
     assert env.as_(MEMBER).put("/api/persona/modes/jason", json={"mode": "kid"}).status_code == 403
     assert env.as_(MEMBER).put("/api/persona/modes/jason", json={"mode": "helper", "minor": True}).status_code == 403
-    assert env.as_(ADMIN).get("/api/persona/modes/jason").json()["mode"] == "companion"
+    assert env.as_(ADMIN).get("/api/persona/modes/jason").json()["mode"] == "unset"
 
 
 def test_an_admin_can_set_kid_and_it_implies_minor(env):
@@ -198,7 +203,7 @@ def test_leaving_minor_status_is_an_explicit_admin_act(env):
 
 def test_admin_can_reset_a_minors_row(env):
     env.as_(ADMIN).put("/api/persona/modes/mia", json={"mode": "kid"})
-    assert env.as_(ADMIN).delete("/api/persona/modes/mia").json() == {"user_id": "mia", "mode": "companion", "minor": False}
+    assert env.as_(ADMIN).delete("/api/persona/modes/mia").json() == {"user_id": "mia", "mode": "unset", "minor": False}
 
 
 @pytest.mark.parametrize("uid", ["guest", "voice-guest", "voice-daemon", "test-abc", "demo_x_1"])
@@ -218,6 +223,11 @@ def test_block_requires_the_internal_token(env):
     c = env.as_(ADMIN)  # a session principal does not help: this is NOT a session route
     assert c.get("/api/persona/block", params={"user_id": "jason"}).status_code == 401
     assert c.get("/api/persona/block", params={"user_id": "jason"}, headers={"X-Internal-Token": "wrong"}).status_code == 403
+
+
+def test_block_is_empty_for_a_member_who_has_not_opted_in(env):
+    for uid in ("jason", "mia"):
+        assert env.client.get("/api/persona/block", params={"user_id": uid}, headers=TOKEN).json()["text"] == ""
 
 
 def test_block_serves_the_member_block_and_household_tone_for_guests(env):

@@ -15,9 +15,12 @@ Neither table holds anything affective: no mood, no score, no per-turn value. Se
 ``docs/governance/emotional-safety-note.md``. There is no FK to ``users`` (the per-table
 ``user_id`` sweeps delete rows in any order); the reader ignores orphans.
 
-Idempotent (``IF NOT EXISTS``). The downgrade drops both tables: ``household_persona`` is
-re-creatable from the defaults and ``member_modes`` is a household preference, so a
-downgrade loses configuration, not history.
+Idempotent (``IF NOT EXISTS``). The downgrade drops ``household_persona`` ONLY (re-creatable
+from the defaults) and KEEPS ``member_modes``: that table is the sole record that a member is a
+minor, so dropping it on a rollback would turn flagged children into unflagged adults on the
+next upgrade (``CREATE TABLE IF NOT EXISTS`` leaves the surviving rows untouched). It is a few
+rows with no free text and nothing affective; an operator who truly wants it gone drops it by
+hand (``DROP TABLE member_modes``) - that is deliberately not automatic.
 """
 
 from alembic import op
@@ -54,5 +57,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TABLE IF EXISTS member_modes")
+    # member_modes is KEPT on purpose (see the module docstring): it holds the minor flags.
     op.execute("DROP TABLE IF EXISTS household_persona")

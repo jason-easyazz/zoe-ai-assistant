@@ -34,6 +34,7 @@ import logging
 import math
 import re
 import time
+import unicodedata
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -84,7 +85,10 @@ _HUMOUR_PHRASE = {
 _WARMTH_PHRASE = {"default": "", "more": "Lean warmer than usual."}
 
 MODES: tuple[str, ...] = ("companion", "mentor", "helper", "kid")
-DEFAULT_MODE = "companion"
+DEFAULT_MODE = "companion"   # the mode a member gets when they OPT IN without choosing one
+# A member with NO member_modes row has not opted in: the persona layer leaves the fixed persona
+# alone. This is a sentinel, not a mode: it is not in MODES and can never be stored.
+UNSET_MODE = "unset"
 # A minor holds only these. companion/mentor are the emotional-bond modes (and a romantic
 # mode, were one ever added, would be the same class): never for a child.
 MINOR_MODES: tuple[str, ...] = ("kid", "helper")
@@ -111,7 +115,8 @@ _FORBIDDEN_CHARS_RE = re.compile(r"[<>{}\[\]`\\\x00-\x1f\x7f]")
 _INJECTION_RE = re.compile(
     r"ignore|disregard|forget\s+(?:all|your|the|previous)|you\s+are\s+now|you\s+are\s+not\s+zoe|"
     r"your\s+name\s+is|pretend|\bact\s+as|role-?play\s+as|system\s*prompt|reveal|override|bypass|"
-    r"jailbreak|developer\s+mode|instruction|zoe-uid|unrestricted|no\s+rules",
+    r"jailbreak|developer\s+mode|instruction|zoe-uid|unrestricted|no\s+rules|"
+    r"\b(?:system|assistant|user|developer|human)\s*:",
     re.IGNORECASE,
 )
 
@@ -148,7 +153,7 @@ class PersonaRecord:
 
 @dataclass(frozen=True)
 class MemberMode:
-    mode: str = DEFAULT_MODE
+    mode: str = UNSET_MODE
     minor: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -165,7 +170,31 @@ def default_persona() -> PersonaRecord:
 
 
 # ── Validation ─────────────────────────────────────────────────────────────────────────
-def _check_free_text(label: str, text: str, max_chars: int, errors: list[str]) -> None:
+def normalise_free_text(raw: str) -> str:
+    """NFKC-fold (fullwidth letters become ASCII), drop invisible format characters (zero-width
+    space/joiner, bidi marks, soft hyphen, BOM), turn every other whitespace/separator into one
+    space and collapse runs. This is what the filter sees AND what is stored."""
+    folded = unicodedata.normalize("NFKC", raw)
+    out = []
+    for ch in folded:
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            continue
+        out.append(" " if (cat in ("Zs", "Zl", "Zp") or ch.isspace()) else ch)
+    return re.sub(r" {2,}", " ", "".join(out)).strip()
+
+
+def _has_line_break_or_control(raw: str) -> bool:
+    return any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in raw)
+
+
+def _check_free_text(label: str, raw: str, max_chars: int, errors: list[str]) -> str:
+    """Validate one free-text field and return its NORMALISED form (the value that is stored and
+    rendered). Line breaks/control characters are refused outright; everything else is folded and
+    de-obfuscated BEFORE the length, markup and instruction filters run."""
+    if _has_line_break_or_control(raw):
+        errors.append(f"{label} may not contain markup, brackets, backticks, backslashes or line breaks")
+    text = normalise_free_text(raw)
     if len(text) > max_chars:
         errors.append(f"{label} is {len(text)} characters; the limit is {max_chars}")
     if _FORBIDDEN_CHARS_RE.search(text):
@@ -175,6 +204,7 @@ def _check_free_text(label: str, text: str, max_chars: int, errors: list[str]) -
             f"{label} looks like an instruction to Zoe rather than a boundary or a description "
             "(boundaries narrow what Zoe does; they cannot override her rules)"
         )
+    return text
 
 
 def validate_persona(data: Any) -> PersonaRecord:
@@ -244,8 +274,10 @@ def validate_persona(data: Any) -> PersonaRecord:
         if not isinstance(b, str) or len(b.strip()) < 3:
             errors.append(f"boundaries[{i}] must be a sentence of at least 3 characters")
             continue
-        text = b.strip()
-        _check_free_text(f"boundaries[{i}]", text, MAX_BOUNDARY_CHARS, errors)
+        text = _check_free_text(f"boundaries[{i}]", b, MAX_BOUNDARY_CHARS, errors)
+        if len(text) < 3:
+            errors.append(f"boundaries[{i}] must be a sentence of at least 3 characters")
+            continue
         boundaries.append(text)
 
     # backstory
@@ -257,7 +289,7 @@ def validate_persona(data: Any) -> PersonaRecord:
         backstory_in = ""
     backstory = backstory_in.strip()
     if backstory:
-        _check_free_text("backstory", backstory, MAX_BACKSTORY_CHARS, errors)
+        backstory = _check_free_text("backstory", backstory_in, MAX_BACKSTORY_CHARS, errors)
 
     if errors:
         raise PersonaValidationError(errors)
@@ -268,11 +300,14 @@ def validate_persona(data: Any) -> PersonaRecord:
     )
     # Budget: the longest block this record can ever render (the longest mode sentence, with a
     # relationship line) must fit. Rejecting here is what makes "no silent truncation" true.
-    worst = max(len(render_persona_block(record, mode=m)) for m in MODES)
-    if worst > MAX_BLOCK_CHARS:
+    blocks = [render_persona_block(record, mode=m) for m in MODES]
+    worst_chars = max(len(b) for b in blocks)
+    worst_tokens = max(estimate_tokens(b) for b in blocks)
+    if worst_tokens > MAX_BLOCK_TOKENS or worst_chars > MAX_BLOCK_CHARS:
         raise PersonaValidationError([
-            f"the persona is too long: it renders to {worst} characters and the budget is "
-            f"{MAX_BLOCK_CHARS} (about {MAX_BLOCK_TOKENS} tokens). Shorten the boundaries or the backstory"
+            f"the persona is too long: it renders to {worst_chars} characters / about {worst_tokens} tokens "
+            f"and the budget is {MAX_BLOCK_TOKENS} tokens (and {MAX_BLOCK_CHARS} characters). "
+            "Shorten the boundaries or the backstory"
         ])
     return record
 
@@ -303,11 +338,14 @@ _FIXED_FLOOR = ('Use contractions. Never open with "Great!", "Of course!" or "Ce
 
 
 def estimate_tokens(text: str) -> int:
-    """The repo's convention is chars/4 (``FLUE_CONTEXT_BUDGET``, the user-model A/B). A word
-    proxy (~1.35 tokens/word) is taken too and the larger wins, so neither can under-count."""
+    """The repo's convention is chars/4 (``FLUE_CONTEXT_BUDGET``, the user-model A/B). Two more
+    proxies are taken and the LARGEST wins, so none can under-count: ~1.35 tokens/word (short
+    words, many spaces) and ~1 token per non-ASCII character (CJK has no spaces)."""
     if not text:
         return 0
-    return max(math.ceil(len(text) / 4), math.ceil(len(text.split()) * 1.35))
+    non_ascii = sum(1 for c in text if ord(c) > 127)   # CJK etc.: ~1 token per character
+    return max(math.ceil(len(text) / 4), math.ceil(len(text.split()) * 1.35),
+               math.ceil((len(text) - non_ascii) / 4 + non_ascii))
 
 
 def _join_traits(parts: list[str]) -> str:
@@ -405,16 +443,17 @@ def block_for(user_id: str = "", *, record: Optional[PersonaRecord] = None,
               member: Optional[MemberMode] = None) -> str:
     """The rendered block for a caller from explicit inputs or the snapshot; ``""`` means "leave
     the fixed persona alone": nothing loaded, a real member whose mode is not in the snapshot
-    (a failed lookup must never default a child to ``companion``), or a minor
-    (``MINORS_GET_PERSONA``). Guests / synthetic users get the household tone, no relationship mode."""
+    (a failed lookup must never default a child to ``companion``), a member who has NOT OPTED IN
+    (no ``member_modes`` row: ``UNSET_MODE``; the layer is opt-in, so an existing child is never
+    silently moved onto a companion persona), or a minor (``MINORS_GET_PERSONA``). Guests / synthetic users get the household tone, no relationship mode."""
     rec = record or _snapshot["record"]
     if rec is None:
         return ""
     if _no_mode_for(user_id):
         return render_persona_block(rec, mode=None)
     m = member if member is not None else _snapshot["modes"].get((user_id or "").strip())
-    if m is None:
-        return ""
+    if m is None or m.mode == UNSET_MODE:
+        return ""  # not loaded, or never opted in: the persona layer is OPT-IN per member
     if m.minor and not MINORS_GET_PERSONA:
         return ""
     return render_persona_block(rec, mode=m.mode, minor=m.minor)
@@ -499,8 +538,9 @@ async def reset_household(db=None) -> None:
 
 
 async def load_member_mode(user_id: str, db=None) -> MemberMode:
-    """The member's stored mode; ``companion`` / non-minor when there is no row. A stored row
-    that breaks the minor rule is treated as the safest valid state (a minor, ``kid``)."""
+    """The member's stored mode; ``MemberMode()`` (UNSET: not opted in, fixed persona) when there is
+    no row — every existing member, children included, starts here. A stored row that breaks the
+    minor rule is treated as the safest valid state (a minor, ``kid``)."""
     async with _db(db) as conn:
         row = await (await conn.execute(
             "SELECT mode, minor FROM member_modes WHERE user_id = ?", (user_id,))).fetchone()

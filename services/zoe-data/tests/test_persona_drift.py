@@ -36,8 +36,8 @@ def fake_embed(text: str):
 
 
 def _rows(good=0, bad=0, kid_bad=0):
-    rows = [{"role": "assistant", "text": GOOD} for _ in range(good)]
-    rows += [{"role": "assistant", "text": BAD_OPENER} for _ in range(bad)]
+    rows = [{"role": "assistant", "text": GOOD, "member_mode": "companion"} for _ in range(good)]
+    rows += [{"role": "assistant", "text": BAD_OPENER, "member_mode": "companion"} for _ in range(bad)]
     rows += [{"role": "assistant", "text": BAD_OPENER, "member_mode": "kid", "user_id": "mia"} for _ in range(kid_bad)]
     return rows
 
@@ -144,14 +144,17 @@ def test_kid_rows_are_skipped_and_do_not_move_the_verdict():
 
 
 def test_the_report_holds_no_text_and_no_user_id():
-    rows = _rows(good=3, kid_bad=2) + [{"role": "assistant", "text": "secret reply text", "user_id": "jason"}]
+    rows = _rows(good=3, kid_bad=2) + [{"role": "assistant", "text": "secret reply text", "user_id": "jason",
+                                         "member_mode": "mentor"}]
     blob = json.dumps(pd.score_rows(rows, embed=fake_embed).to_dict())
     for leak in ("secret reply text", "jason", "mia", "glad you told me"):
         assert leak not in blob
 
 
 def test_non_assistant_and_empty_rows_are_ignored():
-    rows = [{"role": "user", "text": GOOD}, {"role": "assistant", "text": "  "}, {"role": "assistant", "content": GOOD}]
+    rows = [{"role": "user", "text": GOOD, "member_mode": "companion"},
+            {"role": "assistant", "text": "  ", "member_mode": "companion"},
+            {"role": "assistant", "content": GOOD, "member_mode": "companion"}]
     rep = pd.score_rows(rows, embed=fake_embed)
     assert rep.n_scored == 1 and rep.skipped_other == 2
 
@@ -201,13 +204,44 @@ def test_cli_accepts_plain_text_json_output_and_a_persona_file(tmp_path, capsys)
     plain.write_text("\n".join(BAD_OPENER for _ in range(35)) + "\n")
     persona = tmp_path / "persona.json"
     persona.write_text(json.dumps({"traits": [{"name": "warm", "strength": "high"}], "voice_style": {"brevity": "short"}}))
-    code = pd.main([str(plain), "--persona", str(persona), "--json"])
+    code = pd.main([str(plain), "--persona", str(persona), "--member", "companion", "--json"])
     out = json.loads(capsys.readouterr().out)
     assert code == pd.EXIT_EXCEEDED and out["n_scored"] == 35 and out["bar"]["provisional"] is True
     assert BAD_OPENER not in json.dumps(out)
     bad_persona = tmp_path / "bad.json"
     bad_persona.write_text(json.dumps({"traits": [{"name": "warm", "strength": "extreme"}]}))
-    assert pd.main([str(plain), "--persona", str(bad_persona)]) == pd.EXIT_ERROR
+    assert pd.main([str(plain), "--persona", str(bad_persona), "--member", "companion"]) == pd.EXIT_ERROR
+
+
+# ── P2: a child's replies must never be scored by accident ─────────────────────────────
+def test_unlabeled_rows_are_never_scored():
+    rows = [{"role": "assistant", "text": BAD_OPENER} for _ in range(40)]            # no member label at all
+    rep = pd.score_rows(rows, embed=fake_embed)
+    assert rep.n_scored == 0 and rep.skipped_unlabeled == 40 and rep.status == "insufficient_sample"
+    labelled = pd.score_rows([{"role": "assistant", "text": BAD_OPENER, "minor": False}] * 3, embed=fake_embed)
+    assert labelled.n_scored == 3 and labelled.skipped_unlabeled == 0               # an explicit minor:false IS a label
+    assert pd.score_rows([{"role": "assistant", "text": GOOD, "member_mode": ""}], embed=fake_embed).skipped_unlabeled == 1
+
+
+def test_plain_text_input_is_refused_without_a_member_label(tmp_path, capsys):
+    plain = tmp_path / "t.txt"
+    plain.write_text("\n".join(GOOD for _ in range(40)) + "\n")
+    assert pd.main([str(plain)]) == pd.EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "no member label" in err and "--member" in err
+    # a JSONL row missing its label is refused the same way
+    mixed = _write(tmp_path, _rows(good=40) + [{"role": "assistant", "text": GOOD}], "mixed.jsonl")
+    assert pd.main([mixed]) == pd.EXIT_ERROR
+
+
+def test_plain_text_with_a_member_label_is_scored_and_kid_skips_everything(tmp_path, capsys):
+    plain = tmp_path / "t.txt"
+    plain.write_text("\n".join(BAD_OPENER for _ in range(40)) + "\n")
+    assert pd.main([str(plain), "--member", "companion", "--json"]) == pd.EXIT_EXCEEDED
+    assert json.loads(capsys.readouterr().out)["n_scored"] == 40
+    code = pd.main([str(plain), "--member", "kid", "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["n_scored"] == 0 and out["skipped_kid"] == 40 and code == pd.EXIT_INSUFFICIENT
 
 
 def test_cli_writes_nothing_to_disk(tmp_path):

@@ -40,15 +40,17 @@ untouched on purpose: `labs/flue-zoe-brain-2x/src/*` is voice path (replay-gated
   instruction-shaped text), optional `backstory` (≤300 chars). The default is today's persona
   expressed as data (warm / curious / thoughtful; honest, direct when it helps, gentle when it's
   needed; no boundaries, no backstory).
-- **Member mode**: `companion | mentor | helper | kid` + a `minor` flag. Default `companion`,
-  non-minor. A minor holds only `kid`/`helper` (validator, route and renderer all enforce it);
+- **Member mode**: `companion | mentor | helper | kid` + a `minor` flag. Stored default `companion`,
+  non-minor — but the layer is **opt-in per member**: with no row a member keeps the fixed persona
+  (`UNSET`), and a PUT without a mode opts them in at `companion`. A minor holds only `kid`/`helper` (validator, route and renderer all enforce it);
   `kid` implies minor; leaving minor status needs an explicit `"minor": false` by an admin.
   Guests, sentinel ids and synthetic test users get the household tone and no mode. **A minor is HELD
   on the fixed persona** (`persona_layer.MINORS_GET_PERSONA = False`, governance note §7: no crisis
   path yet), and so is a real member whose mode could not be loaded — a failed lookup never defaults
   a child to `companion`.
 - **Storage**: alembic `0035_persona_layer` — `household_persona` (one row, validated JSON +
-  content `version`) and `member_modes`. No row ⇒ the default. Nothing affective is stored.
+  content `version`) and `member_modes`. No household row ⇒ the default. Nothing affective is stored. The downgrade drops `household_persona` only and
+  KEEPS `member_modes` (the sole record that a member is a minor).
 - **Rendering**: deterministic, no LLM. A fixed identity lead, the traits ("You are very warm,
   curious and a little patient."), the voice line (the style plus today's non-configurable
   contractions / banned-openers / acknowledge-first floor), **one** mode sentence, boundaries,
@@ -69,7 +71,8 @@ untouched on purpose: `labs/flue-zoe-brain-2x/src/*` is voice path (replay-gated
 - **Drift stub** (`services/zoe-data/persona_drift.py`): anchor-similarity (weighted top-k mean
   against persona sentences minus a negative seed set) + style adherence + trait-cue rates. CLI:
   `python3 services/zoe-data/persona_drift.py transcript.jsonl [--persona p.json] [--embedder
-  lexical|bge] [--json]` — exit 0 ok / 1 exceeded / 2 error / 3 insufficient sample. Skips kid and
+  lexical|bge] [--member companion|mentor|helper|guest|kid] [--json]` — plain text (no labels) is
+  refused without `--member`; unlabeled rows are never scored; exit 0 ok / 1 exceeded / 2 error / 3 insufficient sample. Skips kid and
   minor rows, keeps no text or ids, writes nothing. The bar (≥30 replies, deviation ≤10 %, style
   pass ≥90 %) and band thresholds are **provisional** until a baseline week is measured. Nothing
   live calls it (`ZOE_PERSONA_DRIFT` gates the unused in-process hook).
