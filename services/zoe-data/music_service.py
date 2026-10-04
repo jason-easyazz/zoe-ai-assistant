@@ -85,10 +85,40 @@ def _ma_headers() -> dict[str, str]:
     return h
 
 
+# ── Idle reap (flag-dark, ZOE_MA_IDLE_REAP) ──────────────────────────────────
+# MA commands that are an EXPLICIT user intent and therefore start a reaped MA
+# (ma_ondemand.ensure_running). Reads are deliberately absent: the panel polls
+# players/all + player_queues/all every 5 s and the listening journal polls
+# recently_played_items every 300 s — waking on those would undo every reap.
+# Entry points that READ first (search_and_play/play_media/control/resolve_music
+# all start with get_players) call ensure_running() themselves.
+_MA_WAKE_COMMANDS = frozenset({
+    "music/search", "player_queues/play_media", "music/playlists/library_items",
+    "music/playlists/playlist_tracks", "music/playlists/create_playlist",
+    "music/favorites/add_item", "config/providers/setup", "config/providers/reconfigure",
+    "config/providers/save",
+})
+_MA_ACTIVITY_PREFIXES = ("player_queues/", "players/cmd/")
+
+
+async def ensure_running() -> bool:
+    """Start a reaped MA before a user-intent call. Flag off → True, no-op."""
+    import ma_ondemand
+    if not ma_ondemand.enabled():
+        return True
+    return await ma_ondemand.ensure_running()
+
+
 async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any) -> Any:
     """POST one MA command; return the httpx.Response, or None on a network/
     transport failure (unreachable, timeout). Never raises. `timeout_s` is a
     keyword for slow writes (no MA command takes a `timeout_s` arg)."""
+    import ma_ondemand
+    reap_on = ma_ondemand.enabled()
+    if reap_on and command in _MA_WAKE_COMMANDS:
+        await ma_ondemand.ensure_running()
+    if reap_on and command.startswith(_MA_ACTIVITY_PREFIXES) and command != "player_queues/all":
+        ma_ondemand.note_activity()
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as c:
             # MA's JSON-RPC shim requires args NESTED under "args" — flat args are
@@ -97,12 +127,17 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
             payload: dict[str, Any] = {"command": command}
             if args:
                 payload["args"] = args
-            return await c.post(f"{_ma_url()}/api", json=payload, headers=_ma_headers())
+            r = await c.post(f"{_ma_url()}/api", json=payload, headers=_ma_headers())
+            if reap_on:
+                ma_ondemand.note_seen_up()
+            return r
     except Exception as exc:  # noqa: BLE001 — MA is optional; never break Zoe
         logger.debug("MA %s unreachable: %s", command, exc)
         # A transport failure is the only sign zoe-data gets that MA went away —
         # possibly to be re-created on a different version. Re-read /info next time.
         _invalidate_ma_version()
+        if reap_on:  # ...and never let a pre-stop "seen up" skip the next wake
+            ma_ondemand.note_seen_down()
         return None
 
 
@@ -243,7 +278,14 @@ async def _ma_api_for_write() -> Optional[bool]:
     """For a credential WRITE: True = 2.10+ flow API, False = pre-2.10 API,
     None = MA's version is unreadable right now. A write must not guess: on 2.10
     the pre-2.10 save 'succeeds' and drops the cookie, so an unknown version fails
-    the write instead of taking the old path."""
+    the write instead of taking the old path.
+
+    Every credential write (setup form, connect, re-auth, OAuth) funnels through
+    here, so this is where a reaped MA is woken: the version probe below is a
+    direct /info read that would otherwise report "unreadable" and end the
+    flow as "unknown provider" before any wake command ran — and the YouTube
+    Music reconnect is the operator's only path to re-auth after a restart."""
+    await ensure_running()
     ver = await ma_server_version(fresh=True)
     if ver is None:
         logger.info("MA version unreadable (/info) — refusing a provider write rather than guess the API")
@@ -413,6 +455,7 @@ _PLAYER_CMDS = {
 async def control(action: str, player_id: str = "", value: Any = None) -> bool:
     """Run a transport/volume action on the target player. Returns True on a
     dispatched command (best-effort — MA is fire-and-forget for transport)."""
+    await ensure_running()
     players = await get_players()
     player = _pick_player(players, player_id)
     if player is None:
@@ -762,6 +805,7 @@ async def search_and_play(query: str, player_id: str = "",
     `zoe_user_id` is the acting user for the listening journal (identity-
     threaded callers pass it; unidentified callers leave it '' → journaled as
     the reserved guest user via music_history.resolve_music_user)."""
+    await ensure_running()
     players = await get_players()
     player = _pick_player(players, player_id)
     if player is None:
@@ -1108,6 +1152,7 @@ async def play_media(uri: str, player_id: str = "", option: str = "replace",
     uri = (uri or "").strip()
     if not uri:
         return {"ok": False, "reason": "empty uri"}
+    await ensure_running()
     players = await get_players()
     if player_id:
         # Same rule as set_preferred_player / group_players: [] means we could
@@ -1345,6 +1390,9 @@ async def resolve_music(intent: Any, user_id: str = "") -> dict[str, Any]:
 
     if action == "setup":
         return await resolve_music_setup(query)
+
+    if action != "status":  # "what's playing?" on a reaped MA is "nothing" — no wake
+        await ensure_running()
 
     if action == "transfer" and query:
         # Voice path for speaker switching: "move/switch music to the kitchen".
