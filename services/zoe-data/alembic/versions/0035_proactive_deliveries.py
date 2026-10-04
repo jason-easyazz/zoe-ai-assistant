@@ -1,6 +1,6 @@
 """0035 — proactive_deliveries: the delivery ledger (pull-not-push inbox, PR 1).
 
-``proactive/ledger.py`` (flag ``ZOE_PROACTIVE_LEDGER``, default OFF) writes ONE row per
+``proactive/ledger.py`` (flag ``ZOE_PROACTIVE_LEDGER``, default OFF) writes ONE open row per
 item a conversation actually carried to a member: a ``[RAISE …]`` that settled with reply
 text, or a ``[Today]`` brief line the selector marked surfaced. Research record
 docs/research/pull-not-push-inbox-2026-10-04.md §3.1 / §3.5 / §5 (PR 1).
@@ -10,9 +10,10 @@ it, and not what the person did next (record §2.5). This table is that evidence
 
   * ``idem_key`` UNIQUE — (member, session, kind, source_ref, delivered_by). A retried or
     double settle of the same delivery inserts nothing; one item, one row.
-  * ``voiced`` — 1 the reply carried one of the item's anchor words, 0 it did not (the
-    injected-but-dropped case, outcome ``undelivered``), NULL unverifiable (no anchors,
-    or the lane passed no reply).
+  * ``voiced`` — set when the sweep closes the row, from the reply chat persisted for that
+    delivery: 1 the reply carried one of the item's anchor words, 0 it did not (the
+    injected-but-dropped case, outcome ``undelivered``), NULL unverifiable (no anchors, or
+    the row closed ``unknown`` before any reply was found).
   * ``outcome`` NULL = surfaced, awaiting the sweep; else ``accepted`` | ``ignored`` |
     ``undelivered`` | ``unknown`` (closed). ``expires_at`` bounds the wait: a row the sweep
     could not judge by then closes ``unknown`` — it never strands.

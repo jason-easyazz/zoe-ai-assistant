@@ -10,23 +10,33 @@ block, no spacing rule, no candidate row, and never speaks.
   * **Writer** — ``record`` / ``record_for_candidate``: one ``proactive_deliveries`` row per
     item a conversation carried, from ``selector._settle`` (a raise) and
     ``selector.mark_brief_surfaced`` (a brief line). IDEMPOTENT: ``idem_key`` UNIQUE, so a
-    retried or double settle inserts nothing. ``voiced`` is decided at write time from the
-    lane's reply text: one of the item's anchor words in the reply = 1, none = 0 (outcome
-    ``undelivered`` at once), nothing to check (no anchors, or no reply passed) = NULL —
-    ``unknown``, never ``undelivered``, because nothing proves it was not voiced (the
-    ``arrival.evaluate_pending_responses`` discipline).
-  * **Sweep** — ``sweep``: closes rows (called from the engine slow loop). An event (Notify:
-    information, no answer expected) is ``accepted`` when voiced. Anything else (a Question)
-    waits ``RESPONSE_WINDOW_S``, then the member's FIRST next turn decides: a deterministic
-    command, or a turn sharing no anchor word, is ``ignored``; one that shares an anchor is
-    ``accepted``; no turn at all is ``ignored``. A row the sweep cannot judge by its
-    ``expires_at`` closes ``unknown`` — nothing strands. Re-running is a no-op
-    (``WHERE outcome IS NULL``).
+    retried or double settle inserts nothing. A new row is open (``outcome`` NULL).
+  * **Sweep** — ``sweep`` (engine slow loop) closes rows from what chat PERSISTED, so the
+    brain lanes are untouched (they are voice-path files: any edit there needs a Jetson
+    replay-gate run). Both lanes persist the reply the person HEARD to ``chat_messages``
+    (``routers.chat._save_chat_message``; the streaming voice lane saves what was spoken),
+    and the user's turn either before the stream (chat, streaming voice) or together with the
+    reply after it (non-streaming voice). So the exchange's REPLY is the first assistant row
+    of the delivery's session at/after the settle, and the person's "next turn" is their
+    first user row after that reply — which excludes the turn that triggered the delivery
+    whichever order it was saved in.
+      - ``voiced``: the reply carries one of the item's anchor words (1) or none (0). 0 closes
+        the row ``undelivered`` — the injected-but-dropped case. NULL (no anchors) is
+        unverifiable: ``unknown``, never ``undelivered``, because nothing proves it was not
+        voiced (the ``arrival.evaluate_pending_responses`` discipline).
+      - an ``event`` (Notify: information, no answer expected) is ``accepted`` once voiced.
+      - anything else (a Question) waits ``RESPONSE_WINDOW_S`` after the reply, then the
+        member's FIRST next turn decides: a deterministic command, or a turn sharing no anchor
+        word, is ``ignored``; one that shares an anchor is ``accepted``; no turn at all is
+        ``ignored``; an unverified item that was not taken up is ``unknown``.
+      - no persisted reply yet, or a chat read / intent-router error: the row stays open and
+        is retried next tick; unjudged by its ``expires_at`` it closes ``unknown`` — nothing
+        strands. Re-running is a no-op (``WHERE outcome IS NULL``).
 
-The sweep reads chat turns with the same SQL shape as ``arrival._first_user_turn``
-(member-wide, not session-bound: a voice session id is not always a chat session id).
-Logs carry counts, ids' kinds and outcomes — never item text, reply text or utterances.
-Flag off: every entry point returns before any DB access.
+The chat reads are Postgres SQL in the shape of ``arrival._first_user_turn`` (member-wide
+turns; session-bound reply). Logs carry counts, item kinds and outcomes — never item text,
+reply text or utterances; reply text is checked and discarded, never stored. Flag off: every
+entry point returns before any DB access.
 """
 from __future__ import annotations
 
@@ -40,7 +50,7 @@ logger = logging.getLogger(__name__)
 _TRUTHY = {"1", "true", "yes", "on"}
 RESPONSE_WINDOW_S = 600       # record §3.5: the person's next turn "within … the next 10 min"
 JUDGE_BY = timedelta(hours=24)  # a row the sweep could not judge by then closes ``unknown``
-_REPLY_CAP = 4000             # chars of reply kept for the voiced check; never stored
+_REPLY_SLACK = timedelta(seconds=10)  # settle runs in the stream's finally; the reply row follows
 _SWEEP_BATCH = 200
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -65,32 +75,6 @@ def _parse(value) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-# ── the reply the lane streamed (collected only with the flag on) ─────────────
-class ReplyTap:
-    """Collects a turn's real reply text for the voiced check. Inactive (flag off) it
-    holds nothing and ``kwargs()`` is ``{}``, so the lanes' settle calls are unchanged."""
-
-    __slots__ = ("active", "_parts", "_n")
-
-    def __init__(self, active: bool) -> None:
-        self.active = active
-        self._parts: list[str] = []
-        self._n = 0
-
-    def add(self, delta: str) -> None:
-        if self.active and self._n < _REPLY_CAP:
-            self._parts.append(delta)
-            self._n += len(delta)
-
-    def kwargs(self) -> dict:
-        return {"reply": "".join(self._parts)[:_REPLY_CAP]} if self.active else {}
-
-
-def reply_tap() -> ReplyTap:
-    return ReplyTap(ledger_enabled())
-
-
-# ── voiced? ───────────────────────────────────────────────────────────────────
 def voiced_in(reply: str | None, cue_words: str) -> int | None:
     """1 / 0 when the reply can be checked against the item's anchors, else None."""
     cues = {c for c in (cue_words or "").split() if c}
@@ -108,38 +92,34 @@ def idem_key(user_id: str, session_id: str, kind: str, source_ref: str, delivere
 # ── writer ────────────────────────────────────────────────────────────────────
 async def record(db, *, user_id: str, candidate_id: str | None, kind: str, source_ref: str,
                  shape: str, delivered_by: str, session_id: str, cue_words: str,
-                 now: datetime, reply: str | None) -> bool:
-    """Insert the delivery (idempotent). True when a NEW row was written. Never raises."""
+                 now: datetime) -> bool:
+    """Insert the delivery, open (idempotent). True when a NEW row was written. Never raises."""
     if not ledger_enabled():
         return False
     try:
-        voiced = voiced_in(reply, cue_words)
-        undelivered = voiced == 0
         stamp = _iso(now)
         cur = await db.execute(
             """INSERT INTO proactive_deliveries (id, idem_key, user_id, candidate_id, kind,
-                   source_ref, shape, delivered_by, session_id, cue_words, voiced, surfaced_at,
-                   expires_at, outcome, outcome_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   source_ref, shape, delivered_by, session_id, cue_words, surfaced_at,
+                   expires_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT (idem_key) DO NOTHING""",
             (uuid.uuid4().hex, idem_key(user_id, session_id, kind, source_ref, delivered_by),
              user_id, candidate_id, kind, source_ref, shape, delivered_by, session_id,
-             cue_words or "", voiced, stamp, _iso(now + JUDGE_BY),
-             "undelivered" if undelivered else None, stamp if undelivered else None, stamp),
+             cue_words or "", stamp, _iso(now + JUDGE_BY), stamp),
         )
         new = (getattr(cur, "rowcount", 1) or 0) > 0
     except Exception as exc:  # noqa: BLE001 — the ledger must never break a settle
         logger.warning("proactive-ledger: record failed user=%s: %r", user_id, exc)
         return False
     if new:
-        logger.info("PROACTIVE_LEDGER user=%s kind=%s shape=%s by=%s voiced=%s%s", user_id, kind,
-                    shape, delivered_by, "?" if voiced is None else voiced,
-                    " outcome=undelivered" if undelivered else "")
+        logger.info("PROACTIVE_LEDGER user=%s kind=%s shape=%s by=%s", user_id, kind, shape,
+                    delivered_by)
     return new
 
 
 async def record_for_candidate(db, *, candidate_id: str, user_id: str, session_id: str,
-                               shape: str, now: datetime, reply: str | None) -> bool:
+                               shape: str, now: datetime) -> bool:
     """A raise just settled: read the candidate's identity and anchors, record the delivery."""
     if not ledger_enabled():
         return False
@@ -157,10 +137,29 @@ async def record_for_candidate(db, *, candidate_id: str, user_id: str, session_i
     return await record(
         db, user_id=user_id, candidate_id=candidate_id, kind=str(row[0]), source_ref=str(row[1]),
         shape=shape, delivered_by="turn", session_id=session_id, cue_words=str(row[2] or ""),
-        now=now, reply=reply)
+        now=now)
 
 
-# ── sweep ─────────────────────────────────────────────────────────────────────
+# ── sweep: what chat persisted ────────────────────────────────────────────────
+async def _reply_after(db, session_id: str, since: str) -> tuple[str, datetime] | None:
+    """The first assistant row of ``session_id`` at/after ``since``: the reply this delivery
+    rode in on (the text the person heard) and when it was persisted. Postgres SQL."""
+    async with db.execute(
+        """SELECT cm.content, cm.created_at::timestamptz AS at
+           FROM chat_messages cm
+           WHERE cm.session_id = ? AND cm.role = 'assistant'
+             AND cm.created_at::timestamptz >= ?::timestamptz
+           ORDER BY cm.created_at::timestamptz ASC
+           LIMIT 1""",
+        (session_id, since),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    at = _parse(row[1])
+    return (str(row[0] or ""), at) if at else None
+
+
 async def _user_turns(db, user_id: str, start: str, end: str, limit: int = 1) -> list[str]:
     """The member's own chat turns in ``(start, end]``, oldest first. The SQL shape of
     ``arrival._first_user_turn`` (Postgres: ``::timestamptz``, ``message_owner_expr``)."""
@@ -191,9 +190,10 @@ def _is_command(text: str) -> bool:
 
 
 def judge_turn(turns: list[str], cue_words: str, voiced: int | None) -> str:
-    """The outcome of a Question from the member's first turn after it (the intent router
-    decides "command"; it RAISES on an unreadable turn and the sweep leaves the row open).
-    ``ignored`` needs a voiced item; an unverified one that was not taken up is ``unknown``."""
+    """The outcome of a Question from the member's first turn after the reply (the intent
+    router decides "command"; it RAISES on an unreadable turn and the sweep leaves the row
+    open). ``ignored`` needs a voiced item; an unverified one that was not taken up is
+    ``unknown``."""
     from proactive.selector import _words
 
     cues = {c for c in (cue_words or "").split() if c}
@@ -202,6 +202,29 @@ def judge_turn(turns: list[str], cue_words: str, voiced: int | None) -> str:
         if not _is_command(text) and cues and _words(text) & cues:
             return "accepted"
     return "ignored" if voiced == 1 else "unknown"
+
+
+async def _decide(db, row: tuple, now: datetime) -> tuple[str | None, int | None]:
+    """(outcome or None = still open, voiced) for one open row. May raise on an unreadable
+    chat read or turn: the caller retries next tick."""
+    _rid, uid, kind, sid, cues, surfaced_at, _expires = row
+    surfaced = _parse(surfaced_at)
+    if surfaced is None:
+        return "unknown", None
+    found = await _reply_after(db, sid, _iso(surfaced - _REPLY_SLACK))
+    if found is None:
+        return None, None  # not persisted yet (or never was): wait, expiry closes it
+    reply, reply_at = found
+    voiced = voiced_in(reply, cues or "")
+    if voiced == 0:
+        return "undelivered", 0  # injected and settled; the reply never mentioned it
+    if kind == "event":  # Notify: information, nothing to answer
+        return ("accepted" if voiced == 1 else "unknown"), voiced
+    end = reply_at + timedelta(seconds=RESPONSE_WINDOW_S)
+    if end > now:
+        return None, voiced  # the window is still open
+    turns = await _user_turns(db, uid, _iso(reply_at), _iso(end))
+    return judge_turn(turns, cues or "", voiced), voiced
 
 
 async def sweep(*, now: datetime | None = None) -> int:
@@ -216,38 +239,30 @@ async def sweep(*, now: datetime | None = None) -> int:
     try:
         async with get_compat_db() as db:
             async with db.execute(
-                "SELECT id, user_id, kind, cue_words, voiced, surfaced_at, expires_at "
+                "SELECT id, user_id, kind, session_id, cue_words, surfaced_at, expires_at "
                 "FROM proactive_deliveries WHERE outcome IS NULL ORDER BY surfaced_at LIMIT ?",
                 (_SWEEP_BATCH,),
             ) as cur:
                 rows = [tuple(r) for r in await cur.fetchall()]
-            for rid, uid, kind, cues, voiced, surfaced_at, expires_at in rows:
-                surfaced = _parse(surfaced_at)
-                judge_by = _parse(expires_at) or (surfaced or now) + JUDGE_BY
-                outcome: str | None = None
-                if surfaced is None:
-                    outcome = "unknown"
-                elif kind == "event":  # Notify: information, nothing to answer
-                    outcome = "accepted" if voiced == 1 else "unknown"
-                elif surfaced + timedelta(seconds=RESPONSE_WINDOW_S) <= now:
-                    try:
-                        turns = await _user_turns(
-                            db, uid, _iso(surfaced),
-                            _iso(surfaced + timedelta(seconds=RESPONSE_WINDOW_S)))
-                        outcome = judge_turn(turns, cues or "", voiced)
-                    except Exception as exc:  # noqa: BLE001 — unreadable: retry next tick
-                        logger.debug("proactive-ledger: judge deferred id=%s: %r", rid, exc)
+            for row in rows:
+                rid, uid, kind = row[0], row[1], row[2]
+                judge_by = _parse(row[6]) or ((_parse(row[5]) or now) + JUDGE_BY)
+                outcome, voiced = None, None
+                try:
+                    outcome, voiced = await _decide(db, row, now)
+                except Exception as exc:  # noqa: BLE001 — unreadable: retry next tick
+                    logger.debug("proactive-ledger: judge deferred id=%s: %r", rid, exc)
                 if outcome is None and now >= judge_by:
                     outcome = "unknown"  # never strands
                 if outcome is None:
                     continue
                 cur = await db.execute(
-                    "UPDATE proactive_deliveries SET outcome = ?, outcome_at = ? "
-                    "WHERE id = ? AND outcome IS NULL", (outcome, _iso(now), rid))
+                    "UPDATE proactive_deliveries SET outcome = ?, outcome_at = ?, voiced = ? "
+                    "WHERE id = ? AND outcome IS NULL", (outcome, _iso(now), voiced, rid))
                 if (getattr(cur, "rowcount", 1) or 0) > 0:
                     closed += 1
-                    logger.info("PROACTIVE_LEDGER_OUTCOME user=%s kind=%s outcome=%s", uid, kind,
-                                outcome)
+                    logger.info("PROACTIVE_LEDGER_OUTCOME user=%s kind=%s outcome=%s voiced=%s",
+                                uid, kind, outcome, "?" if voiced is None else voiced)
     except Exception as exc:  # noqa: BLE001
         logger.warning("proactive-ledger: sweep failed: %r", exc)
     return closed

@@ -1396,7 +1396,6 @@ async def run_flue_brain_streaming(
     The proactivity selector's ``[RAISE …]`` (ZOE_PROACTIVE_SELECTOR, default OFF)
     follows the same prepare/settle contract; the brief wins a turn they share."""
     import brief_first_turn
-    from proactive import ledger as proactive_ledger
     from proactive import selector as proactive_selector
 
     brief = await brief_first_turn.prepare(message, user_id, session_id)
@@ -1408,8 +1407,6 @@ async def run_flue_brain_streaming(
     )
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
-    # ZOE_PROACTIVE_LEDGER: the reply text, for the delivery ledger's voiced check (inert off).
-    tap = proactive_ledger.reply_tap()
     emitted = False  # real reply text went out (never a sentinel or the fallback)
     try:
         async for delta in turn:
@@ -1418,7 +1415,6 @@ async def run_flue_brain_streaming(
                     reply.append(delta)
                 if delta.strip() and delta != _FALLBACK_TEXT:
                     emitted = True
-                    tap.add(delta)
             yield delta
     finally:
         # Close the inner turn deterministically when the consumer stops early
@@ -1428,9 +1424,9 @@ async def run_flue_brain_streaming(
         # in after the first text exits through this finally (GeneratorExit or a
         # CancelledError), and the brief it heard must still take the claim.
         if brief is not None:
-            await brief_first_turn.settle(brief, produced=emitted, **tap.kwargs())
+            await brief_first_turn.settle(brief, produced=emitted)
         if raised is not None:
-            await proactive_selector.settle(raised, produced=emitted, **tap.kwargs())
+            await proactive_selector.settle(raised, produced=emitted)
         if debug:
             logger.info(
                 "SEAM_CONTINUITY_DEBUG user=%s session=%s reply=%r",

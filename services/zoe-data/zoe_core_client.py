@@ -1208,13 +1208,10 @@ async def run_zoe_core_streaming(
     # folds in pending-contact offers that no other path produces. See the header.
     # The first-turn day brief is prepared alongside the packet (both never
     # raise); its claim is settled in the finally below, by whether text went out.
-    from proactive import ledger as proactive_ledger
     from proactive import selector as proactive_selector
 
     briefs: list = []
     raises: list = []
-    # ZOE_PROACTIVE_LEDGER: the reply text, for the delivery ledger's voiced check (inert off).
-    tap = proactive_ledger.reply_tap()
 
     async def _compose() -> str:
         packet, brief = await asyncio.gather(
@@ -1272,7 +1269,6 @@ async def run_zoe_core_streaming(
                 break
             if not str(item).startswith(("__TOOL__:", "__THINKING__:")):
                 yielded_any = True
-                tap.add(str(item))
             yield item
         if errors:
             raise errors[0]
@@ -1287,9 +1283,9 @@ async def run_zoe_core_streaming(
         # The day brief's claim is settled on EVERY exit — clean, error, or a
         # consumer that disconnected/barged in — by whether text went out.
         if briefs:
-            await brief_first_turn.settle(briefs[0], produced=yielded_any, **tap.kwargs())
+            await brief_first_turn.settle(briefs[0], produced=yielded_any)
         if raises:
-            await proactive_selector.settle(raises[0], produced=yielded_any, **tap.kwargs())
+            await proactive_selector.settle(raises[0], produced=yielded_any)
 
 
 async def _reset_worker_for(

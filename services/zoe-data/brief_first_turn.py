@@ -388,7 +388,7 @@ async def prepare(message: str, user_id: str, session_id: str = "") -> DayBrief 
         return None
 
 
-async def settle(brief: DayBrief | None, *, produced: bool, reply: str | None = None) -> bool:
+async def settle(brief: DayBrief | None, *, produced: bool) -> bool:
     """Take today's shared claim once the turn EMITTED reply text. NEVER raises.
 
     Both lanes call this from their stream's ``finally``, so a turn that ended in
@@ -403,13 +403,13 @@ async def settle(brief: DayBrief | None, *, produced: bool, reply: str | None = 
     """
     if brief is None:
         return False
-    task = asyncio.ensure_future(_settle(brief, produced, reply))
+    task = asyncio.ensure_future(_settle(brief, produced))
     _settling.add(task)  # a shielded task must stay referenced until it finishes
     task.add_done_callback(_settling.discard)
     return await asyncio.shield(task)
 
 
-async def _settle(brief: DayBrief, produced: bool, reply: str | None = None) -> bool:
+async def _settle(brief: DayBrief, produced: bool) -> bool:
     # ORDER matters: the claim is written BEFORE this turn's hold is released, so
     # a daemon poll can never find neither (hold gone, claim not yet written) and
     # play a queued 07:30 brief the member just heard. A failed claim write keeps
@@ -430,8 +430,7 @@ async def _settle(brief: DayBrief, produced: bool, reply: str | None = None) -> 
         # The loops it voiced are surfaced: the next conversation must not raise them.
         from proactive.selector import mark_brief_surfaced
 
-        await mark_brief_surfaced(brief.user_id, brief.session_id, list(brief.surfaced),
-                                  **({"reply": reply} if reply is not None else {}))
+        await mark_brief_surfaced(brief.user_id, brief.session_id, list(brief.surfaced))
     _log(brief.user_id, brief.items, brief.shape, injected=True, claimed=claimed)
     return claimed
 

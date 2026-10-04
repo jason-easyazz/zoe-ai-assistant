@@ -2,18 +2,20 @@
 
 Fixtures only — no household text, no real ids. The DB edge is a real SQLite file built by
 migrations 0033 + 0035 behind db_pool's own cursor types, so the idempotent INSERT, the
-outcome UPDATE and the selector's own SQL run for real; the Postgres-only chat-turn read
-(``ledger._user_turns``) is replaced by a fake, like every other ``ci_safe`` test of a
-Postgres edge.
+outcome UPDATE and the selector's own SQL run for real; the two Postgres-only chat reads
+(``ledger._reply_after`` / ``ledger._user_turns``) are replaced by time-honouring fakes, like
+every other ``ci_safe`` test of a Postgres edge.
 
 Negative controls (each was run red before commit):
-  * flag off  -> no row, no sweep DB access, the lanes' settle calls carry NO ``reply``
-    kwarg, and the candidate table + raise block are byte-identical to a flag-on run;
+  * flag off  -> no row, no sweep DB access, and the candidate table + raise blocks are
+    byte-identical to a flag-on run;
   * drop ``idem_key``'s UNIQUE from migration 0035               -> duplicate-key test red;
   * make ``ledger_enabled`` always True                          -> the flag-off tests red;
-  * break the ``voiced_in`` check (always 1)                     -> undelivered test red;
+  * make ``voiced_in`` always 1                                  -> undelivered test red;
+  * start the next-turn window BEFORE the reply                  -> trigger-turn test red;
   * drop ``outcome IS NULL`` from the sweep's SELECT and UPDATE  -> double-sweep test red;
-  * drop the ``judge_by`` fallback                               -> expiry test red.
+  * drop the ``judge_by`` fallback                               -> expiry test red;
+  * ignore the response window                                   -> window test red.
 """
 from __future__ import annotations
 
@@ -33,8 +35,6 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 import db_compat
-import zoe_core_client as core
-import zoe_flue_client as flue
 from db_pool import _Cursor, _ExecResult
 from proactive import ledger
 from proactive import selector as sel
@@ -43,7 +43,7 @@ SVC = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 9, 30, 0, 0, tzinfo=timezone.utc)
 MEMBER = "member-a"
 GREET = "Hi Zoe, how are things?"
-LOOP = "User is anxious about a job interview at the aquarium on Friday"
+LOOP = "User is anxious about a job interview at the aquarium on Friday"  # anchors: interview, job
 
 
 def _migrate(engine, fname, fn="upgrade"):
@@ -112,12 +112,22 @@ def env(monkeypatch, tmp_path):
                 "ZOE_PROACTIVE_RAISE_PER_DAY", "ZOE_LOOP_LIFECYCLE"):
         monkeypatch.delenv(key, raising=False)
     sel._reset_state()
-    state = {"now": NOW, "db": db, "turns": {}}
+    state = {"now": NOW, "db": db, "turns": {}, "replies": {}}
     monkeypatch.setattr(sel, "_now", lambda: state["now"])
 
-    async def fake_turns(_db, user_id, start, end, limit=1):
-        return list(state["turns"].get(user_id, []))[:limit]
+    async def fake_reply_after(_db, session_id, since):
+        # the first assistant row of the session at/after ``since`` (chat_messages)
+        due = [(text, at) for text, at in state["replies"].get(session_id, [])
+               if ledger._iso(at) >= since]
+        return min(due, key=lambda r: r[1]) if due else None
 
+    async def fake_turns(_db, user_id, start, end, limit=1):
+        # the member's user rows in (start, end], oldest first
+        rows = sorted((at, text) for text, at in state["turns"].get(user_id, [])
+                      if start < ledger._iso(at) <= end)
+        return [text for _at, text in rows][:limit]
+
+    monkeypatch.setattr(ledger, "_reply_after", fake_reply_after)
     monkeypatch.setattr(ledger, "_user_turns", fake_turns)
     yield state
     sel._reset_state()
@@ -131,16 +141,30 @@ def _seed(env, text=LOOP, user=MEMBER):
         "follow_up_after) VALUES (?, ?, '', 5, ?, ?)", (user, text, created, due))
 
 
-async def _raise_and_settle(env, *, reply="How did the aquarium interview go?", sid="s1"):
+async def _raise_and_settle(env, *, sid="s1"):
     _seed(env)
     await sel.select_for_user(MEMBER, now=NOW)
     raised = await sel.prepare(GREET, MEMBER, sid)
     assert raised is not None
-    assert await sel.settle(raised, produced=True, reply=reply)
+    assert await sel.settle(raised, produced=True)
     return raised
 
 
+def _persist_reply(env, text="How did the interview go?", *, sid="s1", after_s=2):
+    """Chat persisted the reply the person heard, ``after_s`` after the settle."""
+    env["replies"].setdefault(sid, []).append((text, NOW + timedelta(seconds=after_s)))
+
+
+def _says(env, text, *, after_s):
+    env["turns"].setdefault(MEMBER, []).append((text, NOW + timedelta(seconds=after_s)))
+
+
+async def _sweep_at(env, minutes):
+    return await ledger.sweep(now=NOW + timedelta(minutes=minutes))
+
+
 def _ledger(env):
+    """(kind, shape, delivered_by, session, voiced, outcome)"""
     return env["db"].rows("SELECT kind, shape, delivered_by, session_id, voiced, outcome "
                           "FROM proactive_deliveries ORDER BY created_at")
 
@@ -177,99 +201,131 @@ def test_no_request_time_ddl():
 
 
 # ── writer ────────────────────────────────────────────────────────────────────
-async def test_a_raise_that_voices_the_item_is_recorded_pending(env):
+async def test_a_settled_raise_is_recorded_open(env):
     await _raise_and_settle(env)
     (row,) = _ledger(env)
-    assert row == ("open_loop", "greeting", "turn", "s1", 1, None)  # surfaced, awaiting the sweep
-
-
-async def test_a_raise_the_reply_never_voiced_is_undelivered_at_once(env, caplog):
-    """The #1821 failure, finally visible: injected + settled, reply never mentioned it."""
-    import logging
-
-    with caplog.at_level(logging.INFO, logger="proactive.ledger"):
-        await _raise_and_settle(env, reply="Good, thanks! How are you?")
-    (row,) = _ledger(env)
-    assert row[4:] == (0, "undelivered")
-    assert "outcome=undelivered" in caplog.text
-    assert "interview" not in caplog.text and "How are you" not in caplog.text  # no text in logs
-
-
-async def test_no_reply_or_no_anchors_is_unverifiable_never_undelivered(env):
-    await _raise_and_settle(env, reply=None)
-    assert _ledger(env)[0][4:] == (None, None)
-    assert ledger.voiced_in("anything at all", "") is None
-    assert ledger.voiced_in(None, "aquarium") is None
-    assert ledger.voiced_in("About the Aquarium!", "aquarium") == 1  # case + punctuation
-    assert ledger.voiced_in("about the aquariums", "aquarium") == 1  # plural stem
+    assert row == ("open_loop", "greeting", "turn", "s1", None, None)  # surfaced, awaiting the sweep
 
 
 async def test_duplicate_idempotency_key_is_one_row(env):
     raised = await _raise_and_settle(env)
-    assert await sel.settle(raised, produced=True, reply="How did the aquarium go?")  # retried
+    assert await sel.settle(raised, produced=True)  # a retried settle
     assert len(_ledger(env)) == 1
     again = await ledger.record(
         env["db"], user_id=MEMBER, candidate_id=raised.candidate_id, kind="open_loop",
         source_ref="open_loops:1", shape="greeting", delivered_by="turn", session_id="s1",
-        cue_words="aquarium", now=NOW, reply="aquarium")
+        cue_words="interview", now=NOW)
     assert again is False and len(_ledger(env)) == 1
     other_session = await ledger.record(
         env["db"], user_id=MEMBER, candidate_id=None, kind="open_loop", source_ref="open_loops:1",
-        shape="greeting", delivered_by="turn", session_id="s2", cue_words="aquarium", now=NOW,
-        reply="aquarium")
-    assert other_session is True and len(_ledger(env)) == 2  # a different conversation is a different delivery
+        shape="greeting", delivered_by="turn", session_id="s2", cue_words="interview", now=NOW)
+    assert other_session is True and len(_ledger(env)) == 2  # another conversation = another delivery
 
 
 async def test_a_settle_without_text_writes_nothing(env):
     _seed(env)
     await sel.select_for_user(MEMBER, now=NOW)
     raised = await sel.prepare(GREET, MEMBER, "s1")
-    assert await sel.settle(raised, produced=False, reply="") is False
+    assert await sel.settle(raised, produced=False) is False
     assert _ledger(env) == []
 
 
 async def test_brief_items_are_recorded_with_shape_brief_and_are_idempotent(env):
     items = [("open_loop", "open_loops:7", "The aquarium interview is on Friday")]
-    assert await sel.mark_brief_surfaced(MEMBER, "s9", items, reply="Your aquarium interview is Friday")
-    assert await sel.mark_brief_surfaced(MEMBER, "s9", items, reply="Your aquarium interview is Friday")
+    assert await sel.mark_brief_surfaced(MEMBER, "s9", items)
+    assert await sel.mark_brief_surfaced(MEMBER, "s9", items)
     (row,) = _ledger(env)
-    assert row == ("open_loop", "brief", "brief", "s9", 1, None)
+    assert row == ("open_loop", "brief", "brief", "s9", None, None)
 
 
-# ── sweep ─────────────────────────────────────────────────────────────────────
-async def _sweep_at(env, minutes):
-    return await ledger.sweep(now=NOW + timedelta(minutes=minutes))
+def test_voiced_in():
+    assert ledger.voiced_in("anything at all", "") is None      # no anchors: unverifiable
+    assert ledger.voiced_in(None, "interview") is None
+    assert ledger.voiced_in("About the Interview!", "interview") == 1   # case + punctuation
+    assert ledger.voiced_in("about the interviews", "interview") == 1   # plural stem
+    assert ledger.voiced_in("Good, thanks! How are you?", "interview job") == 0
 
 
-@pytest.mark.parametrize("turns, outcome", [
-    (["The interview went well, they were lovely"], "accepted"),       # engages the item
-    (["I had a long day at work today"], "ignored"),                  # a turn, a different topic
-    (["turn on the lights"], "ignored"),                               # a deterministic command
-    ([], "ignored"),                                                   # nobody said anything
-])
-async def test_question_outcome_from_the_members_next_turn(env, turns, outcome):
+# ── sweep: voiced / undelivered ───────────────────────────────────────────────
+async def test_a_reply_that_never_voiced_the_item_is_undelivered(env, caplog):
+    """The #1821 failure, finally visible: injected + settled, the reply never mentioned it."""
+    import logging
+
     await _raise_and_settle(env)
-    env["turns"][MEMBER] = turns
-    assert await _sweep_at(env, 1) == 0  # the window is still open: nothing is judged early
+    _persist_reply(env, "Good, thanks! How are you?")
+    with caplog.at_level(logging.INFO, logger="proactive.ledger"):
+        assert await _sweep_at(env, 1) == 1
+    assert _ledger(env)[0][4:] == (0, "undelivered")  # closed at once, no 10-minute wait
+    assert "outcome=undelivered" in caplog.text
+    assert "interview" not in caplog.text and "How are you" not in caplog.text  # no text in logs
+
+
+async def test_no_persisted_reply_yet_leaves_the_row_open(env):
+    await _raise_and_settle(env)
+    assert await _sweep_at(env, 30) == 0          # nothing persisted: wait, never guess
+    assert _ledger(env)[0][5] is None
+
+
+async def test_a_reply_persisted_before_the_settle_is_not_this_deliverys(env):
+    """The previous exchange's reply (older than the settle slack) must not be mistaken."""
+    await _raise_and_settle(env)
+    _persist_reply(env, "Good, thanks! How are you?", after_s=-60)
+    assert await _sweep_at(env, 30) == 0
+
+
+async def test_unanchored_item_is_unknown_never_undelivered(env):
+    await ledger.record(env["db"], user_id=MEMBER, candidate_id=None, kind="open_loop",
+                        source_ref="open_loops:9", shape="greeting", delivered_by="turn",
+                        session_id="s1", cue_words="", now=NOW)
+    _persist_reply(env, "Good, thanks! How are you?")
+    _says(env, "I had a long day", after_s=60)
+    await _sweep_at(env, 15)
+    assert _ledger(env)[0][4:] == (None, "unknown")
+
+
+# ── sweep: the member's next turn ─────────────────────────────────────────────
+@pytest.mark.parametrize("turn, outcome", [
+    ("The interview went well, they were lovely", "accepted"),   # engages the item
+    ("I had a long day at work today", "ignored"),               # a turn, a different topic
+    ("turn on the lights", "ignored"),                           # a deterministic command
+    (None, "ignored"),                                           # nobody said anything
+])
+async def test_question_outcome_from_the_members_next_turn(env, turn, outcome):
+    await _raise_and_settle(env)
+    _persist_reply(env)
+    if turn:
+        _says(env, turn, after_s=60)
+    assert await _sweep_at(env, 1) == 0   # the window is still open: nothing is judged early
     assert _ledger(env)[0][5] is None
     assert await _sweep_at(env, 11) == 1
-    assert _ledger(env)[0][5] == outcome
+    assert _ledger(env)[0][4:] == (1, outcome)
 
 
-async def test_an_unverified_item_that_was_not_taken_up_is_unknown_not_ignored(env):
-    await _raise_and_settle(env, reply=None)  # voiced NULL
-    env["turns"][MEMBER] = ["I had a long day at work today"]
+async def test_the_turn_that_triggered_the_delivery_is_never_its_answer(env):
+    """The non-streaming voice lane saves the user row AFTER the settle, together with the
+    reply. The window starts at the reply, so that row (earlier than it) cannot be 'next'."""
+    await _raise_and_settle(env)
+    _says(env, "Hey Zoe, the interview is on my mind", after_s=1)   # saved with the reply, before it
+    _persist_reply(env, after_s=2)
+    _says(env, "I had a long day at work today", after_s=90)
     await _sweep_at(env, 11)
-    assert _ledger(env)[0][5] == "unknown"
+    assert _ledger(env)[0][5] == "ignored"        # judged on the 90 s turn, not the trigger
+
+
+async def test_a_turn_after_the_window_does_not_count(env):
+    await _raise_and_settle(env)
+    _persist_reply(env)
+    _says(env, "The interview went well", after_s=ledger.RESPONSE_WINDOW_S + 60)
+    await _sweep_at(env, 11)
+    assert _ledger(env)[0][5] == "ignored"
 
 
 async def test_an_event_is_accepted_when_voiced_without_waiting_for_an_answer(env):
-    await ledger.record(env["db"], user_id=MEMBER, candidate_id=None, kind="event",
-                        source_ref="events:e1", shape="cue", delivered_by="turn", session_id="s1",
-                        cue_words="dentist", now=NOW, reply="You have the dentist at nine")
-    await ledger.record(env["db"], user_id=MEMBER, candidate_id=None, kind="event",
-                        source_ref="events:e2", shape="cue", delivered_by="turn", session_id="s1",
-                        cue_words="", now=NOW, reply="whatever")
+    for ref in ("events:e1", "events:e2"):
+        await ledger.record(env["db"], user_id=MEMBER, candidate_id=None, kind="event",
+                            source_ref=ref, shape="cue", delivered_by="turn", session_id="s1",
+                            cue_words="dentist" if ref == "events:e1" else "", now=NOW)
+    _persist_reply(env, "You have the dentist at nine")
     assert await _sweep_at(env, 1) == 2
     assert [r[0] for r in env["db"].rows(
         "SELECT outcome FROM proactive_deliveries ORDER BY source_ref")] == ["accepted", "unknown"]
@@ -277,7 +333,8 @@ async def test_an_event_is_accepted_when_voiced_without_waiting_for_an_answer(en
 
 async def test_sweeping_twice_is_a_noop(env):
     await _raise_and_settle(env)
-    env["turns"][MEMBER] = ["the interview went fine"]
+    _persist_reply(env)
+    _says(env, "the interview went fine", after_s=60)
     assert await _sweep_at(env, 11) == 1
     before = _ledger(env)
     stamp = env["db"].rows("SELECT outcome_at FROM proactive_deliveries")
@@ -288,6 +345,7 @@ async def test_sweeping_twice_is_a_noop(env):
 
 async def test_expiry_closes_a_row_the_sweep_could_not_judge(env, monkeypatch):
     await _raise_and_settle(env)
+    _persist_reply(env)
 
     async def broken(*a, **k):
         raise RuntimeError("chat read down")
@@ -301,7 +359,8 @@ async def test_expiry_closes_a_row_the_sweep_could_not_judge(env, monkeypatch):
 
 async def test_an_unreadable_turn_leaves_the_row_open(env, monkeypatch):
     await _raise_and_settle(env)
-    env["turns"][MEMBER] = ["hello there"]
+    _persist_reply(env)
+    _says(env, "hello there", after_s=60)
 
     def boom(text):
         raise RuntimeError("intent router down")
@@ -316,7 +375,7 @@ async def _scenario(env):
     _seed(env)
     await sel.select_for_user(MEMBER, now=NOW)
     first = await sel.prepare(GREET, MEMBER, "s1")
-    assert await sel.settle(first, produced=True, reply="How did the aquarium interview go?")
+    assert await sel.settle(first, produced=True)
     env["now"] = NOW + timedelta(seconds=sel.raise_gap_s() + 1)
     again = await sel.prepare(GREET, MEMBER, "s2")
     return first.block, (again.block if again else None), _candidates(env)
@@ -326,7 +385,7 @@ async def test_flag_off_selector_behaviour_is_identical_and_writes_no_ledger(env
     monkeypatch.setenv("ZOE_PROACTIVE_LEDGER", "0")
     off = await _scenario(env)
     assert _ledger(env) == []
-    # Same scenario, flag ON, fresh DB state: the ledger rows are the ONLY difference.
+    # Same scenario, flag ON, fresh state: the ledger rows are the ONLY difference.
     env["db"].conn.execute("DELETE FROM proactive_candidates")
     env["db"].conn.execute("DELETE FROM open_loops")
     sel._reset_state()
@@ -344,12 +403,10 @@ async def test_flag_off_does_no_io_at_all(env, monkeypatch):
     assert await ledger.sweep(now=NOW) == 0
     assert await ledger.record(env["db"], user_id=MEMBER, candidate_id=None, kind="event",
                                source_ref="x", shape="cue", delivered_by="turn", session_id="s",
-                               cue_words="a", now=NOW, reply="a") is False
+                               cue_words="a", now=NOW) is False
     assert await ledger.record_for_candidate(
-        env["db"], candidate_id="x", user_id=MEMBER, session_id="s", shape="cue", now=NOW,
-        reply="a") is False
+        env["db"], candidate_id="x", user_id=MEMBER, session_id="s", shape="cue", now=NOW) is False
     assert env["db"].calls == calls
-    assert ledger.reply_tap().kwargs() == {}
 
 
 def test_engine_slow_loop_runs_the_sweep():
@@ -358,64 +415,11 @@ def test_engine_slow_loop_runs_the_sweep():
     assert "proactive.ledger" in inspect.getsource(engine._slow_loop)
 
 
-# ── both lanes pass the reply only when the ledger is on ──────────────────────
-def _flue_turn(monkeypatch, reply):
-    async def fake_turn(message, session_id, user_id="", **kwargs):
-        yield "__TOOL__:x"
-        for part in reply:
-            yield part
-
-    monkeypatch.setattr(flue, "_run_flue_brain_streaming_turn", fake_turn)
-
-
-async def test_flue_lane_ledger_on_voiced_and_off_no_reply_kwarg(env, monkeypatch):
-    _seed(env)
-    await sel.select_for_user(MEMBER, now=NOW)
-    _flue_turn(monkeypatch, ["How did the aquarium ", "interview go?"])  # voiced across deltas
-    async for _ in flue.run_flue_brain_streaming(GREET, "s1", MEMBER):
-        pass
-    assert _ledger(env)[0][4:] == (1, None)
-
-    seen, calls = {}, []
-
-    async def spy(raised, *, produced, **kw):
-        calls.append(produced)
-        seen.update(kw)
-        return True
-
-    monkeypatch.setattr(sel, "settle", spy)
-    monkeypatch.setenv("ZOE_PROACTIVE_LEDGER", "0")
-    await sel.select_for_user(MEMBER, now=NOW)
-    sel._reset_state()
-    env["now"] = NOW + timedelta(days=4)
-    await sel.select_for_user(MEMBER, now=env["now"])
-    async for _ in flue.run_flue_brain_streaming(GREET, "s2", MEMBER):
-        pass
-    assert calls == [True] and seen == {}  # flag off: the settle call is exactly the pre-ledger call
-
-
-class _Worker:
-    def __init__(self, reply):
-        self.reply = reply
-
-    async def stream(self, compose, *, timeout_s):
-        await compose()
-        for part in self.reply:
-            yield part
-
-
-async def test_core_lane_passes_the_reply_to_the_ledger(env, monkeypatch):
-    _seed(env)
-    await sel.select_for_user(MEMBER, now=NOW)
-
-    async def fake_worker_for(*a, **k):
-        return _Worker(["Good, thanks! How are you?"])
-
-    async def no_packet(*a, **k):
-        return ""
-
-    monkeypatch.setattr(core, "_worker_for", fake_worker_for)
-    monkeypatch.setattr(core, "_memory_packet_block", no_packet)
-    async for _ in core.run_zoe_core_streaming(GREET, "s1", MEMBER):
-        pass
-    assert _ledger(env)[0][4:] == (0, "undelivered")  # injected, settled, never voiced
+@pytest.mark.parametrize("rel", ["zoe_core_client.py", "zoe_flue_client.py", "brief_first_turn.py",
+                                 "routers/voice_tts.py"])
+def test_the_ledger_stays_out_of_the_voice_path_files(rel):
+    """The brain lanes and voice_tts are VOICE_PATH_PATTERNS: an edit there needs a Jetson
+    replay-gate run bound to the head. The ledger reads what chat persisted instead."""
+    src = (SVC / rel).read_text()
+    assert "proactive.ledger" not in src and "proactive import ledger" not in src
+    assert "ZOE_PROACTIVE_LEDGER" not in src
