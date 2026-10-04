@@ -101,3 +101,68 @@ def test_a_job_that_does_not_exist_yet_is_simply_added(tmp_path):
             sched.shutdown(wait=False)
 
     assert asyncio.run(main()) == ["fresh"]
+
+
+def _survivor_after_failed_replace(factory, tmp_path):
+    """Register a standing job, then try to replace it with one that cannot be stored."""
+    url = f"sqlite:///{tmp_path / 'surv.sqlite'}"
+
+    async def main():
+        sched = factory(jobstores={"default": SQLAlchemyJobStore(url=url)}, timezone="UTC")
+        sched.start()
+        try:
+            sched.add_job(time.time, trigger="interval", hours=1, id="standing_job",
+                          replace_existing=True)
+            failed = False
+            try:
+                # a lambda in kwargs cannot be pickled -> the jobstore rejects the write,
+                # the same shape as a transient Postgres failure between DELETE and INSERT
+                sched.add_job(time.time, trigger="interval", hours=2, id="standing_job",
+                              replace_existing=True, kwargs={"cb": lambda: 1})
+            except Exception:
+                failed = True
+            return failed, sched.get_jobs()
+        finally:
+            sched.shutdown(wait=False)
+
+    return asyncio.run(main())
+
+
+def test_stock_apscheduler_keeps_the_old_job_when_the_replacement_cannot_be_stored(tmp_path):
+    # Control: this is the behaviour the fix must not regress below.
+    failed, jobs = _survivor_after_failed_replace(AsyncIOScheduler, tmp_path)
+    assert failed and len(jobs) == 1
+    assert jobs[0].trigger.interval.total_seconds() == 3600
+
+
+def test_a_failed_replace_leaves_the_standing_job_in_place(tmp_path):
+    # Review of #1850: remove-then-add dropped the job on a failed add (reproduced on a real
+    # SQLAlchemyJobStore). The replacement now goes through the store's single UPDATE.
+    failed, jobs = _survivor_after_failed_replace(scheduler._build_scheduler, tmp_path)
+    assert failed, "the unpicklable replacement should still raise"
+    assert len(jobs) == 1 and jobs[0].id == "standing_job", "the standing job was dropped"
+    assert jobs[0].trigger.interval.total_seconds() == 3600, "old definition must be untouched"
+
+
+def test_replace_before_start_registers_once_without_a_conflict(tmp_path):
+    # Jobs added while the scheduler is stopped sit in the pending list and are written at
+    # start() through the same hook; a re-registered standing job must still replace cleanly.
+    _CountingStore.conflicts = 0
+    url = f"sqlite:///{tmp_path / 'pend.sqlite'}"
+
+    async def main():
+        s1 = scheduler._build_scheduler(jobstores={"default": _CountingStore(url=url)}, timezone="UTC")
+        s1.add_job(time.time, trigger="interval", hours=1, id="p", replace_existing=True)
+        s1.start()
+        s1.shutdown(wait=False)
+        s2 = scheduler._build_scheduler(jobstores={"default": _CountingStore(url=url)}, timezone="UTC")
+        s2.add_job(time.time, trigger="interval", hours=3, id="p", replace_existing=True)
+        s2.start()
+        try:
+            return s2.get_jobs()
+        finally:
+            s2.shutdown(wait=False)
+
+    jobs = asyncio.run(main())
+    assert _CountingStore.conflicts == 0
+    assert len(jobs) == 1 and jobs[0].trigger.interval.total_seconds() == 3 * 3600

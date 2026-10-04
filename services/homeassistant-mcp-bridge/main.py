@@ -68,14 +68,16 @@ class QuietPollAccessFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(QuietPollAccessFilter())
 
-# One WARNING per (method, endpoint head, status) per interval, so an HA outage polled every
+# One WARNING per (method, endpoint head incl. domain/service, status) per interval, so an HA outage polled every
 # 10 s costs a handful of lines an hour instead of one per request.
 _FAILURE_LOG_INTERVAL_S = 60.0
 _failure_last_logged: Dict[tuple, float] = {}
 
 
 def _log_ha_failure(method: str, endpoint: str, status: int, reason: str) -> None:
-    key = (method.upper(), endpoint.split("/", 1)[0], status)
+    # services/<domain>/<service> must not collapse into one "services" bucket: a second,
+    # different failing control inside the interval is its own line. First three segments.
+    key = (method.upper(), "/".join(endpoint.split("/")[:3]), status)
     now = time.monotonic()
     last = _failure_last_logged.get(key)
     if last is not None and now - last < _FAILURE_LOG_INTERVAL_S:

@@ -282,3 +282,27 @@ async def test_repeated_failures_are_rate_limited_per_interval(bridge_module, mo
         clock["t"] += bridge_module._FAILURE_LOG_INTERVAL_S
         await fail()
         assert len([r for r in caplog.records if r.name == "zoe.ha_bridge"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_distinct_failing_services_each_get_their_own_line_within_the_interval(
+    bridge_module, monkeypatch, caplog
+):
+    # Review of #1850: services/<domain>/<service> used to share one "services" rate-limit key,
+    # so a second, different failed control inside 60 s was unlogged.
+    import logging
+
+    class _PostClient(_FakeAsyncClient):
+        async def post(self, *args, **kwargs):
+            return _FakeResponse(self.status_code)
+
+    monkeypatch.setattr(bridge_module.httpx, "AsyncClient", lambda: _PostClient(503))
+    monkeypatch.setattr(bridge_module.time, "monotonic", lambda: 5000.0)
+    bridge = bridge_module.HomeAssistantBridge("http://ha.local", "token")
+    with caplog.at_level(logging.WARNING, logger="zoe.ha_bridge"):
+        for endpoint in ("services/light/turn_on", "services/switch/turn_off", "services/light/turn_on"):
+            with pytest.raises(HTTPException):
+                await bridge._make_request("POST", endpoint, {})
+    msgs = [r.getMessage() for r in caplog.records if r.name == "zoe.ha_bridge"]
+    assert len(msgs) == 2, msgs  # light + switch once each; the repeat of light is suppressed
+    assert "light/turn_on" in msgs[0] and "switch/turn_off" in msgs[1]
