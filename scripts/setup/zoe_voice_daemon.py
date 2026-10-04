@@ -238,6 +238,33 @@ if not (0.0 < ZOE_VAD_TAIL_DEEP_PROB < VAD_ENDPOINT_THRESHOLD):
 # Default 0.28 — 0.35 misses many real mics/rooms; tune via WAKEWORD_THRESHOLD.
 WAKEWORD_THRESHOLD = float(_env("WAKEWORD_THRESHOLD", "0.28", "OWW_THRESHOLD"))
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no")
+
+
+def _silence_insecure_request_warnings(verify: bool) -> bool:
+    """Say ONCE that TLS verification is off, instead of once per request.
+
+    With VERIFY_SSL=false (the panel's self-signed Jetson cert) every
+    ``requests`` call raises urllib3's InsecureRequestWarning, and urllib3
+    registers SecurityWarning as "always" - so the 5 s announce poll alone wrote
+    ~17,000 two-line tracebacks a day to stderr/journald (3,343 in the 4h45m
+    reviewed on 2026-10-04: 82 % of everything the unit logged), burying the
+    real lines. The operator's choice is respected - verification stays off -
+    and one INFO line states it. Returns True when the warning was silenced.
+    """
+    if verify:
+        return False
+    try:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    except Exception as exc:  # a missing/odd urllib3 must never cost the daemon
+        log.debug("could not silence InsecureRequestWarning: %s", exc)
+        return False
+    log.info("TLS certificate verification is OFF (VERIFY_SSL=false) - "
+             "the per-request InsecureRequestWarning is silenced; this is the one notice")
+    return True
+
+
+_TLS_WARNINGS_SILENCED = _silence_insecure_request_warnings(VERIFY_SSL)
 WAKEWORD_DEBUG = os.environ.get("WAKEWORD_DEBUG", "").lower() in ("1", "true", "yes")
 # ── Barge-in: Silero VAD during TTS playback ─────────────────────────────
 BARGE_IN_ENABLED = os.environ.get("BARGE_IN_ENABLED", "true").lower() in ("1", "true", "yes")
