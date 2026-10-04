@@ -1743,19 +1743,17 @@ class MemoryService:
         # collection size; at palace scale this is a few hundred rows) and apply the same
         # visibility / status / expiry rules in Python; the filtered query only
         # supplements when the owner's visible rows are still fewer than ``limit``.
-        try:
-            total = int(col.count())
-        except Exception:  # noqa: BLE001 — count is a nicety for the cap
-            total = 0
-        n_wide = max(limit * 20, 200)
-        if total > 0:
-            n_wide = min(n_wide, total)
-        if n_wide > 0:
-            _collect(col.query(
-                query_texts=[query],
-                n_results=n_wide,
-                include=["documents", "metadatas", "distances"],
-            ))
+        # NEVER call ``col.count()`` here: chroma 1.5.9's Rust client wedged the whole
+        # service on 2026-10-04 08:07 (one worker blocked in ``rust.py:_count`` while a
+        # concurrent query/ingest held the other side; every later memory call queued
+        # behind it, /readyz stopped answering). Reproduced on a palace copy with two
+        # searchers + two writers; without the count the same run completes. The index
+        # caps ``k`` at its own size, so a fixed over-fetch is safe at any store size.
+        _collect(col.query(
+            query_texts=[query],
+            n_results=max(limit * 20, 200),
+            include=["documents", "metadatas", "distances"],
+        ))
         wide = len(hits)
         if len(hits) < limit:
             _collect(col.query(
