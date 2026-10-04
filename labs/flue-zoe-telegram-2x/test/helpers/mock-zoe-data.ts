@@ -1,15 +1,20 @@
 /**
- * A mock zoe-data, implementing exactly the four endpoints this channel calls.
+ * A mock zoe-data, implementing exactly the endpoints this channel calls.
  *
- * These four ARE the port's real contract surface — they are runtime-independent
- * HTTP, so they must come through the 1.x→2.x move byte-identical. The mock
- * records what it received (URL, headers, body) so the tests assert on the WIRE,
- * not on the client's intentions:
+ * The four text-lane contracts ARE the port's real contract surface — they are
+ * runtime-independent HTTP, so they must come through the 1.x→2.x move
+ * byte-identical. The mock records what it received (URL, headers, body) so the
+ * tests assert on the WIRE, not on the client's intentions:
  *
  *   GET  /api/system/resolve-telegram/<id>          → { user_id | null }
  *   POST /api/system/telegram/consume-link-token    → { user_id } | 400
  *   POST /api/system/telegram/register-bot          → { ok }
  *   POST /api/chat/?stream=false                    → { response }
+ *
+ * Voice notes (flag-dark, zoe-data's `telegram_media` router) add two more:
+ *
+ *   POST /api/system/telegram/transcribe   raw audio → { ok, text }
+ *   POST /api/system/telegram/synthesize   { text }  → audio/ogg bytes | 503
  *
  * Nothing here ever reaches the live zoe-data on :8000: the tests set
  * ZOE_DATA_URL to this server's ephemeral loopback URL before importing the
@@ -25,6 +30,8 @@ export interface RecordedRequest {
   url: string;
   headers: Record<string, string | string[] | undefined>;
   body: unknown;
+  /** Raw body bytes — what a binary (audio) upload actually carried. */
+  raw: Uint8Array;
 }
 
 export interface MockZoeData {
@@ -36,6 +43,12 @@ export interface MockZoeData {
   tokens: Map<string, string>;
   /** Canned /api/chat reply. */
   reply: string;
+  /** Canned transcript for telegram/transcribe ('' = no speech). */
+  transcript: string;
+  /** When false, telegram/synthesize answers 503 (Kokoro down). */
+  synthOk: boolean;
+  /** The OGG bytes telegram/synthesize serves. */
+  ogg: Uint8Array;
   close(): Promise<void>;
 }
 
@@ -44,22 +57,29 @@ export async function startMockZoeData(): Promise<MockZoeData> {
   const links = new Map<string, string>();
   const tokens = new Map<string, string>();
 
-  const state = { reply: 'Hi — this is Zoe.' };
+  const state = {
+    reply: 'Hi — this is Zoe.',
+    transcript: 'what time is it',
+    synthOk: true,
+    ogg: new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x02, 0xaa, 0xbb]), // "OggS" + filler
+  };
 
   const server: Server = createServer((req, res) => {
-    let raw = '';
-    req.on('data', (chunk) => {
-      raw += chunk;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
     });
     req.on('end', () => {
       const url = req.url ?? '';
+      const raw = Buffer.concat(chunks);
       let body: unknown = null;
+      const text = raw.toString('utf8');
       try {
-        body = raw ? JSON.parse(raw) : null;
+        body = raw.length ? JSON.parse(text) : null;
       } catch {
-        body = raw;
+        body = text;
       }
-      requests.push({ method: req.method ?? '', url, headers: req.headers, body });
+      requests.push({ method: req.method ?? '', url, headers: req.headers, body, raw: new Uint8Array(raw) });
 
       const json = (payload: unknown, status = 200) => {
         res.writeHead(status, { 'content-type': 'application/json' });
@@ -79,6 +99,15 @@ export async function startMockZoeData(): Promise<MockZoeData> {
       }
       if (url.startsWith('/api/system/telegram/register-bot')) {
         return json({ ok: true });
+      }
+      if (url.startsWith('/api/system/telegram/transcribe')) {
+        if (!raw.length) return json({ ok: false, error: 'empty audio' }, 400);
+        return json({ ok: true, text: state.transcript, duration_s: 4.0 });
+      }
+      if (url.startsWith('/api/system/telegram/synthesize')) {
+        if (!state.synthOk) return json({ ok: false, error: 'tts unavailable' }, 503);
+        res.writeHead(200, { 'content-type': 'audio/ogg' });
+        return res.end(Buffer.from(state.ogg));
       }
       if (url.startsWith('/api/chat/')) {
         return json({ response: state.reply });
@@ -100,6 +129,24 @@ export async function startMockZoeData(): Promise<MockZoeData> {
     },
     set reply(value: string) {
       state.reply = value;
+    },
+    get transcript() {
+      return state.transcript;
+    },
+    set transcript(value: string) {
+      state.transcript = value;
+    },
+    get synthOk() {
+      return state.synthOk;
+    },
+    set synthOk(value: boolean) {
+      state.synthOk = value;
+    },
+    get ogg() {
+      return state.ogg;
+    },
+    set ogg(value: Uint8Array) {
+      state.ogg = value;
     },
     close: () =>
       new Promise<void>((resolve) => {

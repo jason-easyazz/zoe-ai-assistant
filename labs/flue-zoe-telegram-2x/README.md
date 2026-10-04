@@ -22,7 +22,7 @@ change; the fold checkpoint re-folds once from the event log, `FLUE_FORMAT_VERSI
 Same external behaviour, same four zoe-data contracts, same `/health` semantics,
 same URL shape.
 
-**Verified on this branch:** typecheck clean, `vite build` clean, **40/40 tests**
+**Verified on this branch:** typecheck clean, `vite build` clean, **70/70 tests**
 (all offline — mock Bot API + mock zoe-data, no metered model calls, no real
 Telegram sends), and the built `dist/server.mjs` smoke-booted on a throwaway port
 with a throwaway store.
@@ -55,6 +55,31 @@ untouched. `test/brain.test.ts` now asserts them against a real loopback server
 | `POST /api/system/telegram/consume-link-token` | `{token, telegram_id, telegram_username}` → `{user_id}` \| 400 |
 | `POST /api/system/telegram/register-bot` | `{username}` |
 | `POST /api/chat/?stream=false` | `X-Zoe-User-Id` + `X-Internal-Token`, `{message, session_id, channel:'telegram'}` |
+
+Two more, **flag-dark** (voice notes, 2026-10-04 — zoe-data's `routers/telegram_media.py`,
+mounted only under `ZOE_TELEGRAM_MEDIA=1`; same internal-token trust as the four above):
+
+| call | shape |
+|---|---|
+| `POST /api/system/telegram/transcribe` | raw OGG/Opus body (`Content-Type: audio/ogg`) → `{ok, text, duration_s}`; 413 over `ZOE_TELEGRAM_VOICE_MAX_S` |
+| `POST /api/system/telegram/synthesize` | `{text}` → `audio/ogg` bytes (Kokoro → libopus); 503 = voice unavailable, the bot replies in text |
+
+### Voice notes in and out (flag-dark)
+
+`src/voice.ts` + the `message:voice` / `message:audio` handler in `app.ts`, registered
+ONLY when `ZOE_TELEGRAM_VOICE_NOTES=1` (unset = a voice note is received and ignored,
+byte for byte today's behaviour). Order is load-bearing and pinned by `test/voice.test.ts`
++ `test/voice_note.test.ts`: identity (the same linked-member gate as text) → refusals
+BEFORE `getFile` (forwarded unless `ZOE_TELEGRAM_ALLOW_FORWARDED`, over
+`ZOE_TELEGRAM_VOICE_MAX_S`, over 8 MiB) → download (the URL embeds the bot token and is
+never logged; `file_unique_id` is) → zoe-data `transcribe` → the SAME `/api/chat` turn
+as text, as the member → reply in kind per `ZOE_TELEGRAM_VOICE_REPLY` (`voice` default,
+`text`, `both`; a voice outage falls back to text). `/talk` (when `ZOE_BASE_URL` is set)
+hands the phone a "Talk to Zoe" URL button to the existing `voice.html` push-to-talk page —
+VISION principle 8, zero new infrastructure. Nothing in the Pi/panel voice path changes;
+`test/voice_note_off.test.ts` is the flag-off control. One `TELEGRAM_VOICE …` log line per
+note carries the per-stage ms (download / stt / brain / reply) — that line is the
+measurement. Operator record: `docs/knowledge/telegram-voice-notes.md`.
 
 **The placeholder agent is now OPTIONAL — measured, not assumed.** On 1.x
 `src/agents/zoe.ts` was mandatory: `flue build` discovered agents by directory
@@ -126,7 +151,7 @@ for exactly that gap and is the only thing that proves the *built artifact*.
 cd labs/flue-zoe-telegram-2x
 npm install
 npm run typecheck
-npm test          # 40/40, fully offline
+npm test          # 70/70, fully offline
 npm run build     # vite build → dist/server.mjs
 ./smoke-built.sh  # throwaway port + store + mock Bot API
 ```

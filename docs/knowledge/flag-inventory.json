@@ -4383,6 +4383,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_TELEGRAM_FFMPEG": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/telegram_media.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TELEGRAM_FFMPEG_TIMEOUT_S": {
+        "defaults": [
+          "'20'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/telegram_media.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_TELEGRAM_LINK_SECRET": {
         "defaults": [
           "-"
@@ -4390,6 +4410,36 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/telegram_link.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TELEGRAM_MEDIA": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/telegram_media.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TELEGRAM_STT_CAPTURE_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/telegram_media.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TELEGRAM_VOICE_MAX_S": {
+        "defaults": [
+          "'60'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/telegram_media.py"
         ],
         "typed_env": false
       },

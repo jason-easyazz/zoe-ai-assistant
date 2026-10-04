@@ -2242,6 +2242,12 @@ try:
 except Exception as _lk_router_exc:
     logger.warning("LiveKit router not loaded (non-fatal): %s", _lk_router_exc)
 
+# Telegram voice notes (flag-dark): the two internal media contracts for the
+# Telegram lane. Mounted ONLY when ZOE_TELEGRAM_MEDIA is on — flag off = 404.
+# Calls the service's existing Moonshine/Kokoro helpers; voice path untouched.
+from routers import telegram_media as _telegram_media  # noqa: E402
+_telegram_media.register(app)
+
 
 @app.get("/.well-known/agent.json", include_in_schema=False)
 async def a2a_well_known():
