@@ -732,9 +732,22 @@ logs `MEMORY_SEARCH_SUPPLEMENT …` whenever the unfiltered pass was short — c
 (`memory_service._semantic_search`; the owner-filtered query only supplements a short
 result — a short-result trigger alone missed the FULL-BUT-WRONG case measured on the
 confirmation run), so recall no longer depends on graph health.
-Remove the cause by compacting (operator, zoe-data stopped — the recipe is in the script's
-docstring; it backs up the palace and verifies before returning 0). Rebuilding from the
-STORED embeddings is bit-identical; nothing is re-embedded.
+Remove the cause by compacting. Rebuilding from the STORED embeddings is bit-identical;
+nothing is re-embedded. Two ways:
+
+- **In-process, no restart** (flag-dark, `ZOE_MEMORY_INDEX_COMPACT=1` in `.env` + restart
+  once to arm it): `curl -s -X POST -H "X-Internal-Token: $ZOE_INTERNAL_TOKEN"
+  http://127.0.0.1:8000/api/memories/maintenance/compact-index` — the service exports the
+  rows, writes a JSON export + tar backup to `~/.zoe/palace-backups/`, recreates the
+  collection in the same space behind a maintenance gate (readers block ≤ 60 s) and
+  verifies; the body carries `before`/`verify`/`seconds`, the log line is
+  `MEMORY_INDEX_COMPACT`. Health first: `GET …/maintenance/index-health` (same token) gives
+  the ratio; `fresh=True` means "just rebuilt, nothing persisted yet", not unknown. A 500
+  with `restored=true` means the rows were put back from the export; `restored=false` names
+  the tar to restore (zoe-data stopped).
+- **Manual fallback** (zoe-data stopped): `scripts/maintenance/compact_drawers_index.py
+  --compact --i-stopped-zoe-data` — the recipe is in the script's docstring; it backs up the
+  palace and verifies before returning 0.
 
 **Negative controls that held:** index lag ruled out (a fact is searchable 8 s after the
 turn in a small store); query embeddings are unit-norm, no NaN; the `where` filter alone

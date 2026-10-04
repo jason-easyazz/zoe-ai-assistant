@@ -29,10 +29,12 @@ from auth import (
 from database import get_db
 from guest_policy import require_feature_access
 from memory_service import (
+    IndexCompactionError,
     MemoryRef,
     MemoryService,
     MemoryServiceError,
     get_memory_service,
+    index_compaction_enabled,
     memory_affect,
 )
 from models import MemoryProposalCreate, MemoryReviewBody
@@ -977,6 +979,39 @@ async def pending_contacts_endpoint(
         return {"pending": [], "count": 0}
     pending = await list_pending_contacts(user_id)
     return {"pending": pending, "count": len(pending)}
+
+
+@router.get("/maintenance/index-health")
+async def memory_index_health_endpoint(_: None = Depends(require_internal_token)):
+    """Tombstone health of the drawers HNSW index — read-only, safe while serving.
+
+    Internal/service endpoint (loopback or `X-Internal-Token`). Reads the palace SQLite
+    (`mode=ro`) + the segment's `index_metadata.pickle` — no chroma call, so it never
+    waits on the maintenance gate. `compaction_advised` (ratio ≥ 3) is what the weekly
+    dreaming trigger acts on; a just-rebuilt index reports `fresh=True`, ratio 1.0.
+    """
+    try:
+        return await _svc().index_health()
+    except Exception as exc:  # noqa: BLE001 — a missing/unreadable palace is a 503, not a crash
+        raise HTTPException(status_code=503, detail=f"index health unavailable: {exc}")
+
+
+@router.post("/maintenance/compact-index")
+async def memory_compact_index_endpoint(_: None = Depends(require_internal_token)):
+    """Rebuild the drawers index from its STORED embeddings, in-process, no restart.
+
+    Internal/service endpoint (loopback or `X-Internal-Token`), flag-gated behind
+    `ZOE_MEMORY_INDEX_COMPACT` (default OFF → 404, so the route is dark until an operator
+    flips it). Serialised: a second call while one runs is 409. On a failure after the
+    delete the rows are restored from the export and the report says so (500).
+    """
+    if not index_compaction_enabled():
+        raise HTTPException(status_code=404, detail="memory index compaction is disabled (ZOE_MEMORY_INDEX_COMPACT)")
+    try:
+        return await _svc().compact_index()
+    except IndexCompactionError as exc:
+        status = 409 if "already running" in str(exc) else 500
+        return JSONResponse(status_code=status, content=exc.report)
 
 
 @router.get("/people")

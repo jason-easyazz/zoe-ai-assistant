@@ -20,7 +20,13 @@ Modes
            (count, unfiltered reach == count, an owner-filtered query, a metadata
            update), and exits non-zero without touching anything further on any check.
 
-Operator recipe (compaction):
+In-process alternative (no restart, flag ``ZOE_MEMORY_INDEX_COMPACT=1``):
+  ``POST /api/memories/maintenance/compact-index`` (internal token) — the same sequence
+  run by zoe-data itself behind a maintenance gate; the nightly dreaming job triggers it
+  weekly when ``GET /api/memories/maintenance/index-health`` advises it. This script is the
+  manual fallback (zoe-data stopped) and the read-only report under any interpreter.
+
+Operator recipe (manual compaction):
   systemctl --user stop zoe-data
   ~/.zoe/venvs/zoe-data-py312/bin/python scripts/maintenance/compact_drawers_index.py --compact --i-stopped-zoe-data
   systemctl --user start zoe-data && until curl -sf http://127.0.0.1:8000/readyz; do sleep 5; done
@@ -31,58 +37,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import pickle
-import sqlite3
 import sys
 import tarfile
 import time
 from pathlib import Path
 
-DRAWERS = "mempalace_drawers"
-ADVISE_RATIO = 3.0   # elements ever added / live rows; above this the graph is mostly tombstones
+# The pure parts (ratio, advice, the read-only report) live in the service module so the
+# in-process route and this script share ONE implementation (stdlib only, no chromadb).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "zoe-data"))
+from memory_index_health import (  # noqa: E402
+    ADVISE_RATIO, DRAWERS, compaction_advised, report, tombstone_ratio,
+)
 
-
-def tombstone_ratio(total_added: int, live: int) -> float:
-    """elements ever added ÷ live rows (∞ when nothing is live but elements were added)."""
-    if live <= 0:
-        return float("inf") if total_added > 0 else 0.0
-    return total_added / live
-
-
-def compaction_advised(total_added: int, live: int, *, threshold: float = ADVISE_RATIO) -> bool:
-    return live > 0 and tombstone_ratio(total_added, live) >= threshold
-
-
-def report(palace: Path) -> list[dict]:
-    con = sqlite3.connect(f"file:{palace / 'chroma.sqlite3'}?mode=ro", uri=True)
-    out = []
-    for cid, name in con.execute("SELECT id, name FROM collections"):
-        live = con.execute(
-            "SELECT count(*) FROM embeddings e JOIN segments s ON s.id = e.segment_id WHERE s.collection = ?",
-            (cid,)).fetchone()[0]
-        seg = con.execute("SELECT id FROM segments WHERE collection = ? AND scope = 'VECTOR'", (cid,)).fetchone()
-        total = None
-        if seg and (palace / seg[0] / "index_metadata.pickle").exists():
-            try:
-                meta = pickle.load(open(palace / seg[0] / "index_metadata.pickle", "rb"))
-                total = int(getattr(meta, "total_elements_added", None) or (meta.get("total_elements_added") if isinstance(meta, dict) else 0) or 0)
-            except Exception as exc:  # noqa: BLE001 — a report must never crash on a pickle
-                total = None
-                print(f"  ({name}: index metadata unreadable: {type(exc).__name__})", file=sys.stderr)
-        fresh = bool(seg) and not (palace / seg[0] / "index_metadata.pickle").exists()
-        row = {"collection": name, "live_rows": live, "elements_added": total,
-               "tombstone_ratio": (round(tombstone_ratio(total, live), 2) if total is not None else None),
-               "compaction_advised": (compaction_advised(total, live) if total is not None else None),
-               # chroma persists a new segment's index files lazily (sync threshold): right after
-               # a rebuild the directory does not exist yet, which means ratio ≈ 1, not unknown.
-               "note": ("fresh index — not persisted yet, ratio ≈ 1" if fresh else "")}
-        out.append(row)
-    return out
+__all__ = ["ADVISE_RATIO", "DRAWERS", "compaction_advised", "report", "tombstone_ratio", "compact", "main"]
 
 
 def compact(palace: Path, backups: Path) -> int:
     import chromadb
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "zoe-data"))
     from memory_service import _drawers_embedding_function  # same EF identity ("default")
 
     backups.mkdir(parents=True, exist_ok=True)
@@ -133,7 +104,7 @@ def compact(palace: Path, backups: Path) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--palace", default=os.path.expanduser("~/.mempalace"))
-    ap.add_argument("--backups", default=os.path.expanduser("~/.zoe/backups"))
+    ap.add_argument("--backups", default=os.path.expanduser("~/.zoe/palace-backups"))
     ap.add_argument("--compact", action="store_true", help="recreate the drawers collection (operator, zoe-data stopped)")
     ap.add_argument("--i-stopped-zoe-data", action="store_true", help="acknowledge zoe-data is stopped (required with --compact)")
     ap.add_argument("--json", action="store_true")
