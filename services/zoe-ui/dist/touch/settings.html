@@ -5218,6 +5218,11 @@
             try { return localStorage.getItem('zoe_panel_id') || null; } catch (_) { return null; }
         }
         function setLocalPanelId(id) {
+            // A panel registered under its own generated alias is REGISTERED from now
+            // on: drop the local alias marker, or the executor's viewer-mode check
+            // (touch-ui-executor.js isViewerContext) would keep treating the panel as
+            // a laptop after reload (Codex, #1861).
+            try { if (localStorage.getItem('zoe_touch_panel_alias_generated') === String(id || '').trim()) localStorage.removeItem('zoe_touch_panel_alias_generated'); } catch (_) {}
             try {
                 if (id) localStorage.setItem('zoe_panel_id', id);
                 else    localStorage.removeItem('zoe_panel_id');
@@ -5313,6 +5318,7 @@
                 .filter(cb => cb.checked).map(cb => cb.value);
 
             let pid = getLocalPanelId();
+            let registeredNow = false;   // a NEW registration flips this browser from viewer to panel
             try {
                 if (!pid || !panelCurrent) {
                     // Register (creates panel + returns panel_id).
@@ -5327,6 +5333,7 @@
                     });
                     pid = reg.panel_id;
                     setLocalPanelId(pid);
+                    registeredNow = true;
                 } else {
                     // Update metadata on existing panel.
                     await apiRequest(`/panels/${encodeURIComponent(pid)}`, {
@@ -5349,6 +5356,16 @@
                 console.error('savePanelIdentity failed:', e);
                 statusEl.textContent = `Save failed: ${e.message || e}`;
                 if (typeof showNotification === 'function') showNotification('Save failed — see console', 'error');
+            }
+            // The executor classified this browser at boot (touch-ui-executor.js
+            // isViewerContext): a browser that was a VIEWER stays one until the page
+            // reloads. A successful /panels/register has already persisted a REAL panel
+            // id (setLocalPanelId), so reload whether or not the bindings step after it
+            // succeeded — otherwise the services stay off and a retried Save re-registers
+            // the same id (409) forever. Give the status line a moment to be read first.
+            if (registeredNow) {
+                statusEl.innerHTML += ' Panel registered — starting panel services…';
+                setTimeout(() => { try { window.location.reload(); } catch (_) {} }, 1200);
             }
         }
 
