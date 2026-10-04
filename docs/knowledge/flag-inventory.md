@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-503 flags; 501 not documented in `.env.example`.
+517 flags; 515 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -243,11 +243,22 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LOCATION_LAT` | `'-28.7774'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ZOE_LOCATION_LON` | `'114.6158'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ZOE_LOG_BACKUP_COUNT` | `dynamic` | no | NO | `services/zoe-data/logging_setup.py` |
+| `ZOE_LOG_CHATTY_LIBS_LEVEL` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_LOG_DIR` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_LOG_LEVEL` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_LOG_MAX_BYTES` | `dynamic` | no | NO | `services/zoe-data/logging_setup.py` |
+| `ZOE_LOG_QUIET_POLL_PATHS` | `-` | no | NO | `services/zoe-data/middleware/logging.py` |
+| `ZOE_LOG_QUIET_POLL_SLOW_MS` | `dynamic` | no | NO | `services/zoe-data/middleware/logging.py` |
+| `ZOE_LOG_REPEAT_WINDOW_S` | `-` | no | NO | `services/zoe-data/log_throttle.py` |
 | `ZOE_LOOP_LIFECYCLE` | `False` | yes | NO | `services/zoe-data/open_loop_lifecycle.py` |
 | `ZOE_MAX_BROWSER_TABS` | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_MA_CONTAINER` | `'zoe-music-assistant'` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/ma_ondemand.py` |
+| `ZOE_MA_IDLE_MIN` | `dynamic` | no | NO | `scripts/maintenance/ma_idle_reap.py` |
+| `ZOE_MA_IDLE_REAP` | `'0'` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/ma_ondemand.py` |
+| `ZOE_MA_INFLIGHT_GRACE_S` | `dynamic` | no | NO | `scripts/maintenance/ma_idle_reap.py` |
+| `ZOE_MA_REAP_QUIET_HOURS` | `-` | no | NO | `scripts/maintenance/ma_idle_reap.py` |
+| `ZOE_MA_REAP_STATE_DIR` | `'~/.cache/zoe/ma-reap'` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/ma_ondemand.py` |
+| `ZOE_MA_START_TIMEOUT_S` | `'25'` | no | NO | `services/zoe-data/ma_ondemand.py` |
 | `ZOE_MCP_ACTOR_ROLE` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_ACTOR_USER_ID` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_STRICT_USER_ID` | `'false'` | no | NO | `services/zoe-data/mcp_server.py` |
@@ -317,6 +328,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_ID` | `'post-merge-probe'`, `'zoe-touch-pi'` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PERF` | `-` | no | NO | `scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/user_model_ab.py` |
+| `ZOE_PERSONA_DRIFT` | `False` | yes | NO | `services/zoe-data/persona_drift.py` |
+| `ZOE_PERSONA_LAYER` | `False` | yes | NO | `services/zoe-data/persona_layer.py` |
 | `ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED` | `''` | no | NO | `services/zoe-data/person_extractor.py` |
 | `ZOE_PERSON_DOSSIER_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_memory_compose.py` |
 | `ZOE_PERSON_LLM_CONFIDENCE_GATE` | `''` | no | NO | `services/zoe-data/person_extractor_llm.py` |
@@ -352,6 +365,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PRESENCE_WINDOW_S` | `''` | no | NO | `services/zoe-data/proactive/presence.py` |
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
+| `ZOE_PROACTIVE_LEDGER` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |
 | `ZOE_PROACTIVE_RAISE_GAP_S` | `7200` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_RAISE_PER_DAY` | `2` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_SELECTOR` | `''` | no | NO | `services/zoe-data/proactive/selector.py` |

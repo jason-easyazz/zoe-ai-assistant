@@ -53,6 +53,7 @@ from routers.openclaw import router as openclaw_router
 from voice_presence import is_wake_payload, is_wake_text, wake_ack_events
 import logging
 from middleware.logging import setup_json_logging
+from log_throttle import log_throttled
 
 # Setup JSON logging
 setup_json_logging()
@@ -2156,7 +2157,14 @@ async def _enforce_ws_origin(websocket: WebSocket) -> bool:
     """
     if _ws_origin_allowed(websocket):
         return True
-    logger.warning(
+    # Throttled per (origin, path): a browser tab that keeps reconnecting after
+    # a 403 (2026-10-04: a verification harness on :8443, 65 lines in 3 h, each
+    # tripled by uvicorn's own 403 lines) must not bury real warnings. The first
+    # rejection logs at once; repeats fold into one "(+N similar suppressed)".
+    log_throttled(
+        logger,
+        logging.WARNING,
+        f"ws-origin-reject:{websocket.headers.get('origin')}:{websocket.url.path}",
         "Rejected cross-origin WebSocket handshake: origin=%r path=%s",
         websocket.headers.get("origin"),
         websocket.url.path,
@@ -2247,6 +2255,11 @@ except Exception as _lk_router_exc:
 # Calls the service's existing Moonshine/Kokoro helpers; voice path untouched.
 from routers import telegram_media as _telegram_media  # noqa: E402
 _telegram_media.register(app)
+
+# Persona layer, phase 0 (flag-dark): GET/PUT /api/persona, reset, per-member mode. Mounted
+# ONLY when ZOE_PERSONA_LAYER is on — flag off = 404. See docs/governance/emotional-safety-note.md.
+from routers import persona as _persona_router  # noqa: E402
+_persona_router.register(app)
 
 
 @app.get("/.well-known/agent.json", include_in_schema=False)

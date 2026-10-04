@@ -27,7 +27,6 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 CRITICAL_FILES = {
     'css': [
         'services/zoe-ui/dist/css/glass.css',
-        'services/zoe-ui/dist/css/memories-enhanced.css',
     ],
     'core_js': [
         'services/zoe-ui/dist/js/auth.js',

@@ -2312,6 +2312,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LOG_CHATTY_LIBS_LEVEL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LOG_DIR": {
         "defaults": [
           "-"
@@ -2342,6 +2352,36 @@
         ],
         "typed_env": false
       },
+      "ZOE_LOG_QUIET_POLL_PATHS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/middleware/logging.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_QUIET_POLL_SLOW_MS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/middleware/logging.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_REPEAT_WINDOW_S": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/log_throttle.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LOOP_LIFECYCLE": {
         "defaults": [
           "False"
@@ -2361,6 +2401,79 @@
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": true
+      },
+      "ZOE_MA_CONTAINER": {
+        "defaults": [
+          "'zoe-music-assistant'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py",
+          "services/zoe-data/ma_ondemand.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_IDLE_MIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_IDLE_REAP": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py",
+          "services/zoe-data/ma_ondemand.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_INFLIGHT_GRACE_S": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_REAP_QUIET_HOURS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_REAP_STATE_DIR": {
+        "defaults": [
+          "'~/.cache/zoe/ma-reap'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py",
+          "services/zoe-data/ma_ondemand.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_START_TIMEOUT_S": {
+        "defaults": [
+          "'25'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ma_ondemand.py"
+        ],
+        "typed_env": false
       },
       "ZOE_MCP_ACTOR_ROLE": {
         "defaults": [
@@ -3065,6 +3178,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_PERSONA_DRIFT": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/persona_drift.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_PERSONA_LAYER": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/persona_layer.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED": {
         "defaults": [
           "''"
@@ -3415,6 +3548,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/proactive/arrival.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PROACTIVE_LEDGER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/ledger.py"
         ],
         "typed_env": false
       },
