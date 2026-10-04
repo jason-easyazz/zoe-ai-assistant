@@ -142,6 +142,7 @@ _INTENT_UNGATED: dict[str, str] = {
     # replies to an offer Zoe just made: context the head (bare words) cannot see
     "pending_offer_accept": "reply to a pending offer (context follow-up)",
     "pending_offer_dismiss": "reply to a pending offer (context follow-up)",
+    "people_same_person_reply": "reply to a same-person question (context follow-up)",
     # operator / system / engineering commands: explicit command syntax, no router class
     "status_check": "system command",
     "self_improve": "system command",

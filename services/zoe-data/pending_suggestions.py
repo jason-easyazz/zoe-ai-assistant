@@ -635,8 +635,39 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
                     "relationship": fill_rel or existing["relationship"],
                 }
             return {"person_id": existing["id"], "name": name, "created": False}
-        pid = str(uuid.uuid4())
         relationship = (slots.get("relationship") or "").strip() or None
+        import contacts_conversation as _cc
+
+        if _cc.conversational_enabled():
+            # Same merge/ask logic as a typed "add <name>" (intent_router
+            # _merge_into_same_person): accepting "Caitlin" while "Caitlin Farrell"
+            # exists must not mint a second row, and a stub that may be a
+            # different person is asked about, never silently renamed.
+            first = (name.split() or [""])[0]
+            cand = [dict(r) for r in await conn.fetch(
+                "SELECT id, name, relationship, phone, email, notes, birthday, how_we_met FROM people"
+                " WHERE user_id=$1 AND lower(name) LIKE lower($2) ESCAPE '\\' AND deleted=0 LIMIT 20",
+                user_id, f"{_cc.escape_like(first)}%")]
+            stub_ids = [r["id"] for r in cand if len(str(r.get("name", "")).split()) == 1]
+            linked = await _cc.linked_memory_ids(user_id, stub_ids) if stub_ids else set()
+            verdict, hits = _cc.decide_same_person(name, relationship, cand, frozenset(linked))
+            if verdict == "existing_fuller":
+                return {"person_id": hits[0]["id"], "name": name, "created": False,
+                        "existing_name": hits[0]["name"]}
+            if verdict == "ambiguous":
+                return {"name": name, "created": False, "ambiguous": [h["name"] for h in hits]}
+            if verdict == "ask":
+                return {"name": name, "created": False, "relationship": relationship,
+                        "ask_same_person": {"id": hits[0]["id"], "name": hits[0]["name"]}}
+            if verdict == "upgrade":
+                await conn.execute(
+                    "UPDATE people SET name=$1, relationship=COALESCE($2, relationship), is_partial=0,"
+                    " updated_at=$3 WHERE id=$4 AND user_id=$5",
+                    name, relationship, datetime.now(timezone.utc).isoformat(), hits[0]["id"], user_id)
+                await _cc.refresh_person_mirror(user_id, hits[0]["id"], name, relationship)
+                return {"person_id": hits[0]["id"], "name": name, "created": False,
+                        "upgraded_from": hits[0]["name"], "relationship": relationship}
+        pid = str(uuid.uuid4())
         # circle: NULL unless a real category is supplied (never the column-name
         # literal, which would land the contact in an undefined UI bucket).
         # 'circle' is the valid middle tier (inner|circle|public), NOT a bogus

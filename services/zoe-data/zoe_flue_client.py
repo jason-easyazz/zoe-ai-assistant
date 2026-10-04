@@ -772,7 +772,10 @@ async def _pending_offer_block(user_id: str) -> str:
         )
         if not person_suggestions_enabled():
             return ""
-        offers = await surface_pending_contacts_for_prompt(user_id, limit=2)
+        import contacts_conversation as _cc
+        batch = _cc.offer_batch_enabled()
+        offers = await surface_pending_contacts_for_prompt(
+            user_id, limit=_cc.OFFER_BATCH_MAX if batch else 2)
     except Exception as exc:  # noqa: BLE001 — the offer nudge must never break a turn
         logger.debug("seam offer inject: fetch failed, continuing without it: %s", exc)
         return ""
@@ -786,6 +789,15 @@ async def _pending_offer_block(user_id: str) -> str:
         v = re.sub(r"\s+", " ", (v or "")).strip()
         return re.sub(r"[#`*_\[\]\n\r{}\"'\u2018\u2019\u201c\u201d]", "", v)[:60]
 
+    if batch:
+        # ONE question for the whole set: a yes then answers all of it (the
+        # intent router's batch reply matcher) instead of one person at a time.
+        q = _cc.offer_question(offers, _safe)
+        if not q:
+            return ""
+        _cc.record_asked(user_id, q, offers)  # the set a following yes/no may bind to
+        return (f"{_OFFER_BLOCK_OPEN}\n"
+                f'- After answering, ask the user exactly: "{q}"\n{_OFFER_BLOCK_CLOSE}')
     lines = []
     for o in offers:
         name = _safe(str(o.get("name") or ""))

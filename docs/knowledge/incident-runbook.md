@@ -1,14 +1,8 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and reading the panel Pi's voice logs (journal flood, outage recovery, thermal, USB). The under-rotated zoe-data stderr/stdout logs (poll-loop request lines + library chatter, rotation timer) are §26. Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness, zoe-pi, thermal, journald, logging, logrotate]
-timestamp: 2026-10-04T22:00:00+08:00
-
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and installed units drifting from their merged templates (unit_drift_check.py) with the 2026-10-04 evening log-review operator steps. Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, unit-drift, log-review, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness]
-timestamp: 2026-09-30T11:00:00+08:00
-
+description: Verified failure signatures on the live box and their fixes, one numbered section each (§1-§26) — deploy and zoe-data hangs, voice/brain memory pressure, the B0.8 pins and landing-chain hazards, the panel Pi voice logs (§23), installed-unit drift and the evening log review (§24), Docker log hygiene (§25), and unbounded zoe-data stderr/stdout logs (§26). Diagnose-fast patterns plus prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness, zoe-pi, thermal, journald, logging, logrotate, unit-drift, log-review]
 timestamp: 2026-10-04T22:30:00+08:00
 ---
 
@@ -1048,3 +1042,43 @@ one line per minute.
 
 **Other findings this review left for the operator** are listed in
 `docs/knowledge/log-review-2026-10-04.md` § "What remains".
+
+## 27. Pi deploy broke the unit — `zoe-voice` dead with `status=203/EXEC` (2026-10-04)
+
+**Signature.** Right after `scripts/setup/deploy-pi-voice.sh`, the panel has no voice:
+`systemctl --user status zoe-voice` (as `pi` on `zoe-pi`) shows `status=203/EXEC` (or a
+crash loop), `/health` on 127.0.0.1:7777 does not answer.
+
+**Cause.** The old script rsynced the repo's `scripts/setup/zoe-voice.service` — the **Jetson**
+template (`/home/zoe/venv/bin/python3`, `WorkingDirectory=/home/zoe/assistant/scripts/setup`,
+`EnvironmentFile=-/home/zoe/.zoe-voice/.env.voice`, `WantedBy=multi-user.target`) — and installed
+it over `~/.config/systemd/user/zoe-voice.service`, stripping only `User=`/`Group=`. None of those
+paths exist on the Pi. The same script also never shipped `zoe_voice_announce.py`, so an announce
+fix never reached the Pi (the daemon tolerates the missing import and silently disables announce
+polling).
+
+**Restore (as `pi`, on the Pi).** A known-good copy of the unit lives at
+`/home/pi/.zoe-voice/zoe-voice.service.pi-20261004` — `cp` it to
+`~/.config/systemd/user/zoe-voice.service`, then `systemctl --user daemon-reload && systemctl --user
+restart zoe-voice`. If that copy is gone, the unit with the panel paths is the template with:
+
+```
+WorkingDirectory=/home/pi/.zoe-voice
+EnvironmentFile=-/home/pi/.zoe-voice/.env.voice
+ExecStart=/home/pi/.zoe-voice/venv/bin/python3 /home/pi/.zoe-voice/zoe_voice_daemon.py
+WantedBy=default.target          # user unit; no User=/Group=
+```
+
+Then confirm: `systemctl --user is-active zoe-voice` = `active`, `curl -s 127.0.0.1:7777/health`.
+Read logs via `~/.zoe-voice/voice.log` or `journalctl -u zoe-voice` (system journal, see §23).
+
+**Prevention (landed).** `deploy-pi-voice.sh` now ships only the daemon, `zoe_voice_announce.py`
+and `pi-requirements.txt` (backups `<file>.bak-<ts>` kept by rsync), **never touches the installed
+unit by default** and just restarts. `--install-unit` renders a Pi unit for `PI_DAEMON_DIR`/`PI_VENV`
+and refuses when a unit exists unless `--force-unit` (unit backup `zoe-voice.service.bak-<ts>`).
+After the restart it checks `is-active` (20 s), `/health` and per-file md5 against the local copies,
+exits 4 and prints the rollback if any fails. Rollback = restore the `.bak-<ts>` files and
+`systemctl --user restart zoe-voice`. Pinned by `tests/unit/test_deploy_pi_voice_script.py`.
+
+**Rule of thumb.** `scripts/setup/*.service` files are Jetson templates unless the name says
+otherwise; a deploy to another host must render, never copy, them.

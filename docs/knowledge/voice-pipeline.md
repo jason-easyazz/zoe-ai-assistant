@@ -1239,7 +1239,7 @@ succeeds (`healed leaked stream volume`). The honest trade (research §5): a tru
   TTS, so it measures only that the Silero loader and the STT/brain path are unchanged (phase 1
   touches neither). Its PASS is a necessary no-regression check, not evidence the duck works.
 - **Pi lab (operator, panel on; research §6.3).** Deploy the daemon from a worktree
-  (`scripts/setup/deploy-pi-voice.sh`, or rsync `scripts/setup/zoe_voice_daemon.py` to
+  (`scripts/setup/deploy-pi-voice.sh` — ships the daemon + `zoe_voice_announce.py`, leaves the unit alone, verifies; or rsync BOTH `scripts/setup/zoe_voice_daemon.py` and `zoe_voice_announce.py` to
   `zoe-pi:/home/pi/.zoe-voice/`), add `BARGE_DUCK_ENABLED=1` to `/home/pi/.zoe-voice/.env.voice`,
   `systemctl --user restart zoe-voice`, then: (1) confirm the duck is audible —
   `pactl list sink-inputs` while a reply plays must show the aplay stream and its volume drop

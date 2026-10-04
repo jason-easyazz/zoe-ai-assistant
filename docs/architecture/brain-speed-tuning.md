@@ -160,11 +160,16 @@ There are **two different reuse mechanisms** in the server, and only one works f
    the two `get_size()` values differ and `can_shift()` returns false.
 
    **`--swa-full` equalises them and re-enables `--cache-reuse`** — but equalising them
-   IS the cost: ~50× SWA cache growth (30 MiB → 1,536 MiB measured on Gemma E2B),
-   unaffordable on this 15.6G unified-memory box. The re-enablement and the RAM bill are
-   the same knob, so this is a budget tradeoff, not an upstream limitation.
+   IS the cost: ~50× SWA cache growth (30 MiB → 1,536 MiB) — **measured on Gemma E2B at a
+   much larger context**, not on the live build. **Update 2026-10-04:** on the live E4B at
+   ctx 8192 + q8_0 K/V the growth is ≈ +150 MiB, so `--swa-full` is now ON in
+   `llama-server.service` (replay probe 18/18 OK, no latency regression; with it
+   `--cache-ram` went 2048 → 1024 at the same coverage — see
+   [brain-kv-cache-tuning.md](../knowledge/brain-kv-cache-tuning.md)). The re-enablement
+   and the RAM bill are the same knob, so this was a budget tradeoff, not an upstream
+   limitation.
 
-   Consequence: `--cache-reuse` is omitted **by choice**, and exact common-prefix reuse
+   Consequence: `--cache-reuse` stays omitted **by choice** (swa-full re-enables it, but it is optional and unmeasured), and exact common-prefix reuse
    (§1) plus `--cache-ram` is the strategy — which makes **prompt-prefix stability**
    load-bearing. A prompt whose head moves gets no reuse from either cache. See
    `services/zoe-data/AGENTS.md` ("mutate the tail, never the head") and
@@ -344,7 +349,7 @@ line numbers differ:
 - `src/llama-context.cpp:401-405` — quantized-V-requires-FA throw (K-quant allowed FA-off).
 - `tools/server/server-context.cpp:3149` — `get_common_prefix` exact-prefix reuse (not shift-gated).
 - `tools/server/server-context.cpp` — `can_cache_reuse = llama_memory_can_shift(...)`; warning when unsupported (our build f449e05: `:2846-2855`).
-- `src/llama-kv-cache-iswa.cpp:232-236` — `get_can_shift()` = base shiftable AND swa shiftable AND `kv_base->get_size() == kv_swa->get_size()`. No Gemma exclusion (#21468 fixed by #22288); the size equality is why `--swa-full` re-enables `--cache-reuse` and why it costs ~50× the SWA cache.
+- `src/llama-kv-cache-iswa.cpp:232-236` — `get_can_shift()` = base shiftable AND swa shiftable AND `kv_base->get_size() == kv_swa->get_size()`. No Gemma exclusion (#21468 fixed by #22288); the size equality is why `--swa-full` re-enables `--cache-reuse` and why it costs ~50× the SWA cache on E2B at a large context (≈ +150 MiB on the live E4B at ctx 8192).
 - `tools/server/server-task.cpp:1677-1700` — `server_prompt_cache::load` picks cached states by `get_common_prefix`, skipping candidates matching under 25% of their cached prompt: `--cache-ram` is itself a PREFIX cache.
 - `tools/server/server-context.cpp` (slot path) — `ERROR_TYPE_EXCEED_CONTEXT_SIZE` release before caching.
 - `common/arg.cpp` — `--flash-attn` (1384), `--cache-prompt`/`--cache-reuse` (3024-3041), `--cache-ram`/`--cache-idle-slots` (1346-1368), `--keep` (1313), `--slot-save-path` (3064), `--swa-full` (1320), `--spec-*` (3554-3636); `--spec-type mtp` MTP-head fallback (451-458).
