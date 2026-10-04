@@ -34,6 +34,9 @@ def test_normalize_date_handles_padding_and_non_iso_inputs(raw, expected):
 def test_today_prefix_formats_friendly_date_and_default_hint(monkeypatch):
     monkeypatch.setattr(nlu_extractor.datetime, "date", _FixedDate)
 
-    assert nlu_extractor._today_prefix() == (
+    prefix = nlu_extractor._today_prefix()
+    assert prefix.startswith(
         "Today is Friday, May 8, 2026. If the date is not stated, default to today."
     )
+    # The household reads numeric dates day-first; the model's own default is month-first.
+    assert "DAY first" in prefix and "7/8/1991 is 7 August 1991" in prefix

@@ -938,6 +938,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CORRECTION_APPLY": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/correction_apply.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_DAILY_BRIEFING_CACHE_MAX_USERS": {
         "defaults": [
           "'64'"
@@ -979,6 +989,26 @@
           "scripts/maintenance/zoe-nightly-dreaming.py",
           "scripts/perf/samantha_bar.py",
           "services/zoe-data/zoe_core_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DATE_HINT": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DATE_ORDER": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/date_locale.py"
         ],
         "typed_env": false
       },
@@ -3990,6 +4020,16 @@
           "services/zoe-data/ytmusic_signin.py"
         ],
         "typed_env": false
+      },
+      "ZOE_ROSTER_NEUTRAL_ASK": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/fast_tiers.py"
+        ],
+        "typed_env": true
       },
       "ZOE_ROUTER_ARCHIVE_KEEP": {
         "defaults": [

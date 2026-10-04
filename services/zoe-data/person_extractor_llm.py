@@ -90,15 +90,25 @@ def mentions_person(text: str) -> bool:
         return True
     return any(tok not in _CAP_STOP for tok in _CAP_TOKEN.findall(text))
 
+def _rules() -> str:
+    from date_locale import PROMPT_RULE
+    from people_roles import PROMPT_RULES as _ROLE_RULES
+
+    return f"{PROMPT_RULE}\n{_ROLE_RULES}"
+
+
+_EXTRACTION_RULES = _rules()
+
 _EXTRACTION_PROMPT = """\
 Extract person-related facts from the text. Return ONLY a JSON array.
 Each item: {{"name": "First Last", "fact_type": "preference|birthday|work|meeting|gift_idea|gift_given|bucket_list", "value": "concise fact"}}
 Only include facts explicitly stated about named people. If none, return [].
 For RELATIONSHIP facts (wife, husband, partner, boyfriend, girlfriend, son,
 daughter, kids, girls, boys, friend, brother, sister, mum, dad, etc.) the value
-MUST say whose relative they are — e.g. "wife of Lindsay Cannon" or "user's
+MUST say whose relative they are — e.g. "wife of Jordan Smith" or "user's
 friend" — NEVER a bare role like "wife" or "girl" (a bare role is ambiguous and
 will be discarded).
+{rules}
 
 Text:
 {text}
@@ -114,9 +124,10 @@ Each item: {{"name": "First Last", "fact_type": "preference|birthday|work|meetin
 explicitly stated about named people. If none, return [].
 For RELATIONSHIP facts (wife, husband, partner, boyfriend, girlfriend, son,
 daughter, kids, girls, boys, friend, brother, sister, mum, dad, etc.) the value
-MUST say whose relative they are — e.g. "wife of Lindsay Cannon" or "user's
+MUST say whose relative they are — e.g. "wife of Jordan Smith" or "user's
 friend" — NEVER a bare role like "wife" or "girl" (a bare role is ambiguous and
 will be discarded).
+{rules}
 
 Text:
 {text}
@@ -124,8 +135,8 @@ Text:
 
 
 # ── Bare-role backstop ────────────────────────────────────────────────────────
-# The prompt asks the LLM to qualify relationship values ("wife of Lindsay
-# Cannon", "user's friend"), but a 4B model won't always comply. An UNANCHORED
+# The prompt asks the LLM to qualify relationship values ("wife of Jordan
+# Smith", "user's friend"), but a 4B model won't always comply. An UNANCHORED
 # role is poison: "Emily: wife" stored from "Emily is the wife" (describing a
 # FRIEND's family) ranked #1 for "Who is my wife?" (live 2026-07-12). Better to
 # drop the fact than store a wrong-attachment relationship — user-relative
@@ -141,7 +152,7 @@ _ROLE_WORDS = (
 # Bare = optional article/adjectives + a role word as the HEAD NOUN, with no
 # anchor — a trailing qualifier doesn't rescue it ("male friend from work" is
 # still ambiguous about WHOSE friend). Anchored forms contain "of <name>", a
-# possessive ("Lindsay's", "user's"), or a pronoun possessive ("his", "her",
+# possessive ("Jordan's", "user's"), or a pronoun possessive ("his", "her",
 # "their") — those pass through. Head-noun (not role-anywhere) so trait facts
 # like "great with kids" — where the role sits inside a prepositional phrase —
 # are not flagged as relationship claims.
@@ -183,6 +194,10 @@ async def process_text_llm(
     text = (text or "").strip()
     if not text or user_id in ("guest", "") or len(text.split()) < 4:
         return 0
+    # Numeric dates become words (household day-first order) before the model reads
+    # them: the 4B model's default is month-first ("7/8/1991" -> "July 8").
+    from date_locale import normalize_numeric_dates
+    text = normalize_numeric_dates(text)
     if prefilter_enabled() and not mentions_person(text):
         # No plausible person mention → skip the ~0.6–1.3 s Gemma call
         # entirely (flag-gated; see prefilter rationale above).
@@ -195,7 +210,7 @@ async def process_text_llm(
         "model": _MODEL,
         "messages": [
             {"role": "system", "content": "Return ONLY valid JSON arrays."},
-            {"role": "user", "content": prompt.format(text=text[:1200])},
+            {"role": "user", "content": prompt.format(text=text[:1200], rules=_EXTRACTION_RULES)},
         ],
         "max_tokens": 300,
         "temperature": 0.1,
@@ -229,7 +244,8 @@ async def process_text_llm(
             continue
         name = (item.get("name") or "").strip()
         fact_type = (item.get("fact_type") or "preference").strip()
-        value = (item.get("value") or "").strip()
+        # The model may echo a numeric date as it was typed; store it in words.
+        value = normalize_numeric_dates((item.get("value") or "").strip())
         if not name or not value:
             continue
         if not _keep_item(item, gated=gated, min_conf=min_conf):
@@ -257,6 +273,19 @@ async def process_text_llm(
                     value, name,
                 )
                 continue
+        # Roles are stated, never guessed from a name (people_roles.py): "Casey: wife of
+        # Jordan" from a pasted name list whose intro line merely says "a partner and two
+        # kids" is the model assigning roles by first name. Drop it.
+        try:
+            from people_roles import value_role_unsupported
+            if value_role_unsupported(name, value, text):
+                logger.info(
+                    "person_extractor_llm: dropped unstated role %r for %r (the text never "
+                    "ties that role to this name)", value, name,
+                )
+                continue
+        except Exception:
+            pass
         # Told to qualify, the 4B model GUESSES "user" when the text doesn't say
         # ("Emily is the wife" → "wife of user"). Only accept a user anchor the
         # source turn supports ("my <role>"); otherwise drop — a wrong-attachment

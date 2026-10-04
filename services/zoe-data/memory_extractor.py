@@ -692,6 +692,10 @@ def extract_candidates(
         return []
 
     source_excerpt = _clean(user_message)[:220]
+    # "my birthday is 7/8/1991" is mined as "7 August 1991" (household day-first order,
+    # date_locale.py) — the verbatim excerpt above keeps the user's own digits.
+    from date_locale import normalize_numeric_dates
+    user_message = normalize_numeric_dates(user_message)
     seen: set[str] = set()
     out: list[MemoryCandidate] = _mine_templates(user_message, source_excerpt, seen)
 

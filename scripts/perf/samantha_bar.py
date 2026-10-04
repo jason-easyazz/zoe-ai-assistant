@@ -20,6 +20,11 @@ Scenarios (docs/knowledge/samantha-bar.md has what each one proves):
   S13-S16 contacts conversation (2026-10-04): list-all, "my brother X" -> relationship, one
           record per person, one enumerated offer question + one yes (S15/S16 need the
           ZOE_CONTACTS_CONVERSATIONAL / ZOE_CONTACT_OFFER_BATCH flags; dark = FAIL / SKIP)
+  S20 day-first dates — "7/8/1991" is 7 August (Australian household), in the store AND the reply
+  S21 a correction reaches the record — "X is their dog" -> X is no longer one of the children;
+      expected FAIL until ZOE_CORRECTION_APPLY is on (a TARGET, not a regression)
+  S22 roles are stated, never guessed from first names — a pasted list with no roles must not
+      come back with a wife / "the girls"; expected FAIL until ZOE_ROSTER_NEUTRAL_ASK is on
   (S9, the personalisation hop, needs the user-model card, which a fresh synthetic bar user
   can never be served: it lives in scripts/perf/samantha_day_sim.py.)
 
@@ -124,7 +129,8 @@ AUTH_OWNED_TABLES = frozenset({
     "sessions", "oidc_clients", "oidc_signing_keys",
 })
 SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S10", "S11", "S12",
-                "S13", "S14", "S15", "S16")
+                "S13", "S14", "S15", "S16",
+                "S20", "S21", "S22")
 VERDICTS = ("PASS", "FAIL", "SKIP", "ERROR")
 
 
@@ -181,6 +187,23 @@ SAY_FAMILY_YES = "Yes please."
 FAMILY_NAMES = ("ignatius", "philippa", "barnaby")
 S16_WHY = ("no enumerated contact offer surfaced - ZOE_PERSON_SUGGEST_ENABLED, ZOE_SEAM_OFFER_INJECT and "
            "ZOE_CONTACT_OFFER_BATCH must all be on for the one-question offer, so SKIP is the dark default")
+# S20: a numeric date in the user's words. The house is in Australia, so 7/8/1991 is 7 August.
+SAY_DOB = "My friend Priya Nair's birthday is 7/8/1991."
+ASK_DOB = "When is Priya Nair's birthday?"
+S20_RIGHT = ("7 august", "august 7", "7th august", "7th of august", "august 7th")
+S20_WRONG = ("july 8", "8 july", "8th july", "8th of july", "july 8th", "7 8 1991")
+# S21: a pet that was listed among the children, then corrected.
+SAY_KIDS = "My friend Dana Whitfield has two kids, Mika and Biscuit."
+SAY_PET = "Biscuit is their dog"
+ASK_KIDS = "How many children does Dana Whitfield have?"
+# S22: a pasted list, no roles stated. Nothing says who the wife or the girls are.
+SAY_ROSTER = ("Here are my friend's family details, along with a partner and two children.\n\n"
+              "Callum Reyes - 14/03/1980\nAnika Reyes - 02/11/1985\n"
+              "Tobias Reyes- 19/06/2014\nInes Reyes - 30/01/2017")
+ASK_ROSTER = "Who is Anika Reyes?"
+S22_NAMES = ("callum", "anika", "tobias", "ines")
+S22_ROLES = ("wife", "husband", "daughter", "daughters", "son", "sons", "girl", "girls", "boy", "boys",
+             "mother", "father", "mum", "dad", "girlfriend", "boyfriend")
 
 # Needles belonging to user A. None may ever reach user B (S6).
 A_NEEDLES = ("marisol", "lisbon", "dunedin", "hobart", "aquarium", "teodor", "lighthouse")
@@ -280,6 +303,20 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
                "adds them all (ZOE_CONTACT_OFFER_BATCH); SKIP while the offer flags are dark",
      "turns": [("A", "c-family", SAY_FAMILY)],
      "asks": [("A", SAY_FAMILY_NUDGE), ("A", SAY_FAMILY_YES)]},
+    {"id": "S20", "title": "day-first dates", "judged": False,
+     "proves": "'her birthday is 7/8/1991' is stored and answered as 7 August 1991 (DD/MM in an "
+               "Australian household), never 'July 8' (date_locale.py)",
+     "turns": [("A", "d1-dob", SAY_DOB)], "asks": [("A", ASK_DOB)]},
+    {"id": "S21", "title": "a correction reaches the record", "judged": False, "expected": "FAIL",
+     "proves": "after 'Biscuit is their dog' the turn says what it changed, the store holds Biscuit as a "
+               "pet, and the next count of the children leaves Biscuit out — a TARGET until "
+               "ZOE_CORRECTION_APPLY is on (correction_apply.py)",
+     "turns": [("A", "s21-kids", SAY_KIDS), ("A", "s21-fix", SAY_PET)], "asks": [("A", ASK_KIDS)]},
+    {"id": "S22", "title": "roles are stated, never guessed", "judged": False, "expected": "FAIL",
+     "proves": "a pasted list of names with no roles is not answered with a wife / 'the girls' from "
+               "first names, in the reply or the store, and one question asks who's who — a TARGET "
+               "until ZOE_ROSTER_NEUTRAL_ASK is on (people_roles.py)",
+     "turns": [("A", "s22-roster", SAY_ROSTER)], "asks": [("A", ASK_ROSTER)]},
 )
 EXPECTED ={s["id"]: s["expected"] for s in SCENARIOS if s.get("expected")}
 
@@ -648,6 +685,80 @@ def score_s16(offer_reply: str, yes_reply: str) -> tuple[str, dict]:
     return ("PASS" if ok else "FAIL"), ev
 
 
+def score_s20(reply: str, packet: str | None) -> tuple[str, dict]:
+    """Store AND reply: the recall packet must carry 7 August (and no month-first reading or
+    raw digits), and the reply must say August without saying July."""
+    if packet is None:
+        return "ERROR", {"method": "deterministic", "why": "recall packet read failed"}
+    ev = {"method": "deterministic",
+          "reply_august": contains_any(reply, S20_RIGHT), "reply_july": contains_any(reply, ("july",)),
+          "store_august": contains_any(packet, S20_RIGHT),
+          "store_month_first": contains_any(packet, S20_WRONG)}
+    why = []
+    if not ev["store_august"] or ev["store_month_first"]:
+        why.append("the store holds the birthday month-first or as raw digits")
+    if not ev["reply_august"] or ev["reply_july"]:
+        why.append("the reply does not give 7 August (or says July)")
+    return ("FAIL", {**ev, "why": "; ".join(why)}) if why else ("PASS", ev)
+
+
+def score_s21(ack: str, reply: str, packet: str | None) -> tuple[str, dict]:
+    """The correction turn says what changed, the store holds a pet (not a child), and the
+    count of the children leaves Biscuit out (Mika alone)."""
+    if packet is None:
+        return "ERROR", {"method": "deterministic", "why": "recall packet read failed"}
+    a = normalize(ack)
+    pet_lines = [ln for ln in packet.splitlines() if contains_any(ln, ("biscuit",))]
+    still_child = [ln for ln in pet_lines
+                   if re.search(r"\b(child|children|kid|kids|son|daughter)\b", normalize(ln))
+                   and not re.search(r"\b(pet|dog|not a child)\b", normalize(ln))]
+    ev = {"method": "deterministic",
+          "ack_says_what_changed": a.startswith("fixed") and contains_any(ack, ("dog", "pet")),
+          "ack_promises_next_time": "next time" in a,
+          "store_has_pet": any(contains_any(ln, ("pet", "dog")) for ln in pet_lines),
+          "store_still_child": bool(still_child),
+          "reply_counts_two": bool(re.search(r"\b(two|2)\s+(kids|children)\b", normalize(reply))),
+          "reply_names_mika": contains_any(reply, ("mika",))}
+    why = []
+    if not ev["ack_says_what_changed"] or ev["ack_promises_next_time"]:
+        why.append("the correction turn did not state what was changed")
+    if not ev["store_has_pet"] or ev["store_still_child"]:
+        why.append("the store still lists Biscuit as a child (or never records a pet)")
+    if ev["reply_counts_two"] or not ev["reply_names_mika"]:
+        why.append("the count of the children still includes Biscuit")
+    return ("FAIL", {**ev, "why": "; ".join(why)}) if why else ("PASS", ev)
+
+
+def names_a_role(text: str, names: Iterable[str], roles: Iterable[str], window: int = 5) -> list[str]:
+    """Role words within ``window`` words of a roster first name — a role ASSIGNED to a name."""
+    toks = normalize(text).split()
+    names, roles = {normalize(n) for n in names}, {normalize(r) for r in roles}
+    hits = []
+    for i, t in enumerate(toks):
+        if t in names:
+            near = toks[max(0, i - window): i + window + 1]
+            hits += [f"{t}~{r}" for r in near if r in roles]
+    return hits
+
+
+def score_s22(roster_reply: str, ask_reply: str, packet: str | None) -> tuple[str, dict]:
+    """No gendered role reaches a roster name in either reply or the store, and the list is
+    answered with a question (who's who), not a verdict."""
+    if packet is None:
+        return "ERROR", {"method": "deterministic", "why": "recall packet read failed"}
+    ev = {"method": "deterministic",
+          "roles_in_roster_reply": names_a_role(roster_reply, S22_NAMES, S22_ROLES),
+          "roles_in_ask_reply": names_a_role(ask_reply, S22_NAMES, S22_ROLES),
+          "roles_in_store": names_a_role(packet, S22_NAMES, S22_ROLES),
+          "asks_a_question": "?" in roster_reply}
+    why = []
+    if ev["roles_in_roster_reply"] or ev["roles_in_ask_reply"] or ev["roles_in_store"]:
+        why.append("a role was assigned to a name the user never gave one")
+    if not ev["asks_a_question"]:
+        why.append("the list was not answered with a who's-who question")
+    return ("FAIL", {**ev, "why": "; ".join(why)}) if why else ("PASS", ev)
+
+
 def setup_problems(seeds: dict[str, dict | None], landings: dict[str, dict | None]) -> list[str]:
     """Why a scenario's PRECONDITIONS did not happen: a seed turn that was never
     sent or errored, or a fact that never landed in the recall packet. Any
@@ -852,7 +963,7 @@ def plan_text(samples: int) -> str:
              f"  judged scenarios ask {samples}x, majority vote; judge rubric sha {JUDGE_PROMPT_SHA256[:12]}",
              "  order: day 1 (S1 seed+ask, S2/S4/S7 seeds) -> backdate day-1 sessions 26h ->",
              "         day 2 (S2 move+ask, S7 short dup+ask, S10 'gave up'+ask, S4 ask, S3 ask) -> S5 selector"
-         " hook + 2 open turns (S12 scores their spacing) -> S6 -> S8 -> contacts S13-S16; S11 is a reserved SKIP"]
+         " hook + 2 open turns (S12 scores their spacing) -> S20/S21/S22 (dates, corrections, roles) -> S6 -> S8 -> contacts S13-S16; S11 is a reserved SKIP"]
     for s in SCENARIOS:
         tag = "judged" if s["judged"] else "deterministic"
         exp = f", expected {s['expected']}" if s.get("expected") else ""
@@ -1500,6 +1611,41 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
         put("S12", v12, **ev12)
     else:
         put("S12", "ERROR", why="S5's setup was not exercised, so its open turns never ran")
+
+    # S20/S21/S22: the three conversation-quality classes (2026-10-04) ------------
+    say(a, "d1-dob", SAY_DOB)
+    land["S20"] = live.wait_landed(a, ASK_DOB, ("1991",))
+    if setup_ok("S20", ("d1-dob",), ("S20",)):
+        t = live.chat(a, "s20-ask", ASK_DOB)
+        pkt = live.packet(a, ASK_DOB)
+        if t["error"]:
+            put("S20", "ERROR", landed=land["S20"], ask=live.evidence(t))
+        else:
+            v, ev = score_s20(t["reply"], pkt)
+            put("S20", v, landed=land["S20"], ask={**live.evidence(t), **ev})
+
+    say(a, "s21-kids", SAY_KIDS)
+    land["S21"] = live.wait_landed(a, ASK_KIDS, ("biscuit",))
+    if setup_ok("S21", ("s21-kids",), ("S21",)):
+        ack = live.chat(a, "s21-fix", SAY_PET)
+        t = live.chat(a, "s21-ask", ASK_KIDS)
+        pkt = live.packet(a, ASK_KIDS + " Biscuit")
+        if t["error"] or ack["error"]:
+            put("S21", "ERROR", landed=land["S21"], ask=live.evidence(t), ack=live.evidence(ack))
+        else:
+            v, ev = score_s21(ack["reply"], t["reply"], pkt)
+            put("S21", v, landed=land["S21"], ask={**live.evidence(t), **ev})
+
+    t1 = say(a, "s22-roster", SAY_ROSTER)
+    land["S22"] = live.wait_landed(a, ASK_ROSTER, ("anika",))
+    if setup_ok("S22", ("s22-roster",), ("S22",)):
+        t2 = live.chat(a, "s22-ask", ASK_ROSTER)
+        pkt = live.packet(a, ASK_ROSTER)
+        if t2["error"]:
+            put("S22", "ERROR", landed=land["S22"], ask=live.evidence(t2))
+        else:
+            v, ev = score_s22(t1["reply"], t2["reply"], pkt)
+            put("S22", v, landed=land["S22"], ask={**live.evidence(t2), **ev})
 
     # S6: isolation ----------------------------------------------------------
     t = live.chat(b, "b-ask", ASK_B)
