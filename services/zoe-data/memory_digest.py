@@ -133,7 +133,7 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
 
     from person_extractor import _ensure_db
     from memory_extractor import _resolve_unique_person_uuid
-    from memory_service import get_memory_service, is_guest_memory_user
+    from memory_service import get_memory_service, is_guest_memory_user, leased_drawers
 
     if not user_id or is_guest_memory_user(user_id):
         return result
@@ -143,7 +143,7 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
         return result
     try:
         svc = get_memory_service()
-        col = svc._collection()
+        col = leased_drawers(svc)   # per-call lease: never a handle across an await
         # Owner + status scoped scan: only THIS user's still-pending person facts.
         results = col.get(
             where={"$and": [
@@ -1462,7 +1462,7 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
     4. Write related_ids on both the new memory and its neighbours
     5. Extract and store concept_tags if not already set
     """
-    from memory_service import get_memory_service
+    from memory_service import get_memory_service, leased_drawers
     import datetime, hashlib
 
     svc = get_memory_service()
@@ -1471,7 +1471,7 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
     tagged = 0
 
     try:
-        col = svc._collection()
+        col = leased_drawers(svc)   # per-call lease: never a handle across an await
         # ChromaDB $gte only supports int/float — filter by user_id only, then
         # post-filter by added_at date in Python (ISO strings compare correctly
         # lexicographically for same-length prefix matching).
@@ -1605,11 +1605,11 @@ async def _deep_sleep_pass(user_id: str) -> dict:
     Gate: score >= 0.8 AND unique_query_count >= 3 → pending → approved
     Stale: pending for 14+ days without qualifying → archived
     """
-    from memory_service import get_memory_service
+    from memory_service import get_memory_service, leased_drawers
     import datetime
 
     svc = get_memory_service()
-    col = svc._collection()
+    col = leased_drawers(svc)   # per-call lease: never a handle across an await
     promoted = 0
     archived = 0
     cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=14)).isoformat() + "Z"
@@ -1694,10 +1694,10 @@ async def _synthesis_pass(user_id: str) -> dict:
     For clusters of 5+ memories sharing the same top concept tag, prompt Gemma
     to produce one higher-order insight. Stored with source="synthesis".
     """
-    from memory_service import get_memory_service, MemoryServiceError
+    from memory_service import get_memory_service, MemoryServiceError, leased_drawers
 
     svc = get_memory_service()
-    col = svc._collection()
+    col = leased_drawers(svc)   # per-call lease: never a handle across an await
     synthesized = 0
 
     try:
