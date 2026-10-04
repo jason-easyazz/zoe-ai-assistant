@@ -172,6 +172,51 @@ def test_deploy_probes_a_page_nginx_serves_itself_not_the_proxied_health():
     assert "https://localhost/health" not in step, "/health is proxied to zoe-data, which the next step may be restarting"
 
 
+def _skip_patterns() -> "list[re.Pattern[str]]":
+    start = CONF.index('map "$request_method:$status:$uri" $zoe_log_access')
+    block = CONF[start: CONF.index("}", start)]
+    pats = [re.compile(m) for m in re.findall(r'"~(\^[^"]+)"\s+0;', block)]
+    assert pats, "no skip pattern found in the $zoe_log_access map"
+    return pats
+
+
+def _skipped(key: str) -> bool:
+    """True when nginx would NOT log a request whose "<method>:<status>:<uri>" is `key`."""
+    return any(p.match(key) for p in _skip_patterns())
+
+
+def test_successful_polls_skip_the_access_log_but_every_failure_is_still_logged():
+    # 2026-10-04 log review: ~100 lines/min of "200" poll noise from ONE panel buried the
+    # 502s that mattered. Only successful polls on the closed list are skipped.
+    assert _skipped("GET:200:/api/ui/actions/pending")
+    assert _skipped("GET:304:/api/panels/zoe-touch-pi/config")
+    assert _skipped("POST:200:/api/ui/state/sync"), "the periodic heartbeat"
+    assert not _skipped("GET:502:/api/ui/actions/pending"), "a failed poll must stay in the log"
+    assert not _skipped("POST:403:/api/ui/state/sync")
+    assert not _skipped("GET:200:/api/auth/login"), "user actions are the audit trail"
+    assert not _skipped("GET:200:/api/ui/actions/pending/extra"), "anchored, no prefix match"
+    assert not _skipped("GET:200:/ws/push")
+    assert "default 1;" in CONF[CONF.index("$zoe_log_access"):]
+
+
+def test_successful_writes_to_a_polled_uri_stay_in_the_access_log():
+    # Review of #1850: the first cut keyed on "<status>:<uri>", so a SUCCESSFUL PUT to a URI it
+    # also polls with GET (panel config, display preferences) vanished from the audit trail.
+    for uri in ("/api/panels/x/config", "/api/system/display/preferences"):
+        assert _skipped(f"GET:200:{uri}"), uri
+        for method in ("PUT", "POST", "PATCH", "DELETE"):
+            assert not _skipped(f"{method}:200:{uri}"), f"{method} {uri} is a user action"
+    # the only non-GET skip is the heartbeat, and only for that exact path
+    assert not _skipped("PUT:200:/api/ui/state/sync")
+    assert not _skipped("POST:200:/api/ui/actions/pending")
+
+
+def test_both_servers_use_the_conditional_access_log():
+    assert CONF.count("access_log /var/log/nginx/access.log main if=$zoe_log_access;") == 2
+    # a bare second access_log at http scope would DOUBLE-log; locations must not override it
+    assert "access_log" not in LOCATIONS
+
+
 def _tool():
     import importlib.util
 

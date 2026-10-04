@@ -175,3 +175,134 @@ def test_analysis_uses_state_filtered_automation_scene_script_counts(bridge_modu
     assert summary["total_scenes"] == 1
     assert summary["total_scripts"] == 1
     assert calls == 1
+
+
+# -- 2026-10-04 container log review: quiet polls, loud failures ---------------------------
+
+
+def _access_record(bridge_module, method, path, status):
+    import logging
+
+    return logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 0,
+        '%s - "%s %s HTTP/%s" %d', ("172.18.0.1:1234", method, path, "1.1", status), None,
+    )
+
+
+@pytest.mark.parametrize(
+    "method,path,status,kept",
+    [
+        ("GET", "/", 200, False),  # Docker healthcheck, every 30 s
+        ("GET", "/entities", 200, False),  # zoe-data entity poll
+        ("GET", "/entities?domain=light", 200, False),  # query string is not part of the path
+        ("GET", "/", 503, True),  # a failing health probe is signal
+        ("GET", "/entities", 500, True),
+        ("POST", "/devices/control", 200, True),  # a user action is the audit trail
+        ("GET", "/entities/light.x", 200, True),  # only the exact poll paths are quiet
+        ("POST", "/", 200, True),
+    ],
+)
+def test_access_log_drops_only_successful_polls(bridge_module, method, path, status, kept):
+    flt = bridge_module.QuietPollAccessFilter()
+    assert flt.filter(_access_record(bridge_module, method, path, status)) is kept
+
+
+def test_access_filter_passes_records_it_cannot_parse(bridge_module):
+    import logging
+
+    flt = bridge_module.QuietPollAccessFilter()
+    odd = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 0, "plain text", None, None)
+    assert flt.filter(odd) is True
+
+
+def test_filter_is_installed_on_the_uvicorn_access_logger(bridge_module):
+    import logging
+
+    installed = logging.getLogger("uvicorn.access").filters
+    assert any(type(f).__name__ == "QuietPollAccessFilter" for f in installed)
+
+
+class _RaisingClient:
+    def __init__(self, exc):
+        self.exc = exc
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, *args, **kwargs):
+        raise self.exc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "factory,expected",
+    [
+        (lambda m: _FakeAsyncClient(401), "401"),
+        (lambda m: _RaisingClient(m.httpx.TimeoutException("slow")), "408"),
+        (lambda m: _RaisingClient(m.httpx.ConnectError("down")), "503"),
+        (lambda m: _RaisingClient(RuntimeError("boom")), "500"),
+    ],
+)
+async def test_every_ha_failure_is_logged_not_swallowed(bridge_module, monkeypatch, caplog, factory, expected):
+    # The /entities handler turns these HTTPExceptions into HTTP 200 bodies, so before this the
+    # only trace of an expired token or a dead HA was a 200 in the access log.
+    import logging
+
+    monkeypatch.setattr(bridge_module.httpx, "AsyncClient", lambda: factory(bridge_module))
+    bridge = bridge_module.HomeAssistantBridge("http://ha.local", "token")
+    with caplog.at_level(logging.WARNING, logger="zoe.ha_bridge"):
+        with pytest.raises(HTTPException):
+            await bridge._make_request("GET", "states")
+    msgs = [r.getMessage() for r in caplog.records if r.name == "zoe.ha_bridge"]
+    assert len(msgs) == 1 and f"-> {expected}" in msgs[0], msgs
+    assert "token" not in msgs[0].lower().replace("states", ""), "never log credentials"
+
+
+@pytest.mark.asyncio
+async def test_repeated_failures_are_rate_limited_per_interval(bridge_module, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(bridge_module.httpx, "AsyncClient", lambda: _FakeAsyncClient(503))
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(bridge_module.time, "monotonic", lambda: clock["t"])
+    bridge = bridge_module.HomeAssistantBridge("http://ha.local", "token")
+
+    async def fail():
+        with pytest.raises(HTTPException):
+            await bridge._make_request("GET", "states")
+
+    with caplog.at_level(logging.WARNING, logger="zoe.ha_bridge"):
+        for _ in range(6):  # an HA outage polled every 10 s for a minute
+            await fail()
+            clock["t"] += 10
+        assert len([r for r in caplog.records if r.name == "zoe.ha_bridge"]) == 1
+        clock["t"] += bridge_module._FAILURE_LOG_INTERVAL_S
+        await fail()
+        assert len([r for r in caplog.records if r.name == "zoe.ha_bridge"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_distinct_failing_services_each_get_their_own_line_within_the_interval(
+    bridge_module, monkeypatch, caplog
+):
+    # Review of #1850: services/<domain>/<service> used to share one "services" rate-limit key,
+    # so a second, different failed control inside 60 s was unlogged.
+    import logging
+
+    class _PostClient(_FakeAsyncClient):
+        async def post(self, *args, **kwargs):
+            return _FakeResponse(self.status_code)
+
+    monkeypatch.setattr(bridge_module.httpx, "AsyncClient", lambda: _PostClient(503))
+    monkeypatch.setattr(bridge_module.time, "monotonic", lambda: 5000.0)
+    bridge = bridge_module.HomeAssistantBridge("http://ha.local", "token")
+    with caplog.at_level(logging.WARNING, logger="zoe.ha_bridge"):
+        for endpoint in ("services/light/turn_on", "services/switch/turn_off", "services/light/turn_on"):
+            with pytest.raises(HTTPException):
+                await bridge._make_request("POST", endpoint, {})
+    msgs = [r.getMessage() for r in caplog.records if r.name == "zoe.ha_bridge"]
+    assert len(msgs) == 2, msgs  # light + switch once each; the repeat of light is suppressed
+    assert "light/turn_on" in msgs[0] and "switch/turn_off" in msgs[1]

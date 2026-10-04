@@ -57,10 +57,15 @@
         } catch (e) { return 'orbChatMessages_guest'; }
     }
 
-    window.addEventListener('zoe:logout', function() {
+    // js/auth.js dispatches zoe:logout on DOCUMENT; listening on window alone meant
+    // orb transcripts survived logout on a shared machine.
+    function _purgeOrbOnLogout() {
         try { localStorage.removeItem(_orbMsgKey()); } catch (e) {}
         try { localStorage.removeItem('orbChatMessages'); } catch (e) {}
-    });
+        try { localStorage.removeItem('orbChatMessages_guest'); } catch (e) {}
+    }
+    document.addEventListener('zoe:logout', _purgeOrbOnLogout);
+    window.addEventListener('zoe:logout', _purgeOrbOnLogout);
 
     function _restoreOrbState() {
         try {

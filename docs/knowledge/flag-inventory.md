@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-04T00:00:00Z
+timestamp: 2026-10-05T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-04T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-04. The table body is deterministic (sorted, no
+Last generated: 2026-10-05. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-508 flags; 506 not documented in `.env.example`.
+515 flags; 513 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -93,7 +93,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_COMPOSE_TIMEOUT_S` | `'14'` | no | NO | `services/zoe-data/ui_compose.py` |
 | `ZOE_COMPOSE_UI` | `''` | no | NO | `services/zoe-data/ui_compose.py` |
 | `ZOE_COMPOSE_VOICE_BUDGET_S` | `'8'` | no | NO | `services/zoe-data/main.py` |
+| `ZOE_CONTACTS_CONVERSATIONAL` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
 | `ZOE_CONTACT_BACKFILL_ENABLED` | `''` | no | NO | `services/zoe-data/contact_backfill.py` |
+| `ZOE_CONTACT_OFFER_BATCH` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
 | `ZOE_CONTEXT_TOKEN_BUDGET` | `5500` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CONVERSATION_ENDER_ACKS` | `dynamic` | no | NO | `services/zoe-data/conversation_opener.py` |
 | `ZOE_CORE_DATA_URL` | `-` | no | NO | `services/zoe-data/zoe_core_client.py` |
@@ -240,9 +242,13 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LOCATION_LAT` | `'-28.7774'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ZOE_LOCATION_LON` | `'114.6158'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ZOE_LOG_BACKUP_COUNT` | `dynamic` | no | NO | `services/zoe-data/logging_setup.py` |
+| `ZOE_LOG_CHATTY_LIBS_LEVEL` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_LOG_DIR` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_LOG_LEVEL` | `-` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_LOG_MAX_BYTES` | `dynamic` | no | NO | `services/zoe-data/logging_setup.py` |
+| `ZOE_LOG_QUIET_POLL_PATHS` | `-` | no | NO | `services/zoe-data/middleware/logging.py` |
+| `ZOE_LOG_QUIET_POLL_SLOW_MS` | `dynamic` | no | NO | `services/zoe-data/middleware/logging.py` |
+| `ZOE_LOG_REPEAT_WINDOW_S` | `-` | no | NO | `services/zoe-data/log_throttle.py` |
 | `ZOE_LOOP_LIFECYCLE` | `False` | yes | NO | `services/zoe-data/open_loop_lifecycle.py` |
 | `ZOE_MAX_BROWSER_TABS` | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_MA_CONTAINER` | `'zoe-music-assistant'` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/ma_ondemand.py` |
@@ -358,6 +364,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PRESENCE_WINDOW_S` | `''` | no | NO | `services/zoe-data/proactive/presence.py` |
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
+| `ZOE_PROACTIVE_LEDGER` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |
 | `ZOE_PROACTIVE_RAISE_GAP_S` | `7200` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_RAISE_PER_DAY` | `2` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_SELECTOR` | `''` | no | NO | `services/zoe-data/proactive/selector.py` |

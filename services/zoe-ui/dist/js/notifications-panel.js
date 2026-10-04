@@ -5,6 +5,8 @@
  */
 (function() {
     'use strict';
+    // A desktop page must never route into /touch/* (standing rule, 2026-07-20).
+    const IS_TOUCH_SURFACE = (function () { try { return location.pathname.startsWith('/touch/'); } catch (_) { return false; } })();
 
     let notificationsOpen = false;
     let notificationsData = [];
@@ -342,7 +344,9 @@
                     const openHandler = function(e) {
                         e.stopPropagation();
                         close();
-                        location.href = '/touch/updates.html?highlight=openclaw';
+                        // Desktop is desktop, touch is touch: only a touch surface deep-links into
+                        // the panel's updates page; on desktop the panel itself is the updates view.
+                        if (IS_TOUCH_SURFACE) location.href = '/touch/updates.html?highlight=openclaw';
                     };
                     openBtn.addEventListener('click', openHandler);
                     openBtn.addEventListener('touchend', function(e) { e.preventDefault(); openHandler(e); });
@@ -355,7 +359,7 @@
                     const openZoeHandler = function(e) {
                         e.stopPropagation();
                         close();
-                        location.href = '/touch/updates.html';
+                        if (IS_TOUCH_SURFACE) location.href = '/touch/updates.html';
                     };
                     openZoeBtn.addEventListener('click', openZoeHandler);
                     openZoeBtn.addEventListener('touchend', function(e) { e.preventDefault(); openZoeHandler(e); });
@@ -507,35 +511,16 @@
     window.openNotifications = open;
     window.closeNotifications = close;
 
-    // ── Real-time push via /ws/push ─────────────────────────────────────
-    let _ws = null;
-    let _wsRetryMs = 2000;
+    // ── Real-time push via the page's ONE /ws/push socket (js/auth.js zoePush) ──
+    // This file used to open its own socket with no session_id, which the server
+    // refuses (403) — reconnecting every few seconds on every desktop page.
     function connectPush() {
-        try {
-            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const url = `${proto}//${location.host}/ws/push?channel=all`;
-            _ws = new WebSocket(url);
-            _ws.addEventListener('open', function() {
-                _wsRetryMs = 2000;
-            });
-            _ws.addEventListener('message', function(ev) {
-                if (!ev || !ev.data) return;
-                let msg;
-                try { msg = JSON.parse(ev.data); } catch (_) { return; }
-                if (!msg || !msg.type) return;
-                if (msg.type === 'notification_created' || msg.type === 'notifications_changed') {
-                    loadNotifications();
-                }
-            });
-            _ws.addEventListener('close', function() {
-                _ws = null;
-                setTimeout(connectPush, _wsRetryMs);
-                _wsRetryMs = Math.min(_wsRetryMs * 2, 30000);
-            });
-            _ws.addEventListener('error', function() { try { _ws && _ws.close(); } catch (_) {} });
-        } catch (e) {
-            setTimeout(connectPush, _wsRetryMs);
-        }
+        if (!window.zoePush || typeof window.zoePush.subscribe !== 'function') return;
+        window.zoePush.subscribe(function (msg) {
+            if (msg.type === 'notification_created' || msg.type === 'notifications_changed') {
+                loadNotifications();
+            }
+        });
     }
 
     document.addEventListener('DOMContentLoaded', function() {

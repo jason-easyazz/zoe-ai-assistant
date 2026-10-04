@@ -807,9 +807,7 @@
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
 
-            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
 
-            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
 
             <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
 
@@ -843,14 +841,6 @@
                 <div class="more-item" onclick="navigateToPage('notes.html')">
                     <div class="more-item-icon">📝</div>
                     <div class="more-item-label">Notes</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('cooking.html')">
-                    <div class="more-item-icon">🍳</div>
-                    <div class="more-item-label">Cooking</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('smart-home.html')">
-                    <div class="more-item-icon">🏠</div>
-                    <div class="more-item-label">Smart Home</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('updates.html')">
                     <div class="more-item-icon">⬇️</div>
@@ -917,7 +907,9 @@
         async function loadPeople() {
             console.log("=== Loading People ===");
             try {
-                const response = await apiRequest('/api/people');
+                // Trailing slash matters: FastAPI's 307 for '/api/people' carries an http:// Location
+                // behind the proxy, which an https page refuses (net::ERR_FAILED) — the page then never loaded.
+                const response = await apiRequest('/api/people/');
                 console.log("API Response:", response);
                 
                 if (!response || !response.people) {
@@ -1475,10 +1467,17 @@
                 (p.phone && p.phone.includes(query)) ||
                 (p.category && p.category.toLowerCase().includes(query))
             );
-            sidebar.innerHTML = filtered.map(p => `
-                <div class="person-item" onclick="selectPerson('${p.id}')">
-                    <div class="person-name">${p.name || 'Unknown'}</div>
-                    <div class="person-type">${p.category || p.relationshipType || ''}</div>
+            sidebar.innerHTML = renderPeopleSearchResults(filtered);
+        }
+
+        // Search results are user-authored contact data: every field is escaped
+        // and the id rides in an escaped JSON literal, exactly like the card grid
+        // above. Pinned by dist/test_desktop_wave3.js.
+        function renderPeopleSearchResults(filtered) {
+            return filtered.map(p => `
+                <div class="person-item" onclick="selectPerson(${escapeHtml(JSON.stringify(String(p.id)))})">
+                    <div class="person-name">${escapeHtml(p.name || 'Unknown')}</div>
+                    <div class="person-type">${escapeHtml(p.category || p.relationshipType || '')}</div>
                 </div>
             `).join('');
         }

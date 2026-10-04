@@ -777,6 +777,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CONTACTS_CONVERSATIONAL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/contacts_conversation.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_CONTACT_BACKFILL_ENABLED": {
         "defaults": [
           "''"
@@ -784,6 +794,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/contact_backfill.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CONTACT_OFFER_BATCH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/contacts_conversation.py"
         ],
         "typed_env": false
       },
@@ -2282,6 +2302,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LOG_CHATTY_LIBS_LEVEL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LOG_DIR": {
         "defaults": [
           "-"
@@ -2309,6 +2339,36 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_QUIET_POLL_PATHS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/middleware/logging.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_QUIET_POLL_SLOW_MS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/middleware/logging.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_REPEAT_WINDOW_S": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/log_throttle.py"
         ],
         "typed_env": false
       },
@@ -3478,6 +3538,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/proactive/arrival.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PROACTIVE_LEDGER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/ledger.py"
         ],
         "typed_env": false
       },

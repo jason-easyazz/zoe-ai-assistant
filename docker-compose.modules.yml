@@ -5,6 +5,18 @@
 # base web/auth/HA stack. Keep local-only ignored modules out of this tracked file.
 # =============================================================================
 
+# Bounded container logs (2026-10-04 log review; operator background in
+# docs/knowledge/docker-log-and-memory-limits.md). Docker's default json-file driver has NO
+# size cap: zoe-multica-backend alone was 621 MB after seven weeks. 3 x 10 MB per container
+# is ~3 days of the noisiest service and keeps `docker logs` fast. This reaches a container
+# only when it is (re)created; the daemon-wide default in daemon.json is the other half.
+# Pinned for every service by tests/unit/test_compose_loopback_binds.py.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   music-assistant:
     # Pinned by DIGEST (was the floating `:stable` tag). This image supplies the
@@ -72,6 +84,7 @@ services:
     # CI pins this (tests/unit/test_no_live_databases_tracked.py).
     - ${ZOE_MA_DATA:-/home/zoe/.zoe/music-assistant}:/data
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8095/info"]
       interval: 30s
@@ -130,6 +143,7 @@ services:
     ports:
     - "127.0.0.1:4416:4416"
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4416/ping',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -192,6 +206,7 @@ services:
         aliases:
         - backend
     restart: unless-stopped
+    logging: *default-logging
     profiles:
     - multica
     healthcheck:
@@ -213,6 +228,7 @@ services:
     networks:
     - zoe-network
     restart: unless-stopped
+    logging: *default-logging
     profiles:
     - multica
     depends_on:
