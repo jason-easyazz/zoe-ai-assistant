@@ -39,12 +39,15 @@ inert timer.
 **Start (`services/zoe-data/ma_ondemand.py`, called from `music_service`).**
 `_ma_response` wakes on `_MA_WAKE_COMMANDS` only — `music/search`,
 `player_queues/play_media`, playlists library/tracks/create, favourite add,
-provider setup/reconfigure/save. Entry points that read first
-(`search_and_play`, `play_media`, `control`, `resolve_music` for every action but
-`status`) call `ensure_running()` before their `get_players()`. The wake:
-touch `activity` + `inflight` → skip if MA answered in the last 30 s → `GET /info`
-→ else, under the shared `flock`, `docker start` + poll `/info` → log
-`MA_REAP start latency_ms=…`. Failure returns False and the existing "music
+provider setup/reconfigure/save. Every mutating service entry point
+(transport, seek, transfer, group/ungroup, play, queue edits, playlist add,
+favourite add/remove, don't-stop, `resolve_music` for every action but `status`,
+and `_ma_api_for_write()` — the credential-write funnel) calls `ensure_running()`
+first. The wake: touch `activity` + `inflight` → under the shared `flock` (the one
+the reaper holds across stamp+stop): honour a cached "MA answered" only if it is
+newer than the reaper's `stopped` stamp and < 30 s old → else `GET /info` → else
+`docker start` (via `async_subprocess.run_to_completion`, never a loop-thread
+fork) + poll `/info` → log `MA_REAP start latency_ms=…`. Failure returns False and the existing "music
 isn't available" degrade path applies — never a broken turn.
 
 **Stop (`scripts/maintenance/ma_idle_reap.py`, `zoe-ma-idle-reap.timer` every

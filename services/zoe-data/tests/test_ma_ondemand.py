@@ -148,6 +148,161 @@ async def test_provider_write_path_is_inert_with_flag_off(monkeypatch, reap):
     assert await music_service.provider_setup_form("ytmusic") is None
 
 
+async def test_docker_cmd_runs_off_the_loop_via_run_to_completion(monkeypatch):
+    """Codex P1: a fork on FastAPI's loop thread can deadlock pre-exec and freeze
+    every endpoint. _docker_cmd must go through async_subprocess.run_to_completion
+    (fork+exec+communicate in a worker thread) and never asyncio's loop-thread spawn."""
+    import subprocess
+    from pathlib import Path
+    seen = []
+
+    async def _fake_run(cmd, *, timeout=None, merge_stderr=False, queue_timeout=None, **kw):
+        seen.append((list(cmd), timeout, merge_stderr))
+        return subprocess.CompletedProcess(list(cmd), 0, b"true\n", None)
+
+    async def _loop_spawn(*a, **k):
+        raise AssertionError("asyncio.create_subprocess_exec forks on the loop thread")
+    monkeypatch.setattr(ma_ondemand.async_subprocess, "run_to_completion", _fake_run)
+    monkeypatch.setattr(ma_ondemand.asyncio, "create_subprocess_exec", _loop_spawn)
+
+    assert await ma_ondemand._docker_cmd("inspect", "x", timeout=7) == (0, "true")
+    assert seen == [(["docker", "inspect", "x"], 7, True)]
+    assert "create_subprocess_exec" not in Path(ma_ondemand.__file__).read_text()
+
+    async def _timeout(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+    monkeypatch.setattr(ma_ondemand.async_subprocess, "run_to_completion", _timeout)
+    assert await ma_ondemand._docker_cmd("start", "x") == (124, "timeout")
+
+    async def _missing(cmd, **kw):
+        raise FileNotFoundError("docker")
+    monkeypatch.setattr(ma_ondemand.async_subprocess, "run_to_completion", _missing)
+    assert (await ma_ondemand._docker_cmd("start", "x"))[0] == 127
+
+
+async def test_cached_fast_path_takes_the_shared_lock_and_sees_the_reapers_stop(
+        monkeypatch, reap, tmp_path):
+    """Codex P2: the reaper holds the file lock across stamp+stop. A wake with a
+    fresh cached "seen up" must wait for that lock and re-decide under it, so the
+    stop it just waited for is seen (stamp newer than the cache -> probe -> start)."""
+    import contextlib
+    import time
+    ma_ondemand.note_seen_up()
+    reap["http_up"] = True  # MA was up when the cache was written
+    events = []
+
+    @contextlib.asynccontextmanager
+    async def _lock_held_by_reaper():
+        events.append("wait-for-lock")
+        # ...the reaper finishes its critical section while we wait:
+        time.sleep(0.01)
+        (tmp_path / "stopped").touch()
+        reap["http_up"] = False
+        reap["running"] = False
+        events.append("acquired")
+        yield
+        events.append("released")
+    monkeypatch.setattr(ma_ondemand, "_file_lock", _lock_held_by_reaper)
+
+    assert await ma_ondemand.ensure_running(timeout_s=2.0) is True
+    assert ("start", "zoe-music-assistant") in reap["docker"], "cached answer must not win over the stop"
+    assert events == ["wait-for-lock", "acquired", "released"]
+
+
+async def test_cached_fast_path_without_a_reaper_stop_still_skips_docker(monkeypatch, reap):
+    """Negative control for the test above: same lock, no interleaved stop -> cache honoured."""
+    import contextlib
+    ma_ondemand.note_seen_up()
+    reap["http_up"] = True
+    events = []
+
+    @contextlib.asynccontextmanager
+    async def _uncontended():
+        events.append("acquired")
+        yield
+    monkeypatch.setattr(ma_ondemand, "_file_lock", _uncontended)
+    assert await ma_ondemand.ensure_running(timeout_s=0.2) is True
+    assert reap["docker"] == [] and events == ["acquired"], "the fast path must still hold the lock"
+
+
+_MUTATING_ROUTES = {
+    # endpoint name -> payload (ids are the live Bedroom Sonos / a fixture uri)
+    "music_control": {"action": "pause"},
+    "music_seek": {"position_seconds": 10},
+    "music_transfer": {"target_player_id": "RINCON_347E5C9BEC8F01400"},
+    "music_group": {"target_player_id": "RINCON_347E5C9BEC8F01400", "add": ["up286412cf6eb7"]},
+    "music_ungroup": {"player_id": "RINCON_347E5C9BEC8F01400"},
+    "music_play": {"query": "jazz"},
+    "music_play_media": {"uri": "library://track/1"},
+    "music_queue_move": {"queue_id": "q", "item_id": "i", "to_index": 1},
+    "music_queue_remove": {"queue_id": "q", "item_id": "i"},
+    "music_queue_clear": {"queue_id": "q"},
+    "music_queue_play_index": {"queue_id": "q", "index": 0},
+    "music_queue_save": {"queue_id": "q", "name": "n"},
+    "music_playlist_add": {"playlist_uri": "library://playlist/1", "track_uri": "library://track/1"},
+    "music_favorite": {"uri": "library://track/1"},
+    "music_unfavorite": {"uri": "library://track/1"},
+    "music_dont_stop": {"enabled": True},
+}
+# POST routes that mutate ZOE state only (never MA) -- a reaped MA stays reaped.
+_LOCAL_ONLY_ROUTES = {"set_preferred_player"}
+
+
+@pytest.fixture
+def wake_recorder(monkeypatch, reap):
+    """Record service-level wakes; every MA transport is faked as 'down'."""
+    woke = []
+
+    async def _ensure():
+        woke.append(1)
+        return True
+
+    async def _none(*a, **k):
+        return None
+
+    async def _false(*a, **k):
+        return False
+
+    async def _players():
+        return []
+    monkeypatch.setattr(music_service, "ensure_running", _ensure)
+    monkeypatch.setattr(music_service, "_ma", _none)
+    monkeypatch.setattr(music_service, "_ma_ok", _false)
+    monkeypatch.setattr(music_service, "_ma_response", _none)
+    monkeypatch.setattr(music_service, "get_players", _players)
+    return woke
+
+
+@pytest.mark.parametrize("endpoint", sorted(_MUTATING_ROUTES))
+async def test_every_mutating_router_entry_point_wakes_ma(endpoint, wake_recorder):
+    """Codex P2: /playlists/add and /unfavorite (and friends) reached MA with a
+    command outside the wake set, or read first and bailed on a stopped server."""
+    from routers import music as music_router
+    await getattr(music_router, endpoint)(_MUTATING_ROUTES[endpoint])
+    assert wake_recorder, f"{endpoint} must wake a reaped MA"
+
+
+def test_mutating_route_table_is_complete():
+    """Every POST route in routers/music.py is either covered above or explicitly
+    local-only, so the next mutating endpoint cannot ship without a wake decision."""
+    from routers import music as music_router
+    posts = {r.endpoint.__name__ for r in music_router.router.routes
+             if "POST" in getattr(r, "methods", set())}
+    assert posts == set(_MUTATING_ROUTES) | _LOCAL_ONLY_ROUTES
+
+
+async def test_background_reads_never_wake(wake_recorder):
+    """The panel now-playing poll (5 s), the player list, a local preference
+    write, and the 300 s journal observer must leave a reaped MA reaped."""
+    from routers import music as music_router
+    import music_history
+    await music_router.music_now_playing()
+    await music_router.music_players()
+    await music_router.set_preferred_player({"player_id": "RINCON_347E5C9BEC8F01400"})
+    await music_history.observe_once()
+    assert wake_recorder == []
+
+
 class _FakeClient:
     """Stand-in for httpx.AsyncClient: records posts, answers 200 {}."""
     posted: list = []

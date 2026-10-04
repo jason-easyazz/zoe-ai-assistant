@@ -25,14 +25,18 @@ Contract:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fcntl
 import logging
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
 
 import httpx
+
+import async_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -111,21 +115,22 @@ def _recently_up() -> bool:
 
 
 async def _docker_cmd(*args: str, timeout: float = 20.0) -> tuple[int, str]:
-    """Run `docker <args>` off the event loop; (returncode, combined output). Never raises."""
+    """Run `docker <args>` OFF the event-loop thread; (returncode, combined output).
+
+    Never raises. Goes through async_subprocess.run_to_completion — the whole
+    fork+exec+communicate+kill happens in a worker thread — because a fork on
+    FastAPI's loop thread can deadlock pre-exec and freeze every endpoint
+    (services/zoe-data/AGENTS.md "Background loops must not fork on the event
+    loop thread"; the 2026-06-29 outage). `timeout` bounds the CHILD; the pool
+    wait is bounded separately (queue_timeout, short — a wake is latency-bound)."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    except Exception as exc:  # noqa: BLE001 — docker missing from PATH etc.
-        return 127, str(exc)
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except Exception:  # noqa: BLE001
-            pass
+        res = await async_subprocess.run_to_completion(
+            ["docker", *args], timeout=timeout, merge_stderr=True, queue_timeout=10.0)
+    except subprocess.TimeoutExpired:  # incl. QueueTimeout (never started)
         return 124, "timeout"
-    return proc.returncode or 0, (out or b"").decode(errors="replace").strip()
+    except Exception as exc:  # noqa: BLE001 — docker missing, shutting down, ...
+        return 127, str(exc)
+    return res.returncode or 0, (res.stdout or b"").decode(errors="replace").strip()
 
 
 async def _container_running() -> bool:
@@ -156,56 +161,69 @@ def _flock(fh, flags: int) -> None:
     fcntl.flock(fh, flags)
 
 
+@contextlib.asynccontextmanager
+async def _file_lock():
+    """The lock the reaper holds across stamp+`docker stop`. Blocking acquire,
+    off the loop thread. Best-effort: if the file cannot be opened the wake
+    proceeds unlocked (the inflight stamp still covers it)."""
+    fh = None
+    try:
+        state_dir().mkdir(parents=True, exist_ok=True)
+        fh = open(state_dir() / "lock", "a+")
+        await asyncio.to_thread(_flock, fh, fcntl.LOCK_EX)
+    except OSError as exc:
+        logger.debug("MA_REAP lock unavailable: %s", exc)
+    try:
+        yield
+    finally:
+        if fh is not None:
+            with contextlib.suppress(OSError):
+                _flock(fh, fcntl.LOCK_UN)
+                fh.close()
+
+
 async def ensure_running(timeout_s: Optional[float] = None) -> bool:
     """Start the MA container if it is stopped and wait until HTTP is up.
 
     Returns True when MA is (now) serving, False when it could not be started
-    within the bound. Flag off → True, nothing touched."""
+    within the bound. Flag off → True, nothing touched.
+
+    EVERY decision — the cached "seen up", the /info probe and the start — runs
+    under the shared file lock. The reaper takes that same lock for its
+    stamp+stop, so a wake that arrives mid-stop waits, then re-reads the
+    `stopped` stamp and probes instead of returning a cached answer that
+    described the container the reaper just stopped."""
     global _lock
     if not enabled():
         return True
     touch("activity")
     touch("inflight")
-    if _recently_up():
-        return True
-    if await _http_up():
-        note_seen_up()
-        return True
     t0 = time.monotonic()
+    started = False
     if _lock is None:
         _lock = asyncio.Lock()
-    async with _lock:
-        lock_fh = None
-        try:
-            state_dir().mkdir(parents=True, exist_ok=True)
-            lock_fh = open(state_dir() / "lock", "a+")
-            await asyncio.to_thread(_flock, lock_fh, fcntl.LOCK_EX)
-        except OSError as exc:  # no shared lock → still start; the inflight stamp covers us
-            logger.debug("MA_REAP lock unavailable: %s", exc)
-        try:
-            if not await _container_running():
-                logger.info("MA_REAP start container=%s", container_name())
-                rc, out = await _docker_cmd("start", container_name())
-                if rc != 0:
-                    logger.warning("MA_REAP start failed rc=%s out=%s", rc, out[:200])
-                    return False
-            ok = await _wait_http(_start_timeout_s() if timeout_s is None else timeout_s)
-        finally:
-            if lock_fh is not None:
-                try:
-                    _flock(lock_fh, fcntl.LOCK_UN)
-                    lock_fh.close()
-                except OSError:
-                    pass
+    async with _lock, _file_lock():
+        if _recently_up():
+            return True
+        if await _http_up():
+            note_seen_up()
+            return True
+        if not await _container_running():
+            logger.info("MA_REAP start container=%s", container_name())
+            rc, out = await _docker_cmd("start", container_name())
+            if rc != 0:
+                logger.warning("MA_REAP start failed rc=%s out=%s", rc, out[:200])
+                return False
+            started = True
+        ok = await _wait_http(_start_timeout_s() if timeout_s is None else timeout_s)
+        if ok:
+            note_seen_up()
+            with contextlib.suppress(OSError):
+                (state_dir() / "stopped").unlink()
     latency_ms = int((time.monotonic() - t0) * 1000)
     touch("inflight")
     if ok:
-        note_seen_up()
-        try:
-            (state_dir() / "stopped").unlink()
-        except OSError:
-            pass
-        logger.info("MA_REAP start latency_ms=%d", latency_ms)
+        logger.info("MA_REAP start latency_ms=%d started=%s", latency_ms, started)
     else:
         logger.warning("MA_REAP start timeout latency_ms=%d (MA not serving yet)", latency_ms)
     return ok

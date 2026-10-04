@@ -493,6 +493,7 @@ async def seek(position_seconds: Any, player_id: str = "") -> bool:
     Best-effort — a bad position or a dead MA just no-ops; never raises. MA's
     `player_queues/seek` takes {queue_id, position}; queue_id == player_id for a
     solo player (see `now_playing`)."""
+    await ensure_running()
     try:
         pos = max(0, int(position_seconds))
     except (TypeError, ValueError):
@@ -516,6 +517,7 @@ async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
     MA's `player_queues/transfer`. `queue_id == player_id` for a solo player
     (see `now_playing`). Best-effort — MA carries over play state via auto_play;
     never raises. Returns True when a transfer command was dispatched."""
+    await ensure_running()
     if not target_player_id:
         return False
     players = await get_players()
@@ -727,6 +729,7 @@ async def group_players(target_player_id: str,
     `routers/AGENTS.md`). When the list is unavailable we forward the command
     and let MA arbitrate.
     """
+    await ensure_running()
     target = str(target_player_id or "")
     if not target:
         return {"ok": False, "reason": "missing target_player_id"}
@@ -780,6 +783,7 @@ async def ungroup_player(player_id: str) -> dict[str, Any]:
     (controller.py:1211-1240); re-deriving it here would be a second, drifting
     copy of provider logic Zoe does not own.
     """
+    await ensure_running()
     pid = str(player_id or "")
     if not pid:
         return {"ok": False, "reason": "missing player_id"}
@@ -858,6 +862,7 @@ async def queue_move(queue_id: str, item_id: str, to_index: int) -> bool:
     """Reorder: move a queue item to an absolute index. MA's move_item takes a
     signed pos_shift, so compute it from the live position (robust vs a stale
     client index)."""
+    await ensure_running()
     items = await _queue_items(queue_id)
     if not items:
         return False
@@ -873,21 +878,25 @@ async def queue_move(queue_id: str, item_id: str, to_index: int) -> bool:
 
 async def queue_remove(queue_id: str, item_id: str) -> bool:
     """Remove one item from the queue (by queue_item_id)."""
+    await ensure_running()
     return await _ma_ok("player_queues/delete_item", queue_id=queue_id, item_id_or_index=item_id)
 
 
 async def queue_clear(queue_id: str) -> bool:
     """Clear the whole queue."""
+    await ensure_running()
     return await _ma_ok("player_queues/clear", queue_id=queue_id)
 
 
 async def queue_play_index(queue_id: str, index: int) -> bool:
     """Jump to (and play) a specific queue position."""
+    await ensure_running()
     return await _ma_ok("player_queues/play_index", queue_id=queue_id, index=int(index))
 
 
 async def queue_save_playlist(queue_id: str, name: str) -> bool:
     """Save the current queue as a new playlist."""
+    await ensure_running()
     name = (name or "").strip()
     if not name:
         return False
@@ -930,6 +939,7 @@ async def playlist_tracks(uri: str, limit: int = 100) -> list[dict[str, Any]]:
 
 async def playlist_add(playlist_uri: str, track_uri: str) -> bool:
     """Add a track to an existing playlist."""
+    await ensure_running()
     if not (playlist_uri and track_uri):
         return False
     return await _ma_ok("music/playlists/add_playlist_tracks", db_playlist_id=playlist_uri, uris=[track_uri])
@@ -937,6 +947,7 @@ async def playlist_add(playlist_uri: str, track_uri: str) -> bool:
 
 async def favorite_add(uri: str) -> bool:
     """Favorite (thumbs-up / add to library) a media item by uri."""
+    await ensure_running()
     if not uri:
         return False
     return await _ma_ok("music/favorites/add_item", item=uri)
@@ -954,6 +965,7 @@ async def favorite_now_playing(player_id: str = "") -> dict[str, Any]:
     snapshot, favourite its uri. `favorite_add` no-ops falsy uris, so radio /
     provider-less streams (no uri) fall out as "nothing playing" rather than a
     silent success."""
+    await ensure_running()
     np = await now_playing(player_id)
     if not np or np.get("state") not in ("playing", "paused") or not np.get("uri"):
         return {"ok": False, "reason": "nothing playing"}
@@ -980,6 +992,7 @@ async def favorite_remove(uri: str) -> bool:
     An item that was never favourited has no library row, so there is nothing
     to remove — that is success, not failure (the heart is already off).
     """
+    await ensure_running()
     if not uri:
         return False
     item = await _ma("music/item_by_uri", uri=uri)
@@ -1206,6 +1219,7 @@ async def set_dont_stop_the_music(enabled: bool, player_id: str = "") -> bool:
     runs out, MA auto-continues with similar tracks (needs a SIMILAR_TRACKS
     provider, e.g. ytmusic — MA rejects the enable otherwise → False).
     Best-effort — never raises."""
+    await ensure_running()
     players = await get_players()
     player = _pick_player(players, player_id)
     if player is None:
