@@ -63,6 +63,15 @@ copy (installed units carry host edits and their own untracked drop-ins). The
 | `kokoro-tts.service.d/70-start-timeout.conf` | `TimeoutStartSec=300` — template consistency only, **no runtime effect** (Type=simple, no Exec{Pre,Post}, so the timeout never runs during the sidecar's brain wait). Optional; `daemon-reload` only. | `docs/knowledge/incident-runbook.md` §24(b) |
 | `flue-zoe-brain-2x.service.d/50-exit-143.conf`, `flue-zoe-telegram.service.d/50-exit-143.conf` | `SuccessExitStatus=143`: the Node sidecar's SIGTERM exit is a clean stop, not `Failed with result 'exit-code'`. `Restart=always` unchanged. `daemon-reload` only. | `docs/knowledge/incident-runbook.md` §24(c) |
 
+**Host-only drop-ins that the templates now absorb (2026-10-04).** The live box carries two untracked drop-ins
+from the replay-gated brain window of 2026-10-04: `llama-server.service.d/80-swa-full.conf` (a full `ExecStart=`
+override = the template's ExecStart with `--swa-full --cache-ram 1024`) and `functiongemma-router.service.d/80-mlock.conf`
+(`--mlock` + `LimitMEMLOCK=infinity` + `MemoryMax=1280M`, all already in the router template). Both become
+**redundant** once the re-merged templates are copied over the installed units: `unit_drift_check.py` reads the
+effective (template + drop-ins) values, so it reports no drift for either unit before AND after the re-apply. After
+re-applying, the drop-ins may be deleted (`daemon-reload`; a restart is only needed if the effective values would
+change, and they do not). Do not add a second `ExecStart=` drop-in for the brain: the template is the source of truth.
+
 **Did the installed unit ever get the template change?** Nothing applies a merged template.
 `python3 scripts/maintenance/unit_drift_check.py` compares installed units + drop-ins with these
 templates, read-only (values print as hashes; `--show-values`, `--strict`). Run it after any merge

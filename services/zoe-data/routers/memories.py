@@ -638,9 +638,30 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
             return packet
         # Non-destructive read: surfacing marks the offer as seen; aging happens
         # once per real user turn (age_person_offers_on_user_turn), never here.
-        pend = await surface_pending_contacts_for_prompt(user_id, limit=_PENDING_CONTACTS_MAX)
+        import contacts_conversation as _cc
+        batch = _cc.offer_batch_enabled()
+        pend = await surface_pending_contacts_for_prompt(
+            user_id, limit=_cc.OFFER_BATCH_MAX if batch else _PENDING_CONTACTS_MAX)
     except Exception:
         logger.exception("memories: pending-contact offer fold failed (user=%s)", user_id)
+        return packet
+    if batch:
+        # ZOE_CONTACT_OFFER_BATCH: ONE enumerated question for the whole set
+        # (a single yes then accepts all of it - intent_router batch matcher).
+        q = _cc.offer_question(pend, _safe_prompt_inline)
+        if not q:
+            return packet
+        _cc.record_asked(user_id, q, pend)  # the set a following yes/no may bind to
+        section = (
+            "## People mentioned recently (not contacts yet)\n"
+            "IMPORTANT: In this reply, after answering the user, ask the question "
+            "below word-for-word, as ONE question. If the user answers yes, the "
+            "contacts are saved for them automatically (you may also use the "
+            "people_create tool); if they say no, drop it and don't ask again.\n"
+            f'- Ask the user: "{q}" [pending-contact]'
+        )
+        existing = packet.get("packet") or ""
+        packet["packet"] = f"{existing}\n\n{section}" if existing else section
         return packet
     bullets = []
     for p in pend:
