@@ -52,11 +52,16 @@ never a trigger for speech.
   dial"; it is the first continuous camera duty the panel would ever run — straight into the
   trap the enrolment flow documents: the PanaCast and the Jabra speaker share the Pi's USB power
   budget and **every camera drop on 2026-07-19 followed a TTS playback** (`zoe_enroll_flow.py:27-31`,
-  `:121-136`, `:143-146`). The Pi 5 gives USB peripherals **600 mA** on a 3 A supply and **1.6 A**
-  only with a 5 A PD supply and `usb_max_current_enable` ([Raspberry Pi docs](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html));
+  `:121-136`, `:143-146`). The Pi 5 is specified as *"5 V at 5 A (25 W); or 5 V at 3 A (15 W) with a
+  600 mA peripheral limit"* — the firmware raises the peripheral limit to **1.6 A only when it
+  negotiates a 5 V/5 A USB-PD supply**; `usb_max_current_enable=1` merely removes the limiter and
+  the documentation warns it can crash the system if the supply cannot deliver
+  ([Raspberry Pi docs](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html),
+  [RPi USB-PD white paper](https://pip-assets.raspberrypi.com/categories/685-app-notes-guides-whitepapers/documents/RP-009856-WP-1-USB%20Power%20delivery%20on%20Raspberry%20Pi%205.pdf));
   the PanaCast needs a port "with an electrical current higher than 500 mA"
   ([Jabra](https://www.jabra.com/supportpages/jabra-panacast-20/8300-119/faq/Do-I-need-a-separate-power-adapter-for-the-Jabra-PanaCast-20)).
-  **Power is the prerequisite, not the detector.**
+  **A verified 5 A supply (or a powered hub) is the prerequisite, not the detector — and never
+  the config flag on its own.**
 - **The detector itself is cheap.** Frigate's pattern — frame-difference first, run a model only
   on motion, 5 fps is already "correct for the vast majority of cameras"
   ([Frigate](https://docs.frigate.video/configuration/motion_detection),
@@ -319,11 +324,21 @@ need; OpenVINO is x86-first; a Coral or Hailo HAT is "a new sensor" by another n
 Python package pulls its own runtime (~tens of MB) alongside onnxruntime — acceptable on a Pi
 with 5.65 GB free, but only if YuNet proves insufficient.
 
-**The power trap, with numbers.** The Pi 5 gives USB peripherals **600 mA** on a 3 A supply and
-**1.6 A** with a 5 V 5 A PD supply (or `usb_max_current_enable=1` in `config.txt`)
+**The power trap, with numbers.** The Pi 5's power specification is *"USB-C power; 5 V at 5 A
+(25 W); or 5 V at 3 A (15 W) with a 600 mA peripheral limit"*
 ([Raspberry Pi docs](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html)).
-Jabra's own FAQ says the PanaCast works only on a USB 2.0 port *"that has an electrical current
-higher than 500mA, or a USB 3.0 port"*
+The 1.6 A peripheral budget exists only when the firmware negotiates a USB-PD supply that
+advertises 5 A; on anything less the OS warns at first boot that peripherals are restricted to
+600 mA (same page; the mechanism is detailed in Raspberry Pi's
+[USB power delivery white paper](https://pip-assets.raspberrypi.com/categories/685-app-notes-guides-whitepapers/documents/RP-009856-WP-1-USB%20Power%20delivery%20on%20Raspberry%20Pi%205.pdf)).
+`usb_max_current_enable=1` in `config.txt` **does not create current**: it tells the firmware to
+lift the 600 mA limiter regardless of what the supply negotiated, and the documentation's own
+caveat is that running out of current overall can crash the whole system [wording via search
+excerpt of the docs; the exact sentence is on the same page under USB boot/power]. In other
+words the flag turns a clean USB disconnect into undervoltage, SD/NVMe corruption or a reboot
+— **it is never an alternative to a 5 A supply**; it is at most a thing to set *after* a 5 A
+supply or a powered hub is verified in place. Jabra's own FAQ says the PanaCast works only on a
+USB 2.0 port *"that has an electrical current higher than 500mA, or a USB 3.0 port"*
 ([Jabra](https://www.jabra.com/supportpages/jabra-panacast-20/8300-119/faq/Do-I-need-a-separate-power-adapter-for-the-Jabra-PanaCast-20)).
 A USB speakerphone playing audio draws its own peak on the same budget. On a 600 mA budget the
 camera *streaming* while the speaker *plays* is exactly the brown-out the enrolment flow logged.
@@ -332,8 +347,10 @@ Two consequences for any 1 fps design:
 1. **Opening `VideoCapture` starts the UVC stream and its power draw whether or not frames are
    read.** "1 fps" lowers CPU, not current. The choice is between *streaming all the time* (the
    brown-out risk during every reply) and *opening/closing around TTS* (the quick-reopen
-   disconnect). Neither is safe on 600 mA; both should be safe on 1.6 A — and that is a
-   measurement (§5 E1), not an assumption.
+   disconnect). Neither is safe on 600 mA; both should be safe on a verified 1.6 A budget — and
+   that is a measurement (§5 E1, which starts by **reading the supply rating and stopping if it
+   is 3 A**), not an assumption. A powered USB hub moves the camera (or the speaker) off the
+   Pi's budget entirely and is the option that needs no firmware change.
 2. The schedule must be: **stop the stream before `_tts_process` starts, re-open no sooner than
    N seconds after it ends and never within M seconds of the last open** — the ambient-capture
    guards (`:1452-1458`) plus a hysteresis the enrolment flow learned the hard way.
@@ -362,6 +379,44 @@ hash; a listener without it sees a different stranger every quarter hour.
   permanent … a one-time capture per device"*; some devices refuse) or to an ESPresense node in
   enrol mode. That ESP32 is a **~A$10 part used once** — which is why Decision 2 below asks the
   phone question first.
+
+**Holding the IRK is not enough — something has to resolve each new address.** A BlueZ/bleak
+scanner reports whatever address the phone is advertising *right now*; a bleak 0.22 passive scan
+with an `or_pattern` matches raw advertisement payload bytes through BlueZ's
+`AdvertisementMonitor1` and knows nothing about IRKs, so a filter on "the phone's address" stops
+matching at the next rotation (~15 min). There are exactly two correct ways to do it:
+
+- **Application-level resolution (the ESPresense / Home Assistant way).** For every
+  advertisement whose address is a resolvable private address (top two bits `01`), split it into
+  `prand` (upper 24 bits) and `hash` (lower 24 bits), compute `ah(IRK, prand)` — AES-128 of the
+  zero-padded `prand` under the IRK, keep the low 24 bits — and compare with `hash`
+  (Bluetooth Core Specification, Vol 3 Part C §10.8.2.3 / Vol 6 Part B §1.3.2.3,
+  [Bluetooth SIG](https://www.bluetooth.com/specifications/specs/core-specification-6-0/);
+  the walk-through in [Argenox](https://argenox.com/library/bluetooth-low-energy/demystifying-ble-addresses)).
+  Home Assistant's `private_ble_device` does exactly this through
+  [`bluetooth-data-tools`](https://github.com/Bluetooth-Devices/bluetooth-data-tools)
+  (`get_cipher_for_irk(irk)` once, then `resolve_private_address(cipher, address)` per
+  advertisement) — a pure-Python package the Pi daemon can import. Cost: **one AES-128 block
+  per RPA advertisement** (microseconds; a phone advertises a few times per second at most),
+  with a cache of resolved addresses so each rotated address is checked once. The scanner
+  therefore filters on *any* RPA, resolves, and keeps RSSI only for matches; non-matching
+  addresses are dropped on the spot and never logged.
+- **Controller-side resolution (the BlueZ way).** `bluetoothd` loads every bonded device's
+  remote IRK from `/var/lib/bluetooth/<adapter>/<device>/info` (`[IdentityResolvingKey]
+  Key=…`, [BlueZ settings storage](https://bluez.readthedocs.io/en/latest/settings-storage/))
+  into the kernel with the MGMT *Load Identity Resolving Keys* command (0x0030,
+  [BlueZ MGMT](https://github.com/bluez/bluez/wiki/MGMT)) at startup, after which the controller
+  itself reports the phone's identity address. On the Pi 5 that means either a real bond (the
+  ESPresense-style pairing, which iOS 17+ may not complete) or a hand-written `info` file with
+  the IRK and a chosen identity address — persistent across reboots because it lives under
+  `/var/lib/bluetooth`, but undocumented as a workflow and dependent on the UART-attached
+  radio's LE-privacy support [unverified on the Pi 5; the application-level path has no such
+  dependency]. This record chooses application-level resolution and names the controller path
+  only as a later optimisation.
+
+Privacy note for both: the IRK is a secret that **identifies one person's phone for life**
+(irk-capture: *"generally permanent"*). It lives in the Pi's env file only, `0600`, never in
+Postgres, never in a log line, never in a PR; the Jetson receives `owner_near` as a number.
 
 **The companion app's BLE transmitter** is **Android-only**, **disabled by default**, and *"can
 impact battery life, particularly if used with Transmit Power set to High"*
@@ -489,7 +544,7 @@ the direction the sleep gate fails. Bermuda / ESPHome proxies only if a second r
 | `PRESENCE_TICK_POST` | Pi daemon | POST the score to `/api/panels/{id}/presence` (device token) |
 | `PRESENCE_TICK_FPS` / `PRESENCE_DETECT_EVERY_S` | Pi daemon | 1.0 / 10 — detector cadence when there is no motion |
 | `PRESENCE_CAMERA_QUIET_AFTER_TTS_S` / `PRESENCE_CAMERA_MIN_REOPEN_S` | Pi daemon | 5 / 30 — the hysteresis from §2.1 |
-| `PRESENCE_BLE_ENABLED`, `PRESENCE_BLE_IRK` **or** `PRESENCE_BT_CLASSIC_MAC` | Pi env only | the scanner; one of the two identifiers, never both logged |
+| `PRESENCE_BLE_ENABLED`, `PRESENCE_BLE_IRK` **or** `PRESENCE_BT_CLASSIC_MAC` | Pi env only | the scanner; with an IRK it resolves every resolvable private address in software (`bluetooth-data-tools`, §2.2) and keeps RSSI for matches only; with a classic MAC it pages every 6 s; neither identifier is ever logged |
 | `ZOE_PRESENCE_SOURCES` | zoe-data | comma list of producers the fusion may read: `session,touch,voice,music,room,camera,ble,ha` (the identity plan's name, `:113`); empty = today's behaviour |
 | `ZOE_SLEEP_GATE_PRESENCE` | zoe-data | the third vote in `resolve_sleep_gate` from `anyone_here` (and from a `binary_sensor` occupancy entity if one ever exists) |
 | `ZOE_PRESENCE_ORB_GATE` | zoe-data | the P1 orb "has something" state requires `owner_near ≥ 0.7` |
@@ -544,8 +599,10 @@ vote is `anyone_here ≥ 0.7` **and** the score is fresher than 60 s, else the v
 
 - Pi: one `presence_tick.py` beside `zoe_face_id.py` (reuses `detect_faces`, `pick_best_face`,
   `MIN_FACE_PX`; one long-lived `VideoCapture` under the existing `_camera_lock`; the three busy
-  guards from ambient capture; the re-open hysteresis), one `presence_ble.py` (bleak passive
-  scan with an `or_pattern` on the resolved address, or a `hcitool`-style page by MAC every 6 s),
+  guards from ambient capture; the re-open hysteresis), one `presence_ble.py` (a bleak passive
+  scan over **all** advertisements, with `bluetooth-data-tools` `resolve_private_address` applied
+  to every resolvable private address and a resolved-address cache so the phone keeps matching
+  across its ~15-minute rotations — §2.2; or a `hcitool`-style page by the classic MAC every 6 s),
   both as daemon threads behind their flags, both writing the JSONL and the `/health` fields.
 - Jetson: `services/zoe-data/presence_fusion.py` — **pure functions** (signals in, two scores
   out, injectable clock; table-driven `ci_safe` tests: each signal alone, decay, the two fail-safe
@@ -570,7 +627,7 @@ the 0028 migration carries.
 | | greyscale diff at 320×240 | 0 | ~2–5 ms/s [estimate] | Frigate's own method |
 | | YuNet at 160×120 on motion | +~5 MB model, +~30 MB session [unverified] | 6.23 ms per motion frame on a Pi 4B ([opencv_zoo](https://github.com/opencv/opencv_zoo/blob/main/benchmark/README.md)) | measured |
 | | SCRFD det_500m at 320 (alternative; already fetched) | ~15 MB models, +~50–80 MB session [unverified] | ~30–60 ms per motion frame [estimate] | 11.4 ms at 320×240 on a desktop core |
-| | bleak passive scanner | ~25–40 MB (Python + dbus) [unverified] | ~0 | idle D-Bus listener |
+| | bleak passive scanner + RPA resolution | ~25–40 MB (Python + dbus + `cryptography`) [unverified] | one AES-128 block per RPA advertisement, cached per rotated address — µs | idle D-Bus listener; §2.2 |
 | | classic paging by MAC | 0 (subprocess) | ~0; **radio** shared with Wi-Fi | room-assistant |
 | | **USB current** | — | the real budget: 600 mA → 1.6 A | §2.1 |
 | **Jetson** (MemAvailable 0.42–0.56 GB, [memory-pressure profile](../knowledge/memory-pressure-profile-2026-10-03.md)) | fusion + last-state dict | ~0 (one dict, pure math) | ~0 | no model, no table |
@@ -590,7 +647,7 @@ must go red).
 
 | # | Experiment | Measures | Target | Negative control |
 |---|---|---|---|---|
-| **E1 — power** (first, alone) | with the stream open: 50 TTS replies + 20 announcements over two days, on (a) the current supply, (b) a 5 A PD supply / `usb_max_current_enable=1` or a powered hub | `dmesg` USB disconnect count; `vcgencmd pmic_read_adc` rails [unverified on this image]; daemon camera-open failures | **0 disconnects in 48 h** on (b) | (a) must reproduce ≥1 disconnect, or the trap is not what we think and the whole premise is cheaper than feared |
+| **E1 — power** (first, alone; **never a brown-out on the live panel**) | Step 0: read the supply — `vcgencmd get_config usb_max_current_enable`, the first-boot "restricted to 600 mA" warning in `journalctl`, the PSU label. **If it is 3 A, stop: E1 is "buy the 5 A PD supply or a powered hub" and nothing else runs.** Step 1 (only with a verified 5 V/5 A PD supply negotiated, or the camera/speaker on a powered hub): with the stream open, 50 TTS replies + 20 announcements over two days. `usb_max_current_enable=1` is set only *after* the 5 A supply is in place and only if the firmware did not already raise the limit — never on a 3 A supply (the docs' own crash warning, §2.1) | `dmesg` USB disconnect count; `vcgencmd pmic_read_adc` rails and `vcgencmd get_throttled` undervoltage bits [unverified on this image]; daemon camera-open failures | **0 disconnects, 0 undervoltage flags in 48 h** | The "it reproduces" control is **not** run on the live panel. It comes from the 2026-07-19 `dmesg`/journal history already on the Pi (read-only), or from a bench Pi 5 with a 3 A supply if one is available. If neither shows a disconnect, the trap is not what we think and the premise is cheaper than feared — recorded, not assumed |
 | **E2 — the tick as a presence instrument** | one week shadow: `motion_score`, `face_count` at 1 fps | lead time: how many seconds before each touch/voice event the score was already ≥ 0.7; false-present minutes while the phone geofence says away and no touch/voice for ≥ 30 min | lead ≥ 20 s on ≥ 80 % of touches; false-present < 2 % of away minutes | lens covered for one day ⇒ motion and faces must read 0 (a stale frame buffer would not) |
 | **E3 — faces vs persons** | for every motion event, did a face appear within 10 s? | share of "someone there" episodes with no face | if > 30 % lack a face, add the person detector in phase 2 | — |
 | **E4 — BLE / paging** | RSSI every 6 s; iPhone idle vs screen-on vs settings page open | detection rate while the owner is at the panel (touch as ground truth); RSSI at 1 m / 3 m / next room | present ≥ 90 % of panel-touch minutes; next-room RSSI distinguishable by ≥ 10 dB | phone BT off for an hour ⇒ absent within one half-life; a second household phone must **not** match (IRK) |
@@ -603,9 +660,10 @@ drop-ins untouched.
 
 ## 6. Phased build — flag-dark, each phase its own PR
 
-0. **Prerequisite (operator, no code):** E1. Buy nothing yet; if the current supply is 3 A, the
-   5 A PD supply (~A$20) or a powered hub is the cheapest "sensor" in this record. Decide the
-   phone question (Decision 2). Write the privacy note (§2.5) and the policy paragraph (§3.6).
+0. **Prerequisite (operator, no code):** E1 step 0 — read the supply rating. If it is 3 A, the
+   5 A PD supply (~A$20) or a powered hub is the cheapest "sensor" in this record and is bought
+   *before* anything else in E1 runs; `usb_max_current_enable` is not a substitute (§2.1). Decide
+   the phone question (Decision 2). Write the privacy note (§2.5) and the policy paragraph (§3.6).
 1. **PR 1 — shadow tick + fusion math.** `presence_tick.py` (motion diff, YuNet-or-SCRFD on
    motion, JSONL, `/health` fields, the hysteresis), `presence_fusion.py` pure + tests, the
    eye-dot CSS state on the orb (hidden until the daemon reports `camera_open`), a `camera off`
@@ -662,12 +720,16 @@ or MAC anywhere but the Pi env; Bermuda before a second room; ultrasound.
    `unknown` person entity, gives "home / away" and "on home Wi-Fi" to the orb and to identity.
    It is a location-sharing decision, so it is yours.
 4. **Is the panel's supply 5 A, and may we add a powered hub?** Every camera plan in this record
-   is conditional on E1 passing. If the answer is "3 A and no hub", the camera half of Q19 is a
-   no-go until that changes, and Decision 1 becomes the whole plan.
+   is conditional on E1 passing, and E1 does not start until a 5 V/5 A PD supply or a powered hub
+   is verified in place — the `usb_max_current_enable` flag on a 3 A supply is a crash, not a
+   workaround. If the answer is "3 A and no hub", the camera half of Q19 is a no-go until that
+   changes, and Decision 1 becomes the whole plan.
 
 ## 9. Next steps if GO
 
-1. Operator: E1 (power) on the live panel — two days, `dmesg` counts, nothing else changes.
+1. Operator: E1 step 0 (read the supply rating; stop and buy if 3 A), then E1 step 1 on the
+   live panel only with a verified 5 A supply or powered hub — two days, `dmesg` and
+   undervoltage counts, nothing else changes.
 2. Operator: Decisions 2–3; the key/MAC into the Pi env (never pasted into chat or a PR).
 3. PR 1 (shadow tick + fusion math + eye dot + camera-off), deployed from a worktree to the Pi
    per the panel deploy recipe; shadow week; E2/E3 aggregates into a closeout record under
@@ -707,7 +769,8 @@ or MAC anywhere but the Pi env; Bermuda before a second room; ultrasound.
 - Ultralytics Raspberry Pi guide (YOLO26n Pi 5: NCNN 67 ms, ONNX 126 ms; YOLO11n 6.79 FPS) — https://docs.ultralytics.com/guides/raspberry-pi/
 - insightface model zoo (SCRFD-500MF 28.3 ms single-thread @640×480; buffalo_sc) — https://github.com/deepinsight/insightface/blob/master/model_zoo/README.md
 - MediaPipe EfficientDet-Lite0 on Pi 5 (~35 ms, blog) — https://jeffzzq.medium.com/object-detection-on-the-raspberry-pi-5-463ba0f11d1e
-- Raspberry Pi documentation (Pi 5 USB 600 mA / 1.6 A, `usb_max_current_enable`, Bluetooth 5/BLE) — https://www.raspberrypi.com/documentation/computers/raspberry-pi.html
+- Raspberry Pi documentation (Pi 5 "5 V at 3 A with a 600 mA peripheral limit", 1.6 A with a 5 A PD supply, `usb_max_current_enable` caveat, Bluetooth 5/BLE) — https://www.raspberrypi.com/documentation/computers/raspberry-pi.html
+- Raspberry Pi white paper, USB power delivery on Raspberry Pi 5 — https://pip-assets.raspberrypi.com/categories/685-app-notes-guides-whitepapers/documents/RP-009856-WP-1-USB%20Power%20delivery%20on%20Raspberry%20Pi%205.pdf
 - Jabra PanaCast 20 power FAQ (>500 mA or USB 3.0) — https://www.jabra.com/supportpages/jabra-panacast-20/8300-119/faq/Do-I-need-a-separate-power-adapter-for-the-Jabra-PanaCast-20
 
 **Bluetooth / BLE**
@@ -725,7 +788,11 @@ or MAC anywhere but the Pi env; Bermuda before a second room; ultrasound.
 - room-assistant issue #270 (iPhone BLE only while scanning) — https://github.com/mKeRix/room-assistant/issues/270
 - Home Assistant Bluetooth integration (adapters, Docker D-Bus, BlueZ versions, passive scan) — https://www.home-assistant.io/integrations/bluetooth/
 - Home Assistant bluetooth_tracker (removed) — https://www.home-assistant.io/integrations/bluetooth_tracker/
-- bleak passive scanning discussion — https://github.com/hbldh/bleak/discussions/1612
+- bleak passive scanning discussion (`or_pattern` matches payload bytes, not identities) — https://github.com/hbldh/bleak/discussions/1612
+- Bluetooth Core Specification (resolvable private address generation/resolution, `ah` function) — https://www.bluetooth.com/specifications/specs/core-specification-6-0/
+- bluetooth-data-tools (`get_cipher_for_irk`, `resolve_private_address`; used by HA's private_ble_device) — https://github.com/Bluetooth-Devices/bluetooth-data-tools
+- BlueZ settings storage (`info` file, `[IdentityResolvingKey]`) — https://bluez.readthedocs.io/en/latest/settings-storage/
+- BlueZ MGMT API (Load Identity Resolving Keys, 0x0030) — https://github.com/bluez/bluez/wiki/MGMT
 
 **Wi-Fi / HA**
 - Home Assistant ping tracker (consider_home 180 s; phones turn off Wi-Fi) — https://www.home-assistant.io/integrations/ping/
