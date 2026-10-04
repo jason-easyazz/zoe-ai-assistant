@@ -48,13 +48,16 @@ read of the voice corpus was WAV *headers* for durations (§2.1); no household d
   with audEERING"), Vox-Profile's WavLM dimensional model (Open RAIL, "No commercial use",
   "surveillance" and "privacy-invasive applications" out of scope), openSMILE's open-source build
   ("not allowed … for any sort of commercial product"). *Permissive and dimensional* (yes, but
-  heavy): the **Odyssey-2024 WavLM-large baseline (MIT, 0.3 B)** and **LAION's
-  Empathic-Insight-Voice heads (CC-BY-4.0) on a Whisper-Small fine-tune (CC-BY-4.0, 0.2 B)**.
+  **far too heavy to be resident**): the **Odyssey-2024 WavLM-large baseline (MIT, 1.27 GB)** and
+  **LAION's Empathic-Insight-Voice heads (CC-BY-4.0, the arousal head alone is a 295 MB `.pth`)
+  on a Whisper-Small fine-tune (CC-BY-4.0, 967 MB)** — both are judge/teacher material only.
   *Permissive and categorical* (yes, but not arousal): **emotion2vec+ base** (FunASR model licence,
-  commercial permitted with attribution, ~90 M, 9 classes) and **SenseVoiceSmall** (same licence,
-  7 emotion tags, 226 MB int8, duplicates Moonshine). **No permissively-licensed model under
-  ~100 MB that outputs arousal exists today.** The sub-megabyte model the owner's decision assumes
-  has to be *made* — distilled from a clean teacher — before it can be measured.
+  commercial permitted with attribution; 1.12 GB `.pt`, 373 MB fp32 ONNX, 9 classes) and
+  **SenseVoiceSmall** (same licence, 7 emotion tags, 936 MB `.pt` / 226 MB int8, duplicates
+  Moonshine). **No permissively-licensed model under the packet's 300 MB resident line that
+  outputs arousal exists today; the only one under it at all is an int8 SenseVoice that does not.**
+  The sub-megabyte model the owner's decision assumes has to be *made* — distilled from clean
+  teachers — before it can be measured.
 - **Household use would be lawful under every licence above, and that is not the point.** CC's
   "NonCommercial" means "not primarily intended for or directed towards commercial advantage or
   monetary compensation" ([CC BY-NC-SA 4.0 §1](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode));
@@ -90,14 +93,19 @@ read of the voice corpus was WAV *headers* for durations (§2.1); no household d
   names, it needs the enrolment-interview opt-in (W5.3), and under the WA Surveillance Devices Act
   the discard-unknown rule is load-bearing. Since voice-ID is in shadow (the claim is discarded)
   and the only identity today is panel binding, "owner-only" cannot be enforced yet in any case:
-  phase 1 is **score every clip in RAM, keep nothing but anonymous shadow rows, act on the cue,
-  write no memory**.
+  phase 1 is **score every clip in RAM, keep no per-clip value for anyone — only identity-free
+  aggregates (histogram bins, CCC accumulators, counts) — act on the cue, write no memory**.
+  Per-clip rows exist in exactly one place: an **owner-claimed labelling session** (opt-in,
+  panel-bound, time-boxed, started from the owner's phone), because a row with a timestamp and a
+  panel id is linkable emotional data the moment a guest or child speaks, whatever the file is
+  called.
 - **Go/no-go (§4): NO-GO on today's candidates, GO on a measured path.** The path is: write Q16c;
   adopt the licence rule; a bake-off (P-W4.1) in which the only *resident* candidates are
-  licence-clean — a re-distilled 72 K student with the **MIT Odyssey WavLM as the sole teacher**,
-  LAION's CC-BY arousal head on Whisper-Small, emotion2vec+ embeddings plus an in-house head, and
-  a feature-based ridge baseline — judged against a ~150-clip owner-labelled set with negative
-  controls. The four conditions (licence OK, <200 ms p95 on the Pi off-path, arousal CCC ≥0.6 on
+  licence-clean **and under 300 MB** — a re-distilled 72 K student whose teachers are the **MIT
+  Odyssey WavLM and LAION's CC-BY heads** (a clean two-teacher average, the paper's own recipe
+  with a permissive pair), emotion2vec+ embeddings in **int8** (the fp32 ONNX is 373 MB, over
+  the line) plus an in-house head, and a feature-based ridge baseline — judged against a
+  ~150-clip owner-labelled set with negative controls. The four conditions (licence OK, <200 ms p95 on the Pi off-path, arousal CCC ≥0.6 on
   in-house clips, zero voice-path latency change) are stated with the instrument for each.
 
 ## 1. Field — the candidates and their licences
@@ -162,13 +170,13 @@ Cortex-A76** for a 5.592 s clip ([sherpa-onnx](https://k2-fsa.github.io/sherpa/o
 | Candidate | Outputs | Params / size | Arousal CCC (reported) | Pi 5 cost per clip | Weights licence | Training-data terms | Household use lawful? | Repo-compatible (live path)? |
 |---|---|---|---|---|---|---|---|---|
 | **Wav2Small** (student, paper) | A/D/V | 72 K; 60 KB int8 ONNX (paper body) / "120KB" (abstract); 9 MB RAM | **0.66** Test-1, 0.56 IEMOCAP; valence 0.37 | 9 ms per 5 s on a Xeon Gold 6226R → **~50–100 ms** [extrapolated] | **No weights published** (HF repo = README + .gitattributes; GitHub = README) ; paper CC-BY-NC-SA-4.0 (body) vs CC-BY-SA-4.0 (arXiv abstract metadata) | MSP-Podcast v1.7 audio + AudioSet/CochlScene, human labels discarded, teacher A/D/V as ground truth | n/a | **n/a — nothing to install.** As a *recipe* it inherits its teacher's licence |
-| **"wav2small" HF card** (= the teacher) | A/D/V | 0.2 B + 0.3 B, averaged | **0.762** Test-1 (D 0.684, V 0.676); Test-2 A 0.486 | seconds [extrapolated] | README code only; `cc-by-nc-sa-4.0` on the card; loads Dawn (NC) + Odyssey (MIT) | as its two parts | yes (NC) | **No** (half NC, "research only") — judge only |
-| **audEERING Dawn** `wav2vec2-large-robust-12-ft-emotion-msp-dim` | A/D/V ≈0..1 | 0.2 B; ONNX on Zenodo | not on the card; it is the Wav2Small teacher's stronger half [paper: "Dawn"] | **~2–5 s** fp32 [extrapolated from the 86 M anchor ×2] | **CC-BY-NC-SA-4.0**, "for research purpose only", commercial licence sold by audEERING | MSP-Podcast v1.7 (academic licence) | yes (NC) | **No** — judge only, and the card's "research only" wording argues against even that; prefer the MIT judge below |
-| **Odyssey-2024 baseline** `3loi/SER-Odyssey-Baseline-WavLM-Multi-Attributes` | A/D/V | **0.3 B** (WavLM-large) | card: Test-3 A **0.405**, V 0.577, D 0.577 (Test-3 is the hard out-of-domain partition; the single-attribute cards report dev V 0.709 / Test-3 0.607, dev D 0.584 / Test-3 0.424) | **~5–10 s** fp32, ~2–3 s int8 [extrapolated ×3.5 of the 86 M anchor] | **MIT** | MSP-Podcast (Odyssey-2024 release; academic licence to the trainer) | yes | **Yes** as licence; **no** as resident (size, latency) → **the lab judge and the clean teacher** |
-| **Vox-Profile** `tiantiaf/wavlm-large-msp-podcast-emotion-dim` | A/V/D 0..1 | 0.3 B | not on the card | as above | **Open RAIL** — "No commercial use"; out of scope: "Surveillance", "Privacy-invasive applications", "Clinical or diagnostic" | MSP-Podcast | yes (NC) | **No** |
-| **emotion2vec+ base** | 9 classes (angry, disgusted, fearful, happy, neutral, other, sad, surprised, unknown); 768-d embeddings | ~90 M | n/a (categorical) | **~1–2.5 s** int8 [extrapolated from the 86 M anchor] | **FunASR Model License** ("other / model-license" on the card): use, copy, modify, share permitted; attribution and model-name retention required; "provided for reference and learning purposes only" disclaimer; maintainers confirm commercial use | seed: EmoBox academic corpora; base: 4,788 h "filtered large-scale pseudo-labeled data" of unstated provenance | yes | **Yes** — but no arousal; a 768-d embedding + an in-house arousal head is the usable shape |
-| **SenseVoiceSmall** | ASR + 7 emotion tags (`HAPPY SAD ANGRY NEUTRAL FEARFUL DISGUSTED SURPRISED`) + 8 event tags | "similar to Whisper-Small"; **226 MB int8** | n/a (categorical) | RTF 0.099 (1 thread) / 0.049 (3–4) on A76 → **~0.3–0.5 s** | code MIT; weights **FunASR Model License** (commercial OK per maintainers) | FunAudioLLM's own 400 k h, unstated | yes | **Yes** as licence; **no** as design — categorical, 226 MB, and it duplicates Moonshine (the plan's own "fallback only") |
-| **LAION Empathic-Insight-Voice-Small** | 54+ MLP heads incl. **arousal** and **valence** on Whisper-encoder embeddings | heads tiny; backbone **BUD-E-Whisper = Whisper-Small fine-tune, 0.2 B** | **none reported** for arousal (the paper reports 40-class alignment) | Whisper pads to 30 s → encoder cost is fixed: **~2–4 s** int8 [extrapolated] | heads **CC-BY-4.0**; backbone **CC-BY-4.0** | "LAION's Got Talent" ~5,000 h *synthetic* voice acting + ~5,000 h in-the-wild | yes | **Yes** — the one licence-clean dimensional option that exists today; acted/synthetic training is the domain-gap risk the field audit flagged |
+| **"wav2small" HF card** (= the teacher) | A/D/V | the two checkpoints below, averaged: **661 MB + 1.27 GB** | **0.762** Test-1 (D 0.684, V 0.676); Test-2 A 0.486 | seconds [extrapolated] | README code only; `cc-by-nc-sa-4.0` on the card; loads Dawn (NC) + Odyssey (MIT) | as its two parts | yes (NC) | **No** (half NC, "research only") — judge only |
+| **audEERING Dawn** `wav2vec2-large-robust-12-ft-emotion-msp-dim` | A/D/V ≈0..1 | **661 MB** `model.safetensors` (661,375,508 B; ~0.165 B params); ONNX on Zenodo | not on the card; it is the Wav2Small teacher's stronger half [paper: "Dawn"] | **~2–5 s** fp32 [extrapolated from the 86 M anchor ×2] | **CC-BY-NC-SA-4.0**, "for research purpose only", commercial licence sold by audEERING | MSP-Podcast v1.7 (academic licence) | yes (NC) | **No** — judge only, and the card's "research only" wording argues against even that; prefer the MIT judge below |
+| **Odyssey-2024 baseline** `3loi/SER-Odyssey-Baseline-WavLM-Multi-Attributes` | A/D/V | **1.27 GB** `model.safetensors` (1,274,490,516 B; 0.3 B, WavLM-large) | card: Test-3 A **0.405**, V 0.577, D 0.577 (Test-3 is the hard out-of-domain partition; the single-attribute cards report dev V 0.709 / Test-3 0.607, dev D 0.584 / Test-3 0.424) | **~5–10 s** fp32, ~2–3 s int8 [extrapolated ×3.5 of the 86 M anchor] | **MIT** | MSP-Podcast (Odyssey-2024 release; academic licence to the trainer) | yes | **Yes** as licence; **no** as resident (4× the 300 MB line even at int8) → **the lab judge and a clean teacher** |
+| **Vox-Profile** `tiantiaf/wavlm-large-msp-podcast-emotion-dim` | A/V/D 0..1 | **1.26 GB** `model.safetensors` (1,264,246,784 B; 0.3 B) | not on the card | as above | **Open RAIL** — "No commercial use"; out of scope: "Surveillance", "Privacy-invasive applications", "Clinical or diagnostic" | MSP-Podcast | yes (NC) | **No** |
+| **emotion2vec+ base** | 9 classes (angry, disgusted, fearful, happy, neutral, other, sad, surprised, unknown); 768-d embeddings | **1.12 GB** `model.pt` (1,118,245,678 B); community ONNX **373 MB** fp32 (373,159,295 B; ≈93 M params) → **~95 MB int8** would have to be *made* [extrapolated] | n/a (categorical) | **~1–2.5 s** int8 [extrapolated from the 86 M anchor] | **FunASR Model License** ("other / model-license" on the card): use, copy, modify, share permitted; attribution and model-name retention required; "provided for reference and learning purposes only" disclaimer; maintainers confirm commercial use | seed: EmoBox academic corpora; base: 4,788 h "filtered large-scale pseudo-labeled data" of unstated provenance | yes | **Yes** as licence; **under 300 MB only as int8** — no arousal; a 768-d embedding + an in-house arousal head is the usable shape |
+| **SenseVoiceSmall** | ASR + 7 emotion tags (`HAPPY SAD ANGRY NEUTRAL FEARFUL DISGUSTED SURPRISED`) + 8 event tags | **936 MB** `model.pt` (936,291,369 B; "similar to Whisper-Small"); sherpa-onnx **226 MB int8** | n/a (categorical) | RTF 0.099 (1 thread) / 0.049 (3–4) on A76 → **~0.3–0.5 s** | code MIT; weights **FunASR Model License** (commercial OK per maintainers) | FunAudioLLM's own 400 k h, unstated | yes | **Yes** as licence; the only permissive file under 300 MB in this table; **no** as design — categorical, and it duplicates Moonshine (the plan's own "fallback only") |
+| **LAION Empathic-Insight-Voice-Small** | 58 MLP heads incl. **arousal** and **valence** on Whisper-encoder embeddings | **not small**: `model_Arousal_best.pth` is **295 MB** (294,944,245 B; each of the 58 heads is ~295 MB — the documented 1500×768→64 projection alone is ~74 M params) on **BUD-E-Whisper = Whisper-Small fine-tune, 967 MB** `model.safetensors` (966,995,080 B; 241.7 M params) → **≈1.26 GB fp32, ≈315 MB even at ideal int8** | **none reported** for arousal (the paper reports 40-class alignment) | Whisper pads to 30 s → encoder cost is fixed: **~2–4 s** int8 [extrapolated] | heads **CC-BY-4.0**; backbone **CC-BY-4.0** | "LAION's Got Talent" ~5,000 h *synthetic* voice acting + ~5,000 h in-the-wild | yes | **Yes** as licence; **no** as resident (over the 300 MB line before runtime overhead) → **a second clean teacher / judge** beside Odyssey; acted/synthetic training is the domain-gap risk the field audit flagged |
 | **openSMILE eGeMAPS + a ridge head** | hand-crafted prosody features → a regressor we train | KB | depends on our labels | ms | open-source build: free for "research purposes and personal use"; "not allowed … for any sort of commercial product" (audEERING dual licence) | our own labels | yes (personal) | **No** for the extractor (same NC class); the *approach* is fine with permissive feature code (librosa, ISC) |
 
 Sources per row: Wav2Small [paper HTML](https://arxiv.org/html/2408.13920v1), [abstract](https://arxiv.org/abs/2408.13920),
@@ -184,18 +192,31 @@ SenseVoice [repo](https://github.com/FunAudioLLM/SenseVoice), [card](https://hug
 [sherpa-onnx](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html); LAION [heads](https://huggingface.co/laion/Empathic-Insight-Voice-Small),
 [backbone](https://huggingface.co/laion/BUD-E-Whisper), [EmoNet-Voice paper](https://arxiv.org/html/2506.09827v2);
 openSMILE [about](https://audeering.github.io/opensmile/about.html), [Wikipedia](https://en.wikipedia.org/wiki/OpenSMILE) [secondary].
+File sizes are the published checkpoints as listed by the HF API (`?blobs=true`) on 2026-10-04:
+[Dawn](https://huggingface.co/api/models/audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim?blobs=true),
+[Odyssey](https://huggingface.co/api/models/3loi/SER-Odyssey-Baseline-WavLM-Multi-Attributes?blobs=true),
+[Vox-Profile](https://huggingface.co/api/models/tiantiaf/wavlm-large-msp-podcast-emotion-dim?blobs=true),
+[emotion2vec+ base](https://huggingface.co/api/models/emotion2vec/emotion2vec_plus_base?blobs=true),
+[emotion2vec+ ONNX](https://huggingface.co/api/models/pankotaro/emotion2vec-plus-base-onnx?blobs=true),
+[SenseVoiceSmall](https://huggingface.co/api/models/FunAudioLLM/SenseVoiceSmall?blobs=true),
+[LAION heads](https://huggingface.co/api/models/laion/Empathic-Insight-Voice-Small?blobs=true),
+[BUD-E-Whisper](https://huggingface.co/api/models/laion/BUD-E-Whisper?blobs=true). "int8" sizes are
+quarter-of-fp32 estimates unless a published int8 file exists (only SenseVoice's does).
 
 ### 1.3 What the table says
 
 - **The owner's premise — "a tiny model" — has no licence-clean instance yet.** The only sub-MB
   dimensional model in the literature is Wav2Small, and it is unpublished; its 0.66 was reached by
   distilling from a 0.762 teacher that is half non-commercial. Everything that *is* downloadable and
-  outputs arousal is 0.2–0.3 B parameters and seconds per clip on the Pi.
-- **Permissive and dimensional exists in exactly two places**: the Odyssey MIT baseline (too heavy
-  to be resident; the right *judge* and the right *teacher*) and LAION's CC-BY heads (resident-able
-  at ~2–4 s off-path, but trained on synthetic acting with no published arousal CCC — the
-  companion-field record's warning that acted data generalises poorly to natural short commands
-  applies in full).
+  outputs arousal is 0.66–1.27 GB on disk and seconds per clip on the Pi.
+- **Permissive and dimensional exists in exactly two places, and neither fits in 300 MB**: the
+  Odyssey MIT baseline (1.27 GB) and LAION's CC-BY heads (295 MB for the arousal head *alone*, on a
+  967 MB backbone — ≈315 MB even at ideal int8, before runtime overhead). Both are **judge and
+  teacher material**, which is good news for the recipe (§1.4: a clean two-teacher average) and
+  bad news for "ready now": nothing permissive and dimensional can be resident on the Pi as
+  published. LAION's heads carry the extra caveat that they were trained on synthetic acting with
+  no published arousal CCC — the companion-field record's warning that acted data generalises
+  poorly to natural short commands applies in full.
 - **Permissive and small exists only as categorical** (emotion2vec+, SenseVoice), and a
   category→arousal mapping (angry/fearful/surprised high, sad/neutral low) is a guess the measurement
   plan would have to validate, not a model.
@@ -232,9 +253,13 @@ openSMILE [about](https://audeering.github.io/opensmile/about.html), [Wikipedia]
    recipe discards MSP-Podcast's human labels and uses the teacher's A/D/V on *any* audio
    (MSP-Podcast + AudioSet + CochlScene). We cannot obtain MSP-Podcast (academic signature), but the
    recipe does not need it: permissively licensed speech (LibriSpeech CC-BY-4.0, Common Voice
-   CC0, the in-house corpus) plus the MIT teacher yields a student whose weights we own. The risk is
-   quality — the paper's 0.66 came from a 0.762 teacher; the MIT teacher alone reports Test-3 0.405
-   (and whatever it scores on our clips is what §4 measures first).
+   CC0, the in-house corpus) plus permissive teachers yields a student whose weights we own. The
+   paper's teacher was itself an *average of two models*; the clean equivalent is the **MIT
+   Odyssey baseline averaged with LAION's CC-BY arousal head** — both too big to be resident
+   (§1.2), both fine on the Orin in a brain-stopped training window or on a laptop. The risk is
+   quality — the paper's 0.66 came from a 0.762 teacher; the MIT model alone reports Test-3
+   0.405 and LAION reports nothing for arousal (and whatever they score on our clips is what §4
+   measures first).
 4. **The training-data terms are a reason, not a blocker.** They explain why every dimensional
    model is either NC or trained by someone who signed the academic licence; they do not bind a user
    of MIT weights.
@@ -396,11 +421,19 @@ openSMILE [about](https://audeering.github.io/opensmile/about.html), [Wikipedia]
   later allows. Guests' scores are never persisted (the discard-unknown rule). This is the
   biometric policy's own shape — embeddings only, kept until deleted, consent revocable, matching
   filters non-consenting rows in SQL — applied to a non-biometric but emotional datum.
-- **Phase 1 therefore is: score every clip on the Pi, in RAM; keep only anonymous shadow rows
-  (`boot, seq, ts, panel_id, duration_s, arousal, cue_fired, repair_fired`) with a 7-day rotation
-  and no transcript, no user id, no audio; act on the cue; write no memory.** With one panel bound
-  to the owner, those rows are de facto the owner's, which is what the §4 measurement needs and
-  all it needs.
+- **Phase 1 therefore is: score every clip on the Pi, in RAM; keep no per-clip value for anyone;
+  act on the cue; write no memory.** What the shadow phase *may* keep is identity-free by
+  construction: per-panel **aggregates** updated in place — a 10-bin arousal histogram, running
+  CCC/correlation accumulators against the repair cue, and counts (`turns`, `cue_fired`,
+  `repair_fired`, `scorer_skipped`) — with no timestamp, no sequence number and no row per turn.
+  A per-clip row (`seq, ts, panel_id, duration_s, arousal, …`) is **linkable retained emotional
+  data the moment a guest or a child speaks**, because the speaker gate cannot yet tell them from
+  the owner; calling the file "anonymous" would not make it so, and it would contradict the rule
+  two bullets up. Per-clip rows are therefore allowed in exactly one place: an **owner-claimed
+  labelling session** — opt-in, started from the owner's phone, bound to the one panel, time-boxed
+  (≤2 h), rows written only while the claim is open, and the owner told on the panel that it is
+  open. That session is also where the §4 label set comes from. Per-clip rows for anyone else wait
+  until identity *and* consent are enforceable (P3 live + W5.3 opt-in).
 - **"Owner only" as the owner phrased it is the right instinct for the *record* and the wrong
   boundary for the *act*.** That is the one place this record disagrees with the question as
   asked, and §6 puts it to Jason plainly.
@@ -416,10 +449,12 @@ none exists ([personality-identity-layer §3.4](personality-identity-layer-2026-
    anyone (the Vox-Profile card's own exclusions, adopted as ours regardless of model).
 2. **The act/record split** (§3.2), verbatim: repair for anyone; retention and memory for
    consenting adults only; children never; guests never.
-3. **Retention.** Scores, never clips; nothing by identity before the speaker gate is live; the
-   shadow log is anonymous and rotates; deletion follows the biometric path (one request removes
-   everything derived); the `ZOE_VOICE_SAVE_AUDIO` corpus is an operator instrument outside this
-   policy and stays owner-only.
+3. **Retention.** Scores, never clips; **no per-clip score is kept for anyone** before identity and
+   consent are enforceable — the shadow phase keeps only per-panel aggregates with no timestamps;
+   per-clip rows exist only inside an owner-claimed, time-boxed labelling session the owner started
+   and can see is open; deletion follows the biometric path (one request removes everything
+   derived); the `ZOE_VOICE_SAVE_AUDIO` corpus is an operator instrument outside this policy and
+   stays owner-only.
 4. **Consent.** Opt-in in the enrolment interview (W5.3), per member, revocable, visible in
    settings beside Speaker Identity; absence of consent = the act only.
 5. **No therapy claims; crisis language takes the deterministic escalate-to-human path** (the
@@ -446,14 +481,17 @@ none exists ([personality-identity-layer §3.4](personality-identity-layer-2026-
 
 **Measurement plan, in order, no code on the live path:** (1) Q16c + the licence rule
 (docs only); (2) the owner's 150-clip label set (a one-off, ~30 min); (3) the bake-off on the
-**Pi** in an isolated venv — candidates: *a* a 72 K student re-distilled with the Odyssey-MIT teacher
-on permissive audio (this needs a training window; the dev-box rule allows stopping the brain for
-it, or it runs on a laptop), *b* LAION's arousal head on BUD-E-Whisper int8, *c* emotion2vec+ base
-int8 embeddings + a ridge head fitted on the label set (cross-validated), *d* librosa prosody
-features + ridge (the floor); judge = Odyssey WavLM-large; report CCC/AUC, p95, RSS per candidate
-with the negative controls; (4) only if one candidate passes all four lines, a **build record**
-for P4 + W1.5 (flags `ZOE_VOICE_AROUSAL=off|shadow|active`, `ZOE_VOICE_REPAIR`, a one-week
-shadow window on anonymous rows, then the repair).
+**Pi** in an isolated venv — **resident** candidates (all permissive, all under 300 MB): *a* a 72 K
+student re-distilled with the **Odyssey-MIT + LAION-CC-BY two-teacher average** on permissive
+audio (this needs a training window; the dev-box rule allows stopping the brain for it, or it runs
+on a laptop), *b* emotion2vec+ base embeddings **quantised to int8** (the 373 MB fp32 ONNX is over
+the line and the int8 file does not exist yet) + a ridge head fitted on the label set
+(cross-validated), *c* librosa prosody features + ridge (the floor); **judges** (not resident) =
+Odyssey WavLM-large (MIT, 1.27 GB) and the LAION arousal head (CC-BY, 295 MB + 967 MB); report
+CCC/AUC, p95, RSS per candidate with the negative controls; (4) only if one candidate passes all
+four lines, a **build record** for P4 + W1.5 (flags `ZOE_VOICE_AROUSAL=off|shadow|active`,
+`ZOE_VOICE_REPAIR`, a one-week shadow window that writes **aggregates only** — per-clip rows only
+inside an owner-claimed labelling session (§3.2) — then the repair).
 
 ## 5. Go / no-go against VISION
 
@@ -470,7 +508,9 @@ shadow window on anonymous rows, then the repair).
 | 9 Understand before you change | this record | chain traced with file:line; nothing built |
 | Owner rule: never speaks unprompted | GO | the repair answers a turn; it never initiates |
 
-**No-go inside the idea:** any NC/research-only weights on the panel; a per-member clip store; a
+**No-go inside the idea:** any NC/research-only weights on the panel; any resident model over the
+packet's 300 MB line (which today is every permissive dimensional model as published); a per-clip
+score row outside an owner-claimed labelling session; a per-member clip store; a
 score on ambient audio; scoring before the POST unless measured ≤30 ms; feeding arousal into
 memory or continuity before Q16c and consent exist; a categorical→arousal mapping used without the
 label-set validation.
@@ -484,10 +524,12 @@ label-set validation.
    (guests and kids included, nothing kept), but she *keeps* an emotional score only for adults who
    opted in at enrolment, never for children, and for no one until voice-ID is live. If you want
    "owner only" for the apology too, say so — it is simpler and loses the guests and kids.
-3. **Which path to measure first?** (a) build our own tiny model from the MIT teacher (needs a
-   training window — brain stopped on the Orin for an afternoon, or a laptop), (b) LAION's
-   CC-BY model (ready now, heavier, trained on acted voices), (c) both in one bake-off. Default
-   here: (c).
+3. **Which path to measure first?** (a) build our own tiny model from the two permissive teachers
+   (MIT Odyssey + LAION CC-BY; needs a training window — brain stopped on the Orin for an
+   afternoon, or a laptop), (b) emotion2vec+ shrunk to int8 with a small head we fit ourselves
+   (no training window, but ~1–2 s per clip and a quantisation step nobody has published), (c)
+   both in one bake-off. Nothing permissive that outputs arousal is small enough to just install —
+   the LAION model turned out to be 295 MB for the arousal head alone. Default here: (c).
 4. **The labelling chore.** About 150 of your own command clips, rated 1–5 for "how worked up did I
    sound", on your phone, ~30 minutes, one sitting. Without it the "≥0.6 on our clips" bar cannot
    be measured and the whole thing stays a guess. Yes / no.
@@ -498,14 +540,18 @@ label-set validation.
    and to `docs/CANONICAL.md`; reference both from the plan's W4 gate (`:951-955`, `:1037`).
 2. Build the label set: a phone page or a plain CSV over 150 cluster-A corpus clips (operator
    instrument; never the panel); record human-vs-judge CCC first.
-3. Run P-W4.1 as rewritten in §4 on the **Pi**, isolated venv, candidates *a–d*, judge = Odyssey
-   MIT; OKF record `docs/knowledge/ser-bakeoff.md` with the kill criteria and the negative controls.
+3. Run P-W4.1 as rewritten in §4 on the **Pi**, isolated venv, resident candidates *a–c*, judges =
+   Odyssey MIT + LAION CC-BY; OKF record `docs/knowledge/ser-bakeoff.md` with the kill criteria
+   and the negative controls.
 4. If a candidate passes: a build record for **P4 + W1.5** — repair-cue table, `turn_meta` side
-   channel joined by `turn_id`, `[REPAIR]` block pair in the elide tables, anonymous shadow rows,
-   day-sim ask for the misheard-command seed, replay-gated flags, one-week shadow before the
-   repair fires. Still no memory write — that is W4 proper, gated on Q16c consent and W3.
-5. Fold the findings into the plan: W4.1's shortlist is wrong (Wav2Small unpublished; emotion2vec
-   "MIT" is actually the FunASR model licence; SenseVoice categorical) — a one-paragraph correction.
+   channel joined by `turn_id`, `[REPAIR]` block pair in the elide tables, aggregate-only shadow
+   counters plus the owner-claimed labelling session, day-sim ask for the misheard-command seed,
+   replay-gated flags, one-week shadow before the repair fires. Still no memory write — that is W4
+   proper, gated on Q16c consent and W3.
+5. ~~Fold the findings into the plan~~ — **done in this PR (#1838)**: the plan's W4 shortlist
+   (`samantha-evolution-plan.md` §3 W4, §8.4, the W4.1 checklist line) and the P-W4.1 packet now
+   say Wav2Small = recipe/teacher only (teacher half non-commercial), emotion2vec weights = FunASR
+   Model License, SenseVoice categorical, and point here for the go/no-go.
 
 ## 8. Sources
 
@@ -518,7 +564,8 @@ Primary unless marked.
 - Vox-Profile (Open RAIL, no commercial use) — https://huggingface.co/tiantiaf/wavlm-large-msp-podcast-emotion-dim ; paper — https://arxiv.org/pdf/2505.14648
 - emotion2vec+ base — https://huggingface.co/emotion2vec/emotion2vec_plus_base ; front-matter (license: other / model-license → FunASR) — https://huggingface.co/emotion2vec/emotion2vec_plus_base/raw/main/README.md ; repo — https://github.com/ddlBoJack/emotion2vec ; FunASR MODEL_LICENSE — https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE ; community ONNX — https://huggingface.co/pankotaro/emotion2vec-plus-base-onnx
 - SenseVoice — https://github.com/FunAudioLLM/SenseVoice ; card — https://huggingface.co/FunAudioLLM/SenseVoiceSmall ; sherpa-onnx (sizes, RK3588 RTF, `emotion` field) — https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html
-- LAION Empathic-Insight-Voice-Small (CC-BY-4.0) — https://huggingface.co/laion/Empathic-Insight-Voice-Small ; BUD-E-Whisper (Whisper-Small fine-tune, 0.2 B, CC-BY-4.0) — https://huggingface.co/laion/BUD-E-Whisper ; EmoNet-Voice — https://arxiv.org/html/2506.09827v2
+- LAION Empathic-Insight-Voice-Small (CC-BY-4.0; 58 heads, `model_Arousal_best.pth` 294,944,245 B) — https://huggingface.co/laion/Empathic-Insight-Voice-Small ; file listing — https://huggingface.co/api/models/laion/Empathic-Insight-Voice-Small?blobs=true ; BUD-E-Whisper (Whisper-Small fine-tune, 241.7 M params, 966,995,080 B, CC-BY-4.0) — https://huggingface.co/laion/BUD-E-Whisper ; EmoNet-Voice — https://arxiv.org/html/2506.09827v2
+- Checkpoint sizes (HF API `?blobs=true`, 2026-10-04): Dawn 661,375,508 B; Odyssey multi-attribute 1,274,490,516 B; Vox-Profile 1,264,246,784 B; emotion2vec+ base `model.pt` 1,118,245,678 B; emotion2vec+ community ONNX 373,159,295 B; SenseVoiceSmall `model.pt` 936,291,369 B (URLs in §1.2)
 - openSMILE licence [secondary] — https://audeering.github.io/opensmile/about.html ; https://en.wikipedia.org/wiki/OpenSMILE
 - Pi 5 anchor: 86 M AST on Cortex-A76 (9.4 s fp32 / 2.09 s int8 per 10 s) — https://dev.to/syamaner/part-4-edge-deployment-of-an-86m-parameter-audio-transformer-1821
 
