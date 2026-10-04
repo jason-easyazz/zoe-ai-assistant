@@ -73,8 +73,11 @@ started for this record (the measurement is `grep`/`Read` only); nothing below i
   the nightly voice probe, the landing scripts in `~/.zoe/agent-tools`, and read access to the
   live palace — behind SSH. Whatever *still* runs on the box (the builder lane, a landing
   script, an emergency session) runs inside one `zoe-agents.slice` with `MemoryMax` +
-  `MemorySwapMax=0` and a non-blocking lease, so the worst case is **one** capped session, never
-  a fleet. Self-evolution is preserved by design: the builder lane is a lease holder like any
+  `MemorySwapMax=0` and a non-blocking lease — with the shared Serena and the codebase-memory
+  scopes re-parented into that same slice, and the Omnigent container's own Docker limit counted
+  beside it — so engineering on the box is **bounded at 3 GB (slice) + 1.5 GB (container) =
+  4.5 GB worst case, ~1.3 GB typical**, holding at most one session *or* the builder, never an
+  open-ended fleet. Self-evolution is preserved by design: the builder lane is a lease holder like any
   other, wakes only for a ticket, is capped, and excludes itself from the brain window with the
   same lock the voice probe uses (§3.4). RAM returned to the Jetson: **~1–1.7 GB for every hour
   nobody is editing**, plus the removal of the fleet failure class by construction.
@@ -221,14 +224,36 @@ the first.
   the sampler (§5) so unlaunchered sessions are counted. A bridge launched by hand around the
   unit remains possible; it is the thing the sampler's "`ccd-cli` outside the slice" column
   exists to catch, and the slice's cap does not cover it.
-- **The slice.** A `zoe-agents.slice` (user) with `MemoryHigh=MemoryMax` (the A6 lesson:
-  a throttle band under a cap is permanent refault, `scripts/AGENTS.md:45`) and
-  **`MemorySwapMax=0`** — "two out of three is not a cap" (`incident-runbook.md §6`). Processes
-  enter it only at launch (the launcher's `--scope`, the bridge unit's `Slice=`); today the
-  bridge is a plain process under the login scope [live], which is exactly why it needs the
-  unit. The shared Serena stays in its own unit (already capped); the codebase-memory scopes are
-  moved under the slice by the capping wrapper. Values: `MemoryMax=2G` fits one working session
-  with a leaked Serena (§1.3); `3G` if two must briefly overlap for a hand-over.
+- **The slice — an aggregate, so every engineering cgroup must be inside it.** A
+  `zoe-agents.slice` (user) with `MemoryHigh=MemoryMax` (the A6 lesson: a throttle band under a
+  cap is permanent refault, `scripts/AGENTS.md:45`) and **`MemorySwapMax=0`** — "two out of
+  three is not a cap" (`incident-runbook.md §6`). A slice bounds only what is parented to it,
+  so the design puts all of these under it, each keeping its own member cap:
+  - the session scopes — the launcher's `systemd-run --user --scope
+    --slice=zoe-agents.slice`, the bridge unit's `Slice=zoe-agents.slice` (today the bridge is a
+    plain process under the login scope [live], which is exactly why it needs the unit);
+  - **`serena-mcp.service` gains `Slice=zoe-agents.slice`** (a drop-in; its own
+    `MemoryMax=2G` / `MemorySwapMax=0` stay as the member cap) — without this it sits in
+    `app.slice` and the "fleet-wide bound" would exclude the one process that leaks to 1 GB
+    hourly;
+  - **`codebase_memory_capped.sh` passes `--slice=zoe-agents.slice`** on its `systemd-run
+    --scope` (today it passes none, so each scope lands in `app.slice` beside its caller's
+    unit — the wrapper's own note that a nested scope reparents out of the caller's cgroup
+    [src `:74-75`]); the 768M member cap stays;
+  - the builder unit (§3.4), `Slice=zoe-agents.slice`.
+  - **What cannot join: the Omnigent container.** A Docker container's cgroup lives under
+    `system.slice/docker-<id>.scope`; `--cgroup-parent` can move it under a *system* slice, not
+    a user-manager slice, and running the container's agent processes on the host instead would
+    give up the one isolation boundary that lane has ("the container IS the isolation
+    boundary", `--dangerously-skip-permissions`, `omnigent-container-config.md`). So the
+    container keeps its own Docker limit (§3.4) and that limit is **counted inside the
+    advertised total**, not hidden beside it.
+  - **Values and the honest bound.** Slice `MemoryMax=3G`: one working session (~1.2 GB with
+    its codebase-memory) *or* the builder (≤ 1.5 GB — they share the session lease, so never
+    both) plus a Serena anywhere between 0.26 GB and its 2 GB cap. Container `1.5G`. **The
+    worst case on the box is therefore 3 GB (slice) + 1.5 GB (container) = 4.5 GB**, against
+    today's unbounded fleet; the typical case is tonight's ~1.3 GB, and under B the slice is
+    usually empty. Anyone quoting "the 2 GB bound" is quoting Serena's member cap, not the box.
 - **The trap the memory notes name.** cgroup guards cover CPU pages only; a session that runs a
   GPU-loading harness (a `measure_voice.py --stt inprocess`, a second Kokoro) is the 07-19 crash.
   The answer is **not** to tie the session lease to the brain-window lock
@@ -361,24 +386,54 @@ used mini-PC, or the "DGX Spark" direction the self-building record notes), not 
 - **Wakes only for a ticket:** a `zoe-builder.timer` every 10 min runs the single-lane runner
   once; it exits 0 immediately when the queue is empty (the existing dry/full dispatch and
   SINGLE LANE guards in `flue-executor.service` / `multica_board_runner.py`).
-- **Locks in `ExecStart`, checks in `ExecCondition`.** The two locks are acquired by wrapping
-  the runner itself — `ExecStart=flock -n /run/user/1000/zoe-agent-session.lock flock -n
-  /tmp/zoe-voice-harness.lock <runner> --once` — so the lock file descriptors belong to the
-  builder process and live exactly as long as it does. They cannot be taken in `ExecCondition`:
-  that command exits before `ExecStart` runs and its `flock` descriptors close with it, so the
-  builder would start with nothing held. `ExecCondition` keeps the **point-in-time** checks
-  only: `MemAvailable ≥ 1.5 GB` (read from `/proc/meminfo`, the deploy gate's method) and not
-  inside the nightly replay window (`zoe-serena-pregate-restart` at 04:15 → the probe). A
-  builder that fails a condition or a non-blocking lock exits at once and logs
-  `BUILDER_SKIP reason=`; the timer tries again — the zero-effect blind spot
-  (`incident-runbook.md §7`) is covered by the sampler in §5 counting skips.
+- **Locks in `ExecStart`, checks in `ExecCondition`, and every skip names its reason.** The
+  two locks are acquired by wrapping the runner itself, so the lock file descriptors belong to
+  the builder process and live exactly as long as it does. They cannot be taken in
+  `ExecCondition`: that command exits before `ExecStart` runs and its `flock` descriptors close
+  with it, so the builder would start with nothing held. A plain nested `flock -n` has a second
+  problem: on conflict it exits 1 **silently**, so a promised `BUILDER_SKIP reason=` line would
+  never be written and the sampler could not tell lock starvation from any other start
+  failure. The unit therefore gives each lock a distinct conflict exit code with `-E` and
+  translates it after the fact:
+
+  ```ini
+  [Service]
+  Type=oneshot
+  Slice=zoe-agents.slice
+  MemoryHigh=1500M
+  MemoryMax=1500M
+  MemorySwapMax=0
+  # point-in-time checks only (each script logs BUILDER_SKIP reason=memory|replay_window itself)
+  ExecCondition=%h/assistant/scripts/maintenance/zoe_builder_condition.sh memory 1500
+  ExecCondition=%h/assistant/scripts/maintenance/zoe_builder_condition.sh replay_window
+  # locks held by the runner for its whole life; 75 = session lease busy, 76 = brain window busy
+  ExecStart=/usr/bin/flock -n -E 75 /run/user/1000/zoe-agent-session.lock \
+            /usr/bin/flock -n -E 76 /tmp/zoe-voice-harness.lock \
+            %h/assistant/scripts/maintenance/zoe_builder_once.sh
+  # translate the exit status into the line the sampler and negative control 3 read
+  ExecStopPost=%h/assistant/scripts/maintenance/zoe_builder_skip_log.sh $EXIT_STATUS
+  SuccessExitStatus=75 76
+  ```
+
+  `zoe_builder_skip_log.sh` maps `75` → `BUILDER_SKIP reason=session_lock`, `76` →
+  `BUILDER_SKIP reason=harness_lock`, `0` → `BUILDER_RUN ok`, anything else →
+  `BUILDER_FAIL status=<n>` (systemd passes `$EXIT_STATUS` to `ExecStopPost=`;
+  `SuccessExitStatus=` keeps a skip from marking the unit failed). `ExecCondition` keeps the
+  **point-in-time** checks only — `MemAvailable ≥ 1.5 GB` (read from `/proc/meminfo`, the
+  deploy gate's method) and not inside the nightly replay window
+  (`zoe-serena-pregate-restart` at 04:15 → the probe) — and because those are our own
+  scripts, each logs its own `BUILDER_SKIP reason=memory|replay_window` before exiting non-zero.
+  The timer tries again on any skip; the zero-effect blind spot (`incident-runbook.md §7`) is
+  covered by the sampler in §5 counting skips **per reason**.
 - **Never coexists with a brain window:** because the harness lock is held by the runner for
   its whole run, a hand-run probe, a landing script's probe step and the nightly gate exclude
   it, and it them — and because it holds the harness lock only while a ticket actually runs,
   an idle builder never blocks the probe.
-- **The Omnigent container gets the same three-part cap** via compose (`mem_limit` +
-  `memswap_limit` equal to `mem_limit`, which is Docker's "no swap"), ~1.5 GB, so a leaked
-  runner is OOM-killed in the container rather than paging the box (the 08-04 class).
+- **The Omnigent container gets its own cap, counted inside the total.** Via compose
+  (`mem_limit` + `memswap_limit` equal to `mem_limit`, which is Docker's "no swap"), 1.5 GB, so
+  a leaked runner is OOM-killed in the container rather than paging the box (the 08-04 class).
+  It cannot be parented to the user slice (§3.1), so the box's engineering bound is stated as
+  **slice + container**, never as the slice alone.
 - **Under A:** the builder is one more lease holder on the Jetson; Jason's session and the
   builder take turns. The container stays. RAM freed: none beyond the cap.
 - **Under B:** the builder's *tickets* that need nothing from the box (L0–L1 skills, docs,
@@ -398,7 +453,7 @@ when the box can afford it.
 | Option | RAM freed on the Jetson | Self-evolution preserved? | Operator effort | Monthly cost | Risk |
 |---|---|---|---|---|---|
 | **Keep as is** | 0 | yes | none | $0 | the §1.4 ledger repeats; nothing refuses a second session; the W3 gate stays hostage to habit |
-| **A. One at a time (lease + slice)** | 0 while a session is on; caps the worst case at one session (~1–2 GB) instead of a fleet | yes (builder = lease holder) | low: 1 PR (slice, launcher, bridge unit, advisory hook, sampler) + `systemctl --user` install | $0 | a CLI or bridge started by hand bypasses the launcher (counted, not refused); OOM-kill mid-PR at the cap; serial waits |
+| **A. One at a time (lease + slice)** | 0 while a session is on; bounds the engineering total at **3 GB (slice: session *or* builder + Serena + codebase-memory) + 1.5 GB (Omnigent container) = 4.5 GB worst case**, ~1.3 GB typical, instead of an open-ended fleet | yes (builder = lease holder) | low: 1 PR (slice, launcher, bridge unit, Serena + codebase-memory re-parenting, advisory hook, sampler) + `systemctl --user` install | $0 | a CLI or bridge started by hand bypasses the launcher (counted, not refused); OOM-kill mid-PR at a member cap; serial waits |
 | **B. Laptop / desktop + cloud sessions, Jetson = deploy target** | **~0.65–2 GB per avoided session** (+0.26 GB Serena, +0.77 GB swap) — i.e. the box runs at its no-session floor whenever nobody is editing | yes (builder stays capped on the box, moves later) | medium-low: laptop runbook, `ssh zoe` wrapper for the landing scripts, optional Tailscale, worktree sweep | $0 marginal (cloud sessions are in the existing Max / ChatGPT plans [doc]) | habit regression; voice PRs still need a box-run probe (deploy gate enforces); off-LAN access is an operator step |
 | **C. The Pi 5** | same as B | technically | high: second device with credentials, no RAM discipline there, SD-card and thermal unknowns | $0 | the voice/kiosk/AirPlay latency surface takes the bursts; a second device to protect |
 | **B + A (recommended)** | B's gain **and** a hard bound on whatever still runs on the box | yes, by design (§3.4) | A's PR + B's runbook | $0 | the union, each mitigated by the other |
@@ -407,9 +462,11 @@ when the box can afford it.
 the laptop/desktop (LAN SSH to the box for the probe and the palace; cloud sessions for PR-only
 work). The Jetson becomes the deploy target plus a *capped* builder lane. Everything that can
 still run on the box — the builder, the landing scripts, an emergency remote session — runs in
-`zoe-agents.slice` with the three-part cap and the lease, so "we keep hitting RAM issues" has a
-structural answer rather than a habit: the box can hold **at most one** capped engineering
-process at a time, and usually holds none. The Pi stays the panel.
+`zoe-agents.slice` with the three-part cap and the lease, with Serena and codebase-memory
+re-parented into the same slice and the Omnigent container's own limit counted beside it, so
+"we keep hitting RAM issues" has a structural answer rather than a habit: engineering on the
+box is **bounded at 3 GB + 1.5 GB = 4.5 GB worst case**, holds at most one session *or* the
+builder at a time, and usually holds none. The Pi stays the panel.
 
 This is also the cheapest route to the W3 gate as the 10-03 profile re-stated it (≥ 2 GB
 available with the voice stack resident, measured with *and without* a session): tonight's
@@ -423,13 +480,15 @@ all operator-installed, none auto-enabled, the `scripts/setup/systemd/README.md`
 
 | Piece | Kind | Does |
 |---|---|---|
-| `scripts/setup/systemd/zoe-agents.slice` | new user slice | `MemoryHigh=MemoryMax=2G`, `MemorySwapMax=0` — the fleet-wide bound for everything engineering-shaped on the box |
+| `scripts/setup/systemd/zoe-agents.slice` | new user slice | `MemoryHigh=MemoryMax=3G`, `MemorySwapMax=0` — the aggregate bound for every engineering cgroup the user manager owns (sessions, Serena, codebase-memory, builder); the Omnigent container is outside it and counted separately (§3.1) |
+| `scripts/setup/systemd/serena-mcp.service.d/70-agents-slice.conf` | tracked drop-in | `Slice=zoe-agents.slice` — re-parents the shared Serena under the aggregate; its 2G / swap-0 member cap unchanged |
+| `scripts/maintenance/codebase_memory_capped.sh` | one-line change | adds `--slice=zoe-agents.slice` to its `systemd-run --scope`, so each per-client scope is charged to the aggregate; 768M member cap unchanged |
 | `scripts/maintenance/zoe-agent` launcher | script | `flock -n /run/user/1000/zoe-agent-session.lock` then `systemd-run --user --slice=zoe-agents.slice --scope -- claude\|codex …` — the lock fd is held by the launcher for the session's lifetime; a second launch is refused with the holder's name. The session lease only; it never takes the harness lock |
 | `scripts/setup/systemd/zoe-claude-bridge.service` | new user unit (inert) | the remote-control bridge (`srv --serve`) as a managed unit: `Slice=zoe-agents.slice`, `ExecStart=flock -n <session lock> … srv --serve`, so every `ccd-cli` it spawns inherits the slice and the held lease |
 | `.claude/settings.json` `SessionStart` hook | config | **advisory only** (the hook has no blocking decision): prints who holds the lease, tags the session in the sampler's log; cannot refuse or move a session |
-| `scripts/setup/systemd/zoe-builder.service` + `.timer` | new user unit (inert) | §3.4: single-lane ticket runner, `Slice=zoe-agents.slice`, 1.5 GB cap; **`ExecStart` wraps the runner in both `flock -n`s** (session lease + `/tmp/zoe-voice-harness.lock`, held for the run); `ExecCondition` only for the point-in-time checks (`MemAvailable ≥ 1.5 GB`, replay-window schedule) |
-| `modules/omnigent/docker-compose.module.yml` `mem_limit` / `memswap_limit` | compose | the container's three-part cap (~1.5 GB, no swap) |
-| `scripts/setup/systemd/zoe-agent-mem.timer` + `.service` | sampler | every 5 min append to `~/.zoe-logs/agent-mem.tsv`: `MemAvailable`, swap used, `zoe-agents.slice` `memory.current`/`swap.current`, count of `session-*.scope`s, `ccd-cli` / `codex` / `serena` / `codebase-memory-mcp` process counts, lease holder, `BUILDER_SKIP` count since last sample, deploy-gate waits (from the runner log) |
+| `scripts/setup/systemd/zoe-builder.service` + `.timer` (+ `zoe_builder_once.sh`, `zoe_builder_condition.sh`, `zoe_builder_skip_log.sh`) | new user unit (inert), PR 2 | §3.4: single-lane ticket runner, `Slice=zoe-agents.slice`, 1.5 GB cap; **`ExecStart` wraps the runner in `flock -n -E 75` (session lease) and `flock -n -E 76` (`/tmp/zoe-voice-harness.lock`)**, held for the run; `ExecStopPost` translates 75/76 into `BUILDER_SKIP reason=session_lock\|harness_lock`; `ExecCondition` only for the point-in-time checks (`MemAvailable ≥ 1.5 GB`, replay-window schedule), each logging its own reason |
+| `modules/omnigent/docker-compose.module.yml` `mem_limit` / `memswap_limit` | compose, PR 2 | the container's cap (1.5 GB, no swap) — outside the user slice, counted in the 4.5 GB total |
+| `scripts/setup/systemd/zoe-agent-mem.timer` + `.service` | sampler | every 5 min append to `~/.zoe-logs/agent-mem.tsv`: `MemAvailable`, swap used, `zoe-agents.slice` `memory.current`/`swap.current`, the `zoe-omnigent` cgroup's `memory.current`/`swap.current`, count of `session-*.scope`s, `ccd-cli` / `codex` / `serena` / `codebase-memory-mcp` process counts and how many of each are **outside** the slice, lease holder, `BUILDER_SKIP` count **per reason** (`session_lock`, `harness_lock`, `memory`, `replay_window`) since last sample, deploy-gate waits (from the runner log) |
 | `docs/knowledge/engineering-off-box.md` | runbook | laptop setup, `ssh zoe` recipes (probe, palace read, panel tunnel), the landing-script wrapper, cloud-session do/don't list, the worktree sweep |
 
 **Measurement — one week, with negative controls** (the `feedback_verify_your_instruments`
@@ -449,14 +508,24 @@ rule: break the fix and the test must go red):
      by hand under `flock /tmp/zoe-voice-harness.lock` → it must run (the session lease and the
      harness lock are separate); a model-loading command *from* that session must wait on the
      harness lock, not the session.
-   - *Negative control 2:* inside the slice, allocate 2.5 GB in a throwaway `python3 -c` →
+   - *Negative control 2:* inside the slice, allocate 3.5 GB in a throwaway `python3 -c` →
      the OOM kill must land on *that* process (`memory.events` of the slice increments), the
      brain's `MemoryCurrent` unchanged, `/health` green across the event.
-   - *Negative control 3:* take `/tmp/zoe-voice-harness.lock` by hand and fire the builder timer
-     → `BUILDER_SKIP reason=brain_window` must be logged and nothing dispatched; then, with a
-     builder run in flight, `flock -n /tmp/zoe-voice-harness.lock true` must fail for the whole
-     run and succeed the moment the runner exits (proves the lock lives in `ExecStart`, not in
-     an `ExecCondition` that already returned).
+   - *Negative control 3 (after PR 2, dry dispatch):* take `/tmp/zoe-voice-harness.lock` by
+     hand and fire the builder timer → `journalctl --user -u zoe-builder` must show exactly
+     `BUILDER_SKIP reason=harness_lock` and nothing dispatched; release it, hold the session
+     lease from a launcher session instead and fire again → exactly
+     `BUILDER_SKIP reason=session_lock`; a bare exit-1 with no reason line is a **fail** of
+     the instrument, not a skip. Then, with a builder run in flight,
+     `flock -n /tmp/zoe-voice-harness.lock true` must fail for the whole run and succeed the
+     moment the runner exits (proves the lock lives in `ExecStart`, not in an `ExecCondition`
+     that already returned).
+   - *Negative control 4:* with the slice installed, run one Serena-heavy query and one
+     codebase-memory call from a launcher session, then read `/proc/<pid>/cgroup` for
+     `serena`, `jedi-language-server` and `codebase-memory-mcp` → all three must sit under
+     `zoe-agents.slice`; and the slice's `memory.current` must move when they allocate.
+     Before the drop-in and the wrapper change this control must go red (they sit in
+     `app.slice` tonight [live]).
 3. **Off-box week (B in use, A still installed):** Jason's sessions from the laptop. Pass =
    MemAvailable p50 during waking hours ≥ 2 GB **with the voice stack resident**, the nightly
    replay gate stops skipping on the 700 MB floor, `ccd-cli` count on the box is 0 for ≥ 80 % of
@@ -486,10 +555,12 @@ rule: break the fix and the test must go red):
    use Claude Code / Codex cloud sessions for PR-only work; they cannot reach the box.)
 2. **The Pi stays a panel — closed as "no"?** The reasons are latency, a second device holding
    your credentials, and its storage; the RAM gain is the same as the laptop's.
-3. **Hard cap or polite refusal for whatever still runs on the box?** A `MemoryMax=2G` slice
-   can kill a session mid-work when it leaks; a launcher lease only refuses at start, and only
-   for sessions started through the launcher or the bridge unit. The recommendation is both
-   (cap at 2 GB, lease in front), accepting the rare mid-work kill over the box paging.
+3. **Hard cap or polite refusal for whatever still runs on the box?** A `MemoryMax=3G`
+   aggregate slice (plus the container's own 1.5 GB — 4.5 GB worst case on the box) can kill a
+   session mid-work when the slice fills; a launcher lease only refuses at start, and only for
+   sessions started through the launcher or the bridge unit. The recommendation is both (3 GB
+   aggregate, member caps as today, lease in front), accepting the rare mid-work kill over the
+   box paging.
 4. **Builder lane: capped on the Jetson for the first proof skill, then to the laptop (or a
    cheap dedicated box) after two skills?** This follows the self-building record's own order;
    say if you would rather the builder never run on the Jetson at all, which means it waits for
@@ -498,15 +569,20 @@ rule: break the fix and the test must go red):
 ## 8. Next steps if GO
 
 1. **PR 1 — the guard + the sampler** (templates only, inert): `zoe-agents.slice`, the
-   `zoe-agent` launcher, `zoe-claude-bridge.service`, the advisory `SessionStart` hook,
-   `zoe-agent-mem.timer`, a `ci_safe` test that the slice carries all three memory keys, that
-   the launcher and bridge unit take the session lease in the exec path, and that the builder
-   unit's `ExecStart` (not `ExecCondition`) wraps the runner in both `flock`s. Operator installs
-   the sampler first (baseline week), the slice, launcher and bridge unit a week later.
-2. **PR 2 — the builder lane's shape**: `zoe-builder.service/.timer` with the locks in
-   `ExecStart`, the point-in-time `ExecCondition`s and `BUILDER_SKIP` logging, plus the
-   Omnigent compose `mem_limit`/`memswap_limit`.
-   Inert until the self-building record's PR 6 wires tickets to it.
+   `zoe-agent` launcher, `zoe-claude-bridge.service`, the `serena-mcp.service.d/70-agents-slice.conf`
+   drop-in, the `--slice=` line in `codebase_memory_capped.sh`, the advisory `SessionStart`
+   hook, `zoe-agent-mem.timer`. Its `ci_safe` tests cover **only PR 1's artefacts**: the slice
+   carries all three memory keys; the launcher and the bridge unit take the session lease in
+   the exec path and name the slice; the Serena drop-in and the wrapper both name
+   `zoe-agents.slice` (extend `tests/unit/test_agent_mcp_memory_bounds.py`, which already pins
+   the wrapper). Operator installs the sampler first (baseline week), the rest a week later.
+2. **PR 2 — the builder lane's shape**: `zoe-builder.service/.timer` with the `-E 75`/`-E 76`
+   locks in `ExecStart`, the `ExecStopPost` reason translator, the point-in-time
+   `ExecCondition` scripts, plus the Omnigent compose `mem_limit`/`memswap_limit`. **Its
+   `ci_safe` test lives here, with the unit**: `ExecStart` (not `ExecCondition`) wraps the
+   runner in both `flock`s with distinct `-E` codes, `SuccessExitStatus` lists them, the
+   translator maps every code to a reason string, and the compose file sets `memswap_limit`
+   equal to `mem_limit`. Inert until the self-building record's PR 6 wires tickets to it.
 3. **PR 3 — the runbook**: `docs/knowledge/engineering-off-box.md` + a `ZOE_HOST`-aware
    `land_voice_pr.sh` (probe over `ssh zoe`, the rest local), and the sweep of the 102
    worktrees (list, prune the merged ones, re-check every surviving `.mcp.json` for a stdio
