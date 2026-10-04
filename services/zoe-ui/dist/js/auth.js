@@ -383,10 +383,18 @@
         // sessionStorage is tab-scoped and cleared when the browser tab closes, preventing
         // the kiosk bypass from bleeding into non-kiosk sessions.
         // Also clear any stale localStorage kiosk key left by older code.
+        // The estate (touch/home.html) persists the kiosk flag in localStorage so a
+        // bare navigation keeps kiosk behaviour; this page moves it to the tab-scoped
+        // sessionStorage. CARRY it across before clearing, or a kiosk that navigated
+        // here with a bare /touch/*.html URL loses every kiosk signal — and the
+        // executor (touch-ui-executor.js isViewerContext) would then treat a real
+        // panel as a viewer and stop its bind/poll/push (Codex, #1861).
+        try {
+            if (currentPath.startsWith('/touch/') && (search.includes('kiosk=1') || localStorage.getItem('zoe_kiosk') === '1')) {
+                sessionStorage.setItem('zoe_kiosk', '1');
+            }
+        } catch(_){}
         try { localStorage.removeItem('zoe_kiosk'); } catch(_){}
-        if (currentPath.startsWith('/touch/') && search.includes('kiosk=1')) {
-            try { sessionStorage.setItem('zoe_kiosk', '1'); } catch(_){}
-        }
         const kioskStored = currentPath.startsWith('/touch/') && (function(){ try { return sessionStorage.getItem('zoe_kiosk') === '1'; } catch(_){ return false; } })();
         const isKioskMode = kioskStored || (currentPath.startsWith('/touch/') && search.includes('kiosk=1'));
         // Game modules (qd / jag-board / orbit) were retired 2026-06-24 (see

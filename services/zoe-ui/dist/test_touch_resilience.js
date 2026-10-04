@@ -85,6 +85,15 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       ok('viewer: a laptop on /touch/home.html is a viewer; kiosk flag (URL, local or session) or a registered panel id makes a panel (a generated alias never does)');
       assert(/if \(state\.viewer\) \{[\s\S]{0,400}\} else \{[\s\S]{0,200}bindPanel\(\)/.test(execSrc), 'init must gate bind/sync/push/poll on state.viewer');
       ok('viewer: init skips panel bind, state sync, action poll, push socket and SW poll');
+      // Codex (#1861, round 2): js/auth.js on the legacy touch pages must carry the
+      // localStorage kiosk flag into sessionStorage BEFORE clearing it, or a kiosk
+      // navigating with a bare URL loses every signal before isViewerContext runs.
+      const authSrc = fs.readFileSync(path.join(__dirname, 'js/auth.js'), 'utf8');
+      const carry = authSrc.indexOf("localStorage.getItem('zoe_kiosk') === '1'))");
+      const clear = authSrc.indexOf("localStorage.removeItem('zoe_kiosk')");
+      assert(carry > 0 && clear > carry, 'auth.js must copy zoe_kiosk into sessionStorage before removing it');
+      assert(/sessionStorage\.setItem\('zoe_kiosk', '1'\)/.test(authSrc.slice(carry - 200, clear)));
+      ok('viewer: auth.js carries the kiosk flag into sessionStorage before clearing the localStorage copy');
     }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });
