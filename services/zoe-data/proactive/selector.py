@@ -53,7 +53,7 @@ RAISE_OPEN = "[RAISE — once, naturally, only if it fits; otherwise ignore]"
 # A greeting raise is the one thing chosen for this conversation's first open turn: the
 # header must not hand the brain an "ignore" exit (the sidecar strips by the "[RAISE"
 # prefix, context-blocks.ts, so the header text after it is free).
-RAISE_OPEN_GREETING = "[RAISE — once, naturally, after answering them]"
+RAISE_OPEN_GREETING = "[RAISE — do this]"
 RAISE_CLOSE = "[END RAISE]"
 _ASK = {
     "open_loop": "briefly and warmly ask how that is going",
@@ -325,10 +325,14 @@ def ask_phrasing(hint: str, *, shape: str = "cue") -> str:
             "so never say you have no information about it. One sentence, never quoting "
             "them, never as a list or a reminder.")
     if shape == "greeting":
-        return ("Bring this up: after answering what they said, ask them about it with ONE "
-                f"short, gentle question in your own words{example}. {tail} This is the one "
-                "thing to raise this conversation, so do raise it unless they have just "
-                "brought up something heavier themselves.")
+        # Measured live 2026-10-04 (5 samples each, temperature 0.5, the dentist loop on
+        # "Hi Zoe, how are things?"): "Bring this up … do raise it" voiced 0/5, the block
+        # placed before the user's words 0/5, the cue wording 0/5; "Your reply MUST open
+        # with one short, warm question …" voiced 5/5. A 4B model follows a required
+        # opening, not an invitation.
+        return ("Your reply MUST open with ONE short, warm question asking them about it, in "
+                f"your own words{example}, then answer their greeting. {tail} The only "
+                "exception: they have just brought up something heavier themselves.")
     return (f"If it fits this conversation, ask them about it with ONE short, gentle question "
             f"in your own words{example}. {tail} If it does not fit, leave it out.")
 
