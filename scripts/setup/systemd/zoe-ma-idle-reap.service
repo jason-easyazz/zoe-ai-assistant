@@ -1,0 +1,28 @@
+# Zoe maintenance — stop Music Assistant when idle (flag-dark, operator opt-in).
+#
+# Why: the zoe-music-assistant container holds ~0.5 GB resident on a box with
+# 0.4-0.5 GB free (docs/knowledge/memory-pressure-profile-2026-10-03.md, reclaim
+# row 2) while music plays a few hours a week. This oneshot runs the idle check;
+# the first music request after a reap starts the container again
+# (services/zoe-data/ma_ondemand.py). Record + apply/rollback:
+# docs/knowledge/music-assistant-idle-reap.md
+#
+# Inert until BOTH hold: ZOE_MA_IDLE_REAP=1 in services/zoe-data/.env (read via
+# the EnvironmentFile below AND by zoe-data) and this timer enabled:
+#   cp scripts/setup/systemd/zoe-ma-idle-reap.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now zoe-ma-idle-reap.timer
+
+[Unit]
+Description=Stop Music Assistant after a period with no playback
+
+[Service]
+Type=oneshot
+# ZOE_MA_IDLE_REAP / ZOE_MA_IDLE_MIN / ZOE_MA_REAP_QUIET_HOURS and the MA token
+# come from the same env file zoe-data reads, so the flag has ONE home.
+EnvironmentFile=-%h/assistant/services/zoe-data/.env
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/ma_idle_reap.py --execute
+Nice=10
+# User journald has no persistent storage here; keep the decisions readable.
+StandardOutput=append:%h/.zoe-logs/ma-idle-reap.log
+StandardError=append:%h/.zoe-logs/ma-idle-reap.log
