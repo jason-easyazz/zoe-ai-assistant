@@ -956,6 +956,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/check_emotional_thread.py",
+          "scripts/maintenance/zoe-nightly-dreaming.py",
           "scripts/perf/samantha_bar.py",
           "services/zoe-data/zoe_core_client.py"
         ],
@@ -1622,6 +1623,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/check_emotional_thread.py",
+          "scripts/maintenance/zoe-nightly-dreaming.py",
           "services/zoe-data/auth.py",
           "services/zoe-data/auth_handoff.py",
           "services/zoe-data/mcp_server.py",
@@ -2330,6 +2332,79 @@
         ],
         "typed_env": true
       },
+      "ZOE_MA_CONTAINER": {
+        "defaults": [
+          "'zoe-music-assistant'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py",
+          "services/zoe-data/ma_ondemand.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_IDLE_MIN": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_IDLE_REAP": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py",
+          "services/zoe-data/ma_ondemand.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_INFLIGHT_GRACE_S": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_REAP_QUIET_HOURS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_REAP_STATE_DIR": {
+        "defaults": [
+          "'~/.cache/zoe/ma-reap'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/ma_idle_reap.py",
+          "services/zoe-data/ma_ondemand.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MA_START_TIMEOUT_S": {
+        "defaults": [
+          "'25'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ma_ondemand.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MCP_ACTOR_ROLE": {
         "defaults": [
           "-"
@@ -2419,6 +2494,26 @@
           "services/zoe-data/memory_supersede.py"
         ],
         "typed_env": true
+      },
+      "ZOE_MEMORY_INDEX_COMPACT": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_INDEX_COMPACT_DAY": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe-nightly-dreaming.py"
+        ],
+        "typed_env": false
       },
       "ZOE_MEMORY_LINK_RESOLVER_ENABLED": {
         "defaults": [

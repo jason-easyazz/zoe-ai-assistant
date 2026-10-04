@@ -732,9 +732,40 @@ logs `MEMORY_SEARCH_SUPPLEMENT …` whenever the unfiltered pass was short — c
 (`memory_service._semantic_search`; the owner-filtered query only supplements a short
 result — a short-result trigger alone missed the FULL-BUT-WRONG case measured on the
 confirmation run), so recall no longer depends on graph health.
-Remove the cause by compacting (operator, zoe-data stopped — the recipe is in the script's
-docstring; it backs up the palace and verifies before returning 0). Rebuilding from the
-STORED embeddings is bit-identical; nothing is re-embedded.
+Remove the cause by compacting. Rebuilding from the STORED embeddings is bit-identical;
+nothing is re-embedded. Two ways:
+
+- **In-process, no restart** (flag-dark, `ZOE_MEMORY_INDEX_COMPACT=1` in `.env` + restart
+  once to arm it): `curl -s -X POST -H "X-Internal-Token: $ZOE_INTERNAL_TOKEN"
+  http://127.0.0.1:8000/api/memories/maintenance/compact-index` — the service exports the
+  rows, writes a JSON export + tar backup to `~/.zoe/palace-backups/`, recreates the
+  collection in the same space behind a maintenance gate (readers block ≤ 60 s) and
+  verifies; the body carries `before`/`verify`/`seconds`, the log line is
+  `MEMORY_INDEX_COMPACT`. Health first: `GET …/maintenance/index-health` (same token) gives
+  the ratio — counted from the persisted index metadata PLUS the write-ahead log tail, so
+  `fresh=True` (just rebuilt, nothing persisted yet) is still a real count, and
+  `ratio_known=false` means neither source could tell (the weekly trigger then compacts
+  once per period rather than skipping). The POST answers 409 (`status="busy"`) when
+  in-flight memory work did not drain within 30 s — retry later, nothing changed. A 500
+  with `status="restored"` means the rows were put back from the export and verified.
+  **`status="blocked"` = the gate is CLOSED**: the rebuild failed AND the restore could not
+  be verified, so the service keeps the drawers collection unavailable (every memory
+  read/write fails fast with "maintenance FAILED CLOSED", `index-health` shows
+  `maintenance_blocked=true` + `maintenance_reason` + `backup_tar`, the zoe-data log has
+  `MEMORY_INDEX_COMPACT GATE CLOSED`) instead of reopening onto an absent/partial store
+  that the opener would silently recreate as an EMPTY cosine collection. Recovery: stop
+  zoe-data, restore `backup_tar` over the palace (`tar -xf … -C ~/`, the archive holds the
+  palace directory), or re-add from the JSON `export` with the manual script, verify with
+  `scripts/maintenance/compact_drawers_index.py` (live rows == exported), then restart —
+  the block is in-process state and a restart clears it.
+- **Automated weekly** (once the flag is armed): `zoe-nightly-dreaming.py` (the 02:30
+  `zoe-dreaming.timer`) checks the health on `ZOE_MEMORY_INDEX_COMPACT_DAY` (default Sunday,
+  Zoe-local) and POSTs the compaction only when `compaction_advised` is true. Its verdict is
+  in `~/training/logs/dreaming-systemd.log` under `=== Weekly drawers index compaction ===`;
+  while the flag is dark it prints the manual fallback and moves on.
+- **Manual fallback** (zoe-data stopped): `scripts/maintenance/compact_drawers_index.py
+  --compact --i-stopped-zoe-data` — the recipe is in the script's docstring; it backs up the
+  palace and verifies before returning 0.
 
 **Negative controls that held:** index lag ruled out (a fact is searchable 8 s after the
 turn in a small store); query embeddings are unit-norm, no NaN; the `where` filter alone

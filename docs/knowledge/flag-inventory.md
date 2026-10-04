@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-497 flags; 495 not documented in `.env.example`.
+506 flags; 504 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -110,7 +110,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DAILY_BRIEFING_CACHE_MAX_USERS` | `'64'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS` | `'120'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DATA_DB` | `dynamic` | no | NO | `services/zoe-data/database.py` |
-| `ZOE_DATA_URL` | `'http://127.0.0.1:8000'`, `-` | no | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/perf/samantha_bar.py`<br>`services/zoe-data/zoe_core_client.py` |
+| `ZOE_DATA_URL` | `'http://127.0.0.1:8000'`, `-` | no | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/zoe-nightly-dreaming.py`<br>`scripts/perf/samantha_bar.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_DB_ACQUIRE_TIMEOUT_S` | `''` | no | NO | `services/zoe-data/db_pool.py` |
 | `ZOE_DB_CONTAINER` | `'zoe-database'` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
 | `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
@@ -175,7 +175,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_IDLE_CONSOLIDATION_MIN_TURNS` | `2` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
 | `ZOE_INTENT_DISPATCH_REQUIRE_TOKEN` | `''` | no | NO | `services/zoe-data/auth.py` |
 | `ZOE_INTENT_ROUTER_GATE` | `'1'` | no | NO | `services/zoe-data/fast_tiers.py` |
-| `ZOE_INTERNAL_TOKEN` | `''`, `-` | yes | NO | `scripts/maintenance/check_emotional_thread.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/auth_handoff.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/zoe_core_client.py` |
+| `ZOE_INTERNAL_TOKEN` | `''`, `-` | yes | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/zoe-nightly-dreaming.py`<br>`services/zoe-data/auth.py`<br>`services/zoe-data/auth_handoff.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/zoe_core_client.py` |
 | `ZOE_KANBAN_BACKEND` | `'executor'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_BOARD` | `'default'` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
 | `ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET` | `'2'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
@@ -245,6 +245,13 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LOG_MAX_BYTES` | `dynamic` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_LOOP_LIFECYCLE` | `False` | yes | NO | `services/zoe-data/open_loop_lifecycle.py` |
 | `ZOE_MAX_BROWSER_TABS` | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_MA_CONTAINER` | `'zoe-music-assistant'` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/ma_ondemand.py` |
+| `ZOE_MA_IDLE_MIN` | `dynamic` | no | NO | `scripts/maintenance/ma_idle_reap.py` |
+| `ZOE_MA_IDLE_REAP` | `'0'` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/ma_ondemand.py` |
+| `ZOE_MA_INFLIGHT_GRACE_S` | `dynamic` | no | NO | `scripts/maintenance/ma_idle_reap.py` |
+| `ZOE_MA_REAP_QUIET_HOURS` | `-` | no | NO | `scripts/maintenance/ma_idle_reap.py` |
+| `ZOE_MA_REAP_STATE_DIR` | `'~/.cache/zoe/ma-reap'` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/ma_ondemand.py` |
+| `ZOE_MA_START_TIMEOUT_S` | `'25'` | no | NO | `services/zoe-data/ma_ondemand.py` |
 | `ZOE_MCP_ACTOR_ROLE` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_ACTOR_USER_ID` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_STRICT_USER_ID` | `'false'` | no | NO | `services/zoe-data/mcp_server.py` |
@@ -254,6 +261,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MEMORY_COMPOSE_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_memory_compose.py` |
 | `ZOE_MEMORY_DIGEST_LOOKBACK_HOURS` | `-` | no | NO | `services/zoe-data/memory_digest.py` |
 | `ZOE_MEMORY_IMPLICIT_SUPERSEDE` | `False` | yes | NO | `services/zoe-data/memory_supersede.py` |
+| `ZOE_MEMORY_INDEX_COMPACT` | `''` | no | NO | `services/zoe-data/memory_service.py` |
+| `ZOE_MEMORY_INDEX_COMPACT_DAY` | `-` | no | NO | `scripts/maintenance/zoe-nightly-dreaming.py` |
 | `ZOE_MEMORY_LINK_RESOLVER_ENABLED` | `''` | no | NO | `services/zoe-data/memory_digest.py` |
 | `ZOE_MEMORY_LINT_IN_DREAMING` | `''` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LINT_NEAR_DUP_RATIO` | `'0.92'` | no | NO | `services/zoe-data/memory_lint.py` |
