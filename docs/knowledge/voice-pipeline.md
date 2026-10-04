@@ -1177,6 +1177,83 @@ Barge-in detected during playback (monitor, prob=0.99, th=0.75, t+1120ms, window
   the sustained-speech rule each turns a test red.
 - The replay gate cannot see this: it starts from saved recordings and stops before TTS.
 
+### Phase 1 — duck → decide → resume (flag-dark, 2026-10-04)
+
+Design record: [`docs/research/barge-in-duck-decide-resume-2026-10-04.md`](../research/barge-in-duck-decide-resume-2026-10-04.md)
+§4.1 (owner decision Q14: "Go, phase 1"). Pi daemon only; the Jetson is untouched (RAM delta 0).
+With `BARGE_DUCK_ENABLED` off (the default) nothing above changes, byte for byte — the "stops
+within 300 ms" tests run with the flag off and are the lock. With it on, the detector's fire
+becomes stage 1 of three:
+
+1. **Duck.** `pactl set-sink-input-volume <idx> -15dB` on the player's own PulseAudio
+   **sink-input** (found by the aplay pid in `pactl list sink-inputs`; the baseline volume is read
+   from the same listing and restored as an absolute value). Applied at the mixer, so the
+   up-to-a-sentence already queued in the stream is ducked too. Never the sink: the AirPlay-2 "Zoe
+   Panel" output shares it. `BARGE_DUCK_DB` (−15), `BARGE_DUCK_RAMP_MS` (0 = one step; >0 = up to
+   3 relative steps on a helper thread). No `pactl`, or no sink-input for the player yet, means the
+   fire falls back to today's hard stop (`Barge-in duck unavailable … — hard stop`).
+2. **Decide** (`_BargeDecider`, on the same feeder thread as the detector — the stream loop only
+   sees a barge at NDJSON line boundaries). Speech accumulated since onset (the detector's window
+   hits count) ≥ `BARGE_COMMIT_SPEECH_MS` (900) → **commit**: restore the volume, terminate the
+   player, set the barge flag, `close()` the turn's HTTP response so the server-side cancel (and
+   A1's abort) lands at the commit instant, and record the played prefix — the sentence writes
+   are kept in `_PlayoutLedger` (write time + duration, sentence k starts at
+   `max(write_k, end_{k-1})`), heard when `end_k + BARGE_PLAYOUT_LATENCY_MS` (100) ≤ commit →
+   `_last_barge_commit = {heard_chunks, heard_ms}` for phase 3. `BARGE_RESUME_SILENCE_MS` (400) of
+   quiet first → **resume**: restore, playback carries on, the detector re-arms for the same
+   playback. Nothing resolved `BARGE_DECIDE_MAX_MS` (2000) after onset → **ceiling** (a resume).
+   The reply finishing inside the window → **ended** (no kill; someone still talking becomes the
+   next turn). The −1.0 VAD-failure sentinel counts toward neither speech nor quiet, so a broken
+   VAD can only resume or hit the ceiling.
+3. **Seed the next turn** (`BARGE_SEED_NEXT_TURN`, default true, only read with the duck on). A
+   commit keeps recording on the monitor's stream to the normal endpoint (`_Endpointer(spoke=True)`,
+   `RECORD_SECONDS_MAX` cap): the `FOLLOWUP_LOOKBACK_CHUNKS` ring before onset, the decide window
+   (frames capped at lookback + ceiling/chunk + 1, ~75 KB), then the rest of the utterance. The
+   WAV is handed to `voice_command` (`_monitor.take_seed()` → `_follow_up_source`), which runs the
+   next turn on it **without** the follow-up beep or a fresh listen — the dormant LiveKit lane's
+   `barge_frames` shape. Off: the commit still happens; the follow-up beeps and listens as today.
+
+One line per event, countable from the log alone:
+
+```
+Barge-in detected during playback (monitor, prob=0.99, th=0.75, t+1120ms, window=…+fast) — ducked -15dB, deciding
+BARGE_DECIDE outcome=commit ms=960 speech_ms=960 duck_db=-15.0 heard_chunks=1 heard_ms=1000 (monitor)
+```
+
+`ms=` is measured from speech onset; `heard_*` is −1 unless the outcome is `commit`; the source is
+`monitor` (a reply) or `queue` (an announcement — same duck and decide, no seed, since the wake
+stream owns the mic there). **Trap:** PulseAudio's `module-stream-restore` persists a stream's
+volume per application. A player that exits while ducked (the reply ends mid-window) or a restore
+whose `pactl` fails leaves every later `aplay` stream at −15 dB — the daemon records `_duck_leak`
+and heals the next player's sink-input from the feeder thread, once per player, until a `pactl`
+succeeds (`healed leaked stream volume`). The honest trade (research §5): a true interruption is
+*acknowledged* as fast as today (the duck) but *stopped* ~0.7–0.9 s later; false barges (noise,
+"mm-hmm") no longer kill the reply.
+
+- Pinned by the phase-1 lanes in `tests/unit/test_voice_daemon_barge_in.py` (flag-off lock,
+  commit ≤ 1.1 s from onset, resume + re-arm, ceiling, sentinel never commits, sink-input not sink,
+  no-sink-input fallback, seed shape + bound + off, the stream-restore heal). Negative controls
+  measured 2026-10-04: removing the flag read, counting the sentinel as speech, ducking the sink,
+  dropping the re-arm, skipping `r.close()`, or lifting the seed cap each turns exactly one red.
+- **The replay gate cannot see any of this**: it starts from saved recordings and stops before
+  TTS, so it measures only that the Silero loader and the STT/brain path are unchanged (phase 1
+  touches neither). Its PASS is a necessary no-regression check, not evidence the duck works.
+- **Pi lab (operator, panel on; research §6.3).** Deploy the daemon from a worktree
+  (`scripts/setup/deploy-pi-voice.sh`, or rsync `scripts/setup/zoe_voice_daemon.py` to
+  `zoe-pi:/home/pi/.zoe-voice/`), add `BARGE_DUCK_ENABLED=1` to `/home/pi/.zoe-voice/.env.voice`,
+  `systemctl --user restart zoe-voice`, then: (1) confirm the duck is audible —
+  `pactl list sink-inputs` while a reply plays must show the aplay stream and its volume drop
+  on a barge, the sink volume unchanged; (2) play one ~20 s reply and inject three sets through the
+  room — 10 backchannels ("mm-hmm", "yeah"), 10 real interruptions ("stop", a full sentence), and
+  clips from the corpus quarantine folders `quarantine-nonspeech-20260804` and
+  `quarantine-tv-falsewakes-20260719` (aggregates only, no clip names in results); (3) read the
+  `BARGE_DECIDE` lines (`journalctl --user -u zoe-voice | grep BARGE_DECIDE`). First bar: false
+  commits on backchannels/noise ≤ 10 %, resume on noise ≥ 90 %, real-interruption commit ≤ 1.1 s
+  from onset, no self-interruption regression (the grace is unchanged), no −15 dB reply after a
+  reply that ended mid-window. Phase 2 (STT-assisted decide for short bursts) exists to fix whatever
+  false-commit rate this shows; phase 3 (heard prefix on the wire + sidecar trim) pairs with A1.
+  Rollback: remove the flag, restart.
+
 ### Brain side of a barge-in — abort the Flue turn (flag-dark, 2026-10-03)
 
 Stopping playback does not stop the brain. With `ZOE_FLUE_ABORT_ON_CANCEL` off (the default), a
