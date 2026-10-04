@@ -85,10 +85,40 @@ def _ma_headers() -> dict[str, str]:
     return h
 
 
+# ── Idle reap (flag-dark, ZOE_MA_IDLE_REAP) ──────────────────────────────────
+# MA commands that are an EXPLICIT user intent and therefore start a reaped MA
+# (ma_ondemand.ensure_running). Reads are deliberately absent: the panel polls
+# players/all + player_queues/all every 5 s and the listening journal polls
+# recently_played_items every 300 s — waking on those would undo every reap.
+# Entry points that READ first (search_and_play/play_media/control/resolve_music
+# all start with get_players) call ensure_running() themselves.
+_MA_WAKE_COMMANDS = frozenset({
+    "music/search", "player_queues/play_media", "music/playlists/library_items",
+    "music/playlists/playlist_tracks", "music/playlists/create_playlist",
+    "music/favorites/add_item", "config/providers/setup", "config/providers/reconfigure",
+    "config/providers/save",
+})
+_MA_ACTIVITY_PREFIXES = ("player_queues/", "players/cmd/")
+
+
+async def ensure_running() -> bool:
+    """Start a reaped MA before a user-intent call. Flag off → True, no-op."""
+    import ma_ondemand
+    if not ma_ondemand.enabled():
+        return True
+    return await ma_ondemand.ensure_running()
+
+
 async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any) -> Any:
     """POST one MA command; return the httpx.Response, or None on a network/
     transport failure (unreachable, timeout). Never raises. `timeout_s` is a
     keyword for slow writes (no MA command takes a `timeout_s` arg)."""
+    import ma_ondemand
+    reap_on = ma_ondemand.enabled()
+    if reap_on and command in _MA_WAKE_COMMANDS:
+        await ma_ondemand.ensure_running()
+    if reap_on and command.startswith(_MA_ACTIVITY_PREFIXES) and command != "player_queues/all":
+        ma_ondemand.note_activity()
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as c:
             # MA's JSON-RPC shim requires args NESTED under "args" — flat args are
@@ -97,12 +127,17 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
             payload: dict[str, Any] = {"command": command}
             if args:
                 payload["args"] = args
-            return await c.post(f"{_ma_url()}/api", json=payload, headers=_ma_headers())
+            r = await c.post(f"{_ma_url()}/api", json=payload, headers=_ma_headers())
+            if reap_on:
+                ma_ondemand.note_seen_up()
+            return r
     except Exception as exc:  # noqa: BLE001 — MA is optional; never break Zoe
         logger.debug("MA %s unreachable: %s", command, exc)
         # A transport failure is the only sign zoe-data gets that MA went away —
         # possibly to be re-created on a different version. Re-read /info next time.
         _invalidate_ma_version()
+        if reap_on:  # ...and never let a pre-stop "seen up" skip the next wake
+            ma_ondemand.note_seen_down()
         return None
 
 
@@ -243,7 +278,14 @@ async def _ma_api_for_write() -> Optional[bool]:
     """For a credential WRITE: True = 2.10+ flow API, False = pre-2.10 API,
     None = MA's version is unreadable right now. A write must not guess: on 2.10
     the pre-2.10 save 'succeeds' and drops the cookie, so an unknown version fails
-    the write instead of taking the old path."""
+    the write instead of taking the old path.
+
+    Every credential write (setup form, connect, re-auth, OAuth) funnels through
+    here, so this is where a reaped MA is woken: the version probe below is a
+    direct /info read that would otherwise report "unreadable" and end the
+    flow as "unknown provider" before any wake command ran — and the YouTube
+    Music reconnect is the operator's only path to re-auth after a restart."""
+    await ensure_running()
     ver = await ma_server_version(fresh=True)
     if ver is None:
         logger.info("MA version unreadable (/info) — refusing a provider write rather than guess the API")
@@ -413,6 +455,7 @@ _PLAYER_CMDS = {
 async def control(action: str, player_id: str = "", value: Any = None) -> bool:
     """Run a transport/volume action on the target player. Returns True on a
     dispatched command (best-effort — MA is fire-and-forget for transport)."""
+    await ensure_running()
     players = await get_players()
     player = _pick_player(players, player_id)
     if player is None:
@@ -450,6 +493,7 @@ async def seek(position_seconds: Any, player_id: str = "") -> bool:
     Best-effort — a bad position or a dead MA just no-ops; never raises. MA's
     `player_queues/seek` takes {queue_id, position}; queue_id == player_id for a
     solo player (see `now_playing`)."""
+    await ensure_running()
     try:
         pos = max(0, int(position_seconds))
     except (TypeError, ValueError):
@@ -473,6 +517,7 @@ async def transfer(target_player_id: str, source_player_id: str = "") -> bool:
     MA's `player_queues/transfer`. `queue_id == player_id` for a solo player
     (see `now_playing`). Best-effort — MA carries over play state via auto_play;
     never raises. Returns True when a transfer command was dispatched."""
+    await ensure_running()
     if not target_player_id:
         return False
     players = await get_players()
@@ -684,6 +729,7 @@ async def group_players(target_player_id: str,
     `routers/AGENTS.md`). When the list is unavailable we forward the command
     and let MA arbitrate.
     """
+    await ensure_running()
     target = str(target_player_id or "")
     if not target:
         return {"ok": False, "reason": "missing target_player_id"}
@@ -737,6 +783,7 @@ async def ungroup_player(player_id: str) -> dict[str, Any]:
     (controller.py:1211-1240); re-deriving it here would be a second, drifting
     copy of provider logic Zoe does not own.
     """
+    await ensure_running()
     pid = str(player_id or "")
     if not pid:
         return {"ok": False, "reason": "missing player_id"}
@@ -762,6 +809,7 @@ async def search_and_play(query: str, player_id: str = "",
     `zoe_user_id` is the acting user for the listening journal (identity-
     threaded callers pass it; unidentified callers leave it '' → journaled as
     the reserved guest user via music_history.resolve_music_user)."""
+    await ensure_running()
     players = await get_players()
     player = _pick_player(players, player_id)
     if player is None:
@@ -814,6 +862,7 @@ async def queue_move(queue_id: str, item_id: str, to_index: int) -> bool:
     """Reorder: move a queue item to an absolute index. MA's move_item takes a
     signed pos_shift, so compute it from the live position (robust vs a stale
     client index)."""
+    await ensure_running()
     items = await _queue_items(queue_id)
     if not items:
         return False
@@ -829,21 +878,25 @@ async def queue_move(queue_id: str, item_id: str, to_index: int) -> bool:
 
 async def queue_remove(queue_id: str, item_id: str) -> bool:
     """Remove one item from the queue (by queue_item_id)."""
+    await ensure_running()
     return await _ma_ok("player_queues/delete_item", queue_id=queue_id, item_id_or_index=item_id)
 
 
 async def queue_clear(queue_id: str) -> bool:
     """Clear the whole queue."""
+    await ensure_running()
     return await _ma_ok("player_queues/clear", queue_id=queue_id)
 
 
 async def queue_play_index(queue_id: str, index: int) -> bool:
     """Jump to (and play) a specific queue position."""
+    await ensure_running()
     return await _ma_ok("player_queues/play_index", queue_id=queue_id, index=int(index))
 
 
 async def queue_save_playlist(queue_id: str, name: str) -> bool:
     """Save the current queue as a new playlist."""
+    await ensure_running()
     name = (name or "").strip()
     if not name:
         return False
@@ -886,6 +939,7 @@ async def playlist_tracks(uri: str, limit: int = 100) -> list[dict[str, Any]]:
 
 async def playlist_add(playlist_uri: str, track_uri: str) -> bool:
     """Add a track to an existing playlist."""
+    await ensure_running()
     if not (playlist_uri and track_uri):
         return False
     return await _ma_ok("music/playlists/add_playlist_tracks", db_playlist_id=playlist_uri, uris=[track_uri])
@@ -893,6 +947,7 @@ async def playlist_add(playlist_uri: str, track_uri: str) -> bool:
 
 async def favorite_add(uri: str) -> bool:
     """Favorite (thumbs-up / add to library) a media item by uri."""
+    await ensure_running()
     if not uri:
         return False
     return await _ma_ok("music/favorites/add_item", item=uri)
@@ -910,6 +965,7 @@ async def favorite_now_playing(player_id: str = "") -> dict[str, Any]:
     snapshot, favourite its uri. `favorite_add` no-ops falsy uris, so radio /
     provider-less streams (no uri) fall out as "nothing playing" rather than a
     silent success."""
+    await ensure_running()
     np = await now_playing(player_id)
     if not np or np.get("state") not in ("playing", "paused") or not np.get("uri"):
         return {"ok": False, "reason": "nothing playing"}
@@ -936,6 +992,7 @@ async def favorite_remove(uri: str) -> bool:
     An item that was never favourited has no library row, so there is nothing
     to remove — that is success, not failure (the heart is already off).
     """
+    await ensure_running()
     if not uri:
         return False
     item = await _ma("music/item_by_uri", uri=uri)
@@ -1108,6 +1165,7 @@ async def play_media(uri: str, player_id: str = "", option: str = "replace",
     uri = (uri or "").strip()
     if not uri:
         return {"ok": False, "reason": "empty uri"}
+    await ensure_running()
     players = await get_players()
     if player_id:
         # Same rule as set_preferred_player / group_players: [] means we could
@@ -1161,6 +1219,7 @@ async def set_dont_stop_the_music(enabled: bool, player_id: str = "") -> bool:
     runs out, MA auto-continues with similar tracks (needs a SIMILAR_TRACKS
     provider, e.g. ytmusic — MA rejects the enable otherwise → False).
     Best-effort — never raises."""
+    await ensure_running()
     players = await get_players()
     player = _pick_player(players, player_id)
     if player is None:
@@ -1345,6 +1404,9 @@ async def resolve_music(intent: Any, user_id: str = "") -> dict[str, Any]:
 
     if action == "setup":
         return await resolve_music_setup(query)
+
+    if action != "status":  # "what's playing?" on a reaped MA is "nothing" — no wake
+        await ensure_running()
 
     if action == "transfer" and query:
         # Voice path for speaker switching: "move/switch music to the kitchen".

@@ -1052,8 +1052,8 @@ because Theodore reacts; Zoe currently discards the reactions.
 - [ ] **W1.5** conversational repair (confidence/heuristic → clarify) — NOT STARTED
 - [ ] **W2.5** follow-through commitment tracker — NOT STARTED
 - [ ] **W5.3** onboarding interview at enrollment — NOT STARTED
-- [ ] **W5.4** per-user personas + kid mode — NOT STARTED (needs W5)
-- [ ] **emotional-safety policy** (`docs/governance/`) — NOT STARTED (gates W4 writes + W10)
+- [ ] **W5.4** per-user personas + kid mode — **PHASE 0 LANDED, FLAG-DARK** (`ZOE_PERSONA_LAYER`, default OFF: household persona record + per-member `member_mode` field default `companion`, validated, admin-only edit routes, legacy-lane prompt only — NOT the live Flue brain; no voice/panel/phone editor; kid mode is a rule set, nothing assigns it; SSOT `docs/knowledge/persona-layer.md`). Remaining: sidecar consumer, editing UI, kid assignment + tool narrowing (needs W5)
+- [x] **emotional-safety policy** (`docs/governance/emotional-safety-note.md`) — WRITTEN (normative; persona boundaries, no self-editing identity, kids/guests, affective consent+retention, crisis language, drift bar). Still gates W4 writes + W10; its crisis path is a requirement NOT YET BUILT
 - [ ] **W17.1** cross-surface active-thread block in the for-prompt packet — NOT STARTED
 - [ ] **W18.1** voice feedback intent → `chat_feedback` — NOT STARTED
 - [ ] **W18.2** feedback consumers (W10 reflection + W16 scoreboard + W7 material) — NOT STARTED

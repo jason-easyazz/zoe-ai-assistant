@@ -21,7 +21,7 @@ bytes; do not recreate `docs/archive/`.
 Current user, operator, and developer guides.
 
 ### `/docs/governance/`
-Repository rules, safety guidance, and design principles.
+Repository rules, safety guidance, and design principles. Includes [`emotional-safety-note.md`](governance/emotional-safety-note.md) — the normative note for Zoe's personality layer and anything affective.
 
 ---
 

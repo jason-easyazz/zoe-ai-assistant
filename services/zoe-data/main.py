@@ -2248,6 +2248,11 @@ except Exception as _lk_router_exc:
 from routers import telegram_media as _telegram_media  # noqa: E402
 _telegram_media.register(app)
 
+# Persona layer, phase 0 (flag-dark): GET/PUT /api/persona, reset, per-member mode. Mounted
+# ONLY when ZOE_PERSONA_LAYER is on — flag off = 404. See docs/governance/emotional-safety-note.md.
+from routers import persona as _persona_router  # noqa: E402
+_persona_router.register(app)
+
 
 @app.get("/.well-known/agent.json", include_in_schema=False)
 async def a2a_well_known():
