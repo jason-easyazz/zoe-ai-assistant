@@ -21,7 +21,11 @@
     // out with a dead id, 401, and the who+PIN card is raised at boot instead
     // of the ambient home. (Member sessions carry no expires_at.)
     if(ok&&s.expires_at&&Date.parse(s.expires_at)<Date.now()){ok=false;try{localStorage.removeItem('zoe_session');}catch(e2){}}}catch(e){ok=false;}
-    try{kiosk=(new URLSearchParams(location.search)).get('kiosk')==='1'||localStorage.getItem('zoe_kiosk')==='1';}catch(e){}
+    // Three kiosk signals: the URL, localStorage (ours), and sessionStorage (what
+    // js/auth.js keeps on the legacy touch pages) — a bare return navigation from
+    // one of those pages must still boot as a kiosk.
+    try{kiosk=(new URLSearchParams(location.search)).get('kiosk')==='1'||localStorage.getItem('zoe_kiosk')==='1'||sessionStorage.getItem('zoe_kiosk')==='1';}catch(e){}
+    if(kiosk){try{localStorage.setItem('zoe_kiosk','1');}catch(e){}}
     window.__kiosk=kiosk;
     // Kiosk boots as GUEST into the ambient home (like skybridge did); the
     // who+PIN card is summoned on demand when something personal needs auth.

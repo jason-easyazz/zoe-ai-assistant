@@ -94,11 +94,12 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       // localStorage kiosk flag into sessionStorage BEFORE clearing it, or a kiosk
       // navigating with a bare URL loses every signal before isViewerContext runs.
       const authSrc = fs.readFileSync(path.join(__dirname, 'js/auth.js'), 'utf8');
-      const carry = authSrc.indexOf("localStorage.getItem('zoe_kiosk') === '1'))");
-      const clear = authSrc.indexOf("localStorage.removeItem('zoe_kiosk')");
-      assert(carry > 0 && clear > carry, 'auth.js must copy zoe_kiosk into sessionStorage before removing it');
-      assert(/sessionStorage\.setItem\('zoe_kiosk', '1'\)/.test(authSrc.slice(carry - 200, clear)));
-      ok('viewer: auth.js carries the kiosk flag into sessionStorage before clearing the localStorage copy');
+      const blk = /if \(currentPath\.startsWith\('\/touch\/'\)\) \{([\s\S]{0,400})\} else \{([\s\S]{0,120})\}/.exec(authSrc); assert(blk, 'auth.js kiosk-flag block');
+      assert(/sessionStorage\.setItem\('zoe_kiosk', '1'\)/.test(blk[1]) && /localStorage\.setItem\('zoe_kiosk', '1'\)/.test(blk[1]) && !/removeItem\('zoe_kiosk'\)/.test(blk[1]), 'on touch pages auth.js mirrors the kiosk flag and never deletes the estate\'s localStorage copy');
+      assert(/localStorage\.removeItem\('zoe_kiosk'\)/.test(blk[2]), 'off touch the stale key is cleared');
+      const homeSrc = fs.readFileSync(path.join(__dirname, 'touch/home.html'), 'utf8');
+      assert(/sessionStorage\.getItem\('zoe_kiosk'\)==='1'/.test(homeSrc.slice(0, 6000)), 'the estate bootstrap must honour the session-scoped kiosk flag');
+      ok('viewer: the kiosk flag survives bare navigations in both directions (auth.js mirrors, never deletes on touch; the estate bootstrap reads the session copy)');
       // Codex (#1861, round 4): registering the generated alias (touch/settings.html
       // setLocalPanelId after /panels/register) must drop the alias marker, or the
       // now-registered panel reads as a viewer after reload.

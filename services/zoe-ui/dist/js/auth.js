@@ -389,12 +389,20 @@
         // here with a bare /touch/*.html URL loses every kiosk signal — and the
         // executor (touch-ui-executor.js isViewerContext) would then treat a real
         // panel as a viewer and stop its bind/poll/push (Codex, #1861).
+        // On a touch page the localStorage copy is the ESTATE's persistence (touch/
+        // home.html reads it on a bare return navigation) — mirror it, never delete
+        // it. Off touch it is stale (older code) and the kiosk bypass must not bleed
+        // into a desktop session, so there it is cleared.
         try {
-            if (currentPath.startsWith('/touch/') && (search.includes('kiosk=1') || localStorage.getItem('zoe_kiosk') === '1')) {
-                sessionStorage.setItem('zoe_kiosk', '1');
+            if (currentPath.startsWith('/touch/')) {
+                if (search.includes('kiosk=1') || localStorage.getItem('zoe_kiosk') === '1') {
+                    sessionStorage.setItem('zoe_kiosk', '1');
+                    localStorage.setItem('zoe_kiosk', '1');
+                }
+            } else {
+                localStorage.removeItem('zoe_kiosk');
             }
         } catch(_){}
-        try { localStorage.removeItem('zoe_kiosk'); } catch(_){}
         const kioskStored = currentPath.startsWith('/touch/') && (function(){ try { return sessionStorage.getItem('zoe_kiosk') === '1'; } catch(_){ return false; } })();
         const isKioskMode = kioskStored || (currentPath.startsWith('/touch/') && search.includes('kiosk=1'));
         // Game modules (qd / jag-board / orbit) were retired 2026-06-24 (see
