@@ -160,6 +160,11 @@ def test_model_licence_rule_and_pin(tmp_path):
     reg["perm"]["sha256"] = "0" * 64
     with pytest.raises(emb_mod.ModelRefused, match="pinned"):
         emb_mod.resolve_model("perm", models, registry=reg)
+    # a download that does not match the pinned digest is discarded, never left on disk
+    reg["perm"]["sha256"] = emb_mod.sha256_file(path)
+    with pytest.raises(emb_mod.ModelRefused, match="discarded"):
+        emb_mod.resolve_model("perm", tmp_path / "fresh", registry=reg, opener=_fake_opener(b"tampered"))
+    assert not list((tmp_path / "fresh").glob("*"))
     # missing file + downloads disabled
     with pytest.raises(emb_mod.ModelRefused, match="disabled"):
         emb_mod.resolve_model("perm", tmp_path / "other", registry=reg, download=False)

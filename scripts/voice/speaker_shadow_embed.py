@@ -183,6 +183,9 @@ def resolve_model(
                     if not chunk:
                         break
                     out.write(chunk)
+            pinned_dl = spec.get("sha256")
+            if pinned_dl and sha256_file(tmp) != pinned_dl:  # verify BEFORE publishing the file
+                raise ModelRefused(f"{spec['file']}: downloaded bytes do not match the pinned sha256 — discarded")
         except Exception:
             tmp.unlink(missing_ok=True)
             raise
