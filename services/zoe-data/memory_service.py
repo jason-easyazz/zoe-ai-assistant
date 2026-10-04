@@ -29,6 +29,7 @@ Safety rails enforced here, not in callers:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import hashlib
 import json
@@ -42,6 +43,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from memory_importance import score_importance
@@ -174,6 +176,8 @@ def get_drawers_collection(data_dir: str) -> Any:
     client, the existing collection as-is, and ``hnsw:space=cosine`` only when a brand-new
     palace has none yet. The live palace keeps its own ``l2`` space.
     """
+    if not getattr(_OP_THREAD, "depth", 0):   # a leased op was admitted under the gate already
+        _wait_for_maintenance_gate()
     client = _palace_client(data_dir)
     ef = _drawers_embedding_function()
     try:
@@ -185,6 +189,282 @@ def get_drawers_collection(data_dir: str) -> Any:
         return client.create_collection(
             _DRAWERS_COLLECTION, metadata={"hnsw:space": "cosine"}, embedding_function=ef
         )
+
+
+# ── Maintenance gate + in-process index compaction (ZOE_MEMORY_INDEX_COMPACT) ──────────
+# chroma 1.x never compacts a persistent HNSW index; demo-user churn left 1,591 elements for
+# 258 live rows on 2026-10-04 and owner-filtered queries came back empty. The fix is a
+# rebuild from the STORED embeddings (delete + recreate the collection, re-add; nothing is
+# re-embedded). Done in-process it needs ONE guarantee: while the collection is absent,
+# nothing may call ``get_drawers_collection`` — its fallback would CREATE the collection
+# with ``hnsw:space=cosine`` and race the rebuild into the wrong space. Every drawers read
+# and write funnels through that opener (``MemoryService._collection`` and zoe_agent's
+# direct call), so the opener waits on this event; it is SET in normal operation and
+# CLEARED only for the duration of the swap, by the one compaction thread, which talks to
+# the cached client directly and never through the opener.
+#
+# The gate alone only stops NEW openers. ``_run_sync`` uses the default (multi-threaded)
+# executor, so an operation that already holds a handle can still be mid-flight when the
+# gate closes — a write landing between the export and the delete would be lost, a later
+# one would use a stale collection id. Hence the LEASE: ``collection_op`` admits an
+# operation under the gate and counts it until it ends (``_run_sync`` wraps every executor
+# call; direct users of the opener wrap their whole read-modify-write). The compaction
+# closes the gate, then DRAINS the count to zero (bounded) before it exports, and aborts
+# with no change if it cannot. Reader/writer lock semantics, spelled out.
+_MAINTENANCE_OPEN = threading.Event()
+_MAINTENANCE_OPEN.set()
+_MAINTENANCE_WAIT_S = 60.0          # a caller blocks at most this long before raising
+_MAINTENANCE_DRAIN_S = 30.0         # the compaction waits at most this long for in-flight ops
+_OPS_COND = threading.Condition()   # guards _ACTIVE_OPS; notified when a lease is released
+_ACTIVE_OPS = 0
+_OP_THREAD = threading.local()      # .depth: this thread's lease nesting (re-entrant)
+_COMPACT_LOCK = threading.Lock()    # one compaction at a time
+_COMPACT_BATCH = 100
+_COMPACT_PROBE = "When did I tell you about the dentist?"   # the measured failing sentence
+_COMPACT_BACKUPS_DIR = os.path.expanduser("~/.zoe/palace-backups")
+
+
+def _wait_for_maintenance_gate(timeout: float | None = None) -> None:
+    wait = _MAINTENANCE_WAIT_S if timeout is None else timeout
+    if _MAINTENANCE_OPEN.is_set() or _MAINTENANCE_OPEN.wait(wait):
+        return
+    raise MemoryServiceError(
+        f"memory index maintenance in progress: the drawers collection did not reopen within {wait:g}s"
+    )
+
+
+@contextlib.contextmanager
+def collection_op(timeout: float | None = None):
+    """Admit ONE collection operation under the maintenance gate and hold its lease until
+    the block ends (also on exceptions). Re-entrant per thread, so nested helpers that call
+    ``get_drawers_collection`` inside a leased op skip the gate. Admission is re-checked
+    under ``_OPS_COND`` so no op can slip in after the compaction closes the gate."""
+    global _ACTIVE_OPS
+    depth = getattr(_OP_THREAD, "depth", 0)
+    if depth:
+        _OP_THREAD.depth = depth + 1
+        try:
+            yield
+        finally:
+            _OP_THREAD.depth -= 1
+        return
+    wait = _MAINTENANCE_WAIT_S if timeout is None else timeout
+    deadline = time.monotonic() + wait
+    while True:
+        if not _MAINTENANCE_OPEN.wait(max(deadline - time.monotonic(), 0.0)):
+            raise MemoryServiceError(
+                f"memory index maintenance in progress: the drawers collection did not reopen within {wait:g}s"
+            )
+        with _OPS_COND:
+            if _MAINTENANCE_OPEN.is_set():
+                _ACTIVE_OPS += 1
+                break
+    _OP_THREAD.depth = 1
+    try:
+        yield
+    finally:
+        _OP_THREAD.depth = 0
+        with _OPS_COND:
+            _ACTIVE_OPS -= 1
+            _OPS_COND.notify_all()
+
+
+def _leased_call(fn, *args):
+    with collection_op():
+        return fn(*args)
+
+
+def _drain_collection_ops(timeout: float) -> bool:
+    """With the gate CLOSED: wait until no leased op is in flight. False on timeout."""
+    deadline = time.monotonic() + timeout
+    with _OPS_COND:
+        while _ACTIVE_OPS > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _OPS_COND.wait(remaining)
+    return True
+
+
+def _as_list(value: Any) -> list:
+    """A list from chroma's result columns WITHOUT truth-testing: on 1.5.x
+    ``get(include=["embeddings"])`` returns a NumPy ndarray, and ``x or []`` raises
+    "truth value of an array is ambiguous"."""
+    return [] if value is None else list(value)
+
+
+def index_compaction_enabled() -> bool:
+    """Dark flag ``ZOE_MEMORY_INDEX_COMPACT`` (default OFF; per-call read)."""
+    return os.environ.get("ZOE_MEMORY_INDEX_COMPACT", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _collection_space(col: Any) -> str:
+    """The collection's ``hnsw:space`` (1.x configuration JSON first, then the legacy
+    metadata key). The live palace is ``l2``, chroma's own default — so ``l2`` when unset."""
+    try:
+        cfg = col.configuration_json
+        cfg = json.loads(cfg) if isinstance(cfg, str) else dict(cfg or {})
+        space = (cfg.get("hnsw") or {}).get("space")
+        if space:
+            return str(space)
+    except Exception:  # noqa: BLE001 — fall through to the metadata key
+        pass
+    return str((getattr(col, "metadata", None) or {}).get("hnsw:space") or "l2")
+
+
+def _rebuild_drawers(client: Any, ef: Any, space: str, rows: dict[str, list]) -> Any:
+    """create the collection in ``space`` and re-add ``rows`` in batches (used by both the
+    rebuild and the restore-after-delete path — one implementation, no drift)."""
+    new = client.create_collection(
+        _DRAWERS_COLLECTION, metadata={"hnsw:space": space}, embedding_function=ef
+    )
+    ids, embs, docs, metas = rows["ids"], rows["embeddings"], rows["documents"], rows["metadatas"]
+    for i in range(0, len(ids), _COMPACT_BATCH):
+        new.add(ids=ids[i:i + _COMPACT_BATCH], embeddings=embs[i:i + _COMPACT_BATCH],
+                documents=docs[i:i + _COMPACT_BATCH], metadatas=metas[i:i + _COMPACT_BATCH])
+    return new
+
+
+def _verify_rebuilt_drawers(new: Any, rows: dict[str, list], probe: str) -> dict[str, Any]:
+    """count equal; unfiltered reach for the probe == count; an owner-filtered query returns
+    rows (when a non-demo owner exists); one metadata update round-trips."""
+    ids, metas = rows["ids"], rows["metadatas"]
+    n = len(ids)
+    count = int(new.count())
+    reach = len(new.query(query_texts=[probe], n_results=n, include=[])["ids"][0])
+    owner = next((m.get("user_id") for m in metas
+                  if isinstance(m, dict) and m.get("user_id") and not str(m["user_id"]).startswith("demo_")), None)
+    filtered = -1
+    if owner:
+        filtered = len(new.query(query_texts=[probe], n_results=min(6, n), where={"user_id": owner},
+                                 include=[])["ids"][0])
+    roundtrip = True   # vacuous when no row carries metadata (chroma rejects an empty dict)
+    probe_ix = next((i for i, m in enumerate(metas) if isinstance(m, dict) and m), None)
+    if probe_ix is not None:
+        original = dict(metas[probe_ix])
+        new.update(ids=[ids[probe_ix]], metadatas=[dict(original)])   # the historical crash path
+        got = (new.get(ids=[ids[probe_ix]], include=["metadatas"]).get("metadatas") or [None])[0]
+        roundtrip = dict(got or {}) == original
+    ok = count == n and reach == n and filtered != 0 and roundtrip
+    return {"ok": ok, "count": count, "expected": n, "unfiltered_reach": reach,
+            "filtered_owner": filtered, "metadata_roundtrip": roundtrip}
+
+
+def compact_drawers_index_sync(
+    data_dir: str = _MEMPALACE_DATA,
+    *,
+    backups_dir: str | None = None,
+    probe: str = _COMPACT_PROBE,
+    client: Any | None = None,
+    ef: Any | None = None,
+    drain_s: float | None = None,
+) -> dict[str, Any]:
+    """Rebuild ``mempalace_drawers`` from its stored embeddings, in-process, no restart.
+
+    Runs in ONE executor thread with the maintenance gate cleared. Order: export (count +
+    dims verified) → JSON export + tar backup of the palace under ``backups_dir`` → delete →
+    create in the SAME space → re-add in batches → verify → reopen the gate. Any failure
+    BEFORE the delete aborts with no change; any failure AFTER it restores from the export
+    (create + re-add) and raises :class:`IndexCompactionError` whose ``report`` says
+    ``restored``. Nothing is re-embedded. Logs ``MEMORY_INDEX_COMPACT``.
+    """
+    import tarfile
+
+    from memory_index_health import index_health
+
+    if getattr(_OP_THREAD, "depth", 0):
+        raise IndexCompactionError(
+            "compaction must not run under a collection lease (it would wait for itself) — "
+            "schedule it outside _run_sync", {"changed": False})
+    if not _COMPACT_LOCK.acquire(blocking=False):
+        raise IndexCompactionError("a compaction is already running", {"changed": False})
+    t0 = time.monotonic()
+    report: dict[str, Any] = {"changed": False, "restored": False, "space": None}
+    try:
+        try:
+            before = index_health(data_dir)
+            report["before"] = {k: before.get(k) for k in ("live_rows", "elements_added", "tombstone_ratio", "fresh")}
+        except Exception as exc:  # noqa: BLE001 — health is informational here
+            report["before"] = {"error": f"{type(exc).__name__}: {exc}"}
+        client = client if client is not None else _palace_client(data_dir)
+        ef = ef if ef is not None else _drawers_embedding_function()
+        backups = Path(backups_dir or _COMPACT_BACKUPS_DIR)
+        _MAINTENANCE_OPEN.clear()
+        try:
+            drain = _MAINTENANCE_DRAIN_S if drain_s is None else drain_s
+            t_drain = time.monotonic()
+            if not _drain_collection_ops(drain):
+                raise IndexCompactionError(
+                    f"could not drain {_ACTIVE_OPS} in-flight collection operation(s) within {drain:g}s"
+                    " — aborted before any change", report)
+            report["drain_seconds"] = round(time.monotonic() - t_drain, 3)
+            col = client.get_collection(_DRAWERS_COLLECTION, embedding_function=ef)
+            space = _collection_space(col)
+            report["space"] = space
+            rows = col.get(include=["embeddings", "documents", "metadatas"])
+            ids = _as_list(rows.get("ids"))
+            # chroma 1.5.x returns the embeddings as a NumPy ndarray: iterate, never truth-test.
+            embs = [[] if e is None else [float(x) for x in e] for e in _as_list(rows.get("embeddings"))]
+            rows = {"ids": ids, "embeddings": embs,
+                    "documents": _as_list(rows.get("documents")), "metadatas": _as_list(rows.get("metadatas"))}
+            n, count = len(ids), int(col.count())
+            dim_set = {len(e) for e in embs}
+            dim = next(iter(dim_set)) if len(dim_set) == 1 else None
+            report.update(rows=n, count=count, dims=(dim if dim is not None else sorted(dim_set)))
+            if n == 0 or n != count or len(embs) != n or not dim:
+                raise IndexCompactionError(
+                    f"export incomplete (rows={n} count={count} dims={report['dims']}) — aborted before any change",
+                    report)
+            backups.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            export = backups / f"mempalace-drawers-export-{ts}.json"
+            with open(export, "w", encoding="utf-8") as fh:
+                json.dump({"space": space, **rows}, fh)
+            tar_path = backups / f"mempalace-pre-compact-{ts}.tar"
+            palace_dir = os.path.expanduser(data_dir)
+            with tarfile.open(tar_path, "w") as tf:
+                tf.add(palace_dir, arcname=os.path.basename(os.path.normpath(palace_dir)))
+            report.update(export=str(export), backup_tar=str(tar_path))
+
+            client.delete_collection(_DRAWERS_COLLECTION)
+            report["changed"] = True
+            try:
+                new = _rebuild_drawers(client, ef, space, rows)
+                verify = _verify_rebuilt_drawers(new, rows, probe)
+                report["verify"] = verify
+                if not verify["ok"]:
+                    raise MemoryServiceError(f"verification failed: {verify}")
+            except Exception as exc:  # noqa: BLE001 — after the delete: put the rows back
+                try:
+                    try:
+                        client.delete_collection(_DRAWERS_COLLECTION)
+                    except Exception:  # noqa: BLE001 — may not exist yet
+                        pass
+                    restored = _rebuild_drawers(client, ef, space, rows)
+                    report["restored"] = int(restored.count()) == n
+                    report["restored_count"] = int(restored.count())
+                except Exception as rexc:  # noqa: BLE001
+                    report["restore_error"] = f"{type(rexc).__name__}: {rexc}"
+                    logger.error("MEMORY_INDEX_COMPACT restore FAILED — restore the tar backup %s: %s",
+                                 report.get("backup_tar"), rexc)
+                raise IndexCompactionError(
+                    f"{type(exc).__name__}: {exc} (after delete; restored={report['restored']})", report
+                ) from exc
+        finally:
+            _MAINTENANCE_OPEN.set()
+        report.update(ok=True, elements_added=n, seconds=round(time.monotonic() - t0, 2))
+        logger.warning(
+            "MEMORY_INDEX_COMPACT before=%s after=%s elements_added=%s seconds=%s space=%s backup=%s",
+            (report.get("before") or {}).get("elements_added"), n, n, report["seconds"], space, tar_path,
+        )
+        return report
+    except IndexCompactionError as exc:
+        exc.report["seconds"] = round(time.monotonic() - t0, 2)
+        logger.error("MEMORY_INDEX_COMPACT failed changed=%s restored=%s error=%s",
+                     exc.report.get("changed"), exc.report.get("restored"), exc)
+        raise
+    finally:
+        _COMPACT_LOCK.release()
 
 _MEMORY_SCOPE_TO_VISIBILITY = {
     "personal": "personal",
@@ -679,6 +959,14 @@ async def _user_opted_out(user_id: str) -> bool:
 
 class MemoryServiceError(Exception):
     """Raised for operational failures."""
+
+
+class IndexCompactionError(MemoryServiceError):
+    """A compaction that did not complete; ``report`` says whether anything changed."""
+
+    def __init__(self, message: str, report: dict[str, Any]):
+        super().__init__(message)
+        self.report = dict(report, ok=False, error=message)
 
 
 class MemoryService:
@@ -1336,6 +1624,20 @@ class MemoryService:
         except Exception:
             return {}
 
+    async def index_health(self) -> dict[str, Any]:
+        """Tombstone health of the drawers index (read-only SQLite + pickle, no chroma call)."""
+        from memory_index_health import index_health
+
+        return await self._run_sync(index_health, self._data_dir)
+
+    async def compact_index(self) -> dict[str, Any]:
+        """In-process drawers index compaction (see ``compact_drawers_index_sync``).
+        Raises ``IndexCompactionError`` (``.report``) when it did not complete. Deliberately
+        NOT via ``_run_sync``: that path takes a collection lease, and the compaction drains
+        the leases — it would wait for itself."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, compact_drawers_index_sync, self._data_dir)
+
     def _collection_sizes_sync(self) -> dict[str, int]:
         from collections import Counter as _Counter
         col = self._collection()
@@ -1554,8 +1856,10 @@ class MemoryService:
 
     @staticmethod
     async def _run_sync(fn, *args):
+        # Every executor call holds a collection lease for its whole duration, so the
+        # index compaction can drain in-flight work before it swaps the collection.
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, fn, *args)
+        return await loop.run_in_executor(None, _leased_call, fn, *args)
 
     def _track_background_task(self, coro, *, name: str) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro, name=name)

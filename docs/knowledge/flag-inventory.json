@@ -2420,6 +2420,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_MEMORY_INDEX_COMPACT": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MEMORY_LINK_RESOLVER_ENABLED": {
         "defaults": [
           "''"
