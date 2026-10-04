@@ -1048,3 +1048,43 @@ one line per minute.
 
 **Other findings this review left for the operator** are listed in
 `docs/knowledge/log-review-2026-10-04.md` § "What remains".
+
+## 27. Pi deploy broke the unit — `zoe-voice` dead with `status=203/EXEC` (2026-10-04)
+
+**Signature.** Right after `scripts/setup/deploy-pi-voice.sh`, the panel has no voice:
+`systemctl --user status zoe-voice` (as `pi` on `zoe-pi`) shows `status=203/EXEC` (or a
+crash loop), `/health` on 127.0.0.1:7777 does not answer.
+
+**Cause.** The old script rsynced the repo's `scripts/setup/zoe-voice.service` — the **Jetson**
+template (`/home/zoe/venv/bin/python3`, `WorkingDirectory=/home/zoe/assistant/scripts/setup`,
+`EnvironmentFile=-/home/zoe/.zoe-voice/.env.voice`, `WantedBy=multi-user.target`) — and installed
+it over `~/.config/systemd/user/zoe-voice.service`, stripping only `User=`/`Group=`. None of those
+paths exist on the Pi. The same script also never shipped `zoe_voice_announce.py`, so an announce
+fix never reached the Pi (the daemon tolerates the missing import and silently disables announce
+polling).
+
+**Restore (as `pi`, on the Pi).** A known-good copy of the unit lives at
+`/home/pi/.zoe-voice/zoe-voice.service.pi-20261004` — `cp` it to
+`~/.config/systemd/user/zoe-voice.service`, then `systemctl --user daemon-reload && systemctl --user
+restart zoe-voice`. If that copy is gone, the unit with the panel paths is the template with:
+
+```
+WorkingDirectory=/home/pi/.zoe-voice
+EnvironmentFile=-/home/pi/.zoe-voice/.env.voice
+ExecStart=/home/pi/.zoe-voice/venv/bin/python3 /home/pi/.zoe-voice/zoe_voice_daemon.py
+WantedBy=default.target          # user unit; no User=/Group=
+```
+
+Then confirm: `systemctl --user is-active zoe-voice` = `active`, `curl -s 127.0.0.1:7777/health`.
+Read logs via `~/.zoe-voice/voice.log` or `journalctl -u zoe-voice` (system journal, see §23).
+
+**Prevention (landed).** `deploy-pi-voice.sh` now ships only the daemon, `zoe_voice_announce.py`
+and `pi-requirements.txt` (backups `<file>.bak-<ts>` kept by rsync), **never touches the installed
+unit by default** and just restarts. `--install-unit` renders a Pi unit for `PI_DAEMON_DIR`/`PI_VENV`
+and refuses when a unit exists unless `--force-unit` (unit backup `zoe-voice.service.bak-<ts>`).
+After the restart it checks `is-active` (20 s), `/health` and per-file md5 against the local copies,
+exits 4 and prints the rollback if any fails. Rollback = restore the `.bak-<ts>` files and
+`systemctl --user restart zoe-voice`. Pinned by `tests/unit/test_deploy_pi_voice_script.py`.
+
+**Rule of thumb.** `scripts/setup/*.service` files are Jetson templates unless the name says
+otherwise; a deploy to another host must render, never copy, them.
