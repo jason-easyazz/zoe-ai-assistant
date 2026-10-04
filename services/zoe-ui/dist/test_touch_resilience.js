@@ -63,6 +63,23 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
     assert(/_dockMusicT=setTimeout\(paintDockMusic,5000\);\n    \}\);/.test(html), 'dock music chain must re-arm inside its catch'); ok('dock: a failed now-playing poll re-arms the 5 s chain');
     assert(/var unavailable=!!d&&d\.available===false/.test(html) && /Music isn’t available right now/.test(html)); ok('music: MA available:false is "Music isn’t available", not "Nothing playing"');
     assert(/if\(e&&e\.message==='auth'\)\{\s*host\.innerHTML='<div class="srcnote">Sign in to manage music services\./.test(html) && /Couldn’t load music services/.test(html)); ok('sources: auth refusal and failed load are told apart');
+    // viewer mode (touch-ui-executor.js): a non-kiosk, unregistered browser is not a panel
+    {
+      const execSrc = fs.readFileSync(path.join(__dirname, 'js/touch-ui-executor.js'), 'utf8');
+      const m = /function isViewerContext\(/.exec(execSrc); assert(m, 'missing isViewerContext');
+      let i = execSrc.indexOf('{', m.index), d = 0; for (; i < execSrc.length; i++) { if (execSrc[i] === '{') d++; else if (execSrc[i] === '}') { d--; if (!d) break; } }
+      const { isViewerContext } = vm.runInNewContext(execSrc.slice(m.index, i + 1) + '; ({ isViewerContext })', { URLSearchParams });
+      const ls = (o) => ({ getItem: (k) => (k in o ? o[k] : null) });
+      assert.strictEqual(isViewerContext('', ls({})), true);
+      assert.strictEqual(isViewerContext('', ls({ zoe_touch_panel_id: 'panel_abc12345' })), true);
+      assert.strictEqual(isViewerContext('?kiosk=1', ls({})), false);
+      assert.strictEqual(isViewerContext('', ls({ zoe_kiosk: '1' })), false);
+      assert.strictEqual(isViewerContext('?panel_id=zoe-touch-pi', ls({})), false);
+      assert.strictEqual(isViewerContext('', ls({ zoe_panel_id: 'zoe-touch-pi' })), false);
+      ok('viewer: a laptop on /touch/home.html is a viewer; kiosk flag or a registered panel id makes a panel (a generated alias does not)');
+      assert(/if \(state\.viewer\) \{[\s\S]{0,400}\} else \{[\s\S]{0,200}bindPanel\(\)/.test(execSrc), 'init must gate bind/sync/push/poll on state.viewer');
+      ok('viewer: init skips panel bind, state sync, action poll, push socket and SW poll');
+    }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });
 }

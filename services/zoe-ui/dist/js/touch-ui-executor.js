@@ -149,6 +149,25 @@
         return session;
     }
 
+    // A browser is a PANEL only when it says so: `?kiosk=1` (persisted by the
+    // estate as zoe_kiosk) or a registered panel id (?panel_id= / zoe_panel_id —
+    // never the locally generated touch alias). Anything else — a member on a
+    // laptop opening /touch/home.html — is a VIEWER: it must not register as a
+    // panel, poll the action queue, sync panel state or open the panel push
+    // socket (every one of those is refused with 403 for a non-panel and it
+    // used to retry forever). Pure, pinned by dist/test_touch_resilience.js.
+    function isViewerContext(search, ls) {
+        let params;
+        try { params = new URLSearchParams(search || ''); } catch (_) { params = new URLSearchParams(); }
+        const get = (k) => { try { return ls ? ls.getItem(k) : null; } catch (_) { return null; } };
+        const kiosk = params.get('kiosk') === '1' || get('zoe_kiosk') === '1';
+        if (kiosk) return false;
+        const forced = (params.get('panel_id') || '').trim();
+        if (forced) return false;
+        const registered = (get('zoe_panel_id') || '').trim();
+        return !registered;
+    }
+
     function getPanelId() {
         // Prefer the registered panel id for push routing. The generated touch
         // alias is only a fallback for fresh browsers that have not been paired.
@@ -2220,6 +2239,7 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
                 // Auth bootstrap is best-effort; continue so the panel can retry.
             }
         }
+        state.viewer = isViewerContext(window.location.search, window.localStorage);
         state.panelId = getPanelId();
         const session = getSession();
         state.sessionId = session && session.session_id ? session.session_id : null;
@@ -2240,19 +2260,25 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
         window._zoeSetOrbMode = setOrbMode;
         window._zoeResetAutoHomeTimer = resetAutoHomeTimer;
 
-        bindPanel().catch(() => {});
-        syncState().catch(() => {});
-        // Prefer the shared push channel from websocket-sync.js to avoid duplicate
-        // websocket connections and duplicate action handling.
-        if (window.ZoeWebSockets && typeof window.ZoeWebSockets.initPush === 'function') {
-            window.ZoeWebSockets.initPush(state.panelId, state.sessionId);
+        if (state.viewer) {
+            // Not a panel: the estate still renders and its own polls run, but none
+            // of the panel machinery below (bind / sync / action poll / push / SW).
+            console.info('[executor] viewer mode — this browser is not a panel');
         } else {
-            connectPushWebSocket();
-        }
-        registerWithServiceWorker();
+            bindPanel().catch(() => {});
+            syncState().catch(() => {});
+            // Prefer the shared push channel from websocket-sync.js to avoid duplicate
+            // websocket connections and duplicate action handling.
+            if (window.ZoeWebSockets && typeof window.ZoeWebSockets.initPush === 'function') {
+                window.ZoeWebSockets.initPush(state.panelId, state.sessionId);
+            } else {
+                connectPushWebSocket();
+            }
+            registerWithServiceWorker();
 
-        state.pollTimer = setInterval(pollActions, 2000);
-        state.syncTimer = setInterval(syncState, 5000);
+            state.pollTimer = setInterval(pollActions, 2000);
+            state.syncTimer = setInterval(syncState, 5000);
+        }
         ['pointerdown', 'touchstart', 'keydown'].forEach((evt) => {
             window.addEventListener(evt, () => resetAutoHomeTimer(`user:${evt}`), { passive: true });
         });
