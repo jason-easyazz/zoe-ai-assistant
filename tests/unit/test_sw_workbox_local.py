@@ -26,7 +26,7 @@ pytestmark = pytest.mark.ci_safe
 REPO = Path(__file__).resolve().parents[2]
 SW = REPO / "services" / "zoe-ui" / "dist" / "sw.js"
 WORKBOX_DIR = REPO / "services" / "zoe-ui" / "dist" / "workbox"
-NGINX = REPO / "services" / "zoe-ui" / "nginx.conf"
+NGINX = REPO / "services" / "zoe-ui" / "nginx.d" / "security-headers.inc"   # the ONE CSP copy
 
 # workbox-sw.js's own namespace -> module-file-name map (from the 7.0.0 bundle).
 # Keep in sync with upstream if a new namespace is used by sw.js.
@@ -129,7 +129,7 @@ def test_nginx_csp_no_longer_allows_the_workbox_cdn():
     """sw.js was the only consumer; keep the allowance from creeping back."""
     conf = NGINX.read_text(encoding="utf-8")
     script_srcs = re.findall(r"script-src[^;]*;", conf)
-    assert script_srcs, "expected a CSP script-src directive in nginx.conf"
+    assert script_srcs, "expected a CSP script-src directive in nginx.d/security-headers.inc"
     offenders = [d for d in script_srcs if "storage.googleapis.com" in d]
     assert offenders == [], (
         "nginx CSP still allows https://storage.googleapis.com in script-src; "

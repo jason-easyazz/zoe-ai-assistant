@@ -32,7 +32,7 @@ args = ap.parse_args()
 W = os.path.join(args.worktree, "services", "zoe-ui")
 BASE = args.base
 html = open(f"{W}/dist/touch/home.html").read(); execjs = open(f"{W}/dist/js/touch-ui-executor.js").read()
-csp = re.search(r'Content-Security-Policy "([^"]+)"', open(f"{W}/nginx.conf").read()).group(1)
+csp = re.search(r'Content-Security-Policy "([^"]+)"', open(f"{W}/nginx.d/security-headers.inc").read()).group(1)
 fails = []
 def check(cond,msg): print(("  ok   " if cond else "  FAIL ")+msg); fails.append(msg) if not cond else None
 with sync_playwright() as p:
