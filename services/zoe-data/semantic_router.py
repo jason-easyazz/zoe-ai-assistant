@@ -567,14 +567,51 @@ def event_time_target(text: str, domain: Optional[str]) -> Optional[str]:
     return "memory" if is_event_time_question(text or "") else None
 
 
+# ── Own-fact precedence (live 2026-10-04, flag-dark ZOE_OWN_FACT_PRECEDENCE):
+# "When is my birthday?" → head time (the word "when") → "It's 7:50 AM.". A
+# question about a stored fact of the user's own life (birthday, address, age,
+# where they live — memory_gate.is_own_fact_question) can never be answered by
+# a clock, calendar, weather, list or timer tool; only chat (the brain + recall
+# packet) and memory/people keep their claim, anything else is re-pointed to
+# memory (recall_memory). The ONE rule on both head surfaces, like the others.
+OWN_FACT_REASON = "own_fact_question"
+_OWN_FACT_KEEP = frozenset({"chat", "memory", "people"})
+
+
+def own_fact_precedence_enabled() -> bool:
+    """ZOE_OWN_FACT_PRECEDENCE — default OFF (voice path; the operator flips it
+    after the replay gate). Per-call env read."""
+    raw = (os.environ.get("ZOE_OWN_FACT_PRECEDENCE") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def own_fact_target(text: str, domain: Optional[str]) -> Optional[str]:
+    """"memory" when an own-fact question was claimed by a clock/calendar/
+    weather/… domain (and the flag is on), else None. An event-time question
+    ("when is my birthday party") is the event-time rule's, not this one."""
+    if domain is None or domain in _OWN_FACT_KEEP or not own_fact_precedence_enabled():
+        return None
+    from memory_gate import is_event_time_question, is_own_fact_question  # stdlib-only
+
+    msg = text or ""
+    if is_event_time_question(msg) or not is_own_fact_question(msg):
+        return None
+    return "memory"
+
+
 def question_precedence(text: str, domain: Optional[str]) -> Optional[tuple[str, str]]:
     """(target, reason) when a question-shape rule overrides `domain`, else
-    None. Evidence first (a "when did I…" is evidence, not an event time)."""
+    None. Evidence first (a "when did I…" is evidence, not an event time); then
+    event-time (keeps a calendar claim); then own-fact (keeps none of the
+    tools)."""
     target = evidence_target(text, domain)
     if target:
         return target, EVIDENCE_REASON
     target = event_time_target(text, domain)
-    return (target, EVENT_TIME_REASON) if target else None
+    if target:
+        return target, EVENT_TIME_REASON
+    target = own_fact_target(text, domain)
+    return (target, OWN_FACT_REASON) if target else None
 
 
 def _evidence_decision(decision: dict, target: str, reason: str = EVIDENCE_REASON) -> dict:
@@ -612,8 +649,9 @@ def head_verdict(text: str) -> Optional[dict]:
     None unless ZOE_ROUTER_HEAD=active and the router is enabled — i.e. the
     head only arbitrates keyword claims when it is also routing. See
     router_two_stage.head_verdict for the shape; an evidence-shaped or (flag on)
-    event-time question comes back re-pointed (``reason="evidence_question"`` /
-    ``"event_time_question"``). NEVER raises.
+    event-time / own-fact question comes back re-pointed
+    (``reason="evidence_question"`` / ``"event_time_question"`` /
+    ``"own_fact_question"``). NEVER raises.
     """
     if not is_enabled() or head_mode() != "active":
         return None

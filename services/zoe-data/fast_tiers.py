@@ -192,6 +192,9 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
              / event_time_question (ZOE_ROUTER_EVENT_TIME_PRECEDENCE: "what
              time is my dentist…" re-pointed off the clock: only a memory_*
              intent or calendar_show may keep it — never time_query)
+             / own_fact_question (ZOE_OWN_FACT_PRECEDENCE: "when is my
+             birthday" / "what's my address" re-pointed off the clock and
+             calendar: only a memory_* or people_* intent may keep it)
 
     Same rule as the Skybridge router gate (skybridge_router_gate), so every
     deterministic lane shares one authority: the head.
@@ -211,6 +214,13 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
         if intent_name.startswith("memory_") or intent_name == "calendar_show":
             return "allow", "event_time_recall_intent"
         return "veto", "event_time_question"
+    if verdict.get("reason") == "own_fact_question":
+        # ZOE_OWN_FACT_PRECEDENCE: "when is my birthday" / "what's my address"
+        # asks for a stored fact — only a memory_* / people_* intent may answer,
+        # never the clock, calendar, weather or lists.
+        if intent_name.startswith(("memory_", "people_")):
+            return "allow", "own_fact_recall_intent"
+        return "veto", "own_fact_question"
     if verdict.get("gated"):
         if (verdict.get("reason") or "below_gate") == "below_gate":
             return "allow", "router_unsure"

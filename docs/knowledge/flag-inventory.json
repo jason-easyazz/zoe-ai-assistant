@@ -2976,6 +2976,17 @@
         ],
         "typed_env": false
       },
+      "ZOE_OWN_FACT_PRECEDENCE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py",
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PANEL_AGENT_PORT": {
         "defaults": [
           "'8765'"
@@ -4302,6 +4313,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_STRIP_NARRATION": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/narration_filter.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_STT_BACKEND": {
         "defaults": [
           "'moonshine'"
@@ -4498,6 +4519,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_TRIVIA_HEDGE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_TTS_KEEP_TAIL_MS": {
         "defaults": [
           "130"
@@ -4681,6 +4712,16 @@
         "in_env_example": false,
         "readers": [
           "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VERIFY_ON_CHALLENGE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/verify_on_challenge.py"
         ],
         "typed_env": false
       },

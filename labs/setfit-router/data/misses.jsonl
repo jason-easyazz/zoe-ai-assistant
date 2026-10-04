@@ -1,3 +1,26 @@
 {"text": "Who is flying in on Thursday, and where from?", "label": "memory", "source": "samantha_bar_miss_2026-09-28"}
 {"text": "Who is flying in on Thursday, and which city do I live in?", "label": "memory", "source": "samantha_bar_miss_2026-09-28"}
 {"text": "Remind me, who did I say is flying in on Thursday?", "label": "memory", "source": "samantha_bar_miss_2026-09-28"}
+{"text": "when is my birthday", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "when's my birthday again", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my address", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what is my home address", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "how old am I", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "when was I born", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "where do I live", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "which suburb do I live in", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "where am I from", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my phone number", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my email address", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my middle name", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my star sign", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my postcode", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what car do I drive", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "when is our anniversary", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my date of birth", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "what do I do for work", "label": "memory", "source": "own_fact_miss_2026-10-04"}
+{"text": "when is my mum's birthday", "label": "people", "source": "own_fact_miss_2026-10-04"}
+{"text": "when's my dad's birthday", "label": "people", "source": "own_fact_miss_2026-10-04"}
+{"text": "how old is my mum", "label": "people", "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my sister's phone number", "label": "people", "source": "own_fact_miss_2026-10-04"}
+{"text": "when is my partner's birthday", "label": "people", "source": "own_fact_miss_2026-10-04"}
