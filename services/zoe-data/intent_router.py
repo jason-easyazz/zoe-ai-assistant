@@ -696,15 +696,47 @@ _CONTACT_REL_FIRST_RE = re.compile(
 )
 _NAME_WORD_RE = re.compile(r"^[A-Za-z][A-Za-z'\-]*$")
 
+# Words that are never part of a person's name in "<relation> <Name>": days, time
+# words ("add my brother Percival Friday" is a plan, not a person called "Percival
+# Friday"). Applied with AND without a contact cue.
+_NOT_NAME_TIME = frozenset({
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "today", "tomorrow", "tonight", "yesterday", "morning", "afternoon", "evening",
+    "night", "weekend", "week", "month", "year", "noon", "midnight", "later", "soon",
+    "now", "next", "this", "last", "again", "too", "also", "please",
+})
+# Months double as given names (April, May, June), so a month is only refused as the
+# TAIL of a multi-word name ("Percival March"), never as the lone name.
+_MONTH_WORDS = frozenset({
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+})
+# Cue-less only ("add my dad Beer"): common shopping/household nouns and shops. The
+# list is a guard, not a lexicon - a real given name that is also a shop or food
+# word still saves with an explicit cue ("save my mate Bunnings as a contact").
+_NOT_NAME_ITEM = frozenset((
+    "beer wine milk bread butter cheese eggs egg bacon ham chicken beef pork fish steak "
+    "rice pasta noodles pizza burger burgers chips fries salad soup sauce salt pepper sugar "
+    "flour oil honey jam coffee tea juice water soda cola cake cakes biscuits cookies cookie "
+    "chocolate lollies candy sweets snacks fruit apples apple banana bananas oranges orange "
+    "grapes lemon lemons onion onions potato potatoes tomato tomatoes carrots carrot lettuce "
+    "cereal yoghurt yogurt cream ice icecream nuts tissues tissue toilet paper towels "
+    "soap shampoo toothpaste detergent bleach batteries bulbs socks shoes shirt shirts jeans "
+    "jacket jumper hat gloves present gift gifts card cards flowers cash money shopping groceries "
+    "bunnings woolworths coles kmart aldi ikea target costco officeworks bigw chemist pharmacy "
+    "mcdonalds kfc dominos spotlight iga").split())
+
 
 def _contact_relation_first_match(t: str, raw_text: str):
     """Match object for a relation-first contact-create command, else None.
 
     With an explicit contact cue ("... as a contact", "... to my contacts") any
-    plausible name is taken. WITHOUT one ("add my brother Percival") the words
-    after the relation must be a capitalised name in the user's own text and the
-    turn must not name a list: "add my dad some beer" and "add my mate beer to the
-    shopping list" stay list/brain turns."""
+    plausible name is taken. WITHOUT one ("add my brother Percival", "add my brother
+    percival") the turn is ambiguous with a list item, so the name must be at most two
+    words, none of them a day/time word or a shopping/household noun, no list may be
+    named, and when the user typed capitals the name itself must be capitalised
+    ("Add my dad pizza" stays a list turn). All-lowercase input (STT, lazy typing)
+    cannot show a capital and is accepted on the stoplist alone."""
     m = _CONTACT_REL_FIRST_RE.match(t)
     if not m:
         return None
@@ -715,13 +747,18 @@ def _contact_relation_first_match(t: str, raw_text: str):
         return None
     if not all(_NAME_WORD_RE.match(w) and w.lower() not in _cc._BAD_NAME_WORDS for w in words):
         return None
+    low = [w.lower() for w in words]
+    if any(w in _NOT_NAME_TIME for w in low) or any(w in _MONTH_WORDS for w in low[1:]):
+        return None
     if not m.group("cue"):
-        if not re.search(
+        if len(words) > 2 or any(w in _NOT_NAME_ITEM for w in low):
+            return None
+        rawt = (raw_text or "").strip()
+        if re.search(r"[A-Z]", rawt[1:]) and not re.search(
                 rf"(?:my|our)\s+{_cc._REL_PHRASE}\s+((?:[A-Z][A-Za-z'\-]*\s*)+)\W*$",
-                raw_text or ""):
+                rawt):
             return None
     return m
-
 
 
 def detect_intent(
@@ -2962,7 +2999,9 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
             if conversational and not slots.get("force_new"):
                 # A first-name-only contact and a fuller record of the same
                 # first name + relation are one person: never mint a second row.
-                merged = await _merge_into_same_person(db, user_id, name, relationship)
+                merged = await _merge_into_same_person(
+                    db, user_id, name, relationship,
+                    can_ask=not slots.get("no_followup"))
                 if merged:
                     return merged
             await db.execute(
@@ -3099,7 +3138,8 @@ def _remember_same_person_question(user_id: str, stub: dict, name: str,
 
 
 async def _merge_into_same_person(db, user_id: str, name: str,
-                                  relationship: Optional[str]) -> Optional[str]:
+                                  relationship: Optional[str],
+                                  can_ask: bool = True) -> Optional[str]:
     """Flag ZOE_CONTACTS_CONVERSATIONAL: the reply for a save that matches an
     existing contact of the same first name + compatible relation, or None when
     it is a genuinely new person (see contacts_conversation.decide_same_person).
@@ -3126,6 +3166,11 @@ async def _merge_into_same_person(db, user_id: str, name: str,
     if verdict == "upgrade":
         await _rename_person_row(db, user_id, hits[0]["id"], name, relationship)
     elif verdict == "ask":
+        if not can_ask:
+            # A channel that cannot bind the user's next turn to a queued question
+            # (livekit fast tier): say what was NOT done, write nothing, queue nothing.
+            return (f"I already have a {hits[0]['name']} saved, so I haven't added {name}. "
+                    f"Ask me in chat to add {name} and I'll check if it's the same person.")
         _remember_same_person_question(user_id, hits[0], name, relationship)
     return same_person_reply_text(verdict, hits, name, relationship)
 

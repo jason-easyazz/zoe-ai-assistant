@@ -3988,7 +3988,7 @@ async def voice_command(
                 "note_create": lambda s: "Create a new note. Shall I confirm?",
                 "journal_create": lambda s: "Create a journal entry. Shall I confirm?",
                 "transaction_create": lambda s: f"Record a transaction of {s.get('amount', '')}. Shall I confirm?",
-                "people_create": lambda s: f"Add contact {s.get('name', '')}. Shall I confirm?",
+                "people_create": lambda s: _cc_confirm_create(s.get("name", ""), s.get("relationship")),
             }
             _gen = _phrases.get(_quick_intent.name)
             confirm_phrase = _gen(slots) if _gen else f"Confirm this action: {_quick_intent.name}?"
@@ -6210,6 +6210,12 @@ async def get_livekit_token(request: Request, caller: dict = Depends(_require_li
 # Track pending confirmations per panel: panel_id → {intent_name, slots, expire_at, session_id}
 _PENDING_CONFIRMATIONS: dict[str, dict] = {}
 _CONFIRM_TIMEOUT_S = 30  # seconds to wait for "yes/confirm" before expiring
+
+
+def _cc_confirm_create(name: str, relationship: Optional[str]) -> str:
+    """Spoken confirm prompt for a contact-create (names the relation the user said)."""
+    import contacts_conversation as _cc
+    return _cc.confirm_create_phrase(name, relationship)
 
 # Intents that require confirmation before execution (irreversible writes).
 _CONFIRM_INTENTS = frozenset({

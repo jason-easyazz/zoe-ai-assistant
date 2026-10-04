@@ -30,6 +30,10 @@ CASES = [
     ("save my brother Percival as a contact", "Percival", "brother"),
     ("add my brother Percival", "Percival", "brother"),
     ("Save a contact for my brother Percival Jones", "Percival Jones", "brother"),
+    # lowercase typing / STT: nothing shows a capital, the relation phrase identifies the person
+    ("add my brother percival", "Percival", "brother"),
+    ("Add my brother percival.", "Percival", "brother"),
+    ("save my brother percival as a contact", "Percival", "brother"),
 ]
 PEOPLE_ROUTE = {"domain": "people", "score": 0.95, "two_stage": True}
 
@@ -67,11 +71,20 @@ def _rows(db):
     return [{"name": p["name"], "relationship": p["relationship"]} for p in db.people]
 
 
-def _facts_must_not_be_stored(monkeypatch):
-    async def boom(*_a, **_k):
-        raise AssertionError("a contact command was handed to the memory-fact expert")
+FACT_REPLY = "Got it — I'll remember save a contact for your brother Percival."
+STORE_FACT_CALLS = []
 
-    monkeypatch.setattr(expert_dispatch, "store_fact", boom)
+
+def _facts_must_not_be_stored(monkeypatch):
+    """store_fact answers like production did (a non-None reply). Raising instead is
+    swallowed by dispatch's broad except -> None, which hides a revert."""
+    STORE_FACT_CALLS.clear()
+
+    async def old_store_fact(domain, text, *a, **k):
+        STORE_FACT_CALLS.append(text)
+        return FACT_REPLY
+
+    monkeypatch.setattr(expert_dispatch, "store_fact", old_store_fact)
 
 
 # ── detection ────────────────────────────────────────────────────────────────
@@ -90,6 +103,12 @@ def test_every_phrasing_detects_people_create(text, name, rel):
     "add my mum a gift",
     "add my mum",                             # a bare relation asks for the name elsewhere
     "add my brother's present",
+    # CAPITALISED items / days / shops (the capital letter alone is no guard)
+    "add my dad Beer", "add my mum Pizza", "add my wife Eggs", "add my mate Bunnings",
+    "add my dad Ice Cream", "add my brother Percival Friday", "add my mate Dan Saturday",
+    "add my mum Sarah Sunday", "add my brother Percival Jones Smith",
+    "Add my dad pizza", "add my dad socks", "add my brother percival friday",
+    "save my brother Percival Friday as a contact",   # a day word is not a name even WITH a cue
 ])
 def test_relation_first_negative_controls_stay_list_turns(text):
     got = detect_intent(text, log_miss=False)
@@ -115,8 +134,8 @@ async def test_writable_channel_creates_the_row(monkeypatch, text, name, rel, fl
     _install(monkeypatch, db)
     _facts_must_not_be_stored(monkeypatch)
     res = await fast_tiers.resolve(text, USER, "sess-1", channel="telegram", router_decision=PEOPLE_ROUTE)
-    assert res is not None and res.intent == "people_create"
-    assert _rows(db) == [{"name": name, "relationship": rel}]
+    assert res is not None and res.intent == "people_create" and res.reply != FACT_REPLY
+    assert _rows(db) == [{"name": name, "relationship": rel}] and not STORE_FACT_CALLS
 
 
 @pytest.mark.asyncio
@@ -129,7 +148,7 @@ async def test_chat_defers_to_its_own_intent_lane_which_writes(monkeypatch, text
     _install(monkeypatch, db)
     _facts_must_not_be_stored(monkeypatch)
     res = await fast_tiers.resolve(text, USER, "sess-2", channel="chat", router_decision=PEOPLE_ROUTE)
-    assert res is None and _rows(db) == []          # deferred, nothing swallowed it
+    assert res is None and _rows(db) == [] and not STORE_FACT_CALLS   # deferred, nothing swallowed it
     intent = await detect_and_extract_intent(text, USER)
     assert intent is not None and intent.name == "people_create"
     reply = await execute_intent(intent, USER)
@@ -150,3 +169,48 @@ async def test_never_stored_as_a_fact_regression(monkeypatch):
     res = await fast_tiers.resolve(SETUP_TURN, USER, "sess-3", channel="telegram", router_decision=PEOPLE_ROUTE)
     assert res is not None and "remember" not in res.reply.lower()
     assert _rows(db) == [{"name": "Percival", "relationship": "brother"}]
+
+
+# ── channels that cannot bind a follow-up, and the acting user ───────────────
+
+
+@pytest.mark.asyncio
+async def test_livekit_states_the_outcome_instead_of_asking_an_unanswerable_question(monkeypatch):
+    import contacts_conversation as cc
+
+    monkeypatch.setenv("ZOE_CONTACTS_CONVERSATIONAL", "1")
+    stub = {"id": "1", "name": "Dan", "relationship": "friend", "birthday": None, "phone": "555",
+            "email": None, "notes": None, "how_we_met": None, "deleted": 0, "is_partial": 0}
+    text = "Save a contact for my friend Dan Murphy"
+    # control: telegram CAN bind "yes", so it asks and queues the question
+    db = _PeopleDB([dict(stub)])
+    _install(monkeypatch, db)
+    res = await fast_tiers.resolve(text, USER, "s", channel="telegram", router_decision=PEOPLE_ROUTE)
+    assert "same person" in res.reply and cc.peek_same_person(USER) is not None
+    cc._SAME_PENDING.clear()
+    # livekit cannot: no question, nothing queued, nothing written, the reply says why
+    db = _PeopleDB([dict(stub)])
+    _install(monkeypatch, db)
+    res = await fast_tiers.resolve(text, USER, "s", channel="livekit", router_decision=PEOPLE_ROUTE)
+    assert "?" not in res.reply
+    assert "already have a Dan" in res.reply and "Dan Murphy" in res.reply
+    assert cc.peek_same_person(USER) is None and _rows(db) == [{"name": "Dan", "relationship": "friend"}]
+
+
+@pytest.mark.asyncio
+async def test_direct_write_runs_as_the_acting_user_not_the_guest_alias(monkeypatch):
+    db = _PeopleDB()
+    _install(monkeypatch, db)
+    res = await fast_tiers.resolve(SETUP_TURN, "family-admin", "s", channel="telegram", router_decision=PEOPLE_ROUTE)
+    assert res is not None
+    (_sql, params), = db.inserts()
+    assert params[1] == "family-admin"          # not "guest"
+
+
+def test_confirm_prompt_names_the_relationship_the_user_said():
+    import contacts_conversation as cc
+
+    assert cc.confirm_create_phrase("Percival", "brother") == "Add Percival, your brother, to your contacts?"
+    # the detector's default 'friend' / no relation was never said: the old prompt stays
+    assert cc.confirm_create_phrase("Ottoline", "friend") == "Add contact Ottoline. Shall I confirm?"
+    assert cc.confirm_create_phrase("Ottoline", None) == "Add contact Ottoline. Shall I confirm?"

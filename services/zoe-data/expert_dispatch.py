@@ -205,13 +205,25 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
         else:
             from intent_router import Intent, execute_intent
             slots = dict(regex_slots or {})
-            if kind == "write":  # "direct" keeps its regex slots: nothing to extract
+            exec_user = _exec_user(user_id)
+            if kind == "write":
                 from nlu_extractor import extract_slots_for_intent
                 ex = await extract_slots_for_intent(intent_name, text)
                 if not ex:
                     return None
                 slots = ex
-            reply = await execute_intent(Intent(intent_name, slots), _exec_user(user_id))
+            elif kind == "direct":
+                # Regex slots are complete: nothing to extract. Run as the REAL
+                # acting user (the chat intent lane and the old store_fact path both
+                # do) - _exec_user's family-admin -> guest alias is for the list /
+                # calendar / reminder writes, and would file a legacy admin's
+                # contact under "guest".
+                exec_user = user_id or "guest"
+                if ctx.get("binds_followups") is False:
+                    # This channel never binds the next turn ("yes") to a queued
+                    # question, so the same-person handler must not ask one.
+                    slots["no_followup"] = True
+            reply = await execute_intent(Intent(intent_name, slots), exec_user)
     except Exception as exc:
         logger.warning("expert_dispatch execute domain=%s intent=%s failed: %s", domain, intent_name, exc)
         return None
