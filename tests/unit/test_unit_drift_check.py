@@ -1,11 +1,9 @@
 """Logic tests for scripts/maintenance/unit_drift_check.py (installed unit vs template).
 
-The tool exists because a merged template change never reaches the box on its
-own: on 2026-10-04 the router template carried ``--mlock`` + ``LimitMEMLOCK`` for
-a day while the live router ran without them, and every test (which reads the
-template) stayed green. These tests prove the COMPARATOR offline — including the
-negative controls — and that it parses the REAL templates (an instrument that
-parses to nothing reports "no drift" about everything).
+Born of the 2026-10-04 router incident: a merged template carried ``--mlock`` while the live
+unit did not, and every test (which reads the template) stayed green. Includes negative
+controls and a check that the REAL templates parse (a parser that reads nothing reports
+"no drift" about everything).
 """
 from __future__ import annotations
 
@@ -66,7 +64,8 @@ def _kinds(findings):
 def test_identical_units_have_no_drift_and_home_expands(udc, tmp_path):
     _write(tmp_path / "t", "r", ROUTER)
     # Live uses the literal path where the template uses %h.
-    _write(tmp_path / "l", "r", ROUTER.replace("%h", "/home/x"))
+    # Literal path where the template uses %h; 1280M spelled in bytes (sizes normalise).
+    _write(tmp_path / "l", "r", ROUTER.replace("%h", "/home/x").replace("1280M", "1342177280"))
     findings, problems = udc.check(["r"], tmp_path / "t", tmp_path / "l", "/home/x")
     assert findings == [] and problems == []
 
@@ -87,13 +86,6 @@ def test_each_drift_kind_is_reported(udc, tmp_path):
         ("differs", "MemoryMax"),
         ("live_only", "Nice"),
     }
-
-
-def test_sizes_are_normalised(udc, tmp_path):
-    _write(tmp_path / "t", "r", ROUTER)
-    _write(tmp_path / "l", "r", ROUTER.replace("MemoryMax=1280M", "MemoryMax=1342177280"))
-    findings, _ = udc.check(["r"], tmp_path / "t", tmp_path / "l", "/home/x")
-    assert findings == []
 
 
 def test_dropin_reset_semantics_match_systemd(udc, tmp_path):

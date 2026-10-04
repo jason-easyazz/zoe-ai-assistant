@@ -1941,16 +1941,6 @@
         ],
         "typed_env": false
       },
-      "ZOE_KOKORO_HF_OFFLINE": {
-        "defaults": [
-          "False"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/setup/kokoro_sidecar.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_KOKORO_SIDECAR_URL": {
         "defaults": [
           "'http://127.0.0.1:10201'"

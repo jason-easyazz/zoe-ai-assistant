@@ -1,57 +1,29 @@
 #!/usr/bin/env python3
-"""Compare the INSTALLED user units (+ drop-ins) against the repo templates.
+"""Compare the INSTALLED user units (+ drop-ins) against the repo templates. READ-ONLY.
 
-Why this exists
----------------
-``scripts/setup/systemd/*.service`` are TEMPLATES. Merging a template change
-does nothing to the box: an operator has to copy it into
-``~/.config/systemd/user/`` and ``daemon-reload``. Nothing checks that they
-ever did. Found by the 2026-10-04 evening log review
-(``docs/knowledge/log-review-units-2026-10-04.md``): the router template had
-carried ``--mlock`` + ``LimitMEMLOCK=infinity`` + ``MemoryMax=1280M`` for a
-day while the live router still ran without them, so the exact page-refault
-failure the template exists to prevent was still live — and every repo test
-(which reads the template) was green.
+Merging a change to ``scripts/setup/systemd/*.service`` does nothing to the box: an
+operator must copy it to ``~/.config/systemd/user/`` and ``daemon-reload``, and nothing
+checks that they did. 2026-10-04 log review: the router template had carried ``--mlock``
++ ``LimitMEMLOCK`` + ``MemoryMax=1280M`` for a day while the live router ran without
+them, and every test (which reads the template) stayed green
+(``docs/knowledge/log-review-units-2026-10-04.md``). This tool parses unit files only —
+it never calls systemctl and never writes.
 
-That is the #1409 / requirements-drift class again: a spec in one place,
-enforced in no other. This script is the enforcement. It is READ-ONLY: it never
-runs systemctl, never writes, never restarts anything — it parses unit files.
+Compared, per unit, on the EFFECTIVE ``[Service]`` config (main file + ``<unit>.d/*.conf``
+in lexical order; an empty ``ExecStart=``/``Environment=``/``EnvironmentFile=`` resets the
+list, as in systemd; ``%h`` expanded on both sides): ``ExecStart`` binary and every
+``--flag value``, the scalar directives in :data:`SCALAR_KEYS` (sizes normalised,
+``1G`` == ``1024M``), ``Environment`` by name (secret-looking values are never printed),
+and ``EnvironmentFile``/``ExecStartPre``/``ExecStartPost`` as sets.
 
-What it compares
-----------------
-Per unit, the EFFECTIVE ``[Service]`` configuration on each side, i.e. the main
-file with its ``<unit>.d/*.conf`` drop-ins applied in lexical order (an empty
-``ExecStart=`` / ``Environment=`` / ``EnvironmentFile=`` resets the list, exactly
-as systemd does). Then:
+Findings: ``missing`` (template sets it, live does not) and ``differs`` are template changes
+never applied (exit 1); ``live_only`` is an untracked host edit (informational, exit 1 only
+with ``--strict``); ``not_installed`` has a template but no installed file.
 
-* ``ExecStart`` — the binary and every ``--flag value`` pair;
-* the scalar directives in :data:`SCALAR_KEYS` (memory protection, limits,
-  restart policy, exit-status mapping) with sizes normalised (``1G`` == ``1024M``);
-* ``Environment`` — by variable name; values of secret-looking names are NEVER
-  printed;
-* ``EnvironmentFile`` / ``ExecStartPost`` / ``ExecStartPre`` — as sets.
+    python3 scripts/maintenance/unit_drift_check.py [--units a,b] [--json] [--strict]
 
-``%h`` is expanded to ``--home`` on both sides, so a template using ``%h`` and a
-live unit with the literal path compare equal.
-
-Findings
---------
-``missing``   the template sets X and the live unit does not — a template change
-              that was never applied (the actionable class; exit 1).
-``differs``   both set X, to different values (exit 1).
-``live_only`` the live unit sets X and the template does not — a host edit nobody
-              tracked (informational; exit 1 only with ``--strict``).
-``not_installed`` the unit has a template but no installed file.
-
-Usage
------
-    python3 scripts/maintenance/unit_drift_check.py
-    python3 scripts/maintenance/unit_drift_check.py --units functiongemma-router --json
-    python3 scripts/maintenance/unit_drift_check.py --strict
-
-Exit codes: 0 = no drift, 1 = drift found, 2 = bad invocation / unreadable input.
-Applying a fix is an OPERATOR step (copy the template or drop-in, ``daemon-reload``,
-restart under the brain-window lock) — this tool only tells you what differs.
+Exit: 0 no drift, 1 drift, 2 bad invocation / unreadable input. Applying a fix is an
+OPERATOR step (docs/knowledge/incident-runbook.md section 24).
 """
 from __future__ import annotations
 

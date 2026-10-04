@@ -50,15 +50,9 @@ WorkingDirectory=%h/assistant/labs/flue-zoe-brain-2x
 ExecStart=%h/.nvm/current/bin/node dist/server.mjs
 Restart=always
 RestartSec=5
-# A Flue/Node sidecar handles SIGTERM itself and exits with code 143 (128+15). systemd
-# only treats 0 (and death-by-SIGTERM) as a clean stop, so WITHOUT this line every
-# `systemctl --user stop|restart` logs "Main process exited, code=exited,
-# status=143/n/a" + "Failed with result 'exit-code'" and flips the unit into the
-# failed state for an instant. Measured: at least 29 such false failures across
-# flue-zoe-brain-2x / flue-zoe-telegram between 2026-09-27 and 2026-10-04 (every
-# deploy restart), which buries a REAL crash (a non-143 exit) in `--failed` noise.
-# Restart=always is unaffected: a genuine crash still restarts and still counts.
-# docs/knowledge/log-review-units-2026-10-04.md
+# The Flue/Node server traps SIGTERM and exits 143 (128+15); without this every stop or
+# deploy restart logs "Failed with result 'exit-code'" (29+ false failures in a week) and
+# buries a real crash. Restart=always is unchanged. docs/knowledge/log-review-units-2026-10-04.md
 SuccessExitStatus=143
 # 3579 — the production brain port since the 1.x :3578 sidecar was retired.
 Environment=PORT=3579

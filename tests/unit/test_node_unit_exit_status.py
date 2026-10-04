@@ -1,13 +1,8 @@
 """Pins ``SuccessExitStatus=143`` on the Node-hosted Flue units.
 
-The Flue servers trap SIGTERM and exit with code 143 (128+15). systemd counts only
-0 / death-by-SIGTERM as a clean stop, so without ``SuccessExitStatus=143`` every
-stop or restart (every deploy) logs ``Main process exited, code=exited,
-status=143`` + ``Failed with result 'exit-code'`` and flips the unit to *failed*
-for an instant. Counted in the journal 2026-09-27 -> 2026-10-04: at least 29 false
-failures on flue-zoe-brain-2x / flue-zoe-telegram — noise that buries a REAL crash
-(any other exit status) in the failed-units list. ``Restart=always`` is independent
-of this directive, so crash recovery is unchanged.
+The Flue servers trap SIGTERM and exit 143; systemd counts only 0 as a clean stop, so every
+stop/deploy restart logged "Failed with result 'exit-code'" (29+ false failures in a week,
+2026-09-27 -> 10-04), burying a real crash. ``Restart=always`` is independent of this.
 See docs/knowledge/log-review-units-2026-10-04.md.
 """
 from __future__ import annotations

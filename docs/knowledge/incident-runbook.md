@@ -791,12 +791,11 @@ python3 scripts/maintenance/unit_drift_check.py --units functiongemma-router --j
 python3 scripts/maintenance/unit_drift_check.py --strict   # also fail on untracked host edits
 ```
 
-`MISSING`/`DIFFERS` = merged template not applied (act). `LIVE_ONLY` = a host edit nobody
-tracked (decide: track it as a drop-in, or leave). Run it after every merge that touches
-`scripts/setup/systemd/`. Expected residue today (all harmless host edits): kokoro
-`PYTHONPATH`/`ZOE_KOKORO_BACKEND`, serena `MemorySwapMax=0` (stricter than the template's
-2G), zoe-data extra `Environment=`/`ExecStartPre` entries; **and one to confirm**: the live
-zoe-data does not load the repo-root `.env` that the template lists first.
+`MISSING`/`DIFFERS` = merged template not applied (act). `LIVE_ONLY` = an untracked host edit
+(track it as a drop-in or leave it). Run it after every merge touching `scripts/setup/systemd/`.
+Known harmless residue: kokoro `PYTHONPATH`/`ZOE_KOKORO_BACKEND`, serena `MemorySwapMax=0`
+(stricter than the template); **to confirm**: live zoe-data omits the repo-root `.env` its
+template lists first.
 
 ### Operator steps (applying is NOT done by the PR)
 
@@ -831,11 +830,6 @@ systemctl --user daemon-reload      # NO restart — do not bounce TTS for this
 systemctl --user show kokoro-tts -p TimeoutStartUSec    # 5min
 ```
 
-Optional, flag-dark, takes effect at the next restart: `ZOE_KOKORO_HF_OFFLINE=1` in a
-Kokoro drop-in resolves the model load from the local Hugging Face cache (no 4 HEAD
-requests per start; the cache is only used when config + weights + the configured voice are
-all present, and only for the load itself — a later voice switch can still download).
-
 **(c) Flue/Node units — stop reporting a clean SIGTERM as a failure** (drop-ins, no restart):
 
 ```bash
@@ -865,15 +859,6 @@ down for 5 minutes):
    forces a repeat. Land fewer voice-path PRs concurrently, or batch them; do not relax
    sig #36.
 
-### Reading these logs next time (so you do not chase noise)
-
-* Router `W restored context checkpoint` on every request = a cache HIT logged at WARN. Not
-  an alert. A *cancel task* line is the real signal (client timed out at 1.5 s).
-* llama-server `selected slot by LRU` right after a deploy is the zoe-data warmup pair
-  (5 evaluated tokens) — healthy. Two ~1.4-1.6k-token re-prefills per probe run are the
-  probe corpus switching conversation; they are also the only Flue `first_delta_ms` > 2 s.
-* A `voice-gate` / `replay-evidence` job that is red after a push and green after the
-  landing helper's `gate rerun` is the designed fail-closed loop, not a CI problem.
-* `EMPTY` samples in the probe flap 0-2 on identical commits and are excluded from the
-  scoreable set; the SPEED gate (1.5x) has little headroom because the baseline is the
-  best case — a single 1.6x on one head, passing on the immediate re-probe, is noise.
+Noise classes to NOT chase (router `W restored context checkpoint` = a cache hit; the
+two large probe re-prefills; red-then-green `replay-evidence`; probe EMPTY flapping 0-2) are
+listed in [log-review-units-2026-10-04.md](log-review-units-2026-10-04.md) sections 2 and 4.
