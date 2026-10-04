@@ -81,11 +81,16 @@ or the day-sim's synthetic seed, or a count.
    (+8 pts over trajectory-only memory) — i.e. the evidence pack is the product, not the dump.
 5. **Design (flag-dark, ~0 RAM):** one `failure_events` table (signal, severity S1–S4,
    fingerprint, class key, hashed member, turn/sample refs, aggregate evidence JSON, run ref —
-   never text), fed by (a) ingesters for the three harness artifacts, (b) the existing runtime
+   never text; a derived `source_key` with a UNIQUE constraint so a re-ingested artifact or a
+   retried write cannot duplicate a row), fed by (a) ingesters for the three harness artifacts, (b) the existing runtime
    emitters re-pointed (BRAIN_LANE sink, intent-dispatch, the correction cue joined to the
    previous assistant turn, frustration / issue / thumbs, FLUE_ABORT when A1 lands, the P1
-   delivery ledger), (c) a shadow `cant_do` tag lifted from the replay regex. A nightly rollup
-   in the dreaming job groups rows into **classes** by fingerprint with Sentry-shaped states
+   delivery ledger), (c) a shadow refusal classifier (the replay regex) run on the *served* reply
+   at the one sink every brain lane already passes through (`brain_dispatch._LaneRecord`), with a
+   small second hook on deterministic fast-tier replies. A nightly rollup in the dreaming job
+   groups rows into **classes** by fingerprint — a *semantic* key (layer + failure kind +
+   discriminator) that harness and live witnesses share, `source` being witness metadata and
+   never part of the key — with Sentry-shaped states
    (new / active / proposed / fixed / regressed). A weekly digest (the existing trigger) emits
    **proposals** — `evolution_proposals` rows with an evidence pack (class, counts, severity,
    first/last seen, the harness `why`, example refs, suspected layer, the negative control that
@@ -330,8 +335,10 @@ evidence}]`, `compare{has_baseline, regressions, improvements, new, red, notes}`
   round 1 added the continuity injection (fired, "did not work"); round 2 found three causes — the
   digest stored the worry "as the neutral fact", so it "did not rank as emotional" and fell
   outside the pins, and "a soft 'connect if relevant' instruction … did not make the 4B model
-  check in"; round 3 found the focus flipping to today's mood. Three rounds, three classes, one
-  scenario id — which is why the fingerprint must include the `why`, not only the id (§3.2).
+  check in"; round 3 found the focus flipping to today's mood. Three rounds, **one class, three
+  fixes** — a class that regressed twice before a fix stuck — which is why the ledger must carry
+  the fix's PR ref and *reopen* the class rather than open a new one (§3.2), and why the key is
+  the `why`, not the scenario id.
 
 ### 2.3 The day-sim — the capability eval with a simulated member
 
@@ -598,12 +605,13 @@ joins on `interaction_id` / `session_id` and the Zoe's Work board can read it):
 | Column | Type | Rule |
 |---|---|---|
 | `id` | uuid | — |
+| `source_key` | text, **UNIQUE** | the stable identity of the source event — **derived, never generated**: harness rows = `sha256(run_ref.commit \| run_ref.tree \| artifact timestamp \| scenario/ask/sample_ref \| why)`; runtime rows = `sha256(interaction_id or session_id+turn_seq \| signal \| class_key)`; heartbeat rows = `sha256(loop \| run timestamp \| signal)`. Every writer inserts `ON CONFLICT (source_key) DO NOTHING`, so re-ingesting a `_last` or trend run, a retry after an uncertain DB result, or a backfill overlapping live ingestion changes nothing |
 | `ts` | timestamptz | event time (the artifact's `timestamp` for harness rows) |
 | `signal` | text enum | §3.1a |
-| `source` | `probe \| bar \| daysim \| runtime \| heartbeat \| member` | where it came from |
+| `source` | `probe \| bar \| daysim \| runtime \| heartbeat \| member` | where it came from — **witness metadata, never part of the class key** (§3.2) |
 | `severity` | `S1 \| S2 \| S3 \| S4` | §3.1b; assigned by the emitter, never by a model |
 | `fingerprint` | sha256 hex | §3.2 — deterministic over the class key only |
-| `class_key` | text | the human-readable key the fingerprint hashes, e.g. `router.misroute\|time\|calendar_question` |
+| `class_key` | text | the human-readable semantic key the fingerprint hashes — `<layer>.<kind>\|<discriminator>`, e.g. `router.misroute\|calendar`; shared by a bar S1 witness and a live confident misroute |
 | `member_hash` | text, nullable | `sha256(user_id + salt)`; null for harness and heartbeat rows; the demo-user allowlist regex is refused (harness rows carry `source` instead) |
 | `session_id` / `interaction_id` / `sample_ref` | text, nullable | the join key, or the probe sample's filename hash — **never text** |
 | `evidence` | jsonb | aggregates only: `head_conf, routed, shortlist[], gated, lane, outcome, reason, verdict, why, ms{…}, sidecar_age_s, mem_available_mb, n_samples, judge_sha` |
@@ -623,29 +631,36 @@ the nightly class rollup (`failure_classes`: `fingerprint, class_key, severity, 
 last_seen, count_7d, count_28d, count_total, state, proposal_id, pr_ref, members_7d (a count)`)
 is kept forever and is what W16 reads.
 
+**Idempotence (the ingester contract).** A writer never invents identity: it derives `source_key`
+from the event and lets the UNIQUE constraint decide. The backfill dry-run prints, per class,
+`would_insert` and `already_present`; a second dry-run over the same files must print
+`would_insert = 0` everywhere. Every threshold in §3.3 counts **distinct `source_key`s**, never
+rows seen, so a duplicated run can never cross a proposal threshold on its own.
+
 #### 3.1a Signals (what writes a row)
 
-| Signal | Source | Severity | Where it comes from today | Fingerprint key |
+| Signal | Source | Severity | Where it comes from today | Class key (shared by harness and live witnesses, §3.2) |
 |---|---|---|---|---|
-| `replay.cant_do`, `replay.error`, `replay.empty_storm`, `replay.speed` | probe | S2 / S2 / S4 / S3 | `voice_regression_last.json` + per-sample verdicts emitted *into the ledger* by `measure_voice` before the sweep (hash of the sample filename, verdict, `stt_ms`, `brain_ms`) | `signal\|verdict\|stage\|cold:<sidecar_age_s<180>\|contended:<mem<700MB>` |
-| `replay.no_evidence`, `replay.skip`, `replay.non_pass_alert` | probe | S4 | `status`, `reason`, `non_pass_alert` | `signal\|reason-class` |
-| `bar.fail`, `bar.error`, `bar.regression` | bar | S2 (regression S1) | `scenarios[].verdict/evidence.why`, `compare.regressions` | `bar\|<Sx>\|<why>` |
-| `daysim.fail`, `daysim.error` | daysim | S2 | `asks[].verdict/evidence.why` | `daysim\|<ask>\|<why>` |
-| `router.low_conf`, `router.timeout`, `router.misroute` | runtime | S4 / S3 / **S1** | `router_two_stage` record (hash, routed, conf, shortlist, gated) joined to the **next member turn** within 90 s: a correction cue, a `user_issue_report`, a thumbs-down, or a repeat of the same utterance hash ⇒ `misroute`; else no row | `router.misroute\|<routed>\|<shortlist[0]>` |
-| `brain.fallback`, `brain.error`, `brain.interrupted` | runtime | S1 / S2 / S4 | the BRAIN_LANE outcome sink (`brain_dispatch.py:77-87`) — a second sink, no second log line | `brain\|<outcome>\|<reason>` |
-| `turn.cant_do` | runtime (shadow) | S1 | `_CANT_DO_RE` lifted into a shared module and run on the final reply in `fast_tiers` — **shadow first**: it only writes the row, never changes the reply (sibling stage 1b) | `turn.cant_do\|<regex-alternative-id>\|<routed-or-chat>` |
-| `tool.refused`, `tool.failed`, `tool.timeout` | runtime | S2 | `intent_dispatch` (`system.py:2819, 2832-2833`); the Flue tool wrapper's 8 s abort reported back as a `reason` | `tool\|<intent>\|<reason>` |
+| `replay.cant_do`, `replay.error`, `replay.empty_storm`, `replay.speed` | probe | S2 / S2 / S4 / S3 | `voice_regression_last.json` + per-sample verdicts emitted *into the ledger* by `measure_voice` before the sweep (hash of the sample filename, verdict, `stt_ms`, `brain_ms`; the regex alternative a `CANT_DO` matched) | `CANT_DO` → `brain.refusal\|<regex-alt>\|<routed-or-chat>`; `ERROR` → `brain.fallback\|<reason>\|cold:<sidecar_age_s<180>\|contended:<mem<700MB>` (the same keys the live BRAIN_LANE rows write); speed → `voice.speed_regression\|<stage>`; empty storm → `instrument.empty_storm` |
+| `replay.no_evidence`, `replay.skip`, `replay.non_pass_alert` | probe | S4 | `status`, `reason`, `non_pass_alert` | `instrument.probe\|<reason-class>` |
+| `bar.fail`, `bar.error`, `bar.regression` | bar | S2 (regression S1) | `scenarios[].verdict/evidence.why`, `compare.regressions`; for a recall-shaped FAIL the ingester also reads the ask turn's `router_two_stage` record from the shadow log (bar sessions and times are known) and, when the ask left the brain lane, keys the row as a misroute | the `why` → key table (§3.2 item 2): e.g. S1 needles missing + routed away → `router.misroute\|<routed>`; S4 → `memory.thread_not_acknowledged`; scenario id only in `evidence.harness_ref` |
+| `daysim.fail`, `daysim.error` | daysim | S2 | `asks[].verdict/evidence.why`, same shadow-log join | same table: ask 9 → `router.misroute\|time`; 1r unvoiced → `proactive.raise_unvoiced`; 1r "no information" → `brain.refusal\|no_information\|raise`; 6/6n → `memory.recall_floor_miss\|<shape>`; ask id in `evidence.harness_ref` |
+| `router.low_conf`, `router.timeout`, `router.misroute` | runtime | S4 / S3 / **S1** | `router_two_stage` record (hash, routed, conf, shortlist, gated) joined to the **next member turn** within 90 s: a correction cue, a `user_issue_report`, a thumbs-down, or a repeat of the same utterance hash ⇒ `misroute`; else no row | `router.misroute\|<routed>` (`shortlist[0]`, `head_conf` in evidence) — the same key the bar/day-sim witnesses write |
+| `brain.fallback`, `brain.error`, `brain.interrupted` | runtime | S1 / S2 / S4 | the BRAIN_LANE outcome sink (`brain_dispatch.py:77-87`) — a second sink, no second log line; the live row also carries `sidecar_age_s` so a post-restart fallback groups with the probe's | `brain.<outcome>\|<reason>\|cold:<…>` |
+| `brain.refusal` | runtime (shadow) | S1 | the shared refusal classifier (`_CANT_DO_RE` lifted out of `replay_samples.py:73-80` into a module both import) run on the **served reply text** at the one sink every brain lane already passes through: `brain_dispatch._LaneRecord` (`:308-340`), which wraps `_flue_streaming_with_failover` (`:552`) and the one-shot path in `try/finally` and is reached by chat (`routers/chat.py:355-356, 2035, 2171, 2951`), voice (`voice_tts.py:4299`) and the Telegram lane (re-slotted through `/api/chat`, `labs/flue-zoe-telegram-2x/src/brain.ts:2-12`). The record gains a capped (2 KB) accumulator of the yielded deltas and classifies in `emit`, after the stream is paid out — **shadow first**: it writes a row, never changes the reply. `fast_tiers.resolve()` is **not** the place: it sees only deterministic Tier-0/1/1.5 replies and returns `None` whenever the brain should run (`fast_tiers.py:273-290`), so a hook there would miss every brain-generated refusal (the day-sim's "I don't have any information…") | `brain.refusal\|<regex-alternative-id>\|<context: raise\|routed\|chat>` |
+| `tool.empty_result` | runtime | S2 | the second, smaller hook on replies that never reach a brain: `fast_tiers.resolve()`'s `DispatchResult.reply` and the voice intent handlers' `reply_text` (`voice_tts.py:3466-3471`), matched against the deterministic empty-extractor shapes ("I found 0 contacts", an empty calendar — runbook §11) | `tool.empty_result\|<intent>` — a different class from a refusal |
+| `tool.refused`, `tool.failed`, `tool.timeout` | runtime | S2 | `intent_dispatch` (`system.py:2819, 2832-2833`); the Flue tool wrapper's 8 s abort reported back as a `reason` | `tool.<signal>\|<intent>\|<reason>` |
 | `flue.abort` | runtime | S4 (a counter, not a failure) | the `FLUE_ABORT` outcome once A1 (`ZOE_FLUE_ABORT_ON_CANCEL`) lands | `flue.abort\|<reason>\|<outcome>` |
-| `proactive.undelivered`, `proactive.ignored`, `raise.unvoiced`, `raise.cant_do` | runtime | S2 / S4 / S1 / S1 | the P1 delivery ledger (`proactive_deliveries`) — the `undelivered` detection is the day-sim's `topics_in` check moved into the settle path (P1 §3.5) | `proactive\|<klass>\|<outcome>` |
-| `memory.zoe_wrong` vs `memory.user_changed` | runtime | S1 / — | the correction cue (`memory_supersede.py:95-105`) **joined to the previous assistant turn**: if that turn's reply contained the superseded slot's value (string match on the fact value, on the box, never stored) ⇒ `zoe_wrong`, else `user_changed` (no row) | `memory.zoe_wrong\|<attribute>\|<lane>` |
-| `member.issue`, `member.frustration`, `member.thumbs_down` | member | S1 / S2 / S2 | the existing three writers, re-pointed to also write a row with the regex alternative that matched (`_USER_ISSUE_RE`), the repeat count, or the `feedback_type`; **the text stays in Postgres; the Multica issue carries the class key, not the message** | `member\|<signal>\|<regex-id or feedback_type>\|<routed-or-lane of the previous turn>` |
-| `job.zero_effect`, `job.missed`, `job.errored` | heartbeat | S3 | runbook §7's `zero_effect_alert`; APScheduler `_on_job_missed` / `_on_job_error` (`engine.py:581-601`) | `job\|<loop>\|<signal>` |
-| `harness.not_run` | heartbeat | S4 | a daily check: no `samantha_bar_trend` / `day_sim_trend` line in N days (gap 10) | `harness\|<name>` |
+| `proactive.undelivered`, `proactive.ignored`, `proactive.raise_unvoiced`, `proactive.raise_refusal` | runtime | S2 / S4 / S1 / S1 | the P1 delivery ledger (`proactive_deliveries`) — the `undelivered` detection is the day-sim's `topics_in` check moved into the settle path (P1 §3.5); a refusal on a raise turn is the `brain.refusal` classifier with `context = raise` | `proactive.undelivered\|<klass>`, `proactive.ignored\|<klass>`, `proactive.raise_unvoiced`, `brain.refusal\|<regex-alt>\|raise` — the keys the day-sim 1r witnesses write |
+| `memory.zoe_wrong` vs `memory.user_changed` | runtime | S1 / — | the correction cue (`memory_supersede.py:95-105`) **joined to the previous assistant turn**: if that turn's reply contained the superseded slot's value (string match on the fact value, on the box, never stored) ⇒ `zoe_wrong`, else `user_changed` (no row) | `memory.wrong_fact\|<attribute>` (lane in evidence) |
+| `member.issue`, `member.frustration`, `member.thumbs_down` | member | S1 / S2 / S2 | the existing three writers, re-pointed to also write a row with the regex alternative that matched (`_USER_ISSUE_RE`), the repeat count, or the `feedback_type`; **the text stays in Postgres; the Multica issue carries the class key, not the message** | a member signal is a *label on the previous turn*: when the ledger already holds a row for that turn (a misroute, a refusal, a fallback) the member row takes **that row's class key** and becomes its witness; otherwise `member.<signal>\|<regex-id or feedback_type>\|<routed-or-lane of the previous turn>` |
+| `job.zero_effect`, `job.missed`, `job.errored` | heartbeat | S3 | runbook §7's `zero_effect_alert`; APScheduler `_on_job_missed` / `_on_job_error` (`engine.py:581-601`) | `job.<signal>\|<loop>` |
+| `harness.not_run` | heartbeat | S4 | a daily check: no `samantha_bar_trend` / `day_sim_trend` line in N days (gap 10) | `instrument.harness_not_run\|<name>` |
 
 #### 3.1b Severity (assigned by the emitter, from the signal, never by a model)
 
 - **S1 — a member heard something wrong or useless**: a confident misroute confirmed by the next
-  turn, a live `cant_do`, a brain fallback served, a raise that was voiced as "I don't have any
+  turn, a live refusal, a brain fallback served, a raise that was voiced as "I don't have any
   information", a correction of Zoe's own assertion, an issue report. Google SRE's
   "user-visible degradation" trigger.
 - **S2 — a silent loss or a harness FAIL**: a bar/day-sim FAIL, an undelivered proactive item, a
@@ -659,35 +674,48 @@ is kept forever and is what W16 reads.
 
 The **fingerprint** is `sha256(class_key)` and the `class_key` is built the Sentry way:
 
-1. **In-app frames only.** The key never contains the member, the session, the timestamp, the
-   text, the sample name, or the commit. It contains the signal, the *shape* (routed tool,
-   shortlist head, gate reason, lane, outcome reason, regex alternative id, scenario/ask id, the
-   harness `why` constant) and the instrument features that change the diagnosis
-   (`cold`, `contended`).
-2. **The `why` is the message-with-wildcards.** The bar's and day-sim's `why` strings are
-   constants in source (`samantha_bar.py:456-458`, `samantha_day_sim.py:400-408`); the ledger
-   keys on the constant, not on a formatted number ("{len(raised)} candidates surfaced" keys as
-   `candidates_surfaced_gt1`). A `ci_safe` test asserts every `why` the scorers can emit maps to
-   a key — adding a new FAIL reason without a key is red.
+1. **In-app frames only — and `source` is a system frame.** The key never contains the member,
+   the session, the timestamp, the text, the sample name, the commit, the scenario or ask id, or
+   where the witness came from (`source`). It contains the **layer** (`router | brain | memory |
+   proactive | tool | voice | job | instrument`), the **failure kind**, and one stable
+   **discriminator** (the routed tool, the regex alternative id, the attribute, the loop, the
+   outcome reason) plus the instrument features that change the diagnosis (`cold`,
+   `contended`): `<layer>.<kind>|<discriminator>`. A bar S1 witness and a live confident misroute
+   to `calendar` are therefore **one class**, `router.misroute|calendar`, with two witnesses of
+   different `source` — which is what the "one live + one harness" trigger in §3.3 needs, and
+   what per-source prefixes (`bar|…`, `daysim|…`, `proactive|…`) would have made impossible.
+2. **The `why` is the message-with-wildcards, and it maps to a semantic key.** The bar's and
+   day-sim's `why` strings are constants in source (`samantha_bar.py:456-458`,
+   `samantha_day_sim.py:400-408`); a `why → class_key` table in the ingester turns each constant
+   into the shared key (S1 needles missing + routed away → `router.misroute|<routed>`; S4 "not
+   acknowledged" → `memory.thread_not_acknowledged`; 1r "never voiced it" →
+   `proactive.raise_unvoiced`; "{len(raised)} candidates surfaced" → `proactive.raise_multiple`).
+   A `why` without a mapping is still ledgered, as `harness.unclassified|<id>|<why>`, and the
+   completeness test (`ci_safe`: every `why` the scorers can emit has a mapping) is red until the
+   operator adds one — Hamel's open-coding residue, made visible.
 3. **Rules change forward only.** A key is written once; re-fingerprinting old rows is a
    deliberate migration with a `fingerprint_version` column, never a silent re-group.
 4. **Instrument features split the class.** The 2026-10-04T02:29Z storm fingerprints as
-   `replay.error|brain|cold:1` (sidecar restarted 120 s earlier) — a different class from
-   `replay.error|brain|cold:0`, which *is* a brain regression. The probe gains two cheap reads
-   at run time: `systemctl --user show -p ActiveEnterTimestamp flue-zoe-brain-2x` and
+   `brain.fallback|flue|cold:1` (sidecar restarted 120 s earlier) — a different class from
+   `brain.fallback|flue|cold:0`, which *is* a brain regression, and the same key a live
+   `BRAIN_LANE outcome=fallback` row writes in the minutes after a restart. The probe gains two
+   cheap reads at run time: `systemctl --user show -p ActiveEnterTimestamp flue-zoe-brain-2x` and
    `MemAvailable` (already read, `mem_available_mb`, `:138`) — into `evidence`, into the key.
-5. **S4 and S1 of the same shape are different classes.** The day-sim ask-1r reply "I don't have
-   any information about …" and a live `turn.cant_do` on a greeting raise share the regex
-   alternative and the `raise` context; they key identically *except* `source` — which is the
-   point: the harness instance and the live instance of one class are the two witnesses a
-   proposal needs.
+5. **Harness and live witnesses share the class; `source` and severity tell them apart.** The
+   day-sim ask-1r reply "I don't have any information about …" and a live refusal on a greeting
+   raise share the regex alternative and the `raise` context, so both are
+   `brain.refusal|no_information|raise`; the harness row is S2 with `source = daysim`, the live
+   row S1 with `source = runtime`. One class, two witnesses — the pair a proposal needs.
+6. **One class, many fixes.** S4 was fixed three times (#1756, #1762+#1763, #1770) under one
+   `why`; in the ledger that is one class with three `pr_ref`s and two `regressed` reopenings,
+   never three classes. A backfill that splits a `why` by round is red (§4).
 
 **Class states** (Sentry's, on `failure_classes.state`): `new` (first seen this week) → `active`
 → `proposed` (a proposal row exists) → `fixed` (its PR merged and deployed; `pr_ref` set) →
 `regressed` (a new row after `fixed` — reopens with the PR ref in the evidence pack, severity
 raised one step: a fix that did not stick is worse than the original). `muted` is operator-only
-(a known instrument class such as `harness|daysim` during a planned pause) and expires in 30
-days.
+(a known instrument class such as `instrument.harness_not_run|daysim` during a planned pause)
+and expires in 30 days.
 
 ### 3.3 The weekly digest → proposals with an evidence pack
 
@@ -698,7 +726,7 @@ SRE-shaped triggers:
 
 | Trigger | Rule | Latency |
 |---|---|---|
-| S1 class | ≥ 2 instances in 7 days from ≥ 1 member **or** 1 live instance + 1 harness instance of the same shape | next nightly |
+| S1 class | ≥ 2 distinct `source_key`s in 7 days from ≥ 1 member **or** 1 live witness + 1 harness witness of the **same class** (possible only because the key excludes `source`, §3.2 item 1) | next nightly |
 | Harness regression | any `bar.regression` or a day-sim ask that was PASS on the previous run and FAIL now | next nightly (the bar is already red; the proposal is the ticket) |
 | S2 class | ≥ 3 instances in 7 days | weekly |
 | S3 class | ≥ 5 in 7 days, or a `non_pass_streak ≥ 3`, or `zero_effect_alert` | weekly |
@@ -706,7 +734,7 @@ SRE-shaped triggers:
 | `regressed` | immediately, with the old `pr_ref` | next nightly |
 
 Caps: **≤ 3 new proposals per week**, one per class, dedup by fingerprint (replacing the title
-dedup at `evolution_notice.py:80-88`); a `rejected` class is not re-proposed for 30 days unless
+dedup at `evolution_notice.py:80-88`); every count is over distinct `source_key`s; a `rejected` class is not re-proposed for 30 days unless
 its severity rises; `ZOE_AUTO_APPROVE_THRESHOLD` stays 0.
 
 **The evidence pack** is the proposal's `evidence` JSON and the whole of what a ticket may carry
@@ -716,8 +744,8 @@ off the box:
 { class_key, fingerprint, severity, state,
   counts: {7d, 28d, total, members_7d},
   first_seen, last_seen,
-  witnesses: [ {source, ts, run_ref|interaction_ref, evidence} × ≤5 ],   # refs + aggregates, no text
-  harness: { scenario_or_ask, why, judge_sha, criteria_sha, last_pass_commit, first_fail_commit },
+  witnesses: [ {source, source_key, ts, run_ref|interaction_ref, harness_ref?, evidence} × ≤5 ],   # refs + aggregates, no text
+  harness: { refs: [S1, "ask 9"], why, judge_sha, criteria_sha, last_pass_commit, first_fail_commit },
   suspected_layer: router | brain | memory | proactive | voice | tool | instrument,   # from the signal, a lookup, not a model
   runbook_match: "incident-runbook.md#11" | null,                        # by class_key prefix table
   negative_control: "the test that must be red before the fix and green after",
@@ -727,7 +755,7 @@ off the box:
 ```
 
 `suspected_layer` is a table lookup from the signal (a `router.misroute` is `router`; a
-`memory.zoe_wrong` is `memory`; a `replay.error|…|cold:1` is `instrument`), not an inference —
+`memory.wrong_fact` is `memory`; a `brain.fallback|…|cold:1` is `instrument`), not an inference —
 Reflexion's lesson that the explanation helps and the confabulation caution that a small model
 must not write it. The brain is never asked to explain a failure; the operator and the cloud
 worker read the pack.
@@ -790,7 +818,7 @@ the class key; the text stays in the local proposal row), any reply, any sample.
   exists); any fix that needs a live probe run; a parked fix's one specific question.
 - **When Zoe asks a member — only to label, never to approve.** Behind `ZOE_FAILURE_ASK`
   (default off, needs the P1 inbox): after a *confident* S1 signal on a live turn (a
-  `router.misroute` whose next turn was a correction cue, or a `turn.cant_do` on a routed
+  `router.misroute` whose next turn was a correction cue, or a `brain.refusal` on a routed
   domain), Zoe may ask **once**, on the next turn or by pull, "Did I get that wrong just now?" —
   yes / no / "it's fine". The answer is a ledger label (`member.label = confirmed | denied`),
   Replika's reaction with a reason, FROST's "you only observe the outcome of the one you asked
@@ -805,7 +833,7 @@ the class key; the text stays in the local proposal row), any reply, any sample.
 | Flag | Scope | Does |
 |---|---|---|
 | `ZOE_FAILURE_LEDGER` | zoe-data + harness `--ledger` | write `failure_events` rows from the three harness ingesters and the heartbeat signals; **ships first**; no behaviour change |
-| `ZOE_FAILURE_LEDGER_RUNTIME` | zoe-data | the runtime emitters: BRAIN_LANE sink, intent-dispatch, correction join, the three member writers, the shadow `turn.cant_do` tag, `router.misroute` join |
+| `ZOE_FAILURE_LEDGER_RUNTIME` | zoe-data | the runtime emitters: BRAIN_LANE sink, intent-dispatch, correction join, the three member writers, the shadow `brain.refusal` classifier at the lane record (+ the `tool.empty_result` fast-tier hook), the `router.misroute` join |
 | `ZOE_FAILURE_CLASSES` | zoe-data (dreaming phase) | nightly rollup into `failure_classes`, states, `regressed` detection |
 | `ZOE_FAILURE_PROPOSALS` | zoe-data | the trigger table → `evolution_proposals(type=failure_class)` + the digest section + the operator Notify line (needs `ZOE_PROACTIVE_INBOX` for the line; the row is written regardless) |
 | `ZOE_FAILURE_TICKETS` | zoe-data | approve → Multica ticket through admission (needs `MULTICA_WORKSPACE_ID` and the unparked executor) |
@@ -819,7 +847,7 @@ Nothing here enqueues speech; `ZOE_PROACTIVE_SPOKEN` stays 0; `ZOE_AUTO_APPROVE_
 | Piece | Jetson RAM | CPU / latency | Pi |
 |---|---|---|---|
 | ledger INSERT | 0 | one indexed insert per failure; failures are tens/day at most; harness ingestion reads files already written | — |
-| `turn.cant_do` shadow tag | 0 | one compiled regex over the final reply, µs, after the reply is sent | — |
+| `brain.refusal` shadow classifier | 0 | a ≤2 KB delta accumulator in `_LaneRecord` and one compiled regex in `emit`, µs, after the stream is paid out | — |
 | `router.misroute` join | 0 | an in-memory ring of the last routed hash per session (the frustration tracker's shape, `chat.py:617-620`) | — |
 | correction join | 0 | one string search in the previous assistant reply held in the session context already | — |
 | nightly rollup | 0 | one `GROUP BY fingerprint` in the dreaming job, ms | — |
@@ -836,16 +864,17 @@ the STT rock, the W3 gate or the voice stack's memory protection.
 
 **Backfill is the first instrument.** `scripts/maintenance/failure_ledger_backfill.py --dry-run`
 reads `samantha_bar_trend.jsonl` (27 runs), `samantha_day_sim_trend.jsonl` (9), the two `_last`
-artifacts and `voice_regression_trend.jsonl` (484) and prints the classes it would write. It must
-produce, from the files as they are today:
+artifacts and `voice_regression_trend.jsonl` (484) and prints, per class, `would_insert` and
+`already_present`. Run twice back to back, the second pass must print `would_insert = 0` for every
+class (the `source_key` contract). From the files as they are today it must produce:
 
 | Known failure (2026-09-28 → 10-04) | Expected class row | Evidence the backfill must carry |
 |---|---|---|
-| **S1 router misroute** | `bar\|S1\|needles_missing` ×5 (09-28/29), state `fixed` once `pr_ref` #1770 is attached by hand in the test | `last_pass_commit = 269bb680`; the live-row twin `router.misroute\|calendar\|…` is **absent** (no runtime emitter existed) — the backfill must say so, not invent it |
-| **S4 emotional thread** | `bar\|S4\|interview_not_acknowledged` ×5, plus the round-3 variant keyed by its own `why` | three distinct `why` constants over the rounds ⇒ **≥2 classes**, not one — a backfill that yields one class for S4 is red |
-| **Day-sim ask 9 (confident misroute to `time`)** | `daysim\|9\|states_clock_time` ×2 | `evidence.head_conf` is not in the day-sim artifact (it is in the app log) — recorded as `null`, and the gap is listed |
-| **The ERROR storm, 2026-10-04T02:29:21Z** | `replay.error\|brain\|cold:1` (14) **if** the restart age can be recovered for the backfill (journal), else `cold:unknown` — a separate class from the 2026-09-29 `ERROR 20` run | the row must carry `revision.commit`, `verdicts`, `reason`; the 11:59Z pass run on the same day writes **zero** rows |
-| Day-sim 1r "injected and settled but never voiced" | `daysim\|1r\|raise_not_voiced` ×6 | the `why` constant at `samantha_day_sim.py:406` |
+| **S1 router misroute** | `router.misroute\|calendar` ×5 (09-28/29), witnesses `source = bar`, `harness_ref = S1`, keyed through the shadow-log join to each ask turn's `router_two_stage` record (`data/router_head_shadow.jsonl`, 2.1 MB, bar session ids and times known); state `fixed` once `pr_ref` #1770 is attached by hand in the test | **the same class a live confident misroute to `calendar` writes** — no live witness exists yet (no runtime emitter), and the backfill must report `witnesses: bar 5, live 0`, not invent one. If the shadow-log join fails (rotated away), the row lands in `harness.unclassified\|S1\|needles_missing` and the test is red |
+| **S4 emotional thread** | `memory.thread_not_acknowledged` ×5 — **one class**, with `pr_ref`s #1756, #1762+#1763, #1770 attached by hand in the test and two `regressed` reopenings between them | the `why` is the same constant across all three rounds; a backfill that yields more than one class for it is red (fix the class, not the instance — §3.2 item 6) |
+| **Day-sim ask 9 (confident misroute to `time`)** | `router.misroute\|time` ×2, witnesses `source = daysim`, `harness_ref = 9` | **the same class a live confident misroute to `time` writes** (day-sim ask F1 adds the live witness and the pair must share one fingerprint); `evidence.head_conf` comes from the shadow-log join, else `null` and the gap is listed |
+| **The ERROR storm, 2026-10-04T02:29:21Z** | `brain.fallback\|flue\|cold:1` (14) **if** the restart age can be recovered for the backfill (journal), else `cold:unknown` — a separate class from the 2026-09-29 `ERROR 20` run | the row must carry `revision.commit`, `verdicts`, `reason`; the 11:59Z pass run on the same day writes **zero** rows |
+| Day-sim 1r | `proactive.raise_unvoiced` ×6 (the `why` at `samantha_day_sim.py:406`); the judged "I don't have any information" replies → `brain.refusal\|no_information\|raise` | the second key is the one a live refusal on a raise writes; two sources, one class |
 
 **Negative controls (each must go red, or the instrument proves nothing):**
 
@@ -855,7 +884,9 @@ produce, from the files as they are today:
 2. **A pass run writes nothing.** Ingest the 2026-10-04T11:59Z artifact ⇒ 0 rows; ingest the
    first all-PASS day-sim (02:39Z) ⇒ 0 FAIL rows (SKIPs are S4 counters, allowed).
 3. **Break the fingerprint ⇒ classes collapse.** Drop the `why` from the key in a test build ⇒
-   S4's rounds merge into one class ⇒ the "≥2 classes for S4" assertion is red.
+   S4's two FAIL shapes (`memory.thread_not_acknowledged`, `memory.verbatim_quote`,
+   `samantha_bar.py:456-458`) merge, and day-sim 6 / 6n ("asserts the superseded half-marathon"
+   / "asserts the negated fact as current") merge ⇒ the class-count assertions are red.
 4. **Text cannot enter.** Feed an emitter a payload with an 81-char free string or a `[NAME]`-shaped
    token ⇒ the PII guard raises and the row is refused; the `ci_safe` scan over emitter payload
    shapes is red if any emitter can pass a reply field.
@@ -869,11 +900,21 @@ produce, from the files as they are today:
 8. **The ask is bounded.** In the day-sim, after a seeded confident misroute plus a correction
    cue, exactly one Review item "did I get that wrong" exists; a second misroute the same day
    adds none; the stranger's panel holds none.
+9. **Idempotence.** Ingest the same `_last` artifact twice, then run the backfill over the trend
+   file that contains the same run ⇒ the `failure_events` count is unchanged, every class reports
+   `already_present = rows, would_insert = 0`, and no proposal threshold moves; a retried runtime
+   write with the same `source_key` ⇒ one row. Remove the UNIQUE constraint in a test build ⇒ the
+   count doubles ⇒ red.
+10. **Cross-source class.** The live `router.misroute|time` row seeded by F1 and the ask-9 harness
+    row share one fingerprint; add `source` to the key recipe in a test build ⇒ two fingerprints
+    ⇒ the "1 live + 1 harness" S1 trigger never fires ⇒ red.
 
 **Day-sim additions:** ask **F1** — after the seeded ask-9 misroute the ledger holds exactly one
 `router.misroute` row for the demo user (joined on the correction turn) and zero for the
-stranger; ask **F2** — a `turn.cant_do` row for the 1r "no information" reply when the shadow
-tag is on, and the reply byte-identical to the tag off.
+stranger, and its fingerprint equals the ask-9 harness row's; ask **F2** — a
+`brain.refusal|no_information|raise` row for the 1r "no information" reply when the shadow
+classifier is on — a brain-generated reply, so it must be seen at `_LaneRecord`, not at the fast
+tier — and the reply byte-identical to the classifier off.
 
 **W16 counters** (deterministic, from `failure_classes`, per week): classes new / active /
 proposed / fixed / regressed; S1 instances per member-week (the one number that says whether
@@ -896,7 +937,7 @@ has not measured.
 |---|---|---|
 | 1 Rocks fixed | GO | no model, no embedding; the ledger feeds the router's ratchet (the one rock allowed to improve) with the labelled misses it has never had |
 | 2 Local, private, fast | GO with the data-class rule | rows are hashes/counts/enums; the pack leaves the box only on an operator's approve and contains no text; today's verbatim `user-feedback` issue is *removed* by this design |
-| 3 Lab-prove before prod | GO | seven flags, default off; backfill dry-run first; day-sim asks F1/F2; eight negative controls |
+| 3 Lab-prove before prod | GO | seven flags, default off; backfill dry-run first; day-sim asks F1/F2; ten negative controls |
 | 4 Build it to STICK | GO — this is the principle the idea serves | `regressed` reopens a class with its PR; W16 counts fixed-and-quiet, not merged; the instrument features keep the storm class honest |
 | 5 Capture, don't lose | GO | 39 failing probe runs, 13 bar FAILs, 19 day-sim FAILs and every BRAIN_LANE fallback exist today and are compared by nobody; the ledger is the pin |
 | 6 Borrow the piece | GO | Sentry's fingerprint, SRE's triggers, Anthropic's 20–50-from-failures, Hamel's taxonomy-and-count, Hermes' staged approval, Replika's labelled thumbs — no framework, no hosted tracer |
@@ -936,14 +977,17 @@ a negative control; re-fingerprinting old rows without a version bump.
 1. **PR 1 — the ledger + harness ingesters + backfill (`ZOE_FAILURE_LEDGER`).** Table +
    migration; `measure_voice` emits per-sample verdict rows (hash, verdict, ms) into the ledger
    before the sweep; the probe adds `sidecar_age_s` and `mem_available_mb` to `evidence`; bar
-   and day-sim gain `--ledger`; `failure_ledger_backfill.py --dry-run` must reproduce the five
-   rows of §4 from today's files; the PII guard test; negative controls 1–5. Byte-identical with
-   the flag off.
+   and day-sim gain `--ledger`; `source_key` UNIQUE + `ON CONFLICT DO NOTHING` in every writer;
+   the `why → class_key` table with the shadow-log join; `failure_ledger_backfill.py --dry-run`
+   must reproduce the five rows of §4 from today's files and print `would_insert = 0` on its
+   second pass; the PII guard test; negative controls 1–5 and 9. Byte-identical with the flag
+   off.
 2. **PR 2 — runtime emitters (`ZOE_FAILURE_LEDGER_RUNTIME`).** The BRAIN_LANE second sink; intent-
    dispatch outcomes; the correction join to the previous assistant turn; the three member
    writers re-pointed (and `record_user_issue`'s verbatim description replaced by the class key);
-   the shared `cant_do` regex module with the shadow tag in `fast_tiers`; the `router.misroute`
-   join. Day-sim asks F1/F2.
+   the shared refusal-classifier module hooked at `brain_dispatch._LaneRecord` (chat, voice,
+   Telegram) plus the `tool.empty_result` hook on fast-tier and intent-handler replies; the
+   `router.misroute` join. Day-sim asks F1/F2; negative control 10.
 3. **PR 3 — classes (`ZOE_FAILURE_CLASSES`).** Nightly rollup in the dreaming phase; states;
    `regressed` via `pr_ref` (PR bodies cite the class key; a `ci_safe` check reads it from the
    merge commit); the `why`-constant → key table with its completeness test; W16 counters.
