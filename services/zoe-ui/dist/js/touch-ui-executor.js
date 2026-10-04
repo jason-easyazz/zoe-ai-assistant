@@ -165,11 +165,14 @@
         // pages moves it there and clears the localStorage copy).
         const kiosk = params.get('kiosk') === '1' || get(ls, 'zoe_kiosk') === '1' || get(ss, 'zoe_kiosk') === '1';
         if (kiosk) return false;
-        // A registered id is one the server knows. The locally generated alias
-        // (panel_xxxxxxxx, see generatePanelAlias) is fallback-only — carried in
-        // a URL through login or auto-home it must not turn a laptop into a panel.
+        // A registered id is one the server knows. THIS browser's locally generated
+        // alias (persisted under zoe_touch_panel_alias_generated, see getPanelId) is
+        // fallback-only — carried in a URL through login or auto-home it must not
+        // turn a laptop into a panel. Identify it by the persisted MARKER, never by
+        // shape: an administrator may register a real id that looks like one
+        // (test_touch_panel_id_precedence.js pins that case).
         const generated = (get(ls, 'zoe_touch_panel_alias_generated') || '').trim();
-        const isAlias = (id) => /^panel_[a-z0-9]{8}$/i.test(id) || (generated && id === generated);
+        const isAlias = (id) => !!generated && id === generated;
         const forced = (params.get('panel_id') || '').trim();
         if (forced && !isAlias(forced)) return false;
         const registered = (get(ls, 'zoe_panel_id') || '').trim();
@@ -1398,6 +1401,17 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
 
     // Register with the Service Worker so it can drive panel navigation even
     // after this page navigates away (SW persists across all page transitions).
+    function stopServiceWorkerPanelPoll() {
+        try {
+            if (!('serviceWorker' in navigator)) return;
+            navigator.serviceWorker.ready.then((reg) => {
+                const targets = [navigator.serviceWorker.controller, reg && reg.active]
+                    .filter((sw, i, arr) => sw && arr.indexOf(sw) === i);
+                targets.forEach((sw) => sw.postMessage({ type: 'STOP_PANEL_POLL' }));
+            }).catch(() => {});
+        } catch (_) { /* never let cleanup break page boot */ }
+    }
+
     function registerWithServiceWorker() {
         if (!('serviceWorker' in navigator)) return;
         navigator.serviceWorker.ready.then((reg) => {
@@ -2272,6 +2286,11 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
             // Not a panel: the estate still renders and its own polls run, but none
             // of the panel machinery below (bind / sync / action poll / push / SW).
             console.info('[executor] viewer mode — this browser is not a panel');
+            // A service worker from an earlier PANEL session on this origin may still
+            // be draining the old panel queue (sw.js _panelPollTimer) and could even
+            // navigate this viewer on a panel_navigate action — tell it to stop, the
+            // same way js/common.js does for desktop pages.
+            stopServiceWorkerPanelPoll();
         } else {
             bindPanel().catch(() => {});
             syncState().catch(() => {});

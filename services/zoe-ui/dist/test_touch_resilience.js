@@ -79,12 +79,17 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       // Codex (#1861): the session-scoped kiosk flag (auth.js on legacy touch pages) is a panel signal…
       assert.strictEqual(isViewerContext('', ls({}), ls({ zoe_kiosk: '1' })), false);
       // …and a locally generated alias is never a registered id, whether forced in the URL or stored.
-      assert.strictEqual(isViewerContext('?panel_id=panel_abc12345', ls({})), true);
-      assert.strictEqual(isViewerContext('', ls({ zoe_panel_id: 'panel_abc12345' })), true);
+      // …and THIS browser's generated alias (the persisted marker) is never a registered id, whether forced or stored —
+      // while a registered id that merely LOOKS like one (no marker) is a panel (test_touch_panel_id_precedence.js).
+      assert.strictEqual(isViewerContext('?panel_id=panel_abc12345', ls({ zoe_touch_panel_alias_generated: 'panel_abc12345' })), true);
+      assert.strictEqual(isViewerContext('', ls({ zoe_panel_id: 'panel_abc12345', zoe_touch_panel_alias_generated: 'panel_abc12345' })), true);
       assert.strictEqual(isViewerContext('?panel_id=weird-alias', ls({ zoe_touch_panel_alias_generated: 'weird-alias' })), true);
+      assert.strictEqual(isViewerContext('?panel_id=panel_abcd1234', ls({})), false);
       ok('viewer: a laptop on /touch/home.html is a viewer; kiosk flag (URL, local or session) or a registered panel id makes a panel (a generated alias never does)');
       assert(/if \(state\.viewer\) \{[\s\S]{0,400}\} else \{[\s\S]{0,200}bindPanel\(\)/.test(execSrc), 'init must gate bind/sync/push/poll on state.viewer');
-      ok('viewer: init skips panel bind, state sync, action poll, push socket and SW poll');
+      assert(/if \(state\.viewer\) \{[\s\S]{0,900}stopServiceWorkerPanelPoll\(\);/.test(execSrc), 'a viewer must STOP a leftover SW panel poll');
+      assert(/function stopServiceWorkerPanelPoll\(\)[\s\S]{0,600}STOP_PANEL_POLL/.test(execSrc));
+      ok('viewer: init skips panel bind, state sync, action poll, push socket and SW poll — and stops a leftover SW panel poll');
       // Codex (#1861, round 2): js/auth.js on the legacy touch pages must carry the
       // localStorage kiosk flag into sessionStorage BEFORE clearing it, or a kiosk
       // navigating with a bare URL loses every signal before isViewerContext runs.
