@@ -38,7 +38,10 @@ pytestmark = pytest.mark.ci_safe  # GitHub-CI opt-in: runs in validate.yml's `-m
 _DAEMON_PATH = Path(__file__).resolve().parents[2] / "scripts" / "setup" / "zoe_voice_daemon.py"
 _BARGE_ENV = ("BARGE_MIN_CHUNKS", "BARGE_WINDOW_CHUNKS", "BARGE_GRACE_MS",
               "BARGE_FAST_PROB", "BARGE_FAST_CHUNKS", "BARGE_IN_THRESHOLD",
-              "CHUNK_SIZE", "SAMPLE_RATE")
+              "CHUNK_SIZE", "SAMPLE_RATE", "BARGE_DUCK_ENABLED", "BARGE_DUCK_DB",
+              "BARGE_DUCK_RAMP_MS", "BARGE_COMMIT_SPEECH_MS", "BARGE_RESUME_SILENCE_MS",
+              "BARGE_DECIDE_MAX_MS", "BARGE_PLAYOUT_LATENCY_MS", "BARGE_SEED_NEXT_TURN",
+              "FOLLOWUP_LOOKBACK_CHUNKS", "VAD_ENDPOINT_ENABLED")
 
 
 def _load_daemon(name: str):
@@ -82,6 +85,8 @@ class _Clock:
 class _Proc:
     """Stands in for the aplay subprocess."""
 
+    pid = 4242
+
     def __init__(self):
         self.terminated = False
 
@@ -111,8 +116,12 @@ class _MicScript:
     """
 
     def __init__(self, daemon, clock: _Clock, live: list[float], *,
-                 start_at: int | None = None, backlog: list[float] | None = None):
+                 start_at: int | None = None, backlog: list[float] | None = None,
+                 keep_reading_after_kill: bool = False, end_at: int | None = None,
+                 restart_at: int | None = None):
         self.d = daemon
+        self.keep_reading_after_kill = keep_reading_after_kill
+        self.end_at, self.restart_at = end_at, restart_at  # the player exits / a new one starts
         self.clock = clock
         self.live = list(live)
         self.start_at = start_at
@@ -130,11 +139,14 @@ class _MicScript:
             self.backlog_reads += 1
             self.clock.t += 0.02
             return _chunk(self.d, self.buffer.pop(0))
-        if self.i >= len(self.live) or (self.proc is not None and self.proc.terminated):
+        if self.i >= len(self.live) or (self.proc is not None and self.proc.terminated
+                                        and not self.keep_reading_after_kill):
             raise OSError("script exhausted")
         prob = self.live[self.i]
         self.clock.t += self.d._CHUNK_S
-        if self.start_at is not None and self.i == self.start_at:
+        if self.end_at is not None and self.i == self.end_at:
+            self.proc.terminated = True
+        if self.i in (self.start_at, self.restart_at):
             self.proc = _Proc()
             self.d._register_tts_process(self.proc)
             self.started_at = self.clock.t
@@ -398,3 +410,297 @@ def test_queue_thread_drops_stale_items_and_honours_the_grace(daemon, monkeypatc
     finally:
         shutdown.set()
         t.join(timeout=2)
+
+
+# ── phase 1: duck → decide → resume (BARGE_DUCK_ENABLED, default off) ────────
+# docs/research/barge-in-duck-decide-resume-2026-10-04.md §4.1 / §6.1-2.
+
+_PACTL_LISTING = """Sink Input #12
+\tSink: 1
+\tVolume: front-left: 45000 / 69% / -9.72 dB,   front-right: 45000 / 69% / -9.72 dB
+\tProperties:
+\t\tapplication.name = "shairport-sync"
+\t\tapplication.process.id = "777"
+Sink Input #40
+\tSink: 1
+\tVolume: mono: 65536 / 100% / 0.00 dB
+\tProperties:
+\t\tapplication.name = "ALSA plug-in [aplay]"
+\t\tapplication.process.id = "4242"
+"""
+
+
+class _Pactl:
+    """pactl spy: answers `list sink-inputs` with a canned listing, records the rest."""
+
+    def __init__(self, listing: str = _PACTL_LISTING):
+        self.listing = listing
+        self.calls: list[tuple[str, ...]] = []
+
+    fail_sets = False  # pactl exits non-zero on every set-* call
+
+    def __call__(self, *args: str):
+        self.calls.append(args)
+        if args[:2] == ("list", "sink-inputs"):
+            return self.listing
+        return None if self.fail_sets else ""
+
+    def volume_calls(self):
+        return [c for c in self.calls if c[0] != "list"]
+
+
+class _Resp:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture()
+def duck(daemon, rig, monkeypatch):
+    """The rig with the duck ON: a pactl spy, an open turn response and a VAD
+    endpointer (so the seed capture stops on the decoded probabilities)."""
+    pactl = _Pactl()
+    monkeypatch.setattr(daemon, "_pactl", pactl)
+    monkeypatch.setattr(daemon, "BARGE_DUCK_ENABLED", True)
+    monkeypatch.setattr(daemon, "VAD_ENDPOINT_ENABLED", True)
+    monkeypatch.setattr(daemon, "_PLAYOUT", daemon._PlayoutLedger())
+    monkeypatch.setattr(daemon, "_barge_stream_closed", threading.Event())
+    resp = _Resp()
+    daemon._set_turn_response(resp)
+    yield types.SimpleNamespace(pactl=pactl, resp=resp, clock=rig)
+    daemon._set_turn_response(None)
+
+
+def _decide_lines(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("BARGE_DECIDE ")]
+
+
+def _decide_ms(line: str) -> int:
+    return int(line.split(" ms=")[1].split()[0])
+
+
+def _lead(daemon) -> list[float]:
+    return _silence(5) + _silence(_chunks_for(daemon, 1.0))
+
+
+def _run_duck(daemon, rig, live, **kw):
+    pa = MagicMock()
+    pa.get_sample_size.return_value = 2
+    script = _MicScript(daemon, rig, live, start_at=4, keep_reading_after_kill=True, **kw)
+    pa.open.return_value = script
+    mon = daemon._BargeMonitor(pa)
+    mon._run()
+    return mon, script
+
+
+def test_duck_flags_default_off_and_validated(daemon, monkeypatch, caplog):
+    assert daemon.BARGE_DUCK_ENABLED is False and daemon.BARGE_SEED_NEXT_TURN is True
+    assert (daemon.BARGE_DUCK_DB, daemon.BARGE_DUCK_RAMP_MS) == (-15.0, 0)
+    assert (daemon.BARGE_COMMIT_SPEECH_MS, daemon.BARGE_RESUME_SILENCE_MS,
+            daemon.BARGE_DECIDE_MAX_MS, daemon.BARGE_PLAYOUT_LATENCY_MS) == (900, 400, 2000, 100)
+    caplog.set_level(logging.WARNING)
+    for k, v in {"BARGE_DUCK_DB": "5", "BARGE_DUCK_RAMP_MS": "-1", "BARGE_COMMIT_SPEECH_MS": "0",
+                 "BARGE_DECIDE_MAX_MS": "soon"}.items():
+        monkeypatch.setenv(k, v)
+    mod = _load_daemon("zoe_voice_daemon_duck_badenv_under_test")
+    assert (mod.BARGE_DUCK_DB, mod.BARGE_DUCK_RAMP_MS, mod.BARGE_COMMIT_SPEECH_MS,
+            mod.BARGE_DECIDE_MAX_MS) == (-15.0, 0, 900, 2000)
+    assert "BARGE_DUCK_DB" in " ".join(r.getMessage() for r in caplog.records)
+
+
+def test_flag_off_is_todays_hard_stop_and_never_touches_pactl(daemon, rig, monkeypatch, caplog):
+    """Byte-identity lock: with the duck OFF a sustained interruption kills the
+    player at the fire, nothing is ducked, nothing is decided. Negative control
+    for the flag read: the same script with the flag ON must NOT terminate at the
+    fire (next test) — remove the BARGE_DUCK_ENABLED read and one of them reddens."""
+    caplog.set_level(logging.INFO)
+    pactl = _Pactl()
+    monkeypatch.setattr(daemon, "_pactl", pactl)
+    script = _MicScript(daemon, rig, _lead(daemon) + [0.99] * 20, start_at=4)
+    assert _run_monitor(daemon, script)
+    assert script.proc.terminated and pactl.calls == [] and _decide_lines(caplog) == []
+    assert "ducked" not in _fire_line(caplog)
+
+
+@pytest.mark.parametrize("prob", [0.8, 0.99])
+def test_sustained_speech_ducks_then_commits_within_1100ms_of_onset(daemon, duck, caplog, prob):
+    caplog.set_level(logging.INFO)
+    daemon._PLAYOUT.note(duck.clock.t + 0.2, 1.0)  # sentence 1: heard before the barge
+    daemon._PLAYOUT.note(duck.clock.t + 0.3, 8.0)  # sentence 2: still playing at commit
+    mon, script = _run_duck(daemon, duck.clock, _lead(daemon) + [prob] * 16 + _silence(15))
+    assert "ducked -15dB, deciding" in _fire_line(caplog)
+    assert script.proc.terminated and daemon._barge_in_requested.is_set() and duck.resp.closed
+    assert daemon._barge_stream_closed.is_set()
+    (line,) = _decide_lines(caplog)
+    assert "outcome=commit" in line and "duck_db=-15.0" in line and "heard_chunks=1 heard_ms=1000" in line
+    assert 900 <= _decide_ms(line) <= 1100
+    # pactl: duck the aplay sink-input (#40, by pid 4242), restore its absolute
+    # baseline; never the sink, never the AirPlay stream (#12).
+    assert duck.pactl.volume_calls() == [("set-sink-input-volume", "40", "-15.0dB"),
+                                         ("set-sink-input-volume", "40", "65536")]
+    assert daemon._last_barge_commit["heard_chunks"] == 1
+
+
+def test_short_burst_resumes_and_a_later_interruption_still_commits(daemon, duck, caplog):
+    """A 240 ms burst: duck, 400 ms of quiet, RESUME — the player lives, the
+    volume is back. The detector re-arms: sustained speech 1 s later commits."""
+    caplog.set_level(logging.INFO)
+    live = _lead(daemon) + [0.99] * 3 + _silence(12) + [0.99] * 16 + _silence(15)
+    mon, script = _run_duck(daemon, duck.clock, live)
+    lines = _decide_lines(caplog)
+    assert [l.split()[1] for l in lines] == ["outcome=resume", "outcome=commit"]
+    assert _decide_ms(lines[0]) == 240 + 400
+    assert script.proc.terminated  # by the SECOND episode only
+    assert [c[2] for c in duck.pactl.volume_calls()] == ["-15.0dB", "65536", "-15.0dB", "65536"]
+
+
+def test_short_burst_alone_never_terminates_the_player(daemon, duck, caplog):
+    caplog.set_level(logging.INFO)
+    mon, script = _run_duck(daemon, duck.clock, _lead(daemon) + [0.99] * 3 + _silence(30))
+    assert not script.proc.terminated and not daemon._barge_in_requested.is_set()
+    assert not duck.resp.closed and mon.take_seed() is None
+    assert [l.split()[1] for l in _decide_lines(caplog)] == ["outcome=resume"]
+
+
+def test_unresolved_window_hits_the_ceiling_and_resumes(daemon, duck, caplog):
+    """Speech too choppy to commit (<900 ms total) and never quiet long enough
+    to resume (<400 ms runs): the 2 s ceiling resumes."""
+    caplog.set_level(logging.INFO)
+    live = _lead(daemon) + [0.9] * 3 + [0.1] * 4 + ([0.9] * 2 + [0.1] * 4) * 6 + _silence(20)
+    mon, script = _run_duck(daemon, duck.clock, live)
+    lines = _decide_lines(caplog)
+    assert lines and lines[0].split()[1] == "outcome=ceiling", lines
+    assert _decide_ms(lines[0]) == 2000
+    assert not script.proc.terminated and duck.pactl.volume_calls()[1][2] == "65536"
+
+
+def test_vad_failure_sentinel_never_commits(daemon, duck, caplog):
+    """A broken Silero (-1.0 sentinel) after the fire is neither speech nor
+    quiet: the window can only end at the ceiling, never in a kill. Negative
+    control: the same chunks at 0.99 commit."""
+    caplog.set_level(logging.INFO)
+    mon, script = _run_duck(daemon, duck.clock, _lead(daemon) + [0.99] * 2 + [-1.0] * 40)
+    assert not script.proc.terminated
+    assert [l.split()[1] for l in _decide_lines(caplog)] == ["outcome=ceiling"]
+    caplog.clear()
+    daemon._barge_in_requested.clear()
+    mon, script = _run_duck(daemon, duck.clock, _lead(daemon) + [0.99] * 2 + [0.99] * 40)
+    assert script.proc.terminated and _decide_lines(caplog)[0].split()[1] == "outcome=commit"
+
+
+def test_no_sink_input_for_the_player_falls_back_to_the_hard_stop(daemon, duck, caplog):
+    caplog.set_level(logging.INFO)
+    duck.pactl.listing = _PACTL_LISTING.replace('"4242"', '"9999"')
+    mon, script = _run_duck(daemon, duck.clock, _lead(daemon) + [0.99] * 20)
+    assert script.proc.terminated and duck.pactl.volume_calls() == []
+    assert _decide_lines(caplog) == [] and "ducked" not in _fire_line(caplog)
+    assert any("duck unavailable" in r.getMessage() for r in caplog.records)
+
+
+def test_commit_seeds_the_next_turn_from_the_lookback_to_the_endpoint(daemon, duck, caplog):
+    """The seed is the 4-chunk lookback before onset, the decide window, then the
+    rest of the utterance to the normal endpoint — handed over once."""
+    caplog.set_level(logging.INFO)
+    speech = [0.99] * 16 + [0.6] * 5
+    mon, script = _run_duck(daemon, duck.clock, _lead(daemon) + speech + _silence(40))
+    seed = mon.take_seed()
+    assert seed is not None and mon.take_seed() is None
+    probs = list(np.frombuffer(seed[44:], dtype=np.int16)[::daemon.CHUNK_SIZE] / 10000.0)
+    # The 4-chunk ring holds the fire chunk + the one before (both speech on the
+    # fast path) and the 2 room chunks before onset — the same ring shape as
+    # _follow_up_listen, so the first syllable is never clipped.
+    assert probs[:2] == [0.01] * 2, "lookback before onset"
+    assert probs[2:2 + len(speech)] == pytest.approx(speech), "the whole interrupting utterance"
+    assert probs[2 + len(speech):] == [0.01] * 10, "then the VAD endpoint (0.8 s)"
+    assert any("Barge-in seed:" in r.getMessage() for r in caplog.records)
+
+
+def test_seed_frames_are_bounded_by_the_decide_ceiling(daemon, duck, monkeypatch):
+    """The lookback ring is FOLLOWUP_LOOKBACK_CHUNKS long and the episode frames
+    stop growing at lookback + ceiling/chunk + 1, whatever the window does."""
+    captured, fed = {}, []
+    monkeypatch.setattr(daemon._BargeMonitor, "_capture_seed",
+                        lambda self, stream, frames: captured.setdefault("n", len(frames)))
+    # A decider that ignores its ceiling: 400 undecided chunks, then a commit.
+    monkeypatch.setattr(daemon._BargeDecider, "feed",
+                        lambda self, prob, at: fed.append(at) or ("commit" if len(fed) == 400 else ""))
+    mon, script = _run_duck(daemon, duck.clock, _silence(80) + [0.99] * 450)
+    assert captured["n"] == 4 + int(np.ceil(2.0 / daemon._CHUNK_S)) + 1 == 30 < 400
+
+
+def test_player_exiting_mid_decide_heals_the_persisted_duck_on_the_next_player(
+        daemon, duck, caplog, monkeypatch):
+    """The reply ends while deciding: outcome=ended, no kill, the user still
+    talking becomes the seed. The player exited ducked, so PulseAudio's
+    stream-restore holds -15 dB for aplay: the next player is healed."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(daemon, "_duck_leak", None)
+    lead = _lead(daemon)
+    live = lead + [0.99] * 6 + _silence(30)
+    mon, script = _run_duck(daemon, duck.clock, live, end_at=len(lead) + 4)
+    lines = _decide_lines(caplog)
+    assert [l.split()[1] for l in lines] == ["outcome=ended"] and not daemon._barge_in_requested.is_set()
+    assert mon.take_seed() is not None, "still talking at reply end: seeded, no beep"
+    assert daemon._duck_leak == 65536
+    # heal: the next player's sink-input (same pid in this rig) gets the baseline back
+    mon, script = _run_duck(daemon, duck.clock, _silence(5) + _silence(20))
+    assert daemon._duck_leak is None
+    assert [c[2] for c in duck.pactl.volume_calls()] == ["-15.0dB", "65536"]
+    assert any("healed leaked stream volume" in r.getMessage() for r in caplog.records)
+    # A failed restore (pactl error) is a recorded leak too; the heal is tried
+    # once per player and keeps the leak while pactl keeps failing.
+    duck.pactl.fail_sets = True
+    monkeypatch.setattr(daemon, "_duck_heal_tried", None)
+    mon, script = _run_duck(daemon, duck.clock, _lead(daemon) + [0.99] * 3 + _silence(30))
+    assert daemon._duck_leak == 65536 and "outcome=resume" in _decide_lines(caplog)[-1]
+    assert sum(1 for c in duck.pactl.volume_calls() if c[2] == "65536") == 3  # restore, heal x2: one per player
+
+
+def test_seed_off_keeps_the_commit_but_hands_nothing_over(daemon, duck, monkeypatch):
+    monkeypatch.setattr(daemon, "BARGE_SEED_NEXT_TURN", False)
+    mon, script = _run_duck(daemon, duck.clock, _lead(daemon) + [0.99] * 16 + _silence(30))
+    assert script.proc.terminated and mon.take_seed() is None
+
+
+def test_follow_up_source_prefers_the_seed_and_skips_the_beep(daemon, monkeypatch):
+    calls = []
+    monkeypatch.setattr(daemon, "play_follow_up_beep", lambda: calls.append("beep"))
+    monkeypatch.setattr(daemon, "_follow_up_listen",
+                        lambda pa, window_s=None: calls.append("listen") or b"L")
+    monkeypatch.setattr(daemon, "_notify_wake_background", lambda: None)
+    assert daemon._follow_up_source(None, b"SEED") == b"SEED" and calls == []
+    assert daemon._follow_up_source(None, None) == b"L" and calls == ["beep", "listen"]
+
+
+def test_decider_and_ledger_are_pure(daemon):
+    d = daemon._BargeDecider(threshold=0.5, commit_ms=900, resume_ms=400, max_ms=2000)
+    d.start(0.0, speech_ms=160)
+    t, out = 0.16, ""
+    while not out:
+        out = d.feed(0.9, t)
+        t += daemon._CHUNK_S
+    assert out == "commit" and d.speech_ms >= 900 and d.feed(0.9, t) == ""  # decided once
+    d.start(0.0)
+    outs = [d.feed(p, 0.08 * k) for k, p in enumerate([0.9, 0.1, -1.0, 0.1, 0.1, 0.1, 0.1])]
+    assert outs[-1] == "resume" and d.quiet_ms == 400  # the sentinel added to neither side
+    led = daemon._PlayoutLedger()
+    led.note(10.0, 1.0)   # plays 10.0-11.0
+    led.note(10.2, 2.0)   # queued behind it: plays 11.0-13.0
+    assert led.heard(11.05, 0.1) == (0, 0) and led.heard(11.1, 0.1) == (1, 1000)
+    assert led.heard(13.1, 0.1) == (2, 3000)
+
+
+def test_ducker_ramp_steps_and_relative_restore_without_a_baseline(daemon, monkeypatch):
+    pactl = _Pactl(_PACTL_LISTING.replace("Volume: mono: 65536 / 100% / 0.00 dB", "Mute: no"))
+    monkeypatch.setattr(daemon, "_pactl", pactl)
+    monkeypatch.setattr(daemon, "time",
+                        types.SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda s: None))
+    d = daemon._SinkInputDucker(4242, db=-15.0, ramp_ms=450)
+    assert d.duck() and d.baseline is None
+    for th in threading.enumerate():
+        if th.name == "barge-duck-ramp":
+            th.join(2)
+    d.restore()
+    assert [c[2] for c in pactl.volume_calls()] == ["-5.0dB", "-5.0dB", "-5.0dB", "+15.0dB"]

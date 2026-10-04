@@ -50,15 +50,36 @@ _QUIET = array.array("h", [0] * 1280).tobytes()
 _LOUD = array.array("h", [3000] * 1280).tobytes()
 
 
-def test_flag_defaults_and_both_recorders_use_endpointer():
+# Every recording loop in the daemon. A new recorder is added HERE and must go
+# through the shared endpointer; a loop that counts amplitude inline (the 1.5s
+# tail) or one missing from this list turns the test red.
+_RECORDERS = (
+    r"\ndef record_command\(",            # wake → command
+    r"\ndef _follow_up_listen\(",         # follow-up window
+    r"\n    def _capture_seed\(",         # barge-in phase 1: seed the next turn
+)
+
+
+def _recorder_body(pattern: str) -> str:
+    m = re.search(pattern + r".*?(?=\n(?:def |class |    def )\w)", _SRC, re.DOTALL)
+    assert m, pattern
+    return m.group(0)
+
+
+def test_flag_defaults_and_all_recorders_use_endpointer():
     # Ships OFF; enable per-device via /home/pi/.zoe-voice/.env.voice.
     assert re.search(r'VAD_ENDPOINT_ENABLED"\s*,\s*"false"', _SRC)
     assert re.search(r'VAD_ENDPOINT_SILENCE_S"\s*,\s*"0\.8"', _SRC)
     assert re.search(r'VAD_ENDPOINT_THRESHOLD"\s*,\s*"0\.35"', _SRC)
-    # Both recording loops must go through the shared endpointer — a revert to
-    # inline amplitude counting in either loop reintroduces the 1.5s tail.
-    assert _SRC.count("endpointer.push(data, len(frames))") == 2
-    assert "_Endpointer(spoke=True)" in _SRC  # follow-up seeds fast tail
+    # Every recording loop must go through the shared endpointer — a revert to
+    # inline amplitude counting in any loop reintroduces the 1.5s tail.
+    assert _SRC.count("endpointer.push(data, len(frames))") == len(_RECORDERS)
+    for pattern in _RECORDERS:
+        body = _recorder_body(pattern)
+        assert "endpointer.push(data, len(frames))" in body, pattern
+        assert "RECORD_SILENCE_AMPLITUDE" not in body, f"inline amplitude counting in {pattern}"
+    # The follow-up and the barge-in seed start from confirmed speech: fast tail.
+    assert _SRC.count("_Endpointer(spoke=True)") == 2
 
 
 def _make_endpointer(vad_enabled, vad_probs=None, spoke=False, tail_ms=0):
@@ -178,6 +199,13 @@ def _barge_globals(active_playback):
         "BARGE_IN_ENABLED": True, "BARGE_IN_THRESHOLD": 0.5,
         "BARGE_MIN_CHUNKS": 3, "BARGE_WINDOW_CHUNKS": 6, "BARGE_GRACE_MS": 800,
         "BARGE_FAST_PROB": 0.95, "BARGE_FAST_CHUNKS": 2,
+        # Barge-in phase 1 (duck → decide → resume) stays OFF here: this rig pins
+        # the hard-stop path. The block also defines the phase-1 classes, which
+        # need these modules at call time.
+        "BARGE_DUCK_ENABLED": False, "BARGE_SEED_NEXT_TURN": True, "BARGE_DUCK_DB": -15.0,
+        "BARGE_DUCK_RAMP_MS": 0, "BARGE_COMMIT_SPEECH_MS": 900, "BARGE_RESUME_SILENCE_MS": 400,
+        "BARGE_DECIDE_MAX_MS": 2000, "BARGE_PLAYOUT_LATENCY_MS": 100,
+        "re": re, "os": os, "math": __import__("math"),
         "_barge_in_requested": threading.Event(), "_shutdown": threading.Event(),
         "_tts_process": None, "_tts_started_at": None, "_tts_process_lock": threading.Lock(),
         "_get_silero_vad": lambda: (object(), None),

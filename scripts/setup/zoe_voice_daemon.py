@@ -290,6 +290,26 @@ BARGE_WINDOW_CHUNKS = _count_env("BARGE_WINDOW_CHUNKS", 6, minimum=1)
 BARGE_GRACE_MS = _count_env("BARGE_GRACE_MS", 800, minimum=0)
 BARGE_FAST_PROB = _prob_env("BARGE_FAST_PROB", 0.95)
 BARGE_FAST_CHUNKS = _count_env("BARGE_FAST_CHUNKS", 2, minimum=0)  # 0 disables the fast path
+# ── Barge-in phase 1: duck → decide → resume (flag-dark) ──────────────────
+# docs/research/barge-in-duck-decide-resume-2026-10-04.md §4.1, mechanics in
+# docs/knowledge/voice-pipeline.md → "Panel barge-in". OFF = today's hard stop,
+# byte for byte (pinned by tests/unit/test_voice_daemon_barge_in.py). ON: the
+# detector's fire ducks the player's PulseAudio sink-input (never the sink),
+# then _BargeDecider commits (sustained speech), resumes (quiet) or hits the
+# ceiling (resume) on the same Silero probabilities; the VAD-failure sentinel
+# can never commit. BARGE_SEED_NEXT_TURN is only read when the duck is on.
+BARGE_DUCK_ENABLED = os.environ.get("BARGE_DUCK_ENABLED", "false").lower() in ("1", "true", "yes")
+BARGE_DUCK_DB = _float_env("BARGE_DUCK_DB", -15.0)
+if not (-60.0 <= BARGE_DUCK_DB < 0.0):  # a duck is a negative, bounded gain change
+    log.warning("Env BARGE_DUCK_DB=%r is outside [-60, 0); using default -15",
+                os.environ.get("BARGE_DUCK_DB"))
+    BARGE_DUCK_DB = -15.0
+BARGE_DUCK_RAMP_MS = _count_env("BARGE_DUCK_RAMP_MS", 0, minimum=0)  # 0 = single step
+BARGE_COMMIT_SPEECH_MS = _count_env("BARGE_COMMIT_SPEECH_MS", 900, minimum=1)
+BARGE_RESUME_SILENCE_MS = _count_env("BARGE_RESUME_SILENCE_MS", 400, minimum=1)
+BARGE_DECIDE_MAX_MS = _count_env("BARGE_DECIDE_MAX_MS", 2000, minimum=1)
+BARGE_PLAYOUT_LATENCY_MS = _count_env("BARGE_PLAYOUT_LATENCY_MS", 100, minimum=0)
+BARGE_SEED_NEXT_TURN = os.environ.get("BARGE_SEED_NEXT_TURN", "true").lower() in ("1", "true", "yes")
 # ── Ambient memory: always-on VAD captures room speech ────────────────────
 AMBIENT_CAPTURE_ENABLED = os.environ.get("AMBIENT_CAPTURE_ENABLED", "false").lower() in ("1", "true", "yes")
 AMBIENT_VAD_THRESHOLD = float(os.environ.get("AMBIENT_VAD_THRESHOLD", "0.4"))
@@ -372,6 +392,38 @@ _tts_process_lock = threading.Lock()
 # handed to the player). Written with _tts_process under _tts_process_lock; the
 # barge detectors anchor their grace period and stale-audio cut-off to it.
 _tts_started_at: float | None = None
+# The streaming turn's open HTTP response (BARGE_DUCK_ENABLED): a COMMIT closes
+# it at the commit instant, because the stream loop can sit in iter_lines for
+# seconds while the brain generates the next sentence.
+_turn_response = None
+_turn_response_lock = threading.Lock()
+_barge_stream_closed = threading.Event()
+# Last COMMIT's played-prefix estimate (phase 3 puts it on the wire).
+_last_barge_commit: dict = {}
+
+
+def _set_turn_response(r) -> None:
+    global _turn_response
+    with _turn_response_lock:
+        _turn_response = r
+
+
+def _close_turn_response() -> bool:
+    """COMMIT: close the turn's response NOW so the server-side cancel (and A1's
+    abort) lands at the commit instant, not at the next NDJSON line. Best
+    effort: the stream loop treats the resulting read error as the barge."""
+    global _turn_response
+    with _turn_response_lock:
+        r, _turn_response = _turn_response, None
+    if r is None:
+        return False
+    _barge_stream_closed.set()
+    try:
+        r.close()
+        return True
+    except Exception as exc:
+        log.debug("turn response close failed: %s", exc)
+        return False
 
 
 def _register_tts_process(proc: "subprocess.Popen") -> None:
@@ -858,6 +910,20 @@ class _BargeDetector:
     def hits(self) -> int:
         return sum(1 for p in self._probs if p >= self.threshold)
 
+    def onset_offset_chunks(self) -> int:
+        """Chunks between the first speech chunk in the window and the last one."""
+        for i, p in enumerate(self._probs):
+            if p >= self.threshold:
+                return len(self._probs) - 1 - i
+        return 0
+
+    def rearm(self) -> None:
+        """After a RESUME: the same playback may be interrupted again."""
+        self._probs.clear()
+        self._run = 0
+        self._fired = False
+        self.reason = ""
+
     def elapsed_ms(self, now: float) -> int:
         return int(round((now - self._anchor) * 1000)) if self._anchor is not None else -1
 
@@ -866,10 +932,14 @@ class _BargeDetector:
         return f"{self.hits()}/{self.window_chunks}[{probs}]{'+' + self.reason if self.reason else ''}"
 
 
+def _log_barge_detected(source: str, prob: float, det: _BargeDetector, suffix: str = "") -> None:
+    log.info("Barge-in detected during playback (%s, prob=%.2f, th=%.2f, t+%dms, window=%s)%s",
+             source, prob, det.threshold, det.elapsed_ms(time.monotonic()), det.window_repr(), suffix)
+
+
 def _fire_barge_in(source: str, prob: float, det: _BargeDetector, proc: "subprocess.Popen") -> None:
     """Log the decision (diagnosable next time), raise the flag, kill the player."""
-    log.info("Barge-in detected during playback (%s, prob=%.2f, th=%.2f, t+%dms, window=%s)",
-             source, prob, det.threshold, det.elapsed_ms(time.monotonic()), det.window_repr())
+    _log_barge_detected(source, prob, det)
     _barge_in_requested.set()
     # Kill the TTS subprocess DIRECTLY — the stream loop only polls the flag at
     # network-chunk boundaries, which can be seconds away while the brain
@@ -879,6 +949,232 @@ def _fire_barge_in(source: str, prob: float, det: _BargeDetector, proc: "subproc
         log.info("Barge-in: TTS playback terminated immediately.")
     except Exception as exc:
         log.debug("Barge-in terminate failed: %s", exc)
+
+
+def _pactl(*args: str) -> "str | None":
+    """Run pactl; stdout on success, None on any failure. Replaced by tests."""
+    try:
+        res = subprocess.run(["pactl", *args], capture_output=True, text=True, timeout=2)
+        return res.stdout if res.returncode == 0 else None
+    except Exception as exc:
+        log.debug("pactl %s failed: %s", " ".join(args[:2]), exc)
+        return None
+
+
+class _SinkInputDucker:
+    """Duck / restore ONE player's PulseAudio sink-input (found by the player's
+    pid). Applied at the mixer, so audio already queued is ducked too. Never
+    the sink: the AirPlay-2 "Zoe Panel" output shares it."""
+
+    def __init__(self, pid: int, *, db: float | None = None, ramp_ms: int | None = None):
+        self.pid = int(pid)
+        self.db = BARGE_DUCK_DB if db is None else float(db)
+        self.ramp_ms = BARGE_DUCK_RAMP_MS if ramp_ms is None else int(ramp_ms)
+        self.index: int | None = None
+        self.baseline: int | None = None  # absolute volume before the duck
+        self.ducked = False
+        self._applied_db = 0.0
+
+    def resolve(self) -> bool:
+        if self.index is not None:
+            return True
+        idx, vol = None, None
+        for line in (_pactl("list", "sink-inputs") or "").splitlines():
+            m = re.match(r"\s*Sink Input #(\d+)", line)
+            if m:
+                idx, vol = int(m.group(1)), None
+                continue
+            if idx is None:
+                continue
+            m = re.search(r"Volume:.*?(\d+)\s*/", line)  # first channel, absolute
+            if m and vol is None:
+                vol = int(m.group(1))
+            m = re.search(r'application\.process\.id\s*=\s*"(\d+)"', line)
+            if m and int(m.group(1)) == self.pid:
+                self.index, self.baseline = idx, vol
+                return True
+        return False
+
+    def _step(self, db: float) -> None:
+        _pactl("set-sink-input-volume", str(self.index), f"{db:+.1f}dB")  # signed = relative
+        self._applied_db += db
+
+    def duck(self) -> bool:
+        if self.ducked or not self.resolve():
+            return False
+        self.ducked = True
+        steps = min(3, max(1, self.ramp_ms // 150)) if self.ramp_ms > 0 else 1
+        if steps == 1:
+            self._step(self.db)
+        else:
+            threading.Thread(target=self._ramp, args=(steps,), daemon=True,
+                             name="barge-duck-ramp").start()
+        return True
+
+    def _ramp(self, steps: int) -> None:
+        for _ in range(steps):
+            if not self.ducked:
+                return
+            self._step(self.db / steps)
+            time.sleep(self.ramp_ms / steps / 1000.0)
+
+    def restore(self) -> None:
+        global _duck_leak
+        if not self.ducked:
+            return
+        self.ducked = False
+        if self.baseline is not None:
+            if _pactl("set-sink-input-volume", str(self.index), str(self.baseline)) is None:
+                _duck_leak = self.baseline  # stream-restore now holds the ducked value
+        elif self._applied_db:
+            self._step(-self._applied_db)
+        self._applied_db = 0.0
+
+
+class _BargeDecider:
+    """The decide window after a duck (pure, fed from the detector's thread):
+    COMMIT when speech since onset >= commit_ms, RESUME after resume_ms of
+    quiet, CEILING (= resume) max_ms after onset. The -1.0 VAD-failure
+    sentinel is neither speech nor quiet, so a broken VAD can never commit."""
+
+    def __init__(self, *, threshold: float | None = None, commit_ms: int | None = None,
+                 resume_ms: int | None = None, max_ms: int | None = None):
+        self.threshold = BARGE_IN_THRESHOLD if threshold is None else float(threshold)
+        self.commit_ms = BARGE_COMMIT_SPEECH_MS if commit_ms is None else int(commit_ms)
+        self.resume_ms = BARGE_RESUME_SILENCE_MS if resume_ms is None else int(resume_ms)
+        self.max_ms = BARGE_DECIDE_MAX_MS if max_ms is None else int(max_ms)
+        self.onset_at: float | None = None
+        self.speech_ms = 0.0
+        self.quiet_ms = 0.0
+        self.in_speech = False
+        self.outcome = ""
+
+    def start(self, onset_at: float, speech_ms: float = 0.0) -> None:
+        self.onset_at, self.speech_ms, self.quiet_ms = onset_at, speech_ms, 0.0
+        self.in_speech, self.outcome = True, ""
+
+    def feed(self, prob: float, captured_at: float) -> str:
+        """Score one chunk captured at ``captured_at``: "" while undecided, else
+        "commit" | "resume" | "ceiling" exactly once."""
+        if self.onset_at is None or self.outcome:
+            return ""
+        chunk_ms = _CHUNK_S * 1000.0
+        if prob >= self.threshold:
+            self.speech_ms, self.quiet_ms, self.in_speech = self.speech_ms + chunk_ms, 0.0, True
+        elif prob >= 0.0:
+            self.quiet_ms, self.in_speech = self.quiet_ms + chunk_ms, False
+        if self.speech_ms >= self.commit_ms:
+            self.outcome = "commit"
+        elif self.quiet_ms >= self.resume_ms:
+            self.outcome = "resume"
+        elif (captured_at + _CHUNK_S - self.onset_at) * 1000.0 >= self.max_ms:
+            self.outcome = "ceiling"
+        return self.outcome
+
+    def elapsed_ms(self, now: float) -> int:
+        return int(round((now - self.onset_at) * 1000)) if self.onset_at is not None else -1
+
+
+class _PlayoutLedger:
+    """Sentence writes to the player (time + duration) → the played prefix at a
+    COMMIT: sentence k starts at max(write_k, end_{k-1}), heard when
+    end_k + playout latency <= now."""
+
+    def __init__(self):
+        self.ends: list[float] = []
+        self.durs: list[float] = []
+
+    def reset(self) -> None:
+        self.ends, self.durs = [], []
+
+    def note(self, at: float, seconds: float) -> None:
+        start = max(at, self.ends[-1]) if self.ends else at
+        self.ends.append(start + seconds)
+        self.durs.append(seconds)
+
+    def heard(self, at: float, latency_s: float) -> tuple[int, int]:
+        n = sum(1 for e in self.ends if e + latency_s <= at)
+        return n, int(round(sum(self.durs[:n]) * 1000))
+
+
+_PLAYOUT = _PlayoutLedger()
+# PulseAudio's module-stream-restore persists a stream's volume per application:
+# a player that exits while ducked would leave EVERY later aplay stream (replies,
+# beeps, announcements) at -15 dB. The leaked baseline is healed on the next player.
+_duck_leak: int | None = None
+_duck_heal_tried: int | None = None  # pid of the player the heal was attempted on
+
+
+def _heal_duck_leak(proc: "subprocess.Popen") -> None:
+    """Once per player: put the leaked baseline back on its sink-input."""
+    global _duck_leak, _duck_heal_tried
+    if _duck_leak is None or proc.pid == _duck_heal_tried:
+        return
+    d = _SinkInputDucker(proc.pid)
+    if not d.resolve():  # the new player's sink-input may take a chunk or two to appear
+        return
+    _duck_heal_tried = proc.pid
+    if _pactl("set-sink-input-volume", str(d.index), str(_duck_leak)) is not None:
+        log.info("Barge-in duck: healed leaked stream volume (%d) on sink-input %d", _duck_leak, d.index)
+        _duck_leak = None
+
+
+class _BargeEpisode:
+    """One duck → decide → commit/resume episode (BARGE_DUCK_ENABLED). Opened
+    when the detector fires; ``feed`` returns the outcome once; ``finish``
+    restores the volume, acts on a COMMIT and writes the BARGE_DECIDE line."""
+
+    def __init__(self, source: str, proc: "subprocess.Popen", det: _BargeDetector,
+                 captured_at: float):
+        self.source, self.proc = source, proc
+        self.ducker = _SinkInputDucker(proc.pid)
+        self.decider = _BargeDecider()
+        self.decider.start(captured_at - det.onset_offset_chunks() * _CHUNK_S,
+                           speech_ms=det.hits() * _CHUNK_S * 1000.0)
+        self.done = False
+
+    @classmethod
+    def open(cls, source: str, proc: "subprocess.Popen", det: _BargeDetector, prob: float,
+             captured_at: float) -> "_BargeEpisode | None":
+        """None when the player cannot be ducked (no pactl / no sink-input for its
+        pid): the caller falls back to today's hard stop."""
+        ep = cls(source, proc, det, captured_at)
+        if not ep.ducker.duck():
+            log.info("Barge-in duck unavailable (no PulseAudio sink-input for pid %s) — hard stop",
+                     getattr(proc, "pid", "?"))
+            return None
+        _log_barge_detected(source, prob, det, f" — ducked {ep.ducker.db:+.0f}dB, deciding")
+        return ep
+
+    def feed(self, prob: float, captured_at: float, now: float) -> str:
+        outcome = self.decider.feed(prob, captured_at)
+        if outcome:
+            self.finish(outcome, now)
+        return outcome
+
+    def finish(self, outcome: str, now: float) -> None:
+        global _duck_leak
+        if self.done:
+            return
+        self.done = True
+        if self.proc.poll() is None:
+            self.ducker.restore()
+        elif self.ducker.ducked and self.ducker.baseline is not None:
+            _duck_leak = self.ducker.baseline  # exited ducked: no sink-input left to restore
+        heard = (-1, -1)
+        if outcome == "commit":
+            _barge_in_requested.set()
+            try:
+                self.proc.terminate()
+            except Exception as exc:
+                log.debug("Barge-in terminate failed: %s", exc)
+            _close_turn_response()
+            heard = _PLAYOUT.heard(now, BARGE_PLAYOUT_LATENCY_MS / 1000.0)
+            _last_barge_commit.clear()
+            _last_barge_commit.update(at=now, heard_chunks=heard[0], heard_ms=heard[1])
+        log.info("BARGE_DECIDE outcome=%s ms=%d speech_ms=%d duck_db=%.1f heard_chunks=%d "
+                 "heard_ms=%d (%s)", outcome, self.decider.elapsed_ms(now),
+                 int(self.decider.speech_ms), self.ducker.db, heard[0], heard[1], self.source)
 
 
 def _drain_stream_backlog(stream) -> int:
@@ -913,6 +1209,8 @@ class _BargeMonitor:
         self._pa = pa
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._capturing = False
+        self.seed: bytes | None = None  # a COMMIT's interrupting utterance (WAV)
 
     def start(self) -> None:
         if not BARGE_IN_ENABLED or self._thread is not None:
@@ -924,8 +1222,35 @@ class _BargeMonitor:
         self._stop.set()
         t = self._thread
         if t is not None:
-            t.join(timeout=1.5)
+            # A seed capture (BARGE_SEED_NEXT_TURN) records to the normal
+            # endpoint, exactly where the follow-up listener would block.
+            t.join(timeout=RECORD_SECONDS + 2.0 if self._capturing else 1.5)
         self._thread = None
+
+    def take_seed(self) -> "bytes | None":
+        seed, self.seed = self.seed, None
+        return seed
+
+    def _capture_seed(self, stream, frames: list) -> None:
+        """COMMIT: keep recording the interrupting utterance on the SAME stream to
+        the normal endpoint; the next turn runs on it, no beep (LiveKit-lane shape)."""
+        self._capturing = True
+        endpointer = _Endpointer(spoke=True)
+        max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
+        stop_reason = "max_duration"
+        while len(frames) < max_chunks and not _shutdown.is_set():
+            try:
+                data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            except Exception:
+                stop_reason = "stream"
+                break
+            frames.append(data)
+            if endpointer.push(data, len(frames)):
+                stop_reason = "silence"
+                break
+        self.seed = _frames_to_wav(self._pa, frames)
+        log.info("Barge-in seed: %.2fs from onset (stop=%s) — next turn runs on it, no beep",
+                 len(frames) * _CHUNK_S, stop_reason)
 
     def _run(self) -> None:
         model, _ = _get_silero_vad()
@@ -946,6 +1271,16 @@ class _BargeMonitor:
         log.debug("Barge monitor listening (th=%.2f, %d/%d chunks, grace=%dms, fast=%d@%.2f)",
                   det.threshold, det.min_chunks, det.window_chunks, int(det.grace_s * 1000),
                   det.fast_chunks, det.fast_prob)
+        episode: _BargeEpisode | None = None
+        ring: deque | None = None  # FOLLOWUP_LOOKBACK_CHUNKS before onset ...
+        seed_frames: list | None = None  # ... then everything in the decide window
+        seed_cap = 0
+        if BARGE_DUCK_ENABLED and BARGE_SEED_NEXT_TURN:
+            lookback = int(os.environ.get("FOLLOWUP_LOOKBACK_CHUNKS", "4"))
+            ring = deque(maxlen=lookback)
+            # Bounded by construction: lookback + the longest decide window
+            # (~2.3 s, ~75 KB at 16 kHz), whatever the decider does.
+            seed_cap = lookback + int(math.ceil(BARGE_DECIDE_MAX_MS / 1000.0 / _CHUNK_S)) + 1
         try:
             while not self._stop.is_set() and not _shutdown.is_set():
                 try:
@@ -956,8 +1291,20 @@ class _BargeMonitor:
                 # Every chunk goes through Silero so its streaming state stays
                 # continuous, but only audio heard DURING playback can count.
                 prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
+                if ring is not None:
+                    ring.append(chunk)
+                    if seed_frames is not None and len(seed_frames) < seed_cap:
+                        seed_frames.append(chunk)
                 playing = _active_playback()
                 if playing is None:
+                    if episode is not None:
+                        # The reply finished while deciding: nothing to resume.
+                        # Someone still talking becomes the next turn, no beep.
+                        episode.finish("ended", read_at)
+                        if seed_frames is not None and episode.decider.in_speech:
+                            self._capture_seed(stream, seed_frames)
+                            break
+                        episode, seed_frames = None, None
                     # Nothing is playing — the user STILL TALKING (e.g. the
                     # endpointer closed on a long pause) or the room during the
                     # STT/brain wait. Never an interruption of Zoe (live 22:28:10:
@@ -967,6 +1314,7 @@ class _BargeMonitor:
                     det.idle()
                     continue
                 proc, started_at = playing
+                _heal_duck_leak(proc)
                 if det.new_playback(started_at):
                     dropped = _drain_stream_backlog(stream)
                     if dropped:
@@ -974,10 +1322,28 @@ class _BargeMonitor:
                                  dropped, int(dropped * _CHUNK_S * 1000))
                     # The chunk in hand was captured before playback began.
                     continue
+                if episode is not None:
+                    outcome = episode.feed(prob, read_at - _CHUNK_S, read_at)
+                    if outcome == "commit":
+                        if seed_frames is not None:
+                            self._capture_seed(stream, seed_frames)
+                        break
+                    if outcome:  # resume / ceiling: the same playback may be barged again
+                        episode, seed_frames = None, None
+                        det.rearm()
+                    continue
                 if det.feed(prob, read_at - _CHUNK_S):
+                    if BARGE_DUCK_ENABLED:
+                        episode = _BargeEpisode.open("monitor", proc, det, prob, read_at - _CHUNK_S)
+                        if episode is not None:
+                            if ring is not None:
+                                seed_frames = list(ring)  # the onset the detector needed to see
+                            continue
                     _fire_barge_in("monitor", prob, det, proc)
                     break
         finally:
+            if episode is not None:
+                episode.finish("ended", time.monotonic())  # monitor stopped mid-decide
             try:
                 stream.stop_stream()
                 stream.close()
@@ -1011,6 +1377,7 @@ def _barge_in_vad_thread():
 
     log.info("Barge-in VAD thread started (threshold=%.2f)", BARGE_IN_THRESHOLD)
     det = _BargeDetector()
+    episode: _BargeEpisode | None = None
     while not _shutdown.is_set():
         try:
             item = _BARGE_QUEUE.get(timeout=0.1)
@@ -1020,9 +1387,13 @@ def _barge_in_vad_thread():
         # Only do VAD inference when TTS is actually playing.
         playing = _active_playback()
         if playing is None:
+            if episode is not None:
+                episode.finish("ended", time.monotonic())
+                episode = None
             det.idle()
             continue
         proc, started_at = playing
+        _heal_duck_leak(proc)
         batch = [item]
         if det.new_playback(started_at):
             batch += _drain_barge_queue()
@@ -1033,7 +1404,19 @@ def _barge_in_vad_thread():
             batch = [b for b in batch if b[0] >= started_at]
         for captured_at, chunk in batch:
             prob = _vad_prob(model, np.frombuffer(chunk, dtype=np.int16))
+            if episode is not None:
+                outcome = episode.feed(prob, captured_at, time.monotonic())
+                if outcome:
+                    episode = None
+                    if outcome == "commit":
+                        break
+                    det.rearm()
+                continue
             if det.feed(prob, captured_at):
+                if BARGE_DUCK_ENABLED:
+                    episode = _BargeEpisode.open("queue", proc, det, prob, captured_at)
+                    if episode is not None:
+                        continue
                 _fire_barge_in("queue", prob, det, proc)
                 break
     log.info("Barge-in VAD thread stopped.")
@@ -1981,10 +2364,14 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
             cmd += ["-D", AUDIO_OUTPUT_DEVICE]
         aplay = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         _register_tts_process(aplay)
+        if BARGE_DUCK_ENABLED:
+            _PLAYOUT.reset()
     try:
         if aplay.stdin:
             aplay.stdin.write(pcm)
             aplay.stdin.flush()
+            if BARGE_DUCK_ENABLED and rate and ch and width:
+                _PLAYOUT.note(time.monotonic(), len(pcm) / float(rate * ch * width))
     except (BrokenPipeError, ValueError, OSError):
         pass
     return aplay
@@ -2128,6 +2515,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
 
     url = f"{ZOE_URL}/api/voice/turn_stream"
     _barge_in_requested.clear()
+    _barge_stream_closed.clear()
     t0 = _time.monotonic()
     aplay = None
     ttfa = None
@@ -2139,6 +2527,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     try:
         r = requests.post(url, json=payload, headers=_headers, timeout=60, stream=True, verify=VERIFY_SSL)
         r.raise_for_status()
+        _set_turn_response(r)
         for raw_line in r.iter_lines(decode_unicode=False):
             if _barge_in_requested.is_set():
                 log.info("Barge-in during streamed reply.")
@@ -2209,15 +2598,20 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
             if "chunk" in obj:
                 expect_audio = True
                 continue
+        _set_turn_response(None)
     except requests.exceptions.SSLError:
         raise
     except Exception as exc:
+        _set_turn_response(None)
         # If we've already started speaking, re-running the blocking turn would
         # double-play (user hears a fragment, then the whole reply again). Only
         # fall back when nothing has played yet; otherwise let the partial reply
         # stand and finish draining what's queued.
         if played_any:
-            log.warning("turn_stream failed mid-reply (%s) — keeping partial, no re-play", exc)
+            if _barge_stream_closed.is_set():
+                log.info("Barge-in committed: turn stream closed (%s).", type(exc).__name__)
+            else:
+                log.warning("turn_stream failed mid-reply (%s) — keeping partial, no re-play", exc)
             if aplay is not None:
                 try:
                     if aplay.stdin:
@@ -2540,6 +2934,21 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None) -> byt
         return None
 
 
+def _follow_up_source(pa: pyaudio.PyAudio, seed: "bytes | None", *, beep: bool = True,
+                      window_s: float | None = None) -> "bytes | None":
+    """The next follow-up recording: a committed barge-in's seed (the words the
+    user said over Zoe — no beep, no fresh listen), else beep + listen."""
+    if seed is not None:
+        log.info("Follow-up seeded by barge-in (%d bytes) — no beep", len(seed))
+        _recording_active.set()
+        return seed
+    threading.Thread(target=_notify_wake_background, daemon=True, name="followup-notify").start()
+    if beep:
+        play_follow_up_beep()
+    _recording_active.set()
+    return _follow_up_listen(pa, window_s=window_s)
+
+
 def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
     """Record, transcribe, send command, play response, then follow-up listen.
 
@@ -2586,6 +2995,7 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                 played_audio = _turn_fn(pa, wav)
         finally:
             _monitor.stop()
+        seed_wav = _monitor.take_seed()
 
         # ── Conversation mode ("hey zoe, let's talk") ──
         # The server's opener fast-path marks the done frame with
@@ -2601,13 +3011,10 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
             while (time.monotonic() < conv_deadline
                    and conv_turns < CONV_MAX_TURNS
                    and silent_windows < CONV_SILENT_WINDOWS):
-                threading.Thread(target=_notify_wake_background, daemon=True,
-                                 name="conv-notify").start()
-                if CONV_BEEP == "every" or (CONV_BEEP == "first" and not conv_beeped):
-                    play_follow_up_beep()
-                    conv_beeped = True
-                _recording_active.set()
-                conv_wav = _follow_up_listen(pa, window_s=CONV_WINDOW_S)
+                conv_beep = CONV_BEEP == "every" or (CONV_BEEP == "first" and not conv_beeped)
+                conv_wav = _follow_up_source(pa, seed_wav, beep=conv_beep, window_s=CONV_WINDOW_S)
+                conv_beeped = conv_beeped or (conv_beep and seed_wav is None)
+                seed_wav = None
                 if conv_wav is None:
                     silent_windows += 1
                     log.info("Conversation: silent window %d/%d",
@@ -2620,6 +3027,7 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                     _turn_fn(pa, conv_wav, prompt_on_empty=False, conversation=True)
                 finally:
                     _monitor.stop()
+                seed_wav = _monitor.take_seed()
                 conv_turns += 1
                 if _last_turn_flags.get("conversation_end"):
                     log.info("Conversation CLOSED by ender after %d turns", conv_turns)
@@ -2635,11 +3043,9 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
 
         while played_audio and FOLLOW_UP_LISTEN_S > 0 and follow_ups_done < FOLLOW_UP_MAX_TURNS:
             # Re-arm the UI orb to "listening" right before follow-up capture opens.
-            threading.Thread(target=_notify_wake_background, daemon=True, name="followup-notify").start()
-            play_follow_up_beep()
             log.info("Follow-up listening (turn %d/%d, %.1fs window)...", follow_ups_done + 1, FOLLOW_UP_MAX_TURNS, FOLLOW_UP_LISTEN_S)
-            _recording_active.set()
-            follow_wav = _follow_up_listen(pa)
+            follow_wav = _follow_up_source(pa, seed_wav)
+            seed_wav = None
             if follow_wav is None:
                 log.info("No follow-up speech detected, returning to wake mode.")
                 break
@@ -2651,6 +3057,7 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                 played_audio = _turn_fn(pa, follow_wav, prompt_on_empty=False)
             finally:
                 _monitor.stop()
+            seed_wav = _monitor.take_seed()
             follow_ups_done += 1
 
         if POST_PLAY_TAIL_S > 0:
