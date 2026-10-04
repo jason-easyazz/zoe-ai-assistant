@@ -149,7 +149,7 @@ def test_raise_block_asks_one_gentle_question_from_the_hint():
         assert must in block
     # the escape hatch belongs to CUE raises only (2026-10-04: a greeting raise was
     # injected + settled and never voiced under "if it fits … leave it out")
-    expect = "do raise it" if r.shape == "greeting" else "If it does not fit, leave it out."
+    expect = "MUST open with" if r.shape == "greeting" else "If it does not fit, leave it out."
     assert expect in block
 
 
@@ -524,7 +524,8 @@ def test_greeting_raise_is_brought_up_and_cue_raise_keeps_its_escape_hatch():
     # reply never voiced it under the cue wording. Greeting = do raise it; cue = if it fits.
     g = sel.ask_phrasing("How did the dentist go?", shape="greeting")
     c = sel.ask_phrasing("How did the dentist go?", shape="cue")
-    assert g.startswith("Bring this up") and "do raise it" in g and "leave it out" not in g
+    assert g.startswith("Your reply MUST open with ONE short, gentle question") and "leave it out" not in g
+    assert "then answer what they said" in g and "their greeting" not in g   # agenda asks are greeting-shaped too (Codex, #1821)
     assert c.startswith("If it fits") and "leave it out" in c
     for text in (g, c):
         assert "never say you have no information" in text and "ONE short, gentle question" in text
@@ -534,7 +535,7 @@ def test_greeting_raise_is_brought_up_and_cue_raise_keeps_its_escape_hatch():
 def test_raise_body_passes_its_shape_to_the_phrasing():
     r = sel.Raise(user_id="u", session_id="s", candidate_id="c", kind="open_loop", shape="greeting",
                   text="the dentist on Friday", hint="How did the dentist go?", token="t", lifecycle=True)
-    assert "Bring this up" in r.body and r.block.startswith(sel.RAISE_OPEN_GREETING)
+    assert "MUST open with" in r.body and r.block.startswith(sel.RAISE_OPEN_GREETING)
     r2 = sel.Raise(user_id="u", session_id="s", candidate_id="c", kind="open_loop", shape="cue",
                    text="the dentist on Friday", hint="How did the dentist go?", token="t", lifecycle=True)
     assert "If it fits" in r2.body and r2.block.startswith(sel.RAISE_OPEN + "\n")
