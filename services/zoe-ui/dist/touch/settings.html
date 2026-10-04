@@ -5352,18 +5352,20 @@
                 statusEl.innerHTML = `Saved. Panel is now <code>${pid}</code>.`;
                 if (typeof showNotification === 'function') showNotification('Panel settings saved', 'success');
                 await loadPanelIdentity();
-                // The executor classified this browser at boot (touch-ui-executor.js
-                // isViewerContext): a browser that was a VIEWER stays one until the page
-                // reloads, so "Panel is now …" would be a promise with nothing behind it.
-                // Reload once the message has been seen, and the panel services start.
-                if (registeredNow) {
-                    statusEl.innerHTML += ' Starting panel services…';
-                    setTimeout(() => { try { window.location.reload(); } catch (_) {} }, 1200);
-                }
             } catch (e) {
                 console.error('savePanelIdentity failed:', e);
                 statusEl.textContent = `Save failed: ${e.message || e}`;
                 if (typeof showNotification === 'function') showNotification('Save failed — see console', 'error');
+            }
+            // The executor classified this browser at boot (touch-ui-executor.js
+            // isViewerContext): a browser that was a VIEWER stays one until the page
+            // reloads. A successful /panels/register has already persisted a REAL panel
+            // id (setLocalPanelId), so reload whether or not the bindings step after it
+            // succeeded — otherwise the services stay off and a retried Save re-registers
+            // the same id (409) forever. Give the status line a moment to be read first.
+            if (registeredNow) {
+                statusEl.innerHTML += ' Panel registered — starting panel services…';
+                setTimeout(() => { try { window.location.reload(); } catch (_) {} }, 1200);
             }
         }
 

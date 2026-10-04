@@ -11,7 +11,7 @@
      through so the panel keeps its binding after signing in. */
   /* Kiosk bootstrap (was on skybridge.html): persist the kiosk flag so a fresh
      or cleared browser profile keeps kiosk behavior across navigations. */
-  (function(){try{var p=new URLSearchParams(location.search);if(p.get('kiosk')==='1')localStorage.setItem('zoe_kiosk','1');
+  (function(){try{var p=new URLSearchParams(location.search);if(p.get('kiosk')==='1'){localStorage.setItem('zoe_kiosk','1');sessionStorage.setItem('zoe_kiosk','1');}
     // Persist the panel_id from the kiosk URL so command context (skybridge/resolve)
     // has it on a fresh profile — otherwise typed commands go out with an empty panel id.
     var pid=p.get('panel_id');if(pid)localStorage.setItem('zoe_panel_id',pid);}catch(e){}})();
@@ -25,7 +25,10 @@
     // js/auth.js keeps on the legacy touch pages) — a bare return navigation from
     // one of those pages must still boot as a kiosk.
     try{kiosk=(new URLSearchParams(location.search)).get('kiosk')==='1'||localStorage.getItem('zoe_kiosk')==='1'||sessionStorage.getItem('zoe_kiosk')==='1';}catch(e){}
-    if(kiosk){try{localStorage.setItem('zoe_kiosk','1');}catch(e){}}
+    // Persist BOTH: localStorage is shared with every tab of this browser and
+    // js/auth.js on a desktop page REMOVES it; the tab-scoped sessionStorage copy
+    // is what keeps this kiosk tab a kiosk through the next bare navigation.
+    if(kiosk){try{localStorage.setItem('zoe_kiosk','1');sessionStorage.setItem('zoe_kiosk','1');}catch(e){}}
     window.__kiosk=kiosk;
     // Kiosk boots as GUEST into the ambient home (like skybridge did); the
     // who+PIN card is summoned on demand when something personal needs auth.

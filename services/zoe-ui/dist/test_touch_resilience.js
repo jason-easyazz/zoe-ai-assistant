@@ -107,11 +107,20 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       const sl = /function setLocalPanelId\((\w+)\)\s*\{([\s\S]{0,700})/.exec(settingsSrc); assert(sl, 'missing setLocalPanelId');
       assert(/localStorage\.getItem\('zoe_touch_panel_alias_generated'\) === String\(\w+ \|\| ''\)\.trim\(\)\) localStorage\.removeItem\('zoe_touch_panel_alias_generated'\)/.test(sl[2]), 'setLocalPanelId must clear the alias marker when that id becomes registered');
       ok('viewer: registering the generated alias clears the alias marker (touch/settings.html setLocalPanelId)');
-      // Codex (#1861, round 6): a NEW registration must reload so the executor re-classifies
-      // this browser as a panel and starts bind/sync/poll/push (it was booted as a viewer).
-      const sp = /async function savePanelIdentity\(\)[\s\S]{0,4000}?catch \(e\)/.exec(settingsSrc); assert(sp, 'savePanelIdentity');
-      assert(/registeredNow = true;/.test(sp[0]) && /if \(registeredNow\) \{[\s\S]{0,300}window\.location\.reload\(\)/.test(sp[0]), 'a new registration must reload the page');
-      ok('viewer: a new registration from Touch Settings reloads so the panel services start');
+      // Codex (#1861, rounds 6+7): a NEW registration must reload so the executor re-classifies
+      // this browser as a panel — and it must reload even when the bindings step AFTER the
+      // register fails (the id is already persisted), so the reload sits after the catch.
+      const sp = /async function savePanelIdentity\(\)[\s\S]*?\n        \}\n/.exec(settingsSrc); assert(sp, 'savePanelIdentity');
+      assert(/registeredNow = true;/.test(sp[0]), 'register branch marks registeredNow');
+      assert(/catch \(e\) \{[\s\S]*?\n            \}\n[\s\S]{0,900}if \(registeredNow\) \{[\s\S]{0,400}window\.location\.reload\(\)/.test(sp[0]), 'reload must be scheduled AFTER the catch (bindings failure still reloads)');
+      assert(!/try \{[\s\S]*?if \(registeredNow\) \{[\s\S]*?\} catch \(e\)/.test(sp[0]), 'reload must not live inside the try');
+      ok('viewer: a new registration from Touch Settings reloads so the panel services start (even if bindings fail)');
+      // Codex (#1861, round 7): the estate boot mirrors the kiosk flag into sessionStorage too —
+      // js/auth.js on a desktop tab removes the shared localStorage copy, and the tab-scoped
+      // copy is what keeps the kiosk a kiosk across a bare /touch/*.html navigation.
+      assert(/if\(p\.get\('kiosk'\)==='1'\)\{localStorage\.setItem\('zoe_kiosk','1'\);sessionStorage\.setItem\('zoe_kiosk','1'\);\}/.test(homeSrc), 'early inline ?kiosk=1 mirrors to sessionStorage');
+      assert(/if\(kiosk\)\{try\{localStorage\.setItem\('zoe_kiosk','1'\);sessionStorage\.setItem\('zoe_kiosk','1'\);\}catch\(e\)\{\}\}/.test(homeSrc), 'boot kiosk=true mirrors to sessionStorage');
+      ok('viewer: the estate boot persists the kiosk flag to BOTH storages (another tab cannot declassify the kiosk)');
     }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });
