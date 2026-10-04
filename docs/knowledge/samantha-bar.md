@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Samantha bar harness (samantha_bar.py v0)
-description: The Samantha-quality regression gate. Eleven scripted multi-day memory and companion scenarios (S1–S8, S10–S12) run against throwaway demo users through the live API, plus the week-in-the-life day simulation (samantha_day_sim.py) that proves the whole knows-you chain for one user. Covers how to run them, what each scenario and ask proves, the scoring and judge, the baseline and teardown contracts, what a simulation can and cannot fake, and known limits.
+description: The Samantha-quality regression gate. Fourteen scripted multi-day memory and companion scenarios (S1–S8, S10–S15) run against throwaway demo users through the live API, plus the week-in-the-life day simulation (samantha_day_sim.py) that proves the whole knows-you chain for one user. Covers how to run them, what each scenario and ask proves, the scoring and judge, the baseline and teardown contracts, what a simulation can and cannot fake, and known limits.
 tags: [memory, samantha, eval, regression-gate, harness, zoe-data]
 timestamp: 2026-10-03T14:00:00Z
 ---
@@ -14,7 +14,7 @@ Tests: `tests/unit/test_samantha_bar.py` (ci_safe, pure).
 It is the memory and companion counterpart of the voice replay gate. Each run creates two
 fresh users, `demo_bar_<8 hex>` A and B, and talks to the live zoe-data API as them
 (`POST /api/chat/?stream=false` with `X-Internal-Token` + `X-Zoe-User-Id`). It scores
-eleven scenarios (S1–S8, S10–S12; S9 lives in the [day simulation](#week-in-the-life-day-simulation-samantha_day_simpy))
+fourteen scenarios (S1–S8, S10–S15; S9 lives in the [day simulation](#week-in-the-life-day-simulation-samantha_day_simpy))
 and compares them against a baseline. A scenario is red only when it
 passed before and does not pass now.
 
@@ -98,12 +98,15 @@ ids only). Day 2 follows.
 | S10 | A one-word change of state retires the old fact: "I gave up the cello." after "I play the cello in a community orchestra on Tuesday evenings." **Expected FAIL today — a target, not a regression.** | deterministic. Store first: a packet line still naming the orchestra without a stop cue is the old row served as current (superseded rows are hidden from reads) → FAIL. Then the reply must say they stopped. Why it fails: `memory_supersede.same_topic` needs the new fact to cover ≥ 0.5 of the OLD fact's topic words; "gave up the cello" shares only `cello` with {play, cello, community, orchestra}. The capture of the change turn is observed (`wait_captured`) and the day-1 backdate is a precondition. |
 | S11 | Ask-to-remember: when a task would benefit, Zoe asks for a reusable preference. **Expected SKIP — not built.** | No turns. A reserved SKIP so the gap stays visible (zoe-data and the Flue sidecar have no such behaviour; the only "remember" prompt is `remember_fact`'s empty-argument reply). |
 | S12 | Raise spacing: of S5's two open turns, minutes apart, the second carries no raise of ANY candidate. | deterministic, no extra turn: `proactive_candidates.last_surfaced_session` read after S5. A candidate surfaced in the second session = FAIL. Before #1801 the cooldown was per candidate only, so with ≥ 2 candidates the next one opened the next conversation; #1801 added a per-member gap (`ZOE_PROACTIVE_RAISE_GAP_S`, default 2 h) and a daily cap, and S12 is that fix's live regression check; nothing raised in the first, or fewer than 2 candidates (nothing else could open the second conversation) = SKIP; S5 setup not exercised = ERROR. |
+| S13 | Day-first dates: "My friend Priya Nair's birthday is 7/8/1991." (Australian household: 7 August). | deterministic, store AND reply: A's packet must carry 7 August and no month-first reading (`July 8`) or raw digits; the reply must say August and not July. Unflagged (`date_locale.py`), so a real regression gate. |
+| S14 | A correction reaches the record: "Biscuit is their dog" after "…has two kids, Mika and Biscuit." **Expected FAIL until `ZOE_CORRECTION_APPLY` is on — a target.** | deterministic: the correction turn must say what changed ("Fixed: …", not "next time"), the packet must hold Biscuit as a pet and no child line, and the count of the children must leave Biscuit out (Mika alone). |
+| S15 | Roles are stated, never guessed: a pasted list of four names (the intro mentions a partner and two children, no line ties a name to a role). **Expected FAIL until `ZOE_ROSTER_NEUTRAL_ASK` is on — a target.** | deterministic: no role word within 5 words of a roster first name in the roster reply, the follow-up reply or the packet, and the roster reply asks a question. |
 
-`EXPECTED` marks S10 (FAIL) and S11 (SKIP) as targets: the result line and the artifact carry
+`EXPECTED` marks S10 (FAIL), S11 (SKIP), S14 (FAIL) and S15 (FAIL) as targets: the result line and the artifact carry
 `expected`, and `--compare-baseline` is unchanged (only a previous PASS can regress), so a
 target turning PASS is an improvement to lock in by re-recording. A baseline recorded before
-2026-10-03 has no S10–S12 — they appear under `new` and cannot regress until the next
-`--record-baseline`. No judge rubric changed (S10–S12 are deterministic), so the rubric sha
+2026-10-04 has no S13–S15 (and before 2026-10-03 no S10–S12) — they appear under `new` and cannot regress until the next
+`--record-baseline`. No judge rubric changed (S10–S15 are deterministic), so the rubric sha
 and its pin are unchanged.
 
 The judge is the brain itself: llama-server `:11434` `/v1/chat/completions` with temperature 0,

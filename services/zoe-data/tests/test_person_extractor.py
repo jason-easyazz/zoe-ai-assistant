@@ -392,7 +392,7 @@ def test_rel_regex_is_case_insensitive_due_to_ignorecase_flag():
 # ── _ROLE_TO_TYPE mapping table ──────────────────────────────────────────────
 
 
-_KNOWN_GROUPS = {"love", "family", "friend", "work"}
+_KNOWN_GROUPS = {"love", "family", "friend", "work", "pet"}
 
 
 def test_role_to_type_keys_cover_all_relationship_strings():

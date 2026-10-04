@@ -1772,6 +1772,7 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
             rf"\s+on\s+((?:{month_names})\s+\d{{1,2}}(?:st|nd|rd|th)?(?:\s+\d{{4}})?)$",
             rf"\s+on\s+(\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{month_names})(?:\s+\d{{4}})?)$",
             r"\s+on\s+(\d{4}-\d{2}-\d{2})$",
+            r"\s+on\s+(\d{1,2}[/.\-]\d{1,2}(?:[/.\-]\d{2,4})?)$",
         ]
         for pattern in date_patterns:
             m = re.search(pattern, value, flags=re.IGNORECASE)
@@ -5171,6 +5172,14 @@ def _parse_explicit_date(raw: str, today: "date") -> Optional[str]:
     year) or ISO date in `raw`, else None. A year-less date stays in `today`'s
     year (callers such as reminders roll a past one forward)."""
     raw = re.sub(r"^the\s+", "", raw)
+    # "26/10", "7/8/2026", "7-8-26": numeric dates are household day-first (date_locale.py).
+    # ISO (2026-10-05) is not a numeric-slash date and falls through to its own branch.
+    from date_locale import parse_numeric_date
+
+    if re.match(r"\d{1,2}\s?[/.\-]\s?\d", raw) and not re.match(r"\d{4}-\d{2}-\d{2}", raw):
+        nd = parse_numeric_date(raw)
+        if nd:
+            return f"{nd.year or today.year:04d}-{nd.month:02d}-{nd.day:02d}"
     months = {
         "january": 1, "february": 2, "march": 3, "april": 4, "may": 5,
         "june": 6, "july": 7, "august": 8, "september": 9, "october": 10,

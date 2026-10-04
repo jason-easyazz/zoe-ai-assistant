@@ -1,6 +1,6 @@
 """Bare-role backstop for the per-turn LLM person extraction.
 
-An UNANCHORED relationship value is poison: "Emily: wife" stored from a message
+An UNANCHORED relationship value is poison: "Casey: wife" stored from a message
 describing a FRIEND's family ranked #1 for "Who is my wife?" (live 2026-07-12).
 These tests lock in: the prompt carries the qualification rule, the
 _is_unanchored_role predicate, and the drop path (bare role never reaches
@@ -26,9 +26,9 @@ def test_bare_roles_are_unanchored(value):
 
 
 @pytest.mark.parametrize("value", [
-    "wife of Lindsay Cannon", "user's friend", "Lindsay's wife", "his wife",
+    "wife of Jordan Smith", "user's friend", "Jordan's wife", "his wife",
     "their daughter", "my friend",           # anchored relationships pass
-    "software engineer", "born 26/10/1982", "likes hiking", "from Brazil",
+    "software engineer", "born 26/10/1985", "likes hiking", "from Brazil",
     "allergic to nuts",                       # non-relationship facts pass
 ])
 def test_anchored_or_non_role_values_pass(value):
@@ -40,7 +40,7 @@ def test_anchored_or_non_role_values_pass(value):
 def test_both_prompts_require_qualified_relationships():
     for prompt in (pel._EXTRACTION_PROMPT, pel._EXTRACTION_PROMPT_CONF):
         assert "whose relative" in prompt
-        assert "wife of Lindsay Cannon" in prompt
+        assert "wife of Jordan Smith" in prompt
 
 
 # ── drop path: bare role never reaches apply_person_fact ────────────────────
@@ -63,10 +63,10 @@ class _Client:
 @pytest.mark.asyncio
 async def test_bare_role_dropped_qualified_applied(monkeypatch):
     llm_items = [
-        {"name": "Emily Cannon", "fact_type": "preference", "value": "wife"},                      # bare → drop
-        {"name": "Emily Cannon", "fact_type": "preference", "value": "wife of Lindsay Cannon"},    # anchored → apply
-        {"name": "Aria Cannon", "fact_type": "preference", "value": "girl"},                       # bare → drop
-        {"name": "Lindsay Cannon", "fact_type": "birthday", "value": "26/10/1982"},                # non-role → apply
+        {"name": "Casey Smith", "fact_type": "preference", "value": "wife"},                      # bare → drop
+        {"name": "Casey Smith", "fact_type": "preference", "value": "wife of Jordan Smith"},    # anchored → apply
+        {"name": "Riley Smith", "fact_type": "preference", "value": "girl"},                       # bare → drop
+        {"name": "Jordan Smith", "fact_type": "birthday", "value": "26/10/1985"},                # non-role → apply
     ]
     monkeypatch.setattr(pel.httpx, "AsyncClient", lambda **k: _Client(llm_items))
     applied = []
@@ -78,35 +78,37 @@ async def test_bare_role_dropped_qualified_applied(monkeypatch):
     monkeypatch.setattr(person_extractor, "apply_person_fact", fake_apply)
 
     written = await pel.process_text_llm(
-        "Here are the details of my friends family and their names",
+        # the user ties Casey to "wife" on the same line, so the anchored claim is stated
+        "Casey Smith is the wife of Jordan Smith, here are the details of my friends family",
         user_id="demo-roles",
     )
     assert written == 2
-    assert ("Emily Cannon", "wife of Lindsay Cannon") in applied
-    assert ("Lindsay Cannon", "26/10/1982") in applied
-    assert ("Emily Cannon", "wife") not in applied
-    assert ("Aria Cannon", "girl") not in applied
+    assert ("Casey Smith", "wife of Jordan Smith") in applied
+    # a numeric date is stored in words (day-first household order), not as typed
+    assert ("Jordan Smith", "26 October 1985") in applied
+    assert ("Casey Smith", "wife") not in applied
+    assert ("Riley Smith", "girl") not in applied
 
 
 # ── user-anchor validation (memory_quality.user_relationship_claim_unsupported) ──
 
 from memory_quality import user_relationship_claim_unsupported as _unsupported
 
-_SRC = "No Lindsay is my male friend, Emily is the wife and Aria and Olivia are the girls"
+_SRC = "No Jordan is my male friend, Casey is the wife and Riley and Morgan are the girls"
 
 
 @pytest.mark.parametrize("fact", [
-    "Emily is the user's wife.", "Emily: wife of user",
-    "Lindsay Cannon: husband of the speaker", "Aria is a girl in the user's life.",
+    "Casey is the user's wife.", "Casey: wife of user",
+    "Jordan Smith: husband of the speaker", "Riley is a girl in the user's life.",
 ])
 def test_guessed_user_anchor_is_unsupported(fact):
     assert _unsupported(fact, _SRC) is True
 
 
 @pytest.mark.parametrize("fact,src", [
-    ("Lindsay is the user's male friend.", _SRC),          # source says "my male friend"
-    ("Lindsay: male friend of user", _SRC),
-    ("Emily Cannon is Lindsay Cannon's wife", _SRC),       # third-party anchor
+    ("Jordan is the user's male friend.", _SRC),          # source says "my male friend"
+    ("Jordan: male friend of user", _SRC),
+    ("Casey Smith is Jordan Smith's wife", _SRC),       # third-party anchor
     ("The user is allergic to nuts.", "I am allergic to nuts"),  # not a relationship
     ("User's wife is Emma", "I love my wife Emma dearly"), # supported user anchor
 ])
@@ -117,8 +119,8 @@ def test_supported_or_non_relationship_pass(fact, src):
 @pytest.mark.asyncio
 async def test_guessed_user_anchor_dropped_in_llm_loop(monkeypatch):
     llm_items = [
-        {"name": "Emily Cannon", "fact_type": "preference", "value": "wife of user"},   # guessed → drop
-        {"name": "Lindsay Cannon", "fact_type": "preference", "value": "user's male friend"},  # supported → apply
+        {"name": "Casey Smith", "fact_type": "preference", "value": "wife of user"},   # guessed → drop
+        {"name": "Jordan Smith", "fact_type": "preference", "value": "user's male friend"},  # supported → apply
     ]
     monkeypatch.setattr(pel.httpx, "AsyncClient", lambda **k: _Client(llm_items))
     applied = []
@@ -131,7 +133,7 @@ async def test_guessed_user_anchor_dropped_in_llm_loop(monkeypatch):
 
     written = await pel.process_text_llm(_SRC, user_id="demo-roles")
     assert written == 1
-    assert applied == [("Lindsay Cannon", "user's male friend")]
+    assert applied == [("Jordan Smith", "user's male friend")]
 
 
 # ── synonym support + bare-role rescue (Greptile r2) ─────────────────────────
@@ -139,18 +141,18 @@ async def test_guessed_user_anchor_dropped_in_llm_loop(monkeypatch):
 def test_role_synonyms_support_user_anchor():
     # source "my mum" supports a fact phrased "mother"; "my girls" supports "daughter"
     assert _unsupported("User's mother is Janice", "my mum is Janice, born 1947") is False
-    assert _unsupported("User's daughter is Aria", "I took my girls to school") is False
+    assert _unsupported("User's daughter is Riley", "I took my girls to school") is False
     # and a guessed anchor still drops
-    assert _unsupported("Emily is the user's wife.", "Emily is the wife") is True
+    assert _unsupported("Casey is the user's wife.", "Casey is the wife") is True
 
 
 @pytest.mark.asyncio
 async def test_bare_role_rescued_when_turn_supports_it(monkeypatch):
-    """'No Lindsay is my male friend...' + LLM value 'male friend' (bare) must be
+    """'No Jordan is my male friend...' + LLM value 'male friend' (bare) must be
     RESCUED as \"user's male friend\", not dropped (Greptile P2)."""
     llm_items = [
-        {"name": "Lindsay Cannon", "fact_type": "preference", "value": "male friend"},  # bare, supported → rescue
-        {"name": "Emily Cannon", "fact_type": "preference", "value": "wife"},           # bare, unsupported → drop
+        {"name": "Jordan Smith", "fact_type": "preference", "value": "male friend"},  # bare, supported → rescue
+        {"name": "Casey Smith", "fact_type": "preference", "value": "wife"},           # bare, unsupported → drop
     ]
     monkeypatch.setattr(pel.httpx, "AsyncClient", lambda **k: _Client(llm_items))
     applied = []
@@ -162,18 +164,18 @@ async def test_bare_role_rescued_when_turn_supports_it(monkeypatch):
     monkeypatch.setattr(person_extractor, "apply_person_fact", fake_apply)
 
     written = await pel.process_text_llm(
-        "No Lindsay is my male friend, Emily is the wife and the kids are girls",
+        "No Jordan is my male friend, Casey is the wife and the kids are girls",
         user_id="demo-roles",
     )
     assert written == 1
-    assert applied == [("Lindsay Cannon", "user's male friend")]
+    assert applied == [("Jordan Smith", "user's male friend")]
 
 
 # ── role-list sync + irregular plurals (Greptile r3) ─────────────────────────
 
 def test_children_plural_supports_child_facts():
-    assert _unsupported("User's child is Emily", "my children are Emily and Aria") is False
-    assert _unsupported("User's children are Emily and Aria", "my children are Emily and Aria") is False
+    assert _unsupported("User's child is Casey", "my children are Casey and Riley") is False
+    assert _unsupported("User's children are Casey and Riley", "my children are Casey and Riley") is False
 
 
 def test_colleague_class_roles_are_validated():
@@ -188,7 +190,7 @@ def test_nightly_batch_source_empty_drops_all_user_anchored_roles():
     """The nightly digest has no turn provenance (whole-day transcript), so it
     passes source_text=\"\" — EVERY user-anchored relationship fact must drop
     there, even ones a day-level grep would falsely support (Greptile r3)."""
-    assert _unsupported("Emily is the user's wife.", "") is True
+    assert _unsupported("Casey is the user's wife.", "") is True
     assert _unsupported("User's mother is Janice", "") is True
     # non-relationship facts still pass with empty source
     assert _unsupported("The user is allergic to nuts.", "") is False
@@ -200,7 +202,7 @@ def test_boss_role_normalization():
     assert _unsupported("user's boss", "my boss is Sarah and she is great") is False
     assert _unsupported("user's boss", "his boss is Sarah, a director") is True
     # plural-with-s roles still normalize via the regex itself
-    assert _unsupported("User's kids are Aria and Olivia", "my kids are Aria and Olivia") is False
+    assert _unsupported("User's kids are Riley and Morgan", "my kids are Riley and Morgan") is False
 
 
 # ── head-noun bare gate + coworker synonym (Greptile r5) ─────────────────────
@@ -224,7 +226,7 @@ def test_of_mine_is_a_user_anchor():
     friend\" — not treated as third-party-qualified (Greptile r6)."""
     assert _unsupported("Bob is a friend of mine", "he introduced his friend Bob") is True
     assert _unsupported("Bob is a friend of mine", "my friend Bob came over") is False
-    assert _unsupported("Emily Cannon is the wife of Lindsay", "Emily is Lindsay's wife") is False
+    assert _unsupported("Casey Smith is the wife of Jordan", "Casey is Jordan's wife") is False
 
 
 def test_my_in_fact_and_of_mine_in_source(  # Greptile r7 mirror cases
@@ -239,10 +241,10 @@ def test_my_in_fact_and_of_mine_in_source(  # Greptile r7 mirror cases
 
 
 def test_compound_roles_require_full_support():
-    """'user's wife and daughter' from a turn saying only 'my daughter Emily'
+    """'user's wife and daughter' from a turn saying only 'my daughter Casey'
     must drop — one supported role can't carry an unsupported one (Greptile r8)."""
-    assert _unsupported("Emily: user's wife and daughter", "my daughter Emily is here") is True
-    assert _unsupported("Emily: user's wife and daughter", "my wife and my daughter Emily") is False
+    assert _unsupported("Casey: user's wife and daughter", "my daughter Casey is here") is True
+    assert _unsupported("Casey: user's wife and daughter", "my wife and my daughter Casey") is False
 
 
 def test_parent_sibling_grandparent_roles_validated():

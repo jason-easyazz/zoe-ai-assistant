@@ -169,7 +169,8 @@ def test_s5_flag_off_keeps_the_legacy_skip_and_flag_on_runs_two_open_turns(monke
 # ── S10–S12 (2026-10-03): targets and the raise-spacing check ─────────────
 
 def test_s10_and_s11_are_marked_targets_not_regressions():
-    assert sb.EXPECTED == {"S10": "FAIL", "S11": "SKIP"}
+    # S14/S15 (2026-10-04) are flag-dark targets: ZOE_CORRECTION_APPLY / ZOE_ROSTER_NEUTRAL_ASK
+    assert sb.EXPECTED == {"S10": "FAIL", "S11": "SKIP", "S14": "FAIL", "S15": "FAIL"}
     assert "S9" not in sb.SCENARIO_IDS  # the card hop lives in samantha_day_sim.py
 
 
@@ -873,7 +874,13 @@ class _ScriptedLive(sb.Live):
                  "d2-ask-dad": "Your dad Teodor is a retired lighthouse keeper.",
                  "b-ask": "I have no idea who is visiting.",
                  "long-ask-sister": "Marisol.", "long-ask-dad": "He kept a lighthouse.",
-                 "s5-open-1": "Good! How did the aquarium interview go?"}.get(tag, "ok")
+                 "s5-open-1": "Good! How did the aquarium interview go?",
+                 "s13-ask": "Priya Nair's birthday is on 7 August 1991.",
+                 "s14-fix": "Fixed: Biscuit Whitfield is a pet dog, not one of the children.",
+                 "s14-ask": "Dana Whitfield has one child, Mika.",
+                 "s15-roster": "Here's what I've got. I haven't guessed who's who - which one is your friend?",
+                 "s15-ask": "Anika Reyes is on the list you gave me; I don't know how she is related.",
+                 }.get(tag, "ok")
         return {"reply": reply, "error": None, "ms": 1, "session": tag}
 
     def wait_landed(self, user, message, needles, timeout_s=90):
@@ -881,7 +888,15 @@ class _ScriptedLive(sb.Live):
         return {"landed": landed, "waited_s": 0}
 
     def packet(self, user, message):
-        return "" if user == B else "- dad Teodor, retired lighthouse keeper; sister Marisol"
+        if user == B:
+            return ""
+        if "Priya" in message:
+            return "- Priya Nair's birthday is 7 August 1991"
+        if "Biscuit" in message:
+            return "- Biscuit Whitfield is a pet dog, not a child\n- Mika Whitfield, child of Dana"
+        if "Anika" in message:
+            return "- Anika Reyes: 2 November 1985"
+        return "- dad Teodor, retired lighthouse keeper; sister Marisol"
 
     def backdate(self, session_ids, age_s):
         self.backdated.append(list(session_ids))
@@ -1151,3 +1166,55 @@ def test_forget_refuses_a_non_demo_id_before_any_request():
     with pytest.raises(ValueError):
         live.forget("jason")
     assert live.calls == []
+
+
+# ── S13–S15 (2026-10-04): dates, corrections, roles ────────────────────────
+
+@pytest.mark.parametrize("reply, packet, verdict", [
+    ("Priya's birthday is 7 August 1991.", "- Priya Nair's birthday is 7 August 1991", "PASS"),
+    ("Priya's birthday is July 8th, 1991.", "- Priya Nair's birthday is 7 August 1991", "FAIL"),  # reply wrong
+    ("It's 7 August.", "- Priya Nair's birthday is July 8th, 1991.", "FAIL"),                      # store wrong
+    ("It's 7 August.", "- Priya Nair: 7/8/1991", "FAIL"),                                           # raw digits
+    ("I don't know.", "- Priya Nair's birthday is 7 August 1991", "FAIL"),
+    ("7 August", None, "ERROR"),
+])
+def test_s13_day_first(reply, packet, verdict):
+    assert sb.score_s13(reply, packet)[0] == verdict
+
+
+@pytest.mark.parametrize("ack, reply, packet, verdict", [
+    ("Fixed: Biscuit Whitfield is a pet dog, not one of the children.", "She has one child, Mika.",
+     "- Biscuit Whitfield is a pet dog, not a child", "PASS"),
+    ("Oh sorry, I'll get it right next time.", "She has one child, Mika.",
+     "- Biscuit Whitfield is a pet dog, not a child", "FAIL"),        # apologised, changed nothing
+    ("Fixed: Biscuit is a pet dog.", "Dana has two kids, Mika and Biscuit.",
+     "- Biscuit is a pet dog", "FAIL"),                                # the count still has the dog
+    ("Fixed: Biscuit is a pet dog.", "One child, Mika.", "- Biscuit is Dana's child", "FAIL"),  # store
+    ("Fixed.", "One child, Mika.", None, "ERROR"),
+])
+def test_s14_correction_reaches_the_record(ack, reply, packet, verdict):
+    assert sb.score_s14(ack, reply, packet)[0] == verdict
+
+
+@pytest.mark.parametrize("roster_reply, ask_reply, packet, verdict", [
+    ("Which one is your friend?", "Anika is on the list.", "- Anika Reyes: 2 November 1985", "PASS"),
+    ("So Callum is the husband and Anika is the wife?", "ok", "-", "FAIL"),   # roles from first names
+    ("Which one is your friend?", "Anika is his wife.", "-", "FAIL"),
+    ("Which one is your friend?", "ok", "- Ines Reyes, daughter of Callum", "FAIL"),   # the store
+    ("Got them all down.", "ok", "-", "FAIL"),                                  # no who's-who question
+])
+def test_s15_roles_are_not_guessed(roster_reply, ask_reply, packet, verdict):
+    assert sb.score_s15(roster_reply, ask_reply, packet)[0] == verdict
+
+
+def test_new_scenarios_run_in_the_harness(monkeypatch):
+    live, res = _drive(monkeypatch)
+    for sid in ("S13", "S14", "S15"):
+        assert res[sid]["verdict"] == "PASS", res[sid]
+    assert res["S14"]["expected"] == "FAIL" and res["S15"]["expected"] == "FAIL"
+    assert "expected" not in res["S13"]                      # S13 is unflagged: a real regression gate
+    assert {"s14-fix", "s14-ask", "s15-ask", "s13-ask"} <= set(live.chats)
+    live, res = _drive(monkeypatch, seed_errors=["d1-dob"])
+    assert res["S13"]["verdict"] == "ERROR" and "s13-ask" not in live.chats
+    live, res = _drive(monkeypatch, unlanded=["biscuit"])
+    assert res["S14"]["verdict"] == "ERROR" and "s14-fix" not in live.chats

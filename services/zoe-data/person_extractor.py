@@ -108,7 +108,7 @@ _BUCKET_RE = re.compile(
 # Relationship detection  e.g. "Sarah is Mike's wife" / "Mike and Sarah are siblings"
 _REL_RE = re.compile(
     r"(?:"
-    r"(?P<a>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+is\s+(?P<b>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)'s\s+(?P<role1>wife|husband|partner|mother|father|sister|brother|daughter|son|aunt|uncle|cousin|niece|nephew|grandparent|grandchild|boss|mentor|colleague|friend)"
+    r"(?P<a>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+is\s+(?P<b>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)'s\s+(?P<role1>wife|husband|partner|mother|father|sister|brother|daughter|son|aunt|uncle|cousin|niece|nephew|grandparent|grandchild|boss|mentor|colleague|friend|dog|cat|puppy|kitten|pet)"
     r"|(?P<c>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+and\s+(?P<d>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+are\s+(?P<role2>siblings?|partners?|friends?|colleagues?|spouses?|twins?|cousins?)"
     r")",
     re.IGNORECASE,
@@ -143,6 +143,12 @@ _ROLE_TO_TYPE: dict[str, tuple[str, str]] = {
     "grandchild":  ("grandparent","family"),
     "friend":      ("friend",     "friend"),
     "friends":     ("friend",     "friend"),
+    # "Biscuit is Jordan's dog": a pet is not a child (people_roles / correction_apply).
+    "dog":         ("pet",        "pet"),
+    "cat":         ("pet",        "pet"),
+    "puppy":       ("pet",        "pet"),
+    "kitten":      ("pet",        "pet"),
+    "pet":         ("pet",        "pet"),
     "boss":        ("boss",       "work"),
     "mentor":      ("mentor",     "work"),
     "colleague":   ("colleague",  "work"),
@@ -214,6 +220,25 @@ def _parse_birthday(raw: str) -> tuple[Optional[int], Optional[int], Optional[in
     raw = raw.strip()
     month = day = year = None
 
+    # YYYY-MM-DD is ISO and wins outright.
+    m3 = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)
+    if m3:
+        year, month, day = int(m3.group(1)), int(m3.group(2)), int(m3.group(3))
+        if not (1 <= day <= 31):
+            day = None
+        if not (1 <= month <= 12):
+            month = None
+        return month, day, year
+
+    # "7/8/1991", "26/10", "13/January/2022": numeric dates go through the ONE
+    # household-order helper (day first in Australia) — see date_locale.py. Before it a
+    # numeric birthday parsed to (None, None, None) and was stored raw.
+    from date_locale import parse_numeric_date
+
+    nd = parse_numeric_date(raw)
+    if nd:
+        return nd.month, nd.day, nd.year
+
     # "15 March" or "March 15"
     m = re.search(r"(\d{1,2})\s+([A-Za-z]+)", raw)
     if m:
@@ -224,11 +249,6 @@ def _parse_birthday(raw: str) -> tuple[Optional[int], Optional[int], Optional[in
     if not month and m2:
         month = _MONTHS.get(m2.group(1).lower()[:3])
         day = int(m2.group(2))
-
-    # YYYY-MM-DD
-    m3 = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)
-    if m3:
-        year, month, day = int(m3.group(1)), int(m3.group(2)), int(m3.group(3))
 
     # Validate
     if day and (day < 1 or day > 31):
@@ -1075,6 +1095,11 @@ async def process_text(
     """
     if not text or not user_id or user_id in ("guest", "voice-daemon", ""):
         return 0
+    # "his birthday is 7/8/1991" -> "7 August 1991" BEFORE any pattern or stored fact sees
+    # it (household day-first order, date_locale.py): the raw numeric form was stored as is
+    # and a month-first model later rewrote it as July 8.
+    from date_locale import normalize_numeric_dates
+    text = normalize_numeric_dates(text)
 
     _db, _opened = await _ensure_db(db)
     if _db is None:
