@@ -41,13 +41,16 @@ with sync_playwright() as p:
     ctx.add_init_script("try{sessionStorage.setItem('zoe_gb','1')}catch(e){}")   # skip the bootstrap's one-time reload
     pg=ctx.new_page()
     pg.clock.install()
-    logs=[]; pg.on("console", lambda m: logs.append((m.type,m.text[:200])) if m.type=="error" else None)
-    pg.on("pageerror", lambda e: logs.append(("PAGEERROR",str(e)[:200])))
+    logs=[]; pg.on("console", lambda m: logs.append((m.type,m.text[:200],(m.location or {}).get("url",""))) if m.type=="error" else None)
+    pg.on("pageerror", lambda e: logs.append(("PAGEERROR",str(e)[:200],"")))
     # serve the WORKTREE page + executor with the WORKTREE CSP; everything else is the live server
     pg.route("**/touch/home.html*", lambda r: r.fulfill(status=200, body=html, headers={"content-type":"text/html","content-security-policy":csp}))
     pg.route("**/js/touch-ui-executor.js*", lambda r: r.fulfill(status=200, body=execjs, headers={"content-type":"application/javascript","content-security-policy":csp}))
     activates=[]
-    pg.route("**localhost:7777/**", lambda r: (activates.append(r.request.url), r.fulfill(status=200, body="ok")))
+    # ONLY /activate is fulfilled here (it would beep the real panel's mic). Everything else to
+    # the daemon — the GET / CORS probe in 1b — goes to the REAL daemon on this host, or the
+    # probe proves nothing (Codex, #1829).
+    pg.route("**localhost:7777/activate", lambda r: (activates.append(r.request.url), r.fulfill(status=200, body="ok")))
     pg.goto(BASE+"/touch/home.html?panel_id="+args.panel_id+"&kiosk=1", wait_until="load"); time.sleep(2); pg.clock.run_for(9000); time.sleep(2)
     st=pg.evaluate("()=>({authOn:!!document.querySelector('#authov.on'), sess:!!localStorage.getItem('zoe_session')})")
     check(not st["authOn"] and st["sess"], f"boots to ambient home as guest: {st}")
@@ -57,6 +60,9 @@ with sync_playwright() as p:
     csp_err=[l for l in logs if "Content Security Policy" in l[1]]
     check(len(activates)==1 and not csp_err, f"orb tap POSTed /activate without a CSP refusal (activates={len(activates)}, csp_errors={len(csp_err)})")
     check(st["listening"] and not st["cmdbar"], f"orb shows listening, no keyboard bar: {st}")
+    print("--- 1b. CORS: a REAL cross-origin request to the daemon on this host resolves (opaque), it does not reject")
+    probe = pg.evaluate("""async () => { try { const r = await fetch('http://localhost:7777/', {mode:'no-cors', signal: AbortSignal.timeout(2000)}); return 'resolved type='+r.type+' status='+r.status; } catch (e) { return 'REJECTED '+e.message; } }""")
+    check(probe.startswith("resolved type=opaque"), f"no-cors GET / to the real daemon resolves opaque (this is what the orb's POST relies on): {probe}")
     print("--- 2. a guest 403 (Contacts) must NOT raise the PIN card")
     pg.click("#apps"); pg.clock.run_for(600); time.sleep(0.4); pg.click('.ltile[data-id="person"]'); pg.clock.run_for(1500); time.sleep(2.5)
     st=pg.evaluate("()=>({authOn:!!document.querySelector('#authov.on'), sess:!!localStorage.getItem('zoe_session'), copy:(document.querySelector('.ctsign')||{}).textContent||''})")
@@ -101,7 +107,8 @@ with sync_playwright() as p:
     st=pg.evaluate("()=>({dockHidden:document.getElementById('dock').classList.contains('hide'), heard:(document.querySelector('#dbody .dheard')||{}).textContent||'', clock:!!document.getElementById('hClock')})")
     check(not st["dockHidden"] and "what time is it" in st["heard"] and st["clock"], f"transcript left the night clock and shows Heard on the home dock: {st}")
     if args.screenshot: pg.screenshot(path=args.screenshot)
-    noise = [l for l in logs if "Content Security" not in l[1] and "/ws/push" not in l[1] and "status of 403" not in l[1]]
+    # expected: WS 403s for a throwaway panel id, guest 403s, and the daemon's 404 on the GET / probe
+    noise = [l for l in logs if "Content Security" not in l[1] and "/ws/push" not in l[1] and "status of 403" not in l[1] and "localhost:7777" not in l[2]]
     check(not noise, f"no unexpected console errors: {noise[:5]}")
     ctx.close()
 print("RESULT:", "PASS" if not fails else f"FAIL {len(fails)}")
