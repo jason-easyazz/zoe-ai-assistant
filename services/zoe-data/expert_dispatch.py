@@ -175,14 +175,14 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
 
     # Caller opted out of writes on this channel (e.g. chat): defer create/add to
     # the brain BEFORE paying for slot extraction. Reads/expert-recall continue.
-    if kind == "write" and not write_ok:
+    if kind in ("write", "direct") and not write_ok:
         logger.info("EXPERT_DEFER_WRITE domain=%s intent=%s (write_ok=False) → brain", domain, intent_name)
         return None
 
     # 2) Decide whether we may ACT: active mode, domain allow-listed, and for
     #    WRITE/EXPERT kinds an extra opt-in (reads are always safe).
     can_act = (mode() == "active") and (domain in _active_domains())
-    if kind in ("write", "expert"):
+    if kind in ("write", "direct", "expert"):
         can_act = can_act and _allow_writes()
     if not can_act:
         logger.info("EXPERT_SHADOW domain=%s score=%.2f would=%s (%s) %.0fms → brain",
@@ -205,7 +205,7 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
         else:
             from intent_router import Intent, execute_intent
             slots = dict(regex_slots or {})
-            if kind == "write":
+            if kind == "write":  # "direct" keeps its regex slots: nothing to extract
                 from nlu_extractor import extract_slots_for_intent
                 ex = await extract_slots_for_intent(intent_name, text)
                 if not ex:
@@ -245,8 +245,13 @@ def _calendar_qualifier(text: str) -> str:
 
 
 def _plan(domain: str, text: str):
-    """Return (intent_name, regex_slots, kind) or None. kind in {read,write,expert}.
-    Pure/cheap: regex + a create-signal heuristic; NO slot extraction here."""
+    """Return (intent_name, regex_slots, kind) or None. kind in {read,write,direct,expert}.
+    Pure/cheap: regex + a create-signal heuristic; NO slot extraction here.
+
+    ``direct`` = a deterministic WRITE whose regex already produced every slot
+    (an explicit "save a contact for my brother Percival"): deferred on a channel
+    that does not allow writes (chat -> its own intent lane), otherwise executed
+    with those slots and no LLM extraction."""
     from intent_router import detect_intent
 
     if domain == "weather":
@@ -272,6 +277,15 @@ def _plan(domain: str, text: str):
         det = detect_intent(text, log_miss=False)
         if det and det.name == "people_search":
             return (det.name, det.slots, "read")
+        # An explicit contact-WRITE command ("save a contact for my brother
+        # Percival") is a write to the people table, NOT a fact to remember: the
+        # "expert" kind would store the sentence in memory ("Got it — I'll
+        # remember save a contact for your brother Percival.") and never create the
+        # row (Samantha bar S13/S14, 2026-10-05). Same rule as the other domains
+        # below: a regex-recognised write is kind "write"/"direct", never "expert".
+        if det and det.name == "people_create" and (det.slots or {}).get("name") \
+                and "raw" not in (det.slots or {}):
+            return (det.name, dict(det.slots), "direct")
         return ("people_expert", {}, "expert")
 
     # calendar / lists / reminders / timers — disambiguate SHOW (read, safe)

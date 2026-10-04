@@ -685,6 +685,45 @@ def _is_name_shaped(obj: str, raw_obj: str | None = None) -> bool:
     return not (_WHO_IS_CLAUSE_WORDS & set(words))
 
 
+# "save my brother Percival as a contact" / "add my brother Percival": the relation
+# phrase LEADS and the verb has no "contact" noun after it. The clause group is what
+# the main contacts-create block parses ("my brother percival" -> Percival, brother).
+_CONTACT_REL_FIRST_RE = re.compile(
+    rf"^(?:please\s+)?(?:add|create|save)\s+((?:my|our)\s+{_cc._REL_PHRASE}\s+[^,.;:!?]+?)"
+    r"(?:\s+(?P<cue>as\s+(?:a\s+|my\s+)?(?:new\s+)?(?:contact|person|entry)"
+    r"|(?:to|in|into)\s+(?:my\s+)?(?:contacts?|address\s*book|phone\s*book)))?\s*$",
+    re.IGNORECASE,
+)
+_NAME_WORD_RE = re.compile(r"^[A-Za-z][A-Za-z'\-]*$")
+
+
+def _contact_relation_first_match(t: str, raw_text: str):
+    """Match object for a relation-first contact-create command, else None.
+
+    With an explicit contact cue ("... as a contact", "... to my contacts") any
+    plausible name is taken. WITHOUT one ("add my brother Percival") the words
+    after the relation must be a capitalised name in the user's own text and the
+    turn must not name a list: "add my dad some beer" and "add my mate beer to the
+    shopping list" stay list/brain turns."""
+    m = _CONTACT_REL_FIRST_RE.match(t)
+    if not m:
+        return None
+    clause = m.group(1)
+    name, rel = _cc.split_relation_from_name(clause)
+    words = name.split()
+    if not rel or not name or len(words) > 3 or _EXPLICIT_LIST_TARGET_RE.search(t):
+        return None
+    if not all(_NAME_WORD_RE.match(w) and w.lower() not in _cc._BAD_NAME_WORDS for w in words):
+        return None
+    if not m.group("cue"):
+        if not re.search(
+                rf"(?:my|our)\s+{_cc._REL_PHRASE}\s+((?:[A-Z][A-Za-z'\-]*\s*)+)\W*$",
+                raw_text or ""):
+            return None
+    return m
+
+
+
 def detect_intent(
     text: str,
     log_miss: bool = True,
@@ -935,6 +974,10 @@ def detect_intent(
     m = re.match(
         r"^(?:add|create|save) (?:a )?(?:contact|person|entry) (?:for |named )?(.+)$", t
     )
+    if not m:
+        # Relation-first phrasing: "save my brother Percival as a contact",
+        # "add my brother Percival" (never a shopping-list item).
+        m = _contact_relation_first_match(t, text)
     if m:
         raw = m.group(1).strip()
 
