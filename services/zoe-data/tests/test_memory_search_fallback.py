@@ -27,8 +27,8 @@ class _Col:
         self.rows = rows  # list of (id, doc, meta, dist)
         self.calls = []
 
-    def count(self):
-        return len(self.rows)
+    def count(self):  # must never be called from the search path (#1815: the Rust client wedged on it)
+        raise AssertionError("col.count() called inside _semantic_search")
 
     def query(self, *, query_texts, n_results, include, where=None):
         self.calls.append({"where": where, "n": n_results})
@@ -61,7 +61,7 @@ def test_short_filtered_query_falls_back_and_keeps_only_the_owners_rows():
     assert "id2" in ids and "id4" in ids          # the owner's rows came back
     assert "id1" not in ids and "id3" not in ids  # other owners' private rows never leak
     assert "id5" in ids                           # family-visible rows stay visible, as the filter allows
-    assert col.calls[0]["where"] is None and col.calls[0]["n"] == len(col.rows)   # unfiltered first, capped
+    assert col.calls[0]["where"] is None and col.calls[0]["n"] == 200   # unfiltered first, fixed over-fetch (no count() — #1815)
     assert col.calls[1]["where"] == {"$or": [{"user_id": "demo_bar_x"}, {"wing": "demo_bar_x"},
                                              {"visibility": "family"}]}              # supplement (3 < 6)
 
