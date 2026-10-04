@@ -121,6 +121,11 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert(/if\(p\.get\('kiosk'\)==='1'\)\{localStorage\.setItem\('zoe_kiosk','1'\);sessionStorage\.setItem\('zoe_kiosk','1'\);\}/.test(homeSrc), 'early inline ?kiosk=1 mirrors to sessionStorage');
       assert(/if\(kiosk\)\{try\{localStorage\.setItem\('zoe_kiosk','1'\);sessionStorage\.setItem\('zoe_kiosk','1'\);\}catch\(e\)\{\}\}/.test(homeSrc), 'boot kiosk=true mirrors to sessionStorage');
       ok('viewer: the estate boot persists the kiosk flag to BOTH storages (another tab cannot declassify the kiosk)');
+      // Polish (#1862, Codex round 1): the 48 px finger floor applies to the HIT BOX, not the drawing.
+      assert(!/width:\s*44px;\s*height:\s*44px/.test(execSrc), 'executor close buttons must not be 44 px');
+      assert((execSrc.match(/width:\s*48px;\s*height:\s*48px;\s*border-radius:\s*50%/g) || []).length >= 2, 'both executor close buttons are 48×48');
+      assert(/\.srow2 \.sw::before\{content:'';position:absolute;inset:-4px/.test(homeSrc), 'settings switch hit box is extended to 48 px via ::before');
+      ok('polish: executor close buttons are 48×48 and the settings switch hit box is ≥48 px');
     }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });

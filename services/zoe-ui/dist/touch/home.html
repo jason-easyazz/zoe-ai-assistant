@@ -228,6 +228,9 @@
   .setsec{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:20px;margin-bottom:14px;overflow:hidden}
   .setsec .sh{display:flex;align-items:center;gap:14px;padding:20px 24px;cursor:pointer;font-size:22px;font-weight:500}
   .srow2 .sw{width:64px;height:40px;border-radius:999px;background:rgba(255,255,255,.16);position:relative;transition:.25s;flex:none;cursor:pointer}
+  /* The pill is drawn 64×40 but the FINGER target is 72×48: the ::before pseudo-element
+     extends the switch's own hit box (clicks on it fire the span's handler). */
+  .srow2 .sw::before{content:'';position:absolute;inset:-4px;border-radius:999px}
   .srow2 .sw::after{content:'';position:absolute;top:4px;left:4px;width:32px;height:32px;border-radius:50%;background:#fff;transition:.25s}
   .srow2 .sw.on{background:var(--accent)}
   .srow2 .sw.on::after{left:28px}

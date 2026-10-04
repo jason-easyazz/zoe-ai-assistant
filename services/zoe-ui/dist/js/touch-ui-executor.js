@@ -522,7 +522,7 @@
     flex: 1;
 }
 #zvo-close {
-    width: 44px; height: 44px; border-radius: 50%;
+    width: 48px; height: 48px; border-radius: 50%;   /* 48 px finger floor (services/zoe-ui/AGENTS.md) */
     border: none; background: rgba(255,255,255,0.08);
     color: rgba(255,255,255,0.45); font-size: 18px;
     cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -1690,7 +1690,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     color: rgba(255,255,255,0.92); letter-spacing: -.01em;
 }
 .zaf-close {
-    width: 44px; height: 44px; border-radius: 50%;
+    width: 48px; height: 48px; border-radius: 50%;   /* 48 px finger floor (services/zoe-ui/AGENTS.md) */
     border: none; background: rgba(255,255,255,0.08);
     color: rgba(255,255,255,0.50); font-size: 15px;
     cursor: pointer; display: flex; align-items: center; justify-content: center;
