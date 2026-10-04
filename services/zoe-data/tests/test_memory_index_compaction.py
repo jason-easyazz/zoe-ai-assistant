@@ -96,8 +96,11 @@ def _live(n=250, space="l2"):
 @pytest.fixture(autouse=True)
 def _gate_open():
     memory_service._MAINTENANCE_OPEN.set()
+    memory_service._ACTIVE_OPS = 0
+    memory_service._OP_THREAD.depth = 0
     yield
     memory_service._MAINTENANCE_OPEN.set()
+    assert memory_service._ACTIVE_OPS == 0, "a test leaked a collection lease"
 
 
 @pytest.fixture
@@ -110,7 +113,7 @@ def palace(tmp_path):
 
 def _compact(palace, client, tmp_path, **kw):
     return compact_drawers_index_sync(str(palace), backups_dir=str(tmp_path / "backups"),
-                                      client=client, ef=object(), grace_s=0, **kw)
+                                      client=client, ef=object(), drain_s=kw.pop("drain_s", 2.0), **kw)
 
 
 # ── the gate ─────────────────────────────────────────────────────────────────────────────
@@ -213,6 +216,143 @@ def test_second_compaction_is_refused_while_one_runs(palace, tmp_path):
             _compact(palace, _FakeClient(_live(3)), tmp_path)
     finally:
         memory_service._COMPACT_LOCK.release()
+
+
+# ── the export must not truth-test chroma's ndarray (Codex P1, #1827) ────────────────────
+
+class _ArrayLike:
+    """chroma 1.5.x returns ``get(include=["embeddings"])`` as a NumPy ndarray: it has a
+    length and iterates, and ``bool()`` on it RAISES. The list-based fakes above cannot
+    catch an ``x or []`` on it — this one can."""
+
+    def __init__(self, rows):
+        self._rows = [list(r) for r in rows]
+
+    def __len__(self):
+        return len(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def __getitem__(self, ix):
+        return self._rows[ix]
+
+    def __bool__(self):
+        raise ValueError("The truth value of an array with more than one element is ambiguous")
+
+
+def _array_col(n, wrap):
+    col = _live(n)
+    plain_get = col.get
+
+    def get(ids=None, include=None):
+        out = plain_get(ids=ids, include=include)
+        out["embeddings"] = wrap(out["embeddings"])
+        return out
+
+    col.get = get
+    return col
+
+
+def test_export_handles_an_ndarray_like_embeddings_column(palace, tmp_path):
+    client = _FakeClient(_array_col(120, _ArrayLike))
+    r = _compact(palace, client, tmp_path)
+    assert r["ok"] and r["rows"] == 120 and r["dims"] == 3
+    assert client.cols["mempalace_drawers"].embs[7] == [0.1 * 7, 1.0, 2.0]   # bit-identical, as lists
+
+
+def test_export_handles_a_real_numpy_ndarray(palace, tmp_path):
+    np = pytest.importorskip("numpy")
+    client = _FakeClient(_array_col(120, lambda rows: np.asarray(rows, dtype=np.float32)))
+    r = _compact(palace, client, tmp_path)
+    assert r["ok"] and r["rows"] == 120
+    assert all(isinstance(x, float) for x in client.cols["mempalace_drawers"].embs[0])
+
+
+# ── in-flight operations are drained, not raced (Codex P1, #1827) ────────────────────────
+
+def _hold_lease(hold: threading.Event, started: threading.Event, ended: list):
+    with memory_service.collection_op():
+        started.set()
+        hold.wait(5)
+        ended.append(time.monotonic())
+
+
+def test_in_flight_op_delays_the_compaction_until_it_ends(palace, tmp_path):
+    client = _FakeClient(_live(10))
+    col = client.cols["mempalace_drawers"]
+    exported = []
+    plain_get = col.get
+    col.get = lambda ids=None, include=None: (exported.append(time.monotonic()), plain_get(ids=ids, include=include))[1]
+    hold, started, ended = threading.Event(), threading.Event(), []
+    t = threading.Thread(target=_hold_lease, args=(hold, started, ended))
+    t.start()
+    assert started.wait(2) and memory_service._ACTIVE_OPS == 1
+    threading.Timer(0.4, hold.set).start()                         # the op finishes 0.4 s from now
+    r = _compact(palace, client, tmp_path, drain_s=3.0)
+    t.join(2)
+    assert r["ok"] and r["drain_seconds"] >= 0.3
+    assert exported and ended and exported[0] >= ended[0]          # export only after the op ended
+
+
+def test_never_ending_op_aborts_with_no_change_within_the_bound(palace, tmp_path):
+    client = _FakeClient(_live(10))
+    hold, started, ended = threading.Event(), threading.Event(), []
+    t = threading.Thread(target=_hold_lease, args=(hold, started, ended))
+    t.start()
+    try:
+        assert started.wait(2)
+        t0 = time.monotonic()
+        with pytest.raises(IndexCompactionError, match="could not drain 1 in-flight") as ei:
+            _compact(palace, client, tmp_path, drain_s=0.2)
+        assert time.monotonic() - t0 < 1.5
+        assert ei.value.report["changed"] is False and client.deleted == [] and client.created == []
+        assert not (tmp_path / "backups").exists()
+        assert memory_service._MAINTENANCE_OPEN.is_set()           # readers are released again
+    finally:
+        hold.set()
+        t.join(2)
+
+
+def test_lease_counter_returns_to_zero_after_exceptions_and_nesting():
+    with pytest.raises(RuntimeError):
+        with memory_service.collection_op():
+            assert memory_service._ACTIVE_OPS == 1
+            with memory_service.collection_op():                  # re-entrant: still ONE lease
+                assert memory_service._ACTIVE_OPS == 1 and memory_service._OP_THREAD.depth == 2
+            raise RuntimeError("op failed")
+    assert memory_service._ACTIVE_OPS == 0 and memory_service._OP_THREAD.depth == 0
+    with pytest.raises(RuntimeError):
+        memory_service._leased_call(lambda: (_ for _ in ()).throw(RuntimeError("fn failed")))
+    assert memory_service._ACTIVE_OPS == 0
+
+
+def test_no_lease_is_admitted_while_the_gate_is_closed_and_run_sync_holds_one(monkeypatch):
+    memory_service._MAINTENANCE_OPEN.clear()
+    with pytest.raises(MemoryServiceError, match="maintenance in progress"):
+        with memory_service.collection_op(timeout=0.05):
+            pass
+    assert memory_service._ACTIVE_OPS == 0
+    memory_service._MAINTENANCE_OPEN.set()
+    client = _FakeClient(_live(2))
+    monkeypatch.setattr(memory_service, "_palace_client", lambda d: client)
+    monkeypatch.setattr(memory_service, "_drawers_embedding_function", lambda: object())
+    seen = []
+
+    def op():
+        seen.append((memory_service._ACTIVE_OPS, memory_service._OP_THREAD.depth))
+        return memory_service.get_drawers_collection("/x")            # leased: no second gate wait
+
+    import asyncio
+    assert asyncio.run(memory_service.MemoryService._run_sync(op)) is client.cols["mempalace_drawers"]
+    assert seen == [(1, 1)] and memory_service._ACTIVE_OPS == 0
+
+
+def test_compaction_refuses_to_run_under_its_own_lease(palace, tmp_path):
+    with memory_service.collection_op():
+        with pytest.raises(IndexCompactionError, match="wait for itself"):
+            _compact(palace, _FakeClient(_live(3)), tmp_path)
+    assert memory_service._ACTIVE_OPS == 0
 
 
 # ── the routes ───────────────────────────────────────────────────────────────────────────

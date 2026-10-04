@@ -74,14 +74,19 @@ def compact(palace: Path, backups: Path) -> int:
     except Exception:  # noqa: BLE001 — the metadata key / l2 default stands
         pass
     rows = col.get(include=["embeddings", "documents", "metadatas"])
-    ids, embs, docs, metas = rows["ids"], rows["embeddings"], rows["documents"], rows["metadatas"]
+    if rows.get("embeddings") is None:
+        print("export returned no embeddings — aborting before any change", file=sys.stderr)
+        return 2
+    # chroma 1.5.x returns the embeddings as a NumPy ndarray: iterate, never truth-test it.
+    ids, docs, metas = list(rows["ids"]), list(rows["documents"]), list(rows["metadatas"])
+    embs = [[] if e is None else [float(x) for x in e] for e in rows["embeddings"]]
     n = len(ids)
-    if n == 0 or n != col.count() or any(e is None or len(e) == 0 for e in embs):
+    if n == 0 or n != col.count() or len(embs) != n or any(len(e) == 0 for e in embs):
         print("export incomplete — aborting before any change", file=sys.stderr)
         return 2
     export = backups / f"mempalace-drawers-export-{ts}.json"
     json.dump({"space": space, "ids": ids, "documents": docs, "metadatas": metas,
-               "embeddings": [[float(x) for x in e] for e in embs]}, open(export, "w"))
+               "embeddings": embs}, open(export, "w"))
     print(f"export: {n} rows, space={space} → {export}")
 
     client.delete_collection(DRAWERS)

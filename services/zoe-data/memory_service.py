@@ -29,6 +29,7 @@ Safety rails enforced here, not in callers:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import hashlib
 import json
@@ -175,7 +176,8 @@ def get_drawers_collection(data_dir: str) -> Any:
     client, the existing collection as-is, and ``hnsw:space=cosine`` only when a brand-new
     palace has none yet. The live palace keeps its own ``l2`` space.
     """
-    _wait_for_maintenance_gate()
+    if not getattr(_OP_THREAD, "depth", 0):   # a leased op was admitted under the gate already
+        _wait_for_maintenance_gate()
     client = _palace_client(data_dir)
     ef = _drawers_embedding_function()
     try:
@@ -200,10 +202,22 @@ def get_drawers_collection(data_dir: str) -> Any:
 # direct call), so the opener waits on this event; it is SET in normal operation and
 # CLEARED only for the duration of the swap, by the one compaction thread, which talks to
 # the cached client directly and never through the opener.
+#
+# The gate alone only stops NEW openers. ``_run_sync`` uses the default (multi-threaded)
+# executor, so an operation that already holds a handle can still be mid-flight when the
+# gate closes — a write landing between the export and the delete would be lost, a later
+# one would use a stale collection id. Hence the LEASE: ``collection_op`` admits an
+# operation under the gate and counts it until it ends (``_run_sync`` wraps every executor
+# call; direct users of the opener wrap their whole read-modify-write). The compaction
+# closes the gate, then DRAINS the count to zero (bounded) before it exports, and aborts
+# with no change if it cannot. Reader/writer lock semantics, spelled out.
 _MAINTENANCE_OPEN = threading.Event()
 _MAINTENANCE_OPEN.set()
 _MAINTENANCE_WAIT_S = 60.0          # a caller blocks at most this long before raising
-_MAINTENANCE_GRACE_S = 1.0          # after clearing: let in-flight calls on old handles finish
+_MAINTENANCE_DRAIN_S = 30.0         # the compaction waits at most this long for in-flight ops
+_OPS_COND = threading.Condition()   # guards _ACTIVE_OPS; notified when a lease is released
+_ACTIVE_OPS = 0
+_OP_THREAD = threading.local()      # .depth: this thread's lease nesting (re-entrant)
 _COMPACT_LOCK = threading.Lock()    # one compaction at a time
 _COMPACT_BATCH = 100
 _COMPACT_PROBE = "When did I tell you about the dentist?"   # the measured failing sentence
@@ -217,6 +231,66 @@ def _wait_for_maintenance_gate(timeout: float | None = None) -> None:
     raise MemoryServiceError(
         f"memory index maintenance in progress: the drawers collection did not reopen within {wait:g}s"
     )
+
+
+@contextlib.contextmanager
+def collection_op(timeout: float | None = None):
+    """Admit ONE collection operation under the maintenance gate and hold its lease until
+    the block ends (also on exceptions). Re-entrant per thread, so nested helpers that call
+    ``get_drawers_collection`` inside a leased op skip the gate. Admission is re-checked
+    under ``_OPS_COND`` so no op can slip in after the compaction closes the gate."""
+    global _ACTIVE_OPS
+    depth = getattr(_OP_THREAD, "depth", 0)
+    if depth:
+        _OP_THREAD.depth = depth + 1
+        try:
+            yield
+        finally:
+            _OP_THREAD.depth -= 1
+        return
+    wait = _MAINTENANCE_WAIT_S if timeout is None else timeout
+    deadline = time.monotonic() + wait
+    while True:
+        if not _MAINTENANCE_OPEN.wait(max(deadline - time.monotonic(), 0.0)):
+            raise MemoryServiceError(
+                f"memory index maintenance in progress: the drawers collection did not reopen within {wait:g}s"
+            )
+        with _OPS_COND:
+            if _MAINTENANCE_OPEN.is_set():
+                _ACTIVE_OPS += 1
+                break
+    _OP_THREAD.depth = 1
+    try:
+        yield
+    finally:
+        _OP_THREAD.depth = 0
+        with _OPS_COND:
+            _ACTIVE_OPS -= 1
+            _OPS_COND.notify_all()
+
+
+def _leased_call(fn, *args):
+    with collection_op():
+        return fn(*args)
+
+
+def _drain_collection_ops(timeout: float) -> bool:
+    """With the gate CLOSED: wait until no leased op is in flight. False on timeout."""
+    deadline = time.monotonic() + timeout
+    with _OPS_COND:
+        while _ACTIVE_OPS > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _OPS_COND.wait(remaining)
+    return True
+
+
+def _as_list(value: Any) -> list:
+    """A list from chroma's result columns WITHOUT truth-testing: on 1.5.x
+    ``get(include=["embeddings"])`` returns a NumPy ndarray, and ``x or []`` raises
+    "truth value of an array is ambiguous"."""
+    return [] if value is None else list(value)
 
 
 def index_compaction_enabled() -> bool:
@@ -283,7 +357,7 @@ def compact_drawers_index_sync(
     probe: str = _COMPACT_PROBE,
     client: Any | None = None,
     ef: Any | None = None,
-    grace_s: float | None = None,
+    drain_s: float | None = None,
 ) -> dict[str, Any]:
     """Rebuild ``mempalace_drawers`` from its stored embeddings, in-process, no restart.
 
@@ -298,6 +372,10 @@ def compact_drawers_index_sync(
 
     from memory_index_health import index_health
 
+    if getattr(_OP_THREAD, "depth", 0):
+        raise IndexCompactionError(
+            "compaction must not run under a collection lease (it would wait for itself) — "
+            "schedule it outside _run_sync", {"changed": False})
     if not _COMPACT_LOCK.acquire(blocking=False):
         raise IndexCompactionError("a compaction is already running", {"changed": False})
     t0 = time.monotonic()
@@ -313,15 +391,22 @@ def compact_drawers_index_sync(
         backups = Path(backups_dir or _COMPACT_BACKUPS_DIR)
         _MAINTENANCE_OPEN.clear()
         try:
-            time.sleep(_MAINTENANCE_GRACE_S if grace_s is None else grace_s)
+            drain = _MAINTENANCE_DRAIN_S if drain_s is None else drain_s
+            t_drain = time.monotonic()
+            if not _drain_collection_ops(drain):
+                raise IndexCompactionError(
+                    f"could not drain {_ACTIVE_OPS} in-flight collection operation(s) within {drain:g}s"
+                    " — aborted before any change", report)
+            report["drain_seconds"] = round(time.monotonic() - t_drain, 3)
             col = client.get_collection(_DRAWERS_COLLECTION, embedding_function=ef)
             space = _collection_space(col)
             report["space"] = space
             rows = col.get(include=["embeddings", "documents", "metadatas"])
-            ids = list(rows.get("ids") or [])
-            embs = [[float(x) for x in (e if e is not None else [])] for e in (rows.get("embeddings") or [])]
+            ids = _as_list(rows.get("ids"))
+            # chroma 1.5.x returns the embeddings as a NumPy ndarray: iterate, never truth-test.
+            embs = [[] if e is None else [float(x) for x in e] for e in _as_list(rows.get("embeddings"))]
             rows = {"ids": ids, "embeddings": embs,
-                    "documents": list(rows.get("documents") or []), "metadatas": list(rows.get("metadatas") or [])}
+                    "documents": _as_list(rows.get("documents")), "metadatas": _as_list(rows.get("metadatas"))}
             n, count = len(ids), int(col.count())
             dim_set = {len(e) for e in embs}
             dim = next(iter(dim_set)) if len(dim_set) == 1 else None
@@ -1547,8 +1632,11 @@ class MemoryService:
 
     async def compact_index(self) -> dict[str, Any]:
         """In-process drawers index compaction (see ``compact_drawers_index_sync``).
-        Raises ``IndexCompactionError`` (``.report``) when it did not complete."""
-        return await self._run_sync(compact_drawers_index_sync, self._data_dir)
+        Raises ``IndexCompactionError`` (``.report``) when it did not complete. Deliberately
+        NOT via ``_run_sync``: that path takes a collection lease, and the compaction drains
+        the leases — it would wait for itself."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, compact_drawers_index_sync, self._data_dir)
 
     def _collection_sizes_sync(self) -> dict[str, int]:
         from collections import Counter as _Counter
@@ -1768,8 +1856,10 @@ class MemoryService:
 
     @staticmethod
     async def _run_sync(fn, *args):
+        # Every executor call holds a collection lease for its whole duration, so the
+        # index compaction can drain in-flight work before it swaps the collection.
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, fn, *args)
+        return await loop.run_in_executor(None, _leased_call, fn, *args)
 
     def _track_background_task(self, coro, *, name: str) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro, name=name)
