@@ -4601,11 +4601,18 @@
     if(_au.wired)return;_au.wired=true;
     if(back)back.addEventListener('click',function(e){e.stopPropagation();window.__hideAuthCard();});
     ov.addEventListener('click',function(e){if(e.target===ov&&window.__kiosk)window.__hideAuthCard();});
+    // Before a name is chosen the pad is dimmed with pointer-events:none, so a
+    // digit tap lands on the column behind it and used to do NOTHING — a silent
+    // pad reads as broken (2026-10-05: a member typed a PIN with no name tapped
+    // and gave up). Say what to do instead.
+    var colR=ov.querySelector('.colR');
+    if(colR)colR.addEventListener('click',function(){if(_au.sel)return;lead.textContent='Tap your name first';pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');},450);});
     list.addEventListener('click',function(e){var u=e.target.closest('.au');if(!u)return;
       [].forEach.call(list.children,function(x){x.classList.toggle('sel',x===u);});
       _au.sel={user_id:u.getAttribute('data-u'),username:u.getAttribute('data-n')};
       lead.innerHTML='Hi <span class="n">'+esc(_au.sel.username)+'</span>';_au.code='';rdots();pin.classList.add('on');});
-    pad.addEventListener('click',function(e){var b=e.target.closest('.akey');if(!b||!_au.sel||b.classList.contains('ghost'))return;
+    pad.addEventListener('click',function(e){var b=e.target.closest('.akey');if(!b||b.classList.contains('ghost'))return;
+      if(!_au.sel)return;
       var k=b.getAttribute('data-k');
       if(k==='⌫'){_au.code=_au.code.slice(0,-1);rdots();return;}
       if(_au.code.length>=4)return;
