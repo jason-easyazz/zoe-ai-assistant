@@ -62,7 +62,11 @@ CHANNEL_PROFILES: dict[str, dict[str, Any]] = {
     "voice":    {"run_tier0": True,  "allow_writes": True,
                  "defer_domains": frozenset({"people", "memory"}),
                  "tier0_defer_intents": _VOICE_TIER0_DEFER_INTENTS},
-    "livekit":  {"run_tier0": True,  "allow_writes": True},
+    # livekit's fast tier neither persists the assistant reply nor runs the intent
+    # lane's follow-up matchers, so a queued question ("is X the same person?")
+    # could never be answered: binds_followups=False tells a `direct` write to
+    # state the outcome instead of asking.
+    "livekit":  {"run_tier0": True,  "allow_writes": True, "binds_followups": False},
     "telegram": {"run_tier0": True,  "allow_writes": True},
 }
 
@@ -455,6 +459,8 @@ async def resolve(
             "session_id": session_id,
             "score": float(rr.get("score") or 0.0),
         })
+        if prof.get("binds_followups") is False:
+            ctx["binds_followups"] = False
         res = await _xd.dispatch(domain, text, ctx, write_ok=allow_writes)
         if res is not None and not getattr(res, "tier", ""):
             try:

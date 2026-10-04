@@ -389,6 +389,16 @@ def _join_and(items: list[str]) -> str:
 join_and = _join_and
 
 
+def confirm_create_phrase(name: str, relationship: Optional[str]) -> str:
+    """The spoken confirm prompt for a contact-create awaiting a yes. A relation the
+    user actually said is part of the question; the generic default ('friend') is not."""
+    name = (name or "").strip()
+    rel = (relationship or "").strip()
+    if rel and rel.lower() not in _GENERIC_RELS:
+        return f"Add {name}, your {rel}, to your contacts?"
+    return f"Add contact {name}. Shall I confirm?"
+
+
 def format_created(name: str, relationship: Optional[str]) -> str:
     rel = (relationship or "").strip()
     return f"Added {name}, your {rel}." if rel else f"Added {name} to your contacts."

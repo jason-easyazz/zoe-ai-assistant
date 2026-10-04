@@ -83,3 +83,19 @@ no new state), then `ZOE_CONTACT_OFFER_BATCH`. Samantha bar S13 and S14 pass wit
 * Facts on the lookup come from entity-linked memory rows; a fact stored unlinked (`person_pending`) is
   not shown until the idle link resolver (`ZOE_MEMORY_LINK_RESOLVER_ENABLED`) relinks it.
 * The person relationship graph (`person_relationships`) is not read for the sentence yet.
+
+## Contact-create commands in the fast tiers (PR #1863)
+
+* `expert_dispatch._plan` files a regex-recognised `people_create` as kind `direct`, never `expert` (the
+  memory-fact expert answered "Got it, I'll remember save a contact for…" and wrote no row). Chat defers it
+  to its own intent lane; telegram/livekit execute it with the regex slots, as the acting user (no
+  `family-admin` -> `guest` alias).
+* Relation-first phrasings detect as `people_create` ("save my brother Percival as a contact", "add my brother
+  Percival", lowercase too). Without a contact cue the name is at most two words and not a day/time word or a
+  shopping/household noun (`_NOT_NAME_TIME`, `_NOT_NAME_ITEM`); it is a guard, not a lexicon.
+* livekit (`ZOE_LIVEKIT_FAST_TIERS`, default off) cannot bind a follow-up "yes" (it neither persists the reply nor
+  runs the intent lane's matchers), so `binds_followups=False` in its channel profile makes a `direct` create
+  state the same-person outcome instead of queueing a question ("I already have a Dan saved, so I haven't added
+  Dan Murphy. Ask me in chat to add …").
+* Voice: a capitalised transcript "Add my brother Percival." now reaches `people_create` in `voice_tts`'s own
+  confirm path; the prompt names the relation ("Add Percival, your brother, to your contacts?").
