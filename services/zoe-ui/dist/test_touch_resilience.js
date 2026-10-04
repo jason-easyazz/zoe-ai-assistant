@@ -99,6 +99,13 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert(carry > 0 && clear > carry, 'auth.js must copy zoe_kiosk into sessionStorage before removing it');
       assert(/sessionStorage\.setItem\('zoe_kiosk', '1'\)/.test(authSrc.slice(carry - 200, clear)));
       ok('viewer: auth.js carries the kiosk flag into sessionStorage before clearing the localStorage copy');
+      // Codex (#1861, round 4): registering the generated alias (touch/settings.html
+      // setLocalPanelId after /panels/register) must drop the alias marker, or the
+      // now-registered panel reads as a viewer after reload.
+      const settingsSrc = fs.readFileSync(path.join(__dirname, 'touch/settings.html'), 'utf8');
+      const sl = /function setLocalPanelId\((\w+)\)\s*\{([\s\S]{0,700})/.exec(settingsSrc); assert(sl, 'missing setLocalPanelId');
+      assert(/localStorage\.getItem\('zoe_touch_panel_alias_generated'\) === String\(\w+ \|\| ''\)\.trim\(\)\) localStorage\.removeItem\('zoe_touch_panel_alias_generated'\)/.test(sl[2]), 'setLocalPanelId must clear the alias marker when that id becomes registered');
+      ok('viewer: registering the generated alias clears the alias marker (touch/settings.html setLocalPanelId)');
     }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });

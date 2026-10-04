@@ -5218,6 +5218,11 @@
             try { return localStorage.getItem('zoe_panel_id') || null; } catch (_) { return null; }
         }
         function setLocalPanelId(id) {
+            // A panel registered under its own generated alias is REGISTERED from now
+            // on: drop the local alias marker, or the executor's viewer-mode check
+            // (touch-ui-executor.js isViewerContext) would keep treating the panel as
+            // a laptop after reload (Codex, #1861).
+            try { if (localStorage.getItem('zoe_touch_panel_alias_generated') === String(id || '').trim()) localStorage.removeItem('zoe_touch_panel_alias_generated'); } catch (_) {}
             try {
                 if (id) localStorage.setItem('zoe_panel_id', id);
                 else    localStorage.removeItem('zoe_panel_id');
