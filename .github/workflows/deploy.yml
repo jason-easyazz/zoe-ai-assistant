@@ -376,6 +376,19 @@ jobs:
       - name: Restart zoe-data (user service)
         run: |
           export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          # Docs-only merges do not restart the service. Every merge to main used to
+          # cold-restart zoe-data (router heads, embedder, chroma caches), which
+          # inflated brain_ms on any voice probe running at that moment (sig #29/#35,
+          # 2026-10-04: a research-record merge mid-probe failed a landing). A merge
+          # whose only changes are under docs/ or are Markdown files anywhere has
+          # nothing the service loads; everything else keeps the unconditional restart.
+          if [ -n "${OLD_SHA:-}" ] && [ "${OLD_SHA}" != "$(git rev-parse HEAD)" ]; then
+            NON_DOC="$(git diff --name-only "${OLD_SHA}" HEAD | grep -vE '^docs/|\.md$' || true)"
+            if [ -z "${NON_DOC}" ]; then
+              echo "docs-only merge since ${OLD_SHA} — zoe-data not restarted."
+              exit 0
+            fi
+          fi
           systemctl --user restart zoe-data.service
           # Record which interpreter actually came up (B0.7: venv 3.12 vs system
           # 3.10) — what RUNS, read from the process, not the unit. Informational.

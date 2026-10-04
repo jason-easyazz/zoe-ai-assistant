@@ -1,8 +1,8 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, and detaching agent-launched harnesses. Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness]
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and reading the panel Pi's voice logs (journal flood, outage recovery, thermal, USB). Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness, zoe-pi, thermal, journald]
 timestamp: 2026-10-04T22:30:00+08:00
 ---
 
@@ -771,7 +771,52 @@ nothing is re-embedded. Two ways:
 turn in a small store); query embeddings are unit-norm, no NaN; the `where` filter alone
 flips 18 → 0 for the same vector.
 
-## 23. Reviewing Docker logs without drowning, and bounding them (2026-10-04)
+
+## 23. Panel Pi (zoe-pi) — reading the voice daemon's logs, and the operator steps from the 2026-10-04 review
+
+Full inventory and the before/after of the barge-in phase 1 deploy:
+[log-review-pi-2026-10-04.md](log-review-pi-2026-10-04.md). The rules that came out of it:
+
+**Where the evidence is.** `~/.zoe-voice/voice.log` (daemon lines only, survives restarts and
+reboots) and the *system* journal — `journalctl -u zoe-voice` as `pi`, NOT `--user` (that one is
+empty: "No journal files were found"). The journal is `Storage=volatile`, so a reboot erases it.
+`sudo -n dmesg -T` works for `pi` and is where USB disconnects, under-voltage and thermal
+messages would show. Nothing on the Pi needs a restart to be read.
+
+**Journal flood (fixed in the daemon).** A journal that is 80 % `InsecureRequestWarning` +
+`warnings.warn(` pairs means the daemon predates the `_silence_insecure_request_warnings` fix:
+`VERIFY_SSL=false` plus urllib3's "always" filter wrote one per request (the 5 s announce poll
+alone ≈ 17,000 a day). After the fix lands on the Pi, `journalctl -u zoe-voice --since <restart> |
+grep -c InsecureRequestWarning` must be `0` and exactly one `TLS certificate verification is OFF`
+line appears at startup. Do NOT "fix" it by turning verification on against the self-signed
+Jetson cert — every turn would fail with an SSL error.
+
+**`announce poll failed … 502` bursts are the Jetson restarting, not the Pi.** Line up the
+timestamp with `systemctl --user show zoe-data -p ActiveEnterTimestamp` (or a `zoe-ui` restart for
+`Connection refused`). The daemon backs off to 60 s and keeps running. Since the fix, the end of
+each outage is logged as `announce poll recovered after N failed polls; poll blind ~Ts (…)`. The `~Ts`
+is first failed poll to first good poll — the 10/20/40/60 s backoff is inside it, so it overstates
+the outage and the server was back up to 60 s before the line (a 4 s restart logs ~10 s): compare
+the *failed* line's timestamp with `ActiveEnterTimestamp`, not the recovered line's. No such line after a
+`failed` line means the server is still down.
+
+**Thermal.** `vcgencmd get_throttled`: `0xe0000` = capped/throttled/soft-limit *have occurred*
+since boot (history); anything in bits 0–3 (`0xf`) is happening *now*; bit 16 (`0x10000`) is
+under-voltage. The panel has no fan device and idles at 76–82 °C; a heatsink/Active Cooler is an
+operator hardware action. Check `vcgencmd measure_temp` before blaming the daemon for latency,
+and stop extra Pi-side work (`systemctl --user stop pw-headless3`, embedding experiments) when it
+is not needed.
+
+**USB.** The Jabra Speak 750 is the only audio device; `lsusb` and `dmesg | grep -i usb` show
+whether a camera is present at all. A camera sharing the Jabra's power must go on a powered hub;
+if `dmesg` shows `usb … disconnect` right after TTS starts, that is the trap — fix the power, not
+the daemon.
+
+**Inert settings.** `Nice=-5` in `zoe-voice.service` has no effect (`ps -o ni` shows 0; the user
+manager's `RLIMIT_NICE` is 0). The daemon has no CPU priority edge on the Pi; keep other load
+off the box instead.
+
+## 25. Reviewing Docker logs without drowning, and bounding them (2026-10-04)
 
 Evidence and per-container inventory: [log-review-docker-2026-10-04.md](log-review-docker-2026-10-04.md).
 The sizing tables, apply and rollback commands for log rotation and memory caps already exist in

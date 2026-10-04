@@ -1,0 +1,14 @@
+# Five-minute trigger for zoe-agents-sampler.service — see that unit for install steps.
+# Five minutes is the cadence the record asks for: fine enough to see a session open and close,
+# coarse enough that the sampler is invisible next to the thing it measures.
+
+[Unit]
+Description=Five-minute engineering-cgroup sample
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

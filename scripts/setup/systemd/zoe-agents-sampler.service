@@ -1,0 +1,24 @@
+# Zoe maintenance — sample the engineering cgroups (user unit, oneshot)
+#
+# Why: docs/research/agent-sessions-off-box-2026-10-04.md section 5. Appends one JSON line per
+# run to ~/.zoe-logs/agents-sampler.jsonl: MemAvailable, zoe-agents.slice and member
+# MemoryCurrent, the Omnigent container's cgroup, and how many serena / jedi / codebase-memory
+# / ccd-cli / codex / claude processes sit INSIDE vs OUTSIDE the slice. Read-only on /proc and
+# /sys/fs/cgroup; stdlib only; no PII. Install it FIRST (baseline week, nothing else installed):
+#   cp scripts/setup/systemd/zoe-agents-sampler.{service,timer} ~/.config/systemd/user/
+#   # ADJUST the ExecStart path if your checkout is NOT ~/assistant.
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now zoe-agents-sampler.timer
+# Runbook + how to read the file: docs/knowledge/engineering-off-box.md.
+# Rollback: systemctl --user disable --now zoe-agents-sampler.timer; rm both files; daemon-reload.
+
+[Unit]
+Description=Sample engineering cgroups (zoe-agents.slice, members, Omnigent) to JSONL
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/zoe_agents_sampler.py
+Nice=10
+# The sampler must never be the thing that costs memory.
+MemoryMax=64M
+MemorySwapMax=0
