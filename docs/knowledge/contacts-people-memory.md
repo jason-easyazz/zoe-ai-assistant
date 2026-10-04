@@ -183,7 +183,7 @@ record; a list of names with no stated roles must not be assigned roles.
   parent/sibling edges into the new `pet` edge type (`RELATIONSHIP_TYPES["pet"]`), rewrites stored facts that
   call X a child and stores "X is a pet dog, not a child." It acts only when it finds a stored row to
   fix, and the reply states the change ("Fixed: … is 7 August 1991.").
-- Bar scenarios S13 (dates, a real gate), S14 and S15 (flag-dark targets) in [samantha-bar.md](samantha-bar.md).
+- Bar scenarios S20 (dates, a real gate), S21 and S22 (flag-dark targets) in [samantha-bar.md](samantha-bar.md).
 
 ## Cleanup
 
