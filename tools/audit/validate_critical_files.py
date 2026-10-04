@@ -90,6 +90,8 @@ CRITICAL_FILES = {
     'config': [
         'docker-compose.yml',
         'services/zoe-ui/nginx.conf',
+        'services/zoe-ui/nginx.d/locations.inc',
+        'services/zoe-ui/nginx.d/security-headers.inc',
     ]
 }
 
