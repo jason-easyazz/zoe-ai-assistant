@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.jobstores.base import JobLookupError
+from apscheduler.jobstores.base import ConflictingIdError, JobLookupError
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
 from database import DB_PATH
@@ -60,13 +60,64 @@ def get_scheduler() -> AsyncIOScheduler:
     return _scheduler
 
 
+class _ReplaceExistingMixin:
+    """Make ``add_job(..., replace_existing=True)`` idempotent WITHOUT a failed INSERT.
+
+    APScheduler implements replace_existing as "try the INSERT, catch ConflictingIdError,
+    then UPDATE". Against PostgreSQL the failed INSERT is logged by the SERVER as
+    ``ERROR: duplicate key value violates unique constraint "apscheduler_jobs_pkey"`` (plus
+    the whole pickled STATEMENT) on every zoe-data start for every standing job -- 21 such
+    ERRORs in one evening of restarts (2026-10-04 container log review), which buries a
+    real database error.
+
+    The fix looks the job up FIRST and, when it exists, goes straight to the stock UPDATE
+    path (``store.update_job``) by making this one INSERT raise ``ConflictingIdError``
+    without touching the database. It is deliberately NOT remove-then-add: that is
+    destructive when the add fails (an unpicklable argument, a transient Postgres error
+    between the DELETE and the INSERT) and would silently drop a standing job until the
+    next restart, whereas stock APScheduler -- and this -- leave the old row untouched
+    because a single UPDATE either replaces it or does not.
+
+    Hooked at ``_real_add_job`` rather than ``add_job`` so jobs registered before
+    ``start()`` (the pending list) take the same path. Runs under APScheduler's own
+    ``_jobstores_lock``.
+    """
+
+    def _real_add_job(self, job, jobstore_alias, replace_existing):
+        store = None
+        if replace_existing:
+            try:
+                store = self._lookup_jobstore(jobstore_alias)
+                exists = store.lookup_job(job.id) is not None
+            except Exception:  # unreadable store: let APScheduler's own path decide
+                exists = False
+            if not exists:
+                store = None
+        if store is None:
+            return super()._real_add_job(job, jobstore_alias, replace_existing)
+
+        def _conflict(conflicting_job):
+            raise ConflictingIdError(conflicting_job.id)
+
+        store.add_job = _conflict  # instance attribute shadows the method for this one call
+        try:
+            return super()._real_add_job(job, jobstore_alias, replace_existing)
+        finally:
+            store.__dict__.pop("add_job", None)
+
+
+def _build_scheduler(**kwargs):
+    """The configured scheduler class, looked up at call time, plus the replace mixin."""
+    return type("ReplaceExistingScheduler", (_ReplaceExistingMixin, AsyncIOScheduler), {})(**kwargs)
+
+
 def start_scheduler() -> AsyncIOScheduler:
     global _scheduler
     if _scheduler is not None:
         return _scheduler
 
     jobstore_url = _jobstore_url()
-    _scheduler = AsyncIOScheduler(
+    _scheduler = _build_scheduler(
         jobstores={"default": SQLAlchemyJobStore(url=jobstore_url)},
         job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 300},
         timezone="UTC",
