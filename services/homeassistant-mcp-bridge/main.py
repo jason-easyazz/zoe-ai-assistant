@@ -10,9 +10,11 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import httpx
 import json
+import logging
 import os
 import sys
 import asyncio
+import time
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -32,6 +34,55 @@ from ha_tool_names import (  # noqa: E402 — same directory as main.py (volume-
 )
 
 app = FastAPI(title="Zoe Home Assistant MCP Bridge", version="1.0.0")
+
+# -- Logging ------------------------------------------------------------------
+# 2026-10-04 container log review. Two defects made this container's log useless:
+#   1. 99.9% of it was access lines for the Docker healthcheck (GET /, every 30 s) and the
+#      zoe-data entity poll (GET /entities, ~every 10 s) -- 122 MB in weeks, all "200".
+#   2. The failures were INVISIBLE. /entities (and friends) catch the HTTPException raised
+#      by _make_request and answer HTTP 200 with {"error": ..., "status": ...}, so an expired
+#      HA token (401), an HA restart (503) or a timeout (408) left no trace here at all.
+# Fix: drop only SUCCESSFUL polls from the access log, and WARN (rate-limited) on every HA
+# failure at the one place they all pass through.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+log = logging.getLogger("zoe.ha_bridge")
+
+_QUIET_POLLS = frozenset({("GET", "/"), ("GET", "/entities")})
+
+
+class QuietPollAccessFilter(logging.Filter):
+    """Drop 2xx/3xx ``uvicorn.access`` records for the health + entity polls.
+
+    uvicorn's access record args are ``(client_addr, method, full_path, http_version,
+    status_code)``. Anything that does not look like that, or any status >= 400, passes.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            _client, method, full_path, _version, status = record.args  # type: ignore[misc]
+            path = str(full_path).split("?", 1)[0]
+            return not (int(status) < 400 and (str(method), path) in _QUIET_POLLS)
+        except (TypeError, ValueError):
+            return True
+
+
+logging.getLogger("uvicorn.access").addFilter(QuietPollAccessFilter())
+
+# One WARNING per (method, endpoint head, status) per interval, so an HA outage polled every
+# 10 s costs a handful of lines an hour instead of one per request.
+_FAILURE_LOG_INTERVAL_S = 60.0
+_failure_last_logged: Dict[tuple, float] = {}
+
+
+def _log_ha_failure(method: str, endpoint: str, status: int, reason: str) -> None:
+    key = (method.upper(), endpoint.split("/", 1)[0], status)
+    now = time.monotonic()
+    last = _failure_last_logged.get(key)
+    if last is not None and now - last < _FAILURE_LOG_INTERVAL_S:
+        return
+    _failure_last_logged[key] = now
+    log.warning("HA request failed: %s /api/%s -> %s (%s)", method.upper(), endpoint, status, reason)
+
 
 # Configuration
 HA_BASE_URL = os.getenv("HA_BASE_URL", "http://homeassistant:8123")
@@ -67,18 +118,22 @@ class HomeAssistantBridge:
                 if response.status_code == 200:
                     return response.json()
                 else:
+                    _log_ha_failure(method, endpoint, response.status_code, "non-200 from Home Assistant")
                     raise HTTPException(
                         status_code=response.status_code,
                         detail="Home Assistant request failed",
                     )
                     
             except httpx.TimeoutException:
+                _log_ha_failure(method, endpoint, 408, "timeout")
                 raise HTTPException(status_code=408, detail="Home Assistant request timeout")
             except httpx.ConnectError:
+                _log_ha_failure(method, endpoint, 503, "cannot connect")
                 raise HTTPException(status_code=503, detail="Cannot connect to Home Assistant")
             except HTTPException:
                 raise
             except Exception as e:
+                _log_ha_failure(method, endpoint, 500, type(e).__name__)
                 raise HTTPException(status_code=500, detail=f"Home Assistant API error: {str(e)}")
 
     async def _get_states_by_domain(self, domain: str) -> List[Dict]:

@@ -60,13 +60,47 @@ def get_scheduler() -> AsyncIOScheduler:
     return _scheduler
 
 
+class _ReplaceExistingMixin:
+    """Make ``add_job(..., replace_existing=True)`` idempotent WITHOUT a failed INSERT.
+
+    APScheduler implements replace_existing as "try the INSERT, catch ConflictingIdError,
+    then UPDATE". Against PostgreSQL the failed INSERT is logged by the SERVER as
+    ``ERROR: duplicate key value violates unique constraint "apscheduler_jobs_pkey"`` (plus
+    the whole pickled STATEMENT) on every zoe-data start for every standing job -- 21 such
+    ERRORs in one evening of restarts (2026-10-04 container log review), which buries a
+    real database error. Removing the existing row first makes the INSERT succeed, so the
+    log stays empty and the end state is identical: the job is replaced, with the trigger
+    and next_run_time recomputed exactly as the UPDATE path would.
+    """
+
+    def add_job(self, *args, **kwargs):  # noqa: D401 - signature mirrors APScheduler's
+        job_id = kwargs.get("id")
+        if kwargs.get("replace_existing") and job_id:
+            jobstore = kwargs.get("jobstore", "default")
+            try:
+                existing = self.get_job(job_id, jobstore=jobstore)
+            except Exception:  # an unreadable store falls back to APScheduler's own path
+                existing = None
+            if existing is not None:
+                try:
+                    self.remove_job(job_id, jobstore=jobstore)
+                except JobLookupError:
+                    pass  # raced with another remover: the INSERT below is still correct
+        return super().add_job(*args, **kwargs)
+
+
+def _build_scheduler(**kwargs):
+    """The configured scheduler class, looked up at call time, plus the replace mixin."""
+    return type("ReplaceExistingScheduler", (_ReplaceExistingMixin, AsyncIOScheduler), {})(**kwargs)
+
+
 def start_scheduler() -> AsyncIOScheduler:
     global _scheduler
     if _scheduler is not None:
         return _scheduler
 
     jobstore_url = _jobstore_url()
-    _scheduler = AsyncIOScheduler(
+    _scheduler = _build_scheduler(
         jobstores={"default": SQLAlchemyJobStore(url=jobstore_url)},
         job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 300},
         timezone="UTC",

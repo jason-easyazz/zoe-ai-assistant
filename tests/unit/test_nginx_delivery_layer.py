@@ -172,6 +172,33 @@ def test_deploy_probes_a_page_nginx_serves_itself_not_the_proxied_health():
     assert "https://localhost/health" not in step, "/health is proxied to zoe-data, which the next step may be restarting"
 
 
+def _poll_regex() -> "re.Pattern[str]":
+    block = CONF[CONF.index("map \"$status:$uri\" $zoe_log_access"):]
+    block = block[: block.index("}")]
+    pattern = re.search(r'"~(\^[^"]+)"\s+0;', block).group(1)
+    return re.compile(pattern)
+
+
+def test_successful_polls_skip_the_access_log_but_every_failure_is_still_logged():
+    # 2026-10-04 log review: ~100 lines/min of "200" poll noise from ONE panel buried the
+    # 502s that mattered. Only 2xx/304 on the closed poll list is skipped.
+    poll = _poll_regex()
+    assert poll.match("200:/api/ui/actions/pending")
+    assert poll.match("304:/api/panels/zoe-touch-pi/config")
+    assert not poll.match("502:/api/ui/actions/pending"), "a failed poll must stay in the log"
+    assert not poll.match("403:/api/ui/state/sync")
+    assert not poll.match("200:/api/auth/login"), "user actions are the audit trail"
+    assert not poll.match("200:/api/ui/actions/pending/extra"), "anchored, no prefix match"
+    assert not poll.match("200:/ws/push")
+    assert "default 1;" in CONF[CONF.index("$zoe_log_access"):]
+
+
+def test_both_servers_use_the_conditional_access_log():
+    assert CONF.count("access_log /var/log/nginx/access.log main if=$zoe_log_access;") == 2
+    # a bare second access_log at http scope would DOUBLE-log; locations must not override it
+    assert "access_log" not in LOCATIONS
+
+
 def _tool():
     import importlib.util
 
