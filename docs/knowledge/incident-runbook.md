@@ -8,6 +8,8 @@ timestamp: 2026-10-04T22:00:00+08:00
 description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and installed units drifting from their merged templates (unit_drift_check.py) with the 2026-10-04 evening log-review operator steps. Diagnose-fast patterns plus the prevention rules.
 tags: [incident, runbook, unit-drift, log-review, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness]
 timestamp: 2026-09-30T11:00:00+08:00
+
+timestamp: 2026-10-04T22:30:00+08:00
 ---
 
 # Production Incident Runbook
@@ -910,3 +912,66 @@ down for 5 minutes):
 Noise classes to NOT chase (router `W restored context checkpoint` = a cache hit; the
 two large probe re-prefills; red-then-green `replay-evidence`; probe EMPTY flapping 0-2) are
 listed in [log-review-units-2026-10-04.md](log-review-units-2026-10-04.md) sections 2 and 3.
+
+## 25. Reviewing Docker logs without drowning, and bounding them (2026-10-04)
+
+Evidence and per-container inventory: [log-review-docker-2026-10-04.md](log-review-docker-2026-10-04.md).
+The sizing tables, apply and rollback commands for log rotation and memory caps already exist in
+[docker-log-and-memory-limits.md](docker-log-and-memory-limits.md); this entry is the signature,
+the safe read recipe and the current state, not a second copy of that recipe.
+
+**Signatures**
+
+- `docker logs <c>` hangs or prints thousands of lines: the container's json log is unbounded
+  (`docker inspect -f '{{.HostConfig.LogConfig}}' <c>` prints `{json-file map[]}`). Never dump it;
+  always `--since <iso>` and pipe through `grep`/`sort | uniq -c | sort -rn | head`.
+- Postgres `ERROR: duplicate key value violates unique constraint "apscheduler_jobs_pkey"` (three job
+  ids, once per zoe-data start) was APScheduler's `replace_existing` doing INSERT-then-UPDATE. Fixed in
+  `proactive/scheduler.py`; if it reappears after a zoe-data restart, a new code path is adding jobs
+  around `get_scheduler().add_job` (check it passes `id=` and `replace_existing=True`).
+- A `502` burst in `zoe-ui` with `connect() failed (111)` to `172.17.0.1:8000` is zoe-data restarting, not
+  nginx. Count the bursts against zoe-data restarts before touching the proxy.
+- `homeassistant-mcp-bridge` answering **200 with an `error` body** is how an HA failure looks: the
+  bridge now logs one `HA request failed: <METHOD> /api/<path> -> <status>` WARNING per minute per
+  class. Silence in this container is only meaningful after that change is deployed.
+- `Error loading provider(instance) ytmusic--...: User does not have Youtube Music Premium (will be
+  retried later)` every two minutes, plus yt-dlp `account cookies are no longer valid`: the YouTube
+  Music login expired. Section 10 is the fix (panel Music -> Browse -> Sources -> Reconnect -> QR).
+- `zoe-ui-test` (or any `zoe-*-test`) with a bind mount under `.claude/worktrees/...` is an agent
+  session's throwaway preview, not an estate service. Leave it while that session is live;
+  `docker rm -f` it afterwards.
+
+**State at 2026-10-04 22:00 AWST**
+
+- `/etc/docker/daemon.json` already holds `log-opts` 10m x 3 and `dockerd` was restarted at 14:35 AWST
+  (everything bounced; Home Assistant logged an unclean shutdown). **Do not restart dockerd again for
+  logs.** The daemon default applies to every container created from now on.
+- Bounded today: `zoe-ui`, `zoe-auth` (re-created after 14:35). Still `{json-file map[]}`: the other
+  ten. Compose now also carries the cap on all 13 services (pinned by
+  `tests/unit/test_compose_loopback_binds.py`), so a re-create from compose is bounded even if the
+  daemon file is ever lost.
+- No container has a memory cap (`memory.max` is `max` everywhere, all `oom_kill` counters are 0).
+
+**Operator steps (a window action; each is a re-create, none is urgent)**
+
+1. Re-create the stateless containers first, one at a time, with the compose file set and profile they
+   were created with (read it from the container's `com.docker.compose.project.config_files` label):
+   `docker compose -f <files> [--profile <p>] up -d --no-deps --force-recreate <service>` for
+   `homeassistant-mcp-bridge` (also picks up the F3 log fix, no rebuild needed), `zoe-ytmusic-potoken`,
+   `zoe-multica-web`, `zoe-multica-backend`, `zoe-cloudflared`, then `zoe-smb-drop`.
+2. `homeassistant`, `zoe-multica-web` and `zoe-smb-drop` were created by `docker run` per the audit: a
+   compose file cannot reach them; they pick the cap up on a hand re-create.
+3. `zoe-music-assistant`: re-create only together with the YouTube Music reconnect (section 10), because
+   MA restarts carry the re-auth risk and the provider is already down.
+4. `zoe-database` and `zoe-omnigent`: leave until the Postgres/B0.12 window and the omnigent measurement
+   respectively; both are exempt from memory caps in the audit.
+5. After each: `docker inspect -f '{{.HostConfig.LogConfig}}' <c>` must print
+   `{json-file map[max-file:3 max-size:10m]}` and `curl -fsS` the service's health.
+6. Memory caps: apply the `docker update --memory ... --memory-swap ...` block from
+   docker-log-and-memory-limits.md exactly as written (live, no restart). It is unchanged by this review.
+7. Disk hygiene (optional, 23% used): `docker builder prune --filter until=168h` (6.7 GB reclaimable) and
+   `docker container prune` after confirming the four stale exited containers are unwanted.
+
+**Home Assistant UI actions** (state is in `/config/.storage`, not the repo): remove or repair the
+ESPHome entry whose host:6053 refuses connections; renew the Tuya IoT Core subscription or move
+localtuya to local-only (its cloud fallback is logging error 28841002).
