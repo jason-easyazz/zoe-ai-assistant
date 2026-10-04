@@ -263,6 +263,18 @@ def _message_owner_users_sql(*, today_only: bool, lookback_hours: int | None = N
         WHERE owner.user_id IS NOT NULL
         """
 
+def _shared_rules() -> str:
+    """The date-order + no-guessed-roles lines every fact-extraction prompt carries
+    (date_locale.PROMPT_RULE, people_roles.PROMPT_RULES) — one source, so the turn digest,
+    the nightly digest and the idle consolidation cannot drift apart."""
+    from date_locale import PROMPT_RULE
+    from people_roles import PROMPT_RULES
+
+    return f"{PROMPT_RULE}\n{PROMPT_RULES}\n"
+
+
+_SHARED_RULES = _shared_rules()
+
 _EXTRACTION_PROMPT = """\
 You are extracting personal facts from a chat transcript. Only extract facts the user explicitly stated about themselves, their family, preferences, or life. Do NOT infer, assume, or add anything not stated directly.
 
@@ -272,6 +284,7 @@ Return ONLY a JSON array (no preamble, no explanation). Each item has:
 
 If nothing personal was stated, return: []
 
+""" + _SHARED_RULES + """
 Chat messages (user turns only):
 {chat_text}
 """
@@ -334,6 +347,7 @@ If the user names a person AND says something is happening with them (a trip, vi
 
 If nothing personal was stated, return: []
 
+""" + _SHARED_RULES + """
 User said: {user_message}
 """
 
@@ -484,7 +498,12 @@ async def run_turn_digest(
         from memory_service import get_memory_service, MemoryServiceError  # type: ignore[import]
         svc = get_memory_service()
 
-        prompt = _TURN_EXTRACTION_PROMPT.format(user_message=user_message[:600])
+        # Numeric dates become words (household day-first order) before the model reads
+        # them — its default is month-first ("7/8/1991" -> "July 8"). The stored
+        # evidence excerpt below stays the user's verbatim words.
+        from date_locale import normalize_numeric_dates
+        prompt = _TURN_EXTRACTION_PROMPT.format(
+            user_message=normalize_numeric_dates(user_message)[:600])
         payload = {
             "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
             "messages": [
@@ -596,6 +615,16 @@ async def run_turn_digest(
                 if user_relationship_claim_unsupported(fact, user_message):
                     result["skipped_low_quality"] += 1
                     logger.info("run_turn_digest: dropped unsupported user-anchored relationship: %r", fact[:70])
+                    continue
+            except Exception:
+                pass
+            # Roles are stated, never guessed from a name (people_roles.py): "Casey is the
+            # wife" is kept only when the user's own words put Casey and "wife" together.
+            try:
+                from people_roles import named_role_claim_unsupported
+                if named_role_claim_unsupported(fact, user_message):
+                    result["skipped_low_quality"] += 1
+                    logger.info("run_turn_digest: dropped unstated role claim: %r", fact[:70])
                     continue
             except Exception:
                 pass
@@ -1004,7 +1033,8 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
             "extraction; dropped %d tail chars (may lose late-conversation facts)",
             len(chat_text) - 3000,
         )
-    prompt = _EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
+    from date_locale import normalize_numeric_dates
+    prompt = _EXTRACTION_PROMPT.format(chat_text=normalize_numeric_dates(chat_text)[:3000])
     payload = {
         "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [

@@ -152,6 +152,39 @@ Skybridge card system is:
 4. Actions wired via `data-sky-action`: **Add** = `query` (→ `/api/skybridge/resolve` → server-side
    `people_create`, never trusted from the client); **Not now** = a new client-only `dismiss`.
 
+## Dates, corrections and roles (2026-10-04 — three conversation-quality classes)
+
+Three classes: a numeric date such as `7/8/1991` must read as 7 August in an Australian
+household; a correction such as "that date is wrong" or "X is their dog" must update the stored
+record; a list of names with no stated roles must not be assigned roles.
+
+- **Day-first dates, one helper** — `services/zoe-data/date_locale.py` decides what a numeric date
+  means (household order from `ZOE_TIMEZONE`; `ZOE_DATE_ORDER=dmy|mdy` overrides). Every reader goes
+  through it: `person_extractor._parse_birthday`/`process_text`, `person_extractor_llm`,
+  `memory_extractor.extract_candidates`, `memory_digest` (turn + nightly prompts, so idle consolidation
+  too), the reminder grammar (`intent_router._parse_explicit_date`), `nlu_extractor`, and the brain's
+  turn (`zoe_flue_client._day_first_hint`, only on a turn that carries a numeric date). Unflagged.
+  A year-less `a/b` is rewritten only after a date cue (`born`, `due`, `on`, a weekday/month word) and never
+  for idioms (`24/7`, `16/9`, `4/3`) or fractions; a 2-digit year is a past year for birthdays and the nearest
+  future year for reminders; `US date: 7/8/1991` / `(US)` marks one month-first token; the brain hint is
+  switchable with `ZOE_DATE_HINT` (default ON, numeric-date turns only). ISO and written months are untouched.
+- **Roles are stated, never guessed** — `people_roles.py`: a fact giving NAME a role is kept only when the
+  user's own line ties that name to that role (`named_role_claim_unsupported`, applied in
+  `person_extractor_llm`, `memory_digest.run_turn_digest`, and the contact-offer detector); every
+  extraction prompt carries the rule (and "a pet is never a child"). Unflagged precision fix.
+  `ZOE_ROSTER_NEUTRAL_ASK` (flag-dark) answers a pasted `Name - date` list with no roles by restating names
+  and dates and asking one question ("which one is your friend?"). A list needs person-like evidence (a date of birth on 2+ lines, or family words) —
+  shopping lists, recipes and chores are not rosters.
+- **Corrections reach the record** — `correction_apply.py`, flag-dark `ZOE_CORRECTION_APPLY`, reached from
+  `fast_tiers.resolve` (web chat, Telegram, LiveKit; not the panel voice turn). "The date is wrong"
+  re-reads the user's latest message carrying an ambiguous numeric date day-first and supersedes every
+  stored row that holds the raw digits or the month-first rendering (`MemoryService.review(edit)`), plus
+  `person_important_dates`; "X is their dog" sets `people.relationship = "pet dog"`, turns X's
+  parent/sibling edges into the new `pet` edge type (`RELATIONSHIP_TYPES["pet"]`), rewrites stored facts that
+  call X a child and stores "X is a pet dog, not a child." It acts only when it finds a stored row to
+  fix, and the reply states the change ("Fixed: … is 7 August 1991.").
+- Bar scenarios S20 (dates, a real gate), S21 and S22 (flag-dark targets) in [samantha-bar.md](samantha-bar.md).
+
 ## Cleanup
 
 Test contacts accumulate in the live `people` table under synthetic `zoe-*` user_ids.

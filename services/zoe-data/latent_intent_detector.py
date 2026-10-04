@@ -42,7 +42,9 @@ _PERSON_HINT = (
     'For "person_create": the user mentions a specific named person (a friend, '
     "family member, or colleague) Zoe could add as a contact. Use "
     'pre_filled_slots {"name": "<their name>", "relationship": "<relationship or empty>"}. '
-    "Only a real proper name — never a pronoun (he/she/they) or generic word.\n"
+    "Only a real proper name — never a pronoun (he/she/they) or generic word. "
+    "Never infer the relationship from the name or from a list's order: leave it empty "
+    "unless the user said it about that person.\n"
 )
 
 
@@ -177,6 +179,15 @@ async def detect(
             relationship = (
                 slots.get("relationship") or item.get("relationship") or ""
             ).strip()
+            # Roles are stated, never guessed (people_roles.py): a relationship the
+            # user's own text never ties to this name is dropped to unknown (empty).
+            try:
+                from people_roles import value_role_unsupported
+                if relationship and value_role_unsupported(
+                        name, relationship, text, family_only=True):
+                    relationship = ""
+            except Exception:
+                pass
             new_slots = {"name": name}
             if relationship:
                 new_slots["relationship"] = relationship

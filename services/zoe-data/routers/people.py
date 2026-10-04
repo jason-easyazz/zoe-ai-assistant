@@ -76,9 +76,15 @@ RELATIONSHIP_TYPES: dict[str, list[tuple[str, str, str]]] = {
         ("mentor",      "Mentor",       "Mentee"),
         ("client",      "Client",       "Provider"),
     ],
+    # A pet is not a child: "Biscuit is their dog" sets this edge so no summary that
+    # enumerates the children lists them (correction_apply). person_a = the pet,
+    # person_b = the owner; label_a_to_b is what b is to a, as in "family".
+    "pet": [
+        ("pet",         "Pet owner",    "Pet"),
+    ],
 }
 # Groups whose members imply context='personal' vs 'work'
-_PERSONAL_GROUPS = {"love", "family", "friend"}
+_PERSONAL_GROUPS = {"love", "family", "friend", "pet"}
 _WORK_GROUPS = {"work"}
 
 

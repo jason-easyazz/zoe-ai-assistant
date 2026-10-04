@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-515 flags; 513 not documented in `.env.example`.
+519 flags; 517 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -109,10 +109,13 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_CORE_PROVIDER` | `'local-gemma'` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_TIMEOUT_S` | `'180'` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_VOICE_MODEL_MAXTOKENS` | `'512'` | no | NO | `services/zoe-data/zoe_core_client.py` |
+| `ZOE_CORRECTION_APPLY` | `False` | yes | NO | `services/zoe-data/correction_apply.py` |
 | `ZOE_DAILY_BRIEFING_CACHE_MAX_USERS` | `'64'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS` | `'120'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DATA_DB` | `dynamic` | no | NO | `services/zoe-data/database.py` |
 | `ZOE_DATA_URL` | `'http://127.0.0.1:8000'`, `-` | no | NO | `scripts/maintenance/check_emotional_thread.py`<br>`scripts/maintenance/zoe-nightly-dreaming.py`<br>`scripts/perf/samantha_bar.py`<br>`services/zoe-data/zoe_core_client.py` |
+| `ZOE_DATE_HINT` | `True` | yes | NO | `services/zoe-data/zoe_flue_client.py` |
+| `ZOE_DATE_ORDER` | `-` | no | NO | `services/zoe-data/date_locale.py` |
 | `ZOE_DB_ACQUIRE_TIMEOUT_S` | `''` | no | NO | `services/zoe-data/db_pool.py` |
 | `ZOE_DB_CONTAINER` | `'zoe-database'` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
 | `ZOE_DEFAULT_MEDIA_PLAYER` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
@@ -409,6 +412,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_RIG_NOVNC_PORT` | `'6080'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_USER_AGENT` | `-` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_VNC_PORT` | `'5900'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
+| `ZOE_ROSTER_NEUTRAL_ASK` | `False` | yes | NO | `services/zoe-data/fast_tiers.py` |
 | `ZOE_ROUTER_ARCHIVE_KEEP` | `'3'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_BASE_HF` | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_ENABLED` | `'1'` | no | NO | `services/zoe-data/semantic_router.py` |

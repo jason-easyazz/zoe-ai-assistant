@@ -65,7 +65,8 @@ to need most from this relationship
 Write 250-400 words as flowing paragraphs. Be specific, warm, and honest. \
 Write as if you are briefing a dear friend who is about to have a meaningful \
 conversation with this person. Do not list raw facts back — synthesize them \
-into real understanding.
+into real understanding. Never guess a person's gender or family role from their \
+name, and never count a pet as one of someone's children.
 
 [MEMORY FACTS — extracted from their conversations]:
 {memory_facts}

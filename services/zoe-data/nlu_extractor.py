@@ -24,9 +24,11 @@ _MODEL_NAME: str = "gemma-4-E4B-it-qat-UD-Q4_K_XL"
 
 def _today_prefix() -> str:
     today = datetime.date.today()
+    from date_locale import PROMPT_RULE
     return (
         f"Today is {today.strftime('%A, %B %-d, %Y')}. "
-        "If the date is not stated, default to today."
+        "If the date is not stated, default to today. "
+        f"{PROMPT_RULE}"
     )
 
 
