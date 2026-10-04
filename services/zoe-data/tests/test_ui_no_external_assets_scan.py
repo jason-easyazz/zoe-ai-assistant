@@ -264,7 +264,7 @@ def test_scan_ignores_inline_js_url_assignment():
 # scan above would be the only thing standing in its way. Dropping the origins
 # means the browser refuses, whatever a page asks for.
 # --------------------------------------------------------------------------- #
-_NGINX_CONF = Path(__file__).resolve().parents[2] / "zoe-ui" / "nginx.conf"
+_NGINX_CONF = Path(__file__).resolve().parents[2] / "zoe-ui" / "nginx.d" / "security-headers.inc"   # the ONE CSP copy
 
 # Origins that must never reappear in a CSP directive. youtube.com is
 # deliberately absent: video embeds are a real, in-use feature.
@@ -280,7 +280,7 @@ def _csp_headers() -> list[str]:
 
 def test_nginx_conf_has_csp_headers_to_check():
     # Guard against the scan silently passing because the regex stopped matching.
-    assert len(_csp_headers()) >= 5, "expected the known CSP headers in nginx.conf"
+    assert len(_csp_headers()) >= 1, "expected the CSP header in nginx.d/security-headers.inc"
 
 
 @pytest.mark.parametrize("origin", _FORBIDDEN_CSP_ORIGINS)
@@ -292,8 +292,17 @@ def test_csp_does_not_permit_cdn_origins(origin):
     )
 
 
-def test_csp_still_allows_youtube_embeds():
-    # Negative control: the tightening must not have been a blanket strip.
-    assert all("www.youtube.com" in h for h in _csp_headers()), (
-        "youtube.com was removed from a CSP header — video embeds are in use"
+def test_csp_does_not_allow_youtube():
+    # Removed 2026-10-04 (UI deep review, wave 2): there are no YouTube embeds in
+    # dist/ (grep: only prose in setup-music.html), and the YT Music sign-in iframe
+    # loads a plain-http noVNC view (ytmusic_signin._view_url) that frame-src never
+    # permitted either way. The allowance lived only in nginx.conf — the audit tool's
+    # SECURITY_HEADERS never had it — so it was drift, not a feature.
+    assert all("youtube" not in h for h in _csp_headers()), (
+        "youtube.com crept back into the CSP — there is nothing in dist/ that needs it"
     )
+
+
+def test_csp_has_no_unsafe_eval():
+    # Nothing in first-party, lib/ or workbox/ uses eval()/new Function() (grep 2026-10-04).
+    assert all("'unsafe-eval'" not in h for h in _csp_headers())

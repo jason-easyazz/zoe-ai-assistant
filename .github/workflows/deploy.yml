@@ -332,6 +332,39 @@ jobs:
           echo "zoe-auth failed health check after restart"
           exit 1
 
+      - name: Restart zoe-ui / nginx (if changed)
+        run: |
+          cd /home/zoe/assistant
+          # nginx.conf is a single-FILE bind mount pinned to an inode: a git sync REPLACES the
+          # file, so the running master keeps serving the OLD config and `nginx -s reload`
+          # re-reads the old inode too (measured 2026-10-04 — md5 differed in/out of the
+          # container after #1822 landed). Only a container restart re-binds the mount.
+          # nginx.d/ is a directory mount (opened by path) but its contents change with the
+          # same PRs, so it rides the same restart. docker-compose.yml changes (ports,
+          # mounts) need `up -d` to RECREATE; `up -d` alone does nothing for an unchanged
+          # container, hence the explicit restart after it.
+          if [ -n "${OLD_SHA:-}" ] \
+             && git diff --quiet "${OLD_SHA}" HEAD -- services/zoe-ui/nginx.conf services/zoe-ui/nginx.d docker-compose.yml; then
+            echo "zoe-ui nginx config unchanged since ${OLD_SHA} — no restart needed."
+            exit 0
+          fi
+          # Pre-flight the NEW files in a throwaway container (the live one still holds the
+          # old inode, so `docker exec zoe-ui nginx -t` would test the OLD config).
+          docker run --rm --add-host zoe-auth:127.0.0.1 --add-host host.docker.internal:127.0.0.1 \
+            -v "$PWD/services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
+            -v "$PWD/services/zoe-ui/nginx.d:/etc/nginx/zoe:ro" \
+            -v "$PWD/ssl:/etc/nginx/ssl:ro" \
+            nginx:alpine nginx -t
+          docker compose up -d --no-deps zoe-ui
+          docker restart zoe-ui
+          for attempt in {1..12}; do
+            curl -skf https://localhost/health > /dev/null && { echo "zoe-ui serving the new config."; exit 0; }
+            sleep 3
+          done
+          docker logs --tail=40 zoe-ui
+          echo "::error::zoe-ui unhealthy after nginx restart."
+          exit 1
+
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.
       - name: Restart zoe-data (user service)

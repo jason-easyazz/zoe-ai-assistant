@@ -28,10 +28,11 @@ SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
         # compatibility. Keep this explicit so future security audits can tighten it.
         # Zoe also proxies operator-configurable local voice/LiveKit websocket
         # endpoints whose hostnames/ports are not stable enough to enumerate here.
-        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
-        "style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
-        "font-src 'self'; connect-src 'self' ws: wss: http://localhost:7777 http://127.0.0.1:8765; "
-        "frame-ancestors 'self';",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; "
+        "media-src 'self' blob: data:; font-src 'self'; "
+        "connect-src 'self' ws: wss: http://localhost:7777 http://127.0.0.1:8765; "
+        "frame-src 'self'; frame-ancestors 'self';",
     ),
     ("X-Frame-Options", "SAMEORIGIN"),
     ("X-Content-Type-Options", "nosniff"),
@@ -39,6 +40,21 @@ SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
     ("Permissions-Policy", "camera=(), microphone=(self), geolocation=()"),
 )
 HSTS_HEADER = ("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+# The live conf no longer carries literal header blocks: both server blocks (and every
+# location that sets add_header) `include` ONE snippet, services/zoe-ui/nginx.d/
+# security-headers.inc, whose CSP must equal SECURITY_HEADERS above (pinned by
+# tests/unit/test_nginx_delivery_layer.py). A block carrying that include is managed.
+SNIPPET_INCLUDE = "include /etc/nginx/zoe/security-headers.inc;"
+
+
+def _has_snippet_include(block: str) -> bool:
+    for line in block.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if stripped == SNIPPET_INCLUDE:
+            return True
+    return False
 TLS_LISTEN_RE = re.compile(r"^\s*listen\b[^;]*\b(?:443|ssl)\b", re.MULTILINE)
 SSL_CERTIFICATE_RE = re.compile(r"^\s*ssl_certificate\b", re.MULTILINE)
 
@@ -237,7 +253,12 @@ def ensure_headers(text: str) -> str:
     cursor = 0
     for start, end in blocks:
         result.append(text[cursor:start])
-        block = _strip_managed_block(text[start:end])
+        block = text[start:end]
+        if _has_snippet_include(block):
+            result.append(block)
+            cursor = end
+            continue
+        block = _strip_managed_block(block)
         include_hsts = _is_tls_block(block)
         block = _insert_after_header(block, include_hsts=include_hsts)
         block = _insert_location_headers(block, include_hsts=include_hsts)
@@ -258,12 +279,13 @@ def missing_headers(text: str) -> list[str]:
         location_blocks = _find_named_blocks(block, "location")
         first_location_start = min((loc_start for loc_start, _loc_end in location_blocks), default=len(block))
         server_scope = block[:first_location_start]
-        for name, _value in headers:
-            if not _has_active_header(server_scope, name):
-                missing.append(f"server[{index}]: {name}")
+        if not _has_snippet_include(server_scope):
+            for name, _value in headers:
+                if not _has_active_header(server_scope, name):
+                    missing.append(f"server[{index}]: {name}")
         for location_index, (loc_start, loc_end) in enumerate(location_blocks, start=1):
             location = block[loc_start:loc_end]
-            if not _has_active_add_header(location):
+            if not _has_active_add_header(location) or _has_snippet_include(location):
                 continue
             for name, _value in headers:
                 if not _has_active_header(location, name):
