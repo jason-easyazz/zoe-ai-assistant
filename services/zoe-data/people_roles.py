@@ -50,8 +50,9 @@ _ROLE_ALT = (
 _ROLE_RE = re.compile(rf"\b({_ROLE_ALT})s?\b", re.IGNORECASE)
 
 # NAME is the holder of the role in the fact: "Casey is the wife", "Casey is Tom's
-# wife", "Casey: wife of Tom", "Casey (wife)". "Tom's wife" alone names the OWNER, not
-# a holder, so it is deliberately not a claim here.
+# wife", "Casey: wife of Tom", "Casey (wife)", "Tom's wife is Casey", "my wife is Casey",
+# "Casey, my wife". "Tom's wife" alone names the OWNER, not a holder, so it is not a claim.
+_OWNER = rf"(?:{_NAME}|my|his|her|their|our)"
 _CLAIM_RES = (
     re.compile(
         rf"\b(?P<n>{_NAME})\s+(?:is|was|are|were)\s+(?:(?:the|a|an|his|her|their|my|our|user's|"
@@ -59,6 +60,14 @@ _CLAIM_RES = (
     ),
     re.compile(rf"^\s*(?P<n>{_NAME})\s*:\s*(?:\w+\s+){{0,2}}(?P<r>{_ROLE_ALT})s?\b"),
     re.compile(rf"\b(?P<n>{_NAME})\s*\(\s*(?:\w+\s+)?(?P<r>{_ROLE_ALT})s?\s*\)"),
+    re.compile(
+        rf"\b{_OWNER}(?:'s)?\s+(?:\w+\s+)?(?P<r>{_ROLE_ALT})s?\s+(?:is|was|are|were)\s+"
+        rf"(?:named\s+|called\s+)?(?P<n>{_NAME})\b"
+    ),
+    re.compile(
+        rf"\b(?P<n>{_NAME}),?\s+(?:who\s+is\s+)?(?:my|his|her|their|our)\s+(?:\w+\s+)?"
+        rf"(?P<r>{_ROLE_ALT})s?\b"
+    ),
 )
 
 
@@ -67,7 +76,9 @@ def role_claims(fact: str) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for rx in _CLAIM_RES:
         for m in rx.finditer(fact or ""):
-            out.append((m.group("n"), m.group("r").lower()))
+            claim = (m.group("n"), m.group("r").lower())
+            if claim not in out:
+                out.append(claim)
     return out
 
 
@@ -77,35 +88,64 @@ def _variants(role: str) -> frozenset[str]:
     return _role_variants(role)
 
 
-_CAP_TOKEN = re.compile(r"\b[A-Z][a-z]{1,30}\b")
-_NEAR = 4  # tokens between a name and its role inside a name list
+_NEAR = 4  # tokens between a name and its role when they sit side by side
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
-def _name_hits(line: str, name: str) -> list[int]:
-    tokens = re.findall(r"[A-Za-z']+", line.lower())
-    first = name.split()[0].lower()
-    return [i for i, t in enumerate(tokens) if t == first]
+def _sentences(text: str) -> list[str]:
+    return [x for x in _SENT_SPLIT.split(text or "") if x.strip()]
+
+
+_POSSESSIVES = frozenset({"my", "his", "her", "their", "our"})
+_BREAKS = frozenset({"and", "or", "but", ";"})
+
+
+def _adjacent(raw: list[str], tokens: list[str], i: int, j: int) -> bool:
+    """Name at ``i`` and role at ``j`` sit side by side: a few words apart with no list
+    separator, another name or conjunction between them ("my friend Jordan", "Casey is the
+    wife", "Jordan, my friend"). "wife and Riley" or "Casey, Riley" do not qualify."""
+    lo, hi = sorted((i, j))
+    between = tokens[lo + 1: hi]
+    if hi - lo > _NEAR or any(t in _BREAKS for t in between):
+        return False
+    if any(w[:1].isupper() and w.lower() not in ("i",) for w in raw[lo + 1: hi]):
+        return False  # another name sits between them
+    if "," in between:
+        return between[0] == "," and (len(between) == 1 or between[1] in _POSSESSIVES) and len(between) <= 3
+    return True
 
 
 def role_assignment_supported(name: str, role: str, source_text: str) -> bool:
     """Did the user's own text put ``name`` and ``role`` together?
 
-    Same LINE; and when the line is a list of names (3+ capitalised words) the two must
-    also sit within a few words of each other, so "a partner and two children: Ann, Bo, Cy"
-    assigns nothing."""
+    Same SENTENCE (a line break ends one), and linked: the two side by side
+    ("my friend Jordan", "Jordan, my friend"), or the name followed by "is ... <role>"
+    ("Casey, who I married in Perth on Saturday, is my wife"), or the role followed by
+    "name is / called <name>" ("my wife is a nurse at the hospital and her name is Casey").
+    An intro line that merely mentions "a partner and two children" followed by names on
+    other lines, or a name list after it, assigns nothing."""
     variants = {v.lower() for v in _variants(role.lower())}
-    for line in (source_text or "").splitlines():
-        tokens = re.findall(r"[A-Za-z']+", line.lower())
-        hits = _name_hits(line, name)
-        if not hits:
-            continue
+    role_alt = "|".join(sorted((re.escape(v) for v in variants), key=len, reverse=True))
+    first = re.escape(name.split()[0])
+    first_l = name.split()[0].lower()
+    for sent in _sentences(source_text):
+        raw = re.findall(r"[A-Za-z']+|[,;]", sent)
+        tokens = [t.lower() for t in raw]
+        hits = [i for i, t in enumerate(tokens) if t == first_l]
         roles = [i for i, t in enumerate(tokens)
                  if t in variants or (t.endswith("s") and t[:-1] in variants)]
-        if not roles:
+        if not hits or not roles:
             continue
-        if len(_CAP_TOKEN.findall(line)) < 3:
+        if any(_adjacent(raw, tokens, h, r) for h in hits for r in roles):
             return True
-        if any(abs(h - r) <= _NEAR for h in hits for r in roles):
+        # name [, who ... ,] is [up to 3 words] role — the verb must follow the name within its
+        # own clause (no comma/"and" between), so "Jordan is my friend, Casey is the wife"
+        # does not make Jordan a wife.
+        if re.search(rf"\b{first}\b(?:\s*,\s*who\b[^.!?\n,]*,)?[\w'\u2019 ]{{0,30}}?\b(?:is|was|are|were)\s+"
+                     rf"(?:[\w'\u2019]+\s+){{0,3}}(?:{role_alt})s?\b", sent, re.IGNORECASE):
+            return True
+        if re.search(rf"\b(?:{role_alt})s?\b[^.!?\n]*?\b(?:name|called|named)\s+(?:is\s+)?{first}\b",
+                     sent, re.IGNORECASE):
             return True
     return False
 
@@ -163,10 +203,41 @@ def roster_entries(text: str) -> list[tuple[str, str]]:
     return out
 
 
+_MONTH_ALT = "|".join(m.lower() for m in
+                      ("January", "February", "March", "April", "May", "June", "July", "August",
+                       "September", "October", "November", "December")) + "|jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec"
+_WRITTEN_DATE_RE = re.compile(
+    rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{_MONTH_ALT})\b|\b(?:{_MONTH_ALT})\s+\d{{1,2}}(?:st|nd|rd|th)?\b",
+    re.IGNORECASE)
+_QUANTITY_RE = re.compile(
+    r"[\d./\s]+(?:g|kg|ml|l|cups?|tsp|tbsp|x|pcs?|loaf|loaves|dozen|litres?|liters?|packs?|"
+    r"tins?|cans?|bottles?|bags?|boxes|box)?\.?", re.IGNORECASE)
+_PERSON_WORDS_RE = re.compile(
+    r"\b(?:wife|husband|kids?|children|family|friends?|partner|son|daughter|girls|boys|parents?|"
+    r"brother|sister|mum|mom|dad)\b", re.IGNORECASE)
+
+
+def _is_dob(rest: str) -> bool:
+    """A date of birth: a numeric date WITH a year, or a written day+month."""
+    from date_locale import parse_numeric_date
+
+    nd = parse_numeric_date(rest)
+    return bool((nd and nd.year) or _WRITTEN_DATE_RE.search(rest or ""))
+
+
 def is_unlabelled_roster(text: str) -> bool:
-    """3+ ``Name - detail`` lines and NO name tied to a role anywhere in the message."""
-    entries = roster_entries(text)
+    """A pasted list of PEOPLE with no name tied to a role anywhere in the message.
+
+    Person-like evidence is required — a shopping list or a recipe ("Milk - 2", "Flour -
+    200g") is not a roster: entries whose detail is only a quantity are ignored, and the
+    rest must be 3+ lines with a date of birth on at least 2 of them, or family words
+    (wife, kids, family, friend...) in the message."""
+    entries = [(n, r) for n, r in roster_entries(text)
+               if _is_dob(r) or not _QUANTITY_RE.fullmatch(r.strip())]
     if len(entries) < 3:
+        return False
+    dobs = sum(1 for _n, r in entries if _is_dob(r))
+    if dobs < 2 and not _PERSON_WORDS_RE.search(text):
         return False
     for name, _rest in entries:
         for role in {m.group(1).lower() for m in _ROLE_RE.finditer(text)}:

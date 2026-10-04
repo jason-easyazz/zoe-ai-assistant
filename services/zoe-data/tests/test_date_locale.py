@@ -188,3 +188,77 @@ async def test_person_llm_prompt_shows_the_model_words_not_digits(monkeypatch):
     await pel.process_text_llm("Pat Brown, his birthday is 7/8/1991 and he lives nearby",
                                user_id="demo-dates")
     assert "7 August 1991" in sent["prompt"] and "7/8/1991" not in sent["prompt"].split("Text:")[1]
+
+
+# ═══ review round 1 (#1860): one test per finding ═══════════════════════════════
+
+# 1. a year-less a/b is a date only after a date cue, never an everyday idiom
+@pytest.mark.parametrize("text", [
+    "we are open 24/7", "a 16/9 aspect ratio", "a 4/3 screen", "call 22/7 and ask", "pi is about 22/7",
+    "the score was 5/20", "add 1/2 cup of sugar", "from 3/4 of them", "from 24/7 support",
+])
+def test_yearless_idioms_and_ratios_are_left_alone(text):
+    assert dl.normalize_numeric_dates(text) == text
+    assert dl.find_numeric_dates(text) == []
+    assert dl.day_first_hint(text) == ""  # and the brain hint stays silent too
+
+
+@pytest.mark.parametrize("text, expect", [
+    ("born 7/8", "born 7 August"),
+    ("his birthday is 26/10", "his birthday is 26 October"),
+    ("due 7/8", "due 7 August"),
+    ("see you on Saturday 26/10", "see you on Saturday 26 October"),
+    ("the party is until 7/8", "the party is until 7 August"),
+])
+def test_yearless_dates_with_a_cue_are_rewritten(text, expect):
+    assert dl.normalize_numeric_dates(text) == expect
+
+
+def test_yearless_idiom_is_not_rescued_by_a_cue():
+    assert dl.normalize_numeric_dates("on 24/7 support") == "on 24/7 support"
+
+
+# 2. a two-digit year follows its PURPOSE
+def test_reminder_two_digit_year_is_the_nearest_future_not_the_past():
+    import datetime
+    from intent_router import _parse_date
+
+    today = datetime.date(2026, 10, 5)
+    assert _parse_date("5/11/27", today=today) == "2027-11-05"
+    assert dl.parse_numeric_date("5/11/27", purpose="future").year == 2027
+    assert dl.parse_numeric_date("5/11/99", purpose="future").year == 1999  # >50 years ahead wraps back
+    assert dl.parse_numeric_date("5/11/91").year == 1991                     # a birthday: the past
+
+
+def test_free_text_two_digit_year_uses_its_cue():
+    assert dl.normalize_numeric_dates("remind me on 5/11/27") == "remind me on 5 November 2027"
+    assert dl.normalize_numeric_dates("born 5/11/91") == "born 5 November 1991"
+
+
+# (b) US-marked dates, ranges, hint wording
+def test_a_pasted_us_date_is_read_month_first():
+    assert dl.normalize_numeric_dates("US date: 7/8/1991") == "US date: 8 July 1991"
+    assert dl.normalize_numeric_dates("7/8/1991 (US)") == "8 July 1991 (US)"
+    assert dl.normalize_numeric_dates("American style 7/8/1991") == "American style 8 July 1991"
+    assert dl.normalize_numeric_dates("born 7/8/1991") == "born 7 August 1991"  # control: unmarked
+
+
+def test_a_range_is_rewritten_the_same_with_or_without_spaces():
+    assert dl.normalize_numeric_dates("5/12/2024-6/12/2024") == "5 December 2024-6 December 2024"
+    assert dl.normalize_numeric_dates("5/12/2024 - 6/12/2024") == "5 December 2024 - 6 December 2024"
+    assert dl.normalize_numeric_dates("ref 2026-10-05") == "ref 2026-10-05"
+
+
+def test_brain_hint_wording():
+    assert "Say the month by name" in dl.day_first_hint("born 7/8/1991")
+    assert "Say the month by name" not in dl.day_first_hint("born 7/8/1991 in August")
+    assert "7/8/1991 = 8 July 1991 (written US-style)" in dl.day_first_hint("US date: 7/8/1991")
+
+
+# (d) the brain hint is switchable
+def test_brain_hint_has_a_kill_switch(monkeypatch):
+    import zoe_flue_client as zfc
+
+    assert "7 August 1991" in zfc._day_first_hint("born 7/8/1991")
+    monkeypatch.setenv("ZOE_DATE_HINT", "0")
+    assert zfc._day_first_hint("born 7/8/1991") == ""

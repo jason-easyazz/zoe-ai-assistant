@@ -108,7 +108,7 @@ _BUCKET_RE = re.compile(
 # Relationship detection  e.g. "Sarah is Mike's wife" / "Mike and Sarah are siblings"
 _REL_RE = re.compile(
     r"(?:"
-    r"(?P<a>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+is\s+(?P<b>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)'s\s+(?P<role1>wife|husband|partner|mother|father|sister|brother|daughter|son|aunt|uncle|cousin|niece|nephew|grandparent|grandchild|boss|mentor|colleague|friend|dog|cat|puppy|kitten|pet)"
+    r"(?P<a>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+is\s+(?P<b>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)'s\s+(?P<role1>wife|husband|partner|mother|father|sister|brother|daughter|son|aunt|uncle|cousin|niece|nephew|grandparent|grandchild|boss|mentor|colleague|friend)"
     r"|(?P<c>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+and\s+(?P<d>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+are\s+(?P<role2>siblings?|partners?|friends?|colleagues?|spouses?|twins?|cousins?)"
     r")",
     re.IGNORECASE,
@@ -143,12 +143,8 @@ _ROLE_TO_TYPE: dict[str, tuple[str, str]] = {
     "grandchild":  ("grandparent","family"),
     "friend":      ("friend",     "friend"),
     "friends":     ("friend",     "friend"),
-    # "Biscuit is Jordan's dog": a pet is not a child (people_roles / correction_apply).
-    "dog":         ("pet",        "pet"),
-    "cat":         ("pet",        "pet"),
-    "puppy":       ("pet",        "pet"),
-    "kitten":      ("pet",        "pet"),
-    "pet":         ("pet",        "pet"),
+    # Pets are deliberately NOT here: "Biscuit is Jordan's dog" must not mint a person row or
+    # an edge (a pet is typed by correction_apply, never created as a person).
     "boss":        ("boss",       "work"),
     "mentor":      ("mentor",     "work"),
     "colleague":   ("colleague",  "work"),

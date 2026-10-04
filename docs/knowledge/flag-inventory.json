@@ -972,6 +972,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_DATE_HINT": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_DATE_ORDER": {
         "defaults": [
           "-"

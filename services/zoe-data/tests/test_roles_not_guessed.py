@@ -254,3 +254,54 @@ async def test_fast_tier_roster_flag_dark(monkeypatch):
     again = await fast_tiers.resolve(LIST_WITH_ROLES, "demo-roles-list", "s", channel="chat",
                                      run_tier0=False)
     assert again is None or again.tier != "roster"
+
+
+# ═══ review round 1 (#1860): one test per finding ═══════════════════════════════
+
+# 6. a roster needs person-like evidence
+SHOPPING = "Shopping for the week\nMilk - 2\nEggs - 12\nBread - 1 loaf\nButter - 250g"
+RECIPE = "Pancakes (family recipe)\nFlour - 200g\nSugar - 50g\nMilk - 300ml\nEggs - 2"
+CHORES = "Chores this week\nDishes - Sam\nBins - Alex\nLaundry - Pat"
+REAL_ROSTER = ("Family details\nJordan Smith - 26/10/1985\nCasey Smith - 16 December 1994\n"
+               "Riley Smith - 30/05/2014")
+
+
+@pytest.mark.parametrize("text", [SHOPPING, RECIPE, CHORES])
+def test_shopping_lists_recipes_and_chores_are_not_rosters(text):
+    assert pr.is_unlabelled_roster(text) is False
+
+
+def test_a_real_roster_is_still_a_roster():
+    assert pr.is_unlabelled_roster(REAL_ROSTER) is True
+    assert pr.is_unlabelled_roster(LIST_NO_ROLES) is True
+
+
+async def test_a_shopping_list_reaches_the_brain_not_the_roster_tier(monkeypatch):
+    import fast_tiers
+
+    monkeypatch.setenv("ZOE_ROSTER_NEUTRAL_ASK", "1")
+    res = await fast_tiers.resolve(SHOPPING, "demo-roles-list", "s", channel="chat", run_tier0=False)
+    assert res is None or res.tier != "roster"
+
+
+# P2 (a) the claim matcher finds the name-role pair anywhere in the sentence
+def test_owner_first_claims_are_found():
+    assert ("Casey", "wife") in pr.role_claims("Jordan's wife is Casey")
+    assert ("Casey", "wife") in pr.role_claims("my wife is Casey")
+    assert ("Casey", "wife") in pr.role_claims("Casey, my wife")
+    assert pr.named_role_claim_unsupported("Jordan's wife is Casey", LIST_NO_ROLES) is True  # guessed
+
+
+@pytest.mark.parametrize("source", [
+    "My wife is a nurse at Royal Perth Hospital and her name is Casey",
+    "Casey, who I married in Perth on Saturday, is my wife",
+    "Jordan's wife is Casey",
+])
+def test_a_role_stated_in_a_long_sentence_is_not_falsely_dropped(source):
+    assert pr.named_role_claim_unsupported("Casey is the wife", source) is False
+
+
+def test_a_role_for_another_name_in_the_same_sentence_does_not_carry_over():
+    said = "No Jordan is my male friend, Casey is the wife and Riley and Morgan are the girls"
+    assert pr.named_role_claim_unsupported("Jordan is the wife", said) is True
+    assert pr.named_role_claim_unsupported("Riley is the wife", said) is True

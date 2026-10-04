@@ -418,6 +418,10 @@ _IDENTITY_ENVELOPE_PREFIX = " zoe-uid:"
 def _day_first_hint(message: str) -> str:
     """``date_locale.day_first_hint`` that can never fail the turn."""
     try:
+        from typed_env import env_bool
+
+        if not env_bool("ZOE_DATE_HINT", True):  # kill switch; default ON (additive, numeric-date turns only)
+            return ""
         from date_locale import day_first_hint
 
         return day_first_hint(message)

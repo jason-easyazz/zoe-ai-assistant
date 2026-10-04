@@ -68,6 +68,16 @@ _DATE_CUE_RES = (
 )
 
 
+_US_ORDER_RE = re.compile(r"\b(?:american|us[- ]style|us format|u\.s\.|month[- ]first|mm/dd)\b", re.IGNORECASE)
+
+
+def correction_order(text: str) -> str:
+    """``mdy`` when the user's correction itself asks for US/month-first reading ("I use US
+    style dates"), else ``dmy`` (the household default). Those cues state a PREFERENCE, so they
+    set the order for this correction instead of undoing it."""
+    return "mdy" if _US_ORDER_RE.search(text or "") else "dmy"
+
+
 def is_date_correction(text: str) -> bool:
     t = (text or "").strip()
     if not t or len(t.split()) > MAX_WORDS:
@@ -186,11 +196,13 @@ async def apply_date_correction(
 
     if not is_date_correction(text):
         return None
+    order = correction_order(text)
+    dayfirst = None if order == "dmy" else False
     # The most recent user message that carries an AMBIGUOUS numeric date: the one being
     # corrected. Older messages are left alone (blast radius = one message).
     source_msg, found = "", []
     for msg in recent_messages:
-        f = [x for x in find_numeric_dates(msg) if x.date.ambiguous]
+        f = [x for x in find_numeric_dates(msg, dayfirst=dayfirst) if x.date.ambiguous]
         if f:
             source_msg, found = msg, f
             break
@@ -214,16 +226,21 @@ async def apply_date_correction(
             new = None
             if f.token in old:  # the raw digits, stored as typed
                 new = old.replace(f.token, right)
-            elif wrong_rx is not None and wrong_rx.search(old) and (_caps(old) & names):
-                # the month-first rendering a model made of them — only on a row about the
-                # same person/thing as the corrected message, never on an unrelated date
-                new = wrong_rx.sub(right, old, count=1)
+            elif (wrong_rx is not None and f.date.year and (_caps(old) & names)):
+                # A month-first rendering a model made of the digits ("July 8th, 1991"): only
+                # when it carries the SAME year (a date stated in words with another year, or
+                # none, is a different fact and is never touched), on a row about the same
+                # person/thing as the corrected message. The year is never added to a row
+                # that did not have it.
+                m = wrong_rx.search(old)
+                if m and str(f.date.year) in m.group(0):
+                    new = old[: m.start()] + right + old[m.end():]
             if not new or new == old:
                 continue
             try:
                 ref = await svc.review(
                     row.id, decision="edit", edits=new, actor=SOURCE,
-                    note="date correction (day-first household order)",
+                    note=f"date correction ({order} order)",
                     source_excerpt=" ".join((text or "").split()),
                 )
             except Exception as exc:  # noqa: BLE001
@@ -241,16 +258,60 @@ async def apply_date_correction(
     uniq = list(dict.fromkeys(c.strip().rstrip(".") for c in changed))
     uniq.sort(key=lambda c: ("birthday" not in c.lower(), len(c)))
     shown = "; ".join(uniq[:2])
-    reply = (f"Fixed: {shown}. I'd read it month-first — dates are day first here, "
-             "so that's what I've stored.")
+    how = ("I'd read it day-first — dates are month first for you, so that's what I've stored."
+           if order == "mdy" else
+           "I'd read it month-first — dates are day first here, so that's what I've stored.")
+    reply = f"Fixed: {shown}. {how}"
     logger.info("CORRECTION_APPLIED kind=date user=%s rows=%d", user_id, len(changed))
     return CorrectionResult("date", reply, uniq)
 
 
 # ── pet correction ───────────────────────────────────────────────────────────
 
-_CHILD_CUE = re.compile(r"\b(?:child|children|kids?|sons?|daughters?|babys?|babies|girls?|boys?)\b",
-                        re.IGNORECASE)
+_CHILD_WORD = re.compile(r"\b(?:child|children|kids?|sons?|daughters?|babys?|babies)\b", re.IGNORECASE)
+_PET_NOUN = (r"(?:dog|puppy|pup|cat|kitten|bird|parrot|budgie|rabbit|bunny|hamster|guinea pig|"
+             r"fish|horse|pony|pet)")
+
+
+def _claims_child(text: str, name: str) -> bool:
+    """Does ``text`` say NAME is one of someone's children? Same clause only: a row that
+    mentions kids and, separately, "a dog named NAME" is not such a claim, and neither is a
+    row where the child words never reach NAME."""
+    n = re.escape(name)
+    if re.search(rf"\b{_PET_NOUN}\s+(?:named\s+|called\s+)?{n}\b", text, re.IGNORECASE):
+        return False  # already identified as a pet in this very text
+    for sent in re.split(r"[.;\n]", text):
+        if not re.search(rf"\b{n}\b", sent, re.IGNORECASE):
+            continue
+        if re.search(rf"\b(?:children|kids|child|kid|sons?|daughters?)\b[^.;\n]*?"
+                     rf"(?:\bare\b|\bis\b|:|,|\binclude[s]?\b|\bnamed\b|\bcalled\b)[^.;\n]*\b{n}\b",
+                     sent, re.IGNORECASE):
+            return True
+        if re.search(rf"\b{n}(?:\s+[A-Z][a-z]+)?\b[^.;\n]*?\b(?:is|was)\b[^.;\n]*?"
+                     r"\b(?:child|kid|son|daughter)\b", sent, re.IGNORECASE):
+            return True
+    return False
+
+
+_NUM_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+              "nine": 9, "ten": 10}
+_WORD_OF = {1: "one", **{v: k for k, v in _NUM_WORDS.items()}}
+
+
+def _decrement_count(sent: str) -> str:
+    """"two kids" -> "one kid" once the pet is taken out of the list."""
+    def sub(m: "re.Match[str]") -> str:
+        raw = m.group(1).lower()
+        n = _NUM_WORDS.get(raw) or int(raw)
+        left = n - 1
+        word = m.group(2).lower()
+        if left == 1:
+            word = {"kids": "kid", "children": "child"}.get(word, word)
+        label = _WORD_OF.get(left, str(left)) if raw.isalpha() else str(left)
+        return f"{label} {word}"
+
+    return re.sub(r"\b(two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(kids|children)\b", sub,
+                  sent, count=1, flags=re.IGNORECASE)
 
 
 def _strip_name(text: str, name: str) -> str:
@@ -261,16 +322,45 @@ def _strip_name(text: str, name: str) -> str:
     return re.sub(r"\s{2,}", " ", out).strip()
 
 
-async def _people_rows(db, user_id: str, name: str) -> list[tuple[str, str, str]]:
+def _rewrite_child_row(text: str, name: str, pet_text: str) -> str:
+    """Edit ONLY the clause about NAME; every other sentence of the row is kept.
+    "NAME is a child of X" becomes the pet fact; an enumeration loses NAME and its count."""
+    n = re.escape(name)
+    sents = re.split(r"(?<=[.;])\s*|\n", text)
+    out = []
+    for sent in sents:
+        if sent and _claims_child(sent, name):
+            if re.search(rf"\b{n}(?:\s+[A-Z][a-z]+)?\b[^.;\n]*?\b(?:is|was)\b[^.;\n]*?"
+                         r"\b(?:child|kid|son|daughter)\b", sent, re.IGNORECASE):
+                out.append(pet_text)  # "NAME is a child of X": the whole claim is the error
+                continue
+            stripped = _decrement_count(_strip_name(sent, name))
+            out.append(stripped if stripped != sent else f"{sent.rstrip('.')} (not {name}, a pet).")
+        elif sent:
+            out.append(sent)
+    return " ".join(out).strip()
+
+
+async def _people_rows(db, user_id: str, name: str) -> list[dict]:
     rows = await _fetch(
         db,
-        "SELECT id, name, relationship FROM people WHERE user_id=$1 AND deleted=0 AND "
-        "(lower(name)=lower($2) OR lower(name) LIKE lower($3))",
-        "SELECT id, name, relationship FROM people WHERE user_id=? AND deleted=0 AND "
-        "(lower(name)=lower(?) OR lower(name) LIKE lower(?))",
+        "SELECT id, name, relationship, email, phone, birthday, is_partial FROM people "
+        "WHERE user_id=$1 AND deleted=0 AND (lower(name)=lower($2) OR lower(name) LIKE lower($3))",
+        "SELECT id, name, relationship, email, phone, birthday, is_partial FROM people "
+        "WHERE user_id=? AND deleted=0 AND (lower(name)=lower(?) OR lower(name) LIKE lower(?))",
         (user_id, name, f"{name} %"),
     )
-    return [(r[0], r[1], r[2] or "") for r in rows]
+    return [{"id": r[0], "name": r[1], "rel": r[2] or "", "email": r[3], "phone": r[4],
+             "birthday": r[5], "partial": bool(r[6])} for r in rows]
+
+
+def _pet_candidate(p: dict) -> bool:
+    """A row that can safely become a pet: no human data (email / phone / birthday) and it is
+    child-like ("friend's child"), a bare partial stub, or already a pet."""
+    if p["email"] or p["phone"] or p["birthday"]:
+        return False
+    rel = p["rel"].strip().lower()
+    return p["partial"] or rel.startswith("pet") or bool(_CHILD_WORD.search(rel))
 
 
 async def _current_edges(db, user_id: str, person_id: str) -> list[tuple[str, str, str]]:
@@ -336,12 +426,18 @@ async def apply_pet_correction(
 
         svc = get_memory_service()
     people = await _people_rows(db, user_id, name) if db is not None else []
-    full = people[0][1] if people else name
+    if len(people) > 1:
+        # Two people answer to this name: guessing would turn the wrong one into a pet.
+        return CorrectionResult(
+            "pet_ask",
+            f"I know more than one {name} — which one is the {kind}? Tell me their full name "
+            "and I'll fix it.", [])
+    if people and not _pet_candidate(people[0]):
+        return None  # a person with human data (or an adult relationship) is never made a pet
+    full = people[0]["name"] if people else name
     name_rx = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
     rows = await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT)
-    pet_fact_rows = [r for r in rows if name_rx.search(r.text or "")
-                     and "not a child" in (r.text or "").lower()]
-    child_rows = [r for r in rows if name_rx.search(r.text or "") and _CHILD_CUE.search(r.text or "")
+    child_rows = [r for r in rows if _claims_child(r.text or "", name)
                   and "not a child" not in (r.text or "").lower()]
     if not people and not child_rows:
         return None  # nothing stored about this name: no claim, the brain answers
@@ -349,15 +445,12 @@ async def apply_pet_correction(
                 else f"{full} is a pet, not a child.")
     changed = 0
     excerpt = " ".join((text or "").split())
-    for pid, _nm, rel in people:
-        changed += await _make_pet(db, user_id, pid, rel, kind)
+    for p in people:
+        changed += await _make_pet(db, user_id, p["id"], p["rel"], kind)
     for r in child_rows:
-        others = {w for w in _caps(r.text) if w.lower() != name.lower()}
-        # an enumeration ("the kids are A, B and Biscuit") loses only the pet; a row that is
-        # about the pet alone becomes the explicit pet fact
-        new = _strip_name(r.text, name) if len(others) >= 2 else pet_text
-        if new == r.text or not new:
-            new = pet_text
+        new = _rewrite_child_row(r.text, name, pet_text)
+        if not new or new == r.text:
+            continue
         try:
             ref = await svc.review(r.id, decision="edit", edits=new, actor=SOURCE,
                                    note="pet is not a child (correction)", source_excerpt=excerpt)
@@ -366,8 +459,13 @@ async def apply_pet_correction(
             continue
         if ref is not None:
             changed += 1
-    if not pet_fact_rows:
-        entity_id = people[0][0] if people else f"slug:{name.lower().replace(' ', '_')}"
+    # Only now (after the edits) is it known whether a pet fact already exists: an edit above
+    # may have just written it, and ingesting a second copy would duplicate it.
+    after = await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT)
+    has_pet_fact = any(name_rx.search(r.text or "") and "not a child" in (r.text or "").lower()
+                       for r in after)
+    if not has_pet_fact:
+        entity_id = people[0]["id"] if people else f"slug:{name.lower().replace(' ', '_')}"
         try:
             ref = await svc.ingest(
                 pet_text, user_id=user_id, source=SOURCE, memory_type="person",

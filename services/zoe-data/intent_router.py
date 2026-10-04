@@ -5177,7 +5177,7 @@ def _parse_explicit_date(raw: str, today: "date") -> Optional[str]:
     from date_locale import parse_numeric_date
 
     if re.match(r"\d{1,2}\s?[/.\-]\s?\d", raw) and not re.match(r"\d{4}-\d{2}-\d{2}", raw):
-        nd = parse_numeric_date(raw)
+        nd = parse_numeric_date(raw, purpose="future")  # reminders: 5/11/27 is 2027, not 1927
         if nd:
             return f"{nd.year or today.year:04d}-{nd.month:02d}-{nd.day:02d}"
     months = {

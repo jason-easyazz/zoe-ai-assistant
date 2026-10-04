@@ -20,6 +20,7 @@ import correction_apply as ca
 from memory_service import MemoryRef
 
 USER = "demo_correction_user"  # a DEMO user — never a real person
+OTHER_USER = "demo_correction_other"
 
 
 @pytest.fixture(autouse=True)
@@ -30,14 +31,18 @@ def _env(monkeypatch):
 
 
 class FakeSvc:
-    """MemoryService stand-in: approved rows; review(edit) supersedes, ingest adds."""
+    """MemoryService stand-in with the real scoping contract: every row belongs to a user,
+    ``list_by_status`` only returns the caller's rows, ``review(edit)`` supersedes and ``ingest``
+    adds under the caller. ``texts`` seed ``USER``; ``other`` seeds another member."""
 
-    def __init__(self, texts):
+    def __init__(self, texts, other=()):
         self.rows = {}
         self.n = 0
         self.superseded = []
         for t in texts:
-            self._add(t)
+            self._add(t, user_id=USER)
+        for t in other:
+            self._add(t, user_id=OTHER_USER)
 
     def _add(self, text, **meta):
         self.n += 1
@@ -46,7 +51,9 @@ class FakeSvc:
         return self.rows[rid]
 
     async def list_by_status(self, *, user_id, status="pending", limit=100, offset=0):
-        return [r for r in self.rows.values() if r.metadata.get("status") == status][offset:offset + limit]
+        rows = [r for r in self.rows.values()
+                if r.metadata.get("status") == status and r.metadata.get("user_id") == user_id]
+        return rows[offset:offset + limit]
 
     async def review(self, mem_id, *, decision, actor, edits=None, note=None, metadata=None,
                      source_excerpt=None):
@@ -54,20 +61,22 @@ class FakeSvc:
         old = self.rows[mem_id]
         old.metadata["status"] = "superseded"
         self.superseded.append(mem_id)
-        return self._add(edits, supersedes=mem_id)
+        return self._add(edits, supersedes=mem_id, user_id=old.metadata["user_id"])
 
     async def ingest(self, text, *, user_id, source, **kw):
-        return self._add(text, source=source, **kw)
+        return self._add(text, source=source, user_id=user_id, **kw)
 
-    def approved(self):
-        return [r.text for r in self.rows.values() if r.metadata.get("status") == "approved"]
+    def approved(self, user_id=None):
+        return [r.text for r in self.rows.values() if r.metadata.get("status") == "approved"
+                and r.metadata.get("user_id") == (user_id or USER)]
 
 
 async def _people_db():
     db = await aiosqlite.connect(":memory:")
     await db.execute(
         """CREATE TABLE people (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,
-           relationship TEXT, deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT)""")
+           relationship TEXT, email TEXT, phone TEXT, birthday TEXT, is_partial INTEGER DEFAULT 0,
+           deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT)""")
     await db.execute(
         """CREATE TABLE person_relationships (id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
            person_a_id TEXT NOT NULL, person_b_id TEXT NOT NULL, rel_type TEXT NOT NULL,
@@ -203,7 +212,9 @@ async def _family_db():
     db = await _people_db()
     for pid, name, rel in (("o", "Jordan Smith", "friend"), ("c1", "Casey Smith", "friend's child"),
                            ("pet", "Biscuit Smith", "friend's child")):
-        await db.execute("INSERT INTO people VALUES (?,?,?,?,0,NULL)", (pid, USER, name, rel))
+        await db.execute(
+            "INSERT INTO people (id, user_id, name, relationship, deleted) VALUES (?,?,?,?,0)",
+            (pid, USER, name, rel))
     await db.execute("INSERT INTO person_relationships VALUES ('e1',?,?,?,?,?,?,?,NULL,NULL)",
                      (USER, "pet", "o", "parent", "Parent", "Child", "family"))
     await db.execute("INSERT INTO person_relationships VALUES ('e2',?,?,?,?,?,?,?,NULL,NULL)",
@@ -236,7 +247,7 @@ async def test_pet_statement_sets_relationship_edge_and_facts():
     live = svc.approved()
     assert not any(re.search(r"\bBiscuit\b", t) and re.search(r"\bchild", t)
                    and "not a child" not in t for t in live), live
-    assert any("Casey" in t and "Riley" in t and "Pat" in t and "Biscuit" not in t for t in live), live
+    assert "Jordan Smith has three children: Casey, Riley, Pat." in live, live
     assert "Biscuit Smith is a pet dog, not a child." in live
     assert "User likes tea" in live
 
@@ -258,27 +269,11 @@ async def test_pet_correction_is_idempotent():
     assert len(svc.rows) == n
 
 
-async def test_a_real_child_is_never_turned_into_a_pet():
-    db = await _family_db()
-    svc = FakeSvc(["Casey Smith is a child of Jordan Smith."])
-    assert await ca.apply_pet_correction("Biscuit is their dog", USER, svc=svc, db=db) is not None
-    assert "Casey Smith is a child of Jordan Smith." in svc.approved()
-    cur = await db.execute("SELECT rel_type FROM person_relationships WHERE id='e2'")
-    assert (await cur.fetchone())[0] == "parent"
-
-
 def test_relationship_vocabulary_has_a_pet_type():
     from routers.people import RELATIONSHIP_TYPES, _rel_lookup
 
     assert _rel_lookup("pet") == ("pet", "Pet owner", "Pet")
     assert "pet" in RELATIONSHIP_TYPES
-
-
-def test_extractor_reads_x_is_ys_dog_as_a_pet_edge():
-    import person_extractor as pe
-
-    m = pe._REL_RE.search("Biscuit is Jordan's dog")
-    assert m.group("role1") == "dog" and pe._ROLE_TO_TYPE["dog"] == ("pet", "pet")
 
 
 # ── the live path: fast_tiers ────────────────────────────────────────────────
@@ -307,3 +302,156 @@ async def test_fast_tier_flag_off_never_calls_the_module(monkeypatch):
     monkeypatch.setattr(ca, "maybe_apply", fake)
     await fast_tiers.resolve(WRONG_TURN, USER, "s1", channel="chat", run_tier0=False)
     assert called == []
+
+
+# ═══ review round 1 (#1860): one test per finding ═══════════════════════════════
+
+# 3. date correction touches only rows that carry the SAME digits / the same dated rendering
+async def test_date_correction_never_rewrites_a_date_stated_in_words():
+    svc = FakeSvc([
+        "Jordan: 7/8/1991",                           # same digits -> fixed
+        "Pat's birthday is July 8",                   # another person, words, no year
+        "Jordan's cousin's birthday is July 8",       # shares a name with the source, words, no year
+        "Jordan's birthday is July 8, 1985",          # same person, different year -> a different fact
+    ])
+    res = await ca.apply_date_correction(WRONG_TURN, USER, [SAID], svc=svc)
+    assert res is not None
+    live = svc.approved()
+    assert "Jordan: 7 August 1991" in live
+    for untouched in ("Pat's birthday is July 8", "Jordan's cousin's birthday is July 8",
+                      "Jordan's birthday is July 8, 1985"):
+        assert untouched in live, live
+
+
+async def test_date_correction_never_invents_a_year():
+    # a year-less message: only rows holding the digits are rewritten, and no year appears
+    svc = FakeSvc(["Jordan's birthday is 7/8", "Jordan's birthday is July 8"])
+    said = "Pat Brown has a colleague called Jordan, born 7/8"
+    res = await ca.apply_date_correction(WRONG_TURN, USER, [said], svc=svc)
+    assert res is not None
+    live = svc.approved()
+    assert "Jordan's birthday is 7 August" in live and "Jordan's birthday is July 8" in live
+    assert not any("19" in t or "20" in t for t in live)
+
+
+# (c) a US-style preference sets the order for THIS correction instead of undoing it
+async def test_us_style_cue_reads_the_date_month_first():
+    assert ca.correction_order("I use US style dates") == "mdy"
+    assert ca.correction_order("that date is wrong") == "dmy"
+    svc = FakeSvc(["Jordan: 7/8/1991", "Jordan's birthday is 7 August 1991"])
+    res = await ca.apply_date_correction("I use US style dates, that birthday is wrong", USER,
+                                         [SAID], svc=svc)
+    assert res is not None
+    assert "Jordan: 8 July 1991" in svc.approved()
+    assert "Jordan's birthday is 8 July 1991" in svc.approved()  # the day-first rendering flips too
+    assert "dates are month first" in res.reply
+
+
+# 4. namesakes
+async def _namesake_db(*rows):
+    db = await _people_db()
+    for pid, name, rel, email in rows:
+        await db.execute(
+            "INSERT INTO people (id, user_id, name, relationship, email, deleted) VALUES (?,?,?,?,?,0)",
+            (pid, USER, name, rel, email))
+    await db.commit()
+    return db
+
+
+async def test_two_namesakes_refuse_and_ask_nothing_is_written():
+    db = await _namesake_db(("h", "Biscuit Brown", "friend", "b@example.test"),
+                            ("k", "Biscuit Smith", "friend's child", None))
+    svc = FakeSvc(["Biscuit Smith is a child of Jordan Smith."])
+    res = await ca.apply_pet_correction("Biscuit is my dog", USER, svc=svc, db=db)
+    assert res is not None and res.kind == "pet_ask" and "more than one Biscuit" in res.reply
+    cur = await db.execute("SELECT relationship FROM people ORDER BY id")
+    assert [r[0] for r in await cur.fetchall()] == ["friend", "friend's child"]
+    assert svc.superseded == [] and len(svc.rows) == 1
+
+
+async def test_a_human_with_contact_data_is_never_made_a_pet():
+    db = await _namesake_db(("h", "Biscuit Brown", "friend", "b@example.test"))
+    svc = FakeSvc(["Biscuit Brown works at the library."])
+    assert await ca.apply_pet_correction("Biscuit is my dog", USER, svc=svc, db=db) is None
+    cur = await db.execute("SELECT relationship FROM people")
+    assert (await cur.fetchone())[0] == "friend"
+    assert svc.superseded == [] and len(svc.rows) == 1
+
+
+async def test_a_single_childlike_match_is_still_converted():
+    db = await _namesake_db(("k", "Biscuit Smith", "friend's child", None))
+    res = await ca.apply_pet_correction("Biscuit is my dog", USER,
+                                        svc=FakeSvc(["Biscuit Smith is a child of Jordan Smith."]), db=db)
+    assert res is not None and res.kind == "pet"
+
+
+# 5. clause-level edits, no wholesale replacement, no duplicate pet fact
+async def test_a_row_about_kids_and_a_separately_named_dog_is_left_alone():
+    db = await _namesake_db(("k", "Sam Smith", "friend's child", None))
+    svc = FakeSvc(["Jordan has two kids and a dog named Sam"])
+    res = await ca.apply_pet_correction("Sam is their dog", USER, svc=svc, db=db)
+    assert res is not None  # the person row IS converted ...
+    live = svc.approved()
+    assert "Jordan has two kids and a dog named Sam" in live  # ... the kids fact is not lost
+    assert svc.superseded == []
+
+
+async def test_only_the_clause_about_the_pet_is_edited():
+    svc = FakeSvc(["Jordan has two kids, Mika and Biscuit. He coaches football on Saturdays."])
+    res = await ca.apply_pet_correction("Biscuit is their dog", USER, svc=svc, db=None)
+    assert res is not None
+    live = svc.approved()
+    assert "Jordan has one kid, Mika. He coaches football on Saturdays." in live, live
+
+
+async def test_the_pet_fact_is_stored_exactly_once():
+    db = await _family_db()
+    svc = FakeSvc(["Biscuit Smith is a child of Jordan Smith."])
+    await ca.apply_pet_correction("Biscuit is their dog", USER, svc=svc, db=db)
+    assert sum("not a child" in t for t in svc.approved()) == 1
+    # and with no child row to edit, it is still ingested once
+    svc2 = FakeSvc([])
+    db2 = await _family_db()
+    await ca.apply_pet_correction("Biscuit is their dog", USER, svc=svc2, db=db2)
+    assert sum("not a child" in t for t in svc2.approved()) == 1
+
+
+@pytest.mark.parametrize("text", [
+    "Their baby girl is called Ruby and Biscuit sleeps all day",   # generic words, Biscuit elsewhere
+    "My son plays football; Biscuit is the team mascot",
+    "Biscuit likes the boys",
+])
+def test_generic_child_words_without_the_name_in_the_clause_are_not_a_child_claim(text):
+    assert ca._claims_child(text, "Biscuit") is False
+
+
+@pytest.mark.parametrize("text", [
+    "Jordan has four children: Casey, Riley, Pat and Biscuit.",
+    "Jordan has two kids, Mika and Biscuit.",
+    "Biscuit Smith is a child of Jordan Smith.",
+])
+def test_child_claims_are_recognised(text):
+    assert ca._claims_child(text, "Biscuit") is True
+
+
+# scoping: a correction never touches another member's rows
+async def test_corrections_never_touch_another_members_rows():
+    svc = FakeSvc(["Jordan: 7/8/1991"],
+                  other=["Jordan: 7/8/1991", "Biscuit Smith is a child of Jordan Smith."])
+    res = await ca.apply_date_correction(WRONG_TURN, USER, [SAID], svc=svc)
+    assert res is not None
+    assert svc.approved(OTHER_USER) == ["Jordan: 7/8/1991", "Biscuit Smith is a child of Jordan Smith."]
+    await ca.apply_pet_correction("Biscuit is their dog", USER, svc=svc, db=None)
+    assert "Biscuit Smith is a child of Jordan Smith." in svc.approved(OTHER_USER)
+
+
+# (e) a pet is never minted as a person by the regex relationship extractor
+async def test_x_is_ys_dog_mints_no_person_row():
+    import person_extractor as pe
+
+    db = await _people_db()
+    await db.execute("CREATE TABLE person_activities (id TEXT)")
+    await pe.process_text("Biscuit is Jordan's dog", user_id=USER, db=db)
+    cur = await db.execute("SELECT COUNT(*) FROM people")
+    assert (await cur.fetchone())[0] == 0
+    assert pe._REL_RE.search("Biscuit is Jordan's dog") is None
