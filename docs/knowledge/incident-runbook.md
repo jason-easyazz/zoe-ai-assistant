@@ -779,14 +779,15 @@ was written to prevent is still live. The 2026-10-04 review found it three ways 
 
 * `functiongemma-router` runs WITHOUT `--mlock`, `LimitMEMLOCK=infinity` and
   `MemoryMax=1280M` (live `VmLck: 0 kB`) although the template carries them;
-* `kokoro-tts` runs `TimeoutStartSec=120` while the sidecar waits up to 180 s for the
-  brain before it loads — a slow-brain boot can SIGTERM-loop it;
+* `kokoro-tts` runs `TimeoutStartSec=120` vs the template's 300 — drift with **no runtime
+  effect** (`Type=simple`, no `ExecStartPre/Post`: the timeout never runs during its brain wait);
 * every Flue/Node stop or restart logs `status=143` + `Failed with result 'exit-code'`.
 
 **Diagnose in one command (read-only — parses unit files, never calls systemctl):**
 
 ```bash
-python3 scripts/maintenance/unit_drift_check.py            # exit 1 = template change not applied
+python3 scripts/maintenance/unit_drift_check.py            # exit 1 = drift, 2 = unreadable unit; values print as sha256 prefixes
+python3 scripts/maintenance/unit_drift_check.py --show-values  # readable (trusted terminal only)
 python3 scripts/maintenance/unit_drift_check.py --units functiongemma-router --json
 python3 scripts/maintenance/unit_drift_check.py --strict   # also fail on untracked host edits
 ```
@@ -821,7 +822,7 @@ If `VmLck` stays 0: `mlock` failing on `RLIMIT_MEMLOCK` is only a WARNING in lla
 check `journalctl --user -u functiongemma-router | grep -i mlock` and
 `systemctl --user show functiongemma-router -p LimitMEMLOCK`.
 
-**(b) Kokoro — start timeout above the brain wait** (drop-in, applies on the next start):
+**(b) Kokoro — optional, template consistency only** (no runtime effect; drop-in, next start):
 
 ```bash
 mkdir -p ~/.config/systemd/user/kokoro-tts.service.d
@@ -846,19 +847,17 @@ Edit them while NO landing is running (section 13: editing a running script left
 down for 5 minutes):
 
 1. `land_voice_pr.sh` stops Kokoro, THEN calls `wait_deploy` (up to 22 min). Tonight one
-   landing kept TTS down 303 s (21:34:46 -> 21:39:35) while only waiting for another PR's
+   landing kept TTS down 303 s (21:34:46 stop -> 21:39:49 ready) while only waiting for another PR's
    deploy. Move `systemctl --user stop kokoro-tts.service` (and its headroom loop) to just
    AFTER `wait_deploy` + the post-wait restart re-check, immediately before the probe. The
    `trap ... start kokoro-tts` on EXIT already restores it.
-2. Every `gh` call in the landing scripts needs a repo: either `cd /home/zoe/assistant`
-   first (done in `land_queue.sh` during the review) or `-R <owner>/<repo>`. Symptom:
-   `failed to run git: fatal: not a git repository` and a blank state in
-   `queue #N -> `. `docs_merge_chain.sh` still emits it.
-3. Probes per merge: 10 probes for 4 merges because a merge during a ~5-10 min probe makes
-   every other queued PR BEHIND, and policy (sig #36: never move the head after its probe)
-   forces a repeat. Land fewer voice-path PRs concurrently, or batch them; do not relax
-   sig #36.
+2. Every `gh` call needs a repo (`cd /home/zoe/assistant` first, done in `land_queue.sh`
+   during the review, or `-R <owner>/<repo>`); `docs_merge_chain.sh` still prints
+   `failed to run git: fatal: not a git repository` and a blank `queue #N -> ` state.
+3. 10 probes for 4 merges: a merge during a ~5-10 min probe makes every other queued PR
+   BEHIND and sig #36 (never move the head after its probe) forces a repeat. Land fewer
+   voice-path PRs concurrently; do not relax sig #36.
 
 Noise classes to NOT chase (router `W restored context checkpoint` = a cache hit; the
 two large probe re-prefills; red-then-green `replay-evidence`; probe EMPTY flapping 0-2) are
-listed in [log-review-units-2026-10-04.md](log-review-units-2026-10-04.md) sections 2 and 4.
+listed in [log-review-units-2026-10-04.md](log-review-units-2026-10-04.md) sections 2 and 3.
