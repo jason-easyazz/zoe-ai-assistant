@@ -98,7 +98,7 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - 💡 **Pull, not push** (P1): an orb "I have something" state + "what's up?" voice inbox (Notify/Question/Review), one-unanswered-then-wait — offer without unprompted speech (LangChain ambient agents, Nomi).
 - 💡 **Duck → decide → resume** (P2): fade playback −15 dB on barge-in, resume the same reply if it was a backchannel/noise (Voice-Light, arXiv 2609.20995) — refines B1.2.
 - 💡 **Speaker gate per Omi's postmortem + confirm-to-teach** (P3): one model for enrol+match, ≥5-clip centroid, AS-norm, "Is this you?" cards (base + last 5 confirmations) — Omi measured 71 % cross-session false-reject.
-- 💡 **Arousal on the Pi for frustration repair** (P4): Wav2Small (~100 KB) on the daemon, arousal only, valence stays text — needs Jason's call on W4/W3 scope + a licence check.
+- 💡 **Arousal on the Pi for frustration repair** (P4): a Wav2Small-*shaped* model (~100 KB) on the daemon, arousal only, valence stays text — licence + scope researched 2026-10-04 ([record](research/arousal-detection-licence-scope-2026-10-04.md)): Wav2Small has no published weights, so the model must be re-distilled from permissive teachers; four decisions waiting on Jason.
 - 💡 **Persona-drift band on the resident bge-small** (P5): positive/negative anchors → aligned/neutral/deviation, log-only first (Nautilus Compass, Assistant Axis).
 - 💡 **Incomplete-turn marker → pause thoughts** (P7): ●/◐/○ first token (Pipecat), then motivation-scored thoughts (Inner Thoughts, CHI 2025) instead of a fixed 7 s marker.
 - 💡 **Presence fusion** (P8): PanaCast person-detect ≤1 fps on the Pi + Bermuda BLE IRK for *who*; mmWave later.
