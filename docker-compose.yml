@@ -3,7 +3,6 @@
 # =============================================================================
 # Active architecture:
 #   - zoe-data: host-native uvicorn on :8000 (NOT in Docker)
-#   - OpenClaw gateway: systemd user service on :18789 (NOT in Docker)
 #   - llama-server: host-native binary on :11434 (NOT in Docker)
 #   - Docker services below: UI, auth, HA, bridges, cloudflared
 # =============================================================================
@@ -12,15 +11,18 @@ services:
 
   # ── UI ─────────────────────────────────────────────────────────────────────
   zoe-ui:
-    image: nginx:alpine  # pinned: nginx@sha256:b3c656d55d7ad751196f21b7fd2e8d4da9cb430e32f646adcf92441b72f82b14
+    image: nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f  # nginx:alpine as of 2026-10-04; same digest in deploy.yml + validate.yml (pinned by test_nginx_delivery_layer.py)
     container_name: zoe-ui
     ports:
     - 80:80
     - 443:443
-    - 18790:18790
     volumes:
     - ./services/zoe-ui/dist:/usr/share/nginx/html
+    # nginx.conf is a single-FILE mount: pinned to an inode, so a git sync that replaces the
+    # file needs `docker restart zoe-ui` (deploy.yml does it). nginx.d/ is a DIRECTORY mount
+    # (files are opened by path), holding the shared locations + security-header snippets.
     - ./services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    - ./services/zoe-ui/nginx.d:/etc/nginx/zoe:ro
     - ./ssl:/etc/nginx/ssl:ro
     extra_hosts:
     - "host.docker.internal:host-gateway"
