@@ -332,11 +332,63 @@ jobs:
           echo "zoe-auth failed health check after restart"
           exit 1
 
+      - name: Restart zoe-ui / nginx (if changed)
+        run: |
+          cd /home/zoe/assistant
+          # nginx.conf is a single-FILE bind mount pinned to an inode: a git sync REPLACES the
+          # file, so the running master keeps serving the OLD config and `nginx -s reload`
+          # re-reads the old inode too (measured 2026-10-04 — md5 differed in/out of the
+          # container after #1822 landed). Only a container restart re-binds the mount.
+          # nginx.d/ is a directory mount (opened by path) but its contents change with the
+          # same PRs, so it rides the same restart. docker-compose.yml changes (ports,
+          # mounts) need `up -d` to RECREATE; `up -d` alone does nothing for an unchanged
+          # container, hence the explicit restart after it.
+          if [ -n "${OLD_SHA:-}" ] \
+             && git diff --quiet "${OLD_SHA}" HEAD -- services/zoe-ui/nginx.conf services/zoe-ui/nginx.d docker-compose.yml; then
+            echo "zoe-ui nginx config unchanged since ${OLD_SHA} — no restart needed."
+            exit 0
+          fi
+          # Pre-flight the NEW files in a throwaway container (the live one still holds the
+          # old inode, so `docker exec zoe-ui nginx -t` would test the OLD config).
+          # Same digest as docker-compose.yml's image (pinned by tests/unit/test_nginx_delivery_layer.py):
+          # the parser that pre-flights must be the parser that serves.
+          NGINX_IMAGE="nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f"
+          docker run --rm --add-host zoe-auth:127.0.0.1 --add-host host.docker.internal:127.0.0.1 \
+            -v "$PWD/services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
+            -v "$PWD/services/zoe-ui/nginx.d:/etc/nginx/zoe:ro" \
+            -v "$PWD/ssl:/etc/nginx/ssl:ro" \
+            "$NGINX_IMAGE" nginx -t
+          docker compose up -d --no-deps zoe-ui
+          docker restart zoe-ui
+          # Probe something nginx serves ITSELF (a static page), not /health — that is
+          # proxied to zoe-data, which the step after this one may be about to restart.
+          for attempt in {1..12}; do
+            code="$(curl -sk -o /dev/null -w '%{http_code}' https://localhost/index.html || true)"
+            [ "$code" = "200" ] && { echo "zoe-ui serving the new config."; exit 0; }
+            sleep 3
+          done
+          docker logs --tail=40 zoe-ui
+          echo "::error::zoe-ui unhealthy after nginx restart."
+          exit 1
+
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.
       - name: Restart zoe-data (user service)
         run: |
           export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          # Docs-only merges do not restart the service. Every merge to main used to
+          # cold-restart zoe-data (router heads, embedder, chroma caches), which
+          # inflated brain_ms on any voice probe running at that moment (sig #29/#35,
+          # 2026-10-04: a research-record merge mid-probe failed a landing). A merge
+          # whose only changes are under docs/ or are Markdown files anywhere has
+          # nothing the service loads; everything else keeps the unconditional restart.
+          if [ -n "${OLD_SHA:-}" ] && [ "${OLD_SHA}" != "$(git rev-parse HEAD)" ]; then
+            NON_DOC="$(git diff --name-only "${OLD_SHA}" HEAD | grep -vE '^docs/|\.md$' || true)"
+            if [ -z "${NON_DOC}" ]; then
+              echo "docs-only merge since ${OLD_SHA} — zoe-data not restarted."
+              exit 0
+            fi
+          fi
           systemctl --user restart zoe-data.service
           # Record which interpreter actually came up (B0.7: venv 3.12 vs system
           # 3.10) — what RUNS, read from the process, not the unit. Informational.
