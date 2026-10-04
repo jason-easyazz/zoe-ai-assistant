@@ -6,6 +6,7 @@ import os
 import time
 import logging
 import httpx
+import hashlib
 import hmac
 from fastapi import Request, HTTPException, Depends
 from typing import Any, Optional, Dict, Tuple
@@ -47,6 +48,11 @@ def _degraded_user() -> Optional[Dict[str, Any]]:
         "username": "guest",
         "permissions": [],
     }
+
+
+def _session_digest(session_id: str) -> str:
+    """Short one-way digest of a session id, safe to put in a log line."""
+    return hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:8]
 
 
 def _cache_get(session_id: str) -> Optional[dict]:
@@ -217,7 +223,10 @@ async def get_current_user(request: Request) -> dict:
 
     validated = await _validate_with_auth_service(session_id)
     if validated is None:
-        logger.warning("Invalid session: %s...", session_id[:20])
+        # Never log any part of the credential: a 20-char prefix of a session id
+        # is most of a bearer token. A short one-way digest still lets a repeated
+        # offender be correlated across lines.
+        logger.warning("Invalid session: id_digest=%s len=%d", _session_digest(session_id), len(session_id))
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     if validated.get(_DEGRADED_MARK):
         if _AUTH_FAIL_CLOSED:
