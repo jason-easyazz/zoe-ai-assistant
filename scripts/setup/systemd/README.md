@@ -60,6 +60,13 @@ copy (installed units carry host edits and their own untracked drop-ins). The
 | `serena-mcp.service.d/70-agents-slice.conf` | Shared Serena joins `zoe-agents.slice` (`Slice=`); its own 2G / swap-0 member cap is unchanged. Install `zoe-agents.slice` FIRST (a missing slice unit becomes an implicit, uncapped one). | `docs/knowledge/engineering-off-box.md` |
 | `kokoro-tts.service.d/40-memory-tuning.conf` | Kokoro's glibc allocator: `MALLOC_ARENA_MAX=2` + `MALLOC_TRIM_THRESHOLD_=131072` (B6.6). Allocator only — no numeric change. | `docs/knowledge/voice-pipeline.md` (Kokoro memory) |
 | `kokoro-tts.service.d/60-kokoro-venv.conf` | Kokoro's interpreter: `/usr/bin/python3` → `~/.zoe/venvs/kokoro-py310/bin/python` (B5.7) — the same 3.10 + site-packages (`--system-site-packages`) with scikit-learn/pandas/pyarrow blocked. Build the venv FIRST (`scripts/setup/build_kokoro_venv.sh`); restart only under the brain-window lock. | `docs/knowledge/voice-pipeline.md` (Kokoro dedicated venv) |
+| `kokoro-tts.service.d/70-start-timeout.conf` | `TimeoutStartSec=300` — template consistency only, **no runtime effect** (Type=simple, no Exec{Pre,Post}, so the timeout never runs during the sidecar's brain wait). Optional; `daemon-reload` only. | `docs/knowledge/incident-runbook.md` §24(b) |
+| `flue-zoe-brain-2x.service.d/50-exit-143.conf`, `flue-zoe-telegram.service.d/50-exit-143.conf` | `SuccessExitStatus=143`: the Node sidecar's SIGTERM exit is a clean stop, not `Failed with result 'exit-code'`. `Restart=always` unchanged. `daemon-reload` only. | `docs/knowledge/incident-runbook.md` §24(c) |
+
+**Did the installed unit ever get the template change?** Nothing applies a merged template.
+`python3 scripts/maintenance/unit_drift_check.py` compares installed units + drop-ins with these
+templates, read-only (values print as hashes; `--show-values`, `--strict`). Run it after any merge
+touching this directory (runbook section 24).
 
 ```bash
 mkdir -p ~/.config/systemd/user/zoe-data.service.d

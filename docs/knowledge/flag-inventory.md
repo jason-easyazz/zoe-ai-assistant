@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-510 flags; 508 not documented in `.env.example`.
+512 flags; 510 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -325,6 +325,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_ID` | `'post-merge-probe'`, `'zoe-touch-pi'` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PERF` | `-` | no | NO | `scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/user_model_ab.py` |
+| `ZOE_PERSONA_DRIFT` | `False` | yes | NO | `services/zoe-data/persona_drift.py` |
+| `ZOE_PERSONA_LAYER` | `False` | yes | NO | `services/zoe-data/persona_layer.py` |
 | `ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED` | `''` | no | NO | `services/zoe-data/person_extractor.py` |
 | `ZOE_PERSON_DOSSIER_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_memory_compose.py` |
 | `ZOE_PERSON_LLM_CONFIDENCE_GATE` | `''` | no | NO | `services/zoe-data/person_extractor_llm.py` |

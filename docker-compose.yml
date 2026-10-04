@@ -7,6 +7,18 @@
 #   - Docker services below: UI, auth, HA, bridges, cloudflared
 # =============================================================================
 
+# Bounded container logs (2026-10-04 log review; operator background in
+# docs/knowledge/docker-log-and-memory-limits.md). Docker's default json-file driver has NO
+# size cap: zoe-multica-backend alone was 621 MB after seven weeks. 3 x 10 MB per container
+# is ~3 days of the noisiest service and keeps `docker logs` fast. This reaches a container
+# only when it is (re)created; the daemon-wide default in daemon.json is the other half.
+# Pinned for every service by tests/unit/test_compose_loopback_binds.py.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
 
   # ── UI ─────────────────────────────────────────────────────────────────────
@@ -31,6 +43,7 @@ services:
         aliases:
           - zoe.local
     restart: unless-stopped
+    logging: *default-logging
 
   # ── Database ───────────────────────────────────────────────────────────────
   # PostgreSQL is required by zoe-auth and host-native zoe-data.
@@ -71,6 +84,7 @@ services:
     networks:
     - zoe-network
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U zoe"]
       interval: 10s
@@ -88,6 +102,7 @@ services:
     networks:
     - zoe-network
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       zoe-database:
         condition: service_healthy
@@ -114,6 +129,7 @@ services:
     image: ghcr.io/home-assistant/home-assistant:stable  # pinned: sha256:449140e073d8d7814098cd62dfdbb326ad043f51a3c4d4721889369f46751d52
     container_name: homeassistant
     restart: unless-stopped
+    logging: *default-logging
     ports:
     - 8123:8123
     volumes:
@@ -127,6 +143,7 @@ services:
     build: ./services/homeassistant-mcp-bridge
     container_name: homeassistant-mcp-bridge
     restart: unless-stopped
+    logging: *default-logging
     # LOOPBACK ONLY. The bridge has NO inbound auth — on 0.0.0.0 any LAN host could drive
     # Home Assistant through it. Every consumer is host-local or on zoe-network:
     # zoe-data uses ZOE_HA_BRIDGE_URL=http://127.0.0.1:8007; Home Assistant calls
@@ -178,6 +195,7 @@ services:
     image: livekit/livekit-server:latest
     container_name: livekit
     restart: unless-stopped
+    logging: *default-logging
     command: --config /config.yaml
     environment:
     # The API key pair is NOT in the tracked config.yaml — it comes from the
@@ -237,6 +255,7 @@ services:
     image: ghcr.io/ridafkih/keeper.sh:latest
     container_name: zoe-keeper
     restart: unless-stopped
+    logging: *default-logging
     profiles:
     - keeper
     ports:
@@ -266,6 +285,7 @@ services:
     container_name: zoe-cloudflared
     command: --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
     restart: unless-stopped
+    logging: *default-logging
     profiles:
     - cloudflare
     volumes:

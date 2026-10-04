@@ -3148,6 +3148,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_PERSONA_DRIFT": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/persona_drift.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_PERSONA_LAYER": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/persona_layer.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED": {
         "defaults": [
           "''"
