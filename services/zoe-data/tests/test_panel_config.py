@@ -931,3 +931,56 @@ def test_toggle_pin_still_dims_on_unknown():
                                  "attributes": {"friendly_name": "Ceiling Fan"}}}
     pin = _one({"entity_id": "input_boolean.fan", "name": "Fan"}, idx)
     assert pin["available"] is False
+
+
+# ── _entity_index: a bridge error body is UNKNOWN, not "no entities" ──────────
+# 2026-10-04 container log review. homeassistant-mcp-bridge answers GET /entities with
+# HTTP 200 {"entities": [], "count": 0, "error": ..., "status": N} when Home Assistant
+# itself fails, so raise_for_status() never fires. Reading that as an empty index marks
+# every pin stale; None ("cannot tell") is the contract the callers rely on.
+
+
+class _BridgeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+def _bridge_client(payload):
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url):
+            return _BridgeResponse(payload)
+
+    return _Client
+
+
+async def test_entity_index_treats_a_bridge_error_body_as_unknown(monkeypatch):
+    err = {"entities": [], "count": 0, "error": "Home Assistant request timeout", "status": 408}
+    monkeypatch.setattr(pc.httpx, "AsyncClient", _bridge_client(err))
+    assert await pc._entity_index() is None
+
+
+async def test_entity_index_still_indexes_a_healthy_bridge_answer(monkeypatch):
+    ok = {"entities": [{"entity_id": "switch.a", "state": "on"}], "count": 1}
+    monkeypatch.setattr(pc.httpx, "AsyncClient", _bridge_client(ok))
+    assert await pc._entity_index() == {"switch.a": {"entity_id": "switch.a", "state": "on"}}
+
+
+async def test_entity_index_genuinely_empty_house_is_empty_not_unknown(monkeypatch):
+    # No "error" key: an HA with zero entities is a real answer ({}), distinct from unknown.
+    monkeypatch.setattr(pc.httpx, "AsyncClient", _bridge_client({"entities": [], "count": 0}))
+    assert await pc._entity_index() == {}

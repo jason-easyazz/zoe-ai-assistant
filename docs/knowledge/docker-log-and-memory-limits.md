@@ -8,6 +8,8 @@ timestamp: 2026-10-03T23:00:00+08:00
 
 # Docker log rotation and container memory limits (A8 + A9)
 
+> **Status 2026-10-04** (evidence in [log-review-docker-2026-10-04.md](log-review-docker-2026-10-04.md)): A8 step 1 is DONE. `daemon.json` carries the log-opts (edited 10:32 AWST) and dockerd was restarted at 14:35 AWST, so the default is armed; only `zoe-ui` and `zoe-auth` have been re-created since, the other ten containers still show `map[]`. The compose `x-logging` anchor (the "repo follow-up" below) has landed for all 13 services. A9 (memory caps) is NOT applied: every `memory.max` is `max`. The text below is the 2026-10-03 original, kept unchanged, including its "nothing applied" statements and the `daemon.json` ground truth, which describe that earlier date.
+
 Source: the infrastructure audit, `docs/research/infra-data-config-2026-10-03.md` §2 D4/D5 and
 §3 A8/A9 (branch `docs/research-infra-config`), and the 2026-10-03 memory profile
 (`docs/knowledge/memory-pressure-profile-2026-10-03.md`, branch `docs/memory-profile-2026-10-03`). Nothing here has been

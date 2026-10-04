@@ -52,6 +52,87 @@
     ]);
     let _capabilityMatrix = null;
 
+    // ── Desktop auth gate (runs SYNCHRONOUSLY at script evaluation) ───────────
+    // Every desktop data page used to fire its DOMContentLoaded fetches with no
+    // member session, 401/403 on each, open /ws/push without a session (403,
+    // reconnecting every ~1 s) and only THEN paint a "Session Expired" overlay —
+    // while `window.zoeAuthReady` had zero consumers. A guest session counted as
+    // signed in and chat.html listed the shared guest pool to any LAN visitor.
+    // Pure function (pathname + session object → redirect target or null) so the
+    // no-browser harness can pin it: dist/test_desktop_wave3.js.
+    const DESKTOP_PUBLIC_PATHS = new Set([
+        '/', '/index.html', '/auth.html', '/404.html', '/offline.html',
+        '/jukebox.html', '/setup-device.html', '/setup-music.html', '/voice.html',
+        '/clear-cache.html', '/clear-cache-v2.html', '/clear-session.html',
+    ]);
+    function desktopAuthGate(pathname, session) {
+        const path = String(pathname || '/');
+        if (path.startsWith('/touch/')) return null;          // the estate owns its own auth
+        if (DESKTOP_PUBLIC_PATHS.has(path)) return null;
+        if (!session || !session.session_id) return '/index.html';
+        if (isExpiredSessionObject(session)) return '/index.html';
+        if (isGuestSessionObject(session)) return '/index.html'; // desktop is members-only
+        return null;
+    }
+
+    // ── ONE push socket per page ──────────────────────────────────────────────
+    // notifications-panel.js, zoe-orb.js and chat.html each opened their own
+    // /ws/push?channel=all; two of them sent no session_id, which the server
+    // refuses (close 1008 → HTTP 403), so the bell's "instant" path was dead for
+    // signed-in users too and logged-out pages reconnected every few seconds.
+    // Factory so the harness can drive it with a fake WebSocket + fake timers.
+    function createPushHub(deps) {
+        const WS = deps.WebSocket, getSid = deps.getSessionId, loc = deps.location;
+        const setT = deps.setTimeout, clearT = deps.clearTimeout, setI = deps.setInterval, clearI = deps.clearInterval;
+        const PING_MS = 30000, MIN_RETRY = 2000, MAX_RETRY = 30000;
+        const subs = new Set();
+        let ws = null, retryMs = MIN_RETRY, retryT = null, pingI = null, started = false, closed = false, attempts = 0;
+        function dispatch(msg) {
+            subs.forEach((fn) => { try { fn(msg); } catch (_) {} });
+            if (deps.onMessage) { try { deps.onMessage(msg); } catch (_) {} }
+        }
+        function connect() {
+            const sid = getSid();
+            if (!sid) return;                      // no member session → no socket, no retries
+            const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+            attempts += 1;
+            try {
+                ws = new WS(proto + '//' + loc.host + '/ws/push?channel=all&session_id=' + encodeURIComponent(sid));
+            } catch (_) { schedule(); return; }
+            const mine = ws;
+            mine.onopen = function () {
+                retryMs = MIN_RETRY;
+                if (pingI) clearI(pingI);
+                pingI = setI(function () { try { mine.send(JSON.stringify({ type: 'ping' })); } catch (_) {} }, PING_MS);
+            };
+            mine.onmessage = function (ev) {
+                let msg = null;
+                try { msg = JSON.parse(ev.data); } catch (_) { return; }
+                if (msg && msg.type && msg.type !== 'pong') dispatch(msg);
+            };
+            mine.onclose = function () {
+                if (pingI) { clearI(pingI); pingI = null; }
+                if (ws === mine) ws = null;
+                if (!closed && ws === null) schedule();
+            };
+            mine.onerror = function () { try { mine.close(); } catch (_) {} };
+        }
+        function schedule() {
+            if (retryT || closed) return;
+            retryT = setT(function () { retryT = null; connect(); }, retryMs);
+            retryMs = Math.min(retryMs * 2, MAX_RETRY);
+        }
+        return {
+            subscribe(fn) {
+                subs.add(fn);
+                if (!started) { started = true; connect(); }
+                return function () { subs.delete(fn); };
+            },
+            close() { closed = true; if (retryT) { clearT(retryT); retryT = null; } if (ws) { try { ws.close(); } catch (_) {} } },
+            _state() { return { attempts, connected: !!ws, retryMs, subscribers: subs.size }; },
+        };
+    }
+
     function isExpiredSessionObject(session) {
         if (!session || !session.expires_at) return false;
         const expiresAt = new Date(session.expires_at);
@@ -296,6 +377,7 @@
     async function enforceAuth() {
         const currentPath = window.location.pathname;
         const search = window.location.search || '';
+        if (window.__zoeAuthRedirecting) return;   // the synchronous desktop gate already sent us to login
         // Persist kiosk mode in sessionStorage so navigations within the touch UI
         // don't lose it (voice commands navigate to /touch/calendar.html etc. without query params).
         // sessionStorage is tab-scoped and cleared when the browser tab closes, preventing
@@ -528,10 +610,12 @@
         getSessionObject,
         setSession,
         isAuthenticated,
+        isAuthenticatedNonGuestSession,
         getCurrentUser,
         getCurrentSession,
         logout,
         enforceAuth,
+        desktopAuthGate,
         config: AUTH_CONFIG
     };
 
@@ -542,6 +626,35 @@
     // This prevents race condition where DOMContentLoaded triggers both
     // the interceptor installation AND the first API calls
     setupFetchInterceptor();
+
+    // Desktop pages: decide BEFORE any page script runs its init. A redirect here
+    // means the page's DOMContentLoaded fetches never fire (navigation aborts them).
+    window.__zoeAuthRedirecting = false;
+    try {
+        const gateTarget = desktopAuthGate(window.location.pathname, getSessionObject());
+        if (gateTarget) {
+            window.__zoeAuthRedirecting = true;
+            try { sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname + window.location.search); } catch (_) {}
+            window.location.replace(gateTarget);
+        }
+    } catch (_) {}
+
+    // The one push socket for this page. Subscribers get parsed messages; the
+    // hub also re-dispatches each one as a `zoe:push_event` window event for
+    // the pages that already listen that way (chat.html / agent-activity.js).
+    window.zoePush = createPushHub({
+        WebSocket: window.WebSocket,
+        getSessionId: function () {
+            if (window.__zoeAuthRedirecting) return '';
+            const s = getSessionObject();
+            if (!s || !s.session_id || isExpiredSessionObject(s) || isGuestSessionObject(s)) return '';
+            return s.session_id;
+        },
+        location: window.location,
+        setTimeout: window.setTimeout.bind(window), clearTimeout: window.clearTimeout.bind(window),
+        setInterval: window.setInterval.bind(window), clearInterval: window.clearInterval.bind(window),
+        onMessage: function (msg) { try { window.dispatchEvent(new CustomEvent('zoe:push_event', { detail: msg })); } catch (_) {} },
+    });
 
     // Auth enforcement can wait for DOM (needs UI elements)
     async function populateUserProfile() {

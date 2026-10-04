@@ -233,3 +233,31 @@ def test_automated_compose_ups_never_converge_the_database():
     m = re.search(r'"docker", "compose", "-f", COMPOSE_FILE,\s*"up",([^\n]*)', updater)
     assert m, "system_updates.py compose-up call not found — update this guard"
     assert '"--no-deps"' in m.group(1), "system_updates.py compose up must pass --no-deps"
+
+
+def test_every_compose_service_has_bounded_json_file_logs():
+    """No service may fall back to Docker's uncapped json-file default.
+
+    2026-10-04 log review: container logs had no ``max-size`` anywhere --
+    ``zoe-multica-backend`` alone held 621 MB after seven weeks and ``docker logs``
+    needed a ``--since`` to be usable at all. The anchor in each compose file bounds
+    every service it defines; a service added later without ``logging:`` (or one whose
+    cap drifts to something unbounded) is red here. Takes effect when a container is
+    (re)created -- see docs/knowledge/docker-log-and-memory-limits.md for the daemon half.
+    """
+    seen = 0
+    for rel in COMPOSE_FILES:
+        for name, svc in (_load(rel).get("services") or {}).items():
+            logging = (svc or {}).get("logging") or {}
+            where = f"{rel}:{name}"
+            assert logging.get("driver") == "json-file", f"{where}: logging.driver must be json-file"
+            opts = logging.get("options") or {}
+            size = str(opts.get("max-size", ""))
+            m = re.fullmatch(r"(\d+)([kmg])", size)
+            assert m, f"{where}: logging.options.max-size missing/unparseable ({size!r})"
+            mb = int(m.group(1)) * {"k": 1 / 1024, "m": 1, "g": 1024}[m.group(2)]
+            assert 0 < mb <= 50, f"{where}: max-size {size} is not a real cap (<= 50m)"
+            files = int(opts.get("max-file", 0))
+            assert 2 <= files <= 10, f"{where}: max-file {files} (rotation needs >= 2 files)"
+            seen += 1
+    assert seen >= 13, f"only {seen} services checked -- a compose file stopped being read"

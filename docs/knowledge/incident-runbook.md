@@ -1,9 +1,15 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and reading the panel Pi's voice logs (journal flood, outage recovery, thermal, USB). Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness, zoe-pi, thermal, journald]
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and reading the panel Pi's voice logs (journal flood, outage recovery, thermal, USB). The under-rotated zoe-data stderr/stdout logs (poll-loop request lines + library chatter, rotation timer) are §26. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness, zoe-pi, thermal, journald, logging, logrotate]
 timestamp: 2026-10-04T22:00:00+08:00
+
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and installed units drifting from their merged templates (unit_drift_check.py) with the 2026-10-04 evening log-review operator steps. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, unit-drift, log-review, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness]
+timestamp: 2026-09-30T11:00:00+08:00
+
+timestamp: 2026-10-04T22:30:00+08:00
 ---
 
 # Production Incident Runbook
@@ -815,3 +821,270 @@ the daemon.
 **Inert settings.** `Nice=-5` in `zoe-voice.service` has no effect (`ps -o ni` shows 0; the user
 manager's `RLIMIT_NICE` is 0). The daemon has no CPU priority edge on the Pi; keep other load
 off the box instead.
+
+## 24. Installed unit drifted from its merged template — and the operator steps from the 2026-10-04 evening log review
+
+**Signature.** A unit-template fix is merged, every test is green, and the symptom it
+was written to prevent is still live. The 2026-10-04 review found it three ways at once
+(full inventory: [log-review-units-2026-10-04.md](log-review-units-2026-10-04.md)):
+
+* `functiongemma-router` runs WITHOUT `--mlock`, `LimitMEMLOCK=infinity` and
+  `MemoryMax=1280M` (live `VmLck: 0 kB`) although the template carries them;
+* `kokoro-tts` runs `TimeoutStartSec=120` vs the template's 300 — drift with **no runtime
+  effect** (`Type=simple`, no `ExecStartPre/Post`: the timeout never runs during its brain wait);
+* every Flue/Node stop or restart logs `status=143` + `Failed with result 'exit-code'`.
+
+**Diagnose in one command (read-only — parses unit files, never calls systemctl):**
+
+```bash
+python3 scripts/maintenance/unit_drift_check.py            # exit 1 = drift, 2 = unreadable unit; values print as sha256 prefixes
+python3 scripts/maintenance/unit_drift_check.py --show-values  # readable (trusted terminal only)
+python3 scripts/maintenance/unit_drift_check.py --units functiongemma-router --json
+python3 scripts/maintenance/unit_drift_check.py --strict   # also fail on untracked host edits
+```
+
+`MISSING`/`DIFFERS` = merged template not applied (act). `LIVE_ONLY` = an untracked host edit
+(track it as a drop-in or leave it). Run it after every merge touching `scripts/setup/systemd/`.
+Known harmless residue: kokoro `PYTHONPATH`/`ZOE_KOKORO_BACKEND`, serena `MemorySwapMax=0`
+(stricter than the template); **to confirm**: live zoe-data omits the repo-root `.env` its
+template lists first.
+
+### Operator steps (applying is NOT done by the PR)
+
+**(a) Router — apply the merged template (adds `--mlock`, `LimitMEMLOCK`, `MemoryMax=1280M`).**
+Only those three lines differ from the live unit (verified by the tool), so a template copy
+is safe here. The router is CPU-only (~650 MB), so no Kokoro pause is needed, but restart
+OUTSIDE a landing probe (a restart mid-probe records a spurious `fail`, section 15(d)) and
+note that for the ~5 s of the restart the stage-2 call times out and the turn keeps the
+similarity route.
+
+```bash
+cp ~/.config/systemd/user/functiongemma-router.service /tmp/functiongemma-router.service.bak
+cp scripts/setup/systemd/functiongemma-router.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user restart functiongemma-router
+curl -s localhost:11436/health && curl -s localhost:11436/props | grep -c r2     # healthy AND the r2 GGUF
+P=$(systemctl --user show -p MainPID --value functiongemma-router)
+grep -E 'VmLck|VmSwap|VmRSS' /proc/$P/status      # VmLck ~280 MB (the GGUF), VmSwap 0
+python3 scripts/maintenance/unit_drift_check.py --units functiongemma-router   # no drift
+# rollback: cp /tmp/functiongemma-router.service.bak ~/.config/systemd/user/ ; daemon-reload ; restart
+```
+
+If `VmLck` stays 0: `mlock` failing on `RLIMIT_MEMLOCK` is only a WARNING in llama.cpp —
+check `journalctl --user -u functiongemma-router | grep -i mlock` and
+`systemctl --user show functiongemma-router -p LimitMEMLOCK`.
+
+**(b) Kokoro — optional, template consistency only** (no runtime effect; drop-in, next start):
+
+```bash
+mkdir -p ~/.config/systemd/user/kokoro-tts.service.d
+cp scripts/setup/systemd/kokoro-tts.service.d/70-start-timeout.conf ~/.config/systemd/user/kokoro-tts.service.d/
+systemctl --user daemon-reload      # NO restart — do not bounce TTS for this
+systemctl --user show kokoro-tts -p TimeoutStartUSec    # 5min
+```
+
+**(c) Flue/Node units — stop reporting a clean SIGTERM as a failure** (drop-ins, no restart):
+
+```bash
+for u in flue-zoe-brain-2x flue-zoe-telegram; do
+  mkdir -p ~/.config/systemd/user/$u.service.d
+  cp scripts/setup/systemd/$u.service.d/50-exit-143.conf ~/.config/systemd/user/$u.service.d/
+done
+systemctl --user daemon-reload
+systemctl --user show flue-zoe-brain-2x flue-zoe-telegram -p SuccessExitStatus     # 143
+```
+
+**(d) Landing helpers (`~/.zoe/agent-tools/`, not in the repo — for the tool owner).**
+Edit them while NO landing is running (section 13: editing a running script left Kokoro
+down for 5 minutes):
+
+1. `land_voice_pr.sh` stops Kokoro, THEN calls `wait_deploy` (up to 22 min). Tonight one
+   landing kept TTS down 303 s (21:34:46 stop -> 21:39:49 ready) while only waiting for another PR's
+   deploy. Move `systemctl --user stop kokoro-tts.service` (and its headroom loop) to just
+   AFTER `wait_deploy` + the post-wait restart re-check, immediately before the probe. The
+   `trap ... start kokoro-tts` on EXIT already restores it.
+2. Every `gh` call needs a repo (`cd /home/zoe/assistant` first, done in `land_queue.sh`
+   during the review, or `-R <owner>/<repo>`); `docs_merge_chain.sh` still prints
+   `failed to run git: fatal: not a git repository` and a blank `queue #N -> ` state.
+3. 10 probes for 4 merges: a merge during a ~5-10 min probe makes every other queued PR
+   BEHIND and sig #36 (never move the head after its probe) forces a repeat. Land fewer
+   voice-path PRs concurrently; do not relax sig #36.
+
+Noise classes to NOT chase (router `W restored context checkpoint` = a cache hit; the
+two large probe re-prefills; red-then-green `replay-evidence`; probe EMPTY flapping 0-2) are
+listed in [log-review-units-2026-10-04.md](log-review-units-2026-10-04.md) sections 2 and 3.
+
+## 25. Reviewing Docker logs without drowning, and bounding them (2026-10-04)
+
+Evidence and per-container inventory: [log-review-docker-2026-10-04.md](log-review-docker-2026-10-04.md).
+The sizing tables, apply and rollback commands for log rotation and memory caps already exist in
+[docker-log-and-memory-limits.md](docker-log-and-memory-limits.md); this entry is the signature,
+the safe read recipe and the current state, not a second copy of that recipe.
+
+**Signatures**
+
+- `docker logs <c>` hangs or prints thousands of lines: the container's json log is unbounded
+  (`docker inspect -f '{{.HostConfig.LogConfig}}' <c>` prints `{json-file map[]}`). Never dump it;
+  always `--since <iso>` and pipe through `grep`/`sort | uniq -c | sort -rn | head`.
+- Postgres `ERROR: duplicate key value violates unique constraint "apscheduler_jobs_pkey"` (three job
+  ids, once per zoe-data start) was APScheduler's `replace_existing` doing INSERT-then-UPDATE. Fixed in
+  `proactive/scheduler.py`; if it reappears after a zoe-data restart, a new code path is adding jobs
+  around `get_scheduler().add_job` (check it passes `id=` and `replace_existing=True`).
+- A `502` burst in `zoe-ui` with `connect() failed (111)` to `172.17.0.1:8000` is zoe-data restarting, not
+  nginx. Count the bursts against zoe-data restarts before touching the proxy.
+- `homeassistant-mcp-bridge` answering **200 with an `error` body** is how an HA failure looks: the
+  bridge now logs one `HA request failed: <METHOD> /api/<path> -> <status>` WARNING per minute per
+  class. Silence in this container is only meaningful after that change is deployed.
+- `Error loading provider(instance) ytmusic--...: User does not have Youtube Music Premium (will be
+  retried later)` every two minutes, plus yt-dlp `account cookies are no longer valid`: the YouTube
+  Music login expired. Section 10 is the fix (panel Music -> Browse -> Sources -> Reconnect -> QR).
+- `zoe-ui-test` (or any `zoe-*-test`) with a bind mount under `.claude/worktrees/...` is an agent
+  session's throwaway preview, not an estate service. Leave it while that session is live;
+  `docker rm -f` it afterwards.
+
+**State at 2026-10-04 22:00 AWST**
+
+- `/etc/docker/daemon.json` already holds `log-opts` 10m x 3 and `dockerd` was restarted at 14:35 AWST
+  (everything bounced; Home Assistant logged an unclean shutdown). **Do not restart dockerd again for
+  logs.** The daemon default applies to every container created from now on.
+- Bounded today: `zoe-ui`, `zoe-auth` (re-created after 14:35). Still `{json-file map[]}`: the other
+  ten. Compose now also carries the cap on all 13 services (pinned by
+  `tests/unit/test_compose_loopback_binds.py`), so a re-create from compose is bounded even if the
+  daemon file is ever lost.
+- No container has a memory cap (`memory.max` is `max` everywhere, all `oom_kill` counters are 0).
+
+**Operator steps (a window action; each is a re-create, none is urgent)**
+
+1. Re-create the stateless containers first, one at a time, with the compose file set and profile they
+   were created with (read it from the container's `com.docker.compose.project.config_files` label):
+   `docker compose -f <files> [--profile <p>] up -d --no-deps --force-recreate <service>` for
+   `homeassistant-mcp-bridge` (also picks up the F3 log fix, no rebuild needed), `zoe-ytmusic-potoken`,
+   `zoe-multica-web`, `zoe-multica-backend`, `zoe-cloudflared`, then `zoe-smb-drop`.
+2. `homeassistant`, `zoe-multica-web` and `zoe-smb-drop` were created by `docker run` per the audit: a
+   compose file cannot reach them; they pick the cap up on a hand re-create.
+3. `zoe-music-assistant`: re-create only together with the YouTube Music reconnect (section 10), because
+   MA restarts carry the re-auth risk and the provider is already down.
+4. `zoe-database` and `zoe-omnigent`: leave until the Postgres/B0.12 window and the omnigent measurement
+   respectively; both are exempt from memory caps in the audit.
+5. After each: `docker inspect -f '{{.HostConfig.LogConfig}}' <c>` must print
+   `{json-file map[max-file:3 max-size:10m]}` and `curl -fsS` the service's health.
+6. Memory caps: apply the `docker update --memory ... --memory-swap ...` block from
+   docker-log-and-memory-limits.md exactly as written (live, no restart). It is unchanged by this review.
+7. Disk hygiene (optional, 23% used): `docker builder prune --filter until=168h` (6.7 GB reclaimable) and
+   `docker container prune` after confirming the four stale exited containers are unwanted.
+
+**Home Assistant UI actions** (state is in `/config/.storage`, not the repo): remove or repair the
+ESPHome entry whose host:6053 refuses connections; renew the Tuya IoT Core subscription or move
+localtuya to local-only (its cloud fallback is logging error 28841002).
+
+## 26. zoe-data stderr/stdout logs grow without bound (119 MB / 86 MB in a day) (2026-10-04)
+
+**Signature:** `~/.zoe-logs/zoe-data.stderr.log` and `zoe-data.stdout.log` keep growing
+(`ls -l ~/.zoe-logs`; the 09-25 review found a 445 MB stdout; the 10-03 02:50 stderr archive was
+made by the host's old `~/bin/zoe-logs-rotate.sh`, and 40 h later the file was 119 MB again). The in-process **app log** is NOT the problem — it
+rotates itself at 6 × 10 MB, but at the old volume that was only ~a day of history.
+
+**Cause (measured on the 17:00→21:46 window and the whole file):** systemd's `append:` never
+rotates and the host has no logrotate. The only rotator was a host-local, **untracked** pair —
+`~/bin/zoe-logs-rotate.sh` + `~/.config/systemd/user/zoe-logs-rotate.{service,timer}` (note the
+"logs") — daily 02:50, acting only above **150 MB**, archiving with timestamped `.gz` and then
+rewriting the file with `tail -c 50MB` (cuts mid-line, non-atomic `cat >`), pruning only the
+*stdout* archives to 3. At ~70 MB/day of stderr it fired about every other day, so the files sat at
+86–119 MB in between. Three producers wrote the same healthy traffic:
+`middleware/logging.py setup_json_logging()` puts an INFO JSON `StreamHandler` on the root logger
+(stderr) — 78% of stderr bytes were `Request completed` lines for seven kiosk **polls**
+(`/api/ui/actions/pending`, `/api/ui/state/sync`, `/api/voice/announcements`,
+`/api/system/display/preferences`, `/api/skybridge/timers`, `/api/ha/entities`,
+`/api/panels/*/config`), 17% were `httpx` per-call lines and apscheduler "Running job"/"executed
+successfully" pairs; uvicorn's access log put the same polls on stdout (94% of 1.1 M lines).
+Everything was `200 OK`.
+
+**Fix shipped (code, takes effect at the next zoe-data restart):** healthy fast polls log at
+DEBUG (middleware + a `uvicorn.access` filter; `>=400` or `>=1 s` still INFO), httpx/httpcore/
+apscheduler-executor capped at WARNING, repeated identical warnings and upstream-outage
+tracebacks throttled to one line per minute (`log_throttle.py`). Expected stderr volume: ~4% of
+before (≈3 MB/day). Knobs (all optional, in `.env`): `ZOE_LOG_QUIET_POLL_PATHS` (`off` disables),
+`ZOE_LOG_QUIET_POLL_SLOW_MS`, `ZOE_LOG_CHATTY_LIBS_LEVEL=INFO` (restore the lines),
+`ZOE_LOG_REPEAT_WINDOW_S`.
+
+**🧑 Operator steps (nothing below is done by a deploy):**
+
+```bash
+# 1. Retire the old host-local rotator FIRST (two rotators must never share these files), then
+#    install the tracked one (user timer; hourly size check, rotates at >= 50 MB, keeps 4 segments
+#    named zoe-data.stderr.1.log.gz ... — a name the old script's `*.log.*.gz` prune cannot match).
+systemctl --user disable --now zoe-logs-rotate.timer
+mv ~/bin/zoe-logs-rotate.sh ~/bin/zoe-logs-rotate.sh.retired
+rm -f ~/.config/systemd/user/zoe-logs-rotate.{service,timer}
+cd ~/assistant            # after the PR is merged and the live checkout is fast-forwarded
+python3 scripts/maintenance/rotate_service_logs.py --dry-run          # shows what it would rotate
+cp scripts/setup/systemd/zoe-log-rotate.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now zoe-log-rotate.timer
+systemctl --user start zoe-log-rotate.service     # rotate the two big files now (copytruncate: no restart)
+ls -l ~/.zoe-logs/zoe-data.std*.log*              # expect ~0 MB live files + *.1.log.gz
+# the old script's timestamped archives (zoe-data.std*.log.2026*.gz) are no longer pruned by anyone:
+# delete the ones you do not want.
+
+# 2. Pick up the volume fixes (zoe-data restart; poll /health afterwards, not `is-active`).
+systemctl --user restart zoe-data && until curl -fsS localhost:8000/health >/dev/null; do sleep 2; done
+
+# 3. Housekeeping: two stale hand-launched logs from 2026-06-18 (an ad-hoc :8011/:8012 pair;
+#    nothing in the repo or any unit starts them; nothing listens there).
+rm -f ~/.zoe-logs/zoe-data-8011.log ~/.zoe-logs/zoe-data-8012.log
+
+# 4. Tighten the existing world-readable app-log segments (new ones are created 0640 by the fix).
+chmod 640 ~/.zoe-logs/zoe-data.app.log*
+```
+
+Only on a rebuilt host that lacks the capture drop-in: copy
+`scripts/setup/systemd/zoe-data.service.d/20-capture-output.conf` (comment in the file).
+
+**WebSocket 403 bursts from `https://<box-ip>:8443`** (`Rejected cross-origin WebSocket
+handshake`, plus `connection rejected (403)` from uvicorn): that is the UI-verification nginx on
+:8443 hitting the CSWSH guard — correct behaviour, not an outage; the production origin is
+`https://<box-ip>` (no port). Only if you WANT sockets on the verification port, add
+`ZOE_ALLOWED_WS_ORIGINS=https://<box-ip>:8443` (comma list, `.env`) and restart. Repeats are now
+one line per minute.
+
+**Other findings this review left for the operator** are listed in
+`docs/knowledge/log-review-2026-10-04.md` § "What remains".
+
+## 27. Pi deploy broke the unit — `zoe-voice` dead with `status=203/EXEC` (2026-10-04)
+
+**Signature.** Right after `scripts/setup/deploy-pi-voice.sh`, the panel has no voice:
+`systemctl --user status zoe-voice` (as `pi` on `zoe-pi`) shows `status=203/EXEC` (or a
+crash loop), `/health` on 127.0.0.1:7777 does not answer.
+
+**Cause.** The old script rsynced the repo's `scripts/setup/zoe-voice.service` — the **Jetson**
+template (`/home/zoe/venv/bin/python3`, `WorkingDirectory=/home/zoe/assistant/scripts/setup`,
+`EnvironmentFile=-/home/zoe/.zoe-voice/.env.voice`, `WantedBy=multi-user.target`) — and installed
+it over `~/.config/systemd/user/zoe-voice.service`, stripping only `User=`/`Group=`. None of those
+paths exist on the Pi. The same script also never shipped `zoe_voice_announce.py`, so an announce
+fix never reached the Pi (the daemon tolerates the missing import and silently disables announce
+polling).
+
+**Restore (as `pi`, on the Pi).** A known-good copy of the unit lives at
+`/home/pi/.zoe-voice/zoe-voice.service.pi-20261004` — `cp` it to
+`~/.config/systemd/user/zoe-voice.service`, then `systemctl --user daemon-reload && systemctl --user
+restart zoe-voice`. If that copy is gone, the unit with the panel paths is the template with:
+
+```
+WorkingDirectory=/home/pi/.zoe-voice
+EnvironmentFile=-/home/pi/.zoe-voice/.env.voice
+ExecStart=/home/pi/.zoe-voice/venv/bin/python3 /home/pi/.zoe-voice/zoe_voice_daemon.py
+WantedBy=default.target          # user unit; no User=/Group=
+```
+
+Then confirm: `systemctl --user is-active zoe-voice` = `active`, `curl -s 127.0.0.1:7777/health`.
+Read logs via `~/.zoe-voice/voice.log` or `journalctl -u zoe-voice` (system journal, see §23).
+
+**Prevention (landed).** `deploy-pi-voice.sh` now ships only the daemon, `zoe_voice_announce.py`
+and `pi-requirements.txt` (backups `<file>.bak-<ts>` kept by rsync), **never touches the installed
+unit by default** and just restarts. `--install-unit` renders a Pi unit for `PI_DAEMON_DIR`/`PI_VENV`
+and refuses when a unit exists unless `--force-unit` (unit backup `zoe-voice.service.bak-<ts>`).
+After the restart it checks `is-active` (20 s), `/health` and per-file md5 against the local copies,
+exits 4 and prints the rollback if any fails. Rollback = restore the `.bak-<ts>` files and
+`systemctl --user restart zoe-voice`. Pinned by `tests/unit/test_deploy_pi_voice_script.py`.
+
+**Rule of thumb.** `scripts/setup/*.service` files are Jetson templates unless the name says
+otherwise; a deploy to another host must render, never copy, them.

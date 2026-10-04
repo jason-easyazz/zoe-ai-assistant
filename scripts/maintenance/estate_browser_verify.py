@@ -92,6 +92,9 @@ with sync_playwright() as p:
     check(pg.evaluate("()=>!document.querySelector('#authov.on')"), "card auto-hides after the 120 s challenge TTL")
     print("--- 4. the PIN pad still works after repeated show/hide (no duplicated key handlers)")
     pg.evaluate("()=>window.__showAuthCard()"); pg.clock.run_for(500); time.sleep(1.5)
+    pg.click('.akey[data-k="1"]', force=True); pg.clock.run_for(100); time.sleep(0.2)   # the inert pad passes the tap to the column behind it
+    check(pg.evaluate("()=>document.getElementById('auLead').textContent")=="Tap your name first", "a digit before a name says 'Tap your name first' (the pad is never silently dead)")
+    check(pg.evaluate("()=>document.querySelectorAll('#auDots .adot.f').length")==0, "…and fills no dot")
     pg.click('.au[data-u="jason"]'); pg.clock.run_for(100); time.sleep(0.2)
     pg.click('.akey[data-k="1"]'); pg.clock.run_for(100); time.sleep(0.2)
     filled=pg.evaluate("()=>document.querySelectorAll('#auDots .adot.f').length")

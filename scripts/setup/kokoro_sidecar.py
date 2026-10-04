@@ -484,6 +484,12 @@ def _wait_for_brain_ready() -> None:
     )
 
 
+# The repo KPipeline defaults to. Passing it explicitly removes the per-start
+# "Defaulting repo_id to hexgrad/Kokoro-82M" WARNING (11 starts in the 2026-10-04
+# evening) with no behaviour change (docs/knowledge/log-review-units-2026-10-04.md).
+_KOKORO_REPO_ID = "hexgrad/Kokoro-82M"
+
+
 def _load_pipeline():
     """Load and return the Kokoro pipeline (blocking; run once in thread pool)."""
     global _device
@@ -513,7 +519,7 @@ def _load_pipeline():
     if device == "cuda":
         for attempt in range(1, _CUDA_LOAD_ATTEMPTS + 1):
             try:
-                pipeline = KPipeline(lang_code="a", device="cuda")
+                pipeline = KPipeline(lang_code="a", repo_id=_KOKORO_REPO_ID, device="cuda")
                 _device = "cuda"
                 _degraded_reason = None
                 logger.info("Kokoro pipeline ready on cuda.")
@@ -534,7 +540,7 @@ def _load_pipeline():
         "restart kokoro-tts.service. (/health reports degraded=true.)",
         _CUDA_LOAD_ATTEMPTS, _degraded_reason,
     )
-    pipeline = KPipeline(lang_code="a", device="cpu")
+    pipeline = KPipeline(lang_code="a", repo_id=_KOKORO_REPO_ID, device="cpu")
     _device = "cpu"
     return pipeline
 

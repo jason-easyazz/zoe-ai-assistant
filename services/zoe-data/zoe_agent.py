@@ -41,6 +41,7 @@ os.environ.setdefault("ORT_DISABLE_GPU", "1")
 import httpx
 
 from agent_safety import CommandRejected, check_bash_command, guard_browser_page, is_public_url
+import persona_layer
 from typed_env import env_int, env_str
 
 logger = logging.getLogger(__name__)
@@ -291,6 +292,12 @@ Zoe can do weather, calendar (show/create), reminders (show/create), shopping/pe
 
 VOICE ESCALATION: For complex tasks (research, browsing, multi-step work, code), escalate with background=True where supported — prefer Hermes — say "I'll work on that and let you know," and never block voice more than 5s."""
 
+# Persona layer (flag-dark ZOE_PERSONA_LAYER, persona_layer.py): the fixed PERSONA paragraphs
+# of each soul, the swap points for the rendered household persona. SLICED from the souls
+# above, never retyped, so those stay byte-identical (pinned by tests/test_persona_layer.py).
+_ZOE_PERSONA_FIXED = _ZOE_SOUL_BASE.split("\n\nAnswer everyday questions", 1)[0]
+_ZOE_PERSONA_FIXED_VOICE = _ZOE_SOUL_VOICE.split(" This is spoken:", 1)[0]
+
 # Voice-mode tool subset for recovery when intent routing misses.
 # Compact for latency: only the tools a spoken turn can actually reach. The long
 # tail (OpenClaw browser automation, capability-gap builds) goes through
@@ -418,7 +425,8 @@ def _build_voice_prompt(message: str, *, user_id: str, extras: list) -> tuple[st
     context = "\n\n".join(
         filter(None, [_soul_header(user_id=user_id), *[e for e in extras if e]])
     )
-    return _ZOE_SOUL_VOICE, (f"{context}\n\n{message}" if context else message)
+    soul = persona_layer.apply_to_prompt(_ZOE_SOUL_VOICE, _ZOE_PERSONA_FIXED_VOICE, user_id)
+    return soul, (f"{context}\n\n{message}" if context else message)
 
 # OpenAI-compatible tool definitions sent in the API request.
 # llama.cpp routes these through delta.tool_calls, completely separate from text content.
@@ -3859,6 +3867,7 @@ async def run_zoe_agent(
 
     # Load portrait (synthesized narrative understanding of the user)
     user_portrait = portrait if portrait is not None else await _load_user_portrait(user_id)
+    await persona_layer.refresh(user_id)  # no-op unless ZOE_PERSONA_LAYER is on (flag-dark)
 
     # Load user facts, memory context, open loops, and context enhancement in parallel
     mp_facts, memory_ctx, user_open_loops, pending_offers, enhance_ctx = await asyncio.gather(
@@ -3885,7 +3894,7 @@ async def run_zoe_agent(
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
         # The system prompt is byte-identical every turn so llama.cpp can reuse the cache.
         # Portrait and memory go into the user message prefix via _build_prompt.
-        system_prompt = _ZOE_SOUL_STATIC
+        system_prompt = persona_layer.apply_to_prompt(_ZOE_SOUL_STATIC, _ZOE_PERSONA_FIXED, user_id)
         skills = _select_skills(message)
         active_tools = _build_tools(skills)
         user_message = _build_prompt(
@@ -4250,6 +4259,7 @@ async def run_zoe_agent_streaming(
 
     # Load portrait (synthesized narrative understanding of the user)
     user_portrait = portrait if portrait is not None else await _load_user_portrait(user_id)
+    await persona_layer.refresh(user_id)  # no-op unless ZOE_PERSONA_LAYER is on (flag-dark)
 
     # Load user facts, memory context, open loops, and context enhancement in parallel
     mp_facts, memory_ctx, user_open_loops, pending_offers, enhance_ctx = await asyncio.gather(
@@ -4274,7 +4284,7 @@ async def run_zoe_agent_streaming(
     else:
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
         # Portrait and memory go into the user message prefix via _build_prompt.
-        system_prompt = _ZOE_SOUL_STATIC
+        system_prompt = persona_layer.apply_to_prompt(_ZOE_SOUL_STATIC, _ZOE_PERSONA_FIXED, user_id)
         skills = _select_skills(message)
         active_tools = _build_tools(skills)
         # Creative writing: strip all tools so the model generates directly

@@ -169,3 +169,41 @@ def test_dedicated_setting_wins_when_both_present():
 def test_no_recipients_is_reported_loudly_not_silently(capsys):
     """The absence of a recipient must be visible; a silent alerter is the bug."""
     assert mod._recipients({}) == []
+
+
+def test_steady_state_healthy_is_logged_hourly_not_every_tick(rig, capsys):
+    """41,700 identical undated 'healthy +0' lines filled the watcher's log in
+    2026-10 (log review). Steady state must be quiet; any change must speak."""
+    configure, sent = rig
+    configure(restarts=3, healthy=True, active="active")
+    assert mod.check(threshold=5, cooldown=1800, dry_run=False) == 0
+    first = capsys.readouterr().out
+    assert "crash-watch: healthy, restarts=3" in first  # first sight is logged, with a timestamp
+    assert first[:4].isdigit() and "T" in first[:20]
+
+    for _ in range(5):  # five more steady ticks: silence
+        assert mod.check(threshold=5, cooldown=1800, dry_run=False) == 0
+    assert capsys.readouterr().out == ""
+
+    configure(restarts=4, healthy=True, active="active")  # a restart moved the counter: say so
+    assert mod.check(threshold=5, cooldown=1800, dry_run=False) == 0
+    assert "restarts=4 (+1" in capsys.readouterr().out
+
+    configure(restarts=4, healthy=False, active="activating")  # status flip: say so
+    assert mod.check(threshold=5, cooldown=1800, dry_run=False) == 0
+    assert "unhealthy" in capsys.readouterr().out
+
+
+def test_steady_state_heartbeat_returns_after_the_interval(rig, capsys, monkeypatch):
+    configure, _ = rig
+    configure(restarts=0, healthy=True, active="active")
+    t = [1_000_000.0]
+    monkeypatch.setattr(mod.time, "time", lambda: t[0])
+    mod.check(threshold=5, cooldown=1800, dry_run=False)
+    capsys.readouterr()
+    t[0] += mod.HEARTBEAT_S - 1
+    mod.check(threshold=5, cooldown=1800, dry_run=False)
+    assert capsys.readouterr().out == ""
+    t[0] += 2
+    mod.check(threshold=5, cooldown=1800, dry_run=False)
+    assert "healthy" in capsys.readouterr().out
