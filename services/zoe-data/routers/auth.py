@@ -48,9 +48,9 @@ async def logout(
                 upstream_ok = resp.status_code in (200, 204)
                 if not upstream_ok:
                     logger.warning(
-                        "auth/logout: upstream returned %s for session %s...",
+                        "auth/logout: upstream returned %s for session id_digest=%s",
                         resp.status_code,
-                        session_id[:20],
+                        _auth_module._session_digest(session_id),
                     )
         except Exception as exc:
             logger.warning("auth/logout: upstream call failed (%s) — evicting cache anyway", exc)
@@ -59,8 +59,8 @@ async def logout(
     if session_id and session_id in _auth_module._session_cache:
         del _auth_module._session_cache[session_id]
         logger.info(
-            "auth/logout: evicted session %s... from local cache (user=%s)",
-            session_id[:20],
+            "auth/logout: evicted session id_digest=%s from local cache (user=%s)",
+            _auth_module._session_digest(session_id),
             current_user.get("user_id"),
         )
 

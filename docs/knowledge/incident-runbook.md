@@ -1,8 +1,8 @@
 ---
 type: Reference
 title: Production Incident Runbook
-description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and reading the panel Pi's voice logs (journal flood, outage recovery, thermal, USB). Diagnose-fast patterns plus the prevention rules.
-tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness, zoe-pi, thermal, journald]
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and reading the panel Pi's voice logs (journal flood, outage recovery, thermal, USB). The under-rotated zoe-data stderr/stdout logs (poll-loop request lines + library chatter, rotation timer) are §26. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness, zoe-pi, thermal, journald, logging, logrotate]
 timestamp: 2026-10-04T22:00:00+08:00
 
 description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and installed units drifting from their merged templates (unit_drift_check.py) with the 2026-10-04 evening log-review operator steps. Diagnose-fast patterns plus the prevention rules.
@@ -975,3 +975,76 @@ the safe read recipe and the current state, not a second copy of that recipe.
 **Home Assistant UI actions** (state is in `/config/.storage`, not the repo): remove or repair the
 ESPHome entry whose host:6053 refuses connections; renew the Tuya IoT Core subscription or move
 localtuya to local-only (its cloud fallback is logging error 28841002).
+
+## 26. zoe-data stderr/stdout logs grow without bound (119 MB / 86 MB in a day) (2026-10-04)
+
+**Signature:** `~/.zoe-logs/zoe-data.stderr.log` and `zoe-data.stdout.log` keep growing
+(`ls -l ~/.zoe-logs`; the 09-25 review found a 445 MB stdout; the 10-03 02:50 stderr archive was
+made by the host's old `~/bin/zoe-logs-rotate.sh`, and 40 h later the file was 119 MB again). The in-process **app log** is NOT the problem — it
+rotates itself at 6 × 10 MB, but at the old volume that was only ~a day of history.
+
+**Cause (measured on the 17:00→21:46 window and the whole file):** systemd's `append:` never
+rotates and the host has no logrotate. The only rotator was a host-local, **untracked** pair —
+`~/bin/zoe-logs-rotate.sh` + `~/.config/systemd/user/zoe-logs-rotate.{service,timer}` (note the
+"logs") — daily 02:50, acting only above **150 MB**, archiving with timestamped `.gz` and then
+rewriting the file with `tail -c 50MB` (cuts mid-line, non-atomic `cat >`), pruning only the
+*stdout* archives to 3. At ~70 MB/day of stderr it fired about every other day, so the files sat at
+86–119 MB in between. Three producers wrote the same healthy traffic:
+`middleware/logging.py setup_json_logging()` puts an INFO JSON `StreamHandler` on the root logger
+(stderr) — 78% of stderr bytes were `Request completed` lines for seven kiosk **polls**
+(`/api/ui/actions/pending`, `/api/ui/state/sync`, `/api/voice/announcements`,
+`/api/system/display/preferences`, `/api/skybridge/timers`, `/api/ha/entities`,
+`/api/panels/*/config`), 17% were `httpx` per-call lines and apscheduler "Running job"/"executed
+successfully" pairs; uvicorn's access log put the same polls on stdout (94% of 1.1 M lines).
+Everything was `200 OK`.
+
+**Fix shipped (code, takes effect at the next zoe-data restart):** healthy fast polls log at
+DEBUG (middleware + a `uvicorn.access` filter; `>=400` or `>=1 s` still INFO), httpx/httpcore/
+apscheduler-executor capped at WARNING, repeated identical warnings and upstream-outage
+tracebacks throttled to one line per minute (`log_throttle.py`). Expected stderr volume: ~4% of
+before (≈3 MB/day). Knobs (all optional, in `.env`): `ZOE_LOG_QUIET_POLL_PATHS` (`off` disables),
+`ZOE_LOG_QUIET_POLL_SLOW_MS`, `ZOE_LOG_CHATTY_LIBS_LEVEL=INFO` (restore the lines),
+`ZOE_LOG_REPEAT_WINDOW_S`.
+
+**🧑 Operator steps (nothing below is done by a deploy):**
+
+```bash
+# 1. Retire the old host-local rotator FIRST (two rotators must never share these files), then
+#    install the tracked one (user timer; hourly size check, rotates at >= 50 MB, keeps 4 segments
+#    named zoe-data.stderr.1.log.gz ... — a name the old script's `*.log.*.gz` prune cannot match).
+systemctl --user disable --now zoe-logs-rotate.timer
+mv ~/bin/zoe-logs-rotate.sh ~/bin/zoe-logs-rotate.sh.retired
+rm -f ~/.config/systemd/user/zoe-logs-rotate.{service,timer}
+cd ~/assistant            # after the PR is merged and the live checkout is fast-forwarded
+python3 scripts/maintenance/rotate_service_logs.py --dry-run          # shows what it would rotate
+cp scripts/setup/systemd/zoe-log-rotate.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now zoe-log-rotate.timer
+systemctl --user start zoe-log-rotate.service     # rotate the two big files now (copytruncate: no restart)
+ls -l ~/.zoe-logs/zoe-data.std*.log*              # expect ~0 MB live files + *.1.log.gz
+# the old script's timestamped archives (zoe-data.std*.log.2026*.gz) are no longer pruned by anyone:
+# delete the ones you do not want.
+
+# 2. Pick up the volume fixes (zoe-data restart; poll /health afterwards, not `is-active`).
+systemctl --user restart zoe-data && until curl -fsS localhost:8000/health >/dev/null; do sleep 2; done
+
+# 3. Housekeeping: two stale hand-launched logs from 2026-06-18 (an ad-hoc :8011/:8012 pair;
+#    nothing in the repo or any unit starts them; nothing listens there).
+rm -f ~/.zoe-logs/zoe-data-8011.log ~/.zoe-logs/zoe-data-8012.log
+
+# 4. Tighten the existing world-readable app-log segments (new ones are created 0640 by the fix).
+chmod 640 ~/.zoe-logs/zoe-data.app.log*
+```
+
+Only on a rebuilt host that lacks the capture drop-in: copy
+`scripts/setup/systemd/zoe-data.service.d/20-capture-output.conf` (comment in the file).
+
+**WebSocket 403 bursts from `https://<box-ip>:8443`** (`Rejected cross-origin WebSocket
+handshake`, plus `connection rejected (403)` from uvicorn): that is the UI-verification nginx on
+:8443 hitting the CSWSH guard — correct behaviour, not an outage; the production origin is
+`https://<box-ip>` (no port). Only if you WANT sockets on the verification port, add
+`ZOE_ALLOWED_WS_ORIGINS=https://<box-ip>:8443` (comma list, `.env`) and restart. Repeats are now
+one line per minute.
+
+**Other findings this review left for the operator** are listed in
+`docs/knowledge/log-review-2026-10-04.md` § "What remains".

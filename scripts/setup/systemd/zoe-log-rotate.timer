@@ -1,0 +1,19 @@
+# Hourly size check for zoe-log-rotate.service (a no-op when nothing is over the
+# 50 MB threshold: an lstat per file).
+#
+# Persistent=false: a missed tick is replaced by the next one; there is nothing
+# to replay.
+#
+# Enable:
+#   systemctl --user enable --now zoe-log-rotate.timer
+
+[Unit]
+Description=Hourly zoe log-size check
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
