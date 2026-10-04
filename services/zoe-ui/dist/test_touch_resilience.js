@@ -126,6 +126,17 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert((execSrc.match(/width:\s*48px;\s*height:\s*48px;\s*border-radius:\s*50%/g) || []).length >= 2, 'both executor close buttons are 48×48');
       assert(/\.srow2 \.sw::before\{content:'';position:absolute;inset:-4px/.test(homeSrc), 'settings switch hit box is extended to 48 px via ::before');
       ok('polish: executor close buttons are 48×48 and the settings switch hit box is ≥48 px');
+      // Polish (#1862, Codex round 2): calendar view pills guarantee 48 px by min-height, and an
+      // HA icon outside the local glyph set resolves to its family, never the question mark.
+      assert(/\.calviews button\{[^}]*min-height:48px/.test(homeSrc), 'calendar view buttons carry min-height:48px');
+      const mm = /  var MDI=\{[\s\S]*?\n  function mdi\(name\)\{[^\n]*\n/.exec(homeSrc); assert(mm, 'MDI map + mdi() not found');
+      const { mdi: mdiFn, MDI: mdiMap } = vm.runInNewContext(mm[0] + '; ({ mdi, MDI })', {});
+      const q = mdiMap['_'];
+      assert(mdiFn('mdi:lamp').includes(mdiMap['mdi:lightbulb-outline']) && !mdiFn('mdi:lamp').includes(q), 'mdi:lamp resolves to the light glyph');
+      assert(mdiFn('mdi:power-socket-au').includes(mdiMap['mdi:toggle-switch-outline']), 'an unknown device icon resolves to the switch glyph');
+      assert(mdiFn('mdi:fan-speed-3').includes(mdiMap['mdi:fan']) && mdiFn('mdi:tv').includes(mdiMap['mdi:television']), 'fan/tv families resolve');
+      assert(mdiFn('').includes(q) && mdiFn(undefined).includes(q), 'only NO icon draws the question mark');
+      ok('polish: calendar pills are ≥48 px by min-height; unknown HA icons resolve to a family glyph');
     }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });

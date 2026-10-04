@@ -166,7 +166,7 @@
   .calhead{position:absolute;top:38px;left:110px;right:110px;height:48px;display:flex;align-items:center;gap:16px}
   .calhead h1{font-size:28px;font-weight:600;flex:1;letter-spacing:-.01em}
   .calviews{display:flex;gap:6px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:5px}
-  .calviews button{font:inherit;font-size:16px;color:var(--ink-soft);background:transparent;border:0;border-radius:999px;padding:13px 20px;cursor:pointer}
+  .calviews button{font:inherit;font-size:16px;color:var(--ink-soft);background:transparent;border:0;border-radius:999px;padding:13px 20px;min-height:48px;cursor:pointer}   /* min-height, not padding arithmetic: line-height:normal varies by font */
   .calviews button.on{background:#fff;color:#0a0d14;font-weight:600}
   .calbody{flex:1;min-height:0;overflow-y:auto}
   /* Week and month are TODAY-ANCHORED and scroll; the calendar no longer spends
@@ -1460,7 +1460,13 @@
     'mdi:door':'<path d="M3.5 21h17"/><path d="M6 21V4.2a1.2 1.2 0 0 1 1.4-1.2l9 1.3a1.2 1.2 0 0 1 1.1 1.2V21"/><circle cx="14.8" cy="12.4" r="1"/>',
     '_':'<circle cx="12" cy="12" r="8.6"/><path d="M12 8.4v4.2"/><path d="M12 15.8h.01"/>'
   };
-  function mdi(name){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(MDI[name]||MDI['_'])+'</svg>';}
+  // HA supplies ANY mdi:* name (mdi:lamp, mdi:floor-lamp, mdi:power-socket-au, …) and the
+  // server surfaces it raw (routers/panel_config.py), so an icon outside the local glyph
+  // set resolves to its FAMILY — a lamp is still a light, a socket is still a switch —
+  // never to the question mark, which is reserved for "no icon at all".
+  var MDI_FAMILY=[[/light|lamp|bulb|lantern|sconce|chandelier|led/,'mdi:lightbulb-outline'],[/fan/,'mdi:fan'],[/television|^mdi:tv|monitor|speaker|cast|projector|media|remote/,'mdi:television'],[/thermo|temperature|heat|radiator|snowflake|air-condition|hvac/,'mdi:thermostat'],[/door|gate|garage/,'mdi:door'],[/palette|scene|movie|party|weather-night|sleep/,'mdi:palette-outline']];
+  function mdiResolve(name){if(!name)return '_';if(MDI[name])return name;var n=String(name).toLowerCase();for(var i=0;i<MDI_FAMILY.length;i++){if(MDI_FAMILY[i][0].test(n))return MDI_FAMILY[i][1];}return 'mdi:toggle-switch-outline';}
+  function mdi(name){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+MDI[mdiResolve(name)]+'</svg>';}
 
   // Operator-chosen dock pins. null until the first load succeeds; the dock
   // falls back to its old "first few lights HA returned" behaviour whenever
