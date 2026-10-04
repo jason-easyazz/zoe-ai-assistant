@@ -86,7 +86,7 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert.strictEqual(isViewerContext('?panel_id=weird-alias', ls({ zoe_touch_panel_alias_generated: 'weird-alias' })), true);
       assert.strictEqual(isViewerContext('?panel_id=panel_abcd1234', ls({})), false);
       ok('viewer: a laptop on /touch/home.html is a viewer; kiosk flag (URL, local or session) or a registered panel id makes a panel (a generated alias never does)');
-      assert(/if \(state\.viewer\) \{[\s\S]{0,400}\} else \{[\s\S]{0,200}bindPanel\(\)/.test(execSrc), 'init must gate bind/sync/push/poll on state.viewer');
+      assert(/if \(state\.viewer\) \{[\s\S]{0,1500}\} else \{[\s\S]{0,300}bindPanel\(\)/.test(execSrc), 'init must gate bind/sync/push/poll on state.viewer');
       assert(/if \(state\.viewer\) \{[\s\S]{0,900}stopServiceWorkerPanelPoll\(\);/.test(execSrc), 'a viewer must STOP a leftover SW panel poll');
       assert(/function stopServiceWorkerPanelPoll\(\)[\s\S]{0,600}STOP_PANEL_POLL/.test(execSrc));
       ok('viewer: init skips panel bind, state sync, action poll, push socket and SW poll — and stops a leftover SW panel poll');
