@@ -789,7 +789,10 @@ window.addEventListener('widgets-registered', () => {
 // Reinitialize on BFCache restore or soft navigation where the page is resumed
 window.addEventListener('pageshow', (event) => {
     // If coming from bfcache or if dashboard not ready, ensure init runs
-    if (event.persisted || !window.dashboard) {
+    // Only a BFCache restore needs a re-init. On a plain first load `pageshow` fires
+    // before widget registration finishes, and `!window.dashboard` made this log a
+    // spurious "Cannot initialize dashboard" error on every load.
+    if (event.persisted) {
         console.log('🔄 pageshow detected (BFCache or resume) - ensuring lists dashboard initialization');
         if (typeof WidgetManager !== 'undefined' && (window.widgetsRegistered || WidgetManager.manifestLoaded)) {
             initializationAttempted = false;

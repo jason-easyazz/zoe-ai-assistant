@@ -228,11 +228,12 @@
             btn.textContent = 'Checking...';
             btn.disabled = true;
             
-            fetch('/api/health', { 
-                method: 'HEAD',
+            fetch('/health', { 
+                method: 'GET',
                 cache: 'no-cache'
             })
-            .then(() => {
+            .then((res) => {
+                if (!res.ok) throw new Error('health ' + res.status);
                 btn.textContent = 'Connected! ✓';
                 setTimeout(() => {
                     window.location.reload();
