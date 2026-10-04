@@ -23,6 +23,7 @@ Naming note: the record's section 5 calls the sampler `zoe-agent-mem.timer` and 
 | Artefact | Does |
 |---|---|
 | `scripts/setup/systemd/zoe-agents.slice` | The aggregate: `MemoryHigh=MemoryMax=3G`, `MemorySwapMax=0`, `CPUWeight=IOWeight=50`. All three memory keys together (no throttle band, no swap escape). CPU/IO weight 50 is this PR's choice - the record gives none. |
+| `scripts/setup/systemd/system/user@.service.d/delegate.conf` | **ROOT, operator-only** template of `/etc/systemd/system/user@.service.d/delegate.conf` (`Delegate=pids memory cpu io`). It is live on this host but was untracked; without `cpu`/`io` delegated, the slice's `CPUWeight`/`IOWeight` are silently inert on a rebuilt box. |
 | `scripts/setup/systemd/serena-mcp.service.d/70-agents-slice.conf` | `Slice=zoe-agents.slice` on the shared Serena. Its own 2G / swap-0 member cap is unchanged. |
 | `scripts/maintenance/codebase_memory_capped.sh` | `systemd-run --scope` now passes `--slice=zoe-agents.slice`. 768M member cap unchanged. **This one is live on merge** (agent configs run it from the live checkout) - harmless before the slice unit exists, see "Order matters". |
 | `scripts/agents/zoe-agent` | The launcher: `flock -n -E 75 <lease>`, then `systemd-run --user --slice=zoe-agents.slice --scope -- claude\|codex "$@"`. Exit 75 prints "another engineering session holds the lease (pid, since)". |
@@ -46,10 +47,17 @@ mkdir -p ~/.config/systemd/user ~/.config/systemd/user/serena-mcp.service.d
 cp scripts/setup/systemd/zoe-agents-sampler.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now zoe-agents-sampler.timer
 
-# 2 - a week later: the slice, FIRST (before anything names it)
+# 2 - a week later: the slice. NOTE: by now the slice already EXISTS as an implicit, unlimited one
+#     (codebase_memory_capped.sh has named it since merge) - this step turns it into a capped one.
+#     (root, only on a rebuilt box lacking it: the delegate.conf template, see "Controller delegation")
 cp scripts/setup/systemd/zoe-agents.slice ~/.config/systemd/user/ && systemctl --user daemon-reload
-cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/zoe-agents.slice/memory.max   # 3221225472
-cat .../zoe-agents.slice/memory.swap.max                                                              # 0
+S=/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service
+cat $S/cgroup.controllers                    # must list: cpu io memory pids   (delegation)
+cat $S/zoe-agents.slice/memory.max           # 3221225472   (was "max" while implicit)
+cat $S/zoe-agents.slice/memory.swap.max      # 0
+cat $S/zoe-agents.slice/cpu.weight           # 50           (absent/100 = cpu not delegated -> weight inert)
+cat $S/zoe-agents.slice/io.weight            # "default 50"; file ABSENT on this Orin (scheduler none) = IOWeight inert, expected
+python3 scripts/maintenance/zoe_agents_sampler.py --stdout | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["slice"]["state"], r["in_slice_bounded"])'   # capped True
 
 # 3 - re-parent Serena (a restart; first request can take MANY minutes of warm-up - not a fault)
 cp scripts/setup/systemd/serena-mcp.service.d/70-agents-slice.conf ~/.config/systemd/user/serena-mcp.service.d/
@@ -61,15 +69,32 @@ ln -sf ~/assistant/scripts/agents/zoe-agent ~/.local/bin/zoe-agent
 # 5 - the bridge unit: STAGE-GATED, see below.  6 - the SessionStart hook example, below.
 ```
 
-If `memory.max` does not read `3221225472` after step 2, the slice file did not apply (a slice that
-already exists as an implicit, uncapped transient one may need `systemctl --user daemon-reload`
-twice, or `systemctl --user set-property zoe-agents.slice MemoryMax=3G MemoryHigh=3G MemorySwapMax=0`
-[unverified which is needed on this systemd]). **Do not proceed to control 2 until it reads 3G.**
+If `memory.max` does not read `3221225472` after step 2, the slice file did not apply: the implicit
+slice that `codebase_memory_capped.sh` created is the **normal** starting state of step 2, not an edge
+case, and it may need `systemctl --user daemon-reload` twice, or
+`systemctl --user set-property zoe-agents.slice MemoryMax=3G MemoryHigh=3G MemorySwapMax=0`
+[unverified which is needed on this systemd]. **Do not proceed to control 2 until it reads 3G and the
+sampler says `capped`.**
+
+### Controller delegation (root, rebuilt boxes only)
+
+A user slice enforces only the controllers the user manager was delegated. This host has
+`/etc/systemd/system/user@.service.d/delegate.conf` (`Delegate=pids memory cpu io`) - it was untracked;
+the template is `scripts/setup/systemd/system/user@.service.d/delegate.conf` (install line in its header).
+Without it the slice's `CPUWeight` (and `IOWeight`) are accepted and silently do nothing, which is why
+step 2 reads `cpu.weight` back. Separately, `io.weight` needs a block scheduler that exposes it (BFQ /
+io.cost): on this Orin the NVMe scheduler is `none`, `io.weight` does not exist anywhere in the user
+manager's tree, and `IOWeight=50` is **inert here regardless of delegation**. The memory keys - the cap -
+depend on neither.
 
 **Order matters.** `systemd-run --slice=zoe-agents.slice` against a slice with no unit file silently
 creates an *implicit slice with no limits*. That is why the wrapper change is safe to merge first (it
 degrades to "scope in an uncapped slice named zoe-agents.slice") and why every cap-bearing step reads
-the value back before relying on it.
+the value back before relying on it. It also means the **baseline week is not fully clean**: from merge
+day, codebase-memory scopes are parented under the implicit slice, so the sampler counts them `in_slice`
+while `slice.state` is `implicit slice (no memory.max)` and `in_slice_bounded` is `false`. Read
+`in_slice` as "parented" and only `in_slice_bounded: true` as "bounded"; serena, jedi and the sessions are
+the baseline's honest outside-the-bound population.
 
 ### The bridge unit - stage-gate [unverified]
 
@@ -81,7 +106,7 @@ and a unit-started bridge the app ignores is just an unused process. So:
 
 1. `cp scripts/setup/systemd/zoe-claude-bridge.service ~/.config/systemd/user/ && systemctl --user daemon-reload`
 2. With **no** session open: `systemctl --user start zoe-claude-bridge` and read
-   `journalctl --user -u zoe-claude-bridge -n 20`, `cat /proc/$(systemctl --user show -p MainPID --value zoe-claude-bridge)/cgroup`
+   `journalctl --user -u zoe-claude-bridge -n 20` (the helper logs `release <sha> chosen by running --serve process N` or `by newest server file mtime` - never directory mtime, which goes stale on in-place rewrites and app rollbacks), `cat /proc/$(systemctl --user show -p MainPID --value zoe-claude-bridge)/cgroup`
    (must end `…/zoe-agents.slice/zoe-claude-bridge.service`).
 3. From the desktop app, open a new remote session. **Pass** = the new `ccd-cli` is a child of that unit
    (its `/proc/<pid>/cgroup` is under the slice). **Fail** = the app launched its own bridge: `systemctl
@@ -141,10 +166,13 @@ Fields: `mem_available_kb`, `swap_used_kb`; `slice` (`present`, `memory_current`
 `memory_max`, `swap_max`, `events.{high,max,oom,oom_kill}`, `members[]`); `omnigent` (container cgroup,
 found through the `omnigent server` process - no docker CLI); `procs.<kind>.{total,in_slice,outside_slice,container}`
 for `serena`, `jedi-language-server`, `codebase-memory-mcp`, `ccd-cli`, `codex`, `claude`;
-`outside_slice_total`; `lease` (`held`, `lock_pid` from `/proc/locks`, `holder_file`). Container processes
+`slice.state` (`absent`, `implicit slice (no memory.max)`, `capped`), `slice.cpu_weight` / `io_weight` (null
+when the kernel does not expose them), top-level `in_slice_bounded`; `outside_slice_total`; `lease` (`held`, `lock_pid` from `/proc/locks`, `holder_file`). Container processes
 share the host uid and appear in the host `/proc`; they are bucketed `container` and **never** counted
-as outside. Before step 2 the slice does not exist: `slice.present=false` and everything reads outside
-- that is the baseline.
+as outside. Before the PR merges the slice does not exist (`state: absent`, everything reads outside).
+After merge and before step 2 it exists **implicitly**: `slice.present=true`, `memory_max=null`,
+`state: implicit slice (no memory.max)`, `in_slice_bounded: false`, and any codebase-memory scope counts
+`in_slice` (parented, not bounded). That is the baseline; do not read it as a cap.
 
 ## Negative controls (the record's 1, 1b, 2, 4 - control 3 belongs to PR 2)
 
@@ -185,10 +213,14 @@ for p in $(pgrep -f 'serena start-mcp-server|jedi-language-server|codebase-memor
   echo "$p $(sed -n 's/^0:://p' /proc/$p/cgroup)"; done
 ```
 
-Pass = `serena`, `jedi-language-server`, `codebase-memory-mcp` all `outside_slice: 0` and every path contains
-`/zoe-agents.slice/`; the slice's `memory.current` rises when they allocate. **It must read red before steps
-2-3** (they sit in `app.slice` tonight: the sampler read 6 engineering processes outside on 2026-10-04 - serena, jedi, two codebase-memory, two ccd-cli) -
-if it reads green on an unmodified box, the instrument is broken.
+Pass = `serena`, `jedi-language-server`, `codebase-memory-mcp` all `outside_slice: 0`, every path contains
+`/zoe-agents.slice/`, **and** `slice.state` is `capped` (`in_slice_bounded: true`) - a process in the implicit
+slice is parented but unbounded, so membership alone proves nothing; the slice's `memory.current` rises when
+they allocate. **Serena and jedi must read red before step 3** (they sit in `app.slice` tonight: the
+sampler read 6 engineering processes outside on 2026-10-04 - serena, jedi, two codebase-memory, two
+ccd-cli). **codebase-memory reads in-slice from merge day** (the wrapper, not an install step, moves it),
+so for it the red-before signal is `in_slice_bounded: false` until step 2 - if serena/jedi read green on an
+unmodified box, or `in_slice_bounded` is true before step 2, the instrument is broken.
 
 ## Rollback
 
@@ -209,6 +241,6 @@ their cgroup until they exit. The lease files live in `/run/user/1000` and vanis
 - That the desktop app attaches to a unit-started bridge (stage-gate above), and the `--token-file`
   format the app expects. The observed command line is the only source for the flags.
 - Whether `daemon-reload` re-applies slice limits to an already-implicit `zoe-agents.slice` (fallback given).
-- `CPUWeight=IOWeight=50` is a choice, not a measurement.
+- `CPUWeight=IOWeight=50` is a choice, not a measurement; `IOWeight` is inert on this host (no `io.weight`).
 - Behaviour of `/proc/locks` pid attribution under a pid-namespaced reader (the sampler runs on the host;
   fine there).

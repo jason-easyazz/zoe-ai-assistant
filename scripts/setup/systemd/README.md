@@ -32,6 +32,7 @@ access-control directives would be silently ignored.
 | System unit | Port | Purpose |
 |-------------|------|---------|
 | `system/serena-bridge.socket` + `.service` | 9121 on `172.28.0.1` | Scoped proxy letting ONLY the `zoe-omnigent` container use the shared Serena — see below |
+| `system/user@.service.d/delegate.conf` | — | **Drop-in, root, operator-only**: `Delegate=pids memory cpu io` for the user manager, so `zoe-agents.slice`'s `CPUWeight` is enforced (live on this host, previously untracked) — install line in its header; `docs/knowledge/engineering-off-box.md` |
 
 ## Install
 

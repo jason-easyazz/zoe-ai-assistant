@@ -275,28 +275,72 @@ def test_bridge_unit_ships_inert():
     )
 
 
-def test_bridge_exec_serves_from_the_newest_release_dir_and_records_the_holder(tmp_path):
-    srv = tmp_path / "srv"
-    for name, age in (("aaaa", 1000), ("bbbb", 10)):
-        d = srv / name
-        d.mkdir(parents=True)
-        s = d / "server"
-        s.write_text(f'#!/usr/bin/env bash\necho "{name} $@" > "$OUT"\n')
-        s.chmod(0o755)
-        t = time.time() - age
-        os.utime(d, (t, t))
-    run = tmp_path / "run"
-    run.mkdir()
-    env = {
+def _bridge_env(tmp_path: Path, srv: Path, run: Path, proc: Path | None = None) -> dict[str, str]:
+    return {
         "PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(run),
         "AGENT_BRIDGE_SRV_ROOT": str(srv), "AGENT_BRIDGE_RUN_DIR": str(tmp_path / "bridge-run"),
-        "OUT": str(tmp_path / "out"),
+        "AGENT_BRIDGE_PROC_ROOT": str(proc or tmp_path / "no-proc"), "OUT": str(tmp_path / "out"),
     }
-    subprocess.run(["bash", str(BRIDGE_EXEC)], env=env, check=True, timeout=30)
+
+
+def _release(srv: Path, name: str, *, file_age: float, dir_age: float) -> Path:
+    d = srv / name
+    d.mkdir(parents=True)
+    s = d / "server"
+    s.write_text(f'#!/usr/bin/env bash\necho "{name} $@" > "$OUT"\n')
+    s.chmod(0o755)
+    now = time.time()
+    os.utime(s, (now - file_age, now - file_age))
+    os.utime(d, (now - dir_age, now - dir_age))  # set LAST: writing the file would bump it
+    return s
+
+
+def test_bridge_exec_picks_the_release_by_server_file_mtime_not_directory_mtime(tmp_path):
+    """Directory mtime moves only on create/remove: on the live box srv/89cb…/ has dir mtime 09-30
+    while its `server` was rewritten 10-04. Here the OLDER-dir release has the NEWER server file."""
+    srv, run = tmp_path / "srv", tmp_path / "run"
+    run.mkdir()
+    _release(srv, "newdir-oldfile", file_age=5000, dir_age=10)
+    _release(srv, "olddir-newfile", file_age=10, dir_age=5000)
+    r = subprocess.run(["bash", str(BRIDGE_EXEC)], env=_bridge_env(tmp_path, srv, run), check=True,
+                       capture_output=True, text=True, timeout=30)
     out = (tmp_path / "out").read_text()
-    assert out.startswith("bbbb --serve --socket ") and "--token-file" in out, out
+    assert out.startswith("olddir-newfile --serve --socket ") and "--token-file" in out, out
+    assert "release olddir-newfile chosen by newest server file mtime" in r.stderr
     assert (tmp_path / "bridge-run" / "token").stat().st_mode & 0o077 == 0
     assert "cli=claude-bridge" in (run / "zoe-agent-session.holder").read_text()
+
+
+def test_negative_control_bridge_exec_keyed_on_directory_mtime_picks_wrong(tmp_path):
+    """Break the fix (dir-mtime criterion) and the same fixture must pick the other release."""
+    src = BRIDGE_EXEC.read_text()
+    broken_src = src.replace('if [ -z "$bin" ] || [ "$f" -nt "$bin" ]; then', 'if [ -z "$bin" ] || [ "$(dirname "$f")" -nt "$(dirname "$bin")" ]; then')
+    assert broken_src != src, "negative control did not alter the helper"
+    broken = tmp_path / "bridge-broken"
+    broken.write_text(broken_src)
+    srv, run = tmp_path / "srv", tmp_path / "run"
+    run.mkdir()
+    _release(srv, "newdir-oldfile", file_age=5000, dir_age=10)
+    _release(srv, "olddir-newfile", file_age=10, dir_age=5000)
+    subprocess.run(["bash", str(broken)], env=_bridge_env(tmp_path, srv, run), check=True, timeout=30)
+    assert (tmp_path / "out").read_text().startswith("newdir-oldfile"), "mutant did not reproduce the bug"
+
+
+def test_bridge_exec_prefers_the_release_a_running_serve_process_executes(tmp_path):
+    """After an app rollback the live `--serve` runs an OLDER release than the newest file on disk."""
+    srv, run, proc = tmp_path / "srv", tmp_path / "run", tmp_path / "proc"
+    run.mkdir()
+    old = _release(srv, "running-old", file_age=9000, dir_age=9000)
+    _release(srv, "newer-on-disk", file_age=10, dir_age=10)
+    for pid, cmd in (("11", "unrelated --serve"), ("12", f"{old} --serve --socket x")):
+        (proc / pid).mkdir(parents=True)
+        (proc / pid / "cmdline").write_bytes(cmd.replace(" ", "\0").encode() + b"\0")
+    (proc / "12" / "exe").symlink_to(old)
+    (proc / "11" / "exe").symlink_to("/usr/bin/sleep")
+    r = subprocess.run(["bash", str(BRIDGE_EXEC)], env=_bridge_env(tmp_path, srv, run, proc), check=True,
+                       capture_output=True, text=True, timeout=30)
+    assert (tmp_path / "out").read_text().startswith("running-old --serve")
+    assert "release running-old chosen by running --serve process 12" in r.stderr
 
 
 @needs_flock
@@ -396,6 +440,36 @@ def test_sampler_parses_a_fake_cgroup_tree(tmp_path):
     assert p["ccd-cli"] == {"total": 1, "in_slice": 0, "outside_slice": 1, "container": 0}
     assert p["codex"] == {"total": 0, "in_slice": 0, "outside_slice": 0, "container": 1}
     assert r["ts"] == "1970-01-01T00:00:00Z"
+    assert sl["state"] == "capped" and r["in_slice_bounded"] is True
+    assert sl["cpu_weight"] is None and sl["io_weight"] is None  # absent files are null, not a crash
+
+
+def test_implicit_slice_is_reported_distinctly_and_is_not_bounded(tmp_path):
+    """`systemd-run --slice=zoe-agents.slice` with no unit file creates a slice with NO limits
+    (codebase_memory_capped.sh does this from merge day): `present` is true, memory.max reads `max`,
+    and codebase-memory counts as in_slice. The baseline week must not read that as a bound."""
+    t = _tree(tmp_path, serena_cg=OUT_APP, jedi_cg=OUT_APP, cbm_cg=f"/{U}/zoe-agents.slice/run-rA.scope")
+    sdir = t["cgroup_root"] / U / "zoe-agents.slice"
+    (sdir / "memory.max").write_text("max\n")
+    (sdir / "memory.swap.max").write_text("max\n")
+    r = sampler.build_record(**t)
+    assert r["slice"]["present"] is True and r["slice"]["memory_max"] is None
+    assert r["slice"]["state"] == "implicit slice (no memory.max)"
+    assert r["procs"]["codebase-memory-mcp"]["in_slice"] == 1, "structurally in the implicit slice"
+    assert r["in_slice_bounded"] is False, "...but that is parenting, not a bound"
+    # negative control: a real memory.max flips the same tree to capped/bounded
+    (sdir / "memory.max").write_text("3221225472\n")
+    r2 = sampler.build_record(**t)
+    assert r2["slice"]["state"] == "capped" and r2["in_slice_bounded"] is True
+
+
+def test_slice_weights_are_read_back_when_the_kernel_exposes_them(tmp_path):
+    t = _tree(tmp_path, serena_cg=IN, jedi_cg=IN, cbm_cg=IN)
+    sdir = t["cgroup_root"] / U / "zoe-agents.slice"
+    (sdir / "cpu.weight").write_text("50\n")
+    (sdir / "io.weight").write_text("default 50\n")
+    sl = sampler.build_record(**t)["slice"]
+    assert sl["cpu_weight"] == 50 and sl["io_weight"] == 50
 
 
 def test_negative_control_4_outside_the_slice_goes_red_then_green(tmp_path):
@@ -405,6 +479,7 @@ def test_negative_control_4_outside_the_slice_goes_red_then_green(tmp_path):
                      jedi_cg=f"/{U}/app.slice/serena-mcp.service", cbm_cg=OUT_APP)
     outside = {k: v["outside_slice"] for k, v in before["procs"].items()}
     assert outside["serena"] == outside["jedi-language-server"] == outside["codebase-memory-mcp"] == 1
+    assert before["slice"]["state"] == "capped"  # fixture slice is capped; the processes are what sit outside
     assert before["outside_slice_total"] == 4  # + the ccd-cli session, which only the launcher/bridge unit can fix
 
     after = _record(tmp_path, serena_cg=IN, jedi_cg=IN, cbm_cg=f"/{U}/zoe-agents.slice/run-rA.scope")
@@ -456,7 +531,7 @@ def test_sampler_never_crashes_on_a_missing_tree(tmp_path):
     r = sampler.build_record(cgroup_root=tmp_path / "nope", proc_root=tmp_path / "nope2",
                              meminfo_path=tmp_path / "nope3", runtime_dir=tmp_path / "nope4",
                              proc_locks=tmp_path / "nope5", uid=1000, now=0)
-    assert r["slice"] == {"present": False} and r["omnigent"] == {"found": False}
+    assert r["slice"] == {"present": False, "state": "absent"} and r["omnigent"] == {"found": False}
     assert r["mem_available_kb"] is None and r["outside_slice_total"] == 0
 
 
@@ -507,3 +582,15 @@ def test_sampler_units_run_the_script_every_five_minutes():
     assert svc["MemorySwapMax"] == "0"
     tm = _section(SAMPLER_TIMER.read_text(), "Timer")
     assert tm["OnUnitActiveSec"] == "5min"
+
+
+def test_delegation_template_is_tracked_with_the_controllers_the_slice_weights_need():
+    """CPUWeight/IOWeight in a user slice are inert unless the user manager is delegated cpu+io; the
+    root drop-in that does it was untracked on the live host. The template must carry them, and the
+    slice header must name the dependency."""
+    conf = ROOT / "scripts" / "setup" / "systemd" / "system" / "user@.service.d" / "delegate.conf"
+    delegate = _section(conf.read_text(), "Service")["Delegate"].split()
+    assert {"memory", "cpu", "io"} <= set(delegate), delegate
+    header = SLICE_FILE.read_text()
+    assert "delegate.conf" in header and "Delegate=pids memory cpu io" in header
+    assert "io.weight" in header, "the slice must say IOWeight needs a block scheduler that exposes io.weight"

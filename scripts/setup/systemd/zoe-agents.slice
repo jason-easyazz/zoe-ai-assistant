@@ -27,6 +27,14 @@
 # CPUWeight/IOWeight 50 (default 100; the voice stack holds 300-400): dev tooling must
 # lose every scheduling fight against the voice path. The record gives no weight - 50 is
 # this PR's choice, retune from the sampler's data.
+# DEPENDENCIES (the weights are silently inert without them):
+#   * the user manager must be delegated `cpu io`: /etc/systemd/system/user@.service.d/delegate.conf
+#     (`Delegate=pids memory cpu io`) - a ROOT file, tracked as the template
+#     scripts/setup/systemd/system/user@.service.d/delegate.conf. Present on this host, but it
+#     was untracked, so a rebuilt box would not have it. Read back cpu.weight (50).
+#   * io.weight additionally needs a block scheduler that exposes it (BFQ / io.cost). On this
+#     Orin the NVMe scheduler is `none` and io.weight does not exist: IOWeight is inert HERE
+#     whatever the delegation. The memory keys above do not depend on either.
 #
 # Caveat: cgroup guards cover CPU pages only. They do nothing for NvMap/CUDA allocations
 # (the 2026-07-19 brain crash-loop), so a GPU-loading harness run from a session is

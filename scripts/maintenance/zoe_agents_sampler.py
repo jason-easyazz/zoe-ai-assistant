@@ -10,8 +10,10 @@ compare like for like. Runbook: docs/knowledge/engineering-off-box.md.
 
 Records, every run:
   * MemAvailable and swap used (kB);
-  * zoe-agents.slice: memory.current / swap.current / memory.events, and the same for each
-    direct member (units and scopes);
+  * zoe-agents.slice: memory.current / swap.current / memory.events, cpu.weight / io.weight and
+    the same for each direct member (units and scopes), plus `state`: "absent", "implicit slice
+    (no memory.max)" (systemd-run created it; no unit file, NO limits - in_slice then means
+    parented, not bounded; top-level `in_slice_bounded` is false) or "capped";
   * the Omnigent container's cgroup (found through the `omnigent server` process, no docker
     CLI) — it cannot join the slice, so it is measured beside it;
   * for each engineering process kind (serena, jedi-language-server, codebase-memory-mcp,
@@ -42,6 +44,7 @@ import time
 from pathlib import Path
 
 SLICE = "zoe-agents.slice"
+STATE_IMPLICIT = "implicit slice (no memory.max)"
 LEASE_LOCK = "zoe-agent-session.lock"
 LEASE_HOLDER = "zoe-agent-session.holder"
 ROTATE_BYTES = 8 * 1024 * 1024
@@ -197,10 +200,17 @@ def slice_dir(cgroup_root: Path, uid: int) -> Path:
 def slice_report(cgroup_root: Path, uid: int) -> dict:
     d = slice_dir(cgroup_root, uid)
     if not d.is_dir():
-        return {"present": False}
+        return {"present": False, "state": "absent"}
     rep: dict = {"present": True, **_cg_figures(d)}
     rep["memory_max"] = _read_int(d / "memory.max")
     rep["swap_max"] = _read_int(d / "memory.swap.max")
+    rep["cpu_weight"] = _read_int(d / "cpu.weight")
+    io_w = (_read_text(d / "io.weight") or "").split()  # "default 50"; absent without BFQ/io.cost
+    rep["io_weight"] = int(io_w[1]) if len(io_w) == 2 and io_w[0] == "default" and io_w[1].isdigit() else None
+    # `present` alone is NOT "bounded": `systemd-run --slice=zoe-agents.slice` creates an implicit
+    # slice with no limits when the unit file is not installed (codebase_memory_capped.sh does
+    # exactly that from merge day). Processes in it count as `in_slice` structurally.
+    rep["state"] = "capped" if rep["memory_max"] is not None else STATE_IMPLICIT
     events = _read_kv(d / "memory.events")
     rep["events"] = {k: events.get(k) for k in ("high", "max", "oom", "oom_kill")}
     members = []
@@ -282,9 +292,12 @@ def build_record(
         "omnigent": omnigent_report(cgroup_root, extras["omnigent_cgroup"]),
         "procs": counts,
         "outside_slice_total": outside_total,
+        # in_slice counts mean "parented", which is "bounded" only when the slice is capped
+        "in_slice_bounded": False,
         "unreadable": extras["unreadable"],
         "lease": lease_report(runtime_dir, proc_locks),
     }
+    rec["in_slice_bounded"] = rec["slice"].get("state") == "capped"
     return rec
 
 
