@@ -18,6 +18,9 @@ Secrets are never inlined — they are read from `.env` files.
 | `flue-zoe-brain-2x.service` | 3579 | Flue **2.x** Zoe-brain sidecar in `labs/flue-zoe-brain-2x/` — **the LIVE brain lane** (`ZOE_BRAIN_BACKEND=flue`), cut over 2026-08-09; the 1.x `:3578` sidecar was retired 2026-08-10. Optional/operator opt-in; ships inert. Runbook: `labs/flue-zoe-brain-2x/README.md` |
 | `flue-executor.service`    | —     | Multica queue consumer (executor migration Phase 2) — **optional, operator opt-in; ships inert (not enabled, dispatch defaults dry) — see below** |
 | `serena-mcp.service`       | 9121  | Shared Serena MCP code-intelligence server (dev tooling, one per HOST — see below) |
+| `zoe-claude-bridge.service` | —    | Claude Code remote bridge as a managed unit (`Slice=zoe-agents.slice` + the session lease) — **inert, no `[Install]`, stage-gated**; see `docs/knowledge/engineering-off-box.md` |
+| `zoe-agents-sampler.{service,timer}` | — | 5-minute JSONL sample of the engineering cgroups (`~/.zoe-logs/agents-sampler.jsonl`) — operator opt-in; install first |
+| `zoe-agents.slice`         | —     | **Slice, not a service** (the `*.service` glob does not copy it): the 3G / swap-0 aggregate for every engineering cgroup — install by hand, FIRST |
 
 Everything in this directory is a **user** unit. The `system/` subdirectory holds
 the few that must run as **root** (`/etc/systemd/system/`) because they use
@@ -29,6 +32,7 @@ access-control directives would be silently ignored.
 | System unit | Port | Purpose |
 |-------------|------|---------|
 | `system/serena-bridge.socket` + `.service` | 9121 on `172.28.0.1` | Scoped proxy letting ONLY the `zoe-omnigent` container use the shared Serena — see below |
+| `system/user@.service.d/delegate.conf` | — | **Drop-in, root, operator-only**: `Delegate=pids memory cpu io` for the user manager, so `zoe-agents.slice`'s `CPUWeight` is enforced (live on this host, previously untracked) — install line in its header; `docs/knowledge/engineering-off-box.md` |
 
 ## Install
 
@@ -53,6 +57,7 @@ copy (installed units carry host edits and their own untracked drop-ins). The
 |---------|-----------------|---------|
 | `zoe-data.service.d/60-py312-venv.conf` | zoe-data's interpreter: `/usr/bin/python3` (3.10) → `~/.zoe/venvs/zoe-data-py312/bin/python` (B0.7). Build the venv FIRST. | `docs/knowledge/python-312-venv-migration.md` §8 |
 | `zoe-data.service.d/30-nofile.conf` | zoe-data's open-files limit: soft `1024` (user-manager default) → `LimitNOFILE=65536` (A10, infra audit 2026-10-03). Removes EMFILE-on-accept as a path to the accept-queue hang. Same value is in the template; `tests/unit/test_zoe_data_unit_limits.py` keeps them equal. | `docs/knowledge/incident-runbook.md` §1; install/verify/rollback in the file header |
+| `serena-mcp.service.d/70-agents-slice.conf` | Shared Serena joins `zoe-agents.slice` (`Slice=`); its own 2G / swap-0 member cap is unchanged. Install `zoe-agents.slice` FIRST (a missing slice unit becomes an implicit, uncapped one). | `docs/knowledge/engineering-off-box.md` |
 | `kokoro-tts.service.d/40-memory-tuning.conf` | Kokoro's glibc allocator: `MALLOC_ARENA_MAX=2` + `MALLOC_TRIM_THRESHOLD_=131072` (B6.6). Allocator only — no numeric change. | `docs/knowledge/voice-pipeline.md` (Kokoro memory) |
 | `kokoro-tts.service.d/60-kokoro-venv.conf` | Kokoro's interpreter: `/usr/bin/python3` → `~/.zoe/venvs/kokoro-py310/bin/python` (B5.7) — the same 3.10 + site-packages (`--system-site-packages`) with scikit-learn/pandas/pyarrow blocked. Build the venv FIRST (`scripts/setup/build_kokoro_venv.sh`); restart only under the brain-window lock. | `docs/knowledge/voice-pipeline.md` (Kokoro dedicated venv) |
 | `kokoro-tts.service.d/70-start-timeout.conf` | `TimeoutStartSec=300` — template consistency only, **no runtime effect** (Type=simple, no Exec{Pre,Post}, so the timeout never runs during the sidecar's brain wait). Optional; `daemon-reload` only. | `docs/knowledge/incident-runbook.md` §24(b) |

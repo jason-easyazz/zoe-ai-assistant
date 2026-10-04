@@ -119,9 +119,9 @@ def test_omnigent_container_codex_serena_attaches_by_url():
     assert not entry["url"].startswith("http://127."), entry["url"]
 
 
-def _launch_props(tmp_path: Path, script: Path, extra_env: dict | None = None) -> dict:
-    """Run the launcher against a fake systemd-run and return the -p properties
-    it would hand the scope. Exercises the real script, not a grep of it."""
+def _launch_args(tmp_path: Path, script: Path, extra_env: dict | None = None) -> list[str]:
+    """Run the launcher against a fake systemd-run and return the argv it would
+    hand systemd-run. Exercises the real script, not a grep of it."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
     record = tmp_path / "systemd-run.args"
@@ -138,7 +138,12 @@ def _launch_props(tmp_path: Path, script: Path, extra_env: dict | None = None) -
     env = {"PATH": f"{fake_bin}:/usr/bin:/bin", "HOME": str(tmp_path),
            "CODEBASE_MEMORY_BIN": str(mcp), **(extra_env or {})}
     subprocess.run(["bash", str(script)], env=env, check=True, timeout=30)
-    args = record.read_text().splitlines()
+    return record.read_text().splitlines()
+
+
+def _launch_props(tmp_path: Path, script: Path, extra_env: dict | None = None) -> dict:
+    """The -p properties the launcher would hand the scope."""
+    args = _launch_args(tmp_path, script, extra_env)
     return dict(args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "-p")
 
 
@@ -168,3 +173,56 @@ def test_throttle_band_check_catches_the_old_default(tmp_path):
     old.write_text(body.replace('CODEBASE_MEMORY_MEM_HIGH:-$MEM_MAX', "CODEBASE_MEMORY_MEM_HIGH:-512M"))
     assert old.read_text() != body, "negative control did not alter the launcher"
     assert _throttle_band(_launch_props(tmp_path, old))
+
+
+# --- zoe-agents.slice: the aggregate behind the member caps (agent-sessions-off-box-2026-10-04) ---
+#
+# Member caps bound each process; only a parent slice bounds the SUM. A scope or unit that is not
+# parented to zoe-agents.slice is invisible to the aggregate, and nothing alarms when it is not -
+# so the wrapper and the Serena drop-in are exercised/pinned here, beside the caps they sit above.
+
+SLICE = "zoe-agents.slice"
+SERENA_DROPIN = ROOT / "scripts" / "setup" / "systemd" / "serena-mcp.service.d" / "70-agents-slice.conf"
+SERENA_UNIT = ROOT / "scripts" / "setup" / "systemd" / "serena-mcp.service"
+
+
+def _directives(path: Path) -> dict[str, str]:
+    """Key=value directives of a unit file, comments stripped (the headers name every key)."""
+    out: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith(("#", "[")) and "=" in line:
+            k, v = line.split("=", 1)
+            out[k] = v
+    return out
+
+
+def test_codebase_memory_scope_joins_the_agents_slice(tmp_path):
+    args = _launch_args(tmp_path, ROOT / CAPPED)
+    assert f"--slice={SLICE}" in args, "each per-client scope must be charged to the aggregate"
+    assert "--scope" in args and "--user" in args
+
+
+def test_slice_membership_leaves_the_member_cap_unchanged(tmp_path):
+    """A parent slice adds an aggregate; it must not loosen the 768M per-spawn cap."""
+    assert _launch_props(tmp_path, ROOT / CAPPED) == {
+        "MemoryHigh": "768M", "MemoryMax": "768M", "MemorySwapMax": "768M"}
+
+
+def test_negative_control_wrapper_without_the_slice_is_detected(tmp_path):
+    """Control 4 from the record: before the wrapper change the scope lands in app.slice."""
+    old = tmp_path / "old_capped.sh"
+    body = (ROOT / CAPPED).read_text()
+    old.write_text(body.replace(f"        --slice={SLICE} \\\n", ""))
+    assert old.read_text() != body, "negative control did not alter the wrapper"
+    assert f"--slice={SLICE}" not in _launch_args(tmp_path, old)
+
+
+def test_serena_dropin_joins_the_agents_slice_without_touching_member_caps():
+    d = _directives(SERENA_DROPIN)
+    assert d == {"Slice": SLICE}, (
+        "the drop-in re-parents only; a Memory* key here would silently replace the unit's member cap"
+    )
+    unit = _directives(SERENA_UNIT)
+    assert unit["MemoryMax"] == "2G" and unit["MemorySwapMax"] == "2G", "the member cap stays on the unit"
+    assert "Slice" not in unit, "parenting is the drop-in's job, so rollback is rm-the-file"
