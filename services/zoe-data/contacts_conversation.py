@@ -152,7 +152,7 @@ def bare_relation_phrase(raw: str) -> Optional[str]:
     return canon_relation(m.group(1)) if m else None
 
 
-_GENERIC_RELS = frozenset({"", "friend", "contact", "acquaintance"})
+_GENERIC_RELS = frozenset({"", "friend", "contact", "acquaintance", "family", "relative"})
 
 
 def merge_relationship(slot_rel: Optional[str], phrase_rel: Optional[str]) -> Optional[str]:

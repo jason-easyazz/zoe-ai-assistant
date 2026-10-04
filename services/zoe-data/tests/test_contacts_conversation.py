@@ -292,6 +292,14 @@ async def test_specific_slot_relationship_beats_nothing_but_generic(monkeypatch)
     assert "colleague" in params  # an explicit non-generic relationship is kept
 
 
+@pytest.mark.parametrize("slot, phrase, expect", [
+    ("friend", "brother", "brother"), ("family", "brother", "brother"), ("", "brother", "brother"),
+    ("colleague", "brother", "colleague"), (None, None, None), ("sister", None, "sister"),
+])
+def test_merge_relationship(slot, phrase, expect):
+    assert cc.merge_relationship(slot, phrase) == expect
+
+
 @pytest.mark.asyncio
 async def test_bare_relation_is_asked_not_saved(monkeypatch):
     db = _PeopleDB()
