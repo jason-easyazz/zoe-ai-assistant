@@ -956,6 +956,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/check_emotional_thread.py",
+          "scripts/maintenance/zoe-nightly-dreaming.py",
           "scripts/perf/samantha_bar.py",
           "services/zoe-data/zoe_core_client.py"
         ],
@@ -1622,6 +1623,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/check_emotional_thread.py",
+          "scripts/maintenance/zoe-nightly-dreaming.py",
           "services/zoe-data/auth.py",
           "services/zoe-data/auth_handoff.py",
           "services/zoe-data/mcp_server.py",
@@ -2427,6 +2429,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_INDEX_COMPACT_DAY": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe-nightly-dreaming.py"
         ],
         "typed_env": false
       },
